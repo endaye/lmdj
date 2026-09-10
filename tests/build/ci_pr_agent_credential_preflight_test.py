@@ -119,17 +119,38 @@ class CredentialPreflightTest(unittest.TestCase):
         self.assertEqual(receipt["inference_requests"], 0)
 
     def test_workflow_has_no_automatic_or_arbitrary_target(self):
-        import yaml
-        workflow = yaml.safe_load((ROOT / ".github/workflows/pr-agent-credential-preflight.yml").read_text())
-        self.assertEqual(workflow.get("on", workflow.get(True)), {"workflow_dispatch": None})
-        self.assertEqual(workflow["permissions"], {"contents": "read"})
-        job = workflow["jobs"]["deepseek"]
-        self.assertEqual(job["if"], "github.ref == 'refs/heads/main' && github.actor == github.repository_owner")
-        self.assertEqual(job["runs-on"], ["self-hosted", "Linux", "X64", "netcup", "ci-general"])
-        checkout, probe = job["steps"]
-        self.assertEqual(checkout["with"], {"ref": "${{ github.sha }}", "persist-credentials": False})
-        self.assertEqual(probe["env"], {"PR_AGENT_DEEPSEEK_API_KEY": "${{ secrets.PR_AGENT_DEEPSEEK_API_KEY }}"})
-        self.assertEqual(probe["run"], "python3 -I scripts/ci/pr_agent_credential_preflight.py")
+        # The entire tiny workflow is a closed contract. This is not a YAML
+        # parser approximation: additional directives, duplicate keys, aliases,
+        # inputs, jobs, env or steps all fail the exact equality. Pinned
+        # actionlint independently checks real YAML/Actions semantics.
+        expected = """name: PR-Agent Credential Preflight
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pr-agent-credential-preflight
+  cancel-in-progress: false
+jobs:
+  deepseek:
+    if: github.ref == 'refs/heads/main' && github.actor == github.repository_owner
+    runs-on: [self-hosted, Linux, X64, netcup, ci-general]
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify dedicated API authentication without inference
+        env:
+          PR_AGENT_DEEPSEEK_API_KEY: ${{ secrets.PR_AGENT_DEEPSEEK_API_KEY }}
+        run: python3 -I scripts/ci/pr_agent_credential_preflight.py"""
+        source = (ROOT / ".github/workflows/pr-agent-credential-preflight.yml").read_text()
+        directives = "\n".join(line.rstrip() for line in source.splitlines()
+                               if line.strip() and not line.lstrip().startswith("#"))
+        self.assertEqual(directives, expected,
+                         "why: secret-bearing preflight workflow differs from its complete reviewed contract; "
+                         "remedy: restore the closed owner/main/read-only flow or review and test its full replacement")
 
 
 if __name__ == "__main__":
