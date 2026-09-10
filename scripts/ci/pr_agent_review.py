@@ -1180,7 +1180,77 @@ def _usage_from_response(response: Any) -> dict[str, int] | None:
         for key in ("prompt_tokens", "completion_tokens", "total_tokens")
     }
     try:
-        return _validate_usage(result)
+        validated = _validate_usage(result)
+        details = _response_field(usage, "completion_tokens_details")
+        if details is not None:
+            reasoning_tokens = _response_field(details, "reasoning_tokens")
+            if (not _strict_int(reasoning_tokens)
+                    or reasoning_tokens < 0
+                    or reasoning_tokens > validated["completion_tokens"]):
+                return None
+        return validated
+    except (TypeError, ValueError):
+        return None
+
+
+def _raw_envelope_counts(raw_response: Any) -> dict[str, int] | None:
+    """Keep only strict individual counts needed to prove an envelope breach."""
+    try:
+        payload = raw_response.json()
+    except Exception:
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("usage"), dict):
+        return None
+    usage = payload["usage"]
+    counts = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = usage.get(key)
+        if _strict_int(value) and value >= 0:
+            counts[key] = value
+    return counts or None
+
+
+def _raw_usage_counts(raw_response: Any) -> tuple[dict[str, Any], dict[str, int]] | None:
+    """Return strict aggregate counts separately from optional priceability details."""
+    try:
+        payload = raw_response.json()
+    except Exception:
+        return None
+    if not isinstance(payload, dict) or "usage" not in payload:
+        return None
+    usage = payload["usage"]
+    if not isinstance(usage, dict):
+        return None
+    if any(key not in usage for key in ("prompt_tokens", "completion_tokens")):
+        return None
+    values = {
+        key: usage[key]
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        if key in usage
+    }
+    try:
+        return usage, _validate_usage(values)
+    except (TypeError, ValueError):
+        return None
+
+
+def _usage_from_raw_response(raw_response: Any) -> dict[str, int] | None:
+    """Validate billable usage before LiteLLM converts the provider payload."""
+    parts = _raw_usage_counts(raw_response)
+    if parts is None:
+        return None
+    usage, validated = parts
+    try:
+        details = usage.get("completion_tokens_details")
+        if details is not None:
+            if not isinstance(details, dict) or "reasoning_tokens" not in details:
+                return None
+            reasoning_tokens = details["reasoning_tokens"]
+            if (not _strict_int(reasoning_tokens)
+                    or reasoning_tokens < 0
+                    or reasoning_tokens > validated["completion_tokens"]):
+                return None
+        return validated
     except (TypeError, ValueError):
         return None
 
@@ -1451,11 +1521,71 @@ _PROVIDER_INPUT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.Con
 
 def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str, provider: dict[str, Any],
                        budget: dict[str, Any], deadline_monotonic: float,
-                       ai_handler_class: Any | None = None) -> tuple[Any, Any, Any, Any]:
+                       ai_handler_class: Any | None = None) -> tuple[Any, Any, Any, Any, Any, Any]:
     """Wrap only the module's imported LiteLLM seam; stock handler remains intact."""
     handler_module = upstream_litellm
     original_completion = handler_module.acompletion
     original_retry_policy = getattr(handler_module, "_should_retry_same_model", None)
+    raw_transform_class = None
+    original_transform = None
+    had_own_transform = False
+    raw_guard_enabled = provider["provider_id"] == "deepseek"
+    output_token_cap = budget["output_token_cap"]
+    context_token_limit = provider["context_token_limit"]
+
+    def raw_envelope_facts(context: dict[str, Any]) -> tuple[bool, bool, bool]:
+        raw_counts = context.get("raw_envelope_counts")
+        if not isinstance(raw_counts, dict):
+            return False, False, False
+        output_breach = raw_counts.get("completion_tokens", -1) > output_token_cap
+        context_breach = raw_counts.get("total_tokens", -1) > context_token_limit
+        if raw_counts.get("prompt_tokens", -1) > context_token_limit:
+            context_breach = True
+        if ("prompt_tokens" in raw_counts and "completion_tokens" in raw_counts
+                and raw_counts["prompt_tokens"] + raw_counts["completion_tokens"] > context_token_limit):
+            context_breach = True
+        return output_breach or context_breach, output_breach, context_breach
+
+    if raw_guard_enabled:
+        transform_module = sys.modules.get("litellm.llms.deepseek.chat.transformation")
+        if transform_module is None:
+            try:
+                import importlib
+                transform_module = importlib.import_module("litellm.llms.deepseek.chat.transformation")
+            except Exception as exc:
+                raise EngineError("engine_unavailable", "pinned DeepSeek raw response seam is unavailable") from exc
+        raw_transform_class = getattr(transform_module, "DeepSeekChatConfig", None) if transform_module else None
+        if raw_transform_class is None or not callable(getattr(raw_transform_class, "transform_response", None)):
+            raise EngineError("engine_unavailable", "pinned DeepSeek raw response seam is unavailable")
+        original_transform = raw_transform_class.transform_response
+        had_own_transform = "transform_response" in raw_transform_class.__dict__
+
+        def observed_transform(self, *args, **kwargs):
+            context = _REQUEST_CONTEXT.get()
+            raw_response = kwargs.get("raw_response")
+            if raw_response is None and len(args) > 1:
+                raw_response = args[1]
+            if context is not None and isinstance(getattr(raw_response, "status_code", None), int):
+                if 200 <= raw_response.status_code < 300:
+                    context["raw_observation_count"] = context.get("raw_observation_count", 0) + 1
+                    context["raw_envelope_counts"] = _raw_envelope_counts(raw_response)
+                    raw_breach, raw_output_breach, raw_context_breach = raw_envelope_facts(context)
+                    context["raw_envelope_breach"] = raw_breach
+                    context["raw_output_breach"] = raw_output_breach
+                    context["raw_context_breach"] = raw_context_breach
+                    if raw_breach:
+                        context["envelope_breach"] = True
+                    raw_usage = _usage_from_raw_response(raw_response)
+                    if raw_usage is None:
+                        context["raw_usage_invalid"] = True
+                    else:
+                        context["raw_usage"] = raw_usage
+            return original_transform(self, *args, **kwargs)
+
+        try:
+            raw_transform_class.transform_response = observed_transform
+        except Exception as exc:
+            raise EngineError("engine_unavailable", "pinned DeepSeek raw response guard could not be installed") from exc
 
     async def admitted_acompletion(**kwargs):
         context = _REQUEST_CONTEXT.get() or {}
@@ -1471,6 +1601,15 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
         kwargs["timeout"] = request_timeout
         request_id = f"{attempt_id}:{provider['provider_id']}:{context.get('request_index', 0) + 1}"
         context["request_index"] = context.get("request_index", 0) + 1
+        if raw_guard_enabled:
+            context["raw_observation_count"] = 0
+            context["raw_usage"] = None
+            context["raw_usage_invalid"] = False
+            context["raw_envelope_counts"] = None
+            context["raw_envelope_breach"] = False
+            context["raw_output_breach"] = False
+            context["raw_context_breach"] = False
+            context["envelope_breach"] = False
         reservation = ledger.admit(
             approval_id=budget["approval_id"], attempt_id=attempt_id, request_id=request_id,
             provider=provider["provider_id"], model=str(kwargs.get("model", provider["model"])),
@@ -1487,10 +1626,50 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
         try:
             async with asyncio.timeout(request_timeout):
                 response = await original_completion(**kwargs)
-        except BaseException:
-            ledger.reconcile(reservation, status="uncertain", actual_amount=None, usage=None)
+        except BaseException as exc:
+            raw_breach, raw_output_breach, raw_context_breach = raw_envelope_facts(context)
+            ledger.reconcile(
+                reservation, status="uncertain", actual_amount=None, usage=None,
+                envelope_breach=raw_breach,
+            )
+            context["envelope_breach"] = raw_breach
+            if raw_breach and not isinstance(exc, asyncio.CancelledError):
+                if raw_output_breach:
+                    raise EngineError("invalid_parameter", "provider usage exceeds the allowed output token cap") from exc
+                if raw_context_breach:
+                    raise EngineError("invalid_parameter", "provider usage exceeds the verified context limit") from exc
+                raise EngineError("invalid_parameter", "provider response exceeded a trusted envelope") from exc
+            if raw_guard_enabled and context.get("raw_usage_invalid"):
+                raise EngineError("invalid_output", "provider raw response usage is missing or invalid")
             raise
         usage = _usage_from_response(response)
+        if raw_guard_enabled:
+            raw_usage = context.get("raw_usage")
+            raw_breach, raw_output_breach, raw_context_breach = raw_envelope_facts(context)
+            if (context.get("raw_observation_count") != 1
+                    or context.get("raw_usage_invalid")
+                    or raw_usage is None):
+                ledger.reconcile(
+                    reservation, status="uncertain", actual_amount=None, usage=None,
+                    envelope_breach=raw_breach,
+                )
+                context["envelope_breach"] = raw_breach
+                if raw_output_breach:
+                    raise EngineError("invalid_parameter", "provider usage exceeds the allowed output token cap")
+                if raw_context_breach:
+                    raise EngineError("invalid_parameter", "provider usage exceeds the verified context limit")
+                raise EngineError("invalid_output", "provider raw response usage is missing or invalid")
+            if usage != raw_usage:
+                ledger.reconcile(
+                    reservation, status="uncertain", actual_amount=None, usage=None,
+                    envelope_breach=raw_breach,
+                )
+                context["envelope_breach"] = raw_breach
+                if raw_output_breach:
+                    raise EngineError("invalid_parameter", "provider usage exceeds the allowed output token cap")
+                if raw_context_breach:
+                    raise EngineError("invalid_parameter", "provider usage exceeds the verified context limit")
+                raise EngineError("invalid_output", "normalized response usage does not match raw provider usage")
         context["usage"] = usage
         output_breach = usage is not None and usage["completion_tokens"] > output_tokens
         context_breach = usage is not None and usage["total_tokens"] > provider["context_token_limit"]
@@ -1507,11 +1686,12 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
                 context["response_model"] = raw_model.strip()
             if isinstance(raw_version, str) and raw_version.strip() and len(raw_version) <= 200:
                 context["response_version"] = raw_version.strip()
+            known_breach = bool(usage_breach or context.get("raw_envelope_breach"))
             ledger.reconcile(
                 reservation, status="uncertain", actual_amount=None, usage=None,
-                envelope_breach=usage_breach,
+                envelope_breach=known_breach,
             )
-            context["envelope_breach"] = usage_breach
+            context["envelope_breach"] = known_breach
             raise
         context["response_model"] = actual_model
         context["response_version"] = response_version
@@ -1519,11 +1699,12 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
             # Usage and served identity remain visible in the attempt evidence,
             # but unpriced or mismatched service cannot release a reservation
             # using the requested model's configured prices.
+            known_breach = bool(usage_breach or context.get("raw_envelope_breach"))
             ledger.reconcile(
                 reservation, status="uncertain", actual_amount=None, usage=None,
-                envelope_breach=usage_breach,
+                envelope_breach=known_breach,
             )
-            context["envelope_breach"] = usage_breach
+            context["envelope_breach"] = known_breach
             raise EngineError("unsupported_model", "provider response model does not match trusted priced identity")
         if usage is None:
             ledger.reconcile(reservation, status="uncertain", actual_amount=None, usage=None)
@@ -1546,7 +1727,7 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
                 raise EngineError("invalid_parameter", "provider usage exceeds the verified context limit")
             raise EngineError("invalid_output", "provider response usage cost is not representable")
         charge_breach = actual > reservation["reserved_amount_usd"]
-        envelope_breach = output_breach or context_breach or charge_breach
+        envelope_breach = output_breach or context_breach or charge_breach or bool(context.get("raw_envelope_breach"))
         ledger.reconcile(
             reservation, status="reconciled", actual_amount=actual, usage=usage,
             envelope_breach=envelope_breach,
@@ -1600,12 +1781,19 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
                 except Exception:
                     retrying.retry = original_tenacity_retry
                     original_tenacity_wait = None
-    return original_completion, original_retry_policy, original_tenacity_retry, original_tenacity_wait
+    return (original_completion, original_retry_policy, original_tenacity_retry, original_tenacity_wait,
+            raw_transform_class, original_transform if had_own_transform else None)
 
 
-def _restore_admission(upstream_litellm: Any, originals: tuple[Any, Any, Any, Any], ai_handler_class: Any | None = None) -> None:
-    original_completion, original_retry_policy, original_tenacity_retry, original_tenacity_wait = originals
+def _restore_admission(upstream_litellm: Any, originals: tuple[Any, Any, Any, Any, Any, Any], ai_handler_class: Any | None = None) -> None:
+    (original_completion, original_retry_policy, original_tenacity_retry, original_tenacity_wait,
+     raw_transform_class, original_transform) = originals
     upstream_litellm.acompletion, upstream_litellm._should_retry_same_model = original_completion, original_retry_policy
+    if raw_transform_class is not None:
+        if original_transform is None:
+            delattr(raw_transform_class, "transform_response")
+        else:
+            raw_transform_class.transform_response = original_transform
     if ai_handler_class is not None and original_tenacity_retry is not None:
         retrying = getattr(ai_handler_class.chat_completion, "retry", None)
         if retrying is not None and hasattr(retrying, "retry"):

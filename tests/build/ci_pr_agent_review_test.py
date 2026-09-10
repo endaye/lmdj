@@ -17,6 +17,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -113,6 +114,9 @@ class FakeCompletion(dict):
 
     def dict(self):
         return dict(self)
+
+
+_UNSET_USAGE = object()
 
 
 def model_identity(actual="fixture-deepseek-served", version=None):
@@ -246,6 +250,45 @@ class InputAndPolicyTests(unittest.TestCase):
     def setUp(self):
         self.document = json.loads((FIXTURES / "complete-input.json").read_text(encoding="utf-8"))
         self.authenticated = adapter.authenticate_input(self.document)
+
+    def test_contradictory_reasoning_usage_is_not_priceable(self):
+        response = FakeCompletion({
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 96,
+                "total_tokens": 196,
+                "completion_tokens_details": {"reasoning_tokens": 4000},
+            },
+        })
+        self.assertIsNone(adapter._usage_from_response(response))
+
+    def test_optional_reasoning_usage_is_strict_and_typed_usage_is_supported(self):
+        class TypedDetails:
+            reasoning_tokens = 40
+
+        class TypedUsage:
+            prompt_tokens = 100
+            completion_tokens = 96
+            total_tokens = 196
+            completion_tokens_details = TypedDetails()
+
+        class TypedResponse:
+            usage = TypedUsage()
+
+        self.assertEqual(adapter._usage_from_response(TypedResponse()), {
+            "prompt_tokens": 100, "completion_tokens": 96, "total_tokens": 196,
+        })
+        for reasoning_tokens in (True, -1, 97, "40"):
+            with self.subTest(reasoning_tokens=reasoning_tokens):
+                response = FakeCompletion({
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 96,
+                        "total_tokens": 196,
+                        "completion_tokens_details": {"reasoning_tokens": reasoning_tokens},
+                    },
+                })
+                self.assertIsNone(adapter._usage_from_response(response))
 
     def test_fixture_authenticates_and_prompt_contains_full_base_head_and_deleted_content(self):
         prompt = adapter.render_prompt_input(self.authenticated)
@@ -964,6 +1007,9 @@ class InputAndPolicyTests(unittest.TestCase):
 class RealHandlerIntegrationTests(unittest.TestCase):
     """Run in a Python 3.12 environment containing the locked PR-Agent deps."""
 
+    _network_blocked: list[str] = []
+    _network_guard_installed = False
+
     def setUp(self):
         if os.environ.get("PR_AGENT_RUN_INTEGRATION") != "1":
             self.skipTest(
@@ -971,6 +1017,18 @@ class RealHandlerIntegrationTests(unittest.TestCase):
                 "PR_AGENT_RUN_INTEGRATION=1 with PR_AGENT_TEST_PYTHON and "
                 "PR_AGENT_TEST_SOURCE_ROOT to run it"
             )
+        if not type(self)._network_guard_installed:
+            type(self)._network_blocked = []
+
+            def deny_network(event, args):
+                if event in {
+                    "socket.connect", "socket.getaddrinfo", "socket.sendto", "socket.sendmsg",
+                }:
+                    type(self)._network_blocked.append(event)
+                    raise RuntimeError("real-handler integration denies outbound network")
+
+            sys.addaudithook(deny_network)
+            type(self)._network_guard_installed = True
         if not SOURCE_ROOT.joinpath("pr_agent").is_dir():
             self.fail(f"pinned PR-Agent source is unavailable: {SOURCE_ROOT}")
         self.temp = tempfile.TemporaryDirectory()
@@ -1021,14 +1079,402 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             token_encoder = sys.modules["pr_agent.algo.token_handler"].TokenEncoder
             token_encoder._encoder_instance = None
             token_encoder._model = None
-        upstream["litellm_ai_handler"].acompletion = fake
+        async def fake_with_raw_observer(**kwargs):
+            """Explicitly mock the raw-observer boundary for seam-only tests."""
+            response = await fake(**kwargs)
+            context = adapter._REQUEST_CONTEXT.get()
+            if context is not None and kwargs.get("model") != "fixture-glm-model":
+                context["raw_observation_count"] = 1
+                context["raw_usage"] = adapter._usage_from_response(response)
+                context["raw_usage_invalid"] = context["raw_usage"] is None
+            return response
+
+        upstream["litellm_ai_handler"].acompletion = fake_with_raw_observer
         with mock.patch.object(adapter, "_import_upstream", return_value=upstream), \
                 mock.patch.object(adapter, "TRUSTED_CONFIG_ROOT", self.root), \
-                mock.patch.dict(os.environ, {"PR_AGENT_DEEPSEEK_API_KEY": "fixture-secret", "GITHUB_TOKEN": "must-not-leak",
+                mock.patch.dict(os.environ, {"PR_AGENT_DEEPSEEK_API_KEY": "fixture-secret", "PR_AGENT_ZAI_API_KEY": "fixture-zai-secret", "GITHUB_TOKEN": "must-not-leak",
                                               "PR_AGENT_CONFIG_BRANCH": "must-not-read", "DYNACONF_CONFIG__MODEL": "must-not-read",
                                               "OPENAI_API_KEY": "must-not-read"}, clear=False):
             return adapter.run_engine(self.input_path, config_path=self.config_path, source_root=self.source_root,
                                       engine_cwd=hostile, ledger_path=ledger), upstream, ledger
+
+    def run_with_wire_transport(self, response_factory):
+        """Run the real handler while replacing only LiteLLM's HTTP transports."""
+        hostile = self.root / "engine"
+        hostile.mkdir(exist_ok=True)
+        (hostile / "pyproject.toml").write_text("not = [valid", encoding="utf-8")
+        (hostile / ".pr_agent.toml").write_text("PR_AGENT_TEST_KEY = 'must not be read'", encoding="utf-8")
+        ledger = self.root / "wire-ledger.jsonl"
+        with adapter._isolated_environment(hostile, "__never_read__", "__never_read__"):
+            upstream = adapter._import_upstream(self.source_root)
+        httpx = upstream["litellm_ai_handler"].httpx
+        from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+
+        async def fake_transport(_transport, request):
+            return await response_factory(httpx, request)
+
+        with mock.patch.object(httpx.AsyncHTTPTransport, "handle_async_request", fake_transport), \
+                mock.patch.object(LiteLLMAiohttpTransport, "handle_async_request", fake_transport), \
+                mock.patch.object(adapter, "_import_upstream", return_value=upstream), \
+                mock.patch.object(adapter, "TRUSTED_CONFIG_ROOT", self.root), \
+                mock.patch.dict(os.environ, {
+                    "PR_AGENT_DEEPSEEK_API_KEY": "fixture-secret",
+                    "GITHUB_TOKEN": "must-not-leak",
+                    "PR_AGENT_CONFIG_BRANCH": "must-not-read",
+                    "DYNACONF_CONFIG__MODEL": "must-not-read",
+                    "OPENAI_API_KEY": "must-not-read",
+                }, clear=False):
+            result = adapter.run_engine(
+                self.input_path, config_path=self.config_path, source_root=self.source_root,
+                engine_cwd=hostile, ledger_path=ledger,
+            )
+        self.assertEqual(type(self)._network_blocked, [])
+        return result, upstream, ledger
+
+    def configure_flash_fixture(self, *, context_limit=32_768):
+        config = self.config_path.read_text()
+        config = re.sub(r"output_token_cap = \d+", "output_token_cap = 4096", config)
+        config = config.replace("endpoint = \"https://deepseek.invalid.example/v1\"", "endpoint = \"https://api.deepseek.com\"")
+        config = config.replace("model = \"fixture-deepseek-model\"", "model = \"deepseek/deepseek-flash\"")
+        config = config.replace("priced_response_model = \"fixture-deepseek-served\"", "priced_response_model = \"deepseek-flash\"")
+        config = re.sub(r"context_token_limit = \d+", f"context_token_limit = {context_limit}", config)
+        self.config_path.write_text(
+            config,
+            encoding="utf-8",
+        )
+        self.config_path.chmod(0o644)
+
+    async def assert_flash_wire(self, httpx, request):
+        body = json.loads((await request.aread()).decode("utf-8"))
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(str(request.url), "https://api.deepseek.com/chat/completions")
+        self.assertEqual(body["model"], "deepseek-flash")
+        self.assertEqual(body["max_tokens"], 4096)
+        self.assertNotIn("max_completion_tokens", body)
+        for forbidden in ("thinking", "reasoning_effort", "tools", "tool_choice", "web_search_options", "service_tier"):
+            self.assertNotIn(forbidden, body)
+        self.assertEqual(request.headers["authorization"], "Bearer fixture-secret")
+        return body
+
+    async def flash_response(self, httpx, request, *, usage=_UNSET_USAGE, content=None, finish_reason="stop"):
+        await self.assert_flash_wire(httpx, request)
+        if usage is _UNSET_USAGE:
+            usage = {
+                "prompt_tokens": 100, "completion_tokens": 4096, "total_tokens": 4196,
+                "completion_tokens_details": {"reasoning_tokens": 4000},
+            }
+        if content is None:
+            content = (FIXTURES / "valid-native-review.yaml").read_text(encoding="utf-8")
+        payload = {
+            "id": "wire-synthetic", "object": "chat.completion", "created": 0,
+            "model": "deepseek-flash",
+            "choices": [{"index": 0, "finish_reason": finish_reason,
+                         "message": {"role": "assistant", "content": content,
+                                     "reasoning_content": "Synthetic reasoning"}}],
+        }
+        if usage is not None:
+            payload["usage"] = usage
+        return httpx.Response(200, request=request, json=payload)
+
+    def test_flash_real_handler_serializes_default_thinking_and_prices_full_reasoning_usage(self):
+        self.configure_flash_fixture()
+        wire_calls = []
+
+        async def response_factory(httpx, request):
+            wire_calls.append(request)
+            return await self.flash_response(httpx, request)
+
+        result, _upstream, ledger = self.run_with_wire_transport(response_factory)
+        self.assertEqual(result["status"], "reviewed")
+        self.assertEqual(result["selected_attempt"], 0)
+        attempt = result["attempts"][0]
+        self.assertEqual(len(wire_calls), 1)
+        self.assertEqual(attempt["usage"]["num_ai_calls"], len(wire_calls))
+        self.assertTrue(attempt["coverage"]["complete"])
+        self.assertEqual(attempt["coverage"]["input_sha256"], result["input_sha256"])
+        self.assertEqual(attempt["model"], {
+            "requested": "deepseek/deepseek-flash", "actual": "deepseek-flash",
+            "response_version": None, "pricing_revision": "fixture-price-v1",
+        })
+        self.assertEqual(attempt["usage"]["prompt_tokens"], 100)
+        self.assertEqual(attempt["usage"]["completion_tokens"], 4096)
+        self.assertEqual(attempt["usage"]["total_tokens"], 4196)
+        request_timeout = wire_calls[0].extensions.get("timeout")
+        self.assertIsNotNone(request_timeout)
+        if isinstance(request_timeout, dict):
+            self.assertLessEqual(max(request_timeout.values()), 7)
+        records = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([record["status"] for record in records], ["reserved", "reconciled"])
+        self.assertEqual(records[0]["request_id"], records[-1]["request_id"])
+        self.assertEqual(records[0]["provider"], "deepseek")
+        self.assertEqual(records[0]["effective_model"], "deepseek/deepseek-flash")
+        self.assertEqual(records[0]["reservation_basis"]["output_token_cap"], 4096)
+        self.assertEqual(records[0]["reserved_amount_usd"], 0.036864)
+        self.assertEqual(records[-1]["actual_amount_usd"], 0.004196)
+        self.assertEqual(records[-1]["usage"], {
+            "prompt_tokens": 100, "completion_tokens": 4096, "total_tokens": 4196,
+        })
+        self.assertNotIn("fixture-secret", ledger.read_text(encoding="utf-8"))
+        self.assertNotIn("fixture-secret", json.dumps(result))
+
+    def test_flash_real_handler_contradictory_reasoning_retains_unknown_reservation(self):
+        self.configure_flash_fixture()
+        wire_calls = []
+
+        async def response_factory(httpx, request):
+            wire_calls.append(request)
+            return await self.flash_response(
+                httpx, request,
+                usage={
+                    "prompt_tokens": 100, "completion_tokens": 96, "total_tokens": 196,
+                    "completion_tokens_details": {"reasoning_tokens": 4000},
+                },
+            )
+
+        result, _upstream, ledger = self.run_with_wire_transport(
+            response_factory
+        )
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["error_class"], "invalid_output")
+        self.assertEqual(len(wire_calls), 1)
+        self.assertEqual(result["attempts"][0]["usage"]["num_ai_calls"], len(wire_calls))
+        records = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([record["status"] for record in records], ["reserved", "uncertain"])
+        self.assertIsNone(records[-1]["actual_amount_usd"])
+        self.assertIsNone(records[-1]["usage"])
+
+    def test_flash_real_handler_length_stop_with_empty_output_never_fabricates_clean_review(self):
+        self.configure_flash_fixture()
+        wire_calls = []
+
+        async def response_factory(httpx, request):
+            wire_calls.append(request)
+            return await self.flash_response(httpx, request, content="", finish_reason="length")
+
+        result, _upstream, ledger = self.run_with_wire_transport(response_factory)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertIsNone(result["review"] if "review" in result else None)
+        self.assertNotIn("clean review", json.dumps(result).casefold())
+        self.assertEqual(len(wire_calls), 1)
+        records = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([record["status"] for record in records], ["reserved", "reconciled"])
+        self.assertEqual(records[-1]["actual_amount_usd"], 0.004196)
+        self.assertEqual(records[-1]["usage"], {
+            "prompt_tokens": 100, "completion_tokens": 4096, "total_tokens": 4196,
+        })
+
+    def test_flash_real_handler_missing_or_invalid_usage_retains_unknown_reservation(self):
+        self.configure_flash_fixture()
+        cases = {
+            "absent-usage": None,
+            "absent-prompt": {"completion_tokens": 4096, "total_tokens": 4096},
+            "absent-completion": {"prompt_tokens": 100, "total_tokens": 100},
+            "null-prompt": {"prompt_tokens": None, "completion_tokens": 4096, "total_tokens": 4196},
+            "null-completion": {"prompt_tokens": 100, "completion_tokens": None, "total_tokens": 100},
+            "bool-prompt": {"prompt_tokens": True, "completion_tokens": 4096, "total_tokens": 4197},
+            "bool-completion": {"prompt_tokens": 100, "completion_tokens": False, "total_tokens": 100},
+            "string-prompt": {"prompt_tokens": "100", "completion_tokens": 4096, "total_tokens": 4196},
+            "string-completion": {"prompt_tokens": 100, "completion_tokens": "4096", "total_tokens": 4196},
+            "contradictory-total": {"prompt_tokens": 100, "completion_tokens": 4096, "total_tokens": 4195},
+        }
+        for label, usage in cases.items():
+            with self.subTest(case=label, usage=usage):
+                wire_calls = []
+
+                async def response_factory(httpx, request):
+                    wire_calls.append(request)
+                    return await self.flash_response(httpx, request, usage=usage)
+
+                result, _upstream, ledger = self.run_with_wire_transport(response_factory)
+                self.assertEqual(result["status"], "not-reviewed")
+                self.assertEqual(len(wire_calls), 1)
+                records = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+                self.assertEqual([record["status"] for record in records], ["reserved", "uncertain"])
+                self.assertIsNone(records[-1]["actual_amount_usd"])
+                self.assertIsNone(records[-1]["usage"])
+                shutil.rmtree(self.root / "engine")
+                ledger.unlink()
+
+    def test_flash_raw_observation_is_not_stale_across_requests_and_guard_is_restored(self):
+        self.configure_flash_fixture()
+        first_calls = []
+
+        async def first_response(httpx, request):
+            first_calls.append(request)
+            return await self.flash_response(httpx, request)
+
+        first_result, _upstream, first_ledger = self.run_with_wire_transport(first_response)
+        self.assertEqual(first_result["status"], "reviewed")
+        self.assertEqual(len(first_calls), 1)
+        from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
+
+        self.assertNotIn("transform_response", DeepSeekChatConfig.__dict__)
+        first_ledger.unlink()
+
+        second_calls = []
+
+        async def second_response(httpx, request):
+            second_calls.append(request)
+            return await self.flash_response(httpx, request, usage=None)
+
+        second_result, _upstream, second_ledger = self.run_with_wire_transport(second_response)
+        self.assertEqual(second_result["status"], "not-reviewed")
+        self.assertEqual(second_result["attempts"][0]["error_class"], "invalid_output")
+        self.assertEqual(len(second_calls), 1)
+        records = [json.loads(line) for line in second_ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([record["status"] for record in records], ["reserved", "uncertain"])
+        self.assertIsNone(records[-1]["actual_amount_usd"])
+        self.assertIsNone(records[-1]["usage"])
+        self.assertNotIn("transform_response", DeepSeekChatConfig.__dict__)
+
+    def test_flash_real_handler_output_and_context_breaches_reconcile_and_hold_future_admission(self):
+        cases = {
+            "output": (32_768, {"prompt_tokens": 100, "completion_tokens": 4097, "total_tokens": 4197}, 0.004197),
+            "context": (8_192, {"prompt_tokens": 4097, "completion_tokens": 4096, "total_tokens": 8193}, 0.008193),
+        }
+        for kind, (context_limit, usage, expected_actual) in cases.items():
+            with self.subTest(kind=kind):
+                self.configure_flash_fixture(context_limit=context_limit)
+                wire_calls = []
+
+                async def response_factory(httpx, request):
+                    wire_calls.append(request)
+                    return await self.flash_response(httpx, request, usage=usage)
+
+                result, _upstream, ledger_path = self.run_with_wire_transport(response_factory)
+                self.assertEqual(result["status"], "not-reviewed")
+                self.assertEqual(result["attempts"][0]["error_class"], "invalid_parameter")
+                self.assertEqual(len(wire_calls), 1)
+                records = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+                self.assertEqual([record["status"] for record in records], ["reserved", "reconciled"])
+                self.assertTrue(records[-1]["envelope_breach"])
+                self.assertAlmostEqual(records[-1]["actual_amount_usd"], expected_actual, places=9)
+                self.assert_envelope_held(ledger_path, records, kind)
+                shutil.rmtree(self.root / "engine")
+                ledger_path.unlink()
+
+    def test_flash_real_handler_known_breach_survives_invalid_accounting_and_parser_paths(self):
+        cases = {
+            "output-reasoning-invalid": {
+                "context_limit": 32_768,
+                "usage": {
+                    "prompt_tokens": 100, "completion_tokens": 4097, "total_tokens": 4197,
+                    "completion_tokens_details": {"reasoning_tokens": 5000},
+                },
+            },
+            "output-normalized-disagreement": {
+                "context_limit": 32_768,
+                "usage": {"prompt_tokens": 100, "completion_tokens": 4097},
+            },
+            "context-normalized-disagreement": {
+                "context_limit": 8_192,
+                "usage": {"prompt_tokens": 4097, "completion_tokens": 4096},
+            },
+            "output-parser-failure": {
+                "context_limit": 32_768,
+                "usage": {"prompt_tokens": 100, "completion_tokens": 4097, "total_tokens": 4197},
+                "malformed_choices": True,
+            },
+            "output-partial-invalid-prompt": {
+                "context_limit": 32_768,
+                "usage": {"prompt_tokens": "invalid", "completion_tokens": 4097, "total_tokens": "invalid"},
+            },
+            "context-partial-invalid-completion": {
+                "context_limit": 8_192,
+                "usage": {"prompt_tokens": 8193, "completion_tokens": "invalid", "total_tokens": "invalid"},
+            },
+            "context-two-counts-disagreeing-total": {
+                "context_limit": 8_192,
+                "usage": {"prompt_tokens": 4097, "completion_tokens": 4096, "total_tokens": 1},
+            },
+        }
+        for label, case in cases.items():
+            with self.subTest(case=label):
+                ledger_path = self.root / "wire-ledger.jsonl"
+                try:
+                    self.configure_flash_fixture(context_limit=case["context_limit"])
+                    wire_calls = []
+
+                    async def response_factory(httpx, request):
+                        wire_calls.append(request)
+                        response = await self.flash_response(httpx, request, usage=case["usage"])
+                        if case.get("malformed_choices"):
+                            payload = response.json()
+                            payload["choices"] = []
+                            response = httpx.Response(200, request=request, json=payload)
+                        return response
+
+                    result, _upstream, ledger_path = self.run_with_wire_transport(response_factory)
+                    self.assertEqual(result["status"], "not-reviewed")
+                    self.assertEqual(result["attempts"][0]["error_class"], "invalid_parameter")
+                    self.assertEqual(len(wire_calls), 1)
+                    records = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+                    self.assertEqual([record["status"] for record in records], ["reserved", "uncertain"])
+                    final = records[-1]
+                    self.assertTrue(final["envelope_breach"])
+                    self.assertEqual(final["reserved_amount_usd"], records[0]["reserved_amount_usd"])
+                    self.assertIsNone(final["actual_amount_usd"])
+                    self.assertIsNone(final["usage"])
+                    self.assert_envelope_held(ledger_path, records, label)
+                finally:
+                    if (self.root / "engine").exists():
+                        shutil.rmtree(self.root / "engine")
+                    if ledger_path.exists():
+                        ledger_path.unlink()
+
+    def test_flash_real_handler_transport_timeout_is_one_call_with_uncertain_reservation(self):
+        self.configure_flash_fixture()
+        wire_calls = []
+
+        async def response_factory(httpx, request):
+            wire_calls.append(request)
+            await self.assert_flash_wire(httpx, request)
+            raise httpx.ReadTimeout("transport timed out fixture", request=request)
+
+        result, _upstream, ledger = self.run_with_wire_transport(response_factory)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["error_class"], "timeout")
+        self.assertEqual(len(wire_calls), 1)
+        records = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([record["status"] for record in records], ["reserved", "uncertain"])
+        self.assertIsNone(records[-1]["actual_amount_usd"])
+        self.assertIsNone(records[-1]["usage"])
+
+    def test_flash_real_handler_transient_http_failure_uses_one_supported_retry(self):
+        self.configure_flash_fixture()
+        wire_calls = []
+
+        async def response_factory(httpx, request):
+            wire_calls.append(request)
+            if len(wire_calls) == 1:
+                await request.aread()
+                return httpx.Response(503, request=request, json={"error": {"message": "temporary fixture"}})
+            return await self.flash_response(httpx, request)
+
+        result, _upstream, ledger = self.run_with_wire_transport(response_factory)
+        self.assertEqual(result["status"], "reviewed")
+        self.assertEqual(len(wire_calls), 2)
+        self.assertEqual(result["attempts"][0]["usage"]["num_ai_calls"], 2)
+        records = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([record["status"] for record in records], ["reserved", "uncertain", "reserved", "reconciled"])
+        self.assertEqual(len({record["request_id"] for record in records}), 2)
+
+    def test_flash_real_handler_permanent_http_error_retains_unknown_reservation(self):
+        self.configure_flash_fixture()
+        wire_calls = []
+
+        async def response_factory(httpx, request):
+            wire_calls.append(request)
+            await request.aread()
+            return httpx.Response(400, request=request, json={"error": {"message": "permanent fixture"}})
+
+        result, _upstream, ledger = self.run_with_wire_transport(response_factory)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(len(wire_calls), 1)
+        records = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([record["status"] for record in records], ["reserved", "uncertain"])
+        self.assertIsNone(records[-1]["actual_amount_usd"])
+        self.assertIsNone(records[-1]["usage"])
 
     @staticmethod
     def with_glm_fallback(config: str) -> str:
@@ -1048,6 +1494,7 @@ class RealHandlerIntegrationTests(unittest.TestCase):
     def assert_envelope_held(self, ledger_path: Path, records: list[dict], label: str) -> None:
         basis = records[0]["reservation_basis"]
         ledger = adapter.Ledger(ledger_path, test_config()["budget"])
+        before = ledger_path.read_text(encoding="utf-8")
         with self.assertRaisesRegex(adapter.AdmissionDenied, "held for operator review"):
             ledger.admit(
                 approval_id="fixture-approval", attempt_id=f"future-{label}",
@@ -1061,6 +1508,7 @@ class RealHandlerIntegrationTests(unittest.TestCase):
                 max_provider_requests=2, per_pr_usd=1.0, monthly_usd=20.0,
                 pilot_usd=20.0, price_revision=records[0]["price_revision"],
             )
+        self.assertEqual(ledger_path.read_text(encoding="utf-8"), before)
 
     def test_stock_reviewer_receives_every_authenticated_segment_and_captures_native_output(self):
         calls = []
@@ -1147,6 +1595,34 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(tokenizer_http_calls, [])
         self.assertEqual(list(ambient_cache.iterdir()), [])
         self.assertEqual(sys.modules["pr_agent.algo.token_handler"].TokenEncoder._encoder_instance.name, "o200k_base")
+
+    def test_non_deepseek_fallback_keeps_stock_handler_and_normalized_ledger_accounting(self):
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+        self.config_path.write_text(self.with_glm_fallback(self.config_path.read_text()))
+        calls = []
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            if kwargs["model"] == "fixture-deepseek-model":
+                raise RuntimeError("503 temporary fixture")
+            return FakeCompletion({
+                "model": "fixture-glm-served",
+                "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            })
+
+        result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "reviewed")
+        self.assertEqual(result["selected_attempt"], 1)
+        self.assertEqual([call["model"] for call in calls], [
+            "fixture-deepseek-model", "fixture-deepseek-model", "fixture-glm-model",
+        ])
+        records = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([record["status"] for record in records], [
+            "reserved", "uncertain", "reserved", "uncertain", "reserved", "reconciled",
+        ])
+        self.assertEqual(records[-1]["provider"], "glm")
+        self.assertEqual(records[-1]["usage"], {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
 
     def test_nonstop_or_missing_finish_reason_rejects_parseable_actual_output_without_retry(self):
         response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
