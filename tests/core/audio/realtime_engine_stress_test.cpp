@@ -58,11 +58,15 @@ void preserves_compact_voice_states_under_spsc_contention() {
   check_voice_state_contention(full);
   lmdj::audio::detail::RuntimeVoiceStateStorage bounded(true);
   check_voice_state_contention(bounded);
+  for (const std::size_t pending : {1U, 128U, 1024U}) {
+    lmdj::audio::detail::RuntimeVoiceStateStorage sized(true, pending);
+    check_voice_state_contention(sized);
+  }
 }
 
-void preserves_all_trigger_events_under_spsc_contention() {
+template <typename Queue>
+void check_trigger_contention(Queue& queue) {
   constexpr std::uint64_t kEvents = 1'000'000;
-  lmdj::audio::detail::FixedSpscQueue<lmdj::audio::PadControlEvent, 1024> queue;
   std::atomic<bool> producer_done{false};
 
   std::thread producer([&] {
@@ -109,6 +113,15 @@ void preserves_all_trigger_events_under_spsc_contention() {
   producer.join();
   LMDJ_CHECK(expected == kEvents);
   LMDJ_CHECK(queue.size_approx() == 0);
+}
+
+void preserves_all_trigger_events_under_spsc_contention() {
+  lmdj::audio::detail::FixedSpscQueue<lmdj::audio::PadControlEvent, 1024> fixed;
+  check_trigger_contention(fixed);
+  for (const std::size_t capacity : {1U, 128U, 1024U}) {
+    lmdj::audio::detail::RuntimeSpscStorage<lmdj::audio::PadControlEvent> sized(capacity);
+    check_trigger_contention(sized);
+  }
 }
 
 void transports_all_voice_starts_to_concurrent_bounded_drains() {

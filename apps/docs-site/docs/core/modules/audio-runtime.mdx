@@ -31,7 +31,7 @@ atomic32 claimed marker 管理 callback ownership，外部 authority 仍校验�
 发布按 current/pending/retiring/reclaimable 状态转移：实时线程只读不可变 Bank，最后一个 Voice 结束后才允许控制线程回收。publication owner 按 reclaim → reserve → publish 顺序核算 live、pending、retiring bytes。准备阶段按剩余字节的较小约束判定失败，约束相等时稳定返回 Bank failure；Bank、generation 与 transient residency 三类失败不互相冒充。Web Audio 的每个有效 callback（包括 paused callback）以 lock-free `uint32` heartbeat 表示活性；Browser Main 在 `AudioContext.resume()` 后必须先观察 heartbeat 前进，才请求打开 realtime gate。激活只在 accepted generation 已成为 current 且无 pending publication 时开启 gate；激活前锁存的 generation 由首个 open-gate callback 精确确认，避免 stop/start 或 suspend/resume 把旧的非零 acknowledgement 当作当前 Bank。
 Voice-state ring 内部使用自然对齐的紧凑 cell，入队／出队按字段复制，保留公开
 `RuntimeVoiceStateEvent` 的成员顺序和完整 64-bit sequence/runtime frame、32-bit
-source frame。容量仍为 10,240；通用 SPSC 索引与内存序、满队列损坏状态、拒绝新
+source frame。默认容量仍为 10,240；SPSC 索引与内存序、满队列损坏状态、拒绝新
 Voice 和 fail-closed drain 语义不变。当前队列存储在 Engine 构造时独立分配，
 不是 render 中的动态扩容。`RealtimeEngine` 的 C++ 对象大小变化要求所有二进制消费者一致重编；
 公开事件 ABI 不变不代表 Engine ABI 不变，后续 Package 分配须处理 MAJOR 影响。
@@ -39,13 +39,15 @@ Voice 和 fail-closed drain 语义不变。当前队列存储在 Engine 构造�
 ## 7. 产品使用方
 Native Host 与未来正式平台 Host 通过 Facade/适配层使用。
 
-### Cardputer 紧凑存储提案（未实现）
+### Cardputer 紧凑存储实施状态
 
 [设计工作项 #1124](https://github.com/endaye/lmdj/issues/1124) 依据
-[R1 负容量研究 #1127](https://github.com/endaye/lmdj/pull/1127)，拟分别实现
-按回执额度一次配置的控制/结果/Voice-state 存储，以及 live Pad 复用只读 PCM16。
+[R1 负容量研究 #1127](https://github.com/endaye/lmdj/pull/1127)，分开实施队列与 PCM。
+当前 M1 source 已实现按回执额度一次配置的控制/结果/Voice-state 存储；
+live Pad 复用只读 PCM16 仍由 [M2 #1130](https://github.com/endaye/lmdj/issues/1130) 承接。
 默认桌面容量和既有 float Bank 路径保持不变，callback 不分配、不释放，原
-publication ownership 与 quiescence 不变。这是待独立评审的设计，不是当前实现。
+publication ownership 与 quiescence 不变。M1 是 staged source：Engine 布局变化须
+在后续身份分配时处理 Audio Runtime MAJOR，不能作为旧 ABI 的二进制替换。
 设计或修复合并均不能替代同素材、同 reserve 的目标容量复测和完整 Host 验收。
 
 Runtime-only Facade 的 T3 source 使用 `PreparedPatternView::from_canonical_snapshot`：
@@ -59,22 +61,29 @@ Master FX prepare；嵌入 Engine 的固定 FX 对象仍计入固定成本。
 
 ### Voice-state 的回执有界存储
 
-默认 Engine 构造仍保留 10240 条 Voice-state 容量。显式
-`ReceiptBoundedVoiceStates` 构造选择固定 2176 条，仅供满足回执约束的调用方：
-最多 1024 条命令从接收直到回执取走一直占用 pending 名额；先 acquire render
-消费位置，再 drain Voice states，最后归还名额。每条命令至多两个状态事件，
-加上最多 128 个既有 Voice 的结束事件，得到 `2 × 1024 + 128` 的上界。
+默认 Engine 构造的控制/结果/Voice-state 容量保持 `1024/4096/10240`；旧无参数
+`ReceiptBoundedVoiceStates` 构造保持 `1024/4096/2176`。新增显式额度 N 构造
+选择 `N/N/(2 × N + 128)`，N 必须处于 1..1024，且构造后不能调整。
+仅满足回执约束的调用方可采用该 profile：每条 accepted 命令从接收直到回执
+取走一直占用 pending 名额；先 acquire render 消费位置，再 drain Voice states，
+最后归还名额。每条命令至多两个状态事件，加上最多 128 个既有 Voice 的结束事件，
+得到 `2 × N + 128` 的上界。
 Pattern/replay/audition 不进入此状态流；release tail 不重复发布结束事件。
 
-Runtime Facade 显式采用该模式；桌面/Performance 调用方默认不变。两个模式都在
-控制侧构造时一次分配完整固定 SPSC 队列，期间不切换、不截断、不缩窄字段；
+Runtime Facade 将 `maximum_pending_commands` 作为 N；桌面/Performance 默认不变。
+三个队列都使用构造时一次分配的固定 SPSC cell block，期间不切换、不截断、不缩窄字段；
 资源不足可以使构造抛出异常，Facade load 将其转为 allocation_failed 并保留 empty。
 回调不分配、不释放、不加锁；析构仍要求 quiescence。预算必须同时计入 Engine
-对象和独立队列，allocator overhead 另属平台 reserve。选用较小模式但违反回执
+对象和三个独立 cell block，每块包含一个 sentinel cell；索引和 owner wrapper 已在
+Engine 对象内计入。`receipt_bounded_storage_bytes(N)` 用溢出检查计算三个 block
+的总 payload，非法 N 返回空值；构造器对非法 N 抛出 invalid_argument。
+allocator overhead 另属平台 reserve。选用较小模式但违反回执
 约束的 Core 调用方仍会触发原有 corrupted/fail-closed，不会静默覆盖事件。
 
-单元测试锁定两种精确容量和全宽字段；组件测试覆盖 128 个旧 Voice 结束加
-1024 次短音的恰好 2176 条未读状态、队列满重试和部分回执。并发测试覆盖实际
+单元测试锁定旧两个组合和 N=1/128/1024 的精确容量、全宽字段与 wrap；实际分配
+账本检查 Engine 加三个 cell block，而非只比较 sizeof。组件测试分别覆盖 128 个
+旧 Voice 结束加 N 次短音的恰好 `128 + 2 × N` 条未读状态、队列满重试和空/部分回执。
+并发测试覆盖实际
 存储分支以及 render 与满额命令/部分 poll 的交错。这些源码测试不代表真机音频验收。
 
 ### Capture 缓冲按需准备

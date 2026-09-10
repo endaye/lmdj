@@ -94,9 +94,11 @@ RuntimeResult RuntimeFacade::load(std::span<const std::byte> bytes,
     }
     const auto& footprint = inspected.value();
     RuntimeBudget budget;
+    const auto queue_bytes = audio::RealtimeEngine::receipt_bounded_storage_bytes(
+        self.config.maximum_pending_commands);
+    if (!queue_bytes) return RuntimeResult::budget_exceeded;
     budget.fixed_bytes = sizeof(RuntimeFacade) + sizeof(Impl) +
-                         sizeof(audio::RealtimeEngine) +
-                         audio::RealtimeEngine::receipt_bounded_voice_state_storage_bytes();
+                         sizeof(audio::RealtimeEngine) + *queue_bytes;
     budget.encoded_bytes = footprint.encoded_bytes;
     budget.pcm_bytes = footprint.pcm_bytes;
     budget.prepared_float_bytes = footprint.prepared_float_bytes;
@@ -130,7 +132,8 @@ RuntimeResult RuntimeFacade::load(std::span<const std::byte> bytes,
     // fragment a bounded platform heap. Keep the candidate local: any later
     // failure still destroys it and leaves the Facade empty and retryable.
     auto engine = std::make_unique<audio::RealtimeEngine>(
-        audio::RealtimeEngine::ReceiptBoundedVoiceStates{});
+        audio::RealtimeEngine::ReceiptBoundedVoiceStates{},
+        self.config.maximum_pending_commands);
     auto decoded = cooker::decode_runtime_content(bytes, identity, self.config.content_limits);
     if (!decoded.has_value()) {
       return decoded.error().code == foundation::ErrorCode::internal_error

@@ -149,10 +149,10 @@ void lifecycle_stress() {
   LMDJ_CHECK(std::all_of(right.begin(), right.end(), [](float v) { return v == 0; }));
 }
 
-void max_pending_partial_poll_races_render() {
+void max_pending_partial_poll_races_render(std::uint32_t pending) {
   constexpr std::uint32_t commands = 32'768;
   auto limits = config();
-  limits.maximum_pending_commands = 1024;
+  limits.maximum_pending_commands = pending;
   limits.maximum_sequence = commands;
   const auto bytes = content(4);
   RuntimeFacade runtime(limits);
@@ -160,12 +160,12 @@ void max_pending_partial_poll_races_render() {
   RuntimeEpoch epoch;
   LMDJ_CHECK(runtime.start(epoch) == RuntimeResult::ok);
   std::uint32_t submitted = 0;
-  for (; submitted < 1024; ++submitted) {
+  for (; submitted < pending; ++submitted) {
     LMDJ_CHECK(runtime.submit({epoch, submitted + 1}) == RuntimeResult::accepted);
   }
   LMDJ_CHECK(runtime.submit({epoch, submitted + 1}) == RuntimeResult::queue_full);
-  // One full quantum deterministically gives 128 starts and 896 refusals.
-  // Consumption alone must not release any of the 1024 pending receipt slots.
+  // N=1024 deterministically gives 128 starts and 896 refusals; smaller
+  // profiles start the entire batch. Consumption alone never retires receipts.
   std::array<float, 4> initial_left{}, initial_right{};
   runtime.render(initial_left.data(), initial_right.data(), initial_left.size());
   LMDJ_CHECK(runtime.submit({epoch, submitted + 1}) == RuntimeResult::queue_full);
@@ -208,7 +208,8 @@ void max_pending_partial_poll_races_render() {
   callback.join();
   LMDJ_CHECK(calls.load() > 0);
   LMDJ_CHECK(submitted == commands && started + refused == commands);
-  LMDJ_CHECK(started >= 128 && refused >= 896);
+  LMDJ_CHECK(started >= std::min(pending, 128U));
+  if (pending > 128) LMDJ_CHECK(refused >= pending - 128);
   LMDJ_CHECK(runtime.poll(receipts) == 0);
   runtime.stop();
   LMDJ_CHECK(runtime.unload() == RuntimeResult::ok);
@@ -221,7 +222,9 @@ void max_pending_partial_poll_races_render() {
 
 int main(int argc, char** argv) {
   if (argc == 2 && std::string_view(argv[1]) == "--stress") {
-    max_pending_partial_poll_races_render();
+    for (const std::uint32_t pending : {1U, 128U, 1024U}) {
+      max_pending_partial_poll_races_render(pending);
+    }
     lifecycle_stress();
   }
   else {
