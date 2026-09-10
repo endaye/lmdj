@@ -467,29 +467,84 @@ Linux CI 现按角色标签路由，取代共享的 `contabo` 来源标签：兼
 ### PR-Agent Netcup 评审槽位（T4，工具已实现，尚未部署）
 
 仓库现在包含 `scripts/ci/pr-agent/deploy-runner.sh` 与其 inactive
-`netcup-review.json`。`dry-run`/`verify` 是只读身份校验；`install` 只将
-固定 T2 bundle 的归档、五个 detached member identities、实际提取文件、
-受保护 inventory、单独绑定的 operator runtime TOML 和 systemd
-service/sibling slice 单元 stage 到 operator-owned 路径。发布目录以
+`netcup-review.json`。`dry-run`/`verify` 是只读身份校验；`stage` 接受带完整
+SHA/长度的 disabled-provider runtime TOML，并写入一个不可执行的固定
+fail-closed unit。之后只有在完整 admissions 通过时，`install` 才会用同一
+T2 bundle 和新的 runtime/operator inventory 创建 deterministic immutable
+revision；完整输入不变时重复执行幂等。每个 revision 保留五个 detached member
+identities、operator JSON、runtime TOML、exact `service.unit`/`slice.unit`
+bytes 与完整 byte identities；rollback 读取 revision 内已认证的 unit bytes，
+不会用当前 renderer 重建历史 revision。发布目录以
 `0755` 供 service user 穿越，文件以 `0444` 固定；只有独立的 state、attempt
 和 output 根为 service-writable，不能回写受信代码或 `/etc` 配置；`rollback`
-只切换精确的上一 immutable release，并在 current/previous 两侧保留 archive
-长度、SHA-256、detached identity 和成员身份。重复 install 与重复 rollback
-都是幂等的，部署 receipt 为 append-only 并保留 `uncertain` 记录，绝不污染
+会在同一认证转换中恢复 prior operator/runtime/unit/current identities，并保留
+两个 revision。重复 install 与重复 rollback 都是幂等的，部署 receipt 为
+append-only 的闭合 unpublished v3 transition record；state 同时保留精确的
+latest-transition witness。重复 rollback 只对已认证的最新到达幂等，新的
+stage/install 后再次 rollback 会创建新 receipt；legacy、malformed、extra-member
+或错误长度/摘要的 current/previous/transition identity 一律只读拒绝，并保留
+`uncertain` 记录，绝不污染
 T2 引擎使用的 monetary ledger。工具不会调用
 `systemctl`，不会启动 runner，不会读取 API key，不会执行 PR checkout、
 PR config 或 hooks，也不持有 GitHub write token。
+
+每个 revision 还保存受保护的 `REVISION_RECORD.json`，receipt history 会用它
+完整鉴权每个历史 endpoint，而不是只检查路径存在；首个唯一 arrival 必须是
+`from_release=null` 的 install，后续 `from_release` 必须连续等于上一条唯一
+arrival 的 `to_release`。Install receipt 的 target 必须与目的 revision 的完整
+inventory 精确一致（包含 operator-config basename）；rollback receipt 的 target
+绑定发起 rollback 的 from-inventory。State 与 receipt 文件及其所有父目录在任何
+读取、幂等判断、恢复或写入前都必须是 operator-owned、`0600`、非 symlink 的
+安全链；不安全证据不会被 chmod 或替换修复。byte-identical duplicate receipt
+仍按一次 arrival 处理，实际 writer 在 receipt 已追加而 state 尚未发布的 crash
+window 仍可安全恢复。恢复时 state 必须保留 receipt 追加前精确的
+`current`/`previous` base pair，并把 pending 作为唯一最后 arrival 处理。Closed receipt 还包含
+`from_record_sha256`/`from_record_byte_length` 与
+`to_record_sha256`/`to_record_byte_length`，分别绑定端点的 canonical 完整
+`REVISION_RECORD.json` bytes；只有首个 null source 允许 null commitment。缺失或
+partial commitment 不会从历史文件推导，而是 read-only 拒绝。Rollback invocation
+必须精确匹配 authenticated current inventory；只有重复最近一次 authenticated
+rollback 才允许 validated no-op。
+Install 不能以新的 transition ID 从一个 immutable revision 到达同一个
+immutable revision；byte-identical same-ID duplicate 仍按一次 arrival 处理。
 
 部署入口固定创建 mask 为 `022`，新建中间父目录保持 `0755`，不受调用者宽松
 umask 影响；显式私有权限不变。既有 group/world-writable 路径仍拒绝准入，
 不会隐式 chmod/chown 修复；测试分别验证新建权限、重复安装和既有不安全路径拒绝。
 
-首次 install 只有在 target 确实 pristine 时才允许没有 runtime state；已有
+首次 stage/install 只有在 target 确实 pristine 时才允许没有 runtime state；已有
 release、current link、unit、receipt、operator config 或 slot lock 却缺少 state，
-以及 closed v2 state/transition 语义不完整，都会保留现有数据并要求人工恢复。中断
+以及 legacy v2 或 closed v3 state/transition 语义不完整，都会保留现有数据并要求人工恢复。中断
 transition 的 receipt 必须是与 pending record 完全相等的一条 canonical closed record；
-同一 ID 的 malformed、identity/action/status/target mismatch 或冲突 duplicate 都不会
+同一 ID 的 byte-identical 重复行按一次 arrival 处理并 append-once；malformed、
+identity/action/status/target mismatch 或冲突 duplicate 都不会
 清除 transition。每个新的实际 transition 仍分配新的 UUID。
+
+在任何幂等判断或新意图前，state 的 latest-transition witness 必须等于
+receipt stream 中按追加顺序的最后一条 authenticated terminal receipt；只有
+精确的 pending receipt 在“receipt 已追加、state 尚未发布”的中断窗口中必须在
+去除 pending 后仍对应 base history 的精确最后 arrival，并只能作为唯一最后 arrival。
+current 必须是指向 canonical release path 的直接、字面 symlink，
+中间 alias 即使最终 resolve 相同也只读拒绝，不会被修复。恢复会先核验所有保留
+current/previous/from/to release、detached member identity，以及每条记录的
+operator path owner/mode/secure parent 和目标 far-side 的完整文件 identity，再
+append receipt、清理 transition 或替换文件；install receipt 的 from/to 也必须与
+pending transition 完全一致。错误长度、摘要、endpoint、owner、mode 或 receipt
+顺序的证据都会保留完整 state/receipt/target/ledger。
+
+该 contract 的本地 runner suite 为 93 tests：普通、外层 `-S`、installer-child
+`-S` 与 `umask 0002` 均为 92 passed、1 个明确的 v14 archive opt-in skip；启用
+固定 v14 archive 后为 93/93、零 skip。六段 A/B arrival journey 每段都检查
+完整 far-side bytes、canonical record bytes、owner/mode、receipt commitments、
+current/previous 与 latest witness；前两段在下一次 transition 前立即检查，且
+初始 monetary ledger 缺失保持缺失；service/slice bytes 分别绑定 A/B 的
+authenticated record identity，receipt target 绑定声明的 inventory；每个替换还检查
+source、destination 和 parent 的 device/inode/mode/UID/GID、最终 destination
+identity 及 fsync 顺序，并要求新 A/B release 发布前实际 `REVISION_RECORD.json`
+文件完成 fsync。首次 stage/install 的
+receipt-before-state crash 也验证了 retry 的 append-once recovery；receipt stream
+中的每一行（包括重复行）都必须是 canonical、完整且带非空 transition ID 的
+closed v3 object，缺失或 null ID 只读拒绝。
 
 真实 `--target-root /` install 在任何 target write 前要求 root EUID、已 provision 的
 service UID/GID，以及 root-owned operator state/inventory、runtime source/target、
@@ -499,6 +554,13 @@ parent 可写和 owner drift，且不会把既有非 operator-owned 路径静默
 `PR_AGENT_DEPLOY_FIXTURE_IDENTITIES` 模拟身份，只覆盖本地 contract，并非 Linux
 service-account/systemd proof。
 
+每个持久 helper 都先 flush 新文件内容与最终权限/owner metadata，再 rename，
+最后 fsync 父目录；changed operator path 的 install 与 rollback 首次创建路径
+均由 test-only scratch Python wrapper 记录真实 `fsync -> rename -> directory`
+顺序，并把嵌套 record-file fsync 与发布后的最终 inode/metadata 读回纳入
+六段 journey。嵌套 receipt parent 的拒绝快照同时覆盖 relocated external
+receipt tree bytes。该 instrumentation 不属于生产 crash hook。
+
 service 是固定的 `lmdj-pr-agent.service`，不是可多开的 template；真实
 执行命令使用 T2 v14 的 `/usr/bin/python3.12`、vendor `PYTHONPATH`、tokenizer
 cache、专用 engine cwd、固定 input/output 根以及由 operator-controlled
@@ -507,21 +569,27 @@ cache、专用 engine cwd、固定 input/output 根以及由 operator-controlled
 T2 的非 symlink source-root 与 runtime-UID ownership guards。
 `/usr/bin/flock --nonblock --exclusive /run/lmdj-pr-agent/slot.lock` 是唯一
 review slot admission；dispatcher 在同一锁下原子写入 input 后，才由未来的
-lead-authorized operator invocation 启动 service。未来 invocation 需要先以
-`lmdj-pr-agent:lmdj-pr-agent` 预置 engine-state/attempt/output 根的 `0750`
-权限、以 root-only `0700` 预置 operator-state，并设置 `slot.lock` 的 `0660`
-权限，再
-以 `root:lmdj-pr-agent`、`0440` 安装 runtime TOML，并以 root-only `0600`
-安装 operator inventory，最后运行：
+lead-authorized operator invocation 启动 service。生产路径、service 身份和
+受保护文件的预置属于 owner-reviewed administrator procedure；本页不再给出
+猜测 executable 路径或会造成 preplacement 误读的命令。可审阅的 source-tool
+入口形状如下：
 
 ```bash
-sudo install -o root -g root -m 0600 scripts/ci/pr-agent/netcup-review.json /etc/lmdj/pr-agent/netcup-review.json
-sudo scripts/ci/pr-agent/deploy-runner.sh install --config /etc/lmdj/pr-agent/netcup-review.json --bundle /srv/lmdj/t2-v14.tar --identity /srv/lmdj/DEPLOYMENT_IDENTITY.json --runtime-config /etc/lmdj/pr-agent/runtime.toml
+deploy-runner.sh stage --config <inactive-operator-json> --bundle <exact-v14-archive> \
+  --identity <detached-v14-identity> --runtime-config <disabled-provider-toml> \
+  --target-root <isolated-target>
+# After independent operator/runner/capacity/isolation/activation/runtime evidence:
+deploy-runner.sh install --config <active-operator-json> --bundle <exact-v14-archive> \
+  --identity <detached-v14-identity> --runtime-config <enabled-candidate-toml> \
+  --target-root <isolated-target>
+deploy-runner.sh rollback --config <active-operator-json> --target-root <isolated-target>
 ```
 
 此处只描述已实现的 entrypoint 和未来 invocation；本 Task 没有执行 host
 mutation、systemd activation、co-running resource/process-recovery 或 API
-证据。actual-v14 opt-in 只证明 archive bytes/vendor tree/direct canonical
+证据。`stage` 的成功只证明 inactive disabled-provider revision 已受保护地
+落盘；probe、credential intake、launch/admission 与 paid attempt 仍是后续
+独立边界。actual-v14 opt-in 只证明 archive bytes/vendor tree/direct canonical
 paths 与 rendered command contract；不证明非 root Linux T2 CLI startup 或
 systemd admission。T3 仍只负责协议 consumer，T5 负责 shadow Actions route，
 T6 负责 production；T4/T1153 仍 open。
