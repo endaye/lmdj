@@ -1,7 +1,7 @@
 # PR-Agent review migration implementation plan
 
 Date: 2026-09-10
-Status: T1 drafting; no engine implementation, deployment or paid API validation.
+Status: Implementation in progress; per-Task acceptance is recorded in the linked issues.
 Umbrella: #1149. Task issues: #1150–#1155.
 
 ## Authority and coordination
@@ -15,10 +15,11 @@ No server purchase, paid hosted fallback, branch-protection change, product
 release or unrelated cleanup is authorized.
 
 The lead writes this plan and the [design](../design/2026-09-10-pr-agent-review-migration.md),
-coordinates Orca workers, and accepts final evidence. Luna workers perform
+coordinates Orca workers, and accepts final evidence. Supervised workers perform
 implementation and focused verification; separate workers review exact heads.
-Use high effort for bounded implementation and xhigh for provenance, coverage,
-publication or adversarial review. Escalate uncertain choices to the lead, who
+The lead selects the model and effort for the Task's difficulty, using high
+effort for bounded implementation and xhigh for complex provenance, coverage,
+publication or adversarial work. Escalate uncertain choices to the lead, who
 asks the user only when authority, credentials, budget or product decisions
 cannot be resolved from evidence. Do not expand nested worker fanout.
 
@@ -152,6 +153,89 @@ unknown price denial and uncertain timeout reservation retention. Coverage
 receipt/history fields follow the design's Receipt and compatibility interface.
 Any chunk support must be offline-tested for union and missing-result failure;
 it is not enabled for paid pilot evaluation.
+
+### T2 accepted review correction contract
+
+The independent review of PR #1175 at
+`5ed6fa6adfe79d8689ca2c8da11b9263495a3151` found six unresolved defects in
+configuration admission, actual request limits, runtime identity, native-output
+validation, coverage identity and the clean Python 3.11 test boundary. Correct
+these within the existing T2 declared files and retain the failed head and its
+CI/review runs. A changed adapter or config requires a new matching Linux
+bundle and new-head independent review. No supplier is activated by these fixes.
+
+The closed coverage receipt keeps the design's exact top-level keys and has
+no self-digest. Its nested `model` is a closed object with `requested`, `actual`,
+`response_version` and `pricing_revision`. `actual` records the provider's
+returned model identity, distinct from the requested alias. A reviewed receipt
+requires a nonempty actual model matching the trusted priced response binding.
+`response_version` is the provider-returned version when present, otherwise
+null; it is never filled from a guessed or configured release name. Failed
+attempts may retain null actual identity. T3 computes the digest over the complete
+canonical receipt and preserves these identities in its v2 history path.
+
+Each closed expected/observed segment entry has `id`, `path`, `old_path`,
+`change_kind`, `old_blob`, `new_blob`, `patch` and `right_lines`. A blob object
+has `object_id`, `sha256` and `byte_length`; an absent file side is null rather
+than an invented empty blob. `patch` has `sha256` and `byte_length`. Verify Git
+blob hashes, content hashes and lengths from the exact bytes and against the
+fixed base/head collector inventory. Deletion and required zero-hunk content
+remain represented. T2 does not gain GitHub access or execute PR code; T3 owns
+authentication of the collector and control provenance at its consumers.
+
+Trusted activation includes `context_token_limit`, `tokenizer_id`,
+`tokenizer_verified` and `priced_response_model`, in addition to the existing
+endpoint, model, pricing, credential and funding evidence. A tokenizer ID must
+resolve to an explicitly supported pinned provider-approved counter, including
+message overhead. A boolean alone does not approve an arbitrary counter or a
+library fallback. Count the actual complete rendered messages; enforce their
+input cap, the allowed output cap, the combined context limit, the configured
+request timeout and the total deadline at the real request boundary. Unknown
+bindings deny dispatch. Runtime tokenization cannot fetch mutable metadata or
+download unpinned assets. Synthetic activation fixtures do not verify a live
+supplier. The actual committed TOML must parse and load with all unverified
+suppliers disabled, omitting bindings that TOML cannot represent as null.
+Until supplier-specific tokenization and message-overhead evidence is accepted,
+keep the production counter registry empty and deny enabled production routes.
+Synthetic fixture counters prove the real handler boundary only; they are not
+selectable through production configuration. The pinned upstream reviewer also
+constructs its own `TokenHandler` using `o200k_base`; that internal estimate does
+not establish supplier-specific admission counts. If retaining that stock path,
+bundle and verify its fixed asset with an isolated cache and no runtime download.
+Prove actual handler startup with an empty ambient tokenizer cache and blocked
+unexpected metadata/asset requests. A follow-up in T2-owned adapter paths must establish an
+evidence-backed counter before live supplier activation; T4 consumes supported
+bindings and does not silently take ownership of adapter implementation. This
+inactive correction is not proof of live supplier usability or T5 acceptance.
+T2 and its PR remain open/incomplete until that counter prerequisite is met;
+a verified corrective baseline may be committed without declaring T2 complete.
+
+Use a detached `DEPLOYMENT_IDENTITY.json` to bind the final archive SHA-256 and
+byte length, manifest, adapter, bundled default config and dependency lock.
+Generate it after the archive digest is known; a bundle cannot contain its own
+final digest. The engine verifies its actual extracted files against this
+trusted runner/deployment input and computes the runtime configuration digest
+and length separately. PR-supplied identity data cannot authorize execution.
+T4 owns verification of the installed archive and protection of that deployment
+identity. Runtime receipts retain the verified bundle and configuration identity.
+The closed `engine.bundle` has `archive_sha256`, `archive_byte_length`,
+`manifest_sha256`, `adapter_sha256`, `default_config_sha256` and
+`requirements_lock_sha256`; `engine.runtime_config` has `sha256` and
+`byte_length`. The detached identity has exactly `schema`, `archive` and `files`.
+Its `archive` has `sha256` and `byte_length`; its `files` has `manifest`,
+`adapter`, `default_config`, `requirements_lock` and `stock_tokenizer_asset`,
+each with `path`, `sha256` and `byte_length`. T3 preserves these closed
+identities; T4 verifies the archive and installs the detached identity through
+its trusted deployment boundary.
+
+Retain actual YAML/handler regressions in the pinned Python 3.12 boundary while
+making the ordinary Python 3.11 contract independent of ambient PyYAML. Prove
+both stages execute successfully in clean environments, without dropping the
+missing-findings assertion, widening timeouts or skipping a required integration
+case. Require a model-supplied summary for clean output and bound the whole raw
+prediction before parsing, including all retained native fields. Run the
+affected focused tests, staged ownership checks, required clean-CI proof, new
+bundle proof and `scripts/docs-site.sh check` for this plan amendment.
 
 ## T3 — 适配 LMDJ 评审协议、测试范围与所有下游消费者 (#1152)
 

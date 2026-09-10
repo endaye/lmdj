@@ -53,6 +53,7 @@ COVERAGE_SCHEMA = "lmdj.pr-agent-coverage.v1"
 RESULT_SCHEMA = "lmdj.pr-agent-result.v1"
 CONFIG_SCHEMA = "lmdj.pr-agent-config.v1"
 LEDGER_SCHEMA = "lmdj.pr-agent-ledger.v1"
+DEPLOYMENT_SCHEMA = "lmdj.pr-agent-deployment.v1"
 
 SUPPORTED_PROVIDERS = ("deepseek", "glm", "xai", "kimi")
 PROVIDER_ADAPTERS = {
@@ -69,6 +70,7 @@ MAX_PATCH_BYTES = 2 * 1024 * 1024
 MAX_FINDINGS = 20
 MAX_FINDING_BODY_BYTES = 8192
 MAX_SUMMARY_BYTES = 32 * 1024
+MAX_NATIVE_OUTPUT_BYTES = 128 * 1024
 MAX_INPUT_TOKENS = 100_000
 MAX_OUTPUT_TOKENS = 4_096
 DEFAULT_REQUEST_TIMEOUT = 60
@@ -79,6 +81,23 @@ DEFAULT_MAX_PROVIDER_REQUESTS = 2
 MAX_MONTHLY_USD = 20.0
 MAX_PILOT_USD = 20.0
 MAX_PER_PR_USD = 1.0
+# A production binding is added here only after supplier evidence establishes
+# its exact message counter and protocol overhead.  The initial registry is
+# intentionally empty: tokenizer_verified=true in configuration cannot turn an
+# unproved tokenizer guess into an admitted provider route.  Tests inject
+# explicitly fixture-only counters at this code-owned boundary.
+SUPPORTED_TOKENIZERS: dict[str, dict[str, Any]] = {}
+STOCK_TOKENIZER_CACHE_FILE = "tokenizer-cache/fb374d419588a4632f3f557e76b4b70aebbca790"
+
+COVERAGE_KEYS = frozenset({
+    "schema", "identity", "engine", "provider", "model", "input_sha256",
+    "expected_hunks", "observed_hunks", "remaining_files", "failed_chunks",
+    "complete", "usage",
+})
+SEGMENT_KEYS = frozenset({
+    "id", "path", "old_path", "change_kind", "old_blob", "new_blob",
+    "patch", "right_lines",
+})
 
 TRUSTED_CREDENTIAL_REFS = frozenset({
     "PR_AGENT_DEEPSEEK_API_KEY",
@@ -193,18 +212,28 @@ def _safe_path(path: Any) -> str:
     return path
 
 
-def _decode_blob(blob: Any, side: str, path: str) -> tuple[bytes, str]:
+def _git_blob_object_id(data: bytes) -> str:
+    payload = f"blob {len(data)}\0".encode("ascii") + data
+    try:
+        digest = hashlib.sha1(payload, usedforsecurity=False)
+    except TypeError:  # pragma: no cover - compatibility with older Python builds.
+        digest = hashlib.sha1(payload)
+    return digest.hexdigest()
+
+
+def _decode_blob(blob: Any, side: str, path: str) -> tuple[bytes, dict[str, Any] | None, str | None]:
     if blob is None:
-        return b"", ""
-    if not isinstance(blob, dict):
+        return b"", None, None
+    required = {"object_id", "sha256", "byte_length", "data_b64", "encoding"}
+    if not isinstance(blob, dict) or set(blob) != required:
         raise EngineError("input_invalid", "input contains an invalid blob record")
-    required = ("sha256", "byte_length", "data_b64", "encoding")
-    if any(key not in blob for key in required):
-        raise EngineError("input_invalid", "input blob metadata is incomplete")
+    object_id = blob["object_id"]
     digest = blob["sha256"]
     length = blob["byte_length"]
     encoded = blob["data_b64"]
     encoding = blob["encoding"]
+    if not isinstance(object_id, str) or not re.fullmatch(r"[0-9a-f]{40}", object_id):
+        raise EngineError("input_invalid", "input Git blob object ID is invalid")
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise EngineError("input_invalid", "input blob hash is invalid")
     if not _strict_int(length) or length < 0 or length > MAX_BLOB_BYTES:
@@ -215,8 +244,8 @@ def _decode_blob(blob: Any, side: str, path: str) -> tuple[bytes, str]:
         data = base64.b64decode(encoded, validate=True)
     except (ValueError, base64.binascii.Error) as exc:
         raise EngineError("input_invalid", "input blob encoding is invalid") from exc
-    if len(data) != length or _sha256(data) != digest:
-        raise EngineError("input_invalid", "input blob hash or length does not match its bytes")
+    if len(data) != length or _sha256(data) != digest or _git_blob_object_id(data) != object_id:
+        raise EngineError("input_invalid", "input blob object ID, hash or length does not match its bytes")
     if encoding not in ("utf-8", "binary"):
         raise EngineError("input_invalid", "input blob encoding label is unsupported")
     if encoding == "utf-8":
@@ -224,7 +253,7 @@ def _decode_blob(blob: Any, side: str, path: str) -> tuple[bytes, str]:
             data.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise EngineError("input_invalid", f"{side} blob is not valid UTF-8") from exc
-    return data, digest
+    return data, {"object_id": object_id, "sha256": digest, "byte_length": length}, encoding
 
 
 def _parse_patch_right_lines(patch: str) -> list[tuple[int, str]]:
@@ -253,8 +282,8 @@ def _parse_patch_right_lines(patch: str) -> list[tuple[int, str]]:
 
 
 def _verify_hunk(path: str, hunk: dict[str, Any], file_patch: str) -> dict[str, Any]:
-    required = ("id", "patch", "patch_sha256", "right_lines")
-    if any(key not in hunk for key in required):
+    required = {"id", "patch", "patch_sha256", "right_lines"}
+    if not isinstance(hunk, dict) or set(hunk) != required:
         raise EngineError("input_invalid", "input hunk metadata is incomplete")
     hunk_id = hunk["id"]
     patch = hunk["patch"]
@@ -290,8 +319,9 @@ def _verify_hunk(path: str, hunk: dict[str, Any], file_patch: str) -> dict[str, 
     return {
         "id": hunk_id,
         "path": path,
+        "patch_text": patch,
         "patch_sha256": patch_hash,
-        "required_sha256": _sha256(patch.encode("utf-8")),
+        "patch_byte_length": len(patch.encode("utf-8")),
         "right_lines": [line for line, _ in sorted(parsed)],
     }
 
@@ -345,7 +375,10 @@ def authenticate_input(document: Any) -> dict[str, Any]:
     input_complete = True
     represented_bytes = len(diff_bytes)
     for file in files:
-        if not isinstance(file, dict):
+        if not isinstance(file, dict) or set(file) != {
+            "path", "old_path", "change_kind", "patch", "patch_sha256",
+            "base", "head", "hunks",
+        }:
             raise EngineError("input_invalid", "input file record is invalid")
         path = _safe_path(file.get("path"))
         if path in seen_paths:
@@ -367,8 +400,8 @@ def authenticate_input(document: Any) -> dict[str, Any]:
             raise EngineError("input_invalid", "input file patch hash does not match")
         if patch not in diff_text:
             raise EngineError("input_invalid", "input file patch is not present in the authenticated diff")
-        base_bytes, base_hash = _decode_blob(file.get("base"), "base", path)
-        head_bytes, head_hash = _decode_blob(file.get("head"), "head", path)
+        base_bytes, base_blob, base_encoding = _decode_blob(file.get("base"), "base", path)
+        head_bytes, head_blob, head_encoding = _decode_blob(file.get("head"), "head", path)
         if kind == "added" and file.get("base") is not None:
             raise EngineError("input_invalid", "added input unexpectedly contains base bytes")
         if kind == "deleted" and file.get("head") is not None:
@@ -407,12 +440,15 @@ def authenticate_input(document: Any) -> dict[str, Any]:
             "change_kind": kind,
             "patch": patch,
             "patch_sha256": patch_hash,
+            "patch_byte_length": len(patch.encode("utf-8")),
             "base_bytes": base_bytes,
-            "base_sha256": base_hash,
+            "base_blob": base_blob,
+            "base_sha256": base_blob["sha256"] if base_blob else "",
             "head_bytes": head_bytes,
-            "head_sha256": head_hash,
-            "base_encoding": (file.get("base") or {}).get("encoding") if isinstance(file.get("base"), dict) else None,
-            "head_encoding": (file.get("head") or {}).get("encoding") if isinstance(file.get("head"), dict) else None,
+            "head_blob": head_blob,
+            "head_sha256": head_blob["sha256"] if head_blob else "",
+            "base_encoding": base_encoding,
+            "head_encoding": head_encoding,
             "hunks": normalized_hunks,
         })
     if represented_bytes > MAX_INPUT_BYTES * 2:
@@ -431,15 +467,18 @@ def _hunk_marker(hunk: dict[str, Any]) -> str:
     return f"LMDJ-HUNK path={hunk['path']} id={hunk['id']} sha256={hunk['patch_sha256']}"
 
 
-def _content_block(side: str, path: str, data: bytes, encoding: str | None, digest: str) -> str:
-    if not data and not digest:
+def _content_block(side: str, path: str, data: bytes, encoding: str | None,
+                   blob_identity: dict[str, Any] | None) -> str:
+    if blob_identity is None:
         return f"LMDJ-{side}-CONTENT path={path} absent=true\n"
     if encoding == "utf-8":
         value = data.decode("utf-8")
     else:
         value = base64.b64encode(data).decode("ascii")
     return (
-        f"LMDJ-{side}-CONTENT path={path} sha256={digest} encoding={encoding or 'unknown'}\n"
+        f"LMDJ-{side}-CONTENT path={path} object_id={blob_identity['object_id']} "
+        f"sha256={blob_identity['sha256']} byte_length={blob_identity['byte_length']} "
+        f"encoding={encoding or 'unknown'}\n"
         "BEGIN\n" + value + "\nEND\n"
     )
 
@@ -460,11 +499,11 @@ def render_prompt_input(authenticated: dict[str, Any]) -> str:
         lines.extend([
             f"BEGIN FILE path={file['path']} change_kind={file['change_kind']} old_path={file['old_path'] or ''}",
             f"PATCH-SHA256={file['patch_sha256']}",
-            _content_block("BASE", file["path"], file["base_bytes"], file["base_encoding"], file["base_sha256"]),
-            _content_block("HEAD", file["path"], file["head_bytes"], file["head_encoding"], file["head_sha256"]),
+            _content_block("BASE", file["path"], file["base_bytes"], file["base_encoding"], file["base_blob"]),
+            _content_block("HEAD", file["path"], file["head_bytes"], file["head_encoding"], file["head_blob"]),
         ])
         for hunk in file["hunks"]:
-            lines.extend([_hunk_marker(hunk), "BEGIN HUNK", file["patch"], "END HUNK"])
+            lines.extend([_hunk_marker(hunk), "BEGIN HUNK", hunk["patch_text"], "END HUNK"])
         lines.append("END FILE")
     lines.append("END LMDJ AUTHENTICATED REVIEW INPUT")
     return "\n".join(lines)
@@ -477,11 +516,14 @@ def expected_coverage(authenticated: dict[str, Any]) -> list[dict[str, Any]]:
             result.append({
                 "id": hunk["id"],
                 "path": file["path"],
+                "old_path": file["old_path"],
                 "change_kind": file["change_kind"],
-                "old_blob_sha256": file["base_sha256"] or None,
-                "new_blob_sha256": file["head_sha256"] or None,
-                "patch_sha256": hunk["patch_sha256"],
-                "required_sha256": hunk["required_sha256"],
+                "old_blob": copy.deepcopy(file["base_blob"]),
+                "new_blob": copy.deepcopy(file["head_blob"]),
+                "patch": {
+                    "sha256": hunk["patch_sha256"],
+                    "byte_length": hunk["patch_byte_length"],
+                },
                 "right_lines": hunk["right_lines"],
             })
     return result
@@ -535,25 +577,45 @@ def _safe_config(document: Any) -> dict[str, Any]:
     if not isinstance(providers, dict) or set(providers) != set(SUPPORTED_PROVIDERS):
         raise EngineError("configuration_invalid", "trusted provider registry must list exactly four adapters")
     normalized_providers = {}
+    provider_keys = {
+        "enabled", "endpoint", "model", "priced_response_model", "credential_ref",
+        "pricing_revision", "input_price_usd_per_token", "output_price_usd_per_token",
+        "pricing_verified", "funding_ref", "funding_verified", "context_token_limit",
+        "tokenizer_id", "tokenizer_verified",
+    }
+    activation_keys = provider_keys - {"enabled", "pricing_verified", "funding_verified", "tokenizer_verified"}
     for provider_id in SUPPORTED_PROVIDERS:
         entry = providers[provider_id]
-        if not isinstance(entry, dict):
+        if not isinstance(entry, dict) or set(entry) - provider_keys:
             raise EngineError("configuration_invalid", "trusted provider configuration is invalid")
         enabled = entry.get("enabled")
         if not isinstance(enabled, bool):
             raise EngineError("configuration_invalid", "trusted provider enabled flag is invalid")
         if not enabled:
-            if any(entry.get(key) is not None for key in ("endpoint", "model", "credential_ref", "pricing_revision", "input_price_usd_per_token", "output_price_usd_per_token", "funding_ref")):
+            if any(entry.get(key) is not None for key in activation_keys):
                 raise EngineError("configuration_invalid", "disabled provider must have null activation inputs")
             normalized_providers[provider_id] = {"provider_id": provider_id, "enabled": False}
             continue
-        required = ("endpoint", "model", "credential_ref", "pricing_revision", "input_price_usd_per_token", "output_price_usd_per_token", "funding_ref")
-        if any(entry.get(key) is None for key in required) or entry.get("pricing_verified") is not True or entry.get("funding_verified") is not True:
+        required = (
+            "endpoint", "model", "priced_response_model", "credential_ref",
+            "pricing_revision", "input_price_usd_per_token", "output_price_usd_per_token",
+            "funding_ref", "context_token_limit", "tokenizer_id",
+        )
+        if (any(entry.get(key) is None for key in required)
+                or entry.get("pricing_verified") is not True
+                or entry.get("funding_verified") is not True
+                or entry.get("tokenizer_verified") is not True):
             raise EngineError("configuration_invalid", "enabled provider lacks trusted activation evidence")
-        endpoint, model, credential_ref, revision, funding_ref = (entry[key] for key in ("endpoint", "model", "credential_ref", "pricing_revision", "funding_ref"))
+        endpoint, model, priced_model, credential_ref, revision, funding_ref, tokenizer_id = (
+            entry[key] for key in (
+                "endpoint", "model", "priced_response_model", "credential_ref",
+                "pricing_revision", "funding_ref", "tokenizer_id",
+            )
+        )
         if not isinstance(endpoint, str) or not endpoint.startswith("https://") or any(ch.isspace() for ch in endpoint):
             raise EngineError("configuration_invalid", "enabled provider endpoint is invalid")
         if (not isinstance(model, str) or not model or len(model) > 200
+                or not isinstance(priced_model, str) or not priced_model or len(priced_model) > 200
                 or not isinstance(credential_ref, str)
                 or credential_ref not in TRUSTED_CREDENTIAL_REFS):
             raise EngineError("configuration_invalid", "enabled provider model or credential reference is invalid")
@@ -563,16 +625,30 @@ def _safe_config(document: Any) -> dict[str, Any]:
             raise EngineError("configuration_invalid", "enabled provider pricing is invalid")
         if float(entry["input_price_usd_per_token"]) < 0 or float(entry["output_price_usd_per_token"]) < 0:
             raise EngineError("configuration_invalid", "enabled provider pricing is negative")
+        tokenizer = SUPPORTED_TOKENIZERS.get(tokenizer_id)
+        if (not isinstance(tokenizer_id, str) or not isinstance(tokenizer, dict)
+                or set(tokenizer) != {"provider", "evidence_revision", "count_messages"}
+                or tokenizer.get("provider") != provider_id
+                or not isinstance(tokenizer.get("evidence_revision"), str)
+                or not tokenizer["evidence_revision"]
+                or not callable(tokenizer.get("count_messages"))):
+            raise EngineError("configuration_invalid", "enabled provider tokenizer binding is unsupported")
+        context_limit = entry["context_token_limit"]
+        if not _strict_int(context_limit) or context_limit < 2:
+            raise EngineError("configuration_invalid", "enabled provider context token limit is invalid")
         normalized_providers[provider_id] = {
             "provider_id": provider_id,
             "enabled": True,
             "endpoint": endpoint,
             "model": model,
+            "priced_response_model": priced_model,
             "credential_ref": credential_ref,
             "pricing_revision": revision,
             "funding_ref": funding_ref,
             "input_price_usd_per_token": float(entry["input_price_usd_per_token"]),
             "output_price_usd_per_token": float(entry["output_price_usd_per_token"]),
+            "context_token_limit": context_limit,
+            "tokenizer_id": tokenizer_id,
         }
     order = document.get("provider_order", ["deepseek", "glm", "xai", "kimi"])
     if not isinstance(order, list) or any(provider not in SUPPORTED_PROVIDERS for provider in order) or len(set(order)) != len(order):
@@ -583,7 +659,7 @@ def _safe_config(document: Any) -> dict[str, Any]:
     return {"budget": merged_budget, "providers": normalized_providers, "provider_order": order}
 
 
-def load_trusted_config(path: str | os.PathLike[str]) -> dict[str, Any]:
+def _load_trusted_config(path: str | os.PathLike[str]) -> tuple[dict[str, Any], dict[str, Any]]:
     requested_path = Path(path).absolute()
     try:
         trusted_root = TRUSTED_CONFIG_ROOT.resolve(strict=True)
@@ -610,7 +686,12 @@ def load_trusted_config(path: str | os.PathLike[str]) -> dict[str, Any]:
         parsed = tomllib.loads(data.decode("utf-8"))
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise EngineError("configuration_invalid", "trusted configuration is not valid TOML") from exc
-    return _safe_config(parsed)
+    return _safe_config(parsed), {"sha256": _sha256(data), "byte_length": len(data)}
+
+
+def load_trusted_config(path: str | os.PathLike[str]) -> dict[str, Any]:
+    """Load only the normalized configuration; the engine also binds its read bytes."""
+    return _load_trusted_config(path)[0]
 
 
 def _validate_usage(usage: Any) -> dict[str, int]:
@@ -886,6 +967,52 @@ def _usage_from_response(response: Any) -> dict[str, int] | None:
         return None
 
 
+def _response_model_identity(response: Any) -> tuple[str | None, str | None]:
+    model = _response_field(response, "model")
+    version = _response_field(response, "model_version")
+    if model is not None and (not isinstance(model, str) or not model.strip() or len(model) > 200):
+        raise EngineError("unsupported_model", "provider returned an invalid model identity")
+    if version is not None and (not isinstance(version, str) or not version.strip() or len(version) > 200):
+        raise EngineError("unsupported_model", "provider returned an invalid model version")
+    return model.strip() if isinstance(model, str) else None, version.strip() if isinstance(version, str) else None
+
+
+def _require_complete_response(response: Any) -> None:
+    choices = _response_field(response, "choices")
+    if not isinstance(choices, list) or len(choices) != 1:
+        raise EngineError("invalid_output", "provider response does not contain one complete choice")
+    finish_reason = _response_field(choices[0], "finish_reason")
+    if finish_reason != "stop":
+        raise EngineError("invalid_output", "provider response did not terminate normally")
+
+
+def _count_rendered_messages(messages: Any, tokenizer_id: str) -> int:
+    binding = SUPPORTED_TOKENIZERS.get(tokenizer_id)
+    if (not isinstance(binding, dict)
+            or set(binding) != {"provider", "evidence_revision", "count_messages"}
+            or not callable(binding.get("count_messages"))):
+        raise EngineError("configuration_invalid", "request tokenizer binding is unsupported")
+    if not isinstance(messages, list) or not messages:
+        raise EngineError("invalid_parameter", "actual LiteLLM request has no countable messages")
+    for message in messages:
+        if not isinstance(message, dict) or set(message) - {"role", "content", "name"}:
+            raise EngineError("invalid_parameter", "actual LiteLLM message shape is unsupported")
+        role = message.get("role")
+        content = message.get("content")
+        name = message.get("name")
+        if not isinstance(role, str) or not role or not isinstance(content, str):
+            raise EngineError("invalid_parameter", "actual LiteLLM message content is not countable")
+        if name is not None and (not isinstance(name, str) or not name):
+            raise EngineError("invalid_parameter", "actual LiteLLM message name is not countable")
+    try:
+        total = binding["count_messages"](copy.deepcopy(messages))
+    except Exception as exc:
+        raise EngineError("engine_unavailable", "approved request tokenizer failed") from exc
+    if not _strict_int(total) or total < 1:
+        raise EngineError("engine_unavailable", "approved request tokenizer returned an invalid count")
+    return total
+
+
 def _is_timeout(exc: BaseException) -> bool:
     names = {type(exc).__name__.casefold()}
     current = exc.__cause__ or exc.__context__
@@ -899,8 +1026,13 @@ def _is_timeout(exc: BaseException) -> bool:
 
 
 def _error_class(exc: BaseException) -> str:
-    if isinstance(exc, EngineError):
-        return exc.error_class
+    current: BaseException | None = exc
+    for _ in range(5):
+        if current is None:
+            break
+        if isinstance(current, EngineError):
+            return current.error_class
+        current = current.__cause__ or current.__context__
     name = type(exc).__name__.casefold()
     text = str(exc).casefold()
     if "authentication" in name or "invalid api key" in text or "unauthorized" in text or "401" in text:
@@ -920,8 +1052,13 @@ def _error_class(exc: BaseException) -> str:
 
 def _strict_native_yaml(upstream: Any, text: str) -> dict[str, Any]:
     """Reject duplicate YAML keys before invoking the pinned parser."""
+    if not isinstance(text, str) or not text.strip() or len(text.encode("utf-8")) > MAX_NATIVE_OUTPUT_BYTES:
+        raise EngineError("invalid_output", "native PR-Agent output is empty or oversized")
     try:
         import yaml
+
+        if any(isinstance(token, (yaml.tokens.AnchorToken, yaml.tokens.AliasToken)) for token in yaml.scan(text)):
+            raise ValueError("native output aliases are unsupported")
 
         class NoDuplicateLoader(yaml.SafeLoader):
             pass
@@ -939,8 +1076,19 @@ def _strict_native_yaml(upstream: Any, text: str) -> dict[str, Any]:
         parsed = yaml.load(text, Loader=NoDuplicateLoader)
     except Exception as exc:
         raise EngineError("invalid_output", "native PR-Agent output is malformed") from exc
-    if not isinstance(parsed, dict) or not isinstance(parsed.get("review"), dict) or not parsed["review"]:
-        raise EngineError("invalid_output", "native PR-Agent output has no review object")
+    if not isinstance(parsed, dict) or set(parsed) != {"review"}:
+        raise EngineError("invalid_output", "native output contains unsupported top-level fields")
+    parsed_review = parsed.get("review")
+    allowed_review_fields = {"general_comments", "summary", "description", "key_issues_to_review"}
+    if (not isinstance(parsed_review, dict) or not parsed_review
+            or set(parsed_review) - allowed_review_fields):
+        raise EngineError("invalid_output", "native review contains unsupported fields")
+    raw_findings = parsed_review.get("key_issues_to_review")
+    if not isinstance(raw_findings, list):
+        raise EngineError("invalid_output", "native review is missing its findings list")
+    finding_fields = {"relevant_file", "issue_header", "issue_content", "start_line", "end_line"}
+    if any(not isinstance(finding, dict) or set(finding) != finding_fields for finding in raw_findings):
+        raise EngineError("invalid_output", "native finding contains unsupported fields")
     # Use PR-Agent's parser as the authority for its native YAML compatibility, while
     # retaining our stricter duplicate-key and type checks above.
     try:
@@ -949,23 +1097,31 @@ def _strict_native_yaml(upstream: Any, text: str) -> dict[str, Any]:
         raise EngineError("invalid_output", "native PR-Agent output could not be parsed") from exc
     if not isinstance(native, dict) or not isinstance(native.get("review"), dict) or not native["review"]:
         raise EngineError("invalid_output", "native PR-Agent output has no parsed review")
+    if len(_canonical(native)) > MAX_NATIVE_OUTPUT_BYTES:
+        raise EngineError("invalid_output", "parsed native PR-Agent output is oversized")
     if "key_issues_to_review" not in native["review"] or not isinstance(native["review"]["key_issues_to_review"], list):
         raise EngineError("invalid_output", "native review is missing its findings list")
     return native
 
 
 def _validate_native_mapping(native: dict[str, Any], authenticated: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(native, dict) or set(native) != {"review"}:
+        raise EngineError("invalid_output", "native output contains unsupported top-level fields")
     review = native.get("review")
+    if not isinstance(review, dict) or set(review) - {"general_comments", "summary", "description", "key_issues_to_review"}:
+        raise EngineError("invalid_output", "native review contains unsupported fields")
+    if "key_issues_to_review" not in review:
+        raise EngineError("invalid_output", "native review is missing its findings list")
     expected = {file["path"]: file for file in authenticated["files"]}
-    raw_findings = review.get("key_issues_to_review", [])
-    if raw_findings is None:
-        raw_findings = []
+    raw_findings = review["key_issues_to_review"]
     if not isinstance(raw_findings, list) or len(raw_findings) > MAX_FINDINGS:
         raise EngineError("invalid_output", "native finding list is invalid or oversized")
     findings = []
     seen: set[tuple[str, int, int]] = set()
     for finding in raw_findings:
-        if not isinstance(finding, dict):
+        if not isinstance(finding, dict) or set(finding) != {
+            "relevant_file", "issue_header", "issue_content", "start_line", "end_line",
+        }:
             raise EngineError("invalid_output", "native finding is not an object")
         path = finding.get("relevant_file")
         header = finding.get("issue_header")
@@ -989,26 +1145,29 @@ def _validate_native_mapping(native: dict[str, Any], authenticated: dict[str, An
         findings.append({"path": path, "line": start, "body": body})
     summary = review.get("general_comments") or review.get("summary") or review.get("description")
     if not isinstance(summary, str) or not summary.strip():
-        summary = "PR-Agent returned a clean review." if not findings else "PR-Agent returned findings for the changed lines."
+        raise EngineError("invalid_output", "native review is missing a model-supplied summary")
     summary = summary.strip()
     if len(summary.encode("utf-8")) > MAX_SUMMARY_BYTES:
         raise EngineError("invalid_output", "native review summary is oversized")
     return {"summary": summary, "findings": findings}
 
 
-def _make_coverage(authenticated: dict[str, Any], *, provider: str, model: str, prompt: str | None,
+def _make_coverage(authenticated: dict[str, Any], *, provider: str, model: dict[str, Any], prompt: str | None,
                    usage: dict[str, Any] | None, failed_chunks: list[str] | None = None,
-                   remaining_files: list[str] | None = None, complete: bool | None = None) -> dict[str, Any]:
+                   remaining_files: list[str] | None = None, complete: bool | None = None,
+                   engine: dict[str, Any] | None = None) -> dict[str, Any]:
     expected = expected_coverage(authenticated)
     files_by_path = {file["path"]: file for file in authenticated["files"]}
     observed = []
     if prompt is not None:
         for hunk in expected:
-            marker = f"LMDJ-HUNK path={hunk['path']} id={hunk['id']} sha256={hunk['patch_sha256']}"
+            marker = f"LMDJ-HUNK path={hunk['path']} id={hunk['id']} sha256={hunk['patch']['sha256']}"
             file = files_by_path[hunk["path"]]
+            source_hunk = next(candidate for candidate in file["hunks"] if candidate["id"] == hunk["id"])
             required_blocks = (
-                _content_block("BASE", file["path"], file["base_bytes"], file["base_encoding"], file["base_sha256"]),
-                _content_block("HEAD", file["path"], file["head_bytes"], file["head_encoding"], file["head_sha256"]),
+                _content_block("BASE", file["path"], file["base_bytes"], file["base_encoding"], file["base_blob"]),
+                _content_block("HEAD", file["path"], file["head_bytes"], file["head_encoding"], file["head_blob"]),
+                "BEGIN HUNK\n" + source_hunk["patch_text"] + "\nEND HUNK",
             )
             if marker in prompt and all(block in prompt for block in required_blocks):
                 observed.append(hunk)
@@ -1020,10 +1179,10 @@ def _make_coverage(authenticated: dict[str, Any], *, provider: str, model: str, 
     calculated_complete = authenticated.get("input_complete", True) and not remaining_files and not failed_chunks and expected_ids == observed_ids
     if complete is not None:
         calculated_complete = bool(complete) and calculated_complete
-    coverage = {
+    return {
         "schema": COVERAGE_SCHEMA,
         "identity": copy.deepcopy(authenticated["identity"]),
-        "engine": {"name": "pr-agent", "source_commit": UPSTREAM_COMMIT, "version": UPSTREAM_VERSION},
+        "engine": copy.deepcopy(engine or {"name": "pr-agent", "source_commit": UPSTREAM_COMMIT, "version": UPSTREAM_VERSION}),
         "provider": provider,
         "model": model,
         "input_sha256": authenticated["input_sha256"],
@@ -1034,8 +1193,35 @@ def _make_coverage(authenticated: dict[str, Any], *, provider: str, model: str, 
         "complete": calculated_complete,
         "usage": usage or {"prompt_tokens": None, "completion_tokens": None, "total_tokens": None, "num_ai_calls": 0, "cost_status": "unavailable"},
     }
-    coverage["coverage_sha256"] = _sha256(_canonical({key: value for key, value in coverage.items() if key != "coverage_sha256"}))
-    return coverage
+
+
+def _validate_coverage_receipt(receipt: Any) -> dict[str, Any]:
+    if not isinstance(receipt, dict) or set(receipt) != COVERAGE_KEYS:
+        raise EngineError("incomplete_coverage", "coverage receipt keys do not match the closed schema")
+    if receipt.get("schema") != COVERAGE_SCHEMA:
+        raise EngineError("incomplete_coverage", "coverage receipt schema is unsupported")
+    model = receipt.get("model")
+    if not isinstance(model, dict) or set(model) != {"requested", "actual", "response_version", "pricing_revision"}:
+        raise EngineError("incomplete_coverage", "coverage model identity is invalid")
+    for collection_name in ("expected_hunks", "observed_hunks"):
+        collection = receipt.get(collection_name)
+        if not isinstance(collection, list):
+            raise EngineError("incomplete_coverage", "coverage segment inventory is invalid")
+        for segment in collection:
+            if not isinstance(segment, dict) or set(segment) != SEGMENT_KEYS:
+                raise EngineError("incomplete_coverage", "coverage segment keys do not match the closed schema")
+            for blob_name in ("old_blob", "new_blob"):
+                blob = segment[blob_name]
+                if blob is not None and (not isinstance(blob, dict) or set(blob) != {"object_id", "sha256", "byte_length"}):
+                    raise EngineError("incomplete_coverage", "coverage blob identity is invalid")
+            patch = segment["patch"]
+            if not isinstance(patch, dict) or set(patch) != {"sha256", "byte_length"}:
+                raise EngineError("incomplete_coverage", "coverage patch identity is invalid")
+    if receipt.get("complete") is True:
+        if (receipt["expected_hunks"] != receipt["observed_hunks"]
+                or receipt.get("remaining_files") != [] or receipt.get("failed_chunks") != []):
+            raise EngineError("incomplete_coverage", "complete receipt does not exactly cover every required segment")
+    return receipt
 
 
 _REQUEST_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar("lmdj_pr_agent_request", default=None)
@@ -1043,15 +1229,31 @@ _PROVIDER_INPUT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.Con
 
 
 def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str, provider: dict[str, Any],
-                       budget: dict[str, Any], ai_handler_class: Any | None = None) -> tuple[Any, Any, Any, Any]:
+                       budget: dict[str, Any], deadline_monotonic: float,
+                       ai_handler_class: Any | None = None) -> tuple[Any, Any, Any, Any]:
     """Wrap only the module's imported LiteLLM seam; stock handler remains intact."""
     handler_module = upstream_litellm
     original_completion = handler_module.acompletion
     original_retry_policy = getattr(handler_module, "_should_retry_same_model", None)
-    adapter = PROVIDER_ADAPTERS[provider["provider_id"]]
 
     async def admitted_acompletion(**kwargs):
         context = _REQUEST_CONTEXT.get() or {}
+        messages = kwargs.get("messages")
+        if isinstance(messages, list):
+            context["messages"] = copy.deepcopy(messages)
+        input_tokens = _count_rendered_messages(messages, provider["tokenizer_id"])
+        context["input_tokens"] = input_tokens
+        output_tokens = budget["output_token_cap"]
+        if input_tokens > budget["input_token_cap"]:
+            raise EngineError("invalid_parameter", "rendered messages exceed the trusted input token cap")
+        if input_tokens + output_tokens > provider["context_token_limit"]:
+            raise EngineError("invalid_parameter", "rendered messages and allowed output exceed the verified context limit")
+        remaining = deadline_monotonic - time.monotonic()
+        if remaining <= 0:
+            raise EngineError("deadline_exceeded", "engine deadline expired before request dispatch")
+        request_timeout = min(float(budget["request_timeout_seconds"]), remaining)
+        kwargs["max_tokens"] = output_tokens
+        kwargs["timeout"] = request_timeout
         request_id = f"{attempt_id}:{provider['provider_id']}:{context.get('request_index', 0) + 1}"
         context["request_index"] = context.get("request_index", 0) + 1
         reservation = ledger.admit(
@@ -1064,20 +1266,36 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
             price_revision=provider["pricing_revision"],
         )
         context["num_ai_calls"] = context.get("num_ai_calls", 0) + 1
-        messages = kwargs.get("messages")
-        if isinstance(messages, list):
-            context["messages"] = copy.deepcopy(messages)
         try:
-            response = await original_completion(**kwargs)
+            async with asyncio.timeout(request_timeout):
+                response = await original_completion(**kwargs)
         except BaseException:
             ledger.reconcile(reservation, status="uncertain", actual_amount=None, usage=None)
             raise
         usage = _usage_from_response(response)
-        actual = None
-        if usage is not None and _strict_int(usage.get("prompt_tokens")) and _strict_int(usage.get("completion_tokens")):
-            actual = usage["prompt_tokens"] * provider["input_price_usd_per_token"] + usage["completion_tokens"] * provider["output_price_usd_per_token"]
-        ledger.reconcile(reservation, status="reconciled" if actual is not None else "uncertain", actual_amount=actual, usage=usage)
         context["usage"] = usage
+        actual_model, response_version = _response_model_identity(response)
+        context["response_model"] = actual_model
+        context["response_version"] = response_version
+        if actual_model != provider["priced_response_model"]:
+            # Usage and served identity remain visible in the attempt evidence,
+            # but unpriced or mismatched service cannot release a reservation
+            # using the requested model's configured prices.
+            ledger.reconcile(reservation, status="uncertain", actual_amount=None, usage=None)
+            raise EngineError("unsupported_model", "provider response model does not match trusted priced identity")
+        if usage is None:
+            ledger.reconcile(reservation, status="uncertain", actual_amount=None, usage=None)
+            raise EngineError("invalid_output", "provider response usage is missing or invalid")
+        actual = usage["prompt_tokens"] * provider["input_price_usd_per_token"] + usage["completion_tokens"] * provider["output_price_usd_per_token"]
+        ledger.reconcile(reservation, status="reconciled", actual_amount=actual, usage=usage)
+        _require_complete_response(response)
+        if usage is not None:
+            if usage["prompt_tokens"] > budget["input_token_cap"]:
+                raise EngineError("invalid_parameter", "provider usage exceeds the allowed input token cap")
+            if usage["completion_tokens"] > output_tokens:
+                raise EngineError("invalid_parameter", "provider usage exceeds the allowed output token cap")
+            if usage["total_tokens"] > provider["context_token_limit"]:
+                raise EngineError("invalid_parameter", "provider usage exceeds the verified context limit")
         return response
 
     handler_module.acompletion = admitted_acompletion
@@ -1089,7 +1307,10 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
         # errors.  Keep the stock handler and tenacity decorator, but narrow this
         # one policy seam so only transient errors can consume its second request.
         category = _error_class(exc)
-        if category in ("authentication_error", "invalid_parameter", "unsupported_model"):
+        if category in (
+            "authentication_error", "configuration_invalid", "engine_unavailable",
+            "incomplete_coverage", "invalid_output", "invalid_parameter", "unsupported_model",
+        ):
             return False
         if category == "rate_limited":
             return True
@@ -1126,7 +1347,8 @@ def _restore_admission(upstream_litellm: Any, originals: tuple[Any, Any, Any, An
 
 
 @contextlib.contextmanager
-def _isolated_environment(engine_cwd: Path, credential_ref: str, stock_secret_env: str) -> Iterator[None]:
+def _isolated_environment(engine_cwd: Path, credential_ref: str, stock_secret_env: str,
+                          *, tokenizer_cache_dir: Path | None = None) -> Iterator[None]:
     """Keep repository config and unrelated credentials out of the engine process."""
     original_cwd = Path.cwd()
     requested_cwd = Path(engine_cwd).absolute()
@@ -1140,6 +1362,15 @@ def _isolated_environment(engine_cwd: Path, credential_ref: str, stock_secret_en
         raise EngineError("configuration_invalid", "engine cwd must not be inside a repository")
     if credential_ref != "__never_read__" and credential_ref not in TRUSTED_CREDENTIAL_REFS:
         raise EngineError("configuration_invalid", "provider credential reference is not an approved PR-Agent secret")
+    resolved_tokenizer_cache = None
+    if tokenizer_cache_dir is not None:
+        requested_tokenizer_cache = Path(tokenizer_cache_dir).absolute()
+        try:
+            resolved_tokenizer_cache = requested_tokenizer_cache.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise EngineError("engine_unavailable", "stock tokenizer cache is unavailable") from exc
+        if requested_tokenizer_cache.is_symlink() or not resolved_tokenizer_cache.is_dir():
+            raise EngineError("engine_unavailable", "stock tokenizer cache is unsafe")
     resolved_cwd.mkdir(parents=True, exist_ok=True)
     env_before = dict(os.environ)
     try:
@@ -1149,6 +1380,8 @@ def _isolated_environment(engine_cwd: Path, credential_ref: str, stock_secret_en
             if name in env_before:
                 os.environ[name] = env_before[name]
         os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+        if resolved_tokenizer_cache is not None:
+            os.environ["TIKTOKEN_CACHE_DIR"] = str(resolved_tokenizer_cache)
         secret = env_before.get(credential_ref)
         if credential_ref != "__never_read__" and not secret:
             raise EngineError("authentication_error", "configured provider credential is unavailable")
@@ -1186,7 +1419,82 @@ def _source_tree_sha256(root: Path) -> str:
     return _sha256(b"".join(entries))
 
 
-def _import_upstream(source_root: str | os.PathLike[str]) -> dict[str, Any]:
+def _file_identity(path: Path) -> dict[str, Any]:
+    data = path.read_bytes()
+    return {"sha256": _sha256(data), "byte_length": len(data)}
+
+
+def _verify_deployment_identity(root: Path, deployment_identity_path: str | os.PathLike[str] | None,
+                                manifest: dict[str, str]) -> dict[str, Any]:
+    requested = Path(deployment_identity_path).absolute() if deployment_identity_path is not None else root / "DEPLOYMENT_IDENTITY.json"
+    try:
+        resolved = requested.resolve(strict=True)
+        if requested.is_symlink() or not resolved.is_file():
+            raise ValueError("deployment identity is not a regular file")
+        stat = resolved.stat()
+        if stat.st_uid != os.getuid() or stat.st_mode & 0o022:
+            raise ValueError("deployment identity is not owner-controlled")
+        document = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        raise EngineError("engine_unavailable", "trusted deployment identity is unavailable or unsafe") from exc
+    if not isinstance(document, dict) or set(document) != {"schema", "archive", "files"} or document.get("schema") != DEPLOYMENT_SCHEMA:
+        raise EngineError("engine_unavailable", "trusted deployment identity schema is invalid")
+    archive = document.get("archive")
+    files = document.get("files")
+    if (not isinstance(archive, dict) or set(archive) != {"sha256", "byte_length"}
+            or not isinstance(archive.get("sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", archive["sha256"])
+            or not _strict_int(archive.get("byte_length")) or archive["byte_length"] < 1):
+        raise EngineError("engine_unavailable", "trusted archive identity is invalid")
+    expected_files = {
+        "manifest": "IDENTITY",
+        "adapter": "pr_agent_review.py",
+        "default_config": "config.toml",
+        "requirements_lock": "requirements.lock",
+        "stock_tokenizer_asset": STOCK_TOKENIZER_CACHE_FILE,
+    }
+    if not isinstance(files, dict) or set(files) != set(expected_files):
+        raise EngineError("engine_unavailable", "trusted deployment file inventory is invalid")
+    verified_files: dict[str, dict[str, Any]] = {}
+    for name, relative in expected_files.items():
+        record = files[name]
+        if (not isinstance(record, dict) or set(record) != {"path", "sha256", "byte_length"}
+                or record.get("path") != relative
+                or not isinstance(record.get("sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"])
+                or not _strict_int(record.get("byte_length")) or record["byte_length"] < 1):
+            raise EngineError("engine_unavailable", "trusted deployment file identity is invalid")
+        candidate = (root / relative).resolve(strict=True)
+        if candidate.parent != root and root not in candidate.parents:
+            raise EngineError("engine_unavailable", "trusted deployment file escapes the engine installation")
+        actual = _file_identity(candidate)
+        if actual != {"sha256": record["sha256"], "byte_length": record["byte_length"]}:
+            raise EngineError("engine_unavailable", "deployed engine file does not match trusted identity")
+        verified_files[name] = {"sha256": record["sha256"], "byte_length": record["byte_length"]}
+    current_adapter = _file_identity(Path(__file__).resolve())
+    if current_adapter != verified_files["adapter"]:
+        raise EngineError("engine_unavailable", "executing adapter does not match the deployed trusted adapter")
+    for manifest_key, file_name in (
+        ("adapter_sha256", "adapter"),
+        ("default_config_sha256", "default_config"),
+        ("requirements_lock_sha256", "requirements_lock"),
+        ("stock_tokenizer_asset_sha256", "stock_tokenizer_asset"),
+    ):
+        if manifest.get(manifest_key) != verified_files[file_name]["sha256"]:
+            raise EngineError("engine_unavailable", "bundle manifest does not match deployed engine files")
+    return {
+        "archive_sha256": archive["sha256"],
+        "archive_byte_length": archive["byte_length"],
+        "manifest_sha256": verified_files["manifest"]["sha256"],
+        "adapter_sha256": verified_files["adapter"]["sha256"],
+        "default_config_sha256": verified_files["default_config"]["sha256"],
+        "requirements_lock_sha256": verified_files["requirements_lock"]["sha256"],
+        "stock_tokenizer_asset_sha256": verified_files["stock_tokenizer_asset"]["sha256"],
+    }
+
+
+def _import_upstream(source_root: str | os.PathLike[str], *,
+                     deployment_identity_path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     requested_root = Path(source_root).absolute()
     try:
         root = requested_root.resolve(strict=True)
@@ -1222,7 +1530,11 @@ def _import_upstream(source_root: str | os.PathLike[str]) -> dict[str, Any]:
         if (identity.get("schema") != "lmdj.pr-agent-bundle.v1"
                 or identity.get("source_commit") != UPSTREAM_COMMIT
                 or identity.get("source_version") != UPSTREAM_VERSION
-                or not re.fullmatch(r"[0-9a-f]{64}", identity.get("source_tree_sha256", ""))):
+                or not re.fullmatch(r"[0-9a-f]{64}", identity.get("source_tree_sha256", ""))
+                or not re.fullmatch(r"[0-9a-f]{64}", identity.get("adapter_sha256", ""))
+                or not re.fullmatch(r"[0-9a-f]{64}", identity.get("default_config_sha256", ""))
+                or not re.fullmatch(r"[0-9a-f]{64}", identity.get("requirements_lock_sha256", ""))
+                or not re.fullmatch(r"[0-9a-f]{64}", identity.get("stock_tokenizer_asset_sha256", ""))):
             raise ValueError("source identity is incomplete or mismatched")
         if identity["source_tree_sha256"] != EXPECTED_SOURCE_TREE_SHA256:
             raise ValueError("source tree digest is not the independently pinned content identity")
@@ -1230,6 +1542,12 @@ def _import_upstream(source_root: str | os.PathLike[str]) -> dict[str, Any]:
             raise ValueError("source tree digest does not match its identity")
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise EngineError("engine_unavailable", "pinned PR-Agent source identity is missing or does not match its bytes") from exc
+    engine_identity = {
+        "name": "pr-agent",
+        "source_commit": UPSTREAM_COMMIT,
+        "version": UPSTREAM_VERSION,
+        "bundle": _verify_deployment_identity(root, deployment_identity_path, identity),
+    }
     # Do not reuse a previously loaded package from another source root.  This
     # process boundary owns one pinned source tree and must not inherit modules
     # imported from a repository-controlled or ambient path.
@@ -1263,7 +1581,7 @@ def _import_upstream(source_root: str | os.PathLike[str]) -> dict[str, Any]:
     return locals()
 
 
-def _configure_settings(upstream: dict[str, Any], provider: dict[str, Any]) -> None:
+def _configure_settings(upstream: dict[str, Any], provider: dict[str, Any], budget: dict[str, Any]) -> None:
     settings = upstream["get_settings"]()
     model = provider["model"]
     settings.set("config.git_provider", "lmdj-pr-agent")
@@ -1274,7 +1592,8 @@ def _configure_settings(upstream: dict[str, Any], provider: dict[str, Any]) -> N
     settings.set("config.use_repo_settings_file", False)
     settings.set("config.use_global_settings_file", False)
     settings.set("config.repo_context_files", [])
-    settings.set("config.ai_timeout", DEFAULT_REQUEST_TIMEOUT)
+    settings.set("config.ai_timeout", budget["request_timeout_seconds"])
+    settings.set("config.max_output_tokens", budget["output_token_cap"])
     settings.set("config.num_retries", 0)
     settings.set("config.retry_same_model_on_timeout", False)
     settings.set("config.output_run_cost", False)
@@ -1298,7 +1617,11 @@ def _configure_settings(upstream: dict[str, Any], provider: dict[str, Any]) -> N
     settings.set("pr_reviewer.require_risk_assessment", False)
     settings.set("pr_reviewer.require_merge_recommendation", False)
     settings.set("pr_reviewer.require_priority_files", False)
-    settings.set("pr_reviewer.extra_instructions", "Review only the authenticated input supplied by LMDJ. Return native PR-Agent review YAML.")
+    settings.set(
+        "pr_reviewer.extra_instructions",
+        "Review only the authenticated input supplied by LMDJ. Return native PR-Agent review YAML with "
+        "a nonempty review.general_comments summary and review.key_issues_to_review list; include no other fields.",
+    )
     # The upstream handler logs complete prompts/responses at DEBUG and raw
     # provider exceptions at WARNING.  Only the adapter's finite result is an
     # external diagnostic, so keep the imported logger silent during a run.
@@ -1444,20 +1767,35 @@ def _make_reviewer_class(upstream: dict[str, Any]):
     return type("CompleteInputReviewer", (CompleteInputReviewerMixin, upstream["PRReviewer"]), {})
 
 
+def _attempt_model_identity(provider: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = context or {}
+    return {
+        "requested": provider["model"],
+        "actual": context.get("response_model"),
+        "response_version": context.get("response_version"),
+        "pricing_revision": provider["pricing_revision"],
+    }
+
+
 async def _run_provider(upstream: dict[str, Any], authenticated: dict[str, Any], config: dict[str, Any], provider: dict[str, Any],
-                        *, ledger: Ledger, attempt_id: str, engine_cwd: Path) -> dict[str, Any]:
+                        *, ledger: Ledger, attempt_id: str, engine_cwd: Path,
+                        deadline_monotonic: float, engine_identity: dict[str, Any]) -> dict[str, Any]:
     adapter = PROVIDER_ADAPTERS[provider["provider_id"]]
     started = time.monotonic()
     last_prompt = None
     last_usage = None
     try:
-        with _isolated_environment(engine_cwd, provider["credential_ref"], adapter["secret_env"]):
-            _configure_settings(upstream, provider)
+        with _isolated_environment(
+            engine_cwd, provider["credential_ref"], adapter["secret_env"],
+            tokenizer_cache_dir=Path(upstream["root"]) / "tokenizer-cache",
+        ):
+            _configure_settings(upstream, provider, config["budget"])
             if "provider_class" not in upstream:
                 upstream["provider_class"], upstream["provider_holder"] = _provider_class(upstream, authenticated)
             originals = _install_admission(
                 upstream["litellm_ai_handler"], ledger, attempt_id=attempt_id, provider=provider,
-                budget=config["budget"], ai_handler_class=upstream["LiteLLMAIHandler"],
+                budget=config["budget"], deadline_monotonic=deadline_monotonic,
+                ai_handler_class=upstream["LiteLLMAIHandler"],
             )
             context = {"request_index": 0, "num_ai_calls": 0, "messages": [], "usage": None}
             token = _REQUEST_CONTEXT.set(context)
@@ -1481,7 +1819,11 @@ async def _run_provider(upstream: dict[str, Any], authenticated: dict[str, Any],
                 usage = context.get("usage") or {"prompt_tokens": None, "completion_tokens": None, "total_tokens": None}
                 last_usage = usage
                 usage = {**usage, "num_ai_calls": context.get("num_ai_calls", 0), "cost_status": "known" if context.get("usage") else "unavailable", "duration_ms": int((time.monotonic() - started) * 1000)}
-                coverage = _make_coverage(authenticated, provider=provider["provider_id"], model=provider["model"], prompt=prompt, usage=usage)
+                model_identity = _attempt_model_identity(provider, context)
+                coverage = _validate_coverage_receipt(_make_coverage(
+                    authenticated, provider=provider["provider_id"], model=model_identity,
+                    prompt=prompt, usage=usage, engine=engine_identity,
+                ))
                 if not coverage["complete"]:
                     raise EngineError("incomplete_coverage", "actual handler prompt did not contain complete input coverage")
                 mapped = _validate_native_mapping(native, authenticated)
@@ -1490,8 +1832,8 @@ async def _run_provider(upstream: dict[str, Any], authenticated: dict[str, Any],
                     "error_class": None,
                     "error": None,
                     "provider": provider["provider_id"],
-                    "model": provider["model"],
-                    "engine": {"name": "pr-agent", "source_commit": UPSTREAM_COMMIT, "version": UPSTREAM_VERSION},
+                    "model": model_identity,
+                    "engine": copy.deepcopy(engine_identity),
                     "review": mapped,
                     "native_review": native,
                     "coverage": coverage,
@@ -1499,50 +1841,76 @@ async def _run_provider(upstream: dict[str, Any], authenticated: dict[str, Any],
                     "duration_ms": usage["duration_ms"],
                 }
             finally:
+                last_prompt = "\n".join(
+                    str(message.get("content", ""))
+                    for message in context["messages"] if isinstance(message, dict)
+                ) or last_prompt
+                last_usage = context.get("usage") or last_usage
                 _REQUEST_CONTEXT.reset(token)
                 _PROVIDER_INPUT.reset(provider_input_token)
                 _restore_admission(upstream["litellm_ai_handler"], originals, upstream["LiteLLMAIHandler"])
     except EngineError as exc:
-        coverage = _make_coverage(authenticated, provider=provider["provider_id"], model=provider["model"], prompt=last_prompt, usage=last_usage, complete=False)
+        model_identity = _attempt_model_identity(provider, locals().get("context"))
+        coverage = _validate_coverage_receipt(_make_coverage(
+            authenticated, provider=provider["provider_id"], model=model_identity,
+            prompt=last_prompt, usage=last_usage, complete=False, engine=engine_identity,
+        ))
         return {
             "status": "not-reviewed", "error_class": exc.error_class, "error": exc.safe_message,
-            "provider": provider["provider_id"], "model": provider["model"],
-            "engine": {"name": "pr-agent", "source_commit": UPSTREAM_COMMIT, "version": UPSTREAM_VERSION},
+            "provider": provider["provider_id"], "model": model_identity,
+            "engine": copy.deepcopy(engine_identity),
             "review": None, "native_review": None, "coverage": coverage,
             "usage": coverage["usage"], "duration_ms": int((time.monotonic() - started) * 1000),
         }
     except BaseException as exc:
         category = _error_class(exc)
-        coverage = _make_coverage(authenticated, provider=provider["provider_id"], model=provider["model"], prompt=last_prompt, usage=last_usage, complete=False)
+        model_identity = _attempt_model_identity(provider, locals().get("context"))
+        coverage = _validate_coverage_receipt(_make_coverage(
+            authenticated, provider=provider["provider_id"], model=model_identity,
+            prompt=last_prompt, usage=last_usage, complete=False, engine=engine_identity,
+        ))
         return {
             "status": "not-reviewed", "error_class": category, "error": "PR-Agent request failed; see finite diagnostics",
-            "provider": provider["provider_id"], "model": provider["model"],
-            "engine": {"name": "pr-agent", "source_commit": UPSTREAM_COMMIT, "version": UPSTREAM_VERSION},
+            "provider": provider["provider_id"], "model": model_identity,
+            "engine": copy.deepcopy(engine_identity),
             "review": None, "native_review": None, "coverage": coverage,
             "usage": coverage["usage"], "duration_ms": int((time.monotonic() - started) * 1000),
         }
 
 
 async def _run_async(authenticated: dict[str, Any], config: dict[str, Any], *, source_root: str, engine_cwd: Path,
-                     ledger_path: Path) -> dict[str, Any]:
+                     ledger_path: Path, deployment_identity_path: str | os.PathLike[str] | None,
+                     runtime_config_identity: dict[str, Any]) -> dict[str, Any]:
     started = time.monotonic()
+    deadline_monotonic = started + config["budget"]["engine_deadline_seconds"]
     upstream = None
     attempts = []
     skipped = []
+    enabled = [config["providers"][provider] for provider in config["provider_order"] if config["providers"][provider]["enabled"]]
+    if not enabled:
+        raise EngineError("configuration_invalid", "no provider has trusted activation inputs")
     try:
         with _isolated_environment(engine_cwd, "__never_read__", "__never_read__"):
-            upstream = _import_upstream(source_root)
+            upstream = _import_upstream(source_root, deployment_identity_path=deployment_identity_path)
     except EngineError:
         raise
+    engine_identity = copy.deepcopy(upstream["engine_identity"])
+    engine_identity["runtime_config"] = copy.deepcopy(runtime_config_identity)
     ledger = Ledger(ledger_path, config["budget"])
-    enabled = [config["providers"][provider] for provider in config["provider_order"] if config["providers"][provider]["enabled"]]
     for provider_index, provider in enumerate(enabled):
-        if time.monotonic() - started >= config["budget"]["engine_deadline_seconds"]:
+        if time.monotonic() >= deadline_monotonic:
             break
         if provider_index and config["budget"]["backoff_seconds"]:
+            remaining = deadline_monotonic - time.monotonic()
+            if remaining <= config["budget"]["backoff_seconds"]:
+                break
             await asyncio.sleep(config["budget"]["backoff_seconds"])
         attempt_id = f"{authenticated['identity']['run_id']}:{authenticated['identity']['run_attempt']}"
-        result = await _run_provider(upstream, authenticated, config, provider, ledger=ledger, attempt_id=attempt_id, engine_cwd=engine_cwd)
+        result = await _run_provider(
+            upstream, authenticated, config, provider, ledger=ledger,
+            attempt_id=attempt_id, engine_cwd=engine_cwd,
+            deadline_monotonic=deadline_monotonic, engine_identity=engine_identity,
+        )
         attempts.append(result)
         if result["status"] == "reviewed":
             break
@@ -1550,21 +1918,21 @@ async def _run_async(authenticated: dict[str, Any], config: dict[str, Any], *, s
         if not config["providers"][provider_id]["enabled"]:
             skipped.append({"provider": provider_id, "status": "disabled"})
     if not attempts:
-        raise EngineError("configuration_invalid", "no provider has trusted activation inputs")
+        raise EngineError("deadline_exceeded", "engine deadline expired before provider dispatch")
     selected = next((index for index, result in enumerate(attempts) if result["status"] == "reviewed"), None)
     if selected is not None:
         status = "reviewed"
         error_class = None
     else:
         status = "not-reviewed"
-        error_class = "deadline_exceeded" if time.monotonic() - started >= config["budget"]["engine_deadline_seconds"] else attempts[-1]["error_class"]
+        error_class = "deadline_exceeded" if time.monotonic() >= deadline_monotonic else attempts[-1]["error_class"]
     return {
         "schema": RESULT_SCHEMA,
         "status": status,
         "error_class": error_class,
         "identity": copy.deepcopy(authenticated["identity"]),
         "input_sha256": authenticated["input_sha256"],
-        "engine": {"name": "pr-agent", "source_commit": UPSTREAM_COMMIT, "version": UPSTREAM_VERSION},
+        "engine": engine_identity,
         "selected_attempt": selected,
         "attempts": attempts,
         "skipped_providers": skipped,
@@ -1573,15 +1941,21 @@ async def _run_async(authenticated: dict[str, Any], config: dict[str, Any], *, s
 
 
 def run_engine(input_path: str | os.PathLike[str], *, config_path: str | os.PathLike[str], source_root: str | os.PathLike[str],
-               engine_cwd: str | os.PathLike[str], ledger_path: str | os.PathLike[str], output_dir: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+               engine_cwd: str | os.PathLike[str], ledger_path: str | os.PathLike[str],
+               deployment_identity_path: str | os.PathLike[str] | None = None,
+               output_dir: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     """Synchronous API used by the CLI and offline integration tests."""
     try:
         document = json.loads(Path(input_path).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EngineError("input_invalid", "authenticated input JSON could not be read") from exc
     authenticated = authenticate_input(document)
-    config = load_trusted_config(config_path)
-    result = asyncio.run(_run_async(authenticated, config, source_root=str(source_root), engine_cwd=Path(engine_cwd), ledger_path=Path(ledger_path)))
+    config, runtime_config_identity = _load_trusted_config(config_path)
+    result = asyncio.run(_run_async(
+        authenticated, config, source_root=str(source_root), engine_cwd=Path(engine_cwd),
+        ledger_path=Path(ledger_path), deployment_identity_path=deployment_identity_path,
+        runtime_config_identity=runtime_config_identity,
+    ))
     if output_dir is not None:
         target = Path(output_dir)
         target.mkdir(parents=True, exist_ok=True)
@@ -1600,11 +1974,16 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", default=str(TRUSTED_CONFIG_ROOT / "config.toml"))
     parser.add_argument("--source-root", default=os.environ.get("PR_AGENT_SOURCE_ROOT", str(TRUSTED_ENGINE_ROOT)))
     parser.add_argument("--engine-cwd", default=os.environ.get("PR_AGENT_ENGINE_CWD", "/var/lib/lmdj/pr-agent/engine"))
+    parser.add_argument("--deployment-identity", default=os.environ.get("PR_AGENT_DEPLOYMENT_IDENTITY"))
     parser.add_argument("--ledger", default=os.environ.get("PR_AGENT_LEDGER", "/var/lib/lmdj/pr-agent/ledger.jsonl"))
     parser.add_argument("--output-dir", default=None)
     args = parser.parse_args(argv)
     try:
-        result = run_engine(args.input_path, config_path=args.config, source_root=args.source_root, engine_cwd=args.engine_cwd, ledger_path=args.ledger, output_dir=args.output_dir)
+        result = run_engine(
+            args.input_path, config_path=args.config, source_root=args.source_root,
+            engine_cwd=args.engine_cwd, ledger_path=args.ledger,
+            deployment_identity_path=args.deployment_identity, output_dir=args.output_dir,
+        )
     except EngineError as exc:
         result = {"schema": RESULT_SCHEMA, "status": "not-reviewed", "error_class": exc.error_class, "error": exc.safe_message}
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))

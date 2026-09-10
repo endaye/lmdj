@@ -119,6 +119,10 @@ if not (destination / "LICENSE").is_file() or not (destination / "pr_agent").is_
 )
 PY
 
+cp "$ROOT_DIR/scripts/ci/pr_agent_review.py" "$SOURCE_ROOT/pr_agent_review.py"
+cp "$ROOT_DIR/scripts/ci/pr-agent/config.toml" "$SOURCE_ROOT/config.toml"
+cp "$ROOT_DIR/scripts/ci/pr-agent/requirements.lock" "$SOURCE_ROOT/requirements.lock"
+
 "$RUNTIME" -m venv "$VENV"
 BOOTSTRAP_REQUIREMENTS="$WORK_DIR/bootstrap-requirements.txt"
 printf '%s\n' \
@@ -131,6 +135,60 @@ PIP_DISABLE_PIP_VERSION_CHECK=1 "$VENV/bin/python" -m pip install \
 PIP_DISABLE_PIP_VERSION_CHECK=1 "$VENV/bin/python" -m pip install \
   --no-compile --no-build-isolation --require-hashes --requirement \
   "$ROOT_DIR/scripts/ci/pr-agent/requirements.lock"
+
+TOKENIZER_CACHE_KEY=fb374d419588a4632f3f557e76b4b70aebbca790
+TOKENIZER_ASSET_SHA256=446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d
+TOKENIZER_ASSET_BYTES=3613922
+TOKENIZER_PACKAGE_ASSET="$VENV/lib/python3.12/site-packages/litellm/litellm_core_utils/tokenizers/$TOKENIZER_CACHE_KEY"
+mkdir -p "$SOURCE_ROOT/tokenizer-cache"
+cp "$TOKENIZER_PACKAGE_ASSET" "$SOURCE_ROOT/tokenizer-cache/$TOKENIZER_CACHE_KEY"
+"$RUNTIME" - "$SOURCE_ROOT" "$ARCHIVE" "$TOKENIZER_ASSET_SHA256" "$TOKENIZER_ASSET_BYTES" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+archive = pathlib.Path(sys.argv[2])
+tokenizer_asset = root / "tokenizer-cache" / "fb374d419588a4632f3f557e76b4b70aebbca790"
+
+def identity(path: pathlib.Path) -> dict:
+    data = path.read_bytes()
+    return {"sha256": hashlib.sha256(data).hexdigest(), "byte_length": len(data)}
+
+tokenizer_identity = identity(tokenizer_asset)
+if tokenizer_identity != {"sha256": sys.argv[3], "byte_length": int(sys.argv[4])}:
+    raise SystemExit("locked LiteLLM package does not contain the pinned stock tokenizer asset")
+manifest = root / "IDENTITY"
+source_lines = [
+    line for line in manifest.read_text(encoding="utf-8").splitlines()
+    if not line.startswith((
+        "adapter_sha256=", "default_config_sha256=", "requirements_lock_sha256=",
+        "stock_tokenizer_asset_sha256=",
+    ))
+]
+source_lines.extend([
+    f"adapter_sha256={identity(root / 'pr_agent_review.py')['sha256']}",
+    f"default_config_sha256={identity(root / 'config.toml')['sha256']}",
+    f"requirements_lock_sha256={identity(root / 'requirements.lock')['sha256']}",
+    f"stock_tokenizer_asset_sha256={tokenizer_identity['sha256']}",
+])
+manifest.write_text("\n".join(source_lines) + "\n", encoding="utf-8")
+files = {}
+for name, relative in {
+    "manifest": "IDENTITY",
+    "adapter": "pr_agent_review.py",
+    "default_config": "config.toml",
+    "requirements_lock": "requirements.lock",
+    "stock_tokenizer_asset": "tokenizer-cache/fb374d419588a4632f3f557e76b4b70aebbca790",
+}.items():
+    files[name] = {"path": relative, **identity(root / relative)}
+(root / "DEPLOYMENT_IDENTITY.json").write_text(json.dumps({
+    "schema": "lmdj.pr-agent-deployment.v1",
+    "archive": identity(archive),
+    "files": files,
+}, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
 
 env \
   PR_AGENT_RUN_INTEGRATION=1 \

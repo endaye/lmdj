@@ -15,6 +15,9 @@ PYTHON_IMAGE_DIGEST=${PR_AGENT_PYTHON_IMAGE_DIGEST:-}
 SOURCE_COMMIT=53072488e4c3b5a6c9ae730fe6fb52fc5f09d06c
 SOURCE_VERSION=0.45.0
 EXPECTED_SOURCE_TREE_SHA256=65af56f5627de2f42cd1de278321241dac2f54bdcfa596d3dc7a380ada534abf
+STOCK_TOKENIZER_CACHE_KEY=fb374d419588a4632f3f557e76b4b70aebbca790
+STOCK_TOKENIZER_ASSET_SHA256=446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d
+STOCK_TOKENIZER_ASSET_BYTES=3613922
 
 fail() {
   echo "build-bundle: $*" >&2
@@ -80,7 +83,9 @@ docker_server=$(docker info --format '{{.OSType}} {{.Architecture}}' 2>/dev/null
 mkdir -p "$OUTPUT_DIR"
 lock_sha256=$(sha256_file "$SCRIPT_DIR/requirements.lock")
 bundle="$OUTPUT_DIR/lmdj-pr-agent-linux-amd64-${SOURCE_COMMIT}.tar"
-[[ ! -e "$bundle" && ! -e "$bundle.sha256" ]] || fail "refusing to overwrite existing bundle identity: $bundle"
+deployment_identity="$OUTPUT_DIR/DEPLOYMENT_IDENTITY.json"
+[[ ! -e "$bundle" && ! -e "$bundle.sha256" && ! -e "$deployment_identity" ]] \
+  || fail "refusing to overwrite existing bundle identity: $bundle"
 build_log="$OUTPUT_DIR/docker-build.log"
 runtime_log="$OUTPUT_DIR/linux-amd64-import.log"
 context=$(mktemp -d "${TMPDIR:-/tmp}/lmdj-pr-agent-context.XXXXXX")
@@ -100,6 +105,8 @@ git -C "$SOURCE_ROOT" archive \
 cp "$SCRIPT_DIR/requirements.lock" "$context/requirements.lock"
 cp "$SCRIPT_DIR/config.toml" "$context/config.toml"
 cp "$ROOT_DIR/scripts/ci/pr_agent_review.py" "$context/pr_agent_review.py"
+adapter_sha256=$(sha256_file "$context/pr_agent_review.py")
+config_sha256=$(sha256_file "$context/config.toml")
 license_sha256=$(sha256_file "$context/LICENSE")
 source_tree_sha256=$("$PYTHON_BIN" - "$context" <<'PY'
 import hashlib
@@ -137,6 +144,9 @@ python=3.12
 base_image=$PYTHON_IMAGE
 base_image_digest=$PYTHON_IMAGE_DIGEST
 requirements_lock_sha256=$lock_sha256
+adapter_sha256=$adapter_sha256
+default_config_sha256=$config_sha256
+stock_tokenizer_asset_sha256=$STOCK_TOKENIZER_ASSET_SHA256
 upstream_license_sha256=$license_sha256
 source_tree_sha256=$source_tree_sha256
 EOF
@@ -171,6 +181,15 @@ docker cp "$container_id:/opt/lmdj/pr-agent/." "$extracted/"
 docker rm "$container_id" >/dev/null
 container_id=""
 
+stock_tokenizer_asset="$extracted/tokenizer-cache/$STOCK_TOKENIZER_CACHE_KEY"
+[[ -f "$stock_tokenizer_asset" ]] || fail "export lacks the pinned stock tokenizer asset"
+stock_tokenizer_sha256=$(sha256_file "$stock_tokenizer_asset")
+stock_tokenizer_bytes=$(wc -c < "$stock_tokenizer_asset" | tr -d '[:space:]')
+[[ "$stock_tokenizer_sha256" == "$STOCK_TOKENIZER_ASSET_SHA256" ]] \
+  || fail "exported stock tokenizer asset digest is invalid"
+[[ "$stock_tokenizer_bytes" == "$STOCK_TOKENIZER_ASSET_BYTES" ]] \
+  || fail "exported stock tokenizer asset byte length is invalid"
+
 if find "$extracted" \( -type l -o -type d -name '__pycache__' -o -type f -name '*.pyc' \) -print -quit | grep -q .; then
   fail "export contains a symlink, __pycache__, or pyc"
 fi
@@ -202,21 +221,57 @@ PY
 
 bundle_bytes=$(wc -c < "$bundle" | tr -d '[:space:]')
 bundle_sha256=$(sha256_file "$bundle")
+"$PYTHON_BIN" - "$extracted" "$deployment_identity" "$bundle_sha256" "$bundle_bytes" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+
+def identity(path: Path) -> dict:
+    data = path.read_bytes()
+    return {"sha256": hashlib.sha256(data).hexdigest(), "byte_length": len(data)}
+
+files = {}
+for name, relative in {
+    "manifest": "IDENTITY",
+    "adapter": "pr_agent_review.py",
+    "default_config": "config.toml",
+    "requirements_lock": "requirements.lock",
+    "stock_tokenizer_asset": "tokenizer-cache/fb374d419588a4632f3f557e76b4b70aebbca790",
+}.items():
+    files[name] = {"path": relative, **identity(root / relative)}
+document = {
+    "schema": "lmdj.pr-agent-deployment.v1",
+    "archive": {"sha256": sys.argv[3], "byte_length": int(sys.argv[4])},
+    "files": files,
+}
+destination.write_text(
+    json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
 container_id=$(docker create --platform linux/amd64 \
   -i \
   -e LITELLM_LOCAL_MODEL_COST_MAP=true \
   -e "PR_AGENT_EXPECTED_LICENSE_SHA256=$license_sha256" \
   -e "PR_AGENT_EXPECTED_BASE_IMAGE=$PYTHON_IMAGE@$PYTHON_IMAGE_DIGEST" \
   -e "PR_AGENT_EXPECTED_SOURCE_TREE_SHA256=$EXPECTED_SOURCE_TREE_SHA256" \
+  -e "PR_AGENT_EXPECTED_STOCK_TOKENIZER_SHA256=$STOCK_TOKENIZER_ASSET_SHA256" \
+  -e "PR_AGENT_EXPECTED_STOCK_TOKENIZER_BYTES=$STOCK_TOKENIZER_ASSET_BYTES" \
   -e "PR_AGENT_EXPECTED_BUNDLE_BYTES=$bundle_bytes" \
   -e "PR_AGENT_EXPECTED_BUNDLE_SHA256=$bundle_sha256" \
   --entrypoint sh "$PYTHON_IMAGE@$PYTHON_IMAGE_DIGEST" \
-  -c 'apt-get update -qq && apt-get install -y --no-install-recommends git >/dev/null && exec python -')
+  -c 'chown 0:0 /tmp/DEPLOYMENT_IDENTITY.json && chmod 0400 /tmp/DEPLOYMENT_IDENTITY.json && apt-get update -qq && apt-get install -y --no-install-recommends git >/dev/null && exec python -')
 docker cp "$bundle" "$container_id:/tmp/pr-agent-bundle.tar"
+docker cp "$deployment_identity" "$container_id:/tmp/DEPLOYMENT_IDENTITY.json"
 docker start -ai "$container_id" >> "$runtime_log" 2>&1 <<'PY'
 import hashlib
 import importlib
 import importlib.metadata
+import json
 import os
 import pathlib
 import sys
@@ -239,6 +294,7 @@ root.mkdir()
 with tarfile.open(bundle_path) as archive:
     archive.extractall(root)
 artifact = (root / "pr-agent").resolve()
+deployment_identity = json.loads(pathlib.Path("/tmp/DEPLOYMENT_IDENTITY.json").read_text(encoding="utf-8"))
 identity = dict(
     line.split("=", 1)
     for line in (artifact / "IDENTITY").read_text(encoding="utf-8").splitlines()
@@ -250,11 +306,37 @@ expected_source_tree = os.environ["PR_AGENT_EXPECTED_SOURCE_TREE_SHA256"]
 assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "true"
 sys.dont_write_bytecode = True
 assert not any(path.is_symlink() for path in artifact.rglob("*"))
+assert set(deployment_identity) == {"schema", "archive", "files"}
+assert deployment_identity["schema"] == "lmdj.pr-agent-deployment.v1"
+assert deployment_identity["archive"] == {"sha256": actual_bundle_sha256, "byte_length": actual_bundle_bytes}
+expected_files = {
+    "manifest": "IDENTITY",
+    "adapter": "pr_agent_review.py",
+    "default_config": "config.toml",
+    "requirements_lock": "requirements.lock",
+    "stock_tokenizer_asset": "tokenizer-cache/fb374d419588a4632f3f557e76b4b70aebbca790",
+}
+assert set(deployment_identity["files"]) == set(expected_files)
+for name, relative in expected_files.items():
+    data = (artifact / relative).read_bytes()
+    assert deployment_identity["files"][name] == {
+        "path": relative,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "byte_length": len(data),
+    }
 assert identity["schema"] == "lmdj.pr-agent-bundle.v1"
 assert identity["source_commit"] == "53072488e4c3b5a6c9ae730fe6fb52fc5f09d06c"
 assert identity["source_version"] == "0.45.0"
 assert f"{identity['base_image']}@{identity['base_image_digest']}" == expected_base_image
 assert identity["source_tree_sha256"] == expected_source_tree == "65af56f5627de2f42cd1de278321241dac2f54bdcfa596d3dc7a380ada534abf"
+assert identity["adapter_sha256"] == deployment_identity["files"]["adapter"]["sha256"]
+assert identity["default_config_sha256"] == deployment_identity["files"]["default_config"]["sha256"]
+assert identity["requirements_lock_sha256"] == deployment_identity["files"]["requirements_lock"]["sha256"]
+stock_tokenizer = artifact / "tokenizer-cache" / "fb374d419588a4632f3f557e76b4b70aebbca790"
+stock_tokenizer_data = stock_tokenizer.read_bytes()
+assert len(stock_tokenizer_data) == int(os.environ["PR_AGENT_EXPECTED_STOCK_TOKENIZER_BYTES"])
+assert hashlib.sha256(stock_tokenizer_data).hexdigest() == os.environ["PR_AGENT_EXPECTED_STOCK_TOKENIZER_SHA256"]
+assert identity["stock_tokenizer_asset_sha256"] == deployment_identity["files"]["stock_tokenizer_asset"]["sha256"]
 assert hashlib.sha256((artifact / "LICENSE").read_bytes()).hexdigest() == expected_license == identity["upstream_license_sha256"]
 entries = [
     f"{path.relative_to(artifact).as_posix()}\0{len(path.read_bytes())}\0".encode("utf-8") + path.read_bytes()
@@ -267,35 +349,59 @@ assert hashlib.sha256(b"".join(entries)).hexdigest() == identity["source_tree_sh
 sys.path.insert(0, str(artifact / "vendor"))
 sys.path.insert(1, str(artifact))
 import httpx
+import requests
 
 httpx_get_calls = []
+requests_get_calls = []
 def forbidden_get(url, *args, **kwargs):
     httpx_get_calls.append({"url": url, "timeout": kwargs.get("timeout")})
     raise AssertionError("LiteLLM attempted mutable model metadata HTTP")
 
 httpx.get = forbidden_get
+def forbidden_tokenizer_get(url, *args, **kwargs):
+    requests_get_calls.append({"url": url, "timeout": kwargs.get("timeout")})
+    raise AssertionError("stock tokenizer attempted runtime HTTP")
+
+requests.get = forbidden_tokenizer_get
+ambient_tokenizer_cache = pathlib.Path("/tmp/empty-ambient-tokenizer-cache")
+ambient_tokenizer_cache.mkdir()
+assert list(ambient_tokenizer_cache.iterdir()) == []
+os.environ["TIKTOKEN_CACHE_DIR"] = str(artifact / "tokenizer-cache")
 pr_agent = importlib.import_module("pr_agent")
 litellm = importlib.import_module("litellm")
+adapter_module = importlib.import_module("pr_agent_review")
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map_source_info
 
 model_cost_info = get_model_cost_map_source_info()
 handler_module = importlib.import_module("pr_agent.algo.ai_handlers.litellm_ai_handler")
 reviewer_module = importlib.import_module("pr_agent.tools.pr_reviewer")
+token_handler_module = importlib.import_module("pr_agent.algo.token_handler")
 LiteLLMAIHandler = handler_module.LiteLLMAIHandler
 PRReviewer = reviewer_module.PRReviewer
 version = importlib.metadata.version("litellm")
 assert version == "1.100.0"
 assert PRReviewer.__module__ == "pr_agent.tools.pr_reviewer"
 assert LiteLLMAIHandler.__module__ == "pr_agent.algo.ai_handlers.litellm_ai_handler"
+token_handler_module.TokenEncoder._encoder_instance = None
+token_handler_module.TokenEncoder._model = None
+stock_encoder = token_handler_module.TokenEncoder.get_token_encoder("fixture-non-gpt-model")
+assert stock_encoder.name == "o200k_base"
 assert httpx_get_calls == []
+assert requests_get_calls == []
+assert list(ambient_tokenizer_cache.iterdir()) == []
 assert model_cost_info["source"] == "local"
 assert model_cost_info["is_env_forced"] is True
 assert model_cost_info["url"] is None
 assert len(litellm.model_cost) > 0
-modules = (pr_agent, litellm, handler_module, reviewer_module)
+verified_bundle = adapter_module._verify_deployment_identity(
+    artifact, "/tmp/DEPLOYMENT_IDENTITY.json", identity,
+)
+assert verified_bundle["archive_sha256"] == actual_bundle_sha256
+assert verified_bundle["archive_byte_length"] == actual_bundle_bytes
+modules = (pr_agent, litellm, adapter_module, handler_module, reviewer_module)
 assert all(pathlib.Path(module.__file__).resolve().is_relative_to(artifact) for module in modules)
 assert not any(path.is_symlink() or path.is_dir() and path.name == "__pycache__" or path.is_file() and path.suffix == ".pyc" for path in artifact.rglob("*"))
-print(f"PR_AGENT_CLEAN_BASE_PROBE_PASS archive_bytes={actual_bundle_bytes} archive_sha256={actual_bundle_sha256} source_tree={identity['source_tree_sha256']} license={expected_license} clean_base={expected_base_image} litellm={version} model_cost_source={model_cost_info['source']} httpx_get_calls={len(httpx_get_calls)} PRReviewer={PRReviewer.__module__} LiteLLMAIHandler={LiteLLMAIHandler.__module__}")
+print(f"PR_AGENT_CLEAN_BASE_PROBE_PASS archive_bytes={actual_bundle_bytes} archive_sha256={actual_bundle_sha256} manifest_sha256={deployment_identity['files']['manifest']['sha256']} adapter_sha256={identity['adapter_sha256']} config_sha256={identity['default_config_sha256']} lock_sha256={identity['requirements_lock_sha256']} stock_tokenizer_sha256={identity['stock_tokenizer_asset_sha256']} source_tree={identity['source_tree_sha256']} license={expected_license} clean_base={expected_base_image} litellm={version} model_cost_source={model_cost_info['source']} httpx_get_calls={len(httpx_get_calls)} tokenizer_http_calls={len(requests_get_calls)} stock_encoder={stock_encoder.name} PRReviewer={PRReviewer.__module__} LiteLLMAIHandler={LiteLLMAIHandler.__module__}")
 PY
 
 require_clean_base_marker "$runtime_log" "$bundle_bytes" "$bundle_sha256"
@@ -306,3 +412,4 @@ else
 fi
 printf 'bundle=%s\n' "$bundle"
 cat "$bundle.sha256"
+printf 'deployment_identity=%s\n' "$deployment_identity"

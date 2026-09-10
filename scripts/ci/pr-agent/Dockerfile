@@ -28,8 +28,13 @@ RUN PYTHONPATH=/opt/lmdj/pr-agent/vendor python -m pip install --no-compile --no
 # remove any installer-created bytecode before the vendor tree becomes an artifact.
 RUN find /opt/lmdj/pr-agent/vendor -type d -name '__pycache__' -prune -exec rm -rf {} + \
     && find /opt/lmdj/pr-agent/vendor -type f -name '*.pyc' -delete
+RUN mkdir -p /opt/lmdj/pr-agent/tokenizer-cache \
+    && cp /opt/lmdj/pr-agent/vendor/litellm/litellm_core_utils/tokenizers/fb374d419588a4632f3f557e76b4b70aebbca790 \
+      /opt/lmdj/pr-agent/tokenizer-cache/fb374d419588a4632f3f557e76b4b70aebbca790 \
+    && python -c "import hashlib, pathlib; p=pathlib.Path('/opt/lmdj/pr-agent/tokenizer-cache/fb374d419588a4632f3f557e76b4b70aebbca790'); data=p.read_bytes(); assert len(data) == 3613922; assert hashlib.sha256(data).hexdigest() == '446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d'"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV LITELLM_LOCAL_MODEL_COST_MAP=true
+ENV TIKTOKEN_CACHE_DIR=/opt/lmdj/pr-agent/tokenizer-cache
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*

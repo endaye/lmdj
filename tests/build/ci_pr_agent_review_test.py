@@ -9,15 +9,18 @@ is replaced, so a green test cannot come from replacing the reviewer itself.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import copy
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 import shutil
@@ -30,6 +33,9 @@ import pr_agent_review as adapter
 
 FIXTURES = ROOT / "tests/fixtures/ci/pr-agent"
 SOURCE_ROOT = Path(os.environ.get("PR_AGENT_TEST_SOURCE_ROOT", "/tmp/lmdj-pr-agent-packaging/upstream-53072488"))
+STOCK_TOKENIZER_CACHE_KEY = "fb374d419588a4632f3f557e76b4b70aebbca790"
+STOCK_TOKENIZER_ASSET_SHA256 = "446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d"
+STOCK_TOKENIZER_ASSET_BYTES = 3613922
 
 
 def canonical(value):
@@ -48,6 +54,7 @@ def signed_input(mutator=None):
 
 def blob(data: bytes, encoding="utf-8"):
     return {
+        "object_id": hashlib.sha1(f"blob {len(data)}\0".encode("ascii") + data).hexdigest(),
         "sha256": hashlib.sha256(data).hexdigest(),
         "byte_length": len(data),
         "data_b64": base64.b64encode(data).decode("ascii"),
@@ -62,7 +69,45 @@ class FakeCompletion(dict):
         return dict(self)
 
 
-def test_config(enabled=("deepseek",), *, per_pr=1.0, backoff=0):
+def model_identity(actual="fixture-deepseek-served", version=None):
+    return {
+        "requested": "fixture-deepseek-model",
+        "actual": actual,
+        "response_version": version,
+        "pricing_revision": "fixture-price-v1",
+    }
+
+
+FIXTURE_TOKENIZER_IDS = {
+    "deepseek": "fixture-only-deepseek-messages-v1",
+    "glm": "fixture-only-glm-messages-v1",
+    "xai": "fixture-only-xai-messages-v1",
+    "kimi": "fixture-only-kimi-messages-v1",
+}
+
+
+def fixture_count_messages(messages):
+    """Deterministic synthetic counter with explicit fixture framing overhead."""
+    total = 3  # fixture assistant priming
+    for message in messages:
+        total += 3 + len(message["role"].encode("utf-8")) + len(message["content"].encode("utf-8"))
+        if message.get("name") is not None:
+            total += 1 + len(message["name"].encode("utf-8"))
+    return total
+
+
+def fixture_tokenizer_bindings():
+    return {
+        identifier: {
+            "provider": provider,
+            "evidence_revision": "synthetic-test-evidence-v1",
+            "count_messages": fixture_count_messages,
+        }
+        for provider, identifier in FIXTURE_TOKENIZER_IDS.items()
+    }
+
+
+def test_config_document(enabled=("deepseek",), *, per_pr=1.0, backoff=0):
     providers = {}
     for provider in adapter.SUPPORTED_PROVIDERS:
         if provider not in enabled:
@@ -70,6 +115,7 @@ def test_config(enabled=("deepseek",), *, per_pr=1.0, backoff=0):
                 "enabled": False,
                 "endpoint": None,
                 "model": None,
+                "priced_response_model": None,
                 "credential_ref": None,
                 "pricing_revision": None,
                 "input_price_usd_per_token": None,
@@ -77,6 +123,9 @@ def test_config(enabled=("deepseek",), *, per_pr=1.0, backoff=0):
                 "pricing_verified": False,
                 "funding_ref": None,
                 "funding_verified": False,
+                "context_token_limit": None,
+                "tokenizer_id": None,
+                "tokenizer_verified": False,
             }
         else:
             credential_provider = {"deepseek": "DEEPSEEK", "glm": "ZAI", "xai": "XAI", "kimi": "KIMI"}[provider]
@@ -84,6 +133,7 @@ def test_config(enabled=("deepseek",), *, per_pr=1.0, backoff=0):
                 "enabled": True,
                 "endpoint": f"https://{provider}.invalid.example/v1",
                 "model": f"fixture-{provider}-model",
+                "priced_response_model": f"fixture-{provider}-served",
                 "credential_ref": f"PR_AGENT_{credential_provider}_API_KEY",
                 "pricing_revision": "fixture-price-v1",
                 "input_price_usd_per_token": 0.000001,
@@ -91,8 +141,11 @@ def test_config(enabled=("deepseek",), *, per_pr=1.0, backoff=0):
                 "pricing_verified": True,
                 "funding_ref": "fixture-funding-v1",
                 "funding_verified": True,
+                "context_token_limit": 16_384,
+                "tokenizer_id": FIXTURE_TOKENIZER_IDS[provider],
+                "tokenizer_verified": True,
             }
-    return adapter._safe_config({
+    return {
         "schema": adapter.CONFIG_SCHEMA,
         "provider_order": list(adapter.SUPPORTED_PROVIDERS),
         "budget": {
@@ -106,23 +159,64 @@ def test_config(enabled=("deepseek",), *, per_pr=1.0, backoff=0):
             "request_timeout_seconds": 60,
             "backoff_seconds": backoff,
             "engine_deadline_seconds": 600,
-            "input_token_cap": 100,
+            "input_token_cap": 10_000,
             "output_token_cap": 50,
         },
         "providers": providers,
-    })
+    }
+
+
+def test_config(enabled=("deepseek",), *, per_pr=1.0, backoff=0):
+    with mock.patch.dict(adapter.SUPPORTED_TOKENIZERS, fixture_tokenizer_bindings(), clear=True):
+        return adapter._safe_config(test_config_document(enabled, per_pr=per_pr, backoff=backoff))
 
 
 def bound_source(source_root: Path, destination: Path) -> Path:
     shutil.copytree(source_root, destination, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copy2(ROOT / "scripts/ci/pr_agent_review.py", destination / "pr_agent_review.py")
+    shutil.copy2(ROOT / "scripts/ci/pr-agent/config.toml", destination / "config.toml")
+    shutil.copy2(ROOT / "scripts/ci/pr-agent/requirements.lock", destination / "requirements.lock")
+    stock_tokenizer_asset = destination / "tokenizer-cache" / STOCK_TOKENIZER_CACHE_KEY
+    if not stock_tokenizer_asset.is_file():
+        stock_tokenizer_asset.parent.mkdir()
+        litellm_spec = importlib.util.find_spec("litellm")
+        packaged_asset = (
+            Path(litellm_spec.origin).parent / "litellm_core_utils" / "tokenizers" / STOCK_TOKENIZER_CACHE_KEY
+            if litellm_spec is not None and litellm_spec.origin is not None else None
+        )
+        if packaged_asset is not None and packaged_asset.is_file():
+            shutil.copy2(packaged_asset, stock_tokenizer_asset)
+        else:
+            stock_tokenizer_asset.write_bytes(b"fixture-only-stock-tokenizer-asset")
     digest = adapter._source_tree_sha256(destination)
+    adapter_identity = adapter._file_identity(destination / "pr_agent_review.py")
+    config_identity = adapter._file_identity(destination / "config.toml")
+    lock_identity = adapter._file_identity(destination / "requirements.lock")
+    stock_tokenizer_identity = adapter._file_identity(stock_tokenizer_asset)
     (destination / "IDENTITY").write_text(
         "schema=lmdj.pr-agent-bundle.v1\n"
         f"source_commit={adapter.UPSTREAM_COMMIT}\n"
         f"source_version={adapter.UPSTREAM_VERSION}\n"
-        f"source_tree_sha256={digest}\n",
+        f"source_tree_sha256={digest}\n"
+        f"adapter_sha256={adapter_identity['sha256']}\n"
+        f"default_config_sha256={config_identity['sha256']}\n"
+        f"requirements_lock_sha256={lock_identity['sha256']}\n"
+        f"stock_tokenizer_asset_sha256={stock_tokenizer_identity['sha256']}\n",
         encoding="utf-8",
     )
+    files = {}
+    for name, relative in {
+        "manifest": "IDENTITY", "adapter": "pr_agent_review.py",
+        "default_config": "config.toml", "requirements_lock": "requirements.lock",
+        "stock_tokenizer_asset": f"tokenizer-cache/{STOCK_TOKENIZER_CACHE_KEY}",
+    }.items():
+        identity = adapter._file_identity(destination / relative)
+        files[name] = {"path": relative, **identity}
+    (destination / "DEPLOYMENT_IDENTITY.json").write_text(json.dumps({
+        "schema": adapter.DEPLOYMENT_SCHEMA,
+        "archive": {"sha256": hashlib.sha256(b"fixture-archive").hexdigest(), "byte_length": 15},
+        "files": files,
+    }, sort_keys=True) + "\n", encoding="utf-8")
     return destination
 
 
@@ -139,17 +233,29 @@ class InputAndPolicyTests(unittest.TestCase):
         self.assertIn("return 2", prompt)
         self.assertIn("removed content", prompt)
         self.assertIn("LMDJ-HUNK path=obsolete.txt id=obsolete-h1", prompt)
-        coverage = adapter._make_coverage(self.authenticated, provider="deepseek", model="fixture", prompt=prompt, usage=None)
+        coverage = adapter._make_coverage(self.authenticated, provider="deepseek", model=model_identity(), prompt=prompt, usage=None)
         self.assertTrue(coverage["complete"])
         self.assertEqual(coverage["expected_hunks"], coverage["observed_hunks"])
+        self.assertEqual(set(coverage), adapter.COVERAGE_KEYS)
+        self.assertNotIn("coverage_sha256", coverage)
+        self.assertTrue(all(set(segment) == adapter.SEGMENT_KEYS for segment in coverage["expected_hunks"]))
+        adapter._validate_coverage_receipt(coverage)
 
-    def test_marker_only_prompt_is_incomplete_coverage(self):
+    def test_marker_and_content_without_hunk_bytes_is_incomplete_coverage(self):
         markers = "\n".join(
-            f"LMDJ-HUNK path={hunk['path']} id={hunk['id']} sha256={hunk['patch_sha256']}"
+            f"LMDJ-HUNK path={hunk['path']} id={hunk['id']} sha256={hunk['patch']['sha256']}"
             for hunk in adapter.expected_coverage(self.authenticated)
         )
-        coverage = adapter._make_coverage(self.authenticated, provider="deepseek", model="fixture",
-                                          prompt=markers, usage=None)
+        content = "\n".join(
+            block
+            for file in self.authenticated["files"]
+            for block in (
+                adapter._content_block("BASE", file["path"], file["base_bytes"], file["base_encoding"], file["base_blob"]),
+                adapter._content_block("HEAD", file["path"], file["head_bytes"], file["head_encoding"], file["head_blob"]),
+            )
+        )
+        coverage = adapter._make_coverage(self.authenticated, provider="deepseek", model=model_identity(),
+                                          prompt=markers + "\n" + content, usage=None)
         self.assertFalse(coverage["complete"])
         self.assertEqual(coverage["observed_hunks"], [])
 
@@ -158,6 +264,53 @@ class InputAndPolicyTests(unittest.TestCase):
         tampered["diff"]["text"] += "forged"
         with self.assertRaisesRegex(adapter.EngineError, "input authentication digest"):
             adapter.authenticate_input(tampered)
+
+    def test_blob_object_id_and_closed_metadata_are_verified(self):
+        def malformed_id(document):
+            document["files"][0]["base"]["object_id"] = "not-a-git-object"
+
+        with self.assertRaisesRegex(adapter.EngineError, "Git blob object ID"):
+            adapter.authenticate_input(signed_input(malformed_id))
+
+        def mismatched_id(document):
+            document["files"][0]["base"]["object_id"] = "0" * 40
+
+        with self.assertRaisesRegex(adapter.EngineError, "object ID, hash or length"):
+            adapter.authenticate_input(signed_input(mismatched_id))
+
+        def mismatched_length(document):
+            document["files"][0]["head"]["byte_length"] += 1
+
+        with self.assertRaisesRegex(adapter.EngineError, "object ID, hash or length"):
+            adapter.authenticate_input(signed_input(mismatched_length))
+
+        def extra_blob_key(document):
+            document["files"][0]["base"]["untrusted"] = True
+
+        with self.assertRaisesRegex(adapter.EngineError, "invalid blob record"):
+            adapter.authenticate_input(signed_input(extra_blob_key))
+
+    def test_coverage_closed_schema_and_complete_equality_are_enforced(self):
+        coverage = adapter._make_coverage(
+            self.authenticated, provider="deepseek", model=model_identity(),
+            prompt=adapter.render_prompt_input(self.authenticated), usage=None,
+        )
+        for mutation in (
+            lambda value: value.pop("usage"),
+            lambda value: value.update(extra=True),
+        ):
+            invalid = copy.deepcopy(coverage)
+            mutation(invalid)
+            with self.assertRaisesRegex(adapter.EngineError, "closed schema"):
+                adapter._validate_coverage_receipt(invalid)
+        invalid = copy.deepcopy(coverage)
+        invalid["observed_hunks"] = invalid["observed_hunks"][:-1]
+        with self.assertRaisesRegex(adapter.EngineError, "exactly cover"):
+            adapter._validate_coverage_receipt(invalid)
+        invalid = copy.deepcopy(coverage)
+        invalid["expected_hunks"][0]["patch"]["extra"] = True
+        with self.assertRaisesRegex(adapter.EngineError, "patch identity"):
+            adapter._validate_coverage_receipt(invalid)
 
     def test_changed_file_without_both_immutable_blobs_is_rejected(self):
         def remove_head(document):
@@ -200,7 +353,7 @@ class InputAndPolicyTests(unittest.TestCase):
 
         authenticated = adapter.authenticate_input(signed_input(add_unreadable))
         self.assertFalse(authenticated["input_complete"])
-        coverage = adapter._make_coverage(authenticated, provider="deepseek", model="fixture",
+        coverage = adapter._make_coverage(authenticated, provider="deepseek", model=model_identity(),
                                           prompt=adapter.render_prompt_input(authenticated), usage=None)
         self.assertFalse(coverage["complete"])
         self.assertIn("secret.bin", {hunk["path"] for hunk in coverage["expected_hunks"]})
@@ -227,27 +380,50 @@ class InputAndPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(adapter.EngineError, "outside the changed path"):
             adapter._validate_native_mapping(outside, self.authenticated)
 
-    def test_missing_native_findings_list_is_not_a_clean_review(self):
-        class StubReviewer:
-            @staticmethod
-            def _load_review_yaml(_text):
-                return {"review": {"general_comments": "clean"}}
-
-        upstream = {"PRReviewer": StubReviewer}
+    def test_missing_native_findings_list_is_not_a_clean_review_without_yaml_dependency(self):
         with self.assertRaisesRegex(adapter.EngineError, "missing its findings list"):
-            adapter._strict_native_yaml(upstream, "review:\n  general_comments: clean\n")
+            adapter._validate_native_mapping({"review": {"general_comments": "clean"}}, self.authenticated)
+
+    def test_semantically_empty_and_unknown_native_fields_are_rejected(self):
+        with self.assertRaisesRegex(adapter.EngineError, "model-supplied summary"):
+            adapter._validate_native_mapping({"review": {"key_issues_to_review": []}}, self.authenticated)
+        with self.assertRaisesRegex(adapter.EngineError, "unsupported fields"):
+            adapter._validate_native_mapping({"review": {
+                "general_comments": "clean", "key_issues_to_review": [], "ignored": "x",
+            }}, self.authenticated)
+
+    def test_actual_repository_config_is_valid_and_inactive_before_engine_import(self):
+        config_path = ROOT / "scripts/ci/pr-agent/config.toml"
+        with mock.patch.object(adapter, "TRUSTED_CONFIG_ROOT", config_path.parent):
+            config = adapter.load_trusted_config(config_path)
+            self.assertFalse(any(provider["enabled"] for provider in config["providers"].values()))
+            with tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.object(adapter, "_import_upstream") as import_upstream:
+                with self.assertRaisesRegex(adapter.EngineError, "no provider has trusted activation"):
+                    adapter.run_engine(
+                        FIXTURES / "complete-input.json", config_path=config_path,
+                        source_root=Path(directory) / "unused", engine_cwd=Path(directory) / "unused-engine",
+                        ledger_path=Path(directory) / "unused-ledger.jsonl",
+                    )
+                import_upstream.assert_not_called()
 
     def test_trusted_config_requires_verified_activation_and_keeps_provider_mapping_closed(self):
+        self.assertEqual(adapter.SUPPORTED_TOKENIZERS, {})
+        with self.assertRaisesRegex(adapter.EngineError, "tokenizer binding"):
+            adapter._safe_config(test_config_document())
         config = test_config()
         self.assertEqual(config["providers"]["deepseek"]["litellm_provider"] if "litellm_provider" in config["providers"]["deepseek"] else "deepseek", "deepseek")
-        invalid = copy.deepcopy(config)
+        invalid = test_config_document()
         invalid["providers"]["deepseek"]["funding_verified"] = False
         with self.assertRaisesRegex(adapter.EngineError, "enabled provider lacks"):
-            adapter._safe_config({"schema": adapter.CONFIG_SCHEMA, "budget": config["budget"],
-                                  "providers": {**invalid["providers"]}, "provider_order": config["provider_order"]})
+            adapter._safe_config(invalid)
+        invalid = test_config_document()
+        invalid["providers"]["deepseek"]["tokenizer_id"] = "arbitrary"
+        with self.assertRaisesRegex(adapter.EngineError, "tokenizer binding"):
+            adapter._safe_config(invalid)
 
     def test_trusted_config_enforces_approved_dollar_caps_and_order(self):
-        config = test_config()
+        config = test_config_document()
         for key, value in (("monthly_usd", 20.01), ("pilot_usd", 20.01), ("per_pr_usd", 1.01)):
             invalid_budget = {**config["budget"], key: value}
             with self.assertRaisesRegex(adapter.EngineError, "dollar budget"):
@@ -433,13 +609,11 @@ class InputAndPolicyTests(unittest.TestCase):
                     pass
 
     def test_unapproved_credential_reference_is_rejected(self):
-        config = test_config()
-        invalid = copy.deepcopy(config)
+        invalid = test_config_document()
         invalid["providers"]["deepseek"]["credential_ref"] = "GITHUB_TOKEN"
         invalid["providers"]["deepseek"].update(pricing_verified=True, funding_verified=True)
         with self.assertRaisesRegex(adapter.EngineError, "model or credential"):
-            adapter._safe_config({"schema": adapter.CONFIG_SCHEMA, "budget": config["budget"],
-                                  "providers": invalid["providers"], "provider_order": config["provider_order"]})
+            adapter._safe_config(invalid)
 
     def test_upstream_import_does_not_leave_source_path_in_process_path(self):
         if not SOURCE_ROOT.joinpath("pr_agent").is_dir():
@@ -468,15 +642,46 @@ class InputAndPolicyTests(unittest.TestCase):
             source = bound_source(SOURCE_ROOT, Path(directory) / "source")
             target = source / "pr_agent" / "algo" / "types.py"
             target.write_text(target.read_text(encoding="utf-8") + "\n# forged\n", encoding="utf-8")
-            (source / "IDENTITY").write_text(
-                "schema=lmdj.pr-agent-bundle.v1\n"
-                f"source_commit={adapter.UPSTREAM_COMMIT}\n"
-                f"source_version={adapter.UPSTREAM_VERSION}\n"
-                f"source_tree_sha256={adapter._source_tree_sha256(source)}\n",
-                encoding="utf-8",
-            )
+            manifest = source / "IDENTITY"
+            identity = dict(line.split("=", 1) for line in manifest.read_text().splitlines())
+            identity["source_tree_sha256"] = adapter._source_tree_sha256(source)
+            manifest.write_text("".join(f"{key}={value}\n" for key, value in identity.items()), encoding="utf-8")
+            deployment = json.loads((source / "DEPLOYMENT_IDENTITY.json").read_text(encoding="utf-8"))
+            deployment["files"]["manifest"].update(adapter._file_identity(manifest))
+            (source / "DEPLOYMENT_IDENTITY.json").write_text(json.dumps(deployment), encoding="utf-8")
             with mock.patch.object(adapter, "TRUSTED_ENGINE_ROOT", source):
                 with self.assertRaisesRegex(adapter.EngineError, "source identity is missing"):
+                    adapter._import_upstream(source)
+
+    def test_upstream_import_rejects_deployed_adapter_config_or_tokenizer_byte_forgery(self):
+        if not SOURCE_ROOT.joinpath("pr_agent").is_dir():
+            self.skipTest(f"pinned PR-Agent source is unavailable: {SOURCE_ROOT}")
+        for relative in ("pr_agent_review.py", "config.toml", f"tokenizer-cache/{STOCK_TOKENIZER_CACHE_KEY}"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as directory:
+                source = bound_source(SOURCE_ROOT, Path(directory) / "source")
+                target = source / relative
+                target.write_text(target.read_text(encoding="utf-8") + "\n# forged\n", encoding="utf-8")
+                with mock.patch.object(adapter, "TRUSTED_ENGINE_ROOT", source):
+                    with self.assertRaisesRegex(adapter.EngineError, "deployed engine file"):
+                        adapter._import_upstream(source)
+
+    def test_upstream_import_rejects_missing_or_forged_deployment_identity(self):
+        if not SOURCE_ROOT.joinpath("pr_agent").is_dir():
+            self.skipTest(f"pinned PR-Agent source is unavailable: {SOURCE_ROOT}")
+        with tempfile.TemporaryDirectory() as directory:
+            source = bound_source(SOURCE_ROOT, Path(directory) / "source")
+            deployment_path = source / "DEPLOYMENT_IDENTITY.json"
+            original = deployment_path.read_text(encoding="utf-8")
+            deployment_path.unlink()
+            with mock.patch.object(adapter, "TRUSTED_ENGINE_ROOT", source):
+                with self.assertRaisesRegex(adapter.EngineError, "deployment identity"):
+                    adapter._import_upstream(source)
+            deployment_path.write_text(original, encoding="utf-8")
+            forged = json.loads(original)
+            forged["files"]["default_config"]["sha256"] = "0" * 64
+            deployment_path.write_text(json.dumps(forged), encoding="utf-8")
+            with mock.patch.object(adapter, "TRUSTED_ENGINE_ROOT", source):
+                with self.assertRaisesRegex(adapter.EngineError, "does not match trusted identity"):
                     adapter._import_upstream(source)
 
     def test_upstream_import_rejects_supplied_bytecode(self):
@@ -507,10 +712,20 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.source_root = SOURCE_ROOT if (SOURCE_ROOT / "IDENTITY").is_file() else bound_source(SOURCE_ROOT, self.root / "source")
+        self.source_root = bound_source(SOURCE_ROOT, self.root / "source")
+        stock_tokenizer = self.source_root / "tokenizer-cache" / STOCK_TOKENIZER_CACHE_KEY
+        self.assertEqual(adapter._file_identity(stock_tokenizer), {
+            "sha256": STOCK_TOKENIZER_ASSET_SHA256,
+            "byte_length": STOCK_TOKENIZER_ASSET_BYTES,
+        }, "the actual-handler lane must use the real pinned stock o200k_base asset")
         self.trusted_engine_root = mock.patch.object(adapter, "TRUSTED_ENGINE_ROOT", self.source_root)
         self.trusted_engine_root.start()
         self.addCleanup(self.trusted_engine_root.stop)
+        self.fixture_tokenizers = mock.patch.dict(
+            adapter.SUPPORTED_TOKENIZERS, fixture_tokenizer_bindings(), clear=True,
+        )
+        self.fixture_tokenizers.start()
+        self.addCleanup(self.fixture_tokenizers.stop)
         self.input_path = self.root / "input.json"
         self.input_path.write_text(json.dumps(json.loads((FIXTURES / "complete-input.json").read_text()), indent=2), encoding="utf-8")
         self.config_path = self.root / "config.toml"
@@ -518,9 +733,11 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             "schema = \"lmdj.pr-agent-config.v1\"\nprovider_order = [\"deepseek\"]\n\n"
             "[budget]\napproval_id = \"fixture-approval\"\ntimezone = \"Asia/Shanghai\"\nmonthly_usd = 20.0\n"
             "pilot_usd = 20.0\nper_pr_usd = 1.0\nmax_requests = 8\nmax_requests_per_provider = 2\n"
-            "request_timeout_seconds = 60\nbackoff_seconds = 0\nengine_deadline_seconds = 600\n"
-            "input_token_cap = 100\noutput_token_cap = 50\n\n[providers.deepseek]\n"
+            "request_timeout_seconds = 7\nbackoff_seconds = 0\nengine_deadline_seconds = 600\n"
+            "input_token_cap = 10000\noutput_token_cap = 50\n\n[providers.deepseek]\n"
             "enabled = true\nendpoint = \"https://deepseek.invalid.example/v1\"\nmodel = \"fixture-deepseek-model\"\n"
+            "priced_response_model = \"fixture-deepseek-served\"\ncontext_token_limit = 16384\n"
+            f"tokenizer_id = \"{FIXTURE_TOKENIZER_IDS['deepseek']}\"\ntokenizer_verified = true\n"
             "credential_ref = \"PR_AGENT_DEEPSEEK_API_KEY\"\npricing_revision = \"fixture-price-v1\"\n"
             "input_price_usd_per_token = 0.000001\noutput_price_usd_per_token = 0.000001\n"
             "pricing_verified = true\nfunding_ref = \"fixture-funding-v1\"\nfunding_verified = true\n\n"
@@ -529,7 +746,7 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def run_with_fake(self, fake):
+    def run_with_fake(self, fake, *, reset_stock_tokenizer=False):
         hostile = self.root / "engine"
         hostile.mkdir()
         (hostile / "pyproject.toml").write_text("not = [valid", encoding="utf-8")
@@ -537,6 +754,10 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         ledger = self.root / "ledger.jsonl"
         with adapter._isolated_environment(hostile, "__never_read__", "__never_read__"):
             upstream = adapter._import_upstream(self.source_root)
+        if reset_stock_tokenizer:
+            token_encoder = sys.modules["pr_agent.algo.token_handler"].TokenEncoder
+            token_encoder._encoder_instance = None
+            token_encoder._model = None
         upstream["litellm_ai_handler"].acompletion = fake
         with mock.patch.object(adapter, "_import_upstream", return_value=upstream), \
                 mock.patch.object(adapter, "TRUSTED_CONFIG_ROOT", self.root), \
@@ -548,6 +769,14 @@ class RealHandlerIntegrationTests(unittest.TestCase):
 
     def test_stock_reviewer_receives_every_authenticated_segment_and_captures_native_output(self):
         calls = []
+        counted_messages = []
+        tokenizer = adapter.SUPPORTED_TOKENIZERS[FIXTURE_TOKENIZER_IDS["deepseek"]]
+
+        def recording_counter(messages):
+            counted_messages.append(copy.deepcopy(messages))
+            return fixture_count_messages(messages)
+
+        tokenizer["count_messages"] = recording_counter
         response_text = (FIXTURES / "valid-native-review.yaml").read_text(encoding="utf-8")
 
         async def fake_acompletion(**kwargs):
@@ -555,7 +784,8 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             self.assertEqual(os.environ.get("DEEPSEEK_API_KEY"), "fixture-secret")
             for name in ("GITHUB_TOKEN", "PR_AGENT_CONFIG_BRANCH", "DYNACONF_CONFIG__MODEL", "OPENAI_API_KEY"):
                 self.assertIsNone(os.environ.get(name), name)
-            return FakeCompletion({"choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+            return FakeCompletion({"model": "fixture-deepseek-served", "model_version": "fixture-version-1",
+                                   "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
                                    "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}})
 
         result, upstream, ledger = self.run_with_fake(fake_acompletion)
@@ -564,9 +794,20 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         attempt = result["attempts"][0]
         self.assertTrue(attempt["coverage"]["complete"])
         self.assertEqual(attempt["engine"]["source_commit"], adapter.UPSTREAM_COMMIT)
+        self.assertEqual(attempt["model"], model_identity(version="fixture-version-1"))
+        self.assertEqual(attempt["coverage"]["model"], attempt["model"])
+        self.assertEqual(attempt["engine"]["bundle"]["adapter_sha256"], adapter._file_identity(Path(adapter.__file__))["sha256"])
+        self.assertEqual(attempt["engine"]["runtime_config"], adapter._file_identity(self.config_path))
         self.assertEqual(attempt["review"]["findings"][0]["path"], "src/example.py")
         self.assertEqual(len(calls), 1, "why: one complete prompt is the pilot contract; remedy: disable hidden chunk/retry paths")
+        self.assertEqual(counted_messages, [calls[0]["messages"]])
+        self.assertEqual(calls[0]["max_tokens"], 50)
+        self.assertGreater(calls[0]["timeout"], 0)
+        self.assertLessEqual(calls[0]["timeout"], 7)
+        self.assertEqual(calls[0]["num_retries"], 0)
+        self.assertEqual(calls[0]["max_retries"], 0)
         prompt = "\n".join(str(item.get("content", "")) for item in calls[0]["messages"])
+        self.assertIn("nonempty review.general_comments summary", prompt)
         for expected in ("return 1", "return 2", "removed content", "src-example-h1", "obsolete-h1"):
             self.assertIn(expected, prompt)
         self.assertNotIn("must-not-leak", prompt)
@@ -578,6 +819,311 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             "why: the trusted source must not acquire unverified bytecode during import; "
             "remedy: keep PYTHONDONTWRITEBYTECODE enabled for the engine boundary",
         )
+
+    def test_stock_reviewer_starts_from_pinned_cache_with_empty_ambient_cache_and_no_http(self):
+        calls = []
+        tokenizer_http_calls = []
+        ambient_cache = self.root / "empty-ambient-tokenizer-cache"
+        ambient_cache.mkdir()
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            return FakeCompletion({
+                "model": "fixture-deepseek-served",
+                "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            })
+
+        def forbidden_get(url, *args, **kwargs):
+            tokenizer_http_calls.append(str(url))
+            raise AssertionError("stock tokenizer attempted runtime HTTP")
+
+        with mock.patch.dict(os.environ, {"TIKTOKEN_CACHE_DIR": str(ambient_cache)}, clear=False), \
+                mock.patch("requests.get", side_effect=forbidden_get):
+            result, _upstream, _ledger = self.run_with_fake(
+                fake_acompletion, reset_stock_tokenizer=True,
+            )
+            self.assertEqual(os.environ["TIKTOKEN_CACHE_DIR"], str(ambient_cache))
+        self.assertEqual(result["status"], "reviewed")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(tokenizer_http_calls, [])
+        self.assertEqual(list(ambient_cache.iterdir()), [])
+        self.assertEqual(sys.modules["pr_agent.algo.token_handler"].TokenEncoder._encoder_instance.name, "o200k_base")
+
+    def test_nonstop_or_missing_finish_reason_rejects_parseable_actual_output_without_retry(self):
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+        for finish_reason in ("length", "content_filter", None):
+            with self.subTest(finish_reason=finish_reason):
+                calls = []
+                choice = {"message": {"content": response_text}}
+                if finish_reason is not None:
+                    choice["finish_reason"] = finish_reason
+
+                async def fake_acompletion(**kwargs):
+                    calls.append(kwargs)
+                    return FakeCompletion({
+                        "model": "fixture-deepseek-served",
+                        "choices": [choice],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                    })
+
+                result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+                self.assertEqual(result["status"], "not-reviewed")
+                self.assertEqual(result["attempts"][0]["error_class"], "invalid_output")
+                self.assertEqual(result["attempts"][0]["usage"]["prompt_tokens"], 10)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(
+                    {json.loads(line)["status"] for line in ledger.read_text().splitlines()},
+                    {"reserved", "reconciled"},
+                )
+                shutil.rmtree(self.root / "engine")
+                ledger.unlink()
+
+    def test_missing_or_invalid_usage_rejects_parseable_actual_output_and_retains_reservation(self):
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+        for usage in (None, {"prompt_tokens": "unknown", "completion_tokens": 5, "total_tokens": 5}):
+            with self.subTest(usage=usage):
+                calls = []
+
+                async def fake_acompletion(**kwargs):
+                    calls.append(kwargs)
+                    response = FakeCompletion({
+                        "model": "fixture-deepseek-served",
+                        "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                    })
+                    if usage is not None:
+                        response["usage"] = usage
+                    return response
+
+                result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+                self.assertEqual(result["status"], "not-reviewed")
+                self.assertEqual(result["attempts"][0]["error_class"], "invalid_output")
+                self.assertFalse(result["attempts"][0]["coverage"]["complete"])
+                self.assertEqual(len(calls), 1)
+                records = [json.loads(line) for line in ledger.read_text().splitlines()]
+                self.assertEqual({record["status"] for record in records}, {"reserved", "uncertain"})
+                final = next(record for record in records if record["status"] == "uncertain")
+                self.assertEqual(final["reserved_amount_usd"], 0.01005)
+                self.assertIsNone(final["actual_amount_usd"])
+                self.assertIsNone(final["usage"])
+                shutil.rmtree(self.root / "engine")
+                ledger.unlink()
+
+    def test_response_model_alias_mismatch_is_retained_and_fails_closed(self):
+        calls = []
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            return FakeCompletion({
+                "model": "unexpected-served-model", "model_version": "provider-v9",
+                "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            })
+
+        result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["error_class"], "unsupported_model")
+        self.assertEqual(result["attempts"][0]["model"], model_identity("unexpected-served-model", "provider-v9"))
+        self.assertEqual(result["attempts"][0]["usage"]["prompt_tokens"], 10)
+        self.assertEqual(result["attempts"][0]["usage"]["completion_tokens"], 5)
+        self.assertEqual(len(calls), 1)
+        records = [json.loads(line) for line in ledger.read_text().splitlines()]
+        self.assertEqual({record["status"] for record in records}, {"reserved", "uncertain"})
+        final = next(record for record in records if record["status"] == "uncertain")
+        self.assertIsNone(final["actual_amount_usd"])
+        self.assertIsNone(final["usage"])
+
+    def test_missing_response_model_identity_fails_closed_without_retry(self):
+        calls = []
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            return FakeCompletion({
+                "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            })
+
+        result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["error_class"], "unsupported_model")
+        self.assertIsNone(result["attempts"][0]["model"]["actual"])
+        self.assertEqual(result["attempts"][0]["usage"]["prompt_tokens"], 10)
+        self.assertEqual(result["attempts"][0]["usage"]["completion_tokens"], 5)
+        self.assertEqual(len(calls), 1)
+        records = [json.loads(line) for line in ledger.read_text().splitlines()]
+        self.assertEqual({record["status"] for record in records}, {"reserved", "uncertain"})
+        final = next(record for record in records if record["status"] == "uncertain")
+        self.assertIsNone(final["actual_amount_usd"])
+        self.assertIsNone(final["usage"])
+
+    def test_rendered_message_input_cap_rejects_before_admission_or_dispatch(self):
+        self.config_path.write_text(self.config_path.read_text().replace("input_token_cap = 10000", "input_token_cap = 1"))
+        calls = []
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            raise AssertionError("over-cap request reached LiteLLM")
+
+        result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["error_class"], "invalid_parameter")
+        self.assertEqual(calls, [])
+        self.assertFalse(ledger.exists())
+
+    def test_verified_context_limit_rejects_before_admission_or_dispatch(self):
+        self.config_path.write_text(self.config_path.read_text().replace("context_token_limit = 16384", "context_token_limit = 51"))
+        calls = []
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            raise AssertionError("over-context request reached LiteLLM")
+
+        result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["error_class"], "invalid_parameter")
+        self.assertEqual(calls, [])
+        self.assertFalse(ledger.exists())
+
+    def test_overall_deadline_bounds_the_actual_request_timeout(self):
+        self.config_path.write_text(self.config_path.read_text().replace("engine_deadline_seconds = 600", "engine_deadline_seconds = 1"))
+        calls = []
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            return FakeCompletion({
+                "model": "fixture-deepseek-served",
+                "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            })
+
+        result, _upstream, _ledger = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "reviewed")
+        self.assertGreater(calls[0]["timeout"], 0)
+        self.assertLessEqual(calls[0]["timeout"], 1)
+
+    def test_semantically_empty_and_unknown_native_actual_outputs_fail(self):
+        calls = []
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            return FakeCompletion({
+                "model": "fixture-deepseek-served",
+                "choices": [{"message": {"content": "review:\n  key_issues_to_review: []\n"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            })
+
+        result, _upstream, _ledger = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["error_class"], "invalid_output")
+        self.assertEqual(len(calls), 1)
+
+    def test_unknown_native_field_actual_output_fails_closed(self):
+        calls = []
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            return FakeCompletion({
+                "model": "fixture-deepseek-served",
+                "choices": [{"message": {"content": (
+                    "review:\n  general_comments: clean\n  key_issues_to_review: []\n"
+                    "  ignored_payload: not-supported\n"
+                )}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            })
+
+        result, _upstream, _ledger = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["error_class"], "invalid_output")
+        self.assertEqual(len(calls), 1)
+
+    def test_actual_yaml_boundary_rejects_missing_findings_and_oversized_raw_output(self):
+        hostile = self.root / "engine"
+        hostile.mkdir()
+        with adapter._isolated_environment(hostile, "__never_read__", "__never_read__"):
+            upstream = adapter._import_upstream(self.source_root)
+        with self.assertRaisesRegex(adapter.EngineError, "missing its findings list"):
+            adapter._strict_native_yaml(upstream, "review:\n  general_comments: clean\n")
+        with self.assertRaisesRegex(adapter.EngineError, "empty or oversized"):
+            adapter._strict_native_yaml(upstream, "x" * (adapter.MAX_NATIVE_OUTPUT_BYTES + 1))
+
+    def test_oversized_raw_prediction_fails_at_the_actual_handler_boundary(self):
+        calls = []
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            return FakeCompletion({
+                "model": "fixture-deepseek-served",
+                "choices": [{"message": {"content": "x" * (adapter.MAX_NATIVE_OUTPUT_BYTES + 1)}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            })
+
+        result, _upstream, _ledger = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["error_class"], "invalid_output")
+        self.assertEqual(len(calls), 1)
+
+    def test_provider_output_usage_above_cap_fails_after_reconciliation(self):
+        calls = []
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            return FakeCompletion({
+                "model": "fixture-deepseek-served",
+                "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 51, "total_tokens": 61},
+            })
+
+        result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["error_class"], "invalid_parameter")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual({json.loads(line)["status"] for line in ledger.read_text().splitlines()}, {"reserved", "reconciled"})
+
+    def test_provider_input_usage_above_cap_fails_after_reconciliation(self):
+        calls = []
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            return FakeCompletion({
+                "model": "fixture-deepseek-served",
+                "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10_001, "completion_tokens": 1, "total_tokens": 10_002},
+            })
+
+        result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["error_class"], "invalid_parameter")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual({json.loads(line)["status"] for line in ledger.read_text().splitlines()}, {"reserved", "reconciled"})
+
+    def test_configured_request_timeout_cancels_the_actual_seam_without_late_work(self):
+        self.config_path.write_text(self.config_path.read_text().replace("request_timeout_seconds = 7", "request_timeout_seconds = 1"))
+        calls = []
+        cancelled = []
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            try:
+                await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                cancelled.append(True)
+                raise
+            raise AssertionError("cancelled request resumed as late untracked work")
+
+        started = time.monotonic()
+        result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["error_class"], "timeout")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(cancelled, [True])
+        self.assertEqual({json.loads(line)["status"] for line in ledger.read_text().splitlines()}, {"reserved", "uncertain"})
 
     def test_authentication_failure_is_not_retried_by_the_stock_decorator(self):
         calls = []
@@ -599,7 +1145,8 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             calls.append(kwargs)
             if len(calls) == 1:
                 raise RuntimeError("503 temporary network fixture")
-            return FakeCompletion({"choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+            return FakeCompletion({"model": "fixture-deepseek-served",
+                                   "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
                                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
 
         result, _upstream, ledger = self.run_with_fake(fake_acompletion)
@@ -619,7 +1166,8 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             calls.append(kwargs)
             if len(calls) == 1:
                 raise RuntimeError("429 rate limit fixture")
-            return FakeCompletion({"choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+            return FakeCompletion({"model": "fixture-deepseek-served",
+                                   "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
                                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
 
         result, _upstream, _ledger = self.run_with_fake(fake_acompletion)
@@ -634,7 +1182,8 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             calls.append(kwargs)
             if len(calls) == 1:
                 raise TimeoutError("timed out fixture")
-            return FakeCompletion({"choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+            return FakeCompletion({"model": "fixture-deepseek-served",
+                                   "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
                                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
 
         result, _upstream, ledger = self.run_with_fake(fake_acompletion)

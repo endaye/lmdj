@@ -20,50 +20,15 @@ output_token_cap = 4096
 # The DeepSeek endpoint/model and peak cache-miss prices are observations from
 # the design, not fresh implementation verification.  Activation remains
 # closed until an operator supplies reviewed pricing and funding evidence.
+# Candidate observation only: https://api.deepseek.com / deepseek-v4-pro.
 [providers.deepseek]
-enabled = true
-endpoint = "https://api.deepseek.com"
-model = "deepseek-v4-pro"
-credential_ref = "PR_AGENT_DEEPSEEK_API_KEY"
-pricing_revision = "design-observed-2026-09-10"
-input_price_usd_per_token = 0.00000132
-output_price_usd_per_token = 0.00000396
-pricing_verified = false
-funding_ref = "owner-confirmation-unverified"
-funding_verified = false
+enabled = false
 
 [providers.glm]
 enabled = false
-endpoint = null
-model = null
-credential_ref = null
-pricing_revision = null
-input_price_usd_per_token = null
-output_price_usd_per_token = null
-pricing_verified = false
-funding_ref = null
-funding_verified = false
 
 [providers.xai]
 enabled = false
-endpoint = null
-model = null
-credential_ref = null
-pricing_revision = null
-input_price_usd_per_token = null
-output_price_usd_per_token = null
-pricing_verified = false
-funding_ref = null
-funding_verified = false
 
 [providers.kimi]
 enabled = false
-endpoint = null
-model = null
-credential_ref = null
-pricing_revision = null
-input_price_usd_per_token = null
-output_price_usd_per_token = null
-pricing_verified = false
-funding_ref = null
-funding_verified = false
