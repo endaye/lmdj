@@ -1,6 +1,8 @@
 idf_component_register(SRCS main.cpp audio_driver.cpp runtime_host.cpp keyboard.cpp
-  display.cpp input_controller.cpp
+  display.cpp input_controller.cpp transfer.cpp transfer_transaction.cpp
   REQUIRES esp_driver_i2s esp_driver_i2c esp_driver_gpio freertos esp_system pthread)
+target_include_directories(${COMPONENT_LIB} PRIVATE
+  "${LMDJ_SOURCE_ROOT}/third_party/picosha2")
 if(CMAKE_BUILD_EARLY_EXPANSION)
   return()
 endif()

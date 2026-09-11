@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lmdj.dev/contracts/cardputer-transfer/1.0.0",
+  "title": "lmdj.cardputer-transfer.v1 semantic frame",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "opcode", "request_id", "nonce_hex", "payload_hex"],
+  "properties": {
+    "version": {"const": 1},
+    "opcode": {
+      "anyOf": [
+        {"type": "integer", "minimum": 1, "maximum": 6},
+        {"type": "integer", "minimum": 129, "maximum": 134}
+      ]
+    },
+    "request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+    "nonce_hex": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "payload_hex": {"type": "string", "pattern": "^(?:[0-9a-f]{2}){0,1024}$"}
+  }
+}

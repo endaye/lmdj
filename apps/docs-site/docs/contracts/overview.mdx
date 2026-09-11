@@ -18,3 +18,12 @@ Contract ID 表示稳定边界，Contract SemVer 表示该边界自身版本；P
 Runtime Snapshot 是从 Project 派生的内部不可变边界，目前不作为单独持久化 Contract。
 ## 兼容性
 Project Bundle 是 transfer-only，导入后 Project Contract 仍是权威创作状态。新增代码只使用 Assembly Lock 中 active Contract；历史 Contract 只在 History 页面解释。
+
+## Cardputer transfer v1
+Cardputer 首版 transfer contract（Contract SemVer `1.0.0`）是 Cardputer 首版
+USB Serial/JTAG 的有界 framing envelope，不是 Runtime Content 或 USB Audio。
+每帧固定 `LMCP` header、1 KiB payload 上限、非零 request ID、16-byte session
+nonce 与 CRC-32/ISO-HDLC；未知版本、长度、opcode、CRC 和零 request ID 在进入
+业务处理前拒绝。规范参考实现为 `scripts/cardputer-transfer.py`，设备 C++
+边界为 `apps/cardputer-host/main/transfer.*`。当前 C1 交付已覆盖 framing 与
+正反例及有序事务接收器；设备确认、真实 USB 断连旅程和物理验收仍待后续实现。
