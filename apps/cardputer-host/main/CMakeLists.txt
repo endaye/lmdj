@@ -1,4 +1,4 @@
-idf_component_register(SRCS main.cpp audio_driver.cpp runtime_host.cpp keyboard.cpp
+idf_component_register(SRCS main.cpp audio_driver.cpp runtime_host.cpp keyboard.cpp keyboard_scanner.cpp
   display.cpp input_controller.cpp transfer.cpp transfer_transaction.cpp transfer_session.cpp
   usb_transfer_endpoint.cpp
   "${LMDJ_SOURCE_ROOT}/products/lmdj/src/cardputer_assembly.cpp"

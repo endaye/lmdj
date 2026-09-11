@@ -47,7 +47,7 @@ Node 回归覆盖 primary Pointer、Chromium 整数化 compatibility mouse coord
 
 ### Cardputer ADV：I1 输入与状态投影
 
-Cardputer 首版将实体键盘扫描先转换为固定的 `PhysicalKeyEvent`，再进入容量为 16
+Cardputer 首版由正式 Host 的 TCA8418 扫描器将实体键盘事件转换为固定的 `PhysicalKeyEvent`，再进入容量为 16
 的输入队列；只有序列化的 Runtime Host executor 调用 Facade。A/S/D/F 对应四个
 One Shot Pad，Space 播放/停止，M 静音，减号/等号调节音量，Enter 确认接收，
 Esc 取消接收。按下沿去重，自动重复和越序释放不产生额外命令；队列满或丢键时

@@ -2,6 +2,7 @@
 #include "cardputer_assembly.hpp"
 #include "display.hpp"
 #include "input_controller.hpp"
+#include "keyboard_scanner.hpp"
 #include "usb_transfer_endpoint.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -34,6 +35,11 @@ extern "C" void app_main() {
     RuntimeHost host(config.runtime, config.profile, audio);
     Display display;
     InputController input(host, display);
+    Tca8418Scanner scanner(config.audio.io.sda, config.audio.io.scl);
+    if (!scanner.install()) {
+      std::puts("CARDPUTER keyboard initialization failed");
+      return;
+    }
     UsbTransferEndpoint transfer(host, config.runtime.content_limits.maximum_encoded_bytes);
     if (!transfer.install()) {
       std::puts("CARDPUTER USB transfer initialization failed");
@@ -47,6 +53,7 @@ extern "C" void app_main() {
     // implies stop. The display consumes only the bounded value projection.
     for (;;) {
       input.poll();
+      scanner.poll(input);
       transfer.poll();
       vTaskDelay(1);
     }
