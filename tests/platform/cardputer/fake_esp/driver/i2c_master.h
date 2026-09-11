@@ -20,6 +20,7 @@ inline std::array<FakeBus*, 64> routing{};
 inline int created{}, deleted{};
 inline bool fail_add{}, fail_remove{};
 inline bool (*before_transmit)(std::uint8_t, std::uint8_t){};
+inline int (*read_register)(FakeDevice*, std::uint8_t, std::uint8_t*){};
 inline bool connected(FakeBus* bus) {
   return routing[bus->sda] == bus && routing[bus->scl] == bus;
 }
@@ -54,6 +55,8 @@ inline int i2c_master_transmit(FakeDevice* device, const void* data, std::size_t
 inline int i2c_master_transmit_receive(FakeDevice* device, const void* reg, std::size_t,
                                        void* data, std::size_t, int) {
   if (!fake_i2c::connected(device->bus)) return -1;
+  if (fake_i2c::read_register) return fake_i2c::read_register(
+      device, *static_cast<const std::uint8_t*>(reg), static_cast<std::uint8_t*>(data));
   *static_cast<std::uint8_t*>(data) = device->registers[*static_cast<const std::uint8_t*>(reg)];
   return ESP_OK;
 }

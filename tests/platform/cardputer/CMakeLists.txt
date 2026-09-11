@@ -1,4 +1,27 @@
 find_package(Threads REQUIRED)
+# Keep the AudioSession implementation native while exercising the actual ESP
+# scanner. The fake models FIFO count/pop, not electrical timing or speaker IO.
+add_library(lmdj_cardputer_scanner_native_host OBJECT
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/runtime_host.cpp")
+target_link_libraries(lmdj_cardputer_scanner_native_host PRIVATE lmdj::runtime_facade Threads::Threads)
+lmdj_target_warnings(lmdj_cardputer_scanner_native_host)
+lmdj_target_sanitizers(lmdj_cardputer_scanner_native_host)
+add_executable(lmdj_cardputer_scanner_tests keyboard_scanner_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/keyboard_scanner.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/keyboard.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/display.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/input_controller.cpp"
+  $<TARGET_OBJECTS:lmdj_cardputer_scanner_native_host>)
+target_compile_definitions(lmdj_cardputer_scanner_tests PRIVATE ESP_PLATFORM)
+target_include_directories(lmdj_cardputer_scanner_tests PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/fake_esp" "${CMAKE_SOURCE_DIR}")
+target_link_libraries(lmdj_cardputer_scanner_tests PRIVATE lmdj::runtime_facade Threads::Threads)
+lmdj_target_warnings(lmdj_cardputer_scanner_tests)
+lmdj_target_sanitizers(lmdj_cardputer_scanner_tests)
+foreach(scenario a s d f command)
+  lmdj_add_test(NAME platform.cardputer.scanner.${scenario} TIER component
+    COMMAND lmdj_cardputer_scanner_tests ${scenario})
+endforeach()
 add_executable(lmdj_cardputer_dac_startup_tests dac_startup_test.cpp
   "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/audio_driver.cpp")
 target_compile_definitions(lmdj_cardputer_dac_startup_tests PRIVATE ESP_PLATFORM)
