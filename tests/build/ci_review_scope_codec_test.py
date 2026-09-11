@@ -7,6 +7,7 @@ import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts/ci"))
 import review_scope_codec as codec
+import review_scope
 
 
 class CodecTests(unittest.TestCase):
@@ -36,6 +37,12 @@ class CodecTests(unittest.TestCase):
     def test_truncated_stream_rejected(self):
         with self.assertRaisesRegex(ValueError, "truncated"):
             codec.decode(self.marker(zlib.compress(b"{}")[:-1]))
+
+    def test_invalid_compression_header_is_bounded_error(self):
+        with self.assertRaisesRegex(review_scope.ReviewScopeError,
+                                    "why: scope marker compression is invalid; remedy: regenerate the complete receipt") as raised:
+            codec.decode(self.marker(b"not-zlib"))
+        self.assertIsInstance(raised.exception.__cause__, zlib.error)
 
     def test_multiple_markers_rejected(self):
         with self.assertRaisesRegex(ValueError, "ambiguous"):
