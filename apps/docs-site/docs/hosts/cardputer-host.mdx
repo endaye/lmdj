@@ -24,6 +24,14 @@ that prior configuration could report Running while being effectively inaudible.
 This source correction does not amend the frozen test snapshot or establish
 physical acceptance. A fresh immutable candidate is required for final A1 testing.
 
+Playback startup keeps the DAC powered down (`0x12 = 0x02`) while I2S clocks
+start and silent DMA prewarm drains. The hardware-unmute transition then powers
+the DAC up before restoring codec gain and clearing mute. This avoids enabling
+the BCLK-derived DAC before its clock is established; no additional startup
+delay or permanent mute is used. Register-order tests do not prove analogue
+silence: short listening checks on the source candidate are separate from the
+fresh immutable Build and sustained A1 acceptance still required.
+
 Build with the pinned EIM-managed ESP-IDF environment:
 
 ```bash

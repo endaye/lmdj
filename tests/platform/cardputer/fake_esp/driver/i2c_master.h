@@ -19,6 +19,7 @@ namespace fake_i2c {
 inline std::array<FakeBus*, 64> routing{};
 inline int created{}, deleted{};
 inline bool fail_add{}, fail_remove{};
+inline bool (*before_transmit)(std::uint8_t, std::uint8_t){};
 inline bool connected(FakeBus* bus) {
   return routing[bus->sda] == bus && routing[bus->scl] == bus;
 }
@@ -47,6 +48,7 @@ inline int i2c_master_bus_rm_device(FakeDevice* device) {
 inline int i2c_master_transmit(FakeDevice* device, const void* data, std::size_t size, int) {
   if (!fake_i2c::connected(device->bus) || size != 2) return -1;
   const auto* bytes = static_cast<const std::uint8_t*>(data);
+  if (fake_i2c::before_transmit && !fake_i2c::before_transmit(bytes[0], bytes[1])) return -1;
   device->registers[bytes[0]] = bytes[1]; return ESP_OK;
 }
 inline int i2c_master_transmit_receive(FakeDevice* device, const void* reg, std::size_t,

@@ -1,4 +1,15 @@
 find_package(Threads REQUIRED)
+add_executable(lmdj_cardputer_dac_startup_tests dac_startup_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/audio_driver.cpp")
+target_compile_definitions(lmdj_cardputer_dac_startup_tests PRIVATE ESP_PLATFORM)
+target_include_directories(lmdj_cardputer_dac_startup_tests PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/fake_esp" "${CMAKE_SOURCE_DIR}")
+lmdj_target_warnings(lmdj_cardputer_dac_startup_tests)
+lmdj_target_sanitizers(lmdj_cardputer_dac_startup_tests)
+foreach(scenario order power_failure)
+  lmdj_add_test(NAME platform.cardputer.dac_startup.${scenario} TIER component
+    COMMAND lmdj_cardputer_dac_startup_tests ${scenario})
+endforeach()
 add_executable(lmdj_cardputer_codec_gain_tests codec_gain_test.cpp
   "${CMAKE_SOURCE_DIR}/products/lmdj/src/cardputer_assembly.cpp"
   "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/audio_driver.cpp")
