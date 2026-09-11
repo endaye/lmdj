@@ -96,6 +96,14 @@ journal-owned press state needed by later releases. Existing event validation an
 sixteenth-tick unreleased finalization remain authoritative. Transfer replay is
 storage reconstruction, never engine enqueue.
 
+An explicit terminal transfer may have no source candidates: after the prefix has
+drained, the user can stop while still holding a Pad. Require durable admission and
+cutoff fences, admission closure and an empty outstanding candidate set. Atomically
+retain the Facade's existing unreleased-note finalization tail and empty owned-press
+checkpoint with the terminal transfer receipt. This operation does not invent an
+input sequence or physical release. Exact retry after reopen must recover the same
+terminal result, including after the canonical flush has completed.
+
 ## Bounds, backpressure and uncertain writes
 
 Each preparation declares finite candidate-count and encoded-byte limits plus a

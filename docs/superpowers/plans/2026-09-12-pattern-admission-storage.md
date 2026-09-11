@@ -122,6 +122,7 @@ struct SequenceCandidateReceipt {
 };
 struct SequenceAdmissionTransfer {
   foundation::CommandId transfer_id;
+  bool terminal{};
   std::uint64_t first_watermark{};
   std::uint64_t last_watermark{};
   std::string candidates_sha256;
@@ -285,6 +286,22 @@ retain checkpoint; publish all these changes only after the single durable appen
   after revision advancement; a conflicting payload still fails. New transfers
   must pass current revision validation. Do not call append_tail and then append
   a second transfer receipt: that leaves the crash gap this Task must remove.
+
+- [ ] Add an explicit empty-source terminal variant (`terminal=true`). Require
+  first_watermark=last_watermark=0, empty candidate_receipts, and candidates_sha256
+  equal to SHA-256 of canonical JSON `[]`. The explicit flag distinguishes this
+  from an actual watermark-zero candidate. Require both durable fences, closure
+  and no outstanding candidates. Require empty resulting owned_presses and null
+  journal_input_sequence: terminal finalization is not another input. Replace the
+  recoverable tail using the Facade-supplied existing unreleased-note finalization,
+  preserve last_input_sequence, and retain the receipt atomically. No other new
+  transfer is permitted after a terminal transfer; exact retries still reconcile.
+  `complete_admission` requires that terminal receipt and known completed flushes.
+  Add regression: transfer held press -> drain all candidates -> retain cutoff and
+  close -> terminal transfer -> reopen -> exact retry -> flush/complete -> admission
+  completion. Assert empty ownership, one canonical tail, unchanged input sequence
+  and no synthetic release. Ordinary excluded-input transfers keep terminal=false
+  and cannot use this checkpoint-clearing exception.
 
 - [ ] Prevent bypasses: while admission is incomplete, direct append_tail cannot
   replace the managed tail. Existing flush/switch operations are permitted only
