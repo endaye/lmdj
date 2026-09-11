@@ -110,20 +110,19 @@ def blob(data: bytes, encoding="utf-8"):
 
 
 def _git_fixture_run(root, *args):
-    environment = os.environ.copy()
-    for key in (
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_DIR", "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY", "GIT_WORK_TREE",
-    ):
-        environment.pop(key, None)
-    environment.update({
+    git_executable = shutil.which("git")
+    if git_executable is None:
+        raise RuntimeError("the real-Git fixture requires git on PATH")
+    # Git receives only this explicit allowlist.  In particular, no inherited
+    # config-count/parameter channel or repository locator can cross the seam.
+    environment = {
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_SYSTEM": os.devnull,
         "GIT_TERMINAL_PROMPT": "0",
         "LC_ALL": "C",
         "LANG": "C",
-    })
+    }
     options = [
         "-c", "core.hooksPath=/dev/null",
         "-c", "commit.gpgSign=false",
@@ -134,7 +133,7 @@ def _git_fixture_run(root, *args):
         "-c", "color.ui=false",
     ]
     return subprocess.run(
-        ["git", *options, *args], cwd=root, capture_output=True, check=True,
+        [git_executable, *options, *args], cwd=root, capture_output=True, check=True,
         env=environment, timeout=10,
     )
 
@@ -563,6 +562,26 @@ class InputAndPolicyTests(unittest.TestCase):
                         suffix = "\t\n" if " " in path else "\n"
                         self.assertIn(f"+++ b/{path}{suffix}".encode("utf-8"), raw)
 
+    def test_real_git_fixture_isolated_from_poisoned_environment(self):
+        poisoned = {
+            "GIT_CONFIG_COUNT": "2",
+            "GIT_CONFIG_KEY_0": "core.autocrlf",
+            "GIT_CONFIG_VALUE_0": "true",
+            "GIT_CONFIG_KEY_1": "core.eol",
+            "GIT_CONFIG_VALUE_1": "crlf",
+            "GIT_CONFIG_PARAMETERS": "'core.autocrlf'='true'",
+            "GIT_DIR": "/tmp/poisoned-git-dir",
+            "GIT_WORK_TREE": "/tmp/poisoned-git-work-tree",
+            "GIT_INDEX_FILE": "/tmp/poisoned-git-index",
+            "GIT_OBJECT_DIRECTORY": "/tmp/poisoned-git-objects",
+            "GIT_COMMON_DIR": "/tmp/poisoned-git-common",
+            "GIT_CEILING_DIRECTORIES": "/tmp/poisoned-git-ceiling",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": "/tmp/poisoned-git-alternates",
+            "GIT_NAMESPACE": "poisoned-namespace",
+        }
+        with mock.patch.dict(os.environ, poisoned, clear=False):
+            self.test_real_git_space_headers_authenticate_every_text_change_kind()
+
     def test_header_grammar_preserves_legacy_form_and_rejects_suffixes_and_duplicates(self):
         path = "dir with space/example.py"
 
@@ -583,6 +602,20 @@ class InputAndPolicyTests(unittest.TestCase):
             if new_extra:
                 updated = updated.replace(new_label, new_label + new_extra, 1)
             document["files"][0]["path"] = path
+            document["diff"]["text"] = updated
+            refresh_diff_identity(document)
+            unsigned = copy.deepcopy(document)
+            unsigned.pop("input_sha256", None)
+            document["input_sha256"] = hashlib.sha256(canonical(unsigned)).hexdigest()
+            return document
+
+        def no_space_document(*, old_header=None, new_header=None):
+            document = copy.deepcopy(self.document)
+            updated = document["diff"]["text"]
+            if old_header is not None:
+                updated = updated.replace("--- a/src/example.py", old_header, 1)
+            if new_header is not None:
+                updated = updated.replace("+++ b/src/example.py", new_header, 1)
             document["diff"]["text"] = updated
             refresh_diff_identity(document)
             unsigned = copy.deepcopy(document)
@@ -628,6 +661,17 @@ class InputAndPolicyTests(unittest.TestCase):
         no_space_old["input_sha256"] = hashlib.sha256(canonical(unsigned)).hexdigest()
         with self.assertRaisesRegex(adapter.EngineError, "exactly partitioned"):
             adapter.authenticate_input(no_space_old)
+
+        no_space_baseline = no_space_document()
+        self.assertEqual(adapter.authenticate_input(no_space_baseline)["files"][0]["path"], "src/example.py")
+        for separator in ("\r", "\v", "\f", "\x85", "\u2028", "\u2029"):
+            for side, prefix in (("old", "--- a/"), ("new", "+++ b/")):
+                for delimiter in ("", "\t"):
+                    with self.subTest(no_space_separator=repr(separator), side=side, delimiter=repr(delimiter)):
+                        kwargs = {f"{side}_header": f"{prefix}src/example.py{delimiter}{separator}"}
+                        document = no_space_document(**kwargs)
+                        with self.assertRaisesRegex(adapter.EngineError, "exactly partitioned"):
+                            adapter.authenticate_input(document)
 
         for separator in ("\r", "\v", "\f", "\x85", "\u2028", "\u2029"):
             for side, prefix in (("old", "--- a/"), ("new", "+++ b/")):
