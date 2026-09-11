@@ -22,6 +22,13 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/ci/pr-agent/deploy-runner.sh"
 BASE_CONFIG = json.loads((ROOT / "scripts/ci/pr-agent/netcup-review.json").read_text())
+PROVIDER_ENV_FILE = "EnvironmentFile=-/etc/lmdj/pr-agent/provider.env"
+PROVIDER_ENV_NAMES = (
+    "PR_AGENT_DEEPSEEK_API_KEY",
+    "PR_AGENT_ZAI_API_KEY",
+    "PR_AGENT_XAI_API_KEY",
+    "PR_AGENT_KIMI_API_KEY",
+)
 
 
 def digest(data: bytes) -> dict:
@@ -139,7 +146,8 @@ class RunnerDeploymentTests(unittest.TestCase):
                *, runtime: Path | None = None, overrides: dict[str, dict[str, int]] | None = None,
                child_umask: int = -1, python_bin: Path | None = None,
                trace_path: Path | None = None, operator: dict[str, int] | None = None,
-               service: dict[str, int] | None = None):
+               service: dict[str, int] | None = None, extra_environment: dict[str, str] | None = None,
+               without_provider_environment: bool = False):
         command = [str(SCRIPT), mode, "--config", str(config), "--target-root", str(self.target)]
         if archive is not None:
             command += ["--bundle", str(archive)]
@@ -148,6 +156,11 @@ class RunnerDeploymentTests(unittest.TestCase):
         if mode in {"verify", "stage", "install"}:
             command += ["--runtime-config", str(runtime or self.runtime_config)]
         environment = self.fixture_env(overrides, operator=operator, service=service)
+        if without_provider_environment:
+            for name in PROVIDER_ENV_NAMES:
+                environment.pop(name, None)
+        if extra_environment:
+            environment.update(extra_environment)
         if python_bin is not None:
             environment["PR_AGENT_DEPLOY_PYTHON"] = str(python_bin)
         if trace_path is not None:
@@ -458,7 +471,7 @@ class RunnerDeploymentTests(unittest.TestCase):
         revision = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return Path(inventory["install_root"]) / "releases" / revision
 
-    def expected_unit_bytes(self, config: Path, release: Path) -> tuple[bytes, bytes]:
+    def expected_unit_bytes(self, config: Path, release: Path, *, include_provider_environment: bool = True) -> tuple[bytes, bytes]:
         """Build the fixed fixture oracle without invoking the production renderer."""
         document = json.loads(config.read_text())
         target = document["target"]
@@ -471,6 +484,7 @@ class RunnerDeploymentTests(unittest.TestCase):
         output = Path(inventory["output_root"])
         slot_lock = Path(inventory["slot_lock"])
         ledger = Path(inventory["ledger"])
+        provider_environment = PROVIDER_ENV_FILE + "\n" if include_provider_environment else ""
         command = (
             "/usr/bin/flock --nonblock --exclusive " + str(slot_lock) + " " + runtime["python"] + " "
             + str(current / "pr_agent_review.py") + " --input " + str(attempt / "input.json")
@@ -493,7 +507,7 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=LITELLM_LOCAL_MODEL_COST_MAP=true
 Environment=PYTHONPATH={current / 'vendor'}:{current}
 Environment=TIKTOKEN_CACHE_DIR={current / 'tokenizer-cache'}
-ExecStartPre=/usr/bin/test -r {attempt / 'input.json'}
+{provider_environment}ExecStartPre=/usr/bin/test -r {attempt / 'input.json'}
 ExecStartPre=/usr/bin/test -d {attempt / 'engine'}
 ExecStartPre=/usr/bin/test -d {output}
 ExecStart={command}
@@ -537,6 +551,121 @@ TasksMax=128
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn(message, result.stderr)
         self.assertEqual(self.target_snapshot(), before)
+
+    def test_service_environment_directive_is_fixed_and_provider_value_is_not_copied(self):
+        source = SCRIPT.read_text()
+        directives = "\n".join(line for line in source.splitlines() if line.startswith("Environment"))
+        self.assertEqual(directives.count(PROVIDER_ENV_FILE), 1)
+        self.assertNotIn("Environment=PR_AGENT_", directives)
+        self.assertNotIn("PassEnvironment=", source)
+        for blocked_name in ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"):
+            self.assertIn(blocked_name, source)
+
+        inactive_runtime = self.runtime("service-environment-inactive", enabled=False)
+        inactive_config = self.config_for_runtime(inactive_runtime, active=False)
+        inactive = self.invoke("stage", inactive_config, self.archive, self.identity,
+                               runtime=inactive_runtime, without_provider_environment=True)
+        self.assertEqual(inactive.returncode, 0, inactive.stderr)
+        inactive_unit = (self.target / "etc/systemd/system/lmdj-pr-agent.service").read_bytes()
+        self.assertIn((PROVIDER_ENV_FILE + "\n").encode(), inactive_unit)
+        self.assertIn(b"ExecStart=/usr/bin/false\n", inactive_unit)
+        self.assertIn(b"UnsetEnvironment=GITHUB_TOKEN GH_TOKEN GITHUB_APP_ID GITHUB_APP_PRIVATE_KEY\n", inactive_unit)
+
+        shutil.rmtree(self.target)
+        self.target.mkdir()
+        active_runtime = self.runtime("service-environment-active", enabled=True)
+        active_config = self.config_for_runtime(active_runtime, active=True)
+        synthetic = "synthetic-provider-value-never-copy"
+        active = self.invoke("install", active_config, self.archive, self.identity,
+                             runtime=active_runtime,
+                             extra_environment={"PR_AGENT_DEEPSEEK_API_KEY": synthetic})
+        self.assertEqual(active.returncode, 0, active.stderr)
+        self.assertNotIn(synthetic, active.stdout)
+        self.assertNotIn(synthetic, active.stderr)
+        self.assertFalse(self.target_path("/etc/lmdj/pr-agent/provider.env").exists())
+        self.assertNotIn(synthetic.encode(), self.archive.read_bytes())
+        self.assertNotIn(synthetic.encode(), self.identity.read_bytes())
+        for path in self.target.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                self.assertNotIn(synthetic.encode(), path.read_bytes(), path)
+
+    def test_new_renderer_install_and_rollback_restore_historical_unit_bytes(self):
+        global SCRIPT
+        old_script = self.directory / "old-deploy-runner.sh"
+        old_script.write_bytes(subprocess.check_output([
+            "git", "show",
+            "a22dae478fba4e53ba9a5467dc1b9afe775c51e1:scripts/ci/pr-agent/deploy-runner.sh",
+        ]))
+        old_script.chmod(0o755)
+        current_script = SCRIPT
+        config_a = self.config(active=True)
+        archive_bytes = self.archive.read_bytes()
+        identity_bytes = self.identity.read_bytes()
+        config_bytes = config_a.read_bytes()
+        runtime_bytes = self.runtime_config.read_bytes()
+        try:
+            SCRIPT = old_script
+            release_a = self.expected_revision_path(config_a, self.runtime_config)
+            expected_old_service, expected_old_slice = self.expected_unit_bytes(
+                config_a, release_a, include_provider_environment=False)
+            self.assertNotIn(PROVIDER_ENV_FILE.encode(), expected_old_service)
+            self.assertNotIn(PROVIDER_ENV_FILE.encode(), expected_old_slice)
+            SCRIPT = current_script
+            release_b = self.expected_revision_path(config_a, self.runtime_config)
+            self.assertNotEqual(release_a, release_b)
+            expected_new_service, expected_new_slice = self.expected_unit_bytes(config_a, release_b)
+            self.assertIn(PROVIDER_ENV_FILE.encode(), expected_new_service)
+            SCRIPT = old_script
+            installed_a = self.invoke("install", config_a, self.archive, self.identity)
+            self.assertEqual(installed_a.returncode, 0, installed_a.stderr)
+            state_path = self.target / "var/lib/lmdj/pr-agent/operator-state/runtime.json"
+            receipt_path = self.target / "var/lib/lmdj/pr-agent/operator-state/deployment-receipts.jsonl"
+            state = self.assert_terminal_far_side(
+                state_path, release_a, None, config_a, self.runtime_config, "install", None,
+                expected_service_unit=expected_old_service,
+                expected_slice_unit=expected_old_slice)
+            self.assertEqual(state["current"]["deployment_tool_sha256"], digest(old_script.read_bytes())["sha256"])
+            old_receipt_bytes = receipt_path.read_bytes()
+            self.assertEqual(len(old_receipt_bytes.splitlines()), 1)
+            old_release_snapshot = self.external_snapshot(release_a)
+
+            SCRIPT = current_script
+            installed_b = self.invoke("install", config_a, self.archive, self.identity)
+            self.assertEqual(installed_b.returncode, 0, installed_b.stderr)
+            state = self.assert_terminal_far_side(
+                state_path, release_b, release_a, config_a, self.runtime_config, "install", None,
+                expected_previous_config=config_a,
+                expected_previous_runtime=self.runtime_config,
+                expected_service_unit=expected_new_service,
+                expected_slice_unit=expected_new_slice,
+                expected_previous_service_unit=expected_old_service,
+                expected_previous_slice_unit=expected_old_slice)
+            self.assertEqual(state["current"]["deployment_tool_sha256"], digest(current_script.read_bytes())["sha256"])
+            new_receipt_bytes = receipt_path.read_bytes()
+            self.assertEqual(len(new_receipt_bytes.splitlines()), 2)
+            self.assertTrue(new_receipt_bytes.startswith(old_receipt_bytes))
+            self.assertEqual(self.external_snapshot(release_a), old_release_snapshot)
+
+            rolled_back = self.invoke("rollback", config_a)
+            self.assertEqual(rolled_back.returncode, 0, rolled_back.stderr)
+            state = self.assert_terminal_far_side(
+                state_path, release_a, release_b, config_a, self.runtime_config, "rollback", None,
+                expected_previous_config=config_a,
+                expected_previous_runtime=self.runtime_config,
+                expected_service_unit=expected_old_service,
+                expected_slice_unit=expected_old_slice,
+                expected_previous_service_unit=expected_new_service,
+                expected_previous_slice_unit=expected_new_slice)
+            self.assertEqual(self.external_snapshot(release_a), old_release_snapshot)
+            rollback_receipt_bytes = receipt_path.read_bytes()
+            self.assertEqual(len(rollback_receipt_bytes.splitlines()), 3)
+            self.assertTrue(rollback_receipt_bytes.startswith(new_receipt_bytes))
+            self.assertEqual(self.archive.read_bytes(), archive_bytes)
+            self.assertEqual(self.identity.read_bytes(), identity_bytes)
+            self.assertEqual(config_a.read_bytes(), config_bytes)
+            self.assertEqual(self.runtime_config.read_bytes(), runtime_bytes)
+        finally:
+            SCRIPT = current_script
 
     def test_stage_creates_disabled_revision_with_fail_closed_unit(self):
         runtime = self.runtime("a", enabled=False)

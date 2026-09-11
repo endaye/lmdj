@@ -3,7 +3,7 @@
 Date: 2026-09-10 (Asia/Shanghai)
 
 Task: LMDJ #1153 / umbrella #1149 T4
-Status: staged-revision source tooling implemented; host installation and review acceptance pending
+Status: service-environment source tooling implemented; host installation and review acceptance pending
 
 ## What this Task implements
 
@@ -140,16 +140,18 @@ read.
 The readiness refresh and read-only host-access receipt remain authoritative:
 T4 is not deployed and is not review acceptance. The successful inventory
 receipt is a source/runner observation, not free capacity or co-running
-headroom. Runner 04 still carries an elastic label while its normalized policy
-role is baseline and needs operator classification. The `ci-pr-agent` label is
-an intended dedicated route, not a currently observed runner label; operator
-registration and route read-back are pending. The later strict BatchMode SSH
-probe recorded in `/tmp/lmdj-pr-agent-plan/t4-readonly-host-access.md` at
-22:41+08 proves read-only access as `en@netcup01`; it supersedes the earlier
-readiness note that had not attempted SSH. `sudo -n true` failed, so admin
-access is unavailable, and actual host capacity/admission remains unproved;
-this Task does not seek or read a password, alter authentication, or mutate the
-host.
+headroom. An earlier runner projection showed runner 04 with an elastic label;
+the later classification/readback recorded its normalized baseline role, the
+extra label removed and the other ten labels plus online status unchanged. The
+`ci-pr-agent` label is an intended dedicated route, not a currently observed
+runner label; operator registration and route read-back are pending. The later
+strict BatchMode SSH probe recorded in
+`/tmp/lmdj-pr-agent-plan/t4-readonly-host-access.md` at 22:41+08 proves
+read-only access as `en@netcup01`; it supersedes the earlier readiness note that
+had not attempted SSH. The earlier `sudo -n true` failure is historical; a
+later sudoers correction receipt records successful noninteractive admin access.
+Actual host capacity/admission remains unproved; this Task does not seek or
+read a password, alter authentication, or mutate the host.
 
 The source-only operator interface is intentionally limited to a reviewable
 sequence. The first command stages an inactive disabled-provider runtime; a
@@ -189,43 +191,61 @@ read-back evidence for all of the following:
 
 The one-slot arithmetic envelope (1 vCPU / 2 GiB beside 14 vCPU / 48 GiB) is
 not measured capacity. A same-host second process is concurrency, not host
-redundancy. API authentication, balance, model health, supplier success,
-fallback quality, the 20-PR shadow cohort, and production publisher/cutover
-remain T5/T6 acceptance, not T4 implementation evidence.
+redundancy. API authentication, model health, supplier success, fallback
+quality, the 20-PR shadow cohort, and production publisher/cutover remain
+T5/T6 acceptance, not T4 implementation evidence. Historical balance
+observations are retained below but are not a current proactive funding or
+balance admission gate.
 
-## Dedicated credential preflight
+## Credential preflight and service environment boundary
 
-The owner selected DeepSeek-V4.1-Flash (`deepseek-flash`, no Pro fallback) and
-authorized deployment admission and credential verification on 2026-09-11.
-The earlier sudo failure above is historical: a fresh `visudo -c` and
-noninteractive `sudo -n whoami` now pass after correcting the exact sudoers
-file mode to `0440`. Runner 04's policy was independently read back as baseline
-on both host and current main; its extra GitHub `elastic` label was removed and
-the other ten labels plus online status read back unchanged. Neither change
-proves runtime isolation, resource coexistence or T4 completion.
+The following ordered observations are retained as historical evidence, not as
+current T4 acceptance. On 2026-09-11 the selected candidate was
+DeepSeek-V4.1-Flash (`deepseek-flash`), with no Pro fallback. An earlier
+read-only checkpoint recorded `sudo -n true` failing and runner 04 still
+carrying an elastic label. A later correction checkpoint recorded successful
+`visudo -c` and noninteractive `sudo -n whoami` after correcting the exact
+sudoers mode to `0440`; runner 04 was read back as baseline on both host and
+main, its extra GitHub `elastic` label was removed, and its other ten labels
+plus online status were unchanged. The later access details are retained in
+`/tmp/lmdj-pr-agent-plan/t4-sudo-admission-refresh.md` and the runner-04
+classification/readback in `/tmp/lmdj-pr-agent-plan/t4-admission-mutations-2026-09-11.md`.
+These observations do not prove runtime isolation, resource coexistence,
+capacity or T4 completion.
 
-The manual `PR-Agent Credential Preflight` workflow runs only for the repository
-owner at main, on existing Netcup `ci-general` capacity. It consumes only the
-dedicated `PR_AGENT_DEEPSEEK_API_KEY` in its check step, uses a fixed HTTPS
-balance endpoint and no redirects/proxy environment/retries, and outputs only
-finite authentication/availability metadata. It never outputs the key, raw
-supplier body/error or balance amounts, copies a secret to the host, performs
-inference, publishes review/scope, or activates the review service.
+The earlier manual `PR-Agent Credential Preflight` workflow and its sanitized
+authentication/balance observations remain historical evidence only. Its
+balance workflow instruction and proactive supplier balance/funding admission
+were withdrawn from this migration wave; do not rerun that workflow as a
+current T4 prerequisite. Provider health, quality, four-provider fallback and
+T5/T6 acceptance remain later gates, including the deferred
+insufficient-balance/quota warning (#1188). The retained monetary guards are
+USD 1 per attempt, USD 20 pilot and USD 20 per calendar month; they are not
+funding-approval evidence.
 
-After this Task is merged, the authorized operation is:
+The generated `lmdj-pr-agent.service` uses the existing provider environment
+interface through exactly this optional, fixed service-scoped directive:
 
-```bash
-gh workflow run pr-agent-credential-preflight.yml --ref main
+```ini
+EnvironmentFile=-/etc/lmdj/pr-agent/provider.env
 ```
 
-Read back the exact run/attempt and successful job plus its sanitized receipt.
-Secret metadata alone and mocked tests do not prove authentication. A successful
-balance check is not USD funding admission or model health: the actual engine
-still requires its reviewed price/context bounds, verified monetary funding,
-durable ledger, restricted runtime credential injection and measured host
-admission before any paid request. Other suppliers remain disabled; full
-four-supplier health/fallback acceptance, T5 cohorts and T6 cutover remain open.
-Budgets remain USD 1 per attempt, USD 20 pilot and USD 20/calendar month.
+The operator, outside this source Task, must provision a regular non-symlink
+file at that path below protected root-owned parents with `root:root` ownership
+and mode `0600`. Each line must be a plain `NAME=value` assignment with no
+`export` prefix. It may contain only the approved `PR_AGENT_*_API_KEY`
+assignments required by the selected reviewed configuration; never put GitHub
+write tokens, Python/tooling overrides or values in the unit. The installer does
+not read, create, copy, hash, log, archive or repair this file, and does not
+start/restart the service. Environment variables remain visible to the service
+and child processes, so this is service scoping, not a claim of secret isolation.
+
+The optional file preserves inactive no-key staging. A later active attempt with
+a missing selected key still fails through the existing adapter boundary; an
+environment assignment does not enable a disabled provider or establish pricing,
+funding or admission. Synthetic service injection and file metadata checks are
+separate lead-owned acceptance; no real key or provider request belongs to this
+source Task.
 
 ## Verification performed by this Task
 
@@ -246,8 +266,8 @@ before a new release directory is published, and compares final destination
 device/inode/mode/UID/GID after the leg. The relocated receipt-tree refusal
 also covers bytes outside the target-root snapshot. The durable suite ports all sixteen
 independent N1-N3 scenarios; normal, child-`-S`, and `umask 0002` runs report
-93 tests with one explicit archive opt-in skip (92 passed), while the pinned
-v14 opt-in is 93/93 with zero skips. The same 93/93-minus-one-skip result is
+95 tests with one explicit archive opt-in skip (94 passed), while the pinned
+v14 opt-in is 95/95 with zero skips. The same 95/95-minus-one-skip result is
 reproduced under child `-S` and `umask 0002`; the six-leg durability trace now
 asserts source, destination and parent identities plus the complete far-side
 state after every leg, including immediate complete first-A and first-B far
@@ -255,12 +275,17 @@ sides with initial monetary-ledger absence. Initial stage/install receipt-before
 also recover append-once without changing the base current/previous pair. An opt-in
 test validates the extracted bytes, vendor tree and direct canonical release
 paths against the actual pinned T2 v14 archive without invoking a paid provider
-call. It does not prove non-root Linux T2 CLI startup or real systemd admission;
+call. The added EnvironmentFile contract test proves a synthetic provider value
+is not copied into generated units or deployment artifacts, inactive staging
+works without provider environment, and rollback restores retained historical
+unit bytes lacking the new directive. It does not prove non-root Linux T2 CLI startup or real systemd admission;
 those remain explicit external gaps. The test never calls `systemctl`, Docker or
-a live API. The correction report at
-`/tmp/lmdj-pr-agent-plan/staged-history-dde3-j2-j3-fixes-report.md` records original
-and final HEAD/tree, individual test counts/skips, finding dispositions, and
-the remaining live acceptance gaps.
+a live API. The original implementation report at
+`/tmp/lmdj-pr-agent-plan/service-environment-implementation.md` is preserved as
+historical evidence. The F1-F6 correction report at
+`/tmp/lmdj-pr-agent-plan/service-environment-f1-f6-correction.md` records the
+corrected exact source HEAD/base, five-file inventory, test exits/counts/skips,
+raw receipt paths, and remaining live acceptance gaps for this Task.
 
 ## Version and documentation impact
 
