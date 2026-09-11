@@ -66,7 +66,7 @@ W1/W2 → U0（映射、状态及稳定切片原型评审）；W3 → U1；W4 �
 | --- | --- | --- | --- | --- |
 | U0 | [#1214](https://github.com/endaye/lmdj/issues/1214) | U0 确认功能映射、上下文与状态规范 | 无 | 盘点与设计评审 |
 | U1 | [#1215](https://github.com/endaye/lmdj/issues/1215) | U1 实现可回退四区外壳与稳定 Pad | U0 | 等待依赖交付 |
-| U2 | [#1216](https://github.com/endaye/lmdj/issues/1216) | U2 迁移 Sequence 完整编序流程 | U1 | 等待依赖交付 |
+| U2 | [#1216](https://github.com/endaye/lmdj/issues/1216) | U2 迁移 Sequence 完整编序流程 | U1、全局 Pattern transport #1230 | 等待依赖交付 |
 | U3 | [#1217](https://github.com/endaye/lmdj/issues/1217) | U3 迁移 Project 与全局恢复入口 | U2 | 等待依赖交付 |
 | U4 | [#1218](https://github.com/endaye/lmdj/issues/1218) | U4 迁移 Sample、采集与裁切恢复 | U2 | 等待依赖交付 |
 | U5 | [#1219](https://github.com/endaye/lmdj/issues/1219) | U5 纳入 Slice 与 Sound Sets 工作区 | U3, U4 | 等待依赖交付 |
@@ -176,7 +176,9 @@ export function HardwareConsole(props: HardwareConsoleProps) {
 
 ### U2 — U2 迁移 Sequence 完整编序流程（[#1216](https://github.com/endaye/lmdj/issues/1216)）
 
-**依赖：** U1。
+**依赖：** U1，以及 [#1230](https://github.com/endaye/lmdj/issues/1230) 的全局 Pattern transport。
+
+2026-09-12 更新：用户已确认独立 Play/Stop、Record 两键的关联状态表；停止后启动从当前 Pattern 开头开始，无预备拍；播放中开关 Record 不重置播放。Record 写入当前 Pattern 的 Pad 操作，不是 Sample 采集或 Performance 音频录制。按[获批架构方案](../superpowers/specs/2026-09-11-global-pattern-transport-design.md)实施；首个独立子系统见[音频基础实施计划](../superpowers/plans/2026-09-12-pattern-transport-audio.md)。其后仍需持久化暂存、Facade 协调、运行时接口和 Creator 接入，不能把现有 `stopSequence` 当作播放停止，也不能以完成音频基础代替 U2 全流程验收。U0–U8 原有范围及退出条件不变。
 
 **交付范围：** 首个完整新UI切片：上屏轨道/进度只读，触摸区编辑现有Tempo/Swing/Quantize、Pattern选择与创建；录制、叠录、切换、停止、持久化和恢复复用既有actions。新视觉控件不得改变当前提交时机、参数范围或flush边界；图中Copy等未核实能力不作为已实现。
 
