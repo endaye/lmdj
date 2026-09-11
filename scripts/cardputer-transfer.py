@@ -10,7 +10,11 @@ from __future__ import annotations
 import argparse
 import binascii
 import hashlib
+import os
+import select
 import struct
+import termios
+import time
 from dataclasses import dataclass
 
 MAGIC = b"LMCP"
@@ -232,10 +236,12 @@ def content_frames(content: bytes, request_id: int, nonce: bytes,
     identity = hashlib.sha256(content).digest()
     frames = [encode(Frame(3, request_id, nonce,
                            transfer_id + struct.pack("<Q", len(content)) + identity))]
+    request_id += 1
     for offset in range(0, len(content), chunk_size):
         chunk = content[offset:offset + chunk_size]
         frames.append(encode(Frame(4, request_id, nonce,
                                    transfer_id + struct.pack("<Q", offset) + chunk)))
+        request_id += 1
     frames.append(encode(Frame(5, request_id, nonce, transfer_id)))
     return frames
 
@@ -269,11 +275,87 @@ def decode(data: bytes) -> Frame:
     return Frame(opcode, request_id, data[12:28], data[28:size - 4], version)
 
 
+def send_serial(path: str, content: bytes, timeout: float = 5.0) -> Frame:
+    """Perform one HELLO -> BEGIN -> DATA -> COMMIT transaction on POSIX serial."""
+    if not path or timeout <= 0:
+        raise ValueError("invalid serial path or timeout")
+    fd = os.open(path, os.O_RDWR | os.O_NOCTTY)
+    try:
+        attrs = termios.tcgetattr(fd)
+        attrs[0] = 0
+        attrs[1] = 0
+        attrs[2] = termios.CS8 | termios.CLOCAL | termios.CREAD
+        attrs[3] = 0
+        attrs[4] = termios.B115200
+        attrs[5] = termios.B115200
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+
+        def exchange(frame: Frame) -> Frame:
+            wire = encode(frame)
+            view = memoryview(wire)
+            while view:
+                writable, _, _ = select.select([], [fd], [], timeout)
+                if not writable:
+                    raise TimeoutError("serial write timeout")
+                count = os.write(fd, view)
+                view = view[count:]
+            deadline = time.monotonic() + timeout
+            received = bytearray()
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("serial response timeout")
+                readable, _, _ = select.select([fd], [], [], remaining)
+                if not readable:
+                    continue
+                received.extend(os.read(fd, MAX_FRAME * 2))
+                if len(received) < HEADER + 4:
+                    continue
+                if received[:4] != MAGIC:
+                    del received[:1]
+                    continue
+                payload_size = struct.unpack_from("<H", received, 6)[0]
+                size = HEADER + payload_size + 4
+                if len(received) < size:
+                    continue
+                return decode(bytes(received[:size]))
+
+        hello = exchange(Frame(1, 1, bytes(16)))
+        if hello.opcode != 0x81 or len(hello.payload) < 4 or hello.payload[:2] != b"\0\0":
+            raise ValueError("device rejected HELLO")
+        nonce = hello.nonce
+        transfer_id = os.urandom(TRANSFER_ID_BYTES)
+        identity = hashlib.sha256(content).digest()
+        request_id = 2
+        begin = exchange(Frame(3, request_id, nonce,
+                               transfer_id + struct.pack("<Q", len(content)) + identity))
+        if begin.opcode != 0x83 or begin.payload[:2] != b"\0\0":
+            raise ValueError("device rejected BEGIN; confirm receive on device")
+        offset = 0
+        request_id += 1
+        while offset < len(content):
+            chunk = content[offset:offset + MAX_PAYLOAD - DATA_OFFSET_BYTES]
+            response = exchange(Frame(4, request_id, nonce,
+                                       transfer_id + struct.pack("<Q", offset) + chunk))
+            if response.opcode != 0x84 or response.payload[:2] != b"\0\0":
+                raise ValueError("device rejected DATA")
+            offset += len(chunk)
+            request_id += 1
+        response = exchange(Frame(5, request_id, nonce, transfer_id))
+        if response.opcode != 0x85 or response.payload[:2] != b"\0\0":
+            raise ValueError("device rejected COMMIT")
+        return response
+    finally:
+        os.close(fd)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=("encode", "decode", "send"))
     parser.add_argument("value")
     parser.add_argument("--output", default="-", help="send output path, or - for stdout")
+    parser.add_argument("--port", help="POSIX serial device for a live transaction")
+    parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--request-id", type=int, default=1)
     parser.add_argument("--nonce", default="00" * 16)
     parser.add_argument("--chunk-size", type=int, default=MAX_PAYLOAD - DATA_OFFSET_BYTES)
@@ -287,6 +369,12 @@ def main() -> int:
     else:
         with open(args.value, "rb") as source:
             content = source.read()
+        if args.port:
+            if os.name == "nt":
+                raise SystemExit("--port is supported on POSIX only")
+            response = send_serial(args.port, content, args.timeout)
+            print(f"committed={response.payload[2:].hex()}")
+            return 0
         wire = b"".join(content_frames(content, args.request_id,
                                          bytes.fromhex(args.nonce), args.chunk_size))
         if args.output == "-":

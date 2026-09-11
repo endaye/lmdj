@@ -2,6 +2,7 @@
 #include "cardputer_assembly.hpp"
 #include "display.hpp"
 #include "input_controller.hpp"
+#include "usb_transfer_endpoint.hpp"
 #include <algorithm>
 #include <cstdio>
 #include "freertos/FreeRTOS.h"
@@ -33,6 +34,11 @@ extern "C" void app_main() {
     RuntimeHost host(config.runtime, config.profile, audio);
     Display display;
     InputController input(host, display);
+    UsbTransferEndpoint transfer(host, config.runtime.content_limits.maximum_encoded_bytes);
+    if (!transfer.install()) {
+      std::puts("CARDPUTER USB transfer initialization failed");
+      return;
+    }
     std::printf("CARDPUTER product-build=%s host=%s assembly=%s source=%s phase=empty\n",
                 config.product_build, config.host_version, config.assembly_sha256,
                 LMDJ_CARDPUTER_REVISION);
@@ -41,6 +47,7 @@ extern "C" void app_main() {
     // implies stop. The display consumes only the bounded value projection.
     for (;;) {
       input.poll();
+      transfer.poll();
       vTaskDelay(1);
     }
   } catch (...) {
