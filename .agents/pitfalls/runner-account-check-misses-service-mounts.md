@@ -3,7 +3,7 @@ id: runner-account-check-misses-service-mounts
 area: ci-release
 status: absorbed
 recurrences:
-  - date: 2026-09-12
+  - date: 2026-09-11
     occurrence: https://github.com/endaye/lmdj/actions/runs/34628173677
     observed_by: codex
 exit: gate:tests/build/ci_pr_agent_install_test.py
