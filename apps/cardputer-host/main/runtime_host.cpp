@@ -10,7 +10,8 @@ using facade::RuntimeResult;
 
 RuntimeHost::RuntimeHost(facade::RuntimeConfig config, HostProfile profile,
                          AudioSession& audio)
-    : runtime_(config), profile_(profile), audio_(audio) {}
+    : runtime_(config), profile_(profile), audio_(audio),
+      pending_pad_commands_(config.maximum_pending_commands, 0xff) {}
 
 RuntimeHost::~RuntimeHost() {
   (void)shutdown();
@@ -37,16 +38,14 @@ void RuntimeHost::collect_receipts() noexcept {
       if (receipts[i].epoch != epoch_) continue;
       status_.last_receipt_sequence = receipts[i].sequence;
       status_.last_receipt_outcome = receipts[i].outcome;
-      for (std::size_t pad = 0; pad < status_.pad_active.size(); ++pad) {
-        if (receipts[i].sequence == press_sequences_[pad]) {
-          status_.pad_active[pad] =
-              receipts[i].outcome == facade::RuntimeCommandOutcome::voice_started;
-          press_sequences_[pad] = 0;
-        }
-        if (receipts[i].sequence == release_sequences_[pad]) {
-          status_.pad_active[pad] = false;
-          release_sequences_[pad] = 0;
-        }
+      // poll returns accepted commands in sequence order and returns their
+      // credits. The same serialized owner records each submit before it can
+      // poll, so even a receipt published during submit retains its metadata.
+      auto& command = pending_pad_commands_[receipts[i].sequence % pending_pad_commands_.size()];
+      if (command != 0xff) {
+        status_.pad_active[command & 3U] = (command & 4U) != 0 &&
+            receipts[i].outcome == facade::RuntimeCommandOutcome::voice_started;
+        command = 0xff;
       }
     }
   } while (count == receipts.size());
@@ -65,8 +64,7 @@ HostResult RuntimeHost::start() noexcept {
   status_.core_result = runtime_.start(epoch_);
   if (status_.core_result != RuntimeResult::ok) return fail(HostResult::core_error);
   sequence_ = 0;
-  press_sequences_ = {};
-  release_sequences_ = {};
+  std::fill(pending_pad_commands_.begin(), pending_pad_commands_.end(), 0xff);
   status_.pad_active = {};
   status_.last_receipt_sequence = 0;
   status_.last_receipt_outcome = {};
@@ -84,8 +82,7 @@ HostResult RuntimeHost::start() noexcept {
 HostResult RuntimeHost::stop() noexcept {
   runtime_.stop();
   collect_receipts();
-  press_sequences_ = {};
-  release_sequences_ = {};
+  std::fill(pending_pad_commands_.begin(), pending_pad_commands_.end(), 0xff);
   status_.pad_active = {};
   if (audio_owned_ || !status_.physical_stopped) {
     status_.phase = RuntimePhase::draining;
@@ -100,8 +97,7 @@ HostResult RuntimeHost::stop() noexcept {
 }
 
 void RuntimeHost::clear_content() noexcept {
-  press_sequences_ = {};
-  release_sequences_ = {};
+  std::fill(pending_pad_commands_.begin(), pending_pad_commands_.end(), 0xff);
   status_.pad_active = {};
   status_.pads = {};
   status_.pad_count = 0;
@@ -199,7 +195,8 @@ HostResult RuntimeHost::handle_key(KeyEvent event) noexcept {
         static_cast<std::uint8_t>(pad.bank * 16 + pad.pad), 127});
     if (status_.core_result != RuntimeResult::accepted) return fail(HostResult::core_error);
     ++sequence_; // queue_full does not consume this counter.
-    (event.pressed ? press_sequences_ : release_sequences_)[key] = sequence_;
+    pending_pad_commands_[sequence_ % pending_pad_commands_.size()] =
+        static_cast<std::uint8_t>(key | (event.pressed ? 4U : 0U));
     return HostResult::accepted;
   }
   if (!event.pressed) return HostResult::ok;
