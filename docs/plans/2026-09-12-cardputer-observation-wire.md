@@ -57,6 +57,92 @@ request, not permission to restart a content transfer.
 
 ## Required complete status fields
 
+### Proposed byte tables for review
+
+The following allocations are proposals only: request opcodes 7 and 8,
+responses 0x87 and 0x88. Both requests have exactly one payload byte, format=1.
+The header nonce must equal the current non-zero HELLO nonce. Their non-zero
+request ID is correlation-only in the observation domain: it does not advance
+the content session's exact-next ID and does not share its retry cache.
+Only one request is in flight on the serial link; the client correlates both
+opcode and request ID and never reuses an observation ID within a session.
+Retries use a fresh observation ID. These are fresh reads, not idempotent
+replays of a cached status; the immutable observation generation identifies
+whether two successful diagnostics reads describe the same measurement.
+
+No observation operation performs HELLO implicitly. A caller joining a live
+transfer must use that transfer's existing session; a new HELLO has its existing
+transaction-cancellation semantics and is not a harmless status probe.
+Bad nonce returns stale-session=3; wrong payload shape/format returns
+invalid-transfer=6, with no content/session/observation mutation. Error replies
+contain only the u16 result and echo the request nonce/ID, never the current
+nonce. This avoids accidentally issuing the live nonce to a stale requester.
+
+All offsets below are within successful response payload, including result.
+Integer fields are unsigned little-endian; every reserved byte must be zero.
+The decoder requires exact final length, valid enums, boolean 0/1 and no extra
+bytes. Complete status has a fixed 146-byte prefix followed by identity data:
+
+| Offset | Width | Field |
+| --- | --- | --- |
+| 0 | 2 | result=0 |
+| 2 | 1 | observation format=1 |
+| 3 | 1 | flags: bit0 content present, bit1 receiving; other bits zero |
+| 4 | 16 | non-zero boot nonce, fixed until device reset, distinct from session nonce |
+| 20 | 1 each | phase, error, armed, muted, volume, Pad count |
+| 26 | 8 | four bank/Pad pairs; unused pairs 255/255 |
+| 34 | 2 | reserved |
+| 36 | 8 each | maximum encoded bytes, maximum PCM bytes |
+| 52 | 4 each | maximum frames, maximum Pads, maximum events |
+| 64 | 8 | current content byte length |
+| 72 | 32 | raw current content SHA-256 |
+| 104 | 16 | active transfer ID |
+| 120 | 8 each | actual received bytes, expected bytes |
+| 136 | 8 | latest admitted observation generation, 0 before any attempt |
+| 144 | 2 | identity JSON UTF-8 length, at most 512 |
+| 146 | length | canonical identity object described below |
+
+The prefix is field-encoded rather than copied from a compiler layout. Absence flags require the
+corresponding content/transfer fields to be all zero. Expected receive length
+must be non-zero while receiving and received must not exceed expected. The
+identity object contains exactly product_build, host_version, revision,
+assembly_lock_sha256 and profile_sha256, as in D1. Strings are validated against
+the generated active identities; no null product identity is accepted by a
+formal-candidate client. Maximum successful status payload is 658 bytes.
+
+Successful diagnostics has a fixed 336-byte measurement prefix, then the same
+length-prefixed identity JSON (2+at most 512 bytes), maximum 850 bytes:
+
+| Offset | Width | Field |
+| --- | --- | --- |
+| 0 | 2 | result=0 |
+| 2 | 1 | observation format=1 |
+| 3 | 1 | flags: start succeeded, quiescent, silent, diagnostics available in bits 0..3 |
+| 4 | 16 | boot nonce |
+| 20 | 8 | non-zero measured generation |
+| 28 | 8 | measured content byte length |
+| 36 | 32 | raw measured content SHA-256 |
+| 68 | 4 | timing flags=7: bit0 elapsed microseconds, bit1 delivered EOF, bit2 prewarm/drain excluded |
+| 72 | 8 each | attempts, submitted, stopped, wait failed, convert failed, write failed |
+| 120 | 32 each | six duration records in wait/wakeup/render/convert/submit/service order |
+| 312 | 8 each | recording samples, maximum microseconds, invalid samples |
+| 336 | 2 | identity JSON length |
+| 338 | length | identity object |
+
+Each 32-byte duration record is valid samples u64, invalid samples u64,
+maximum_us u64, p999_us u32, percentile_available u8 and three zero bytes.
+Unavailable percentile requires p999_us=0, but availability=0 is not a measured
+zero. Unavailable diagnostics require all duration/count fields zero while
+preserving the identity and start/join outcome. Before any observation or while
+audio owns it, return wrong-state=1 with no successful payload. Physical
+underrun/latency/voice/resource measurements are deliberately absent from this
+format; absent values must never be interpreted as measured zero.
+
+Before implementation, add independent golden byte vectors at all listed
+offsets and verify the maximum-length arithmetic mechanically. Freeze the
+timing-bit numeric allocation and canonical identity encoding in the reviewed
+Contract change, not by whichever language's encoder is implemented first.
+
 - Explicit response format version, result and availability flags.
 - Host phase/error, local armed state, mute/volume and canonical four Pad Slots.
 - Exact configured encoded/PCM/frame/Pad/event limits, not inferred capacity.
