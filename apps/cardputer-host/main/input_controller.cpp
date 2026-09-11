@@ -63,6 +63,11 @@ void InputController::poll() noexcept {
     --count_;
     const auto mapped = map_physical_key(event.key);
     if (!mapped) continue;
+    // Command keys are edge-triggered actions. Their release is only a
+    // physical bookkeeping event; forwarding it would execute the command a
+    // second time (for example, Enter release would re-enter receive mode and
+    // can clear an already armed Host).
+    if (!is_pad(event.key) && !event.pressed) continue;
     const auto result = host_.handle_key({*mapped, event.pressed});
     const auto status = host_.read_status();
     if (result == HostResult::core_error &&

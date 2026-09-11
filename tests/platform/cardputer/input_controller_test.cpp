@@ -115,6 +115,11 @@ void empty_rejects_pad_and_receive_confirm_cancel_are_stateful() {
   LMDJ_CHECK(input.enqueue({PhysicalKey::enter, true, false}));
   input.poll();
   LMDJ_CHECK(display.frame().status.armed);
+  // Enter is an edge-triggered command; its physical release must not invoke
+  // begin_receive a second time and lose the armed state.
+  LMDJ_CHECK(input.enqueue({PhysicalKey::enter, false, false}));
+  input.poll();
+  LMDJ_CHECK(display.frame().status.armed);
   LMDJ_CHECK(input.enqueue({PhysicalKey::escape, true, false}));
   input.poll();
   LMDJ_CHECK(!display.frame().status.armed);
