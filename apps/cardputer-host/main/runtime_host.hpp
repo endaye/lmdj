@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <lmdj/facade/runtime_facade.hpp>
 #ifdef ESP_PLATFORM
@@ -113,6 +114,9 @@ class EspAudioSession final : public AudioSession {
   // Control owner only. Never reads mutable audio-owned data while running;
   // returns false until the start attempt has published its finished release.
   bool read_diagnostics(AudioDiagnosticsSnapshot&) const noexcept;
+  // Same owner/barrier as diagnostics. Unavailable if no worker ran. Captured
+  // before task deletion; does not establish idle-task memory reclamation.
+  std::optional<std::size_t> stopped_stack_high_water_bytes() const noexcept;
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

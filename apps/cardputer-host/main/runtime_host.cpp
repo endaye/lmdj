@@ -198,6 +198,7 @@ HostResult RuntimeHost::handle_key(KeyEvent event) noexcept {
 
 #ifdef ESP_PLATFORM
 #include <atomic>
+#include "resource_observation.hpp"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -221,6 +222,7 @@ struct EspAudioSession::Impl {
   std::atomic<bool> stop_requested{}, retry_cleanup{}, failed{};
   std::atomic<std::uint32_t> settings{};
   bool silent{}; // Written before finished release; read after acquire only.
+  std::optional<std::size_t> stack_high_water_bytes;
   static_assert(std::atomic<Phase>::is_always_lock_free);
 
   static void worker(void* argument) {
@@ -263,6 +265,7 @@ struct EspAudioSession::Impl {
     }
     s.silent = s.driver.physical_stopped();
     if (!s.silent) s.failed.store(true, std::memory_order_release);
+    s.stack_high_water_bytes = current_task_stack_high_water_bytes();
     s.phase.store(Phase::finished, std::memory_order_release);
     // Last access to s above. The control owner may now reclaim callback state;
     // the FreeRTOS idle task separately reclaims this task's private stack.
@@ -300,6 +303,7 @@ bool EspAudioSession::start(Render render, void* context, std::uint8_t volume,
       pdMS_TO_TICKS(s.config.handshake_timeout_ms) == 0) return false;
   s.render = render; s.context = context;
   s.diagnostics.reset();
+  s.stack_high_water_bytes.reset();
   s.stop_requested.store(false); s.retry_cleanup.store(false); s.failed.store(false);
   s.silent = false;
   set_output(volume, muted);
@@ -342,6 +346,11 @@ bool EspAudioSession::read_diagnostics(AudioDiagnosticsSnapshot& result) const n
   if (impl_->phase.load(std::memory_order_acquire) != Impl::Phase::finished) return false;
   result = impl_->diagnostics.snapshot();
   return true;
+}
+
+std::optional<std::size_t> EspAudioSession::stopped_stack_high_water_bytes() const noexcept {
+  if (impl_->phase.load(std::memory_order_acquire) != Impl::Phase::finished) return std::nullopt;
+  return impl_->stack_high_water_bytes;
 }
 }  // namespace lmdj::cardputer
 #endif
