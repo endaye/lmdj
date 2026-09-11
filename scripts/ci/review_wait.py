@@ -188,10 +188,23 @@ def automated(reader, posted, repo, number, head, bot):
     require(posted["body"].startswith(expected["body"] + "\n\nScope "), "published summary differs from authentic model artifact")
     comments = reader.pages(f"/repos/{repository}/pulls/{number}/reviews/{posted['id']}/comments")
     require(len(comments) == len(expected["comments"]), "published findings inventory differs")
-    for actual, wanted in zip(comments, expected["comments"]):
+    for listed, wanted in zip(comments, expected["comments"]):
+        # The per-review list returns legacy diff positions, not original_line
+        # or side. Hydrate its validated numeric ID from the canonical detail
+        # endpoint; never guess a source line from position or skip the check.
+        actual = reader.get(f"/repos/{repository}/pulls/comments/{listed['id']}")
+        require(isinstance(actual, dict)
+                and all(actual.get(key) == listed.get(key) for key in
+                        ("id", "pull_request_review_id", "original_commit_id", "path", "body"))
+                and isinstance(actual.get("user"), dict)
+                and isinstance(listed.get("user"), dict)
+                and actual["user"].get("id") == listed["user"].get("id"),
+                "published finding detail differs from its review inventory")
         require(actual.get("user", {}).get("id") == bot["id"] and actual.get("pull_request_review_id") == posted["id"]
                 and actual.get("original_commit_id") == head and actual.get("path") == wanted["path"]
-                and actual.get("original_line") == wanted["line"] and actual.get("body") == wanted["body"], "published finding differs from authentic model artifact")
+                and type(actual.get("original_line")) is int and actual["original_line"] == wanted["line"]
+                and actual.get("side") == wanted["side"] and actual.get("original_start_line") is None
+                and actual.get("body") == wanted["body"], "published finding differs from authentic model artifact")
     return {"kind": "automated", "review_id": posted["id"], "run_id": run, "run_attempt": attempt,
             "backend": backend, "findings": model["findings"]}
 

@@ -27,6 +27,9 @@ recurrences:
   - date: 2026-09-11
     occurrence: https://github.com/endaye/lmdj/actions/runs/34630800630
     observed_by: Codex
+  - date: 2026-09-11
+    occurrence: https://github.com/endaye/lmdj/actions/runs/34633148497/attempts/2
+    observed_by: Codex
 exit: gate:apps/web-runtime-host/test/deploy_command_test.py
 escalation: https://github.com/endaye/lmdj/issues/726
 ---
@@ -194,3 +197,14 @@ members/keys, and malformed diagnostics. The only newly admitted members are
 the three explicitly named optional v2 diagnostics; none supplies review
 authority. Earlier invalid observations remain historical evidence. The broader
 escalation #726 remains open; this repair does not settle typed polling doubles.
+
+PR #1243 then exposed a different projection mismatch: the per-review comments
+endpoint returns legacy `position` fields but omits modern `original_line` and
+`side`. The fixture incorrectly returned the full detail shape there, so a
+successful real review with findings was rejected. The reader now fetches each
+listed numeric comment ID from the canonical detail endpoint, binds it back to
+the complete review inventory, and compares its exact original RIGHT-side line
+and body to the authenticated model artifact. The regression keeps list/detail
+responses separate and rejects missing, forged, duplicate and mismatched
+identities/locations. No line is inferred from legacy position and no finding
+is omitted. The broader escalation #726 remains open.

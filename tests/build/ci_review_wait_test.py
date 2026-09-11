@@ -37,7 +37,8 @@ class AdmissionTests(unittest.TestCase):
         self.pull = {"number": 7, "state": "open", "draft": False, "merged": False, "user": self.owner,
                      "head": {"sha": A, "repo": self.repo}, "base": {"ref": "main", "repo": self.repo}}
         self.bot = {"id": 20, "type": "Bot", "login": "github-actions[bot]"}
-        self.comments, self.reviews, self.inline = [], [], []
+        self.comments, self.reviews, self.inline, self.inline_details = [], [], [], {}
+        self.detail_reads = []
         self.pull_reads = 0
         self.move = False
         self.fail_page = False
@@ -51,11 +52,21 @@ class AdmissionTests(unittest.TestCase):
             write=lambda p, data: payloads.append(data))
         self.reviews = [{"id": 60, "user": self.bot, "state": "COMMENTED", "commit_id": A,
                          "submitted_at": "2026-09-10T01:00:00Z", "body": payloads[0]["body"] + "\n\nScope reason: Documentation-only change."}]
-        self.inline = [{"id": 70 + i, "user": self.bot, "pull_request_review_id": 60, "original_commit_id": A,
-                        "path": c["path"], "original_line": c["line"], "body": c["body"]}
-                       for i, c in enumerate(payloads[0]["comments"])]
+        self.render_comments(payloads[0]["comments"])
 
-    def render_v2(self):
+    def render_comments(self, comments):
+        # GitHub's per-review list is a legacy projection: it does not return
+        # original_line/side. Only the exact comment detail endpoint has those.
+        # Observed on PR #1243, run 34633148497 attempt 2, comments 3992461160/69.
+        self.inline = [{"id": 70 + i, "user": self.bot, "pull_request_review_id": 60,
+                        "commit_id": A, "original_commit_id": A, "original_position": 200 + i,
+                        "path": c["path"], "body": c["body"]}
+                       for i, c in enumerate(comments)]
+        self.inline_details = {item["id"]: {**deepcopy(item), "original_line": c["line"],
+                                "line": c["line"], "side": c["side"], "original_start_line": None}
+                               for item, c in zip(self.inline, comments)}
+
+    def render_v2(self, findings=None):
         document = json.loads((ROOT / "tests/fixtures/ci/pr-agent/complete-input.json").read_text())
         document["identity"].update(pull_request=7, base_sha=B, head_sha=A, control_sha=B, run_id="51")
         unsigned = deepcopy(document)
@@ -81,7 +92,7 @@ class AdmissionTests(unittest.TestCase):
                    "response_version": "fixture-v1", "pricing_revision": "fixture-v1"},
             prompt=wait.pipeline.t2.render_prompt_input(authenticated), usage=None, engine=engine))
         review = {"schema": review_scope.REVIEW_SCHEMA, "summary": "Reviewed the complete v2 input.",
-                  "findings": [], "test_scope": {"labels": ["test:full"], "reason": "Complete engine review retains the deterministic floor."}}
+                  "findings": findings or [], "test_scope": {"labels": ["test:full"], "reason": "Complete engine review retains the deterministic floor."}}
         history = {"schema": review_scope.HISTORY_SCHEMA_V2, "attempts": [{
             "backend": "deepseek", "status": "reviewed", "error_class": None, "review": review,
             "engine": engine, "provider": "deepseek", "model": coverage["model"],
@@ -107,7 +118,7 @@ class AdmissionTests(unittest.TestCase):
             write=lambda p, data: payloads.append(data))
         self.reviews = [{"id": 60, "user": self.bot, "state": "COMMENTED", "commit_id": A,
                          "submitted_at": "2026-09-10T01:00:00Z", "body": payloads[0]["body"] + "\n\nScope reason: Complete engine review retains the deterministic floor."}]
-        self.inline = []
+        self.render_comments(payloads[0]["comments"])
 
     def _request(self, method, path, *, raw=False):
         self.assertEqual(method, "GET", "helper must never mutate GitHub")
@@ -130,6 +141,13 @@ class AdmissionTests(unittest.TestCase):
         if route.endswith("/actions/artifacts/9/zip"):
             self.assertTrue(raw)
             return self.source.download(9)
+        if route.startswith(prefix + "/pulls/comments/"):
+            self.assertFalse(query)
+            comment_id = int(route.rsplit("/", 1)[1])
+            self.detail_reads.append(comment_id)
+            if comment_id not in self.inline_details:
+                raise OSError("comment detail unavailable")
+            return deepcopy(self.inline_details[comment_id])
         inventories = {prefix + "/pulls/7/reviews": (self.reviews, None),
             prefix + "/issues/7/comments": (self.comments, None),
             prefix + "/pulls/7/reviews/60/comments": (self.inline, None),
@@ -291,6 +309,73 @@ class AdmissionTests(unittest.TestCase):
         result = self.check()
         self.assertTrue(result["eligible"], result)
         self.assertEqual(result["evidence"][0]["findings"], review["findings"])
+
+    def test_legacy_list_v2_findings_use_exact_comment_details(self):
+        findings = [{"path": "src/example.py", "line": 2, "body": "Check the changed return value."},
+                    {"path": "src/example.py", "line": 3, "body": "Check the changed comment."}]
+        self.render_v2(findings)
+        self.assertTrue(all("original_line" not in item and "side" not in item for item in self.inline))
+        result = self.check()
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(self.detail_reads, [70, 71])
+        self.assertEqual(result["evidence"][0]["findings"], findings)
+
+    def one_v2_finding(self):
+        self.render_v2([{"path": "src/example.py", "line": 2, "body": "Check the changed return value."}])
+
+    def test_comment_detail_must_match_the_exact_review_inventory(self):
+        for key, value in (("id", 999), ("pull_request_review_id", 999),
+                           ("user", {"id": 999}), ("original_commit_id", B),
+                           ("path", "other.py"), ("body", "edited body")):
+            with self.subTest(key=key):
+                self.one_v2_finding()
+                self.inline_details[70][key] = value
+                result = self.check()
+                self.assertFalse(result["eligible"], result)
+                self.assertIn("detail differs", result["diagnostics"][0]["why"])
+
+    def test_matching_list_and_detail_cannot_forge_model_or_author_identity(self):
+        for key, value in (("pull_request_review_id", 999), ("user", {"id": 999}),
+                           ("original_commit_id", B), ("path", "other.py"), ("body", "edited body")):
+            with self.subTest(key=key):
+                self.one_v2_finding()
+                self.inline[0][key] = value
+                self.inline_details[70][key] = value
+                self.assertFalse(self.check()["eligible"])
+
+    def test_detail_must_supply_exact_original_single_right_side_line(self):
+        for key, value in (("original_line", None), ("original_line", 3), ("original_line", True),
+                           ("side", "LEFT"), ("side", None), ("original_start_line", 1)):
+            with self.subTest(key=key, value=value):
+                self.one_v2_finding()
+                self.inline_details[70][key] = value
+                self.assertFalse(self.check()["eligible"])
+
+    def test_comment_detail_unavailable_never_uses_legacy_position_as_line(self):
+        self.one_v2_finding()
+        self.inline[0]["original_position"] = 2
+        self.inline_details.clear()
+        result = self.check()
+        self.assertFalse(result["eligible"], result)
+        self.assertEqual(self.detail_reads, [70])
+
+    def test_comment_detail_non_object_is_invalid(self):
+        self.one_v2_finding()
+        self.inline_details[70] = []
+        self.assertFalse(self.check()["eligible"])
+
+    def test_duplicate_comment_inventory_is_rejected_before_hydration(self):
+        self.render_v2([{"path": "src/example.py", "line": line, "body": "Check this change."}
+                        for line in (2, 3)])
+        self.inline[1] = deepcopy(self.inline[0])
+        self.assertFalse(self.check()["eligible"])
+        self.assertEqual(self.detail_reads, [])
+
+    def test_missing_comment_inventory_id_is_rejected_before_hydration(self):
+        self.one_v2_finding()
+        self.inline[0]["id"] = "70"
+        self.assertFalse(self.check()["eligible"])
+        self.assertEqual(self.detail_reads, [])
 
     def test_missing_published_finding_is_invalid(self):
         self.test_authentic_findings_are_retained_for_disposition()
