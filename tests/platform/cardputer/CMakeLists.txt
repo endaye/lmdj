@@ -1,4 +1,15 @@
 find_package(Threads REQUIRED)
+add_executable(lmdj_cardputer_codec_gain_tests codec_gain_test.cpp
+  "${CMAKE_SOURCE_DIR}/products/lmdj/src/cardputer_assembly.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/audio_driver.cpp")
+target_compile_definitions(lmdj_cardputer_codec_gain_tests PRIVATE ESP_PLATFORM)
+target_link_libraries(lmdj_cardputer_codec_gain_tests PRIVATE lmdj::runtime_facade)
+target_include_directories(lmdj_cardputer_codec_gain_tests PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/fake_esp" "${CMAKE_SOURCE_DIR}")
+lmdj_target_warnings(lmdj_cardputer_codec_gain_tests)
+lmdj_target_sanitizers(lmdj_cardputer_codec_gain_tests)
+lmdj_add_test(NAME platform.cardputer.codec_gain TIER component
+  COMMAND lmdj_cardputer_codec_gain_tests)
 # Compile the real ESP audio implementation against a GPIO-routing fake.
 # This checks shared-bus lifetime, not DMA timing or physical sound; those
 # remain covered by the existing audio tests and device acceptance.

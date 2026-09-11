@@ -17,6 +17,13 @@ Cardputer Host `1.0.0` is included in Product Build `1.0.56.0` as a team-test
 candidate. Product Assembly supplies the ESP32-S3/Cardputer ADV pin profile,
 runtime limits, and Assembly identity; the Host does not choose those values.
 
+The current source uses ES8311 DAC unity gain (`0x32 = 0xBF`, 0 dB).
+User volume remains software-controlled (default 2/10), with a one-block gain
+ramp and explicit mute/stop silence. Codec `0x40` is −63.5 dB, not 25% volume;
+that prior configuration could report Running while being effectively inaudible.
+This source correction does not amend the frozen test snapshot or establish
+physical acceptance. A fresh immutable candidate is required for final A1 testing.
+
 Build with the pinned EIM-managed ESP-IDF environment:
 
 ```bash
