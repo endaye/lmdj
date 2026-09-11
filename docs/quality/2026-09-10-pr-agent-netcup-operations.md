@@ -3,7 +3,7 @@
 Date: 2026-09-10 (Asia/Shanghai)
 
 Task: LMDJ #1153 / umbrella #1149 T4
-Status: service-environment source tooling implemented; host installation and review acceptance pending
+Status: service-environment tooling and Flash inventory binding documented; host installation and review acceptance pending
 
 ## What this Task implements
 
@@ -44,12 +44,62 @@ still fail admission without chmod/chown repair. Positive test fixtures use
 protected installation modes; separate negative cases retain unsafe paths.
 
 The committed `scripts/ci/pr-agent/netcup-review.json` is intentionally
-`active: false`. Its inventory binds the T2 Linux/amd64 bundle
-`4359addd2521847509b61c655a346e1a59e49ebec87934024f35c066eb3f26d3` /
-`361820160` bytes and detached identity
-`a1f7f67b6ae9390a3a4117f0bf1bb96a7269306aef5b12433d06b6e62dc3d2c3` /
+`active: false`. Its inventory now binds the accepted Flash Linux/amd64 bundle
+`lmdj-pr-agent-linux-amd64-53072488e4c3b5a6c9ae730fe6fb52fc5f09d06c.tar`,
+SHA-256 `d43d11d489a879e8935b8a70d75665d311db3739f4c1c6907f159c6dcfcc6991`,
+`361830400` bytes, and detached identity SHA-256
+`0a04de3496b1519ba2b2d3276ce1d3b65c1cdafe9c282a2e1613dd3cbb8c67cd`,
 `896` bytes, plus all five detached member identities. No archive is copied
 into this repository.
+
+## Accepted Flash bundle and bounded environment evidence
+
+The archive was built from candidate source
+`f4f6ebf64eca70b3c5cc17267e61ece7e529c05f`. Separately, PR #1198 source head
+`8952cdc98fd67d50341f728b0562c96563737432`, merged as
+`374793290e881389bf2513ab23873d8647aca5ad`, is the accepted installer source
+and synthetic systemd-test provenance; the installer is not inside this
+archive. The present inventory remains inactive, every admission flag is
+false, the runtime path has null identity, and the default configuration keeps
+all four providers disabled. The accepted archive and detached identity are retained at
+`/tmp/lmdj-pr-agent-packaging/artifacts-v15-flash.mjwNyB`; the repository binds
+their identities but does not publish or install them.
+
+The lead artifact acceptance has already passed: static independent checks plus
+inspection of the author-owned clean-base execution. The supplemental archive
+verifier is author-owned evidence, not independently executed reviewer
+acceptance. The full corrected builder stdout/stderr logs and exported exact
+tool envelopes are in `/tmp/lmdj-pr-agent-packaging/artifacts-v15-flash.mjwNyB/`;
+the build report is `/tmp/lmdj-pr-agent-plan/post-funding-bundle-build.md`.
+No build or rerun is part of this inventory task.
+
+The superseded v14 compatibility evidence remains explicitly historical:
+archive SHA-256 `4359addd2521847509b61c655a346e1a59e49ebec87934024f35c066eb3f26d3`,
+`361820160` bytes; detached identity SHA-256
+`a1f7f67b6ae9390a3a4117f0bf1bb96a7269306aef5b12433d06b6e62dc3d2c3`,
+`896` bytes. It is not the current v15 operator candidate.
+
+The real-host synthetic systemd receipt
+`/tmp/lmdj-pr-agent-plan/service-env-systemd-acceptance-receipt.md` records two
+accepted bounded legs. The EnvironmentFile-present leg reached the selected
+public marker under UID/GID 984/976 and all four blocked names
+(`GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`) were
+absent. The optional-file-missing leg reached a successful process result with
+the selected variable absent and all four blocked names absent; both legs had
+empty stderr and the exact terminal properties. The first failure and its
+cleanup remain retained; no provider file contents were read, and synthetic
+cleanup completed with only named resources removed. The legs used unique
+temporary EnvironmentFile/slice/probe paths, a no-adapter probe,
+`PrivateNetwork=yes`, and `RemainAfterExit=yes`; they are not production paths.
+These legs do not prove production activation, credentials or authentication,
+provider health/quality, measured capacity/coexistence, restart/crash/ledger
+recovery, route/cutover, or T4 completion.
+
+Proactive supplier balance/funding attestation is withdrawn; manual balances
+are outside this gate. USD 1 per attempt, USD 20 pilot and USD 20 monthly
+guards remain, as do real authentication/model/route/pricing and all-four
+provider health/fallback/quality gates. Kimi's no-call restriction is
+unchanged; Issues #1149, #1153, #1154, #1155 and #1188 remain open.
 
 ## Isolation and resource contract
 
@@ -154,9 +204,8 @@ Actual host capacity/admission remains unproved; this Task does not seek or
 read a password, alter authentication, or mutate the host.
 
 The source-only operator interface is intentionally limited to a reviewable
-sequence. The first command stages an inactive disabled-provider runtime; a
-later active command may create a new immutable revision from the same v14
-archive after all admissions are independently evidenced:
+sequence. The following retained example is historical v14 compatibility
+evidence, not the current v15 handoff:
 
 ```bash
 deploy-runner.sh stage --config <inactive-operator-json> --bundle <exact-v14-archive> \
@@ -169,6 +218,10 @@ deploy-runner.sh install --config <active-operator-json> --bundle <exact-v14-arc
   --target-root <isolated-target>
 deploy-runner.sh rollback --config <active-operator-json> --target-root <isolated-target>
 ```
+
+The current v15 handoff binds the accepted Flash archive and identity from the
+trusted inventory (with the same inactive stage first); it must not silently
+reuse the superseded v14 identities above.
 
 These are source-tool shapes, not commands executed by this Task; production
 paths and service identities must be supplied through the separately reviewed
@@ -265,10 +318,12 @@ declared inventory, requires the nested `REVISION_RECORD.json` file fsync
 before a new release directory is published, and compares final destination
 device/inode/mode/UID/GID after the leg. The relocated receipt-tree refusal
 also covers bytes outside the target-root snapshot. The durable suite ports all sixteen
-independent N1-N3 scenarios; normal, child-`-S`, and `umask 0002` runs report
-95 tests with one explicit archive opt-in skip (94 passed), while the pinned
-v14 opt-in is 95/95 with zero skips. The same 95/95-minus-one-skip result is
-reproduced under child `-S` and `umask 0002`; the six-leg durability trace now
+independent N1-N3 scenarios. Historical PR1198 evidence retained above reported 95 tests with one v14 skip
+in ordinary, child-`-S`, and `umask 0002` variants, and 95/95 when v14 was
+enabled; those variants were not rerun by this correction. This correction's
+ordinary run reports 96 tests, 94 passed and two explicit v14/current skips;
+the run with both exact v14 and current archives reports 96/96 with zero skips.
+The six-leg durability trace now
 asserts source, destination and parent identities plus the complete far-side
 state after every leg, including immediate complete first-A and first-B far
 sides with initial monetary-ledger absence. Initial stage/install receipt-before-state crash probes

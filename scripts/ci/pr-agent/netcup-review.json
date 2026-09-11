@@ -10,18 +10,18 @@
   "bundle": {
     "archive": {
       "filename": "lmdj-pr-agent-linux-amd64-53072488e4c3b5a6c9ae730fe6fb52fc5f09d06c.tar",
-      "sha256": "4359addd2521847509b61c655a346e1a59e49ebec87934024f35c066eb3f26d3",
-      "byte_length": 361820160
+      "sha256": "d43d11d489a879e8935b8a70d75665d311db3739f4c1c6907f159c6dcfcc6991",
+      "byte_length": 361830400
     },
     "identity": {
       "filename": "DEPLOYMENT_IDENTITY.json",
-      "sha256": "a1f7f67b6ae9390a3a4117f0bf1bb96a7269306aef5b12433d06b6e62dc3d2c3",
+      "sha256": "0a04de3496b1519ba2b2d3276ce1d3b65c1cdafe9c282a2e1613dd3cbb8c67cd",
       "byte_length": 896
     },
     "files": {
-      "manifest": {"path": "IDENTITY", "sha256": "5fd87751f8d2ef2b71e6c68fcdcbaa4df5994d41539c74a339d9f2b1597f06cf", "byte_length": 786},
-      "adapter": {"path": "pr_agent_review.py", "sha256": "68e51eeb0264449d2d3c2a6b0964b6339ecfad3df27296e90c0f8585732a1e46", "byte_length": 125134},
-      "default_config": {"path": "config.toml", "sha256": "a220eed9ba1e6b66030038140a5e21b3eeb140ee77b587d1dabf4e62b1c68652", "byte_length": 1193},
+      "manifest": {"path": "IDENTITY", "sha256": "dfab7f98c5a63742f0fb0552d7e4852d797ad2031f67cf82bc7528aa6a15cea9", "byte_length": 786},
+      "adapter": {"path": "pr_agent_review.py", "sha256": "16526aa381a2dd6b20585676e5560c83679de200b3bdc4164486f3338876c6e8", "byte_length": 134887},
+      "default_config": {"path": "config.toml", "sha256": "381721392dda7942c2ac90da2ac68fb2d13a9fd8a37ac07006300d838af196ae", "byte_length": 1278},
       "requirements_lock": {"path": "requirements.lock", "sha256": "cbfa9acb42c7657cbbde891a267e8ac181993cf9b49086140be212f6d28d2a96", "byte_length": 134773},
       "stock_tokenizer_asset": {"path": "tokenizer-cache/fb374d419588a4632f3f557e76b4b70aebbca790", "sha256": "446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d", "byte_length": 3613922}
     }
