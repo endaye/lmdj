@@ -92,7 +92,7 @@ target_link_libraries(lmdj_cardputer_audio_lifecycle_tests PRIVATE lmdj::runtime
 target_include_directories(lmdj_cardputer_audio_lifecycle_tests PRIVATE "${CMAKE_SOURCE_DIR}")
 lmdj_target_warnings(lmdj_cardputer_audio_lifecycle_tests)
 lmdj_target_sanitizers(lmdj_cardputer_audio_lifecycle_tests)
-foreach(scenario prewarm stop quiescence_failure partial_configuration short_write
+foreach(scenario observation_identity observation_failure observation_unavailable prewarm stop quiescence_failure partial_configuration short_write
     invalid_block mute_failure enable_failure zero_failure drain_failure unmute_failure release_failure
     host_mapping host_profile host_physical_stop pcm_ramp pcm_nonfinite explicit_prewarm
     host_volume host_mute host_output_release host_start_output

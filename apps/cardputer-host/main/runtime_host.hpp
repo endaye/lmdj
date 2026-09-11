@@ -5,9 +5,9 @@
 #include <cstdint>
 #include <span>
 #include <lmdj/facade/runtime_facade.hpp>
+#include "audio_diagnostics.hpp"
 #ifdef ESP_PLATFORM
 #include "audio_driver.hpp"
-#include "audio_diagnostics.hpp"
 #endif
 
 namespace lmdj::cardputer {
@@ -31,6 +31,10 @@ class AudioSession {
   virtual AudioStopResult stop_and_join() noexcept = 0;
   virtual void set_output(std::uint8_t volume, bool muted) noexcept = 0;
   virtual bool healthy() const noexcept = 0;
+  virtual bool read_diagnostics(AudioDiagnosticsSnapshot& result) const noexcept {
+    result = {};
+    return false;
+  }
 };
 
 enum class HostResult : std::uint8_t {
@@ -60,6 +64,15 @@ struct HostStatus {
   facade::RuntimeCommandOutcome last_receipt_outcome{};
 };
 
+struct HostAudioObservation {
+  // Boot-local generation, never a Facade epoch or cross-reset identity.
+  std::uint64_t generation{};
+  std::array<char, 64> content_sha256{};
+  std::uint64_t content_bytes{};
+  bool start_succeeded{}, quiescent{}, silent{}, diagnostics_available{};
+  AudioDiagnosticsSnapshot diagnostics;
+};
+
 // All methods below have one serialized executor owner. AudioSession must
 // outlive this object; neither keyboard nor USB workers call the Facade.
 class RuntimeHost final {
@@ -76,6 +89,9 @@ class RuntimeHost final {
   HostResult shutdown() noexcept;
   void poll() noexcept;
   HostStatus read_status() const noexcept { return status_; }
+  // Serialized control owner. While audio owns the observation, return no
+  // data rather than an older completed observation relabeled as current.
+  bool read_audio_observation(HostAudioObservation&) const noexcept;
 
  private:
   static void render(void*, float*, float*, std::uint32_t) noexcept;
@@ -91,6 +107,7 @@ class RuntimeHost final {
   facade::RuntimeEpoch epoch_;
   std::uint32_t sequence_{};
   bool audio_owned_{};
+  HostAudioObservation observation_{};
 };
 
 #ifdef ESP_PLATFORM
@@ -112,7 +129,7 @@ class EspAudioSession final : public AudioSession {
   bool healthy() const noexcept override;
   // Control owner only. Never reads mutable audio-owned data while running;
   // returns false until the start attempt has published its finished release.
-  bool read_diagnostics(AudioDiagnosticsSnapshot&) const noexcept;
+  bool read_diagnostics(AudioDiagnosticsSnapshot&) const noexcept override;
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
