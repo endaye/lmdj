@@ -1,4 +1,6 @@
 #include "runtime_host.hpp"
+#include "display.hpp"
+#include "input_controller.hpp"
 #include <algorithm>
 #include <cstdio>
 #include "freertos/FreeRTOS.h"
@@ -38,11 +40,14 @@ extern "C" void app_main() {
       return;
     }
     RuntimeHost host(config.runtime, config.profile, audio);
+    Display display;
+    InputController input(host, display);
     std::printf("CARDPUTER research unversioned source-base=%s phase=empty\n", LMDJ_CARDPUTER_REVISION);
-    // I1/C1 will feed this single serialized executor. No external USB/keyboard
-    // worker is granted direct Facade access, and disconnect never implies stop.
+    // Platform keyboard scanning feeds PhysicalKeyEvent into input. No external
+    // USB/keyboard worker is granted direct Facade access, and disconnect never
+    // implies stop. The display consumes only the bounded value projection.
     for (;;) {
-      host.poll();
+      input.poll();
       vTaskDelay(1);
     }
   } catch (...) {

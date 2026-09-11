@@ -1,4 +1,5 @@
-idf_component_register(SRCS main.cpp audio_driver.cpp runtime_host.cpp
+idf_component_register(SRCS main.cpp audio_driver.cpp runtime_host.cpp keyboard.cpp
+  display.cpp input_controller.cpp
   REQUIRES esp_driver_i2s esp_driver_i2c esp_driver_gpio freertos esp_system pthread)
 if(CMAKE_BUILD_EARLY_EXPANSION)
   return()

@@ -17,3 +17,18 @@ foreach(scenario prewarm stop quiescence_failure partial_configuration short_wri
 endforeach()
 lmdj_add_test(NAME platform.cardputer.audio.threaded_stress TIER stress
   COMMAND lmdj_cardputer_audio_lifecycle_tests threaded_stress)
+
+add_executable(lmdj_cardputer_input_tests
+  input_controller_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/keyboard.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/display.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/input_controller.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/runtime_host.cpp")
+target_link_libraries(lmdj_cardputer_input_tests PRIVATE lmdj::runtime_facade Threads::Threads)
+target_include_directories(lmdj_cardputer_input_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+lmdj_target_warnings(lmdj_cardputer_input_tests)
+lmdj_target_sanitizers(lmdj_cardputer_input_tests)
+foreach(scenario mapping repeat_release empty_receive overflow queue_retry display)
+  lmdj_add_test(NAME platform.cardputer.input.${scenario} TIER component
+    COMMAND lmdj_cardputer_input_tests ${scenario})
+endforeach()
