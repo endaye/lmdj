@@ -297,14 +297,22 @@ def send_serial(path: str, content: bytes, timeout: float = 5.0) -> Frame:
         def exchange(frame: Frame) -> Frame:
             wire = encode(frame)
             view = memoryview(wire)
+            write_deadline = time.monotonic() + timeout
             while view:
                 try:
                     count = os.write(fd, view)
                     view = view[count:]
                 except BlockingIOError:
-                    writable, _, _ = select.select([], [fd], [], timeout)
-                    if not writable:
+                    remaining = write_deadline - time.monotonic()
+                    if remaining <= 0:
                         raise TimeoutError("serial write timeout")
+                    # macOS USB Serial/JTAG may keep the descriptor out of
+                    # the writable set even while a short retry succeeds.
+                    # Keep the deadline bounded, but do not require select()
+                    # to advertise writability.
+                    writable, _, _ = select.select([], [fd], [], min(0.01, remaining))
+                    if not writable:
+                        time.sleep(min(0.001, remaining))
             deadline = time.monotonic() + timeout
             received = bytearray()
             while True:
