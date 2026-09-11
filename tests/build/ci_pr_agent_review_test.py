@@ -109,6 +109,66 @@ def blob(data: bytes, encoding="utf-8"):
     }
 
 
+def document_from_git_diff(diff_text, records):
+    """Build a complete T2 document from fixed bytes and an emitted Git diff."""
+    sections = {}
+    lines = diff_text.splitlines(keepends=True)
+    starts = [index for index, line in enumerate(lines) if line.startswith("diff --git ")]
+    for position, start in enumerate(starts):
+        stop = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        sections[lines[start].removesuffix("\n")] = "".join(lines[start:stop])
+    document = json.loads((FIXTURES / "complete-input.json").read_text(encoding="utf-8"))
+    document["diff"] = {
+        "text": diff_text,
+        "sha256": hashlib.sha256(diff_text.encode("utf-8")).hexdigest(),
+        "byte_length": len(diff_text.encode("utf-8")),
+    }
+    files = []
+    for record in records:
+        path = record["path"]
+        old_path = record.get("old_path")
+        header = f"diff --git a/{old_path if old_path is not None else path} b/{path}"
+        section = sections[header]
+        section_lines = section.splitlines(keepends=True)
+        hunk_start = next((index for index, line in enumerate(section_lines) if line.startswith("@@")), None)
+        if hunk_start is not None:
+            patches = adapter._parse_diff_hunks(section)
+            patch = "".join(patches)
+        elif record["change_kind"] == "renamed":
+            patch = "".join(line for line in section_lines[1:] if line.startswith(("rename from ", "rename to ")))
+            patches = [patch]
+        else:
+            patch = next(line for line in section_lines[1:] if line.startswith("Binary files "))
+            patches = [patch]
+        hunks = []
+        for index, patch_fragment in enumerate(patches, start=1):
+            right_lines = [
+                {"line": line, "text": text, "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}
+                for line, text in adapter._parse_patch_right_lines(patch_fragment)
+            ]
+            hunks.append({
+                "id": f"{index}-{re.sub(r'[^A-Za-z0-9._:/#-]', '-', path)}",
+                "patch": patch_fragment,
+                "patch_sha256": hashlib.sha256(patch_fragment.encode("utf-8")).hexdigest(),
+                "right_lines": right_lines,
+            })
+        files.append({
+            "path": path,
+            "old_path": old_path,
+            "change_kind": record["change_kind"],
+            "patch": patch,
+            "patch_sha256": hashlib.sha256(patch.encode("utf-8")).hexdigest(),
+            "base": None if record.get("base") is None else blob(record["base"]),
+            "head": None if record.get("head") is None else blob(record["head"]),
+            "hunks": hunks,
+        })
+    document["files"] = files
+    unsigned = copy.deepcopy(document)
+    unsigned.pop("input_sha256", None)
+    document["input_sha256"] = hashlib.sha256(canonical(unsigned)).hexdigest()
+    return document
+
+
 class FakeCompletion(dict):
     """Mapping-shaped LiteLLM response with the SDK response logging method."""
 
@@ -325,6 +385,220 @@ class InputAndPolicyTests(unittest.TestCase):
         tampered["diff"]["text"] += "forged"
         with self.assertRaisesRegex(adapter.EngineError, "input authentication digest"):
             adapter.authenticate_input(tampered)
+
+    def test_real_git_space_headers_authenticate_every_text_change_kind(self):
+        def git(cwd, *args):
+            return subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=True)
+
+        def emitted(before, action, records, *, find_renames=False):
+            with tempfile.TemporaryDirectory(prefix="t4-space-header-git-") as temporary:
+                root = Path(temporary)
+                git(root, "init", "-q")
+                git(root, "config", "user.email", "fixture@example.invalid")
+                git(root, "config", "user.name", "Fixture")
+                (root / "README").write_bytes(b"fixture\n")
+                for relative, data in before.items():
+                    target = root / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(data)
+                git(root, "add", "--all")
+                git(root, "commit", "-qm", "base")
+                action(root)
+                git(root, "add", "--all")
+                diff_args = ["diff", "--cached", "--no-ext-diff", "--full-index"]
+                if find_renames:
+                    diff_args.append("--find-renames=20%")
+                else:
+                    diff_args.append("--no-renames")
+                raw = git(root, *diff_args).stdout
+                return raw, document_from_git_diff(raw.decode("utf-8"), records)
+
+        cases = [
+            (
+                "added-directory-and-trailing-space",
+                {},
+                lambda root: ((root / "dir with space" / "trailing ").parent.mkdir(parents=True), (root / "dir with space" / "trailing ").write_bytes(b"added")),
+                [{"path": "dir with space/trailing ", "change_kind": "added", "head": b"added"}],
+            ),
+            (
+                "modified-directory-space",
+                {"dir with space/modified file.txt": b"old\n"},
+                lambda root: (root / "dir with space/modified file.txt").write_bytes(b"new\n"),
+                [{"path": "dir with space/modified file.txt", "change_kind": "modified", "base": b"old\n", "head": b"new\n"}],
+            ),
+            (
+                "modified-crlf-no-final-newline",
+                {"dir with space/crlf file.txt": b"old\r\nline\r\n"},
+                lambda root: (root / "dir with space/crlf file.txt").write_bytes(b"new\r\nline"),
+                [{"path": "dir with space/crlf file.txt", "change_kind": "modified", "base": b"old\r\nline\r\n", "head": b"new\r\nline"}],
+            ),
+            (
+                "deleted-directory-space",
+                {"dir with space/deleted file.txt": b"deleted\n"},
+                lambda root: (root / "dir with space/deleted file.txt").unlink(),
+                [{"path": "dir with space/deleted file.txt", "change_kind": "deleted", "base": b"deleted\n"}],
+            ),
+            (
+                "edited-rename-old-space-new-plain",
+                {"old space/old file.txt": b"keep\nold\n"},
+                lambda root: (subprocess.run(["git", "mv", "old space/old file.txt", "new-file.txt"], cwd=root, check=True), (root / "new-file.txt").write_bytes(b"keep\nnew\n")),
+                [{"path": "new-file.txt", "old_path": "old space/old file.txt", "change_kind": "renamed", "base": b"keep\nold\n", "head": b"keep\nnew\n"}],
+            ),
+            (
+                "edited-rename-old-plain-new-space",
+                {"old-file.txt": b"keep\nold\n"},
+                lambda root: ((root / "new space").mkdir(parents=True), subprocess.run(["git", "mv", "old-file.txt", "new space/new file.txt"], cwd=root, check=True), (root / "new space/new file.txt").write_bytes(b"keep\nnew\n")),
+                [{"path": "new space/new file.txt", "old_path": "old-file.txt", "change_kind": "renamed", "base": b"keep\nold\n", "head": b"keep\nnew\n"}],
+            ),
+            (
+                "pure-rename-spaces",
+                {"pure old/pure file.txt": b"unchanged\n"},
+                lambda root: ((root / "pure new").mkdir(parents=True), subprocess.run(["git", "mv", "pure old/pure file.txt", "pure new/pure file.txt"], cwd=root, check=True)),
+                [{"path": "pure new/pure file.txt", "old_path": "pure old/pure file.txt", "change_kind": "renamed", "base": b"unchanged\n", "head": b"unchanged\n"}],
+            ),
+        ]
+        for name, before, action, records in cases:
+            with self.subTest(name=name):
+                raw, document = emitted(before, action, records, find_renames=records[0]["change_kind"] == "renamed")
+                authenticated = adapter.authenticate_input(document)
+                self.assertTrue(authenticated["input_complete"])
+                path = records[0]["path"]
+                if records[0]["change_kind"] != "renamed" or records[0]["path"] != "pure new/pure file.txt":
+                    if records[0]["change_kind"] == "deleted":
+                        self.assertIn(b"+++ /dev/null\n", raw)
+                    else:
+                        suffix = "\t\n" if " " in path else "\n"
+                        self.assertIn(f"+++ b/{path}{suffix}".encode("utf-8"), raw)
+
+    def test_header_grammar_preserves_legacy_form_and_rejects_suffixes_and_duplicates(self):
+        path = "dir with space/example.py"
+
+        def space_document(*, old_header=None, new_header=None, old_extra="", new_extra=""):
+            document = copy.deepcopy(self.document)
+            original = document["diff"]["text"]
+            updated = original.replace(
+                "diff --git a/src/example.py b/src/example.py",
+                f"diff --git a/{path} b/{path}",
+                1,
+            )
+            old_label = f"--- a/{path}" if old_header is None else old_header
+            new_label = f"+++ b/{path}" if new_header is None else new_header
+            updated = updated.replace("--- a/src/example.py", old_label, 1)
+            updated = updated.replace("+++ b/src/example.py", new_label, 1)
+            if old_extra:
+                updated = updated.replace(old_label, old_label + old_extra, 1)
+            if new_extra:
+                updated = updated.replace(new_label, new_label + new_extra, 1)
+            document["files"][0]["path"] = path
+            document["diff"]["text"] = updated
+            refresh_diff_identity(document)
+            unsigned = copy.deepcopy(document)
+            unsigned.pop("input_sha256", None)
+            document["input_sha256"] = hashlib.sha256(canonical(unsigned)).hexdigest()
+            return document
+
+        legacy = space_document()
+        self.assertEqual(adapter.authenticate_input(legacy)["files"][0]["path"], path)
+        native = space_document(new_header=f"+++ b/{path}\t")
+        self.assertEqual(adapter.authenticate_input(native)["files"][0]["path"], path)
+        for name, document in (
+            ("duplicate-old", space_document(old_extra=f"\n--- a/{path}")),
+            ("duplicate-new", space_document(new_extra=f"\n+++ b/{path}")),
+            ("contradictory-old", space_document(old_header="--- a/other.py")),
+            ("contradictory-new", space_document(new_header="+++ b/other.py")),
+            ("missing-old", space_document(old_header="")),
+            ("missing-new", space_document(new_header="")),
+            ("wrong-side-old", space_document(old_header=f"--- b/{path}")),
+            ("wrong-side-new", space_document(new_header=f"+++ a/{path}")),
+            ("two-tabs", space_document(new_header=f"+++ b/{path}\t\t")),
+            ("appended-text", space_document(new_header=f"+++ b/{path}\t timestamp")),
+            ("wrong-prefix", space_document(new_header=f"+++ c/{path}")),
+        ):
+            with self.subTest(name=name), self.assertRaisesRegex(adapter.EngineError, "exactly partitioned"):
+                adapter.authenticate_input(document)
+
+        no_space = copy.deepcopy(self.document)
+        no_space["diff"]["text"] = no_space["diff"]["text"].replace("+++ b/src/example.py", "+++ b/src/example.py\t", 1)
+        refresh_diff_identity(no_space)
+        unsigned = copy.deepcopy(no_space)
+        unsigned.pop("input_sha256", None)
+        no_space["input_sha256"] = hashlib.sha256(canonical(unsigned)).hexdigest()
+        with self.assertRaisesRegex(adapter.EngineError, "exactly partitioned"):
+            adapter.authenticate_input(no_space)
+
+    def test_payload_header_decoys_cannot_satisfy_real_metadata(self):
+        document = copy.deepcopy(self.document)
+        base = b"def value():\n--- a/src/example.py\n"
+        head = b"def value():\n+++ b/src/example.py\n    return 2\n    # changed\n"
+        patch = "@@ -1,2 +1,4 @@\n def value():\n--- a/src/example.py\n+++ b/src/example.py\n+    return 2\n+    # changed\n"
+        file = document["files"][0]
+        file.update(
+            base=blob(base),
+            head=blob(head),
+            patch=patch,
+            patch_sha256=hashlib.sha256(patch.encode()).hexdigest(),
+            hunks=[{
+                "id": "src-example-h1",
+                "patch": patch,
+                "patch_sha256": hashlib.sha256(patch.encode()).hexdigest(),
+                "right_lines": [
+                    {"line": 2, "text": "++ b/src/example.py", "sha256": hashlib.sha256(b"++ b/src/example.py").hexdigest()},
+                    {"line": 3, "text": "    return 2", "sha256": hashlib.sha256(b"    return 2").hexdigest()},
+                    {"line": 4, "text": "    # changed", "sha256": hashlib.sha256(b"    # changed").hexdigest()},
+                ],
+            }],
+        )
+        first = document["diff"]["text"].index("diff --git a/src/example.py")
+        second = document["diff"]["text"].index("\ndiff --git a/obsolete.txt")
+        section = document["diff"]["text"][first:second]
+        section = section.replace("--- a/src/example.py", "--- a/unrelated-old.py", 1)
+        section = section.replace("+++ b/src/example.py", "+++ b/unrelated-new.py", 1)
+        hunk_start = section.index("@@")
+        document["diff"]["text"] = document["diff"]["text"][:first] + section[:hunk_start] + patch + document["diff"]["text"][second:]
+        refresh_diff_identity(document)
+        unsigned = copy.deepcopy(document)
+        unsigned.pop("input_sha256", None)
+        document["input_sha256"] = hashlib.sha256(canonical(unsigned)).hexdigest()
+        with self.assertRaisesRegex(adapter.EngineError, "exactly partitioned"):
+            adapter.authenticate_input(document)
+
+    def test_trusted_collector_witness_consumes_space_path_and_rejects_retained_mismatch(self):
+        import review_pipeline as pipeline
+        import review_scope
+
+        path = "dir with space/example.py"
+        document = copy.deepcopy(self.document)
+        document["files"][0]["path"] = path
+        document["diff"]["text"] = document["diff"]["text"].replace(
+            "diff --git a/src/example.py b/src/example.py",
+            f"diff --git a/{path} b/{path}",
+            1,
+        ).replace("--- a/src/example.py", f"--- a/{path}", 1).replace(
+            "+++ b/src/example.py", f"+++ b/{path}\t", 1,
+        )
+        refresh_diff_identity(document)
+        unsigned = copy.deepcopy(document)
+        unsigned.pop("input_sha256", None)
+        document["input_sha256"] = hashlib.sha256(canonical(unsigned)).hexdigest()
+        with tempfile.TemporaryDirectory(prefix="t4-space-header-witness-") as temporary:
+            directory = Path(temporary)
+            retained = directory / "t2-input.json"
+            retained.write_text(json.dumps(document), encoding="utf-8")
+            with mock.patch.dict(os.environ, {"T2_INPUT_JSON": str(retained)}):
+                witness = pipeline.trusted_collector(directory)
+                self.assertEqual(witness["schema"], review_scope.COLLECTOR_SCHEMA)
+                self.assertEqual(witness["expected_hunks"][0]["path"], path)
+                mismatched = copy.deepcopy(document)
+                mismatched["diff"]["text"] = mismatched["diff"]["text"].replace(
+                    f"+++ b/{path}\t", "+++ b/wrong.py", 1,
+                )
+                refresh_diff_identity(mismatched)
+                unsigned = copy.deepcopy(mismatched)
+                unsigned.pop("input_sha256", None)
+                mismatched["input_sha256"] = hashlib.sha256(canonical(unsigned)).hexdigest()
+                retained.write_text(json.dumps(mismatched), encoding="utf-8")
+                with self.assertRaisesRegex(review_scope.ReviewScopeError, "collector input failed"):
+                    pipeline.trusted_collector(directory)
 
     def test_diff_partition_accepts_multi_file_multi_hunk_rename_and_deletion(self):
         authenticated = adapter.authenticate_input(signed_input(add_rename_second_hunk))

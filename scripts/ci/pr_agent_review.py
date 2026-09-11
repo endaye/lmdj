@@ -385,24 +385,49 @@ def _parse_diff_hunks(section: str) -> list[str]:
     return hunks
 
 
+def _patch_header_matches(line: str, prefix: str, path: str) -> bool:
+    expected = f"{prefix}{path}"
+    if line == expected:
+        return True
+    return " " in path and line == expected + "\t"
+
+
+def _verify_text_patch_headers(section: str, *, path: str, old_path: str | None) -> None:
+    """Validate the unique old/new headers before the first unified hunk."""
+    lines = section.splitlines()
+    first_hunk = next(
+        (index for index, line in enumerate(lines) if line.startswith("@@")),
+        len(lines),
+    )
+    metadata = lines[1:first_hunk]
+    old_headers = [line for line in metadata if line.startswith("--- ")]
+    new_headers = [line for line in metadata if line.startswith("+++ ")]
+    old_label = old_path if old_path == "/dev/null" else f"a/{old_path if old_path is not None else path}"
+    new_label = path if path == "/dev/null" else f"b/{path}"
+    if (len(old_headers) != 1 or len(new_headers) != 1
+            or not _patch_header_matches(old_headers[0], "--- ", old_label)
+            or not _patch_header_matches(new_headers[0], "+++ ", new_label)):
+        raise _diff_partition_error("a text record does not have one exact old and new patch header")
+
+
 def _verify_diff_semantics(section: str, *, path: str, old_path: str | None, kind: str) -> None:
-    lines = set(section.splitlines())
+    lines = section.splitlines()
     has_hunks = any(line.startswith("@@") for line in lines)
     if kind == "renamed":
         if f"rename from {old_path}" not in lines or f"rename to {path}" not in lines:
             raise _diff_partition_error("a rename record does not match its explicit old and new paths")
-        if has_hunks and not ({f"--- a/{old_path}", f"+++ b/{path}"} <= lines):
-            raise _diff_partition_error("a renamed text record does not match its old and new patch paths")
+        if has_hunks:
+            _verify_text_patch_headers(section, path=path, old_path=old_path)
     elif any(line.startswith(("rename from ", "rename to ")) for line in lines):
         raise _diff_partition_error("rename metadata is labeled with a different change kind")
     if any(line.startswith(("copy from ", "copy to ")) for line in lines):
         raise _diff_partition_error("copied diff records are unsupported by the closed change-kind inventory")
-    if kind == "modified" and not ({f"--- a/{path}", f"+++ b/{path}"} <= lines):
-        raise _diff_partition_error("a modified record does not match its patch paths")
-    if kind == "added" and not ({"--- /dev/null", f"+++ b/{path}"} <= lines):
-        raise _diff_partition_error("an added record does not have explicit /dev/null semantics")
-    if kind == "deleted" and not ({f"--- a/{path}", "+++ /dev/null"} <= lines):
-        raise _diff_partition_error("a deleted record does not have explicit /dev/null semantics")
+    if kind == "modified":
+        _verify_text_patch_headers(section, path=path, old_path=None)
+    if kind == "added":
+        _verify_text_patch_headers(section, path=path, old_path="/dev/null")
+    if kind == "deleted":
+        _verify_text_patch_headers(section, path="/dev/null", old_path=path)
     binary = any(line == "GIT binary patch" or line.startswith("Binary files ") for line in lines)
     if kind == "binary" and not binary:
         raise _diff_partition_error("a binary record has no explicit binary diff marker")
