@@ -1,0 +1,41 @@
+---
+title: Hosts 总览
+area: hosts
+status: partial
+owners: [hosts, core]
+source_paths:
+  - apps
+  - packages/application-facade
+  - products/lmdj/assembly.json
+  - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
+  - docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md
+  - docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md
+  - docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md
+  - docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## Host 规则
+
+Native/CLI/MCP Host 只通过 Application Facade 调用 Core；浏览器 Host 只通过共享 Web Runtime Platform 间接使用 Facade。任何 Host 都不解析 Project Bundle，也不把协议/UI 逻辑下沉到 Core。
+
+## 当前清单
+
+Cardputer Host `1.0.0` is the embedded test candidate in Product Build
+`1.0.56.0`. It is distinct from the desktop Native Host and remains subject
+to the physical A1 acceptance gates.
+
+五个 Host 的当前身份与依赖由 Build Identity 从 Assembly 派生。五个 Host 只经 Application Facade（Web Host 经 Platform）使用 Project v5、共享 Sample quota、Sequence recording 与本 Build 新增的 Sound Set 目录浏览、检查、映射预览与安装；Web Hosts 把长选区拆成有界 chunk 并在浏览器侧取回 Catalog 字节交给 Core 暂存，Native/Web 输入共享 Audio Runtime frame clock，Host 不解析 Project bundles 或复制 quantizer。
+Product Build `1.0.25.0` 的 G2 evidence-durability 级联锁定 CLI `1.0.14`、MCP `1.1.11`、Native Test Host `1.0.12`、Formal Web Runtime Host `1.2.11` 与 Creator Web Host `1.3.2`。
+CLI `1.0.13`、MCP `1.1.10`、Native Test Host `1.0.11`、Formal Web Runtime Host `1.2.10` 与 Creator Web Host `1.3.1` 已锁入 Product Build `1.0.24.0` Assembly。CLI/MCP/Native 通过 Facade 获得 Sample parity；两个 Web Host 只依赖共享 Web Runtime Platform `0.3.1`；Web Runtime Lab 仍是独立实验工具，不是正式 Host。
+
+## 生命周期
+
+每个 Host 负责进程/设备输入输出、调用取消和结果呈现；Core typed error 不应被抹成无结构文本。
+
+## 下一门禁
+
+Creator clean-source packaged Proof 与五条物理设备验收分别记录。macOS Safari Pointer L1 已在 Product Build `1.0.36.0` local source、tested revision `703b339f` 上[通过](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md)；macOS Chrome Pointer L2 已在 Product Build `1.0.40.0` local source、tested revision `5c094c98` 上[通过](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md)；macOS Chrome Physical MIDI L3 已在 Product Build `1.0.40.0` local source、tested revision `1869a925` 上[通过](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md)；iPadOS Safari Touch L4 已在 Product Build `1.0.40.0` local source、tested revision `e2cd0cf9`、iPad Air 13-inch (M3) model `A3268` 上[通过](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md)；同一设备上的 iPadOS Safari lifecycle/route recovery L5 已在 tested revision `67a7ac03` 上[通过](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-01-web-runtime-l5-ipados-safari-lifecycle-1.0.40.0.md)。五行 retained physical matrix 已通过；`beta`、`stable`、发布与 Channel promotion 仍需各自独立授权和证据。
