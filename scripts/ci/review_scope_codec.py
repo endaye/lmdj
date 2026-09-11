@@ -39,7 +39,7 @@ def decode(body):
     try:
         raw = inflater.decompress(compressed, MAX_RAW_BYTES + 1)
     except zlib.error as error:
-        raise review_scope.ReviewScopeError(f"why: {label} marker compression is invalid; remedy: regenerate the complete receipt") from error
+        raise review_scope.ReviewScopeError("why: scope marker compression is invalid; remedy: regenerate the complete receipt") from error
     review_scope.require(len(raw) <= MAX_RAW_BYTES and not inflater.unconsumed_tail
                          and not inflater.unused_data and inflater.eof, "scope metadata is oversized, truncated or has trailing streams")
     return json.loads(raw, object_pairs_hook=change_scope.reject_duplicates)
