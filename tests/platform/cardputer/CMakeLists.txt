@@ -1,4 +1,20 @@
 find_package(Threads REQUIRED)
+add_executable(lmdj_cardputer_usb_display_tests usb_display_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/usb_transfer_endpoint.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer_transaction.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer_session.cpp"
+  $<TARGET_OBJECTS:lmdj_cardputer_scanner_native_host>)
+target_compile_definitions(lmdj_cardputer_usb_display_tests PRIVATE ESP_PLATFORM)
+target_include_directories(lmdj_cardputer_usb_display_tests PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/fake_esp" "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/third_party/picosha2")
+target_link_libraries(lmdj_cardputer_usb_display_tests PRIVATE lmdj::runtime_facade Threads::Threads)
+lmdj_target_warnings(lmdj_cardputer_usb_display_tests)
+lmdj_target_sanitizers(lmdj_cardputer_usb_display_tests)
+foreach(scenario progress timeout cancel retry reset_progress)
+  lmdj_add_test(NAME platform.cardputer.usb_display.${scenario} TIER component
+    COMMAND lmdj_cardputer_usb_display_tests ${scenario})
+endforeach()
 add_executable(lmdj_cardputer_feedback_interleaving_tests
   pad_feedback_interleaving_test.cpp
   "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/runtime_host.cpp")
