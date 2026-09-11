@@ -470,6 +470,7 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=LITELLM_LOCAL_MODEL_COST_MAP=true
 Environment=PYTHONPATH={current / 'vendor'}:{current}
 Environment=TIKTOKEN_CACHE_DIR={current / 'tokenizer-cache'}
+EnvironmentFile=-/etc/lmdj/pr-agent/provider.env
 ExecStartPre=/usr/bin/test -r {attempt / 'input.json'}
 ExecStartPre=/usr/bin/test -d {attempt / 'engine'}
 ExecStartPre=/usr/bin/test -d {output}

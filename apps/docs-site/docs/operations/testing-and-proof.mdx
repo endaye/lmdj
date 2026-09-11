@@ -10,13 +10,26 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 <BuildIdentity />
 
-## PR-Agent 凭据预检
+## PR-Agent 凭据与服务环境边界
 
-`PR-Agent Credential Preflight` 仅允许 owner 在 main 手动触发，使用现有 Netcup
-`ci-general` runner 和专用 DeepSeek Secret 调用固定只读余额端点。只输出脱敏的
-鉴权/可用性结果，不输出密钥、余额数值或原始响应，不执行模型推理、不注入运行时密钥、
-不激活服务或切换生产 review。成功回执不等于美元预算准入、Flash 模型健康或 T4/T5/T6
-验收；具体证据边界见源文档中的 Dedicated credential preflight。
+此前 `PR-Agent Credential Preflight` 的鉴权/余额观察仅是历史证据；本轮已撤回
+主动余额/资金准入，不应把该 workflow 作为当前 T4 前置步骤重新运行。Provider 健康、
+质量、USD 预算、四 provider fallback 与 T5/T6 仍是后续门禁，余额/配额告警 #1188 仍延期。
+服务使用现有 provider 环境入口，生成 unit 只声明以下固定的可选 service-scoped 路径：
+
+```ini
+EnvironmentFile=-/etc/lmdj/pr-agent/provider.env
+```
+
+该文件由 operator 在仓库外置备于受保护的 root-owned 父目录下，必须是
+`root:root`、`0600` 的 regular non-symlink file。每行必须是 plain `NAME=value`，不能使用
+`export` 前缀；只包含选定 reviewed config 所需的
+`PR_AGENT_*_API_KEY` assignment。Installer 不读取、创建、复制、hash、记录或修复该文件，
+也不启动/重启 service；Environment 仍可能被 service 与子进程访问，这不是 secret isolation
+承诺。可选文件保持 inactive no-key stage；active 缺少 selected key 时仍由既有 adapter
+拒绝，环境变量不会启用 disabled provider，也不建立 pricing、funding 或 admission。
+Synthetic systemd 注入、文件元数据和真实 key/provider 请求是后续独立验收，本地 source
+Task 不包含这些操作。
 
 ## 测试层级
 unit/component 验证局部边界，integration/e2e 验证组合，stress 验证锁自由/并发，Proof 验证 Headless Core 交付链。
@@ -488,6 +501,13 @@ T2 引擎使用的 monetary ledger。工具不会调用
 `systemctl`，不会启动 runner，不会读取 API key，不会执行 PR checkout、
 PR config 或 hooks，也不持有 GitHub write token。
 
+生成的 service unit 只增加固定的可选入口
+`EnvironmentFile=-/etc/lmdj/pr-agent/provider.env`，不把任何 provider value
+写入 unit、release、state、receipt 或 archive。该文件由 operator 在仓库外置备为
+受保护的 `root:root`、`0600` regular non-symlink file；installer 永不读取、创建、复制、
+hash、记录或修复它。缺少该文件仍兼容 inactive no-key stage，active 缺少 selected key
+仍由既有 adapter fail closed；这不是 systemd、真实 key 或 provider acceptance。
+
 每个 revision 还保存受保护的 `REVISION_RECORD.json`，receipt history 会用它
 完整鉴权每个历史 endpoint，而不是只检查路径存在；首个唯一 arrival 必须是
 `from_release=null` 的 install，后续 `from_release` 必须连续等于上一条唯一
@@ -532,9 +552,11 @@ append receipt、清理 transition 或替换文件；install receipt 的 from/to
 pending transition 完全一致。错误长度、摘要、endpoint、owner、mode 或 receipt
 顺序的证据都会保留完整 state/receipt/target/ledger。
 
-该 contract 的本地 runner suite 为 93 tests：普通、外层 `-S`、installer-child
-`-S` 与 `umask 0002` 均为 92 passed、1 个明确的 v14 archive opt-in skip；启用
-固定 v14 archive 后为 93/93、零 skip。六段 A/B arrival journey 每段都检查
+该 contract 的本地 runner suite 为 95 tests：普通、外层 `-S`、installer-child
+`-S` 与 `umask 0002` 均为 94 passed、1 个明确的 v14 archive opt-in skip；启用
+固定 v14 archive 后为 95/95、零 skip。新增 contract 检查固定 EnvironmentFile
+路径、provider value non-copy、inactive no-key stage，以及新 unit 安装后回滚到
+缺少该 directive 的历史 unit bytes。六段 A/B arrival journey 每段都检查
 完整 far-side bytes、canonical record bytes、owner/mode、receipt commitments、
 current/previous 与 latest witness；前两段在下一次 transition 前立即检查，且
 初始 monetary ledger 缺失保持缺失；service/slice bytes 分别绑定 A/B 的
@@ -606,8 +628,14 @@ self-hosted Netcup，不能推导 hosted fallback 或生产评审质量。
 
 后续 strict BatchMode receipt
 `/tmp/lmdj-pr-agent-plan/t4-readonly-host-access.md`（22:41+08）已证明
-`en@netcup01` 的 SSH read-only access，取代之前「未尝试 SSH」的 readiness 说法；
-`sudo -n true` 失败，因此 admin access、host capacity 和 admission 仍未证明。
+`en@netcup01` 的 SSH read-only access，取代之前「未尝试 SSH」的 readiness 说法。
+更早的 `sudo -n true` 失败与之后修正 sudoers 后 `visudo -c`、`sudo -n whoami`
+成功，均是有序历史观察，不是 T4 acceptance；admin access、host capacity 和
+admission 仍未由本页自动化证明。Lead 后续元数据-only receipt
+`/tmp/lmdj-pr-agent-plan/t4-provider-file-metadata-2026-09-11.md` 观察到固定
+provider file 是 `root:root`、`0600`、regular non-symlink，位于受保护的 root-owned
+`0755` parents 下；该 receipt 不证明文件内容、可用 key、认证、provider response
+或 service activation。
 
 常规受信控制与裁决任务使用现有 Netcup、Contabo 主机上的字面
 self-hosted `ci-general` 角色。角色资格本身不授予写入、发布或部署权限；
