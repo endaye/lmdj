@@ -45,3 +45,27 @@ verified content to the Runtime Host. This candidate has no public Release,
 deployment, Channel promotion, or physical A1 acceptance; a real computer
 producer must exercise the complete transfer sequence, while combined-load
 measurements and the complete A1 journey remain required.
+
+## Audio service diagnostics
+
+Current development source records separate microsecond distributions for DMA
+wait, delivered-EOF wakeup, Core render, PCM conversion, driver submission and
+combined service elapsed time. Counters include failed/partially executed
+attempts. The control owner can read a snapshot only after the audio task has
+finished; there is no live mutable snapshot or audio-thread logging. Read-only
+USB extraction is not yet wired.
+
+Each distribution reports its count, maximum and exact nearest-rank p99.9 while
+the count is below 512000 and all observations are representable. After that
+limit, or a bad clock observation, the percentile is explicitly unavailable;
+count and maximum are not silently reset. The six fixed retained tails add
+12288 payload bytes plus metadata to the Host's resource cost. They do not use
+the platform reserve as an unreported budget.
+
+Service elapsed excludes DMA wait, includes preemption and timer-call costs,
+and is not an isolated task-CPU measurement. Accumulator overhead is reported
+separately as a count and maximum; its surrounding clock calls and final
+counter update are outside that observation. Startup prewarm and final drain
+are not steady-service samples. Delivered callbacks cannot establish physical
+DMA timing during masked/delayed interrupts, so these diagnostics alone cannot
+prove zero underruns, the 30-minute combined-load target or physical latency.

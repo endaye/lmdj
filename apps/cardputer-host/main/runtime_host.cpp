@@ -198,6 +198,7 @@ HostResult RuntimeHost::handle_key(KeyEvent event) noexcept {
 
 #ifdef ESP_PLATFORM
 #include <atomic>
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -211,6 +212,7 @@ struct EspAudioSession::Impl {
   EspAudioIo io;
   AudioDriver driver;
   PcmOutputStage output;
+  AudioDiagnostics diagnostics;
   std::array<float, AudioDriver::frames_per_block> left{}, right{};
   std::array<std::int16_t, AudioDriver::frames_per_block * 2> pcm{};
   Render render{};
@@ -229,13 +231,23 @@ struct EspAudioSession::Impl {
     else {
       s.phase.store(Phase::running, std::memory_order_release);
       while (!s.stop_requested.load(std::memory_order_acquire)) {
-        if (!s.io.wait_writable()) { s.failed.store(true); break; }
-        if (s.stop_requested.load(std::memory_order_acquire)) break;
-        s.render(s.context, s.left.data(), s.right.data(), AudioDriver::frames_per_block);
-        const auto settings = s.settings.load(std::memory_order_acquire);
-        if (!s.output.convert(s.left, s.right, s.pcm,
-                static_cast<std::uint8_t>(settings & 0xff), (settings & 0x100) != 0) ||
-            !s.driver.write(s.pcm)) {
+        const auto clock = [] { return static_cast<std::uint64_t>(esp_timer_get_time()); };
+        const auto trace = service_audio_block(clock,
+            [&] { return s.io.wait_writable(); },
+            [&] { return s.stop_requested.load(std::memory_order_acquire); },
+            [&] { return s.io.reserved_eof_us(); },
+            [&] { s.render(s.context, s.left.data(), s.right.data(), AudioDriver::frames_per_block); },
+            [&] {
+              const auto settings = s.settings.load(std::memory_order_acquire);
+              return s.output.convert(s.left, s.right, s.pcm,
+                  static_cast<std::uint8_t>(settings & 0xff), (settings & 0x100) != 0);
+            }, [&] { return s.driver.write(s.pcm); });
+        const auto recording_begin = clock();
+        s.diagnostics.record(trace);
+        const auto recording_end = clock();
+        s.diagnostics.record_overhead(recording_begin, recording_end);
+        if (trace.result == AudioBlockResult::stopped) break;
+        if (trace.result != AudioBlockResult::submitted) {
           s.failed.store(true, std::memory_order_release);
           break;
         }
@@ -287,6 +299,7 @@ bool EspAudioSession::start(Render render, void* context, std::uint8_t volume,
       s.config.prewarm_blocks < s.config.io.dma_blocks ||
       pdMS_TO_TICKS(s.config.handshake_timeout_ms) == 0) return false;
   s.render = render; s.context = context;
+  s.diagnostics.reset();
   s.stop_requested.store(false); s.retry_cleanup.store(false); s.failed.store(false);
   s.silent = false;
   set_output(volume, muted);
@@ -322,6 +335,13 @@ void EspAudioSession::set_output(std::uint8_t volume, bool muted) noexcept {
 
 bool EspAudioSession::healthy() const noexcept {
   return !impl_->failed.load(std::memory_order_acquire);
+}
+
+bool EspAudioSession::read_diagnostics(AudioDiagnosticsSnapshot& result) const noexcept {
+  result = {};
+  if (impl_->phase.load(std::memory_order_acquire) != Impl::Phase::finished) return false;
+  result = impl_->diagnostics.snapshot();
+  return true;
 }
 }  // namespace lmdj::cardputer
 #endif

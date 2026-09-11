@@ -1,5 +1,6 @@
 #include "apps/cardputer-host/main/audio_driver.hpp"
 #include "driver/i2s_std.h"
+#include "esp_timer.h"
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -39,8 +40,11 @@ int main(int argc, char** argv) {
   lmdj::cardputer::EspAudioIo io({8, 9, 41, 43, 42, 0x18, 0xBF, 2, 1});
   require(io.configure() && io.enable(), "configure/enable failed");
   fake_i2s::write = write;
+  fake_timer::now_us = 1000;
   eof();
+  fake_timer::now_us = 2000;
   require(io.wait_writable(), "initial reservation failed");
+  require(io.reserved_eof_us() == 1000, "reservation lost the delivered EOF timestamp");
   if (scenario == "before") eof();
   interrupt_write = scenario == "during";
   std::array<std::int16_t, 512> pcm{};

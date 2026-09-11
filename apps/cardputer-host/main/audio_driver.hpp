@@ -114,6 +114,9 @@ class EspAudioIo final : public AudioIo {
   // Reserve the next completed DMA buffer before rendering, separating DMA
   // pacing wait from render/convert/submit CPU work. write consumes it.
   bool wait_writable() noexcept;
+  // Timestamp of the delivered EOF that granted the current reservation.
+  // Audio owner only; same esp_timer microsecond clock as the service probe.
+  std::uint64_t reserved_eof_us() const noexcept;
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

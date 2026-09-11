@@ -1,4 +1,12 @@
 find_package(Threads REQUIRED)
+add_executable(lmdj_cardputer_audio_diagnostics_tests audio_diagnostics_test.cpp)
+target_include_directories(lmdj_cardputer_audio_diagnostics_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+lmdj_target_warnings(lmdj_cardputer_audio_diagnostics_tests)
+lmdj_target_sanitizers(lmdj_cardputer_audio_diagnostics_tests)
+foreach(scenario percentile capacity invalid boundaries failures)
+  lmdj_add_test(NAME platform.cardputer.audio_diagnostics.${scenario} TIER component
+    COMMAND lmdj_cardputer_audio_diagnostics_tests ${scenario})
+endforeach()
 add_executable(lmdj_cardputer_dma_deadline_tests dma_deadline_test.cpp
   "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/audio_driver.cpp")
 target_compile_definitions(lmdj_cardputer_dma_deadline_tests PRIVATE ESP_PLATFORM)

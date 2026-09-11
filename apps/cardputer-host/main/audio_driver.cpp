@@ -119,6 +119,7 @@ bool AudioDriver::stop() noexcept {
 #include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
 #include "esp_attr.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -126,7 +127,7 @@ bool AudioDriver::stop() noexcept {
 namespace lmdj::cardputer {
 struct EspAudioIo::Impl {
   explicit Impl(EspAudioConfig supplied) : config(supplied) {}
-  struct Eof { void* buffer; std::uint32_t sequence; std::uint32_t committed; int core; };
+  struct Eof { void* buffer; std::uint32_t sequence; std::uint32_t committed; int core; std::uint64_t time_us; };
   EspAudioConfig config;
   i2c_master_bus_handle_t bus{};
   i2c_master_dev_handle_t codec{};
@@ -167,7 +168,8 @@ struct EspAudioIo::Impl {
     const auto serial = self.sequence.fetch_add(1, std::memory_order_relaxed) + 1;
     if (serial == 0) { self.fault.store(true, std::memory_order_relaxed); return false; }
     const Eof event{data->dma_buf, serial,
-        self.committed[(serial - 1) % self.config.dma_blocks].load(std::memory_order_acquire), xPortGetCoreID()};
+        self.committed[(serial - 1) % self.config.dma_blocks].load(std::memory_order_acquire),
+        xPortGetCoreID(), static_cast<std::uint64_t>(esp_timer_get_time())};
     BaseType_t wake = pdFALSE;
     if (data->size != AudioDriver::frames_per_block * 4 ||
         xQueueSendFromISR(self.queue, &event, &wake) != pdTRUE)
@@ -282,6 +284,10 @@ bool EspAudioIo::wait_writable() noexcept {
   s.reserved = event;
   s.writable = true;
   return true;
+}
+
+std::uint64_t EspAudioIo::reserved_eof_us() const noexcept {
+  return impl_->reserved.time_us;
 }
 
 bool EspAudioIo::write(std::span<const std::int16_t> pcm, std::size_t& accepted) noexcept {
