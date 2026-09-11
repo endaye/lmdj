@@ -58,3 +58,18 @@ foreach(scenario happy reject_identity disconnect)
   lmdj_add_test(NAME platform.cardputer.transfer_transaction.${scenario} TIER component
     COMMAND lmdj_cardputer_transfer_transaction_tests ${scenario})
 endforeach()
+
+add_executable(lmdj_cardputer_transfer_session_tests
+  transfer_session_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer_transaction.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer_session.cpp")
+target_link_libraries(lmdj_cardputer_transfer_session_tests PRIVATE Threads::Threads)
+target_include_directories(lmdj_cardputer_transfer_session_tests PRIVATE
+  "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/third_party/picosha2")
+lmdj_target_warnings(lmdj_cardputer_transfer_session_tests)
+lmdj_target_sanitizers(lmdj_cardputer_transfer_session_tests)
+lmdj_add_test(NAME platform.cardputer.transfer_session.lifecycle TIER component
+  COMMAND lmdj_cardputer_transfer_session_tests lifecycle)
+lmdj_add_test(NAME platform.cardputer.transfer_session.stale TIER component
+  COMMAND lmdj_cardputer_transfer_session_tests stale)
