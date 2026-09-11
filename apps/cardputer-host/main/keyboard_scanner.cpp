@@ -68,7 +68,8 @@ void Tca8418Scanner::poll(InputController& input) noexcept {
   while (count-- != 0) {
     std::uint8_t event{};
     if (!s.read(0x04, event) || event == 0) break;
-    const bool pressed = (event & 0x80) == 0;
+    // TCA8418 KEA[7]: 1 means key press, 0 means key release.
+    const bool pressed = (event & 0x80) != 0;
     const auto encoded = static_cast<std::uint8_t>(event & 0x7f);
     // 0x01..0x50 are matrix events; GPIO events and empty reads are not keys.
     if (encoded == 0 || encoded > 0x50) continue;
