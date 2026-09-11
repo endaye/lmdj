@@ -963,20 +963,26 @@ void RealtimeEngine::apply_pattern_transport(std::uint64_t frame) noexcept {
     } else {
       // The sole audio owner resolves both Q and L before this callback's
       // claim/apply. Control cannot cancel, publish or reclaim while reserved.
+      std::uint32_t canceled_token;
       if (audio_pending_pattern_ &&
           audio_pending_pattern_->generation == command.switch_generation) {
-        audio_pending_pattern_generation_.store(0, std::memory_order_release);
+        canceled_token = audio_pending_pattern_generation_.exchange(
+            0, std::memory_order_acq_rel);
         audio_pending_pattern_.reset();
         observed_audio_pending_ = {};
       } else {
-        queued_pattern_generation_.store(0, std::memory_order_seq_cst);
+        canceled_token = queued_pattern_generation_.exchange(
+            0, std::memory_order_seq_cst);
       }
       pattern_slots_[command.switch_slot].state.store(
           PatternState::reclaimable, std::memory_order_release);
       receipt.decision = PatternCutoffDecision::canceled_at_cutoff;
       observed_claimed_through_ = std::max(
           observed_claimed_through_, command.switch_generation);
-      ++transport_canceled_publications_;
+      // Control may already have canceled L's token and counted that terminal
+      // outcome. Audio must still release L and retain the cutoff receipt, but
+      // only the owner removing a live token counts the cancellation.
+      if (canceled_token != 0) ++transport_canceled_publications_;
     }
   }
   if (command.action == PatternTransportAction::start) {

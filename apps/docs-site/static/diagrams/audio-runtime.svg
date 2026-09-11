@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="62b08092f211cd6a9723a7fe9a9002320399d76e81110932ff197db9fd8b8ec8">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="6afe4c12d946a2994294b2265550d40cdfbfa8b7ee3973353a711896b0438624">
   <title id="title">Audio Runtime Module</title><desc id="description">不可变 Pattern、保相位替换与持续 Voice、显式 transport cutoff 回执和有界实时输出</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -21,7 +21,7 @@
 <g class="connection"><path class="edge-mask" d="M 320 538 H 480 V 218 H 640"/><path class="edge" d="M 320 538 H 480 V 218 H 640" marker-end="url(#arrow)"/><text x="480" y="369">one POD command; before claim</text></g>
 <g class="connection"><path class="edge-mask" d="M 870 218 H 904 V 482 H 606 V 428 H 640"/><path class="edge" d="M 870 218 H 904 V 482 H 606 V 428 H 640" marker-end="url(#arrow)"/><text x="755" y="314">audio-owned S &lt; F decision</text></g>
 <g class="connection"><path class="edge-mask" d="M 890 428 H 924 V 592 H 6 V 538 H 40"/><path class="edge" d="M 890 428 H 924 V 592 H 6 V 538 H 40" marker-end="url(#arrow)"/><text x="465" y="474">immutable until acknowledgment</text></g>
-<g class="connection"><path class="edge-mask" d="M 870 218 H 904 V 272 H 296 V 218 H 330"/><path class="edge" d="M 870 218 H 904 V 272 H 296 V 218 H 330" marker-end="url(#arrow)"/><text x="600" y="209">retain until last Voice ends</text></g>
+<g class="connection"><path class="edge-mask" d="M 870 218 H 904 V 272 H 296 V 218 H 330"/><path class="edge" d="M 870 218 H 904 V 272 H 296 V 218 H 330" marker-end="url(#arrow)"/></g>
 
     <g class="component kind-host">
       <rect class="node-mask" x="36" y="166" width="218" height="104" rx="18"/>
@@ -83,7 +83,7 @@
       <text class="node-title" x="656" y="412">Retained Receipt</text>
       <text class="node-detail" x="656" y="438">F / origin / identity / cutoff</text>
     </g>
-  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Pattern Transport / Phase</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Start anchors F; Stop ramps Pattern voices; Fence keeps origin. Phase retains cursor/release + PCM; 4 slots, control reclaim.</div></foreignObject></g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Pattern Transport / Phase</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Start anchors F; Stop ramps Pattern voices; Fence keeps origin. Phase retains PCM/cursor/release; control reclaims after last Voice.</div></foreignObject></g>
 <g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Telemetry</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Audio/control value snapshots; only non-realtime readers lock. Transport has a separate control reader. Drain callbacks before lifecycle handoff. Runtime-only Facade owns OPEN/BUSY drain; its audio-only consumed counter is not proof of a started Voice.</div></foreignObject></g>
 <g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Master FX</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Fixed order filter, delay, reverb, stutter, gate, reverse, crush, cutter; values are 0..1000 and every period derives from the Bar, not wall clock.</div></foreignObject></g>
 <g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Forbidden boundary</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">No allocation, destruction, lock, Project mutation, quantization, journal I/O or production test hook on the realtime thread. Reclaimed decoded PCM bytes refund Project Banks only; the reserved audition pool contributes no Project reservation refund.</div></foreignObject></g>

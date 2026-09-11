@@ -903,6 +903,73 @@ void pattern_transport_cancels_queued_tie_without_allocating() {
   LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
 }
 
+void pattern_transport_control_canceled_claim_counts_once_for_stop_and_fence() {
+  using namespace lmdj::audio;
+  bool conserved = true;
+  for (const auto action : {PatternTransportAction::stop, PatternTransportAction::fence}) {
+    PatternTransportFixture f;
+    f.apply(1, PatternTransportAction::start);
+    auto view = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternB, {0, 1}, 127, 90, 16'000));
+    const auto pending = f.engine.publish_pattern_view(std::move(view.value()), 200);
+    LMDJ_CHECK(pending.result == PatternPublishResult::accepted);
+    render_frames(f.engine, 1); // B is audio-local, not yet applied.
+    const PatternReplacementAuthority authority{
+        pending.generation, PatternId{kPatternB}, 200};
+    LMDJ_CHECK(f.engine.cancel_pattern_publication(authority));
+    LMDJ_CHECK(f.engine.pattern_telemetry().canceled_publications == 1);
+    LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 0);
+    LMDJ_CHECK(f.engine.submit_pattern_transport({7, 2, f.generation, action, authority}) ==
+        PatternTransportSubmit::accepted);
+    render_frames(f.engine, 1);
+    const auto receipt = f.engine.inspect_pattern_transport_receipt(7, 2);
+    LMDJ_CHECK(receipt.has_value());
+    LMDJ_CHECK(receipt->runtime_generation == 7 && receipt->epoch == 2);
+    LMDJ_CHECK(receipt->effective_frame == 2 && receipt->origin_frame == 0);
+    LMDJ_CHECK(receipt->pattern_generation == f.generation);
+    LMDJ_CHECK(receipt->pattern_id == PatternId{kPatternA} && receipt->bpm == 120);
+    LMDJ_CHECK(receipt->playing == (action == PatternTransportAction::fence));
+    LMDJ_CHECK(receipt->switch_decision == PatternCutoffDecision::canceled_at_cutoff);
+    LMDJ_CHECK(!receipt->switch_applied_frame);
+    LMDJ_CHECK(receipt->switch_authority.has_value());
+    LMDJ_CHECK(receipt->switch_authority->generation == pending.generation);
+    LMDJ_CHECK(receipt->switch_authority->pattern_id == PatternId{kPatternB});
+    LMDJ_CHECK(receipt->switch_authority->activation_frame == 200);
+    LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 0); // Retained receipt.
+    render_frames(f.engine, 300); // Cross B's obsolete activation; never play it.
+    const auto retained = f.engine.inspect_pattern_transport_receipt(7, 2);
+    LMDJ_CHECK(retained->effective_frame == receipt->effective_frame);
+    LMDJ_CHECK(retained->pattern_generation == receipt->pattern_generation);
+    LMDJ_CHECK(retained->switch_decision == receipt->switch_decision);
+    LMDJ_CHECK(retained->switch_authority->generation == pending.generation);
+    LMDJ_CHECK(!retained->switch_applied_frame);
+    LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kPatternA});
+    LMDJ_CHECK(f.engine.pattern_telemetry().current_generation == f.generation);
+    LMDJ_CHECK(f.engine.telemetry().started_voices == 1);
+    LMDJ_CHECK(f.engine.telemetry().active_voices ==
+        (action == PatternTransportAction::fence ? 1 : 0));
+    LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(7, 2));
+    LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
+    LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 0);
+    const auto stats = f.engine.pattern_telemetry();
+    const bool exact = stats.accepted_publications == 2 && stats.applied_publications == 1 &&
+        stats.canceled_publications == 1 && stats.superseded_publications == 0 &&
+        stats.pending_publications == 0 && stats.reclaimed_patterns == 1 &&
+        stats.accepted_publications == stats.applied_publications +
+            stats.canceled_publications + stats.superseded_publications + stats.pending_publications;
+    if (!exact) std::fprintf(stderr,
+        "control-canceled claim: action=%s accepted=%llu applied=%llu canceled=%llu pending=%llu reclaimed=%llu\n",
+        action == PatternTransportAction::stop ? "stop" : "fence",
+        static_cast<unsigned long long>(stats.accepted_publications),
+        static_cast<unsigned long long>(stats.applied_publications),
+        static_cast<unsigned long long>(stats.canceled_publications),
+        static_cast<unsigned long long>(stats.pending_publications),
+        static_cast<unsigned long long>(stats.reclaimed_patterns));
+    conserved &= exact; // Exercise and diagnose BOTH actions before failing RED.
+  }
+  LMDJ_CHECK(conserved);
+}
+
 void pattern_transport_rejects_current_identity_as_its_own_switch() {
   using namespace lmdj::audio;
   PatternTransportFixture f;
@@ -931,8 +998,10 @@ void pattern_transport_rejects_unacknowledged_zero_predecessor() {
     // without dereferencing the reclaimed current Pattern's empty optional.
     if (receipt) LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(7, 1));
     const auto reclaimed = f.engine.reclaim_retired_patterns();
-    std::fprintf(stderr, "zero predecessor: zero_callback=%d submit=%u receipt=%d reclaimed=%zu\n",
-        zero_callback, static_cast<unsigned>(result), receipt.has_value(), reclaimed);
+    if (result != PatternTransportSubmit::identity_mismatch || receipt || reclaimed != 0) {
+      std::fprintf(stderr, "zero predecessor: zero_callback=%d submit=%u receipt=%d reclaimed=%zu\n",
+          zero_callback, static_cast<unsigned>(result), receipt.has_value(), reclaimed);
+    }
     rejected &= result == PatternTransportSubmit::identity_mismatch && !receipt;
     current_preserved &= reclaimed == 0;
     if (result == PatternTransportSubmit::identity_mismatch && reclaimed == 0) {
@@ -4477,6 +4546,7 @@ void render_and_adapter_status_finish_while_observer_holds_reader_lock() {
 }  // namespace
 
 int main() {
+  pattern_transport_control_canceled_claim_counts_once_for_stop_and_fence();
   phase_overlay_retains_sustained_samples();
   phase_replacement_keeps_ramped_cursor_envelope_and_absolute_release();
   phase_replacement_rejects_musical_identity_and_stale_generation();
