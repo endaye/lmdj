@@ -17,7 +17,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 事务式保存/加载 Project Truth、导入/导出 portable Project Bundle，并维护 Sequence journal overlay、flush receipt 与 recovery artifact；不 Cook、渲染或拥有 Host UI。
 ## 2. 当前实现状态
-Project I/O 的 Store、Sequence Journal、streaming Bundle parser/packer、旧 Contract 读取与当前 Contract 写出、Sound Set Store、Catalog transport 与缓存、Workspace Cache 和 crash-safe publication 已实现。`persisted_projection` 写出 v5；v1/v2/v3/v4 读取保留原有迁移纪律，打开本身不回写。Bundle envelope 及 native/Python reader 同步接受 v5，并继续接受旧 envelope 版本。v4 上的旧 Lineage 在下一次持久化原样保留，capability_adoption 必须属于 v5。完整 Slice lineage 随 Asset 进入 checkpoint 和事务 payload；同一内部 command ID 的 replay 比较原始完整 payload，任一证据变化拒绝 collision，重开后保留分析源 revision 和独立物化 Artifact 身份。Workspace Job 状态、terminal 文件与候选生命周期不混入 Project。journal 现在是 session-kind aware：`SessionKind::sequence` 与 `SessionKind::performance` 分别标注 active journal 与 flush record，`ActivePerformanceJournal` 独立承载 performance fingerprint、flush 序列、pending events、rebase 记录、transient checkpoint 与最后一次 launch acknowledgement。Performance 侧另有独立于 Sequence 的 draft 生命周期：`begin_performance_draft` 在 journal 自身的锁内以 begin/complete 两段方式登记草稿，`save_performance_draft`/`discard_performance_draft` 结束草稿，`stop_performance_session`、`apply_performance_recovery`/`discard_performance_recovery` 与 `bind_performance_recording` 各自返回带 identity 的 receipt，owner loss 通过 `preview_performance_owner_loss` 先给出 transient closure 预览再 seal。flush 以 manifest replacement 为 commit point，并把 command/session/flush identity 与 committed revision 写入可幂等重放的 receipt；同一 `command_id` 的 replay/collision 始终比较不可变 original canonical payload，相同 append 返回原 record，冲突 payload 在写入前失败。completion 只更新独立 effective recovery residual，不能改写 command identity；sealed payload v2 同时要求两者，旧 recovery-only snapshot 按旧语义安全读取。当前 source 在每个已接受 Sequence Pad event acknowledgement 前 append 单调、checksummed canonical tail；flush record 消费同一 tail。若较早 flush 在 commit point 前失败，后续 flush 必须 canonical 覆盖全部 unresolved batch 与最新 tail。任一 receipt 可见时，Project I/O 按同 session/pattern/expected-revision 的 canonical key/value coverage 双向 resolve：较晚 completion supersede 被覆盖的较早 batch；较早 completion resolve 精确等价的已耐久 retry，并从非等价较晚 batch 及当时最新 durable pending tail 扣除精确 committed event、保留新增或同-key 新值 residual。即使没有较晚 flush，owner loss 也只 seal 真正未提交部分；tail 的单调 sequence metadata 与 canonical 顺序不被过滤重置。所有普通 authoring mutation 仍在持有 writer lease 后重读 active Sequence Journal；存在 active journal 时只有 `UpdateSequenceSettings` 属于既有白名单，其成功提交由 Store 同步 rebase journal。
+Project I/O 的 Store、Sequence Journal、streaming Bundle parser/packer、旧 Contract 读取与当前 Contract 写出、Sound Set Store、Catalog transport 与缓存、Workspace Cache 和 crash-safe publication 已实现。`persisted_projection` 写出 v5；v1/v2/v3/v4 读取保留原有迁移纪律，打开本身不回写。Bundle envelope 及 native/Python reader 同步接受 v5，并继续接受旧 envelope 版本。v4 上的旧 Lineage 在下一次持久化原样保留，capability_adoption 必须属于 v5。完整 Slice lineage 随 Asset 进入 checkpoint 和事务 payload；同一内部 command ID 的 replay 比较原始完整 payload，任一证据变化拒绝 collision，重开后保留分析源 revision 和独立物化 Artifact 身份。Workspace Job 状态、terminal 文件与候选生命周期不混入 Project。journal 现在是 session-kind aware：`SessionKind::sequence` 与 `SessionKind::performance` 分别标注 active journal 与 flush record，`ActivePerformanceJournal` 独立承载 performance fingerprint、flush 序列、pending events、rebase 记录、transient checkpoint 与最后一次 launch acknowledgement。Performance 侧另有独立于 Sequence 的 draft 生命周期：`begin_performance_draft` 在 journal 自身的锁内以 begin/complete 两段方式登记草稿，`save_performance_draft`/`discard_performance_draft` 结束草稿，`stop_performance_session`、`apply_performance_recovery`/`discard_performance_recovery` 与 `bind_performance_recording` 各自返回带 identity 的 receipt，owner loss 通过 `preview_performance_owner_loss` 先给出 transient closure 预览再 seal。flush 以 manifest replacement 为 commit point，并把 command/session/flush identity 与 committed revision 写入可幂等重放的 receipt；同一 `command_id` 的 replay/collision 始终比较不可变 original canonical payload，相同 append 返回原 record，冲突 payload 在写入前失败。completion 只更新独立 effective recovery residual，不能改写 command identity；sealed payload v2 同时要求两者，Sequence active/recovery 已直接采用新内部格式，旧或未知 Sequence 格式拒绝读取并保留原文件。当前 source 在每个已接受 Sequence Pad event acknowledgement 前 append 单调、checksummed canonical tail；flush record 消费同一 tail。若较早 flush 在 commit point 前失败，后续 flush 必须 canonical 覆盖全部 unresolved batch 与最新 tail。任一 receipt 可见时，Project I/O 按同 session/pattern/expected-revision 的 canonical key/value coverage 双向 resolve：较晚 completion supersede 被覆盖的较早 batch；较早 completion resolve 精确等价的已耐久 retry，并从非等价较晚 batch 及当时最新 durable pending tail 扣除精确 committed event、保留新增或同-key 新值 residual。即使没有较晚 flush，owner loss 也 seal 未提交事件与未完成 admission 状态；tail 的单调 sequence metadata 与 canonical 顺序不被过滤重置。所有普通 authoring mutation 仍在持有 writer lease 后重读 active Sequence Journal；存在 active journal 时只有 `UpdateSequenceSettings` 属于既有白名单，其成功提交由 Store 同步 rebase journal。
 ## 3. 所有权与依赖
 依赖 Foundation 与 Authoring Domain；平台适配不能改变领域语义。
 ## 4. 架构与数据流
@@ -31,9 +31,37 @@ Application Facade 使用；Host 不直接解析 bundle。
 ## 8. 测试与证据
 Project store、v1/v2/v3/v4→v5 migration、atomic Sample transaction、Sequence journal/receipt/recovery、durable tail reload/flush consumption、失败 F1 被成功累积 F2 supersede、F0 先完成时 32 条等价 retry inverse resolve、original A+B replay 与 residual-only collision、versioned serialize/reload/legacy recovery、post-commit same-bundle retry/restart reconcile、无 later flush 的 A+B/A+A'+B/equivalent-only pending-tail residual、非等价 flush residual 提取、torn/checksum/sequence/canonical corruption 的统一 fail-closed evidence、writer-lease 内 direct-authoring refusal/settings rebase、Bundle 1.0/1.1 round trip/publication、fault matrix、distinct-platform publication ownership、Native link-count 与 Web/native storage platform contract 测试；`performance_journal_test.cpp`、`performance_lifecycle_test.cpp`、`performance_rebase_test.cpp` 与 `session_mutual_exclusion_test.cpp` 覆盖 performance session kind、draft 生命周期、rebase 记录与会话互斥。
 ## 9. 限制与下一门禁
+全局 Pattern transport 的 Facade/runtime/Creator 接入仍待实现；以下 admission 存储能力不代表浏览器 OPFS 或端到端录制验收已经完成。
 云同步和协同冲突策略未批准，不能从本地存储能力推断。持久化正确性由自动化证明，不构成任何设备、听感或物理演奏验收。
 ## 10. 版本身份
 版本和依赖由 `module.json`/Assembly Lock 派生。
+
+## Durable Pattern recording admission
+
+Sequence Journal 在同一 writer lease 和 checksummed record 流中保存 preparation、
+带原始 press correlation 的候选、两个独立不可变 admission/cutoff fence、closure，
+以及带逐候选 SHA-256 receipt 的 transfer。它们属于恢复元数据，不进入 Project Truth；
+存储不判断声音是否播放，不重放 live enqueue，也不改变成功、失败、未知的输入结果。
+
+未解决候选上限为 1024 条及 1 MiB canonical candidate bytes；每次 transfer 独立预留
+1 MiB，两个 fence 加 closure/completion 预留 64 KiB control space。最后一个 count/byte
+slot 的候选与 capacity closure 属于同一 durable record transition。5000 ms deadline
+由 coordinator 的单调时钟执行，存储只校验政策并保留显式 closure，不持久化墙钟期限。
+这些限制约束未解决候选和单条记录，不代表整个 recording file 固定大小；不可变 transfer
+history 随现有 session 生命周期增长。
+
+transfer 在一次 append 中替换完整 canonical recoverable tail、保存 checkpoint 和 receipt、
+消费确切候选前缀。已消费候选仍可通过 receipt 检查 exact retry；相同 identity 的不同 payload
+拒绝。无输入贡献的 prefix 不推进 journal input sequence，也不修改 checkpoint。
+显式 terminal transfer 在两个 fence、closure 已耐久且无剩余候选时，原子保留 Facade
+提供的既有 unreleased-note finalization 和空 owned-press checkpoint；它不制造 release
+或新 input sequence。terminal 后只接受旧 transfer 的 exact retry；完成还要求 canonical
+flush 已知完成。
+
+active reread、sealed snapshot/list 和 owner-loss reconciliation 都保留 admission，
+即使 pending event list 为空。旧 runtime 的 fence 缺失时仍为 unresolved recovery，
+不猜测 Pattern/origin/switch 结果，也不自动启动 playback。只读失败保留不支持的旧格式、
+未知格式和 torn suffix 的原始字节；没有 migration reader 或自动删除路径。
 
 ## Verified Asset owner read
 

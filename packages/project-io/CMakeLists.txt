@@ -10,6 +10,7 @@ add_library(
     src/workspace_cache.cpp
     src/project_bundle_transfer.cpp
     src/sequence_journal.cpp
+    src/sequence_admission_codec.cpp
     src/soundset_store.cpp
     ${lmdj_project_io_platform_source}
 )
@@ -66,6 +67,7 @@ if(BUILD_TESTING)
       src/workspace_cache.cpp
       src/project_bundle_transfer.cpp
       src/sequence_journal.cpp
+      src/sequence_admission_codec.cpp
       src/soundset_store.cpp
       src/native/storage_platform.cpp
   )
@@ -307,6 +309,7 @@ if(BUILD_TESTING)
     lmdj_session_mutual_exclusion_tests
     PRIVATE
       lmdj_project_io_testable
+      lmdj_picosha2
       nlohmann_json::nlohmann_json
       Threads::Threads
   )

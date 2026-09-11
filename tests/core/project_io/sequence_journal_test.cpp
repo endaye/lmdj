@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -190,6 +191,35 @@ void test_shared_fingerprint_vectors_are_exact_bytes() {
   LMDJ_CHECK(
       lmdj::project_io::sequence_pattern_fingerprint(populated) ==
       document.at("vectors").at(1).at("sha256").get<std::string>());
+}
+
+void admission_candidate_reopens() {
+  using namespace lmdj::project_io;
+  TempDirectory directory("admission-reopen");
+  ProjectStore store;
+  const auto bundle = create_bundle(directory, store);
+  const SequenceAdmissionPreparation preparation{
+      {CommandId{std::string{kCommandId}}, 1, 1},
+      ProjectId{std::string{kProjectId}}, PatternId{std::string{kPatternId}},
+      1, 10};
+  const SequenceAdmissionCandidate candidate{
+      10, 1000, {0, 0}, SequenceCandidateKind::press, 100, 7};
+  {
+    SequenceJournal journal;
+    begin(journal, bundle);
+    const SequenceSessionId session{std::string{kSessionId}};
+    LMDJ_CHECK(journal.prepare_admission(bundle, session, preparation).has_value());
+    LMDJ_CHECK(journal.append_admission_candidate(
+        bundle, session, preparation.identity, candidate).has_value());
+  }
+  const auto reopened = SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value().admission.has_value());
+  LMDJ_CHECK(reopened.value().admission->preparation == preparation);
+  LMDJ_CHECK(reopened.value().admission->candidates ==
+             std::vector<SequenceAdmissionCandidate>{candidate});
+  LMDJ_CHECK(reopened.value().pending_events.empty());
+  LMDJ_CHECK(!reopened.value().last_input_sequence.has_value());
 }
 
 void test_durable_tail_snapshots_survive_reload_and_are_consumed_by_flush() {
@@ -1005,9 +1035,7 @@ void test_original_flush_payload_survives_inverse_completion_residual() {
           "discard") !=
       std::string::npos);
 
-  // A legacy sealed snapshot stored only its effective residual in `events`.
-  // It remains safely recoverable without reconstructing an unavailable
-  // original command payload.
+  // Unsupported legacy payloads are rejected without changing retained bytes.
   auto legacy = nlohmann::json::parse(original_snapshot);
   auto& legacy_flush = legacy["payload"]["journal"]["flushes"][1];
   legacy_flush["events"] = legacy_flush.at("recovery_events");
@@ -1019,14 +1047,9 @@ void test_original_flush_payload_survives_inverse_completion_residual() {
       sealed_path,
       lmdj::foundation::canonical_json(legacy) + "\n");
   const auto legacy_candidates = journal.list_recoverable(bundle);
-  LMDJ_CHECK(legacy_candidates.has_value());
-  LMDJ_CHECK(legacy_candidates.value().size() == 1);
-  LMDJ_CHECK(
-      legacy_candidates.value().front().journal.flushes.at(1).canonical_events ==
-      std::vector{residual});
-  LMDJ_CHECK(
-      legacy_candidates.value().front().journal.flushes.at(1).recovery_events ==
-      std::vector{residual});
+  LMDJ_CHECK(!legacy_candidates.has_value());
+  LMDJ_CHECK(read_text(sealed_path) ==
+      lmdj::foundation::canonical_json(legacy) + "\n");
 }
 
 void test_replayed_completion_subtracts_committed_events_from_durable_tail() {
@@ -1396,6 +1419,574 @@ void test_concurrent_flush_allocation_is_gap_free() {
   LMDJ_CHECK(candidates.value().empty());
 }
 
+// Admission fixtures use the public API and independently encode receipt preimages.
+using namespace lmdj::project_io;
+
+nlohmann::json admission_candidate_json(const SequenceAdmissionCandidate& c) {
+  return {{"watermark", c.watermark}, {"runtime_frame", c.runtime_frame},
+          {"slot", {{"bank", c.slot.bank}, {"pad", c.slot.pad}}},
+          {"kind", static_cast<unsigned>(c.kind)}, {"velocity", c.velocity},
+          {"press_sequence", c.press_sequence}};
+}
+
+struct AdmissionFixture {
+  TempDirectory temp{"admission"};
+  ProjectStore store;
+  std::filesystem::path bundle{temp.path() / "project.lmdj"};
+  SequenceJournal journal;
+  SequenceSessionId session{std::string{kSessionId}};
+  SequenceAdmissionPreparation preparation{
+      {CommandId{std::string{kCommandId}}, 1, 1},
+      ProjectId{std::string{kProjectId}}, PatternId{std::string{kPatternId}}, 1, 10};
+  SequenceAdmissionCandidate press{10, 1000, {0, 0}, SequenceCandidateKind::press, 100, 7};
+  explicit AdmissionFixture(bool target_pattern = false) {
+    auto state = project_with_pattern();
+    if (target_pattern) {
+      const PatternId target{uuid_for(90)};
+      state.patterns.emplace(target, Pattern{target, 1, {}});
+    }
+    LMDJ_CHECK(store.create(bundle, state).has_value());
+    begin(journal, bundle);
+  }
+  auto path() const { return bundle / "recovery/active/sequence.jsonl"; }
+  auto state() const { return SequenceJournal{}.read_active(bundle).value(); }
+  void prepare() {
+    LMDJ_CHECK(journal.prepare_admission(bundle, session, preparation).has_value());
+  }
+  auto candidate(const SequenceAdmissionCandidate& c) {
+    return journal.append_admission_candidate(bundle, session, preparation.identity, c);
+  }
+  SequenceAdmissionFence fence(bool cutoff = false) const {
+    return {cutoff ? SequenceFenceKind::cutoff : SequenceFenceKind::admission,
+            CommandId{uuid_for(cutoff ? 92 : 91)}, cutoff ? 2U : 1U,
+            cutoff ? 2000U : 900U, 0, preparation.pattern_id, 1, 120, true,
+            std::nullopt, SequenceSwitchOutcome::none, std::nullopt};
+  }
+  void retain(bool cutoff = false) {
+    LMDJ_CHECK(journal.retain_admission_fence(
+        bundle, session, preparation.identity, fence(cutoff)).has_value());
+  }
+  void close() {
+    LMDJ_CHECK(journal.close_admission(bundle, session, preparation.identity,
+        {press.watermark, SequenceAdmissionCloseReason::requested}).has_value());
+  }
+  SequenceAdmissionTransfer transfer(bool held = true) const {
+    auto array = nlohmann::json::array({admission_candidate_json(press)});
+    SequenceAdmissionTransfer t{
+        CommandId{uuid_for(93)}, false, press.watermark, press.watermark,
+        sha256(lmdj::foundation::canonical_json(array)),
+        {{press.watermark, sha256(lmdj::foundation::canonical_json(array.at(0)))}},
+        preparation.pattern_id, 0, std::nullopt, {},
+        {preparation.pattern_id, 900, {}}};
+    if (held) {
+      t.journal_input_sequence = 1;
+      t.recoverable_tail = {event()};
+      t.checkpoint = {preparation.pattern_id, 1000, {{{0, 0}, 7, 0, 0, 100}}};
+    }
+    return t;
+  }
+  auto transfer(const SequenceAdmissionTransfer& t) {
+    return journal.transfer_admission_prefix(bundle, session, preparation.identity, t);
+  }
+  template <typename Operation> void rejected_unchanged(Operation operation) {
+    const auto bytes = read_text(path());
+    const auto before = state();
+    LMDJ_CHECK(!operation().has_value());
+    LMDJ_CHECK(read_text(path()) == bytes);
+    LMDJ_CHECK(state() == before);
+  }
+  template <typename Operation> void retry_unchanged(Operation operation) {
+    const auto bytes = read_text(path());
+    const auto before = state();
+    LMDJ_CHECK(operation().has_value());
+    LMDJ_CHECK(read_text(path()) == bytes);
+    LMDJ_CHECK(state() == before);
+  }
+};
+
+void admission_exact_retry_and_collisions() {
+  AdmissionFixture f;
+  f.prepare();
+  f.retry_unchanged([&] { return f.journal.prepare_admission(f.bundle, f.session, f.preparation); });
+  auto changed = f.preparation;
+  changed.first_watermark++;
+  f.rejected_unchanged([&] { return f.journal.prepare_admission(f.bundle, f.session, changed); });
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  f.retry_unchanged([&] { return f.candidate(f.press); });
+  auto c = f.press;
+  c.velocity++;
+  f.rejected_unchanged([&] { return f.candidate(c); });
+  auto identity = f.preparation.identity;
+  identity.runtime_generation++;
+  f.rejected_unchanged([&] { return f.journal.append_admission_candidate(f.bundle, f.session, identity, f.press); });
+  identity = f.preparation.identity;
+  identity.transport_epoch++;
+  f.rejected_unchanged([&] { return f.journal.append_admission_candidate(f.bundle, f.session, identity, f.press); });
+  f.rejected_unchanged([&] { return f.journal.append_admission_candidate(f.bundle, SequenceSessionId{uuid_for(99)}, f.preparation.identity, f.press); });
+}
+
+void admission_bounds_and_integer_extremes() {
+  for (unsigned which = 0; which < 8; ++which) {
+    AdmissionFixture f;
+    auto p = f.preparation;
+    if (which == 0) p.candidate_limit = 0;
+    if (which == 1) p.candidate_limit = 1025;
+    if (which == 2) p.candidate_byte_limit = 0;
+    if (which == 3) p.candidate_byte_limit = 1048577;
+    if (which == 4) p.fence_timeout_ms = 5001;
+    if (which == 5) p.identity.runtime_generation = 0;
+    if (which == 6) p.project_id = ProjectId{uuid_for(99)};
+    if (which == 7) p.pattern_id = PatternId{uuid_for(99)};
+    f.rejected_unchanged([&] { return f.journal.prepare_admission(f.bundle, f.session, p); });
+  }
+  AdmissionFixture f;
+  f.prepare();
+  for (unsigned which = 0; which < 6; ++which) {
+    auto c = f.press;
+    if (which == 0) c.watermark = 9;
+    if (which == 1) c.slot.bank = 4;
+    if (which == 2) c.slot.pad = 16;
+    if (which == 3) c.velocity = 0;
+    if (which == 4) c.velocity = 128;
+    if (which == 5) c.kind = SequenceCandidateKind::release;
+    f.rejected_unchanged([&] { return f.candidate(c); });
+  }
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  auto c = f.press;
+  c.watermark = std::numeric_limits<std::uint64_t>::max();
+  c.runtime_frame = std::numeric_limits<std::uint64_t>::max();
+  LMDJ_CHECK(f.candidate(c).has_value());
+  f.retry_unchanged([&] { return f.candidate(c); });
+  c.watermark = 11;
+  f.rejected_unchanged([&] { return f.candidate(c); });
+}
+
+void admission_final_slot_closes_atomically() {
+  for (bool byte_limit : {false, true}) {
+    AdmissionFixture f;
+    if (byte_limit) {
+      f.preparation.candidate_byte_limit = static_cast<std::uint32_t>(
+          lmdj::foundation::canonical_json(admission_candidate_json(f.press)).size());
+    } else {
+      f.preparation.candidate_limit = 1;
+    }
+    f.prepare();
+    const auto before = read_text(f.path());
+    LMDJ_CHECK(f.candidate(f.press).has_value());
+    const auto added = read_text(f.path()).substr(before.size());
+    LMDJ_CHECK(std::count(added.begin(), added.end(), '\n') == 1);
+    LMDJ_CHECK(f.state().admission->closure ==
+        (SequenceAdmissionClosure{10, SequenceAdmissionCloseReason::capacity}));
+    f.retry_unchanged([&] { return f.candidate(f.press); });
+    auto next = f.press;
+    next.watermark++;
+    f.rejected_unchanged([&] { return f.candidate(next); });
+    f.retain();
+    f.retain(true);
+    LMDJ_CHECK(f.transfer(f.transfer()).has_value());
+  }
+  AdmissionFixture f;
+  f.preparation.candidate_byte_limit = 1;
+  f.prepare();
+  f.rejected_unchanged([&] { return f.candidate(f.press); });
+  LMDJ_CHECK(f.journal.close_admission(f.bundle, f.session, f.preparation.identity,
+      {std::nullopt, SequenceAdmissionCloseReason::capacity}).has_value());
+  f.retain();
+  f.retain(true);
+}
+
+void admission_fences_are_independent_immutable_decisions() {
+  AdmissionFixture f;
+  f.prepare();
+  auto wrong = f.fence();
+  wrong.origin_frame = wrong.effective_frame + 1;
+  f.rejected_unchanged([&] { return f.journal.retain_admission_fence(f.bundle, f.session, f.preparation.identity, wrong); });
+  f.retain(true);
+  f.retain();
+  f.retry_unchanged([&] { return f.journal.retain_admission_fence(f.bundle, f.session, f.preparation.identity, f.fence()); });
+  wrong = f.fence();
+  wrong.playing = false;
+  f.rejected_unchanged([&] { return f.journal.retain_admission_fence(f.bundle, f.session, f.preparation.identity, wrong); });
+  for (auto outcome : {SequenceSwitchOutcome::applied_before_cutoff, SequenceSwitchOutcome::canceled_at_cutoff}) {
+    AdmissionFixture g;
+    g.prepare();
+    auto decision = g.fence(true);
+    decision.switch_outcome = outcome;
+    decision.switch_authority = SequencePublicationAuthority{g.preparation.pattern_id, 1, 1500};
+    if (outcome == SequenceSwitchOutcome::applied_before_cutoff) decision.switch_applied_frame = 2000;
+    else decision.switch_applied_frame = 1500;
+    g.rejected_unchanged([&] { return g.journal.retain_admission_fence(g.bundle, g.session, g.preparation.identity, decision); });
+    if (outcome == SequenceSwitchOutcome::applied_before_cutoff) decision.switch_applied_frame = 1500;
+    else decision.switch_applied_frame.reset();
+    LMDJ_CHECK(g.journal.retain_admission_fence(g.bundle, g.session, g.preparation.identity, decision).has_value());
+    LMDJ_CHECK(g.state().admission->cutoff_fence == decision);
+  }
+}
+
+void admission_transfer_requires_authority_and_replaces_once() {
+  AdmissionFixture f;
+  f.prepare();
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  auto t = f.transfer();
+  f.rejected_unchanged([&] { return f.transfer(t); });
+  f.retain();
+  f.rejected_unchanged([&] { return f.journal.append_tail(f.bundle, f.session, f.preparation.pattern_id, 0, 1, std::vector{event()}); });
+  f.rejected_unchanged([&] { return f.journal.append_flush(f.bundle, f.session, CommandId{uuid_for(98)}, f.preparation.pattern_id, 0, std::vector{event()}); });
+  for (unsigned which = 0; which < 5; ++which) {
+    auto bad = t;
+    if (which == 0) bad.candidates_sha256[0] = 'x';
+    if (which == 1) bad.candidate_receipts[0].payload_sha256[0] = 'x';
+    if (which == 2) bad.expected_revision++;
+    if (which == 3) bad.checkpoint.owned_presses.push_back(bad.checkpoint.owned_presses.front());
+    if (which == 4) bad.recoverable_tail.front().duration_tick = 0;
+    f.rejected_unchanged([&] { return f.transfer(bad); });
+  }
+  LMDJ_CHECK(f.transfer(t).has_value());
+  LMDJ_CHECK(f.state().pending_events == std::vector{event()});
+  LMDJ_CHECK(f.state().admission->candidates.empty());
+  LMDJ_CHECK(f.state().admission->transfers.back() == t);
+  f.retry_unchanged([&] { return f.transfer(t); });
+  f.retry_unchanged([&] { return f.candidate(f.press); });
+  auto collision = f.press;
+  collision.press_sequence++;
+  f.rejected_unchanged([&] { return f.candidate(collision); });
+  t.checkpoint.last_runtime_frame++;
+  f.rejected_unchanged([&] { return f.transfer(t); });
+}
+
+void admission_excluded_prefix_preserves_sequence_and_checkpoint() {
+  AdmissionFixture f;
+  f.press.runtime_frame = 800; // Before the admission fence at frame 900.
+  f.prepare();
+  f.retain();
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  auto t = f.transfer(false);
+  auto changed = t;
+  changed.checkpoint.last_runtime_frame++;
+  f.rejected_unchanged([&] { return f.transfer(changed); });
+  LMDJ_CHECK(f.transfer(t).has_value());
+  LMDJ_CHECK(!f.state().last_input_sequence.has_value());
+  LMDJ_CHECK(f.state().pending_events.empty());
+  LMDJ_CHECK(f.state().admission->candidates.empty());
+  f.retry_unchanged([&] { return f.transfer(t); });
+}
+
+void admission_held_press_terminal_reopens_flushes_and_completes() {
+  AdmissionFixture f;
+  f.prepare();
+  f.retain();
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  const auto held = f.transfer();
+  LMDJ_CHECK(f.transfer(held).has_value());
+  auto terminal = held;
+  terminal.transfer_id = CommandId{uuid_for(94)};
+  terminal.terminal = true;
+  terminal.first_watermark = terminal.last_watermark = 0;
+  terminal.candidate_receipts.clear();
+  terminal.candidates_sha256 = sha256("[]");
+  terminal.journal_input_sequence.reset();
+  terminal.checkpoint.owned_presses.clear();
+  terminal.checkpoint.last_runtime_frame = 2000;
+  f.rejected_unchanged([&] { return f.transfer(terminal); });
+  f.retain(true);
+  f.close();
+  f.rejected_unchanged([&] { return f.journal.complete_admission(f.bundle, f.session, f.preparation.identity); });
+  LMDJ_CHECK(f.transfer(terminal).has_value());
+  const auto reopened = SequenceJournal{}.read_active(f.bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value().admission->transfers.back() == terminal);
+  LMDJ_CHECK(reopened.value().pending_events == std::vector{event()});
+  LMDJ_CHECK(reopened.value().last_input_sequence == 1);
+  f.retry_unchanged([&] { return f.transfer(terminal); });
+  auto new_terminal = terminal;
+  new_terminal.transfer_id = CommandId{uuid_for(95)};
+  f.rejected_unchanged([&] { return f.transfer(new_terminal); });
+  f.rejected_unchanged([&] { return f.journal.complete_admission(f.bundle, f.session, f.preparation.identity); });
+  const CommandId command{uuid_for(96)};
+  const auto flush = f.journal.append_flush(f.bundle, f.session, command,
+      f.preparation.pattern_id, 0, terminal.recoverable_tail);
+  LMDJ_CHECK(flush.has_value());
+  LMDJ_CHECK(f.store.execute_sequence_flush(f.bundle,
+      {f.session, flush.value().flush_seq, command, f.preparation.pattern_id}).has_value());
+  f.retry_unchanged([&] { return f.transfer(terminal); });
+  f.retry_unchanged([&] { return f.transfer(held); });
+  LMDJ_CHECK(f.journal.complete_admission(f.bundle, f.session, f.preparation.identity).has_value());
+  f.retry_unchanged([&] { return f.journal.complete_admission(f.bundle, f.session, f.preparation.identity); });
+  LMDJ_CHECK(f.state().admission->completed);
+  LMDJ_CHECK(f.state().last_input_sequence == 1);
+  LMDJ_CHECK(f.store.load(f.bundle).value().patterns.at(f.preparation.pattern_id).events == std::vector{event()});
+  auto expected = f.state();
+  expected.state = SequenceSessionState::owner_lost;
+  LMDJ_CHECK(f.journal.seal(f.bundle, f.session, "owner_lost").has_value());
+  const auto sealed = f.journal.list_recoverable(f.bundle);
+  LMDJ_CHECK(sealed.has_value());
+  LMDJ_CHECK(sealed.value().size() == 1);
+  LMDJ_CHECK(sealed.value().front().journal == expected);
+}
+
+void admission_torn_records_and_write_failures_preserve_bytes() {
+  for (unsigned which = 0; which < 3; ++which) {
+    AdmissionFixture f;
+    f.prepare();
+    if (which == 2) { LMDJ_CHECK(f.candidate(f.press).has_value()); f.retain(); }
+    auto operation = [&]() {
+      if (which == 0) return f.candidate(f.press);
+      if (which == 1) return f.journal.retain_admission_fence(f.bundle, f.session, f.preparation.identity, f.fence());
+      return f.transfer(f.transfer());
+    };
+    { FaultGuard fault(FaultPoint::sequence_journal_write); f.rejected_unchanged(operation); }
+    const auto prefix = read_text(f.path());
+    LMDJ_CHECK(operation().has_value());
+    const auto full = read_text(f.path());
+    f.retry_unchanged(operation); // Durable append, lost response, new reader.
+    const auto torn = full.substr(0, full.size() - 3);
+    write_text(f.path(), torn);
+    const auto read = SequenceJournal{}.read_active(f.bundle);
+    LMDJ_CHECK(!read.has_value());
+    LMDJ_CHECK(read.error().details.at("durable_prefix_length") == prefix.size());
+    LMDJ_CHECK(!operation().has_value());
+    LMDJ_CHECK(read_text(f.path()) == torn);
+  }
+}
+
+void admission_empty_pending_owner_loss_is_not_removed() {
+  AdmissionFixture f;
+  const CommandId command{uuid_for(97)};
+  const auto flush = f.journal.append_flush(f.bundle, f.session, command,
+      f.preparation.pattern_id, 0, std::vector{event()});
+  LMDJ_CHECK(flush.has_value());
+  LMDJ_CHECK(f.store.execute_sequence_flush(f.bundle,
+      {f.session, flush.value().flush_seq, command, f.preparation.pattern_id}).has_value());
+  f.prepare();
+  LMDJ_CHECK(f.state().pending_events.empty());
+  f.rejected_unchanged([&] { return f.journal.remove_active_if_complete(f.bundle, f.session); });
+  const auto recovery = f.store.reconcile_sequence_recovery(f.bundle);
+  LMDJ_CHECK(recovery.has_value());
+  LMDJ_CHECK(recovery.value().size() == 1);
+  LMDJ_CHECK(recovery.value().front().journal.admission->preparation == f.preparation);
+  LMDJ_CHECK(!recovery.value().front().journal.admission->completed);
+  LMDJ_CHECK(!recovery.value().front().journal.admission->admission_fence.has_value());
+}
+
+void admission_unsupported_formats_are_retained() {
+  for (bool sealed : {false, true}) {
+    for (std::string_view contract : {"v1", "v99"}) {
+      AdmissionFixture f;
+      f.prepare();
+      LMDJ_CHECK(f.candidate(f.press).has_value());
+      auto path = f.path();
+      if (sealed) {
+        const auto result = f.journal.seal(f.bundle, f.session, "owner_lost");
+        LMDJ_CHECK(result.has_value());
+        path = result.value();
+      }
+      const auto original = read_text(path);
+      const auto end = original.find('\n');
+      auto envelope = nlohmann::json::parse(original.substr(0, end));
+      envelope["payload"]["contract"] =
+          std::string{sealed ? "lmdj.sequence.recovery." : "lmdj.sequence.journal."} + std::string{contract};
+      envelope["checksum"] = sha256(lmdj::foundation::canonical_json(envelope.at("payload")));
+      const auto changed = lmdj::foundation::canonical_json(envelope) + original.substr(end);
+      write_text(path, changed);
+      if (sealed) LMDJ_CHECK(!f.journal.list_recoverable(f.bundle).has_value());
+      else {
+        LMDJ_CHECK(!f.journal.read_active(f.bundle).has_value());
+        LMDJ_CHECK(!f.candidate(f.press).has_value());
+        LMDJ_CHECK(!f.store.reconcile_sequence_recovery(f.bundle).has_value());
+      }
+      LMDJ_CHECK(read_text(path) == changed);
+    }
+  }
+}
+
+void admission_unknown_sync_requires_durable_retry() {
+  for (unsigned which = 0; which < 3; ++which) {
+    AdmissionFixture f;
+    f.prepare();
+    if (which == 2) { LMDJ_CHECK(f.candidate(f.press).has_value()); f.retain(); }
+    auto operation = [&]() {
+      if (which == 0) return f.candidate(f.press);
+      if (which == 1) return f.journal.retain_admission_fence(f.bundle, f.session, f.preparation.identity, f.fence());
+      return f.transfer(f.transfer());
+    };
+    const auto prefix = read_text(f.path());
+    {
+      FaultGuard fault(FaultPoint::active_journal_sync);
+      LMDJ_CHECK(!operation().has_value());
+      LMDJ_CHECK(read_text(f.path()).size() > prefix.size());
+      // Readable bytes after write-before-fsync do not establish durability.
+      // Retry must finish the sync, and remain unknown while that still fails.
+      f.rejected_unchanged(operation);
+    }
+    f.retry_unchanged(operation);
+    if (which == 2) {
+      LMDJ_CHECK(f.state().pending_events == std::vector{event()});
+      LMDJ_CHECK(f.state().admission->transfers.size() == 1);
+    }
+  }
+}
+
+void admission_hard_count_and_transfer_byte_bounds() {
+  AdmissionFixture f;
+  f.prepare();
+  // A checksummed durable prefix avoids 1023 unrelated filesystem syncs while
+  // exercising the real replay and final-slot append against the hard cap.
+  auto bytes = read_text(f.path());
+  for (std::uint64_t i = 0; i < 1023; ++i) {
+    auto c = f.press;
+    c.watermark += i;
+    const nlohmann::json payload{
+        {"kind", "admission-candidate"}, {"session_id", kSessionId},
+        {"identity", {{"operation_id", kCommandId}, {"runtime_generation", 1}, {"transport_epoch", 1}}},
+        {"data", admission_candidate_json(c)}};
+    bytes += lmdj::foundation::canonical_json(nlohmann::json{
+        {"payload", payload}, {"checksum", sha256(lmdj::foundation::canonical_json(payload))}}) + "\n";
+  }
+  write_text(f.path(), bytes);
+  auto last = f.press;
+  last.watermark += 1023;
+  LMDJ_CHECK(f.candidate(last).has_value());
+  LMDJ_CHECK(f.state().admission->candidates.size() == 1024);
+  LMDJ_CHECK(f.state().admission->closure ==
+      (SequenceAdmissionClosure{1033, SequenceAdmissionCloseReason::capacity}));
+  ++last.watermark;
+  f.rejected_unchanged([&] { return f.candidate(last); });
+
+  AdmissionFixture g;
+  g.prepare();
+  g.retain();
+  LMDJ_CHECK(g.candidate(g.press).has_value());
+  auto oversized = g.transfer();
+  oversized.recoverable_tail.clear();
+  for (std::uint32_t tick = 0; tick < 300; ++tick) {
+    for (std::uint8_t slot = 0; slot < 64; ++slot) {
+      oversized.recoverable_tail.push_back({{static_cast<std::uint8_t>(slot / 16),
+          static_cast<std::uint8_t>(slot % 16)}, tick, 1, 100});
+    }
+  }
+  oversized.recoverable_tail = lmdj::domain::merge_pattern_events({}, oversized.recoverable_tail);
+  g.rejected_unchanged([&] { return g.transfer(oversized); });
+}
+
+void admission_corrupt_integer_and_snapshot_fields_fail_closed() {
+  for (const auto& invalid : {nlohmann::json(-1), nlohmann::json(256), nlohmann::json(1.5)}) {
+    AdmissionFixture f;
+    f.prepare();
+    LMDJ_CHECK(f.candidate(f.press).has_value());
+    rewrite_last_record(f.path(), [&](auto& envelope) {
+      envelope["payload"]["data"]["velocity"] = invalid;
+      envelope["checksum"] = sha256(lmdj::foundation::canonical_json(envelope.at("payload")));
+    });
+    const auto bytes = read_text(f.path());
+    LMDJ_CHECK(!f.journal.read_active(f.bundle).has_value());
+    LMDJ_CHECK(!f.candidate(f.press).has_value());
+    LMDJ_CHECK(read_text(f.path()) == bytes);
+  }
+  for (const auto* field : {"admission", "next_tail_seq", "pending_events", "capture_commit", "armed_capture_slot"}) {
+    AdmissionFixture f;
+    f.prepare();
+    const auto sealed = f.journal.seal(f.bundle, f.session, "owner_lost");
+    LMDJ_CHECK(sealed.has_value());
+    rewrite_last_record(sealed.value(), [&](auto& envelope) {
+      envelope["payload"]["journal"].erase(field);
+      envelope["checksum"] = sha256(lmdj::foundation::canonical_json(envelope.at("payload")));
+    });
+    const auto bytes = read_text(sealed.value());
+    LMDJ_CHECK(!f.journal.list_recoverable(f.bundle).has_value());
+    LMDJ_CHECK(read_text(sealed.value()) == bytes);
+  }
+}
+
+void sequence_new_snapshot_rejects_wrong_field_types() {
+  for (bool bad_bars : {false, true}) {
+    AdmissionFixture f;
+    f.prepare();
+    const auto sealed = f.journal.seal(f.bundle, f.session, "owner_lost");
+    LMDJ_CHECK(sealed.has_value());
+    rewrite_last_record(sealed.value(), [&](auto& envelope) {
+      if (bad_bars) envelope["payload"]["journal"]["bars"] = 257;
+      else envelope["payload"]["journal"]["pending_events"] = nullptr;
+      envelope["checksum"] = sha256(lmdj::foundation::canonical_json(envelope.at("payload")));
+    });
+    const auto bytes = read_text(sealed.value());
+    LMDJ_CHECK(!f.journal.list_recoverable(f.bundle).has_value());
+    LMDJ_CHECK(read_text(sealed.value()) == bytes);
+  }
+}
+
+void admission_switch_drains_source_before_target_exclusion() {
+  AdmissionFixture f(true);
+  f.prepare();
+  f.retain();
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  const auto held = f.transfer();
+  auto excluded = f.press;
+  excluded.watermark = 11;
+  excluded.runtime_frame = 1600;
+  excluded.kind = SequenceCandidateKind::release;
+  excluded.velocity = 0;
+  excluded.press_sequence = 0;
+  LMDJ_CHECK(f.candidate(excluded).has_value());
+  const PatternId target{uuid_for(90)};
+  auto cutoff = f.fence(true);
+  cutoff.pattern_id = target;
+  cutoff.publication_generation = 2;
+  cutoff.origin_frame = 1500;
+  cutoff.switch_authority = SequencePublicationAuthority{target, 2, 1500};
+  cutoff.switch_outcome = SequenceSwitchOutcome::applied_before_cutoff;
+  cutoff.switch_applied_frame = 1500;
+  LMDJ_CHECK(f.journal.retain_admission_fence(f.bundle, f.session, f.preparation.identity, cutoff).has_value());
+  LMDJ_CHECK(f.journal.close_admission(f.bundle, f.session, f.preparation.identity,
+      {11, SequenceAdmissionCloseReason::requested}).has_value());
+  const Pattern target_value{target, 1, {}};
+  const auto target_fingerprint = sequence_pattern_fingerprint(target_value);
+  f.rejected_unchanged([&] { return f.journal.switch_pattern(f.bundle, f.session, target, 1, target_fingerprint, 0); });
+  LMDJ_CHECK(f.transfer(held).has_value());
+  const CommandId command{uuid_for(96)};
+  const auto flush = f.journal.append_flush(f.bundle, f.session, command,
+      f.preparation.pattern_id, 0, held.recoverable_tail);
+  LMDJ_CHECK(flush.has_value());
+  LMDJ_CHECK(f.store.execute_sequence_flush(f.bundle,
+      {f.session, flush.value().flush_seq, command, f.preparation.pattern_id}).has_value());
+  LMDJ_CHECK(f.state().admission->candidates == std::vector{excluded});
+  LMDJ_CHECK(f.journal.switch_pattern(f.bundle, f.session, target, 1, target_fingerprint, 1).has_value());
+  f.press = excluded;
+  auto transfer = f.transfer(false);
+  transfer.transfer_id = CommandId{uuid_for(97)};
+  transfer.pattern_id = target;
+  transfer.expected_revision = 1;
+  transfer.checkpoint = {target, 1500, {}};
+  LMDJ_CHECK(f.transfer(transfer).has_value());
+  LMDJ_CHECK(f.state().pending_events.empty());
+  LMDJ_CHECK(f.state().last_input_sequence == 1);
+  LMDJ_CHECK(f.state().admission->candidates.empty());
+  LMDJ_CHECK(f.state().admission->transfers.back() == transfer);
+  const auto truth = f.store.load(f.bundle);
+  LMDJ_CHECK(truth.has_value());
+  LMDJ_CHECK(truth.value().patterns.at(f.preparation.pattern_id).events == held.recoverable_tail);
+  LMDJ_CHECK(truth.value().patterns.at(target).events.empty());
+}
+
+void sequence_snapshot_requires_flush_record_grammar() {
+  for (const auto* field : {"kind", "events", "recovery_events"}) {
+    AdmissionFixture f;
+    const auto flush = f.journal.append_flush(f.bundle, f.session, CommandId{uuid_for(99)},
+        f.preparation.pattern_id, 0, std::vector{event()});
+    LMDJ_CHECK(flush.has_value());
+    const auto sealed = f.journal.seal(f.bundle, f.session, "owner_lost");
+    LMDJ_CHECK(sealed.has_value());
+    rewrite_last_record(sealed.value(), [&](auto& envelope) {
+      auto& record = envelope["payload"]["journal"]["flushes"][0];
+      if (std::string_view{field} == "kind") record.erase(field);
+      else record[field] = nlohmann::json{{"event", record.at(field).at(0)}};
+      envelope["checksum"] = sha256(lmdj::foundation::canonical_json(envelope.at("payload")));
+    });
+    const auto bytes = read_text(sealed.value());
+    LMDJ_CHECK(!f.journal.list_recoverable(f.bundle).has_value());
+    LMDJ_CHECK(read_text(sealed.value()) == bytes);
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1405,6 +1996,23 @@ int main(int argc, char** argv) {
       return 0;
     }
     test_shared_fingerprint_vectors_are_exact_bytes();
+    admission_candidate_reopens();
+    admission_exact_retry_and_collisions();
+    admission_bounds_and_integer_extremes();
+    admission_final_slot_closes_atomically();
+    admission_fences_are_independent_immutable_decisions();
+    admission_transfer_requires_authority_and_replaces_once();
+    admission_excluded_prefix_preserves_sequence_and_checkpoint();
+    admission_held_press_terminal_reopens_flushes_and_completes();
+    admission_torn_records_and_write_failures_preserve_bytes();
+    admission_empty_pending_owner_loss_is_not_removed();
+    admission_unsupported_formats_are_retained();
+    admission_unknown_sync_requires_durable_retry();
+    admission_hard_count_and_transfer_byte_bounds();
+    admission_corrupt_integer_and_snapshot_fields_fail_closed();
+    sequence_new_snapshot_rejects_wrong_field_types();
+    admission_switch_drains_source_before_target_exclusion();
+    sequence_snapshot_requires_flush_record_grammar();
     test_durable_tail_snapshots_survive_reload_and_are_consumed_by_flush();
     test_torn_tail_fails_closed_with_actionable_recovery_evidence();
     test_later_cumulative_flush_resolves_failed_earlier_flush_exactly_once();
