@@ -72,9 +72,9 @@ void Tca8418Scanner::poll(InputController& input) noexcept {
   while (count-- != 0) {
     std::uint8_t event{};
     if (!s.read(0x04, event) || event == 0) break;
-    // Cardputer's TCA8418 event table uses 0x01..0x50 for presses and
-    // 0x81..0xd0 for releases (KEA[7] is the release marker).
-    const bool pressed = (event & 0x80) == 0;
+    // TCA8418 SCPS215G section 8.6.2.4: KEA[7]=1 is a press, 0 a release.
+    // The lower seven bits carry the same key number for either edge.
+    const bool pressed = (event & 0x80) != 0;
     const auto encoded = static_cast<std::uint8_t>(event & 0x7f);
     // 0x01..0x50 are matrix events; GPIO events and empty reads are not keys.
     if (encoded == 0 || encoded > 0x50) continue;
