@@ -10,10 +10,12 @@ is replaced, so a green test cannot come from replacing the reviewer itself.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import base64
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -1037,19 +1039,106 @@ class InputAndPolicyTests(unittest.TestCase):
             adapter.authenticate_input(signed_input(enlarge))
 
     def test_wrong_side_and_outside_diff_findings_are_rejected(self):
-        wrong_side = {"review": {"key_issues_to_review": [{
-            "relevant_file": "src/example.py", "issue_header": "Bug", "issue_content": "bad",
-            "start_line": 1, "end_line": 1,
-        }]}}
-        with self.assertRaisesRegex(adapter.EngineError, "changed RIGHT-side line"):
-            adapter._validate_native_mapping(wrong_side, self.authenticated)
+        for path, start, end, reason in (
+            ("src/example.py", 1, 1, "changed RIGHT-side line"),
+            ("not-changed.py", 2, 2, "outside the changed path"),
+            ("src/example.py", 3, 2, "changed RIGHT-side line"),
+        ):
+            with self.subTest(path=path, start=start, end=end), self.assertRaisesRegex(adapter.EngineError, reason):
+                adapter._validate_native_mapping({"review": {
+                    "general_comments": "Reviewed.", "key_issues_to_review": [{
+                        "relevant_file": path, "issue_header": "Bug", "issue_content": "bad",
+                        "start_line": start, "end_line": end,
+                    }]}}, self.authenticated)
 
-        outside = {"review": {"key_issues_to_review": [{
-            "relevant_file": "not-changed.py", "issue_header": "Bug", "issue_content": "bad",
-            "start_line": 2, "end_line": 2,
-        }]}}
-        with self.assertRaisesRegex(adapter.EngineError, "outside the changed path"):
-            adapter._validate_native_mapping(outside, self.authenticated)
+    def test_yaml_block_scalar_path_anchors_to_the_exact_inventory(self):
+        mapped = adapter._validate_native_mapping({"review": {
+            "general_comments": "Reviewed.", "key_issues_to_review": [{
+                "relevant_file": "src/example.py\n", "issue_header": "Bug", "issue_content": "anchored",
+                "start_line": 2, "end_line": 3,
+            }]}}, self.authenticated)
+        self.assertEqual(mapped["findings"], [{"path": "src/example.py", "line": 2, "body": "Bug: anchored"}])
+
+    def test_exact_git_path_keeps_surrounding_whitespace(self):
+        authenticated = copy.deepcopy(self.authenticated)
+        authenticated["files"][0]["path"] = " spaced.py "
+        mapped = adapter._validate_native_mapping({"review": {
+            "general_comments": "Reviewed.", "key_issues_to_review": [{
+                "relevant_file": " spaced.py ", "issue_header": "Bug", "issue_content": "anchored",
+                "start_line": 2, "end_line": 3,
+            }]}}, authenticated)
+        self.assertEqual(mapped["findings"][0]["path"], " spaced.py ")
+
+    def test_malformed_finding_fields_are_still_rejected(self):
+        for finding in (
+            {"relevant_file": 7, "issue_header": "Bug", "issue_content": "x", "start_line": 2, "end_line": 2},
+            {"relevant_file": "src/example.py", "issue_header": "Bug", "issue_content": "", "start_line": 2, "end_line": 2},
+            {"relevant_file": "src/example.py", "issue_header": "Bug", "issue_content": "x", "start_line": "2", "end_line": 2},
+        ):
+            with self.subTest(finding=finding), self.assertRaisesRegex(adapter.EngineError, "invalid typed fields"):
+                adapter._validate_native_mapping({"review": {"general_comments": "s", "key_issues_to_review": [finding]}},
+                                                 self.authenticated)
+        duplicate = {"relevant_file": "src/example.py", "issue_header": "Bug", "issue_content": "x", "start_line": 2, "end_line": 2}
+        with self.assertRaisesRegex(adapter.EngineError, "duplicated"):
+            adapter._validate_native_mapping({"review": {"general_comments": "s", "key_issues_to_review": [duplicate, dict(duplicate)]}},
+                                             self.authenticated)
+
+    def test_prompt_lists_the_changed_right_side_lines_of_every_hunk(self):
+        prompt = adapter.render_prompt_input(self.authenticated)
+        for file in self.authenticated["files"]:
+            for hunk in file["hunks"]:
+                header = f"BEGIN HUNK RIGHT-SIDE LINES path={file['path']} id={hunk['id']}"
+                self.assertIn(header, prompt)
+                block = prompt.split(header, 1)[1].split("END HUNK RIGHT-SIDE LINES", 1)[0]
+                listed = [int(line.split(":", 1)[0]) for line in block.splitlines()[1:] if line.strip()]
+                self.assertEqual(listed, hunk["right_lines"])
+        # Coverage still sees the exact hunk bytes and content blocks.
+        coverage = adapter._make_coverage(self.authenticated, provider="deepseek", model=model_identity(), prompt=prompt, usage=None)
+        self.assertTrue(coverage["complete"])
+
+    def test_trusted_owner_is_root_or_the_current_account(self):
+        self.assertTrue(adapter._trusted_owner(0))
+        self.assertTrue(adapter._trusted_owner(os.getuid()))
+        self.assertFalse(adapter._trusted_owner(os.getuid() + 1_000_003))
+
+    def test_witness_cli_prints_the_trusted_configuration_or_a_bounded_error(self):
+        witness = {"schema": adapter.WITNESS_SCHEMA, "provider_order": ["deepseek"], "providers": {}, "engine": {"name": "pr-agent"}}
+        with mock.patch.object(adapter, "describe_engine", return_value=witness), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(adapter._main(["--witness", "--config", "/x/runtime.toml"]), 0)
+        self.assertEqual(json.loads(out.getvalue()), witness)
+        with mock.patch.object(adapter, "describe_engine", side_effect=adapter.EngineError("engine_unavailable", "bounded")), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(adapter._main(["--witness"]), 2)
+        self.assertEqual(json.loads(out.getvalue())["error_class"], "engine_unavailable")
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            adapter._main([])
+
+    def test_describe_engine_binds_config_and_installed_identity(self):
+        if not SOURCE_ROOT.joinpath("pr_agent").is_dir():
+            self.skipTest(f"pinned PR-Agent source is unavailable: {SOURCE_ROOT}")
+        with tempfile.TemporaryDirectory() as directory:
+            source = bound_source(SOURCE_ROOT, Path(directory) / "source")
+            config_path = source / "runtime.toml"
+            config_path.write_text((ROOT / "scripts/ci/pr-agent/runtime.toml").read_text(encoding="utf-8"), encoding="utf-8")
+            config_path.chmod(0o644)
+            with mock.patch.object(adapter, "TRUSTED_ENGINE_ROOT", source), \
+                    mock.patch.object(adapter, "TRUSTED_CONFIG_ROOT", source):
+                try:
+                    witness = adapter.describe_engine(config_path=config_path, source_root=source,
+                                                      engine_cwd=Path(directory) / "engine")
+                except adapter.EngineError as exc:
+                    self.skipTest(f"pinned dependencies unavailable in this interpreter: {exc.safe_message}")
+            config_identity = adapter._file_identity(config_path)
+            adapter_identity = adapter._file_identity(source / "pr_agent_review.py")
+        self.assertEqual(witness["schema"], adapter.WITNESS_SCHEMA)
+        self.assertEqual(witness["provider_order"], ["deepseek", "glm", "xai", "kimi"])
+        self.assertTrue(witness["providers"]["deepseek"]["enabled"])
+        self.assertEqual(witness["providers"]["deepseek"]["model"], "deepseek/deepseek-flash")
+        self.assertEqual(witness["engine"]["name"], "pr-agent")
+        self.assertEqual(witness["engine"]["source_commit"], adapter.UPSTREAM_COMMIT)
+        self.assertEqual(witness["engine"]["runtime_config"], config_identity)
+        self.assertEqual(witness["engine"]["bundle"]["adapter_sha256"], adapter_identity["sha256"])
 
     def test_missing_native_findings_list_is_not_a_clean_review_without_yaml_dependency(self):
         with self.assertRaisesRegex(adapter.EngineError, "missing its findings list"):
@@ -1627,7 +1716,9 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(body["model"], "deepseek-flash")
         self.assertEqual(body["max_tokens"], 4096)
         self.assertNotIn("max_completion_tokens", body)
-        for forbidden in ("thinking", "reasoning_effort", "tools", "tool_choice", "web_search_options", "service_tier"):
+        # DeepSeek V4 thinks by default; the engine asks for plain output.
+        self.assertEqual(body["thinking"], {"type": "disabled"})
+        for forbidden in ("reasoning_effort", "tools", "tool_choice", "web_search_options", "service_tier"):
             self.assertNotIn(forbidden, body)
         self.assertEqual(request.headers["authorization"], "Bearer fixture-secret")
         return body
@@ -1652,7 +1743,7 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             payload["usage"] = usage
         return httpx.Response(200, request=request, json=payload)
 
-    def test_flash_real_handler_serializes_default_thinking_and_prices_full_reasoning_usage(self):
+    def test_flash_real_handler_disables_thinking_on_the_wire_and_prices_full_usage(self):
         self.configure_flash_fixture()
         wire_calls = []
 
@@ -2019,6 +2110,15 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(calls[0]["max_retries"], 0)
         prompt = "\n".join(str(item.get("content", "")) for item in calls[0]["messages"])
         self.assertIn("nonempty review.general_comments summary", prompt)
+        system_prompt = next(item["content"] for item in calls[0]["messages"] if item["role"] == "system")
+        example = system_prompt.split("Example output:\n```yaml\n", 1)[1].split("```", 1)[0]
+        # Validate the example actually sent through the real PRReviewer and
+        # LiteLLM handler. The upstream example asks for fields our consumer
+        # rejects even when their feature flags are disabled.
+        example_native = adapter._strict_native_yaml(upstream, example)
+        self.assertEqual(set(example_native["review"]), {"general_comments", "key_issues_to_review"})
+        self.assertNotIn("relevant_tests", system_prompt)
+        self.assertNotIn("security_concerns", system_prompt)
         for expected in ("return 1", "return 2", "removed content", "src-example-h1", "obsolete-h1"):
             self.assertIn(expected, prompt)
         self.assertNotIn("must-not-leak", prompt)

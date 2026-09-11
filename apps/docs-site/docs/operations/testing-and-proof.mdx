@@ -3,75 +3,46 @@ title: Testing 与 Proof
 area: operations
 status: partial
 owners: [core, quality]
-source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md, docs/quality/2026-08-12-stage7-creator-editor-review.md, docs/quality/2026-08-24-creator-capture-precommit-crop.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/quality/2026-08-09-stage8-sample-editor-acceptance.md, docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md, docs/release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md, docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md, docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md, docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md, docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md, docs/release-evidence/release-intents.json, scripts/core.sh, scripts/release.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/creator-web-deploy.sh, scripts/web-toolchain-conformance.sh, .github/workflows/pr-review.yml, .github/workflows/pr-contract.yml, .github/workflows/self-test-report.yml, apps/docs-site/scripts/check-doc-impact.mjs, scripts/ci/self_test.py, scripts/ci/self_test_report.py, scripts/ci/batch_verdict.py, scripts/ci/batch_execution.py, scripts/ci/batch_evidence_validation.py, scripts/ci/report_outbox.py, scripts/ci/elastic_runner.py, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, scripts/ci/incremental_entry.py, scripts/ci/incremental_storage.json, scripts/ci/test_scope.py, scripts/ci/batch_runtime.py, scripts/ci/report_runtime.py, scripts/ci/review_discovery_runtime.py, scripts/ci/review_wait.py, .github/workflows/incremental-completion.yml, scripts/ci/incremental_completion.py, docs/plans/2026-09-08-lmdj-ci-completion-relay.md, scripts/ci/pr-agent/deploy-runner.sh, scripts/ci/pr-agent/netcup-review.json, tests/build/ci_pr_agent_runner_test.py, docs/quality/2026-09-10-pr-agent-netcup-operations.md, .github/workflows/pr-agent-credential-preflight.yml, scripts/ci/pr_agent_credential_preflight.py, tests/build/ci_pr_agent_credential_preflight_test.py]
+source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md, docs/quality/2026-08-12-stage7-creator-editor-review.md, docs/quality/2026-08-24-creator-capture-precommit-crop.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/quality/2026-08-09-stage8-sample-editor-acceptance.md, docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md, docs/release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md, docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md, docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md, docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md, docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md, docs/release-evidence/release-intents.json, scripts/core.sh, scripts/release.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/creator-web-deploy.sh, scripts/web-toolchain-conformance.sh, .github/workflows/pr-review.yml, .github/workflows/pr-contract.yml, .github/workflows/self-test-report.yml, apps/docs-site/scripts/check-doc-impact.mjs, scripts/ci/self_test.py, scripts/ci/self_test_report.py, scripts/ci/batch_verdict.py, scripts/ci/batch_execution.py, scripts/ci/batch_evidence_validation.py, scripts/ci/report_outbox.py, scripts/ci/elastic_runner.py, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, scripts/ci/incremental_entry.py, scripts/ci/incremental_storage.json, scripts/ci/test_scope.py, scripts/ci/batch_runtime.py, scripts/ci/report_runtime.py, scripts/ci/review_discovery_runtime.py, scripts/ci/review_wait.py, .github/workflows/incremental-completion.yml, scripts/ci/incremental_completion.py, docs/plans/2026-09-08-lmdj-ci-completion-relay.md, docs/quality/2026-09-10-pr-agent-netcup-operations.md, scripts/ci/pr-agent/install.sh, scripts/ci/pr-agent/run-engine.sh, scripts/ci/pr-agent/runtime.toml, scripts/ci/pr_agent_review.py, scripts/ci/review_pipeline.py]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 <BuildIdentity />
 
-## PR-Agent Flash inventory and bounded environment proof
+## PR-Agent 评审引擎（生产路径）
 
-The current trusted PR-Agent inventory remains inactive (`active: false`) with
-all admission flags false, null runtime identity, and all four providers
-disabled. It binds the accepted Flash archive
-`lmdj-pr-agent-linux-amd64-53072488e4c3b5a6c9ae730fe6fb52fc5f09d06c.tar`
-(`361830400` bytes,
-`d43d11d489a879e8935b8a70d75665d311db3739f4c1c6907f159c6dcfcc6991`) and
-`DEPLOYMENT_IDENTITY.json` (`896` bytes,
-`0a04de3496b1519ba2b2d3276ce1d3b65c1cdafe9c282a2e1613dd3cbb8c67cd`). The
-archive build source is candidate
-`f4f6ebf64eca70b3c5cc17267e61ece7e529c05f`. Separately, PR #1198 source head
-`8952cdc98fd67d50341f728b0562c96563737432`, merged as
-`374793290e881389bf2513ab23873d8647aca5ad`, is the accepted installer source
-and synthetic systemd-test provenance; the installer is not inside this
-archive. Corrected builder logs and exported full tool envelopes are retained
-under `/tmp/lmdj-pr-agent-packaging/artifacts-v15-flash.mjwNyB/`, while the
-build report is `/tmp/lmdj-pr-agent-plan/post-funding-bundle-build.md`.
-Lead artifact acceptance already passed from static independent checks plus
-inspection of the author-owned clean-base execution; the supplemental archive
-verifier is author-owned evidence, not independently executed reviewer
-acceptance. The superseded v14 compatibility archive remains historical:
-`4359addd2521847509b61c655a346e1a59e49ebec87934024f35c066eb3f26d3`,
-`361820160` bytes, with detached identity
-`a1f7f67b6ae9390a3a4117f0bf1bb96a7269306aef5b12433d06b6e62dc3d2c3`,
-`896` bytes; it is not the current candidate.
+`pr-review.yml` 的 `Review fallback` job 现在只有一个模型后端：固定版本
+PR-Agent `0.45.0`（source commit `53072488`）经 LiteLLM `1.100.0` 调用
+DeepSeek-V4.1-Flash（API 模型名 `deepseek-flash`），运行在 Netcup 主机
+`netcup01` 上已安装的 release 内。步骤顺序固定为 `collect-t2`（完整可信输入：
+base/head 全量字节与精确 diff）→ `run-engine.sh --witness`（读回安装的引擎、
+bundle 与 `runtime.toml` 身份）→ `run-engine.sh --input`（引擎，`flock` 单槽位）→
+`capture --backend deepseek` → `finalize`；publisher 与 merged-PR scope map 不变。
+引擎进程只拿到 `PR_AGENT_DEEPSEEK_API_KEY`，没有 GitHub token；每次请求显式
+`thinking: disabled`，`max_tokens` 4096，单请求 60 秒、单次评审 600 秒上限。
+预算由引擎内的 append-only ledger 强制：每 PR USD 1、试点累计 USD 20、
+每月 USD 20，按 1M context 峰值价预留、按实际 usage 结算。
 
-The bounded real-host synthetic systemd receipt accepted both the root-only
-EnvironmentFile-present and optional-file-missing legs. The present leg reached
-the selected public marker under UID/GID 984/976 and all four blocked names
-(`GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`) were
-absent. The missing-file leg had a successful process result, the selected
-variable absent, and all four blocked names absent; both legs had empty stderr
-and the exact terminal properties. The legs used unique temporary
-EnvironmentFile/slice/probe paths, a no-adapter probe, `PrivateNetwork=yes`,
-and `RemainAfterExit=yes`; no provider file contents were read. This is not production
-activation, credential/authentication, provider health or quality, measured
-capacity/coexistence, restart/crash/ledger recovery, cutover, or T4 completion;
-supplier funding/balance attestation is withdrawn, while USD1/attempt, USD20
-pilot/month, real auth/model/route/pricing and all-four-provider health/fallback
-/quality gates remain. Issues #1149/#1153/#1154/#1155/#1188 remain open.
+安装与更新只有一个入口：`scripts/ci/pr-agent/install.sh <staging-dir>` 以 root
+在主机执行，把现有 bundle 复制到新 release 后写入仓库的 adapter/config，
+重算新版本的成员身份，把 release 设为 root-owned 只读，
+给所有 runner 账户对共享 ledger/engine 目录的 ACL 写权限，最后以 runner 账户
+跑一次 `--witness`，成功后原子切换 `current`，旧版本保留在 `previous`。
+archive 身份指 seed bundle，运行时 adapter/config 由各自摘要绑定。
+不再创建专用 systemd service、slice、operator inventory
+或 deployment receipt；`scripts/ci/pr-agent/run-engine.sh` 在 workflow 中以
+runner 账户直接执行 release 内的引擎。GLM/Kimi Claude Code 与 Grok CLI 后端、
+`advisory-review-liveness` 诊断和 `PR-Agent Credential Preflight` 已退役。
 
-## PR-Agent 凭据与服务环境边界
-
-此前 `PR-Agent Credential Preflight` 的鉴权/余额观察仅是历史证据；本轮已撤回
-主动余额/资金准入，不应把该 workflow 作为当前 T4 前置步骤重新运行。Provider 健康、
-质量、USD 预算、四 provider fallback 与 T5/T6 仍是后续门禁，余额/配额告警 #1188 仍延期。
-服务使用现有 provider 环境入口，生成 unit 只声明以下固定的可选 service-scoped 路径：
-
-```ini
-EnvironmentFile=-/etc/lmdj/pr-agent/provider.env
-```
-
-该文件由 operator 在仓库外置备于受保护的 root-owned 父目录下，必须是
-`root:root`、`0600` 的 regular non-symlink file。每行必须是 plain `NAME=value`，不能使用
-`export` 前缀；只包含选定 reviewed config 所需的
-`PR_AGENT_*_API_KEY` assignment。Installer 不读取、创建、复制、hash、记录或修复该文件，
-也不启动/重启 service；Environment 仍可能被 service 与子进程访问，这不是 secret isolation
-承诺。可选文件保持 inactive no-key stage；active 缺少 selected key 时仍由既有 adapter
-拒绝，环境变量不会启用 disabled provider，也不建立 pricing、funding 或 admission。
-Synthetic systemd 注入、文件元数据和真实 key/provider 请求是后续独立验收，本地 source
-Task 不包含这些操作。
+引擎输出仍按 T3 协议进入 CI 内部 history v2 回执：只有位于本 PR 变更
+RIGHT-side 行的 finding 才能通过验证并成为 inline thread；无效定位使本次
+attempt 失败。YAML block scalar 的末尾换行仅在能匹配精确路径时规范化。
+模型看到的每个 hunk 后都列出可用的 RIGHT-side 行号，system prompt 的示例
+与严格解析器使用同一字段约定，不再要求解析器禁止的上游附加字段。
+引擎崩溃或被拒绝时，`capture` 记一次失败的 deepseek attempt（有限错误类别），
+`finalize` 报告 not-reviewed，job 变红并保留 artifact；不存在 clean 伪装。
+`test_scope` 仍是确定性 `test:full` 下限。
 
 ## 测试层级
 unit/component 验证局部边界，integration/e2e 验证组合，stress 验证锁自由/并发，Proof 验证 Headless Core 交付链。
@@ -160,16 +131,15 @@ session、实际 scope、findings/disposition 和 limitations。共享 GitHub lo
 head 明确重新采纳，不能自动升级成可信记录；编辑旧 comment、旧 SHA 或 `review:skipped`
 label 都不能替代新记录。等待有界，超时仍为 pending；新 push 必须重新审查。
 
-`pr-review.yml` 按 GLM → Kimi → Grok 有界回退；获得一次有效 findings 与范围结果即停止，
-发现代码问题不触发换模型。三者均不可用时保留真实失败并通过 outbox 报告 Issue，
-不能伪造 clean。模型只读取可信控制代码与作为数据的 PR diff，不 checkout 或执行
-PR head，也没有 PR 写权限。短 publisher
-校验结构化结果及当前 head，用固定 `commit_id` 发布 COMMENT review；模型不生成
-合并授权。可信发布器绑定 repository、PR、head、run、attempt 和 backend，liveness
-核对同一身份的模型、publisher 与 bot review。发布过程中 head 移动会留下旧 commit
-的历史反馈并报告失败，不能冒充新 head 已审查。clean 结果不创建 inline thread；
-真实缺凭据、API/模型故障及人工 resolve 的远端验收仍分别记录，不从本地测试推导。
-若线上仍要求旧 required contexts 或 strict，报告切换未完成，不借普通 shipping 权限绕过。
+`pr-review.yml` 只运行一次 PR-Agent/DeepSeek 引擎评审；获得一次有效 findings 即停止，
+发现代码问题不触发换模型。引擎失败时保留真实失败并让 job 变红，不能伪造 clean。
+模型只读取可信控制代码与作为数据的完整 PR 输入，不 checkout 或执行 PR head，也没有
+PR 写权限。短 publisher 校验结构化结果及当前 head，用固定 `commit_id` 发布 COMMENT
+review；模型不生成合并授权。可信发布器绑定 repository、PR、head、run、attempt 和 backend。
+发布过程中 head 移动会留下旧 commit 的历史反馈并报告失败，不能冒充新 head
+已审查。clean 结果不创建 inline thread；真实缺凭据、API/模型故障及人工 resolve 的
+远端验收仍分别记录，不从本地测试推导。若线上仍要求旧 required contexts 或 strict，
+报告切换未完成，不借普通 shipping 权限绕过。
 
 ## 2026-09-10 集成验收记录
 
@@ -519,166 +489,27 @@ Linux CI 现按角色标签路由，取代共享的 `contabo` 来源标签：兼
 
 `ci-core` 角色承担四个原生 Core job：Ubuntu Core、Linux ASan、Coverage 与 Core Package，各自以字面标签集合 `self-hosted`、`Linux`、`X64`、`lmdj-linux`、`lmdj-linux-pool`、`ci-core` 直接路由。该角色刻意不跨两台主机：持久原生 `ccache` 与预装的 clang-22/llvm-22 覆盖率工具链是共享主机上的机器状态，不是池状态；两台主机现都预装同版本 Clang/LLVM 22 工具链（noble 自带归档止于 18.1.3，22 来自 apt.llvm.org 的精确主版本套件 `llvm-toolchain-noble-22`，由 `scripts/ci/host/install-llvm-toolchain.sh` 以固定密钥指纹与 apt 优先级 100 安装；#693），角色可放在任一台，但同一时刻只注册在一台上。2026-09-06 起该角色由 Contabo 迁至 netcup：同一 revision 的实测（#676，决定记录于 #298）显示四条原生 Core lane 在 netcup 上冷缓存即已快于 Contabo 热缓存（`core_ubuntu` 热 60 s 对 126 s，`package` 318 s 对 566 s），且 netcup 无 staging 共租户。因此三条原生 Core lane 的 `use-ccache` 不再取决于 selector 输出而恒为 `true`，ccache 统计步骤也变为无条件；Coverage 在角色上不安装任何工具链——此前为 hosted fallback 而存在的 `apt-get install` 步骤已删除，保留下来只会在多个 runner service 共享的机器状态上反复写入；每条 Core lane 都只以 `command -v` 校验 pin 存在。Package 依旧禁用 ccache。
 
-### PR-Agent Netcup 评审槽位（T4，工具已实现，尚未部署）
+### PR-Agent Netcup 安装与运行
 
-仓库现在包含 `scripts/ci/pr-agent/deploy-runner.sh` 与其 inactive
-`netcup-review.json`。`dry-run`/`verify` 是只读身份校验；`stage` 接受带完整
-SHA/长度的 disabled-provider runtime TOML，并写入一个不可执行的固定
-fail-closed unit。之后只有在完整 admissions 通过时，`install` 才会用同一
-T2 bundle 和新的 runtime/operator inventory 创建 deterministic immutable
-revision；完整输入不变时重复执行幂等。每个 revision 保留五个 detached member
-identities、operator JSON、runtime TOML、exact `service.unit`/`slice.unit`
-bytes 与完整 byte identities；rollback 读取 revision 内已认证的 unit bytes，
-不会用当前 renderer 重建历史 revision。发布目录以
-`0755` 供 service user 穿越，文件以 `0444` 固定；只有独立的 state、attempt
-和 output 根为 service-writable，不能回写受信代码或 `/etc` 配置；`rollback`
-会在同一认证转换中恢复 prior operator/runtime/unit/current identities，并保留
-两个 revision。重复 install 与重复 rollback 都是幂等的，部署 receipt 为
-append-only 的闭合 unpublished v3 transition record；state 同时保留精确的
-latest-transition witness。重复 rollback 只对已认证的最新到达幂等，新的
-stage/install 后再次 rollback 会创建新 receipt；legacy、malformed、extra-member
-或错误长度/摘要的 current/previous/transition identity 一律只读拒绝，并保留
-`uncertain` 记录，绝不污染
-T2 引擎使用的 monetary ledger。工具不会调用
-`systemctl`，不会启动 runner，不会读取 API key，不会执行 PR checkout、
-PR config 或 hooks，也不持有 GitHub write token。
+主机上的 release 位于 `/var/lib/lmdj/pr-agent/releases/<id>`，由 `current`
+symlink 指向；里面是解包的 bundle（`pr_agent/`、`vendor/`、`tokenizer-cache/`、
+`requirements.lock`、`LICENSE`）加上仓库安装的 `pr_agent_review.py` 与
+`runtime.toml`。引擎启动时校验：release 路径必须是 `current` 解析后的真实目录，
+所有文件 root-owned 且无 group/world 写位，没有 symlink 或 `.pyc`，`IDENTITY` 的
+source tree 摘要等于引擎内固定常量，`DEPLOYMENT_IDENTITY.json` 的成员摘要等于磁盘
+字节，正在执行的 adapter 等于 release 内的 adapter；`runtime.toml` 必须位于同一
+release。任一校验失败即 `engine_unavailable`，不会读取 PR 输入或调用模型。
 
-生成的 service unit 只增加固定的可选入口
-`EnvironmentFile=-/etc/lmdj/pr-agent/provider.env`，不把任何 provider value
-写入 unit、release、state、receipt 或 archive。该文件由 operator 在仓库外置备为
-受保护的 `root:root`、`0600` regular non-symlink file；installer 永不读取、创建、复制、
-hash、记录或修复它。缺少该文件仍兼容 inactive no-key stage，active 缺少 selected key
-仍由既有 adapter fail closed；这不是 systemd、真实 key 或 provider acceptance。
-
-每个 revision 还保存受保护的 `REVISION_RECORD.json`，receipt history 会用它
-完整鉴权每个历史 endpoint，而不是只检查路径存在；首个唯一 arrival 必须是
-`from_release=null` 的 install，后续 `from_release` 必须连续等于上一条唯一
-arrival 的 `to_release`。Install receipt 的 target 必须与目的 revision 的完整
-inventory 精确一致（包含 operator-config basename）；rollback receipt 的 target
-绑定发起 rollback 的 from-inventory。State 与 receipt 文件及其所有父目录在任何
-读取、幂等判断、恢复或写入前都必须是 operator-owned、`0600`、非 symlink 的
-安全链；不安全证据不会被 chmod 或替换修复。byte-identical duplicate receipt
-仍按一次 arrival 处理，实际 writer 在 receipt 已追加而 state 尚未发布的 crash
-window 仍可安全恢复。恢复时 state 必须保留 receipt 追加前精确的
-`current`/`previous` base pair，并把 pending 作为唯一最后 arrival 处理。Closed receipt 还包含
-`from_record_sha256`/`from_record_byte_length` 与
-`to_record_sha256`/`to_record_byte_length`，分别绑定端点的 canonical 完整
-`REVISION_RECORD.json` bytes；只有首个 null source 允许 null commitment。缺失或
-partial commitment 不会从历史文件推导，而是 read-only 拒绝。Rollback invocation
-必须精确匹配 authenticated current inventory；只有重复最近一次 authenticated
-rollback 才允许 validated no-op。
-Install 不能以新的 transition ID 从一个 immutable revision 到达同一个
-immutable revision；byte-identical same-ID duplicate 仍按一次 arrival 处理。
-
-部署入口固定创建 mask 为 `022`，新建中间父目录保持 `0755`，不受调用者宽松
-umask 影响；显式私有权限不变。既有 group/world-writable 路径仍拒绝准入，
-不会隐式 chmod/chown 修复；测试分别验证新建权限、重复安装和既有不安全路径拒绝。
-
-首次 stage/install 只有在 target 确实 pristine 时才允许没有 runtime state；已有
-release、current link、unit、receipt、operator config 或 slot lock 却缺少 state，
-以及 legacy v2 或 closed v3 state/transition 语义不完整，都会保留现有数据并要求人工恢复。中断
-transition 的 receipt 必须是与 pending record 完全相等的一条 canonical closed record；
-同一 ID 的 byte-identical 重复行按一次 arrival 处理并 append-once；malformed、
-identity/action/status/target mismatch 或冲突 duplicate 都不会
-清除 transition。每个新的实际 transition 仍分配新的 UUID。
-
-在任何幂等判断或新意图前，state 的 latest-transition witness 必须等于
-receipt stream 中按追加顺序的最后一条 authenticated terminal receipt；只有
-精确的 pending receipt 在“receipt 已追加、state 尚未发布”的中断窗口中必须在
-去除 pending 后仍对应 base history 的精确最后 arrival，并只能作为唯一最后 arrival。
-current 必须是指向 canonical release path 的直接、字面 symlink，
-中间 alias 即使最终 resolve 相同也只读拒绝，不会被修复。恢复会先核验所有保留
-current/previous/from/to release、detached member identity，以及每条记录的
-operator path owner/mode/secure parent 和目标 far-side 的完整文件 identity，再
-append receipt、清理 transition 或替换文件；install receipt 的 from/to 也必须与
-pending transition 完全一致。错误长度、摘要、endpoint、owner、mode 或 receipt
-顺序的证据都会保留完整 state/receipt/target/ledger。
-
-该 contract 的历史 PR1198 证据在 ordinary、child-S 与 umask 变体中报告 95 tests、
-94 passed 加一个 v14 skip；这些变体未在本轮重跑，不应改标为 96。当前本轮 ordinary
-实际为 96 tests、94 passed 加两个明确 opt-in skip；启用固定 v14 与 accepted current
-Flash archive 后实际为 96/96、零 skip。新增 contract 检查固定 EnvironmentFile
-路径、provider value non-copy、inactive no-key stage，以及新 unit 安装后回滚到
-缺少该 directive 的历史 unit bytes。六段 A/B arrival journey 每段都检查
-完整 far-side bytes、canonical record bytes、owner/mode、receipt commitments、
-current/previous 与 latest witness；前两段在下一次 transition 前立即检查，且
-初始 monetary ledger 缺失保持缺失；service/slice bytes 分别绑定 A/B 的
-authenticated record identity，receipt target 绑定声明的 inventory；每个替换还检查
-source、destination 和 parent 的 device/inode/mode/UID/GID、最终 destination
-identity 及 fsync 顺序，并要求新 A/B release 发布前实际 `REVISION_RECORD.json`
-文件完成 fsync。首次 stage/install 的
-receipt-before-state crash 也验证了 retry 的 append-once recovery；receipt stream
-中的每一行（包括重复行）都必须是 canonical、完整且带非空 transition ID 的
-closed v3 object，缺失或 null ID 只读拒绝。
-
-真实 `--target-root /` install 在任何 target write 前要求 root EUID、已 provision 的
-service UID/GID，以及 root-owned operator state/inventory、runtime source/target、
-control/install parents 的安全 owner/group/mode。它拒绝 symlink、path substitution、
-parent 可写和 owner drift，且不会把既有非 operator-owned 路径静默 chown；runtime TOML
-是 root:`lmdj-pr-agent` `0440`。fixture 用显式
-`PR_AGENT_DEPLOY_FIXTURE_IDENTITIES` 模拟身份，只覆盖本地 contract，并非 Linux
-service-account/systemd proof。
-
-每个持久 helper 都先 flush 新文件内容与最终权限/owner metadata，再 rename，
-最后 fsync 父目录；changed operator path 的 install 与 rollback 首次创建路径
-均由 test-only scratch Python wrapper 记录真实 `fsync -> rename -> directory`
-顺序，并把嵌套 record-file fsync 与发布后的最终 inode/metadata 读回纳入
-六段 journey。嵌套 receipt parent 的拒绝快照同时覆盖 relocated external
-receipt tree bytes。该 instrumentation 不属于生产 crash hook。
-
-service 是固定的 `lmdj-pr-agent.service`，不是可多开的 template；真实
-执行命令使用 T2 v14 的 `/usr/bin/python3.12`、vendor `PYTHONPATH`、tokenizer
-cache、专用 engine cwd、固定 input/output 根以及由 operator-controlled
-`/etc/lmdj/pr-agent/runtime.toml` digest-bound 后复制到 service-owned release
-的 `runtime.toml`，不会使用归档内 inactive 的默认 TOML。这样同时满足
-T2 的非 symlink source-root 与 runtime-UID ownership guards。
-`/usr/bin/flock --nonblock --exclusive /run/lmdj-pr-agent/slot.lock` 是唯一
-review slot admission；dispatcher 在同一锁下原子写入 input 后，才由未来的
-lead-authorized operator invocation 启动 service。生产路径、service 身份和
-受保护文件的预置属于 owner-reviewed administrator procedure；本页不再给出
-猜测 executable 路径或会造成 preplacement 误读的命令。可审阅的 source-tool
-入口形状如下：
-
-```bash
-deploy-runner.sh stage --config <inactive-operator-json> --bundle <exact-v14-archive> \
-  --identity <detached-v14-identity> --runtime-config <disabled-provider-toml> \
-  --target-root <isolated-target>
-# After independent operator/runner/capacity/isolation/activation/runtime evidence:
-deploy-runner.sh install --config <active-operator-json> --bundle <exact-v14-archive> \
-  --identity <detached-v14-identity> --runtime-config <enabled-candidate-toml> \
-  --target-root <isolated-target>
-deploy-runner.sh rollback --config <active-operator-json> --target-root <isolated-target>
-```
-
-此处只描述已实现的 entrypoint 和未来 invocation；本 Task 没有执行 host
-mutation、systemd activation、co-running resource/process-recovery 或 API
-证据。`stage` 的成功只证明 inactive disabled-provider revision 已受保护地
-落盘；probe、credential intake、launch/admission 与 paid attempt 仍是后续
-独立边界。actual-v14 opt-in 只证明 archive bytes/vendor tree/direct canonical
-paths 与 rendered command contract；不证明非 root Linux T2 CLI startup 或
-systemd admission。T3 仍只负责协议 consumer，T5 负责 shadow Actions route，
-T6 负责 production；T4/T1153 仍 open。
-
-目标槽位的静态 envelope 是 one review slot、1 vCPU (`CPUQuota=100%`)、
-2 GiB (`MemoryMax=2G`)、low CPU weight 的 sibling
-`lmdj-pr-review.slice`；现有 heavy slice 的 14 vCPU/48 GiB 与 elastic
-ceiling 是只读保护条件。工具进入仓库不代表 host mutation、systemd
-activation、available-memory/pressure/swap headroom、co-running recovery、
-runner-04 classification、operator sudo/admin access、provider API
-authentication/model health、shadow quality 或 T5/T6 cutover 已通过。
-这些仍需 lead-authorized、read-back 的真实证据；当前 route 仍是
-self-hosted Netcup，不能推导 hosted fallback 或生产评审质量。
-
-后续 strict BatchMode receipt
-`/tmp/lmdj-pr-agent-plan/t4-readonly-host-access.md`（22:41+08）已证明
-`en@netcup01` 的 SSH read-only access，取代之前「未尝试 SSH」的 readiness 说法。
-更早的 `sudo -n true` 失败与之后修正 sudoers 后 `visudo -c`、`sudo -n whoami`
-成功，均是有序历史观察，不是 T4 acceptance；admin access、host capacity 和
-admission 仍未由本页自动化证明。Lead 后续元数据-only receipt
-`/tmp/lmdj-pr-agent-plan/t4-provider-file-metadata-2026-09-11.md` 观察到固定
-provider file 是 `root:root`、`0600`、regular non-symlink，位于受保护的 root-owned
-`0755` parents 下；该 receipt 不证明文件内容、可用 key、认证、provider response
-或 service activation。
+共享状态只有 `/var/lib/lmdj/pr-agent/engine-state/ledger.jsonl`（预算 ledger，
+附带 `.lock`）与 `/var/lib/lmdj/pr-agent/engine`（引擎 cwd）；两者对每个
+`lmdj-runner-0N` 账户开放 ACL 读写，`run-engine.sh` 以 `umask 002` 运行使新建
+文件保持可写。`/var/lib/lmdj/pr-agent/slot.lock` 由 workflow 的 `flock -w 900`
+串行化同一主机上的评审。runner service 带 `NoNewPrivileges=true`，因此没有
+sudo、没有专用 service 账户；引擎以 runner 账户运行，凭据只来自 step 环境。
+更新 adapter 或配置：改仓库文件，在主机执行 `install.sh` 创建并验证新 release；
+回滚在持有同一 slot lock 时把 `current` 原子切回保留的旧 release，随后读回
+`--witness`。具体接管记录、历史调用与未完成的端到端验收见
+[运维记录](https://github.com/endaye/lmdj/blob/main/docs/quality/2026-09-10-pr-agent-netcup-operations.md)。
 
 常规受信控制与裁决任务使用现有 Netcup、Contabo 主机上的字面
 self-hosted `ci-general` 角色。角色资格本身不授予写入、发布或部署权限；
@@ -720,6 +551,7 @@ full-risk 路径是每条 lane 的输入，避免共享改动留下 stale cached
 任何本地结果或 hook bypass 都不扩大 push、PR、merge、发布或清理权限。
 
 由 Core Nightly reusable workflow 承担的两个 native suite——Release stress 与 TSan——都以字面标签集合 `self-hosted`、`Linux`、`X64`、`lmdj-linux`、`lmdj-linux-pool`、`ci-core` 路由，并同时加入仓库级 `lmdj-native-heavy` 队列：只点 `ci-core` 角色不足以串行化它们——该角色跨越同一台物理主机上的多个 runner service，两者会在同一秒启动、彼此并行。run `33838737018` 在 2026-09-04 正是如此且两者皆败，使当时的 TSan probe 结果不可用：它测到的是争用，而非主机能否执行 TSan runtime。Release stress 仍最多连续运行 20 次并在首次失败时停止，不把失败重试成绿色。定时 TSan 曾长期留在 GitHub-hosted `ubuntu-24.04`：run `33905688022` 在容量队列生效、probe 独占运行的条件下仍以 `FATAL: ThreadSanitizer: unexpected memory mapping` 在 0.03–0.12 秒内死亡。#693 查明原因在主机而非 runner 或编译器：6.8 内核默认 32 位 `vm.mmap_rnd_bits`，任何 TSan runtime（GCC 13、LLVM 18、LLVM 22）都无法在该布局下直接启动，只能以关闭 ASLR 重新 exec，而 runner unit 的 `LockPersonality=true` 禁止这样做——LLVM 22 因此给出明确 FATAL，LLVM 18 的共享 runtime 则 9/10 次静默死亡（即 #676 探针 B″ 的"0.01 秒无输出"）。Owner 决定由 `scripts/ci/host/configure-sanitizer-aslr.sh` 把 `ci-core` 主机的熵封顶为 28（与 GitHub hosted 镜像一致，保留 ASLR），同 revision 的 probe 随后在 netcup 上通过，定时 TSan 据此迁至 `ci-core`，probe job 与其 dispatch 输入一并删除。该 lane 在构建前以固定的 Clang 22、与 Core 一致的共享 TSan runtime 和 rpath 编译最小双线程程序，要求连续十次启动全部成功，首次失败即停止并保留 infrastructure verification debt；随后以 `CC=clang-22` 显式配置并执行完整 stress suite。`vm.mmap_rnd_bits` 是 root-only（0600）接口，普通 runner 不再通过读取它判断兼容性；预检不修改主机权限或 ASLR。契约测试固定这一路由、实际 runtime 预检、失败分类与编译器 pin。
+
 ## 证据分离
 本地通过、clean-room Proof、CI 绿色、正式 tag、Channel promotion、门户快照和物理设备验收分别报告。Product Build `1.0.21.0` 的 protected PR run `31684663825`、squash merge `5613158`、exact-main run `31688172806` 与 fresh merged-tree local Proof 已分别绑定；后续 Product Build 的自动化不继承历史 Build 的 PR、CI 或 merge 结论。匹配 Build 的 snapshot provenance 由 Portal 门禁单独判定，不由 Host Proof 推断。物理记录分别是：macOS Safari Pointer `passed on 1.0.36.0 local source`、tested revision `703b339f`（[evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md)）；macOS Chrome Pointer `passed on 1.0.40.0 local source`、tested revision `5c094c98`（[evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md)）；macOS Chrome Physical MIDI `passed on 1.0.40.0 local source`、tested revision `1869a925`、Akai MPD218（[evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md)）；iPadOS Safari Touch `passed on 1.0.40.0 local source`、tested revision `e2cd0cf9`、iPad Air 13-inch (M3) model `A3268`（[evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md)）；同一设备上的 iPadOS Safari lifecycle `passed on 1.0.40.0 local source`、tested revision `67a7ac03`、Voice Memos route interruption（[evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-01-web-runtime-l5-ipados-safari-lifecycle-1.0.40.0.md)）。L1–L5 retained physical matrix 已通过；它不升级 Channel，也不替代 Snapshot、tag、CI、merge、发布或部署证据。
 ## 门户责任

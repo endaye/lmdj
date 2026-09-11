@@ -3,7 +3,119 @@
 Date: 2026-09-10 (Asia/Shanghai)
 
 Task: LMDJ #1153 / umbrella #1149 T4
-Status: service-environment tooling and Flash inventory binding documented; host installation and review acceptance pending
+Status: production pilot implementation in progress; see the current record below.
+
+## 2026-09-12 takeover and current installation
+
+The owner requested direct DeepSeek integration; the current Task is
+`docs/plans/2026-09-12-pr-agent-cutover.md`. The former deploy-runner/systemd
+entrypoint is retired by this Task. Historical evidence below remains unchanged.
+The new entrypoints are `scripts/ci/pr-agent/install.sh` and `run-engine.sh`;
+the model and budget are in the separately installed `runtime.toml`.
+
+Read-only host/API inspection during takeover found `netcup01`, four online
+matching Netcup runners (01-04), four offline elastic runners, and the GitHub
+secret name `PR_AGENT_DEEPSEEK_API_KEY`. No secret values were printed. The
+actual `actions.runner.endaye-lmdj.netcup-lmdj-linux.service` runs as
+`lmdj-runner-01` with `NoNewPrivileges=yes` under the existing CI slice.
+Review execution uses the runner account, not the unactivated dedicated T4
+service. Dedicated 1-vCPU/2-GiB isolation and co-running capacity are not proven.
+
+The prior session's final message said one model call had run and a second had
+not run. Retained host artifacts and the monetary ledger show two calls:
+
+| UTC start | Input | Result | Usage | Ledger amount USD |
+| --- | --- | --- | --- | --- |
+| 2026-09-11 16:32:31 | historical PR #1233 | reviewed, complete input | 23313 input / 699 output | 0.0078327 |
+| 2026-09-11 16:34:25 | same historical PR | not-reviewed, invalid_output | 23313 input / 287 output | 0.0073383 |
+
+These are conservative peak-price ledger calculations, not a provider invoice.
+The second failure is `native review contains unsupported fields`. Both calls
+used run_id `1`, attempt `1`, head
+`255cde310fccd7f701f90a5cad0a295174a6556f`, base
+`8338b7cd0334b441a39be099e9a9d02ae3b0022e`, control
+`9a3c34ffe0b19bee794e87f593b9bc726baf2e77`. Neither is an Actions run or
+authenticated current-head publication. First-call findings were moved to
+summary by the uncommitted adapter; they are not proof of valid inline review
+or defect-detection quality. That relaxation is removed in the final Task.
+
+Original host files: `/tmp/live-result-1233.json`, `/tmp/live-result-1233b.json`,
+and `/var/lib/lmdj/pr-agent/engine-state/ledger.jsonl`. Local copies and this
+session's raw tests are retained in `/tmp/lmdj-pr-agent-cutover.Jx0gpqLL/`.
+The real rendered-prompt regression reproduces the upstream example/consumer
+contradiction before the fix; it then passes with one configured schema.
+The upstream PRReviewer and LiteLLM engine remain pinned and unchanged.
+
+The configured Flash model, peak input/output rates and non-thinking parameter
+were refreshed from the official DeepSeek [pricing](https://api-docs.deepseek.com/quick_start/pricing/)
+and [thinking-mode](https://api-docs.deepseek.com/guides/thinking_mode/) pages on
+2026-09-12. Runtime caps remain USD 1 per PR attempt, USD 20 pilot/month,
+60 seconds per request, 600 seconds per engine invocation, 4096 output tokens.
+No manual paid call was added by this continuation.
+
+### Verified continuation receipt
+
+The installer completed with exit 0 and selected
+`/var/lib/lmdj/pr-agent/releases/cutover.5Jaxm58H`. The original release
+`/var/lib/lmdj/pr-agent/releases/c734251f52c21d8a1b2265e3284c1a98fb8ca5d8ff108f2afbc38c2cec387416`
+is unchanged and retained as `previous`. Runner 01 verified the candidate
+before the switch; runner 02 independently read the installed witness after it.
+These are installation checks, not independent source review or model calls.
+
+- Installed adapter SHA-256:
+  `6bbe205f95b6957ee62995a39b7aa88f34eddef656ef1e24e84c58153d39c176`.
+- Runtime SHA-256:
+  `c02b452c9d8c3269bc5025bd9f13a98e0f9c33cbcf9d50c9150575edd230fa74`.
+- Monetary ledger SHA-256, identical before and after:
+  `132139c2d65951e848a381ec06e335a0657438389293a208096b248f35ddee85`.
+
+Raw logs under the local evidence directory above retain the failed runs as
+well as the corrections. Final child processes all exited 0:
+
+| Check | Result | Log |
+| --- | --- | --- |
+| Pinned engine suite, including its real-handler subprocess | 58 passed, no skips | `engine-tests-v3.log` |
+| Direct real PRReviewer/LiteLLM handler suite | 39 passed, no skips; overlaps the parent suite | `engine-child-tests-v2.log` |
+| Input, protocol, workflow and consumer regressions | 408 passed, 1 actionlint check skipped then separately passed | `protocol-tests.log` |
+| Change-scope ownership, including retained deletion-path rules | 72 passed | `scope-tests-v3.log` |
+| Real Linux root/ACL installer fixtures, no provider | 4 passed | `install-tests-v1.log` |
+| Actual installation and post-switch runner witness | Passed; ledger unchanged | `host-install-v1.log` |
+| Portal validation and build | Passed, 46 routes | `docs-check-v3.log` |
+
+Pinned actionlint 1.7.12 with ShellCheck 0.9.0 on Linux and shell syntax checks
+also passed. Failed-candidate and busy-lock behavior were exercised in separate
+temporary fixture roots, not by disrupting the installed production release.
+
+### Update and rollback
+
+Stage the reviewed repository copies of `install.sh`, `run-engine.sh`,
+`runtime.toml` and `pr_agent_review.py` in a dedicated host directory. Run
+`sudo -n bash STAGING/install.sh STAGING`. The installer requires the existing
+root-owned bundle, Python 3.12, ACL tools and a free slot lock. It copies the
+bundle into a new protected release, updates only that candidate's member
+identities, verifies it with a runner-account `--witness`, and atomically
+switches `current`, retaining `previous`. A failed candidate is retained for
+inspection; it never replaces current. The original seed archive digest stays
+provenance, while adapter/config hashes bind the installed overlay.
+
+To roll back, first read and record the exact protected previous directory and
+current link. Under the same `slot.lock`, atomically replace only `current`
+with a symlink to that recorded directory, then run `run-engine.sh --witness`
+and compare the complete identity with its retained witness. Keep all release
+directories and monetary records. A workflow revert restores old routing,
+whose model availability was already unreliable; it does not prove health.
+
+### Remaining acceptance
+
+The proposed workflow still needs independent current-head review and merge,
+then a real Actions current-head collect/review/publish/read-back. Its own PR
+uses trusted base scripts, so missing new entrypoints before merge must not
+be bypassed by executing PR-owned code. New push/rerun, stale/duplicate output,
+cancellation/recovery, quality/cohort and real rollback/restoration retain their
+own evidence gaps. #1149, #1153, #1154 and #1155 are not completed by these
+manual replays. Historical failure Issues need individual disposition.
+
+## Historical T4 source and acceptance record
 
 ## What this Task implements
 
