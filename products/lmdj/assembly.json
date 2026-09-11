@@ -2,7 +2,7 @@
   "contract": "lmdj.assembly.v2",
   "product": {
     "id": "lmdj",
-    "version": "1.0.54.0"
+    "version": "1.0.55.0"
   },
   "provider_policy": {
     "allowed_regions": [
@@ -61,6 +61,10 @@
     {
       "id": "native-host",
       "version": "3.4.0"
+    },
+    {
+      "id": "cardputer-host",
+      "version": "1.0.0"
     },
     {
       "id": "web-runtime-host",
@@ -157,6 +161,10 @@
     },
     {
       "id": "lmdj.slice-points.v1",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.cardputer-transfer.v1",
       "version": "1.0.0"
     }
   ]

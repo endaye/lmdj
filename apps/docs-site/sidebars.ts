@@ -11,12 +11,12 @@ const sidebars: SidebarsConfig = {
       'core/modules/application-facade', 'core/modules/web-runtime-platform',
     ]},
     {type: 'category', label: 'Hosts', items: [
-      'hosts/overview', 'hosts/core-cli', 'hosts/core-mcp', 'hosts/native-host',
+      'hosts/overview', 'hosts/core-cli', 'hosts/core-mcp', 'hosts/native-host', 'hosts/cardputer-host',
       'hosts/web-runtime', 'hosts/creator-web',
     ]},
     {type: 'category', label: 'Providers', items: ['providers/overview', 'providers/local-proof', 'providers/local-sample-slice']},
     {type: 'category', label: 'Contracts', items: [
-      'contracts/overview', 'contracts/project', 'contracts/project-bundle',
+      'contracts/overview', 'contracts/cardputer-transfer', 'contracts/project', 'contracts/project-bundle',
       'contracts/runtime-snapshot', 'contracts/capability',
       'contracts/assembly', 'contracts/error-module-version',
     ]},

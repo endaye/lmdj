@@ -1,0 +1,66 @@
+---
+title: Project Cooker
+area: core
+status: implemented
+owners: [core]
+module: project-cooker
+source_paths: [packages/project-cooker, tests/core/cooker, contracts/runtime-content]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
+
+<BuildIdentity kind="modules" id="project-cooker" />
+
+<DiagramFrame title="Project Cooker Module" diagramId="project-cooker" />
+
+## 1. 目的与非职责
+把 Project Truth 和 Artifact 确定性派生为 Runtime Snapshot；不保存 Project 或执行实时输出。
+## 2. 当前实现状态
+Project Cooker 可从 Project v5 tick-native Pattern、Pad playback 与 PCM16 Artifact 确定性生成 Runtime Snapshot；WAV inspect/decode、真实 peak waveform、44.1→48 kHz resample 与确定性矩阵已实现。本版新增一条纯附加的 Performance replay 投影：`cook_performance_replay(project, performance_id, resolve)` 返回不可变的 `PerformanceReplayProjection`，字段恰为 `performance_id`、`resolved_revision`、`bpm`、`quantize_enabled`、`swing_percent`、`pads[64]`（resolved Pad）、`patterns[16]`（每个 Pattern Slot 一份 Runtime Snapshot）、`boundaries`（`offset_tick` + `PerformanceEvent`）与 `event_count`。既有 Cook surface 的形状与语义不变。
+## 3. 所有权与依赖
+依赖 Foundation 与 Authoring Domain，不依赖 Host 或 Product Assembly。
+## 4. 架构与数据流
+验证 Slot/Asset/playback 引用和 source-frame admission，读取不可变 WAV Artifact，生成多层 peak envelope 与 48 kHz PCM，输出不可变 prepared snapshot。replay 投影走同一条确定性路径：以 Project Truth 中的 Performance 与 `pattern_slots` 为输入，逐 Pad Slot 解析 playback、逐 Pattern Slot 生成 Runtime Snapshot，并把 Performance event 展开为带 `offset_tick` 的 boundary 序列。
+## 5. API 与 Artifact 边界
+Artifact 输入显式传入；inspect/waveform 不修改 Project，Cook 输出 resolved playback、Runtime Snapshot 或 privacy-safe typed error。
+
+当前 source 追加 `encode_runtime_content` / `decode_runtime_content`，处理
+`contracts/runtime-content/README.md` 所定义的确定性 little-endian 派生内容。编码保留单个 Pattern、
+Pad playback 和未压缩 PCM16；按包含格式描述的 sample body 完整身份去重。解码先验证
+完整内容身份、精确版本/能力、表顺序与引用、全部 sample body、playback 和调用方限额，
+再构造自有 PCM 的不可变 Snapshot。`RuntimeContentLimits` 的零值是零额度，不是无限。
+这不是 Project parser、实时回调 API 或设备的 Engine/FX/DMA 总内存预算。
+
+`inspect_runtime_content` 与 decode 共享完整校验器，在分配 PCM 或 count-sized 表前
+返回 encoded/unique PCM/per-Pad float 字节、最大 float 临时样本及 Pad/event/sample
+数量。`runtime_content_types.hpp` 单独提供纯值身份/额度/footprint，窄 Facade 公共
+头不必暴露 Runtime Snapshot。inspection 不跳过摘要、规范顺序、能力或引用检查；
+输入在调用期间必须保持有效且不可变。摘要 hex 转换使用一次固定大小 string 分配，
+分配异常直接传播到失败边界，不通过可能吞掉异常的流返回截断身份。
+这些兼容追加不改变 wire Contract 版本，完整 Engine/准备/平台资源 admission 属于
+Runtime Facade，真实设备内存仍须测量。
+## 6. 状态、错误与生命周期
+相同输入必须产生相同结果；快照与 Project 生命周期分离。`PerformanceReplayProjection` 同样只是派生状态：它由 Cook 现算、随消费者生命周期释放，绝不是 Project Truth，也绝不被持久化或回写创作真相。
+## 7. 产品使用方
+Audio Runtime 与 Application Facade 消费 Cook 结果。
+## 8. 测试与证据
+`project_cooker_test.cpp`、`sample_analysis_test.cpp` 和 `determinism_matrix_test.cpp` 覆盖格式、边界、waveform cache identity、resample 与相同输入相同输出；`performance_replay_projection_test.cpp` 覆盖 replay 投影的字段解析、Pattern Slot 解析与 boundary 展开，`wav_selection_test.cpp` 覆盖选区语义。
+## 9. 限制与下一门禁
+`runtime_content_test.cpp` 和独立 `runtime_content_contract_test.py` 覆盖固定字节、
+跨实现读取、exact/+1 限额、异常字段与分配失败。新 Contract 尚未选择到 desktop
+Assembly；新增兼容 API 的 MINOR 分配与消费者 lock 留给 B2 Assembly 集成。
+
+增量 Cook 和分布式 Cook 不属于当前能力。replay 投影只提供确定性派生素材，不承担实时调度、听感或物理演奏验收。
+## 10. 版本身份
+版本和 source hash 来自 Assembly Lock。
+
+## Bounded Slice materialization
+
+`select_pcm16_wav` materializes a nonempty half-open interval from a source bounded
+to 16 MiB. It validates PCM16 mono/stereo at 44.1 or 48 kHz and emits an independent
+WAV preserving channel samples and source frame rate. The existing stereo-only
+selection API retains its original restriction. Runtime preparation can subsequently
+resample using the existing rules; materialization itself does not resample or write
+Project state. The WAV selection unit test covers both profile rates/channel counts,
+exact PCM intervals, the byte bound and malformed/range refusal.

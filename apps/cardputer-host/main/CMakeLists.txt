@@ -1,8 +1,10 @@
 idf_component_register(SRCS main.cpp audio_driver.cpp runtime_host.cpp keyboard.cpp
   display.cpp input_controller.cpp transfer.cpp transfer_transaction.cpp transfer_session.cpp
+  "${LMDJ_SOURCE_ROOT}/products/lmdj/src/cardputer_assembly.cpp"
   REQUIRES esp_driver_i2s esp_driver_i2c esp_driver_gpio freertos esp_system pthread)
 target_include_directories(${COMPONENT_LIB} PRIVATE
-  "${LMDJ_SOURCE_ROOT}/third_party/picosha2")
+  "${LMDJ_SOURCE_ROOT}/third_party/picosha2"
+  "${LMDJ_SOURCE_ROOT}")
 if(CMAKE_BUILD_EARLY_EXPANSION)
   return()
 endif()
@@ -34,5 +36,6 @@ target_link_libraries(cardputer_facade PUBLIC cardputer_cooker PRIVATE cardputer
 target_link_libraries(${COMPONENT_LIB} PRIVATE cardputer_facade)
 target_compile_options(${COMPONENT_LIB} PRIVATE -std=gnu++20 -fexceptions -Wall -Wextra -Wpedantic -Werror -fstack-usage)
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-  LMDJ_CARDPUTER_CONFIG_HEADER="${LMDJ_CARDPUTER_CONFIG_HEADER}"
   LMDJ_CARDPUTER_REVISION="${LMDJ_CARDPUTER_REVISION}")
+target_include_directories(${COMPONENT_LIB} PRIVATE
+  "${LMDJ_SOURCE_ROOT}/products/lmdj/src")
