@@ -232,7 +232,6 @@ CASES = {
     ".github/actions/web-ci-proof/action.yml": set(LANES),
     ".github/workflows/ci-self-hosted-benchmark.yml": {"ci_contract"},
     ".github/workflows/pr-contract.yml": {"ci_contract"},
-    ".github/scripts/grok_review.py": {"ci_contract"},
     ".gitattributes": set(LANES),
 }
 
@@ -859,11 +858,21 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(unknown["mode"], "full")
         self.assertEqual(self.true_lanes(unknown), LANES)
 
-    def test_grok_review_script_is_ci_contract_and_similar_unknown_name_is_full(self):
-        # The workflow half of this rule went with grok-review.yml when the
-        # lane moved into ci.yml (#659); ci.yml is a full-CI control-plane
-        # path, so the job it now holds is covered by that rule instead.
-        manifest = self.classify([".github/scripts/grok_review.py"])
+    def test_retired_review_paths_keep_ownership_for_deletion_and_historical_diffs(self):
+        for filename in (
+            ".github/scripts/advisory_review_liveness.py", ".github/scripts/grok_review.py",
+            ".github/workflows/advisory-review-liveness.yml", ".github/workflows/pr-agent-credential-preflight.yml",
+        ):
+            with self.subTest(filename=filename):
+                manifest = self.classify([filename])
+                self.assertEqual(manifest["mode"], "focused")
+                self.assertEqual(self.true_lanes(manifest), {"ci_contract"})
+
+    def test_review_target_script_is_ci_contract_and_similar_unknown_name_is_full(self):
+        # `.github/scripts/pr_review_target.py` binds a review run to a PR head
+        # and publishes the trusted review; an unknown workflow with a similar
+        # name is still a full-CI control-plane path.
+        manifest = self.classify([".github/scripts/pr_review_target.py"])
         self.assertEqual(manifest["mode"], "focused")
         self.assertEqual(self.true_lanes(manifest), {"ci_contract"})
         unknown = self.classify([".github/workflows/grok-review-control.yml"])

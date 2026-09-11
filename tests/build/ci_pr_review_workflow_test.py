@@ -56,12 +56,12 @@ def pull(*, state="open", draft=False, head_repo="endaye/lmdj", head_sha=HEAD, l
 
 
 class StandaloneEntryWorkflowTest(unittest.TestCase):
+    """Pins the PR-Agent production route: collect-t2 -> engine -> capture -> finalize -> publish."""
+
     @classmethod
     def setUpClass(cls):
         cls.source = WORKFLOW.read_text(encoding="utf-8")
-        cls.jobs = {name: job_block(cls.source, actual) for name, actual in
-                    (("target", "target"), ("claude-review", "review"), ("grok-review", "review"),
-                     ("publish-claude", "publish"), ("publish-grok", "publish"))}
+        cls.jobs = {name: job_block(cls.source, name) for name in ("target", "review", "publish")}
 
     def test_yaml_parser_retains_both_run_name_expressions_after_hash(self):
         # Use the actual pinned workflow parser instead of a hand-written YAML
@@ -103,6 +103,7 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
                          "why: YAML discarded the PR/head run-name expressions after #; "
                          "remedy: quote the complete run-name scalar")
 
+
     def test_dispatch_only_on_main_and_pr_automatically_active(self):
         self.assertIn("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'", self.jobs["target"])
         condition = self.jobs["target"].split('    if: >-\n', 1)[1].split('    runs-on:', 1)[0]
@@ -129,80 +130,71 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
                 self.assertIn(trusted, job)
                 self.assertNotIn("ref: ${{ needs.target.outputs.head_sha }}", job)
                 self.assertIn("persist-credentials: false", job)
-        for name in ("claude-review", "grok-review"):
-            self.assertIn('review_pipeline.py collect --directory "$REVIEW_DIR"', self.jobs[name])
+        self.assertIn('review_pipeline.py collect-t2 --directory "$REVIEW_DIR"', self.jobs["review"])
         adapter = (REPO_ROOT / "scripts/ci/review_pipeline.py").read_text()
         self.assertIn('"--no-ext-diff", "--no-textconv"', adapter)
         self.assertNotIn('git("checkout"', adapter)
 
-    def test_models_have_no_write_token_or_executable_tools(self):
-        for name in ("claude-review", "grok-review"):
-            job = self.jobs[name]
-            self.assertIn("pull-requests: read", job)
-            self.assertNotIn(": write", job)
-            self.assertNotIn("--publish-file", job)
-            # Individual backend failures are captured and validated before
-            # fallback. The job itself is not continue-on-error.
-            self.assertNotRegex(job, r"(?m)^    continue-on-error: true$")
-            self.assertIn("Manual takeover", job)
-        claude = self.jobs["claude-review"]
-        self.assertIn('--tools "Read" --allowedTools "Read" --disable-slash-commands', claude)
-        self.assertIn('classify_inline_comments: "false"', claude)
-        self.assertIn("steps.glm.outputs.structured_output", claude)
-        self.assertIn("steps.kimi.outputs.structured_output", claude)
-        self.assertNotIn("/pr-review --comment", claude)
-        self.assertNotIn("Bash(", claude)
-        grok = self.jobs["grok-review"]
-        self.assertIn("review_pipeline.py grok", grok)
-        self.assertNotIn("GITHUB_TOKEN:", grok.split("      - name: Grok review", 1)[1].split("      - name: Validate Grok", 1)[0])
+    def test_engine_runs_on_the_netcup_host_with_only_the_provider_key(self):
+        job = self.jobs["review"]
+        self.assertIn("pull-requests: read", job)
+        self.assertNotIn(": write", job)
+        self.assertNotRegex(job, r"(?m)^    continue-on-error: true$",
+                            "why: the job conclusion must be able to say not-reviewed; remedy: keep continue-on-error on the model step only")
+        runs_on = job.split("    runs-on: ", 1)[1].split("\n", 1)[0]
+        self.assertIn("netcup", runs_on, "why: the engine is installed only on the Netcup host; remedy: keep the netcup label")
+        self.assertIn("run-engine.sh --witness", job)
+        engine = job.split("      - name: deepseek review", 1)[1].split("      - name: Validate PR-Agent result", 1)[0]
+        self.assertIn("continue-on-error: true", engine)
+        self.assertIn("PR_AGENT_DEEPSEEK_API_KEY: ${{ secrets.PR_AGENT_DEEPSEEK_API_KEY }}", engine)
+        self.assertNotIn("GITHUB_TOKEN", engine)
+        self.assertNotIn("GH_TOKEN", engine)
+        self.assertIn("flock -w 900 /var/lib/lmdj/pr-agent/slot.lock", engine)
+        self.assertIn('run-engine.sh --input "$REVIEW_DIR/t2-input.json"', engine)
+        self.assertIn('review_pipeline.py capture --backend deepseek', job)
+        self.assertIn("T2_RESULT_JSON: ${{ env.REVIEW_DIR }}/t2-result.json", job)
+        self.assertIn("BACKEND_OUTCOME: ${{ steps.deepseek.outcome }}", job)
+        for retired in ("anthropics/claude-code-action", "ZAI_CODING_KEY", "KIMI_CODING_KEY", "GROK_AUTH_JSON",
+                        "review_pipeline.py grok", "x.ai/cli"):
+            self.assertNotIn(retired, self.source, f"why: the {retired} lane is retired; remedy: keep PR-Agent as the only model route")
+        self.assertIn("Manual takeover", job)
 
     def test_the_producer_cannot_report_success_over_a_not_reviewed_result(self):
-        """The `finalize` verdict must be able to fail the job.
-
-        #939: `Review fallback` reported success while its artifact said
-        `not-reviewed`, so a reader scanning job names saw a green check over a
-        review that never happened. The lane as a whole never lost the
-        distinction -- the publisher refuses a not-reviewed result -- but the
-        producer's own name and conclusion did not match what it produced.
-
-        `review_pipeline.py finalize` now exits nonzero for that case. This
-        asserts the workflow lets that exit reach the job conclusion, because
-        the fix is defeated by a single `continue-on-error` or `|| true` on the
-        step, and neither would look wrong in review.
-        """
-        job = self.jobs["claude-review"]
+        """The `finalize` verdict must be able to fail the job (#939)."""
+        job = self.jobs["review"]
         finalize = job.split("      - name: Save honest final result", 1)[1]
         finalize = finalize.split("      - uses:", 1)[0]
         self.assertIn("review_pipeline.py finalize", finalize)
         self.assertNotIn("continue-on-error", finalize)
         self.assertNotIn("|| true", finalize)
         self.assertNotIn("|| :", finalize)
-        # The receipts must still upload after that failure, or a dropped
-        # review stops being recoverable -- #916's was recovered from exactly
-        # this artifact hours after the fact.
         upload = job.split("      - uses: actions/upload-artifact", 1)[1]
         self.assertIn("if: ${{ always() }}", upload)
-        # And the workflow already expected this exit: its takeover step is
-        # guarded on failure() and says NOT REVIEWED.
         self.assertIn("Manual takeover", job)
         self.assertIn("if: ${{ failure() }}", job)
 
-    def test_publishers_are_short_trusted_data_consumers(self):
-        for name in ("publish-claude", "publish-grok"):
-            job = self.jobs[name]
-            self.assertIn("pull-requests: write", job)
-            self.assertIn("timeout-minutes: 5", job)
-            self.assertNotIn("contents: write", job)
-            self.assertNotIn("issues: write", job)
-            self.assertIn('HEAD_SHA: ${{ needs.target.outputs.head_sha }}', job)
-            self.assertIn("review_pipeline.py publish", job)
-            self.assertIn("actions/download-artifact@v4", job)
-            self.assertIn("github.run_attempt", job)
-            self.assertIn("needs.target.outputs.head_sha", job)
-            self.assertIn("Report the review state", job)
-            self.assertIn("review the current head manually", job)
-            self.assertNotIn("anthropics/claude-code-action", job)
-            self.assertNotIn("grok_review.py", job)
+    def test_artifact_carries_every_file_the_v2_publisher_and_readers_need(self):
+        upload = self.jobs["review"].split("      - uses: actions/upload-artifact", 1)[1].split("      - name:", 1)[0]
+        for name in ("context.json", "history.json", "review.json", "result.json", "failure.json",
+                     "t2-input.json", "collection-receipt.json", "t2-config-witness.json", "t2-result.json",
+                     "collector.json", "coverage-*.json"):
+            self.assertIn(f"${{{{ env.REVIEW_DIR }}}}/{name}", upload,
+                          f"why: publish/wait/failure readers open {name} from the artifact; remedy: upload it")
+
+    def test_publisher_is_a_short_trusted_data_consumer(self):
+        job = self.jobs["publish"]
+        self.assertIn("pull-requests: write", job)
+        self.assertIn("timeout-minutes: 5", job)
+        self.assertNotIn("contents: write", job)
+        self.assertNotIn("issues: write", job)
+        self.assertIn('HEAD_SHA: ${{ needs.target.outputs.head_sha }}', job)
+        self.assertIn("review_pipeline.py publish", job)
+        self.assertIn("actions/download-artifact@v4", job)
+        self.assertIn("github.run_attempt", job)
+        self.assertIn("Report the review state", job)
+        self.assertIn("review the current head manually", job)
+        self.assertNotIn("PR_AGENT_DEEPSEEK_API_KEY", job)
+        self.assertNotIn("run-engine.sh", job)
 
     def test_review_has_no_heavy_dependency_and_no_merge_authority(self):
         jobs = self.source.split("\njobs:\n", 1)[1]
@@ -212,21 +204,8 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         self.assertIn("required_conversation_resolution", self.source)
         self.assertIn("#707", self.source)
         self.assertIn("not a new gate", self.source)
-
-    def test_backend_selector_and_runtime_pins_stay_compatible(self):
-        self.assertNotIn("vars.CLAUDE_REVIEW_ORDER", self.source)
-        self.assertIn("steps.capture-glm.outputs.reviewed != 'true'", self.jobs["claude-review"])
-        self.assertIn("steps.capture-kimi.outputs.reviewed != 'true'", self.jobs["grok-review"])
-        pin = re.search(r"uses: anthropics/claude-code-action@([0-9a-f]{40})", self.source).group(1)
-        self.assertEqual(pin, "fa2b2666b747000bf42767d1f332065b375e3c8f")
-        pins = {"GROK_VERSION": "1.0.13", "GROK_SHA256": "edf79521581bb5e6b95abef848491a6a742e860da3e237ebe86a280d30dce4c1"}
-        for key in pins:
-            value = re.search(rf'{key}: "([^"]+)"', self.source).group(1)
-            self.assertEqual(value, pins[key])
-        self.assertIn("sha256sum --check --strict", self.source)
-        self.assertNotIn("secrets.ANTHROPIC_API_KEY", self.source)
-        self.assertIn("ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic", self.source)
-        self.assertIn("ANTHROPIC_BASE_URL: https://api.kimi.com/coding/", self.source)
+        self.assertIn("name: Review fallback", self.jobs["review"],
+                      "why: publisher, wait and discovery readers authenticate the producer job by name; remedy: keep it")
 
     def test_same_pr_cancellation_does_not_create_product_gate(self):
         self.assertIn("group: pr-review-${{ inputs.pr_number || github.event.pull_request.number }}", self.source)
@@ -238,6 +217,22 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         exact = {r["match"]["value"]: set(r["lanes"]) for r in policy["rules"] if r["match"]["kind"] == "exact"}
         for path in (".github/workflows/pr-review.yml", ".github/scripts/pr_review_target.py"):
             self.assertEqual(exact.get(path), {"ci_contract"})
+        for retired in (".github/scripts/grok_review.py", ".github/scripts/advisory_review_liveness.py",
+                        ".github/workflows/advisory-review-liveness.yml", ".github/workflows/pr-agent-credential-preflight.yml"):
+            # Deletion and historical comparisons still need explicit routing.
+            self.assertEqual(exact.get(retired), {"ci_contract"})
+            self.assertFalse((REPO_ROOT / retired).exists(), retired)
+
+    def test_engine_runner_script_uses_the_installed_release_only(self):
+        script = (REPO_ROOT / "scripts/ci/pr-agent/run-engine.sh").read_text(encoding="utf-8")
+        self.assertIn('release=$(readlink -f "$current")', script)
+        self.assertIn('"$release/pr_agent_review.py"', script)
+        self.assertIn('--config "$release/runtime.toml"', script)
+        self.assertIn("umask 002", script)
+        self.assertNotIn("GITHUB_TOKEN", script)
+        runtime = (REPO_ROOT / "scripts/ci/pr-agent/runtime.toml").read_text(encoding="utf-8")
+        self.assertIn('credential_ref = "PR_AGENT_DEEPSEEK_API_KEY"', runtime)
+        self.assertNotRegex(runtime, r"sk-[A-Za-z0-9]{10,}", "why: the runtime config is committed; remedy: keep keys in secrets")
 
 
 class TargetScriptTest(unittest.TestCase):
@@ -382,70 +377,6 @@ class TrustedPublisherTest(unittest.TestCase):
             self.assertEqual(json.loads(output.read_text()), {"summary": "clean", "findings": []})
             with mock.patch.dict("os.environ", {"REVIEW_JSON": "null"}), contextlib.redirect_stderr(io.StringIO()):
                 self.assertNotEqual(target.main(["--capture-output", str(output)]), 0)
-
-    def test_grok_structured_mode_never_calls_write_api(self):
-        from unittest import mock
-        import grok_review
-        with tempfile.TemporaryDirectory() as directory:
-            diff = Path(directory) / "diff"
-            diff.write_text("diff --git a/x b/x\n+changed\n")
-            output = Path(directory) / "review.json"
-            with mock.patch.dict("os.environ", {"XAI_API_KEY": "test", "GROK_AUTH_JSON": "", "RUNNER_TEMP": directory}), \
-                    mock.patch.object(grok_review, "run_grok", return_value={"text": "## Verdict\n`clean`\n\n## Findings\nNo findings.\n\nThe diff changes x."}), \
-                    mock.patch.object(grok_review, "github_request", side_effect=AssertionError("model cannot write")):
-                self.assertEqual(grok_review.main(["--diff-file", str(diff), "--structured-output", str(output)]), 0)
-            self.assertEqual(json.loads(output.read_text())["findings"], [])
-
-    def test_grok_malformed_or_unfinished_response_is_not_a_clean_artifact(self):
-        from unittest import mock
-        import grok_review
-        responses = (
-            "I could not complete the review.",
-            "No issues found.",
-            "## Verdict\nunknown\n\n## Findings\nNo findings.",
-            "## Verdict\nclean or issues\n\n## Findings\nNo findings.",
-            "## Verdict\nclean\n\n## Verdict\nissues\n\n## Findings\nNo findings.",
-            "## Verdict\nclean",  # truncated before the mandatory findings section
-            "## Verdict\nclean\n\n## Findings\nCould not complete review.",
-            "## Verdict\nissues\n\n## Findings\nNo findings.",
-            "## Verdict\nclean\n\n## Findings\n### [important] Bad return\n- Path: `x:1`",
-        )
-        for response in responses:
-            with self.subTest(response=response), tempfile.TemporaryDirectory() as directory:
-                diff = Path(directory) / "diff"
-                diff.write_text("diff --git a/x b/x\n+changed\n")
-                output = Path(directory) / "review.json"
-                with mock.patch.dict("os.environ", {"XAI_API_KEY": "test", "GROK_AUTH_JSON": "", "RUNNER_TEMP": directory}), \
-                        mock.patch.object(grok_review, "run_grok", return_value={"text": response}), \
-                        mock.patch.object(grok_review, "github_request", side_effect=AssertionError("model cannot write")):
-                    with self.assertRaisesRegex(RuntimeError, "remedy:"):
-                        grok_review.main(["--diff-file", str(diff), "--structured-output", str(output)])
-                self.assertFalse(output.exists(), "invalid model response must not acquire publishable evidence")
-
-    def test_grok_valid_issues_are_completed_review_data_not_a_failed_gate(self):
-        from unittest import mock
-        import grok_review
-        response = "## Verdict\n`issues`\n\n## Findings\n### [important] Bad return\n- Path: `x:1`\n- Why: wrong result\n- Remedy: correct the return"
-        with tempfile.TemporaryDirectory() as directory:
-            diff = Path(directory) / "diff"
-            diff.write_text("diff --git a/x b/x\n+changed\n")
-            output = Path(directory) / "review.json"
-            with mock.patch.dict("os.environ", {"XAI_API_KEY": "test", "GROK_AUTH_JSON": "", "RUNNER_TEMP": directory}), \
-                    mock.patch.object(grok_review, "run_grok", return_value={"text": response}), \
-                    mock.patch.object(grok_review, "github_request", side_effect=AssertionError("model cannot write")):
-                self.assertEqual(grok_review.main(["--diff-file", str(diff), "--structured-output", str(output)]), 0)
-            finding = json.loads(output.read_text())["findings"][0]
-            self.assertEqual((finding["path"], finding["line"]), ("x", 1))
-
-    def test_grok_skip_cannot_reuse_a_stale_output_file(self):
-        from unittest import mock
-        import grok_review
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "review.json"
-            output.write_text('{"summary":"old review","findings":[]}')
-            with mock.patch.dict("os.environ", {"XAI_API_KEY": "", "GROK_AUTH_JSON": ""}):
-                with self.assertRaisesRegex(RuntimeError, "did not review"):
-                    grok_review.main(["--structured-output", str(output)])
 
 
 if __name__ == "__main__":

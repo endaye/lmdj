@@ -42,6 +42,36 @@ class TargetUnavailable(RuntimeError):
     """The Pull Request could not be read; nothing about it is known."""
 
 
+def github_request(
+    method: str,
+    url: str,
+    token: str,
+    payload: Mapping[str, object] | None = None,
+) -> object:
+    """One authenticated GitHub REST call; only the trusted publisher uses writes."""
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": API_VERSION,
+            "User-Agent": "lmdj-pr-review",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            body = response.read()
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"GitHub {method} {url} failed: {error.code} {detail[:2000]}") from error
+    if not body:
+        return None
+    return json.loads(body.decode("utf-8"))
+
+
 def _api(path: str) -> object:
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
@@ -220,7 +250,6 @@ def publish_review(repository: str, number: int, head: str, run: str, attempt: s
     comments = [{"path": item["path"], "line": item["line"], "side": "RIGHT",
                  "body": f"{marker}\n{identity}\n{item['body']}"} for item in model["findings"]]
     if write is None:
-        from grok_review import github_request
         write = lambda path, data: github_request("POST", f"{API_ROOT}{path}",
                                                    os.environ["GITHUB_TOKEN"], data)
     write(f"/repos/{repository}/pulls/{number}/reviews",

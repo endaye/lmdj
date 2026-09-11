@@ -47,6 +47,210 @@ class PipelineTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {**self.env, **env}):
             pipeline.capture(self.directory, backend)
 
+    def test_glm_success_persists_full_original_model(self):
+        self.capture("glm")
+        pipeline.finalize(self.directory)
+        self.assertEqual(pipeline.read(self.directory / "review.json"), self.model)
+        self.assertEqual(pipeline.read(self.directory / "result.json")["status"], "reviewed")
+        self.assertIn("reviewed=true", (self.directory / "output").read_text())
+
+    def test_glm_failure_then_kimi_success_preserves_each_receipt(self):
+        self.capture("glm", BACKEND_OUTCOME="failure")
+        self.capture("kimi")
+        pipeline.finalize(self.directory)
+        history = pipeline.read(self.directory / "history.json")
+        self.assertEqual([item["status"] for item in history], ["failed", "reviewed"])
+        self.assertEqual(pipeline.read(self.directory / "result.json")["publication"]["record"]["backend"], "kimi")
+
+    def test_invalid_json_triggers_next_backend(self):
+        self.capture("glm", REVIEW_JSON="not-json")
+        history = pipeline.read(self.directory / "history.json")
+        self.assertEqual(history[0]["error_class"], "invalid_output")
+        self.assertEqual(review_scope.next_backend(test_scope.load_policy(ROOT), history), "kimi")
+
+    def test_missing_key_is_not_empty_success(self):
+        self.capture("glm", BACKEND_AVAILABLE="false", BACKEND_OUTCOME="skipped")
+        self.assertEqual(pipeline.read(self.directory / "history.json")[0]["error_class"], "missing_credential")
+
+    def test_all_failure_persists_failure_not_clean_review(self):
+        for backend in review_scope.BACKENDS:
+            self.capture(backend, BACKEND_OUTCOME="failure")
+        pipeline.finalize(self.directory)
+        failure = pipeline.read(self.directory / "failure.json")
+        self.assertEqual(failure["status"], "not-reviewed")
+        self.assertEqual(len(failure["attempts"]), 3)
+        self.assertFalse((self.directory / "review.json").exists())
+
+    def cli(self, *arguments, env=None):
+        """Run the real CLI the workflow runs, and return `(returncode, stderr)`.
+
+        The workflow reads an exit code, not a return value, so that is what
+        this asserts. Calling `finalize()` directly would pass whatever the
+        function does and say nothing about the job's conclusion, which is the
+        thing #939 was about.
+        """
+        environment = {**os.environ, **self.env, **(env or {})}
+        completed = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/ci/review_pipeline.py"),
+             *arguments, "--directory", str(self.directory)],
+            capture_output=True, text=True, timeout=60, env=environment,
+        )
+        return completed.returncode, completed.stderr
+
+    def test_finalize_exits_nonzero_when_no_model_reviewed(self):
+        # The producer job is named `Review fallback`; its conclusion is what a
+        # reader scanning job names sees. Reporting success over a
+        # `not-reviewed` artifact makes that name a lie.
+        for backend in review_scope.BACKENDS:
+            self.capture(backend, BACKEND_OUTCOME="failure")
+        code, stderr = self.cli("finalize")
+        self.assertEqual(code, 1)
+        self.assertIn("no model reviewed this head", stderr)
+
+    def test_finalize_still_writes_every_receipt_when_it_fails(self):
+        # The exit code changes; the evidence must not. A dropped review is
+        # recoverable from this artifact, which is how #916's was found hours
+        # later, so failing must not cost the receipts.
+        for backend in review_scope.BACKENDS:
+            self.capture(backend, BACKEND_OUTCOME="failure")
+        code, _ = self.cli("finalize")
+        self.assertEqual(code, 1)
+        result = pipeline.read(self.directory / "result.json")
+        self.assertEqual(result["status"], "not-reviewed")
+        failure = pipeline.read(self.directory / "failure.json")
+        self.assertEqual(len(failure["attempts"]), 3)
+        self.assertTrue((self.directory / "history.json").exists())
+        self.assertTrue((self.directory / "context.json").exists())
+
+    def test_finalize_exits_zero_when_a_model_did_review(self):
+        # The positive control. Without it the case above would pass against a
+        # `finalize` that always failed, which would be a different defect and
+        # would read identically here.
+        self.capture("glm")
+        code, stderr = self.cli("finalize")
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(
+            pipeline.read(self.directory / "result.json")["status"], "reviewed")
+
+    def test_a_crash_and_a_clean_not_reviewed_are_told_apart(self):
+        # Both exit nonzero, so the job fails either way -- but a reader
+        # diagnosing the run must be able to tell "the backends were down" from
+        # "the pipeline broke". Same exit code, different stderr.
+        code, stderr = self.cli("finalize")  # empty history: chain unfinished
+        self.assertEqual(code, 1)
+        self.assertIn("review pipeline operation failed", stderr)
+        self.assertNotIn("no model reviewed this head", stderr)
+
+    def test_publish_prints_which_precondition_refused(self):
+        """#939: the publisher's refusals must name themselves.
+
+        It drops roughly one review in four and every log said only "review
+        pipeline operation failed", so no remedy could be designed: a retry
+        aimed at the wrong precondition would look like a fix and change
+        nothing. These messages already existed at every `require` in
+        `publish()`; the handler was destroying them.
+        """
+        self.capture("glm")
+        pipeline.finalize(self.directory)
+        # The publisher's whole environment, with exactly one value wrong, so
+        # the first `require` in `publish()` is the only thing that can fire.
+        code, stderr = self.cli("publish", env={
+            "GITHUB_REPOSITORY": self.identity["repository"],
+            "PR_NUMBER": "999999",
+            "HEAD_SHA": self.identity["head_sha"],
+            "GITHUB_RUN_ID": str(self.identity["run_id"]),
+            "GITHUB_RUN_ATTEMPT": str(self.identity["run_attempt"]),
+        })
+        self.assertEqual(code, 1)
+        self.assertIn("artifact identity differs from publisher context", stderr)
+        self.assertNotIn("review pipeline operation failed", stderr)
+
+    def test_only_publish_gets_the_specific_message(self):
+        """Other commands retain generic diagnostics while provider text is in scope."""
+        code, stderr = self.cli("finalize")
+        self.assertEqual(code, 1)
+        self.assertIn("review pipeline operation failed", stderr)
+        self.assertNotIn("review chain did not finish", stderr)
+
+    def test_attempt_after_success_is_refused(self):
+        self.capture("glm")
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "fallback order"):
+            self.capture("kimi")
+
+    def test_partial_chain_is_not_finalized(self):
+        self.capture("glm", BACKEND_OUTCOME="failure")
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "did not finish"):
+            pipeline.finalize(self.directory)
+
+    def test_engine_process_failure_records_one_failed_deepseek_attempt(self):
+        # The engine crashed or was refused before printing a result: the
+        # attempt still happened under the trusted provider order, so history
+        # records one failed deepseek attempt and finalize reports not-reviewed
+        # instead of leaving the chain unfinished.
+        source = json.loads((ROOT / "tests/fixtures/ci/pr-agent/complete-input.json").read_text())
+        # Production identities carry the numeric GitHub run id; re-sign the fixture with one.
+        source["identity"]["run_id"] = "99"
+        unsigned = copy.deepcopy(source)
+        unsigned.pop("input_sha256", None)
+        source["input_sha256"] = hashlib.sha256(
+            json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        authenticated = t2.authenticate_input(source)
+        identity = {"repository": authenticated["identity"]["repository"], "pr_number": authenticated["identity"]["pull_request"],
+                    "head_sha": authenticated["identity"]["head_sha"], "base_sha": authenticated["identity"]["base_sha"],
+                    "control_sha": authenticated["identity"]["control_sha"], "backend": "deterministic",
+                    "run_id": 99, "run_attempt": authenticated["identity"]["run_attempt"]}
+        collector = pipeline.collector_witness(source)
+        engine = {"name": "pr-agent", "source_commit": "1" * 40, "version": "0.45.0",
+                  "bundle": {"archive_sha256": "2" * 64, "archive_byte_length": 7, "manifest_sha256": "3" * 64,
+                             "adapter_sha256": "4" * 64, "default_config_sha256": "5" * 64,
+                             "requirements_lock_sha256": "6" * 64, "stock_tokenizer_asset_sha256": "7" * 64},
+                  "runtime_config": {"sha256": "8" * 64, "byte_length": 7}}
+        trusted = {"schema": review_scope.TRUSTED_CONFIG_SCHEMA, "provider_order": ["deepseek", "glm", "xai", "kimi"],
+                   "providers": {"deepseek": {"enabled": True, "model": "deepseek/deepseek-flash"},
+                                 "glm": {"enabled": False}, "xai": {"enabled": False}, "kimi": {"enabled": False}},
+                   "engine": engine}
+        pipeline.save(self.directory / "context.json",
+                      {"identity": identity, "changed_paths": sorted({h["path"] for h in collector["expected_hunks"]})})
+        pipeline.save(self.directory / "t2-input.json", source)
+        pipeline.save(self.directory / "t2-config-witness.json", trusted)
+        cases = {
+            "no result file": (None, "failure", "service_error"),
+            "engine-level refusal": ({"schema": t2.RESULT_SCHEMA, "status": "not-reviewed",
+                                      "error_class": "authentication_error", "error": "bounded"}, "failure", "missing_credential"),
+            "budget refusal": ({"schema": t2.RESULT_SCHEMA, "status": "not-reviewed",
+                                "error_class": "budget_exhausted", "error": "bounded"}, "failure", "budget_exhausted"),
+            "killed by step timeout": (None, "cancelled", "timeout"),
+            "garbage on stdout": ("Traceback (most recent call last)", "failure", "service_error"),
+        }
+        for label, (result, outcome, expected) in cases.items():
+            with self.subTest(case=label):
+                result_path = self.directory / "t2-result.json"
+                if result is None:
+                    result_path.unlink(missing_ok=True)
+                elif isinstance(result, str):
+                    result_path.write_text(result, encoding="utf-8")
+                else:
+                    pipeline.save(result_path, result)
+                pipeline.save(self.directory / "history.json", [])
+                for stale in ("result.json", "failure.json", "review.json"):
+                    (self.directory / stale).unlink(missing_ok=True)
+                self.capture("deepseek", BACKEND_OUTCOME=outcome, T2_RESULT_JSON=str(result_path), REVIEW_JSON="")
+                history = pipeline.read(self.directory / "history.json")
+                self.assertEqual(history["schema"], review_scope.HISTORY_SCHEMA_V2)
+                self.assertEqual([(a["backend"], a["status"], a["error_class"]) for a in history["attempts"]],
+                                 [("deepseek", "failed", expected)])
+                self.assertIsNone(history["attempts"][0]["coverage_sha256"])
+                self.assertEqual(pipeline.read(self.directory / "collector.json"), collector)
+                self.assertEqual(pipeline.read(self.directory / "t2-config-witness.json"), trusted)
+                self.assertIn("reviewed=false", (self.directory / "output").read_text())
+                self.assertEqual(pipeline.finalize(self.directory), "not-reviewed")
+                self.assertTrue((self.directory / "failure.json").exists())
+                self.assertFalse((self.directory / "review.json").exists())
+        # A completed attempt history is never overwritten by a synthesized failure.
+        pipeline.save(self.directory / "history.json", history)
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "existing attempt history"):
+            self.capture("deepseek", BACKEND_OUTCOME="failure", T2_RESULT_JSON=str(self.directory / "absent.json"), REVIEW_JSON="")
+
     def test_schema_vocabulary_matches_every_label_the_validator_accepts(self):
         policy = test_scope.load_policy(ROOT)
         labels = pipeline.response_schema(policy)["properties"]["test_scope"]["properties"]["labels"]
@@ -239,7 +443,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(review_scope.next_backend(test_scope.load_policy(ROOT), history), "grok")
         self.assertFalse((self.directory / "review.json").exists())
 
-    def test_collected_schema_reaches_both_claude_argument_lists(self):
+    def test_legacy_collect_still_emits_only_the_trusted_schema_output(self):
         target = {"review": "true", "head_sha": "a" * 40, "base_sha": "b" * 40,
                   "body": "untrusted $(echo forged) body\nreview_schema=forged"}
         expected = {
@@ -261,267 +465,12 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(output), 1, "why: schema output has extra records; remedy: serialize only trusted policy")
         name, schema = output[0].split("=", 1)
         self.assertEqual(name, "review_schema")
+        self.assertEqual(json.loads(schema), pipeline.response_schema(test_scope.load_policy(ROOT)))
+        # The production workflow feeds the engine from collect-t2, never from
+        # a model-side JSON-schema argument.
         source = (ROOT / ".github/workflows/pr-review.yml").read_text()
-        arguments = re.findall(r"          claude_args: >-\n(.*?)(?=\n      -)", source, re.S)
-        self.assertEqual(len(arguments), 2)
-        for args in arguments:
-            parsed = shlex.split(args.replace("${{ steps.input.outputs.review_schema }}", schema))
-            actual = json.loads(parsed[parsed.index("--json-schema") + 1])
-            self.assertEqual(actual, pipeline.response_schema(test_scope.load_policy(ROOT)),
-                             "why: Claude did not receive trusted policy schema; remedy: wire the collect output")
-            allowed = actual["properties"]["test_scope"]["properties"]["labels"]["items"]["enum"]
-            for bare in ("creator", "docs_static", "portal", "test:unknown"):
-                self.assertNotIn(bare, allowed)
-        self.assertEqual((self.directory / "pr-body.md").read_text(), target["body"])
-
-    def test_glm_success_persists_full_original_model(self):
-        self.capture("glm")
-        pipeline.finalize(self.directory)
-        self.assertEqual(pipeline.read(self.directory / "review.json"), self.model)
-        self.assertEqual(pipeline.read(self.directory / "result.json")["status"], "reviewed")
-        self.assertIn("reviewed=true", (self.directory / "output").read_text())
-
-    def test_glm_failure_then_kimi_success_preserves_each_receipt(self):
-        self.capture("glm", BACKEND_OUTCOME="failure")
-        self.capture("kimi")
-        pipeline.finalize(self.directory)
-        history = pipeline.read(self.directory / "history.json")
-        self.assertEqual([item["status"] for item in history], ["failed", "reviewed"])
-        self.assertEqual(pipeline.read(self.directory / "result.json")["publication"]["record"]["backend"], "kimi")
-
-    def test_invalid_json_triggers_next_backend(self):
-        self.capture("glm", REVIEW_JSON="not-json")
-        history = pipeline.read(self.directory / "history.json")
-        self.assertEqual(history[0]["error_class"], "invalid_output")
-        self.assertEqual(review_scope.next_backend(test_scope.load_policy(ROOT), history), "kimi")
-
-    def test_missing_key_is_not_empty_success(self):
-        self.capture("glm", BACKEND_AVAILABLE="false", BACKEND_OUTCOME="skipped")
-        self.assertEqual(pipeline.read(self.directory / "history.json")[0]["error_class"], "missing_credential")
-
-    def test_all_failure_persists_failure_not_clean_review(self):
-        for backend in review_scope.BACKENDS:
-            self.capture(backend, BACKEND_OUTCOME="failure")
-        pipeline.finalize(self.directory)
-        failure = pipeline.read(self.directory / "failure.json")
-        self.assertEqual(failure["status"], "not-reviewed")
-        self.assertEqual(len(failure["attempts"]), 3)
-        self.assertFalse((self.directory / "review.json").exists())
-
-    def cli(self, *arguments, env=None):
-        """Run the real CLI the workflow runs, and return `(returncode, stderr)`.
-
-        The workflow reads an exit code, not a return value, so that is what
-        this asserts. Calling `finalize()` directly would pass whatever the
-        function does and say nothing about the job's conclusion, which is the
-        thing #939 was about.
-        """
-        environment = {**os.environ, **self.env, **(env or {})}
-        completed = subprocess.run(
-            [sys.executable, str(ROOT / "scripts/ci/review_pipeline.py"),
-             *arguments, "--directory", str(self.directory)],
-            capture_output=True, text=True, timeout=60, env=environment,
-        )
-        return completed.returncode, completed.stderr
-
-    def test_finalize_exits_nonzero_when_no_model_reviewed(self):
-        # The producer job is named `Review fallback`; its conclusion is what a
-        # reader scanning job names sees. Reporting success over a
-        # `not-reviewed` artifact makes that name a lie.
-        for backend in review_scope.BACKENDS:
-            self.capture(backend, BACKEND_OUTCOME="failure")
-        code, stderr = self.cli("finalize")
-        self.assertEqual(code, 1)
-        self.assertIn("no model reviewed this head", stderr)
-
-    def test_finalize_still_writes_every_receipt_when_it_fails(self):
-        # The exit code changes; the evidence must not. A dropped review is
-        # recoverable from this artifact, which is how #916's was found hours
-        # later, so failing must not cost the receipts.
-        for backend in review_scope.BACKENDS:
-            self.capture(backend, BACKEND_OUTCOME="failure")
-        code, _ = self.cli("finalize")
-        self.assertEqual(code, 1)
-        result = pipeline.read(self.directory / "result.json")
-        self.assertEqual(result["status"], "not-reviewed")
-        failure = pipeline.read(self.directory / "failure.json")
-        self.assertEqual(len(failure["attempts"]), 3)
-        self.assertTrue((self.directory / "history.json").exists())
-        self.assertTrue((self.directory / "context.json").exists())
-
-    def test_finalize_exits_zero_when_a_model_did_review(self):
-        # The positive control. Without it the case above would pass against a
-        # `finalize` that always failed, which would be a different defect and
-        # would read identically here.
-        self.capture("glm")
-        code, stderr = self.cli("finalize")
-        self.assertEqual(code, 0, stderr)
-        self.assertEqual(
-            pipeline.read(self.directory / "result.json")["status"], "reviewed")
-
-    def test_a_crash_and_a_clean_not_reviewed_are_told_apart(self):
-        # Both exit nonzero, so the job fails either way -- but a reader
-        # diagnosing the run must be able to tell "the backends were down" from
-        # "the pipeline broke". Same exit code, different stderr.
-        code, stderr = self.cli("finalize")  # empty history: chain unfinished
-        self.assertEqual(code, 1)
-        self.assertIn("review pipeline operation failed", stderr)
-        self.assertNotIn("no model reviewed this head", stderr)
-
-    def test_publish_prints_which_precondition_refused(self):
-        """#939: the publisher's refusals must name themselves.
-
-        It drops roughly one review in four and every log said only "review
-        pipeline operation failed", so no remedy could be designed: a retry
-        aimed at the wrong precondition would look like a fix and change
-        nothing. These messages already existed at every `require` in
-        `publish()`; the handler was destroying them.
-        """
-        self.capture("glm")
-        pipeline.finalize(self.directory)
-        # The publisher's whole environment, with exactly one value wrong, so
-        # the first `require` in `publish()` is the only thing that can fire.
-        code, stderr = self.cli("publish", env={
-            "GITHUB_REPOSITORY": self.identity["repository"],
-            "PR_NUMBER": "999999",
-            "HEAD_SHA": self.identity["head_sha"],
-            "GITHUB_RUN_ID": str(self.identity["run_id"]),
-            "GITHUB_RUN_ATTEMPT": str(self.identity["run_attempt"]),
-        })
-        self.assertEqual(code, 1)
-        self.assertIn("artifact identity differs from publisher context", stderr)
-        self.assertNotIn("review pipeline operation failed", stderr)
-
-    def test_only_publish_gets_the_specific_message(self):
-        """The generic line stays everywhere the model's text is still in scope.
-
-        `grok` raises `ReviewScopeError` from positions that describe provider
-        output, and two tests below keep those generic. This asserts the
-        boundary directly rather than leaving it to them, because the arm added
-        for `publish` is one `args.command` away from covering them too.
-        """
-        code, stderr = self.cli("finalize")  # empty history: chain unfinished
-        self.assertEqual(code, 1)
-        self.assertIn("review pipeline operation failed", stderr)
-        self.assertNotIn("review chain did not finish", stderr)
-
-    def test_attempt_after_success_is_refused(self):
-        self.capture("glm")
-        with self.assertRaisesRegex(review_scope.ReviewScopeError, "fallback order"):
-            self.capture("kimi")
-
-    def test_partial_chain_is_not_finalized(self):
-        self.capture("glm", BACKEND_OUTCOME="failure")
-        with self.assertRaisesRegex(review_scope.ReviewScopeError, "did not finish"):
-            pipeline.finalize(self.directory)
-
-    def test_grok_has_bounded_read_only_process_and_no_github_token(self):
-        (self.directory / "pr-body.md").write_text("untrusted body")
-        (self.directory / "pr.diff").write_text("untrusted diff")
-
-        def run(command, *, env, capture_output, text, timeout):
-            self.assertEqual(command[0], "grok")
-            self.assertIn("--no-subagents", command)
-            self.assertEqual(command[command.index("--tools") + 1], "read_file,grep,list_dir")
-            self.assertNotIn("GITHUB_TOKEN", env)
-            self.assertNotIn("GH_TOKEN", env)
-            self.assertNotIn("GROK_AUTH_JSON", env)
-            self.assertEqual(timeout, 300)
-            self.assertTrue(capture_output and text)
-            return subprocess.CompletedProcess(command, 0, json.dumps({"text": json.dumps(self.model)}), "")
-
-        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "secret", "GH_TOKEN": "secret", "GROK_AUTH_JSON": "{}"}), \
-                mock.patch.object(pipeline.subprocess, "run", side_effect=run):
-            pipeline.grok(self.directory)
-        self.assertEqual(pipeline.read(self.directory / "grok.json"), self.model)
-        self.assertFalse((self.directory / "grok-auth/auth.json").exists())
-
-    def test_grok_timeout_cleans_exact_temporary_auth(self):
-        (self.directory / "pr-body.md").write_text("body")
-        (self.directory / "pr.diff").write_text("diff")
-        with mock.patch.dict(os.environ, {"GROK_AUTH_JSON": "{}"}), \
-                mock.patch.object(pipeline.subprocess, "run", side_effect=subprocess.TimeoutExpired("grok", 300)), \
-                self.assertRaises(subprocess.TimeoutExpired):
-            pipeline.grok(self.directory)
-        self.assertFalse((self.directory / "grok-auth/auth.json").exists())
-
-    def assert_grok_diagnostic(self, category, *, returncode=None, stdout="RAW_PROVIDER_SECRET",
-                               error=None, credential="PRIVATE_AUTH_SECRET"):
-        (self.directory / "pr-body.md").write_text("PRIVATE_BODY_SECRET")
-        (self.directory / "pr.diff").write_text("PRIVATE_DIFF_SECRET")
-        output, errors = io.StringIO(), io.StringIO()
-        process = subprocess.CompletedProcess(["grok"], returncode or 0, stdout, "RAW_STDERR_SECRET")
-        with mock.patch.dict(os.environ, {"GROK_AUTH_JSON": credential, "XAI_API_KEY": ""}), \
-                mock.patch.object(sys, "argv", ["review_pipeline.py", "grok", "--directory", str(self.directory)]), \
-                mock.patch.object(pipeline.subprocess, "run", return_value=process, side_effect=error) as run, \
-                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-            self.assertEqual(pipeline.main(), 1)
-        if category == "credential_unavailable":
-            run.assert_not_called()
-        else:
-            run.assert_called_once()
-        self.assertEqual(output.getvalue(), "")
-        lines = errors.getvalue().splitlines()
-        self.assertEqual(len(lines), 2)
-        self.assertEqual(json.loads(lines[0]), {"schema": "lmdj.ci-review-diagnostic.v1", "backend": "grok",
-                                              "category": category, "returncode": returncode})
-        self.assertIn("why: review pipeline operation failed; remedy:", lines[1])
-        self.assertNotIn("SECRET", errors.getvalue(),
-                         "why: failure diagnostics leaked raw data; remedy: emit finite local categories only")
-        self.assertFalse((self.directory / "grok-auth/auth.json").exists())
-        self.assertFalse((self.directory / "grok.json").exists())
-
-    def test_grok_missing_credential_is_visible_before_process_launch(self):
-        self.assert_grok_diagnostic("credential_unavailable", credential="")
-
-    def test_grok_launch_failure_never_prints_exception(self):
-        self.assert_grok_diagnostic("launch_failure", error=OSError("PRIVATE_LAUNCH_SECRET"))
-
-    def test_grok_timeout_never_prints_partial_output(self):
-        self.assert_grok_diagnostic("timeout", error=subprocess.TimeoutExpired(
-            "PRIVATE_COMMAND_SECRET", 300, output="PARTIAL_OUTPUT_SECRET", stderr="PARTIAL_STDERR_SECRET"))
-
-    def test_grok_process_failure_retains_actual_exit_code(self):
-        self.assert_grok_diagnostic("process_failure", returncode=17)
-
-    def test_grok_nonzero_auth_envelope_is_not_lost_before_json_parsing(self):
-        self.assert_grok_diagnostic("authentication_required", returncode=1,
-            stdout=json.dumps({"type": "error", "message":
-                "Not signed in. To authenticate without a browser, run:\nPRIVATE_AUTH_SECRET"}))
-
-    def test_grok_nonzero_error_envelope_keeps_only_a_finite_category(self):
-        self.assert_grok_diagnostic("error_envelope", returncode=1,
-            stdout=json.dumps({"type": "error", "message": "PRIVATE_PROVIDER_SECRET"}))
-
-    def test_grok_nonzero_valid_review_cannot_become_success(self):
-        self.assert_grok_diagnostic("process_failure", returncode=1,
-            stdout=json.dumps({"text": json.dumps(self.model)}))
-
-    def test_grok_duplicate_error_keys_are_not_diagnostic_authority(self):
-        self.assert_grok_diagnostic("process_failure", returncode=1,
-            stdout='{"type":"result","type":"error","message":"Not signed in. SECRET"}')
-
-    def test_grok_oversized_error_envelope_is_not_parsed(self):
-        self.assert_grok_diagnostic("process_failure", returncode=1,
-            stdout=json.dumps({"type": "error", "message": "Not signed in. " + "SECRET" * 30000}))
-
-    def test_grok_embedded_auth_prose_does_not_claim_authentication_failure(self):
-        self.assert_grok_diagnostic("error_envelope", returncode=1,
-            stdout=json.dumps({"type": "error", "message": "PRIVATE_SECRET quotes Not signed in."}))
-
-    def test_grok_non_json_envelope_does_not_expose_parse_input(self):
-        self.assert_grok_diagnostic("invalid_envelope", returncode=0)
-
-    def test_grok_array_envelope_remains_invalid(self):
-        self.assert_grok_diagnostic("invalid_envelope", returncode=0, stdout='["PRIVATE_ENVELOPE_SECRET"]')
-
-    def test_grok_error_envelope_does_not_expose_provider_message(self):
-        self.assert_grok_diagnostic("error_envelope", returncode=0,
-                                   stdout=json.dumps({"type": "error", "message": "PRIVATE_ERROR_SECRET"}))
-
-    def test_grok_invalid_review_remains_failure_without_echoing_model_text(self):
-        self.assert_grok_diagnostic("invalid_review", returncode=0,
-                                   stdout=json.dumps({"text": "PRIVATE_MODEL_SECRET"}))
+        self.assertNotIn("claude_args", source)
+        self.assertIn('review_pipeline.py collect-t2 --directory "$REVIEW_DIR"', source)
 
     def test_git_failure_does_not_echo_credentials(self):
         with mock.patch.object(pipeline.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, b"", b"secret")), \
@@ -540,13 +489,14 @@ class PipelineTests(unittest.TestCase):
                 self.assertRaisesRegex(review_scope.ReviewScopeError, "incomplete inventory"):
             pipeline.pages("/jobs", "jobs")
 
-    def test_workflow_uses_only_one_successful_chain_and_exact_artifact(self):
+    def test_workflow_uses_only_one_engine_attempt_and_exact_artifact(self):
         source = (ROOT / ".github/workflows/pr-review.yml").read_text()
         self.assertEqual(source.count("name: Review fallback"), 1)
-        self.assertEqual(source.count("timeout-minutes: 5"), 5)
-        self.assertIn("steps.capture-glm.outputs.reviewed != 'true' && steps.capture-kimi.outputs.reviewed != 'true'", source)
+        self.assertEqual(source.count("review_pipeline.py capture --backend"), 1,
+                         "why: the engine owns provider fallback; remedy: keep one capture step")
         self.assertIn("${{ env.REVIEW_DIR }}/review.json", source)
         self.assertIn("${{ env.REVIEW_DIR }}/failure.json", source)
+        self.assertIn("${{ env.REVIEW_DIR }}/t2-config-witness.json", source)
         self.assertIn("pr-test-scope-${{ needs.target.outputs.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}", source)
         self.assertNotIn("issues: write", source)
         self.assertNotIn("actions: write", source)
@@ -566,7 +516,7 @@ class PipelineTests(unittest.TestCase):
                 mock.patch.object(pipeline, "previous_records", return_value=([], unavailable)), \
                 mock.patch.object(pipeline.change_scope, "read_git_inventory", return_value=[pipeline.change_scope.ChangedFile("M", ("docs/notes/a.md",))]), \
                 mock.patch.object(pipeline, "publish_model", side_effect=lambda identity, record, model, **kwargs: calls.append(("review", {"summary": model["summary"] + model["test_scope"]["reason"] + pipeline.codec.encode(record)}))), \
-                mock.patch.object(pipeline.grok_review, "github_request", side_effect=lambda *a: calls.append(("labels", a))):
+                mock.patch.object(pipeline.pr_review_target, "github_request", side_effect=lambda *a: calls.append(("labels", a))):
             pipeline.publish(self.directory)
         return calls
 
@@ -647,10 +597,15 @@ class PipelineTests(unittest.TestCase):
 
     def test_backend_conditions_require_successful_collection(self):
         source = (ROOT / ".github/workflows/pr-review.yml").read_text()
-        for step in ("glm", "kimi", "grok", "capture-glm", "capture-kimi", "capture-grok"):
+        for step in ("deepseek", "capture-deepseek"):
             block = source.split("        id: " + step + "\n", 1)[1].split("      - ", 1)[0]
             self.assertIn("steps.input.outcome == 'success'", block,
-                          "why: backend could run without complete diff; remedy: gate it on input collection success")
+                          "why: the engine could run without the complete authenticated input; remedy: gate it on collection success")
+        engine = source.split("        id: deepseek\n", 1)[1].split("      - ", 1)[0]
+        self.assertIn("slot.lock bash -euo pipefail <<'REVIEW'", engine)
+        self.assertLess(engine.index("slot.lock"), engine.index("run-engine.sh --witness"))
+        self.assertLess(engine.index("run-engine.sh --witness"), engine.index("run-engine.sh --input"),
+                        "why: witness and model must bind one protected release; remedy: execute both under the same slot lock")
 
     def make_real_t2_repo(self):
         temporary = tempfile.TemporaryDirectory(prefix="lmdj-pipeline-t2-")
@@ -853,7 +808,7 @@ class PipelineTests(unittest.TestCase):
                         mock.patch.object(pipeline, "fetch"), \
                         mock.patch.object(pipeline, "previous_records", return_value=([], False)), \
                         mock.patch.object(pipeline, "publish_model"), \
-                        mock.patch.object(pipeline.grok_review, "github_request"), \
+                        mock.patch.object(pipeline.pr_review_target, "github_request"), \
                         mock.patch.object(pipeline.change_scope, "read_git_inventory",
                                           side_effect=read_inventory):
                     pipeline.publish(output)
