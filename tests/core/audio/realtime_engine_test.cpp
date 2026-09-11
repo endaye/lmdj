@@ -3195,6 +3195,187 @@ struct PausedRealtimeHook {
   void release() { released.store(true, std::memory_order_release); }
 };
 
+// Generation visibility is not the pending-zero admission handoff. Removing
+// that gate must fail this contract test; the stress must wait for readiness.
+void bank_generation_precedes_admission_readiness() {
+  using namespace lmdj::audio;
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.start().has_value());
+  auto owner = std::make_shared<const lmdj::cooker::PcmSample>(
+      lmdj::cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(256, 16'384)});
+  std::weak_ptr<const lmdj::cooker::PcmSample> lifetime = owner;
+  auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+  LMDJ_CHECK(bank.set_pcm_sample(0, owner,
+      {0, 256, TriggerMode::loop_gate, 1.0F, false}).has_value());
+  owner.reset();
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) == PublishResult::accepted);
+  PausedRealtimeHook gate;
+  testing::set_realtime_hook(
+      testing::RealtimeHookPoint::bank_applied_before_pending_release, &gate.hook);
+  std::array<float, 2> left{}, right{};
+  std::thread audio([&] { engine.render(left.data(), right.data(), 1); });
+  gate.wait();
+  const auto visible = engine.bank_telemetry();
+  const PadControlEvent press{42, 0, 127, PadControlKind::press, {}};
+  const auto refused = engine.enqueue_control(press);
+  const auto admissions = engine.telemetry().enqueued_events;
+  gate.release();
+  audio.join();
+  LMDJ_CHECK(visible.current_generation == 1);
+  LMDJ_CHECK(visible.pending_publications == 1);
+  LMDJ_CHECK(refused == EnqueueResult::bank_transition);
+  LMDJ_CHECK(admissions == 0);
+  const auto ready = engine.bank_telemetry();
+  LMDJ_CHECK(ready.current_generation == 1 && ready.pending_publications == 0);
+  LMDJ_CHECK(engine.enqueue_control(press) == EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left[0] == 0 && left[1] > 0);
+  LMDJ_CHECK(engine.telemetry().started_voices == 1);
+  LMDJ_CHECK(engine.publish_sample_bank(
+      PreparedSampleBank::empty(ProjectId{kProjectId}, 2)) == PublishResult::accepted);
+  render_frames(engine, 1);
+  LMDJ_CHECK(!lifetime.expired());
+  LMDJ_CHECK(engine.reclaim_retired_banks() == 0);
+  LMDJ_CHECK(engine.enqueue_control(
+      {43, 0, 0, PadControlKind::stop_all, {}}) == EnqueueResult::accepted);
+  render_frames(engine, kRealtimeRampFrames + 1);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(!lifetime.expired());
+  const auto reclaimed = engine.reclaim_retired_bank_telemetry();
+  LMDJ_CHECK(reclaimed.count == 1 && reclaimed.decoded_pcm_bytes == 512);
+  LMDJ_CHECK(lifetime.expired());
+}
+
+PreparedSampleBank audition_bank_with_pcm_owner(
+    std::shared_ptr<const lmdj::cooker::PcmSample> owner) {
+  auto bank = PreparedSampleBank::empty(
+      lmdj::audio::kAuditionBankProjectId(),
+      lmdj::audio::kAuditionBankProjectRevision);
+  LMDJ_CHECK(bank.set_pcm_sample(lmdj::audio::kAuditionSampleSlot, std::move(owner),
+      {0, 128, TriggerMode::loop_gate, 1.0F, false}).has_value());
+  return bank;
+}
+
+// A start acquired after the initial publication drain must hear the PCM
+// published before that command, rather than the previous current Bank.
+void audition_start_after_initial_drain_uses_new_pcm() {
+  using namespace lmdj::audio;
+  RealtimeEngine engine;
+  const auto make_bank = [](std::int16_t sample) {
+    return audition_bank_with_pcm_owner(
+        std::make_shared<const lmdj::cooker::PcmSample>(lmdj::cooker::PcmSample{
+            48'000, 1, std::vector<std::int16_t>(128, sample)}));
+  };
+  auto old_owner = std::make_shared<const lmdj::cooker::PcmSample>(
+      lmdj::cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(128, -12'000)});
+  std::weak_ptr<const lmdj::cooker::PcmSample> old_lifetime = old_owner;
+  LMDJ_CHECK(engine.publish_audition_bank(
+      audition_bank_with_pcm_owner(std::move(old_owner))) == PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  PausedRealtimeHook gate;
+  testing::set_realtime_hook(testing::RealtimeHookPoint::before_pattern_claim, &gate.hook);
+  std::array<float, 2> left{}, right{};
+  std::thread audio([&] { engine.render(left.data(), right.data(), left.size()); });
+  gate.wait();
+  auto new_owner = std::make_shared<const lmdj::cooker::PcmSample>(
+      lmdj::cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(128, 12'000)});
+  std::weak_ptr<const lmdj::cooker::PcmSample> new_lifetime = new_owner;
+  const auto published = engine.publish_audition_bank(
+      audition_bank_with_pcm_owner(std::move(new_owner)));
+  const auto admitted = engine.enqueue_control(
+      {1, 0, 127, PadControlKind::audition_start, {}});
+  gate.release();
+  audio.join();
+  LMDJ_CHECK(published == PublishResult::accepted);
+  LMDJ_CHECK(admitted == EnqueueResult::accepted);
+  LMDJ_CHECK(engine.telemetry().started_voices == 1);
+  LMDJ_CHECK(left[0] == 0);  // Preserve the zero-gain first attack sample.
+  LMDJ_CHECK(left[1] > 0);  // New positive PCM, not old negative PCM.
+  LMDJ_CHECK(right[1] > 0);
+  LMDJ_CHECK(!old_lifetime.expired() && !new_lifetime.expired());
+  LMDJ_CHECK(engine.reclaim_retired_banks() == 1);
+  LMDJ_CHECK(old_lifetime.expired() && !new_lifetime.expired());
+  LMDJ_CHECK(engine.publish_audition_bank(make_bank(16'000)) == PublishResult::accepted);
+  render_frames(engine, 1);
+  LMDJ_CHECK(engine.reclaim_retired_banks() == 0);
+  LMDJ_CHECK(!new_lifetime.expired());
+  LMDJ_CHECK(engine.enqueue_control(
+      {2, 0, 0, PadControlKind::audition_stop, {}}) == EnqueueResult::accepted);
+  render_frames(engine, kRealtimeRampFrames + 1);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(engine.telemetry().cancelled_voices == 1);
+  LMDJ_CHECK(!new_lifetime.expired());
+  const auto reclaimed = engine.reclaim_retired_bank_telemetry();
+  LMDJ_CHECK(reclaimed.count == 1 && reclaimed.decoded_pcm_bytes == 0);
+  LMDJ_CHECK(new_lifetime.expired());
+}
+
+// Without the post-acquire refresh, an admitted first start is discarded
+// because the initial callback drain saw no audition Bank at all.
+void first_audition_after_initial_drain_is_not_lost() {
+  using namespace lmdj::audio;
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.start().has_value());
+  PausedRealtimeHook gate;
+  testing::set_realtime_hook(testing::RealtimeHookPoint::before_pattern_claim, &gate.hook);
+  std::array<float, 2> left{}, right{};
+  std::thread audio([&] { engine.render(left.data(), right.data(), left.size()); });
+  gate.wait();
+  const auto published = engine.publish_audition_bank(audition_bank_with_pcm_owner(
+      std::make_shared<const lmdj::cooker::PcmSample>(lmdj::cooker::PcmSample{
+          48'000, 1, std::vector<std::int16_t>(128, 12'000)})));
+  const auto admitted = engine.enqueue_control(
+      {1, 0, 127, PadControlKind::audition_start, {}});
+  gate.release();
+  audio.join();
+  LMDJ_CHECK(published == PublishResult::accepted);
+  LMDJ_CHECK(admitted == EnqueueResult::accepted);
+  LMDJ_CHECK(left[0] == 0);
+  LMDJ_CHECK(left[1] > 0 && right[1] > 0);
+  LMDJ_CHECK(engine.telemetry().started_voices == 1);
+  LMDJ_CHECK(engine.enqueue_control(
+      {2, 0, 0, PadControlKind::audition_stop, {}}) == EnqueueResult::accepted);
+  render_frames(engine, kRealtimeRampFrames + 1);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(engine.telemetry().cancelled_voices == 1);
+}
+
+// Pinning a start to A or refusing B while that start is queued breaks the
+// existing latest-publication-wins contract. Both Banks precede callback one.
+void audition_start_uses_latest_publication_before_first_callback() {
+  using namespace lmdj::audio;
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.start().has_value());
+  auto owner_a = std::make_shared<const lmdj::cooker::PcmSample>(
+      lmdj::cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(128, -12'000)});
+  std::weak_ptr<const lmdj::cooker::PcmSample> lifetime_a = owner_a;
+  LMDJ_CHECK(engine.publish_audition_bank(
+      audition_bank_with_pcm_owner(std::move(owner_a))) == PublishResult::accepted);
+  LMDJ_CHECK(engine.enqueue_control(
+      {1, 0, 127, PadControlKind::audition_start, {}}) == EnqueueResult::accepted);
+  auto owner_b = std::make_shared<const lmdj::cooker::PcmSample>(
+      lmdj::cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(128, 12'000)});
+  std::weak_ptr<const lmdj::cooker::PcmSample> lifetime_b = owner_b;
+  LMDJ_CHECK(engine.publish_audition_bank(
+      audition_bank_with_pcm_owner(std::move(owner_b))) == PublishResult::accepted);
+  std::array<float, 2> left{}, right{};
+  engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left[0] == 0);
+  LMDJ_CHECK(left[1] > 0 && right[1] > 0);
+  LMDJ_CHECK(engine.telemetry().started_voices == 1);
+  LMDJ_CHECK(!lifetime_a.expired() && !lifetime_b.expired());
+  const auto reclaimed = engine.reclaim_retired_bank_telemetry();
+  LMDJ_CHECK(reclaimed.count == 1 && reclaimed.decoded_pcm_bytes == 0);
+  LMDJ_CHECK(lifetime_a.expired() && !lifetime_b.expired());
+  LMDJ_CHECK(engine.enqueue_control(
+      {2, 0, 0, PadControlKind::audition_stop, {}}) == EnqueueResult::accepted);
+  render_frames(engine, kRealtimeRampFrames + 1);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(engine.telemetry().cancelled_voices == 1);
+  LMDJ_CHECK(engine.reclaim_retired_banks() == 0);
+  LMDJ_CHECK(!lifetime_b.expired());  // The current Bank is retained after stop.
+}
+
 void occupancy_includes_one_reservation_and_one_popped_entry(bool fx) {
   using lmdj::audio::testing::RealtimeHookPoint;
   RealtimeEngine engine;
@@ -3489,6 +3670,10 @@ void render_and_adapter_status_finish_while_observer_holds_reader_lock() {
 }  // namespace
 
 int main() {
+  bank_generation_precedes_admission_readiness();
+  audition_start_uses_latest_publication_before_first_callback();
+  first_audition_after_initial_drain_is_not_lost();
+  audition_start_after_initial_drain_uses_new_pcm();
   engine_queue_profiles_account_for_all_allocated_payloads();
   receipt_profile_rejects_invalid_capacity();
   pcm_replacement_releases_the_actual_float_allocation();
