@@ -1,4 +1,18 @@
 find_package(Threads REQUIRED)
+# Compile the real ESP audio implementation against a GPIO-routing fake.
+# This checks shared-bus lifetime, not DMA timing or physical sound; those
+# remain covered by the existing audio tests and device acceptance.
+add_executable(lmdj_cardputer_shared_i2c_tests shared_i2c_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/audio_driver.cpp")
+target_compile_definitions(lmdj_cardputer_shared_i2c_tests PRIVATE ESP_PLATFORM)
+target_include_directories(lmdj_cardputer_shared_i2c_tests PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/fake_esp" "${CMAKE_SOURCE_DIR}")
+lmdj_target_warnings(lmdj_cardputer_shared_i2c_tests)
+lmdj_target_sanitizers(lmdj_cardputer_shared_i2c_tests)
+foreach(scenario restart partial retry owned)
+  lmdj_add_test(NAME platform.cardputer.i2c.${scenario} TIER component
+    COMMAND lmdj_cardputer_shared_i2c_tests ${scenario})
+endforeach()
 add_executable(lmdj_cardputer_audio_lifecycle_tests
   audio_lifecycle_test.cpp
   "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/audio_driver.cpp"

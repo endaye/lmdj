@@ -19,7 +19,16 @@ void silence(void*, float* left, float* right, std::uint32_t frames) noexcept {
 extern "C" void app_main() {
   using namespace lmdj::cardputer;
   try {
-    const auto config = cardputer_configuration();
+    auto config = cardputer_configuration();
+    // Both devices share physical SDA/SCL. Keep one controller and its pin
+    // routing alive across audio start/stop. Declare its owner first so it
+    // is destroyed only after the audio worker has joined.
+    Tca8418Scanner scanner(config.audio.io.sda, config.audio.io.scl);
+    if (!scanner.install()) {
+      std::puts("CARDPUTER keyboard initialization failed");
+      return;
+    }
+    config.audio.io.shared_bus = scanner.bus_handle();
     EspAudioSession audio(config.audio);
     // Establish actual codec/DMA silence even on a reset from an older image.
     // This is not a request to load content or auto-start a Pattern.
@@ -35,11 +44,6 @@ extern "C" void app_main() {
     RuntimeHost host(config.runtime, config.profile, audio);
     Display display;
     InputController input(host, display);
-    Tca8418Scanner scanner(config.audio.io.sda, config.audio.io.scl);
-    if (!scanner.install()) {
-      std::puts("CARDPUTER keyboard initialization failed");
-      return;
-    }
     UsbTransferEndpoint transfer(host, config.runtime.content_limits.maximum_encoded_bytes);
     if (!transfer.install()) {
       std::puts("CARDPUTER USB transfer initialization failed");
