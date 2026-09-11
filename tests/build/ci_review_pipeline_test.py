@@ -165,6 +165,13 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("artifact identity differs from publisher context", stderr)
         self.assertNotIn("review pipeline operation failed", stderr)
 
+    def test_only_publish_gets_the_specific_message(self):
+        """Other commands retain generic diagnostics while provider text is in scope."""
+        code, stderr = self.cli("finalize")
+        self.assertEqual(code, 1)
+        self.assertIn("review pipeline operation failed", stderr)
+        self.assertNotIn("review chain did not finish", stderr)
+
     def test_attempt_after_success_is_refused(self):
         self.capture("glm")
         with self.assertRaisesRegex(review_scope.ReviewScopeError, "fallback order"):
@@ -465,6 +472,18 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("claude_args", source)
         self.assertIn('review_pipeline.py collect-t2 --directory "$REVIEW_DIR"', source)
 
+    def test_git_failure_does_not_echo_credentials(self):
+        with mock.patch.object(pipeline.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, b"", b"secret")), \
+                self.assertRaisesRegex(review_scope.ReviewScopeError, "Git input") as raised:
+            pipeline.git("fetch", "main")
+        self.assertNotIn("secret", str(raised.exception))
+
+    def test_pagination_reads_second_page(self):
+        def api(path):
+            return {"jobs": [{"id": i} for i in range(100)]} if path.endswith("&page=1") else {"jobs": [{"id": 100}]}
+        with mock.patch.object(pipeline, "api", side_effect=api):
+            self.assertEqual(len(pipeline.pages("/jobs", "jobs")), 101)
+
     def test_pagination_failure_is_not_empty(self):
         with mock.patch.object(pipeline, "api", return_value={"message": "forbidden"}), \
                 self.assertRaisesRegex(review_scope.ReviewScopeError, "incomplete inventory"):
@@ -578,13 +597,15 @@ class PipelineTests(unittest.TestCase):
 
     def test_backend_conditions_require_successful_collection(self):
         source = (ROOT / ".github/workflows/pr-review.yml").read_text()
-        for step in ("witness", "deepseek", "capture-deepseek"):
+        for step in ("deepseek", "capture-deepseek"):
             block = source.split("        id: " + step + "\n", 1)[1].split("      - ", 1)[0]
             self.assertIn("steps.input.outcome == 'success'", block,
                           "why: the engine could run without the complete authenticated input; remedy: gate it on collection success")
         engine = source.split("        id: deepseek\n", 1)[1].split("      - ", 1)[0]
-        self.assertIn("steps.witness.outcome == 'success'", engine,
-                      "why: a review without its trusted config witness cannot be captured; remedy: gate the engine on the witness")
+        self.assertIn("slot.lock bash -euo pipefail <<'REVIEW'", engine)
+        self.assertLess(engine.index("slot.lock"), engine.index("run-engine.sh --witness"))
+        self.assertLess(engine.index("run-engine.sh --witness"), engine.index("run-engine.sh --input"),
+                        "why: witness and model must bind one protected release; remedy: execute both under the same slot lock")
 
     def make_real_t2_repo(self):
         temporary = tempfile.TemporaryDirectory(prefix="lmdj-pipeline-t2-")

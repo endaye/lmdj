@@ -17,6 +17,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = Path(os.environ.get("PR_AGENT_INSTALLER_TEST_SCRIPT", ROOT / "scripts/ci/pr-agent/install.sh"))
+WORKFLOW = Path(os.environ.get("PR_AGENT_WORKFLOW_TEST_FILE", ROOT / ".github/workflows/pr-review.yml"))
 WITNESS = '''import json, pathlib, sys
 if (pathlib.Path(__file__).parent / "runtime.toml").read_text() == "invalid":
     sys.exit(2)
@@ -117,6 +118,46 @@ class InstallTransitions(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("outside the releases directory", result.stderr)
         self.assertEqual(list((self.install / "releases").iterdir()), [self.source])
+
+    def run_workflow_engine_step(self, *, failed_witness=False):
+        # Execute the real workflow shell with only its fixed lock path relocated
+        # into this fixture. The wrapper observes locking, never calls a model.
+        source = WORKFLOW.read_text()
+        step = source.split("      - name: deepseek review\n", 1)[1].split("      - name: Validate PR-Agent result", 1)[0]
+        body = step.split("        run: |\n", 1)[1]
+        script = "\n".join(line[10:] for line in body.splitlines())
+        script = script.replace("/var/lib/lmdj/pr-agent/slot.lock", str(self.install / "slot.lock"))
+        wrapper = self.root / "scripts/ci/pr-agent/run-engine.sh"
+        wrapper.parent.mkdir(parents=True)
+        wrapper.write_text('''set -eu
+if flock -n "$TEST_SLOT" true; then
+  echo "wrapper ran outside slot lock" >&2
+  exit 80
+fi
+printf '%s\\n' "$1" >> "$REVIEW_DIR/trace"
+if [ "$1" = --witness ] && [ "$FAIL_WITNESS" = 1 ]; then exit 2; fi
+printf '{"release":"fixture-A"}\\n'
+''')
+        return subprocess.run(["bash", "-euo", "pipefail", "-c", script], cwd=self.root,
+                              env={**os.environ, "REVIEW_DIR": str(self.staging),
+                                   "TEST_SLOT": str(self.install / "slot.lock"),
+                                   "FAIL_WITNESS": "1" if failed_witness else "0"},
+                              text=True, capture_output=True, timeout=10)
+
+    def test_workflow_witness_and_input_both_hold_the_installation_lock(self):
+        result = self.run_workflow_engine_step()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.staging / "trace").read_text().splitlines(), ["--witness", "--input"])
+        self.assertEqual(json.loads((self.staging / "t2-config-witness.json").read_text()),
+                         {"release": "fixture-A"})
+        self.assertEqual(json.loads((self.staging / "t2-result.json").read_text()),
+                         {"release": "fixture-A"})
+
+    def test_workflow_failed_witness_never_invokes_the_model_entrypoint(self):
+        result = self.run_workflow_engine_step(failed_witness=True)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual((self.staging / "trace").read_text().splitlines(), ["--witness"])
+        self.assertFalse((self.staging / "t2-result.json").exists())
 
 
 if __name__ == "__main__":

@@ -219,7 +219,8 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
             self.assertEqual(exact.get(path), {"ci_contract"})
         for retired in (".github/scripts/grok_review.py", ".github/scripts/advisory_review_liveness.py",
                         ".github/workflows/advisory-review-liveness.yml", ".github/workflows/pr-agent-credential-preflight.yml"):
-            self.assertNotIn(retired, exact)
+            # Deletion and historical comparisons still need explicit routing.
+            self.assertEqual(exact.get(retired), {"ci_contract"})
             self.assertFalse((REPO_ROOT / retired).exists(), retired)
 
     def test_engine_runner_script_uses_the_installed_release_only(self):

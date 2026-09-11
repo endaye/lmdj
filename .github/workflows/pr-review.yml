@@ -88,34 +88,31 @@ jobs:
           PR_NUMBER: ${{ needs.target.outputs.number }}
           HEAD_SHA: ${{ needs.target.outputs.head_sha }}
         run: python3 scripts/ci/review_pipeline.py collect-t2 --directory "$REVIEW_DIR"
-      - name: Read the installed engine and provider configuration
-        id: witness
-        if: ${{ !cancelled() && steps.input.outcome == 'success' }}
-        timeout-minutes: 3
-        run: bash scripts/ci/pr-agent/run-engine.sh --witness > "$REVIEW_DIR/t2-config-witness.json"
       - name: deepseek review
         # PR-Agent runs here as the runner account with no GitHub token in its
         # environment; the engine clears everything but the named provider key.
-        # One review at a time per host; the ledger enforces the USD budget.
+        # Witness and model execution share the installation slot lock, so a
+        # release switch cannot mix their identities. The ledger caps spend.
         id: deepseek
-        if: ${{ !cancelled() && steps.input.outcome == 'success' && steps.witness.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.input.outcome == 'success' }}
         timeout-minutes: 25
         continue-on-error: true
         env:
           PR_AGENT_DEEPSEEK_API_KEY: ${{ secrets.PR_AGENT_DEEPSEEK_API_KEY }}
-        run: >-
-          flock -w 900 /var/lib/lmdj/pr-agent/slot.lock
-          bash scripts/ci/pr-agent/run-engine.sh --input "$REVIEW_DIR/t2-input.json"
-          > "$REVIEW_DIR/t2-result.json"
+        run: |
+          flock -w 900 /var/lib/lmdj/pr-agent/slot.lock bash -euo pipefail <<'REVIEW'
+            bash scripts/ci/pr-agent/run-engine.sh --witness > "$REVIEW_DIR/t2-config-witness.json"
+            bash scripts/ci/pr-agent/run-engine.sh --input "$REVIEW_DIR/t2-input.json" > "$REVIEW_DIR/t2-result.json"
+          REVIEW
       - name: Validate PR-Agent result
         id: capture-deepseek
-        if: ${{ !cancelled() && steps.input.outcome == 'success' && steps.witness.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.input.outcome == 'success' }}
         env:
           BACKEND_OUTCOME: ${{ steps.deepseek.outcome }}
           T2_RESULT_JSON: ${{ env.REVIEW_DIR }}/t2-result.json
         run: python3 scripts/ci/review_pipeline.py capture --backend deepseek --directory "$REVIEW_DIR"
       - name: Save honest final result
-        if: ${{ !cancelled() && steps.input.outcome == 'success' && steps.witness.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.input.outcome == 'success' }}
         run: python3 scripts/ci/review_pipeline.py finalize --directory "$REVIEW_DIR"
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}

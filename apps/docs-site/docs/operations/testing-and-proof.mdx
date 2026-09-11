@@ -498,13 +498,14 @@ symlink 指向；里面是解包的 bundle（`pr_agent/`、`vendor/`、`tokenize
 所有文件 root-owned 且无 group/world 写位，没有 symlink 或 `.pyc`，`IDENTITY` 的
 source tree 摘要等于引擎内固定常量，`DEPLOYMENT_IDENTITY.json` 的成员摘要等于磁盘
 字节，正在执行的 adapter 等于 release 内的 adapter；`runtime.toml` 必须位于同一
-release。任一校验失败即 `engine_unavailable`，不会读取 PR 输入或调用模型。
+release。安装或配置校验失败会拒绝本次评审，不会调用模型。
 
 共享状态只有 `/var/lib/lmdj/pr-agent/engine-state/ledger.jsonl`（预算 ledger，
 附带 `.lock`）与 `/var/lib/lmdj/pr-agent/engine`（引擎 cwd）；两者对每个
 `lmdj-runner-0N` 账户开放 ACL 读写，`run-engine.sh` 以 `umask 002` 运行使新建
 文件保持可写。`/var/lib/lmdj/pr-agent/slot.lock` 由 workflow 的 `flock -w 900`
-串行化同一主机上的评审。runner service 带 `NoNewPrivileges=true`，因此没有
+同时保护配置 witness 与模型执行，避免两者之间切换 release，并串行化同一主机上的评审。
+runner service 带 `NoNewPrivileges=true`，因此没有
 sudo、没有专用 service 账户；引擎以 runner 账户运行，凭据只来自 step 环境。
 更新 adapter 或配置：改仓库文件，在主机执行 `install.sh` 创建并验证新 release；
 回滚在持有同一 slot lock 时把 `current` 原子切回保留的旧 release，随后读回

@@ -76,15 +76,22 @@ well as the corrections. Final child processes all exited 0:
 | --- | --- | --- |
 | Pinned engine suite, including its real-handler subprocess | 58 passed, no skips | `engine-tests-v3.log` |
 | Direct real PRReviewer/LiteLLM handler suite | 39 passed, no skips; overlaps the parent suite | `engine-child-tests-v2.log` |
-| Input, protocol, workflow and consumer regressions | 408 passed, 1 actionlint check skipped then separately passed | `protocol-tests.log` |
+| Input, protocol, workflow and consumer regressions | 412 passed, no skips after independent-review corrections | `protocol-tests-v3.log` |
 | Change-scope ownership, including retained deletion-path rules | 72 passed | `scope-tests-v3.log` |
-| Real Linux root/ACL installer fixtures, no provider | 4 passed | `install-tests-v1.log` |
+| Real Linux root/ACL installer and workflow-lock fixtures, no provider | 6 passed | `install-tests-v3.log` |
 | Actual installation and post-switch runner witness | Passed; ledger unchanged | `host-install-v1.log` |
-| Portal validation and build | Passed, 46 routes | `docs-check-v3.log` |
+| Portal validation and build | Passed, 46 routes | `docs-check-v5.log` |
 
 Pinned actionlint 1.7.12 with ShellCheck 0.9.0 on Linux and shell syntax checks
 also passed. Failed-candidate and busy-lock behavior were exercised in separate
 temporary fixture roots, not by disrupting the installed production release.
+Independent review found and corrected a stale test that rejected retained
+deletion-path ownership, and a witness/installation race. The workflow now
+holds one slot lock across both witness and model execution; witness failure
+prevents model entry. Three still-active generic pipeline regressions were also
+restored. The final heredoc shell spelling is separately exercised by the real
+Linux lock fixtures and the affected workflow/pipeline suite; earlier logs are
+not rewritten as final-head evidence.
 
 ### Update and rollback
 
