@@ -26,4 +26,5 @@ USB Serial/JTAG 的有界 framing envelope，不是 Runtime Content 或 USB Audi
 nonce 与 CRC-32/ISO-HDLC；未知版本、长度、opcode、CRC 和零 request ID 在进入
 业务处理前拒绝。规范参考实现为 `scripts/cardputer-transfer.py`，设备 C++
 边界为 `apps/cardputer-host/main/transfer.*`。当前 C1 交付已覆盖 framing 与
-正反例及有序事务接收器；设备确认、真实 USB 断连旅程和物理验收仍待后续实现。
+正反例及带独立 transfer ID、重复块不续期的五秒停滞回收有序事务接收器；设备确认、
+exact request replay/session nonce 及真实 USB 断连旅程和物理验收仍待后续实现。

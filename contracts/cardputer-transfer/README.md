@@ -17,9 +17,14 @@ payload. A framing parser may discard one byte on bad magic to resynchronise;
 it must not allocate based on an unverified length.
 
 The implementation supplies framing plus a bounded ordered content transaction:
-BEGIN reserves the exact byte length, DATA accepts only the next offset (exact
-repeats are idempotent), and COMMIT verifies SHA-256/length before publishing to
-the sink. ABORT, disconnect, conflicting duplicates, incomplete input and sink
-failure discard staging and expose no partial content. Session authorization,
-real USB/PTY integration and timeout scheduling remain deployment/acceptance
-work; they must preserve these D1 rules.
+BEGIN reserves the exact byte length and a non-zero transfer ID, DATA accepts
+only the next offset (exact repeats are idempotent), and COMMIT verifies
+SHA-256/length before publishing to the sink. ABORT, disconnect, conflicting
+duplicates, incomplete input and sink failure discard staging and expose no
+partial content. The protocol-facing receiver also expires a stalled transfer
+after five seconds of no new bytes; duplicate chunks do not extend that clock.
+The reference sender puts the same 16-byte transfer ID in BEGIN, every DATA
+chunk, and COMMIT; DATA chunks carry the transfer ID before their little-endian
+offset, so a stale transaction cannot mutate a newer one.
+Session/nonce authorization, exact request replay caching, and real USB/PTY
+integration remain deployment/acceptance work and must preserve these D1 rules.

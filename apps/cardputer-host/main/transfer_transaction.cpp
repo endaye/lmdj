@@ -35,18 +35,31 @@ TransferReceiver::TransferReceiver(std::size_t maximum_bytes, CommitSink sink,
 
 void TransferReceiver::clear() noexcept {
   staging_.clear();
+  transfer_id_ = {};
   identity_ = {};
   request_id_ = 0;
   received_ = 0;
+  last_progress_ms_ = 0;
   receiving_ = false;
 }
 
 TransferTransactionResult TransferReceiver::begin(
     std::uint32_t request_id, const TransferContentIdentity& identity) noexcept {
-  if (request_id == 0 || identity.byte_length > maximum_bytes_ || sink_ == nullptr)
+  std::array<std::byte, 16> legacy_id{};
+  legacy_id[0] = std::byte{1};
+  return begin(request_id, legacy_id, identity, 0);
+}
+
+TransferTransactionResult TransferReceiver::begin(
+    std::uint32_t request_id, const std::array<std::byte, 16>& transfer_id,
+    const TransferContentIdentity& identity, std::uint64_t now_ms) noexcept {
+  if (request_id == 0 || identity.byte_length > maximum_bytes_ || sink_ == nullptr ||
+      transfer_id == std::array<std::byte, 16>{} ||
+      (identity.transfer_id != std::array<std::byte, 16>{} &&
+       identity.transfer_id != transfer_id))
     return TransferTransactionResult::unsupported;
   if (receiving_) {
-    if (request_id == request_id_ && identity == identity_)
+    if (request_id == request_id_ && transfer_id == transfer_id_ && identity == identity_)
       return TransferTransactionResult::duplicate;
     return TransferTransactionResult::wrong_state;
   }
@@ -56,10 +69,26 @@ TransferTransactionResult TransferReceiver::begin(
     clear();
     return TransferTransactionResult::resource_limit;
   }
+  transfer_id_ = transfer_id;
   identity_ = identity;
   request_id_ = request_id;
+  last_progress_ms_ = now_ms;
   receiving_ = true;
   return TransferTransactionResult::accepted;
+}
+
+TransferTransactionResult TransferReceiver::data(
+    std::uint32_t request_id, const std::array<std::byte, 16>& transfer_id,
+    std::uint64_t offset, std::span<const std::byte> bytes,
+    std::uint64_t now_ms) noexcept {
+  if (transfer_id != transfer_id_) return TransferTransactionResult::wrong_state;
+  if (bytes.empty()) return TransferTransactionResult::malformed;
+  const auto result = data(request_id, offset, bytes);
+  // Exact duplicate chunks do not count as progress and cannot keep a
+  // stalled transaction alive.
+  if (result == TransferTransactionResult::accepted && !bytes.empty())
+    last_progress_ms_ = now_ms;
+  return result;
 }
 
 TransferTransactionResult TransferReceiver::data(
@@ -97,12 +126,34 @@ TransferTransactionResult TransferReceiver::commit(std::uint32_t request_id) noe
                    : TransferTransactionResult::malformed;
 }
 
+TransferTransactionResult TransferReceiver::commit(
+    std::uint32_t request_id, const std::array<std::byte, 16>& transfer_id,
+    std::uint64_t now_ms) noexcept {
+  (void)now_ms;
+  if (transfer_id != transfer_id_) return TransferTransactionResult::wrong_state;
+  return commit(request_id);
+}
+
 TransferTransactionResult TransferReceiver::abort(std::uint32_t request_id) noexcept {
   if (!receiving_ || request_id != request_id_) return TransferTransactionResult::wrong_state;
   clear();
   return TransferTransactionResult::aborted;
 }
 
+TransferTransactionResult TransferReceiver::abort(
+    std::uint32_t request_id,
+    const std::array<std::byte, 16>& transfer_id) noexcept {
+  if (transfer_id != transfer_id_) return TransferTransactionResult::wrong_state;
+  return abort(request_id);
+}
+
 void TransferReceiver::disconnect() noexcept { clear(); }
+
+bool TransferReceiver::expire(std::uint64_t now_ms) noexcept {
+  if (!receiving_ || now_ms < last_progress_ms_ ||
+      now_ms - last_progress_ms_ < 5000) return false;
+  clear();
+  return true;
+}
 
 }  // namespace lmdj::cardputer
