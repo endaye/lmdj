@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://lmdj.dev/contracts/cardputer-transfer/1.0.0",
+  "$id": "https://lmdj.dev/contracts/cardputer-transfer/lmdj.cardputer-transfer.v1.schema.json",
+  "x-lmdj-contract-version": "1.0.0",
   "title": "lmdj.cardputer-transfer.v1 semantic frame",
   "type": "object",
   "additionalProperties": false,

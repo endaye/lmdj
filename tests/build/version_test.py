@@ -298,6 +298,7 @@ assert assembly["contracts"] == [
     {"id": "lmdj.product-version.v1", "version": "1.0.0"},
     {"id": "lmdj.audio.pcm16-wav.v1", "version": "1.0.0"},
     {"id": "lmdj.slice-points.v1", "version": "1.0.0"},
+    {"id": "lmdj.cardputer-transfer.v1", "version": "1.0.0"},
 ]
 
 expected_contract_sources = {
@@ -321,6 +322,7 @@ expected_contract_sources = {
     # This gate tracks Contract identity on disk, not Assembly
     # membership, so it belongs here from the moment the file exists.
     "contracts/slice-points/lmdj.slice-points.v1.schema.json": "1.0.0",
+    "contracts/cardputer-transfer/lmdj.cardputer-transfer.v1.schema.json": "1.0.0",
     "contracts/version/lmdj.product-version.v1.schema.json": "1.0.0",
 }
 actual_contract_sources = sorted(

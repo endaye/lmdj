@@ -10,10 +10,10 @@ fail() {
 }
 
 usage() {
-  echo 'usage: scripts/cardputer-host.sh configure|build CONFIG_HEADER' >&2
+  echo 'usage: scripts/cardputer-host.sh configure|build' >&2
   echo '       scripts/cardputer-host.sh test [dev|asan|tsan]' >&2
   echo 'Activate the selected EIM-managed ESP-IDF v6.1 environment first.' >&2
-  echo 'This research entry does not allocate, flash or release a Product Build.' >&2
+  echo 'This builds the B1 Cardputer test Product Build; it does not flash or release it.' >&2
 }
 
 [[ $# -gt 0 ]] || { usage; exit 64; }
@@ -33,9 +33,7 @@ case "$action" in
     ctest --preset "$preset" --output-on-failure --no-tests=error -R '^platform\.cardputer\.'
     ;;
   configure|build)
-    [[ $# -eq 1 ]] || { usage; exit 64; }
-    [[ -f "$1" ]] || fail 'missing explicit hardware/profile header' 'supply the Assembly or research configuration header'
-    config_header="$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")"
+    [[ $# -eq 0 ]] || { usage; exit 64; }
     [[ -n "${IDF_PATH:-}" && -f "$IDF_PATH/tools/idf.py" ]] ||
       fail 'ESP-IDF is not activated' 'activate the selected EIM-managed ESP-IDF v6.1 environment'
     [[ -n "${IDF_PYTHON_ENV_PATH:-}" && -x "$IDF_PYTHON_ENV_PATH/bin/python" ]] ||
@@ -51,8 +49,7 @@ case "$action" in
     cd "$repo_root"
     idf=("$IDF_PYTHON_ENV_PATH/bin/python" "$IDF_PATH/tools/idf.py"
       -C "$repo_root/apps/cardputer-host" -B "$build_root"
-      -D "SDKCONFIG=$build_root/sdkconfig"
-      -D "LMDJ_CARDPUTER_CONFIG_HEADER=$config_header")
+      -D "SDKCONFIG=$build_root/sdkconfig")
     # Reconfigure for both actions so a cached header cannot silently win.
     "${idf[@]}" reconfigure
     if [[ "$action" == build ]]; then

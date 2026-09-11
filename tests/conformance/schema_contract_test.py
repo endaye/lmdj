@@ -41,6 +41,9 @@ schema_paths = {
     "runtime_content": (
         contract_root / "runtime-content" / "lmdj.runtime-content.v1.schema.json"
     ),
+    "cardputer_transfer": (
+        contract_root / "cardputer-transfer" / "lmdj.cardputer-transfer.v1.schema.json"
+    ),
 }
 
 

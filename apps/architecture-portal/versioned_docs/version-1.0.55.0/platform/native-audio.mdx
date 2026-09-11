@@ -1,0 +1,128 @@
+---
+title: Native Audio
+area: platform
+status: partial
+owners: [audio, platform]
+source_paths:
+  - packages/audio-runtime
+  - apps/native-host/src/capture_writer.cpp
+  - apps/native-host/src/main.cpp
+  - apps/cardputer-host
+  - scripts/cardputer-host.sh
+  - tests/platform/cardputer
+  - tests/build/cardputer_host_build_test.py
+  - tests/core/audio/coreaudio_output_test.cpp
+  - docs/design/2026-08-02-native-realtime-coreaudio-probe-design.md
+  - docs/research/2026-09-09-cardputer-audio-hearing.md
+  - docs/prd/decisions/2026-09-10-cardputer-runtime-host-first-slice.md
+  - docs/design/2026-09-10-cardputer-runtime-host.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {StatusBadge} from '@site/src/components/StatusBadge';
+
+<BuildIdentity />
+
+## 已实现范围
+<StatusBadge status="partial" /> 实时引擎、Pattern origin、整数 transport anchor、Bar-boundary SPSC、CoreAudio output 自动化 Probe 与 Native Host Sequence capture 已实现。
+## 实时边界
+非实时线程准备 Snapshot/样本；实时回调只推进整数 transport、发布有界 Bar/Voice 状态并写设备 buffer。Project mutation、journal 与 quantization 永不进入回调。
+
+Engine 的完整 64 位 telemetry 值通过固定三缓冲发布，多个非实时观察者只在读取侧串行，音频线程不获取该 mutex。Native Host 使用已有 Facade mutex 串行 CaptureWriter drain 与其他 Engine control 操作；等待和 join 不持有它。capture origin 在 active/首个 ring event 之前发布，最终计数在 idle 之前发布，保证 writer 在 callback 返回前 drain 或收尾也能观察正确值。start/stop 仍要求 callback quiescence；32 位同步实现不构成设备 deadline 证据。
+## 自动化证据
+单元、stress 与 CoreAudio output 测试验证算法、队列和平台接线。
+## 物理验收
+声卡/扬声器、主观手感、端到端延迟和长时间设备生命周期必须单列证据，自动化结果不能代替。
+
+### Cardputer ADV：指定探针已听测，完整 Host 未验收
+
+[2026-09-09 音频对照记录](https://github.com/endaye/lmdj/blob/main/docs/research/2026-09-09-cardputer-audio-hearing.md)
+保留了早期听测未符合预期，以及后续同机内置扬声器的人工确认：固定 1000 Hz
+短音的直出／Core 对照经两次原样复听一致；独立的原幅度／两倍／原幅度长音
+两轮符合预期，无刺耳或破音。完整源码／镜像／素材／日志身份与数字旅程在报告中
+分开记录；这不是当前 Product Build 的产品验收。
+
+外部 Host 的已验证顺序是静音启钟、实际发送至少半秒静音后 unmute、播放、
+stop 后零块、先 mute 再排空 DMA／disable／quiesce，最后回收。
+保持 PCM 格式显式配置与寄存器读回；I2S 阻塞写和 codec 操作不进入 Core render。
+不能将一个配置项独自判为根因，或把独立发生器的长音能力视为 Core 长素材能力。
+该探针没有确定正式默认音量；物理 I2S／模拟波形、声压／失真、p99.9／underrun、
+端到端延迟、持续音乐负载和完整 Host 断连／替换／恢复旅程仍待验证。
+
+### 首版设计与待测目标
+
+[首版 Decision](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-09-10-cardputer-runtime-host-first-slice.md)
+已批准 USB 装载后本地演奏的四 Pad 鼓机范围；
+[工程设计](https://github.com/endaye/lmdj/blob/main/docs/design/2026-09-10-cardputer-runtime-host.md)
+固定了合计 1 秒 PCM16 鼓音、至少 4 声部和 30 分钟运行的验收口径。256-frame／
+48 kHz 输出的最差 CPU 服务目标保留 20% 周期余量，同时独立记录调度、DMA deadline
+与实际 underrun；物理输入到模拟输出以同步测量证明，软件注入不替代完整时延。
+音量由 Host 输出档位与静音控制，不改变 Project；默认低档与增益 ramp 是待实现
+策略，不是已经通过的扬声器质量或声压结论。
+
+先完成真实资源测量，再接入音频 Driver/Host、键盘/显示与 USB；正式物理验收前
+必须有可追溯测试 Build 及其不可变快照。未测的 I2S、声音质量、容量和恢复旅程
+仍保持待验证，不能用设计批准或新一轮单音 PASS 填入产品验收行。
+
+[R1 真实音乐容量结果](https://github.com/endaye/lmdj/blob/main/docs/research/2026-09-10-cardputer-music-capacity.md)
+为 BLOCKED：指定源码的目标 ABI 常驻 payload 下界 549860 bytes，准备峰值
+模型 763071 bytes；不引用旧单音镜像的可用 heap 作为本轮 cap。由于常驻下界
+已超片上 SRAM，本轮仅严格编译/链接与 native reference，没有设备操作。
+目标 30 分钟 max/p99.9、deadline/underrun、真实 heap 和完整 I/O 旅程仍未测。
+存储重设计由 [#1124](https://github.com/endaye/lmdj/issues/1124) 接管，原音乐
+目标与 reserve 不降低，完成研究本身不意味着容量准入。
+
+[R2 同口径复测](https://github.com/endaye/lmdj/blob/main/docs/research/2026-09-10-cardputer-music-capacity-retest.md)
+保留原 4284 µs CPU 余量失败。扫描修复后的指定 merged source 在相同
+240 MHz/O2、音乐、DMA 和 4266.666… µs 限额下，完成两轮各 100 次实际 I2S
+生命周期：服务加观测发布最大 1876 / 1874 µs，最低 free heap 58556 bytes，
+目标 admission 302383 bytes。每轮 4568 music blocks，不代替完整 Host 的
+30 分钟。前置 PR 的独立评审缺口单列，实测改善不等于批准或自动完成 R2。
+
+旧探针 `0x32=0` 的读回只证明音量寄存器值，不能证明显式 DAC mute。
+后续独立镜像验证显式 mute 与停止控制，再按 −12/−6/0 dB 各播两段音乐；
+操作者确认清楚且逐档变响，有轻微可接受的“刺啦”声，原因未确定。
+这些是绑定镜像的短时听感，不是无杂音、声压或完整音质认证。
+EOF/DMA readback 与 generation 零错误不证明物理 underrun 为零；完整
+Host I/O、物理时延、30 分钟和正式 Build/快照仍未验收。
+
+### H1 source：串行控制与音频任务边界
+
+`apps/cardputer-host` 已提供薄 `RuntimeHost`、`AudioSession` 与 ESP-IDF 音频适配源码。
+一个串行 executor 拥有全部 Facade control 调用；独立音频任务是唯一 render 调用方。
+Host 只接收不透明 Runtime Content 和完整 identity，不解析 Project bundle。
+接收前必须完成 Core stop、音频 join 和模拟输出静音确认，再 unload；新内容
+通过 Core 校验及 Host One Shot/profile 校验后才投影 ready。实际 Pad 映射来自
+Facade 摘要，操作回执来自 `poll`，不是按键预测。I1/C1 仍负责后续键盘、显示和
+USB framing 接线；当前入口仅建立启动静音并运行 control pump，不加载音乐。
+
+Core stopped 不代表设备已停。Driver 保留 mute → 零块 → drain → disable/quiesce
+→ release 顺序，失败时保留未回收资源与错误；Host 在 join 失败时不释放 callback
+context。输出增益和静音在 render 返回后处理，codec/I2S 操作不进入 Core 回调。
+预热块数、硬件接线、栈与容量 reserve/profile 由显式配置注入；研究值不是正式产品默认。
+
+在 EIM 中激活指定 SDK 后，可执行研究构建；缺失配置或 SDK revision 不符会拒绝：
+
+```bash
+scripts/cardputer-host.sh configure /absolute/path/to/config.hpp
+scripts/cardputer-host.sh build /absolute/path/to/config.hpp
+scripts/cardputer-host.sh test dev
+scripts/cardputer-host.sh test asan
+scripts/cardputer-host.sh test tsan
+```
+
+构建输出位于 `build/core/cardputer-host/`，带明确的 research/unversioned 标记，
+不是 Product Build，不分配 Host manifest 身份，也不执行烧录、发布或 Channel 晋级。
+每次 build 重新绑定显式配置。`test` 包含 Cardputer component 与 stress 测试；
+它不改变 `core.sh test ... full` 排除 stress 的语义。
+
+当前自动化覆盖命令边界、fake I/O 故障顺序，以及独立 native render 线程的
+停止／卸载／重载、输出失败恢复和销毁 join。256 次压力旅程逐次检查完整内容
+identity、非零 PCM、消费回执和 join 后状态；dev、ASan、TSan 均已运行通过。
+这些测试模拟 AudioSession，不运行 ESP-IDF 任务删除、codec 或 DMA。
+目标全量研究构建及独立 Facade 公开入口链接闭包已验证，但启动固件中未调用的
+音乐路径会被链接器裁剪；构建成功不证明设备播放或完整 Host 链接／执行旅程。
+真实 I2S/codec 生命周期、资源回收时点、持续音乐、30 分钟与完整 I/O 仍待实测。
+
+## 下一门禁
+正式产品 Host 需要保留设备矩阵、测量数据与可复核录制。
