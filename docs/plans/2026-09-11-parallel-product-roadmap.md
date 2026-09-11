@@ -80,14 +80,16 @@ A1 保留装载 A → Pattern/Pad 播放 → stop/实际静音/drain → unload 
 
 复用[四区设计参考](../design/2026-09-11-lmdj-hardware-ui-layout-reference.md)。
 #1207 承接本轮四区与上下文迭代，#522 保留整体视觉语言责任。
-W1–W5 是规划编号，尚不是新建 Issue 或已批准实现范围。
+W1–W5 是主线规划编号；2026-09-11 已由[Creator UI 渐进迁移计划](2026-09-11-creator-ui-migration.md)
+细化为 #1214–#1222：W1/W2 对应 U0，W3 对应 U1，W4 对应 U2–U6，W5 对应切片验收及 U7，U8 为条件化退场。
+Issue 创建不等于设计获批或实施完成；依最新用户认可的迁移顺序，先做 Sequence 完整切片，再覆盖其余工作区。
 
 | 阶段 | 交付与依赖 | 文件边界与最低层验证 |
 | --- | --- | --- |
 | W1 交互及能力矩阵 | 可立即准备；列模式×对象×操作阶段、Pad 选择/触发、四旋钮/方向键映射、返回/未保存/确认/撤销；逐项区分现有 Facade、仅设计和待决策能力 | 建议独立 `docs/design/2026-09-11-creator-context-matrix.md`；对照 Facade 公开接口和现有产品决策逐格审查；未决语义列问题，不代替用户裁定 |
 | W2 原型和状态 | 依赖 W1 已批准交互；补空/加载/禁用/失败/恢复、键鼠/触摸、焦点与非颜色提示；真实触摸预验可提前发现问题 | 独立原型与设计/验收记录，开始时锁定文件和节点；逐腿观察选择→操作→反馈→取消/返回，校验上屏无需触摸、Pad 空间身份不变 |
 | W3 布局骨架 | W1/W2 稳定区域获批后，接入现有 Creator，保持 Facade 边界；不一次性重写全部页面 | `apps/creator-web/` shell/style/对应组件测试，实施子 Task 必须列精确文件；最低层验证布局、焦点顺序、输入归属及模式切换，不用截图冒充行为证据 |
-| W4 工作流纵向交付 | 基于 W3，建议先 Project/Sample 核心旅程，再 Sequence/Perform；每项独立 Task。阶段内互不争用文件才并行 | 每个工作流的组件/reducer 与对应 browser spec 精确清单；验证实际 Facade 回执、失败/取消、保存重开以及音频状态。新 Core/Contract 能力另立前置 Task |
+| W4 工作流纵向交付 | 基于 W3，按新迁移计划先 Sequence，再覆盖 Project/Sample、Slice/Sound Sets、Perform；每项独立 Task。阶段内互不争用文件才并行 | 每个工作流的组件/reducer 与对应 browser spec 精确清单见 U2–U6；验证实际 Facade 回执、失败/取消、保存重开以及音频状态。新 Core/Contract 能力另立前置 Task |
 | W5 固定候选验收 | 对每个已集成切片持续验收，最终汇总；等待具体候选及对应自动化证据 | 独立 `docs/quality/` 报告与 evidence 目录；稳定入口 `scripts/creator-web.sh proof` 加实际触摸/键鼠/听感/恢复和非开发者可用性旅程 |
 
 上述目录是拆分边界，不是可执行的无限文件清单。W1/W2 可产出设计稿；
