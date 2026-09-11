@@ -25,7 +25,7 @@ Native/CLI/MCP Host 只通过 Application Facade 调用 Core；浏览器 Host �
 ## 当前清单
 
 Cardputer Host `1.0.0` is the embedded test candidate in Product Build
-`1.0.55.0`. It is distinct from the desktop Native Host and remains subject
+`1.0.56.0`. It is distinct from the desktop Native Host and remains subject
 to the physical A1 acceptance gates.
 
 五个 Host 的当前身份与依赖由 Build Identity 从 Assembly 派生。五个 Host 只经 Application Facade（Web Host 经 Platform）使用 Project v5、共享 Sample quota、Sequence recording 与本 Build 新增的 Sound Set 目录浏览、检查、映射预览与安装；Web Hosts 把长选区拆成有界 chunk 并在浏览器侧取回 Catalog 字节交给 Core 暂存，Native/Web 输入共享 Audio Runtime frame clock，Host 不解析 Project bundles 或复制 quantizer。

@@ -20,9 +20,9 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
           CompiledComponent{"authoring-domain", "4.1.0"},
           CompiledComponent{"project-io", "4.1.0"},
           CompiledComponent{"project-cooker", "1.2.0"},
-          CompiledComponent{"audio-runtime", "4.0.3"},
+          CompiledComponent{"audio-runtime", "5.0.0"},
           CompiledComponent{"provider-sdk", "2.2.0"},
-          CompiledComponent{"application-facade", "5.3.0"},
+          CompiledComponent{"application-facade", "6.0.0"},
           CompiledComponent{"web-runtime-platform", "5.3.0"},
       },
       {
