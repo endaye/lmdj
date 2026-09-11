@@ -1,6 +1,6 @@
 # Creator hardware UI migration — U0 source-backed design draft
 
-Date: 2026-09-11. Status: design DRAFT; not approved and not U0 complete. Full migration-plan execution is authorized subject to the U0 design, prototype, verification and approval gates; execution authorization does not establish that those gates have passed.
+Date: 2026-09-11. Status: design DRAFT with narrow approval of the shown layout/flow preview (“我觉得没有问题👍”), recorded in the [preview approval](https://github.com/endaye/lmdj/issues/1214#issuecomment-5634900788). This does not approve unshown D01–D08 details, keyboard/focus behavior or the complete spec. U0 remains incomplete. Full migration-plan execution is authorized subject to its applicable U0 gates.
 
 Source HEAD: `b9cb540fe7e1001e22569c0cbf48c7bb60426f02`.
 Tracking: [U0 #1214](https://github.com/endaye/lmdj/issues/1214), [migration #1207](https://github.com/endaye/lmdj/issues/1207), [visual language #522](https://github.com/endaye/lmdj/issues/522).
@@ -217,12 +217,12 @@ Read-only live issue body and five comments inspected on 2026-09-11. Issue is OP
 | Hardware reference | `docs/design/2026-09-11-lmdj-hardware-ui-layout-reference.md` records geometry and Figma reference nodes | Historical pages were static. The later twenty-two-frame draft is recorded separately in §10; neither establishes device acceptance. |
 | Migration handoff | [comment](https://github.com/endaye/lmdj/issues/522#issuecomment-5633697107) assigns #1214–#1222 under #1207 | Confirms U0 carries W1/W2 review; explicitly does not change historical completion. |
 | Phase 1 specimens / Phase 2 selection | Reviewed comments plus local artifact inventory contain research/constraints but do not demonstrate three qualifying specimens and an accepted direction | Evidence not established by this audit; do not claim no such artifact could exist elsewhere. Explicit qualifying links and decisions are still required. |
-| Phase 3 / W2 | Source mapping and twenty-two existing Figma draft frames (§10); configured branches and correction readback, actual playback verification pending | Not Phase 3 exit. Interactive observations and layout/focus/state approval remain required, alongside `/hosts/creator-web/` impact. Record actual touch precheck OR an explicit gap; full device/audio acceptance is not a newly imposed U1 prerequisite. |
+| Phase 3 / W2 | Source mapping, twenty-two draft frames, narrow shown-preview approval and partial pointer observations (§10) | Not Phase 3 exit. Unshown decisions/focus/state approval and remaining stable-slice observations require disposition, alongside `/hosts/creator-web/` impact. Record actual touch precheck OR an explicit gap; full device/audio acceptance is not a newly imposed U1 prerequisite. |
 | Phase 4 | Existing Creator functions are implemented source, not proof this new visual spec landed | U0 does not close #522 or authorize subsequent implementation. |
 
 ## 10. Existing Figma draft and remaining verification
 
-The following twenty-two frame nodes exist in the Figma design file, as reported by the prototype updates on 2026-09-11. Links identify existing draft frames, not completed acceptance flows. Actual-pointer prototype playback is not yet verified. The `103:*` example branches and `106:*` Pattern 02 resolution frames are simulations; they are not working forms or an embedded existing application. Verified readback and remaining limitations are distinguished below.
+The following twenty-two frame nodes exist in the Figma design file, as reported by the prototype updates on 2026-09-11. Links identify existing draft frames, not completed acceptance flows. Partial actual-pointer observations are recorded below. The `103:*` example branches and `106:*` Pattern 02 resolution frames are simulations; they are not working forms or an embedded existing application. Verified readback and remaining limitations are distinguished below.
 
 | Draft frame | Node link | Source interpretation / limitation |
 | --- | --- | --- |
@@ -234,7 +234,7 @@ The following twenty-two frame nodes exist in the Figma design file, as reported
 | Command error | [100:5071](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=100-5071) | Error overlays retained phase; source has no generic `failed` SequencePhase |
 | Recovery | [100:5936](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=100-5936) | Original or selected alternate existing Pattern only; corrected original-recovery action is linked below |
 | Discard confirmation | [100:6801](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=100-6801) | Proposed D03 safeguard; cancel/back must leave the recovery candidate intact |
-| Sequence menu | [103:842](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=103-842) | Example branch entry; navigation verification pending |
+| Sequence menu | [103:842](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=103-842) | Example branch entry; Ready→menu and Tempo cancel return observed in current pointer recheck |
 | BPM draft | [103:1715](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=103-1715) | Preset example 120→124, not full 40–240 integer editing |
 | BPM applied | [103:2588](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=103-2588) | Simulated applied feedback, not a settings receipt |
 | New Pattern draft | [103:3461](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=103-3461) | Four-bar preset example, not a complete 1/2/4/8-bar form |
@@ -249,7 +249,7 @@ The following twenty-two frame nodes exist in the Figma design file, as reported
 | Pattern 02 flushing | [106:988](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=106-988) | Upper display SEQUENCE/02; simulated Stop resolution with a 1.5-second timer |
 | Pattern 02 committed | [106:1861](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=106-1861) | Upper display SEQUENCE/02; simulated committed feedback, repeat Record disabled/unwired |
 
-The earlier reported structural readback covers the first twenty roots: each is 880×592 with a 368×368 touch region, expected fonts and zero interactive descendants in the upper display; the reported check result is `faults: []`. Sequence menu and No Project screenshots were also inspected. The two later Pattern 02 frames bring the total to twenty-two; their upper-display identity and reaction links were read back as recorded below. Do not extend the earlier twenty-root structural check or screenshot coverage to the two added roots without corresponding evidence. None establishes actual-pointer playback.
+The earlier reported structural readback covers the first twenty roots: each is 880×592 with a 368×368 touch region, expected fonts and zero interactive descendants in the upper display; the reported check result is `faults: []`. Sequence menu and No Project screenshots were also inspected. The two later Pattern 02 frames bring the total to twenty-two; their identity/reaction readback and subsequent pointer/screenshot observations are recorded below. The earlier structural check is not a twenty-two-root structural rerun; current pointer evidence is separate from that historical check.
 
 All U0 grids are labelled “ILLUSTRATIVE GRID / NOT LIVE EVENT DATA”. No Project hides the grid and shows sixteen neutral disabled Pads. These labels preserve the distinction between simulated artwork and the desired live read-only event grid in D06; they do not discharge the projection dependency.
 
@@ -261,23 +261,62 @@ Configured touch-only draft navigation: Audio required → Ready → Recording �
 
 Latest reported link readback: Ready “Sequence options” → Sequence menu `103:842`; Recording “Switch Pattern” → Pattern selection `103:5207`; Switch pending uses a simulated two-second timer → Switch confirmed `103:6953`. Example reset links explicitly say “Restart menu example”. Pattern created's Record control is not wired; it does not incorrectly record the old Pattern 01. Neither timer represents an actual runtime boundary or persistence acknowledgment.
 
-Final correction readback verified the actual reaction IDs for [Stop 103:7811](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=103-7811) in Switch confirmed → Pattern 02 flushing `106:988` → simulated 1.5-second timer → Pattern 02 committed `106:1861`. Both resolution frames show SEQUENCE/02. This fixes the earlier wrong-Pattern-01 Stop context; it is no longer an outstanding link defect. It remains a simulated resolution, not a real stop receipt or authenticated playback pass. Repeat Record from created/committed Pattern 02 is explicitly disabled and unwired; menu reset remains explicitly labelled Restart. The draft is at preview-review stage, with no further prototype edits planned before that review.
+Earlier correction readback verified the actual reaction IDs for [Stop 103:7811](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=103-7811) in Switch confirmed → Pattern 02 flushing `106:988` → simulated 1.5-second timer → Pattern 02 committed `106:1861`. Both resolution frames show SEQUENCE/02. The wrong-Pattern-01 Stop context was fixed structurally, and the corrected branch is now pointer-observed in the current evidence table. It remains simulated feedback, not a real stop receipt. Repeat Record from created/committed Pattern 02 is explicitly disabled and unwired; menu reset remains explicitly labelled Restart. The earlier pre-review editing status is historical; shown-preview approval and subsequent current observations are recorded below. No additional prototype edits accompanied this final evidence batch.
+
+### Pointer observations and approval scope
+
+Evidence update recorded at documentation HEAD `fbc41830e67e60f3f134d547aa348e76c3ee3877`; the code inventory's source HEAD above remains unchanged. The shown layout/flow preview has the narrow approval linked at the top of this spec. No approval is inferred for unshown D01–D08 choices or focus/keyboard behavior.
+
+The following observations were supplied by the controller from actual in-app-browser pointer navigation. Current recheck viewport: 998×1128; accessibility-tree (AX) URL checked after every click, screenshots inspected after key far-side states, not after every repeated navigation. Node links above identify the frames; these are reported observations, not an independent rerun in this documentation update.
+
+| Evidence scope | Pointer action / path | Observed destination and feedback |
+| --- | --- | --- |
+| Current recheck | TAKE COMMITTED `100:4206` → Back to Sequence | `100:1611`, READY |
+| Current recheck | READY → Sequence options | `103:842`, Sequence menu |
+| Current recheck | Menu → Tempo | `103:1715`, upper BPM 120, draft 124 |
+| Current recheck | Draft → Cancel | `103:842`, upper BPM remains 120 |
+| Current recheck | Menu → Tempo again | `103:1715`, preset draft reopened |
+| Current recheck | Draft → Apply 124 | `103:2588`, upper BPM 124 / TEMPO APPLIED |
+| Current recheck, final batch | Applied `103:2588` → Restart menu → New Pattern | `103:842` → `103:3461`, four-bar preset, current Pattern 01 |
+| Current recheck, final batch | New Pattern draft → Cancel | `103:842`, current Pattern remains 01 |
+| Current recheck, final batch | Reenter New Pattern → Create 4 bar | `103:4334`, upper SEQUENCE/02 / PATTERN CREATED; Record dim and labelled not wired |
+| Current recheck, final batch | Restart menu → Back → Record → Switch Pattern | `103:842` → `100:1611` → `100:2476` → `103:5207` |
+| Current recheck, final batch | Request 02 | `103:6080`, upper 01, current 01 / pending 02, switch-pending |
+| Current recheck, final batch | Observe pending timer completion | `103:6953`, upper 02, current 02 / pending none |
+| Current recheck, final batch | Click Stop `103:7811` | `106:988`, upper 02 / flushing |
+| Current recheck, final batch | Observe flushing timer completion | `106:1861`, upper 02 / stopped / COMMIT CONFIRMED; repeat Record dim and not wired |
+| Current recheck, direct scenario entry | Navigate directly to prototype `100:5071`, then click Refresh | `100:5936`, RECOVERABLE TAKE; error was not induced from live recording |
+| Current recheck, final batch | Recovery → Discard | `100:6801`, DISCARD THIS TAKE confirmation |
+| Current recheck, final batch | Confirmation → Cancel | `100:5936`, candidate fixture still present |
+| Current recheck, final batch | Recover original | `100:4206`, upper 01 / TAKE COMMITTED fixture |
+| Carried-forward controller history, not current recheck | Audio `100:746` → Ready `100:1611` → Recording `100:2476` → Flushing `100:3341` → Committed `100:4206` | Earlier pointer path reported observed; simulated recording/flush/commit feedback only |
+
+Playback is now accessible for the current recheck. The earlier login-wall observation is historical and no longer describes a blanket access blocker; no authentication method or login change is inferred. The final batch uses AX URLs after every click and screenshots after key far-side states; no screenshot coverage is claimed for every repeated navigation. No additional Figma edits were made in that batch. These observations establish only the listed pointer-enabled prototype simulations. Preset 120→124 and four-bar creation are not full value editing; simulated labels/timers are not native audio, revision persistence, storage, physical touch, keyboard or focus evidence.
 
 Explicit open gaps:
 
-- No Project now has a draft frame, but its entry/import/start journey is not verified. Actual prototype URL playback was attempted using the in-app browser, but Figma displayed “Want to check out this file? Sign up or Log in”. No authenticated actual-pointer playback was possible. This is a concrete authentication-blocked verification gap, not a passed journey; link-structure readback cannot replace playback.
+- No Project now has a draft frame, but its entry/import/start journey is not verified. Accessible playback of the listed paths does not verify the remaining branches; link-structure readback cannot replace their interaction observations.
 - Physical shortcuts are not connected. Ready/Recording Refresh controls are presentation only.
-- Pattern 02 Stop context is corrected by the reaction readback above; actual-pointer validation of that corrected branch remains blocked. Repeat Record from created/committed Pattern 02 remains explicitly disabled/unwired.
-- Original recovery now routes to the Committed fixture. The fixture is simulated feedback, not an actual `applySequenceRecovery` receipt. Alternate recovery must select an existing Pattern before apply; never depict creation of a new Pattern as an existing recovery capability.
+- The requested switch to Pattern 02, timer confirmation, Stop and Pattern 02 flushing/committed feedback are now pointer-observed. Switch Cancel and Stop while switch-pending were not clicked. Repeat Record from created/committed Pattern 02 remains explicitly disabled/unwired and was not clicked.
+- Direct error-scenario entry, Refresh, Discard confirmation, Cancel with candidate fixture retained, and Recover original are now pointer-observed. The error was not reached by inducing a recording failure; confirmation's actual Discard action was not clicked. Recovery's Committed fixture is not an actual `applySequenceRecovery` receipt. Alternate recovery still requires selection of an existing Pattern before apply; no new-Pattern recovery capability is inferred.
 - The timer does not prove persistence, Stop acknowledgment, revision reconciliation or reopen/inspect. Discard cancellation does not prove actual discard success.
-- New Pattern, BPM and Pattern-switch branches have example frames and the partial link readback above; remaining wiring/fixes and observed selection/apply/cancel/back outcomes are pending. Pattern created Record remains unwired. Full BPM value editing, invalid input, all Pattern lengths, Swing and Quantize remain gaps; presets do not discharge these requirements.
+- BPM preset open/cancel/reopen/apply, four-bar New Pattern cancel/reenter/create, return to Ready and the listed Pattern-switch branch are now pointer-observed. Full BPM value editing, invalid input, other Pattern lengths, Swing and Quantize remain gaps; presets do not discharge these requirements. Unwired controls were not clicked.
 - Alternate-existing-Pattern recovery selection/apply, actual System/runtime actions, Sample capture/trim fallback and live More modes/existing-workspace handoff remain gaps. The twenty-two frames do not cover or verify all flows.
 
 Record actual selection → operation → feedback → cancel/back observations for each required flow. Add real node IDs as the missing states are created; do not assign invented IDs to planned coverage. Static screenshots and configured reactions alone do not satisfy W2.
 
 Physical touch prevalidation: not performed; explicitly recorded as a gap. The exact U0 brief requires “记录真实触摸预验或其明确缺口” (record a real touch precheck OR its explicit gap), and separately requires user approval of layout, focus and state proposals before U1. It does not require a complete physical audio journey before U1. Preserve W2 interactive-prototype observation requirements without replacing them with static boards; an explicit touch gap is not a claimed touch pass and does not supply missing layout/focus/state approval.
 
-To close the touch gap later, record a named device/browser/orientation/viewport/zoom and observations of hit areas, mistaken hits and focus/scroll interference. Full audio journeys, simultaneous input, keyboard/MIDI alternatives, reduced-motion and broader browser/device acceptance belong to their applicable implementation/acceptance scope; do not promote all of them into new U0 gates. Actual browser playback remains separately blocked as documented above.
+To close the touch gap later, record a named device/browser/orientation/viewport/zoom and observations of hit areas, mistaken hits and focus/scroll interference. Full audio journeys, simultaneous input, keyboard/MIDI alternatives, reduced-motion and broader browser/device acceptance belong to their applicable implementation/acceptance scope; do not promote all of them into new U0 gates. Partial browser playback is now observed as documented above; unreported branches remain gaps.
+
+### Remaining U0 disposition before U1 versus later acceptance
+
+- Lock the bounded slice's still-unshown control/state rules: Pad selection versus triggering, applicable encoder/transport/direction behavior, Back/draft ownership, System and layout-selector/fallback access and preference location. Confirm or explicitly defer inapplicable D01–D08 details; do not require all future screen content to be designed or implement unresolved semantics.
+- Obtain approval for the remaining applicable focus/state proposal and device/scale/non-color/keyboard-alternative/reduced-motion design boundaries. The shown-preview approval stands; it is not evidence that these unshown details were approved or tested.
+- Complete/disposition W2 observations for the stable slice's empty/loading/failure/disabled/recovery and cancel/back paths, and confirm every inventoried operation has a new route or retained usable old-layout route, including audio/MIDI/retry/reports. Current pointer observations close only the table's paths. Keep the explicit physical-touch gap; a full physical audio journey is not a prerequisite.
+- Complete the U0 spec review/file checks and authorized integration required by the plan. Neither approval of a preview nor documentation commit alone completes U0 or #522.
+
+U1 implementation owns the actual opt-in shell, one session/input owner, non-interactive overview DOM, usable old-layout fallback and 200%/small-viewport paths with its declared tests. U2 owns real Sequence value editing, persistence/recovery and boundary verification; later mode Tasks own their working workflows. Prototype presets and handoff descriptions need not become live product forms before U1, but their design rules/routes must be resolved for the bounded slice. D06's desired real event grid and conditional projection-capability dependency remain intact; metadata-only feedback does not redefine the final outcome.
 
 Manual inventory review covered six `CreatorMode` members, global StatusBar/ErrorPanel actions, all listed action-bearing components, source handlers, current guards and source/draft/receipt distinctions. Known behavioral ambiguities are in D01–D08; this is coverage of the design audit, not runtime acceptance.
 
@@ -295,4 +334,4 @@ Reason: source-backed design draft only; no Product Build, Host, Module, Provide
 
 Documentation impact: none
 
-Reason: this draft records unapproved proposals, source audit and incomplete prototype evidence, not changed current product behavior, approved visual policy or portal publication. It changes no portal facts, diagrams, tooling or projected identities. This is not the final #522 Phase 3 spec exit. Final approved design integration must reassess required `/hosts/creator-web/` updates (and any affected diagrams) in its declared Task and run `scripts/docs-site.sh check` when required.
+Reason: this bounded update records narrow shown-preview approval and partial prototype evidence while retaining unshown proposals; it changes no implemented behavior, portal facts, diagrams, tooling or projected identities. It is not the final approved #522 Phase 3 policy/spec exit. Final approved design integration must reassess required `/hosts/creator-web/` updates (and any affected diagrams) in its declared Task and run `scripts/docs-site.sh check` when required.
