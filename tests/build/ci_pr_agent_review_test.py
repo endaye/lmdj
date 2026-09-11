@@ -109,64 +109,134 @@ def blob(data: bytes, encoding="utf-8"):
     }
 
 
-def document_from_git_diff(diff_text, records):
-    """Build a complete T2 document from fixed bytes and an emitted Git diff."""
-    sections = {}
-    lines = diff_text.splitlines(keepends=True)
-    starts = [index for index, line in enumerate(lines) if line.startswith("diff --git ")]
-    for position, start in enumerate(starts):
-        stop = starts[position + 1] if position + 1 < len(starts) else len(lines)
-        sections[lines[start].removesuffix("\n")] = "".join(lines[start:stop])
-    document = json.loads((FIXTURES / "complete-input.json").read_text(encoding="utf-8"))
-    document["diff"] = {
-        "text": diff_text,
-        "sha256": hashlib.sha256(diff_text.encode("utf-8")).hexdigest(),
-        "byte_length": len(diff_text.encode("utf-8")),
-    }
-    files = []
-    for record in records:
-        path = record["path"]
-        old_path = record.get("old_path")
-        header = f"diff --git a/{old_path if old_path is not None else path} b/{path}"
-        section = sections[header]
-        section_lines = section.splitlines(keepends=True)
-        hunk_start = next((index for index, line in enumerate(section_lines) if line.startswith("@@")), None)
-        if hunk_start is not None:
-            patches = adapter._parse_diff_hunks(section)
-            patch = "".join(patches)
-        elif record["change_kind"] == "renamed":
-            patch = "".join(line for line in section_lines[1:] if line.startswith(("rename from ", "rename to ")))
-            patches = [patch]
-        else:
-            patch = next(line for line in section_lines[1:] if line.startswith("Binary files "))
-            patches = [patch]
-        hunks = []
-        for index, patch_fragment in enumerate(patches, start=1):
-            right_lines = [
-                {"line": line, "text": text, "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}
-                for line, text in adapter._parse_patch_right_lines(patch_fragment)
-            ]
-            hunks.append({
-                "id": f"{index}-{re.sub(r'[^A-Za-z0-9._:/#-]', '-', path)}",
-                "patch": patch_fragment,
-                "patch_sha256": hashlib.sha256(patch_fragment.encode("utf-8")).hexdigest(),
-                "right_lines": right_lines,
-            })
-        files.append({
-            "path": path,
-            "old_path": old_path,
-            "change_kind": record["change_kind"],
-            "patch": patch,
-            "patch_sha256": hashlib.sha256(patch.encode("utf-8")).hexdigest(),
-            "base": None if record.get("base") is None else blob(record["base"]),
-            "head": None if record.get("head") is None else blob(record["head"]),
-            "hunks": hunks,
+def _git_fixture_run(root, *args):
+    environment = os.environ.copy()
+    for key in (
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_DIR", "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY", "GIT_WORK_TREE",
+    ):
+        environment.pop(key, None)
+    environment.update({
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+        "LC_ALL": "C",
+        "LANG": "C",
+    })
+    options = [
+        "-c", "core.hooksPath=/dev/null",
+        "-c", "commit.gpgSign=false",
+        "-c", "commit.template=",
+        "-c", "core.attributesFile=/dev/null",
+        "-c", "diff.external=",
+        "-c", "diff.textconv=",
+        "-c", "color.ui=false",
+    ]
+    return subprocess.run(
+        ["git", *options, *args], cwd=root, capture_output=True, check=True,
+        env=environment, timeout=10,
+    )
+
+
+def _git_fixture_blob(root, revision, path, expected):
+    object_id = _git_fixture_run(root, "rev-parse", f"{revision}:{path}").stdout.decode().strip()
+    data = _git_fixture_run(root, "cat-file", "blob", object_id).stdout
+    assert data == expected, (path, revision, data, expected)
+    return blob(data), {"object_id": object_id, "data": data}
+
+
+def _committed_git_document(before, action, records, *, find_renames=False):
+    """Build an authenticated input from committed Git objects and hand facts."""
+    with tempfile.TemporaryDirectory(prefix="t4-space-header-git-") as temporary:
+        root = Path(temporary)
+        _git_fixture_run(root, "init", "--template=/dev/null", "-q")
+        _git_fixture_run(root, "config", "user.email", "fixture@example.invalid")
+        _git_fixture_run(root, "config", "user.name", "Fixture")
+        (root / "README").write_bytes(b"fixture\n")
+        for relative, data in before.items():
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        _git_fixture_run(root, "add", "--all")
+        _git_fixture_run(root, "commit", "-qm", "base")
+        base_sha = _git_fixture_run(root, "rev-parse", "HEAD").stdout.decode().strip()
+        action(root)
+        _git_fixture_run(root, "add", "--all")
+        _git_fixture_run(root, "commit", "-qm", "head")
+        head_sha = _git_fixture_run(root, "rev-parse", "HEAD").stdout.decode().strip()
+        (root / "control").write_bytes(b"control\n")
+        _git_fixture_run(root, "add", "control")
+        _git_fixture_run(root, "commit", "-qm", "control")
+        control_sha = _git_fixture_run(root, "rev-parse", "HEAD").stdout.decode().strip()
+        diff_args = [
+            "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--full-index",
+            "--src-prefix=a/", "--dst-prefix=b/", "--line-prefix=",
+            "--diff-algorithm=myers", "--no-indent-heuristic",
+        ]
+        diff_args.append("--find-renames=20%" if find_renames else "--no-renames")
+        diff_args.extend([base_sha, head_sha, "--"])
+        raw = _git_fixture_run(root, *diff_args).stdout
+        diff_text = raw.decode("utf-8")
+        document = json.loads((FIXTURES / "complete-input.json").read_text(encoding="utf-8"))
+        document["identity"].update({
+            "base_sha": base_sha,
+            "head_sha": head_sha,
+            "control_sha": control_sha,
+            "run_id": "t4-space-header-r2-git-fixture",
         })
-    document["files"] = files
-    unsigned = copy.deepcopy(document)
-    unsigned.pop("input_sha256", None)
-    document["input_sha256"] = hashlib.sha256(canonical(unsigned)).hexdigest()
-    return document
+        document["diff"] = {
+            "text": diff_text,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "byte_length": len(raw),
+        }
+        files = []
+        facts = []
+        for record in records:
+            path = record["path"]
+            old_path = record.get("old_path")
+            base_info = None
+            head_info = None
+            if record.get("base") is not None:
+                base_info, base_fact = _git_fixture_blob(
+                    root, base_sha, old_path if old_path is not None else path, record["base"],
+                )
+            else:
+                base_fact = None
+            if record.get("head") is not None:
+                head_info, head_fact = _git_fixture_blob(root, head_sha, path, record["head"])
+            else:
+                head_fact = None
+            hunks = []
+            for hunk in record["hunks"]:
+                patch_fragment = hunk["patch"]
+                right_lines = [
+                    {"line": line, "text": text, "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}
+                    for line, text in hunk["right_lines"]
+                ]
+                hunks.append({
+                    "id": hunk["id"],
+                    "patch": patch_fragment,
+                    "patch_sha256": hashlib.sha256(patch_fragment.encode("utf-8")).hexdigest(),
+                    "right_lines": right_lines,
+                })
+            patch = "".join(hunk["patch"] for hunk in record["hunks"])
+            files.append({
+                "path": path,
+                "old_path": old_path,
+                "change_kind": record["change_kind"],
+                "patch": patch,
+                "patch_sha256": hashlib.sha256(patch.encode("utf-8")).hexdigest(),
+                "base": base_info,
+                "head": head_info,
+                "hunks": hunks,
+            })
+            facts.append({"path": path, "base": base_fact, "head": head_fact})
+        document["files"] = files
+        unsigned = copy.deepcopy(document)
+        unsigned.pop("input_sha256", None)
+        document["input_sha256"] = hashlib.sha256(canonical(unsigned)).hexdigest()
+        return raw, document, facts
 
 
 class FakeCompletion(dict):
@@ -387,79 +457,102 @@ class InputAndPolicyTests(unittest.TestCase):
             adapter.authenticate_input(tampered)
 
     def test_real_git_space_headers_authenticate_every_text_change_kind(self):
-        def git(cwd, *args):
-            return subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=True)
-
-        def emitted(before, action, records, *, find_renames=False):
-            with tempfile.TemporaryDirectory(prefix="t4-space-header-git-") as temporary:
-                root = Path(temporary)
-                git(root, "init", "-q")
-                git(root, "config", "user.email", "fixture@example.invalid")
-                git(root, "config", "user.name", "Fixture")
-                (root / "README").write_bytes(b"fixture\n")
-                for relative, data in before.items():
-                    target = root / relative
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(data)
-                git(root, "add", "--all")
-                git(root, "commit", "-qm", "base")
-                action(root)
-                git(root, "add", "--all")
-                diff_args = ["diff", "--cached", "--no-ext-diff", "--full-index"]
-                if find_renames:
-                    diff_args.append("--find-renames=20%")
-                else:
-                    diff_args.append("--no-renames")
-                raw = git(root, *diff_args).stdout
-                return raw, document_from_git_diff(raw.decode("utf-8"), records)
-
         cases = [
             (
                 "added-directory-and-trailing-space",
                 {},
                 lambda root: ((root / "dir with space" / "trailing ").parent.mkdir(parents=True), (root / "dir with space" / "trailing ").write_bytes(b"added")),
-                [{"path": "dir with space/trailing ", "change_kind": "added", "head": b"added"}],
+                [{
+                    "path": "dir with space/trailing ", "change_kind": "added", "head": b"added",
+                    "hunks": [{
+                        "id": "added-trailing-h1",
+                        "patch": "@@ -0,0 +1 @@\n+added\n\\ No newline at end of file\n",
+                        "right_lines": [(1, "added")],
+                    }],
+                }],
             ),
             (
                 "modified-directory-space",
                 {"dir with space/modified file.txt": b"old\n"},
                 lambda root: (root / "dir with space/modified file.txt").write_bytes(b"new\n"),
-                [{"path": "dir with space/modified file.txt", "change_kind": "modified", "base": b"old\n", "head": b"new\n"}],
+                [{
+                    "path": "dir with space/modified file.txt", "change_kind": "modified",
+                    "base": b"old\n", "head": b"new\n",
+                    "hunks": [{"id": "modified-space-h1", "patch": "@@ -1 +1 @@\n-old\n+new\n", "right_lines": [(1, "new")]}],
+                }],
             ),
             (
                 "modified-crlf-no-final-newline",
                 {"dir with space/crlf file.txt": b"old\r\nline\r\n"},
                 lambda root: (root / "dir with space/crlf file.txt").write_bytes(b"new\r\nline"),
-                [{"path": "dir with space/crlf file.txt", "change_kind": "modified", "base": b"old\r\nline\r\n", "head": b"new\r\nline"}],
+                [{
+                    "path": "dir with space/crlf file.txt", "change_kind": "modified",
+                    "base": b"old\r\nline\r\n", "head": b"new\r\nline",
+                    "hunks": [{
+                        "id": "modified-crlf-h1",
+                        "patch": "@@ -1,2 +1,2 @@\n-old\r\n-line\r\n+new\r\n+line\n\\ No newline at end of file\n",
+                        "right_lines": [(1, "new"), (2, "line")],
+                    }],
+                }],
             ),
             (
                 "deleted-directory-space",
                 {"dir with space/deleted file.txt": b"deleted\n"},
                 lambda root: (root / "dir with space/deleted file.txt").unlink(),
-                [{"path": "dir with space/deleted file.txt", "change_kind": "deleted", "base": b"deleted\n"}],
+                [{
+                    "path": "dir with space/deleted file.txt", "change_kind": "deleted", "base": b"deleted\n",
+                    "hunks": [{"id": "deleted-space-h1", "patch": "@@ -1 +0,0 @@\n-deleted\n", "right_lines": []}],
+                }],
             ),
             (
                 "edited-rename-old-space-new-plain",
                 {"old space/old file.txt": b"keep\nold\n"},
-                lambda root: (subprocess.run(["git", "mv", "old space/old file.txt", "new-file.txt"], cwd=root, check=True), (root / "new-file.txt").write_bytes(b"keep\nnew\n")),
-                [{"path": "new-file.txt", "old_path": "old space/old file.txt", "change_kind": "renamed", "base": b"keep\nold\n", "head": b"keep\nnew\n"}],
+                lambda root: (_git_fixture_run(root, "mv", "old space/old file.txt", "new-file.txt"), (root / "new-file.txt").write_bytes(b"keep\nnew\n")),
+                [{
+                    "path": "new-file.txt", "old_path": "old space/old file.txt", "change_kind": "renamed",
+                    "base": b"keep\nold\n", "head": b"keep\nnew\n",
+                    "hunks": [{"id": "rename-old-space-h1", "patch": "@@ -1,2 +1,2 @@\n keep\n-old\n+new\n", "right_lines": [(2, "new")]}],
+                }],
             ),
             (
                 "edited-rename-old-plain-new-space",
                 {"old-file.txt": b"keep\nold\n"},
-                lambda root: ((root / "new space").mkdir(parents=True), subprocess.run(["git", "mv", "old-file.txt", "new space/new file.txt"], cwd=root, check=True), (root / "new space/new file.txt").write_bytes(b"keep\nnew\n")),
-                [{"path": "new space/new file.txt", "old_path": "old-file.txt", "change_kind": "renamed", "base": b"keep\nold\n", "head": b"keep\nnew\n"}],
+                lambda root: ((root / "new space").mkdir(parents=True), _git_fixture_run(root, "mv", "old-file.txt", "new space/new file.txt"), (root / "new space/new file.txt").write_bytes(b"keep\nnew\n")),
+                [{
+                    "path": "new space/new file.txt", "old_path": "old-file.txt", "change_kind": "renamed",
+                    "base": b"keep\nold\n", "head": b"keep\nnew\n",
+                    "hunks": [{"id": "rename-new-space-h1", "patch": "@@ -1,2 +1,2 @@\n keep\n-old\n+new\n", "right_lines": [(2, "new")]}],
+                }],
             ),
             (
                 "pure-rename-spaces",
                 {"pure old/pure file.txt": b"unchanged\n"},
-                lambda root: ((root / "pure new").mkdir(parents=True), subprocess.run(["git", "mv", "pure old/pure file.txt", "pure new/pure file.txt"], cwd=root, check=True)),
-                [{"path": "pure new/pure file.txt", "old_path": "pure old/pure file.txt", "change_kind": "renamed", "base": b"unchanged\n", "head": b"unchanged\n"}],
+                lambda root: ((root / "pure new").mkdir(parents=True), _git_fixture_run(root, "mv", "pure old/pure file.txt", "pure new/pure file.txt")),
+                [{
+                    "path": "pure new/pure file.txt", "old_path": "pure old/pure file.txt", "change_kind": "renamed",
+                    "base": b"unchanged\n", "head": b"unchanged\n",
+                    "hunks": [{
+                        "id": "pure-rename-h1",
+                        "patch": "rename from pure old/pure file.txt\nrename to pure new/pure file.txt\n",
+                        "right_lines": [],
+                    }],
+                }],
             ),
         ]
         for name, before, action, records in cases:
             with self.subTest(name=name):
-                raw, document = emitted(before, action, records, find_renames=records[0]["change_kind"] == "renamed")
+                raw, document, facts = _committed_git_document(
+                    before, action, records, find_renames=records[0]["change_kind"] == "renamed",
+                )
+                self.assertEqual(raw, document["diff"]["text"].encode("utf-8"))
+                self.assertEqual(len(set(document["identity"][key] for key in ("base_sha", "head_sha", "control_sha"))), 3)
+                for file, fact in zip(document["files"], facts, strict=True):
+                    if fact["base"] is not None:
+                        self.assertEqual(file["base"]["object_id"], fact["base"]["object_id"])
+                        self.assertEqual(base64.b64decode(file["base"]["data_b64"]), fact["base"]["data"])
+                    if fact["head"] is not None:
+                        self.assertEqual(file["head"]["object_id"], fact["head"]["object_id"])
+                        self.assertEqual(base64.b64decode(file["head"]["data_b64"]), fact["head"]["data"])
                 authenticated = adapter.authenticate_input(document)
                 self.assertTrue(authenticated["input_complete"])
                 path = records[0]["path"]
@@ -499,6 +592,8 @@ class InputAndPolicyTests(unittest.TestCase):
 
         legacy = space_document()
         self.assertEqual(adapter.authenticate_input(legacy)["files"][0]["path"], path)
+        native_old = space_document(old_header=f"--- a/{path}\t")
+        self.assertEqual(adapter.authenticate_input(native_old)["files"][0]["path"], path)
         native = space_document(new_header=f"+++ b/{path}\t")
         self.assertEqual(adapter.authenticate_input(native)["files"][0]["path"], path)
         for name, document in (
@@ -525,11 +620,28 @@ class InputAndPolicyTests(unittest.TestCase):
         no_space["input_sha256"] = hashlib.sha256(canonical(unsigned)).hexdigest()
         with self.assertRaisesRegex(adapter.EngineError, "exactly partitioned"):
             adapter.authenticate_input(no_space)
+        no_space_old = copy.deepcopy(self.document)
+        no_space_old["diff"]["text"] = no_space_old["diff"]["text"].replace("--- a/src/example.py", "--- a/src/example.py\t", 1)
+        refresh_diff_identity(no_space_old)
+        unsigned = copy.deepcopy(no_space_old)
+        unsigned.pop("input_sha256", None)
+        no_space_old["input_sha256"] = hashlib.sha256(canonical(unsigned)).hexdigest()
+        with self.assertRaisesRegex(adapter.EngineError, "exactly partitioned"):
+            adapter.authenticate_input(no_space_old)
+
+        for separator in ("\r", "\v", "\f", "\x85", "\u2028", "\u2029"):
+            for side, prefix in (("old", "--- a/"), ("new", "+++ b/")):
+                for delimiter in ("", "\t"):
+                    with self.subTest(separator=repr(separator), side=side, delimiter=repr(delimiter)):
+                        kwargs = {f"{side}_header": f"{prefix}{path}{delimiter}{separator}"}
+                        document = space_document(**kwargs)
+                        with self.assertRaisesRegex(adapter.EngineError, "exactly partitioned"):
+                            adapter.authenticate_input(document)
 
     def test_payload_header_decoys_cannot_satisfy_real_metadata(self):
         document = copy.deepcopy(self.document)
-        base = b"def value():\n--- a/src/example.py\n"
-        head = b"def value():\n+++ b/src/example.py\n    return 2\n    # changed\n"
+        base = b"def value():\n-- a/src/example.py\n"
+        head = b"def value():\n++ b/src/example.py\n    return 2\n    # changed\n"
         patch = "@@ -1,2 +1,4 @@\n def value():\n--- a/src/example.py\n+++ b/src/example.py\n+    return 2\n+    # changed\n"
         file = document["files"][0]
         file.update(
@@ -551,16 +663,31 @@ class InputAndPolicyTests(unittest.TestCase):
         first = document["diff"]["text"].index("diff --git a/src/example.py")
         second = document["diff"]["text"].index("\ndiff --git a/obsolete.txt")
         section = document["diff"]["text"][first:second]
-        section = section.replace("--- a/src/example.py", "--- a/unrelated-old.py", 1)
-        section = section.replace("+++ b/src/example.py", "+++ b/unrelated-new.py", 1)
         hunk_start = section.index("@@")
         document["diff"]["text"] = document["diff"]["text"][:first] + section[:hunk_start] + patch + document["diff"]["text"][second:]
         refresh_diff_identity(document)
         unsigned = copy.deepcopy(document)
         unsigned.pop("input_sha256", None)
         document["input_sha256"] = hashlib.sha256(canonical(unsigned)).hexdigest()
+        authenticated = adapter.authenticate_input(document)
+        self.assertTrue(authenticated["input_complete"])
+        self.assertEqual(authenticated["files"][0]["base_bytes"], base)
+        self.assertEqual(authenticated["files"][0]["head_bytes"], head)
+        self.assertEqual(document["files"][0]["hunks"][0]["right_lines"][0]["text"], "++ b/src/example.py")
+
+        mutated = copy.deepcopy(document)
+        first = mutated["diff"]["text"].index("diff --git a/src/example.py")
+        second = mutated["diff"]["text"].index("\ndiff --git a/obsolete.txt")
+        section = mutated["diff"]["text"][first:second]
+        section = section.replace("--- a/src/example.py", "--- a/unrelated-old.py", 1)
+        section = section.replace("+++ b/src/example.py", "+++ b/unrelated-new.py", 1)
+        mutated["diff"]["text"] = mutated["diff"]["text"][:first] + section + mutated["diff"]["text"][second:]
+        refresh_diff_identity(mutated)
+        unsigned = copy.deepcopy(mutated)
+        unsigned.pop("input_sha256", None)
+        mutated["input_sha256"] = hashlib.sha256(canonical(unsigned)).hexdigest()
         with self.assertRaisesRegex(adapter.EngineError, "exactly partitioned"):
-            adapter.authenticate_input(document)
+            adapter.authenticate_input(mutated)
 
     def test_trusted_collector_witness_consumes_space_path_and_rejects_retained_mismatch(self):
         import review_pipeline as pipeline

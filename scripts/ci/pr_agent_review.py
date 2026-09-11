@@ -392,9 +392,17 @@ def _patch_header_matches(line: str, prefix: str, path: str) -> bool:
     return " " in path and line == expected + "\t"
 
 
+def _split_lf_lines(text: str) -> list[str]:
+    """Split metadata on literal LF without normalizing other separators."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def _verify_text_patch_headers(section: str, *, path: str, old_path: str | None) -> None:
     """Validate the unique old/new headers before the first unified hunk."""
-    lines = section.splitlines()
+    lines = _split_lf_lines(section)
     first_hunk = next(
         (index for index, line in enumerate(lines) if line.startswith("@@")),
         len(lines),
@@ -411,7 +419,7 @@ def _verify_text_patch_headers(section: str, *, path: str, old_path: str | None)
 
 
 def _verify_diff_semantics(section: str, *, path: str, old_path: str | None, kind: str) -> None:
-    lines = section.splitlines()
+    lines = _split_lf_lines(section)
     has_hunks = any(line.startswith("@@") for line in lines)
     if kind == "renamed":
         if f"rename from {old_path}" not in lines or f"rename to {path}" not in lines:
