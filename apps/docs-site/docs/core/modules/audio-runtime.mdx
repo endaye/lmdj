@@ -39,6 +39,45 @@ Voice 和 fail-closed drain 语义不变。当前队列存储在 Engine 构造�
 ## 7. 产品使用方
 Native Host 与未来正式平台 Host 通过 Facade/适配层使用。
 
+### 显式 Pattern transport 与 cutoff 回执（A1 source）
+
+`enable_pattern_transport(generation)` 在 quiescent、`start()` 前选择显式模式；
+runtime generation 在同一个 Engine 对象的 enable 调用间非零、严格递增；
+耗尽时需要新 Engine，不要求不同 Project、进程或 Engine 之间全局排序。
+默认调用方仍在 Engine start 后自动调度。
+显式模式中 Engine running 与 Pattern playing 分离：start 后保持 Pattern stopped，
+只有 `submit_pattern_transport` 的 start 在音频边界 F 生效后才开始调度。
+该 start 设置 origin=F、cursor=0，无 count-in；既有 96-frame attack 保持不变。
+stop 在 F 的调度前关闭 Pattern playing，并按既有 96-frame release 结束
+Pattern-owned Voice。live Pad 与非 Pattern replay 保留各自 release 所有权；
+replay 使用原 scheduled release。fence 保持 playing 和 origin。
+
+串行控制 owner 提交 `PatternTransportCommand`，携带 runtime generation、epoch、
+expected Pattern generation、start/stop/fence，以及可选精确 pending-switch authority。
+首个 epoch 为 1，随后严格递增，耗尽拒绝。重复 start、stale identity 与非法 action
+拒绝，不解释成 toggle。单个 outstanding command 与单个 retained receipt 使用
+固定 SPSC cell；`PatternTransportCommandCell`/`PatternTransportReceiptCell` 均为 POD，
+字符串与完整 authority 只在控制侧保留。保留期间 publication、cancel 与 reclaim
+暂停，后续 command 返回 busy。inspect/acknowledge 也是串行控制方法，不是 observer API。
+
+stop/fence 在首个能消费命令的非空 callback 边界 F、publication claim 前，由音频
+owner 对命令命名的 switch 作出决定：实际应用 S&lt;F 保留，未应用（包含 S=F）取消。
+已越过本 callback 消费点的命令取下一 callback 的实际 F；不会倒填 requested frame。
+`inspect_pattern_transport_receipt(generation, epoch)` 返回不可变历史值：F、origin、
+Pattern identity/generation/BPM、playing、完整 switch authority、cutoff decision，
+以及已经应用时的实际 S。延迟读取不改写决定。
+
+调用者须先保存完整回执，再 `acknowledge_pattern_transport_receipt` 释放 reservation。
+该 API 只转移 RAM 保留责任，不提供 crash durability；录制 coordinator 必须先持久保留
+未决 fence 结果。quiescent Engine stop 使 runtime generation 失效，下一次 start
+清空旧命令通道并保持 Pattern stopped，接受新命令前必须重新 enable 新 generation。
+
+A1 尚不提供 preserve-phase replacement（A2）、Facade 六转换、journal durability、
+Runtime bridge 或 Creator 全局 opt-in。新增公开 API 与 Engine 内嵌存储改变 C++ 对象
+布局：这是 staged ABI break，不能作为旧 ABI 二进制替换。按集成裁定，本 source slice
+不改 manifest/Assembly；任何 package/team-test Build 分配前必须完成下一 Audio Runtime
+MAJOR 身份分配、coherent 静态消费者重编和匹配的 Assembly 流程。
+
 ### Cardputer 紧凑存储与只读 PCM Bank
 
 [设计工作项 #1124](https://github.com/endaye/lmdj/issues/1124) 依据

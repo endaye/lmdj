@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <lmdj/audio/prepared_sample_bank.hpp>
@@ -236,6 +237,436 @@ void render_frames(RealtimeEngine& engine, std::uint64_t frames) {
     engine.render(left.data(), right.data(), block);
     frames -= block;
   }
+}
+
+void explicit_pattern_start_uses_acknowledged_origin() {
+  using namespace lmdj::audio;
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.enable_pattern_transport(7).has_value());
+  LMDJ_CHECK(engine.publish_sample_bank(
+      PreparedSampleBank::empty(ProjectId{kProjectId}, 1)) == PublishResult::accepted);
+  auto view = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 127, 120, 12'000));
+  LMDJ_CHECK(view.has_value());
+  const auto publication = engine.publish_pattern_view(std::move(view.value()));
+  LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  render_frames(engine, 512);
+  const PatternTransportCommand start{
+      7, 1, publication.generation, PatternTransportAction::start, std::nullopt};
+  LMDJ_CHECK(engine.submit_pattern_transport(start) == PatternTransportSubmit::accepted);
+  LMDJ_CHECK(!engine.inspect_pattern_transport_receipt(7, 1).has_value());
+  std::array<float, 1> left{}, right{};
+  engine.render(left.data(), right.data(), 1);
+  const auto receipt = engine.inspect_pattern_transport_receipt(7, 1);
+  LMDJ_CHECK(receipt.has_value());
+  LMDJ_CHECK(receipt->playing);
+  LMDJ_CHECK(receipt->effective_frame == 512);
+  LMDJ_CHECK(receipt->origin_frame == 512);
+  LMDJ_CHECK(receipt->pattern_id == PatternId{kPatternA});
+  LMDJ_CHECK(left[0] == 0.0F);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left[0] > 0.0F);
+  LMDJ_CHECK(engine.acknowledge_pattern_transport_receipt(7, 1));
+}
+
+struct PatternTransportFixture {
+  RealtimeEngine engine;
+  std::uint64_t generation{};
+  PatternTransportFixture() {
+    LMDJ_CHECK(engine.enable_pattern_transport(7).has_value());
+    LMDJ_CHECK(engine.publish_sample_bank(
+        PreparedSampleBank::empty(ProjectId{kProjectId}, 1)) == PublishResult::accepted);
+    auto view = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, {0, 0}, 127, 120, 12'000));
+    LMDJ_CHECK(view.has_value());
+    const auto published = engine.publish_pattern_view(std::move(view.value()));
+    LMDJ_CHECK(published.result == PatternPublishResult::accepted);
+    generation = published.generation;
+    LMDJ_CHECK(engine.start().has_value());
+  }
+  lmdj::audio::PatternTransportReceipt apply(
+      std::uint64_t epoch, lmdj::audio::PatternTransportAction action) {
+    using namespace lmdj::audio;
+    LMDJ_CHECK(engine.submit_pattern_transport(
+        {7, epoch, generation, action, {}}) == PatternTransportSubmit::accepted);
+    render_frames(engine, 1);
+    auto receipt = engine.inspect_pattern_transport_receipt(7, epoch);
+    LMDJ_CHECK(receipt.has_value());
+    LMDJ_CHECK(engine.acknowledge_pattern_transport_receipt(7, epoch));
+    return *receipt;
+  }
+};
+
+void pattern_transport_opt_in_is_silent_and_legacy_still_schedules() {
+  PatternTransportFixture f;
+  std::array<float, 512> left{}, right{};
+  f.engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(std::all_of(left.begin(), left.end(), [](float v) { return v == 0; }));
+  LMDJ_CHECK(f.engine.telemetry().started_voices == 0);
+  RealtimeEngine legacy;
+  auto view = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternA, {0, 0}, 127, 120, 12'000));
+  LMDJ_CHECK(view.has_value());
+  LMDJ_CHECK(legacy.publish_pattern_view(std::move(view.value())).result ==
+      PatternPublishResult::accepted);
+  LMDJ_CHECK(legacy.start().has_value());
+  legacy.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left[0] == 0 && left[1] > 0);
+}
+
+void pattern_transport_validates_epochs_and_retains_receipt_until_ack() {
+  using namespace lmdj::audio;
+  PatternTransportFixture f;
+  PatternTransportCommand c{7, 2, f.generation, PatternTransportAction::start, {}};
+  LMDJ_CHECK(f.engine.submit_pattern_transport(c) == PatternTransportSubmit::stale_epoch);
+  c.epoch = 1;
+  c.runtime_generation = 8;
+  LMDJ_CHECK(f.engine.submit_pattern_transport(c) == PatternTransportSubmit::stale_generation);
+  c.runtime_generation = 7;
+  c.expected_pattern_generation = 999;
+  LMDJ_CHECK(f.engine.submit_pattern_transport(c) == PatternTransportSubmit::identity_mismatch);
+  c.expected_pattern_generation = f.generation;
+  c.action = static_cast<PatternTransportAction>(255);
+  LMDJ_CHECK(f.engine.submit_pattern_transport(c) == PatternTransportSubmit::invalid_action);
+  c.action = PatternTransportAction::fence;
+  LMDJ_CHECK(f.engine.submit_pattern_transport(c) == PatternTransportSubmit::not_running);
+  c.action = PatternTransportAction::start;
+  LMDJ_CHECK(f.engine.submit_pattern_transport(c) == PatternTransportSubmit::accepted);
+  LMDJ_CHECK(!f.engine.acknowledge_pattern_transport_receipt(7, 1));
+  LMDJ_CHECK(f.engine.submit_pattern_transport(c) == PatternTransportSubmit::busy);
+  render_frames(f.engine, 1);
+  auto receipt = f.engine.inspect_pattern_transport_receipt(7, 1);
+  LMDJ_CHECK(receipt && receipt->bpm == 120 && receipt->origin_frame == 0);
+  render_frames(f.engine, 123);
+  LMDJ_CHECK(f.engine.inspect_pattern_transport_receipt(7, 1)->effective_frame == 0);
+  LMDJ_CHECK(!f.engine.inspect_pattern_transport_receipt(8, 1));
+  LMDJ_CHECK(!f.engine.acknowledge_pattern_transport_receipt(7, 2));
+  LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(7, 1));
+  LMDJ_CHECK(!f.engine.inspect_pattern_transport_receipt(7, 1));
+  LMDJ_CHECK(f.engine.submit_pattern_transport(c) == PatternTransportSubmit::stale_epoch);
+  c.epoch = 2;
+  LMDJ_CHECK(f.engine.submit_pattern_transport(c) == PatternTransportSubmit::invalid_action);
+  c.action = PatternTransportAction::fence;
+  c.epoch = std::numeric_limits<std::uint64_t>::max();
+  LMDJ_CHECK(f.engine.submit_pattern_transport(c) == PatternTransportSubmit::accepted);
+  render_frames(f.engine, 1);
+  LMDJ_CHECK(f.engine.inspect_pattern_transport_receipt(7, c.epoch)->origin_frame == 0);
+  LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(7, c.epoch));
+  c.epoch = 0;
+  LMDJ_CHECK(f.engine.submit_pattern_transport(c) == PatternTransportSubmit::stale_epoch);
+}
+
+void pattern_transport_stop_ramps_and_restart_has_new_tick_zero() {
+  using namespace lmdj::audio;
+  PatternTransportFixture f;
+  render_frames(f.engine, 512);
+  LMDJ_CHECK(f.apply(1, PatternTransportAction::start).origin_frame == 512);
+  render_frames(f.engine, 127);
+  auto fence = f.apply(2, PatternTransportAction::fence);
+  LMDJ_CHECK(fence.playing && fence.origin_frame == 512 && fence.effective_frame == 640);
+  auto stopped = f.apply(3, PatternTransportAction::stop);
+  LMDJ_CHECK(!stopped.playing && stopped.origin_frame == 512);
+  std::array<float, 128> left{}, right{};
+  f.engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left[0] > 0 && left[96] == 0);
+  render_frames(f.engine, 96'000);
+  LMDJ_CHECK(f.engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(f.engine.telemetry().started_voices == 1);
+  LMDJ_CHECK(f.apply(4, PatternTransportAction::stop).origin_frame == 512);
+  const auto restarted = f.apply(5, PatternTransportAction::start);
+  LMDJ_CHECK(restarted.origin_frame == restarted.effective_frame);
+  LMDJ_CHECK(restarted.origin_frame > 96'000);
+  f.engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left[0] > 0);
+  LMDJ_CHECK(f.engine.telemetry().started_voices == 2);
+  f.engine.stop();
+  LMDJ_CHECK(!f.engine.enable_pattern_transport(7).has_value());
+  LMDJ_CHECK(f.engine.start().has_value());
+  LMDJ_CHECK(f.engine.submit_pattern_transport(
+      {7, 6, f.generation, PatternTransportAction::start, {}}) ==
+      PatternTransportSubmit::stale_generation);
+  f.engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(std::all_of(left.begin(), left.end(), [](float v) { return v == 0; }));
+  f.engine.stop();
+  LMDJ_CHECK(f.engine.enable_pattern_transport(8).has_value());
+  LMDJ_CHECK(f.engine.start().has_value());
+  LMDJ_CHECK(f.engine.submit_pattern_transport(
+      {8, 1, f.generation, PatternTransportAction::start, {}}) ==
+      PatternTransportSubmit::accepted);
+  render_frames(f.engine, 1);
+  LMDJ_CHECK(f.engine.inspect_pattern_transport_receipt(8, 1)->origin_frame == 0);
+}
+
+void pattern_transport_cutoff_retains_exact_history() {
+  using namespace lmdj::audio;
+  for (const auto action : {PatternTransportAction::stop, PatternTransportAction::fence}) {
+    for (const auto cutoff : {199ULL, 200ULL, 201ULL}) {
+      PatternTransportFixture f;
+      f.apply(1, PatternTransportAction::start);
+      auto view = PreparedPatternView::from_snapshot(
+          pattern_snapshot(kPatternB, {0, 1}, 127, 90, 16'000));
+      LMDJ_CHECK(view.has_value());
+      const auto pending = f.engine.publish_pattern_view(std::move(view.value()), 200);
+      LMDJ_CHECK(pending.result == PatternPublishResult::accepted);
+      render_frames(f.engine, cutoff - 1);
+      const PatternReplacementAuthority authority{
+          pending.generation, PatternId{kPatternB}, 200};
+      PatternTransportCommand command{7, 2, f.generation, action, authority};
+      command.pending_switch->activation_frame = 201;
+      LMDJ_CHECK(f.engine.submit_pattern_transport(command) == PatternTransportSubmit::identity_mismatch);
+      command.pending_switch = authority;
+      if (cutoff == 201) {
+        command.expected_pattern_generation = 999;
+        LMDJ_CHECK(f.engine.submit_pattern_transport(command) == PatternTransportSubmit::identity_mismatch);
+        command.expected_pattern_generation = f.generation;
+      }
+      LMDJ_CHECK(f.engine.submit_pattern_transport(command) == PatternTransportSubmit::accepted);
+      LMDJ_CHECK(!f.engine.cancel_pattern_publication(authority));
+      auto conflict = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternA, {0, 0}, 127));
+      LMDJ_CHECK(f.engine.publish_pattern_view(std::move(conflict.value())).result ==
+          PatternPublishResult::publication_pending);
+      render_frames(f.engine, 500);
+      const auto receipt = f.engine.inspect_pattern_transport_receipt(7, 2);
+      LMDJ_CHECK(receipt && receipt->effective_frame == cutoff);
+      LMDJ_CHECK(receipt->playing == (action == PatternTransportAction::fence));
+      LMDJ_CHECK(receipt->switch_authority->generation == pending.generation);
+      LMDJ_CHECK(receipt->switch_authority->pattern_id == PatternId{kPatternB});
+      LMDJ_CHECK(receipt->switch_authority->activation_frame == 200);
+      LMDJ_CHECK(receipt->pattern_id == PatternId{cutoff == 201 ? kPatternB : kPatternA});
+      LMDJ_CHECK(receipt->origin_frame == (cutoff == 201 ? 200 : 0));
+      LMDJ_CHECK(receipt->switch_decision == (cutoff == 201 ?
+          PatternCutoffDecision::applied_before_cutoff : PatternCutoffDecision::canceled_at_cutoff));
+      LMDJ_CHECK(receipt->switch_applied_frame == (cutoff == 201 ?
+          std::optional<std::uint64_t>{200} : std::nullopt));
+      const auto t = f.engine.pattern_telemetry();
+      LMDJ_CHECK(t.pending_publications == 0);
+      LMDJ_CHECK(t.accepted_publications == t.applied_publications + t.canceled_publications);
+      LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(7, 2));
+      LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
+      LMDJ_CHECK(receipt->switch_authority->pattern_id == PatternId{kPatternB});
+    }
+  }
+}
+
+void pattern_transport_render_receipts_do_not_allocate() {
+  using namespace lmdj::audio;
+  PatternTransportFixture f;
+  for (std::uint64_t epoch = 1; epoch <= 3; ++epoch) {
+    const auto action = epoch == 1 ? PatternTransportAction::start :
+        epoch == 2 ? PatternTransportAction::fence : PatternTransportAction::stop;
+    LMDJ_CHECK(f.engine.submit_pattern_transport({7, epoch, f.generation, action, {}}) ==
+        PatternTransportSubmit::accepted);
+    g_allocations.store(0); g_deallocations.store(0);
+    g_track_allocations.store(true);
+    render_frames(f.engine, 256);
+    g_track_allocations.store(false);
+    LMDJ_CHECK(g_allocations.load() == 0 && g_deallocations.load() == 0);
+    LMDJ_CHECK(f.engine.inspect_pattern_transport_receipt(7, epoch).has_value());
+    LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(7, epoch));
+  }
+}
+
+void pattern_transport_stop_preserves_live_and_replay_release_ownership() {
+  using namespace lmdj::audio;
+  for (const auto origin : {PadControlOrigin::host_input, PadControlOrigin::performance_replay}) {
+    PatternTransportFixture f;
+    const std::array<float, 128> sample = [] {
+      std::array<float, 128> result{}; result.fill(0.25F); return result;
+    }();
+    LMDJ_CHECK(f.engine.publish_sample_bank(bank_with_playback(
+        2, sample, {0, 128, TriggerMode::loop_gate, 1.0F, false})) == PublishResult::accepted);
+    render_frames(f.engine, 1);
+    f.apply(1, PatternTransportAction::start);
+    std::array<std::int16_t, 128> replay_pcm{};
+    replay_pcm.fill(12'000);
+    PadControlEvent press{42, 0, 127, PadControlKind::press,
+        {0, 128, TriggerMode::loop_gate, 1.0F, false}, origin};
+    if (origin == PadControlOrigin::performance_replay) {
+      press.duration_frames = 512;
+      press.material = {replay_pcm.data(), 128, 1};
+    }
+    LMDJ_CHECK(f.engine.enqueue_control(press) == EnqueueResult::accepted);
+    render_frames(f.engine, 128);
+    f.apply(2, PatternTransportAction::stop);
+    render_frames(f.engine, 128);
+    LMDJ_CHECK(f.engine.telemetry().active_voices == 1);
+    std::array<float, 1> left{}, right{};
+    f.engine.render(left.data(), right.data(), 1);
+    LMDJ_CHECK(left[0] > 0);
+    if (origin == PadControlOrigin::host_input) {
+      LMDJ_CHECK(f.engine.enqueue_control({42, 0, 0, PadControlKind::release,
+          {}, origin}) == EnqueueResult::accepted);
+      render_frames(f.engine, 97);
+    } else {
+      // Replay has an original scheduled release, not a live release command.
+      render_frames(f.engine, 512 - 258 + 96);
+    }
+    f.engine.render(left.data(), right.data(), 1);
+    LMDJ_CHECK(left[0] == 0 && f.engine.telemetry().active_voices == 0);
+  }
+}
+
+void pattern_transport_late_claim_takes_next_callback_cutoff() {
+  using namespace lmdj::audio;
+  for (const bool at_apply : {false, true}) {
+    PatternTransportFixture f;
+    f.apply(1, PatternTransportAction::start);
+    auto view = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB, {0, 1}, 127));
+    const auto pending = f.engine.publish_pattern_view(std::move(view.value()), 200);
+    LMDJ_CHECK(pending.result == PatternPublishResult::accepted);
+    // Claim the pending entry only for the apply-hook variant.
+    if (at_apply) render_frames(f.engine, 199);
+    struct Gate { std::atomic<bool> entered{}, release{}; } gate;
+    testing::PatternClaimHook hook{&gate, [](void* context) noexcept {
+      auto& g = *static_cast<Gate*>(context);
+      g.entered.store(true, std::memory_order_release);
+      while (!g.release.load(std::memory_order_acquire)) std::this_thread::yield();
+    }};
+    if (at_apply) testing::set_pattern_apply_hook(&hook);
+    else testing::set_pattern_claim_hook(&hook);
+    std::thread callback([&] { render_frames(f.engine, at_apply ? 1 : 200); });
+    while (!gate.entered.load(std::memory_order_acquire)) std::this_thread::yield();
+    const PatternTransportCommand command{7, 2, f.generation, PatternTransportAction::fence,
+        PatternReplacementAuthority{pending.generation, PatternId{kPatternB}, 200}};
+    LMDJ_CHECK(f.engine.submit_pattern_transport(command) == PatternTransportSubmit::accepted);
+    LMDJ_CHECK(!f.engine.inspect_pattern_transport_receipt(7, 2));
+    gate.release.store(true, std::memory_order_release);
+    callback.join();
+    LMDJ_CHECK(!f.engine.inspect_pattern_transport_receipt(7, 2));
+    render_frames(f.engine, 1);
+    const auto receipt = f.engine.inspect_pattern_transport_receipt(7, 2);
+    LMDJ_CHECK(receipt && receipt->effective_frame == 201);
+    LMDJ_CHECK(receipt->switch_applied_frame == 200);
+    LMDJ_CHECK(receipt->switch_decision == PatternCutoffDecision::applied_before_cutoff);
+    LMDJ_CHECK(receipt->origin_frame == 200 && receipt->playing);
+    LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(7, 2));
+  }
+}
+
+void pattern_transport_cancels_queued_tie_without_allocating() {
+  using namespace lmdj::audio;
+  PatternTransportFixture f;
+  f.apply(1, PatternTransportAction::start);
+  auto view = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB, {0, 1}, 127));
+  const auto pending = f.engine.publish_pattern_view(std::move(view.value()), 1);
+  LMDJ_CHECK(pending.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(f.engine.submit_pattern_transport({7, 2, f.generation, PatternTransportAction::stop,
+      PatternReplacementAuthority{pending.generation, PatternId{kPatternB}, 1}}) ==
+      PatternTransportSubmit::accepted);
+  g_allocations.store(0); g_deallocations.store(0); g_track_allocations.store(true);
+  render_frames(f.engine, 128);
+  g_track_allocations.store(false);
+  LMDJ_CHECK(g_allocations.load() == 0 && g_deallocations.load() == 0);
+  const auto receipt = f.engine.inspect_pattern_transport_receipt(7, 2);
+  LMDJ_CHECK(receipt && receipt->switch_decision == PatternCutoffDecision::canceled_at_cutoff);
+  LMDJ_CHECK(receipt->pattern_id == PatternId{kPatternA} && !receipt->playing);
+  LMDJ_CHECK(f.engine.pattern_telemetry().pending_publications == 0);
+  LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(7, 2));
+  LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
+}
+
+void pattern_transport_rejects_current_identity_as_its_own_switch() {
+  using namespace lmdj::audio;
+  PatternTransportFixture f;
+  LMDJ_CHECK(f.engine.submit_pattern_transport({7, 1, f.generation, PatternTransportAction::stop,
+      PatternReplacementAuthority{f.generation, PatternId{kPatternA}, 0}}) ==
+      PatternTransportSubmit::identity_mismatch);
+  LMDJ_CHECK(f.apply(1, PatternTransportAction::start).pattern_id == PatternId{kPatternA});
+}
+
+void pattern_transport_quiescent_restart_discards_unconsumed_commands() {
+  using namespace lmdj::audio;
+  PatternTransportFixture f;
+  LMDJ_CHECK(f.engine.submit_pattern_transport(
+      {7, 1, f.generation, PatternTransportAction::start, {}}) == PatternTransportSubmit::accepted);
+  f.engine.stop();
+  LMDJ_CHECK(f.engine.enable_pattern_transport(8).has_value());
+  LMDJ_CHECK(f.engine.start().has_value());
+  render_frames(f.engine, 128);
+  LMDJ_CHECK(f.engine.telemetry().started_voices == 0);
+  LMDJ_CHECK(!f.engine.inspect_pattern_transport_receipt(7, 1));
+  LMDJ_CHECK(f.engine.submit_pattern_transport(
+      {8, 1, f.generation, PatternTransportAction::start, {}}) == PatternTransportSubmit::accepted);
+  render_frames(f.engine, 1);
+  const auto receipt = f.engine.inspect_pattern_transport_receipt(8, 1);
+  LMDJ_CHECK(receipt && receipt->origin_frame == 128);
+  f.engine.stop();
+  LMDJ_CHECK(f.engine.enable_pattern_transport(9).has_value());
+  LMDJ_CHECK(f.engine.start().has_value());
+  render_frames(f.engine, 128);
+  LMDJ_CHECK(!f.engine.inspect_pattern_transport_receipt(8, 1));
+  LMDJ_CHECK(f.engine.telemetry().started_voices == 0);
+}
+
+void pattern_transport_stop_retires_obsolete_reservations() {
+  using namespace lmdj::audio;
+  bool identities_rejected = true;
+  bool preparation_unblocked = true;
+  // 0: command unconsumed; 1: receipt queued; 2: receipt retained by inspect.
+  for (unsigned phase = 0; phase != 3; ++phase) {
+    for (const bool reenable : {false, true}) {
+      auto prepare = [&](PatternTransportFixture& f) {
+        auto next = PreparedPatternView::from_snapshot(
+            pattern_snapshot(kPatternB, {0, 0}, 127));
+        LMDJ_CHECK(next.has_value());
+        const auto publication = f.engine.publish_pattern_view_immediate(std::move(next.value()));
+        LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+        render_frames(f.engine, 1);
+        f.generation = publication.generation;
+        LMDJ_CHECK(f.engine.submit_pattern_transport(
+            {7, 1, f.generation, PatternTransportAction::start, {}}) == PatternTransportSubmit::accepted);
+        if (phase != 0) render_frames(f.engine, 1);
+        if (phase == 2) LMDJ_CHECK(f.engine.inspect_pattern_transport_receipt(7, 1));
+        f.engine.stop();
+        if (reenable) LMDJ_CHECK(f.engine.enable_pattern_transport(8).has_value());
+      };
+      // Fresh fixture per identity: a buggy acknowledgment must not hide the
+      // next case by consuming the obsolete receipt first.
+      for (const auto identity : std::array<std::array<std::uint64_t, 2>, 6>{{
+               {0, 0}, {0, 1}, {7, 0}, {7, 1}, {8, 0}, {8, 1}}}) {
+        PatternTransportFixture f;
+        prepare(f);
+        const bool inspected = f.engine.inspect_pattern_transport_receipt(identity[0], identity[1]).has_value();
+        const bool acknowledged = f.engine.acknowledge_pattern_transport_receipt(identity[0], identity[1]);
+        if (inspected || acknowledged) {
+          std::fprintf(stderr, "F1 phase=%u reenable=%d identity=(%llu,%llu) inspect=%d ack=%d\n",
+              phase, reenable, static_cast<unsigned long long>(identity[0]),
+              static_cast<unsigned long long>(identity[1]), inspected, acknowledged);
+        }
+        identities_rejected &= !inspected && !acknowledged;
+      }
+      PatternTransportFixture f;
+      prepare(f);
+      const auto reclaimed = f.engine.reclaim_retired_patterns();
+      auto next = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternA, {0, 0}, 127));
+      LMDJ_CHECK(next.has_value());
+      const auto publication = f.engine.publish_pattern_view(std::move(next.value()));
+      const bool accepted = publication.result == PatternPublishResult::accepted;
+      if (reclaimed != 1 || !accepted) {
+        std::fprintf(stderr, "F1 phase=%u reenable=%d reclaimed=%zu publication=%u\n",
+            phase, reenable, reclaimed, static_cast<unsigned>(publication.result));
+      }
+      preparation_unblocked &= reclaimed == 1 && accepted;
+      if (accepted) {
+        LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kPatternA});
+        LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
+        if (!reenable) LMDJ_CHECK(f.engine.enable_pattern_transport(8).has_value());
+        LMDJ_CHECK(f.engine.start().has_value());
+        render_frames(f.engine, 128);
+        LMDJ_CHECK(f.engine.telemetry().started_voices == 0);
+        LMDJ_CHECK(!f.engine.inspect_pattern_transport_receipt(8, 1));
+        LMDJ_CHECK(f.engine.submit_pattern_transport(
+            {8, 1, publication.generation, PatternTransportAction::start, {}}) == PatternTransportSubmit::accepted);
+        render_frames(f.engine, 1);
+        const auto receipt = f.engine.inspect_pattern_transport_receipt(8, 1);
+        LMDJ_CHECK(receipt && receipt->runtime_generation == 8 && receipt->epoch == 1);
+        LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(8, 1));
+      }
+    }
+  }
+  LMDJ_CHECK(identities_rejected);
+  LMDJ_CHECK(preparation_unblocked);
 }
 
 PadControlEvent control(
@@ -3674,6 +4105,18 @@ int main() {
   audition_start_uses_latest_publication_before_first_callback();
   first_audition_after_initial_drain_is_not_lost();
   audition_start_after_initial_drain_uses_new_pcm();
+  explicit_pattern_start_uses_acknowledged_origin();
+  pattern_transport_opt_in_is_silent_and_legacy_still_schedules();
+  pattern_transport_validates_epochs_and_retains_receipt_until_ack();
+  pattern_transport_stop_ramps_and_restart_has_new_tick_zero();
+  pattern_transport_cutoff_retains_exact_history();
+  pattern_transport_render_receipts_do_not_allocate();
+  pattern_transport_stop_preserves_live_and_replay_release_ownership();
+  pattern_transport_late_claim_takes_next_callback_cutoff();
+  pattern_transport_cancels_queued_tie_without_allocating();
+  pattern_transport_rejects_current_identity_as_its_own_switch();
+  pattern_transport_quiescent_restart_discards_unconsumed_commands();
+  pattern_transport_stop_retires_obsolete_reservations();
   engine_queue_profiles_account_for_all_allocated_payloads();
   receipt_profile_rejects_invalid_capacity();
   pcm_replacement_releases_the_actual_float_allocation();
