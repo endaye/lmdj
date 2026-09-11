@@ -26,6 +26,10 @@ RestrictNetworkInterfaces=~tailscale0
 InaccessiblePaths=/run/tailscale
 UMask=0007
 ReadWritePaths=@WORKDIR@ /var/lib/lmdj-runner-@INDEX@ /var/cache/lmdj-ccache /var/cache/lmdj-emsdk /var/cache/lmdj-playwright /var/cache/lmdj-npm
+# ACLs alone cannot make these writable under ProtectSystem=strict. Keep the
+# parent/releases read-only. Missing paths are allowed before engine install;
+# restart idle runner services after creating the paths or changing this list.
+ReadWritePaths=-/var/lib/lmdj/pr-agent/engine-state -/var/lib/lmdj/pr-agent/engine
 Environment=CCACHE_DIR=/var/cache/lmdj-ccache
 Environment=CCACHE_UMASK=002
 Environment=CMAKE_BUILD_PARALLEL_LEVEL=4

@@ -14,7 +14,8 @@
 #      own installation check binds the new adapter/config bytes;
 #   3. makes the release root-owned and read-only, and gives every CI runner
 #      account write access to the shared ledger and engine working directory
-#      through POSIX ACLs (no runner service restart needed);
+#      through POSIX ACLs. Runner services must separately allow these exact
+#      paths in ReadWritePaths; changed mounts require an idle service restart;
 #   4. verifies that candidate as a runner account, then atomically switches
 #      current and retains the previous release for rollback. No model call.
 set -euo pipefail
@@ -122,7 +123,8 @@ for directory in "$INSTALL_ROOT/engine-state" "$INSTALL_ROOT/engine"; do
   done
 done
 
-# Prove the installation from a runner account before any workflow relies on it.
+# Prove installation identity from a runner account. This is outside its service
+# mount namespace: it does NOT prove live ReadWritePaths or ledger write access.
 smoke_account=""
 for account in $RUNNER_ACCOUNTS; do
   if id "$account" >/dev/null 2>&1; then smoke_account=$account; break; fi
