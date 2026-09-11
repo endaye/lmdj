@@ -332,10 +332,18 @@ def send_serial(path: str, content: bytes, timeout: float = 5.0) -> Frame:
                 size = HEADER + payload_size + 4
                 if len(received) < size:
                     continue
-                return decode(bytes(received[:size]))
+                response = decode(bytes(received[:size]))
+                if response.opcode != (frame.opcode | 0x80) or response.request_id != frame.request_id:
+                    raise ValueError("serial response does not match request")
+                if frame.opcode == 1:
+                    if not any(response.nonce):
+                        raise ValueError("HELLO returned an empty session nonce")
+                elif response.nonce != frame.nonce:
+                    raise ValueError("serial response belongs to a different session")
+                return response
 
         hello = exchange(Frame(1, 1, bytes(16)))
-        if hello.opcode != 0x81 or len(hello.payload) < 4 or hello.payload[:2] != b"\0\0":
+        if hello.payload != struct.pack("<HH", 0, MAX_PAYLOAD):
             raise ValueError("device rejected HELLO")
         nonce = hello.nonce
         transfer_id = os.urandom(TRANSFER_ID_BYTES)
@@ -343,7 +351,7 @@ def send_serial(path: str, content: bytes, timeout: float = 5.0) -> Frame:
         request_id = 2
         begin = exchange(Frame(3, request_id, nonce,
                                transfer_id + struct.pack("<Q", len(content)) + identity))
-        if begin.opcode != 0x83 or begin.payload[:2] != b"\0\0":
+        if begin.payload != b"\0\0" + transfer_id + struct.pack("<Q", 0):
             raise ValueError("device rejected BEGIN; confirm receive on device")
         offset = 0
         request_id += 1
@@ -351,12 +359,12 @@ def send_serial(path: str, content: bytes, timeout: float = 5.0) -> Frame:
             chunk = content[offset:offset + MAX_PAYLOAD - DATA_OFFSET_BYTES]
             response = exchange(Frame(4, request_id, nonce,
                                        transfer_id + struct.pack("<Q", offset) + chunk))
-            if response.opcode != 0x84 or response.payload[:2] != b"\0\0":
+            if response.payload != b"\0\0" + transfer_id + struct.pack("<Q", offset + len(chunk)):
                 raise ValueError("device rejected DATA")
             offset += len(chunk)
             request_id += 1
         response = exchange(Frame(5, request_id, nonce, transfer_id))
-        if response.opcode != 0x85 or response.payload[:2] != b"\0\0":
+        if response.payload != b"\0\0" + struct.pack("<Q", len(content)) + identity:
             raise ValueError("device rejected COMMIT")
         return response
     finally:
