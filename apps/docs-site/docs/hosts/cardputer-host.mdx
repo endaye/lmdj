@@ -24,6 +24,9 @@ scripts/cardputer-host.sh configure
 scripts/cardputer-host.sh build
 ```
 
-This candidate has no public Release, deployment, Channel promotion, or
-physical A1 acceptance. USB producer/consumer wiring, combined-load
-measurements, and the complete A1 journey remain required.
+The Host now exposes the bounded `lmdj.cardputer-transfer.v1` receiver over
+the ESP32-S3 USB Serial/JTAG endpoint and hands only committed, identity-
+verified content to the Runtime Host. This candidate has no public Release,
+deployment, Channel promotion, or physical A1 acceptance; a real computer
+producer must exercise the complete transfer sequence, while combined-load
+measurements and the complete A1 journey remain required.
