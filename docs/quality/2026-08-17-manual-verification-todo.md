@@ -1,5 +1,16 @@
 # Human TODO — 2026-08-17
 
+## 三条主线当前入口（2026-09-11）
+
+统一依赖与工作拆分见[三线总计划](../plans/2026-09-11-parallel-product-roadmap.md)。
+Stage 12：S2 #1167 固定候选 Windows 操作/听感及 S4 #1169 适用性裁定。
+Embedded：H1 启动/停止静音、R2 真正设备测量及 A1 #1111 完整旅程；
+B1 #1110 的构建结果不能替代这些验收。
+Web Creator：W1 未决交互确认、W2 真实触摸原型验证、W5 固定候选听感/恢复/
+非开发者可用性验收；#1207 与 #522 各自保留完成范围。
+历史 Safari/iPadOS/MIDI/Sequence/Perform 验收继续保留，不随本次重排结案。
+
+
 ## Stage 12 当前入口（2026-09-10）
 
 完整列表与验收腿见[独立交付计划](../plans/2026-09-10-stage12-independent-delivery.md)。

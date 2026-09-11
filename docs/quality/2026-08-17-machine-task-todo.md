@@ -1,5 +1,14 @@
 # Machine Task TODO — 2026-08-17
 
+## 三条主线当前入口（2026-09-11）
+
+统一依赖与工作拆分见[三线总计划](../plans/2026-09-11-parallel-product-roadmap.md)。
+可立即准备：Stage 12 S1 #1166、Stem T1 #1171、Pattern P1 #1173；
+Embedded CPU #1176 与 H1 #1107 问题归因/修复；Web Creator W1 交互及能力矩阵。
+R2 #1131 等相关修复后按原口径复测；W2–W4 等各自前置与精确 Task 拆分。
+B1 #1110 已 CLOSED 只登记构建事实，后续集成缺口仍由 #1104 核定责任。
+
+
 ## Stage 12 当前入口（2026-09-10）
 
 完整列表与精确文件/验证见[独立交付计划](../plans/2026-09-10-stage12-independent-delivery.md)。

@@ -971,6 +971,25 @@ Headless Test 代替。
 及采纳语义分别设计；模型选型、Pattern Merge 和模型事件生成不由拆分决定。
 后两项的设计研究可与 Slice 验收并行，实施须先有获评审的精确 Task 边界。
 
+### 当前三条并行产品主线（2026-09-11）
+
+上述 Stage 编号保留历史交付语义，不要求当前工作全部串行。主线现按以下三线推进，
+依赖、状态与验收见[三线总计划](../plans/2026-09-11-parallel-product-roadmap.md)：
+
+- **Stage 12 / #472**：12A Slice 验收优先；12B Stem 与 12C Pattern 独立设计和交付。
+- **Embedded / Cardputer Runtime / #1104**：H1 生命周期与静音、R2/CPU 容量、
+  B1 固定候选、A1 完整真机旅程。B1 #1110 已 CLOSED、有构建证据，
+  H1 #1107、R2 #1131、CPU #1176、A1 #1111 仍 OPEN；构建不替代设备验收。
+- **Web Creator / #1207、#522**：四区设计参考已合并，继续上下文/映射决策、
+  原型与状态补齐、稳定布局、分工作流接入和真实设备验收。设计进展不计作实现完成。
+
+三线共享 Core/Facade/Contracts；Creator 使用既有能力可独立迭代，Slice 验收
+不等待新版 UI，Cardputer 首版不依赖设备端编辑或 Provider。
+Stage 13 标签 #1189 保留为后续扩展，不成为三线当前交付的统一前置。
+原 Stage 0–11 人工验收缺口仍按各自台账追踪；CI/部署是支撑线路，保留独立验收。
+
+### 早期并行验证与首个用户价值里程碑
+
 与第 1 步同期启动 **Web 实时音频 Spike**：最小化验证
 AudioWorklet + WASM 线程、SharedArrayBuffer 所需的 Cross-Origin Isolation、
 iPad Safari 音频生命周期，并实测 Touch-to-Sound 延迟。它不依赖 Facade 和
