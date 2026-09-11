@@ -26,6 +26,10 @@ Tca8418Scanner::~Tca8418Scanner() {
   if (impl_->bus) (void)i2c_del_master_bus(impl_->bus);
 }
 
+i2c_master_bus_handle_t Tca8418Scanner::bus_handle() const noexcept {
+  return impl_->installed ? impl_->bus : nullptr;
+}
+
 bool Tca8418Scanner::install() noexcept {
   auto& s = *impl_;
   if (s.installed) return true;

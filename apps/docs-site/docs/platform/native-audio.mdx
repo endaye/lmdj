@@ -101,6 +101,13 @@ Core stopped 不代表设备已停。Driver 保留 mute → 零块 → drain →
 context。输出增益和静音在 render 返回后处理，codec/I2S 操作不进入 Core 回调。
 预热块数、硬件接线、栈与容量 reserve/profile 由显式配置注入；研究值不是正式产品默认。
 
+Cardputer ADV 的 codec 与键盘共用 SDA/SCL。Host 先安装键盘总线，将其句柄借给
+音频驱动；音频停止时仅移除 codec 设备，键盘总线一直保留到音频任务退出之后。
+禁止为同一组引脚另建音频控制器，否则启动播放会重写 GPIO 路由，使后续按键失效。
+独立音频探针没有注入共享句柄时仍自行创建并回收总线。平台回归测试编译真实
+ESP 音频实现，模拟 GPIO 路由并检查重启、初始化失败和清理重试后的键盘访问；
+该测试不测真实 DMA 时限或模拟输出。
+
 在 EIM 中激活指定 SDK 后，可执行研究构建；缺失配置或 SDK revision 不符会拒绝：
 
 ```bash

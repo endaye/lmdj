@@ -184,14 +184,18 @@ bool EspAudioIo::configure() noexcept {
   for (auto& value : s.committed) value.store(0);
   s.queue = xQueueCreate(s.config.dma_blocks, sizeof(Impl::Eof));
   if (!s.queue) return false;
-  i2c_master_bus_config_t bus{};
-  bus.i2c_port = I2C_NUM_0;
-  bus.sda_io_num = static_cast<gpio_num_t>(s.config.sda);
-  bus.scl_io_num = static_cast<gpio_num_t>(s.config.scl);
-  bus.clk_source = I2C_CLK_SRC_DEFAULT;
-  bus.glitch_ignore_cnt = 7;
-  bus.flags.enable_internal_pullup = true;
-  if (i2c_new_master_bus(&bus, &s.bus) != ESP_OK) return false;
+  if (s.config.shared_bus) {
+    s.bus = s.config.shared_bus;
+  } else {
+    i2c_master_bus_config_t bus{};
+    bus.i2c_port = I2C_NUM_0;
+    bus.sda_io_num = static_cast<gpio_num_t>(s.config.sda);
+    bus.scl_io_num = static_cast<gpio_num_t>(s.config.scl);
+    bus.clk_source = I2C_CLK_SRC_DEFAULT;
+    bus.glitch_ignore_cnt = 7;
+    bus.flags.enable_internal_pullup = true;
+    if (i2c_new_master_bus(&bus, &s.bus) != ESP_OK) return false;
+  }
   i2c_device_config_t codec{};
   codec.dev_addr_length = I2C_ADDR_BIT_LEN_7;
   codec.device_address = s.config.codec_address;
@@ -319,7 +323,10 @@ bool EspAudioIo::release() noexcept {
   if (s.callbacks && !disable_and_quiesce()) return false;
   if (s.tx) { if (i2s_del_channel(s.tx) != ESP_OK) return false; s.tx = nullptr; }
   if (s.codec) { if (i2c_master_bus_rm_device(s.codec) != ESP_OK) return false; s.codec = nullptr; }
-  if (s.bus) { if (i2c_del_master_bus(s.bus) != ESP_OK) return false; s.bus = nullptr; }
+  if (s.bus) {
+    if (!s.config.shared_bus && i2c_del_master_bus(s.bus) != ESP_OK) return false;
+    s.bus = nullptr;
+  }
   if (s.queue) { vQueueDelete(s.queue); s.queue = nullptr; }
   return true;
 }
