@@ -30,4 +30,6 @@ SequenceAdmissionState snapshot(const nlohmann::json& encoded,
 bool blocks_flush(const ActiveSequenceJournal& journal);
 bool blocks_switch(const ActiveSequenceJournal& journal,
                    const foundation::PatternId& target);
+// Called on the replay copy only after the ordinary switch grammar is validated.
+void reconcile_switch(ActiveSequenceJournal& journal);
 }  // namespace lmdj::project_io::admission_codec

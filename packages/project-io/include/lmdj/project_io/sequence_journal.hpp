@@ -227,6 +227,10 @@ class SequenceJournal {
       const std::filesystem::path& bundle, foundation::SequenceSessionId session,
       const SequenceAdmissionIdentity& identity,
       const SequenceAdmissionFence& fence);
+  foundation::Result<void> retain_admission_switch(
+      const std::filesystem::path& bundle, foundation::SequenceSessionId session,
+      const SequenceAdmissionIdentity& identity,
+      const SequencePublicationAuthority& authority);
   foundation::Result<void> close_admission(
       const std::filesystem::path& bundle, foundation::SequenceSessionId session,
       const SequenceAdmissionIdentity& identity,

@@ -50,6 +50,16 @@ slot 的候选与 capacity closure 属于同一 durable record transition。5000
 这些限制约束未解决候选和单条记录，不代表整个 recording file 固定大小；不可变 transfer
 history 随现有 session 生命周期增长。
 
+普通录制切换通过 `retain_admission_switch` 先持久化已确认的目标 Pattern、publication
+generation 和实际 activation frame，再 flush/source switch；没有确切 authority 时在
+写入 switch 前拒绝。一次只允许一个尚未完成 journal reconciliation 的边界，S 之前的
+source 候选先 drain，S 及之后的 target 候选可保留跨越 source flush/switch。独立 switch
+history 与 `S<F` cutoff receipt 必须一致，`S>=F` cancellation 不能被改写成 applied。
+checkpoint 同时保存 Pattern 与 publication generation；P→Q→P 是不同 segment，不能
+复活旧 P 的 owned presses。切换不制造 event/release 或推进 input sequence。
+streaming preflight 在 DOM 分配前检查包括未知 envelope/payload 字段在内的记录边界，
+active tail/flush 的 events 必须为 array；historical receipts 不受整会话固定大小上限。
+
 transfer 在一次 append 中替换完整 canonical recoverable tail、保存 checkpoint 和 receipt、
 消费确切候选前缀。已消费候选仍可通过 receipt 检查 exact retry；相同 identity 的不同 payload
 拒绝。无输入贡献的 prefix 不推进 journal input sequence，也不修改 checkpoint。

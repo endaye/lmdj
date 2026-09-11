@@ -145,8 +145,9 @@ template <> SequenceOwnedPress decode<SequenceOwnedPress>(const Json& input) {
 }
 
 template <> SequenceAdmissionCheckpoint decode<SequenceAdmissionCheckpoint>(const Json& input) {
-  require(input.is_object() && input.size() == 3, "invalid SequenceAdmissionCheckpoint shape");
+  require(input.is_object() && input.size() == 4, "invalid SequenceAdmissionCheckpoint shape");
   return {decode<foundation::PatternId>(input.at("pattern_id")),
+          decode<std::uint64_t>(input.at("publication_generation")),
           decode<std::uint64_t>(input.at("last_runtime_frame")),
           decode<std::vector<SequenceOwnedPress>>(input.at("owned_presses"))};
 }
@@ -173,13 +174,15 @@ template <> SequenceAdmissionTransfer decode<SequenceAdmissionTransfer>(const Js
 }
 
 template <> SequenceAdmissionState decode<SequenceAdmissionState>(const Json& input) {
-  require(input.is_object() && input.size() == 7, "invalid SequenceAdmissionState shape");
+  require(input.is_object() && input.size() == 9, "invalid SequenceAdmissionState shape");
   return {decode<SequenceAdmissionPreparation>(input.at("preparation")),
           decode<std::vector<SequenceAdmissionCandidate>>(input.at("candidates")),
           decode<std::optional<SequenceAdmissionFence>>(input.at("admission_fence")),
           decode<std::optional<SequenceAdmissionFence>>(input.at("cutoff_fence")),
           decode<std::optional<SequenceAdmissionClosure>>(input.at("closure")),
           decode<std::vector<SequenceAdmissionTransfer>>(input.at("transfers")),
+          decode<std::vector<SequencePublicationAuthority>>(input.at("applied_switches")),
+          decode<std::uint64_t>(input.at("segment_generation")),
           decode<bool>(input.at("completed"))};
 }
 }  // namespace
@@ -258,6 +261,7 @@ Json encode(const SequenceOwnedPress& value) {
 
 Json encode(const SequenceAdmissionCheckpoint& value) {
   return {{"pattern_id", value_json(value.pattern_id)},
+          {"publication_generation", value_json(value.publication_generation)},
           {"last_runtime_frame", value_json(value.last_runtime_frame)},
           {"owned_presses", value_json(value.owned_presses)}};
 }
@@ -288,6 +292,8 @@ Json encode(const SequenceAdmissionState& value) {
           {"cutoff_fence", value_json(value.cutoff_fence)},
           {"closure", value_json(value.closure)},
           {"transfers", value_json(value.transfers)},
+          {"applied_switches", value_json(value.applied_switches)},
+          {"segment_generation", value_json(value.segment_generation)},
           {"completed", value_json(value.completed)}};
 }
 
@@ -399,7 +405,8 @@ std::size_t candidate_bytes(const SequenceAdmissionState& s) {
 void checkpoint_valid(const SequenceAdmissionCheckpoint& checkpoint,
                       const foundation::PatternId& pattern, std::uint32_t length) {
   uuid(checkpoint.pattern_id);
-  require(checkpoint.pattern_id == pattern && checkpoint.owned_presses.size() <= 64,
+  require(checkpoint.pattern_id == pattern && checkpoint.publication_generation &&
+              checkpoint.owned_presses.size() <= 64,
           "invalid admission checkpoint Pattern or size");
   std::array<bool, 64> slots{};
   for (const auto& press : checkpoint.owned_presses) {
@@ -427,20 +434,79 @@ void tail_valid(const SequenceAdmissionTransfer& t, std::uint32_t length) {
 bool terminal_retained(const SequenceAdmissionState& s) {
   return !s.transfers.empty() && s.transfers.back().terminal;
 }
+std::optional<SequencePublicationAuthority> cutoff_switch(const SequenceAdmissionState& s) {
+  if (!s.cutoff_fence ||
+      s.cutoff_fence->switch_outcome != SequenceSwitchOutcome::applied_before_cutoff) return {};
+  return SequencePublicationAuthority{s.cutoff_fence->switch_authority->pattern_id,
+      s.cutoff_fence->switch_authority->generation, *s.cutoff_fence->switch_applied_frame};
+}
+SequencePublicationAuthority segment(const SequenceAdmissionState& s, std::uint64_t generation) {
+  if (generation == s.preparation.publication_generation) {
+    return {s.preparation.pattern_id, generation,
+            s.admission_fence ? s.admission_fence->effective_frame : 0};
+  }
+  for (const auto& a : s.applied_switches) if (a.generation == generation) return a;
+  const auto cutoff = cutoff_switch(s);
+  require(cutoff && cutoff->generation == generation,
+          "journal segment lacks applied authority");
+  return *cutoff;
+}
+SequencePublicationAuthority segment(const SequenceAdmissionState& s) {
+  return segment(s, s.segment_generation);
+}
+std::optional<SequencePublicationAuthority> pending_switch(const SequenceAdmissionState& s) {
+  if (!s.applied_switches.empty() &&
+      s.applied_switches.back().generation > s.segment_generation) return s.applied_switches.back();
+  const auto cutoff = cutoff_switch(s);
+  if (cutoff && cutoff->generation > s.segment_generation) return cutoff;
+  return {};
+}
+void switches_valid(const SequenceAdmissionState& s) {
+  auto previous = SequencePublicationAuthority{s.preparation.pattern_id,
+      s.preparation.publication_generation, s.admission_fence ? s.admission_fence->effective_frame : 0};
+  std::size_t pending = 0;
+  for (const auto& a : s.applied_switches) {
+    uuid(a.pattern_id);
+    require(a.generation > previous.generation && a.frame >= previous.frame &&
+                a.pattern_id != previous.pattern_id, "applied switch history regressed");
+    if (a.generation > s.segment_generation) ++pending;
+    previous = a;
+  }
+  require(pending <= 1, "multiple unreconciled applied switches");
+  (void)segment(s); // Validates the persisted reconciled generation as well.
+  if (!s.cutoff_fence) return;
+  const auto& f = *s.cutoff_fence;
+  const auto cutoff = cutoff_switch(s);
+  for (const auto& a : s.applied_switches) {
+    require(a.frame < f.effective_frame, "ordinary applied switch is at or after cutoff");
+    if (f.switch_authority && a.generation == f.switch_authority->generation) {
+      require(cutoff && a == *cutoff, "ordinary switch conflicts with cutoff decision");
+    }
+  }
+  if (cutoff) {
+    require(cutoff->generation >= previous.generation && cutoff->frame >= previous.frame,
+            "cutoff applied authority regressed");
+    if (cutoff->generation == previous.generation) {
+      require(cutoff->pattern_id == previous.pattern_id &&
+                  (s.applied_switches.empty() || *cutoff == previous),
+              "cutoff applied authority collision");
+    } else {
+      require(pending == 0, "cutoff adds a second unreconciled switch");
+    }
+  } else {
+    require(f.pattern_id == previous.pattern_id && f.publication_generation == previous.generation,
+            "cutoff does not match last applied publication");
+  }
+}
 SequenceAdmissionCheckpoint checkpoint(
     const SequenceAdmissionState& s, const foundation::PatternId& current_pattern) {
-  auto previous = s.transfers.empty()
-      ? SequenceAdmissionCheckpoint{s.preparation.pattern_id, s.admission_fence->effective_frame, {}}
-      : s.transfers.back().checkpoint;
-  if (previous.pattern_id == current_pattern) return previous;
-  // The existing switch record follows the old segment's completed flush. Its
-  // new empty ownership/frame comes only from the retained historical decision;
-  // an ordinary current-status observation cannot provide this authority.
-  require(s.cutoff_fence &&
-              s.cutoff_fence->switch_outcome == SequenceSwitchOutcome::applied_before_cutoff &&
-              s.cutoff_fence->switch_authority->pattern_id == current_pattern,
-          "checkpoint switch authority is unresolved");
-  return {current_pattern, *s.cutoff_fence->switch_applied_frame, {}};
+  const auto current = segment(s);
+  require(current.pattern_id == current_pattern, "checkpoint segment Pattern mismatch");
+  if (!s.transfers.empty() &&
+      s.transfers.back().checkpoint.publication_generation == current.generation) {
+    return s.transfers.back().checkpoint;
+  }
+  return {current_pattern, current.generation, current.frame, {}};
 }
 void record_bound(const Json& record) {
   const auto kind = record.at("kind").get<std::string>();
@@ -465,22 +531,26 @@ bool blocks_flush(const ActiveSequenceJournal& journal) {
   const auto& s = *journal.admission;
   if (!s.admission_fence) return true;
   if (s.candidates.empty()) return false;
-  // A resolved S<F boundary permits flushing the old segment after its prefix
-  // drained, while candidates for the new Pattern remain outstanding.
-  return !(s.cutoff_fence &&
-           s.cutoff_fence->switch_outcome == SequenceSwitchOutcome::applied_before_cutoff &&
-           s.cutoff_fence->switch_authority->pattern_id != journal.pattern_id &&
+  // A durable ordinary or S<F applied boundary permits source finalization
+  // while target-side candidates remain. No current-status clock is consulted.
+  const auto boundary = pending_switch(s);
+  return !(boundary &&
            std::ranges::all_of(s.candidates, [&](const auto& c) {
-             return c.runtime_frame >= *s.cutoff_fence->switch_applied_frame;
+             return c.runtime_frame >= boundary->frame;
            }));
 }
 bool blocks_switch(const ActiveSequenceJournal& journal,
                    const foundation::PatternId& target) {
-  return journal.admission && !journal.admission->completed &&
-         (blocks_flush(journal) || !journal.pending_events.empty() ||
-          !journal.admission->admission_fence ||
-          (journal.admission->cutoff_fence &&
-           journal.admission->cutoff_fence->pattern_id != target));
+  if (!journal.admission || journal.admission->completed) return false;
+  const auto boundary = pending_switch(*journal.admission);
+  return blocks_flush(journal) || !journal.pending_events.empty() ||
+         !journal.admission->admission_fence || !boundary || boundary->pattern_id != target;
+}
+void reconcile_switch(ActiveSequenceJournal& journal) {
+  if (!journal.admission || journal.admission->completed) return;
+  const auto boundary = pending_switch(*journal.admission);
+  require(boundary.has_value(), "switch lacks durable applied authority");
+  journal.admission->segment_generation = boundary->generation;
 }
 
 void preflight(std::string_view bytes) {
@@ -489,6 +559,8 @@ void preflight(std::string_view bytes) {
   // Historical transfers are bounded individually, not as an entire session.
   class Bounds final : public nlohmann::json_sax<Json> {
    public:
+    std::string payload_kind;
+    std::set<std::string> payload_keys;
     struct Frame {
       bool array;
       std::string name;
@@ -503,10 +575,18 @@ void preflight(std::string_view bytes) {
     bool number_integer(number_integer_t n) override { return scalar(std::to_string(n).size()); }
     bool number_unsigned(number_unsigned_t n) override { return scalar(std::to_string(n).size()); }
     bool number_float(number_float_t, const string_t& raw) override { return scalar(raw.size()); }
-    bool string(string_t& value) override { return scalar(value.size() + 2); }
+    bool string(string_t& value) override {
+      if (frames.size() == 2 && frames.back().name == "payload" &&
+          frames.back().key == "kind") payload_kind = value;
+      return scalar(value.size() + 2);
+    }
     bool binary(binary_t&) override { return false; }
     bool key(string_t& value) override {
       if (frames.empty()) return false;
+      if (frames.size() == 1 && value != "checksum" && value != "payload") return false;
+      if (frames.size() == 2 && frames.back().name == "payload") {
+        if (!payload_keys.insert(value).second) return false;
+      }
       frames.back().key = value;
       return charge(value.size() + 3);
     }
@@ -537,7 +617,28 @@ void preflight(std::string_view bytes) {
           (frames.back().array ? frames.back().name : frames.back().key);
       Frame frame{array, name, {}};
       frame.start = total;
+      // Unknown fields inherit a finite budget too. Only actual session/history
+      // containers are exempt; spelling an arbitrary array "transfers" is not
+      // enough to obtain an unbounded allocation.
+      frame.budget = kSequenceAdmissionControlBytes;
+      if (frames.empty() || (frames.size() == 1 && name == "payload") ||
+          (frames.size() == 2 && name == "journal") ||
+          (frames.size() == 3 && frames.back().name == "journal" && name == "admission") ||
+          (array && frames.size() == 4 && frames.back().name == "admission" &&
+           (name == "transfers" || name == "applied_switches")) ||
+          (array && frames.size() == 3 && frames.back().name == "journal" &&
+           (name == "flushes" || name == "pending_events" || name == "rebases")) ||
+          (array && name == "events" &&
+           ((frames.size() == 2 && frames.back().name == "payload") ||
+            frames.back().name == "flushes")) ||
+          (array && name == "recovery_events" && frames.back().name == "flushes") ||
+          (!array && name == "flushes" && frames.back().array)) {
+        frame.budget = std::numeric_limits<std::size_t>::max();
+      }
+      if (array && (frames.empty() || name == "payload" || name == "journal" ||
+                    name == "admission" || name == "checksum")) return false;
       if (name == "data" || (name == "transfers" && !array)) frame.budget = kSequenceAdmissionTransferBytes;
+      if (name == "recoverable_tail" && array) frame.budget = kSequenceAdmissionTransferBytes;
       if (name == "candidates" || name == "candidate_receipts") {
         frame.budget = kSequenceAdmissionCandidateBytes;
         if (array) frame.maximum = kSequenceAdmissionMaxCandidates;
@@ -555,6 +656,19 @@ void preflight(std::string_view bytes) {
     }
   } bounds;
   require(Json::sax_parse(bytes, &bounds), "admission JSON exceeds bounds or is malformed");
+  // The streaming pass discovers kind without relying on member ordering. This
+  // whole-envelope check still runs BEFORE the caller constructs a JSON DOM,
+  // so even fields recognized in another grammar cannot evade record limits.
+  if (bounds.payload_kind.starts_with("admission-")) {
+    const auto limit = bounds.payload_kind == "admission-transfer"
+        ? kSequenceAdmissionTransferBytes : kSequenceAdmissionControlBytes;
+    require(bytes.size() <= limit && bounds.payload_keys ==
+                std::set<std::string>{"data", "identity", "kind", "session_id"},
+            "admission envelope exceeds bounds or has unknown fields");
+  } else if (bounds.payload_keys.contains("journal")) {
+    require(bounds.payload_keys == std::set<std::string>{"contract", "journal", "reason"},
+            "recovery envelope has unknown fields");
+  }
 }
 
 bool apply(ActiveSequenceJournal& journal, const Json& record,
@@ -578,7 +692,7 @@ bool apply(ActiveSequenceJournal& journal, const Json& record,
     }
     require(journal.state == SequenceSessionState::active && p.pattern_id == journal.pattern_id,
             "preparation does not match active Pattern");
-    journal.admission = SequenceAdmissionState{p, {}, {}, {}, {}, {}, false};
+    journal.admission = SequenceAdmissionState{p, {}, {}, {}, {}, {}, {}, p.publication_generation, false};
     return true;
   }
   require(journal.admission.has_value(), "admission is not prepared");
@@ -621,6 +735,37 @@ bool apply(ActiveSequenceJournal& journal, const Json& record,
     }
     return true;
   }
+  if (kind == "admission-switch") {
+    const auto authority = decode<SequencePublicationAuthority>(data);
+    uuid(authority.pattern_id);
+    for (const auto& previous : s.applied_switches) {
+      if (previous.generation == authority.generation) {
+        require(previous == authority, "immutable applied switch collision");
+        return false;
+      }
+    }
+    require(!s.completed && !terminal_retained(s) && s.admission_fence &&
+                (journal.state == SequenceSessionState::active ||
+                 journal.state == SequenceSessionState::switching),
+            "applied switch lacks active admission");
+    const auto pending = pending_switch(s);
+    // A matching S<F receipt may already supply this same boundary; it is not
+    // a second switch. Any other unresolved boundary must reconcile first.
+    require(!pending || ((s.applied_switches.empty() ||
+                s.applied_switches.back().generation <= s.segment_generation) &&
+                *pending == authority), "another applied switch is unresolved");
+    const auto current = segment(s);
+    require(authority.generation > current.generation &&
+                authority.frame >= checkpoint(s, journal.pattern_id).last_runtime_frame,
+            "applied switch generation or frame regressed");
+    if (s.cutoff_fence) {
+      const auto cutoff = cutoff_switch(s);
+      require(cutoff && *cutoff == authority, "applied switch conflicts with retained cutoff");
+    }
+    s.applied_switches.push_back(authority);
+    switches_valid(s);
+    return true;
+  }
   if (kind == "admission-fence") {
     const auto f = decode<SequenceAdmissionFence>(data);
     fence_valid(f, s.preparation);
@@ -632,6 +777,7 @@ bool apply(ActiveSequenceJournal& journal, const Json& record,
     require(!s.completed, "admission is complete");
     slot = f;
     fences_valid(s);
+    switches_valid(s);
     return true;
   }
   if (kind == "admission-close") {
@@ -661,11 +807,12 @@ bool apply(ActiveSequenceJournal& journal, const Json& record,
             "transfer Pattern or revision mismatch");
     tail_valid(t, domain::pattern_length_ticks(journal.bars));
     const auto previous_checkpoint = checkpoint(s, journal.pattern_id);
-    require(t.checkpoint.last_runtime_frame >= previous_checkpoint.last_runtime_frame,
+    require(t.checkpoint.publication_generation == previous_checkpoint.publication_generation &&
+                t.checkpoint.last_runtime_frame >= previous_checkpoint.last_runtime_frame,
             "checkpoint frame regressed");
     std::size_t consumed = 0;
     if (t.terminal) {
-      require(s.cutoff_fence && s.closure && s.candidates.empty() &&
+      require(s.cutoff_fence && s.closure && s.candidates.empty() && !pending_switch(s) &&
                   t.first_watermark == 0 && t.last_watermark == 0 &&
                   t.candidate_receipts.empty() && t.candidates_sha256 == digest(Json::array()) &&
                   t.checkpoint.owned_presses.empty() && !t.journal_input_sequence &&
@@ -712,7 +859,7 @@ bool apply(ActiveSequenceJournal& journal, const Json& record,
   }
   require(kind == "admission-complete" && data.is_null(), "unknown admission record");
   if (s.completed) return false;
-  require(s.admission_fence && s.cutoff_fence && s.closure && s.candidates.empty() &&
+  require(s.admission_fence && s.cutoff_fence && s.closure && s.candidates.empty() && !pending_switch(s) &&
               terminal_retained(s) && s.transfers.back().checkpoint.owned_presses.empty() &&
               journal.pending_events.empty() &&
               std::ranges::all_of(journal.flushes, [](const auto& f) { return f.completed; }),
@@ -736,19 +883,29 @@ SequenceAdmissionState snapshot(const Json& input, const ActiveSequenceJournal& 
   auto s = decode<SequenceAdmissionState>(input);
   preparation_valid(s.preparation);
   fences_valid(s);
+  switches_valid(s);
+  require(segment(s).pattern_id == journal.pattern_id, "snapshot segment Pattern mismatch");
   std::optional<std::uint64_t> previous;
   std::set<std::string> transfers;
   bool terminal = false;
+  std::uint64_t previous_generation = s.preparation.publication_generation;
   for (const auto& t : s.transfers) {
     require(!terminal && transfers.insert(t.transfer_id.value()).second,
             "duplicate or post-terminal transfer history");
     tail_valid(t, domain::pattern_length_ticks(8));
+    const auto authority = segment(s, t.checkpoint.publication_generation);
+    require(t.checkpoint.publication_generation >= previous_generation &&
+                t.checkpoint.publication_generation <= s.segment_generation &&
+                authority.pattern_id == t.pattern_id &&
+                t.checkpoint.last_runtime_frame >= authority.frame,
+            "snapshot transfer segment is invalid");
+    previous_generation = t.checkpoint.publication_generation;
     require(hash_valid(t.candidates_sha256), "invalid prefix digest");
     if (t.terminal) {
       require(t.first_watermark == 0 && t.last_watermark == 0 &&
                   t.candidate_receipts.empty() && t.candidates_sha256 == digest(Json::array()) &&
                   !t.journal_input_sequence && t.checkpoint.owned_presses.empty() &&
-                  s.admission_fence && s.cutoff_fence && s.closure && s.candidates.empty() &&
+                  s.admission_fence && s.cutoff_fence && s.closure && s.candidates.empty() && !pending_switch(s) &&
                   t.pattern_id == s.cutoff_fence->pattern_id,
               "invalid terminal snapshot");
       terminal = true;

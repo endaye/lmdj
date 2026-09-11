@@ -113,6 +113,7 @@ struct SequenceOwnedPress {
 };
 struct SequenceAdmissionCheckpoint {
   foundation::PatternId pattern_id;
+  std::uint64_t publication_generation{};
   std::uint64_t last_runtime_frame{};
   std::vector<SequenceOwnedPress> owned_presses;
 };
@@ -140,6 +141,8 @@ struct SequenceAdmissionState {
   std::optional<SequenceAdmissionFence> cutoff_fence;
   std::optional<SequenceAdmissionClosure> closure;
   std::vector<SequenceAdmissionTransfer> transfers;
+  std::vector<SequencePublicationAuthority> applied_switches;
+  std::uint64_t segment_generation{};
   bool completed{};
 };
 ```
@@ -164,6 +167,10 @@ retain_admission_fence(const std::filesystem::path& bundle,
                   foundation::SequenceSessionId session,
                   const SequenceAdmissionIdentity& identity,
                   const SequenceAdmissionFence& fence);
+retain_admission_switch(const std::filesystem::path& bundle,
+                  foundation::SequenceSessionId session,
+                  const SequenceAdmissionIdentity& identity,
+                  const SequencePublicationAuthority& authority);
 close_admission(const std::filesystem::path& bundle,
                   foundation::SequenceSessionId session,
                   const SequenceAdmissionIdentity& identity,
@@ -182,6 +189,16 @@ Inspection uses existing `read_active` and sealed recovery, not another service.
 candidate buffer. Candidate limits apply to the unresolved set; immutable journal
 history grows under the existing session lifecycle. Never claim the entire recording
 file has a fixed size. Bound each decoded record before allocating its arrays.
+
+`retain_admission_switch` stores an acknowledged ordinary applied boundary before
+source flush/switch. Its authority frame is actual, not scheduled. Ordered
+`applied_switches` retain immutable generation identities; generations strictly
+increase, frames never decrease, exact retries reconcile durably, and collisions
+fail. Only one boundary may be ahead of the durable journal segment at a time.
+`segment_generation` starts at preparation publication generation and advances only
+when the existing journal switch reconciles a retained boundary. Checkpoints must
+match that segment generation, including P->Q->P without any Q transfer. History
+follows the session lifecycle with per-control-record bounds, not candidate limits.
 
 ## Task S1: Durable records, atomic transfer and recovery ownership
 
@@ -253,6 +270,9 @@ ctest --preset dev --output-on-failure -R '^project_io\.(sequence_journal|sessio
   but no applied frame. Storage does not derive an audio outcome from these fields.
 
 - [ ] Enforce limits on outstanding candidate count and canonical encoded bytes.
+  Streaming preflight must bound unknown envelope/payload arrays before DOM
+  construction as well as known admission fields, without capping the entire
+  historical session. New active tail/flush event fields must be arrays.
   Admit at most 1024 candidates / 1 MiB. Reserve 1 MiB for transfer and 64 KiB for
   both fence records plus closure/completion. A candidate that consumes the final
   available count/byte slot writes its capacity closure in the SAME envelope, so
@@ -309,6 +329,18 @@ retain checkpoint; publish all these changes only after the single durable appen
   candidates. Completion requires both fences, closure, no outstanding candidates,
   no owned presses and known completed canonical flushes. Plain journals without
   admission continue current Sequence operations using the new format.
+
+- [ ] Retain ordinary applied-switch authority before source flush/switch, bound
+  to preparation operation/runtime identity. Reject a switch before mutation when
+  its exact authority is missing. Drain source candidates before S; target-side
+  candidates at/after S may remain across source flush/switch. Preserve the S<F
+  cutoff route, reject conflicting ordinary/cutoff authority and never turn a
+  canceled S>=F boundary into an applied switch. Initialize the target checkpoint
+  from its retained Pattern/generation/actual frame, not Pattern identity alone.
+  Prove ordinary P->Q with both candidate sides, source flush, target transfer,
+  reopen and later no-pending-switch cutoff/terminal; P->Q->P without intermediate
+  transfers; duplicate/collision/unknown-sync receipts; and unchanged held-terminal
+  and S<F regressions. Persist/validate history and reconciled generation in sealing.
 
 - [ ] Add independent native regressions for exact retry with unchanged file size;
   collision; generation/session mismatch; invalid watermark and integer extremes;

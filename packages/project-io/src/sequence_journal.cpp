@@ -991,6 +991,9 @@ foundation::Result<JournalDocument> read_journal(
             "Sequence Journal tail event order is not canonical";
         const auto loop_length =
             domain::pattern_length_ticks(document.journal.bars);
+        if (!payload.value().at("events").is_array()) {
+          throw std::runtime_error("Sequence tail events must be an array");
+        }
         for (const auto& encoded : payload.value().at("events")) {
           auto parsed = parse_event(encoded, loop_length, path);
           if (!parsed.has_value()) {
@@ -1036,6 +1039,9 @@ foundation::Result<JournalDocument> read_journal(
         }
         const auto loop_length =
             domain::pattern_length_ticks(document.journal.bars);
+        if (!payload.value().at("events").is_array()) {
+          throw std::runtime_error("Sequence flush events must be an array");
+        }
         for (const auto& encoded : payload.value().at("events")) {
           auto parsed = parse_event(encoded, loop_length, path);
           if (!parsed.has_value()) {
@@ -1231,6 +1237,7 @@ foundation::Result<JournalDocument> read_journal(
                 [](const auto& flush) { return !flush.completed; })) {
           throw std::runtime_error("Sequence switch metadata is invalid");
         }
+        admission_codec::reconcile_switch(document.journal);
         document.journal.pattern_id = pattern_id;
         document.journal.bars = bars;
         document.journal.pattern_fingerprint = fingerprint;
@@ -1597,6 +1604,12 @@ foundation::Result<void> SequenceJournal::retain_admission_fence(
     const SequenceAdmissionIdentity& identity, const SequenceAdmissionFence& fence) {
   return append_admission_record(platform_, bundle, session, identity,
                                  "admission-fence", admission_codec::encode(fence));
+}
+foundation::Result<void> SequenceJournal::retain_admission_switch(
+    const std::filesystem::path& bundle, foundation::SequenceSessionId session,
+    const SequenceAdmissionIdentity& identity, const SequencePublicationAuthority& authority) {
+  return append_admission_record(platform_, bundle, session, identity,
+                                 "admission-switch", admission_codec::encode(authority));
 }
 foundation::Result<void> SequenceJournal::close_admission(
     const std::filesystem::path& bundle, foundation::SequenceSessionId session,

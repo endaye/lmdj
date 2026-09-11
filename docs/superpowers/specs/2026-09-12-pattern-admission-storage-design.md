@@ -78,6 +78,7 @@ operations; implementation names may differ but semantics may not.
 | Admission preparation | Session and Project identity, unique operation ID, runtime generation, transport epoch, expected Pattern authority, bounded candidate limit and deadline policy |
 | Candidate | Preparation identity, strictly increasing control watermark, runtime frame, Pad Slot, press/release kind, velocity where applicable, original press sequence or existing release correlation |
 | Fence outcome | Exact command/epoch/generation, actual effective frame and origin, active Pattern/publication identity, playing state and exact pending-switch applied/canceled decision including actual switch frame |
+| Ordinary applied switch | Preparation identity plus acknowledged target Pattern/publication generation/actual activation frame, retained before source flush and journal switch; ordered immutable history with at most one unreconciled boundary |
 | Admission closure | Operation identity, last retained watermark B and terminal reason; closure may precede fence resolution |
 | Prefix transfer | Stable transfer identity, source watermark interval, complete payload identity, consumed candidates, canonical event contribution and resulting journal sequence/checkpoint needed for retry |
 
@@ -153,6 +154,34 @@ the target segment and terminal F. For S >= F, retain cancellation and create no
 segment at S, including the tie. Delayed inspection cannot replace the historical
 receipt with later current state. Record-off keeps playback; Play/Stop applies
 audio stop before journal flush. IO failure must not undo either known audio fact.
+
+Ordinary recording switches do not require a terminal cutoff. Before source flush
+or journal switch, the Facade calls `retain_admission_switch(bundle, session,
+identity, authority)` with the already acknowledged `SequencePublicationAuthority`;
+here `frame` is the actual activation frame, not a requested or guessed clock.
+The method returns `foundation::Result<void>` and uses the same identity, lease,
+checksum, exact-retry and uncertain-sync rules as fences. Generations strictly
+increase and actual frames never decrease. Reusing a generation with a different
+payload is a collision. Only one not-yet-reconciled boundary is permitted; another
+must wait for the journal segment to catch up. Historical receipts are individually
+bounded control records, not members of the unresolved candidate pool.
+
+Candidates before S drain into the source segment first. Retained target candidates
+at/after S may remain while the source tail is finalized/flushed and the journal
+switches under that exact authority. Without authority the switch fails before its
+durable mutation. The existing applied S<F cutoff receipt can supply the same
+boundary. Ordinary history and a cutoff receipt cannot disagree; an S>=F canceled
+decision never becomes an ordinary applied switch.
+
+Checkpoints carry both `pattern_id` and `publication_generation`, in addition to
+the last runtime frame and owned presses. Admission state retains `applied_switches`
+and `segment_generation`, the generation reconciled by a durable journal switch.
+An empty target checkpoint derives its generation/frame from that retained applied
+authority. P->Q->P therefore starts a distinct P segment even without an intermediate
+Q transfer; it cannot resurrect the first P segment's owned presses. Switching
+itself neither creates events nor advances journal input sequence. Existing musical
+finalization remains Facade-owned. Active and sealed readers retain and validate
+the same history/generation without a compatibility fallback.
 
 ## Recovery and completion
 

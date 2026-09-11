@@ -90,6 +90,7 @@ struct SequenceOwnedPress {
 };
 struct SequenceAdmissionCheckpoint {
   foundation::PatternId pattern_id;
+  std::uint64_t publication_generation{};
   std::uint64_t last_runtime_frame{};
   std::vector<SequenceOwnedPress> owned_presses;
   bool operator==(const SequenceAdmissionCheckpoint&) const = default;
@@ -122,6 +123,9 @@ struct SequenceAdmissionState {
   std::optional<SequenceAdmissionFence> cutoff_fence;
   std::optional<SequenceAdmissionClosure> closure;
   std::vector<SequenceAdmissionTransfer> transfers;
+  std::vector<SequencePublicationAuthority> applied_switches;
+  // Generation of the segment already reconciled by a durable switch record.
+  std::uint64_t segment_generation{};
   bool completed{};
   bool operator==(const SequenceAdmissionState&) const = default;
 };
