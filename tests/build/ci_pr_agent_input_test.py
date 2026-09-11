@@ -48,7 +48,7 @@ class ProducerTests(unittest.TestCase):
         self.repo = Path(self.temp.name) / "repo"
         self.repo.mkdir()
         self.git = RealGit(self.repo)
-        self.git.run("init", "-q")
+        self.git.run("init", "-q", "-b", "main")
 
     def identity(self, base: str, head: str, control: str | None = None) -> dict[str, object]:
         return {

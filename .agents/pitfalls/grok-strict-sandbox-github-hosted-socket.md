@@ -6,7 +6,7 @@ recurrences:
   - date: 2026-09-03
     occurrence: https://github.com/endaye/lmdj/pull/598
     observed_by: grok-4.6
-exit: gate:tests/build/ci_grok_review_workflow_test.py
+exit: gate:tests/build/ci_pr_review_workflow_test.py
 ---
 
 # Grok `--sandbox strict` cannot start on GitHub-hosted Ubuntu because `/run/podman/podman.sock` is unreadable, and bwrap fail-closes.
@@ -23,8 +23,7 @@ review ran.
 
 ## How to apply
 
-Do not pass `--sandbox strict` or `--sandbox read-only` to Grok in
-GitHub-hosted workflows. Keep isolation through `--tools` allowlisting
-read-only tools and `--deny` on credential paths. The contract test in
-`tests/build/ci_grok_review_workflow_test.py` fails if `--sandbox` returns to
-the review command.
+The Grok CLI review route is now retired. Do not restore that route or its
+deleted test to repair a historical ledger reference. The active contract in
+`tests/build/ci_pr_review_workflow_test.py` rejects the old CLI route and
+credentials in the PR Review workflow, keeping this failure mechanism absent.
