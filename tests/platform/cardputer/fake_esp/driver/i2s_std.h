@@ -4,6 +4,11 @@ using i2s_chan_handle_t = int*;
 struct i2s_event_data_t { void* dma_buf; std::size_t size; };
 using FakeCallback = bool (*)(i2s_chan_handle_t, i2s_event_data_t*, void*);
 struct i2s_event_callbacks_t { FakeCallback on_sent{}, on_send_q_ovf{}; };
+namespace fake_i2s {
+inline i2s_event_callbacks_t callbacks{};
+inline void* context{};
+inline int (*write)(const void*, std::size_t, std::size_t*){};
+}
 struct i2s_chan_config_t { unsigned dma_desc_num{}, dma_frame_num{}; bool auto_clear_after_cb{}; };
 struct i2s_std_config_t {
   int clk_cfg{}, slot_cfg{};
@@ -21,8 +26,12 @@ inline int i2s_channel_init_std_mode(int*, const i2s_std_config_t*) { return ESP
 inline int i2s_channel_get_info(int* c, i2s_chan_info_t* info) {
   info->total_dma_buf_size = static_cast<unsigned>(*c); return ESP_OK;
 }
-inline int i2s_channel_register_event_callback(int*, const i2s_event_callbacks_t*, void*) { return ESP_OK; }
+inline int i2s_channel_register_event_callback(int*, const i2s_event_callbacks_t* callbacks, void* context) {
+  fake_i2s::callbacks = *callbacks; fake_i2s::context = context; return ESP_OK;
+}
 inline int i2s_channel_enable(int*) { return ESP_OK; }
 inline int i2s_channel_disable(int*) { return ESP_OK; }
 inline int i2s_del_channel(int* c) { delete c; return ESP_OK; }
-inline int i2s_channel_write(int*, const void*, std::size_t, std::size_t*, int) { return -1; }
+inline int i2s_channel_write(int*, const void* data, std::size_t size, std::size_t* bytes, int) {
+  return fake_i2s::write ? fake_i2s::write(data, size, bytes) : -1;
+}

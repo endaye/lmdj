@@ -1,4 +1,15 @@
 find_package(Threads REQUIRED)
+add_executable(lmdj_cardputer_dma_deadline_tests dma_deadline_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/audio_driver.cpp")
+target_compile_definitions(lmdj_cardputer_dma_deadline_tests PRIVATE ESP_PLATFORM)
+target_include_directories(lmdj_cardputer_dma_deadline_tests PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/fake_esp" "${CMAKE_SOURCE_DIR}")
+lmdj_target_warnings(lmdj_cardputer_dma_deadline_tests)
+lmdj_target_sanitizers(lmdj_cardputer_dma_deadline_tests)
+foreach(scenario ontime before during)
+  lmdj_add_test(NAME platform.cardputer.dma_deadline.${scenario} TIER component
+    COMMAND lmdj_cardputer_dma_deadline_tests ${scenario})
+endforeach()
 # Keep the AudioSession implementation native while exercising the actual ESP
 # scanner. The fake models FIFO count/pop, not electrical timing or speaker IO.
 add_library(lmdj_cardputer_scanner_native_host OBJECT

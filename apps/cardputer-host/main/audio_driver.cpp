@@ -143,6 +143,18 @@ struct EspAudioIo::Impl {
   static_assert(std::atomic<bool>::is_always_lock_free);
 
   bool owner() const noexcept { return xPortGetCoreID() == config.audio_core; }
+  bool reservation_current() noexcept {
+    // At EOF k the next descriptor starts transmitting. Our completed slot
+    // starts again at EOF k + dma_blocks - 1, not at its own next EOF. Check
+    // around the copy: matching bytes/generation alone can accept a copy into
+    // an already transmitting buffer. This observes delivered callbacks, not
+    // hardware progress while an interrupt is masked; it is no analogue proof.
+    if (fault.load() || sequence.load() - reserved.sequence >= config.dma_blocks - 1) {
+      fault.store(true);
+      return false;
+    }
+    return true;
+  }
   bool reg(std::uint8_t address, std::uint8_t value) noexcept {
     if (!codec) return false;
     const std::uint8_t bytes[]{address, value};
@@ -276,12 +288,14 @@ bool EspAudioIo::write(std::span<const std::int16_t> pcm, std::size_t& accepted)
   accepted = 0;
   auto& s = *impl_;
   if (pcm.size() != AudioDriver::frames_per_block * 2 || !wait_writable()) return false;
+  if (!s.reservation_current()) { s.writable = false; return false; }
   std::size_t bytes{};
   const auto result = i2s_channel_write(s.tx, pcm.data(), pcm.size_bytes(), &bytes, 0);
   accepted = bytes / sizeof(std::int16_t);
   s.writable = false;
   if (result != ESP_OK || bytes != pcm.size_bytes() ||
-      std::memcmp(s.reserved.buffer, pcm.data(), pcm.size_bytes()) != 0 || s.fault.load()) return false;
+      std::memcmp(s.reserved.buffer, pcm.data(), pcm.size_bytes()) != 0 ||
+      !s.reservation_current()) return false;
   s.submitted = s.reserved.sequence;
   s.committed[(s.submitted - 1) % s.config.dma_blocks].store(s.submitted, std::memory_order_release);
   return true;
