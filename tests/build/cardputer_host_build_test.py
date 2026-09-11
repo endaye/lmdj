@@ -59,39 +59,39 @@ class CardputerBuildCommandTest(unittest.TestCase):
     def test_flash_is_not_an_implicit_build_operation(self):
         self.assert_rejected_without_sdk_call(self.run_command('flash', self.header), 64)
 
-    def test_configure_requires_explicit_header(self):
-        self.assert_rejected_without_sdk_call(self.run_command('configure'), 64)
+    def test_configure_accepts_assembly_from_product_sources(self):
+        result = self.run_command('configure')
+        self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_missing_header(self):
-        self.assert_rejected_without_sdk_call(self.run_command('build', self.header.with_suffix('.missing')))
+    def test_extra_configuration_argument_is_rejected(self):
+        self.assert_rejected_without_sdk_call(self.run_command('build', self.header), 64)
 
     def test_missing_sdk(self):
         self.env.pop('IDF_PATH')
-        self.assert_rejected_without_sdk_call(self.run_command('build', self.header))
+        self.assert_rejected_without_sdk_call(self.run_command('build'))
 
     def test_missing_python_environment(self):
         self.env.pop('IDF_PYTHON_ENV_PATH')
-        self.assert_rejected_without_sdk_call(self.run_command('build', self.header))
+        self.assert_rejected_without_sdk_call(self.run_command('build'))
 
     def test_wrong_sdk_revision(self):
         self.env['SDK_REVISION'] = '0' * 40
-        self.assert_rejected_without_sdk_call(self.run_command('build', self.header))
+        self.assert_rejected_without_sdk_call(self.run_command('build'))
 
     def test_redirected_build_root(self):
         (self.root / 'build').symlink_to(self.sdk, target_is_directory=True)
-        self.assert_rejected_without_sdk_call(self.run_command('build', self.header))
+        self.assert_rejected_without_sdk_call(self.run_command('build'))
 
     def test_configure_passes_exact_paths_with_spaces(self):
-        result = self.run_command('configure', self.header)
+        result = self.run_command('configure')
         self.assertEqual(result.returncode, 0, result.stderr)
         build = self.root / 'build/core/cardputer-host'
         self.assertEqual([json.loads(line) for line in self.calls.read_text().splitlines()], [[
             '-C', str(self.root / 'apps/cardputer-host'), '-B', str(build),
-            '-D', 'SDKCONFIG=' + str(build / 'sdkconfig'),
-            '-D', 'LMDJ_CARDPUTER_CONFIG_HEADER=' + str(self.header), 'reconfigure']])
+            '-D', 'SDKCONFIG=' + str(build / 'sdkconfig'), 'reconfigure']])
 
     def test_build_reconfigures_before_build(self):
-        result = self.run_command('build', self.header)
+        result = self.run_command('build')
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         self.assertEqual([call[-1] for call in calls], ['reconfigure', 'build'])
@@ -99,7 +99,7 @@ class CardputerBuildCommandTest(unittest.TestCase):
 
     def test_configuration_failure_prevents_build(self):
         self.env['SDK_EXIT'] = '17'
-        result = self.run_command('build', self.header)
+        result = self.run_command('build')
         self.assertEqual(result.returncode, 17)
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         self.assertEqual([call[-1] for call in calls], ['reconfigure'])
