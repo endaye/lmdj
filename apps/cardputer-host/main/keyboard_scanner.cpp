@@ -44,7 +44,17 @@ bool Tca8418Scanner::install() noexcept {
   if (i2c_master_bus_add_device(s.bus, &device, &s.dev) != ESP_OK) return false;
   // TCA8418: seven rows and eight columns are wired on Cardputer ADV.
   if (!s.write(0x1d, 0x7f) || !s.write(0x1e, 0xff) ||
-      !s.write(0x01, 0x81) || !s.write(0x03, 0x00)) return false;
+      !s.write(0x01, 0x81)) return false;
+  // A MCU reset does not necessarily reset the keypad controller. Discard
+  // stale FIFO entries and acknowledge its interrupt before admitting input.
+  std::uint8_t pending{};
+  if (!s.read(0x03, pending)) return false;
+  pending &= 0x0f;
+  while (pending-- != 0) {
+    std::uint8_t discarded{};
+    if (!s.read(0x04, discarded)) return false;
+  }
+  if (!s.write(0x02, 0x01) || !s.write(0x03, 0x00)) return false;
   s.installed = true;
   return true;
 }
