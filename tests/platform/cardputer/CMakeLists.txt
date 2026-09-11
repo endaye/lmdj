@@ -138,7 +138,8 @@ target_link_libraries(lmdj_cardputer_input_tests PRIVATE lmdj::runtime_facade Th
 target_include_directories(lmdj_cardputer_input_tests PRIVATE "${CMAKE_SOURCE_DIR}")
 lmdj_target_warnings(lmdj_cardputer_input_tests)
 lmdj_target_sanitizers(lmdj_cardputer_input_tests)
-foreach(scenario mapping repeat_release empty_receive overflow queue_retry display)
+foreach(scenario mapping repeat_release empty_receive overflow queue_retry display
+    feedback_receipt feedback_stop feedback_release feedback_restart)
   lmdj_add_test(NAME platform.cardputer.input.${scenario} TIER component
     COMMAND lmdj_cardputer_input_tests ${scenario})
 endforeach()

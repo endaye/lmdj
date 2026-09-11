@@ -174,6 +174,74 @@ void display_is_bounded_and_uses_actual_status() {
   LMDJ_CHECK(display.frame().status.phase == facade::RuntimePhase::empty);
 }
 
+void feedback_waits_for_render_receipt() {
+  FakeSession audio;
+  auto host = make_host(audio);
+  load_and_start(host);
+  Display display;
+  InputController input(host, display);
+  LMDJ_CHECK(input.enqueue({PhysicalKey::a, true, false}));
+  input.poll();
+  LMDJ_CHECK(!display.frame().pad_active[0]);
+  audio.pump();
+  input.poll();
+  LMDJ_CHECK(display.frame().pad_active[0]);
+}
+
+void stop_clears_acknowledged_feedback() {
+  FakeSession audio;
+  auto host = make_host(audio);
+  load_and_start(host);
+  Display display;
+  InputController input(host, display);
+  LMDJ_CHECK(input.enqueue({PhysicalKey::a, true, false}));
+  input.poll();
+  audio.pump();
+  input.poll();
+  LMDJ_CHECK(display.frame().pad_active[0]);
+  LMDJ_CHECK(input.enqueue({PhysicalKey::space, true, false}));
+  input.poll();
+  LMDJ_CHECK(display.frame().status.phase == facade::RuntimePhase::stopped);
+  LMDJ_CHECK(!display.frame().pad_active[0]);
+}
+
+void release_feedback_waits_for_receipt() {
+  FakeSession audio;
+  auto host = make_host(audio);
+  load_and_start(host);
+  Display display;
+  InputController input(host, display);
+  LMDJ_CHECK(input.enqueue({PhysicalKey::a, true, false}));
+  input.poll();
+  audio.pump();
+  input.poll();
+  LMDJ_CHECK(display.frame().pad_active[0]);
+  LMDJ_CHECK(input.enqueue({PhysicalKey::a, false, false}));
+  input.poll();
+  LMDJ_CHECK(display.frame().pad_active[0]);
+  audio.pump();
+  input.poll();
+  LMDJ_CHECK(!display.frame().pad_active[0]);
+}
+
+void restart_cannot_inherit_feedback() {
+  FakeSession audio;
+  auto host = make_host(audio);
+  load_and_start(host);
+  Display display;
+  InputController input(host, display);
+  LMDJ_CHECK(input.enqueue({PhysicalKey::a, true, false}));
+  input.poll();
+  // Stop before this press is rendered: its cancellation cannot light a Pad
+  // in the next run, where sequence numbers restart at one.
+  LMDJ_CHECK(host.handle_key({Key::play_stop, true}) == HostResult::ok);
+  LMDJ_CHECK(host.handle_key({Key::play_stop, true}) == HostResult::ok);
+  audio.pump();
+  input.poll();
+  LMDJ_CHECK(display.frame().status.phase == facade::RuntimePhase::running);
+  LMDJ_CHECK(!display.frame().pad_active[0]);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -186,6 +254,10 @@ int main(int argc, char** argv) {
     else if (scenario == "overflow") overflow_stops_and_clears_local_state();
     else if (scenario == "queue_retry") runtime_queue_full_retries_original_event();
     else if (scenario == "display") display_is_bounded_and_uses_actual_status();
+    else if (scenario == "feedback_receipt") feedback_waits_for_render_receipt();
+    else if (scenario == "feedback_stop") stop_clears_acknowledged_feedback();
+    else if (scenario == "feedback_release") release_feedback_waits_for_receipt();
+    else if (scenario == "feedback_restart") restart_cannot_inherit_feedback();
     else return 2;
   } catch (const std::exception& error) {
     return std::fprintf(stderr, "%s\n", error.what()), 1;

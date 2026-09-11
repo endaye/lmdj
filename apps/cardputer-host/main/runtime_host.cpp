@@ -34,8 +34,20 @@ void RuntimeHost::collect_receipts() noexcept {
   do {
     count = runtime_.poll(receipts);
     for (std::size_t i = 0; i < count; ++i) {
+      if (receipts[i].epoch != epoch_) continue;
       status_.last_receipt_sequence = receipts[i].sequence;
       status_.last_receipt_outcome = receipts[i].outcome;
+      for (std::size_t pad = 0; pad < status_.pad_active.size(); ++pad) {
+        if (receipts[i].sequence == press_sequences_[pad]) {
+          status_.pad_active[pad] =
+              receipts[i].outcome == facade::RuntimeCommandOutcome::voice_started;
+          press_sequences_[pad] = 0;
+        }
+        if (receipts[i].sequence == release_sequences_[pad]) {
+          status_.pad_active[pad] = false;
+          release_sequences_[pad] = 0;
+        }
+      }
     }
   } while (count == receipts.size());
 }
@@ -53,6 +65,9 @@ HostResult RuntimeHost::start() noexcept {
   status_.core_result = runtime_.start(epoch_);
   if (status_.core_result != RuntimeResult::ok) return fail(HostResult::core_error);
   sequence_ = 0;
+  press_sequences_ = {};
+  release_sequences_ = {};
+  status_.pad_active = {};
   status_.last_receipt_sequence = 0;
   status_.last_receipt_outcome = {};
   audio_owned_ = true; // Including partial start failure, until joined.
@@ -69,6 +84,9 @@ HostResult RuntimeHost::start() noexcept {
 HostResult RuntimeHost::stop() noexcept {
   runtime_.stop();
   collect_receipts();
+  press_sequences_ = {};
+  release_sequences_ = {};
+  status_.pad_active = {};
   if (audio_owned_ || !status_.physical_stopped) {
     status_.phase = RuntimePhase::draining;
     const auto result = audio_.stop_and_join();
@@ -82,6 +100,9 @@ HostResult RuntimeHost::stop() noexcept {
 }
 
 void RuntimeHost::clear_content() noexcept {
+  press_sequences_ = {};
+  release_sequences_ = {};
+  status_.pad_active = {};
   status_.pads = {};
   status_.pad_count = 0;
   status_.content_sha256 = {};
@@ -178,6 +199,7 @@ HostResult RuntimeHost::handle_key(KeyEvent event) noexcept {
         static_cast<std::uint8_t>(pad.bank * 16 + pad.pad), 127});
     if (status_.core_result != RuntimeResult::accepted) return fail(HostResult::core_error);
     ++sequence_; // queue_full does not consume this counter.
+    (event.pressed ? press_sequences_ : release_sequences_)[key] = sequence_;
     return HostResult::accepted;
   }
   if (!event.pressed) return HostResult::ok;
