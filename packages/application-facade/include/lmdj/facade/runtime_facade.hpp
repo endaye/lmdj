@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -73,6 +74,23 @@ struct RuntimeReceipt {
   RuntimeCommandOutcome outcome{};
 };
 
+enum class RuntimeTriggerMode : std::uint8_t {
+  one_shot, gate, loop_gate, loop_toggle,
+};
+
+struct RuntimePadSummary {
+  std::uint8_t bank{};
+  std::uint8_t pad{};
+  RuntimeTriggerMode trigger_mode{};
+  bool operator==(const RuntimePadSummary&) const = default;
+};
+
+struct RuntimeContentSummary {
+  std::array<RuntimePadSummary, 64> pads{};
+  std::uint8_t count{};
+  bool operator==(const RuntimeContentSummary&) const = default;
+};
+
 // One serialized control caller for everything except render. render admits
 // exactly one callback at a time, and never allocates/frees/locks. Destroy only
 // after the Host has stopped calling render; stop() drains already admitted
@@ -103,6 +121,10 @@ class RuntimeFacade final {
   // Control-side owned copy of the published complete identity; empty before
   // a successful load and after unload/reset. Copying may allocate.
   std::optional<RuntimeContentIdentity> content_identity() const;
+  // Control-side value copy, canonical bank/pad order. Empty when no content
+  // is published; unused entries are value-initialized. No allocation or
+  // borrowed storage, and no Host profile filtering of the Core's 64 slots.
+  RuntimeContentSummary content_summary() const noexcept;
   void render(float* left, float* right, std::uint32_t frames) noexcept;
 
  private:

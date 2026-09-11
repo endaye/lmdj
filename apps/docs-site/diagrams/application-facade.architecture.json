@@ -9,7 +9,7 @@
     {
       "id": "native-hosts",
       "label": "Native Hosts",
-      "detail": "CLI · MCP · Native",
+      "detail": "desktop · Cardputer source",
       "kind": "host",
       "x": 40,
       "y": 140,
@@ -89,7 +89,7 @@
     {
       "id": "runtime-only",
       "label": "Runtime-only Facade",
-      "detail": "content · epoch · drain gate",
+      "detail": "content · Pad summary · epoch",
       "kind": "core",
       "x": 680,
       "y": 100,
@@ -158,7 +158,7 @@
     },
     {
       "title": "Runtime boundary",
-      "body": "Budget Engine plus 2176-state receipt-bounded storage. Acquire consumption, drain states, retire receipts. OPEN/BUSY drain before reclaim. No physical-device proof."
+      "body": "Budget Engine plus 2176-state receipt-bounded storage. Acquire consumption, drain states, retire receipts. OPEN/BUSY drain before reclaim. Control-only Pad summary is an owned, allocation-free canonical 64-slot value; Host profile does not narrow Core capacity. Cardputer serial control owns load and receipts; its audio task alone renders. Device join and physical silence remain separate from Core stopped. No physical-device proof."
     }
   ]
 }

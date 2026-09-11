@@ -7,6 +7,10 @@ source_paths:
   - packages/audio-runtime
   - apps/native-host/src/capture_writer.cpp
   - apps/native-host/src/main.cpp
+  - apps/cardputer-host
+  - scripts/cardputer-host.sh
+  - tests/platform/cardputer
+  - tests/build/cardputer_host_build_test.py
   - tests/core/audio/coreaudio_output_test.cpp
   - docs/design/2026-08-02-native-realtime-coreaudio-probe-design.md
   - docs/research/2026-09-09-cardputer-audio-hearing.md
@@ -81,6 +85,44 @@ stop 后零块、先 mute 再排空 DMA／disable／quiesce，最后回收。
 这些是绑定镜像的短时听感，不是无杂音、声压或完整音质认证。
 EOF/DMA readback 与 generation 零错误不证明物理 underrun 为零；完整
 Host I/O、物理时延、30 分钟和正式 Build/快照仍未验收。
+
+### H1 source：串行控制与音频任务边界
+
+`apps/cardputer-host` 已提供薄 `RuntimeHost`、`AudioSession` 与 ESP-IDF 音频适配源码。
+一个串行 executor 拥有全部 Facade control 调用；独立音频任务是唯一 render 调用方。
+Host 只接收不透明 Runtime Content 和完整 identity，不解析 Project bundle。
+接收前必须完成 Core stop、音频 join 和模拟输出静音确认，再 unload；新内容
+通过 Core 校验及 Host One Shot/profile 校验后才投影 ready。实际 Pad 映射来自
+Facade 摘要，操作回执来自 `poll`，不是按键预测。I1/C1 仍负责后续键盘、显示和
+USB framing 接线；当前入口仅建立启动静音并运行 control pump，不加载音乐。
+
+Core stopped 不代表设备已停。Driver 保留 mute → 零块 → drain → disable/quiesce
+→ release 顺序，失败时保留未回收资源与错误；Host 在 join 失败时不释放 callback
+context。输出增益和静音在 render 返回后处理，codec/I2S 操作不进入 Core 回调。
+预热块数、硬件接线、栈与容量 reserve/profile 由显式配置注入；研究值不是正式产品默认。
+
+在 EIM 中激活指定 SDK 后，可执行研究构建；缺失配置或 SDK revision 不符会拒绝：
+
+```bash
+scripts/cardputer-host.sh configure /absolute/path/to/config.hpp
+scripts/cardputer-host.sh build /absolute/path/to/config.hpp
+scripts/cardputer-host.sh test dev
+scripts/cardputer-host.sh test asan
+scripts/cardputer-host.sh test tsan
+```
+
+构建输出位于 `build/core/cardputer-host/`，带明确的 research/unversioned 标记，
+不是 Product Build，不分配 Host manifest 身份，也不执行烧录、发布或 Channel 晋级。
+每次 build 重新绑定显式配置。`test` 包含 Cardputer component 与 stress 测试；
+它不改变 `core.sh test ... full` 排除 stress 的语义。
+
+当前自动化覆盖命令边界、fake I/O 故障顺序，以及独立 native render 线程的
+停止／卸载／重载、输出失败恢复和销毁 join。256 次压力旅程逐次检查完整内容
+identity、非零 PCM、消费回执和 join 后状态；dev、ASan、TSan 均已运行通过。
+这些测试模拟 AudioSession，不运行 ESP-IDF 任务删除、codec 或 DMA。
+目标全量研究构建及独立 Facade 公开入口链接闭包已验证，但启动固件中未调用的
+音乐路径会被链接器裁剪；构建成功不证明设备播放或完整 Host 链接／执行旅程。
+真实 I2S/codec 生命周期、资源回收时点、持续音乐、30 分钟与完整 I/O 仍待实测。
 
 ## 下一门禁
 正式产品 Host 需要保留设备矩阵、测量数据与可复核录制。
