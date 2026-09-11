@@ -120,6 +120,14 @@ def _validate_hunk_collection(values, label):
         require(isinstance(hunk["id"], str) and isinstance(hunk["path"], str)
                 and isinstance(hunk["change_kind"], str) and isinstance(hunk["right_lines"], list),
                 f"{label} hunk fields are invalid")
+        old_path = hunk["old_path"]
+        require(old_path is None or isinstance(old_path, str) and bool(old_path),
+                f"{label} hunk old path is invalid")
+        if hunk["change_kind"] == "renamed":
+            require(old_path is not None and old_path != hunk["path"],
+                    f"{label} rename hunk lacks a distinct old path")
+        else:
+            require(old_path is None, f"{label} non-rename hunk carries an old path")
         for blob_key in ("old_blob", "new_blob"):
             blob = hunk[blob_key]
             if blob is not None:
@@ -136,6 +144,23 @@ def _validate_hunk_collection(values, label):
                 f"{label} patch identity is invalid")
         for line in hunk["right_lines"]:
             require(type(line) is int and line > 0, f"{label} RIGHT-side line identity is invalid")
+
+
+def changed_path_inventory(values):
+    """Return the complete logical path union, retaining both rename sides."""
+    require(isinstance(values, list), "changed path inventory is invalid")
+    paths = set()
+    for value in values:
+        require(isinstance(value, dict)
+                and isinstance(value.get("path"), str) and bool(value["path"]),
+                "changed path inventory item is invalid")
+        old_path = value.get("old_path")
+        require(old_path is None or isinstance(old_path, str) and bool(old_path),
+                "changed path inventory old path is invalid")
+        paths.add(value["path"])
+        if old_path is not None:
+            paths.add(old_path)
+    return sorted(paths)
 
 
 def validate_collector(collector, *, identity=None):
@@ -267,7 +292,7 @@ def _validate_coverage(identity, receipt, *, require_complete=False, changed_pat
         require(isinstance(model["actual"], str) and bool(model["actual"].strip()),
                 "reviewed coverage lacks the actual served model identity")
     if changed_paths is not None:
-        require(sorted(set(changed_paths)) == sorted({hunk["path"] for hunk in receipt["expected_hunks"]}),
+        require(sorted(set(changed_paths)) == changed_path_inventory(receipt["expected_hunks"]),
                 "coverage expected partition does not bind the authenticated changed-path inventory")
     if collector is not None:
         validate_collector(collector, identity=identity)
