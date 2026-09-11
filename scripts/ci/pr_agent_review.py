@@ -749,7 +749,10 @@ def _safe_config(document: Any) -> dict[str, Any]:
         "pricing_verified", "funding_ref", "funding_verified", "context_token_limit",
         "fixed_request_charge_usd", "billable_categories",
     }
-    activation_keys = provider_keys - {"enabled", "pricing_verified", "funding_verified"}
+    # Retain the retired funding fields as ignored compatibility inputs. They
+    # are accepted for old configuration identities but never establish
+    # supplier balance or provider activation authority.
+    activation_keys = provider_keys - {"enabled", "pricing_verified", "funding_ref", "funding_verified"}
     for provider_id in SUPPORTED_PROVIDERS:
         entry = providers[provider_id]
         if not isinstance(entry, dict) or set(entry) - provider_keys:
@@ -765,16 +768,15 @@ def _safe_config(document: Any) -> dict[str, Any]:
         required = (
             "endpoint", "model", "priced_response_model", "credential_ref",
             "pricing_revision", "input_price_usd_per_token", "output_price_usd_per_token",
-            "funding_ref", "context_token_limit", "fixed_request_charge_usd", "billable_categories",
+            "context_token_limit", "fixed_request_charge_usd", "billable_categories",
         )
         if (any(entry.get(key) is None for key in required)
-                or entry.get("pricing_verified") is not True
-                or entry.get("funding_verified") is not True):
+                or entry.get("pricing_verified") is not True):
             raise EngineError("configuration_invalid", "enabled provider lacks trusted activation evidence")
-        endpoint, model, priced_model, credential_ref, revision, funding_ref = (
+        endpoint, model, priced_model, credential_ref, revision = (
             entry[key] for key in (
                 "endpoint", "model", "priced_response_model", "credential_ref",
-                "pricing_revision", "funding_ref",
+                "pricing_revision",
             )
         )
         if not isinstance(endpoint, str) or not endpoint.startswith("https://") or any(ch.isspace() for ch in endpoint):
@@ -784,8 +786,8 @@ def _safe_config(document: Any) -> dict[str, Any]:
                 or not isinstance(credential_ref, str)
                 or credential_ref not in TRUSTED_CREDENTIAL_REFS):
             raise EngineError("configuration_invalid", "enabled provider model or credential reference is invalid")
-        if not isinstance(revision, str) or not revision or not isinstance(funding_ref, str) or not funding_ref:
-            raise EngineError("configuration_invalid", "enabled provider pricing or funding identity is invalid")
+        if not isinstance(revision, str) or not revision:
+            raise EngineError("configuration_invalid", "enabled provider pricing identity is invalid")
         if (not _finite_number(entry["input_price_usd_per_token"])
                 or not _finite_number(entry["output_price_usd_per_token"])
                 or not _finite_number(entry["fixed_request_charge_usd"])):
@@ -808,7 +810,6 @@ def _safe_config(document: Any) -> dict[str, Any]:
             "priced_response_model": priced_model,
             "credential_ref": credential_ref,
             "pricing_revision": revision,
-            "funding_ref": funding_ref,
             "input_price_usd_per_token": float(entry["input_price_usd_per_token"]),
             "output_price_usd_per_token": float(entry["output_price_usd_per_token"]),
             "context_token_limit": context_limit,

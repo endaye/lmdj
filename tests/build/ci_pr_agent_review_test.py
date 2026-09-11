@@ -142,8 +142,6 @@ def test_config_document(enabled=("deepseek",), *, per_pr=1.0, backoff=0):
                 "input_price_usd_per_token": None,
                 "output_price_usd_per_token": None,
                 "pricing_verified": False,
-                "funding_ref": None,
-                "funding_verified": False,
                 "context_token_limit": None,
                 "fixed_request_charge_usd": None,
                 "billable_categories": None,
@@ -160,8 +158,6 @@ def test_config_document(enabled=("deepseek",), *, per_pr=1.0, backoff=0):
                 "input_price_usd_per_token": 0.000001,
                 "output_price_usd_per_token": 0.000001,
                 "pricing_verified": True,
-                "funding_ref": "fixture-funding-v1",
-                "funding_verified": True,
                 "context_token_limit": 16_384,
                 "fixed_request_charge_usd": 0.0,
                 "billable_categories": list(adapter.BOUNDED_BILLABLE_CATEGORIES),
@@ -657,13 +653,49 @@ class InputAndPolicyTests(unittest.TestCase):
                     self.assertEqual(config_path.stat().st_mode & 0o777, mode)
                     self.assertEqual(config_path.read_bytes(), source_bytes)
 
-    def test_trusted_config_requires_verified_activation_and_rejects_counting_or_unbounded_keys(self):
+    def test_trusted_config_ignores_legacy_funding_attestation_and_rejects_counting_or_unbounded_keys(self):
         config = test_config()
         self.assertEqual(config["providers"]["deepseek"]["litellm_provider"] if "litellm_provider" in config["providers"]["deepseek"] else "deepseek", "deepseek")
-        invalid = test_config_document()
-        invalid["providers"]["deepseek"]["funding_verified"] = False
-        with self.assertRaisesRegex(adapter.EngineError, "enabled provider lacks"):
-            adapter._safe_config(invalid)
+        for legacy_value in (False, True):
+            legacy = test_config_document()
+            legacy["providers"]["deepseek"].update(
+                funding_ref="legacy-funding-v1", funding_verified=legacy_value,
+            )
+            self.assertEqual(adapter._safe_config(legacy), config)
+        disabled = test_config_document(enabled=())
+        for provider in adapter.SUPPORTED_PROVIDERS:
+            disabled["providers"][provider].update(
+                funding_ref="legacy-funding-v1", funding_verified=True,
+            )
+        normalized_disabled = adapter._safe_config(disabled)
+        self.assertEqual(
+            {provider for provider, entry in normalized_disabled["providers"].items() if entry["enabled"]},
+            set(),
+        )
+        self.assertEqual(
+            normalized_disabled["providers"]["deepseek"],
+            {"provider_id": "deepseek", "enabled": False},
+        )
+
+    def test_legacy_funding_attestation_cannot_waive_retained_activation_guards(self):
+        cases = (
+            ("pricing verification", "pricing_verified", False, "enabled provider lacks"),
+            ("empty model", "model", "", "model or credential"),
+            ("empty pricing identity", "pricing_revision", "", "pricing identity"),
+            ("unapproved credential", "credential_ref", "GITHUB_TOKEN", "model or credential"),
+            ("negative input price", "input_price_usd_per_token", -0.000001, "pricing is negative"),
+        )
+        for legacy in (False, True):
+            for label, key, value, message in cases:
+                with self.subTest(legacy=legacy, case=label):
+                    invalid = test_config_document()
+                    if legacy:
+                        invalid["providers"]["deepseek"].update(
+                            funding_ref="legacy-funding-v1", funding_verified=True,
+                        )
+                    invalid["providers"]["deepseek"][key] = value
+                    with self.assertRaisesRegex(adapter.EngineError, message):
+                        adapter._safe_config(invalid)
         for obsolete_key, value in (("tokenizer_id", "arbitrary"), ("tokenizer_verified", True)):
             invalid = test_config_document()
             invalid["providers"]["deepseek"][obsolete_key] = value
@@ -911,7 +943,6 @@ class InputAndPolicyTests(unittest.TestCase):
     def test_unapproved_credential_reference_is_rejected(self):
         invalid = test_config_document()
         invalid["providers"]["deepseek"]["credential_ref"] = "GITHUB_TOKEN"
-        invalid["providers"]["deepseek"].update(pricing_verified=True, funding_verified=True)
         with self.assertRaisesRegex(adapter.EngineError, "model or credential"):
             adapter._safe_config(invalid)
 
@@ -1057,7 +1088,7 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             "credential_ref = \"PR_AGENT_DEEPSEEK_API_KEY\"\npricing_revision = \"fixture-price-v1\"\n"
             "input_price_usd_per_token = 0.000001\noutput_price_usd_per_token = 0.000001\n"
             "fixed_request_charge_usd = 0.0\nbillable_categories = [\"input_tokens\", \"output_tokens\", \"fixed_request\"]\n"
-            "pricing_verified = true\nfunding_ref = \"fixture-funding-v1\"\nfunding_verified = true\n\n"
+            "pricing_verified = true\n\n"
             "[providers.glm]\nenabled = false\n\n[providers.xai]\nenabled = false\n\n"
             "[providers.kimi]\nenabled = false\n",
             encoding="utf-8",
@@ -1485,7 +1516,7 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             "pricing_revision = \"fixture-price-v1\"\ninput_price_usd_per_token = 0.000001\n"
             "output_price_usd_per_token = 0.000001\nfixed_request_charge_usd = 0.0\n"
             "billable_categories = [\"input_tokens\", \"output_tokens\", \"fixed_request\"]\n"
-            "pricing_verified = true\nfunding_ref = \"fixture-funding-v1\"\nfunding_verified = true"
+            "pricing_verified = true"
         )
         return config.replace(
             'provider_order = ["deepseek"]', 'provider_order = ["deepseek", "glm"]',
@@ -1564,6 +1595,28 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             "why: the trusted source must not acquire unverified bytecode during import; "
             "remedy: keep PYTHONDONTWRITEBYTECODE enabled for the engine boundary",
         )
+
+    def test_stock_reviewer_without_funding_uses_only_the_review_post(self):
+        """The actual stock handler must reach review transport without balance work."""
+        response_text = (FIXTURES / "valid-native-review.yaml").read_text(encoding="utf-8")
+        wire_calls = []
+
+        async def response_factory(httpx, request):
+            wire_calls.append(request.method)
+            self.assertEqual(request.method, "POST")
+            return httpx.Response(200, request=request, json={
+                "id": "wire-synthetic", "object": "chat.completion", "created": 0,
+                "model": "fixture-deepseek-served",
+                "choices": [{"index": 0, "finish_reason": "stop",
+                             "message": {"role": "assistant", "content": response_text}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
+            })
+
+        result, _upstream, ledger = self.run_with_wire_transport(response_factory)
+        self.assertEqual(result["status"], "reviewed")
+        self.assertEqual(wire_calls, ["POST"])
+        records = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([record["status"] for record in records], ["reserved", "reconciled"])
 
     def test_stock_reviewer_starts_from_pinned_cache_with_empty_ambient_cache_and_no_http(self):
         calls = []
