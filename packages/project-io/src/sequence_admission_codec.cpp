@@ -884,7 +884,11 @@ SequenceAdmissionState snapshot(const Json& input, const ActiveSequenceJournal& 
   preparation_valid(s.preparation);
   fences_valid(s);
   switches_valid(s);
-  require(segment(s).pattern_id == journal.pattern_id, "snapshot segment Pattern mismatch");
+  // Completed admission is historical evidence: later ordinary journal switches
+  // do not rewrite its retained segment or immutable receipts.
+  if (!s.completed) {
+    require(segment(s).pattern_id == journal.pattern_id, "snapshot segment Pattern mismatch");
+  }
   std::optional<std::uint64_t> previous;
   std::set<std::string> transfers;
   bool terminal = false;

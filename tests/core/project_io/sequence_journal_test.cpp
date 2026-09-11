@@ -1976,7 +1976,7 @@ void admission_switch_drains_source_before_target_exclusion() {
   LMDJ_CHECK(truth.value().patterns.at(target).events.empty());
 }
 
-void admission_ordinary_switch_continues_through_terminal() {
+void admission_ordinary_switch_continues_through_terminal(bool switch_after_completion = false) {
   AdmissionFixture f(true);
   f.prepare();
   f.retain();
@@ -2053,10 +2053,47 @@ void admission_ordinary_switch_continues_through_terminal() {
   LMDJ_CHECK(truth.has_value());
   LMDJ_CHECK(truth.value().patterns.at(target.id).events == std::vector{event()});
   LMDJ_CHECK(truth.value().patterns.at(f.preparation.pattern_id).events == std::vector{event()});
+  const auto historical = f.state().admission;
+  LMDJ_CHECK(historical.has_value());
+  LMDJ_CHECK(historical->completed);
+  if (switch_after_completion) {
+    const auto& original = truth.value().patterns.at(f.preparation.pattern_id);
+    const auto completed = f.state();
+    LMDJ_CHECK(f.journal.switch_pattern(f.bundle, f.session, original.id, original.bars,
+        sequence_pattern_fingerprint(original), completed.expected_revision).has_value());
+    const auto switched = SequenceJournal{}.read_active(f.bundle);
+    LMDJ_CHECK(switched.has_value());
+    LMDJ_CHECK(switched.value().pattern_id == original.id);
+    LMDJ_CHECK(switched.value().admission == historical);
+    LMDJ_CHECK(switched.value().last_input_sequence == completed.last_input_sequence);
+    LMDJ_CHECK(switched.value().pending_events.empty());
+  }
   auto expected = f.state();
   expected.state = SequenceSessionState::owner_lost;
-  LMDJ_CHECK(f.journal.seal(f.bundle, f.session, "owner_lost").has_value());
-  LMDJ_CHECK(f.journal.list_recoverable(f.bundle).value().front().journal == expected);
+  const auto sealed = f.journal.seal(f.bundle, f.session, "owner_lost");
+  LMDJ_CHECK(sealed.has_value());
+  const auto bytes = read_text(sealed.value());
+  const auto recovered = SequenceJournal{}.list_recoverable(f.bundle);
+  LMDJ_CHECK(recovered.has_value());
+  LMDJ_CHECK(recovered.value().size() == 1);
+  LMDJ_CHECK(recovered.value().front().journal == expected);
+  LMDJ_CHECK(recovered.value().front().journal.admission == historical);
+  LMDJ_CHECK(read_text(sealed.value()) == bytes);
+}
+
+void admission_incomplete_snapshot_requires_current_segment() {
+  AdmissionFixture f(true);
+  f.prepare();
+  f.retain();
+  const auto sealed = f.journal.seal(f.bundle, f.session, "owner_lost");
+  LMDJ_CHECK(sealed.has_value());
+  rewrite_last_record(sealed.value(), [&](auto& envelope) {
+    envelope["payload"]["journal"]["pattern_id"] = uuid_for(90);
+    envelope["checksum"] = sha256(lmdj::foundation::canonical_json(envelope.at("payload")));
+  });
+  const auto bytes = read_text(sealed.value());
+  LMDJ_CHECK(!SequenceJournal{}.list_recoverable(f.bundle).has_value());
+  LMDJ_CHECK(read_text(sealed.value()) == bytes);
 }
 
 void admission_repeated_pattern_starts_a_new_generation_checkpoint() {
@@ -2338,6 +2375,8 @@ int main(int argc, char** argv) {
     test_shared_fingerprint_vectors_are_exact_bytes();
     admission_switch_requires_retained_boundary();
     admission_ordinary_switch_continues_through_terminal();
+    admission_ordinary_switch_continues_through_terminal(true);
+    admission_incomplete_snapshot_requires_current_segment();
     admission_repeated_pattern_starts_a_new_generation_checkpoint();
     admission_switch_receipt_refuses_conflicts_and_unknown_sync();
     admission_preflight_rejects_unknown_large_arrays();
