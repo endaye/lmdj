@@ -14,10 +14,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = Path(os.environ.get("PR_AGENT_INSTALLER_TEST_SCRIPT", ROOT / "scripts/ci/pr-agent/install.sh"))
 WORKFLOW = Path(os.environ.get("PR_AGENT_WORKFLOW_TEST_FILE", ROOT / ".github/workflows/pr-review.yml"))
+RUNNER_TEMPLATE = Path(os.environ.get("PR_AGENT_RUNNER_TEMPLATE_TEST_FILE", ROOT / "scripts/ci/elastic-runner/unit-netcup.template"))
 WITNESS = '''import json, pathlib, sys
 if (pathlib.Path(__file__).parent / "runtime.toml").read_text() == "invalid":
     sys.exit(2)
@@ -33,7 +35,8 @@ class InstallTransitions(unittest.TestCase):
     def setUp(self):
         for executable in ("sudo", "flock", "setfacl", "/usr/bin/python3.12"):
             self.assertIsNotNone(shutil.which(executable), f"why: {executable} missing; remedy: prepare the deployment platform")
-        self.tmp = tempfile.TemporaryDirectory(prefix="lmdj-install-test.")
+        # /run remains visible with PrivateTmp=true in the mount-policy tests.
+        self.tmp = tempfile.TemporaryDirectory(prefix="lmdj-install-test.", dir="/run")
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.root.chmod(0o755)
@@ -158,6 +161,85 @@ printf '{"release":"fixture-A"}\\n'
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertEqual((self.staging / "trace").read_text().splitlines(), ["--witness"])
         self.assertFalse((self.staging / "t2-result.json").exists())
+
+    def run_mount_probe(self, *, allow_state):
+        self.assertIsNotNone(shutil.which("systemd-run"),
+                             "why: real mount test needs systemd; remedy: run on the deployment platform")
+        installed = self.run_install()
+        self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+        # These outside files are DAC-writable, so refusal must be the mount
+        # boundary, not the installer's independent ownership/ACL protection.
+        outside = self.install / "outside-state"
+        outside.write_bytes(b"unchanged")
+        outside.chmod(0o666)
+        release_file = (self.install / "current").resolve() / "pr_agent_review.py"
+        release_file.chmod(0o666)
+        probe = self.root / "probe.py"
+        probe.write_text('''import errno, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+allowed = sys.argv[2] == 'yes'
+for filename in (root / 'engine-state/ledger.jsonl', root / 'engine/probe'):
+    try:
+        with filename.open('ab') as stream:
+            stream.write(b'mount probe\\n')
+    except OSError as exc:
+        assert not allowed and exc.errno == errno.EROFS, (filename, exc)
+    else:
+        assert allowed, filename
+for filename in (root / 'outside-state', root / 'current/pr_agent_review.py'):
+    try:
+        with filename.open('ab') as stream:
+            stream.write(b'UNSAFE')
+    except OSError as exc:
+        assert exc.errno == errno.EROFS, (filename, exc)
+    else:
+        raise AssertionError('protected installation became mount-writable')
+''')
+        source = RUNNER_TEMPLATE.read_text().splitlines()
+        properties = [line for line in source if line.startswith(
+            ("ProtectSystem=", "ProtectHome=", "NoNewPrivileges=", "PrivateTmp="))]
+        if allow_state:
+            paths = []
+            for line in source:
+                if not line.startswith("ReadWritePaths="):
+                    continue
+                for value in line.split("=", 1)[1].split():
+                    candidate = os.path.normpath(value.lstrip("-+"))
+                    if candidate in ("/", "/var", "/var/lib", "/var/lib/lmdj"):
+                        # Relocate broad ancestor grants too: excluding them
+                        # would hide the very write-boundary regression tested.
+                        paths.append(str(self.install))
+                    elif candidate == "/var/lib/lmdj/pr-agent" or candidate.startswith("/var/lib/lmdj/pr-agent/"):
+                        paths.append(value.replace("/var/lib/lmdj/pr-agent", str(self.install)))
+            properties.append("ReadWritePaths=" + " ".join(paths))
+        command = ["systemd-run", "--quiet", "--wait", "--pipe", "--collect",
+                   "--property=User=nobody", "--property=PrivateNetwork=true"]
+        command.extend("--property=" + value for value in properties)
+        command.extend(["/usr/bin/python3.12", str(probe), str(self.install), "yes" if allow_state else "no"])
+        result = subprocess.run(command, text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0,
+                         "why: real service mount permissions differ from the state-only contract; "
+                         "remedy: retain ProtectSystem=strict and the two exact state paths\n"
+                         + result.stdout + result.stderr)
+        self.assertEqual(self.ledger.read_bytes(), b"retained historical ledger\n" + (b"mount probe\n" if allow_state else b""))
+        if allow_state:
+            self.assertEqual((self.install / "engine/probe").read_bytes(), b"mount probe\n")
+        else:
+            self.assertFalse((self.install / "engine/probe").exists())
+        self.assertEqual(outside.read_bytes(), b"unchanged")
+        self.assertEqual(release_file.read_text(), WITNESS)
+
+    def test_acl_without_service_mount_allowlist_cannot_write_state(self):
+        self.run_mount_probe(allow_state=False)
+
+    def test_service_mount_allowlist_writes_state_but_not_installation(self):
+        self.run_mount_probe(allow_state=True)
+
+    def test_broad_ancestor_grant_fails_the_real_protected_write_probe(self):
+        broad = RUNNER_TEMPLATE.read_text() + "\nReadWritePaths=/var/lib\n"
+        with mock.patch.object(sys.modules[__name__], "RUNNER_TEMPLATE", mock.Mock(read_text=lambda: broad)):
+            with self.assertRaisesRegex(AssertionError, "why: real service mount permissions"):
+                self.run_mount_probe(allow_state=True)
 
 
 if __name__ == "__main__":

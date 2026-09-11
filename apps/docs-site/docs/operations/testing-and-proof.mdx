@@ -29,6 +29,10 @@ bundle 与 `runtime.toml` 身份）→ `run-engine.sh --input`（引擎，`flock
 重算新版本的成员身份，把 release 设为 root-owned 只读，
 给所有 runner 账户对共享 ledger/engine 目录的 ACL 写权限，最后以 runner 账户
 跑一次 `--witness`，成功后原子切换 `current`，旧版本保留在 `previous`。
+账户级 witness 不证明 systemd 服务里的账本可写；Netcup runner 保留
+`ProtectSystem=strict`，只用 `ReadWritePaths` 放行 `engine-state` 与 `engine`。
+首次创建目录或修改挂载配置后，必须等 runner 空闲再逐个重启并在实际服务的
+mount namespace 验证；不能把安装成功当作服务权限验收。
 archive 身份指 seed bundle，运行时 adapter/config 由各自摘要绑定。
 不再创建专用 systemd service、slice、operator inventory
 或 deployment receipt；`scripts/ci/pr-agent/run-engine.sh` 在 workflow 中以
@@ -507,6 +511,10 @@ release。安装或配置校验失败会拒绝本次评审，不会调用模型�
 同时保护配置 witness 与模型执行，避免两者之间切换 release，并串行化同一主机上的评审。
 runner service 带 `NoNewPrivileges=true`，因此没有
 sudo、没有专用 service 账户；引擎以 runner 账户运行，凭据只来自 step 环境。
+`ProtectSystem=strict` 的挂载权限独立于 ACL：Netcup unit 模板仅添加
+`-/var/lib/lmdj/pr-agent/engine-state` 和 `-/var/lib/lmdj/pr-agent/engine` 两个
+可写路径，父目录、release 与配置仍只读。前缀 `-` 允许安装前目录缺失，但
+不会给已经运行的服务补上挂载；创建目录或更新 unit 后应逐个重启空闲服务。
 更新 adapter 或配置：改仓库文件，在主机执行 `install.sh` 创建并验证新 release；
 回滚在持有同一 slot lock 时把 `current` 原子切回保留的旧 release，随后读回
 `--witness`。具体接管记录、历史调用与未完成的端到端验收见

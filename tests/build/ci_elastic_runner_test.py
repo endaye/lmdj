@@ -14,8 +14,10 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import posixpath
 import sys
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "scripts/ci/elastic_runner.py"
@@ -24,6 +26,38 @@ spec = importlib.util.spec_from_file_location("elastic_runner", MODULE_PATH)
 er = importlib.util.module_from_spec(spec)
 sys.modules["elastic_runner"] = er
 spec.loader.exec_module(er)
+
+
+class ReviewRunnerMountContract(unittest.TestCase):
+    def test_netcup_allows_only_review_state_below_the_protected_installation(self):
+        source = (ROOT / "scripts/ci/elastic-runner/unit-netcup.template").read_text()
+        installation = Path("/var/lib/lmdj/pr-agent")
+        paths = []
+        for line in source.splitlines():
+            if not line.startswith("ReadWritePaths="):
+                continue
+            for value in line.split("=", 1)[1].split():
+                raw = value.lstrip("-+")
+                if not raw.startswith("/"):
+                    continue  # Existing provisioner placeholders are unrelated.
+                candidate = Path(posixpath.normpath("/" + raw.lstrip("/")))
+                if candidate == installation or candidate in installation.parents or installation in candidate.parents:
+                    paths.append(value)
+        self.assertEqual(paths, ["-/var/lib/lmdj/pr-agent/engine-state", "-/var/lib/lmdj/pr-agent/engine"],
+                         "why: runner mount policy must expose only the two PR-Agent state directories; "
+                         "remedy: retain the narrow ReadWritePaths entries, never the installation root")
+        for setting in ("ProtectSystem=strict", "NoNewPrivileges=true", "ProtectHome=true"):
+            self.assertIn(setting, source.splitlines(),
+                          "why: PR-Agent state access must not disable runner hardening; remedy: restore " + setting)
+
+    def test_ancestor_writable_mounts_are_not_hidden_by_path_filtering(self):
+        source = (ROOT / "scripts/ci/elastic-runner/unit-netcup.template").read_text()
+        for broad in ("/", "/var", "/var/lib", "/var/lib/lmdj", "/var/lib/lmdj/pr-agent",
+                      "/var/lib/lmdj/pr-agent/releases", "-/var/lib/lmdj/pr-agent/.."):
+            with self.subTest(broad=broad), mock.patch.object(Path, "read_text", return_value=(
+                    source + "\nReadWritePaths=" + broad + "\n")):
+                with self.assertRaisesRegex(AssertionError, "why: runner mount policy"):
+                    self.test_netcup_allows_only_review_state_below_the_protected_installation()
 
 
 def netcup_config(**overrides):

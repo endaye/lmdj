@@ -105,6 +105,27 @@ switches `current`, retaining `previous`. A failed candidate is retained for
 inspection; it never replaces current. The original seed archive digest stays
 provenance, while adapter/config hashes bind the installed overlay.
 
+The account-level witness does not enter the runner's systemd mount namespace.
+PR #1238 run `34628173677` attempt 1 exposed this boundary: it made zero model
+calls, reported `budget_exhausted`, and failed to open the ledger lock with
+`EROFS` inside runner 04's service despite working ACLs and only USD 0.015171
+recorded spend. Preserve that failed run; it is not provider/budget acceptance.
+
+Keep `ProtectSystem=strict`. The Netcup unit template allows only
+`-/var/lib/lmdj/pr-agent/engine-state` and `-/var/lib/lmdj/pr-agent/engine` via
+an additive `ReadWritePaths=` line. The `-` permits absent directories during
+provisioning; it does not update an already running mount namespace. For
+existing Netcup services, install that same line in a root-owned dedicated
+drop-in, daemon-reload, and restart only idle services one at a time. Offline
+elastic units stay stopped. Check GitHub busy state and host worker processes
+before each restart; wait for busy workers rather than interrupting them.
+Never make the installation root or release/configuration bytes writable.
+Read back effective properties and verify state access from the restarted
+service's actual mount namespace; retain ledger bytes through the operation.
+The real systemd tests in `ci_pr_agent_install_test.py` reproduce the denied
+case and exercise both allowed state writes and denied installation writes.
+They do not call a provider or substitute for a real PR Review run.
+
 To roll back, first read and record the exact protected previous directory and
 current link. Under the same `slot.lock`, atomically replace only `current`
 with a symlink to that recorded directory, then run `run-engine.sh --witness`
