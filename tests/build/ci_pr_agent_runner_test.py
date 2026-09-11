@@ -8,7 +8,7 @@ import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import stat
@@ -877,6 +877,39 @@ TasksMax=128
 
     def test_committed_defaults_are_inactive_and_use_the_approved_budget(self):
         self.assertFalse(BASE_CONFIG["active"])
+        self.assertEqual(
+            set(BASE_CONFIG),
+            {"schema", "active", "target", "bundle", "runtime", "runtime_config", "resources", "paths", "admission"},
+        )
+        self.assertEqual(BASE_CONFIG["schema"], "lmdj.pr-agent-runner.v1")
+        self.assertEqual(BASE_CONFIG["target"], {
+            "host": "netcup01",
+            "service": "lmdj-pr-agent.service",
+            "slice": "lmdj-pr-review.slice",
+            "labels": ["self-hosted", "Linux", "X64", "netcup", "ci-pr-agent"],
+        })
+        self.assertEqual(set(BASE_CONFIG["bundle"]), {"archive", "identity", "files"})
+        self.assertEqual(set(BASE_CONFIG["bundle"]["archive"]), {"filename", "sha256", "byte_length"})
+        self.assertEqual(set(BASE_CONFIG["bundle"]["identity"]), {"filename", "sha256", "byte_length"})
+        self.assertEqual(set(BASE_CONFIG["bundle"]["files"]), {
+            "manifest", "adapter", "default_config", "requirements_lock", "stock_tokenizer_asset",
+        })
+        for item in [BASE_CONFIG["bundle"]["archive"], BASE_CONFIG["bundle"]["identity"],
+                     *BASE_CONFIG["bundle"]["files"].values()]:
+            self.assertRegex(item["sha256"], r"^[0-9a-f]{64}$")
+            self.assertIsInstance(item["byte_length"], int)
+            self.assertGreater(item["byte_length"], 0)
+        self.assertEqual(BASE_CONFIG["runtime"]["python"], "/usr/bin/python3.12")
+        self.assertEqual(BASE_CONFIG["runtime"]["user"], "lmdj-pr-agent")
+        self.assertEqual(BASE_CONFIG["runtime"]["group"], "lmdj-pr-agent")
+        self.assertEqual(BASE_CONFIG["runtime_config"], {
+            "path": "/etc/lmdj/pr-agent/runtime.toml", "sha256": None, "byte_length": None,
+        })
+        self.assertEqual(set(BASE_CONFIG["admission"]), {
+            "operator_access", "runner04_classification", "capacity_receipts",
+            "filesystem_isolation", "activation_receipt", "runtime_config_receipt",
+        })
+        self.assertTrue(all(value is False for value in BASE_CONFIG["admission"].values()))
         self.assertEqual(BASE_CONFIG["resources"]["concurrency"], 1)
         self.assertEqual(BASE_CONFIG["resources"]["cpu_quota"], "100%")
         self.assertEqual(BASE_CONFIG["resources"]["memory_max"], "2G")
@@ -2694,6 +2727,189 @@ def replace(source, destination):
         result = self.invoke("install", config_b, self.archive, self.identity, runtime=runtime_b)
         self._assert_unchanged_failure(result, before, "deployment receipts parent is a symlink")
         self.assertEqual(self.external_snapshot(relocated), external_before)
+
+    def test_actual_current_archive_contract_when_explicitly_enabled(self):
+        if os.environ.get("PR_AGENT_RUN_CURRENT_DEPLOYMENT_TEST") != "1":
+            self.skipTest("set PR_AGENT_RUN_CURRENT_DEPLOYMENT_TEST=1 with the trusted current Flash artifact")
+        archive = Path(os.environ.get(
+            "PR_AGENT_CURRENT_ARCHIVE",
+            "/tmp/lmdj-pr-agent-packaging/artifacts-v15-flash.mjwNyB/"
+            "lmdj-pr-agent-linux-amd64-53072488e4c3b5a6c9ae730fe6fb52fc5f09d06c.tar",
+        ))
+        identity = archive.with_name("DEPLOYMENT_IDENTITY.json")
+        self.assertTrue(archive.is_file(), archive)
+        self.assertTrue(identity.is_file(), identity)
+
+        trusted = BASE_CONFIG["bundle"]
+        self.assertEqual(digest(archive.read_bytes()), {
+            "sha256": trusted["archive"]["sha256"], "byte_length": trusted["archive"]["byte_length"],
+        })
+        self.assertEqual(digest(identity.read_bytes()), {
+            "sha256": trusted["identity"]["sha256"], "byte_length": trusted["identity"]["byte_length"],
+        })
+        detached = json.loads(identity.read_text())
+        self.assertEqual(detached["schema"], "lmdj.pr-agent-deployment.v1")
+        self.assertEqual(detached["archive"], {
+            "sha256": trusted["archive"]["sha256"], "byte_length": trusted["archive"]["byte_length"],
+        })
+        self.assertEqual(detached["files"], trusted["files"])
+        with tarfile.open(archive) as source:
+            members = source.getmembers()
+        self.assertTrue(any(member.name.startswith("pr-agent/vendor/litellm/") for member in members))
+        for member in trusted["files"].values():
+            self.assertIn("pr-agent/" + member["path"], {item.name for item in members})
+
+        def assert_current_release_bytes(release: Path, config: Path, runtime_config: Path,
+                                         service_unit: bytes, slice_unit: bytes) -> None:
+            """Bind every far-side identity to the supplied trusted archive."""
+            record = json.loads((release / "REVISION_RECORD.json").read_text())
+            self.assertEqual(record["archive_sha256"], trusted["archive"]["sha256"])
+            self.assertEqual(record["archive_byte_length"], trusted["archive"]["byte_length"])
+            self.assertEqual(record["deployment_identity_sha256"], trusted["identity"]["sha256"])
+            self.assertEqual(record["deployment_identity_byte_length"], trusted["identity"]["byte_length"])
+            self.assertEqual(record["member_identities"], trusted["files"])
+            self.assertEqual(record["operator_config_sha256"], digest(config.read_bytes())["sha256"])
+            self.assertEqual(record["operator_config_byte_length"], config.stat().st_size)
+            self.assertEqual(record["runtime_config_sha256"], digest(runtime_config.read_bytes())["sha256"])
+            self.assertEqual(record["runtime_config_byte_length"], runtime_config.stat().st_size)
+            self.assertEqual(record["deployment_tool_sha256"], digest(SCRIPT.read_bytes())["sha256"])
+            self.assertEqual(record["deployment_tool_byte_length"], SCRIPT.stat().st_size)
+            self.assertEqual(record["service_unit_sha256"], digest(service_unit)["sha256"])
+            self.assertEqual(record["service_unit_byte_length"], len(service_unit))
+            self.assertEqual(record["slice_unit_sha256"], digest(slice_unit)["sha256"])
+            self.assertEqual(record["slice_unit_byte_length"], len(slice_unit))
+
+            self.assertEqual((release / "bundle.tar").read_bytes(), archive.read_bytes())
+            self.assertEqual((release / "DEPLOYMENT_IDENTITY.json").read_bytes(), identity.read_bytes())
+            with tarfile.open(archive) as source:
+                archive_files = {}
+                for member in source.getmembers():
+                    if member.isdir():
+                        continue
+                    self.assertTrue(member.isfile(), member.name)
+                    relative = str(Path(*PurePosixPath(member.name).relative_to("pr-agent").parts))
+                    stream = source.extractfile(member)
+                    self.assertIsNotNone(stream, member.name)
+                    archive_files[relative] = stream.read()
+            for relative, expected_bytes in archive_files.items():
+                extracted = release / relative
+                self.assertTrue(extracted.is_file(), relative)
+                self.assertFalse(extracted.is_symlink(), relative)
+                self.assertEqual(extracted.read_bytes(), expected_bytes, relative)
+            allowed_extra = {
+                "bundle.tar", "DEPLOYMENT_IDENTITY.json", "runtime.toml", "operator-config.json",
+                "service.unit", "slice.unit", "REVISION_RECORD.json",
+            }
+            for child in release.rglob("*"):
+                if child.is_file():
+                    relative = str(child.relative_to(release))
+                    self.assertIn(relative, set(archive_files) | allowed_extra, relative)
+
+        def actual_config(runtime_config: Path, *, active: bool, suffix: str,
+                          admission: dict[str, bool]) -> Path:
+            document = copy.deepcopy(BASE_CONFIG)
+            document["active"] = active
+            document["admission"] = admission
+            document["runtime_config"] = {
+                "path": document["runtime_config"]["path"], **digest(runtime_config.read_bytes()),
+            }
+            document["paths"]["operator_config"] = f"/etc/lmdj/pr-agent/netcup-review-{suffix}.json"
+            config_path = self.directory / f"current-flash-{suffix}.json"
+            config_path.write_text(json.dumps(document, indent=2) + "\n")
+            config_path.chmod(0o600)
+            return config_path
+
+        def expected_current_revision(config: Path, runtime_config: Path) -> Path:
+            """Derive the expected revision from the supplied trusted inputs."""
+            document = json.loads(config.read_text())
+            payload = {
+                "schema": "lmdj.pr-agent-deployment-revision.v1",
+                "archive": digest(archive.read_bytes()),
+                "detached_identity": digest(identity.read_bytes()),
+                "runtime_config": digest(runtime_config.read_bytes()),
+                "operator_config": digest(config.read_bytes()),
+                "inventory": self.expected_inventory(config),
+                "active": document["active"],
+                "admission": document["admission"],
+                "deployment_tool": digest(SCRIPT.read_bytes()),
+            }
+            revision = hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            return Path(payload["inventory"]["install_root"]) / "releases" / revision
+
+        runtime = self.runtime("current-flash", enabled=True)
+        active_config = actual_config(
+            runtime, active=True, suffix="active",
+            admission={key: True for key in BASE_CONFIG["admission"]},
+        )
+        expected_active_release = expected_current_revision(active_config, runtime)
+        result = self.invoke("install", active_config, archive, identity, runtime=runtime)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = json.loads(result.stdout.splitlines()[-1])
+        release = Path(output["release"])
+        self.assertEqual(release, expected_active_release)
+        active_document = json.loads(active_config.read_text())
+        state_path = self.target_path(active_document["paths"]["state"])
+        active_service, active_slice = self.expected_unit_bytes(active_config, release)
+        self.assert_terminal_far_side(
+            state_path, release, None, active_config, runtime, "install", None,
+            expected_receipt_target_config=active_config,
+            expected_service_unit=active_service,
+            expected_slice_unit=active_slice,
+        )
+        unit = active_service.decode()
+        self.assertIn(PROVIDER_ENV_FILE + "\n", unit)
+        self.assertIn("UnsetEnvironment=GITHUB_TOKEN GH_TOKEN GITHUB_APP_ID GITHUB_APP_PRIVATE_KEY\n", unit)
+        self.assertNotIn("ExecStart=/usr/bin/false\n", unit)
+        self.assertIn("--engine-cwd", unit)
+        self.assertIn("--deployment-identity", unit)
+        assert_current_release_bytes(release, active_config, runtime, active_service, active_slice)
+
+        shutil.rmtree(self.target)
+        self.target.mkdir()
+        with tarfile.open(archive) as source:
+            default_member = source.extractfile("pr-agent/config.toml")
+            self.assertIsNotNone(default_member)
+            default_bytes = default_member.read()
+        inactive_runtime = self.directory / "current-flash-inactive-default.toml"
+        inactive_runtime.write_bytes(default_bytes)
+        inactive_runtime.chmod(0o440)
+        inactive_admission = {
+            "operator_access": True,
+            "runner04_classification": True,
+            "capacity_receipts": False,
+            "filesystem_isolation": False,
+            "activation_receipt": False,
+            "runtime_config_receipt": False,
+        }
+        inactive_config = actual_config(
+            inactive_runtime, active=False, suffix="inactive",
+            admission=inactive_admission,
+        )
+        inactive_document = json.loads(inactive_config.read_text())
+        expected_inactive_release = expected_current_revision(inactive_config, inactive_runtime)
+        staged = self.invoke("stage", inactive_config, archive, identity, runtime=inactive_runtime)
+        self.assertEqual(staged.returncode, 0, staged.stderr)
+        staged_release = Path(json.loads(staged.stdout.splitlines()[-1])["release"])
+        self.assertEqual(staged_release, expected_inactive_release)
+        staged_service, staged_slice = self.expected_unit_bytes(inactive_config, staged_release)
+        inactive_state = self.assert_terminal_far_side(
+            self.target_path(inactive_document["paths"]["state"]), staged_release, None,
+            inactive_config, inactive_runtime, "install", None,
+            expected_receipt_target_config=inactive_config,
+            expected_service_unit=staged_service,
+            expected_slice_unit=staged_slice,
+        )
+        self.assertEqual(inactive_state["current"]["active"], False)
+        self.assertEqual(inactive_state["current"]["admission"], inactive_admission)
+        self.assertEqual(inactive_state["activation"], "pending")
+        self.assertFalse(self.target_path(inactive_document["paths"]["ledger"]).exists())
+        staged_unit = staged_service.decode()
+        self.assertIn(PROVIDER_ENV_FILE + "\n", staged_unit)
+        self.assertIn("UnsetEnvironment=GITHUB_TOKEN GH_TOKEN GITHUB_APP_ID GITHUB_APP_PRIVATE_KEY\n", staged_unit)
+        self.assertIn("ExecStart=/usr/bin/false\n", staged_unit)
+        assert_current_release_bytes(staged_release, inactive_config, inactive_runtime, staged_service, staged_slice)
 
     def test_actual_v14_archive_contract_when_explicitly_enabled(self):
         if os.environ.get("PR_AGENT_RUN_V14_DEPLOYMENT_TEST") != "1":

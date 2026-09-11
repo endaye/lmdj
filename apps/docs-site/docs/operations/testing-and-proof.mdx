@@ -10,6 +10,48 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 <BuildIdentity />
 
+## PR-Agent Flash inventory and bounded environment proof
+
+The current trusted PR-Agent inventory remains inactive (`active: false`) with
+all admission flags false, null runtime identity, and all four providers
+disabled. It binds the accepted Flash archive
+`lmdj-pr-agent-linux-amd64-53072488e4c3b5a6c9ae730fe6fb52fc5f09d06c.tar`
+(`361830400` bytes,
+`d43d11d489a879e8935b8a70d75665d311db3739f4c1c6907f159c6dcfcc6991`) and
+`DEPLOYMENT_IDENTITY.json` (`896` bytes,
+`0a04de3496b1519ba2b2d3276ce1d3b65c1cdafe9c282a2e1613dd3cbb8c67cd`). The
+archive build source is candidate
+`f4f6ebf64eca70b3c5cc17267e61ece7e529c05f`. Separately, PR #1198 source head
+`8952cdc98fd67d50341f728b0562c96563737432`, merged as
+`374793290e881389bf2513ab23873d8647aca5ad`, is the accepted installer source
+and synthetic systemd-test provenance; the installer is not inside this
+archive. Corrected builder logs and exported full tool envelopes are retained
+under `/tmp/lmdj-pr-agent-packaging/artifacts-v15-flash.mjwNyB/`, while the
+build report is `/tmp/lmdj-pr-agent-plan/post-funding-bundle-build.md`.
+Lead artifact acceptance already passed from static independent checks plus
+inspection of the author-owned clean-base execution; the supplemental archive
+verifier is author-owned evidence, not independently executed reviewer
+acceptance. The superseded v14 compatibility archive remains historical:
+`4359addd2521847509b61c655a346e1a59e49ebec87934024f35c066eb3f26d3`,
+`361820160` bytes, with detached identity
+`a1f7f67b6ae9390a3a4117f0bf1bb96a7269306aef5b12433d06b6e62dc3d2c3`,
+`896` bytes; it is not the current candidate.
+
+The bounded real-host synthetic systemd receipt accepted both the root-only
+EnvironmentFile-present and optional-file-missing legs. The present leg reached
+the selected public marker under UID/GID 984/976 and all four blocked names
+(`GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`) were
+absent. The missing-file leg had a successful process result, the selected
+variable absent, and all four blocked names absent; both legs had empty stderr
+and the exact terminal properties. The legs used unique temporary
+EnvironmentFile/slice/probe paths, a no-adapter probe, `PrivateNetwork=yes`,
+and `RemainAfterExit=yes`; no provider file contents were read. This is not production
+activation, credential/authentication, provider health or quality, measured
+capacity/coexistence, restart/crash/ledger recovery, cutover, or T4 completion;
+supplier funding/balance attestation is withdrawn, while USD1/attempt, USD20
+pilot/month, real auth/model/route/pricing and all-four-provider health/fallback
+/quality gates remain. Issues #1149/#1153/#1154/#1155/#1188 remain open.
+
 ## PR-Agent 凭据与服务环境边界
 
 此前 `PR-Agent Credential Preflight` 的鉴权/余额观察仅是历史证据；本轮已撤回
@@ -552,9 +594,10 @@ append receipt、清理 transition 或替换文件；install receipt 的 from/to
 pending transition 完全一致。错误长度、摘要、endpoint、owner、mode 或 receipt
 顺序的证据都会保留完整 state/receipt/target/ledger。
 
-该 contract 的本地 runner suite 为 95 tests：普通、外层 `-S`、installer-child
-`-S` 与 `umask 0002` 均为 94 passed、1 个明确的 v14 archive opt-in skip；启用
-固定 v14 archive 后为 95/95、零 skip。新增 contract 检查固定 EnvironmentFile
+该 contract 的历史 PR1198 证据在 ordinary、child-S 与 umask 变体中报告 95 tests、
+94 passed 加一个 v14 skip；这些变体未在本轮重跑，不应改标为 96。当前本轮 ordinary
+实际为 96 tests、94 passed 加两个明确 opt-in skip；启用固定 v14 与 accepted current
+Flash archive 后实际为 96/96、零 skip。新增 contract 检查固定 EnvironmentFile
 路径、provider value non-copy、inactive no-key stage，以及新 unit 安装后回滚到
 缺少该 directive 的历史 unit bytes。六段 A/B arrival journey 每段都检查
 完整 far-side bytes、canonical record bytes、owner/mode、receipt commitments、
