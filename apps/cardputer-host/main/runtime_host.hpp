@@ -57,6 +57,9 @@ struct HostStatus {
   // Consumed receipts, never inferred audible/active voice state.
   std::uint32_t last_receipt_sequence{};
   facade::RuntimeCommandOutcome last_receipt_outcome{};
+  // Acknowledged local press until acknowledged release/stop. This does not
+  // describe Pattern voices or the duration of a One Shot sample's tail.
+  std::array<bool, 4> pad_active{};
 };
 
 // All methods below have one serialized executor owner. AudioSession must
@@ -89,6 +92,7 @@ class RuntimeHost final {
   HostStatus status_;
   facade::RuntimeEpoch epoch_;
   std::uint32_t sequence_{};
+  std::array<std::uint32_t, 4> press_sequences_{}, release_sequences_{};
   bool audio_owned_{};
 };
 

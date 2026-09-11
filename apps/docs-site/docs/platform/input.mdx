@@ -60,7 +60,11 @@ TCA8418 的 KEY_EVENT_A 位 7 为 1 表示按下、0 表示释放，低 7 位是
 它验证非零 Core PCM 和处理回执，但不模拟电气扫描时延或扬声器输出。
 
 显示读取 Host 的有界值副本，投影 `empty/ready/running/draining/stopped`、错误、
-音量/静音和四个 Pad 活动；它不预测 Core 成功，也不从屏幕线程调用 Facade。
+音量/静音和四个 Pad 的已确认按下状态；只有当前运行 epoch 的 `voice_started`
+回执点亮对应 Pad，释放回执及停止/卸载清除反馈。命令刚入队时不会点亮，
+该指示也不表示 One Shot 尾音长度或 Pattern 的全部发声数。
+显示不从屏幕线程调用 Facade。目前交付的是内存状态投影，实际 LCD 初始化、
+绘制与刷新适配层仍待开发，不能仅凭此投影宣称屏幕可用。
 当前自动化覆盖映射、重复/越序、空状态拒绝、接收确认/取消、overflow、队列重试
 和 bounded display frame。Cardputer ADV 的逐键组合、输入延迟、同时音乐负载和
 真实屏幕/按键体验仍必须在固定 Product Build 上由 A1 物理验收。
