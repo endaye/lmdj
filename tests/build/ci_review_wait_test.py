@@ -1,5 +1,6 @@
 """Current-head admission through real publisher/collector with read-only API fixtures."""
 from copy import deepcopy
+import fnmatch
 import hashlib
 import json
 import os
@@ -7,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+import warnings
 from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -172,6 +174,92 @@ class AdmissionTests(unittest.TestCase):
         result = self.check()
         self.assertTrue(result["eligible"], result)
         self.assertEqual(result["evidence"][0]["backend"], "deepseek")
+
+    def current_workflow_archive(self):
+        self.render_v2()
+        # These are retained diagnostics, deliberately not canonical authority.
+        self.source.documents.update({name: {"diagnostic": name, "status": "not-reviewed"}
+            for name in ("t2-input.json", "collection-receipt.json", "t2-result.json")})
+        source = (ROOT / ".github/workflows/pr-review.yml").read_text()
+        upload = source.split("      - uses: actions/upload-artifact", 1)[1].split("      - name:", 1)[0]
+        patterns = [line.strip().removeprefix("${{ env.REVIEW_DIR }}/")
+                    for line in upload.splitlines() if line.strip().startswith("${{ env.REVIEW_DIR }}/")]
+        selected = {}
+        for pattern in patterns:
+            matches = {name: data for name, data in self.source.documents.items() if fnmatch.fnmatchcase(name, pattern)}
+            self.assertTrue(matches or pattern == "failure.json",
+                            "why: producer upload path has no source-shaped fixture: " + pattern
+                            + "; remedy: model its actual file before claiming reader compatibility")
+            selected.update(matches)
+        self.source.documents = selected
+
+    def test_current_producer_uploaded_v2_inventory_is_admitted_by_real_reader(self):
+        self.current_workflow_archive()
+        result = self.check()
+        self.assertTrue(result["eligible"],
+                        "why: actual producer member inventory is rejected by the reader; "
+                        "remedy: reconcile only documented diagnostic members without weakening canonical receipts\n" + str(result))
+        self.assertEqual(result["evidence"][0]["findings"], [])
+
+    def test_diagnostic_members_remain_optional_for_historical_v2_receipts(self):
+        names = ("t2-input.json", "collection-receipt.json", "t2-result.json")
+        for mask in range(8):
+            with self.subTest(mask=mask):
+                self.render_v2()
+                self.source.documents.update({name: {"status": "reviewed", "arbitrary": "not authority"}
+                    for index, name in enumerate(names) if mask & (1 << index)})
+                self.assertTrue(self.check()["eligible"])
+
+    def test_v1_cannot_smuggle_v2_diagnostic_members(self):
+        for name in ("t2-input.json", "collection-receipt.json", "t2-result.json"):
+            with self.subTest(name=name):
+                self.source.documents[name] = {}
+                self.assertFalse(self.check()["eligible"])
+                del self.source.documents[name]
+
+    def test_current_v2_archive_still_rejects_unknown_or_nested_members(self):
+        self.current_workflow_archive()
+        for name in ("unknown.json", "nested/t2-input.json", "../t2-result.json"):
+            with self.subTest(name=name):
+                self.source.documents[name] = {}
+                self.assertFalse(self.check()["eligible"])
+                del self.source.documents[name]
+
+    def test_diagnostics_never_replace_required_canonical_receipts(self):
+        for name in ("context.json", "history.json", "result.json", "review.json", "collector.json", "t2-config-witness.json"):
+            with self.subTest(name=name):
+                self.current_workflow_archive()
+                del self.source.documents[name]
+                self.assertFalse(self.check()["eligible"])
+
+    def test_diagnostics_never_override_tampered_canonical_results(self):
+        self.current_workflow_archive()
+        self.source.documents["t2-result.json"] = {"status": "reviewed", "findings": []}
+        self.source.documents["review.json"]["summary"] = "forged summary"
+        self.assertFalse(self.check()["eligible"])
+
+    def test_v2_diagnostics_keep_duplicate_members_and_json_errors_rejected(self):
+        self.current_workflow_archive()
+        original = self.source.download
+        for kind in ("duplicate-member", "duplicate-key", "invalid-json"):
+            with self.subTest(kind=kind):
+                def download(artifact):
+                    raw = original(artifact)
+                    output = wait.io.BytesIO()
+                    with wait.zipfile.ZipFile(wait.io.BytesIO(raw)) as source, wait.zipfile.ZipFile(output, "w") as target:
+                        for name in source.namelist():
+                            data = source.read(name)
+                            if name == "t2-result.json" and kind != "duplicate-member":
+                                data = b'{"same":1,"same":2}' if kind == "duplicate-key" else b'{'
+                            target.writestr(name, data)
+                        if kind == "duplicate-member":
+                            with warnings.catch_warnings():
+                                warnings.filterwarnings("ignore", message="Duplicate name:")
+                                target.writestr("t2-result.json", b'{}')
+                    return output.getvalue()
+                self.source.download = download
+                self.assertFalse(self.check()["eligible"])
+        self.source.download = original
 
     def test_v2_foreign_malformed_and_duplicate_markers_are_invalid(self):
         self.render_v2()

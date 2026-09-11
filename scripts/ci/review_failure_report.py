@@ -236,7 +236,12 @@ def collect(api, repository, run_id, attempt):
                     {"context.json", "history.json", "result.json", "review.json"}]
         if v2_archive:
             required = [{*entry, "collector.json", "t2-config-witness.json"} for entry in required]
-        base_names = {name for name in names if not name.startswith("coverage-")}
+        # The current T2 producer retains these diagnostic JSON files alongside
+        # the canonical receipts. They are bounded/parsed below but never supply
+        # review authority. Historical v2 archives may omit them; v1 may not add
+        # them. Keep every other member and canonical-receipt check closed.
+        diagnostics = {"t2-input.json", "collection-receipt.json", "t2-result.json"} if v2_archive else set()
+        base_names = {name for name in names if not name.startswith("coverage-") and name not in diagnostics}
         coverage_names = {name for name in names if name.startswith("coverage-")}
         require(len(names) == len(set(names)) and base_names in required
                 and all(name.endswith(".json") and name != "coverage-.json" for name in coverage_names),
