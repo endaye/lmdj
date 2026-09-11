@@ -874,9 +874,12 @@ PatternTransportSubmit RealtimeEngine::submit_pattern_transport(
        pattern_token_generation(pending) != cell.switch_generation))
     return PatternTransportSubmit::identity_mismatch;
   const auto current = current_pattern_slot_.load(std::memory_order_acquire);
+  // A named current successor needs a real acknowledged predecessor, not
+  // the initial zero sentinel shared by an unacknowledged command.
   if (current == kNoPatternSlot ||
       (pattern_slots_[current].generation != command.expected_pattern_generation &&
        (pattern_slots_[current].generation != cell.switch_generation ||
+        acknowledged_pattern_generation_ == 0 ||
         command.expected_pattern_generation != acknowledged_pattern_generation_)))
     return PatternTransportSubmit::identity_mismatch;
   for (std::size_t i = 0; i < pattern_slots_.size(); ++i) {

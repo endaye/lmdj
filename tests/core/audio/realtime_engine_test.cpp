@@ -575,6 +575,45 @@ void pattern_transport_rejects_current_identity_as_its_own_switch() {
   LMDJ_CHECK(f.apply(1, PatternTransportAction::start).pattern_id == PatternId{kPatternA});
 }
 
+void pattern_transport_rejects_unacknowledged_zero_predecessor() {
+  using namespace lmdj::audio;
+  bool rejected = true;
+  bool current_preserved = true;
+  for (const bool zero_callback : {false, true}) {
+    PatternTransportFixture f;
+    const auto result = f.engine.submit_pattern_transport({7, 1, 0, PatternTransportAction::stop,
+        PatternReplacementAuthority{f.generation, PatternId{kPatternA}, 0}});
+    if (zero_callback) {
+      std::array<float, 1> left{}, right{};
+      f.engine.render(left.data(), right.data(), 0);
+      LMDJ_CHECK(!f.engine.inspect_pattern_transport_receipt(7, 1));
+    }
+    render_frames(f.engine, 1);
+    const auto receipt = f.engine.inspect_pattern_transport_receipt(7, 1);
+    // Capture the ownership consequence of the invalid admission on RED,
+    // without dereferencing the reclaimed current Pattern's empty optional.
+    if (receipt) LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(7, 1));
+    const auto reclaimed = f.engine.reclaim_retired_patterns();
+    std::fprintf(stderr, "zero predecessor: zero_callback=%d submit=%u receipt=%d reclaimed=%zu\n",
+        zero_callback, static_cast<unsigned>(result), receipt.has_value(), reclaimed);
+    rejected &= result == PatternTransportSubmit::identity_mismatch && !receipt;
+    current_preserved &= reclaimed == 0;
+    if (result == PatternTransportSubmit::identity_mismatch && reclaimed == 0) {
+      LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kPatternA});
+      LMDJ_CHECK(f.engine.pattern_telemetry().current_generation == f.generation);
+      // Refusal must not spend epoch 1 or damage the current scheduling owner.
+      const auto start = f.apply(1, PatternTransportAction::start);
+      LMDJ_CHECK(start.pattern_generation == f.generation && start.origin_frame == 1);
+      std::array<float, 1> left{}, right{};
+      f.engine.render(left.data(), right.data(), 1);
+      LMDJ_CHECK(left[0] > 0.0F);
+      LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 0);
+    }
+  }
+  LMDJ_CHECK(rejected);
+  LMDJ_CHECK(current_preserved);
+}
+
 void pattern_transport_quiescent_restart_discards_unconsumed_commands() {
   using namespace lmdj::audio;
   PatternTransportFixture f;
@@ -4115,6 +4154,7 @@ int main() {
   pattern_transport_late_claim_takes_next_callback_cutoff();
   pattern_transport_cancels_queued_tie_without_allocating();
   pattern_transport_rejects_current_identity_as_its_own_switch();
+  pattern_transport_rejects_unacknowledged_zero_predecessor();
   pattern_transport_quiescent_restart_discards_unconsumed_commands();
   pattern_transport_stop_retires_obsolete_reservations();
   engine_queue_profiles_account_for_all_allocated_payloads();
