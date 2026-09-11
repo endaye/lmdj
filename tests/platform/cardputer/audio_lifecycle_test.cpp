@@ -188,9 +188,12 @@ struct FakeSession final : AudioSession {
   AudioStopResult stop_result{true, true};
   std::uint8_t start_volume{};
   bool start_muted{};
+  bool fail_start{};
+  bool diagnostics_supported{true};
+  mutable unsigned diagnostic_reads{};
   bool start(Render fn, void* ctx, std::uint8_t volume, bool muted) noexcept override {
     start_volume = volume; start_muted = muted;
-    callback = fn; context = ctx; return true;
+    callback = fn; context = ctx; return !fail_start;
   }
   AudioStopResult stop_and_join() noexcept override {
     if (stop_result.quiescent) { callback = nullptr; context = nullptr; }
@@ -205,6 +208,12 @@ struct FakeSession final : AudioSession {
     ++output_updates;
   }
   bool healthy() const noexcept override { return true; }
+  bool read_diagnostics(AudioDiagnosticsSnapshot& result) const noexcept override {
+    ++diagnostic_reads;
+    result = {};
+    result.submitted = 123;
+    return diagnostics_supported;
+  }
   void pump() {
     std::array<float, 256> left{}, right{};
     LMDJ_CHECK(callback != nullptr);
@@ -215,10 +224,10 @@ struct FakeSession final : AudioSession {
 lmdj::facade::RuntimeConfig host_config() {
   return {{1'048'576, 262'144, 65'536, 64, 1024}, 16'777'216, 65'536, 1, 100, 10'000};
 }
-lmdj::cooker::EncodedRuntimeContent host_content(bool one_shot = true) {
+lmdj::cooker::EncodedRuntimeContent host_content(bool one_shot = true, std::int16_t value = 16384) {
   using namespace lmdj;
   auto pcm = std::make_shared<const cooker::PcmSample>(
-      cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(4096, 16384)});
+      cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(4096, value)});
   cooker::RuntimeSnapshot snapshot{
       foundation::ProjectId{"00000000-0000-4000-8000-000000000001"},
       foundation::PatternId{"00000000-0000-4000-8000-000000000002"},
@@ -228,6 +237,75 @@ lmdj::cooker::EncodedRuntimeContent host_content(bool one_shot = true) {
   auto encoded = cooker::encode_runtime_content(snapshot, host_config().content_limits);
   LMDJ_CHECK(encoded.has_value());
   return std::move(encoded.value());
+}
+
+void observation_keeps_measured_content_after_replacement() {
+  FakeSession audio;
+  RuntimeHost host(host_config(), {4}, audio);
+  const auto a = host_content();
+  const auto b = host_content(true, 8192);
+  LMDJ_CHECK(a.identity.sha256 != b.identity.sha256);
+  HostAudioObservation observation;
+  LMDJ_CHECK(!host.read_audio_observation(observation));
+  const auto load = [&](const auto& content) {
+    LMDJ_CHECK(host.begin_receive() == HostResult::ok);
+    LMDJ_CHECK(host.load_received(content.bytes, {content.identity.sha256, content.identity.byte_length}) == HostResult::ok);
+  };
+  load(a);
+  LMDJ_CHECK(host.handle_key({Key::play_stop, true}) == HostResult::ok);
+  LMDJ_CHECK(!host.read_audio_observation(observation));
+  LMDJ_CHECK(audio.diagnostic_reads == 0);
+  LMDJ_CHECK(host.handle_key({Key::play_stop, true}) == HostResult::ok);
+  LMDJ_CHECK(host.read_audio_observation(observation));
+  LMDJ_CHECK(observation.generation == 1 && observation.start_succeeded && observation.silent);
+  LMDJ_CHECK(observation.diagnostics_available && observation.diagnostics.submitted == 123);
+  load(b);
+  LMDJ_CHECK(host.read_audio_observation(observation));
+  LMDJ_CHECK(std::string(observation.content_sha256.data(), 64) == a.identity.sha256);
+  LMDJ_CHECK(observation.content_bytes == a.identity.byte_length);
+  LMDJ_CHECK(host.handle_key({Key::play_stop, true}) == HostResult::ok);
+  LMDJ_CHECK(!host.read_audio_observation(observation));
+  LMDJ_CHECK(observation.generation == 0 && observation.content_bytes == 0);
+  LMDJ_CHECK(host.handle_key({Key::play_stop, true}) == HostResult::ok);
+  LMDJ_CHECK(host.read_audio_observation(observation));
+  LMDJ_CHECK(observation.generation == 2);
+  LMDJ_CHECK(std::string(observation.content_sha256.data(), 64) == b.identity.sha256);
+  LMDJ_CHECK(observation.content_bytes == b.identity.byte_length);
+}
+
+void observation_failed_join_and_start_are_explicit() {
+  FakeSession audio;
+  RuntimeHost host(host_config(), {4}, audio);
+  const auto content = host_content();
+  LMDJ_CHECK(host.begin_receive() == HostResult::ok);
+  LMDJ_CHECK(host.load_received(content.bytes, {content.identity.sha256, content.identity.byte_length}) == HostResult::ok);
+  audio.fail_start = true;
+  audio.stop_result = {false, false};
+  LMDJ_CHECK(host.handle_key({Key::play_stop, true}) == HostResult::audio_error);
+  HostAudioObservation observation;
+  LMDJ_CHECK(!host.read_audio_observation(observation));
+  LMDJ_CHECK(audio.diagnostic_reads == 0);
+  audio.stop_result = {true, true};
+  LMDJ_CHECK(host.shutdown() == HostResult::ok);
+  LMDJ_CHECK(host.read_audio_observation(observation));
+  LMDJ_CHECK(!observation.start_succeeded && observation.quiescent && observation.silent);
+  LMDJ_CHECK(std::string(observation.content_sha256.data(), 64) == content.identity.sha256);
+}
+
+void observation_missing_diagnostics_is_not_zero_success() {
+  FakeSession audio;
+  audio.diagnostics_supported = false;
+  RuntimeHost host(host_config(), {4}, audio);
+  const auto content = host_content();
+  LMDJ_CHECK(host.begin_receive() == HostResult::ok);
+  LMDJ_CHECK(host.load_received(content.bytes, content.identity) == HostResult::ok);
+  LMDJ_CHECK(host.handle_key({Key::play_stop, true}) == HostResult::ok);
+  LMDJ_CHECK(host.handle_key({Key::play_stop, true}) == HostResult::ok);
+  HostAudioObservation observation;
+  LMDJ_CHECK(host.read_audio_observation(observation));
+  LMDJ_CHECK(!observation.diagnostics_available);
+  LMDJ_CHECK(observation.diagnostics.submitted == 0);
+  LMDJ_CHECK(observation.start_succeeded && observation.quiescent);
 }
 
 void host_volume_is_bounded_and_forwarded() {
@@ -475,6 +553,9 @@ void threaded_stop_reload_stress() {
 int main(int argc, char** argv) {
   struct Case { const char* name; void (*run)(); };
   const Case cases[]{
+      {"observation_identity", observation_keeps_measured_content_after_replacement},
+      {"observation_failure", observation_failed_join_and_start_are_explicit},
+      {"observation_unavailable", observation_missing_diagnostics_is_not_zero_success},
       {"threaded_stop_reload", threaded_stop_reload_retains_no_old_callback},
       {"threaded_output_failure", threaded_output_failure_is_joined_before_reload},
       {"threaded_destruction", threaded_destruction_joins_render_before_free},
