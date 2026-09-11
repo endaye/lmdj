@@ -214,15 +214,15 @@ Read-only live issue body and five comments inspected on 2026-09-11. Issue is OP
 | Confirmed constraints brief | `docs/research/2026-09-01-creator-visual-language-brief.md`; [comment](https://github.com/endaye/lmdj/issues/522#issuecomment-5496550905) explicitly says specimens not started | Reuse instrument body, fixed identity, honest state, desktop audience. Four-region evolution needs reconciliation with older shell wording. |
 | ThreeUI research | `docs/research/2026-09-02-threeui-creator-visual-effects-research.md`; [shipping comment](https://github.com/endaye/lmdj/issues/522#issuecomment-5498619959) names PR #545 and squash `28af2795f9eacc39413efed00abc2ee499b84807` | Landed research input; comment explicitly leaves specimens/direction/approved design/implementation outstanding. Historical reported portal pass is not U0 verification. |
 | Three.js visual constraint | `docs/prd/decisions/2026-09-02-creator-web-threejs.md`, `docs/research/2026-09-02-creator-visual-language-threejs-amendment.md`; [comment](https://github.com/endaye/lmdj/issues/522#issuecomment-5498392722) | Reuse single visual layer/semantic UI/fallback constraint. Does not select direction, prove GPU performance or authorize dependency addition. |
-| Hardware reference | `docs/design/2026-09-11-lmdj-hardware-ui-layout-reference.md` records geometry and Figma reference nodes | Historical pages were static. The later twenty-two-frame draft is recorded separately in §10; neither establishes device acceptance. |
+| Hardware reference | `docs/design/2026-09-11-lmdj-hardware-ui-layout-reference.md` records geometry and Figma reference nodes | Historical pages were static. The current twenty-four-frame draft is recorded separately in §10; neither establishes device acceptance. |
 | Migration handoff | [comment](https://github.com/endaye/lmdj/issues/522#issuecomment-5633697107) assigns #1214–#1222 under #1207 | Confirms U0 carries W1/W2 review; explicitly does not change historical completion. |
 | Phase 1 specimens / Phase 2 selection | Reviewed comments plus local artifact inventory contain research/constraints but do not demonstrate three qualifying specimens and an accepted direction | Evidence not established by this audit; do not claim no such artifact could exist elsewhere. Explicit qualifying links and decisions are still required. |
-| Phase 3 / W2 | Source mapping, twenty-two draft frames, narrow shown-preview approval and partial pointer observations (§10) | Not Phase 3 exit. Unshown decisions/focus/state approval and remaining stable-slice observations require disposition, alongside `/hosts/creator-web/` impact. Record actual touch precheck OR an explicit gap; full device/audio acceptance is not a newly imposed U1 prerequisite. |
+| Phase 3 / W2 | Source mapping, twenty-four draft frames, narrow shown-preview approval and partial pointer observations (§10) | Not Phase 3 exit. Unshown decisions/focus/state approval and remaining stable-slice observations require disposition, alongside `/hosts/creator-web/` impact. Record actual touch precheck OR an explicit gap; full device/audio acceptance is not a newly imposed U1 prerequisite. |
 | Phase 4 | Existing Creator functions are implemented source, not proof this new visual spec landed | U0 does not close #522 or authorize subsequent implementation. |
 
 ## 10. Existing Figma draft and remaining verification
 
-The following twenty-two frame nodes exist in the Figma design file, as reported by the prototype updates on 2026-09-11. Links identify existing draft frames, not completed acceptance flows. Partial actual-pointer observations are recorded below. The `103:*` example branches and `106:*` Pattern 02 resolution frames are simulations; they are not working forms or an embedded existing application. Verified readback and remaining limitations are distinguished below.
+The following twenty-four frame nodes exist in the Figma design file, as reported by the prototype updates on 2026-09-11. Links identify existing draft frames, not completed acceptance flows. Partial actual-pointer observations are recorded below. The example branches, Pattern 02 resolution and empty-context handoffs are simulations; they are not working forms or an embedded existing application. Verified readback and remaining limitations are distinguished below.
 
 | Draft frame | Node link | Source interpretation / limitation |
 | --- | --- | --- |
@@ -244,12 +244,14 @@ The following twenty-two frame nodes exist in the Figma design file, as reported
 | Switch confirmed | [103:6953](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=103-6953) | Simulated confirmation; real source requires matching authority/boundary |
 | System | [103:7826](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=103-7826) | Describes handoff/actions; no actual old-app/runtime integration |
 | More modes | [103:8699](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=103-8699) | Describes mode handoff; does not prove live fallback reachability |
-| No Project | [103:9572](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=103-9572) | Existing empty-state draft; entry/import journey not verified |
+| No Project | [103:9572](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=103-9572) | Empty-context System/handoff/return navigation observed; actual import not verified |
 | Existing workspace handoff | [103:10445](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=103-10445) | Handoff explanation only, not the existing application |
 | Pattern 02 flushing | [106:988](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=106-988) | Upper display SEQUENCE/02; simulated Stop resolution with a 1.5-second timer |
 | Pattern 02 committed | [106:1861](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=106-1861) | Upper display SEQUENCE/02; simulated committed feedback, repeat Record disabled/unwired |
+| System — empty | [114:1012](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=114-1012) | Dedicated empty-context System proposal; no live System action |
+| Existing workspace handoff — empty | [114:1886](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=114-1886) | Dedicated handoff proposal; not running the app or opening a Project |
 
-The earlier reported structural readback covers the first twenty roots: each is 880×592 with a 368×368 touch region, expected fonts and zero interactive descendants in the upper display; the reported check result is `faults: []`. Sequence menu and No Project screenshots were also inspected. The two later Pattern 02 frames bring the total to twenty-two; their identity/reaction readback and subsequent pointer/screenshot observations are recorded below. The earlier structural check is not a twenty-two-root structural rerun; current pointer evidence is separate from that historical check.
+The earlier reported structural readback covers the first twenty roots: each is 880×592 with a 368×368 touch region, expected fonts and zero interactive descendants in the upper display; the reported check result is `faults: []`. Sequence menu and No Project screenshots were also inspected. Pattern 02 frames subsequently formed the earlier twenty-two-frame baseline; the empty-context additions now bring the inventory to twenty-four. Their separate evidence below does not expand the historical twenty-root structural audit.
 
 All U0 grids are labelled “ILLUSTRATIVE GRID / NOT LIVE EVENT DATA”. No Project hides the grid and shows sixteen neutral disabled Pads. These labels preserve the distinction between simulated artwork and the desired live read-only event grid in D06; they do not discharge the projection dependency.
 
@@ -293,15 +295,30 @@ The following observations were supplied by the controller from actual in-app-br
 
 Playback is now accessible for the current recheck. The earlier login-wall observation is historical and no longer describes a blanket access blocker; no authentication method or login change is inferred. The final batch uses AX URLs after every click and screenshots after key far-side states; no screenshot coverage is claimed for every repeated navigation. No additional Figma edits were made in that batch. These observations establish only the listed pointer-enabled prototype simulations. Preset 120→124 and four-bar creation are not full value editing; simulated labels/timers are not native audio, revision persistence, storage, physical touch, keyboard or focus evidence.
 
+### Subsequent empty-context correction and pointer evidence
+
+After documentation HEAD `53f13e32abf98457f987d6629a21c0f94a6f5c99`, a supplied canvas-click check reproduced No Project→shared System incorrectly showing Sequence 01, 120 BPM and assigned Pads; the shared handoff also returned to a populated menu. These were prototype fixture-context defects, not Project mutations. Dedicated empty System `114:1012` and handoff `114:1886` now replace those empty-context routes; populated System/handoff remain unchanged. Both new roots are reported 880×592, reuse existing neutral components/fonts, preserve empty overview/Pads in screenshots, and pass the reported font assertion `wrongFonts: []`.
+
+Corrected edges: `103:10430`→`114:1886`, `103:10431`→`114:1012`; Existing controls `114:1870`→`114:1886`, Back `114:1871`→`103:9572`, Return `114:2744`→`103:9572`, System `114:2745`→`114:1012`.
+
+Separate fresh two-root readback: `114:1012` and `114:1886` each measure 880×592, upper display 752×176 and both lower P/T regions 368×368; upper root and descendant reactions are all empty. System P/T IDs are `114:1682` / `114:1818`; handoff P/T IDs are `114:2556` / `114:2692`. Existing populated return controls `103:8685` and `103:11303` still target `103:842`. This is a scoped new-two-root check, not a twenty-four-root aggregate pass.
+
+| Subsequent pointer check after fresh browser reload | Observed far-side result |
+| --- | --- |
+| No Project `103:9572` → System empty `114:1012` → Handoff empty `114:1886` → Return No Project | Empty context retained throughout; no populated Pattern/Pad fixture introduced |
+| No Project → Open/Import → Handoff empty → System empty → Back No Project | No Project and unavailable Sequence retained throughout; handoff explicitly remains a proposal, not the running app, with no Project opened |
+
+AX checked after every click; screenshots inspected at key far-side states. This supplied correction/readback and pointer evidence closes the empty-context navigation defect only. It is not actual import, live System/fallback, audio/persistence, focus or device evidence and does not broaden the shown-preview approval.
+
 Explicit open gaps:
 
-- No Project now has a draft frame, but its entry/import/start journey is not verified. Accessible playback of the listed paths does not verify the remaining branches; link-structure readback cannot replace their interaction observations.
+- No Project's simulated System/Open-Import handoff and return paths are now observed with empty context preserved. Actual Project import/open, System operations and live fallback remain unverified; these handoff simulations do not establish an operational start journey.
 - Physical shortcuts are not connected. Ready/Recording Refresh controls are presentation only.
 - The requested switch to Pattern 02, timer confirmation, Stop and Pattern 02 flushing/committed feedback are now pointer-observed. Switch Cancel and Stop while switch-pending were not clicked. Repeat Record from created/committed Pattern 02 remains explicitly disabled/unwired and was not clicked.
 - Direct error-scenario entry, Refresh, Discard confirmation, Cancel with candidate fixture retained, and Recover original are now pointer-observed. The error was not reached by inducing a recording failure; confirmation's actual Discard action was not clicked. Recovery's Committed fixture is not an actual `applySequenceRecovery` receipt. Alternate recovery still requires selection of an existing Pattern before apply; no new-Pattern recovery capability is inferred.
 - The timer does not prove persistence, Stop acknowledgment, revision reconciliation or reopen/inspect. Discard cancellation does not prove actual discard success.
 - BPM preset open/cancel/reopen/apply, four-bar New Pattern cancel/reenter/create, return to Ready and the listed Pattern-switch branch are now pointer-observed. Full BPM value editing, invalid input, other Pattern lengths, Swing and Quantize remain gaps; presets do not discharge these requirements. Unwired controls were not clicked.
-- Alternate-existing-Pattern recovery selection/apply, actual System/runtime actions, Sample capture/trim fallback and live More modes/existing-workspace handoff remain gaps. The twenty-two frames do not cover or verify all flows.
+- Alternate-existing-Pattern recovery selection/apply, actual System/runtime actions, Sample capture/trim fallback and live More modes/existing-workspace handoff remain gaps. The twenty-four frames do not cover or verify all flows.
 
 Record actual selection → operation → feedback → cancel/back observations for each required flow. Add real node IDs as the missing states are created; do not assign invented IDs to planned coverage. Static screenshots and configured reactions alone do not satisfy W2.
 
