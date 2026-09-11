@@ -275,6 +275,35 @@ def decode(data: bytes) -> Frame:
     return Frame(opcode, request_id, data[12:28], data[28:size - 4], version)
 
 
+def pop_response(buffer: bytearray) -> Frame | None:
+    """Drain invalid prefixes before waiting; retain at most one partial frame."""
+    while True:
+        start = buffer.find(MAGIC)
+        if start < 0:
+            # Preserve a possible magic prefix split across reads.
+            del buffer[:max(0, len(buffer) - (len(MAGIC) - 1))]
+            return None
+        if start:
+            del buffer[:start]
+        if len(buffer) < HEADER:
+            return None
+        version, opcode, payload_size, request_id = struct.unpack_from("<BBHI", buffer, 4)
+        if (version != VERSION or not (1 <= opcode <= 6 or 0x81 <= opcode <= 0x86)
+                or request_id == 0 or payload_size > MAX_PAYLOAD):
+            del buffer[:1]
+            continue
+        size = HEADER + payload_size + 4
+        if len(buffer) < size:
+            return None
+        try:
+            response = decode(bytes(buffer[:size]))
+        except ValueError:
+            del buffer[:1]
+            continue
+        del buffer[:size]
+        return response
+
+
 def send_serial(path: str, content: bytes, timeout: float = 5.0) -> Frame:
     """Perform one HELLO -> BEGIN -> DATA -> COMMIT transaction on POSIX serial."""
     if not path or timeout <= 0:
@@ -319,20 +348,15 @@ def send_serial(path: str, content: bytes, timeout: float = 5.0) -> Frame:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError("serial response timeout")
-                readable, _, _ = select.select([fd], [], [], remaining)
-                if not readable:
+                response = pop_response(received)
+                if response is None:
+                    readable, _, _ = select.select([fd], [], [], remaining)
+                    if not readable:
+                        continue
+                    # pop_response retained < MAX_FRAME bytes. Each read adds
+                    # at most 2*MAX_FRAME, bounding live input below 3 frames.
+                    received.extend(os.read(fd, MAX_FRAME * 2))
                     continue
-                received.extend(os.read(fd, MAX_FRAME * 2))
-                if len(received) < HEADER + 4:
-                    continue
-                if received[:4] != MAGIC:
-                    del received[:1]
-                    continue
-                payload_size = struct.unpack_from("<H", received, 6)[0]
-                size = HEADER + payload_size + 4
-                if len(received) < size:
-                    continue
-                response = decode(bytes(received[:size]))
                 if response.opcode != (frame.opcode | 0x80) or response.request_id != frame.request_id:
                     raise ValueError("serial response does not match request")
                 if frame.opcode == 1:
