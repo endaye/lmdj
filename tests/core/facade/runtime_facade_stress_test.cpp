@@ -72,6 +72,7 @@ void exact_stop_barrier() {
   std::array<float, 256> left{}, right{};
   std::thread callback([&] { runtime.render(left.data(), right.data(), left.size()); });
   await(paused.entered);
+  LMDJ_CHECK(!runtime.stopped_peak_voices());
   std::array<RuntimeReceipt, 2> receipts;
   LMDJ_CHECK(runtime.poll(receipts) == 0);
   // A second callback is rejected without entering Engine or disturbing the
@@ -84,6 +85,7 @@ void exact_stop_barrier() {
   runtime.request_stop();
   LMDJ_CHECK(runtime.phase() == RuntimePhase::draining);
   LMDJ_CHECK(runtime.finish_stop() == RuntimeResult::draining);
+  LMDJ_CHECK(!runtime.stopped_peak_voices());
   LMDJ_CHECK(runtime.unload() == RuntimeResult::wrong_state);
   LMDJ_CHECK(runtime.submit({epoch, 2}) == RuntimeResult::wrong_state);
   paused.resume.store(true, std::memory_order_release);
@@ -91,6 +93,7 @@ void exact_stop_barrier() {
   audio::testing::set_realtime_hook(audio::testing::RealtimeHookPoint::before_pattern_claim, nullptr);
   LMDJ_CHECK(runtime.finish_stop() == RuntimeResult::ok);
   LMDJ_CHECK(runtime.phase() == RuntimePhase::stopped);
+  LMDJ_CHECK(runtime.stopped_peak_voices() == 1);
   LMDJ_CHECK(runtime.poll(receipts) == 1);
   LMDJ_CHECK(receipts[0].sequence == 1);
   LMDJ_CHECK(receipts[0].outcome == RuntimeCommandOutcome::voice_started);
@@ -125,12 +128,15 @@ void lifecycle_stress() {
     LMDJ_CHECK(runtime.budget().pcm_bytes > 0);
     RuntimeEpoch epoch;
     LMDJ_CHECK(runtime.start(epoch) == RuntimeResult::ok);
+    LMDJ_CHECK(!runtime.stopped_peak_voices());
     LMDJ_CHECK(runtime.submit({previous, 1}) == RuntimeResult::stale_epoch);
     for (std::uint32_t sequence = 1; sequence <= 64; ++sequence) {
       LMDJ_CHECK(runtime.submit({epoch, sequence}) == RuntimeResult::accepted);
     }
     runtime.stop();
     LMDJ_CHECK(runtime.phase() == RuntimePhase::stopped);
+    LMDJ_CHECK(runtime.stopped_peak_voices().has_value());
+    LMDJ_CHECK(*runtime.stopped_peak_voices() <= 64);
     std::array<RuntimeReceipt, 128> receipts;
     const auto count = runtime.poll(receipts);
     LMDJ_CHECK(count == 64);
@@ -139,6 +145,7 @@ void lifecycle_stress() {
     }
     runtime.reset();
     LMDJ_CHECK(runtime.phase() == RuntimePhase::empty);
+    LMDJ_CHECK(!runtime.stopped_peak_voices());
     LMDJ_CHECK(!runtime.content_identity());
     // Callback thread continues calling the closed gate during unload/load.
     // No forced state replaces the actual callback or ownership transfer.
@@ -217,6 +224,9 @@ void max_pending_partial_poll_races_render(std::uint32_t pending) {
   if (pending > 128) LMDJ_CHECK(refused >= pending - 128);
   LMDJ_CHECK(runtime.poll(receipts) == 0);
   runtime.stop();
+  LMDJ_CHECK(runtime.stopped_peak_voices().has_value());
+  LMDJ_CHECK(*runtime.stopped_peak_voices() <= 128);
+  if (pending >= 128) LMDJ_CHECK(runtime.stopped_peak_voices() == 128);
   LMDJ_CHECK(runtime.unload() == RuntimeResult::ok);
   initial_left.fill(1); initial_right.fill(1);
   runtime.render(initial_left.data(), initial_right.data(), initial_left.size());

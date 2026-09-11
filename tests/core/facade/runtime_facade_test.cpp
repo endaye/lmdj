@@ -113,6 +113,66 @@ RuntimeContentSummary summary_without_allocation(const RuntimeFacade& runtime) {
   return result;
 }
 
+void stopped_peak_counts_pattern_and_pads_inside_one_block() {
+  auto source = snapshot(true);
+  auto short_pcm = std::make_shared<const cooker::PcmSample>(
+      cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(16, 16384)});
+  source.pads.front().sample = short_pcm;
+  source.pads.front().playback.end_frame = 16;
+  source.events.front().sample = short_pcm;
+  const auto first = source.pads.front();
+  for (std::uint8_t slot = 1; slot < 4; ++slot) {
+    auto pad = first;
+    pad.slot.pad = slot;
+    source.pads.push_back(pad);
+  }
+  auto encoded = cooker::encode_runtime_content(source, config().content_limits);
+  LMDJ_CHECK(encoded.has_value());
+  RuntimeFacade runtime(config());
+  LMDJ_CHECK(!runtime.stopped_peak_voices());
+  LMDJ_CHECK(runtime.load(encoded.value().bytes, encoded.value().identity) == RuntimeResult::ok);
+  LMDJ_CHECK(!runtime.stopped_peak_voices());
+  RuntimeEpoch epoch;
+  LMDJ_CHECK(runtime.start(epoch) == RuntimeResult::ok);
+  for (std::uint8_t slot = 1; slot < 4; ++slot)
+    LMDJ_CHECK(runtime.submit({epoch, slot, RuntimeCommandKind::press, slot}) == RuntimeResult::accepted);
+  Output output;
+  output.render(runtime);
+  LMDJ_CHECK(!output.silent());
+  LMDJ_CHECK(output.left.back() == 0);
+  output.render(runtime);
+  LMDJ_CHECK(output.silent());
+  LMDJ_CHECK(!runtime.stopped_peak_voices());
+  runtime.request_stop();
+  LMDJ_CHECK(!runtime.stopped_peak_voices());
+  LMDJ_CHECK(runtime.finish_stop() == RuntimeResult::ok);
+  forbid_allocation = true;
+  const auto peak = runtime.stopped_peak_voices();
+  forbid_allocation = false;
+  LMDJ_CHECK(peak == 4);
+  std::array<RuntimeReceipt, 4> receipts;
+  LMDJ_CHECK(runtime.poll(receipts) == 3);
+  LMDJ_CHECK(runtime.start(epoch) == RuntimeResult::ok);
+  runtime.stop(); // No render or Pad admission in this run.
+  LMDJ_CHECK(runtime.stopped_peak_voices() == 0);
+  LMDJ_CHECK(runtime.unload() == RuntimeResult::ok);
+  LMDJ_CHECK(!runtime.stopped_peak_voices());
+}
+
+void stopped_peak_does_not_count_muted_admission() {
+  auto encoded = content(false, true);
+  RuntimeFacade runtime(config());
+  LMDJ_CHECK(runtime.load(encoded.bytes, encoded.identity) == RuntimeResult::ok);
+  RuntimeEpoch epoch;
+  LMDJ_CHECK(runtime.start(epoch) == RuntimeResult::ok);
+  LMDJ_CHECK(runtime.submit({epoch, 1, RuntimeCommandKind::press}) == RuntimeResult::accepted);
+  Output output;
+  output.render(runtime);
+  LMDJ_CHECK(output.silent());
+  runtime.stop();
+  LMDJ_CHECK(runtime.stopped_peak_voices() == 0);
+}
+
 void content_summary_preserves_all_canonical_slots_and_modes() {
   auto source = snapshot(false);
   const auto prototype = source.pads.front();
@@ -675,6 +735,8 @@ void operator delete(void* pointer, std::size_t, std::align_val_t) noexcept { op
 void operator delete[](void* pointer, std::size_t, std::align_val_t) noexcept { operator delete(pointer); }
 
 int main() {
+  stopped_peak_counts_pattern_and_pads_inside_one_block();
+  stopped_peak_does_not_count_muted_admission();
   content_summary_preserves_all_canonical_slots_and_modes();
   content_summary_tracks_publication_and_clearing();
   allocator_controls_cover_ordinary_and_aligned_storage();
