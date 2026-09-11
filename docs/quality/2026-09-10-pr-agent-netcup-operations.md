@@ -3,22 +3,27 @@
 Date: 2026-09-10 (Asia/Shanghai)
 
 Task: LMDJ #1153 / umbrella #1149 T4
-Status: repository tooling implemented; host installation and review acceptance pending
+Status: staged-revision source tooling implemented; host installation and review acceptance pending
 
 ## What this Task implements
 
 `scripts/ci/pr-agent/deploy-runner.sh` is the repository-owned entrypoint for
-the future Netcup slot. It has four explicit modes:
+the future Netcup slot. It has five explicit modes:
 
 - `dry-run` reads the trusted inventory and bundle identities and writes
   nothing to the target tree.
 - `verify` performs the same read-only checks, including archive SHA-256 and
   byte length, detached `DEPLOYMENT_IDENTITY.json`, every named member, safe
   archive paths, and the bytes of the extracted files in a temporary directory.
-- `install` stages a content-addressed release, protected operator inventory,
+- `stage` stages an inactive disabled-provider revision with an explicit fixed
+  fail-closed service unit; it makes no activation, isolation, capacity, or
+  live-host claim.
+- `install` stages a deterministic immutable deployment revision, protected operator inventory,
   separately supplied runtime TOML and systemd service/slice units. Release
   directories are mode `0755` for service-user traversal while extracted files
-  are mode `0444`; service-writable state, attempt and output roots are separate
+  are mode `0444`; each revision also stores the exact rendered `service.unit`
+  and `slice.unit` bytes with closed SHA-256/length identities, so rollback
+  never rerenders an earlier revision with today's tool. Service-writable state, attempt and output roots are separate
   mode `0750` paths. It is idempotent, writes a separate append-only
   deployment-receipt stream (never the T2 monetary ledger), and deliberately
   does not invoke `systemctl`. A state-less install is allowed only at a
@@ -28,7 +33,7 @@ the future Netcup slot. It has four explicit modes:
 - `rollback` switches only to the exact recorded previous release and carries
   archive byte length, SHA-256, detached identity length/SHA-256, member
   identities and runtime-config identity in both current/previous records.
-  Repeating the same rollback is idempotent; release directories and ledger
+  Repeating the same authenticated latest rollback is idempotent; release directories and ledger
   records (including `uncertain` records) are retained, and service activation
   remains pending.
 
@@ -96,11 +101,39 @@ Linux service-account behavior; the real-host ownership/read-back acceptance
 remains pending.
 
 An interrupted transition can finish only when its target/current link and
-generated units match the durable target and the receipt stream contains
-exactly one byte-canonical, closed receipt equal to that transition's pending
-record. A malformed, mismatched, or duplicate same-ID receipt fails closed and
-leaves the transition and all other records intact; a distinct occurrence gets
-a new transition ID.
+stored authenticated unit bytes match the durable target and the receipt stream
+contains one byte-canonical record in the closed unpublished v3 shape
+equal to that transition's pending record. Current and retained previous
+releases, nested detached identities, and every recorded operator path are
+verified for exact keys, digest/length, owner, mode and secure parents before
+any new intent, receipt append, state clear or file replacement; shared paths
+are checked against the intended far-side state. The state witness must equal
+the exact final unique-arrival receipt of the base history, and the pending
+receipt is permitted only as that history's one final unique arrival in the
+documented interrupted append window. A
+malformed, legacy, stale, mismatched, or conflicting same-ID receipt fails
+closed and leaves the transition and all records intact. Byte-identical repeated
+lines are one arrival and are reconciled append-once. Every immutable release
+also stores a protected `REVISION_RECORD.json`; receipt history authenticates
+that complete record for each endpoint, requires the first arrival to be an
+install from null, and requires each later `from_release` to equal the prior
+unique `to_release`. Install receipt targets equal the destination inventory
+exactly, including the operator-config basename; rollback targets equal the
+invoking from-inventory. State and receipt leaves are also required to be
+operator-owned `0600` regular files with secure parent chains before reads or
+writes; insecure evidence is never repaired. Current must be the direct
+literal canonical release symlink, so intermediate aliases are never repaired.
+An install arrival whose source and destination are the same immutable release
+is rejected even with a distinct transition ID; byte-identical same-ID
+duplicates remain one arrival.
+The closed receipt also commits each endpoint's canonical complete
+`REVISION_RECORD.json` with `from_record_sha256`/`from_record_byte_length` and
+`to_record_sha256`/`to_record_byte_length`; the source commitment is null only
+for the initial install. A missing or partial commitment is an unpublished v3
+schema failure and is refused read-only, never inferred from historical files.
+Rollback input must exactly match the authenticated current inventory; only an
+exact repeat of the latest authenticated rollback is a no-effect idempotent
+read.
 
 ## Evidence boundary and pending prerequisites
 
@@ -118,21 +151,30 @@ access is unavailable, and actual host capacity/admission remains unproved;
 this Task does not seek or read a password, alter authentication, or mutate the
 host.
 
-The future lead-authorized operator invocation is, in outline:
+The source-only operator interface is intentionally limited to a reviewable
+sequence. The first command stages an inactive disabled-provider runtime; a
+later active command may create a new immutable revision from the same v14
+archive after all admissions are independently evidenced:
 
 ```bash
-sudo install -d -o lmdj-pr-agent -g lmdj-pr-agent -m 0750 /var/lib/lmdj/pr-agent/engine-state /run/lmdj-pr-agent/attempt /run/lmdj-pr-agent/output
-sudo install -d -o root -g root -m 0700 /var/lib/lmdj/pr-agent/operator-state
-sudo install -o lmdj-pr-agent -g lmdj-pr-agent -m 0660 /dev/null /run/lmdj-pr-agent/slot.lock
-sudo install -o root -g lmdj-pr-agent -m 0440 runtime.toml /etc/lmdj/pr-agent/runtime.toml
-sudo install -o root -g root -m 0600 scripts/ci/pr-agent/netcup-review.json /etc/lmdj/pr-agent/netcup-review.json
-sudo scripts/ci/pr-agent/deploy-runner.sh install --config /etc/lmdj/pr-agent/netcup-review.json --bundle /srv/lmdj/t2-v14.tar --identity /srv/lmdj/DEPLOYMENT_IDENTITY.json --runtime-config /etc/lmdj/pr-agent/runtime.toml
+deploy-runner.sh stage --config <inactive-operator-json> --bundle <exact-v14-archive> \
+  --identity <detached-v14-identity> --runtime-config <disabled-provider-toml> \
+  --target-root <isolated-target>
+# Only after separate operator, runner, capacity, isolation, activation and
+# runtime receipts pass:
+deploy-runner.sh install --config <active-operator-json> --bundle <exact-v14-archive> \
+  --identity <detached-v14-identity> --runtime-config <enabled-candidate-toml> \
+  --target-root <isolated-target>
+deploy-runner.sh rollback --config <active-operator-json> --target-root <isolated-target>
 ```
 
-The dispatcher must atomically write the fixed attempt input while holding the
-same non-blocking slot lock, then start the fixed service only after all
-prerequisites are read back; publisher and recovery read the output/ledger
-separately. No command above is executed by this Task. Before a lead-authorized install/activation, an operator must provide fresh,
+These are source-tool shapes, not commands executed by this Task; production
+paths and service identities must be supplied through the separately reviewed
+administrator procedure. The dispatcher must atomically write the fixed
+attempt input while holding the same non-blocking slot lock, then start the
+fixed service only after all prerequisites are read back; publisher and
+recovery read the output/ledger separately. Before a lead-authorized
+install/activation, an operator must provide fresh,
 read-back evidence for all of the following:
 
 1. approved admin access and execution user;
@@ -191,15 +233,32 @@ Budgets remain USD 1 per attempt, USD 20 pilot and USD 20/calendar month.
 exercise read-only dry-run, malformed/mismatched/tampered archive and identity
 cases, traversal and isolation rejection, explicit fixture identity emulation,
 state-less pristine admission, corrupt/missing-state recovery refusal,
-canonical same-transition receipt reconciliation, authenticated unit
+canonical same-transition receipt reconciliation (every receipt line must be a
+closed canonical v3 object with a non-null transition ID), authenticated unit
 replacement, operator-state separation, idempotent install, repeated exact
-rollback, reinstall-after-rollback, and retention of uncertain ledger records. An opt-in
+rollback, reinstall-after-rollback, retention of uncertain ledger records,
+authenticated first-arrival history, exact historical endpoint inventories,
+state/receipt leaf and parent trust, actual writer crash recovery, and six
+independently reset publication traces. Each trace binds service/slice bytes to
+the authenticated A/B record identities, binds the latest receipt target to the
+declared inventory, requires the nested `REVISION_RECORD.json` file fsync
+before a new release directory is published, and compares final destination
+device/inode/mode/UID/GID after the leg. The relocated receipt-tree refusal
+also covers bytes outside the target-root snapshot. The durable suite ports all sixteen
+independent N1-N3 scenarios; normal, child-`-S`, and `umask 0002` runs report
+93 tests with one explicit archive opt-in skip (92 passed), while the pinned
+v14 opt-in is 93/93 with zero skips. The same 93/93-minus-one-skip result is
+reproduced under child `-S` and `umask 0002`; the six-leg durability trace now
+asserts source, destination and parent identities plus the complete far-side
+state after every leg, including immediate complete first-A and first-B far
+sides with initial monetary-ledger absence. Initial stage/install receipt-before-state crash probes
+also recover append-once without changing the base current/previous pair. An opt-in
 test validates the extracted bytes, vendor tree and direct canonical release
 paths against the actual pinned T2 v14 archive without invoking a paid provider
 call. It does not prove non-root Linux T2 CLI startup or real systemd admission;
 those remain explicit external gaps. The test never calls `systemctl`, Docker or
 a live API. The correction report at
-`/tmp/lmdj-pr-agent-plan/t4-deployment-correction-report.md` records original
+`/tmp/lmdj-pr-agent-plan/staged-history-dde3-j2-j3-fixes-report.md` records original
 and final HEAD/tree, individual test counts/skips, finding dispositions, and
 the remaining live acceptance gaps.
 
