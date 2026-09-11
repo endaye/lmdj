@@ -293,6 +293,24 @@ std::optional<RuntimeContentIdentity> RuntimeFacade::content_identity() const {
   return impl_->identity;
 }
 
+RuntimeContentSummary RuntimeFacade::content_summary() const noexcept {
+  RuntimeContentSummary result;
+  if (!impl_->snapshot) return result;
+  // load publishes only a fully validated snapshot: <=64 canonical Pad Slots.
+  // Project-domain types stay behind this narrow Facade projection.
+  for (const auto& pad : impl_->snapshot->pads) {
+    RuntimeTriggerMode mode{};
+    switch (pad.playback.trigger_mode) {
+      case domain::TriggerMode::one_shot: mode = RuntimeTriggerMode::one_shot; break;
+      case domain::TriggerMode::gate: mode = RuntimeTriggerMode::gate; break;
+      case domain::TriggerMode::loop_gate: mode = RuntimeTriggerMode::loop_gate; break;
+      case domain::TriggerMode::loop_toggle: mode = RuntimeTriggerMode::loop_toggle; break;
+    }
+    result.pads[result.count++] = {pad.slot.bank, pad.slot.pad, mode};
+  }
+  return result;
+}
+
 void RuntimeFacade::render(float* left, float* right, std::uint32_t frames) noexcept {
   if (left == nullptr || right == nullptr) return;
   auto& self = *impl_;

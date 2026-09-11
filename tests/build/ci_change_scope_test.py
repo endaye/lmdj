@@ -186,6 +186,30 @@ CASES = {
     "tests/build/cardputer_music_fixture_test.py": {
         "core_ubuntu", "core_asan", "core_coverage", "core_macos"
     },
+    "apps/cardputer-host/main/runtime_host.cpp": {
+        "portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "apps/cardputer-host/main/audio_driver.cpp": {
+        "portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "apps/cardputer-host/CMakeLists.txt": {
+        "portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "apps/cardputer-host/sdkconfig.defaults": {
+        "portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "scripts/cardputer-host.sh": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "tests/platform/cardputer/audio_lifecycle_test.cpp": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "tests/platform/cardputer/CMakeLists.txt": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "tests/build/cardputer_host_build_test.py": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
     "tools/release/model.py": {"deploy_contract", "ci_contract"},
     "tools/canary/planning.py": {"ci_contract"},
     "tools/canary/records.py": {"ci_contract"},

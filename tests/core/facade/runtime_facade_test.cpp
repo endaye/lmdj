@@ -106,6 +106,71 @@ struct Output {
   }
 };
 
+RuntimeContentSummary summary_without_allocation(const RuntimeFacade& runtime) {
+  forbid_allocation = true;
+  const auto result = runtime.content_summary();
+  forbid_allocation = false;
+  return result;
+}
+
+void content_summary_preserves_all_canonical_slots_and_modes() {
+  auto source = snapshot(false);
+  const auto prototype = source.pads.front();
+  source.pads.clear();
+  const std::array modes{domain::TriggerMode::one_shot, domain::TriggerMode::gate,
+                         domain::TriggerMode::loop_gate, domain::TriggerMode::loop_toggle};
+  const std::array expected{RuntimeTriggerMode::one_shot, RuntimeTriggerMode::gate,
+                            RuntimeTriggerMode::loop_gate, RuntimeTriggerMode::loop_toggle};
+  for (std::uint8_t slot = 0; slot < 64; ++slot) {
+    auto pad = prototype;
+    pad.slot = {static_cast<std::uint8_t>(slot / 16), static_cast<std::uint8_t>(slot % 16)};
+    pad.playback.trigger_mode = modes[slot % modes.size()];
+    source.pads.push_back(pad);
+  }
+  auto encoded = cooker::encode_runtime_content(source, config().content_limits);
+  LMDJ_CHECK(encoded.has_value());
+  RuntimeFacade runtime(config());
+  LMDJ_CHECK(runtime.load(encoded.value().bytes, encoded.value().identity) == RuntimeResult::ok);
+  const auto summary = summary_without_allocation(runtime);
+  LMDJ_CHECK(summary.count == 64);
+  for (std::size_t slot = 0; slot < summary.count; ++slot) {
+    LMDJ_CHECK(summary.pads[slot].bank == slot / 16);
+    LMDJ_CHECK(summary.pads[slot].pad == slot % 16);
+    LMDJ_CHECK(summary.pads[slot].trigger_mode == expected[slot % expected.size()]);
+  }
+}
+
+void content_summary_tracks_publication_and_clearing() {
+  const auto bytes = content();
+  RuntimeFacade runtime(config());
+  const RuntimeContentSummary empty{};
+  LMDJ_CHECK(summary_without_allocation(runtime) == empty);
+  auto wrong = bytes.identity;
+  ++wrong.byte_length;
+  LMDJ_CHECK(runtime.load(bytes.bytes, wrong) == RuntimeResult::invalid_content);
+  LMDJ_CHECK(summary_without_allocation(runtime) == empty);
+  LMDJ_CHECK(runtime.load(bytes.bytes, bytes.identity) == RuntimeResult::ok);
+  const auto ready = summary_without_allocation(runtime);
+  LMDJ_CHECK(ready.count == 1);
+  LMDJ_CHECK(ready.pads[0] == (RuntimePadSummary{0, 0, RuntimeTriggerMode::one_shot}));
+  RuntimeEpoch epoch;
+  LMDJ_CHECK(runtime.start(epoch) == RuntimeResult::ok);
+  LMDJ_CHECK(summary_without_allocation(runtime) == ready);
+  runtime.request_stop();
+  LMDJ_CHECK(summary_without_allocation(runtime) == ready);
+  LMDJ_CHECK(runtime.finish_stop() == RuntimeResult::ok);
+  LMDJ_CHECK(summary_without_allocation(runtime) == ready);
+  LMDJ_CHECK(runtime.unload() == RuntimeResult::ok);
+  LMDJ_CHECK(summary_without_allocation(runtime) == empty);
+  LMDJ_CHECK(runtime.load(bytes.bytes, bytes.identity) == RuntimeResult::ok);
+  LMDJ_CHECK(summary_without_allocation(runtime) == ready);
+  runtime.reset();
+  LMDJ_CHECK(summary_without_allocation(runtime) == empty);
+  // A returned value owns no pointers into content reclaimed by unload/reset.
+  LMDJ_CHECK(ready.count == 1);
+  LMDJ_CHECK(ready.pads[0] == (RuntimePadSummary{0, 0, RuntimeTriggerMode::one_shot}));
+}
+
 void lifecycle_journey() {
   const auto bytes = content();
   RuntimeFacade runtime(config());
@@ -364,6 +429,7 @@ void every_load_allocation_failure_stays_empty(std::uint32_t pending) {
                     "; actual allocations " + std::to_string(allocation_count));
     LMDJ_CHECK(runtime.phase() == RuntimePhase::empty);
     LMDJ_CHECK(!runtime.content_identity().has_value());
+    LMDJ_CHECK(summary_without_allocation(runtime) == RuntimeContentSummary{});
     Output output; output.render(runtime); LMDJ_CHECK(output.silent());
     LMDJ_CHECK(runtime.load(bytes.bytes, bytes.identity) == RuntimeResult::ok);
     RuntimeEpoch epoch;
@@ -609,6 +675,8 @@ void operator delete(void* pointer, std::size_t, std::align_val_t) noexcept { op
 void operator delete[](void* pointer, std::size_t, std::align_val_t) noexcept { operator delete(pointer); }
 
 int main() {
+  content_summary_preserves_all_canonical_slots_and_modes();
+  content_summary_tracks_publication_and_clearing();
   allocator_controls_cover_ordinary_and_aligned_storage();
   fixed_budget_tracks_pending_admission();
   shared_pcm_load_has_one_payload_and_no_float_allocation();

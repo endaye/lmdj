@@ -773,3 +773,13 @@ lmdj_add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   TIMEOUT 10
 )
+
+if(BUILD_TESTING)
+  lmdj_add_test(
+    NAME build.cardputer_host
+    TIER component
+    COMMAND "${Python3_EXECUTABLE}" tests/build/cardputer_host_build_test.py
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  add_subdirectory(tests/platform/cardputer)
+endif()

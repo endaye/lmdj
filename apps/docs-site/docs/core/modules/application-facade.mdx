@@ -64,7 +64,7 @@ M2 source 已让窄 Runtime 的 live Pad 与 Pattern 共享 decoded PCM16，完�
 测试通过或修复合并都不能解除设备容量门槛，必须取得同口径的正向目标证据。
 
 `runtime_facade.hpp` 只暴露不透明字节、完整内容身份、资源配置、进程内 opaque
-epoch、Pad 命令和回执，不暴露 Snapshot、Engine、Project 路径或 Provider 对象。
+epoch、Pad 命令、回执和只读 Pad 摘要，不暴露 Snapshot、Engine、Project 路径或 Provider 对象。
 一个串行控制调用方负责 `load/start/submit/poll/request_stop/finish_stop/stop/unload/reset`；
 一个音频调用方调用 `render`。生命周期为 empty → ready → running → draining →
 stopped → empty；stopped 也可重启同一内容，running/draining 不接受 load/unload。
@@ -72,6 +72,14 @@ stopped → empty；stopped 也可重启同一内容，running/draining 不接�
 并允许正确内容重试。`reset` 先停再卸载，不重置 epoch 耗尽计数。
 `content_identity` 返回 Core 保存的完整 SHA-256/byte length 副本，成功 load 才存在，
 卸载/reset 后为空；不是 Host 对最近一次请求的预测。该控制侧值复制可分配内存。
+
+`content_summary()` 返回 Facade 自有的 `RuntimeContentSummary` 值副本：固定容量
+64 个 Pad，按 bank/pad 的 canonical 次序排列，含各自 trigger mode 和有效 count；
+未使用项清零。查询不分配内存、不借出 Snapshot 存储，仍属于串行控制侧。
+empty、失败 load、unload/reset 后 count 为零；running/stopped 保留当前已发布内容。
+这是兼容的 staged API 增量，Module 版本与 Assembly 的分配留给后续集成 Task。
+Cardputer Host 用摘要映射实际 Pad Slots 并在自身边界拒绝非 One Shot 或超出
+显式 Host profile 的内容；Core 摘要不裁成四 Pad，也不决定产品 profile。
 
 每次成功 start 产生独立 epoch；命令必须带当前 epoch 和从 1 开始的精确下一序号。
 旧 epoch、重复、跳号、非法命令与计数耗尽明确拒绝，既不重放也不绕回。
