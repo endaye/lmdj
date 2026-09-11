@@ -85,5 +85,26 @@ int main(int argc, char** argv) {
   assert(receiver.commit(10) == TransferTransactionResult::committed);
   assert(sink.bytes.size() == content.size());
   assert(std::equal(sink.bytes.begin(), sink.bytes.end(), content.begin()));
+  std::array<std::byte, 16> transfer_id{};
+  for (std::size_t i = 0; i < transfer_id.size(); ++i)
+    transfer_id[i] = std::byte(i + 1);
+  auto timed_identity = identity(content);
+  timed_identity.transfer_id = transfer_id;
+  assert(receiver.begin(20, transfer_id, timed_identity, 100) ==
+         TransferTransactionResult::accepted);
+  std::array<std::byte, 16> wrong_transfer{};
+  wrong_transfer[0] = std::byte{9};
+  assert(receiver.abort(20, wrong_transfer) == TransferTransactionResult::wrong_state);
+  assert(receiver.data(20, transfer_id, 0, {}, 150) ==
+         TransferTransactionResult::malformed);
+  assert(receiver.data(20, transfer_id, 0,
+                       std::span<const std::byte>{content}.subspan(0, 2), 200) ==
+         TransferTransactionResult::accepted);
+  assert(receiver.data(20, transfer_id, 0,
+                       std::span<const std::byte>{content}.subspan(0, 2), 4900) ==
+         TransferTransactionResult::duplicate);
+  assert(!receiver.expire(5199));
+  assert(receiver.expire(5200));
+  assert(!receiver.receiving());
   return 0;
 }

@@ -18,8 +18,9 @@ VERSION = 1
 HEADER = 28
 MAX_PAYLOAD = 1024
 MAX_FRAME = HEADER + MAX_PAYLOAD + 4
-DATA_OFFSET_BYTES = 8
-BEGIN_IDENTITY_BYTES = 8 + 32
+TRANSFER_ID_BYTES = 16
+DATA_OFFSET_BYTES = TRANSFER_ID_BYTES + 8
+BEGIN_IDENTITY_BYTES = TRANSFER_ID_BYTES + 8 + 32
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class Frame:
 class ContentIdentity:
     sha256: bytes
     byte_length: int
+    transfer_id: bytes = b""
 
 
 class Receiver:
@@ -50,6 +52,8 @@ class Receiver:
         self.identity = None
         self.buffer = bytearray()
         self.received = 0
+        self.transfer_id = None
+        self.last_progress_ms = None
 
     @property
     def receiving(self):
@@ -67,6 +71,22 @@ class Receiver:
         self.buffer = bytearray(identity.byte_length)
         self.received = 0
         return "accepted"
+
+    def begin_transfer(self, request_id: int, transfer_id: bytes,
+                       identity: ContentIdentity, now_ms: int):
+        """Begin the D1 transaction identified independently of request IDs."""
+        if (len(transfer_id) != 16 or not any(transfer_id) or
+                identity.transfer_id not in (b"", transfer_id)):
+            raise ValueError("invalid transfer id")
+        if self.receiving:
+            if (request_id == self.request_id and transfer_id == self.transfer_id
+                    and identity == self.identity):
+                return "duplicate"
+            raise ValueError("transaction already active")
+        result = self.begin(request_id, identity)
+        self.transfer_id = transfer_id
+        self.last_progress_ms = now_ms
+        return result
 
     def data(self, request_id: int, offset: int, chunk: bytes):
         if not self.receiving or request_id != self.request_id:
@@ -88,6 +108,17 @@ class Receiver:
         self.received += len(chunk)
         return "accepted"
 
+    def data_transfer(self, request_id: int, transfer_id: bytes, offset: int,
+                      chunk: bytes, now_ms: int):
+        if transfer_id != self.transfer_id:
+            raise ValueError("wrong transfer")
+        if not chunk:
+            raise ValueError("empty data chunk")
+        result = self.data(request_id, offset, chunk)
+        if result == "accepted" and chunk:
+            self.last_progress_ms = now_ms
+        return result
+
     def commit(self, request_id: int):
         if not self.receiving or request_id != self.request_id:
             raise ValueError("wrong transaction")
@@ -104,31 +135,56 @@ class Receiver:
             raise ValueError("content sink rejected")
         return "committed"
 
+    def commit_transfer(self, request_id: int, transfer_id: bytes, now_ms: int):
+        if transfer_id != self.transfer_id:
+            raise ValueError("wrong transfer")
+        return self.commit(request_id)
+
     def abort(self, request_id: int):
         if not self.receiving or request_id != self.request_id:
             raise ValueError("wrong transaction")
         self.clear()
         return "aborted"
 
+    def abort_transfer(self, request_id: int, transfer_id: bytes):
+        if transfer_id != self.transfer_id:
+            raise ValueError("wrong transfer")
+        return self.abort(request_id)
+
     def disconnect(self):
         self.clear()
 
+    def expire(self, now_ms: int):
+        if (not self.receiving or self.last_progress_ms is None or
+                now_ms < self.last_progress_ms or
+                now_ms - self.last_progress_ms < 5000):
+            return False
+        self.clear()
+        return True
+
 
 def content_frames(content: bytes, request_id: int, nonce: bytes,
-                   chunk_size: int = MAX_PAYLOAD - DATA_OFFSET_BYTES) -> list[bytes]:
+                   chunk_size: int = MAX_PAYLOAD - DATA_OFFSET_BYTES,
+                   transfer_id: bytes | None = None) -> list[bytes]:
     """Build a complete sender stream for one already-exported artifact."""
     if not (1 <= request_id <= 0xFFFFFFFF) or len(nonce) != 16:
         raise ValueError("invalid request or nonce")
     if not (1 <= chunk_size <= MAX_PAYLOAD - DATA_OFFSET_BYTES):
         raise ValueError("chunk size exceeds DATA payload bound")
+    if transfer_id is None:
+        # Deterministic reference default; a production sender should use a
+        # fresh random 128-bit value for every transfer attempt.
+        transfer_id = hashlib.sha256(content).digest()[:TRANSFER_ID_BYTES]
+    if len(transfer_id) != TRANSFER_ID_BYTES or not any(transfer_id):
+        raise ValueError("invalid transfer id")
     identity = hashlib.sha256(content).digest()
     frames = [encode(Frame(3, request_id, nonce,
-                           struct.pack("<Q", len(content)) + identity))]
+                           transfer_id + struct.pack("<Q", len(content)) + identity))]
     for offset in range(0, len(content), chunk_size):
         chunk = content[offset:offset + chunk_size]
         frames.append(encode(Frame(4, request_id, nonce,
-                                   struct.pack("<Q", offset) + chunk)))
-    frames.append(encode(Frame(5, request_id, nonce)))
+                                   transfer_id + struct.pack("<Q", offset) + chunk)))
+    frames.append(encode(Frame(5, request_id, nonce, transfer_id)))
     return frames
 
 

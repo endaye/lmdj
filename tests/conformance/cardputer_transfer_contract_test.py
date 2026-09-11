@@ -78,7 +78,9 @@ class CardputerTransferContractTest(unittest.TestCase):
         receiver = transfer.Receiver(
             4096, lambda payload, identity: published.append((payload, identity)) or True
         )
-        wire = b"".join(transfer.content_frames(content, 17, bytes(range(16)), 97))
+        transfer_id = bytes(range(1, 17))
+        wire = b"".join(transfer.content_frames(
+            content, 17, bytes(range(16)), 97, transfer_id))
         frames = []
         cursor = 0
         while cursor < len(wire):
@@ -86,14 +88,40 @@ class CardputerTransferContractTest(unittest.TestCase):
             frames.append(transfer.decode(wire[cursor:cursor + size]))
             cursor += size
         begin = frames.pop(0)
-        total = int.from_bytes(begin.payload[:8], "little")
-        identity = transfer.ContentIdentity(begin.payload[8:], total)
-        self.assertEqual(receiver.begin(begin.request_id, identity), "accepted")
+        self.assertEqual(begin.payload[:16], transfer_id)
+        total = int.from_bytes(begin.payload[16:24], "little")
+        identity = transfer.ContentIdentity(begin.payload[24:], total, transfer_id)
+        self.assertEqual(receiver.begin_transfer(begin.request_id, transfer_id, identity, 0), "accepted")
         for frame in frames[:-1]:
-            offset = int.from_bytes(frame.payload[:8], "little")
-            self.assertEqual(receiver.data(frame.request_id, offset, frame.payload[8:]), "accepted")
-        self.assertEqual(receiver.commit(frames[-1].request_id), "committed")
+            self.assertEqual(frame.payload[:16], transfer_id)
+            offset = int.from_bytes(frame.payload[16:24], "little")
+            self.assertEqual(receiver.data_transfer(
+                frame.request_id, transfer_id, offset, frame.payload[24:], 1), "accepted")
+        self.assertEqual(frames[-1].payload, transfer_id)
+        self.assertEqual(receiver.commit_transfer(frames[-1].request_id, transfer_id, 2), "committed")
         self.assertEqual(published[0][0], content)
+
+    def test_transfer_id_is_independent_and_duplicate_data_does_not_extend_timeout(self):
+        content = b"timed"
+        transfer_id = bytes(range(1, 17))
+        identity = transfer.ContentIdentity(hashlib.sha256(content).digest(), len(content))
+        receiver = transfer.Receiver(1024, lambda *_: True)
+        self.assertEqual(receiver.begin_transfer(2, transfer_id, identity, 100), "accepted")
+        self.assertEqual(receiver.data_transfer(2, transfer_id, 0, content[:2], 200), "accepted")
+        self.assertEqual(receiver.data_transfer(2, transfer_id, 0, content[:2], 4_900), "duplicate")
+        self.assertFalse(receiver.expire(5_199))
+        self.assertTrue(receiver.expire(5_200))
+        self.assertFalse(receiver.receiving)
+
+    def test_wrong_transfer_cannot_abort_or_mutate(self):
+        content = b"safe"
+        transfer_id = bytes(range(1, 17))
+        identity = transfer.ContentIdentity(hashlib.sha256(content).digest(), len(content))
+        receiver = transfer.Receiver(1024, lambda *_: True)
+        receiver.begin_transfer(3, transfer_id, identity, 0)
+        with self.assertRaisesRegex(ValueError, "wrong transfer"):
+            receiver.abort_transfer(3, b"x" * 16)
+        self.assertTrue(receiver.receiving)
 
 
 if __name__ == "__main__":
