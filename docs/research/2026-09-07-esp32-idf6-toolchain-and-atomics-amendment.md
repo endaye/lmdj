@@ -985,3 +985,20 @@ Version impact: none；Documentation impact: none（仅实验研究，不宣称 
 **有效审查和 merge 仍等待用户指定的、由另一 agent 负责的 CI scope 修复。** 本轮
 没有审查接管或 CI 修复。T4 的负面容量结果应先进入后续独立设计/修复决策；T5、
 heap/largest-block 实测、callback deadline/jitter/underrun、I2S、听感与真机验收均未执行。
+
+### 10.6 后续处理记录（2026-09-12）
+
+以上是固定输入 `b24114f5082cbdd494bb599b49e6e6f2674da44b` 的历史实验，
+不是 current main 的容量或测试状态。随后两个独立 Task 已合入：
+
+- [PR #1060](https://github.com/endaye/lmdj/pull/1060) 修正了
+  `facade.application` 的过期版本断言，并记录该测试通过；本节原始 **21/22、exit 8**
+  及其原始失败输出保持不变，不用后续修复重写旧输入的实验结果。
+- [PR #1081](https://github.com/endaye/lmdj/pull/1081) 为 Runtime Facade 引入
+  基于 receipt 上界的 voice-state 存储，并记录目标机资源验证。其源码、镜像和极小
+  golden fixture 与 T4 的身份／验证范围分开；它处理后续容量问题，但不把本节
+  **603044 字节 fixed model** 改判为可运行，也不证明正常音乐容量、I2S 或完整真机验收。
+
+这些链接补齐历史发现的后续去向，不扩大 T4 的研究结论，也不解除另行进行的
+CI scope 修复所对应的有效审查／合并暂停条件。原始 callback 间接调用、stack、
+deadline 与硬件未测项仍按当时证据保留；后续实验必须绑定各自的准确身份。

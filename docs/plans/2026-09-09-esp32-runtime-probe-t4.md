@@ -130,3 +130,24 @@ failing its pre-existing hard-coded version expectation. No test was removed
 or fixed within this research Task. Callback indirect-call, heap peak, hardware
 stack and deadline evidence remain unmeasured. Effective review remains held
 for the separately owned CI scope repair; T5 is not started.
+
+## Follow-up disposition (2026-09-12)
+
+The recorded outcome above remains bound to input
+`b24114f5082cbdd494bb599b49e6e6f2674da44b`, not current main.
+Two subsequent, separately merged Tasks address its findings:
+
+- [PR #1060](https://github.com/endaye/lmdj/pull/1060) updated the stale
+  `facade.application` version expectations and recorded a passing test.
+  T4's original 21/22 result and exit 8 remain unchanged.
+- [PR #1081](https://github.com/endaye/lmdj/pull/1081) introduced receipt-bounded
+  Runtime Facade voice-state storage and recorded target resource journeys.
+  Those results belong to its own source/image and tiny golden fixture;
+  they do not retroactively make T4's 603044-byte fixed model fit the device
+  or establish normal music capacity, I2S or full physical acceptance.
+
+This follow-up changes only the two declared Markdown files and PR explanation.
+Verification: docs_static, staged diff/ownership and PR-body checks; no product
+rebuild, device run, version allocation or current Portal behavior change.
+The CI scope repair/effective-review hold remains in force; adding historical
+disposition links does not authorize Ready for review, merge or T5.
