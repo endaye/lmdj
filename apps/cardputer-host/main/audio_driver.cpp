@@ -207,7 +207,7 @@ bool EspAudioIo::configure() noexcept {
   // ES8311 BCLK-derived clock, 48 kHz / 16-bit stereo input. Board pins and
   // analogue output level are supplied by Assembly/research configuration.
   constexpr std::uint8_t registers[][2]{{0x01,0xB5},{0x02,0x18},{0x0D,0x01},
-      {0x12,0},{0x13,0x10},{0x32,0},{0x37,0x08},{0x09,0x0C}};
+      {0x12,0x02},{0x13,0x10},{0x32,0},{0x37,0x08},{0x09,0x0C}};
   for (const auto& pair : registers) if (!s.reg(pair[0], pair[1])) return false;
   if (!mute(true)) return false;
   i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
@@ -242,7 +242,9 @@ bool EspAudioIo::mute(bool value) noexcept {
     const bool minimum = s.reg(0x32, 0);
     return muted && minimum;
   }
-  return s.reg(0x32, s.config.codec_volume) && s.reg(0x31, 0);
+  // Startup calls this only after the silent DMA prewarm has reached output.
+  // Keep the DAC powered down until its BCLK-derived clock is established.
+  return s.reg(0x12, 0) && s.reg(0x32, s.config.codec_volume) && s.reg(0x31, 0);
 }
 
 bool EspAudioIo::enable() noexcept {
