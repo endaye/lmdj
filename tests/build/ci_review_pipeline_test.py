@@ -12,6 +12,7 @@ import re
 import shlex
 from pathlib import Path
 import subprocess
+import stat
 import sys
 import tempfile
 import textwrap
@@ -650,6 +651,517 @@ class PipelineTests(unittest.TestCase):
             block = source.split("        id: " + step + "\n", 1)[1].split("      - ", 1)[0]
             self.assertIn("steps.input.outcome == 'success'", block,
                           "why: backend could run without complete diff; remedy: gate it on input collection success")
+
+    def make_real_t2_repo(self):
+        temporary = tempfile.TemporaryDirectory(prefix="lmdj-pipeline-t2-")
+        self.addCleanup(temporary.cleanup)
+        repository = Path(temporary.name) / "repo"
+        repository.mkdir()
+
+        def git(*args):
+            result = subprocess.run(["git", *args], cwd=repository, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+            return result.stdout.decode().strip()
+
+        git("init", "-q")
+        (repository / "source.txt").write_text("old\n", encoding="utf-8")
+        git("add", ".")
+        git("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base")
+        base = git("rev-parse", "HEAD")
+        (repository / "source.txt").write_text("new\n", encoding="utf-8")
+        git("add", ".")
+        git("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "head")
+        head = git("rev-parse", "HEAD")
+        return repository, base, head
+
+    def make_real_bounded_failure_repo(self):
+        """Build the over-budget refusal with real Git byte-path objects."""
+        temporary = tempfile.TemporaryDirectory(prefix="lmdj-pipeline-bounded-failure-")
+        self.addCleanup(temporary.cleanup)
+        repository = Path(temporary.name) / "repo"
+        repository.mkdir()
+
+        def git(*args, data=None):
+            result = subprocess.run(["git", *args], cwd=repository, input=data, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+            return result.stdout
+
+        git("init", "-q")
+        blob = git("hash-object", "-w", "--stdin", data=b"new\n").strip()
+
+        def commit(names, parent=None):
+            tree_input = b"".join(
+                b"100644 blob " + blob + b"\t" + name + b"\0" for name in sorted(names)
+            )
+            tree = git("mktree", "-z", data=tree_input).decode().strip()
+            command = ["-c", "user.name=test", "-c", "user.email=test@example.invalid",
+                       "commit-tree", tree]
+            if parent is not None:
+                command.extend(["-p", parent])
+            head = git(*command, data=b"bounded failure\n").decode().strip()
+            git("update-ref", "HEAD", head.encode())
+            return head
+
+        base = commit([b"source.txt"])
+        invalid = [f"a{index:04d}-".encode() + b"x" * 160 + b"\xff.txt" for index in range(256)]
+        head = commit([b"source.txt", b"z-later.txt", *invalid], parent=base)
+        return repository, base, head
+
+    def make_real_rename_repo(self, *, pure):
+        temporary = tempfile.TemporaryDirectory(prefix="lmdj-pipeline-rename-")
+        self.addCleanup(temporary.cleanup)
+        repository = Path(temporary.name) / "repo"
+        (repository / "contracts").mkdir(parents=True)
+        (repository / "apps/creator-web").mkdir(parents=True)
+
+        def git(*args):
+            result = subprocess.run(["git", *args], cwd=repository, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+            return result.stdout.decode().strip()
+
+        git("init", "-q")
+        (repository / "contracts/old.txt").write_text(
+            "one\ntwo\nthree\nkeep\nend\n", encoding="utf-8")
+        git("add", ".")
+        git("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base")
+        base = git("rev-parse", "HEAD")
+        git("mv", "contracts/old.txt", "apps/creator-web/new.txt")
+        if not pure:
+            (repository / "apps/creator-web/new.txt").write_text(
+                "one\ntwo\nthree\nchanged\nend\n", encoding="utf-8")
+            git("add", ".")
+        git("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "head")
+        head = git("rev-parse", "HEAD")
+        return repository, base, head
+
+    def collect_real_t2(self, repository, base, head, output, *, pull_number=1151):
+        witness_output = output.parent / (output.name + "-github-output")
+        target = {"review": "true", "head_sha": head, "base_sha": base, "body": "body"}
+        environment = {
+            "GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": str(pull_number), "HEAD_SHA": head,
+            "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_OUTPUT": str(witness_output),
+        }
+        with mock.patch.dict(os.environ, environment, clear=False), \
+                mock.patch.object(pipeline, "ROOT", repository), \
+                mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(pipeline, "response_schema", return_value={}), \
+                mock.patch.object(pipeline.test_scope, "load_policy", return_value={}), \
+                mock.patch.object(pipeline.pr_review_target, "resolve_target", side_effect=[target, target]), \
+                mock.patch.object(sys, "argv", ["review_pipeline.py", "collect-t2", "--directory", str(output)]):
+            self.assertEqual(pipeline.main(), 0)
+        witness_line = next(line for line in witness_output.read_text().splitlines()
+                            if line.startswith("t2_publication_witness="))
+        witness = json.loads(witness_line.split("=", 1)[1])
+        document = pipeline.read(output / "t2-input.json")
+        return document, witness
+
+    def complete_real_t3(self, repository, output, document, witness):
+        authenticated = t2.authenticate_input(document)
+        collector = pipeline.trusted_collector_t2(output, witness)
+        engine = {
+            "name": "pr-agent", "source_commit": "1" * 40, "version": "0.45.0",
+            "bundle": {
+                "archive_sha256": "2" * 64, "archive_byte_length": 7,
+                "manifest_sha256": "3" * 64, "adapter_sha256": "4" * 64,
+                "default_config_sha256": "5" * 64, "requirements_lock_sha256": "6" * 64,
+                "stock_tokenizer_asset_sha256": "7" * 64,
+            },
+            "runtime_config": {"sha256": "8" * 64, "byte_length": 7},
+        }
+        model = {"requested": "fixture-model", "actual": "fixture-served",
+                 "response_version": "fixture-v1", "pricing_revision": "fixture-v1"}
+        coverage = t2._validate_coverage_receipt(t2._make_coverage(
+            authenticated, provider="deepseek", model=model,
+            prompt=t2.render_prompt_input(authenticated), usage=None, engine=engine))
+        review = {"summary": "Reviewed the complete rename.", "findings": []}
+        attempt = {
+            "status": "reviewed", "error_class": None, "error": None,
+            "provider": "deepseek", "model": coverage["model"], "engine": engine,
+            "review": review, "native_review": {}, "coverage": coverage,
+            "usage": coverage["usage"], "duration_ms": 1,
+        }
+        result = {
+            "schema": "lmdj.pr-agent-result.v1", "status": "reviewed", "error_class": None,
+            "identity": authenticated["identity"], "input_sha256": authenticated["input_sha256"],
+            "engine": engine, "selected_attempt": 0, "attempts": [attempt],
+            "skipped_providers": [], "elapsed_ms": 1,
+        }
+        trusted = {
+            "schema": review_scope.TRUSTED_CONFIG_SCHEMA, "provider_order": ["deepseek"],
+            "providers": {
+                "deepseek": {"enabled": True, "model": model["requested"]},
+                "glm": {"enabled": False}, "xai": {"enabled": False}, "kimi": {"enabled": False},
+            },
+            "engine": engine,
+        }
+        pipeline.save(output / "t2-result.json", result)
+        pipeline.save(output / "t2-config-witness.json", trusted)
+        environment = {
+            "GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": str(authenticated["identity"]["pull_request"]),
+            "HEAD_SHA": authenticated["identity"]["head_sha"], "GITHUB_RUN_ID": "99",
+            "GITHUB_RUN_ATTEMPT": "1", "GITHUB_OUTPUT": str(output / "t3-output"),
+        }
+        with mock.patch.dict(os.environ, environment, clear=False), \
+                mock.patch.object(pipeline, "ROOT", repository), \
+                mock.patch.object(pipeline.test_scope, "load_policy", return_value=test_scope.load_policy(ROOT)), \
+                mock.patch.object(sys, "argv", ["review_pipeline.py", "capture", "--backend", "deepseek",
+                                                  "--directory", str(output)]):
+            self.assertEqual(pipeline.main(), 0)
+        with mock.patch.dict(os.environ, environment, clear=False), \
+                mock.patch.object(pipeline, "ROOT", repository), \
+                mock.patch.object(pipeline.test_scope, "load_policy", return_value=test_scope.load_policy(ROOT)), \
+                mock.patch.object(sys, "argv", ["review_pipeline.py", "finalize", "--directory", str(output)]):
+            self.assertEqual(pipeline.main(), 0)
+        self.assertEqual(pipeline.read(output / "result.json")["status"], "reviewed")
+        return collector, coverage, result
+
+    def test_real_pure_and_edited_rename_journeys_bind_old_new_through_t3_and_publisher(self):
+        for pure in (True, False):
+            with self.subTest(rename="pure" if pure else "edited"):
+                repository, base, head = self.make_real_rename_repo(pure=pure)
+                output = self.directory / ("pure-rename" if pure else "edited-rename")
+                document, witness = self.collect_real_t2(repository, base, head, output,
+                                                         pull_number=1151 if pure else 1152)
+                context = pipeline.read(output / "context.json")
+                self.assertEqual(context["changed_paths"],
+                                 ["apps/creator-web/new.txt", "contracts/old.txt"])
+                collector, coverage, _result = self.complete_real_t3(repository, output, document, witness)
+                self.assertEqual(review_scope.changed_path_inventory(collector["expected_hunks"]),
+                                 context["changed_paths"])
+                if pure:
+                    self.assertEqual(collector["right_inventory"], [])
+                else:
+                    self.assertEqual(collector["right_inventory"],
+                                     [{"path": "apps/creator-web/new.txt", "line": 4}])
+                self.assertEqual(review_scope.changed_path_inventory(coverage["expected_hunks"]),
+                                 context["changed_paths"])
+                environment = {
+                    "GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": str(1151 if pure else 1152),
+                    "HEAD_SHA": head, "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1",
+                    "GITHUB_TOKEN": "secret",
+                }
+                original_inventory = pipeline.change_scope.read_git_inventory
+                observed_inventories = []
+                def read_inventory(*args, **kwargs):
+                    value = original_inventory(*args, **kwargs)
+                    observed_inventories.append(value)
+                    return value
+                with mock.patch.dict(os.environ, environment, clear=False), \
+                        mock.patch.object(pipeline, "ROOT", repository), \
+                        mock.patch.object(pipeline.test_scope, "load_policy", return_value=test_scope.load_policy(ROOT)), \
+                        mock.patch.object(pipeline, "authenticate", return_value=context["identity"]), \
+                        mock.patch.object(pipeline, "fetch"), \
+                        mock.patch.object(pipeline, "previous_records", return_value=([], False)), \
+                        mock.patch.object(pipeline, "publish_model"), \
+                        mock.patch.object(pipeline.grok_review, "github_request"), \
+                        mock.patch.object(pipeline.change_scope, "read_git_inventory",
+                                          side_effect=read_inventory):
+                    pipeline.publish(output)
+                self.assertEqual(len(observed_inventories), 1)
+                actual = observed_inventories[0]
+                self.assertEqual([(item.status[0], item.paths) for item in actual],
+                                 [("R", ("contracts/old.txt", "apps/creator-web/new.txt"))])
+                print(json.dumps({
+                    "rename": "pure" if pure else "edited",
+                    "context_paths": context["changed_paths"],
+                    "collector_right_inventory": collector["right_inventory"],
+                    "coverage_paths": review_scope.changed_path_inventory(coverage["expected_hunks"]),
+                    "publisher_git_inventory": [
+                        {"status": item.status, "paths": list(item.paths)} for item in actual
+                    ],
+                }, sort_keys=True))
+
+    def test_collect_t2_cli_dispatch_publishes_input_and_real_t3_witness(self):
+        repository, base, head = self.make_real_t2_repo()
+        output = self.directory / "t2-output"
+        witness_output = self.directory / "github-output"
+        target = {"review": "true", "head_sha": head, "base_sha": base, "body": "body"}
+        environment = {"GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "1151", "HEAD_SHA": head,
+                       "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_OUTPUT": str(witness_output)}
+        with mock.patch.dict(os.environ, environment, clear=False), \
+                mock.patch.object(pipeline, "ROOT", repository), \
+                mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(pipeline, "response_schema", return_value={}), \
+                mock.patch.object(pipeline.test_scope, "load_policy", return_value={}), \
+                mock.patch.object(pipeline.pr_review_target, "resolve_target", side_effect=[target, target]), \
+                mock.patch.object(sys, "argv", ["review_pipeline.py", "collect-t2", "--directory", str(output)]):
+            self.assertEqual(pipeline.main(), 0)
+        self.assertEqual(sorted(item.name for item in output.iterdir()),
+                         ["collection-receipt.json", "context.json", "history.json", "pr-body.md", "pr.diff", "t2-input.json"])
+        document = pipeline.read(output / "t2-input.json")
+        authenticated = t2.authenticate_input(document)
+        context = pipeline.read(output / "context.json")
+        witness_line = next(line for line in witness_output.read_text().splitlines()
+                            if line.startswith("t2_publication_witness="))
+        witness = json.loads(witness_line.split("=", 1)[1])
+        self.assertEqual(witness["receipt_sha256"], hashlib.sha256(
+            (output / "collection-receipt.json").read_bytes()).hexdigest())
+        collector = pipeline.trusted_collector_t2(output, witness)
+        self.assertEqual(collector, pipeline.collector_witness(document))
+        self.assertEqual(collector["input_sha256"], document["input_sha256"])
+        self.assertEqual(collector["identity"]["head_sha"], context["identity"]["head_sha"])
+        self.assertEqual(authenticated["identity"]["pull_request"], 1151)
+        receipt = pipeline.read(output / "collection-receipt.json")
+        self.assertEqual(receipt["status"], "complete")
+        self.assertEqual(receipt["input_sha256"], document["input_sha256"])
+        self.assertEqual(receipt["context_sha256"], hashlib.sha256(
+            pipeline.input_producer.json_bytes(context)).hexdigest())
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "successful-producer witness"):
+            pipeline.trusted_collector_t2(output)
+        (output / "t2-input.json").write_bytes(b"leftover bytes")
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "successful-producer witness"):
+            pipeline.trusted_collector_t2(output, witness)
+
+        bounded_repository, bounded_base, bounded_head = self.make_real_bounded_failure_repo()
+        bounded_output = self.directory / "bounded-failure-output"
+        bounded_witness_output = self.directory / "bounded-failure-github-output"
+        bounded_identity = {
+            "repository": "endaye/lmdj", "pull_request": 1151, "base_sha": bounded_base,
+            "head_sha": bounded_head, "control_sha": bounded_head, "run_id": "99", "run_attempt": 1,
+        }
+        with self.assertRaises(pipeline.input_producer.InputCollectionError) as raised:
+            pipeline.input_producer.build_input(bounded_repository, bounded_identity)
+        original_failure = raised.exception.result
+        original_payload = pipeline.input_producer.json_bytes(original_failure)
+        self.assertGreater(len(original_payload), pipeline.input_producer.MAX_FAILURE_BYTES)
+        bounded_target = {"review": "true", "head_sha": bounded_head, "base_sha": bounded_base, "body": "body"}
+        bounded_environment = {
+            "GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "1151", "HEAD_SHA": bounded_head,
+            "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_OUTPUT": str(bounded_witness_output),
+        }
+        errors = io.StringIO()
+        with mock.patch.dict(os.environ, bounded_environment, clear=False), \
+                mock.patch.object(pipeline, "ROOT", bounded_repository), \
+                mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(pipeline.pr_review_target, "resolve_target", return_value=bounded_target), \
+                mock.patch.object(sys, "argv", ["review_pipeline.py", "collect-t2", "--directory", str(bounded_output)]), \
+                contextlib.redirect_stderr(errors):
+            self.assertEqual(pipeline.main(), 1)
+        receipt_path = bounded_output / "collection-failure.json"
+        receipt = receipt_path.read_bytes()
+        failure = json.loads(receipt)
+        self.assertLessEqual(len(receipt), pipeline.input_producer.MAX_FAILURE_BYTES)
+        self.assertEqual(failure["status"], "failed")
+        self.assertEqual(failure["failure_summary"]["schema"],
+                         pipeline.input_producer.FAILURE_SUMMARY_SCHEMA)
+        self.assertEqual(failure["failure_summary"]["original"], {
+            "sha256": hashlib.sha256(original_payload).hexdigest(),
+            "byte_length": len(original_payload),
+        })
+        self.assertEqual(failure["failure_summary"]["inventory"]["total_records"], 257)
+        self.assertLess(failure["failure_summary"]["inventory"]["retained_records"], 257)
+        self.assertTrue(failure["failure_summary"]["truncated"])
+        self.assertFalse(failure["failure_summary"]["complete"])
+        self.assertEqual(failure["raw_inventory"], original_failure["raw_inventory"])
+        self.assertTrue(any("z-later.txt" in item.get("paths", []) for item in failure["inventory"]))
+        self.assertEqual(sorted(item.name for item in bounded_output.iterdir()), ["collection-failure.json"])
+        self.assertFalse((bounded_output / "t2-input.json").exists())
+        self.assertFalse((bounded_output / "collection-receipt.json").exists())
+        self.assertFalse(bounded_witness_output.exists(), "failed CLI collection must emit no success witness")
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "successful-producer witness"):
+            pipeline.trusted_collector_t2(bounded_output)
+        self.assertIn("review pipeline operation failed", errors.getvalue())
+        print(json.dumps({
+            "cli_returncode": 1,
+            "failure_receipt": failure,
+            "failure_receipt_bytes": len(receipt),
+            "github_output_exists": bounded_witness_output.exists(),
+            "residual_artifacts": sorted(item.name for item in bounded_output.iterdir()),
+            "fresh_consumer_rejected": True,
+        }, sort_keys=True))
+
+    def test_t2_consumer_rejects_uncertain_leftovers_even_when_failure_fence_write_fails(self):
+        output = self.directory / "uncertain-output"
+        artifacts = {
+            "t2-input.json": b'{"fixture":"inert"}',
+            "collection-receipt.json": b'{"status":"complete"}',
+        }
+        original_fsync = pipeline.input_producer._fsync_directory
+        original_write = pipeline.input_producer._write_no_clobber
+        original_unlink = Path.unlink
+        calls = 0
+
+        def fail_final_fsync(directory):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("injected receipt fsync failure")
+            return original_fsync(directory)
+
+        def fail_fence_write(directory, name, data):
+            if name == "collection-failure.json":
+                raise pipeline.input_producer.PublicationError("injected failure-fence write failure")
+            return original_write(directory, name, data)
+
+        def fail_marker_unlink(path, *args, **kwargs):
+            if path == output / "collection-receipt.json":
+                raise OSError("injected final-marker cleanup failure")
+            return original_unlink(path, *args, **kwargs)
+
+        with mock.patch.object(pipeline.input_producer, "_fsync_directory", side_effect=fail_final_fsync), \
+                mock.patch.object(pipeline.input_producer, "_write_no_clobber", side_effect=fail_fence_write), \
+                mock.patch.object(Path, "unlink", new=fail_marker_unlink), \
+                self.assertRaises(pipeline.input_producer.PublicationError):
+            pipeline.input_producer.publish_collection(output, artifacts)
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "successful-producer witness"):
+            pipeline.trusted_collector_t2(output)
+
+    def test_collect_t2_cli_publication_failure_fences_the_full_six_artifact_boundary(self):
+        repository, base, head = self.make_real_t2_repo()
+        output = self.directory / "failed-t2-output"
+        target = {"review": "true", "head_sha": head, "base_sha": base, "body": "body"}
+        environment = {
+            "GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "1151", "HEAD_SHA": head,
+            "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_OUTPUT": "",
+        }
+        original_fsync = pipeline.input_producer._fsync_directory
+        calls = 0
+
+        def fail_receipt_directory_fsync(directory):
+            nonlocal calls
+            calls += 1
+            # Five complete non-receipt links precede the receipt's final
+            # directory durability boundary in the actual collect-t2 path.
+            if calls == 6:
+                raise OSError("injected final receipt directory fsync failure")
+            return original_fsync(directory)
+
+        errors = io.StringIO()
+        with mock.patch.dict(os.environ, environment, clear=False), \
+                mock.patch.object(pipeline, "ROOT", repository), \
+                mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(pipeline.pr_review_target, "resolve_target", side_effect=[target, target]), \
+                mock.patch.object(pipeline.input_producer, "_fsync_directory",
+                                  side_effect=fail_receipt_directory_fsync), \
+                mock.patch.object(sys, "argv", ["review_pipeline.py", "collect-t2", "--directory", str(output)]), \
+                contextlib.redirect_stderr(errors):
+            self.assertEqual(pipeline.main(), 1)
+        self.assertEqual(calls, 7)  # the best-effort failure fence also durably commits
+        self.assertEqual(
+            sorted(item.name for item in output.iterdir()),
+            ["collection-failure.json", "context.json", "history.json", "pr-body.md", "pr.diff", "t2-input.json"],
+        )
+        self.assertFalse((output / "collection-receipt.json").exists())
+        self.assertNotIn("injected final receipt", errors.getvalue())
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "successful-producer witness"):
+            pipeline.trusted_collector_t2(output)
+
+    def test_collect_t2_cli_triple_publication_fault_leaves_exact_six_residuals_without_witness(self):
+        repository, base, head = self.make_real_t2_repo()
+        positive = self.directory / "triple-fault-positive"
+        document, _witness = self.collect_real_t2(repository, base, head, positive)
+        artifact_names = {
+            "context.json", "pr.diff", "pr-body.md", "history.json", "t2-input.json",
+            "collection-receipt.json",
+        }
+        expected = {name: (positive / name).read_bytes() for name in artifact_names}
+
+        output = self.directory / "triple-fault-output"
+        witness_output = self.directory / "triple-fault-github-output"
+        target = {"review": "true", "head_sha": head, "base_sha": base, "body": "body"}
+        environment = {
+            "GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "1151", "HEAD_SHA": head,
+            "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_OUTPUT": str(witness_output),
+        }
+        original_fsync = pipeline.input_producer.os.fsync
+        original_open = pipeline.input_producer.os.open
+        original_unlink = Path.unlink
+        directory_fsync_calls = 0
+        receipt_fsync_failures = 0
+        receipt_unlink_calls = 0
+        fence_open_calls = 0
+
+        def fail_final_receipt_fsync(descriptor):
+            nonlocal directory_fsync_calls, receipt_fsync_failures
+            descriptor_stat = os.fstat(descriptor)
+            if stat.S_ISDIR(descriptor_stat.st_mode) and output.is_dir():
+                output_stat = output.stat()
+                if ((descriptor_stat.st_dev, descriptor_stat.st_ino) ==
+                        (output_stat.st_dev, output_stat.st_ino)):
+                    directory_fsync_calls += 1
+                    if (output / "collection-receipt.json").is_file():
+                        receipt_fsync_failures += 1
+                        raise OSError("injected final receipt directory fsync EIO")
+            return original_fsync(descriptor)
+
+        def fail_failure_fence_open(path, *args, **kwargs):
+            nonlocal fence_open_calls
+            candidate = Path(path)
+            if (candidate.parent == output and candidate.name.startswith(".collection-failure.json.")
+                    and candidate.name.endswith(".partial")):
+                fence_open_calls += 1
+                raise OSError("injected failure-fence open EIO")
+            return original_open(path, *args, **kwargs)
+
+        def fail_receipt_unlink(path, *args, **kwargs):
+            nonlocal receipt_unlink_calls
+            if path == output / "collection-receipt.json":
+                receipt_unlink_calls += 1
+                raise OSError("injected receipt unlink EIO")
+            return original_unlink(path, *args, **kwargs)
+
+        errors = io.StringIO()
+        with mock.patch.dict(os.environ, environment, clear=False), \
+                mock.patch.object(pipeline, "ROOT", repository), \
+                mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(pipeline, "response_schema", return_value={}), \
+                mock.patch.object(pipeline.test_scope, "load_policy", return_value={}), \
+                mock.patch.object(pipeline.pr_review_target, "resolve_target", side_effect=[target, target]), \
+                mock.patch.object(pipeline.input_producer.os, "fsync",
+                                  side_effect=fail_final_receipt_fsync), \
+                mock.patch.object(pipeline.input_producer.os, "open",
+                                  side_effect=fail_failure_fence_open), \
+                mock.patch.object(Path, "unlink", new=fail_receipt_unlink), \
+                mock.patch.object(sys, "argv", ["review_pipeline.py", "collect-t2", "--directory", str(output)]), \
+                contextlib.redirect_stderr(errors):
+            self.assertEqual(pipeline.main(), 1)
+        self.assertEqual((directory_fsync_calls, receipt_fsync_failures,
+                          receipt_unlink_calls, fence_open_calls), (6, 1, 1, 1))
+        self.assertFalse(witness_output.exists(), "failed CLI collection must emit no success witness")
+        residual_names = sorted(item.name for item in output.iterdir())
+        self.assertEqual(residual_names, sorted(artifact_names))
+        self.assertEqual({item.name: item.read_bytes() for item in output.iterdir()}, expected)
+        self.assertNotIn("collection-failure.json", residual_names)
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "successful-producer witness") as refused:
+            pipeline.trusted_collector_t2(output)
+        print(json.dumps({
+            "cli_returncode": 1,
+            "directory_fsync_calls": directory_fsync_calls,
+            "receipt_fsync_failures": receipt_fsync_failures,
+            "receipt_unlink_calls": receipt_unlink_calls,
+            "failure_fence_open_calls": fence_open_calls,
+            "residual_artifacts": sorted(artifact_names),
+            "residual_sha256": {name: hashlib.sha256(data).hexdigest() for name, data in sorted(expected.items())},
+            "success_witness_emitted": witness_output.exists(),
+            "strict_consumer_refusal": str(refused.exception),
+        }, sort_keys=True))
+
+    def test_collect_t2_target_change_before_publication_fails_closed(self):
+        repository, base, head = self.make_real_t2_repo()
+        output = self.directory / "changed-target-output"
+        target = {"review": "true", "head_sha": head, "base_sha": base, "body": "body"}
+        moved = {"review": "true", "head_sha": "f" * 40, "base_sha": base, "body": "body"}
+        environment = {"GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "1151", "HEAD_SHA": head,
+                       "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_OUTPUT": ""}
+        with mock.patch.dict(os.environ, environment, clear=False), \
+                mock.patch.object(pipeline, "ROOT", repository), \
+                mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(pipeline.pr_review_target, "resolve_target", side_effect=[target, moved]), \
+                self.assertRaisesRegex(review_scope.ReviewScopeError, "before complete-input publication"):
+            pipeline.collect_t2(output)
+        self.assertFalse((output / "t2-input.json").exists())
+        self.assertFalse((output / "collection-receipt.json").exists())
+
+    def test_collect_t2_refuses_preexisting_output_before_resolving_target(self):
+        output = self.directory / "already-used"
+        output.mkdir()
+        sentinel = output / "sentinel"
+        sentinel.write_bytes(b"old")
+        with mock.patch.object(pipeline.pr_review_target, "resolve_target") as resolve:
+            with self.assertRaisesRegex(pipeline.input_producer.PublicationError, "already used"):
+                pipeline.collect_t2(output)
+        resolve.assert_not_called()
+        self.assertEqual(sentinel.read_bytes(), b"old")
 
 
 if __name__ == "__main__":

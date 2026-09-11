@@ -101,6 +101,89 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(review.validate_coverage(None, receipt), receipt)
         self.assertTrue(all(type(line) is int for hunk in receipt["expected_hunks"] for line in hunk["right_lines"]))
 
+    def test_rename_inventory_keeps_old_and_new_but_right_anchors_stay_new_only(self):
+        coverage = self.coverage()
+        hunk = coverage["expected_hunks"][0]
+        hunk["path"] = "apps/creator-web/new.ts"
+        hunk["old_path"] = "contracts/old.ts"
+        hunk["change_kind"] = "renamed"
+        paths = review.changed_path_inventory(coverage["expected_hunks"])
+        self.assertEqual(paths, ["apps/creator-web/new.ts", "contracts/old.ts"])
+        collector = {
+            "schema": review.COLLECTOR_SCHEMA,
+            "identity": coverage["identity"],
+            "input_sha256": coverage["input_sha256"],
+            "expected_hunks": copy.deepcopy(coverage["expected_hunks"]),
+            "right_inventory": [{"path": "apps/creator-web/new.ts", "line": 1}],
+        }
+        review.validate_collector(collector, identity=self.identity)
+        review.validate_coverage(None, coverage, changed_paths=paths, collector=collector)
+        with self.assertRaisesRegex(review.ReviewScopeError, "changed-path inventory"):
+            review.validate_coverage(None, coverage, changed_paths=["apps/creator-web/new.ts"], collector=collector)
+        forged = copy.deepcopy(collector)
+        forged["right_inventory"] = [{"path": "contracts/old.ts", "line": 1}]
+        with self.assertRaisesRegex(review.ReviewScopeError, "RIGHT-side inventory"):
+            review.validate_collector(forged, identity=self.identity)
+
+    def test_rename_hunk_requires_old_path_and_non_rename_cannot_carry_one(self):
+        coverage = self.coverage()
+        coverage["expected_hunks"][0]["change_kind"] = "renamed"
+        with self.assertRaisesRegex(review.ReviewScopeError, "rename hunk lacks"):
+            review.validate_coverage(None, coverage)
+        coverage = self.coverage()
+        coverage["expected_hunks"][0]["old_path"] = "contracts/old.ts"
+        with self.assertRaisesRegex(review.ReviewScopeError, "non-rename hunk carries"):
+            review.validate_coverage(None, coverage)
+
+    def test_rename_scope_rejects_extra_path_wrong_old_path_and_forged_rename(self):
+        coverage = self.coverage()
+        for collection in ("expected_hunks", "observed_hunks"):
+            hunk = coverage[collection][0]
+            hunk["path"] = "apps/creator-web/new.ts"
+            hunk["old_path"] = "contracts/old.ts"
+            hunk["change_kind"] = "renamed"
+        paths = review.changed_path_inventory(coverage["expected_hunks"])
+        collector = {
+            "schema": review.COLLECTOR_SCHEMA,
+            "identity": coverage["identity"],
+            "input_sha256": coverage["input_sha256"],
+            "expected_hunks": copy.deepcopy(coverage["expected_hunks"]),
+            "right_inventory": [{"path": "apps/creator-web/new.ts", "line": 1}],
+        }
+        with self.assertRaisesRegex(review.ReviewScopeError, "changed-path inventory"):
+            review.validate_coverage(None, coverage, changed_paths=paths + ["forged/extra.ts"], collector=collector)
+
+        wrong_old = copy.deepcopy(coverage)
+        wrong_old["expected_hunks"][0]["old_path"] = "contracts/wrong.ts"
+        with self.assertRaisesRegex(review.ReviewScopeError, "expected partition"):
+            review.validate_coverage(None, wrong_old, changed_paths=paths, collector=collector)
+
+        forged_collector = copy.deepcopy(collector)
+        forged_collector["expected_hunks"][0]["old_path"] = "contracts/forged.ts"
+        with self.assertRaisesRegex(review.ReviewScopeError, "expected partition"):
+            review.validate_coverage(None, coverage, changed_paths=paths, collector=forged_collector)
+
+    def test_rename_scope_rejects_old_side_inline_finding_after_positive_edit(self):
+        coverage = self.coverage()
+        for collection in ("expected_hunks", "observed_hunks"):
+            hunk = coverage[collection][0]
+            hunk["path"] = "apps/creator-web/new.ts"
+            hunk["old_path"] = "contracts/old.ts"
+            hunk["change_kind"] = "renamed"
+        collector = {
+            "schema": review.COLLECTOR_SCHEMA,
+            "identity": coverage["identity"],
+            "input_sha256": coverage["input_sha256"],
+            "expected_hunks": copy.deepcopy(coverage["expected_hunks"]),
+            "right_inventory": [{"path": "apps/creator-web/new.ts", "line": 1}],
+        }
+        payload = copy.deepcopy(self.payload)
+        payload["findings"] = [{"path": "contracts/old.ts", "line": 1, "body": "forged old-side finding"}]
+        with self.assertRaisesRegex(review.ReviewScopeError, "not anchored"):
+            review.validate_review(self.policy, payload, coverage=coverage,
+                                   changed_paths=review.changed_path_inventory(coverage["expected_hunks"]),
+                                   collector=collector)
+
     def test_v2_order_model_and_engine_bind_to_trusted_t2_config(self):
         coverage = self.coverage()
         trusted = {"schema": review.TRUSTED_CONFIG_SCHEMA, "provider_order": ["deepseek", "glm"],

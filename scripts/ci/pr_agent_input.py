@@ -1,0 +1,1179 @@
+#!/usr/bin/env python3
+"""Build the complete PR-Agent input from fixed Git objects only.
+
+This module is intentionally independent of the review pipeline's environment
+and GitHub client.  Its caller supplies the seven-field identity and a checked
+out repository whose ``HEAD`` is the trusted control revision.  All PR content
+is read from immutable Git objects; the working tree is never inspected.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import selectors
+import stat
+import subprocess
+import tempfile
+import time
+from collections.abc import Mapping, Sequence
+from typing import Any
+import uuid
+
+import change_scope
+import pr_agent_review as t2
+
+
+IDENTITY_KEYS = (
+    "repository", "pull_request", "base_sha", "head_sha", "control_sha",
+    "run_id", "run_attempt",
+)
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_OID_RE = re.compile(r"^[0-9a-f]{40}$")
+_RAW_HEADER_RE = re.compile(
+    r"^:(?P<old_mode>[0-7]{6}) (?P<new_mode>[0-7]{6}) "
+    r"(?P<old>[0-9a-f]{40}) (?P<new>[0-9a-f]{40}) "
+    r"(?P<status>[ACDMRT](?:[0-9]{1,3})?)$"
+)
+
+COLLECTION_RECEIPT_SCHEMA = "lmdj.pr-agent-input-collection.v1"
+COLLECTION_FAILURE_SCHEMA = "lmdj.pr-agent-input-collection-failure.v1"
+PUBLICATION_WITNESS_SCHEMA = "lmdj.pr-agent-input-publication-witness.v1"
+COLLECTION_ARTIFACTS = (
+    "context.json", "pr.diff", "pr-body.md", "history.json", "t2-input.json",
+    "collection-receipt.json",
+)
+GIT_TIMEOUT_SECONDS = 120
+MAX_INVENTORY_BYTES = 4 * 1024 * 1024
+MAX_FAILURE_BYTES = 256 * 1024
+MAX_STDERR_BYTES = 64 * 1024
+
+
+def _canonical(value: Any) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _sha256(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _strict_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _safe_identity(identity: Any) -> dict[str, Any] | None:
+    if not isinstance(identity, Mapping):
+        return None
+    return dict(identity)
+
+
+def validate_identity(identity: Any) -> dict[str, Any]:
+    """Validate and copy the closed identity supplied by the trusted caller."""
+    if not isinstance(identity, Mapping) or set(identity) != set(IDENTITY_KEYS):
+        raise ValueError("identity must contain exactly the seven T2 fields")
+    value = dict(identity)
+    if not isinstance(value["repository"], str) or not value["repository"].strip():
+        raise ValueError("repository identity is invalid")
+    if not _strict_int(value["pull_request"]) or value["pull_request"] < 1:
+        raise ValueError("pull request identity is invalid")
+    for key in ("base_sha", "head_sha", "control_sha"):
+        if not isinstance(value[key], str) or not _SHA_RE.fullmatch(value[key]):
+            raise ValueError(f"{key} must be a lowercase 40-character SHA")
+    if not isinstance(value["run_id"], str) or not value["run_id"]:
+        raise ValueError("run identity is invalid")
+    if not _strict_int(value["run_attempt"]) or value["run_attempt"] < 1:
+        raise ValueError("run attempt identity is invalid")
+    return value
+
+
+class InputCollectionError(Exception):
+    """Finite refusal carrying the complete inventory and per-path reasons."""
+
+    def __init__(self, message: str, *, result: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.result = result
+        self.failure = result
+
+
+class PublicationError(InputCollectionError):
+    """A bounded artifact write failed without admitting a complete input."""
+
+
+FAILURE_SUMMARY_SCHEMA = "lmdj.pr-agent-input-collection-failure-summary.v1"
+
+
+def _failure(
+    identity: Any,
+    inventory: Sequence[change_scope.ChangedFile | Mapping[str, Any]] = (),
+    reasons: Mapping[str, str] | None = None,
+    global_reason: str = "complete input collection was not admitted",
+    *,
+    schema: str = COLLECTION_FAILURE_SCHEMA,
+    raw_evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    safe = _safe_identity(identity)
+    entries = []
+    reason_entries = []
+    for item in inventory:
+        if isinstance(item, change_scope.ChangedFile):
+            status, paths = item.status, tuple(item.paths)
+            raw_paths = None
+        else:
+            status = item["status"]
+            paths = tuple(item["paths"])
+            raw_paths = tuple(item.get("raw_paths", ()))
+        entry = {"status": status, "paths": list(paths)}
+        if raw_paths and any(path is None for path in paths):
+            entry["paths_raw_hex"] = [raw.hex() for raw in raw_paths]
+            entry["paths_raw_base64"] = [base64.b64encode(raw).decode("ascii") for raw in raw_paths]
+        entries.append(entry)
+        for index, path in enumerate(paths):
+            raw_path = raw_paths[index] if raw_paths and index < len(raw_paths) else None
+            reason = (reasons or {}).get(path, global_reason) if isinstance(path, str) else global_reason
+            if isinstance(path, str):
+                reason_entries.append({"path": path, "reason": reason})
+            elif raw_path is not None:
+                reason_entries.append({
+                    "path_raw_hex": raw_path.hex(),
+                    "path_raw_base64": base64.b64encode(raw_path).decode("ascii"),
+                    "reason": reason,
+                })
+    result = {
+        "schema": schema,
+        "status": "failed",
+        "identity": safe,
+        "inventory": entries,
+        "reasons": sorted(reason_entries, key=lambda item: (
+            item.get("path", ""), item.get("path_raw_hex", ""))),
+    }
+    if raw_evidence is not None:
+        result["raw_inventory"] = dict(raw_evidence)
+    return result
+
+
+def _failure_sample(item: Any) -> dict[str, Any] | None:
+    """Keep one bounded diagnostic record without treating it as input."""
+    if not isinstance(item, Mapping):
+        return None
+    status = item.get("status")
+    paths = item.get("paths")
+    if not isinstance(status, str) or not isinstance(paths, list):
+        return None
+    sample: dict[str, Any] = {"status": status, "paths": list(paths)}
+    # A summary needs only one lossless representation.  The full result keeps
+    # both encodings for small failures; summaries prefer hex to stay bounded.
+    raw_paths = item.get("paths_raw_hex")
+    if isinstance(raw_paths, list) and len(raw_paths) == len(paths):
+        sample["paths_raw_hex"] = list(raw_paths)
+    else:
+        raw_paths = item.get("paths_raw_base64")
+        if isinstance(raw_paths, list) and len(raw_paths) == len(paths):
+            sample["paths_raw_base64"] = list(raw_paths)
+    return sample
+
+
+def _failure_reason_sample(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, Mapping) or not isinstance(item.get("reason"), str):
+        return None
+    sample = {"reason": item["reason"]}
+    if isinstance(item.get("path"), str):
+        sample["path"] = item["path"]
+    elif isinstance(item.get("path_raw_hex"), str):
+        sample["path_raw_hex"] = item["path_raw_hex"]
+    elif isinstance(item.get("path_raw_base64"), str):
+        sample["path_raw_base64"] = item["path_raw_base64"]
+    return sample
+
+
+def _failure_sample_indices(count: int, limit: int = 8) -> list[int]:
+    if count <= limit:
+        return list(range(count))
+    edge = limit // 2
+    return list(range(edge)) + list(range(count - edge, count))
+
+
+def _bounded_failure_summary(result: Mapping[str, Any], original_payload: bytes) -> dict[str, Any]:
+    """Reduce an oversized refusal to bounded, explicit diagnostic evidence.
+
+    The complete in-memory refusal remains available to the caller, but its
+    receipt cannot exceed MAX_FAILURE_BYTES.  This summary never looks like a
+    successful collection: it retains failure status, original bytes/digest,
+    total and retained populations, and explicit incomplete/truncated flags.
+    """
+    inventory = result.get("inventory", [])
+    reasons = result.get("reasons", [])
+    total_inventory = len(inventory) if isinstance(inventory, list) else 0
+    total_reasons = len(reasons) if isinstance(reasons, list) else 0
+    identity = result.get("identity")
+    if not isinstance(identity, Mapping):
+        identity = None
+    summary: dict[str, Any] = {
+        "schema": result.get("schema", COLLECTION_FAILURE_SCHEMA),
+        "status": "failed",
+        "identity": dict(identity) if identity is not None else None,
+        "inventory": [],
+        "reasons": [],
+        "failure_summary": {
+            "schema": FAILURE_SUMMARY_SCHEMA,
+            "original": {"sha256": _sha256(original_payload), "byte_length": len(original_payload)},
+            "inventory": {"total_records": total_inventory, "retained_records": 0},
+            "reasons": {"total_records": total_reasons, "retained_records": 0},
+            "complete": False,
+            "truncated": True,
+        },
+    }
+    raw_inventory = result.get("raw_inventory")
+    if isinstance(raw_inventory, Mapping):
+        summary["raw_inventory"] = {
+            key: raw_inventory.get(key)
+            for key in ("sha256", "byte_length", "complete", "truncated")
+            if key in raw_inventory
+        }
+
+    def refresh_counts() -> None:
+        summary["failure_summary"]["inventory"]["retained_records"] = len(summary["inventory"])
+        summary["failure_summary"]["reasons"]["retained_records"] = len(summary["reasons"])
+
+    # Keep both edges so a valid later path remains visible alongside the first
+    # failing record.  Every candidate is checked against the actual receipt
+    # budget, including hostile or unexpectedly large diagnostic strings.
+    for index in _failure_sample_indices(total_inventory):
+        candidate = _failure_sample(inventory[index])
+        if candidate is None:
+            continue
+        summary["inventory"].append(candidate)
+        refresh_counts()
+        if len(_canonical(summary)) > MAX_FAILURE_BYTES:
+            summary["inventory"].pop()
+            refresh_counts()
+    for index in _failure_sample_indices(total_reasons):
+        candidate = _failure_reason_sample(reasons[index])
+        if candidate is None:
+            continue
+        summary["reasons"].append(candidate)
+        refresh_counts()
+        if len(_canonical(summary)) > MAX_FAILURE_BYTES:
+            summary["reasons"].pop()
+            refresh_counts()
+    if len(_canonical(summary)) <= MAX_FAILURE_BYTES:
+        return summary
+
+    # Identity and raw metadata are bounded in normal producer operation, but
+    # retain a fixed fallback if a future caller supplies pathological values.
+    summary["identity"] = None
+    summary["inventory"] = []
+    summary["reasons"] = []
+    summary.pop("raw_inventory", None)
+    refresh_counts()
+    return summary
+
+
+def _refuse(message: str, identity: Any,
+            inventory: Sequence[change_scope.ChangedFile | Mapping[str, Any]] = (),
+            reasons: Mapping[str, str] | None = None, global_reason: str | None = None,
+            *, raw_evidence: Mapping[str, Any] | None = None) -> InputCollectionError:
+    return InputCollectionError(
+        message,
+        result=_failure(identity, inventory, reasons, global_reason or message, raw_evidence=raw_evidence),
+    )
+
+
+def _git_environment() -> dict[str, str]:
+    """Return a Git environment with ambient configuration and fetching removed."""
+    dangerous = {
+        "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+        "GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS", "GIT_PAGER", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR",
+        "GIT_SSH_COMMAND", "GIT_SSH", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_DIR", "GIT_WORK_TREE",
+        "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR",
+        "GIT_CEILING_DIRECTORIES", "GIT_PREFIX", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM",
+        "GIT_CONFIG_NOSYSTEM", "GIT_OPTIONAL_LOCKS", "GIT_NO_REPLACE_OBJECTS", "GIT_NO_LAZY_FETCH",
+        "GIT_ATTR_SOURCE", "GIT_ATTR_NOSYSTEM",
+    }
+    environment = {
+        key: value for key, value in os.environ.items()
+        if key not in dangerous
+        and not key.startswith("GIT_CONFIG_KEY_")
+        and not key.startswith("GIT_CONFIG_VALUE_")
+    }
+    environment.update({
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_PAGER": "cat",
+        "GIT_LFS_SKIP_SMUDGE": "1",
+    })
+    return environment
+
+
+def _bounded_process(command: list[str], *, cwd: Path, input_data: bytes = b"",
+                     max_output: int = MAX_INVENTORY_BYTES, env: Mapping[str, str] | None = None) -> bytes:
+    """Run a fixed Git read with a hard stdout/stderr capture bound."""
+    try:
+        process = subprocess.Popen(
+            command, cwd=str(cwd), env=dict(env or _git_environment()), stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+    except OSError as error:
+        raise InputCollectionError("Git read could not be started") from error
+    selector = selectors.DefaultSelector()
+    output: list[bytes] = []
+    total = 0
+    stderr_total = 0
+    stdin_registered = False
+    try:
+        pending_input = memoryview(input_data)
+        if process.stdin is not None:
+            os.set_blocking(process.stdin.fileno(), False)
+            if pending_input:
+                selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
+                stdin_registered = True
+            else:
+                process.stdin.close()
+        if process.stdout is not None:
+            os.set_blocking(process.stdout.fileno(), False)
+            selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        if process.stderr is not None:
+            os.set_blocking(process.stderr.fileno(), False)
+            selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.kill()
+                process.wait()
+                raise InputCollectionError("Git read exceeded its bounded time limit")
+            events = selector.select(remaining)
+            if not events:
+                continue
+            if process.poll() is not None and process.stdin is not None and stdin_registered:
+                selector.unregister(process.stdin)
+                process.stdin.close()
+                stdin_registered = False
+            for key, _ in events:
+                if key.data == "stdin":
+                    if not stdin_registered or process.poll() is not None:
+                        continue
+                    try:
+                        count = os.write(key.fileobj.fileno(), pending_input)
+                    except BlockingIOError:
+                        count = 0
+                    except BrokenPipeError:
+                        # A child may close stdin after its own bounded protocol
+                        # handshake while continuing to produce output.  Stop
+                        # retrying a permanently unwritable descriptor; the
+                        # stdout/stderr readers and the common deadline remain
+                        # authoritative for the child outcome.
+                        selector.unregister(key.fileobj)
+                        key.fileobj.close()
+                        stdin_registered = False
+                        pending_input = memoryview(b"")
+                        continue
+                    except OSError as error:
+                        selector.unregister(key.fileobj)
+                        key.fileobj.close()
+                        stdin_registered = False
+                        raise InputCollectionError("Git read input write failed") from error
+                    if count:
+                        pending_input = pending_input[count:]
+                    if not pending_input or process.poll() is not None:
+                        selector.unregister(key.fileobj)
+                        key.fileobj.close()
+                        stdin_registered = False
+                    continue
+                chunk = os.read(key.fileobj.fileno(), 65536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    continue
+                if key.data == "stdout":
+                    total += len(chunk)
+                    if total > max_output:
+                        process.kill()
+                        process.wait()
+                        raise InputCollectionError("Git read exceeded its bounded output limit")
+                    output.append(chunk)
+                else:
+                    stderr_total += len(chunk)
+                    if stderr_total > MAX_STDERR_BYTES:
+                        process.kill()
+                        process.wait()
+                        raise InputCollectionError("Git read exceeded its bounded diagnostic limit")
+        try:
+            returncode = process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired as error:
+            process.kill()
+            process.wait()
+            raise InputCollectionError("Git read exceeded its bounded time limit") from error
+        if returncode != 0:
+            raise InputCollectionError("Git object or diff read failed")
+        return b"".join(output)
+    finally:
+        selector.close()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+def _repository_object_directory(repository: Path) -> Path:
+    command = ["git", "--no-replace-objects", "--no-pager", "rev-parse", "--git-path", "objects"]
+    try:
+        value = _bounded_process(command, cwd=repository, max_output=4096).decode("utf-8", "strict").strip()
+    except (InputCollectionError, UnicodeDecodeError) as error:
+        raise InputCollectionError("Git object directory could not be resolved") from error
+    object_directory = Path(value)
+    if not object_directory.is_absolute():
+        object_directory = repository / object_directory
+    if object_directory.is_symlink() or not object_directory.is_dir():
+        raise InputCollectionError("Git object directory is not readable")
+    return object_directory.resolve()
+
+
+def _isolated_attribute_environment(repository: Path, attr_source: str) -> tuple[dict[str, str], tempfile.TemporaryDirectory[str]]:
+    """Give Git an object-only metadata view with no worktree attributes.
+
+    GIT_ATTR_SOURCE selects a committed tree, but Git can still consult
+    ``.git/info/attributes`` and other metadata unless the command receives an
+    isolated GIT_DIR.  An empty temporary metadata directory with an object
+    alternate retains the real immutable objects while excluding all local,
+    global, system, and index attribute sources.
+    """
+    temporary = tempfile.TemporaryDirectory(prefix="lmdj-pr-agent-git-view-")
+    git_directory = Path(temporary.name)
+    try:
+        objects = git_directory / "objects"
+        (objects / "info").mkdir(parents=True)
+        (git_directory / "refs").mkdir()
+        (git_directory / "HEAD").write_text("ref: refs/heads/none\n", encoding="utf-8")
+        (git_directory / "config").write_text(
+            "[core]\n"
+            "\trepositoryformatversion = 0\n"
+            "\tfilemode = true\n"
+            "\tbare = true\n"
+            "\tignorecase = true\n"
+            "\tprecomposeunicode = true\n",
+            encoding="utf-8",
+        )
+        (objects / "info" / "alternates").write_text(
+            str(_repository_object_directory(repository)) + "\n", encoding="utf-8"
+        )
+    except (InputCollectionError, OSError) as error:
+        temporary.cleanup()
+        raise InputCollectionError("isolated Git object view could not be prepared") from error
+    environment = _git_environment()
+    environment.update({
+        "GIT_DIR": str(git_directory),
+        "GIT_WORK_TREE": str(repository),
+        "GIT_ATTR_SOURCE": attr_source,
+    })
+    return environment, temporary
+
+
+def _git(repository: Path, *arguments: str, input_data: bytes = b"", max_output: int = MAX_INVENTORY_BYTES,
+         attr_source: str | None = None) -> bytes:
+    command = [
+        "git", "--no-replace-objects", "--no-pager",
+        "-c", "core.quotePath=false",
+        "-c", "diff.external=",
+        "-c", "diff.renames=true",
+        "-c", "diff.algorithm=myers",
+        "-c", "diff.noprefix=false",
+        "-c", "diff.mnemonicprefix=false",
+        "-c", "color.ui=false",
+        *arguments,
+    ]
+    temporary = None
+    if attr_source is None:
+        environment = _git_environment()
+    else:
+        environment, temporary = _isolated_attribute_environment(repository, attr_source)
+    try:
+        # Keep the process helper injectable for tests while supplying the exact
+        # fixed-object attribute source to every diff invocation.
+        return _bounded_process(command, cwd=repository, input_data=input_data, max_output=max_output,
+                                env=environment)
+    finally:
+        if temporary is not None:
+            temporary.cleanup()
+
+
+def _require_repository(repository: str | Path) -> Path:
+    path = Path(repository)
+    if path.is_symlink() or not path.is_dir():
+        raise InputCollectionError("repository path is not an existing directory")
+    try:
+        _git(path, "rev-parse", "--git-dir", max_output=4096)
+    except InputCollectionError as error:
+        raise InputCollectionError("repository is not a readable Git checkout") from error
+    return path
+
+
+def _commit_exists(repository: Path, revision: str) -> None:
+    try:
+        actual = _git(repository, "rev-parse", "--verify", f"{revision}^{{commit}}", max_output=4096).decode("ascii").strip()
+    except (UnicodeDecodeError, InputCollectionError) as error:
+        raise InputCollectionError("required Git commit object is unavailable") from error
+    if actual != revision:
+        raise InputCollectionError("required Git commit object identity differs")
+
+
+def _parse_raw_inventory(payload: bytes) -> list[dict[str, Any]]:
+    if not payload or len(payload) > MAX_INVENTORY_BYTES:
+        raise ValueError("raw Git inventory is empty or oversized")
+    fields = payload.split(b"\0")
+    if fields[-1] != b"":
+        raise ValueError("raw Git inventory is not NUL terminated")
+    fields.pop()
+    records: list[dict[str, Any]] = []
+    index = 0
+    while index < len(fields):
+        try:
+            header = fields[index].decode("ascii")
+        except UnicodeDecodeError as error:
+            raise ValueError("raw Git inventory header is not ASCII") from error
+        index += 1
+        match = _RAW_HEADER_RE.fullmatch(header)
+        if match is None:
+            raise ValueError("raw Git inventory header is malformed")
+        status = match.group("status")
+        count = 2 if status[0] in "RC" else 1
+        if index + count > len(fields):
+            raise ValueError("raw Git inventory path record is incomplete")
+        try:
+            paths = [fields[index + offset].decode("utf-8", "strict") for offset in range(count)]
+        except UnicodeDecodeError as error:
+            raise ValueError("raw Git inventory path is not UTF-8") from error
+        index += count
+        records.append({
+            "status": status,
+            "paths": tuple(paths),
+            "old_mode": match.group("old_mode"),
+            "new_mode": match.group("new_mode"),
+            "old_oid": match.group("old"),
+            "new_oid": match.group("new"),
+        })
+    return records
+
+
+def _parse_raw_inventory_failure(payload: bytes) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Parse status/path bytes for refusal diagnostics without admitting paths."""
+    if not isinstance(payload, bytes):
+        return [], {"sha256": None, "byte_length": 0, "complete": False, "truncated": False}
+    fields = payload.split(b"\0")
+    terminated = fields[-1] == b""
+    if terminated:
+        fields.pop()
+    records: list[dict[str, Any]] = []
+    index = 0
+    complete = terminated
+    while index < len(fields):
+        try:
+            header = fields[index].decode("ascii")
+        except UnicodeDecodeError:
+            complete = False
+            break
+        match = _RAW_HEADER_RE.fullmatch(header)
+        if match is None:
+            complete = False
+            break
+        status = match.group("status")
+        index += 1
+        count = 2 if status[0] in "RC" else 1
+        if index + count > len(fields):
+            complete = False
+            break
+        raw_paths = tuple(fields[index + offset] for offset in range(count))
+        index += count
+        paths: list[str | None] = []
+        for raw_path in raw_paths:
+            try:
+                paths.append(raw_path.decode("utf-8", "strict"))
+            except UnicodeDecodeError:
+                paths.append(None)
+        records.append({"status": status, "paths": tuple(paths), "raw_paths": raw_paths})
+    if index != len(fields):
+        complete = False
+    evidence = {
+        "sha256": _sha256(payload),
+        "byte_length": len(payload),
+        "complete": complete,
+        "truncated": len(payload) >= MAX_INVENTORY_BYTES and not terminated,
+    }
+    return records, evidence
+
+
+def _parse_sections(diff_text: str) -> dict[str, str]:
+    lines = diff_text.splitlines(keepends=True)
+    starts = [index for index, line in enumerate(lines) if line.startswith("diff --git ")]
+    if not starts or starts[0] != 0:
+        raise ValueError("canonical Git diff has content outside file records")
+    sections: dict[str, str] = {}
+    for position, start in enumerate(starts):
+        stop = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        header = lines[start].removesuffix("\n")
+        if header in sections:
+            raise ValueError("canonical Git diff contains a duplicate file header")
+        sections[header] = "".join(lines[start:stop])
+    return sections
+
+
+def _path_is_safe(path: str) -> bool:
+    try:
+        t2._safe_path(path)
+    except t2.EngineError:
+        return False
+    return True
+
+
+def _binary_section(section: str) -> bool:
+    return any(line == "GIT binary patch" or line.startswith("Binary files ") for line in section.splitlines())
+
+
+def _body(section: str) -> str:
+    return section.split("\n", 1)[1] if "\n" in section else ""
+
+
+def _object_metadata(repository: Path, oids: Sequence[str]) -> dict[str, tuple[str, int]]:
+    unique = sorted({oid for oid in oids if oid != "0" * 40})
+    if not unique:
+        return {}
+    if any(not _OID_RE.fullmatch(oid) for oid in unique):
+        raise InputCollectionError("Git blob object identity is malformed")
+    payload = ("\n".join(unique) + "\n").encode("ascii")
+    result = _git(repository, "cat-file", "--batch-check", input_data=payload, max_output=MAX_INVENTORY_BYTES)
+    lines = result.splitlines()
+    if len(lines) != len(unique):
+        raise InputCollectionError("Git object metadata inventory is incomplete")
+    metadata: dict[str, tuple[str, int]] = {}
+    for line in lines:
+        fields = line.decode("ascii", "strict").split()
+        if len(fields) == 2 and fields[0] in unique and fields[1] == "missing":
+            metadata[fields[0]] = ("missing", -1)
+            continue
+        if len(fields) != 3 or fields[0] not in unique or not fields[2].isdigit():
+            raise InputCollectionError("Git object metadata record is malformed")
+        metadata[fields[0]] = (fields[1], int(fields[2]))
+    if set(metadata) != set(unique):
+        raise InputCollectionError("Git object metadata inventory is incomplete")
+    return metadata
+
+
+def _blob(repository: Path, oid: str, metadata: Mapping[str, tuple[str, int]], path: str) -> tuple[dict[str, Any], bytes]:
+    if oid == "0" * 40:
+        raise InputCollectionError(f"missing required blob for {path}")
+    kind, size = metadata.get(oid, ("missing", -1))
+    if kind == "missing":
+        raise InputCollectionError(f"Git blob object for {path} is missing")
+    if kind != "blob":
+        raise InputCollectionError(f"Git object for {path} is not a blob")
+    if size < 0 or size > t2.MAX_BLOB_BYTES:
+        raise InputCollectionError(f"Git blob for {path} is oversized")
+    data = _git(repository, "cat-file", "blob", oid, max_output=size + 1)
+    if len(data) != size:
+        raise InputCollectionError(f"Git blob for {path} changed during bounded read")
+    try:
+        data.decode("utf-8")
+        encoding = "utf-8"
+    except UnicodeDecodeError:
+        encoding = "binary"
+    return {
+        "object_id": oid,
+        "sha256": _sha256(data),
+        "byte_length": len(data),
+        "data_b64": base64.b64encode(data).decode("ascii"),
+        "encoding": encoding,
+    }, data
+
+
+def _hunk_record(path: str, old_path: str | None, kind: str, index: int, patch: str) -> dict[str, Any]:
+    patch_bytes = patch.encode("utf-8")
+    if not patch or len(patch_bytes) > t2.MAX_PATCH_BYTES:
+        raise InputCollectionError(f"patch for {path} is empty or oversized")
+    right = t2._parse_patch_right_lines(patch)
+    seed = (path + "\0" + (old_path or "") + "\0" + str(index) + "\0" + patch).encode("utf-8")
+    hunk_id = "h" + _sha256(seed)
+    return {
+        "id": hunk_id,
+        "patch": patch,
+        "patch_sha256": _sha256(patch_bytes),
+        "right_lines": [
+            {"line": line, "text": text, "sha256": _sha256(text.encode("utf-8"))}
+            for line, text in right
+        ],
+    }
+
+
+def _file_input(repository: Path, record: dict[str, Any], section: str,
+                metadata: Mapping[str, tuple[str, int]]) -> tuple[dict[str, Any], int]:
+    status = record["status"]
+    path = record["paths"][-1]
+    old_path = record["paths"][0] if status[0] == "R" else None
+    if not _path_is_safe(path) or (old_path is not None and not _path_is_safe(old_path)):
+        raise InputCollectionError(f"path {path!r} is unsafe or unsupported")
+    expected_header = f"diff --git a/{old_path or path} b/{path}"
+    if not section.startswith(expected_header + "\n") and section.split("\n", 1)[0] != expected_header:
+        raise InputCollectionError(f"path {path!r} has an unsupported quoted Git diff header")
+    if status[0] == "C":
+        raise InputCollectionError(f"path {path!r} is a copied change unsupported by the closed input contract")
+    if status[0] == "T":
+        raise InputCollectionError(f"path {path!r} is a Git type change unsupported by the closed input contract")
+    binary = _binary_section(section)
+    if status[0] == "R" and binary:
+        raise InputCollectionError(f"path {path!r} is a binary rename unsupported by the closed input contract")
+    if status[0] == "M":
+        kind = "binary" if binary else "modified"
+    elif status[0] == "R":
+        kind = "renamed"
+    elif status[0] == "A":
+        if binary:
+            raise InputCollectionError(f"path {path!r} is a binary addition unsupported by the closed input contract")
+        kind = "added"
+    elif status[0] == "D":
+        if binary:
+            raise InputCollectionError(f"path {path!r} is a binary deletion unsupported by the closed input contract")
+        kind = "deleted"
+    else:
+        raise InputCollectionError(f"path {path!r} has an unsupported Git change status")
+    try:
+        parsed_hunks = t2._parse_diff_hunks(section)
+    except t2.EngineError as error:
+        raise InputCollectionError(f"path {path!r} has a malformed Git hunk") from error
+    if parsed_hunks:
+        patches = parsed_hunks
+    elif kind in ("renamed", "binary"):
+        patches = [_body(section)]
+    else:
+        raise InputCollectionError(f"path {path!r} has unsupported zero-hunk content")
+    if any(not patch for patch in patches):
+        raise InputCollectionError(f"path {path!r} has an empty diff fragment")
+    hunks = [_hunk_record(path, old_path, kind, index, patch) for index, patch in enumerate(patches, 1)]
+    old_oid = record["old_oid"]
+    new_oid = record["new_oid"]
+    if kind == "added" and old_oid != "0" * 40:
+        raise InputCollectionError(f"path {path!r} addition has an unexpected old blob")
+    if kind == "deleted" and new_oid != "0" * 40:
+        raise InputCollectionError(f"path {path!r} deletion has an unexpected new blob")
+    if kind in ("modified", "renamed", "binary") and (old_oid == "0" * 40 or new_oid == "0" * 40):
+        raise InputCollectionError(f"path {path!r} is missing a required blob side")
+    base_record = None
+    head_record = None
+    represented = sum(len(item.encode("utf-8")) for item in patches)
+    if old_oid != "0" * 40:
+        base_record, old_bytes = _blob(repository, old_oid, metadata, old_path or path)
+        represented += len(old_bytes)
+    if new_oid != "0" * 40:
+        head_record, new_bytes = _blob(repository, new_oid, metadata, path)
+        represented += len(new_bytes)
+    file_value = {
+        "path": path,
+        "old_path": old_path,
+        "change_kind": kind,
+        "patch": "".join(patches),
+        "patch_sha256": _sha256("".join(patches).encode("utf-8")),
+        "base": base_record,
+        "head": head_record,
+        "hunks": hunks,
+    }
+    return file_value, represented
+
+
+def build_input(repository: str | Path, identity: Mapping[str, Any]) -> dict[str, Any]:
+    """Build and authenticate a complete ``lmdj.pr-agent-input.v1`` document."""
+    try:
+        value = validate_identity(identity)
+    except ValueError as error:
+        raise _refuse("T2 identity is invalid", identity, global_reason="T2 identity is invalid") from error
+    try:
+        root = _require_repository(repository)
+        for revision in (value["base_sha"], value["head_sha"], value["control_sha"]):
+            _commit_exists(root, revision)
+        actual_control = _git(root, "rev-parse", "--verify", "HEAD^{commit}", max_output=4096).decode("ascii").strip()
+        if actual_control != value["control_sha"]:
+            raise InputCollectionError("trusted control checkout identity differs from supplied control_sha")
+        merge_base = _git(root, "merge-base", value["base_sha"], value["head_sha"], max_output=4096).decode("ascii").strip()
+        if merge_base != value["base_sha"]:
+            raise InputCollectionError("supplied base_sha is not the selected Git merge base")
+    except InputCollectionError as error:
+        if error.result is not None:
+            raise
+        raise _refuse(str(error), value, global_reason=str(error)) from error
+    try:
+        inventory_payload = _git(
+            root, "diff", "--name-status", "-z", "--find-renames=50%", "--no-ext-diff", "--no-textconv",
+            "--no-color", "--full-index", "--no-indent-heuristic", "--diff-algorithm=myers",
+            "--src-prefix=a/", "--dst-prefix=b/", value["base_sha"], value["head_sha"], "--",
+            attr_source=value["base_sha"],
+        )
+        raw_payload = _git(
+            root, "diff", "--raw", "-z", "--abbrev=40", "--find-renames=50%", "--no-ext-diff", "--no-textconv",
+            "--no-color", "--full-index", "--no-indent-heuristic", "--diff-algorithm=myers",
+            "--src-prefix=a/", "--dst-prefix=b/", value["base_sha"], value["head_sha"], "--",
+            attr_source=value["base_sha"],
+        )
+        try:
+            raw = _parse_raw_inventory(raw_payload)
+        except ValueError as error:
+            diagnostic_inventory, raw_evidence = _parse_raw_inventory_failure(raw_payload)
+            raise _refuse(str(error), value, diagnostic_inventory, global_reason=str(error),
+                          raw_evidence=raw_evidence) from error
+        try:
+            inventory = list(change_scope.parse_name_status_z(inventory_payload))
+        except (ValueError, UnicodeDecodeError) as error:
+            diagnostic_inventory = [
+                {"status": item["status"], "paths": item["paths"]} for item in raw
+            ]
+            raise _refuse(str(error), value, diagnostic_inventory, global_reason=str(error)) from error
+        if not inventory:
+            raise _refuse("changed Git inventory is empty", value, global_reason="changed Git inventory is empty")
+        if len(inventory) > t2.MAX_FILES:
+            raise _refuse("changed Git inventory exceeds the file limit", value, inventory,
+                          global_reason="changed Git inventory exceeds MAX_FILES")
+        expected_inventory = [(item.status, item.paths) for item in inventory]
+        observed_inventory = [(item["status"], item["paths"]) for item in raw]
+        if observed_inventory != expected_inventory:
+            raise _refuse("Git raw and NUL inventory disagree", value, inventory,
+                          global_reason="Git raw and NUL inventory disagree")
+        diff_bytes = _git(
+            root, "diff", "--find-renames=50%", "--no-ext-diff", "--no-textconv", "--no-color",
+            "--full-index", "--no-indent-heuristic", "--diff-algorithm=myers", "--src-prefix=a/", "--dst-prefix=b/",
+            value["base_sha"], value["head_sha"], "--", max_output=t2.MAX_INPUT_BYTES + 1,
+            attr_source=value["base_sha"],
+        )
+        if not diff_bytes or len(diff_bytes) > t2.MAX_INPUT_BYTES:
+            raise _refuse("complete Git diff is empty or oversized", value, inventory,
+                          global_reason="complete Git diff exceeds MAX_INPUT_BYTES or is empty")
+        diff_text = diff_bytes.decode("utf-8", "strict")
+        type_changes = [item for item in inventory if item.status[0] == "T"]
+        if type_changes:
+            reasons = {
+                path: "Git type change is unsupported by the closed input contract"
+                for item in type_changes for path in item.paths
+            }
+            raise _refuse("Git type change is unsupported", value, inventory, reasons)
+        sections = _parse_sections(diff_text)
+        if len(sections) != len(inventory):
+            raise _refuse("canonical Git diff and inventory disagree", value, inventory,
+                          global_reason="canonical Git diff and complete inventory disagree")
+        by_key = {(item["status"], item["paths"]): item for item in raw}
+        oids = [oid for item in raw for oid in (item["old_oid"], item["new_oid"]) if oid != "0" * 40]
+        metadata = _object_metadata(root, oids)
+        files: list[dict[str, Any]] = []
+        represented_bytes = len(diff_bytes)
+        for item in inventory:
+            raw_item = by_key[(item.status, item.paths)]
+            path = item.paths[-1]
+            old_path = item.paths[0] if item.status[0] == "R" else None
+            header = f"diff --git a/{old_path or path} b/{path}"
+            section = sections.get(header)
+            if section is None:
+                reason = {name: "unsupported quoted or noncanonical Git diff header" for name in item.paths}
+                raise _refuse(f"path {path!r} has no canonical Git diff section", value, inventory, reason)
+            try:
+                file_value, represented = _file_input(root, raw_item, section, metadata)
+            except InputCollectionError as error:
+                reason = {name: str(error) for name in item.paths}
+                raise _refuse(str(error), value, inventory, reason) from error
+            represented_bytes += represented
+            if represented_bytes > t2.MAX_INPUT_BYTES * 2:
+                reason = {name: "represented input exceeds the bounded total byte limit" for name in item.paths}
+                raise _refuse("represented input is oversized", value, inventory, reason)
+            files.append(file_value)
+        if sections.keys() != {f"diff --git a/{item.paths[0] if item.status[0] == 'R' else item.paths[0]} b/{item.paths[-1]}" for item in inventory}:
+            raise _refuse("canonical Git diff contains an unlisted file section", value, inventory,
+                          global_reason="canonical Git diff contains an unlisted file section")
+        document: dict[str, Any] = {
+            "schema": t2.INPUT_SCHEMA,
+            "identity": {
+                "repository": value["repository"],
+                "pull_request": value["pull_request"],
+                "base_sha": value["base_sha"],
+                "head_sha": value["head_sha"],
+                "control_sha": value["control_sha"],
+                "run_id": value["run_id"],
+                "run_attempt": value["run_attempt"],
+            },
+            "diff": {"text": diff_text, "sha256": _sha256(diff_bytes), "byte_length": len(diff_bytes)},
+            "files": files,
+        }
+        document["input_sha256"] = _sha256(_canonical(document))
+        try:
+            t2.authenticate_input(document)
+        except t2.EngineError as error:
+            raise _refuse("final T2 input failed real authentication", value, inventory,
+                          global_reason="final T2 input failed the complete adapter authentication contract") from error
+        return document
+    except (InputCollectionError, ValueError, UnicodeDecodeError) as error:
+        if isinstance(error, InputCollectionError) and error.result is not None:
+            raise
+        raise _refuse(str(error), value, inventory if "inventory" in locals() else (),
+                      global_reason=str(error)) from error
+
+
+def build_t2_input(repository: str | Path, identity: Mapping[str, Any]) -> dict[str, Any]:
+    """Compatibility name for callers that use the contract's T2 terminology."""
+    return build_input(repository, identity)
+
+
+def collection_receipt(input_document: Mapping[str, Any], context: Mapping[str, Any]) -> dict[str, Any]:
+    input_bytes = _canonical(input_document)
+    context_bytes = _canonical(context)
+    paths = context.get("changed_paths")
+    if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+        raise ValueError("collection context path inventory is invalid")
+    inventory_bytes = _canonical(paths)
+    return {
+        "schema": COLLECTION_RECEIPT_SCHEMA,
+        "status": "complete",
+        "identity": dict(input_document["identity"]),
+        "input_identity": dict(input_document["identity"]),
+        "input_sha256": input_document["input_sha256"],
+        "input_byte_length": len(input_bytes),
+        "context_identity": dict(context["identity"]),
+        "context_sha256": _sha256(context_bytes),
+        "context_byte_length": len(context_bytes),
+        "changed_paths": list(paths),
+        "changed_paths_sha256": _sha256(inventory_bytes),
+        "changed_paths_byte_length": len(inventory_bytes),
+    }
+
+
+def json_bytes(value: Any) -> bytes:
+    """Return the exact stable JSON bytes used by publication and receipts."""
+    return _canonical(value)
+
+
+def publication_witness(artifacts: Mapping[str, bytes]) -> dict[str, Any]:
+    """Return the caller-held proof emitted only after complete publication."""
+    if not isinstance(artifacts, Mapping) or not artifacts or "collection-receipt.json" not in artifacts:
+        raise PublicationError("collection artifact set is incomplete")
+    if any(not isinstance(name, str) or not isinstance(data, bytes) for name, data in artifacts.items()):
+        raise PublicationError("collection artifact set contains an invalid bounded file")
+    entries = {
+        name: {"sha256": _sha256(data), "byte_length": len(data)}
+        for name, data in sorted(artifacts.items())
+    }
+    return {
+        "schema": PUBLICATION_WITNESS_SCHEMA,
+        "status": "committed",
+        "artifacts": entries,
+        "receipt_sha256": entries["collection-receipt.json"]["sha256"],
+    }
+
+
+def verify_publication(directory: str | Path, witness: Mapping[str, Any] | None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Verify retained bytes against a separately supplied success witness.
+
+    A complete-looking receipt in a directory is never authority by itself:
+    the witness is produced in-memory by the successful caller and must be
+    supplied independently by the trusted next consumer.
+    """
+    root = Path(directory)
+    if root.is_symlink() or not root.is_dir():
+        raise PublicationError("collection output is not a readable directory")
+    if (root / "collection-failure.json").exists():
+        raise PublicationError("collection output has an uncertain-publication fence")
+    if not isinstance(witness, Mapping) or set(witness) != {"schema", "status", "artifacts", "receipt_sha256"}:
+        raise PublicationError("trusted collection publication witness is missing or not closed")
+    if witness["schema"] != PUBLICATION_WITNESS_SCHEMA or witness["status"] != "committed":
+        raise PublicationError("trusted collection publication witness is not committed")
+    receipt_digest = witness["receipt_sha256"]
+    if not isinstance(receipt_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", receipt_digest):
+        raise PublicationError("trusted collection receipt digest is invalid")
+    entries = witness["artifacts"]
+    if not isinstance(entries, Mapping) or set(entries) != set(COLLECTION_ARTIFACTS):
+        raise PublicationError("trusted collection artifact witness is incomplete")
+    retained: dict[str, bytes] = {}
+    for name in COLLECTION_ARTIFACTS:
+        entry = entries[name]
+        if not isinstance(entry, Mapping) or set(entry) != {"sha256", "byte_length"}:
+            raise PublicationError("trusted collection artifact witness is invalid")
+        digest = entry["sha256"]
+        length = entry["byte_length"]
+        if (not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or not _strict_int(length) or length < 0 or length > t2.MAX_INPUT_BYTES * 4):
+            raise PublicationError("trusted collection artifact witness bounds are invalid")
+        path = root / name
+        try:
+            descriptor = os.open(
+                path,
+                os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    raise PublicationError(f"retained collection artifact {name} is not a regular file")
+                chunks = []
+                total = 0
+                while total <= length:
+                    chunk = os.read(descriptor, min(65536, length + 1 - total))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+                data = b"".join(chunks)
+            finally:
+                os.close(descriptor)
+        except PublicationError:
+            raise
+        except OSError as error:
+            raise PublicationError(f"retained collection artifact {name} is unreadable") from error
+        if len(data) != length or _sha256(data) != digest:
+            raise PublicationError(f"retained collection artifact {name} differs from the trusted witness")
+        retained[name] = data
+    if receipt_digest != entries["collection-receipt.json"]["sha256"]:
+        raise PublicationError("trusted collection receipt digest differs from its artifact witness")
+    try:
+        document = json.loads(retained["t2-input.json"], object_pairs_hook=change_scope.reject_duplicates)
+        context = json.loads(retained["context.json"], object_pairs_hook=change_scope.reject_duplicates)
+        receipt = json.loads(retained["collection-receipt.json"], object_pairs_hook=change_scope.reject_duplicates)
+    except (TypeError, ValueError, RecursionError) as error:
+        raise PublicationError("retained collection JSON is invalid") from error
+    if not isinstance(document, dict) or not isinstance(context, dict) or not isinstance(receipt, dict):
+        raise PublicationError("retained collection JSON is not an object")
+    try:
+        expected_receipt = collection_receipt(document, context)
+    except (KeyError, TypeError, ValueError) as error:
+        raise PublicationError("retained collection receipt inputs are incomplete") from error
+    if receipt != expected_receipt:
+        raise PublicationError("retained collection receipt does not bind its input and context")
+    return document, context, receipt
+
+
+def _ensure_fresh_directory(directory: Path) -> None:
+    if directory.exists():
+        if not directory.is_dir() or directory.is_symlink():
+            raise PublicationError("collection output is not a fresh directory")
+        try:
+            if any(directory.iterdir()):
+                raise PublicationError("collection output directory is already used")
+        except OSError as error:
+            raise PublicationError("collection output directory cannot be inspected") from error
+    else:
+        try:
+            directory.parent.mkdir(parents=True, exist_ok=True)
+            directory.mkdir()
+        except OSError as error:
+            raise PublicationError("collection output directory could not be created") from error
+
+
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_no_clobber(directory: Path, name: str, data: bytes) -> None:
+    temporary = directory / f".{name}.{uuid.uuid4().hex}.partial"
+    final = directory / name
+    linked = False
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            view = memoryview(data)
+            while view:
+                count = os.write(descriptor, view)
+                view = view[count:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.link(temporary, final)
+        linked = True
+        temporary.unlink()
+        _fsync_directory(directory)
+    except OSError as error:
+        # A directory fsync can fail after the no-clobber link succeeds.  Remove
+        # the marker when possible and retain any leftover as uncertain data;
+        # only the separately supplied success witness can grant authority.
+        if linked:
+            try:
+                final.unlink()
+            except OSError:
+                pass
+        raise PublicationError(f"collection artifact {name} could not be committed") from error
+
+
+def _best_effort_failure_fence(directory: Path, artifact: str, reason: str) -> None:
+    """Leave bounded diagnostic fencing when publication outcome is uncertain.
+
+    This fence is useful evidence only; consumers must still require the
+    separately supplied success witness because this write can fail too.
+    """
+    if not directory.is_dir() or directory.is_symlink():
+        return
+    payload = _canonical({
+        "schema": COLLECTION_FAILURE_SCHEMA,
+        "status": "failed",
+        "identity": None,
+        "inventory": [],
+        "reasons": [{"path": artifact, "reason": "publication outcome is uncertain; " + reason}],
+    })
+    try:
+        _write_no_clobber(directory, "collection-failure.json", payload)
+    except Exception:
+        # The positive witness, not this best-effort diagnostic, is the safety
+        # boundary.  Keep the original publication exception authoritative.
+        pass
+
+
+def publish_collection(directory: str | Path, artifacts: Mapping[str, bytes]) -> dict[str, Any]:
+    """Publish a complete artifact set with no-clobber links and a final receipt.
+
+    ``collection-receipt.json`` is written last and is the success marker.  A
+    write/fsync/link failure leaves bounded partial or uncertain evidence and
+    emits no success witness; it never replaces an existing output directory
+    or artifact.
+    """
+    root = Path(directory)
+    if not isinstance(artifacts, Mapping) or not artifacts or "collection-receipt.json" not in artifacts:
+        raise PublicationError("collection artifact set is incomplete")
+    for name, data in artifacts.items():
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", name) or not isinstance(data, bytes):
+            raise PublicationError("collection artifact set contains an invalid bounded file")
+        if len(data) > t2.MAX_INPUT_BYTES * 4:
+            raise PublicationError("collection artifact exceeds its bounded output limit")
+    if "collection-failure.json" in artifacts:
+        raise PublicationError("collection-failure.json is reserved for uncertain publication fencing")
+    witness = publication_witness(artifacts)
+    _ensure_fresh_directory(root)
+    current = "collection-receipt.json"
+    try:
+        for name in [item for item in artifacts if item != "collection-receipt.json"]:
+            current = name
+            _write_no_clobber(root, name, artifacts[name])
+        _write_no_clobber(root, "collection-receipt.json", artifacts["collection-receipt.json"])
+    except PublicationError as error:
+        _best_effort_failure_fence(root, current, str(error))
+        raise
+    return witness
+
+
+def publish_failure(directory: str | Path, result: Mapping[str, Any]) -> None:
+    payload = _canonical(result)
+    if len(payload) > MAX_FAILURE_BYTES:
+        # A complete diagnostic can exceed the receipt budget when one bad
+        # inventory contains many raw byte paths.  Persist a bounded summary
+        # with its original digest/length and explicit truncation metadata;
+        # failure status and the absence of a success witness remain intact.
+        payload = _canonical(_bounded_failure_summary(result, payload))
+        if len(payload) > MAX_FAILURE_BYTES:
+            raise PublicationError("bounded collection failure summary exceeds its output limit")
+    _ensure_fresh_directory(Path(directory))
+    _write_no_clobber(Path(directory), "collection-failure.json", payload)
+
+
+# Clear aliases make the producer callable under the terminology used by the
+# plan and by older local harnesses without introducing another implementation.
+collect_input = build_input
+produce_input = build_input

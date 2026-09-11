@@ -17,6 +17,7 @@ import review_scope
 import review_scope_codec as codec
 import test_scope
 import pr_agent_review as t2
+import pr_agent_input as input_producer
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".github/scripts"))
@@ -97,6 +98,23 @@ def trusted_collector(directory):
     review_scope.require(path.exists(),
                          "v2 result has no separately trusted T2 collector input; retain t2-input.json")
     return collector_witness(read(path))
+
+
+def trusted_collector_t2(directory, publication_witness=None):
+    """Consume opt-in collection only with the caller's positive proof.
+
+    The legacy ``trusted_collector`` path remains unchanged for existing
+    callers.  Complete-looking files from ``collect-t2`` are not authority
+    unless the successful producer returned this separate witness.
+    """
+    try:
+        document, _context, _receipt = input_producer.verify_publication(directory, publication_witness)
+    except input_producer.InputCollectionError as error:
+        raise review_scope.ReviewScopeError(
+            "why: complete-input publication lacks an independently supplied successful-producer witness; "
+            "remedy: use the witness returned by collect-t2 and revalidate retained bytes"
+        ) from error
+    return collector_witness(document)
 
 
 def trusted_config(directory):
@@ -293,6 +311,70 @@ def collect(directory):
         output.write("review_schema=" + schema + "\n")
 
 
+def collect_t2(directory):
+    """Opt-in complete-input collection; legacy ``collect`` remains unchanged."""
+    input_producer._ensure_fresh_directory(Path(directory))
+    repo, number = os.environ["GITHUB_REPOSITORY"], int(os.environ["PR_NUMBER"])
+    expected_head = os.environ["HEAD_SHA"]
+    target = pr_review_target.resolve_target(repo, number)
+    review_scope.require(target["review"] == "true" and target["head_sha"] == expected_head,
+                         "PR target moved or is not reviewable")
+    control = git("rev-parse", "HEAD").decode("ascii").strip()
+    fetch(target["base_sha"], target["head_sha"])
+    base = git("merge-base", target["base_sha"], target["head_sha"]).decode("ascii").strip()
+    identity = {
+        "repository": repo,
+        "pull_request": number,
+        "base_sha": base,
+        "head_sha": target["head_sha"],
+        "control_sha": control,
+        "run_id": str(int(os.environ["GITHUB_RUN_ID"])),
+        "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+    }
+    try:
+        document = input_producer.build_input(ROOT, identity)
+    except input_producer.InputCollectionError as error:
+        if error.result is not None:
+            input_producer.publish_failure(directory, error.result)
+        raise
+    latest = pr_review_target.resolve_target(repo, number)
+    review_scope.require(
+        latest["review"] == "true"
+        and latest["head_sha"] == target["head_sha"]
+        and latest["base_sha"] == target["base_sha"],
+        "PR target moved before complete-input publication",
+    )
+    changed_paths = review_scope.changed_path_inventory(document["files"])
+    context_identity = {
+        "repository": repo,
+        "pr_number": number,
+        "head_sha": target["head_sha"],
+        "base_sha": base,
+        "control_sha": control,
+        "backend": "deterministic",
+        "run_id": int(identity["run_id"]),
+        "run_attempt": identity["run_attempt"],
+    }
+    context = {"identity": context_identity, "changed_paths": changed_paths}
+    receipt = input_producer.collection_receipt(document, context)
+    artifacts = {
+        "context.json": input_producer.json_bytes(context),
+        "pr.diff": document["diff"]["text"].encode("utf-8"),
+        "pr-body.md": latest["body"].encode("utf-8"),
+        "history.json": b"[]",
+        "t2-input.json": input_producer.json_bytes(document),
+        "collection-receipt.json": input_producer.json_bytes(receipt),
+    }
+    witness = input_producer.publish_collection(directory, artifacts)
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if output_path:
+        schema = json.dumps(response_schema(test_scope.load_policy(ROOT)), separators=(",", ":"))
+        with Path(output_path).open("a", encoding="utf-8") as output:
+            output.write("review_schema=" + schema + "\n")
+            output.write("t2_publication_witness=" + json.dumps(witness, sort_keys=True, separators=(",", ":")) + "\n")
+    return witness
+
+
 def capture(directory, backend):
     policy = test_scope.load_policy(ROOT)
     history = read(directory / "history.json")
@@ -304,7 +386,7 @@ def capture(directory, backend):
         collector = trusted_collector(directory)
         trusted = trusted_config(directory)
         changed_paths = test_scope._paths(context.get("changed_paths"))
-        review_scope.require(changed_paths == sorted({hunk["path"] for hunk in collector["expected_hunks"]}),
+        review_scope.require(changed_paths == review_scope.changed_path_inventory(collector["expected_hunks"]),
                              "collector full hunk partition differs from the independently fetched changed-path inventory")
         history, inventory = adapt_t2_result(t2, identity=context["identity"],
                                               changed_paths=changed_paths, collector=collector,
@@ -584,8 +666,23 @@ def publish(directory):
     policy = test_scope.load_policy(ROOT)
     fetch(identity["base_sha"], identity["head_sha"])
     actual = change_scope.read_git_inventory(ROOT, identity["base_sha"], identity["head_sha"])
-    paths = sorted({p for changed in actual for p in changed.paths})
+    paths = review_scope.changed_path_inventory([
+        {"path": changed.paths[-1],
+         "old_path": changed.paths[0] if len(changed.paths) == 2 else None}
+        for changed in actual
+    ])
     review_scope.require(paths == context["changed_paths"] and paths == record["changed_paths"], "artifact changed inventory mismatch")
+    expected_changes = sorted({
+        ("modified" if hunk["change_kind"] == "binary" else hunk["change_kind"],
+         (hunk["old_path"], hunk["path"]) if hunk["old_path"] is not None else (hunk["path"],))
+        for hunk in collector["expected_hunks"]
+    }) if collector is not None else None
+    actual_changes = sorted({
+        ({"A": "added", "C": "copied", "D": "deleted", "M": "modified", "R": "renamed", "T": "type_changed"}[changed.status[0]], changed.paths)
+        for changed in actual
+    })
+    review_scope.require(collector is None or actual_changes == expected_changes,
+                         "artifact changed-file status/path pairs differ from the independently authenticated collector")
     expected = review_scope.prepare_result(policy, identity, changed_paths=paths, history=history,
                                            coverages=coverages if is_v2_history(history) else None,
                                            collector=collector, trusted_config=trusted)
@@ -631,13 +728,15 @@ def publish(directory):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["collect", "capture", "grok", "finalize", "publish"])
+    parser.add_argument("command", choices=["collect", "collect-t2", "capture", "grok", "finalize", "publish"])
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--backend", choices=review_scope.V2_BACKENDS)
     args = parser.parse_args()
     try:
         if args.command == "capture":
             capture(args.directory, args.backend)
+        elif args.command == "collect-t2":
+            collect_t2(args.directory)
         elif args.command == "finalize":
             status = finalize(args.directory)
             if status != "reviewed":
