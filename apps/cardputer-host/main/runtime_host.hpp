@@ -7,6 +7,7 @@
 #include <lmdj/facade/runtime_facade.hpp>
 #ifdef ESP_PLATFORM
 #include "audio_driver.hpp"
+#include "audio_diagnostics.hpp"
 #endif
 
 namespace lmdj::cardputer {
@@ -109,6 +110,9 @@ class EspAudioSession final : public AudioSession {
   AudioStopResult stop_and_join() noexcept override;
   void set_output(std::uint8_t volume, bool muted) noexcept override;
   bool healthy() const noexcept override;
+  // Control owner only. Never reads mutable audio-owned data while running;
+  // returns false until the start attempt has published its finished release.
+  bool read_diagnostics(AudioDiagnosticsSnapshot&) const noexcept;
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
