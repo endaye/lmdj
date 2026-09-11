@@ -51,6 +51,16 @@ status again Running/error 0/unmuted, volume 2/four pads/96808 bytes.
 This is short source-candidate hearing evidence, not a measured transient,
 reset/power-on acceptance, clean per-transition stop/restart receipt, or A1 pass.
 
+Follow-up receipt on the same flashed source/image and identical A content:
+after a new complete COMMIT and Ready/error 0, the user pressed Space only and
+confirmed restored drums; status was Running (2)/error 0. The user then pressed
+Space only and confirmed silence with no POP; status was Stopped (4)/error 0.
+One final Space restored drums with no POP; status was Running (2)/error 0.
+All three observations retained armed 0, muted 0, volume 2, four pads and
+96808-byte content. This closes the previously missing clean stop/restart
+receipt without rewriting the earlier confounded observation. No firmware
+change occurred between these transitions; sustained A1 remains outstanding.
+
 ## Regression and shipping verification
 
 Component `dac_startup.order` catches DAC enable before clock startup and
