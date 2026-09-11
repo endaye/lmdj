@@ -534,7 +534,7 @@ void RealtimeEngine::start_pattern_voice(
   voice->pattern_generation = pattern_slots_[voice->pattern_slot].generation;
   voice->active = true;
   voice_scan_extent_ = std::max(
-      voice_scan_extent_, static_cast<std::size_t>(voice - voices_.data()) + 1);
+      voice_scan_extent_, static_cast<std::size_t>(voice - voices_.begin()) + 1);
   ++pattern_slots_[voice->pattern_slot].active_voices;
   started_voices_ += 1;
   active_voices_ += 1;
@@ -2201,7 +2201,7 @@ void RealtimeEngine::render(
     }
     voice->active = true;
     voice_scan_extent_ = std::max(
-        voice_scan_extent_, static_cast<std::size_t>(voice - voices_.data()) + 1);
+        voice_scan_extent_, static_cast<std::size_t>(voice - voices_.begin()) + 1);
     if (auto* const owner = bank_slot_for(bank_slot); owner != nullptr) {
       ++owner->active_voices;
     }
