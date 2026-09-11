@@ -279,7 +279,11 @@ def send_serial(path: str, content: bytes, timeout: float = 5.0) -> Frame:
     """Perform one HELLO -> BEGIN -> DATA -> COMMIT transaction on POSIX serial."""
     if not path or timeout <= 0:
         raise ValueError("invalid serial path or timeout")
-    fd = os.open(path, os.O_RDWR | os.O_NOCTTY)
+    # USB Serial/JTAG devices on macOS may not report writable through
+    # select(2) even though a non-blocking write is immediately accepted.
+    # Open non-blocking and use select only after EAGAIN so HELLO cannot time
+    # out before the endpoint sees its first frame.
+    fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
     try:
         attrs = termios.tcgetattr(fd)
         attrs[0] = 0
@@ -294,11 +298,13 @@ def send_serial(path: str, content: bytes, timeout: float = 5.0) -> Frame:
             wire = encode(frame)
             view = memoryview(wire)
             while view:
-                writable, _, _ = select.select([], [fd], [], timeout)
-                if not writable:
-                    raise TimeoutError("serial write timeout")
-                count = os.write(fd, view)
-                view = view[count:]
+                try:
+                    count = os.write(fd, view)
+                    view = view[count:]
+                except BlockingIOError:
+                    writable, _, _ = select.select([], [fd], [], timeout)
+                    if not writable:
+                        raise TimeoutError("serial write timeout")
             deadline = time.monotonic() + timeout
             received = bytearray()
             while True:

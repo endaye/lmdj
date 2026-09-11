@@ -97,6 +97,14 @@ bool UsbTransferEndpoint::commit_sink(void* context, std::span<const std::byte> 
 
 bool UsbTransferEndpoint::install() noexcept {
   if (installed_) return true;
+  // The production Host uses USB Serial/JTAG for the ESP console, which
+  // installs this driver before app_main. Reusing that driver is required;
+  // attempting a second install returns ESP_ERR_INVALID_STATE and would make
+  // poll() silently discard every transfer frame.
+  if (usb_serial_jtag_is_driver_installed()) {
+    installed_ = true;
+    return true;
+  }
   usb_serial_jtag_driver_config_t config{};
   config.rx_buffer_size = static_cast<std::uint32_t>(input_.size());
   config.tx_buffer_size = static_cast<std::uint32_t>(output_.size());
