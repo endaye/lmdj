@@ -125,6 +125,10 @@ class RuntimeFacade final {
   // is published; unused entries are value-initialized. No allocation or
   // borrowed storage, and no Host profile filtering of the Core's 64 slots.
   RuntimeContentSummary content_summary() const noexcept;
+  // Serialized control caller, stopped phase only (callback gate drained).
+  // Actual allocated-voice overlap since start, not command or audible count.
+  // Unavailable before stop and after unload; a measured silent run is zero.
+  std::optional<std::uint32_t> stopped_peak_voices() const noexcept;
   void render(float* left, float* right, std::uint32_t frames) noexcept;
 
  private:

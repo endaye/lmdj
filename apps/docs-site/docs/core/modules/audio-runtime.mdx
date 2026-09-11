@@ -19,6 +19,13 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 2. 当前实现状态
 Audio Runtime `3.1.0` 已实现 Prepared Sample Bank、per-Pad playback、四种触发模式、Voice state、Realtime Engine、Offline Renderer，以及整数 BPM transport anchor、Bar-boundary notification 和 Pattern origin。Prepared PCM 不再设置单 Pad 帧数上限：64 个 Pad Slot 各自持有独立的可变长 `std::vector<float>`，每个 16-Pad user Bank 使用独立字节账本，同时受 generation 总账本约束；无需 PCM arena 或 offset table。resident bytes 由 publication owner 另行核算。当前 source 以 32 位 atomic slot-token mailbox 线性化 immutable Pattern publication：control 只取代尚未被 callback claim 的同 Project/Pattern/next-Bar view；不同 Pattern 默认拒绝，只有同时匹配 pending generation、源 Pattern 与 activation frame 的 Sequence switch/Stop authority 才可替换或取消。已 claim 的 view 保留原 boundary，较新的 view 从 claimed activation/BPM Bar length 重算到下一 Bar；slot token 的 bit 31 表示 claimed，完整 64 位 generation 保存在不可变槽内；保留原有 2^63 耗尽边界并 fail closed，不循环复用外部身份。实时线程只消费不可变 Runtime Snapshot 与固定队列，不执行 quantization、Project mutation 或 journal I/O。本版新增固定八段 master FX 链：`kFxChainOrder` 的顺序恒为 filter → delay → reverb → stutter → gate → reverse → crush → cutter，每段状态是 `{value, engaged, frozen}`，链级另有一个 HOLD 位冻结全链当前形态。所有 FX 取值共享 0..1000 的整数值域（`kMasterFxValueMaximum = 1000`）。`MasterFxChain` 暴露 `prepare / reset / set_bpm(bpm) / apply_gesture(FxGesture) / process(left, right, frames)`；stutter、cutter 与 delay 的周期全部由 `master_fx_bar_frames(sample_rate, bpm)` 与各自的 divisor 表从 Bar 推导，因此 FX 时值跟随整数 BPM transport anchor，而不是墙钟时间。`RealtimeEngine` 相应新增 `prepare_master_fx(bpm)`（控制线程、quiescent，一次性分配全部 FX 渲染存储）、`enqueue_fx_gesture`/`enqueue_master_fx_tempo(bpm)`、有界的 `MasterFxControlKind {gesture, tempo}` 控制通道、`FxEnqueueResult`（`accepted`、`invalid_fx`、`invalid_value`、`invalid_bpm`、`not_prepared`、`not_running`、`queue_full`）与 `master_fx_telemetry()`、`master_fx_processed_frames_`。既有实时不变量完全不变：实时回调仍不分配、不加锁、不修改 Project、不做量化、不做 journal I/O；FX 缓冲在准备阶段一次分配完毕，手势与 tempo 只经由有界控制通道到达。
 ## 3. 所有权与依赖
+当前开发源码在 Pattern 与本地 Pad 的实际 voice 激活处维护每次 start 的峰值。
+`peak_voices_audio()` 只允许唯一音频 owner 或已排空回调的调用方读取；不通过该接口
+跨线程读取运行中的可变值。计数包含同一个 block 内启动并结束的 voice 重叠，
+不把未发声的命令 admission 或容量拒绝当成新 voice。stop 保留计数，下一次
+成功 start 清零。它度量 voice 分配重叠，不证明模拟输出、响度或物理按键时延；
+既有 128-voice 容量不变。版本化分发仍须后续集成版本分配。
+
 依赖 Foundation 与 Project Cooker；平台输出位于适配边界。
 ## 4. 架构与数据流
 Runtime Snapshot + 可选 pending overlay → immutable Prepared Pattern slot → atomic32 slot-token mailbox claim → fixed SPSC control 与 Voice-state/Bar-boundary 队列 → Bar-boundary apply → master FX 链 → 输出 sink；preview、overlay、transport anchor 与 master FX 状态只属于 Runtime，不进入 Project Truth。FX 手势与 tempo 更新走同一条独立的有界 master FX 控制通道，与 trigger/control 通道同为单生产者单消费者；tempo 更新与手势保持顺序，并在下一个渲染量子边界生效。

@@ -538,6 +538,7 @@ void RealtimeEngine::start_pattern_voice(
   ++pattern_slots_[voice->pattern_slot].active_voices;
   started_voices_ += 1;
   active_voices_ += 1;
+  peak_voices_ = std::max(peak_voices_, active_voices_);
 }
 
 void RealtimeEngine::schedule_pattern_events(
@@ -1618,6 +1619,7 @@ foundation::Result<void> RealtimeEngine::start() {
   started_voices_ = 0;
   completed_voices_ = 0;
   active_voices_ = 0;
+  peak_voices_ = 0;
   cancelled_voices_ = 0;
   invalid_events_ = 0;
   audio_invalid_events_ = 0;
@@ -2207,6 +2209,7 @@ void RealtimeEngine::render(
     }
     started_voices_ += 1;
     active_voices_ += 1;
+    peak_voices_ = std::max(peak_voices_, active_voices_);
     if (!replay && !audition) {
       if (trigger_outcome_ring_.try_push(RuntimeTriggerOutcomeEvent{
               event.sequence,
