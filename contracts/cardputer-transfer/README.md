@@ -26,5 +26,8 @@ after five seconds of no new bytes; duplicate chunks do not extend that clock.
 The reference sender puts the same 16-byte transfer ID in BEGIN, every DATA
 chunk, and COMMIT; DATA chunks carry the transfer ID before their little-endian
 offset, so a stale transaction cannot mutate a newer one.
-Session/nonce authorization, exact request replay caching, and real USB/PTY
-integration remain deployment/acceptance work and must preserve these D1 rules.
+The protocol-facing session seam now requires a zero-nonce HELLO, issues a
+non-zero session nonce, and admits only the exact next request ID; stale nonce
+or skipped IDs cannot reach the transaction receiver. Exact request replay
+caching and real USB/PTY integration remain deployment/acceptance work and
+must preserve these D1 rules.

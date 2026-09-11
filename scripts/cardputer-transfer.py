@@ -114,7 +114,9 @@ class Receiver:
             raise ValueError("wrong transfer")
         if not chunk:
             raise ValueError("empty data chunk")
-        result = self.data(request_id, offset, chunk)
+        # Session owns wire request sequencing; Receiver retains BEGIN's
+        # request ID only as its legacy transaction handle.
+        result = self.data(self.request_id, offset, chunk)
         if result == "accepted" and chunk:
             self.last_progress_ms = now_ms
         return result
@@ -138,7 +140,7 @@ class Receiver:
     def commit_transfer(self, request_id: int, transfer_id: bytes, now_ms: int):
         if transfer_id != self.transfer_id:
             raise ValueError("wrong transfer")
-        return self.commit(request_id)
+        return self.commit(self.request_id)
 
     def abort(self, request_id: int):
         if not self.receiving or request_id != self.request_id:
@@ -161,6 +163,56 @@ class Receiver:
             return False
         self.clear()
         return True
+
+
+class Session:
+    """Nonce and exact-next request sequencing around :class:`Receiver`."""
+
+    def __init__(self, maximum_bytes: int, sink, nonce_source):
+        self.receiver = Receiver(maximum_bytes, sink)
+        self.nonce_source = nonce_source
+        self.nonce = None
+        self.next_request_id = 1
+
+    def hello(self, request_id: int, nonce: bytes):
+        if request_id != 1 or nonce != bytes(16):
+            raise ValueError("bad hello")
+        candidate = bytes(self.nonce_source())
+        if len(candidate) != 16 or not any(candidate):
+            raise ValueError("invalid session nonce")
+        self.receiver.disconnect()
+        self.nonce = candidate
+        self.next_request_id = 2
+        return "accepted"
+
+    def _authorize(self, request_id: int, nonce: bytes):
+        if self.nonce is None or nonce != self.nonce:
+            raise ValueError("stale session")
+        if self.next_request_id == 0 or request_id != self.next_request_id:
+            raise ValueError("bad request id")
+        self.next_request_id = 0 if request_id == 0xFFFFFFFF else request_id + 1
+
+    def begin(self, request_id: int, nonce: bytes, transfer_id: bytes,
+              identity: ContentIdentity, now_ms: int):
+        self._authorize(request_id, nonce)
+        return self.receiver.begin_transfer(request_id, transfer_id, identity, now_ms)
+
+    def data(self, request_id: int, nonce: bytes, transfer_id: bytes,
+             offset: int, chunk: bytes, now_ms: int):
+        self._authorize(request_id, nonce)
+        return self.receiver.data_transfer(request_id, transfer_id, offset, chunk, now_ms)
+
+    def commit(self, request_id: int, nonce: bytes, transfer_id: bytes,
+               now_ms: int):
+        self._authorize(request_id, nonce)
+        return self.receiver.commit_transfer(request_id, transfer_id, now_ms)
+
+    def abort(self, request_id: int, nonce: bytes, transfer_id: bytes):
+        self._authorize(request_id, nonce)
+        return self.receiver.abort_transfer(request_id, transfer_id)
+
+    def expire(self, now_ms: int):
+        return self.receiver.expire(now_ms)
 
 
 def content_frames(content: bytes, request_id: int, nonce: bytes,

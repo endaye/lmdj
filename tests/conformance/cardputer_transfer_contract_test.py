@@ -123,6 +123,25 @@ class CardputerTransferContractTest(unittest.TestCase):
             receiver.abort_transfer(3, b"x" * 16)
         self.assertTrue(receiver.receiving)
 
+    def test_session_nonce_and_exact_request_sequence(self):
+        content = b"session"
+        transfer_id = bytes(range(1, 17))
+        identity = transfer.ContentIdentity(hashlib.sha256(content).digest(), len(content), transfer_id)
+        session = transfer.Session(1024, lambda *_: True, lambda: bytes(range(1, 17)))
+        with self.assertRaisesRegex(ValueError, "bad hello"):
+            session.hello(2, bytes(16))
+        self.assertEqual(session.hello(1, bytes(16)), "accepted")
+        nonce = session.nonce
+        with self.assertRaisesRegex(ValueError, "stale session"):
+            session.begin(2, b"x" * 16, transfer_id, identity, 0)
+        self.assertEqual(session.next_request_id, 2)
+        self.assertEqual(session.begin(2, nonce, transfer_id, identity, 0), "accepted")
+        with self.assertRaisesRegex(ValueError, "bad request id"):
+            session.data(4, nonce, transfer_id, 0, content, 1)
+        self.assertEqual(session.next_request_id, 3)
+        self.assertEqual(session.data(3, nonce, transfer_id, 0, content, 1), "accepted")
+        self.assertEqual(session.commit(4, nonce, transfer_id, 2), "committed")
+
 
 if __name__ == "__main__":
     unittest.main()

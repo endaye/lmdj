@@ -81,9 +81,12 @@ TransferTransactionResult TransferReceiver::data(
     std::uint32_t request_id, const std::array<std::byte, 16>& transfer_id,
     std::uint64_t offset, std::span<const std::byte> bytes,
     std::uint64_t now_ms) noexcept {
+  (void)request_id;
   if (transfer_id != transfer_id_) return TransferTransactionResult::wrong_state;
   if (bytes.empty()) return TransferTransactionResult::malformed;
-  const auto result = data(request_id, offset, bytes);
+  // The session owns the wire request sequence; the transaction receiver's
+  // stored request ID is only the legacy transaction handle.
+  const auto result = data(request_id_, offset, bytes);
   // Exact duplicate chunks do not count as progress and cannot keep a
   // stalled transaction alive.
   if (result == TransferTransactionResult::accepted && !bytes.empty())
@@ -129,9 +132,10 @@ TransferTransactionResult TransferReceiver::commit(std::uint32_t request_id) noe
 TransferTransactionResult TransferReceiver::commit(
     std::uint32_t request_id, const std::array<std::byte, 16>& transfer_id,
     std::uint64_t now_ms) noexcept {
+  (void)request_id;
   (void)now_ms;
   if (transfer_id != transfer_id_) return TransferTransactionResult::wrong_state;
-  return commit(request_id);
+  return commit(request_id_);
 }
 
 TransferTransactionResult TransferReceiver::abort(std::uint32_t request_id) noexcept {
@@ -143,8 +147,9 @@ TransferTransactionResult TransferReceiver::abort(std::uint32_t request_id) noex
 TransferTransactionResult TransferReceiver::abort(
     std::uint32_t request_id,
     const std::array<std::byte, 16>& transfer_id) noexcept {
+  (void)request_id;
   if (transfer_id != transfer_id_) return TransferTransactionResult::wrong_state;
-  return abort(request_id);
+  return abort(request_id_);
 }
 
 void TransferReceiver::disconnect() noexcept { clear(); }
