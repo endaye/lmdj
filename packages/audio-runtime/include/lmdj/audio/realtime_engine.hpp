@@ -85,6 +85,7 @@ enum class PatternPublishResult : std::uint8_t {
   pattern_slots_full,
   publish_queue_full,
   generation_exhausted,
+  phase_mismatch,
 };
 
 struct PatternPublication {
@@ -505,6 +506,13 @@ class RealtimeEngine final {
   // racing this call cannot make the internally observed frame stale.
   PatternPublication publish_pattern_view_immediate(
       PreparedPatternView&& pattern) noexcept;
+  // Serialized control owner, like all publication/reclaim APIs. Requires the
+  // exact current generation and identical Project/Pattern, BPM, PPQ and loop.
+  // Refuses pending publications or a reserved transport command. Applies at
+  // the first effective render frame without changing origin or sounding voices.
+  // Explicit Pattern-stopped remains stopped; legacy scheduling stays enabled.
+  PatternPublication publish_pattern_view_preserving_phase(
+      PreparedPatternView&& pattern, std::uint64_t expected_generation) noexcept;
   // Control thread, concurrent with render. Cancels the exact pending
   // publication until the render apply point claims it. False means the
   // authority was stale or the apply point already won.
@@ -603,6 +611,7 @@ class RealtimeEngine final {
   enum class PatternPublicationTiming : std::uint8_t {
     scheduled,
     immediate,
+    preserve_phase,
   };
   static_assert(std::atomic<BankState>::is_always_lock_free);
   static_assert(std::atomic<PatternState>::is_always_lock_free);
@@ -643,6 +652,7 @@ class RealtimeEngine final {
     std::uint64_t generation = 0;
     std::uint64_t activation_frame = 0;
     std::size_t active_voices = 0;
+    bool preserve_phase = false;
   };
 
   struct PatternPublishEntry {
@@ -764,7 +774,8 @@ class RealtimeEngine final {
       PreparedPatternView&& pattern,
       std::optional<std::uint64_t> activation_frame,
       std::optional<PatternReplacementAuthority> replacement_authority,
-      PatternPublicationTiming timing) noexcept;
+      PatternPublicationTiming timing,
+      std::uint64_t expected_generation = 0) noexcept;
   void schedule_pattern_events(std::uint64_t runtime_frame) noexcept;
   void start_pattern_voice(
       const PreparedPatternEvent& event,

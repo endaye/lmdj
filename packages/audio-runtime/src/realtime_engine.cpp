@@ -455,9 +455,10 @@ void RealtimeEngine::apply_published_pattern(
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_audio_observation};
   const auto current =
       current_pattern_slot_.load(std::memory_order_relaxed);
+  const auto preserve_phase = pattern_slots_[publication.slot].preserve_phase;
   if (current != kNoPatternSlot) {
     for (auto& voice : voices_) {
-      if (voice.active && voice.pattern_slot == current) {
+      if (!preserve_phase && voice.active && voice.pattern_voice) {
         stop_voice(voice, runtime_frame);
       }
     }
@@ -472,11 +473,21 @@ void RealtimeEngine::apply_published_pattern(
   pattern_applied_frames_[publication.slot] = runtime_frame;
   next.state.store(PatternState::current, std::memory_order_release);
   current_pattern_slot_.store(publication.slot, std::memory_order_release);
-  pattern_origin_frame_ = runtime_frame;
+  if (!preserve_phase) pattern_origin_frame_ = runtime_frame;
   observed_current_pattern_generation_ = publication.generation;
   observed_audio_pending_ = {};
   publish_transport_decision();
   pattern_event_index_ = 0;
+  if (preserve_phase && runtime_frame >= pattern_origin_frame_) {
+    const auto local_frame =
+        (runtime_frame - pattern_origin_frame_) % next.pattern->loop_frames();
+    const auto& events = next.pattern->events();
+    pattern_event_index_ = static_cast<std::size_t>(std::lower_bound(
+        events.begin(), events.end(), local_frame,
+        [](const PreparedPatternEvent& event, std::uint64_t frame) {
+          return event.start_frame < frame;
+        }) - events.begin());
+  }
   audio_pending_pattern_generation_.store(0, std::memory_order_release);
   applied_pattern_publications_ += 1;
 }
@@ -1005,11 +1016,17 @@ PatternPublication RealtimeEngine::publish_pattern_view_immediate(
       PatternPublicationTiming::immediate);
 }
 
+PatternPublication RealtimeEngine::publish_pattern_view_preserving_phase(
+    PreparedPatternView&& pattern, std::uint64_t expected_generation) noexcept {
+  return publish_pattern_view_impl(std::move(pattern), std::nullopt, std::nullopt,
+      PatternPublicationTiming::preserve_phase, expected_generation);
+}
+
 PatternPublication RealtimeEngine::publish_pattern_view_impl(
     PreparedPatternView&& pattern,
     std::optional<std::uint64_t> requested_activation_frame,
     std::optional<PatternReplacementAuthority> replacement_authority,
-    PatternPublicationTiming timing) noexcept {
+    PatternPublicationTiming timing, std::uint64_t expected_generation) noexcept {
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
   if (pattern_transport_reserved_) {
     ++pattern_publication_rejections_;
@@ -1042,6 +1059,11 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
     const auto observed_pending_generation = observed_mailbox != 0
         ? pattern_token_generation(observed_mailbox)
         : observed_audio_generation;
+    if (timing == PatternPublicationTiming::preserve_phase &&
+        observed_pending_generation != 0) {
+      ++pattern_publication_rejections_;
+      return {PatternPublishResult::publication_pending, 0, 0};
+    }
     std::optional<std::uint64_t> observed_pending_activation;
     std::optional<std::uint64_t> claimed_next_activation;
     bool authorized_replacement = false;
@@ -1101,6 +1123,21 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
 
     const auto current =
         current_pattern_slot_.load(std::memory_order_acquire);
+    if (timing == PatternPublicationTiming::preserve_phase) {
+      if (current == kNoPatternSlot || expected_generation == 0 ||
+          pattern_slots_[current].generation != expected_generation) {
+        ++pattern_publication_rejections_;
+        return {PatternPublishResult::phase_mismatch, 0, 0};
+      }
+      const auto& previous = *pattern_slots_[current].pattern;
+      if (previous.project_id() != pattern.project_id() ||
+          previous.pattern_id() != pattern.pattern_id() ||
+          previous.bpm() != pattern.bpm() || previous.ppq() != pattern.ppq() ||
+          previous.loop_length_ticks() != pattern.loop_length_ticks()) {
+        ++pattern_publication_rejections_;
+        return {PatternPublishResult::phase_mismatch, 0, 0};
+      }
+    }
     if (current != kNoPatternSlot &&
         pattern_slots_[current].pattern->project_id() != pattern.project_id()) {
       pattern_publication_rejections_ += 1;
@@ -1131,6 +1168,7 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
     slot->pattern.emplace(std::move(pattern));
     slot->active_voices = 0;
     slot->generation = *generation;
+    slot->preserve_phase = timing == PatternPublicationTiming::preserve_phase;
 
     const auto running =
         state_.load(std::memory_order_acquire) == RealtimeState::running;
@@ -1139,7 +1177,7 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
       const auto observed_frame =
           transport_decision_.read().rendered_frames;
       activation_frame = observed_frame;
-      if (timing == PatternPublicationTiming::immediate) {
+      if (timing != PatternPublicationTiming::scheduled) {
         activation_frame = observed_frame;
       } else if (authorized_replacement &&
                  requested_activation_frame.has_value()) {

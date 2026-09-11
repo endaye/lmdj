@@ -72,11 +72,43 @@ Pattern identity/generation/BPM、playing、完整 switch authority、cutoff dec
 未决 fence 结果。quiescent Engine stop 使 runtime generation 失效，下一次 start
 清空旧命令通道并保持 Pattern stopped，接受新命令前必须重新 enable 新 generation。
 
-A1 尚不提供 preserve-phase replacement（A2）、Facade 六转换、journal durability、
-Runtime bridge 或 Creator 全局 opt-in。新增公开 API 与 Engine 内嵌存储改变 C++ 对象
+A1/A2 尚不提供 Facade 六转换、journal durability、Runtime bridge 或 Creator
+全局 opt-in。新增公开 API 与 Engine 内嵌存储改变 C++ 对象
 布局：这是 staged ABI break，不能作为旧 ABI 二进制替换。按集成裁定，本 source slice
 不改 manifest/Assembly；任何 package/team-test Build 分配前必须完成下一 Audio Runtime
 MAJOR 身份分配、coherent 静态消费者重编和匹配的 Assembly 流程。
+
+### 保相位替换与持续 Voice（A2 source）
+
+串行控制 owner 调用
+`publish_pattern_view_preserving_phase(PreparedPatternView&&, expected_generation)`，
+要求非零 expected generation 精确匹配 current publication，并保持相同
+Project、Pattern、BPM、PPQ 与 loop length；不匹配返回
+`PatternPublishResult::phase_mismatch`。PreparedPatternView 的准备边界本身也拒绝
+非 canonical PPQ。Project revision 和事件内容可以变化，支持 journal overlay
+与提交后的 canonical replacement。既有 publication 方法与默认启动语义保留。
+
+替换在音频实际取得 publication 后的首个有效渲染帧 F 应用，保留原 origin。
+新事件 cursor 从该 origin 推导当前 loop phase，并定位到 F 尚未调度的首个事件：
+恰在 F 的事件执行一次，已经过去的事件等下一 loop。返回的 activation frame 是
+控制侧观察到的最早请求帧，并非回填的实际应用帧。显式 Pattern-stopped 状态下只更新
+current view，不启用调度；后续显式 start 仍从新的 origin 开始。
+
+旧 generation 的持续 Voice 保留其 slot、sample reference、播放 cursor、envelope
+和绝对 scheduled release。旧 Pattern slot 进入 retiring，所有 Voice 结束且
+publication/audio owner 已释放后才可由控制线程 reclaim；音频线程不析构 PCM。
+固定四槽耗尽返回 `pattern_slots_full`，不抢占 Voice、不强制回收、不增长存储，
+释放后调用者可重试。pending publication（含 switch）或 reserved transport
+command/receipt 返回 `publication_pending`，不暗中重启或取代它们。
+
+Pattern Stop 按既有 96-frame ramp 结束所有仍存活的 Pattern generation；真正的
+Pattern switch 保留 origin 重启行为，并释放旧代 Pattern Voice。live Pad 与
+独立 performance replay 仍保留各自 release 所有权。
+
+组件证据覆盖独立引擎逐采样比较、非恒定 PCM 到 scheduled release、原 envelope、
+overlay/canonical 边界事件、固定槽耗尽和重试、停止时替换，以及跨代 Stop/switch。
+production stress 覆盖保相位 publication 与 render/reclaim/Stop 并发和显式拒绝，
+render allocation guard 覆盖替换应用及旧音符结束。源码证明不代表真机听感验收。
 
 ### Cardputer 紧凑存储与只读 PCM Bank
 

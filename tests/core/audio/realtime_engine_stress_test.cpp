@@ -145,6 +145,113 @@ void pattern_transport_receipts_race_publication_and_reclaim() {
       PatternTransportSubmit::stale_generation);
 }
 
+void phase_publication_races_render_reclaim_and_stop() {
+  using namespace lmdj;
+  using namespace lmdj::audio;
+  const foundation::ProjectId project{"00000000-0000-4000-8000-000000000001"};
+  const foundation::PatternId pattern{"00000000-0000-4000-8000-000000000002"};
+  auto make_view = [&] {
+    std::vector<std::int16_t> values(509);
+    for (std::size_t i = 0; i < values.size(); ++i)
+      values[i] = static_cast<std::int16_t>(1000 + i * 31);
+    auto pcm = std::make_shared<const cooker::PcmSample>(
+        cooker::PcmSample{48'000, 1, std::move(values)});
+    cooker::RuntimeSnapshot snapshot{project, pattern, 1, 120, 1,
+        domain::kPpq, domain::kBarTicks4x4,
+        {{{0, 0}, {std::string(64, 'a'), "audio/wav", 1018}, pcm,
+          {0, 509, domain::TriggerMode::loop_gate, 1.0F, false}}}, {}};
+    for (unsigned tick = 0; tick < 3840; tick += 40)
+      snapshot.events.push_back({{0, 0}, tick, 3840 - tick, 79, pcm});
+    auto result = PreparedPatternView::from_snapshot(snapshot);
+    LMDJ_CHECK(result.has_value());
+    return std::move(result.value());
+  };
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.enable_pattern_transport(23).has_value());
+  auto publication = engine.publish_pattern_view(make_view());
+  LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  std::atomic<bool> done{};
+  std::thread callback([&] {
+    std::array<float, 64> left{}, right{};
+    while (!done.load(std::memory_order_acquire)) {
+      callback_active = true;
+      engine.render(left.data(), right.data(), left.size());
+      callback_active = false;
+      for (std::size_t i = 0; i < left.size(); ++i)
+        LMDJ_CHECK(std::isfinite(left[i]) && std::isfinite(right[i]));
+      std::this_thread::yield();
+    }
+  });
+  std::uint64_t current = publication.generation, epoch = 0;
+  unsigned accepted = 0, refused = 0;
+  std::size_t reclaimed = 0;
+  auto receipt_for = [&](PatternTransportAction action,
+                         std::optional<PatternReplacementAuthority> authority = {}) {
+    LMDJ_CHECK(engine.submit_pattern_transport({23, ++epoch, current, action, authority}) ==
+        PatternTransportSubmit::accepted);
+    LMDJ_CHECK(engine.publish_pattern_view_preserving_phase(make_view(), current).result ==
+        PatternPublishResult::publication_pending);
+    ++refused;
+    std::optional<PatternTransportReceipt> receipt;
+    while (!(receipt = engine.inspect_pattern_transport_receipt(23, epoch)))
+      std::this_thread::yield();
+    LMDJ_CHECK(receipt->pattern_id == pattern);
+    LMDJ_CHECK(engine.acknowledge_pattern_transport_receipt(23, epoch));
+    current = receipt->pattern_generation;
+    return *receipt;
+  };
+  for (unsigned cycle = 0; cycle < 300; ++cycle) {
+    reclaimed += engine.reclaim_retired_patterns();
+    const auto start = receipt_for(PatternTransportAction::start);
+    // Natural completion can race preparation and reclaim; retry only when
+    // the fixed pool explicitly says retained voices still own its slots.
+    do {
+      publication = engine.publish_pattern_view_preserving_phase(make_view(), current);
+      if (publication.result == PatternPublishResult::pattern_slots_full) {
+        ++refused;
+        reclaimed += engine.reclaim_retired_patterns();
+        std::this_thread::yield();
+      }
+    } while (publication.result == PatternPublishResult::pattern_slots_full);
+    LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+    ++accepted;
+    const auto competing = engine.publish_pattern_view_preserving_phase(make_view(), current);
+    LMDJ_CHECK(competing.result == PatternPublishResult::publication_pending ||
+        competing.result == PatternPublishResult::phase_mismatch);
+    ++refused;
+    if (cycle % 2 == 0) {
+      while (engine.pattern_telemetry().current_generation != publication.generation) {
+        reclaimed += engine.reclaim_retired_patterns();
+        std::this_thread::yield();
+      }
+      LMDJ_CHECK(engine.current_pattern_origin_frame() == start.origin_frame);
+    }
+    const auto stop = receipt_for(PatternTransportAction::stop,
+        PatternReplacementAuthority{publication.generation, pattern, publication.activation_frame});
+    LMDJ_CHECK(!stop.playing && stop.origin_frame == start.origin_frame);
+    if (stop.switch_decision == PatternCutoffDecision::applied_before_cutoff) {
+      LMDJ_CHECK(stop.pattern_generation == publication.generation);
+      LMDJ_CHECK(stop.switch_applied_frame && *stop.switch_applied_frame < stop.effective_frame);
+    } else {
+      LMDJ_CHECK(stop.switch_decision == PatternCutoffDecision::canceled_at_cutoff);
+    }
+    while (engine.telemetry().active_voices != 0) {
+      reclaimed += engine.reclaim_retired_patterns();
+      std::this_thread::yield();
+    }
+    reclaimed += engine.reclaim_retired_patterns();
+  }
+  done.store(true, std::memory_order_release);
+  callback.join();
+  reclaimed += engine.reclaim_retired_patterns();
+  LMDJ_CHECK(accepted == 300 && refused >= 900 && reclaimed == 300);
+  const auto stats = engine.pattern_telemetry();
+  LMDJ_CHECK(stats.pending_publications == 0);
+  LMDJ_CHECK(stats.accepted_publications == stats.applied_publications + stats.canceled_publications);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+}
+
 void pcm_publication_retirement_races_real_render_without_owner_destruction() {
   using namespace lmdj;
   using namespace lmdj::audio;
@@ -679,6 +786,7 @@ void operator delete(void* p, std::size_t, std::align_val_t) noexcept { release_
 void operator delete[](void* p, std::size_t, std::align_val_t) noexcept { release_allocation(p); }
 
 int main() {
+  phase_publication_races_render_reclaim_and_stop();
   pattern_transport_receipts_race_publication_and_reclaim();
   pcm_audition_replacement_keeps_both_owners_until_audio_release();
   pcm_publication_retirement_races_real_render_without_owner_destruction();
