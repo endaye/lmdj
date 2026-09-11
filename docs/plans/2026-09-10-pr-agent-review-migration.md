@@ -4,13 +4,73 @@ Date: 2026-09-10
 Status: Implementation in progress; per-Task acceptance is recorded in the linked issues.
 Umbrella: #1149. Task issues: #1150–#1155.
 
+## Owner scope update — funding checks deferred
+
+On 2026-09-11 the owner removed proactive balance/limit-management and native
+funding admission from this wave and will check supplier accounts manually.
+This update supersedes conflicting funding-proof prerequisites in the earlier
+plan text; historical balance preflight and rejected source evidence are not
+rewritten or treated as accepted. Do not run the balance preflight again merely
+to satisfy an obsolete gate. The withdrawn native-funding branch is excluded
+from the current candidate and its unfinished work is not a migration blocker.
+
+Record actual supplier insufficient-balance/quota/limit failures and notify the
+owner without exposing keys or raw account data. Automatic warning is deferred
+as [#1188](https://github.com/endaye/lmdj/issues/1188), not a dependency of this
+wave. Existing USD 1/20/20 accounting, request/timeout caps, verified pricing,
+credential/model identity, four-provider/fallback and quality acceptance,
+Netcup isolation, exact-head protection and cutover/handoff remain unchanged.
+
+### Bounded follow-through Task: retire funding attestation activation gate
+
+Status: implemented; declared verification passed before this amendment;
+independent exact-head review remains pending. The initial implementation commit
+is `4e08436113b39a2327cff0c630279dff0f158685`; postcommit verification repairs
+acceptance after the original docs-site check failed before that commit.
+Use a fresh isolated `fix/pr-agent-funding-gate` worktree from verified main,
+not the withdrawn native-funding worktree. Lead owns this plan and acceptance;
+Luna owns implementation/tests in one Conventional Commit.
+
+Declared files:
+
+- `scripts/ci/pr_agent_review.py`
+- `tests/build/ci_pr_agent_review_test.py`
+- `scripts/ci/pr-agent/config.toml` (inactive explanatory comments)
+- `docs/design/2026-09-10-pr-agent-review-migration.md`
+- `docs/plans/2026-09-10-pr-agent-review-migration.md`
+
+Remove mandatory `funding_ref`/`funding_verified` from provider enablement and
+normalized operational authority. Accept those legacy keys as ignored
+compatibility inputs, without changing the config schema or other unknown-key
+rejection. New fixtures omit them; explicit legacy true/false compatibility
+tests cannot activate a disabled provider or bypass any other retained guard.
+Do not invent proof of funds, query balances, add native bookkeeping or implement
+the deferred warning. No installer/workflow/dependency/host/secret mutation.
+
+Verification first reproduces the old no-funding-fields rejection with every
+other activation input valid. Then prove valid activation without the fields,
+ignored legacy inputs, retained negative pricing/credential/model checks, and
+an actual pinned-handler fake-HTTP success with no balance GET. Preserve every
+existing method/subcase, run ordinary and `-S` adapter tests, the complete shared
+integration under `0022` and `0002`, complete change-scope and docs-site checks.
+Inspect exact staged/committed paths and clean final head. An independent
+complete exact-head review is required before push; no real API is called by
+this source Task. Historical failed runs remain separate evidence.
+
+Version impact: none for Product/Module/Contract. Changed internal adapter and
+config bytes require a newly verified Linux bundle before deployment; never
+relabel the v14 archive. Documentation impact: none, because this Task changes
+internal design/plan and inactive configuration, not a current Portal route;
+the documentation check remains required by the declared verification.
+
 ## Authority and coordination
 
 The user authorized the complete umbrella implementation, task-local commit,
 push, PR, independent current-head review and squash merge, plus deployment to
 the existing Netcup server. The owner supplied a USD 20 monthly API cap on 2026-09-10. The design records
 calendar-month accounting, a USD 20 cumulative first-pilot cap and a USD 1
-per-PR cap. Credentials and supplier funding/eligibility remain unverified.
+per-PR cap. Credentials and supplier route eligibility remain unverified;
+supplier funding is checked manually and is not an adapter activation gate.
 No server purchase, paid hosted fallback, branch-protection change, product
 release or unrelated cleanup is authorized.
 
@@ -206,7 +266,8 @@ enabled charged output classes. Unknown/unbounded categories deny admission;
 optional charged features stay disabled unless bounded. Price revision binds
 these limits, rates, fixed charge, billable categories and priced response-model
 identity in the durable reservation basis. Preserve USD 1 attempt,
-USD 20 cumulative pilot and USD 20 Asia/Shanghai monthly caps and funding checks.
+USD 20 cumulative pilot and USD 20 Asia/Shanghai monthly caps. Supplier account
+funding is checked manually and is not an adapter activation prerequisite.
 
 Reconcile complete authoritative priced usage/model identity; otherwise finalize
 exactly once uncertain and retain reservation. Direct monetary charge
@@ -262,9 +323,10 @@ review infrastructure and design/plan only, no Portal route/projected identity
 change. Version impact: none; no Product/Module/Contract identity changes.
 
 T2 may complete when the adjusted engine works with eligible trusted config and
-these technical gates pass. Supplier counting, live funding proof, host access,
-shadow qualification and T3-T6 acceptance are not additional T2 gates. Defaults
-remain inactive; this amendment is not proof of live supplier usability.
+these technical gates pass. Supplier counting, live supplier qualification,
+host access, shadow qualification and T3-T6 acceptance are not additional T2
+gates. Defaults remain inactive; this amendment is not proof of live supplier
+usability. Funding attestation is deferred and is not a T2 gate.
 
 Use a detached `DEPLOYMENT_IDENTITY.json` to bind the final archive SHA-256 and
 byte length, manifest, adapter, bundled default config and dependency lock.
@@ -531,7 +593,13 @@ and route `/operations/testing-and-proof/` when deployed behavior is documented.
 Update page source_paths and run the check in that same Task. A docs/quality
 file alone does not justify claiming that a Portal page was changed.
 
-## T4 prerequisite: dedicated credential preflight
+## Historical T4 prerequisite: dedicated credential preflight
+
+This section records the earlier balance-preflight workflow and its evidence
+boundary; it is retained as history, not a current candidate gate. Do not rerun
+it merely to satisfy the retired funding-attestation requirement. The owner now
+checks supplier accounts manually, and this migration adds no balance query or
+funding authority.
 
 The owner authorized completion of deployment admission and credential
 verification on 2026-09-11 after selecting DeepSeek-V4.1-Flash (API name

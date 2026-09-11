@@ -18,7 +18,8 @@ output_token_cap = 4096
 
 # The DeepSeek endpoint/model and peak cache-miss prices are observations from
 # the design, not fresh implementation verification.  Activation remains
-# closed until an operator supplies reviewed pricing and funding evidence.
+# closed until an operator supplies reviewed pricing evidence. Supplier account
+# balances and quotas are checked manually; no funding attestation is required.
 # An enabled provider must also bind its full context ceiling, peak input/output
 # rates, fixed request charge, and the closed billable category inventory to one
 # reviewed pricing revision.  The adapter does not perform supplier token counting.

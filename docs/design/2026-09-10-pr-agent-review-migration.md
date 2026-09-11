@@ -5,6 +5,39 @@ Status: design accepted; inactive engine and review protocol merged; production 
 Owner: project lead; implementation and independent verification use supervised
 Orca workers. Umbrella: #1149. Design Task: #1150.
 
+## Owner scope update — 2026-09-11
+
+The owner removed proactive supplier balance/limit management and native
+funding admission from this migration wave: run the multi-provider review flow
+first, with account balances and quotas checked manually by the owner. This
+decision supersedes conflicting funds-proof prerequisites below; retain older
+observations as history, not current activation gates. The withdrawn native
+funding work is not accepted or included in the candidate.
+
+Do not fabricate `funding_verified` or a funding receipt to enable a provider.
+The follow-through Task removes that activation requirement; legacy
+`funding_ref`/`funding_verified` inputs remain accepted but ignored for config
+compatibility and establish no balance fact. Pricing/model/credential/source
+validation and the existing USD 1/20/20, request and timeout boundaries remain
+unchanged. The source implementation is implemented; declared verification
+passed before this amendment. Independent exact-head review remains pending.
+The initial implementation commit is `4e08436113b39a2327cff0c630279dff0f158685`;
+postcommit verification repairs acceptance after the original docs-site check
+failed before that commit. This is not acceptance or merge evidence.
+
+If a real model returns insufficient balance, exhausted quota or a limit error,
+retain sanitized failure evidence and tell the owner. Automatic operator-visible
+warning is deferred in [#1188](https://github.com/endaye/lmdj/issues/1188), outside
+this wave and not a T4/T5/T6 dependency. No automatic balance query, top-up,
+extra retry or custom credential-entry subsystem is introduced. The owner chose
+the existing provider environment-variable entrance; service-scoped injection
+still needs ordinary deployment verification without exposing key values.
+
+Four-provider/fallback evidence, full quality cohorts, exact-head independent
+review, Netcup isolation/coexistence, production cutover, rollback and handoff
+remain required. Removing funding functionality is not an approval of missing
+review or deployment evidence.
+
 ## Outcome and evidence boundary
 
 Replace the GLM/Kimi Claude Code action and Grok CLI invocation with PR-Agent
@@ -159,8 +192,9 @@ budget-admitted request succeeds. The initial enabled candidate order is
 `[deepseek, glm, grok, kimi]`. Inactive suppliers have `enabled=false` and
 null endpoint/model bindings, not guessed defaults. T2 must support all four
 provider adapters and reject activation without an explicit trusted endpoint,
-model, pricing revision, credential reference and funding/eligibility receipt.
-T4 records reviewed activation configuration when those inputs are available.
+model, pricing revision and credential reference. T4 records reviewed
+activation configuration when those inputs are available; supplier account
+balances and quotas are checked manually, not as an adapter activation gate.
 This inactive state is a complete initial configuration, not four-supplier
 acceptance; T5/T6 remain blocked until their live supplier criteria pass.
 Do not reuse Coding-plan/login secrets as general API credentials without
@@ -179,10 +213,10 @@ spend if it spans months. No automatic recharge, subscription upgrade or new
 purchase is configured by this authorization.
 
 The lead sets a USD 1 per-PR attempt cap (including all provider retries),
-further bounded by remaining pilot/monthly allowance and verified supplier
-funds. The reported DeepSeek balance of approximately USD 10 is unverified;
-never treat the reported amount as confirmed available funds. Requests still
-require configured credentials, verified pricing and ledger admission.
+further bounded by remaining pilot/monthly allowance. The reported DeepSeek
+balance of approximately USD 10 is an unverified historical observation and is
+not an adapter input. Requests still require configured credentials, verified
+pricing and ledger admission; supplier account checks remain manual.
 
 The available GitHub repository secret names observed on 2026-09-10 are
 `ZAI_CODING_KEY`, `KIMI_CODING_KEY`, `GROK_AUTH_JSON`, the runner read token,
@@ -237,11 +271,12 @@ context-rejected request; it is not a locally measured prompt size. Require
 billable input/output class. Reasoning, tools, search, priority and other charged
 features must be disabled unless their charges fall within these same enforced
 bounds. A zero fixed charge requires reviewed pricing evidence. Unknown or
-unbounded charges, unverified funding, non-finite bounds, or a reservation above
+unbounded charges, non-finite bounds, or a reservation above
 remaining USD 1 attempt / USD 20 cumulative pilot / USD 20 Asia/Shanghai monthly
 allowance deny admission. A context above 100,000 is eligible under this formula
-without a supplier counter. Available balance subtracts reconciled spend plus
-outstanding reservations. Never reset or clear the ledger when replacing a worker.
+without a supplier counter. Remaining project allowance subtracts reconciled
+spend plus outstanding reservations. Never reset or clear the ledger when
+replacing a worker.
 
 The trusted price revision binds context limit, output cap, rates, fixed charge,
 enabled billable categories and priced response-model identity; any change
@@ -268,13 +303,19 @@ once as uncertain, and still records a durable breach hold when its valid usage
 exceeds the envelope. Such a breach permits neither stock retry nor fallback.
 Never fabricate a finite actual charge for unpriceable usage. Record
 estimates separately from supplier billing. Supplier counter certification is
-not a T2 completion prerequisite; funding, live qualification and model selection
-remain in their existing later Tasks without increased dollar caps.
+not a T2 completion prerequisite; live qualification and model selection remain
+in their existing later Tasks without increased dollar caps. Funding attestation
+is deferred by the owner and is not an activation or T2 completion prerequisite.
 
 Only finite error categories, HTTP status, safe request IDs and aggregate usage
 leave the engine boundary; raw provider errors and keys do not enter artifacts.
 
-## Subscription and API funding boundaries
+## Historical subscription and API funding observations
+
+The following supplier-route observations are retained as historical context,
+not as current adapter activation gates. The owner checks supplier accounts
+manually; this migration does not add balance queries, top-ups or funding
+attestation authority.
 
 Official documentation checked 2026-09-10 distinguishes these routes:
 
