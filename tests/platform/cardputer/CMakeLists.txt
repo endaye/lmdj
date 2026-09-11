@@ -80,6 +80,19 @@ foreach(scenario happy reject_identity disconnect)
     COMMAND lmdj_cardputer_transfer_transaction_tests ${scenario})
 endforeach()
 
+add_executable(lmdj_cardputer_transfer_hash_memory_tests
+  transfer_hash_memory_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer_transaction.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer_session.cpp")
+target_include_directories(lmdj_cardputer_transfer_hash_memory_tests PRIVATE
+  "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/third_party/picosha2")
+lmdj_target_warnings(lmdj_cardputer_transfer_hash_memory_tests)
+lmdj_target_sanitizers(lmdj_cardputer_transfer_hash_memory_tests)
+foreach(scenario bounded corrupt allocation_failure session_allocation_failure)
+  lmdj_add_test(NAME platform.cardputer.transfer_hash_memory.${scenario} TIER component
+    COMMAND lmdj_cardputer_transfer_hash_memory_tests ${scenario})
+endforeach()
+
 add_executable(lmdj_cardputer_transfer_session_tests
   transfer_session_test.cpp
   "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer.cpp"
