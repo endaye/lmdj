@@ -42,6 +42,7 @@ ASSERTION_KEYWORDS = frozenset(
         "minimum",
         "maximum",
         "allOf",
+        "anyOf",
         "oneOf",
         "if",
         "then",
@@ -112,7 +113,7 @@ def assert_supported(schema: Any, where: str = "#") -> None:
                 raise SchemaError(f"{child}: expected an object")
             for name, sub in value.items():
                 assert_supported(sub, f"{child}/{name}")
-        elif key in ("allOf", "oneOf"):
+        elif key in ("allOf", "anyOf", "oneOf"):
             if not isinstance(value, list):
                 raise SchemaError(f"{child}: expected an array")
             for index, sub in enumerate(value):
@@ -194,7 +195,7 @@ def _validate(
     if isinstance(instance, list):
         _validate_array(instance, schema, root, path, errors)
 
-    for keyword in ("allOf", "oneOf"):
+    for keyword in ("allOf", "anyOf", "oneOf"):
         if keyword not in schema:
             continue
         matched = 0
@@ -206,6 +207,10 @@ def _validate(
                     errors.extend(branch)
             else:
                 matched += 1
+        if keyword == "anyOf" and matched == 0:
+            errors.append(
+                f"{path}: expected at least one anyOf branch to match"
+            )
         if keyword == "oneOf" and matched != 1:
             errors.append(
                 f"{path}: expected exactly one oneOf branch to match, "
