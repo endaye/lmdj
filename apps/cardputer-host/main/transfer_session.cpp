@@ -80,6 +80,7 @@ TransferSessionResult TransferSession::commit(
   const auto result = receiver_.commit(request_id, transfer_id, now_ms);
   switch (result) {
     case TransferTransactionResult::committed: return TransferSessionResult::committed;
+    case TransferTransactionResult::resource_limit: return TransferSessionResult::resource_limit;
     case TransferTransactionResult::identity_mismatch: return TransferSessionResult::identity_mismatch;
     case TransferTransactionResult::malformed: return TransferSessionResult::invalid_transfer;
     default: return TransferSessionResult::wrong_state;
