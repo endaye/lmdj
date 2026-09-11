@@ -32,3 +32,29 @@ foreach(scenario mapping repeat_release empty_receive overflow queue_retry displ
   lmdj_add_test(NAME platform.cardputer.input.${scenario} TIER component
     COMMAND lmdj_cardputer_input_tests ${scenario})
 endforeach()
+
+add_executable(lmdj_cardputer_transfer_tests
+  transfer_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer.cpp")
+target_link_libraries(lmdj_cardputer_transfer_tests PRIVATE Threads::Threads)
+target_include_directories(lmdj_cardputer_transfer_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+lmdj_target_warnings(lmdj_cardputer_transfer_tests)
+lmdj_target_sanitizers(lmdj_cardputer_transfer_tests)
+foreach(scenario crc roundtrip limits malformed resync)
+  lmdj_add_test(NAME platform.cardputer.transfer.${scenario} TIER component
+    COMMAND lmdj_cardputer_transfer_tests ${scenario})
+endforeach()
+
+add_executable(lmdj_cardputer_transfer_transaction_tests
+  transfer_transaction_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer_transaction.cpp")
+target_link_libraries(lmdj_cardputer_transfer_transaction_tests PRIVATE Threads::Threads)
+target_include_directories(lmdj_cardputer_transfer_transaction_tests PRIVATE
+  "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/third_party/picosha2")
+lmdj_target_warnings(lmdj_cardputer_transfer_transaction_tests)
+lmdj_target_sanitizers(lmdj_cardputer_transfer_transaction_tests)
+foreach(scenario happy reject_identity disconnect)
+  lmdj_add_test(NAME platform.cardputer.transfer_transaction.${scenario} TIER component
+    COMMAND lmdj_cardputer_transfer_transaction_tests ${scenario})
+endforeach()

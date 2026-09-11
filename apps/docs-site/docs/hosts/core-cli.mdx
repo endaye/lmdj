@@ -22,6 +22,16 @@ stdin/参数 → CLI adapter → Facade → 规范 JSON/Artifact 输出。CLI �
 ## 限制
 CLI 是工程 Host，不等同于最终创作者 GUI。headless bridge 使用 steady time source 而非音频设备时钟，Performance 操作在 CLI 上的可用性只证明控制面与状态边界，不构成任何物理演奏、听感或延迟验收，也不表示 tag、Release、部署或 Channel promotion 已发生。
 
+## Cardputer 导出边界
+Cardputer C1 的电脑入口必须调用 `Application::export_runtime_content` 生成完整
+Runtime Content 与 `sha256`/byte length identity；CLI 不解析 Project Bundle、不
+修改 Project Truth，也不把 BEGIN/DATA admission 回执当作设备已装载。USB
+Cardputer transfer v1 sender/receiver 是独立的有界传输适配，支持 macOS
+与 Linux 命令行范围；Windows、Creator UI、Wi-Fi、蓝牙和 SD 导入不在首版承诺。
+当前已交付 framing、有序事务接收和 artifact-to-wire 的 deterministic Python
+sender，并有独立 Python/C++ conformance；Facade 真实导出接线、真实 USB/PTY
+传输与物理断连/重连仍是 C1 后续验收范围。
+
 ## Provider 输入 owner 与会话权限
 
 Host 通过 Facade 提供 `provider.list`、`provider.permissions.configure`、

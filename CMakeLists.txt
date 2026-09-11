@@ -781,5 +781,17 @@ if(BUILD_TESTING)
     COMMAND "${Python3_EXECUTABLE}" tests/build/cardputer_host_build_test.py
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
+  lmdj_add_test(
+    NAME build.cardputer_transfer
+    TIER component
+    COMMAND "${Python3_EXECUTABLE}" tests/build/cardputer_transfer_test.py
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  lmdj_add_test(
+    NAME conformance.cardputer_transfer
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/conformance/cardputer_transfer_contract_test.py
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
   add_subdirectory(tests/platform/cardputer)
 endif()

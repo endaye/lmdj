@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Bounded lmdj.cardputer-transfer.v1 framing reference implementation.
+
+This module intentionally handles bytes only. Project/Runtime Content decoding
+stays behind the Application Facade and is never inferred from a wire frame.
+"""
+
+from __future__ import annotations
+
+import argparse
+import binascii
+import hashlib
+import struct
+from dataclasses import dataclass
+
+MAGIC = b"LMCP"
+VERSION = 1
+HEADER = 28
+MAX_PAYLOAD = 1024
+MAX_FRAME = HEADER + MAX_PAYLOAD + 4
+DATA_OFFSET_BYTES = 8
+BEGIN_IDENTITY_BYTES = 8 + 32
+
+
+@dataclass(frozen=True)
+class Frame:
+    opcode: int
+    request_id: int
+    nonce: bytes = bytes(16)
+    payload: bytes = b""
+    version: int = VERSION
+
+
+@dataclass(frozen=True)
+class ContentIdentity:
+    sha256: bytes
+    byte_length: int
+
+
+class Receiver:
+    """Fail-closed, ordered staging transaction for Runtime Content bytes."""
+
+    def __init__(self, maximum_bytes: int, sink):
+        self.maximum_bytes = maximum_bytes
+        self.sink = sink
+        self.clear()
+
+    def clear(self):
+        self.request_id = None
+        self.identity = None
+        self.buffer = bytearray()
+        self.received = 0
+
+    @property
+    def receiving(self):
+        return self.request_id is not None
+
+    def begin(self, request_id: int, identity: ContentIdentity):
+        if (request_id <= 0 or identity.byte_length < 0 or
+                len(identity.sha256) != 32 or identity.byte_length > self.maximum_bytes):
+            raise ValueError("unsupported content transaction")
+        if self.receiving:
+            if request_id == self.request_id and identity == self.identity:
+                return "duplicate"
+            raise ValueError("transaction already active")
+        self.request_id, self.identity = request_id, identity
+        self.buffer = bytearray(identity.byte_length)
+        self.received = 0
+        return "accepted"
+
+    def data(self, request_id: int, offset: int, chunk: bytes):
+        if not self.receiving or request_id != self.request_id:
+            raise ValueError("wrong transaction")
+        if offset > self.received or offset > self.identity.byte_length:
+            raise ValueError("offset mismatch")
+        if len(chunk) > self.identity.byte_length - offset:
+            raise ValueError("content exceeds declared length")
+        if offset < self.received:
+            overlap = min(self.received - offset, len(chunk))
+            if chunk[:overlap] != self.buffer[offset:offset + overlap]:
+                raise ValueError("conflicting duplicate data")
+            if overlap == len(chunk):
+                return "duplicate"
+            chunk, offset = chunk[overlap:], offset + overlap
+        if offset != self.received:
+            raise ValueError("offset mismatch")
+        self.buffer[offset:offset + len(chunk)] = chunk
+        self.received += len(chunk)
+        return "accepted"
+
+    def commit(self, request_id: int):
+        if not self.receiving or request_id != self.request_id:
+            raise ValueError("wrong transaction")
+        if self.received != self.identity.byte_length:
+            raise ValueError("incomplete content")
+        if hashlib.sha256(self.buffer).digest() != self.identity.sha256:
+            self.clear()
+            raise ValueError("content identity mismatch")
+        try:
+            accepted = bool(self.sink(bytes(self.buffer), self.identity))
+        finally:
+            self.clear()
+        if not accepted:
+            raise ValueError("content sink rejected")
+        return "committed"
+
+    def abort(self, request_id: int):
+        if not self.receiving or request_id != self.request_id:
+            raise ValueError("wrong transaction")
+        self.clear()
+        return "aborted"
+
+    def disconnect(self):
+        self.clear()
+
+
+def content_frames(content: bytes, request_id: int, nonce: bytes,
+                   chunk_size: int = MAX_PAYLOAD - DATA_OFFSET_BYTES) -> list[bytes]:
+    """Build a complete sender stream for one already-exported artifact."""
+    if not (1 <= request_id <= 0xFFFFFFFF) or len(nonce) != 16:
+        raise ValueError("invalid request or nonce")
+    if not (1 <= chunk_size <= MAX_PAYLOAD - DATA_OFFSET_BYTES):
+        raise ValueError("chunk size exceeds DATA payload bound")
+    identity = hashlib.sha256(content).digest()
+    frames = [encode(Frame(3, request_id, nonce,
+                           struct.pack("<Q", len(content)) + identity))]
+    for offset in range(0, len(content), chunk_size):
+        chunk = content[offset:offset + chunk_size]
+        frames.append(encode(Frame(4, request_id, nonce,
+                                   struct.pack("<Q", offset) + chunk)))
+    frames.append(encode(Frame(5, request_id, nonce)))
+    return frames
+
+
+def encode(frame: Frame) -> bytes:
+    if frame.version != VERSION or not (1 <= frame.opcode <= 6 or 0x81 <= frame.opcode <= 0x86):
+        raise ValueError("unsupported version or opcode")
+    if not (1 <= frame.request_id <= 0xFFFFFFFF):
+        raise ValueError("request id must be nonzero u32")
+    if len(frame.nonce) != 16 or len(frame.payload) > MAX_PAYLOAD:
+        raise ValueError("nonce/payload exceeds bounded frame")
+    header = MAGIC + bytes((frame.version, frame.opcode))
+    header += struct.pack("<HI", len(frame.payload), frame.request_id) + frame.nonce
+    body = header + frame.payload
+    return body + struct.pack("<I", binascii.crc32(body) & 0xFFFFFFFF)
+
+
+def decode(data: bytes) -> Frame:
+    if len(data) < HEADER + 4:
+        raise ValueError("incomplete frame")
+    if data[:4] != MAGIC:
+        raise ValueError("bad magic")
+    version, opcode, payload_size, request_id = struct.unpack_from("<BBHI", data, 4)
+    size = HEADER + payload_size + 4
+    if size > MAX_FRAME or len(data) != size:
+        raise ValueError("invalid frame length")
+    if version != VERSION or not (1 <= opcode <= 6 or 0x81 <= opcode <= 0x86) or request_id == 0:
+        raise ValueError("invalid frame header")
+    if (binascii.crc32(data[:size - 4]) & 0xFFFFFFFF) != struct.unpack_from("<I", data, size - 4)[0]:
+        raise ValueError("bad crc")
+    return Frame(opcode, request_id, data[12:28], data[28:size - 4], version)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("command", choices=("encode", "decode", "send"))
+    parser.add_argument("value")
+    parser.add_argument("--output", default="-", help="send output path, or - for stdout")
+    parser.add_argument("--request-id", type=int, default=1)
+    parser.add_argument("--nonce", default="00" * 16)
+    parser.add_argument("--chunk-size", type=int, default=MAX_PAYLOAD - DATA_OFFSET_BYTES)
+    args = parser.parse_args()
+    if args.command == "decode":
+        frame = decode(bytes.fromhex(args.value))
+        print(f"opcode={frame.opcode} request_id={frame.request_id} payload={frame.payload.hex()}")
+    elif args.command == "encode":
+        # CLI encode accepts a compact payload-only example and emits a HELLO-like frame.
+        print(encode(Frame(1, 1, payload=bytes.fromhex(args.value))).hex())
+    else:
+        with open(args.value, "rb") as source:
+            content = source.read()
+        wire = b"".join(content_frames(content, args.request_id,
+                                         bytes.fromhex(args.nonce), args.chunk_size))
+        if args.output == "-":
+            import sys
+            sys.stdout.buffer.write(wire)
+        else:
+            with open(args.output, "wb") as target:
+                target.write(wire)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
