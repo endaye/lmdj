@@ -13,6 +13,13 @@ foreach(scenario restart partial retry owned)
   lmdj_add_test(NAME platform.cardputer.i2c.${scenario} TIER component
     COMMAND lmdj_cardputer_shared_i2c_tests ${scenario})
 endforeach()
+add_executable(lmdj_cardputer_status_payload_tests status_payload_test.cpp)
+target_link_libraries(lmdj_cardputer_status_payload_tests PRIVATE lmdj::runtime_facade)
+target_include_directories(lmdj_cardputer_status_payload_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+lmdj_target_warnings(lmdj_cardputer_status_payload_tests)
+lmdj_target_sanitizers(lmdj_cardputer_status_payload_tests)
+lmdj_add_test(NAME platform.cardputer.status_payload TIER component
+  COMMAND lmdj_cardputer_status_payload_tests)
 add_executable(lmdj_cardputer_audio_lifecycle_tests
   audio_lifecycle_test.cpp
   "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/audio_driver.cpp"
