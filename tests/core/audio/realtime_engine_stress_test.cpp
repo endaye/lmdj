@@ -76,8 +76,13 @@ void pcm_publication_retirement_races_real_render_without_owner_destruction() {
         {0, 256, domain::TriggerMode::loop_gate, 1, false}).has_value());
     owner.reset();
     LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) == PublishResult::accepted);
-    while (engine.bank_telemetry().current_generation != generation * 2 - 1)
+    for (;;) {
+      const auto observed = engine.bank_telemetry();
+      // Generation becomes visible before the pending-zero admission handoff.
+      if (observed.current_generation == generation * 2 - 1 &&
+          observed.pending_publications == 0) break;
       std::this_thread::yield();
+    }
     (void)engine.reclaim_retired_banks();
     LMDJ_CHECK(engine.enqueue_control(
         {++sequence, 0, 127, PadControlKind::press, {}}) == EnqueueResult::accepted);

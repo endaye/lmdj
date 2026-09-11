@@ -1705,14 +1705,23 @@ void RealtimeEngine::render(
   std::uint8_t published_slot = 0;
   while (publish_queue_.try_pop(published_slot)) {
     apply_published_bank(published_slot);
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+    testing::invoke_realtime_hook(
+        testing::RealtimeHookPoint::bank_applied_before_pending_release);
+#endif
     pending_publications_.fetch_sub(1, std::memory_order_release);
   }
-  // Before the control events below, so an audition published and started in
-  // the same callback is audible in that callback rather than the next.
-  std::uint8_t published_audition = 0;
-  while (audition_publish_queue_.try_pop(published_audition)) {
-    apply_published_audition(published_audition);
-  }
+  const auto refresh_audition_publications = [this]() noexcept {
+    std::uint8_t published_audition = 0;
+    for (std::size_t applied = 0;
+         applied < kRealtimeAuditionBankCapacity &&
+         audition_publish_queue_.try_pop(published_audition);
+         ++applied) {
+      apply_published_audition(published_audition);
+    }
+  };
+  // Apply publication-only updates even when no audition start is queued.
+  refresh_audition_publications();
   if (!audio_pending_pattern_.has_value()) {
 #if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
     testing::invoke_realtime_hook(testing::RealtimeHookPoint::before_pattern_claim);
@@ -1823,6 +1832,10 @@ void RealtimeEngine::render(
     const auto audition = event.kind == PadControlKind::audition_start;
     std::uint8_t audition_slot = kNoAuditionSlot;
     if (audition) {
+      // Acquiring this command orders the producer's preceding publications.
+      // The initial drain may predate them; refresh before choosing the latest
+      // source, with a fixed pool-sized bound even if control keeps publishing.
+      refresh_audition_publications();
       audition_slot = current_audition_slot_.load(std::memory_order_acquire);
       if (audition_slot == kNoAuditionSlot) {
         audio_invalid_events_ += 1;
