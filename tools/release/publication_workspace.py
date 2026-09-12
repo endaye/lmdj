@@ -46,7 +46,10 @@ class PublicationWorkspace:
             lease = (self._journal.lock,)
         env = {k: v for k, v in os.environ.items() if k in ("PATH", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP")}
         env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
-                   GIT_NO_REPLACE_OBJECTS="1", GIT_GRAFT_FILE=os.devnull, LC_ALL="C")
+                   GIT_NO_REPLACE_OBJECTS="1", GIT_GRAFT_FILE=os.devnull, LC_ALL="C",
+                   GIT_NO_LAZY_FETCH="1", GIT_ALLOW_PROTOCOL="")
+        # This runner is local-only. Disable all transports as well as lazy
+        # fetch, including on Git versions predating GIT_NO_LAZY_FETCH support.
         if index is not None:
             env["GIT_INDEX_FILE"] = str(index)
         try:
