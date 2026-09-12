@@ -782,6 +782,12 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
   lmdj_add_test(
+    NAME build.cardputer_identity
+    TIER component
+    COMMAND "${Python3_EXECUTABLE}" tests/build/cardputer_identity_test.py
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  lmdj_add_test(
     NAME build.cardputer_transfer
     TIER component
     COMMAND "${Python3_EXECUTABLE}" tests/build/cardputer_transfer_test.py

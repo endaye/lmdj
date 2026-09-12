@@ -6,15 +6,18 @@ CardputerConfiguration cardputer_configuration() noexcept {
   // Cardputer ADV / ESP32-S3 wiring and the no-PSRAM admission profile are
   // product facts. They are deliberately absent from the neutral Host.
   return {
-      "1.0.56.0",
-      "1.0.0",
-      "9213ef66e2b92120a4680ab49bf6ac09b4096be46378d88ae7aebd67a27f5c3d",
+      LMDJ_CARDPUTER_PRODUCT_BUILD,
+      LMDJ_CARDPUTER_HOST_VERSION,
+      LMDJ_CARDPUTER_ASSEMBLY_SHA256,
       {{131072, 96000, 19200, 4, 32}, 331176, 32768, 128, 1000, 1000000},
       {4},
       // ES8311 register 0x32 is logarithmic: 0xBF = 0 dB, not maximum
       // gain. Keep user attenuation and click-free ramps in PcmOutputStage;
       // 0x40 here adds -63.5 dB before the default 20% software volume.
       {{8, 9, 41, 43, 42, 0x18, 0xBF, 2, 1}, 8192, 20, 94, 5000},
+      // M5GFX Cardputer ADV rotation 1: swap axes and mirror X. The
+      // 135-pixel panel starts at 240 - (135 + 52) = 53 after rotation.
+      {2, 35, 36, 37, 34, 33, 38, 40000000, 40, 53, true, true, false, true},
   };
 }
 

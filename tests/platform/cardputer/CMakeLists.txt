@@ -11,6 +11,32 @@ foreach(scenario capabilities mapping absent stack interval resample)
   lmdj_add_test(NAME platform.cardputer.resources.${scenario} TIER component
     COMMAND lmdj_cardputer_resource_observation_tests ${scenario})
 endforeach()
+add_executable(lmdj_cardputer_main_failure_tests main_failure_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/main.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/keyboard.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/keyboard_scanner.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/input_controller.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/display.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/screen_view.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/lcd_display.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/usb_transfer_endpoint.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer_transaction.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer_session.cpp"
+  "${CMAKE_SOURCE_DIR}/products/lmdj/src/cardputer_assembly.cpp"
+  $<TARGET_OBJECTS:lmdj_cardputer_scanner_native_host>)
+target_compile_definitions(lmdj_cardputer_main_failure_tests PRIVATE ESP_PLATFORM
+  LMDJ_CARDPUTER_PRODUCT_BUILD="test-build" LMDJ_CARDPUTER_HOST_VERSION="test-host"
+  LMDJ_CARDPUTER_ASSEMBLY_SHA256="test-assembly" LMDJ_CARDPUTER_REVISION="test-source")
+target_include_directories(lmdj_cardputer_main_failure_tests PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/fake_esp" "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/third_party/picosha2")
+target_link_libraries(lmdj_cardputer_main_failure_tests PRIVATE lmdj::runtime_facade Threads::Threads)
+lmdj_target_warnings(lmdj_cardputer_main_failure_tests)
+lmdj_target_sanitizers(lmdj_cardputer_main_failure_tests)
+foreach(scenario install draw)
+  lmdj_add_test(NAME platform.cardputer.main_failure.${scenario} TIER component
+    COMMAND lmdj_cardputer_main_failure_tests ${scenario})
+endforeach()
 add_executable(lmdj_cardputer_audio_diagnostics_tests audio_diagnostics_test.cpp)
 target_include_directories(lmdj_cardputer_audio_diagnostics_tests PRIVATE "${CMAKE_SOURCE_DIR}")
 lmdj_target_warnings(lmdj_cardputer_audio_diagnostics_tests)
@@ -29,6 +55,54 @@ lmdj_target_sanitizers(lmdj_cardputer_dma_deadline_tests)
 foreach(scenario ontime before during)
   lmdj_add_test(NAME platform.cardputer.dma_deadline.${scenario} TIER component
     COMMAND lmdj_cardputer_dma_deadline_tests ${scenario})
+endforeach()
+add_executable(lmdj_cardputer_usb_display_tests usb_display_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/usb_transfer_endpoint.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer_transaction.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/transfer_session.cpp"
+  $<TARGET_OBJECTS:lmdj_cardputer_scanner_native_host>)
+target_compile_definitions(lmdj_cardputer_usb_display_tests PRIVATE ESP_PLATFORM)
+target_include_directories(lmdj_cardputer_usb_display_tests PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/fake_esp" "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/third_party/picosha2")
+target_link_libraries(lmdj_cardputer_usb_display_tests PRIVATE lmdj::runtime_facade Threads::Threads)
+lmdj_target_warnings(lmdj_cardputer_usb_display_tests)
+lmdj_target_sanitizers(lmdj_cardputer_usb_display_tests)
+foreach(scenario progress timeout cancel retry reset_progress)
+  lmdj_add_test(NAME platform.cardputer.usb_display.${scenario} TIER component
+    COMMAND lmdj_cardputer_usb_display_tests ${scenario})
+endforeach()
+add_executable(lmdj_cardputer_feedback_interleaving_tests
+  pad_feedback_interleaving_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/runtime_host.cpp")
+target_include_directories(lmdj_cardputer_feedback_interleaving_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+target_link_libraries(lmdj_cardputer_feedback_interleaving_tests PRIVATE lmdj::runtime_facade Threads::Threads)
+lmdj_target_warnings(lmdj_cardputer_feedback_interleaving_tests)
+lmdj_target_sanitizers(lmdj_cardputer_feedback_interleaving_tests)
+lmdj_add_test(NAME platform.cardputer.input.feedback_interleaving TIER component
+  COMMAND lmdj_cardputer_feedback_interleaving_tests)
+add_executable(lmdj_cardputer_lcd_tests lcd_display_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/lcd_display.cpp")
+target_compile_definitions(lmdj_cardputer_lcd_tests PRIVATE ESP_PLATFORM)
+target_include_directories(lmdj_cardputer_lcd_tests PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/fake_esp" "${CMAKE_SOURCE_DIR}")
+target_link_libraries(lmdj_cardputer_lcd_tests PRIVATE lmdj::runtime_facade)
+lmdj_target_warnings(lmdj_cardputer_lcd_tests)
+lmdj_target_sanitizers(lmdj_cardputer_lcd_tests)
+foreach(scenario ownership frame failures draw_failure shutdown snapshot)
+  lmdj_add_test(NAME platform.cardputer.lcd.${scenario} TIER component
+    COMMAND lmdj_cardputer_lcd_tests ${scenario})
+endforeach()
+add_executable(lmdj_cardputer_screen_tests screen_view_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/screen_view.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/display.cpp")
+target_include_directories(lmdj_cardputer_screen_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+target_link_libraries(lmdj_cardputer_screen_tests PRIVATE lmdj::runtime_facade)
+lmdj_target_warnings(lmdj_cardputer_screen_tests)
+lmdj_target_sanitizers(lmdj_cardputer_screen_tests)
+foreach(scenario empty lifecycle transfer bounds)
+  lmdj_add_test(NAME platform.cardputer.screen.${scenario} TIER component
+    COMMAND lmdj_cardputer_screen_tests ${scenario})
 endforeach()
 # Keep the AudioSession implementation native while exercising the actual ESP
 # scanner. The fake models FIFO count/pop, not electrical timing or speaker IO.
@@ -67,7 +141,9 @@ endforeach()
 add_executable(lmdj_cardputer_codec_gain_tests codec_gain_test.cpp
   "${CMAKE_SOURCE_DIR}/products/lmdj/src/cardputer_assembly.cpp"
   "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/audio_driver.cpp")
-target_compile_definitions(lmdj_cardputer_codec_gain_tests PRIVATE ESP_PLATFORM)
+target_compile_definitions(lmdj_cardputer_codec_gain_tests PRIVATE ESP_PLATFORM
+  LMDJ_CARDPUTER_PRODUCT_BUILD="test-build" LMDJ_CARDPUTER_HOST_VERSION="test-host"
+  LMDJ_CARDPUTER_ASSEMBLY_SHA256="test-assembly" LMDJ_CARDPUTER_REVISION="test-source")
 target_link_libraries(lmdj_cardputer_codec_gain_tests PRIVATE lmdj::runtime_facade)
 target_include_directories(lmdj_cardputer_codec_gain_tests PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/fake_esp" "${CMAKE_SOURCE_DIR}")
@@ -125,7 +201,8 @@ target_link_libraries(lmdj_cardputer_input_tests PRIVATE lmdj::runtime_facade Th
 target_include_directories(lmdj_cardputer_input_tests PRIVATE "${CMAKE_SOURCE_DIR}")
 lmdj_target_warnings(lmdj_cardputer_input_tests)
 lmdj_target_sanitizers(lmdj_cardputer_input_tests)
-foreach(scenario mapping repeat_release empty_receive overflow queue_retry display)
+foreach(scenario mapping repeat_release empty_receive overflow queue_retry display
+    feedback_receipt feedback_stop feedback_release feedback_restart feedback_wrap)
   lmdj_add_test(NAME platform.cardputer.input.${scenario} TIER component
     COMMAND lmdj_cardputer_input_tests ${scenario})
 endforeach()

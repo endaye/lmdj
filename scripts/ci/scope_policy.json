@@ -174,6 +174,7 @@
     {"match": {"kind": "prefix", "value": "tests/platform/audio/"}, "lanes": ["core_macos"]},
     {"match": {"kind": "prefix", "value": "tests/platform/cardputer/"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
     {"match": {"kind": "exact", "value": "tests/build/cardputer_transfer_test.py"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
+    {"match": {"kind": "exact", "value": "tests/build/cardputer_identity_test.py"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
     {"match": {"kind": "prefix", "value": "tests/platform/web/toolchain/"}, "lanes": ["web_toolchain"]},
     {"match": {"kind": "prefix", "value": "tests/platform/web/audio/"}, "lanes": ["web_toolchain", "web_runtime_host"]},
     {"match": {"kind": "prefix", "value": "tests/platform/web/project_io/"}, "lanes": ["web_toolchain"]},

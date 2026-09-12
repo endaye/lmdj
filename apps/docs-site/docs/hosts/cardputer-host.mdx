@@ -46,6 +46,31 @@ deployment, Channel promotion, or physical A1 acceptance; a real computer
 producer must exercise the complete transfer sequence, while combined-load
 measurements and the complete A1 journey remain required.
 
+## Integrated screen and firmware identity
+
+The current development source connects the ST7789 display adapter to the
+single control loop. Product Assembly supplies panel wiring and orientation.
+The display consumes a bounded value snapshot of Host state, processed Pad
+feedback and USB receive state; it never reads Project Truth or calls the
+Application Facade. USB session activity is not a cable-presence detector.
+
+The adapter keeps one nine-row DMA stripe and does not rewrite it before its
+completion callback. It captures a new view between complete frames, limits
+frame refresh frequency, and leaves the backlight off until the first complete
+frame is initialized. Initialization or drawing failure exits the control loop
+through owner destruction. Native tests call the real application entry point
+and check resource cleanup, but substitute the physical audio worker: they do
+not establish stopping audible playback, real worker quiescence, panel
+orientation or combined-load timing on a device.
+
+Firmware Product Build, Host version and Assembly digest are derived at CMake
+configuration from the active manifests and Assembly lock. The ESP application
+version uses the same Product Build. A mismatched Product/Host version, changed
+Assembly bytes or missing Host lock entry rejects configuration; no new version
+is allocated by compiling. A dirty development build and its recorded base
+revision are not an immutable candidate. A fresh fixed Build and matching
+snapshot remain required before the final joint physical acceptance journey.
+
 ## Audio service diagnostics
 
 Current development source records separate microsecond distributions for DMA

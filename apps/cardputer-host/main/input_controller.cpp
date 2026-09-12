@@ -39,7 +39,8 @@ void InputController::retry_front(PhysicalKeyEvent event) noexcept {
 }
 
 void InputController::refresh() noexcept {
-  display_.present(host_.read_status(), active_);
+  const auto status = host_.read_status();
+  display_.present(status, status.pad_active);
 }
 
 void InputController::poll() noexcept {
@@ -47,7 +48,6 @@ void InputController::poll() noexcept {
   if (overflow_) {
     clear_queue();
     held_.fill(false);
-    active_.fill(false);
     overflow_ = false;
     (void)host_.handle_key({Key::overflow, true});
     refresh();
@@ -75,9 +75,7 @@ void InputController::poll() noexcept {
       retry_front(event);
       break;
     }
-    if (is_pad(event.key) && result == HostResult::accepted) {
-      active_[index(event.key)] = event.pressed;
-    } else if (result != HostResult::accepted && result != HostResult::ok) {
+    if (result != HostResult::accepted && result != HostResult::ok) {
       held_[index(event.key)] = false;
     }
   }

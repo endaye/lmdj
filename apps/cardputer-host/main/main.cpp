@@ -4,6 +4,8 @@
 #include "input_controller.hpp"
 #include "keyboard_scanner.hpp"
 #include "usb_transfer_endpoint.hpp"
+#include "lcd_display.hpp"
+#include "esp_timer.h"
 #include <algorithm>
 #include <cstdio>
 #include "freertos/FreeRTOS.h"
@@ -49,6 +51,13 @@ extern "C" void app_main() {
       std::puts("CARDPUTER USB transfer initialization failed");
       return;
     }
+    LcdDisplay lcd(config.lcd);
+    if (!lcd.install()) {
+      std::puts("CARDPUTER LCD initialization failed");
+      return;
+    }
+    const ScreenIdentity identity{config.product_build, config.host_version,
+                                  LMDJ_CARDPUTER_REVISION};
     std::printf("CARDPUTER product-build=%s host=%s assembly=%s source=%s phase=empty\n",
                 config.product_build, config.host_version, config.assembly_sha256,
                 LMDJ_CARDPUTER_REVISION);
@@ -59,6 +68,13 @@ extern "C" void app_main() {
       input.poll();
       scanner.poll(input);
       transfer.poll();
+      if (!lcd.poll(make_screen_view(display.frame(), transfer.display_status(), identity),
+                    static_cast<std::uint64_t>(esp_timer_get_time()) / 1000)) {
+        // Leave the control loop on display failure. RuntimeHost destruction
+        // stops and joins audio; never leave a stale screen driving playback.
+        std::puts("CARDPUTER LCD update failed");
+        return;
+      }
       vTaskDelay(1);
     }
   } catch (...) {

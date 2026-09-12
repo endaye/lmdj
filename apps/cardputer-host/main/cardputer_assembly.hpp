@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime_host.hpp"
+#include "lcd_display.hpp"
 
 namespace lmdj::cardputer {
 
@@ -14,6 +15,7 @@ struct CardputerConfiguration {
   facade::RuntimeConfig runtime;
   HostProfile profile;
   EspAudioSessionConfig audio;
+  LcdConfiguration lcd;
 };
 
 CardputerConfiguration cardputer_configuration() noexcept;
