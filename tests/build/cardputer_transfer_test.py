@@ -7,7 +7,12 @@ import sys
 import unittest
 from unittest import mock
 import hashlib
+import os
+import pty
+import select
 import struct
+import threading
+import time
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -59,6 +64,72 @@ class CardputerTransferTest(unittest.TestCase):
         result = self.serial_transaction()
         self.assertEqual([frame.opcode for frame in self.sent], [1, 3, 4, 5])
         self.assertEqual(result.payload, b"\0\0" + struct.pack("<Q", 5) + hashlib.sha256(b"music").digest())
+
+    def test_serial_complete_transaction_over_real_pty(self):
+        master, slave = pty.openpty()
+        path = os.ttyname(slave)
+        os.close(slave)
+        nonce, transfer_id, content = b"p" * 16, b"q" * 16, b"music"
+        received = bytearray()
+        receiver_errors = []
+        finished = threading.Event()
+
+        def write_all(wire):
+            view = memoryview(wire)
+            while view:
+                count = os.write(master, view)
+                view = view[count:]
+
+        def receiver():
+            buffer = bytearray()
+            offset = 0
+            try:
+                while not finished.is_set():
+                    readable, _, _ = select.select([master], [], [], 1.0)
+                    if not readable:
+                        continue
+                    chunk = os.read(master, 4096)
+                    if not chunk:
+                        # macOS reports the PTY master readable with an empty
+                        # read until the sender opens the slave endpoint.
+                        time.sleep(0.01)
+                        continue
+                    buffer.extend(chunk)
+                    while True:
+                        frame = transfer.pop_response(buffer)
+                        if frame is None:
+                            break
+                        if frame.opcode == 1:
+                            payload = struct.pack("<HH", 0, transfer.MAX_PAYLOAD)
+                        elif frame.opcode == 3:
+                            transfer_id = frame.payload[:16]
+                            payload = b"\0\0" + transfer_id + struct.pack("<Q", 0)
+                        elif frame.opcode == 4:
+                            offset = struct.unpack_from("<Q", frame.payload, 16)[0] + len(frame.payload) - 24
+                            received.extend(frame.payload[24:])
+                            payload = b"\0\0" + transfer_id + struct.pack("<Q", offset)
+                        elif frame.opcode == 5:
+                            payload = b"\0\0" + struct.pack("<Q", len(received)) + hashlib.sha256(received).digest()
+                            finished.set()
+                        else:
+                            raise AssertionError(f"unexpected request opcode {frame.opcode}")
+                        write_all(transfer.encode(transfer.Frame(
+                            frame.opcode | 0x80, frame.request_id, nonce, payload)))
+            except BaseException as error:  # report the receiver failure in the test thread
+                receiver_errors.append(error)
+                finished.set()
+
+        thread = threading.Thread(target=receiver, daemon=True)
+        thread.start()
+        try:
+            result = transfer.send_serial(path, content, timeout=2.0)
+        finally:
+            finished.set()
+            thread.join(timeout=2.0)
+            os.close(master)
+        self.assertFalse(receiver_errors, receiver_errors)
+        self.assertEqual(received, content)
+        self.assertEqual(result.payload, b"\0\0" + struct.pack("<Q", len(content)) + hashlib.sha256(content).digest())
 
     def test_serial_boot_noise_and_fragmented_magic(self):
         self.serial_transaction(wire_transform=lambda wire: [b"boot log\nL", wire[1:]])
