@@ -143,6 +143,13 @@ Task commit、push、PR、squash merge、signed product tag、Release、部署�
 当前仅用隔离文件系统模拟外部 API 做故障验收；真实 candidate / GitHub / 部署 adapter、
 `run / status / resume` 命令与服务安装仍待接入，不能据此声称已能无人值守发版。
 
+Product release changelog 的冻结模块已实现：固定同 profile 已发布祖先 tag / target，
+从完整 Git 历史枚举候选范围，要求每个 commit 有变更条目或经审查的排除理由；
+GitHub 与 doc-site 将共享其 Markdown 内容及摘要。它拒绝浅历史、范围外来源、重复或
+遗漏提交及不安全文本。提交范围校验不证明文字真实性；基线 Release 的真实签名和
+公开状态仍须外部 audit，正文仍须 PR 审查。prepare / Draft / published 验证与网站
+生成器尚未接入此模块，当前不能声称每次 Release 已自动交付两端 changelog。
+
 ## 标准 Release 控制面
 
 源码 Product Build 与匹配的 immutable snapshot 可以先完成分配，此时允许没有 release intent；
