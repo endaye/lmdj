@@ -69,3 +69,23 @@ counter update are outside that observation. Startup prewarm and final drain
 are not steady-service samples. Delivered callbacks cannot establish physical
 DMA timing during masked/delayed interrupts, so these diagnostics alone cannot
 prove zero underruns, the 30-minute combined-load target or physical latency.
+
+## Resource observations
+
+Development source also provides a control-owner sampler for internal 8-bit,
+DMA 8-bit and external 8-bit heaps. It retains free bytes, largest free block
+and the SDK's sum of per-region low watermarks. These capability sets overlap;
+do not sum them. Queries are sequential, not an atomic system snapshot, and
+begin/end timestamps include their collection interval. The sampler also reads
+the calling control task's stack high water in bytes, without word scaling.
+It must not run in the audio render callback or an ISR.
+
+The audio worker separately records its own stack high water after driver
+cleanup and before publishing completion. The control owner can read it only
+after that completion barrier. It is unavailable before a worker completes or
+if task creation failed; an observed zero remains a valid value. A new start
+clears the old result. The measurement excludes later task deletion code, and
+completion does not prove that FreeRTOS's idle task has reclaimed its memory.
+Neither sampler supplies a per-cycle heap minimum or a reclamation verdict.
+Identity-bound extraction and actual load/play/stop/unload/reload resource
+measurements remain pending; these APIs do not establish device acceptance.
