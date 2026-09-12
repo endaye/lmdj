@@ -26,6 +26,14 @@ bundle 与 `runtime.toml` 身份）→ `run-engine.sh --input`（引擎，`flock
 当前不启用任何供应商后备；GLM、Kimi 和 Grok 仅保留为历史兼容身份，
 不会被此 workflow 注入凭据或自动调用。
 
+模型结果按完整 YAML 文档校验，兼容单个包住整个文档的 Markdown YAML 围栏；
+围栏外说明、多文档、重复键、alias、未知字段和无效 diff 行号仍拒绝。
+新提示词使用纯 YAML 示例，并要求自由文本使用 block scalar，减少冒号或代码片段
+破坏语法的情况。失败制品 `t2-result.json` 的 `attempts[].error` 保留有限诊断：
+YAML 语法错误的位置及原文长度/摘要，或已知的 `finish_reason`（如 `length`）。
+诊断不输出模型原文；旧记录只有 `malformed` 时不能反推出具体语法错误。
+源码合入后仍需通过下述安装入口更新主机 release，才能应用解析与提示词修复。
+
 安装与更新只有一个入口：`scripts/ci/pr-agent/install.sh <staging-dir>` 以 root
 在主机执行，把现有 bundle 复制到新 release 后写入仓库的 adapter/config，
 重算新版本的成员身份，把 release 设为 root-owned 只读，
