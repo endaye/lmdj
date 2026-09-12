@@ -311,6 +311,11 @@ RuntimeContentSummary RuntimeFacade::content_summary() const noexcept {
   return result;
 }
 
+std::optional<std::uint32_t> RuntimeFacade::stopped_peak_voices() const noexcept {
+  if (impl_->phase != RuntimePhase::stopped || !impl_->engine) return std::nullopt;
+  return impl_->engine->peak_voices_audio();
+}
+
 void RuntimeFacade::render(float* left, float* right, std::uint32_t frames) noexcept {
   if (left == nullptr || right == nullptr) return;
   auto& self = *impl_;
