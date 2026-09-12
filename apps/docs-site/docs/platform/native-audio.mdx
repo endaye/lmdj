@@ -86,6 +86,11 @@ stop 后零块、先 mute 再排空 DMA／disable／quiesce，最后回收。
 EOF/DMA readback 与 generation 零错误不证明物理 underrun 为零；完整
 Host I/O、物理时延、30 分钟和正式 Build/快照仍未验收。
 
+Cardputer 的最新 source-candidate A/B 装载、Pad 听感、超时重试和电池连续播放
+观察集中记录在 [A1 状态记录](https://github.com/endaye/lmdj/blob/main/docs/quality/2026-09-12-cardputer-runtime-acceptance.md)。
+它们仍不是固定 B1 Build 的模拟静音、30 分钟、p99.9/underrun 或端到端延迟
+验收；H1 startup-click 的历史失败也没有被这些短时观察豁免。
+
 ### H1 source：串行控制与音频任务边界
 
 `apps/cardputer-host` 已提供薄 `RuntimeHost`、`AudioSession` 与 ESP-IDF 音频适配源码。

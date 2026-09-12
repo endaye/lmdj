@@ -132,6 +132,17 @@ The same snapshot includes the optional audio-task stack high-water value when
 the concrete session has published its finished barrier. Alternate sessions
 may leave it unavailable; it is never inferred from the control-task value.
 
+## A1 验收状态
+
+截至 2026-09-12，操作者已在后续 source candidate 上观察到 A/B 装载、Pad
+演奏、坏输入拒绝、超时丢弃和正确重试；这些结果没有绑定 B1 的不可变 Product
+Build、ELF、工具链和快照。ON 状态电池播放听感为正向观察，但 USB 重连未枚举，
+且 D1 的代表性时长、p99.9/underrun、端到端延迟、heap/stack 与 H1 startup
+click 仍 pending。完整矩阵见 [A1 状态记录](https://github.com/endaye/lmdj/blob/main/docs/quality/2026-09-12-cardputer-runtime-acceptance.md)。
+
+因此本 Host 页面保持 `status: implemented`（源码能力），不把它解释为 A1
+或 Umbrella #1104 已通过；固定候选必须重新执行整条物理旅程。
+
 `ResourceCycleLedger` now retains up to 100 fixed-size, identity-bound records.
 Each record starts before a validated content load, folds samples taken after
 load/start/stop and at unload, and is published only after the audio session
