@@ -135,6 +135,15 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         self.assertIn('"--no-ext-diff", "--no-textconv"', adapter)
         self.assertNotIn('git("checkout"', adapter)
 
+    def test_collection_failure_is_in_the_actual_always_upload_inventory(self):
+        upload = self.jobs["review"].split("      - uses: actions/upload-artifact@v4\n", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("if: ${{ always() }}", upload)
+        paths = upload.split("          path: |\n", 1)[1].split("          if-no-files-found:", 1)[0]
+        paths = [line.strip() for line in paths.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+        self.assertEqual(paths.count("${{ env.REVIEW_DIR }}/collection-failure.json"), 1,
+            "why: collector refusal is absent from the upload inventory; remedy: retain collection-failure.json without treating it as successful review evidence")
+        self.assertIn("if-no-files-found: error", upload)
+
     def test_engine_runs_on_the_netcup_host_with_only_the_provider_key(self):
         job = self.jobs["review"]
         self.assertIn("pull-requests: read", job)

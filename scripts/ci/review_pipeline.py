@@ -720,6 +720,16 @@ def main():
         else:
             globals()[args.command](args.directory)
     except Exception as error:
+        if (args.command == "collect-t2" and isinstance(error, input_producer.InputCollectionError)
+                and error.result is not None):
+            # The structured refusal has already passed publish_failure. Never
+            # echo exception text: it may contain source paths or API details.
+            print("why: complete PR input was refused before model execution; "
+                  "remedy: inspect collection-failure.json in this run's review artifact; "
+                  "obtain independent current-head review for unsupported or oversized input; "
+                  "never truncate input or relax its limits to manufacture a review",
+                  file=sys.stderr)
+            return 1
         if args.command == "publish" and isinstance(error, review_scope.ReviewScopeError):
             # `publish` only, and its refusals are the ones nobody can
             # diagnose. Every `review_scope.require` in `publish()` carries an
