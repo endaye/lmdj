@@ -626,11 +626,11 @@ workflow_dispatch/push/workflow_run/schedule 闭集，不能从排队 request ki
 独立重算 exact target、current/frozen/executor policy 一致的全 16-suite passed verdict。
 focused、none、债务、旧 policy、缺 artifact 或跨 SHA/attempt 拼接一律不授予候选资格。
 
-新 batch reference 全部写入 plan `ci` 及永久 `lmdj.release-plan-marker.v3`；v1/v2 marker
+新 batch reference 全部写入 plan `ci` 及永久 `lmdj.release-plan-marker.v3`（带冻结 changelog 时为 v4）；v1/v2 marker
 不证明 batch 引用，旧 self-test v2 与 legacy v1 历史不迁移。仅 `Disposition.PUBLISHED`
 可读取 recorded attempt 的稳定来源/target/control/event provenance 而不再次要求短期 artifact
 或永远不变的 current policy；仍必须通过实际 immutable tag、signer、Release、assets 和
-精确 v3 marker 验证。allocated/abandoned/superseded 不能使用这条历史例外。
+精确 v3/v4 marker 验证。allocated/abandoned/superseded 不能使用这条历史例外。
 本协议不自动选择候选，不修改既有 intent。手动精确 full 能力由上述统一入口保留；
 旧 `ci.yml` dispatch 的退役不删除历史来源验证，也不降低完整证据要求。
 
@@ -644,6 +644,17 @@ Release `profile` 从受保护 policy 选择确定性 builder、verifier 与闭�
 Notes、asset inventory 与 plan 的结构和 digest 是确定性的；独立 OpenPGP 签名会包含签名时间，
 因此不承诺重新签名得到逐字节相同的 signature。重试复用并验证已经持久化的 exact signature，
 不会用新签名覆盖它。
+
+带冻结日志的 Web Hosts Product intent 可携带闭合 `changelog` 文档
+（`lmdj.release-changelog.v1`），精确匹配 tag、Product Build、profile 与 target。
+该文档记录固定已发布基线、完整提交范围、分类条目与排除理由；PR 审查负责文字事实，
+prepare 负责重验真实 Git 范围。文档进入 canonical plan，统一 renderer 同时供 Release
+与后续 doc-site 投影使用。永久 `lmdj.release-plan-marker.v4` 保留既有 CI 身份并额外
+绑定结构化内容与 notes 摘要；Draft、published verifier 与 remote audit 必须核对完整
+正文，不接受仅 marker 正确但文字已变的 Release，也不新增第七项资产。
+旧无 changelog 的历史 intent/plan 保持 v1–v3，不重写公开历史。该扩展不自动切换所有
+旧调用者；新总控的强制日志准入与网站发布验证需完成各自接入，不能用兼容路径宣称
+完整自动发布已实现。
 
 公开 publication 只由 dispatch-only `publish-release.yml` 完成。Workflow 以 exact tag、numeric
 Release ID 和 plan digest 重建并验证 Draft，通过受保护 `release` Environment 的 exact-main

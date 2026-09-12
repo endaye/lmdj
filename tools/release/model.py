@@ -127,6 +127,7 @@ class ReleaseIntent:
     promotions: tuple[PromotionRecord, ...] = ()
     self_test_evidence: Mapping[str, object] | None = None
     batch_test_evidence: Mapping[str, object] | None = None
+    changelog: Mapping[str, object] | None = None
 
     @property
     def current_channel(self) -> str | None:
@@ -516,7 +517,7 @@ def _parse_entry(value: object, policy: ReleasePolicy) -> ReleaseIntent:
         required.add("channel")
     _require_exact_keys(
         item, required, "ledger entry",
-        optional={"snapshot", "merged_main_run_id", "make_latest", "promotions", "self_test_evidence", "batch_test_evidence"},
+        optional={"snapshot", "merged_main_run_id", "make_latest", "promotions", "self_test_evidence", "batch_test_evidence", "changelog"},
     )
     tag = _require_string(item["tag"], "tag")
     tag_identity = classify_tag(tag, policy)
@@ -590,10 +591,23 @@ def _parse_entry(value: object, policy: ReleasePolicy) -> ReleaseIntent:
         if run_id is None:
             raise ReleaseModelError("self_test_evidence requires merged_main_run_id")
         self_test_evidence = MappingProxyType(dict(evidence))
+    changelog = None
+    if "changelog" in item:
+        from .changelog import ChangelogError, validate
+        try:
+            validate(item["changelog"])
+        except ChangelogError as error:
+            raise ReleaseModelError(str(error)) from None
+        record = item["changelog"]
+        if (kind is not ReleaseKind.PRODUCT or profile != "web-hosts"
+                or (record["tag"], record["target_revision"], record["product_build"], record["profile"])
+                != (tag, target_revision, identity, profile)):
+            raise ReleaseModelError("why: changelog identity differs from intent; remedy: bind the exact reviewed candidate")
+        changelog = freeze(record)
     evidence_paths = _paths(item["evidence_paths"], "evidence_paths")
     return ReleaseIntent(
         tag, kind, identity, target_revision, disposition, profile, evidence_paths,
-        channel, snapshot, run_id, make_latest, promotions, self_test_evidence, batch_test_evidence,
+        channel, snapshot, run_id, make_latest, promotions, self_test_evidence, batch_test_evidence, changelog,
     )
 
 
