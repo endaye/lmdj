@@ -56,6 +56,11 @@ attempt 失败。YAML block scalar 的末尾换行仅在能匹配精确路径时
 与严格解析器使用同一字段约定，不再要求解析器禁止的上游附加字段。
 引擎崩溃或被拒绝时，`capture` 记一次失败的 deepseek attempt（有限错误类别），
 `finalize` 报告 not-reviewed，job 变红并保留 artifact；不存在 clean 伪装。
+完整输入采集在模型执行前拒绝超限或不支持的 diff 时，保留同一 run 的
+`collection-failure.json`，CLI 提示从 review artifact 检查具体拒绝原因；该文件不是
+成功输入或审查回执。超大 PR 需要独立 current-head 接管审查，不能截断 diff、放宽
+输入上限或把未执行模型当作通过。采集阶段的网络或存储故障仍可能没有有效回执，
+不能据此推断为空或已审查。
 `test_scope` 仍是确定性 `test:full` 下限。
 
 ## 测试层级

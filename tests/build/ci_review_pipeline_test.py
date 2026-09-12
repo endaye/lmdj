@@ -165,6 +165,32 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("artifact identity differs from publisher context", stderr)
         self.assertNotIn("review pipeline operation failed", stderr)
 
+    def test_collection_refusal_names_its_receipt_without_raw_exception(self):
+        error = pipeline.input_producer.InputCollectionError("SECRET-RAW-ERROR", result={"status":"failed"})
+        output = io.StringIO()
+        with mock.patch.object(pipeline, "collect_t2", side_effect=error), \
+                mock.patch.object(sys, "argv", ["review_pipeline.py", "collect-t2", "--directory", str(self.directory)]), \
+                contextlib.redirect_stderr(output):
+            code = pipeline.main()
+        stderr = output.getvalue()
+        self.assertEqual(code, 1)
+        self.assertIn("complete PR input was refused before model execution", stderr)
+        self.assertIn("collection-failure.json", stderr)
+        self.assertIn("independent current-head review", stderr)
+        self.assertNotIn("SECRET-RAW-ERROR", stderr)
+
+    def test_collection_transport_error_stays_generic_without_receipt_claim(self):
+        output = io.StringIO()
+        with mock.patch.object(pipeline, "collect_t2", side_effect=RuntimeError("SECRET-API-ERROR")), \
+                mock.patch.object(sys, "argv", ["review_pipeline.py", "collect-t2", "--directory", str(self.directory)]), \
+                contextlib.redirect_stderr(output):
+            code = pipeline.main()
+        stderr = output.getvalue()
+        self.assertEqual(code, 1)
+        self.assertIn("review pipeline operation failed", stderr)
+        self.assertNotIn("collection-failure.json", stderr)
+        self.assertNotIn("SECRET-API-ERROR", stderr)
+
     def test_only_publish_gets_the_specific_message(self):
         """Other commands retain generic diagnostics while provider text is in scope."""
         code, stderr = self.cli("finalize")
@@ -915,7 +941,8 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(bounded_witness_output.exists(), "failed CLI collection must emit no success witness")
         with self.assertRaisesRegex(review_scope.ReviewScopeError, "successful-producer witness"):
             pipeline.trusted_collector_t2(bounded_output)
-        self.assertIn("review pipeline operation failed", errors.getvalue())
+        self.assertIn("complete PR input was refused before model execution", errors.getvalue())
+        self.assertIn("collection-failure.json", errors.getvalue())
         print(json.dumps({
             "cli_returncode": 1,
             "failure_receipt": failure,
