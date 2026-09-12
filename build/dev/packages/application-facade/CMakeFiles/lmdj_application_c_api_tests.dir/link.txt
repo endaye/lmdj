@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/lmdj_application_c_api_tests.dir/__/__/tests/core/facade/c_api_test.cpp.o -o ../../bin/lmdj_application_c_api_tests  -Wl,-rpath,/home/en/lmdj/build/dev/lib ../../lib/liblmdj_core_c.so 

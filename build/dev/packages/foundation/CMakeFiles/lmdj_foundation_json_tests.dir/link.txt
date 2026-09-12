@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/lmdj_foundation_json_tests.dir/__/__/tests/core/foundation/json_test.cpp.o -o ../../bin/lmdj_foundation_json_tests  ../../lib/liblmdj_foundation.a 

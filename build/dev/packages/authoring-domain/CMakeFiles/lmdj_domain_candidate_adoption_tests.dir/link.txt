@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/lmdj_domain_candidate_adoption_tests.dir/__/__/tests/core/domain/candidate_adoption_test.cpp.o -o ../../bin/lmdj_domain_candidate_adoption_tests  ../../lib/liblmdj_authoring_domain.a ../../lib/liblmdj_foundation.a 

@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../lib/liblmdj_audio_runtime_testable.a CMakeFiles/lmdj_audio_runtime_testable.dir/src/master_fx.cpp.o CMakeFiles/lmdj_audio_runtime_testable.dir/src/prepared_sample_bank.cpp.o CMakeFiles/lmdj_audio_runtime_testable.dir/src/realtime_engine.cpp.o
+/usr/bin/ranlib ../../lib/liblmdj_audio_runtime_testable.a

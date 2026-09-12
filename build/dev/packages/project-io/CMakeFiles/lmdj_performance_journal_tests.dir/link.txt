@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/lmdj_performance_journal_tests.dir/__/__/tests/core/project_io/performance_journal_test.cpp.o -o ../../bin/lmdj_performance_journal_tests  ../../lib/liblmdj_project_io_testable.a ../../lib/liblmdj_authoring_domain.a ../../lib/liblmdj_foundation.a 

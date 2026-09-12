@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../lib/liblmdj_runtime_facade.a CMakeFiles/lmdj_runtime_facade.dir/src/runtime_facade.cpp.o
+/usr/bin/ranlib ../../lib/liblmdj_runtime_facade.a

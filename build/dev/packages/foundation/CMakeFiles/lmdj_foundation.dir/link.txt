@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../lib/liblmdj_foundation.a CMakeFiles/lmdj_foundation.dir/src/artifact.cpp.o CMakeFiles/lmdj_foundation.dir/src/json.cpp.o CMakeFiles/lmdj_foundation.dir/src/soundset_manifest.cpp.o
+/usr/bin/ranlib ../../lib/liblmdj_foundation.a
