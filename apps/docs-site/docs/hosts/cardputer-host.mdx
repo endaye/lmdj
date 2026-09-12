@@ -89,3 +89,12 @@ completion does not prove that FreeRTOS's idle task has reclaimed its memory.
 Neither sampler supplies a per-cycle heap minimum or a reclamation verdict.
 Identity-bound extraction and actual load/play/stop/unload/reload resource
 measurements remain pending; these APIs do not establish device acceptance.
+
+`RuntimeHost::read_resources` is the serialized control-owner entry point for
+the sampler. It returns a caller-owned value and adds no status bytes or wire
+opcode. A future diagnostics transport must bind the value to its session and
+phase; calling this method alone does not provide that binding.
+
+The same snapshot includes the optional audio-task stack high-water value when
+the concrete session has published its finished barrier. Alternate sessions
+may leave it unavailable; it is never inferred from the control-task value.

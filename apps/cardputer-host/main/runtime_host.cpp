@@ -194,6 +194,13 @@ HostResult RuntimeHost::handle_key(KeyEvent event) noexcept {
   return HostResult::ok;
 }
 
+#ifdef ESP_PLATFORM
+void RuntimeHost::read_resources(ResourceObservation& result) const noexcept {
+  result = capture_control_resources();
+  result.audio_task_stack_high_water_bytes = audio_.stopped_stack_high_water_bytes();
+}
+#endif
+
 }  // namespace lmdj::cardputer
 
 #ifdef ESP_PLATFORM

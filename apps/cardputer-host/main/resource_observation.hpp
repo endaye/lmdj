@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace lmdj::cardputer {
 struct HeapObservation {
@@ -14,6 +15,9 @@ struct ResourceObservation {
   std::int64_t begin_us{}, end_us{};
   HeapObservation internal_8bit, dma_8bit, external_8bit;
   std::size_t caller_stack_high_water_bytes{};
+  // Available only after an audio worker publishes finished; nullopt means
+  // no completed worker observation exists for the current session.
+  std::optional<std::size_t> audio_task_stack_high_water_bytes;
 };
 }  // namespace lmdj::cardputer
 

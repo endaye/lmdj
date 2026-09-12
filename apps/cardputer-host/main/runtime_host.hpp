@@ -9,6 +9,7 @@
 #ifdef ESP_PLATFORM
 #include "audio_driver.hpp"
 #include "audio_diagnostics.hpp"
+#include "resource_observation.hpp"
 #endif
 
 namespace lmdj::cardputer {
@@ -32,6 +33,11 @@ class AudioSession {
   virtual AudioStopResult stop_and_join() noexcept = 0;
   virtual void set_output(std::uint8_t volume, bool muted) noexcept = 0;
   virtual bool healthy() const noexcept = 0;
+  // Optional capability keeps existing fake/alternate sessions source
+  // compatible; the ESP implementation publishes it after its finish barrier.
+  virtual std::optional<std::size_t> stopped_stack_high_water_bytes() const noexcept {
+    return std::nullopt;
+  }
 };
 
 enum class HostResult : std::uint8_t {
@@ -77,6 +83,11 @@ class RuntimeHost final {
   HostResult shutdown() noexcept;
   void poll() noexcept;
   HostStatus read_status() const noexcept { return status_; }
+#ifdef ESP_PLATFORM
+  // Serialized control-owner boundary for future diagnostics extraction. The
+  // sample is sequential and is not a callback/ISR operation.
+  void read_resources(ResourceObservation& result) const noexcept;
+#endif
 
  private:
   static void render(void*, float*, float*, std::uint32_t) noexcept;
@@ -116,7 +127,7 @@ class EspAudioSession final : public AudioSession {
   bool read_diagnostics(AudioDiagnosticsSnapshot&) const noexcept;
   // Same owner/barrier as diagnostics. Unavailable if no worker ran. Captured
   // before task deletion; does not establish idle-task memory reclamation.
-  std::optional<std::size_t> stopped_stack_high_water_bytes() const noexcept;
+  std::optional<std::size_t> stopped_stack_high_water_bytes() const noexcept override;
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

@@ -1,8 +1,18 @@
 #include "apps/cardputer-host/main/resource_observation.hpp"
+#include "apps/cardputer-host/main/runtime_host.hpp"
 #include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
+#include <type_traits>
+
+#ifdef ESP_PLATFORM
+static_assert(std::is_same_v<decltype(&lmdj::cardputer::RuntimeHost::read_resources),
+                             void (lmdj::cardputer::RuntimeHost::*)(
+                                 lmdj::cardputer::ResourceObservation&) const noexcept>);
+static_assert(std::is_same_v<decltype(&lmdj::cardputer::AudioSession::stopped_stack_high_water_bytes),
+                             std::optional<std::size_t> (lmdj::cardputer::AudioSession::*)() const noexcept>);
+#endif
 
 // Models only API arguments, returned values and elapsed time, not allocator
 // locking, stack scanning, scheduler interference or idle-task reclamation.
