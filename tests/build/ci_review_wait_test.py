@@ -205,7 +205,9 @@ class AdmissionTests(unittest.TestCase):
         selected = {}
         for pattern in patterns:
             matches = {name: data for name, data in self.source.documents.items() if fnmatch.fnmatchcase(name, pattern)}
-            self.assertTrue(matches or pattern == "failure.json",
+            # Both are failure-only outputs. A successful producer omits them;
+            # retaining them on failure does not admit them as success proof.
+            self.assertTrue(matches or pattern in ("failure.json", "collection-failure.json"),
                             "why: producer upload path has no source-shaped fixture: " + pattern
                             + "; remedy: model its actual file before claiming reader compatibility")
             selected.update(matches)
@@ -227,6 +229,26 @@ class AdmissionTests(unittest.TestCase):
                 self.source.documents.update({name: {"status": "reviewed", "arbitrary": "not authority"}
                     for index, name in enumerate(names) if mask & (1 << index)})
                 self.assertTrue(self.check()["eligible"])
+
+    def test_collection_failure_only_archive_never_establishes_review_eligibility(self):
+        self.current_workflow_archive()
+        self.assertTrue(self.check()["eligible"], "positive control must authenticate the full success archive")
+        self.source.documents = {"collection-failure.json": {
+            "schema": "lmdj.pr-agent-input-collection-failure.v1", "status": "failed",
+            "identity": {}, "inventory": [], "reasons": [{"reason": "input exceeds file limit"}]}}
+        result = self.check()
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["status"], "invalid")
+
+    def test_collection_failure_fence_rejects_otherwise_complete_success_archive(self):
+        self.current_workflow_archive()
+        self.assertTrue(self.check()["eligible"], "positive control must authenticate the full success archive")
+        self.source.documents["collection-failure.json"] = {
+            "schema": "lmdj.pr-agent-input-collection-failure.v1", "status": "failed",
+            "identity": {}, "inventory": [], "reasons": [{"reason": "publication outcome is uncertain"}]}
+        result = self.check()
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["status"], "invalid")
 
     def test_v1_cannot_smuggle_v2_diagnostic_members(self):
         for name in ("t2-input.json", "collection-receipt.json", "t2-result.json"):
