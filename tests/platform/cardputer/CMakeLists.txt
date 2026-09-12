@@ -96,6 +96,19 @@ lmdj_target_warnings(lmdj_cardputer_status_payload_tests)
 lmdj_target_sanitizers(lmdj_cardputer_status_payload_tests)
 lmdj_add_test(NAME platform.cardputer.status_payload TIER component
   COMMAND lmdj_cardputer_status_payload_tests)
+
+# Proposal-only observation codec vectors. This target intentionally excludes
+# the active ESP component and does not register opcodes or alter Contract
+# identities until the independent byte-table review is complete.
+add_executable(lmdj_cardputer_observation_wire_tests observation_wire_test.cpp)
+target_include_directories(lmdj_cardputer_observation_wire_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+lmdj_target_warnings(lmdj_cardputer_observation_wire_tests)
+lmdj_target_sanitizers(lmdj_cardputer_observation_wire_tests)
+foreach(scenario valid invalid decode diagnostics unavailable escape)
+  lmdj_add_test(NAME platform.cardputer.observation_wire.${scenario} TIER component
+    COMMAND lmdj_cardputer_observation_wire_tests ${scenario})
+endforeach()
+
 add_executable(lmdj_cardputer_audio_lifecycle_tests
   audio_lifecycle_test.cpp
   "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/audio_driver.cpp"
