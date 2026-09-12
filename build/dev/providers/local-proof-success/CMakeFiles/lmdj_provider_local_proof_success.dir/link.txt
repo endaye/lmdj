@@ -1,2 +1,0 @@
-/usr/bin/ar qc ../../lib/liblmdj_provider_local_proof_success.a CMakeFiles/lmdj_provider_local_proof_success.dir/src/provider.cpp.o
-/usr/bin/ranlib ../../lib/liblmdj_provider_local_proof_success.a

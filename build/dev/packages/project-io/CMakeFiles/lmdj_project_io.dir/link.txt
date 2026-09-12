@@ -1,2 +1,0 @@
-/usr/bin/ar qc ../../lib/liblmdj_project_io.a CMakeFiles/lmdj_project_io.dir/src/project_store.cpp.o CMakeFiles/lmdj_project_io.dir/src/workspace_cache.cpp.o CMakeFiles/lmdj_project_io.dir/src/project_bundle_transfer.cpp.o CMakeFiles/lmdj_project_io.dir/src/sequence_journal.cpp.o CMakeFiles/lmdj_project_io.dir/src/sequence_admission_codec.cpp.o CMakeFiles/lmdj_project_io.dir/src/soundset_store.cpp.o CMakeFiles/lmdj_project_io.dir/src/native/storage_platform.cpp.o
-/usr/bin/ranlib ../../lib/liblmdj_project_io.a

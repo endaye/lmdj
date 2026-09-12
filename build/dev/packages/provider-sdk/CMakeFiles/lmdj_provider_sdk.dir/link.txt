@@ -1,2 +1,0 @@
-/usr/bin/ar qc ../../lib/liblmdj_provider_sdk.a CMakeFiles/lmdj_provider_sdk.dir/src/provider.cpp.o CMakeFiles/lmdj_provider_sdk.dir/src/capability.cpp.o CMakeFiles/lmdj_provider_sdk.dir/src/registry.cpp.o CMakeFiles/lmdj_provider_sdk.dir/src/attempt_store.cpp.o CMakeFiles/lmdj_provider_sdk.dir/src/durable_file.cpp.o
-/usr/bin/ranlib ../../lib/liblmdj_provider_sdk.a

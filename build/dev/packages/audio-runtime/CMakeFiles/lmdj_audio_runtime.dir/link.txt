@@ -1,2 +1,0 @@
-/usr/bin/ar qc ../../lib/liblmdj_audio_runtime.a CMakeFiles/lmdj_audio_runtime.dir/src/offline_renderer.cpp.o CMakeFiles/lmdj_audio_runtime.dir/src/wav_writer.cpp.o CMakeFiles/lmdj_audio_runtime.dir/src/master_fx.cpp.o CMakeFiles/lmdj_audio_runtime.dir/src/prepared_sample_bank.cpp.o CMakeFiles/lmdj_audio_runtime.dir/src/realtime_engine.cpp.o
-/usr/bin/ranlib ../../lib/liblmdj_audio_runtime.a

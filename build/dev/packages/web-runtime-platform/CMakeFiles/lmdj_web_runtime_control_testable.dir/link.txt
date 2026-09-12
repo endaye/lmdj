@@ -1,2 +1,0 @@
-/usr/bin/ar qc ../../lib/liblmdj_web_runtime_control_testable.a CMakeFiles/lmdj_web_runtime_control_testable.dir/src/control_runtime.cpp.o
-/usr/bin/ranlib ../../lib/liblmdj_web_runtime_control_testable.a
