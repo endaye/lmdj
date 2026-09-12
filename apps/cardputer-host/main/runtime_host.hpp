@@ -9,6 +9,7 @@
 #ifdef ESP_PLATFORM
 #include "audio_driver.hpp"
 #include "audio_diagnostics.hpp"
+#include "resource_observation.hpp"
 #endif
 
 namespace lmdj::cardputer {
@@ -77,6 +78,11 @@ class RuntimeHost final {
   HostResult shutdown() noexcept;
   void poll() noexcept;
   HostStatus read_status() const noexcept { return status_; }
+#ifdef ESP_PLATFORM
+  // Serialized control-owner boundary for future diagnostics extraction. The
+  // sample is sequential and is not a callback/ISR operation.
+  void read_resources(ResourceObservation& result) const noexcept;
+#endif
 
  private:
   static void render(void*, float*, float*, std::uint32_t) noexcept;
