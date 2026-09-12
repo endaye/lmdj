@@ -23,6 +23,8 @@ bundle 与 `runtime.toml` 身份）→ `run-engine.sh --input`（引擎，`flock
 `thinking: disabled`，`max_tokens` 4096，单请求 60 秒、单次评审 600 秒上限。
 预算由引擎内的 append-only ledger 强制：每 PR USD 1、试点累计 USD 20、
 每月 USD 20，按 1M context 峰值价预留、按实际 usage 结算。
+当前不启用任何供应商后备；GLM、Kimi 和 Grok 仅保留为历史兼容身份，
+不会被此 workflow 注入凭据或自动调用。
 
 安装与更新只有一个入口：`scripts/ci/pr-agent/install.sh <staging-dir>` 以 root
 在主机执行，把现有 bundle 复制到新 release 后写入仓库的 adapter/config，

@@ -1132,7 +1132,7 @@ class InputAndPolicyTests(unittest.TestCase):
             config_identity = adapter._file_identity(config_path)
             adapter_identity = adapter._file_identity(source / "pr_agent_review.py")
         self.assertEqual(witness["schema"], adapter.WITNESS_SCHEMA)
-        self.assertEqual(witness["provider_order"], ["deepseek", "glm", "xai", "kimi"])
+        self.assertEqual(witness["provider_order"], ["deepseek"])
         self.assertTrue(witness["providers"]["deepseek"]["enabled"])
         self.assertEqual(witness["providers"]["deepseek"]["model"], "deepseek/deepseek-flash")
         self.assertEqual(witness["engine"]["name"], "pr-agent")
