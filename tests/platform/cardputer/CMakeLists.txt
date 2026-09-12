@@ -30,6 +30,15 @@ foreach(scenario ontime before during)
   lmdj_add_test(NAME platform.cardputer.dma_deadline.${scenario} TIER component
     COMMAND lmdj_cardputer_dma_deadline_tests ${scenario})
 endforeach()
+add_executable(lmdj_cardputer_feedback_interleaving_tests
+  pad_feedback_interleaving_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/runtime_host.cpp")
+target_include_directories(lmdj_cardputer_feedback_interleaving_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+target_link_libraries(lmdj_cardputer_feedback_interleaving_tests PRIVATE lmdj::runtime_facade Threads::Threads)
+lmdj_target_warnings(lmdj_cardputer_feedback_interleaving_tests)
+lmdj_target_sanitizers(lmdj_cardputer_feedback_interleaving_tests)
+lmdj_add_test(NAME platform.cardputer.input.feedback_interleaving TIER component
+  COMMAND lmdj_cardputer_feedback_interleaving_tests)
 # Keep the AudioSession implementation native while exercising the actual ESP
 # scanner. The fake models FIFO count/pop, not electrical timing or speaker IO.
 add_library(lmdj_cardputer_scanner_native_host OBJECT
@@ -139,7 +148,7 @@ target_include_directories(lmdj_cardputer_input_tests PRIVATE "${CMAKE_SOURCE_DI
 lmdj_target_warnings(lmdj_cardputer_input_tests)
 lmdj_target_sanitizers(lmdj_cardputer_input_tests)
 foreach(scenario mapping repeat_release empty_receive overflow queue_retry display
-    feedback_receipt feedback_stop feedback_release feedback_restart)
+    feedback_receipt feedback_stop feedback_release feedback_restart feedback_wrap feedback_interleaving)
   lmdj_add_test(NAME platform.cardputer.input.${scenario} TIER component
     COMMAND lmdj_cardputer_input_tests ${scenario})
 endforeach()

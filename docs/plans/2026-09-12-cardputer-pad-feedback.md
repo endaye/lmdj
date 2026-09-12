@@ -15,18 +15,37 @@ work in the same umbrella.
 - `apps/cardputer-host/main/input_controller.hpp`
 - `apps/cardputer-host/main/input_controller.cpp`
 - `tests/platform/cardputer/input_controller_test.cpp`
+- `tests/platform/cardputer/pad_feedback_interleaving_test.cpp`
 - `tests/platform/cardputer/CMakeLists.txt`
 - `apps/docs-site/docs/platform/input.mdx`
 - `docs/plans/2026-09-12-cardputer-pad-feedback.md`
 
 ## Implementation
 
-The serialized Host correlates each Pad's latest press/release sequence with
+The serialized Host correlates every admitted Pad press/release sequence with
 actual current-epoch receipts. Only voice_started lights press feedback;
 release, refusal and lifecycle transitions clear it. This is acknowledged
 local Pad input, not an estimate of all sounding voices or audible tail length.
-The projection consumes HostStatus. No new audio-thread synchronization,
-allocation, Core Contract or predicted success is introduced.
+The projection consumes HostStatus. A one-byte-per-credit table is allocated
+at Host construction (128 payload bytes for the current profile); no render
+allocation or new audio-thread synchronization is introduced. Its memory is
+part of the Host cost to measure with the completed candidate.
+
+Review follow-up: the per-Pad latest-sequence implementation could overwrite
+an older press while its completed render was publishing a receipt. A boundary
+double reproduces this ordering while keeping receipts strictly FIFO; its
+regression failed on the reviewed source with exit 8 in
+`/tmp/cardputer-feedback-interleaving-red.log`. The table now retains every
+outstanding command until polling returns its credit. The review's separate
+out-of-order-receipt premise is not supported by RuntimeFacade::poll, which
+retires pending commands from the front in sequence order.
+
+Follow-up verification: native and ASan/UBSan each 43/43 passed (42 component,
+one existing stress), including credit-table wrap/queue-full retry and the
+interleaving regression. EIM firmware build and full portal check exited 0.
+Logs use `/tmp/cardputer-feedback-v2-` prefixes; previous failed evidence is
+retained. The Facade double only establishes the publication ordering at the
+Host boundary; the original real-Core tests remain in both selections.
 
 ## Verification
 

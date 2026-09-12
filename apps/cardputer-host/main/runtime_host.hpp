@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <vector>
 #include <lmdj/facade/runtime_facade.hpp>
 #ifdef ESP_PLATFORM
 #include "audio_driver.hpp"
@@ -105,7 +106,9 @@ class RuntimeHost final {
   HostStatus status_;
   facade::RuntimeEpoch epoch_;
   std::uint32_t sequence_{};
-  std::array<std::uint32_t, 4> press_sequences_{}, release_sequences_{};
+  // One byte per permitted outstanding command, allocated only at setup.
+  // Facade receipt credits prevent slot reuse before its receipt is polled.
+  std::vector<std::uint8_t> pending_pad_commands_;
   bool audio_owned_{};
 };
 

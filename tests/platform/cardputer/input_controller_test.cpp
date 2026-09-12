@@ -242,6 +242,30 @@ void restart_cannot_inherit_feedback() {
   LMDJ_CHECK(!display.frame().pad_active[0]);
 }
 
+void receipt_metadata_wraps_without_aliasing() {
+  FakeSession audio;
+  auto host = make_host(audio, 2);
+  load_and_start(host);
+  for (int cycle = 0; cycle < 8; ++cycle) {
+    LMDJ_CHECK(host.handle_key({Key::pad_a, true}) == HostResult::accepted);
+    LMDJ_CHECK(host.handle_key({Key::pad_a, false}) == HostResult::accepted);
+    LMDJ_CHECK(host.handle_key({Key::pad_a, true}) == HostResult::core_error);
+    LMDJ_CHECK(host.read_status().core_result == facade::RuntimeResult::queue_full);
+    audio.pump();
+    host.poll();
+    LMDJ_CHECK(!host.read_status().pad_active[0]);
+    LMDJ_CHECK(host.handle_key({Key::pad_a, true}) == HostResult::accepted);
+    audio.pump();
+    host.poll();
+    LMDJ_CHECK(host.read_status().pad_active[0]);
+    LMDJ_CHECK(host.handle_key({Key::pad_a, false}) == HostResult::accepted);
+    audio.pump();
+    host.poll();
+    LMDJ_CHECK(!host.read_status().pad_active[0]);
+  }
+  LMDJ_CHECK(host.read_status().last_receipt_sequence == 32);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -258,6 +282,7 @@ int main(int argc, char** argv) {
     else if (scenario == "feedback_stop") stop_clears_acknowledged_feedback();
     else if (scenario == "feedback_release") release_feedback_waits_for_receipt();
     else if (scenario == "feedback_restart") restart_cannot_inherit_feedback();
+    else if (scenario == "feedback_wrap") receipt_metadata_wraps_without_aliasing();
     else return 2;
   } catch (const std::exception& error) {
     return std::fprintf(stderr, "%s\n", error.what()), 1;
