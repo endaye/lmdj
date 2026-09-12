@@ -102,6 +102,15 @@ void valid_status_vector() {
   LMDJ_CHECK(!validate_extended_status(bytes, Identity{
       "1.0.56.1", status.identity.host_version, status.identity.revision,
       status.identity.assembly_lock_sha256, status.identity.profile_sha256}));
+
+  std::string maximum_build(241, 'x');
+  auto maximum = status;
+  maximum.identity.product_build = maximum_build;
+  LMDJ_CHECK(encode_extended_status(maximum, output, written));
+  LMDJ_CHECK(written == status_max_bytes);
+  const auto maximum_bytes = std::span<const std::byte>(output).first(written);
+  LMDJ_CHECK(read_u16(maximum_bytes, 144) == identity_limit);
+  LMDJ_CHECK(validate_extended_status(maximum_bytes, maximum.identity));
 }
 
 void status_rejects_invalid_state() {
@@ -135,6 +144,11 @@ void status_decoder_rejects_malformed() {
   std::size_t written = 0;
   LMDJ_CHECK(encode_extended_status(status, output, written));
   output[34] = std::byte{1};
+  LMDJ_CHECK(!validate_extended_status(
+      std::span<const std::byte>(output).first(written), status.identity));
+  LMDJ_CHECK(encode_extended_status(status, output, written));
+  output[72] = std::byte{};
+  for (std::size_t index = 73; index < 104; ++index) output[index] = std::byte{};
   LMDJ_CHECK(!validate_extended_status(
       std::span<const std::byte>(output).first(written), status.identity));
   LMDJ_CHECK(encode_extended_status(status, output, written));

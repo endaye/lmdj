@@ -381,7 +381,8 @@ inline bool validate_extended_status(std::span<const std::byte> bytes,
   const auto received_bytes = detail::read_u64(bytes, 120);
   const auto expected_bytes = detail::read_u64(bytes, 128);
   const auto transfer = bytes.subspan(104, 16);
-  if ((!content_present &&
+  if ((content_present && detail::all_zero(bytes.subspan(72, 32))) ||
+      (!content_present &&
        (content_bytes != 0 || !detail::all_zero(bytes.subspan(72, 32)))) ||
       (!receiving &&
        (received_bytes != 0 || expected_bytes != 0 || !detail::all_zero(transfer))) ||
