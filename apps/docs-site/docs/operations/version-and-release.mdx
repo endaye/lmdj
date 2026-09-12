@@ -131,6 +131,14 @@ Task commit、push、PR、squash merge、signed product tag、Release、部署�
 缺少任一 Host / changelog 目标、越权 Channel 与无界重试。它目前只是经过校验的默认范围，
 不是发布授权，也不表示 run / resume 总控、非交互签名或双端 changelog 发布已经实现。
 
+三个发布／部署 workflow 已提供可选的 `request_id`（固定 operation 的 64 位小写十六进制摘要）。
+携带它时，preflight 在现有门禁前生成并上传 `release-dispatch-correlation`，记录 exact inputs、
+repository / actor / run numeric ID、首次 attempt，以及 event / workflow / tooling revision。
+它只证明请求被该运行接收，不证明签名、发布、部署或授权；缺省时保留原有手动路径。
+关联回执生成或上传失败会停止该 preflight，不进入后续发布／部署。消费端仍须认证实际
+API run、留存 artifact 及可信源码；未知 POST 不得凭回执文件、run-name 或最新成功盲目重发。
+此回执生产端已实现，完整关联消费者和生产总控恢复尚未接通。
+
 发布请求的持久状态层已实现：固定 request / scope / policy / revision，独占 writer 在
 每一步外部操作前持久化 intent；结果必须有匹配 operation 的证据回执才能推进。
 崩溃留下的 intent 需要核对，不允许重新 begin；校验失败或状态损坏也不自动清空。
