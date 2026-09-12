@@ -128,7 +128,7 @@ export function renderChangelog({id, title, manifestVersion, entries, hasSource}
     '这些是源码中的 prepared 记录，不是已发布版本列表。摘要只校验记录完整性，不证明 AI 判断正确、测试通过或远端授权。', '',
     'Publication / deployment / promotion: **未接入认证回执，状态未知**。Prepared 不等于已部署或已晋级。', '',
     '本页为静态源码投影；历史 Product 快照保留冻结时内容，不读取当前 main 的 changelog。', '',
-    '[版本与发布边界](./version-and-release.mdx)', ''];
+    '[版本与发布边界](./version-and-release.mdx) · [Product release 日志](../releases/index.mdx)', ''];
   if (hasSource) lines.push(`原始日志：\`${sourcePath}\`。未结构化的历史文字不作为可验证版本记录展示。`, '');
   if (!entries.length) lines.push('暂无结构化 prepared 记录；不补造历史版本或发布日期。', '');
   for (const entry of entries) {
