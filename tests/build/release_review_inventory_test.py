@@ -24,7 +24,7 @@ class InventoryTest(unittest.TestCase):
         self.rows["reviews"] = [dict(id=f"R_{n}", databaseId=100+n, body=f"finding {n}",
             state="DISMISSED" if n == 1 else "COMMENTED", submittedAt="2026-09-13T01:00:00Z",
             updatedAt="2026-09-13T01:00:00Z", commit={"oid": "b"*40 if n == 1 else self.head},
-            author={"login": "reviewer"}) for n in (1, 2)]
+            author={"login": "reviewer", "databaseId":20}) for n in (1, 2)]
         self.rows["comments"] = [dict(id=f"IC_{n}", databaseId=200+n, body=f"discussion {n}",
             createdAt="2026-09-13T01:00:00Z", updatedAt="2026-09-13T01:00:00Z", author=None) for n in (1, 2)]
         self.rows["reviewThreads"] = [dict(id=f"T_{n}", isResolved=(n == 1), isOutdated=(n == 1),
@@ -34,7 +34,7 @@ class InventoryTest(unittest.TestCase):
         for n in (1, 2):
             self.rows[f"T_{n}"] = [dict(id=f"RC_{n}_{m}", databaseId=400+n*10+m,
                 body=f"thread {n} comment {m}", createdAt="2026-09-13T01:00:00Z",
-                updatedAt="2026-09-13T01:00:00Z", author={"login": "reviewer"},
+                updatedAt="2026-09-13T01:00:00Z", author={"login": "reviewer", "databaseId":20},
                 originalCommit={"oid":"b"*40}, commit={"oid":self.head}, path="tools/release/example.py",
                 diffHunk="@@ -1 +1 @@\n-old\n+new", originalLine=1, line=None,
                 pullRequest={"databaseId":41,"number":42}, pullRequestReview={"id":f"R_{n}","databaseId":100+n}) for m in (1, 2)]
@@ -51,6 +51,9 @@ class InventoryTest(unittest.TestCase):
         variables = request["variables"]
         cursor, thread = variables["cursor"], variables.get("thread")
         kind = "threadComments" if thread else next(k for k in self.rows if f"{k}(first:" in request["query"])
+        if kind in ("reviews", "comments", "threadComments"):
+            self.assertIn("... on User { databaseId }", request["query"])
+            self.assertIn("... on Bot { databaseId }", request["query"])
         self.assertEqual(request, query_document(42, kind, cursor, thread))
         if kind == "reviews" and cursor is None:
             self.snapshots += 1

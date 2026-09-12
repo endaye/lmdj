@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -33,6 +34,16 @@ def require(value, reason):
 
 def nonempty(value):
     return isinstance(value, str) and bool(value.strip())
+
+
+def body_observation(row):
+    """Bind observed UTF-8 bytes, not semantic approval of arbitrary text."""
+    body, author = row.get("body"), row.get("user")
+    require(type(body) is str and type(author) is dict and type(author.get("id")) is int
+            and author["id"] > 0 and nonempty(author.get("login")), "review body observation lacks author identity")
+    raw = body.encode("utf-8")
+    return {"sha256": hashlib.sha256(raw).hexdigest(), "byte_length": len(raw),
+            "author_id": author["id"], "author_login": author["login"]}
 
 
 class Reader:
@@ -117,7 +128,8 @@ def manual(reader, comment, repo, head):
         for finding in review["findings"]:
             require(isinstance(finding, dict) and set(finding) == {"finding", "disposition"}
                     and all(nonempty(v) for v in finding.values()), "finding needs actual disposition")
-    return {"kind": record["kind"], "comment_id": comment["id"], "record": record}
+    return {"kind": record["kind"], "comment_id": comment["id"], "record": record,
+            "body_observation": body_observation(comment)}
 
 
 def automated(reader, posted, repo, number, head, bot):
@@ -206,7 +218,8 @@ def automated(reader, posted, repo, number, head, bot):
                 and actual.get("side") == wanted["side"] and actual.get("original_start_line") is None
                 and actual.get("body") == wanted["body"], "published finding differs from authentic model artifact")
     return {"kind": "automated", "review_id": posted["id"], "run_id": run, "run_attempt": attempt,
-            "backend": backend, "findings": model["findings"]}
+            "backend": backend, "findings": model["findings"],
+            "body_observation": body_observation(posted)}
 
 
 def check(reader, repository, number, head):
@@ -226,6 +239,7 @@ def check(reader, repository, number, head):
         repo = reader.get(prefix)
         require(repo.get("full_name") == repository and type(repo.get("id")) is int
                 and before["base"].get("repo", {}).get("id") == repo["id"], "repository identity mismatch")
+        result["repository_id"] = repo["id"]
         bot = reader.get("/users/github-actions%5Bbot%5D")
         reviews = reader.pages(prefix + f"/pulls/{number}/reviews")
         comments = reader.pages(prefix + f"/issues/{number}/comments")
