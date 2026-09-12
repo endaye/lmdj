@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/lmdj_cardputer_transfer_tests.dir/transfer_test.cpp.o "CMakeFiles/lmdj_cardputer_transfer_tests.dir/__/__/__/apps/cardputer-host/main/transfer.cpp.o" -o ../../../bin/lmdj_cardputer_transfer_tests 

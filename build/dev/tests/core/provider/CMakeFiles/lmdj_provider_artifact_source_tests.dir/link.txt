@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/lmdj_provider_artifact_source_tests.dir/artifact_source_test.cpp.o -o ../../../bin/lmdj_provider_artifact_source_tests  ../../../lib/liblmdj_provider_local_proof_success.a ../../../lib/liblmdj_provider_sdk.a ../../../lib/liblmdj_foundation.a 
