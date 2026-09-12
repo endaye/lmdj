@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
@@ -104,6 +105,9 @@ class RuntimeHost final {
   // Serialized control-owner boundary for future diagnostics extraction. The
   // sample is sequential and is not a callback/ISR operation.
   void read_resources(ResourceObservation& result) const noexcept;
+  // Returns the fixed-size, identity-bound records accumulated at lifecycle
+  // boundaries. The copy is control-owner-only; no render/ISR path reads it.
+  void read_resource_cycles(ResourceCycleReport& result) const noexcept;
 #endif
   // Serialized control owner. While audio owns the observation, return no
   // data rather than an older completed observation relabeled as current.
@@ -116,6 +120,9 @@ class RuntimeHost final {
   HostResult fail(HostResult error) noexcept;
   void collect_receipts() noexcept;
   void clear_content() noexcept;
+#ifdef ESP_PLATFORM
+  void observe_resource_cycle() noexcept;
+#endif
   facade::RuntimeFacade runtime_;
   HostProfile profile_;
   AudioSession& audio_;
@@ -127,6 +134,12 @@ class RuntimeHost final {
   std::vector<std::uint8_t> pending_pad_commands_;
   bool audio_owned_{};
   HostAudioObservation observation_{};
+#ifdef ESP_PLATFORM
+  // Keep the 100-record ledger out of the app_main/control-task stack. Its
+  // bounded storage is allocated once with the Host and reclaimed after all
+  // audio/platform owners have stopped.
+  std::unique_ptr<ResourceCycleLedger> resource_cycles_;
+#endif
 };
 
 #ifdef ESP_PLATFORM

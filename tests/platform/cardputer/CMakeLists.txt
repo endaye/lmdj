@@ -7,7 +7,7 @@ target_include_directories(lmdj_cardputer_resource_observation_tests PRIVATE
   "${CMAKE_SOURCE_DIR}/packages/project-cooker/include")
 lmdj_target_warnings(lmdj_cardputer_resource_observation_tests)
 lmdj_target_sanitizers(lmdj_cardputer_resource_observation_tests)
-foreach(scenario capabilities mapping absent stack interval resample)
+foreach(scenario capabilities mapping absent stack interval resample ledger ledger_abort ledger_capacity)
   lmdj_add_test(NAME platform.cardputer.resources.${scenario} TIER component
     COMMAND lmdj_cardputer_resource_observation_tests ${scenario})
 endforeach()

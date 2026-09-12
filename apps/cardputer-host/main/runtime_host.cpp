@@ -11,7 +11,11 @@ using facade::RuntimeResult;
 RuntimeHost::RuntimeHost(facade::RuntimeConfig config, HostProfile profile,
                          AudioSession& audio)
     : runtime_(config), profile_(profile), audio_(audio),
-      pending_pad_commands_(config.maximum_pending_commands, 0xff) {}
+      pending_pad_commands_(config.maximum_pending_commands, 0xff)
+#ifdef ESP_PLATFORM
+      , resource_cycles_(std::make_unique<ResourceCycleLedger>())
+#endif
+      {}
 
 RuntimeHost::~RuntimeHost() {
   (void)shutdown();
@@ -59,6 +63,14 @@ void RuntimeHost::poll() noexcept {
   }
 }
 
+#ifdef ESP_PLATFORM
+void RuntimeHost::observe_resource_cycle() noexcept {
+  if (!resource_cycles_) return;
+  ResourceObservation sample = capture_control_resources();
+  (void)resource_cycles_->observe(sample);
+}
+#endif
+
 HostResult RuntimeHost::start() noexcept {
   if (audio_owned_ || status_.armed) return fail(HostResult::wrong_state);
   if (observation_.generation == std::numeric_limits<std::uint64_t>::max())
@@ -79,9 +91,15 @@ HostResult RuntimeHost::start() noexcept {
   status_.physical_stopped = false;
   if (!audio_.start(render, this, status_.volume, status_.muted)) {
     (void)stop();
+#ifdef ESP_PLATFORM
+    if (resource_cycles_) resource_cycles_->abort();
+#endif
     return fail(HostResult::audio_error);
   }
   status_.phase = RuntimePhase::running;
+#ifdef ESP_PLATFORM
+  observe_resource_cycle();
+#endif
   observation_.start_succeeded = true;
   status_.error = HostResult::ok;
   return HostResult::ok;
@@ -108,6 +126,9 @@ HostResult RuntimeHost::stop() noexcept {
         }
       }
     }
+#ifdef ESP_PLATFORM
+    if (result.quiescent) observe_resource_cycle();
+#endif
     if (!status_.physical_stopped) return fail(HostResult::audio_error);
   }
   if (!status_.physical_stopped) return fail(HostResult::audio_error);
@@ -139,6 +160,11 @@ HostResult RuntimeHost::shutdown() noexcept {
   const auto result = stop();
   if (audio_owned_) return result;
   status_.core_result = runtime_.unload();
+#ifdef ESP_PLATFORM
+  if (result == HostResult::ok && status_.core_result == RuntimeResult::ok &&
+      resource_cycles_)
+    (void)resource_cycles_->complete(capture_control_resources());
+#endif
   clear_content();
   return result;
 }
@@ -148,6 +174,10 @@ HostResult RuntimeHost::begin_receive() noexcept {
   if (stop() != HostResult::ok) return HostResult::audio_error;
   status_.core_result = runtime_.unload();
   if (status_.core_result != RuntimeResult::ok) return fail(HostResult::core_error);
+#ifdef ESP_PLATFORM
+  if (resource_cycles_)
+    (void)resource_cycles_->complete(capture_control_resources());
+#endif
   clear_content();
   status_.armed = true;
   status_.error = HostResult::ok;
@@ -168,14 +198,26 @@ HostResult RuntimeHost::load_received(std::span<const std::byte> bytes,
   status_.armed = false;
   if (profile_.maximum_pads == 0 || profile_.maximum_pads > status_.pads.size())
     return fail(HostResult::unsupported_content);
+#ifdef ESP_PLATFORM
+  const bool cycle_started = resource_cycles_ &&
+      resource_cycles_->begin(capture_control_resources());
+#endif
   status_.core_result = runtime_.load(bytes, identity);
-  if (status_.core_result != RuntimeResult::ok) return fail(HostResult::core_error);
+  if (status_.core_result != RuntimeResult::ok) {
+#ifdef ESP_PLATFORM
+    if (cycle_started) resource_cycles_->abort();
+#endif
+    return fail(HostResult::core_error);
+  }
   const auto summary = runtime_.content_summary();
   bool supported = summary.count > 0 && summary.count <= profile_.maximum_pads;
   for (std::size_t i = 0; i < summary.count; ++i)
     supported = supported && summary.pads[i].trigger_mode == facade::RuntimeTriggerMode::one_shot;
   if (!supported) {
     (void)runtime_.unload();
+#ifdef ESP_PLATFORM
+    if (cycle_started) resource_cycles_->abort();
+#endif
     clear_content();
     return fail(HostResult::unsupported_content);
   }
@@ -183,6 +225,9 @@ HostResult RuntimeHost::load_received(std::span<const std::byte> bytes,
     const auto published = runtime_.content_identity();
     if (!published || published->sha256.size() != status_.content_sha256.size()) {
       (void)runtime_.unload();
+#ifdef ESP_PLATFORM
+      if (cycle_started) resource_cycles_->abort();
+#endif
       clear_content();
       return fail(HostResult::core_error);
     }
@@ -190,10 +235,26 @@ HostResult RuntimeHost::load_received(std::span<const std::byte> bytes,
     status_.content_bytes = published->byte_length;
   } catch (...) {
     (void)runtime_.unload();
+#ifdef ESP_PLATFORM
+    if (cycle_started) resource_cycles_->abort();
+#endif
     clear_content();
     status_.core_result = RuntimeResult::allocation_failed;
     return fail(HostResult::core_error);
   }
+#ifdef ESP_PLATFORM
+  if (cycle_started) {
+    if (!resource_cycles_->bind_identity(status_.content_sha256,
+                                          status_.content_bytes)) {
+      (void)runtime_.unload();
+      resource_cycles_->abort();
+      clear_content();
+      status_.core_result = RuntimeResult::allocation_failed;
+      return fail(HostResult::core_error);
+    }
+    observe_resource_cycle();
+  }
+#endif
   status_.pad_count = summary.count;
   std::copy_n(summary.pads.begin(), summary.count, status_.pads.begin());
   status_.phase = RuntimePhase::ready; // Never expose pre-profile Core ready.
@@ -243,6 +304,14 @@ HostResult RuntimeHost::handle_key(KeyEvent event) noexcept {
 void RuntimeHost::read_resources(ResourceObservation& result) const noexcept {
   result = capture_control_resources();
   result.audio_task_stack_high_water_bytes = audio_.stopped_stack_high_water_bytes();
+}
+
+void RuntimeHost::read_resource_cycles(ResourceCycleReport& result) const noexcept {
+  if (!resource_cycles_) {
+    result = {};
+    return;
+  }
+  resource_cycles_->snapshot(result);
 }
 #endif
 

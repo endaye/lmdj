@@ -131,3 +131,22 @@ phase; calling this method alone does not provide that binding.
 The same snapshot includes the optional audio-task stack high-water value when
 the concrete session has published its finished barrier. Alternate sessions
 may leave it unavailable; it is never inferred from the control-task value.
+
+`ResourceCycleLedger` now retains up to 100 fixed-size, identity-bound records.
+Each record starts before a validated content load, folds samples taken after
+load/start/stop and at unload, and is published only after the full
+load/play/stop/unload journey completes. The report preserves baseline free
+bytes, observed free/largest-block minima, SDK low-water minima and
+caller/audio stack minima so transient allocation peaks can be derived without
+summing overlapping heap capability classes. Failed loads increment an
+explicit aborted count; a full ledger increments a dropped count rather than
+overwriting history.
+
+The ESP Host allocates this bounded ledger once at construction so the record
+array does not consume the `app_main` control-task stack; that allocation is
+part of the measured Host resource cost.
+
+`RuntimeHost::read_resource_cycles` is a serialized, caller-owned copy for the
+future observation transport. It adds no wire opcode or STATUS field, and the
+fixed records do not prove target allocator behavior, idle-task reclamation,
+30-minute stability, or any physical acceptance leg.
