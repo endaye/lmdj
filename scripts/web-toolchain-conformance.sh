@@ -317,6 +317,7 @@ case "$command_name" in
     python3 "$web_test_root/toolchain/server_test.py"
     python3 "$web_test_root/toolchain/toolchain_identity_test.py"
     python3 "$web_test_root/project_io/project_io_web_timeout_policy_test.py"
+    node --test "$web_test_root/project_io/opfs_writer_error_test.mjs"
     configure_fixture
     build_fixture
     build_project_io
