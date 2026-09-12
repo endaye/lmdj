@@ -1976,7 +1976,8 @@ void admission_switch_drains_source_before_target_exclusion() {
   LMDJ_CHECK(truth.value().patterns.at(target).events.empty());
 }
 
-void admission_ordinary_switch_continues_through_terminal(bool switch_after_completion = false) {
+void admission_ordinary_switch_continues_through_terminal(bool switch_after_completion = false,
+                                                       int later_work = 0) {
   AdmissionFixture f(true);
   f.prepare();
   f.retain();
@@ -2067,6 +2068,26 @@ void admission_ordinary_switch_continues_through_terminal(bool switch_after_comp
     LMDJ_CHECK(switched.value().admission == historical);
     LMDJ_CHECK(switched.value().last_input_sequence == completed.last_input_sequence);
     LMDJ_CHECK(switched.value().pending_events.empty());
+  }
+  if (later_work != 0) {
+    const auto completed = f.state();
+    const std::vector later_tail{event(0, 120, 120, 100)};
+    if (later_work == 1) {
+      LMDJ_CHECK(f.journal.append_tail(f.bundle, f.session, completed.pattern_id,
+          completed.expected_revision, *completed.last_input_sequence + 1, later_tail).has_value());
+    } else {
+      LMDJ_CHECK(f.journal.append_flush(f.bundle, f.session, CommandId{uuid_for(100)},
+          completed.pattern_id, completed.expected_revision, later_tail).has_value());
+    }
+    const auto reopened = SequenceJournal{}.read_active(f.bundle);
+    LMDJ_CHECK(reopened.has_value());
+    LMDJ_CHECK(reopened.value().admission == historical);
+    if (later_work == 1) LMDJ_CHECK(reopened.value().pending_events == later_tail);
+    else {
+      LMDJ_CHECK(!reopened.value().flushes.back().completed);
+      LMDJ_CHECK(reopened.value().flushes.back().canonical_events == later_tail);
+      LMDJ_CHECK(reopened.value().flushes.back().recovery_events == later_tail);
+    }
   }
   auto expected = f.state();
   expected.state = SequenceSessionState::owner_lost;
@@ -2376,6 +2397,8 @@ int main(int argc, char** argv) {
     admission_switch_requires_retained_boundary();
     admission_ordinary_switch_continues_through_terminal();
     admission_ordinary_switch_continues_through_terminal(true);
+    admission_ordinary_switch_continues_through_terminal(false, 1);
+    admission_ordinary_switch_continues_through_terminal(false, 2);
     admission_incomplete_snapshot_requires_current_segment();
     admission_repeated_pattern_starts_a_new_generation_checkpoint();
     admission_switch_receipt_refuses_conflicts_and_unknown_sync();

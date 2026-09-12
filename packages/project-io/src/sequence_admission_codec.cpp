@@ -941,9 +941,10 @@ SequenceAdmissionState snapshot(const Json& input, const ActiveSequenceJournal& 
   if (s.closure) closure_valid(*s.closure, s);
   if (!s.transfers.empty()) require(s.admission_fence.has_value(), "transfer history lacks authority");
   if (s.completed) {
-    require(terminal && journal.pending_events.empty() &&
-                std::ranges::all_of(journal.flushes, [](const auto& f) { return f.completed; }),
-            "completed snapshot has unresolved work");
+    // Completion checked the ordinary journal at its own record boundary.
+    // A sealed snapshot may also contain later ordinary tails or flushes;
+    // those do not invalidate the retained terminal admission evidence.
+    require(terminal, "completed snapshot lacks terminal evidence");
   }
   return s;
 }
