@@ -30,6 +30,29 @@ foreach(scenario ontime before during)
   lmdj_add_test(NAME platform.cardputer.dma_deadline.${scenario} TIER component
     COMMAND lmdj_cardputer_dma_deadline_tests ${scenario})
 endforeach()
+add_executable(lmdj_cardputer_lcd_tests lcd_display_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/lcd_display.cpp")
+target_compile_definitions(lmdj_cardputer_lcd_tests PRIVATE ESP_PLATFORM)
+target_include_directories(lmdj_cardputer_lcd_tests PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/fake_esp" "${CMAKE_SOURCE_DIR}")
+target_link_libraries(lmdj_cardputer_lcd_tests PRIVATE lmdj::runtime_facade)
+lmdj_target_warnings(lmdj_cardputer_lcd_tests)
+lmdj_target_sanitizers(lmdj_cardputer_lcd_tests)
+foreach(scenario ownership frame failures draw_failure shutdown snapshot)
+  lmdj_add_test(NAME platform.cardputer.lcd.${scenario} TIER component
+    COMMAND lmdj_cardputer_lcd_tests ${scenario})
+endforeach()
+add_executable(lmdj_cardputer_screen_tests screen_view_test.cpp
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/screen_view.cpp"
+  "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/display.cpp")
+target_include_directories(lmdj_cardputer_screen_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+target_link_libraries(lmdj_cardputer_screen_tests PRIVATE lmdj::runtime_facade)
+lmdj_target_warnings(lmdj_cardputer_screen_tests)
+lmdj_target_sanitizers(lmdj_cardputer_screen_tests)
+foreach(scenario empty lifecycle transfer bounds)
+  lmdj_add_test(NAME platform.cardputer.screen.${scenario} TIER component
+    COMMAND lmdj_cardputer_screen_tests ${scenario})
+endforeach()
 add_executable(lmdj_cardputer_feedback_interleaving_tests
   pad_feedback_interleaving_test.cpp
   "${CMAKE_SOURCE_DIR}/apps/cardputer-host/main/runtime_host.cpp")
