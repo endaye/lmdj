@@ -44,3 +44,8 @@ The future diagnostics transport must receive independent contract review,
 bind identity/session/phase, and exercise every A1 resource-cycle leg. Real
 allocator behavior, scheduler timing, reclamation, USB extraction, load,
 latency, hearing and device acceptance remain pending.
+
+The first review found that the signature-only component test linked the full
+Facade library unnecessarily. The fix removes that link and adds only the
+public Facade and project-cooker include directories; the assertion now cannot
+mask link coupling or hide a runtime-library dependency.

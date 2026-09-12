@@ -2,8 +2,9 @@ find_package(Threads REQUIRED)
 add_executable(lmdj_cardputer_resource_observation_tests resource_observation_test.cpp)
 target_compile_definitions(lmdj_cardputer_resource_observation_tests PRIVATE ESP_PLATFORM)
 target_include_directories(lmdj_cardputer_resource_observation_tests PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/fake_esp" "${CMAKE_SOURCE_DIR}")
-target_link_libraries(lmdj_cardputer_resource_observation_tests PRIVATE lmdj::runtime_facade)
+  "${CMAKE_CURRENT_SOURCE_DIR}/fake_esp" "${CMAKE_SOURCE_DIR}"
+  "${CMAKE_SOURCE_DIR}/packages/application-facade/include"
+  "${CMAKE_SOURCE_DIR}/packages/project-cooker/include")
 lmdj_target_warnings(lmdj_cardputer_resource_observation_tests)
 lmdj_target_sanitizers(lmdj_cardputer_resource_observation_tests)
 foreach(scenario capabilities mapping absent stack interval resample)
