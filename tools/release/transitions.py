@@ -159,6 +159,12 @@ def verify_draft(
 def verify_published(
     tag: str, release_id: int, plan_sha256: str, context: PrepareContext,
 ) -> TransitionResult:
+    return verify_published_state(tag, release_id, plan_sha256, context).result
+
+
+def verify_published_state(
+    tag: str, release_id: int, plan_sha256: str, context: PrepareContext,
+) -> _VerifiedRelease:
     """Verify the live published Release without consulting the lagging ledger state."""
     try:
         authority = _formal_authority(tag, context, require_local=False, require_remote=True)
@@ -190,7 +196,10 @@ def verify_published(
                 "remedy: investigate Release identity and immutable tag state"
             )
         verified = _verify_release_state(tag, release_id, plan_sha256, context)
-        return replace(verified.result, status="published")
+        if (_release_projection(release) != _release_projection(verified.release)
+                or authority.intent != verified.authority.intent):
+            raise TransitionError("published Release or canonical intent changed during verification")
+        return replace(verified, result=replace(verified.result, status="published"))
     except TransitionError as error:
         message = str(error)
         if not message.startswith("why:"):
@@ -559,7 +568,7 @@ def _release_pair(
 
 
 def _release_projection(release: GitHubRelease) -> tuple[object, ...]:
-    return (_release_without_draft(release), release.draft, release.html_url)
+    return (_release_without_draft(release), release.draft, release.html_url, release.published_at)
 
 
 def _release_without_draft(release: GitHubRelease) -> tuple[object, ...]:
