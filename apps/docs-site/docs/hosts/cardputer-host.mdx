@@ -55,6 +55,14 @@ attempts. The control owner can read a snapshot only after the audio task has
 finished; there is no live mutable snapshot or audio-thread logging. Read-only
 USB extraction is not yet wired.
 
+The Host retains the measured content's full digest and byte length from the
+admitted start, with a boot-local observation generation and explicit start,
+join and silence outcomes. Stop/unload/loading different content does not
+relabel the old measurement. A new admitted start hides and replaces it;
+failed joins keep it unavailable until callback quiescence is confirmed.
+Firmware/profile and cross-reset identity binding remain part of the pending
+generated-identity/transport integration; a local generation is not global identity.
+
 Each distribution reports its count, maximum and exact nearest-rank p99.9 while
 the count is below 512000 and all observations are representable. After that
 limit, or a bad clock observation, the percentile is explicitly unavailable;

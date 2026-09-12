@@ -1,0 +1,18 @@
+# CMake generated Testfile for 
+# Source directory: /home/en/lmdj/apps/native-host
+# Build directory: /home/en/lmdj/build/dev/apps/native-host
+# 
+# This file includes the relevant testing commands required for 
+# testing this directory and lists subdirectories to be tested as well.
+add_test([=[host.native_capture_allocation_failure]=] "/home/en/.local/bin/python3.11" "/home/en/lmdj/tests/host/native_capture_allocation_failure_test.py" "/home/en/lmdj/build/dev/bin/lmdj_native_capture_allocation_failure" "/home/en/lmdj/build/dev/bin/lmdj-core" "/home/en/lmdj/products/lmdj/assembly.json")
+set_tests_properties([=[host.native_capture_allocation_failure]=] PROPERTIES  LABELS "host;" TIMEOUT "120" WORKING_DIRECTORY "/home/en/lmdj" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/apps/native-host/CMakeLists.txt;62;lmdj_add_test;/home/en/lmdj/apps/native-host/CMakeLists.txt;0;")
+add_test([=[host.native_source_boundary]=] "/home/en/.local/bin/python3.11" "/home/en/lmdj/tests/host/native_host_source_boundary_test.py" "/home/en/lmdj/apps/native-host" "/home/en/lmdj/build/dev/apps/native-host/lmdj_native_host.link-libraries.txt")
+set_tests_properties([=[host.native_source_boundary]=] PROPERTIES  LABELS "contract;" TIMEOUT "30" WORKING_DIRECTORY "/home/en/lmdj" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/apps/native-host/CMakeLists.txt;72;lmdj_add_test;/home/en/lmdj/apps/native-host/CMakeLists.txt;0;")
+add_test([=[host.native_timeout_policy]=] "/home/en/.local/bin/python3.11" "/home/en/lmdj/tests/host/native_host_timeout_policy_test.py")
+set_tests_properties([=[host.native_timeout_policy]=] PROPERTIES  LABELS "unit;" TIMEOUT "10" WORKING_DIRECTORY "/home/en/lmdj" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/apps/native-host/CMakeLists.txt;82;lmdj_add_test;/home/en/lmdj/apps/native-host/CMakeLists.txt;0;")
+add_test([=[host.soundset_catalog_partition]=] "/home/en/.local/bin/python3.11" "/home/en/lmdj/tests/host/soundset_catalog_partition_test.py" "/home/en/lmdj/build/dev/bin/lmdj-native-host" "/home/en/lmdj/build/dev/bin/lmdj-core" "/home/en/lmdj/products/lmdj/assembly.json")
+set_tests_properties([=[host.soundset_catalog_partition]=] PROPERTIES  LABELS "host;" TIMEOUT "120" WORKING_DIRECTORY "/home/en/lmdj" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/apps/native-host/CMakeLists.txt;94;lmdj_add_test;/home/en/lmdj/apps/native-host/CMakeLists.txt;0;")
+add_test([=[host.native]=] "/home/en/.local/bin/python3.11" "/home/en/lmdj/tests/host/native_host_test.py" "/home/en/lmdj/build/dev/bin/lmdj-native-host" "/home/en/lmdj/build/dev/bin/lmdj-core" "/home/en/lmdj/products/lmdj/assembly.json")
+set_tests_properties([=[host.native]=] PROPERTIES  LABELS "host;" TIMEOUT "120" WORKING_DIRECTORY "/home/en/lmdj" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/apps/native-host/CMakeLists.txt;106;lmdj_add_test;/home/en/lmdj/apps/native-host/CMakeLists.txt;0;")
+add_test([=[host.provider_owner]=] "/home/en/.local/bin/python3.11" "/home/en/lmdj/tests/host/provider_owner_test.py" "/home/en/lmdj/build/dev/bin/lmdj-core" "/home/en/lmdj/build/dev/bin/lmdj-native-host" "/home/en/lmdj/build/dev/lib/liblmdj_core_c.so")
+set_tests_properties([=[host.provider_owner]=] PROPERTIES  ENVIRONMENT "PYTHONPATH=/home/en/lmdj/apps/core-mcp" LABELS "host;" TIMEOUT "120" WORKING_DIRECTORY "/home/en/lmdj" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/apps/native-host/CMakeLists.txt;118;lmdj_add_test;/home/en/lmdj/apps/native-host/CMakeLists.txt;0;")

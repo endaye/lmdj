@@ -61,8 +61,15 @@ void RuntimeHost::poll() noexcept {
 
 HostResult RuntimeHost::start() noexcept {
   if (audio_owned_ || status_.armed) return fail(HostResult::wrong_state);
+  if (observation_.generation == std::numeric_limits<std::uint64_t>::max())
+    return fail(HostResult::wrong_state);
   status_.core_result = runtime_.start(epoch_);
   if (status_.core_result != RuntimeResult::ok) return fail(HostResult::core_error);
+  const auto generation = observation_.generation + 1;
+  observation_ = {};
+  observation_.generation = generation;
+  observation_.content_sha256 = status_.content_sha256;
+  observation_.content_bytes = status_.content_bytes;
   sequence_ = 0;
   std::fill(pending_pad_commands_.begin(), pending_pad_commands_.end(), 0xff);
   status_.pad_active = {};
@@ -75,6 +82,7 @@ HostResult RuntimeHost::start() noexcept {
     return fail(HostResult::audio_error);
   }
   status_.phase = RuntimePhase::running;
+  observation_.start_succeeded = true;
   status_.error = HostResult::ok;
   return HostResult::ok;
 }
@@ -89,11 +97,29 @@ HostResult RuntimeHost::stop() noexcept {
     const auto result = audio_.stop_and_join();
     audio_owned_ = !result.quiescent;
     status_.physical_stopped = result.quiescent && result.silent;
+    if (observation_.generation != 0) {
+      observation_.quiescent = result.quiescent;
+      observation_.silent = status_.physical_stopped;
+      if (result.quiescent && !observation_.diagnostics_available) {
+        AudioDiagnosticsSnapshot snapshot;
+        if (audio_.read_diagnostics(snapshot)) {
+          observation_.diagnostics = snapshot;
+          observation_.diagnostics_available = true;
+        }
+      }
+    }
     if (!status_.physical_stopped) return fail(HostResult::audio_error);
   }
   if (!status_.physical_stopped) return fail(HostResult::audio_error);
   status_.phase = runtime_.phase();
   return HostResult::ok;
+}
+
+bool RuntimeHost::read_audio_observation(HostAudioObservation& result) const noexcept {
+  result = {};
+  if (audio_owned_ || observation_.generation == 0 || !observation_.quiescent) return false;
+  result = observation_;
+  return true;
 }
 
 void RuntimeHost::clear_content() noexcept {

@@ -1,0 +1,116 @@
+platform.cardputer.audio_diagnostics.percentile 3 0.0019198
+platform.cardputer.audio_diagnostics.capacity 3 0.0339149
+platform.cardputer.audio_diagnostics.invalid 3 0.0009376
+platform.cardputer.audio_diagnostics.boundaries 3 0.000777861
+platform.cardputer.audio_diagnostics.failures 3 0.0010333
+platform.cardputer.audio.observation_identity 4 0.00270816
+platform.cardputer.audio.observation_failure 4 0.00165524
+platform.cardputer.audio.observation_unavailable 4 0.00179683
+platform.cardputer.audio.prewarm 4 0.000650878
+platform.cardputer.audio.stop 4 0.00068649
+platform.cardputer.audio.quiescence_failure 4 0.000555645
+platform.cardputer.audio.partial_configuration 4 0.000509041
+platform.cardputer.audio.short_write 4 0.000722542
+platform.cardputer.audio.invalid_block 4 0.000623224
+platform.cardputer.audio.mute_failure 4 0.000593697
+platform.cardputer.audio.enable_failure 4 0.000632062
+platform.cardputer.audio.zero_failure 4 0.000700513
+platform.cardputer.audio.drain_failure 4 0.000564134
+platform.cardputer.audio.unmute_failure 4 0.000595279
+platform.cardputer.audio.release_failure 4 0.000614466
+platform.cardputer.audio.host_mapping 4 0.00162812
+platform.cardputer.audio.host_profile 4 0.00169093
+platform.cardputer.audio.host_physical_stop 4 0.00168869
+platform.cardputer.audio.pcm_ramp 4 0.000779808
+platform.cardputer.audio.pcm_nonfinite 4 0.000585144
+platform.cardputer.audio.explicit_prewarm 4 0.000528899
+platform.cardputer.audio.host_volume 4 0.000777494
+platform.cardputer.audio.host_mute 4 0.000707198
+platform.cardputer.audio.host_output_release 4 0.000578359
+platform.cardputer.audio.host_start_output 4 0.00164652
+platform.cardputer.audio.threaded_stop_reload 4 0.00236502
+platform.cardputer.audio.threaded_output_failure 4 0.00251736
+platform.cardputer.audio.threaded_destruction 4 0.0017255
+platform.cardputer.audio.threaded_stress 4 0.499944
+platform.cardputer.input.feedback_interleaving 0 0
+platform.cardputer.dma_deadline.ontime 1 0.0023273
+platform.cardputer.dma_deadline.before 1 0.00339295
+platform.cardputer.dma_deadline.during 1 0.00245153
+platform.cardputer.scanner.a 0 0
+platform.cardputer.scanner.s 0 0
+platform.cardputer.scanner.d 0 0
+platform.cardputer.scanner.f 0 0
+platform.cardputer.scanner.command 0 0
+platform.cardputer.dac_startup.order 0 0
+platform.cardputer.dac_startup.power_failure 0 0
+platform.cardputer.codec_gain 0 0
+platform.cardputer.i2c.restart 0 0
+platform.cardputer.i2c.partial 0 0
+platform.cardputer.i2c.retry 0 0
+platform.cardputer.i2c.owned 0 0
+platform.cardputer.status_payload 0 0
+platform.cardputer.input.mapping 0 0
+platform.cardputer.input.repeat_release 0 0
+platform.cardputer.input.empty_receive 0 0
+platform.cardputer.input.overflow 0 0
+platform.cardputer.input.queue_retry 0 0
+platform.cardputer.input.display 0 0
+platform.cardputer.input.feedback_receipt 0 0
+platform.cardputer.input.feedback_stop 0 0
+platform.cardputer.input.feedback_release 0 0
+platform.cardputer.input.feedback_restart 0 0
+platform.cardputer.input.feedback_wrap 0 0
+platform.cardputer.transfer.crc 0 0
+platform.cardputer.transfer.roundtrip 0 0
+platform.cardputer.transfer.limits 0 0
+platform.cardputer.transfer.malformed 0 0
+platform.cardputer.transfer.resync 0 0
+platform.cardputer.transfer_transaction.happy 0 0
+platform.cardputer.transfer_transaction.reject_identity 0 0
+platform.cardputer.transfer_transaction.disconnect 0 0
+platform.cardputer.transfer_hash_memory.bounded 0 0
+platform.cardputer.transfer_hash_memory.corrupt 0 0
+platform.cardputer.transfer_hash_memory.allocation_failure 0 0
+platform.cardputer.transfer_hash_memory.session_allocation_failure 0 0
+platform.cardputer.transfer_session.lifecycle 0 0
+platform.cardputer.transfer_session.stale 0 0
+---
+platform.cardputer.input.feedback_interleaving
+platform.cardputer.scanner.a
+platform.cardputer.scanner.s
+platform.cardputer.scanner.d
+platform.cardputer.scanner.f
+platform.cardputer.scanner.command
+platform.cardputer.dac_startup.order
+platform.cardputer.dac_startup.power_failure
+platform.cardputer.codec_gain
+platform.cardputer.i2c.restart
+platform.cardputer.i2c.partial
+platform.cardputer.i2c.retry
+platform.cardputer.i2c.owned
+platform.cardputer.status_payload
+platform.cardputer.input.mapping
+platform.cardputer.input.repeat_release
+platform.cardputer.input.empty_receive
+platform.cardputer.input.overflow
+platform.cardputer.input.queue_retry
+platform.cardputer.input.display
+platform.cardputer.input.feedback_receipt
+platform.cardputer.input.feedback_stop
+platform.cardputer.input.feedback_release
+platform.cardputer.input.feedback_restart
+platform.cardputer.input.feedback_wrap
+platform.cardputer.transfer.crc
+platform.cardputer.transfer.roundtrip
+platform.cardputer.transfer.limits
+platform.cardputer.transfer.malformed
+platform.cardputer.transfer.resync
+platform.cardputer.transfer_transaction.happy
+platform.cardputer.transfer_transaction.reject_identity
+platform.cardputer.transfer_transaction.disconnect
+platform.cardputer.transfer_hash_memory.bounded
+platform.cardputer.transfer_hash_memory.corrupt
+platform.cardputer.transfer_hash_memory.allocation_failure
+platform.cardputer.transfer_hash_memory.session_allocation_failure
+platform.cardputer.transfer_session.lifecycle
+platform.cardputer.transfer_session.stale

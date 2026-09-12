@@ -1,0 +1,38 @@
+# CMake generated Testfile for 
+# Source directory: /home/en/lmdj/packages/project-io
+# Build directory: /home/en/lmdj/build/dev/packages/project-io
+# 
+# This file includes the relevant testing commands required for 
+# testing this directory and lists subdirectories to be tested as well.
+add_test([=[project_io.project_store]=] "/home/en/lmdj/build/dev/bin/lmdj_project_store_tests")
+set_tests_properties([=[project_io.project_store]=] PROPERTIES  LABELS "component;persistence;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;121;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.storage_platform]=] "/home/en/lmdj/build/dev/bin/lmdj_project_storage_platform_tests")
+set_tests_properties([=[project_io.storage_platform]=] PROPERTIES  LABELS "component;persistence;concurrency;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;151;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.project_bundle_transfer]=] "/home/en/lmdj/build/dev/bin/lmdj_project_bundle_transfer_tests")
+set_tests_properties([=[project_io.project_bundle_transfer]=] PROPERTIES  LABELS "component;persistence;concurrency;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;182;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.sequence_journal]=] "/home/en/lmdj/build/dev/bin/lmdj_sequence_journal_tests")
+set_tests_properties([=[project_io.sequence_journal]=] PROPERTIES  LABELS "component;persistence;concurrency;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;214;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.sequence_journal_stress]=] "/home/en/lmdj/build/dev/bin/lmdj_sequence_journal_tests" "--stress")
+set_tests_properties([=[project_io.sequence_journal_stress]=] PROPERTIES  LABELS "stress;persistence;concurrency;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;220;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.sequence_fingerprint_vectors]=] "/home/en/lmdj/tests/conformance/sequence_fingerprint_vector_test.py")
+set_tests_properties([=[project_io.sequence_fingerprint_vectors]=] PROPERTIES  LABELS "component;persistence;conformance" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;227;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.performance_journal]=] "/home/en/lmdj/build/dev/bin/lmdj_performance_journal_tests")
+set_tests_properties([=[project_io.performance_journal]=] PROPERTIES  LABELS "component;persistence;concurrency;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;260;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.performance_lifecycle]=] "/home/en/lmdj/build/dev/bin/lmdj_performance_lifecycle_tests")
+set_tests_properties([=[project_io.performance_lifecycle]=] PROPERTIES  LABELS "component;persistence;concurrency;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;295;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.performance_rebase]=] "/home/en/lmdj/build/dev/bin/lmdj_performance_rebase_tests")
+set_tests_properties([=[project_io.performance_rebase]=] PROPERTIES  LABELS "component;persistence;concurrency;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;295;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.session_mutual_exclusion]=] "/home/en/lmdj/build/dev/bin/lmdj_session_mutual_exclusion_tests")
+set_tests_properties([=[project_io.session_mutual_exclusion]=] PROPERTIES  LABELS "component;persistence;concurrency;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;327;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.performance_writer_lease_stress]=] "/home/en/lmdj/build/dev/bin/lmdj_session_mutual_exclusion_tests" "--stress")
+set_tests_properties([=[project_io.performance_writer_lease_stress]=] PROPERTIES  LABELS "stress;persistence;concurrency;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;333;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.soundset_store]=] "/home/en/lmdj/build/dev/bin/lmdj_soundset_store_tests")
+set_tests_properties([=[project_io.soundset_store]=] PROPERTIES  LABELS "component;persistence;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;364;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.soundset_local_adapter]=] "/home/en/lmdj/build/dev/bin/lmdj_soundset_local_adapter_tests")
+set_tests_properties([=[project_io.soundset_local_adapter]=] PROPERTIES  LABELS "component;persistence;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;393;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.fault_matrix]=] "/home/en/lmdj/build/dev/bin/lmdj_project_io_fault_matrix_tests")
+set_tests_properties([=[project_io.fault_matrix]=] PROPERTIES  LABELS "component;persistence;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;422;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.soundset_install_commit]=] "/home/en/lmdj/build/dev/bin/lmdj_project_io_soundset_install_commit_tests")
+set_tests_properties([=[project_io.soundset_install_commit]=] PROPERTIES  LABELS "component;persistence;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;452;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")
+add_test([=[project_io.candidate_adoption]=] "/home/en/lmdj/build/dev/bin/lmdj_project_io_candidate_adoption_tests")
+set_tests_properties([=[project_io.candidate_adoption]=] PROPERTIES  LABELS "component;persistence;native" TIMEOUT "30" _BACKTRACE_TRIPLES "/home/en/lmdj/cmake/LmdjTesting.cmake;40;add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;482;lmdj_add_test;/home/en/lmdj/packages/project-io/CMakeLists.txt;0;")

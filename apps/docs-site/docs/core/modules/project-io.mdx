@@ -96,21 +96,20 @@ invalid-state 错误。Chromium 断言没有新 flush、字节和状态不变、
 Emscripten 构建为该模块及消费者启用 `-fexceptions` 编译和链接，修正这些生产校验路径
 原先因禁止异常捕获而 abort 的缺陷；这不代表依赖模块的 catch 支持或产品性能已验收。
 隔离 WebKit 2361 的真实持久化上下文已执行相同存储旅程；它不等同于锁定版
-WebKit、Apple Safari 或真实设备验收。正式入口通过
-`LMDJ_WEBKIT_OPFS_EXECUTABLE` 显式选择测试浏览器，仅影响 Project IO 的 WebKit
+WebKit、Apple Safari 或真实设备验收。标准 proof 自动解析独立安装的测试浏览器，
+也保留 `LMDJ_WEBKIT_OPFS_EXECUTABLE` 显式覆盖入口，仅影响 Project IO 的 WebKit
 上下文。每个测试使用新建的持久化目录，保留同一测试内关闭页面、终止 Worker、
 重新打开和重试的全部步骤；不复用用户配置，不模拟 OPFS，不修改默认依赖。
-未设置该变量时仍使用锁定浏览器，缺失能力仍是 S2 失败而不是通过。
+未安装隔离浏览器时，proof 在构建前报告安装指令，不退回缺失能力的浏览器或跳过 S2。
 
-可在独立目录安装已验证的测试构建，再通过现有完整 proof 入口验收（Linux 示例）：
+安装器依赖和完整性摘要独立锁定于 `tests/platform/web/opfs-browser/`，浏览器缓存位于
+工作区 `build/toolchains/opfs-webkit/`，不覆盖共享缓存。CI 仅为 web_toolchain lane
+执行同一安装入口；系统依赖安装仍服从 runner 原有授权配置。Linux 本地示例：
 
 ```bash
-npm install --prefix build/toolchains/webkit-validation --ignore-scripts --no-audit --no-fund \
-  playwright@1.64.0-alpha-2026-09-11
-PLAYWRIGHT_BROWSERS_PATH="$PWD/build/toolchains/webkit-validation/browsers" \
-  node build/toolchains/webkit-validation/node_modules/playwright/cli.js install webkit
-LMDJ_WEBKIT_OPFS_EXECUTABLE="$PWD/build/toolchains/webkit-validation/browsers/webkit-2361/pw_run.sh" \
-  scripts/web-toolchain-conformance.sh proof
+bash scripts/prepare-opfs-webkit.sh
+# 需要安装系统库且已获机器管理权限时，安装命令增加 --with-deps。
+scripts/web-toolchain-conformance.sh proof
 ```
 
 主测试客户端仍是锁定的 Playwright 1.62.1，SDK 仍须满足标准工具链检查。

@@ -1,0 +1,1189 @@
+Start testing: Sep 12 12:25 CEST
+----------------------------------------------------------
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_feedback_interleaving_tests
+166/241 Testing: platform.cardputer.input.feedback_interleaving
+166/241 Test: platform.cardputer.input.feedback_interleaving
+Command: ""
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.input.feedback_interleaving" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.input.feedback_interleaving" end time: Sep 12 12:25 CEST
+"platform.cardputer.input.feedback_interleaving" time elapsed: 00:00:00
+----------------------------------------------------------
+
+167/241 Testing: platform.cardputer.audio_diagnostics.percentile
+167/241 Test: platform.cardputer.audio_diagnostics.percentile
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_diagnostics_tests" "percentile"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio_diagnostics.percentile" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio_diagnostics.percentile" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio_diagnostics.percentile" time elapsed: 00:00:00
+----------------------------------------------------------
+
+168/241 Testing: platform.cardputer.audio_diagnostics.capacity
+168/241 Test: platform.cardputer.audio_diagnostics.capacity
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_diagnostics_tests" "capacity"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio_diagnostics.capacity" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.10 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio_diagnostics.capacity" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio_diagnostics.capacity" time elapsed: 00:00:00
+----------------------------------------------------------
+
+169/241 Testing: platform.cardputer.audio_diagnostics.invalid
+169/241 Test: platform.cardputer.audio_diagnostics.invalid
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_diagnostics_tests" "invalid"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio_diagnostics.invalid" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio_diagnostics.invalid" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio_diagnostics.invalid" time elapsed: 00:00:00
+----------------------------------------------------------
+
+170/241 Testing: platform.cardputer.audio_diagnostics.boundaries
+170/241 Test: platform.cardputer.audio_diagnostics.boundaries
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_diagnostics_tests" "boundaries"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio_diagnostics.boundaries" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio_diagnostics.boundaries" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio_diagnostics.boundaries" time elapsed: 00:00:00
+----------------------------------------------------------
+
+171/241 Testing: platform.cardputer.audio_diagnostics.failures
+171/241 Test: platform.cardputer.audio_diagnostics.failures
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_diagnostics_tests" "failures"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio_diagnostics.failures" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio_diagnostics.failures" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio_diagnostics.failures" time elapsed: 00:00:00
+----------------------------------------------------------
+
+172/241 Testing: platform.cardputer.dma_deadline.ontime
+172/241 Test: platform.cardputer.dma_deadline.ontime
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_dma_deadline_tests" "ontime"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.dma_deadline.ontime" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.dma_deadline.ontime" end time: Sep 12 12:25 CEST
+"platform.cardputer.dma_deadline.ontime" time elapsed: 00:00:00
+----------------------------------------------------------
+
+173/241 Testing: platform.cardputer.dma_deadline.before
+173/241 Test: platform.cardputer.dma_deadline.before
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_dma_deadline_tests" "before"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.dma_deadline.before" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.dma_deadline.before" end time: Sep 12 12:25 CEST
+"platform.cardputer.dma_deadline.before" time elapsed: 00:00:00
+----------------------------------------------------------
+
+174/241 Testing: platform.cardputer.dma_deadline.during
+174/241 Test: platform.cardputer.dma_deadline.during
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_dma_deadline_tests" "during"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.dma_deadline.during" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.dma_deadline.during" end time: Sep 12 12:25 CEST
+"platform.cardputer.dma_deadline.during" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_scanner_tests
+175/241 Testing: platform.cardputer.scanner.a
+175/241 Test: platform.cardputer.scanner.a
+Command: "" "a"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.scanner.a" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.scanner.a" end time: Sep 12 12:25 CEST
+"platform.cardputer.scanner.a" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_scanner_tests
+176/241 Testing: platform.cardputer.scanner.s
+176/241 Test: platform.cardputer.scanner.s
+Command: "" "s"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.scanner.s" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.scanner.s" end time: Sep 12 12:25 CEST
+"platform.cardputer.scanner.s" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_scanner_tests
+177/241 Testing: platform.cardputer.scanner.d
+177/241 Test: platform.cardputer.scanner.d
+Command: "" "d"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.scanner.d" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.scanner.d" end time: Sep 12 12:25 CEST
+"platform.cardputer.scanner.d" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_scanner_tests
+178/241 Testing: platform.cardputer.scanner.f
+178/241 Test: platform.cardputer.scanner.f
+Command: "" "f"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.scanner.f" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.scanner.f" end time: Sep 12 12:25 CEST
+"platform.cardputer.scanner.f" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_scanner_tests
+179/241 Testing: platform.cardputer.scanner.command
+179/241 Test: platform.cardputer.scanner.command
+Command: "" "command"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.scanner.command" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.scanner.command" end time: Sep 12 12:25 CEST
+"platform.cardputer.scanner.command" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_dac_startup_tests
+180/241 Testing: platform.cardputer.dac_startup.order
+180/241 Test: platform.cardputer.dac_startup.order
+Command: "" "order"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.dac_startup.order" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.dac_startup.order" end time: Sep 12 12:25 CEST
+"platform.cardputer.dac_startup.order" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_dac_startup_tests
+181/241 Testing: platform.cardputer.dac_startup.power_failure
+181/241 Test: platform.cardputer.dac_startup.power_failure
+Command: "" "power_failure"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.dac_startup.power_failure" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.dac_startup.power_failure" end time: Sep 12 12:25 CEST
+"platform.cardputer.dac_startup.power_failure" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_codec_gain_tests
+182/241 Testing: platform.cardputer.codec_gain
+182/241 Test: platform.cardputer.codec_gain
+Command: ""
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.codec_gain" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.codec_gain" end time: Sep 12 12:25 CEST
+"platform.cardputer.codec_gain" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_shared_i2c_tests
+183/241 Testing: platform.cardputer.i2c.restart
+183/241 Test: platform.cardputer.i2c.restart
+Command: "" "restart"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.i2c.restart" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.i2c.restart" end time: Sep 12 12:25 CEST
+"platform.cardputer.i2c.restart" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_shared_i2c_tests
+184/241 Testing: platform.cardputer.i2c.partial
+184/241 Test: platform.cardputer.i2c.partial
+Command: "" "partial"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.i2c.partial" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.i2c.partial" end time: Sep 12 12:25 CEST
+"platform.cardputer.i2c.partial" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_shared_i2c_tests
+185/241 Testing: platform.cardputer.i2c.retry
+185/241 Test: platform.cardputer.i2c.retry
+Command: "" "retry"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.i2c.retry" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.i2c.retry" end time: Sep 12 12:25 CEST
+"platform.cardputer.i2c.retry" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_shared_i2c_tests
+186/241 Testing: platform.cardputer.i2c.owned
+186/241 Test: platform.cardputer.i2c.owned
+Command: "" "owned"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.i2c.owned" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.i2c.owned" end time: Sep 12 12:25 CEST
+"platform.cardputer.i2c.owned" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_status_payload_tests
+187/241 Testing: platform.cardputer.status_payload
+187/241 Test: platform.cardputer.status_payload
+Command: ""
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.status_payload" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.status_payload" end time: Sep 12 12:25 CEST
+"platform.cardputer.status_payload" time elapsed: 00:00:00
+----------------------------------------------------------
+
+188/241 Testing: platform.cardputer.audio.observation_identity
+188/241 Test: platform.cardputer.audio.observation_identity
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "observation_identity"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.observation_identity" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.observation_identity" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.observation_identity" time elapsed: 00:00:00
+----------------------------------------------------------
+
+189/241 Testing: platform.cardputer.audio.observation_failure
+189/241 Test: platform.cardputer.audio.observation_failure
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "observation_failure"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.observation_failure" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.observation_failure" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.observation_failure" time elapsed: 00:00:00
+----------------------------------------------------------
+
+190/241 Testing: platform.cardputer.audio.observation_unavailable
+190/241 Test: platform.cardputer.audio.observation_unavailable
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "observation_unavailable"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.observation_unavailable" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.observation_unavailable" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.observation_unavailable" time elapsed: 00:00:00
+----------------------------------------------------------
+
+191/241 Testing: platform.cardputer.audio.prewarm
+191/241 Test: platform.cardputer.audio.prewarm
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "prewarm"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.prewarm" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.prewarm" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.prewarm" time elapsed: 00:00:00
+----------------------------------------------------------
+
+192/241 Testing: platform.cardputer.audio.stop
+192/241 Test: platform.cardputer.audio.stop
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "stop"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.stop" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.stop" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.stop" time elapsed: 00:00:00
+----------------------------------------------------------
+
+193/241 Testing: platform.cardputer.audio.quiescence_failure
+193/241 Test: platform.cardputer.audio.quiescence_failure
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "quiescence_failure"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.quiescence_failure" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.quiescence_failure" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.quiescence_failure" time elapsed: 00:00:00
+----------------------------------------------------------
+
+194/241 Testing: platform.cardputer.audio.partial_configuration
+194/241 Test: platform.cardputer.audio.partial_configuration
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "partial_configuration"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.partial_configuration" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.partial_configuration" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.partial_configuration" time elapsed: 00:00:00
+----------------------------------------------------------
+
+195/241 Testing: platform.cardputer.audio.short_write
+195/241 Test: platform.cardputer.audio.short_write
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "short_write"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.short_write" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.short_write" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.short_write" time elapsed: 00:00:00
+----------------------------------------------------------
+
+196/241 Testing: platform.cardputer.audio.invalid_block
+196/241 Test: platform.cardputer.audio.invalid_block
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "invalid_block"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.invalid_block" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.invalid_block" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.invalid_block" time elapsed: 00:00:00
+----------------------------------------------------------
+
+197/241 Testing: platform.cardputer.audio.mute_failure
+197/241 Test: platform.cardputer.audio.mute_failure
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "mute_failure"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.mute_failure" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.mute_failure" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.mute_failure" time elapsed: 00:00:00
+----------------------------------------------------------
+
+198/241 Testing: platform.cardputer.audio.enable_failure
+198/241 Test: platform.cardputer.audio.enable_failure
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "enable_failure"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.enable_failure" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.enable_failure" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.enable_failure" time elapsed: 00:00:00
+----------------------------------------------------------
+
+199/241 Testing: platform.cardputer.audio.zero_failure
+199/241 Test: platform.cardputer.audio.zero_failure
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "zero_failure"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.zero_failure" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.zero_failure" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.zero_failure" time elapsed: 00:00:00
+----------------------------------------------------------
+
+200/241 Testing: platform.cardputer.audio.drain_failure
+200/241 Test: platform.cardputer.audio.drain_failure
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "drain_failure"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.drain_failure" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.drain_failure" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.drain_failure" time elapsed: 00:00:00
+----------------------------------------------------------
+
+201/241 Testing: platform.cardputer.audio.unmute_failure
+201/241 Test: platform.cardputer.audio.unmute_failure
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "unmute_failure"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.unmute_failure" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.unmute_failure" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.unmute_failure" time elapsed: 00:00:00
+----------------------------------------------------------
+
+202/241 Testing: platform.cardputer.audio.release_failure
+202/241 Test: platform.cardputer.audio.release_failure
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "release_failure"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.release_failure" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.release_failure" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.release_failure" time elapsed: 00:00:00
+----------------------------------------------------------
+
+203/241 Testing: platform.cardputer.audio.host_mapping
+203/241 Test: platform.cardputer.audio.host_mapping
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "host_mapping"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.host_mapping" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.host_mapping" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.host_mapping" time elapsed: 00:00:00
+----------------------------------------------------------
+
+204/241 Testing: platform.cardputer.audio.host_profile
+204/241 Test: platform.cardputer.audio.host_profile
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "host_profile"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.host_profile" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.host_profile" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.host_profile" time elapsed: 00:00:00
+----------------------------------------------------------
+
+205/241 Testing: platform.cardputer.audio.host_physical_stop
+205/241 Test: platform.cardputer.audio.host_physical_stop
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "host_physical_stop"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.host_physical_stop" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.host_physical_stop" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.host_physical_stop" time elapsed: 00:00:00
+----------------------------------------------------------
+
+206/241 Testing: platform.cardputer.audio.pcm_ramp
+206/241 Test: platform.cardputer.audio.pcm_ramp
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "pcm_ramp"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.pcm_ramp" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.pcm_ramp" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.pcm_ramp" time elapsed: 00:00:00
+----------------------------------------------------------
+
+207/241 Testing: platform.cardputer.audio.pcm_nonfinite
+207/241 Test: platform.cardputer.audio.pcm_nonfinite
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "pcm_nonfinite"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.pcm_nonfinite" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.pcm_nonfinite" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.pcm_nonfinite" time elapsed: 00:00:00
+----------------------------------------------------------
+
+208/241 Testing: platform.cardputer.audio.explicit_prewarm
+208/241 Test: platform.cardputer.audio.explicit_prewarm
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "explicit_prewarm"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.explicit_prewarm" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.explicit_prewarm" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.explicit_prewarm" time elapsed: 00:00:00
+----------------------------------------------------------
+
+209/241 Testing: platform.cardputer.audio.host_volume
+209/241 Test: platform.cardputer.audio.host_volume
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "host_volume"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.host_volume" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.host_volume" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.host_volume" time elapsed: 00:00:00
+----------------------------------------------------------
+
+210/241 Testing: platform.cardputer.audio.host_mute
+210/241 Test: platform.cardputer.audio.host_mute
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "host_mute"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.host_mute" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.host_mute" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.host_mute" time elapsed: 00:00:00
+----------------------------------------------------------
+
+211/241 Testing: platform.cardputer.audio.host_output_release
+211/241 Test: platform.cardputer.audio.host_output_release
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "host_output_release"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.host_output_release" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.host_output_release" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.host_output_release" time elapsed: 00:00:00
+----------------------------------------------------------
+
+212/241 Testing: platform.cardputer.audio.host_start_output
+212/241 Test: platform.cardputer.audio.host_start_output
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "host_start_output"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.host_start_output" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.host_start_output" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.host_start_output" time elapsed: 00:00:00
+----------------------------------------------------------
+
+213/241 Testing: platform.cardputer.audio.threaded_stop_reload
+213/241 Test: platform.cardputer.audio.threaded_stop_reload
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "threaded_stop_reload"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.threaded_stop_reload" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.threaded_stop_reload" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.threaded_stop_reload" time elapsed: 00:00:00
+----------------------------------------------------------
+
+214/241 Testing: platform.cardputer.audio.threaded_output_failure
+214/241 Test: platform.cardputer.audio.threaded_output_failure
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "threaded_output_failure"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.threaded_output_failure" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.threaded_output_failure" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.threaded_output_failure" time elapsed: 00:00:00
+----------------------------------------------------------
+
+215/241 Testing: platform.cardputer.audio.threaded_destruction
+215/241 Test: platform.cardputer.audio.threaded_destruction
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "threaded_destruction"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.threaded_destruction" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.threaded_destruction" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.threaded_destruction" time elapsed: 00:00:00
+----------------------------------------------------------
+
+216/241 Testing: platform.cardputer.audio.threaded_stress
+216/241 Test: platform.cardputer.audio.threaded_stress
+Command: "/home/en/lmdj/build/dev/bin/lmdj_cardputer_audio_lifecycle_tests" "threaded_stress"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.audio.threaded_stress" start time: Sep 12 12:25 CEST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   2.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.audio.threaded_stress" end time: Sep 12 12:25 CEST
+"platform.cardputer.audio.threaded_stress" time elapsed: 00:00:01
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_input_tests
+217/241 Testing: platform.cardputer.input.mapping
+217/241 Test: platform.cardputer.input.mapping
+Command: "" "mapping"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.input.mapping" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.input.mapping" end time: Sep 12 12:25 CEST
+"platform.cardputer.input.mapping" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_input_tests
+218/241 Testing: platform.cardputer.input.repeat_release
+218/241 Test: platform.cardputer.input.repeat_release
+Command: "" "repeat_release"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.input.repeat_release" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.input.repeat_release" end time: Sep 12 12:25 CEST
+"platform.cardputer.input.repeat_release" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_input_tests
+219/241 Testing: platform.cardputer.input.empty_receive
+219/241 Test: platform.cardputer.input.empty_receive
+Command: "" "empty_receive"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.input.empty_receive" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.input.empty_receive" end time: Sep 12 12:25 CEST
+"platform.cardputer.input.empty_receive" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_input_tests
+220/241 Testing: platform.cardputer.input.overflow
+220/241 Test: platform.cardputer.input.overflow
+Command: "" "overflow"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.input.overflow" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.input.overflow" end time: Sep 12 12:25 CEST
+"platform.cardputer.input.overflow" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_input_tests
+221/241 Testing: platform.cardputer.input.queue_retry
+221/241 Test: platform.cardputer.input.queue_retry
+Command: "" "queue_retry"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.input.queue_retry" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.input.queue_retry" end time: Sep 12 12:25 CEST
+"platform.cardputer.input.queue_retry" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_input_tests
+222/241 Testing: platform.cardputer.input.display
+222/241 Test: platform.cardputer.input.display
+Command: "" "display"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.input.display" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.input.display" end time: Sep 12 12:25 CEST
+"platform.cardputer.input.display" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_input_tests
+223/241 Testing: platform.cardputer.input.feedback_receipt
+223/241 Test: platform.cardputer.input.feedback_receipt
+Command: "" "feedback_receipt"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.input.feedback_receipt" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.input.feedback_receipt" end time: Sep 12 12:25 CEST
+"platform.cardputer.input.feedback_receipt" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_input_tests
+224/241 Testing: platform.cardputer.input.feedback_stop
+224/241 Test: platform.cardputer.input.feedback_stop
+Command: "" "feedback_stop"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.input.feedback_stop" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.input.feedback_stop" end time: Sep 12 12:25 CEST
+"platform.cardputer.input.feedback_stop" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_input_tests
+225/241 Testing: platform.cardputer.input.feedback_release
+225/241 Test: platform.cardputer.input.feedback_release
+Command: "" "feedback_release"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.input.feedback_release" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.input.feedback_release" end time: Sep 12 12:25 CEST
+"platform.cardputer.input.feedback_release" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_input_tests
+226/241 Testing: platform.cardputer.input.feedback_restart
+226/241 Test: platform.cardputer.input.feedback_restart
+Command: "" "feedback_restart"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.input.feedback_restart" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.input.feedback_restart" end time: Sep 12 12:25 CEST
+"platform.cardputer.input.feedback_restart" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_input_tests
+227/241 Testing: platform.cardputer.input.feedback_wrap
+227/241 Test: platform.cardputer.input.feedback_wrap
+Command: "" "feedback_wrap"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.input.feedback_wrap" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.input.feedback_wrap" end time: Sep 12 12:25 CEST
+"platform.cardputer.input.feedback_wrap" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_transfer_tests
+228/241 Testing: platform.cardputer.transfer.crc
+228/241 Test: platform.cardputer.transfer.crc
+Command: "" "crc"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.transfer.crc" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.transfer.crc" end time: Sep 12 12:25 CEST
+"platform.cardputer.transfer.crc" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_transfer_tests
+229/241 Testing: platform.cardputer.transfer.roundtrip
+229/241 Test: platform.cardputer.transfer.roundtrip
+Command: "" "roundtrip"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.transfer.roundtrip" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.transfer.roundtrip" end time: Sep 12 12:25 CEST
+"platform.cardputer.transfer.roundtrip" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_transfer_tests
+230/241 Testing: platform.cardputer.transfer.limits
+230/241 Test: platform.cardputer.transfer.limits
+Command: "" "limits"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.transfer.limits" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.transfer.limits" end time: Sep 12 12:25 CEST
+"platform.cardputer.transfer.limits" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_transfer_tests
+231/241 Testing: platform.cardputer.transfer.malformed
+231/241 Test: platform.cardputer.transfer.malformed
+Command: "" "malformed"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.transfer.malformed" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.transfer.malformed" end time: Sep 12 12:25 CEST
+"platform.cardputer.transfer.malformed" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_transfer_tests
+232/241 Testing: platform.cardputer.transfer.resync
+232/241 Test: platform.cardputer.transfer.resync
+Command: "" "resync"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.transfer.resync" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.transfer.resync" end time: Sep 12 12:25 CEST
+"platform.cardputer.transfer.resync" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_transfer_transaction_tests
+233/241 Testing: platform.cardputer.transfer_transaction.happy
+233/241 Test: platform.cardputer.transfer_transaction.happy
+Command: "" "happy"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.transfer_transaction.happy" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.transfer_transaction.happy" end time: Sep 12 12:25 CEST
+"platform.cardputer.transfer_transaction.happy" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_transfer_transaction_tests
+234/241 Testing: platform.cardputer.transfer_transaction.reject_identity
+234/241 Test: platform.cardputer.transfer_transaction.reject_identity
+Command: "" "reject_identity"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.transfer_transaction.reject_identity" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.transfer_transaction.reject_identity" end time: Sep 12 12:25 CEST
+"platform.cardputer.transfer_transaction.reject_identity" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_transfer_transaction_tests
+235/241 Testing: platform.cardputer.transfer_transaction.disconnect
+235/241 Test: platform.cardputer.transfer_transaction.disconnect
+Command: "" "disconnect"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.transfer_transaction.disconnect" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.transfer_transaction.disconnect" end time: Sep 12 12:25 CEST
+"platform.cardputer.transfer_transaction.disconnect" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_transfer_hash_memory_tests
+236/241 Testing: platform.cardputer.transfer_hash_memory.bounded
+236/241 Test: platform.cardputer.transfer_hash_memory.bounded
+Command: "" "bounded"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.transfer_hash_memory.bounded" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.transfer_hash_memory.bounded" end time: Sep 12 12:25 CEST
+"platform.cardputer.transfer_hash_memory.bounded" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_transfer_hash_memory_tests
+237/241 Testing: platform.cardputer.transfer_hash_memory.corrupt
+237/241 Test: platform.cardputer.transfer_hash_memory.corrupt
+Command: "" "corrupt"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.transfer_hash_memory.corrupt" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.transfer_hash_memory.corrupt" end time: Sep 12 12:25 CEST
+"platform.cardputer.transfer_hash_memory.corrupt" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_transfer_hash_memory_tests
+238/241 Testing: platform.cardputer.transfer_hash_memory.allocation_failure
+238/241 Test: platform.cardputer.transfer_hash_memory.allocation_failure
+Command: "" "allocation_failure"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.transfer_hash_memory.allocation_failure" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.transfer_hash_memory.allocation_failure" end time: Sep 12 12:25 CEST
+"platform.cardputer.transfer_hash_memory.allocation_failure" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_transfer_hash_memory_tests
+239/241 Testing: platform.cardputer.transfer_hash_memory.session_allocation_failure
+239/241 Test: platform.cardputer.transfer_hash_memory.session_allocation_failure
+Command: "" "session_allocation_failure"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.transfer_hash_memory.session_allocation_failure" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.transfer_hash_memory.session_allocation_failure" end time: Sep 12 12:25 CEST
+"platform.cardputer.transfer_hash_memory.session_allocation_failure" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_transfer_session_tests
+240/241 Testing: platform.cardputer.transfer_session.lifecycle
+240/241 Test: platform.cardputer.transfer_session.lifecycle
+Command: "" "lifecycle"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.transfer_session.lifecycle" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.transfer_session.lifecycle" end time: Sep 12 12:25 CEST
+"platform.cardputer.transfer_session.lifecycle" time elapsed: 00:00:00
+----------------------------------------------------------
+
+Unable to find executable: /home/en/lmdj/build/dev/bin/lmdj_cardputer_transfer_session_tests
+241/241 Testing: platform.cardputer.transfer_session.stale
+241/241 Test: platform.cardputer.transfer_session.stale
+Command: "" "stale"
+Directory: /home/en/lmdj/build/dev/tests/platform/cardputer
+"platform.cardputer.transfer_session.stale" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"platform.cardputer.transfer_session.stale" end time: Sep 12 12:25 CEST
+"platform.cardputer.transfer_session.stale" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Sep 12 12:25 CEST
+
+component =   0.25 sec*proc
+
+native =   2.25 sec*proc
+
+stress =   2.00 sec*proc
+
