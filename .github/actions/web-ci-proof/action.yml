@@ -189,6 +189,19 @@ runs:
           npx --no-install playwright install chromium webkit
         fi
 
+    - name: Prepare isolated OPFS WebKit for Project IO acceptance
+      if: ${{ inputs.lane == 'web_toolchain' }}
+      shell: bash
+      env:
+        INSTALL_SYSTEM_DEPS: ${{ inputs.install-system-deps }}
+      run: |
+        set -euo pipefail
+        if [[ "$INSTALL_SYSTEM_DEPS" == 'true' ]]; then
+          bash scripts/prepare-opfs-webkit.sh --with-deps
+        else
+          bash scripts/prepare-opfs-webkit.sh
+        fi
+
     - name: Execute the selected Web proof
       shell: bash
       run: |
