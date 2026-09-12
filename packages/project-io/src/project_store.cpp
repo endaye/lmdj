@@ -6228,6 +6228,7 @@ ProjectStore::reconcile_sequence_recovery(
   }
   const bool has_pending =
       !active.value().pending_events.empty() ||
+      (active.value().admission && !active.value().admission->completed) ||
       std::any_of(
           active.value().flushes.begin(), active.value().flushes.end(),
           [](const auto& flush) { return !flush.completed; });

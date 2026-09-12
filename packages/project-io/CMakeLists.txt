@@ -10,6 +10,7 @@ add_library(
     src/workspace_cache.cpp
     src/project_bundle_transfer.cpp
     src/sequence_journal.cpp
+    src/sequence_admission_codec.cpp
     src/soundset_store.cpp
     ${lmdj_project_io_platform_source}
 )
@@ -28,6 +29,10 @@ target_link_libraries(
     lmdj_picosha2
 )
 if(EMSCRIPTEN)
+  # Journal validation uses throw/catch to return structured failures. Emscripten
+  # otherwise aborts on these paths; enable JS-based EH in compilation and linkage.
+  target_compile_options(lmdj_project_io PUBLIC -fexceptions)
+  target_link_options(lmdj_project_io INTERFACE -fexceptions)
   set(
     lmdj_project_io_async_imports
     "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_directory_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable','lmdj_opfs_replace_complete','lmdj_opfs_append_durable','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_list_directories','lmdj_opfs_remove_tree','lmdj_opfs_publish_directory_if_absent','lmdj_opfs_validate_tree']"
@@ -66,6 +71,7 @@ if(BUILD_TESTING)
       src/workspace_cache.cpp
       src/project_bundle_transfer.cpp
       src/sequence_journal.cpp
+      src/sequence_admission_codec.cpp
       src/soundset_store.cpp
       src/native/storage_platform.cpp
   )
@@ -307,6 +313,7 @@ if(BUILD_TESTING)
     lmdj_session_mutual_exclusion_tests
     PRIVATE
       lmdj_project_io_testable
+      lmdj_picosha2
       nlohmann_json::nlohmann_json
       Threads::Threads
   )

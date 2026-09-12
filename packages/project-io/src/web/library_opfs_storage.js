@@ -743,7 +743,24 @@ mergeInto(LibraryManager.library, {
       const scopeKey = await this.pathKey(projectPath);
       const leases = await this.directory([".lmdj-host", "leases"], true);
       const file = await leases.getFileHandle(`${scopeKey}.lock`, {create: true});
-      const access = await file.createSyncAccessHandle();
+      let access;
+      try {
+        access = await file.createSyncAccessHandle();
+      } catch (error) {
+        // WebKit reports an exclusive-lock conflict as InvalidStateError.
+        // A closed/invalid file handle uses the same error: only normalize
+        // acquisition failure when the freshly obtained file remains valid.
+        // Errors after acquisition (read/write/flush/recovery) stay unchanged.
+        if (error instanceof DOMException && error.name === "InvalidStateError") {
+          try {
+            await file.getFile();
+          } catch (_) {
+            throw error;
+          }
+          throw new DOMException("", "NoModificationAllowedError");
+        }
+        throw error;
+      }
       try {
         if (access.getSize() === 0) {
           const identity = crypto.getRandomValues(new Uint8Array(32));

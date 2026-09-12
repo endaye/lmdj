@@ -1718,6 +1718,146 @@ void test_missed_switch_boundary_rebases_only_the_same_target() {
   LMDJ_CHECK(store.load(project).value().revision == 3);
 }
 
+// A sealed admission is not an empty musical take merely because conversion
+// has not produced canonical events. Exercise the public recovery boundary.
+void test_admission_recovery_preserves_unconverted_input() {
+  using namespace lmdj::project_io;
+  for (const bool alternate : {false, true}) {
+    TempDirectory temp;
+    const auto project = temp.path() / "unconverted-admission.lmdj";
+    const PatternId pattern{uuid(900)};
+    const SequenceSessionId session{uuid(901)};
+    Application app(config(temp.path()));
+    create_recordable_project(app, project, pattern);
+    ProjectStore store;
+    const auto before = store.load(project);
+    LMDJ_CHECK(before.has_value());
+    SequenceJournal journal;
+    LMDJ_CHECK(journal.begin(project, session, pattern, 1,
+        sequence_pattern_fingerprint(before.value().patterns.at(pattern)),
+        before.value().revision).has_value());
+    const SequenceAdmissionPreparation preparation{
+        {CommandId{uuid(902)}, 1, 1}, before.value().id, pattern, 1, 10};
+    LMDJ_CHECK(journal.prepare_admission(project, session, preparation).has_value());
+    LMDJ_CHECK(journal.append_admission_candidate(project, session,
+        preparation.identity,
+        {10, 1000, {0, 0}, SequenceCandidateKind::press, 100, 7}).has_value());
+    LMDJ_CHECK(journal.seal(project, session, "owner_lost").has_value());
+    const auto sealed = journal.list_recoverable(project);
+    LMDJ_CHECK(sealed.has_value() && sealed.value().size() == 1);
+    const auto path = sealed.value().front().path;
+    const auto bytes = read_bytes(path);
+    // An explicit destination must not bypass admission validation. Using the
+    // original valid Pattern also isolates this from destination lookup errors.
+    const auto destination = alternate ? std::optional{pattern} : std::nullopt;
+    for (int retry = 0; retry < 2; ++retry) {
+      const auto applied = app.apply_sequence_recovery({project, session, destination});
+      LMDJ_CHECK(!applied.has_value());
+      LMDJ_CHECK(applied.error().code == ErrorCode::invalid_argument);
+      LMDJ_CHECK(applied.error().details.at("reason") == "sequence_admission_unresolved");
+      LMDJ_CHECK(applied.error().details.at("journal_retained") == true);
+      LMDJ_CHECK(read_bytes(path) == bytes);
+      LMDJ_CHECK(store.load(project).value() == before.value());
+      LMDJ_CHECK(!std::filesystem::exists(project / "recovery/active/sequence.jsonl"));
+      LMDJ_CHECK(app.list_sequence_recovery({project}).value().size() == 1);
+    }
+    // Explicit discard is still possible; Apply must never imply discard.
+    LMDJ_CHECK(app.discard_sequence_recovery({project, session, std::nullopt}).has_value());
+    LMDJ_CHECK(app.list_sequence_recovery({project}).value().empty());
+    LMDJ_CHECK(!std::filesystem::exists(path));
+    LMDJ_CHECK(store.load(project).value() == before.value());
+  }
+}
+
+void check_transferred_admission_recovery(bool terminal) {
+  using namespace lmdj::project_io;
+  TempDirectory temp;
+  const auto project = temp.path() / "terminal-admission.lmdj";
+  const PatternId pattern{uuid(910)};
+  const SequenceSessionId session{uuid(911)};
+  Application app(config(temp.path()));
+  create_recordable_project(app, project, pattern);
+  ProjectStore store;
+  const auto before = store.load(project).value();
+  SequenceJournal journal;
+  LMDJ_CHECK(journal.begin(project, session, pattern, 1,
+      sequence_pattern_fingerprint(before.patterns.at(pattern)), before.revision).has_value());
+  const SequenceAdmissionPreparation preparation{
+      {CommandId{uuid(912)}, 1, 1}, before.id, pattern, 1, 10};
+  LMDJ_CHECK(journal.prepare_admission(project, session, preparation).has_value());
+  const SequenceAdmissionFence admission{
+      SequenceFenceKind::admission, CommandId{uuid(913)}, 1, 900, 0,
+      pattern, 1, 120, true, std::nullopt, SequenceSwitchOutcome::none, std::nullopt};
+  LMDJ_CHECK(journal.retain_admission_fence(project, session, preparation.identity,
+      admission).has_value());
+  LMDJ_CHECK(journal.append_admission_candidate(project, session, preparation.identity,
+      {10, 1000, {0, 0}, SequenceCandidateKind::press, 100, 7}).has_value());
+  // Independently calculated SHA-256 of the canonical six-field candidate
+  // above, its one-element array, and the empty terminal array below.
+  const std::vector<lmdj::domain::PatternEvent> events{{{0, 0}, 0, 240, 100}};
+  SequenceAdmissionTransfer transfer{
+      CommandId{uuid(914)}, false, 10, 10,
+      "017ed51ecf86ddcbc0fc6f53e64647f7490916c7ceb35fc9e0172f5eed0de77d",
+      {{10, "9afe2d51235a3f5987db3d0842629e470e11f75e3d9703779bd9779fc80c216b"}},
+      pattern, before.revision, 1, events,
+      {pattern, 1, 1000, {{{0, 0}, 7, 0, 0, 100}}}};
+  LMDJ_CHECK(journal.transfer_admission_prefix(project, session,
+      preparation.identity, transfer).has_value());
+  if (!terminal) {
+    // Draining the candidate prefix is insufficient: this checkpoint still
+    // owns a press and lacks the cutoff/terminal conversion authority.
+    LMDJ_CHECK(journal.read_active(project).value().admission->candidates.empty());
+    LMDJ_CHECK(journal.seal(project, session, "owner_lost").has_value());
+    const auto path = journal.list_recoverable(project).value().front().path;
+    const auto bytes = read_bytes(path);
+    const auto applied = app.apply_sequence_recovery({project, session, std::nullopt});
+    LMDJ_CHECK(!applied.has_value());
+    LMDJ_CHECK(applied.error().details.at("reason") == "sequence_admission_unresolved");
+    LMDJ_CHECK(applied.error().details.at("journal_retained") == true);
+    LMDJ_CHECK(read_bytes(path) == bytes);
+    LMDJ_CHECK(store.load(project).value() == before);
+    LMDJ_CHECK(!std::filesystem::exists(project / "recovery/active/sequence.jsonl"));
+    return;
+  }
+  auto cutoff = admission;
+  cutoff.kind = SequenceFenceKind::cutoff;
+  cutoff.command_id = CommandId{uuid(915)};
+  cutoff.transport_epoch = 2;
+  cutoff.effective_frame = 2000;
+  LMDJ_CHECK(journal.retain_admission_fence(project, session,
+      preparation.identity, cutoff).has_value());
+  LMDJ_CHECK(journal.close_admission(project, session, preparation.identity,
+      {10, SequenceAdmissionCloseReason::requested}).has_value());
+  transfer.transfer_id = CommandId{uuid(916)};
+  transfer.terminal = true;
+  transfer.first_watermark = transfer.last_watermark = 0;
+  transfer.candidate_receipts.clear();
+  transfer.candidates_sha256 = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
+  transfer.journal_input_sequence.reset();
+  transfer.checkpoint.last_runtime_frame = 2000;
+  transfer.checkpoint.owned_presses.clear();
+  LMDJ_CHECK(journal.transfer_admission_prefix(project, session,
+      preparation.identity, transfer).has_value());
+  LMDJ_CHECK(!journal.read_active(project).value().admission->completed);
+  LMDJ_CHECK(journal.seal(project, session, "owner_lost").has_value());
+  const auto applied = app.apply_sequence_recovery({project, session, std::nullopt});
+  LMDJ_CHECK(applied.has_value());
+  const auto recovered = store.load(project).value();
+  LMDJ_CHECK(recovered.revision == before.revision + 1);
+  LMDJ_CHECK(recovered.patterns.at(pattern).events == events);
+  LMDJ_CHECK(app.list_sequence_recovery({project}).value().empty());
+  LMDJ_CHECK(!app.apply_sequence_recovery({project, session, std::nullopt}).has_value());
+  LMDJ_CHECK(store.load(project).value() == recovered);
+}
+
+void test_terminal_admission_recovers_uncommitted_canonical_tail() {
+  check_transferred_admission_recovery(true);
+}
+
+void test_admission_recovery_preserves_owned_press_checkpoint() {
+  check_transferred_admission_recovery(false);
+}
+
 using Scenario = void (*)();
 
 constexpr std::array<Scenario, 7> kLifecycleScenarios{
@@ -1730,7 +1870,10 @@ constexpr std::array<Scenario, 7> kLifecycleScenarios{
     test_owner_loss_apply_and_discard_are_explicit,
 };
 
-constexpr std::array<Scenario, 8> kRecoveryScenarios{
+constexpr std::array<Scenario, 11> kRecoveryScenarios{
+    test_terminal_admission_recovers_uncommitted_canonical_tail,
+    test_admission_recovery_preserves_owned_press_checkpoint,
+    test_admission_recovery_preserves_unconverted_input,
     test_sigkill_owner_recovers_acknowledged_unflushed_events,
     test_later_flush_supersedes_failed_flush_before_recovery_apply,
     test_replayed_completion_applies_only_durable_tail_residual_once,
