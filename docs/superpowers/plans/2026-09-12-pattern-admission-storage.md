@@ -441,6 +441,29 @@ scripts/web-toolchain-conformance.sh proof
   `test(project-io): prove admission recovery through OPFS interruption`.
   Independent exact-head review and issue-done shipping apply. Retain #1230/#1207.
 
+## Review follow-up: reproducible OPFS browser setup
+
+User authorized this narrowly scoped test-environment integration after PR1260
+review identified missing default Linux setup. Other CI repairs remain separate.
+Declared files: `.github/actions/web-ci-proof/action.yml`,
+`scripts/prepare-opfs-webkit.sh`, `scripts/web-toolchain-conformance.sh`,
+`scripts/ci/scope_policy.json` (new installer's lane ownership),
+`tests/platform/web/opfs-browser/package.json` and `package-lock.json`,
+`tests/platform/web/project_io/opfs_browser_environment.mjs` and
+`opfs_browser_environment_test.mjs`, this plan and
+`apps/docs-site/docs/core/modules/project-io.mdx`.
+Lock the isolated installer, install into a workspace-local browser cache, and
+resolve its executable before the standard offline proof. Keep explicit overrides,
+the pinned test client, and all mandatory OPFS assertions. Missing installation or
+installer mismatch must fail with a why/remedy, never downgrade coverage.
+Lowest-tier tests: Node environment resolver suite (default cache, mismatch,
+missing executable, explicit override, actual CLI root resolution). Run real
+installer plus standard proof without an executable override, relevant Web action
+tests, staged ownership, and portal check before shipping. No live-runner success
+is claimed from local evidence; independent current-head review remains required.
+Version impact: none for this setup; it allocates no product/module identity.
+Documentation impact: required; affected portal pages: `/core/modules/project-io/`.
+
 ## Required downstream integration, not claimed by S1/S2
 
 Storage cannot validate live enqueue or apply audio effects. The next coordinator/
