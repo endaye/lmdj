@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <vector>
 #include <lmdj/facade/runtime_facade.hpp>
 #ifdef ESP_PLATFORM
 #include "audio_driver.hpp"
@@ -65,6 +66,9 @@ struct HostStatus {
   // Consumed receipts, never inferred audible/active voice state.
   std::uint32_t last_receipt_sequence{};
   facade::RuntimeCommandOutcome last_receipt_outcome{};
+  // Acknowledged local press until acknowledged release/stop. This does not
+  // describe Pattern voices or the duration of a One Shot sample's tail.
+  std::array<bool, 4> pad_active{};
 };
 
 // All methods below have one serialized executor owner. AudioSession must
@@ -102,6 +106,9 @@ class RuntimeHost final {
   HostStatus status_;
   facade::RuntimeEpoch epoch_;
   std::uint32_t sequence_{};
+  // One byte per permitted outstanding command, allocated only at setup.
+  // Facade receipt credits prevent slot reuse before its receipt is polled.
+  std::vector<std::uint8_t> pending_pad_commands_;
   bool audio_owned_{};
 };
 
