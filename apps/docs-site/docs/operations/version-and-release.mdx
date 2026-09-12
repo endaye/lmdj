@@ -167,7 +167,14 @@ Release 正文按冻结 Markdown 逐字核对。内部 Release plan marker v4（
 事实，输出证据 PR 所需的 Git patch：仅更新对应 intent 的 published 状态、追加公开
 记录及版本页、更新索引，并按新增页数递增独立文档页数清单。已有完整一致记录输出空
 patch；历史页缺失、内容冲突或本地 intent 与 canonical 不同均拒绝。命令不自动应用
-patch 或提交 PR，也不编辑历史快照。回执合入的证据 PR、线上内容 smoke、新总控强制准入和
+patch 或提交 PR，也不编辑历史快照。
+现有 `scripts/docs-site.sh smoke BASE_URL` 已接入发布日志内容检查：从同一冻结源核对
+索引及逐版本 HTML 的完整正文、分类、身份、摘要和链接，不只核对摘要标签。重定向、
+非 HTML、缺失页面或内容漂移都失败；输出的逐页回执带 source / content / response
+摘要。Git-triggered Portal 发布沿用该入口检查 Preview 和 production，并分别将匹配
+当前 Git revision / URL 的逐页回执保存到部署证据；exit 0 但回执缺失仍失败。build checker
+也在上传前校验本地 HTML。它证明静态内容一致，不替代浏览器验收、真实发布回执认证
+或总控完成判定。回执合入的证据 PR、新总控强制准入和
 显式追加更正记录的接口仍待接入，不表示每次 Release 已自动交付两端日志。
 
 ## 标准 Release 控制面
