@@ -31,7 +31,7 @@ Application Facade 使用；Host 不直接解析 bundle。
 ## 8. 测试与证据
 Project store、v1/v2/v3/v4→v5 migration、atomic Sample transaction、Sequence journal/receipt/recovery、durable tail reload/flush consumption、失败 F1 被成功累积 F2 supersede、F0 先完成时 32 条等价 retry inverse resolve、original A+B replay 与 residual-only collision、versioned serialize/reload/legacy recovery、post-commit same-bundle retry/restart reconcile、无 later flush 的 A+B/A+A'+B/equivalent-only pending-tail residual、非等价 flush residual 提取、torn/checksum/sequence/canonical corruption 的统一 fail-closed evidence、writer-lease 内 direct-authoring refusal/settings rebase、Bundle 1.0/1.1 round trip/publication、fault matrix、distinct-platform publication ownership、Native link-count 与 Web/native storage platform contract 测试；`performance_journal_test.cpp`、`performance_lifecycle_test.cpp`、`performance_rebase_test.cpp` 与 `session_mutual_exclusion_test.cpp` 覆盖 performance session kind、draft 生命周期、rebase 记录与会话互斥。
 ## 9. 限制与下一门禁
-全局 Pattern transport 的 Facade/runtime/Creator 接入仍待实现；以下 admission 存储能力不代表浏览器 OPFS 或端到端录制验收已经完成。
+全局 Pattern transport 的 Facade/runtime/Creator 接入仍待实现；以下 admission 的 Chromium OPFS 证据只是存储验收的一部分，双浏览器完整验收与端到端录制验收均未完成。
 云同步和协同冲突策略未批准，不能从本地存储能力推断。持久化正确性由自动化证明，不构成任何设备、听感或物理演奏验收。
 ## 10. 版本身份
 版本和依赖由 `module.json`/Assembly Lock 派生。
@@ -72,6 +72,53 @@ active reread、sealed snapshot/list 和 owner-loss reconciliation 都保留 adm
 即使 pending event list 为空。旧 runtime 的 fence 缺失时仍为 unresolved recovery，
 不猜测 Pattern/origin/switch 结果，也不自动启动 playback。只读失败保留不支持的旧格式、
 未知格式和 torn suffix 的原始字节；没有 migration reader 或自动删除路径。
+
+### Real OPFS evidence and remaining gaps
+
+`project_io_web_conformance.spec.mjs` 的 S2 fixture 调用实际 C++ journal API，
+在真实 OPFS 上验证 candidate、fence、transfer 持久化后的回应丢失：
+操作成功且观察到 storage flush 后，测试 Worker 发布绑定 bundle、session、operation、
+完整 record/checksum 的 marker，在回应前停住；测试关闭其页面以终止 Worker，再在同一
+origin/bundle 重开、精确重试并再次重开。断言比较完整 canonical tail、原始 press
+correlation、journal input sequence 和不可变 transfer receipt。重试的零字节 flush
+不算新增记录；这证明 after-durable/before-response 边界，不覆盖 flush 内任意时刻掉电。
+
+fixture-only 包装复用现有 storage-condition 注入，在实际 append 前抛出 quota 或
+invalid-state 错误。Chromium 断言没有新 flush、字节和状态不变、重开后只有已持久化前缀，
+随后精确重试成功；这是注入错误处理证据，不是物理磁盘耗尽测试。另有最后一个候选 slot
+原子关闭、缺失 fence 的 owner-loss seal/list 重开、预留 fence/terminal transfer，以及
+普通 P→Q 切换经过 source commit、target generation/checkpoint、terminal completion
+和已提交 Project Truth 重开的证据。浏览器没有据此宣称 P→Q→P 重复身份回归已覆盖。
+
+双浏览器的 OPFS 能力仍是硬性断言。当前锁定 Linux WebKit 未暴露 storage API，
+不能把 unsupported 当作成功；已有环境限制也不由 fixture 模拟补齐。Chromium 的关闭后
+追加、旧/未知格式与损坏 suffix 拒绝用例验证返回结构化失败并保留字节。Project IO 的
+Emscripten 构建为该模块及消费者启用 `-fexceptions` 编译和链接，修正这些生产校验路径
+原先因禁止异常捕获而 abort 的缺陷；这不代表依赖模块的 catch 支持或产品性能已验收。
+隔离 WebKit 2361 的真实持久化上下文已执行相同存储旅程；它不等同于锁定版
+WebKit、Apple Safari 或真实设备验收。正式入口通过
+`LMDJ_WEBKIT_OPFS_EXECUTABLE` 显式选择测试浏览器，仅影响 Project IO 的 WebKit
+上下文。每个测试使用新建的持久化目录，保留同一测试内关闭页面、终止 Worker、
+重新打开和重试的全部步骤；不复用用户配置，不模拟 OPFS，不修改默认依赖。
+未设置该变量时仍使用锁定浏览器，缺失能力仍是 S2 失败而不是通过。
+
+可在独立目录安装已验证的测试构建，再通过现有完整 proof 入口验收（Linux 示例）：
+
+```bash
+npm install --prefix build/toolchains/webkit-validation --ignore-scripts --no-audit --no-fund \
+  playwright@1.64.0-alpha-2026-09-11
+PLAYWRIGHT_BROWSERS_PATH="$PWD/build/toolchains/webkit-validation/browsers" \
+  node build/toolchains/webkit-validation/node_modules/playwright/cli.js install webkit
+LMDJ_WEBKIT_OPFS_EXECUTABLE="$PWD/build/toolchains/webkit-validation/browsers/webkit-2361/pw_run.sh" \
+  scripts/web-toolchain-conformance.sh proof
+```
+
+主测试客户端仍是锁定的 Playwright 1.62.1，SDK 仍须满足标准工具链检查。
+每项测试附带实际 executable 路径和持久化目录；覆盖浏览器可执行文件后，
+不能把锁定客户端报告的版本当作该浏览器的构建身份。测试目录保留供排查。
+完整 proof 结果需单独记录，不能用分开运行的通过结果拼成一次完整 proof 通过。
+Facade 对 sealed admission 的消费及 runtime/Creator 接入仍是后续工作；这些存储测试
+不证明 UI Apply、安全恢复已接入、声音接受或自动恢复 playback。
 
 ## Verified Asset owner read
 

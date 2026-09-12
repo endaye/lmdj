@@ -29,6 +29,9 @@
 #include <lmdj/project_io/sequence_journal.hpp>
 #include <lmdj/project_io/workspace_cache.hpp>
 
+// Fixture reporting only; every transition below uses SequenceJournal's public API.
+#include "../../../../packages/project-io/src/sequence_admission_codec.hpp"
+
 namespace lmdj::project_io {
 std::shared_ptr<ProjectStoragePlatform> make_web_project_storage_platform();
 std::shared_ptr<ProjectStoragePlatform>
@@ -168,8 +171,8 @@ nlohmann::json prepare_sample_cache(
       domain::create_project(foundation::ProjectId{uuid("19")}, 120),
       "Sample Web Project create state");
   require(
-      initial.contract == domain::ProjectContract::v4,
-      "Sample Web Project did not start as v4");
+      initial.contract == domain::ProjectContract::v5,
+      "Sample Web Project did not start as v5");
   success(store.create(bundle, initial), "Sample Web Project create");
 
   const auto staging_root = sample_staging_root();
@@ -196,7 +199,7 @@ nlohmann::json prepare_sample_cache(
 
   return {
       {"revision", initial.revision},
-      {"contract", "lmdj.project.v4"},
+      {"contract", "lmdj.project.v5"},
       {"oldStagingPresent",
        value(
            platform->directory_exists(old_staging),
@@ -227,9 +230,9 @@ nlohmann::json mutate_sample_cache(
       "Sample Web Project import and assign");
   require(!imported.replayed, "first Sample import was replayed");
   require(
-      imported.state.contract == domain::ProjectContract::v4 &&
+      imported.state.contract == domain::ProjectContract::v5 &&
           imported.state.revision == 1,
-      "Sample import did not commit one v4 revision");
+      "Sample import did not commit one v5 revision");
   const auto replayed = value(
       store.import_assign_sample_bytes(bundle, request),
       "Sample Web Project exact replay");
@@ -272,7 +275,7 @@ nlohmann::json mutate_sample_cache(
 
   return {
       {"revision", imported.state.revision},
-      {"contract", "lmdj.project.v4"},
+      {"contract", "lmdj.project.v5"},
       {"replayed", replayed.replayed},
       {"padAssetId", pad.asset_id->value()},
       {"padPlayback", pad_playback_json(pad)},
@@ -307,7 +310,7 @@ nlohmann::json reopen_sample_cache(
   project_io::ProjectStore store{platform};
   const auto reopened = value(store.load(bundle), "Sample Web Project reopen");
   require(
-      reopened.contract == domain::ProjectContract::v4 &&
+      reopened.contract == domain::ProjectContract::v5 &&
           reopened.revision == 1,
       "reopened Sample Project changed revision or contract");
   const foundation::AssetId asset_id{uuid("22")};
@@ -333,7 +336,7 @@ nlohmann::json reopen_sample_cache(
 
   return {
       {"revision", reopened.revision},
-      {"contract", "lmdj.project.v4"},
+      {"contract", "lmdj.project.v5"},
       {"padAssetId", pad.asset_id->value()},
       {"padPlayback", pad_playback_json(pad)},
       {"assetCount", reopened.assets.size()},
@@ -405,6 +408,227 @@ std::string sha256_hex(std::string_view input) {
   }
   hasher.finish();
   return picosha2::get_hash_hex_string(hasher);
+}
+
+// Runs in the fixture's proxied main Worker after C++ has returned success.
+// This is lost response AFTER durability, not interruption inside access.flush().
+EM_ASYNC_JS(void, admission_response_barrier, (const char* encoded), {
+  await LmdjOpfsTest.markFault(UTF8ToString(encoded));
+  await new Promise(() => {});
+});
+
+nlohmann::json admission_events(
+    const std::vector<lmdj::domain::PatternEvent>& events) {
+  auto result = nlohmann::json::array();
+  for (const auto& event : events) {
+    result.push_back(lmdj::project_io::admission_codec::encode(event));
+  }
+  return result;
+}
+
+nlohmann::json admission_summary(
+    const lmdj::project_io::ActiveSequenceJournal& journal) {
+  using lmdj::project_io::admission_codec::encode;
+  auto flushes = nlohmann::json::array();
+  for (const auto& f : journal.flushes) {
+    flushes.push_back({{"flush_seq", f.flush_seq},
+        {"command_id", f.command_id.value()}, {"pattern_id", f.pattern_id.value()},
+        {"expected_revision", f.expected_revision}, {"completed", f.completed},
+        {"canonical_events", admission_events(f.canonical_events)},
+        {"recovery_events", admission_events(f.recovery_events)}});
+  }
+  return {{"session_id", journal.session_id.value()},
+      {"pattern_id", journal.pattern_id.value()}, {"bars", journal.bars},
+      {"pattern_fingerprint", journal.pattern_fingerprint},
+      {"expected_revision", journal.expected_revision},
+      {"state", static_cast<unsigned>(journal.state)},
+      {"next_tail_seq", journal.next_tail_seq}, {"next_flush_seq", journal.next_flush_seq},
+      {"last_input_sequence", journal.last_input_sequence
+          ? nlohmann::json(*journal.last_input_sequence) : nlohmann::json(nullptr)},
+      {"pending_events", admission_events(journal.pending_events)},
+      {"flushes", flushes},
+      {"admission", journal.admission ? encode(*journal.admission) : nlohmann::json(nullptr)}};
+}
+
+std::optional<nlohmann::json> run_admission_action() {
+  if (query("action") != "admission") return std::nullopt;
+  using namespace lmdj;
+  using namespace project_io;
+  const auto name = query("bundle");
+  require(!name.empty(), "admission bundle missing");
+  const auto bundle = std::filesystem::path{"/lmdj-workspace"} / (name + ".lmdj");
+  const auto path = bundle / "recovery/active/sequence.jsonl";
+  const auto step = query("step");
+  const bool target = query("target") == "1";
+  auto platform = make_web_project_storage_platform();
+  ProjectStore store{platform};
+  SequenceJournal journal{platform};
+  const foundation::ProjectId project{uuid("301")};
+  const foundation::SequenceSessionId session{uuid("302")};
+  const domain::Pattern source_pattern{foundation::PatternId{uuid("303")}, 1, {}};
+  const domain::Pattern target_pattern{foundation::PatternId{uuid("304")}, 1, {}};
+  SequenceAdmissionPreparation preparation{
+      {foundation::CommandId{uuid("305")}, 7, 11}, project, source_pattern.id, 21, 10};
+  if (query("limit") == "2") preparation.candidate_limit = 2;
+  const auto& identity = preparation.identity;
+  const SequenceAdmissionCandidate press{target ? 12U : 10U, target ? 1600U : 1000U,
+      {0, 0}, SequenceCandidateKind::press, 100, target ? 72U : 71U};
+  auto release = press;
+  ++release.watermark;
+  release.runtime_frame += 100;
+  release.kind = SequenceCandidateKind::release;
+  release.velocity = 0;
+  const auto& pattern = target ? target_pattern : source_pattern;
+  const std::vector<domain::PatternEvent> source_tail{
+      {{0, 1}, 0, 120, 90}, {{0, 0}, 240, 120, 100}};
+  const std::vector<domain::PatternEvent> target_tail{{{0, 0}, 0, 120, 100}};
+  const auto& tail = target ? target_tail : source_tail;
+  SequenceAdmissionFence fence{SequenceFenceKind::admission,
+      foundation::CommandId{uuid("306")}, 11, 900, 0, source_pattern.id, 21,
+      120, true, std::nullopt, SequenceSwitchOutcome::none, std::nullopt};
+  if (step == "cutoff") {
+    fence.kind = SequenceFenceKind::cutoff;
+    fence.command_id = foundation::CommandId{uuid("307")};
+    fence.transport_epoch = 12;
+    fence.effective_frame = 2000;
+    fence.pattern_id = pattern.id;
+    fence.publication_generation = target ? 22 : 21;
+    fence.origin_frame = target ? 1500 : 0;
+  }
+  const auto candidates = nlohmann::json::array({admission_codec::encode(press),
+                                                 admission_codec::encode(release)});
+  SequenceAdmissionTransfer transfer{
+      foundation::CommandId{uuid(target ? "309" : "308")}, false,
+      press.watermark, release.watermark,
+      sha256_hex(foundation::canonical_json(candidates)),
+      {{press.watermark, sha256_hex(foundation::canonical_json(candidates[0]))},
+       {release.watermark, sha256_hex(foundation::canonical_json(candidates[1]))}},
+      pattern.id, target ? 1U : 0U, target ? 3U : 2U, tail,
+      {pattern.id, target ? 22U : 21U, release.runtime_frame, {}}};
+  if (step == "terminal") {
+    transfer.transfer_id = foundation::CommandId{uuid("310")};
+    transfer.terminal = true;
+    transfer.first_watermark = transfer.last_watermark = 0;
+    transfer.candidates_sha256 = sha256_hex("[]");
+    transfer.candidate_receipts.clear();
+    transfer.journal_input_sequence.reset();
+    transfer.checkpoint.last_runtime_frame = 2000;
+  }
+  if (step == "prepare") {
+    auto state = value(domain::create_project(project, 120), "admission Project state");
+    state.patterns.emplace(source_pattern.id, source_pattern);
+    state.patterns.emplace(target_pattern.id, target_pattern);
+    success(store.create(bundle, state), "admission Project create");
+    success(journal.begin(bundle, session, source_pattern.id, 1,
+        sequence_pattern_fingerprint(source_pattern), 0), "admission begin");
+    if (query("seed") == "tail") {
+      const std::vector<domain::PatternEvent> seed{source_tail.front()};
+      success(journal.append_tail(bundle, session, source_pattern.id, 0, 1, seed),
+              "admission preexisting canonical tail");
+    }
+  }
+
+  // Fixture-local prewrite injection delegates to the existing storage-condition
+  // fault helper. The real adapter still maps the thrown DOMException; no write
+  // or durable success is synthesized. No production target links this wrapper.
+  const bool inject = query("inject") == "1";
+  if (inject) {
+    EM_ASM({
+      LmdjOpfsTest.admissionOriginalAppend = LmdjOpfs.appendDurable;
+      LmdjOpfs.appendDurable = async function(...args) {
+        const destination = this.canonicalPath(this.parts(args[0], args[1]));
+        const point = await LmdjOpfsTest.faultForDestination(destination);
+        await LmdjOpfsTest.throwStorageConditionFault(point);
+        return LmdjOpfsTest.admissionOriginalAppend.apply(this, args);
+      };
+    });
+  }
+  const bool listing = step == "list" || step == "read-invalid-sealed";
+  const auto before = listing ? std::vector<std::byte>{}
+      : value(platform->read_complete(path), "admission before bytes");
+  const int flush_before = lmdj_opfs_append_flush_count();
+  auto mutation = Result<void>::success();
+  report_progress(("admission-api-enter:" + step).c_str());
+  if (step == "prepare") mutation = journal.prepare_admission(bundle, session, preparation);
+  else if (step == "candidate" || step == "release") {
+    mutation = journal.append_admission_candidate(bundle, session, identity,
+        step == "candidate" ? press : release);
+  } else if (step == "fence" || step == "cutoff") {
+    mutation = journal.retain_admission_fence(bundle, session, identity, fence);
+  } else if (step == "transfer" || step == "terminal") {
+    mutation = journal.transfer_admission_prefix(bundle, session, identity, transfer);
+  } else if (step == "close") {
+    mutation = journal.close_admission(bundle, session, identity,
+        {release.watermark, SequenceAdmissionCloseReason::requested});
+  } else if (step == "boundary") {
+    mutation = journal.retain_admission_switch(bundle, session, identity,
+        {target_pattern.id, 22, 1500});
+  } else if (step == "flush") {
+    const foundation::CommandId command{uuid(target ? "312" : "311")};
+    const auto flush = value(journal.append_flush(bundle, session, command,
+        pattern.id, target ? 1U : 0U, tail), "admission append canonical flush");
+    (void)value(store.execute_sequence_flush(bundle,
+        {session, flush.flush_seq, command, pattern.id}), "admission commit canonical flush");
+  } else if (step == "switch") {
+    mutation = journal.switch_pattern(bundle, session, target_pattern.id, 1,
+        sequence_pattern_fingerprint(target_pattern), 1);
+  } else if (step == "complete") mutation = journal.complete_admission(bundle, session, identity);
+  else if (step == "seal") {
+    (void)value(journal.seal(bundle, session, "owner_lost"), "admission seal owner loss");
+  } else if (step != "inspect" && !listing && step != "read-invalid") {
+    throw std::runtime_error("unknown admission fixture step");
+  }
+  report_progress(("admission-api-returned:" + step).c_str());
+  if (inject) {
+    EM_ASM({
+      LmdjOpfs.appendDurable = LmdjOpfsTest.admissionOriginalAppend;
+      delete LmdjOpfsTest.admissionOriginalAppend;
+    });
+  }
+  const int flush_after = lmdj_opfs_append_flush_count();
+  nlohmann::json result{{"mutation", mutation_result(mutation)},
+      {"flushBefore", flush_before}, {"flushAfter", flush_after}};
+  if (step == "seal" || listing) {
+    report_progress("admission-list-enter");
+    const auto listed = journal.list_recoverable(bundle);
+    report_progress("admission-list-returned");
+    result["read"] = mutation_result(listed);
+    require(listed.has_value() || step == "read-invalid-sealed", "admission recovery list failed");
+    result["recoveries"] = nlohmann::json::array();
+    if (listed.has_value()) for (const auto& recovery : listed.value()) {
+      result["recoveries"].push_back({{"path", recovery.path.generic_string()},
+          {"reason", recovery.reason}, {"journal", admission_summary(recovery.journal)}});
+    }
+  } else {
+    const auto after = value(platform->read_complete(path), "admission after bytes");
+    result["bytesUnchanged"] = before == after;
+    result["journalSha256"] = sha256_hex(text(after));
+    report_progress("admission-read-active-enter");
+    const auto active = journal.read_active(bundle);
+    report_progress("admission-read-active-returned");
+    result["read"] = mutation_result(active);
+    if (active.has_value()) result["journal"] = admission_summary(active.value());
+    if (query("pause") == "1") {
+      require(mutation.has_value() && active.has_value() && flush_after > flush_before,
+              "response-loss barrier requires successful durable append and observed flush");
+      const auto content = text(after);
+      const auto previous_line = content.rfind('\n', content.size() - 2);
+      const auto record = nlohmann::json::parse(content.substr(previous_line + 1));
+      const auto marker = nlohmann::json{{"barrier", "admission-after-durable-before-response"},
+          {"bundle", bundle.generic_string()}, {"step", step},
+          {"session_id", session.value()}, {"identity", admission_codec::encode(identity)},
+          {"record", record}, {"journalSha256", result["journalSha256"]},
+          {"flushBefore", flush_before}, {"flushAfter", flush_after}}.dump();
+      admission_response_barrier(marker.c_str());
+    }
+  }
+  if (step == "flush" || step == "inspect") {
+    const auto truth = value(store.inspect_committed(bundle), "admission committed truth");
+    result["truth"] = {{"project_id", truth.id.value()}, {"revision", truth.revision},
+        {"source_events", admission_events(truth.patterns.at(source_pattern.id).events)},
+        {"target_events", admission_events(truth.patterns.at(target_pattern.id).events)}};
+  }
+  return nlohmann::json{{"complete", true}, {"result", result}};
 }
 
 // One occupied slot, the same canonical shape the native Set Store test
@@ -1588,7 +1812,10 @@ int main() {
   nlohmann::json report;
   try {
     report_progress("native-suite-start");
-    auto action = run_soundset_store_action();
+    auto action = run_admission_action();
+    if (!action.has_value()) {
+      action = run_soundset_store_action();
+    }
     if (!action.has_value()) {
       action = run_sample_cache_action();
     }

@@ -373,9 +373,11 @@ scripts/docs-site.sh check
 
 ## Task S2: Real OPFS interruption and reopen proof
 
-**Files:** `tests/platform/web/project_io/project_io_web_test.cpp`,
+**Files:** `packages/project-io/CMakeLists.txt`,
+`tests/platform/web/project_io/project_io_web_test.cpp`,
 `tests/platform/web/project_io/project_io_web_conformance.spec.mjs`,
 `tests/platform/web/project_io/project_io_web_faults.mjs`,
+`tests/platform/web/project_io/opfs_browser.fixture.mjs`,
 `apps/docs-site/docs/core/modules/project-io.mdx`.
 Use existing worker/fault bridge. If an actual missing production capability is
 found, stop S2 testing edits and fix that defect in S1-owned code with its own red
@@ -421,6 +423,18 @@ scripts/web-toolchain-conformance.sh proof
   Retain each process handle and collect its terminal result. Unsupported OPFS,
   missing browsers or toolchain failure is not a pass; keep the precise acceptance
   gap and resolve it without dropping a browser or widening timeouts.
+  User-authorized environment adjustment: the locked Linux WebKit does not expose
+  OPFS. Keep the pinned SDK and Playwright client; explicitly set
+  `LMDJ_WEBKIT_OPFS_EXECUTABLE` to an independently installed OPFS-capable WebKit
+  for Project IO only. Use a fresh persistent profile per test and retain the
+  same-context crash/reopen journey. Record the exact browser build separately
+  from the locked client's version. Without this opt-in the default remains
+  unchanged and missing OPFS is still a failed S2 assertion. The portal documents
+  the isolated installation and the same full proof command; no mocked storage,
+  test exclusions or product dependency upgrade are permitted by this adjustment.
+  The Project IO CMake exception flags are the scoped correction for real
+  malformed-record rejection paths aborting in Emscripten; they do not claim
+  exception support for every dependency module.
 - [ ] Update portal evidence to distinguish tested storage semantics from pending
   runtime integration. Run `scripts/docs-site.sh check`, inspect/stage only S2 files,
   `git diff --cached --check`, and commit
