@@ -114,6 +114,9 @@ int main(int argc, char** argv) {
     const auto identity = digest('a');
     require(ledger.bind_identity(identity, 1234), "cycle identity not bound");
     require(!ledger.bind_identity(identity, 1234), "identity was rebound");
+    require(!ledger.complete(after), "unplayed cycle was published");
+    require(ledger.mark_playing(), "playing transition rejected");
+    require(!ledger.mark_playing(), "playing transition repeated");
     require(ledger.observe(during), "active cycle sample rejected");
     require(ledger.complete(after), "complete cycle rejected");
     ResourceCycleReport report;
@@ -163,6 +166,7 @@ int main(int argc, char** argv) {
       auto identity = digest(static_cast<char>('a' + index % 26));
       require(ledger.bind_identity(identity, index + 1),
               "capacity identity not bound");
+      require(ledger.mark_playing(), "capacity playing transition rejected");
       require(ledger.complete(sample(static_cast<std::int64_t>(index + 1),
                                       99, 49, 89, 44, 79, 39, 29)),
               "capacity cycle not completed");

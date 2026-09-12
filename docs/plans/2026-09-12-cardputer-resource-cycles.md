@@ -17,8 +17,10 @@ leak, stack, or physical acceptance result.
 `ResourceCycleLedger` is a fixed 100-record control-owner accumulator. A
 record begins before a successful content load, is bound to the published
 content SHA-256 and byte length only after load validation, and completes only
-after the corresponding stop and unload succeed. Samples supplied after load,
-after audio start, after stop/join, and at unload are folded into per-heap free
+after the audio session has actually started and the corresponding stop and
+unload succeed. Loading and unloading without a play transition is rejected as
+an incomplete journey. Samples supplied after load, after audio start, after
+stop/join, and at unload are folded into per-heap free
 and largest-block minima and caller/audio stack high-water minima. The initial
 free values and SDK low-water minima remain in each record so a later report
 can derive the observed allocation peak, including a transient allocation

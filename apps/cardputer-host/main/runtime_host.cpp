@@ -99,6 +99,7 @@ HostResult RuntimeHost::start() noexcept {
   status_.phase = RuntimePhase::running;
 #ifdef ESP_PLATFORM
   observe_resource_cycle();
+  if (resource_cycles_) (void)resource_cycles_->mark_playing();
 #endif
   observation_.start_succeeded = true;
   status_.error = HostResult::ok;

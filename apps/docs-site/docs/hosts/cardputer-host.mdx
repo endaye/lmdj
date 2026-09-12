@@ -134,8 +134,10 @@ may leave it unavailable; it is never inferred from the control-task value.
 
 `ResourceCycleLedger` now retains up to 100 fixed-size, identity-bound records.
 Each record starts before a validated content load, folds samples taken after
-load/start/stop and at unload, and is published only after the full
-load/play/stop/unload journey completes. The report preserves baseline free
+load/start/stop and at unload, and is published only after the audio session
+has started and the full load/play/stop/unload journey completes. A load that
+is unloaded without starting playback is not counted as a completed cycle. The
+report preserves baseline free
 bytes, observed free/largest-block minima, SDK low-water minima and
 caller/audio stack minima so transient allocation peaks can be derived without
 summing overlapping heap capability classes. Failed loads increment an

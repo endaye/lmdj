@@ -160,13 +160,20 @@ class ResourceCycleLedger final {
     return true;
   }
 
+  bool mark_playing() noexcept {
+    if (!active_ || !identity_bound_ || playing_) return false;
+    playing_ = true;
+    return true;
+  }
+
   bool complete(const ResourceObservation& sample) noexcept {
-    if (!active_ || !identity_bound_) return false;
+    if (!active_ || !identity_bound_ || !playing_) return false;
     observe(sample);
     active_record_.completed_us = sample.end_us;
     records_[completed_++] = active_record_;
     active_record_ = {};
     identity_bound_ = false;
+    playing_ = false;
     active_ = false;
     return true;
   }
@@ -175,6 +182,7 @@ class ResourceCycleLedger final {
     if (!active_) return;
     active_record_ = {};
     identity_bound_ = false;
+    playing_ = false;
     active_ = false;
     ++aborted_;
   }
@@ -192,7 +200,7 @@ class ResourceCycleLedger final {
   std::array<ResourceCycleRecord, resource_cycle_capacity> records_{};
   ResourceCycleRecord active_record_{};
   std::size_t completed_{}, aborted_{}, dropped_{};
-  bool active_{}, identity_bound_{};
+  bool active_{}, identity_bound_{}, playing_{};
 };
 }  // namespace lmdj::cardputer
 
