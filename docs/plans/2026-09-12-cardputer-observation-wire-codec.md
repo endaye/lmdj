@@ -28,9 +28,10 @@ review of the opcode allocation and byte tables is recorded on the wire plan.
 
 ## Verification
 
-The native proposal-only target runs five focused scenarios: valid status,
-invalid status state, valid diagnostics, explicit unavailable diagnostics and
-canonical escaped identity. It asserts field offsets and lengths, including
+The native proposal-only target runs six focused scenarios: valid status,
+invalid status state, malformed status/diagnostics decoders, valid diagnostics,
+explicit unavailable diagnostics and canonical escaped identity. It asserts
+field offsets and lengths, including
 the mechanically derived maxima of 658 and 850 bytes when identity data uses
 the full 512-byte bound. These tests are evidence for the draft codec only;
 they do not establish USB, PTY receiver, device timing, or physical A1 gates.
