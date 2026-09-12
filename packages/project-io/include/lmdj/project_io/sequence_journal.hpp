@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <lmdj/domain/project.hpp>
+#include <lmdj/project_io/sequence_admission.hpp>
 #include <lmdj/project_io/storage_platform.hpp>
 
 namespace lmdj::project_io {
@@ -69,6 +70,7 @@ struct ActiveSequenceJournal {
   std::optional<std::uint64_t> last_input_sequence;
   std::vector<domain::PatternEvent> pending_events;
   SessionKind kind{SessionKind::sequence};
+  std::optional<SequenceAdmissionState> admission{};
 
   bool operator==(const ActiveSequenceJournal&) const = default;
 };
@@ -213,6 +215,33 @@ class SequenceJournal {
  public:
   SequenceJournal();
   explicit SequenceJournal(std::shared_ptr<ProjectStoragePlatform> platform);
+
+  foundation::Result<void> prepare_admission(
+      const std::filesystem::path& bundle, foundation::SequenceSessionId session,
+      const SequenceAdmissionPreparation& preparation);
+  foundation::Result<void> append_admission_candidate(
+      const std::filesystem::path& bundle, foundation::SequenceSessionId session,
+      const SequenceAdmissionIdentity& identity,
+      const SequenceAdmissionCandidate& candidate);
+  foundation::Result<void> retain_admission_fence(
+      const std::filesystem::path& bundle, foundation::SequenceSessionId session,
+      const SequenceAdmissionIdentity& identity,
+      const SequenceAdmissionFence& fence);
+  foundation::Result<void> retain_admission_switch(
+      const std::filesystem::path& bundle, foundation::SequenceSessionId session,
+      const SequenceAdmissionIdentity& identity,
+      const SequencePublicationAuthority& authority);
+  foundation::Result<void> close_admission(
+      const std::filesystem::path& bundle, foundation::SequenceSessionId session,
+      const SequenceAdmissionIdentity& identity,
+      const SequenceAdmissionClosure& closure);
+  foundation::Result<void> transfer_admission_prefix(
+      const std::filesystem::path& bundle, foundation::SequenceSessionId session,
+      const SequenceAdmissionIdentity& identity,
+      const SequenceAdmissionTransfer& transfer);
+  foundation::Result<void> complete_admission(
+      const std::filesystem::path& bundle, foundation::SequenceSessionId session,
+      const SequenceAdmissionIdentity& identity);
 
   foundation::Result<void> begin(
       const std::filesystem::path& bundle,

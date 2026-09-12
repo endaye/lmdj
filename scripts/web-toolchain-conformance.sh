@@ -311,12 +311,16 @@ case "$command_name" in
         >&2
       exit 2
     fi
+    LMDJ_WEBKIT_OPFS_EXECUTABLE="$(node "$web_test_root/project_io/opfs_browser_environment.mjs")"
+    export LMDJ_WEBKIT_OPFS_EXECUTABLE
     export npm_config_offline=true
     export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
     clean_fixture
     python3 "$web_test_root/toolchain/server_test.py"
     python3 "$web_test_root/toolchain/toolchain_identity_test.py"
     python3 "$web_test_root/project_io/project_io_web_timeout_policy_test.py"
+    node --test "$web_test_root/project_io/opfs_writer_error_test.mjs"
+    node --test "$web_test_root/project_io/opfs_browser_environment_test.mjs"
     configure_fixture
     build_fixture
     build_project_io

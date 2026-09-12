@@ -42,7 +42,6 @@ class InputController final {
   std::size_t tail_{};
   std::size_t count_{};
   std::array<bool, key_count> held_{};
-  std::array<bool, 4> active_{};
   bool overflow_{};
 };
 

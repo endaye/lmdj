@@ -3379,6 +3379,19 @@ struct Application::Impl {
       return foundation::Result<SequenceMutationResult>::failure(sequence_error(
           ErrorCode::not_found, "Sequence recovery candidate was not found"));
     }
+    // Event-only recovery cannot consume raw candidates or an owned-press
+    // checkpoint. A terminal transfer proves all admission input was resolved;
+    // admission.completed would be too strict because its flush may be pending.
+    const auto& admission = candidate->journal.admission;
+    if (admission.has_value() &&
+        (admission->transfers.empty() || !admission->transfers.back().terminal)) {
+      return foundation::Result<SequenceMutationResult>::failure(sequence_error(
+          ErrorCode::invalid_argument,
+          "Sequence admission is unresolved; retain the recording until its "
+          "input conversion is finalized, or explicitly discard it",
+          {{"reason", "sequence_admission_unresolved"},
+           {"journal_retained", true}}));
+    }
     auto loaded = projects.load(request.project_path);
     if (!loaded.has_value()) {
       return foundation::Result<SequenceMutationResult>::failure(loaded.error());

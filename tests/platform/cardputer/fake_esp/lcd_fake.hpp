@@ -1,5 +1,6 @@
 #pragma once
 #include "driver/i2c_master.h"
+#include "esp_heap_caps.h"
 #include <algorithm>
 #include <cstdlib>
 #include <string>
@@ -7,7 +8,7 @@
 
 using spi_host_device_t = int;
 inline constexpr int GPIO_MODE_OUTPUT = 1, SPI_DMA_CH_AUTO = 3;
-inline constexpr int LCD_RGB_ELEMENT_ORDER_RGB = 0, MALLOC_CAP_DMA = 1, MALLOC_CAP_INTERNAL = 2;
+inline constexpr int LCD_RGB_ELEMENT_ORDER_RGB = 0;
 struct gpio_config_t { std::uint64_t pin_bit_mask{}; int mode{}; };
 struct spi_bus_config_t { int mosi_io_num{}, miso_io_num{}, sclk_io_num{}, quadwp_io_num{}, quadhd_io_num{}, max_transfer_sz{}; };
 struct FakeLcdIo;

@@ -574,6 +574,9 @@ class RealtimeEngine final {
   std::uint64_t consumed_controls_audio() const noexcept {
     return dequeued_events_;
   }
+  // Sole audio consumer or quiescent caller only. Counts actual allocated
+  // voices, including overlap wholly inside a block; reset by start, not stop.
+  std::uint32_t peak_voices_audio() const noexcept { return peak_voices_; }
   // Any non-realtime thread (including control), not the audio callback.
   // Counters are exact after quiescence and a best-effort snapshot while running.
   RealtimeTelemetry telemetry() const noexcept;
@@ -837,6 +840,7 @@ class RealtimeEngine final {
   std::uint64_t started_voices_ = 0;
   std::uint64_t completed_voices_ = 0;
   std::uint32_t active_voices_ = 0;
+  std::uint32_t peak_voices_ = 0;
   std::uint64_t cancelled_voices_ = 0;
   std::uint64_t invalid_events_ = 0;
   std::uint64_t audio_invalid_events_ = 0;

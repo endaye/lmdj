@@ -7,6 +7,9 @@ Orca workers. Umbrella: #1149. Design Task: #1150.
 
 ## Owner scope update — 2026-09-11
 
+The active-provider wording in this historical update is superseded by the
+DeepSeek-only decision recorded in the 2026-09-12 update below.
+
 The owner removed proactive supplier balance/limit management and native
 funding admission from this migration wave: run the multi-provider review flow
 first, with account balances and quotas checked manually by the owner. This
@@ -33,18 +36,37 @@ extra retry or custom credential-entry subsystem is introduced. The owner chose
 the existing provider environment-variable entrance; service-scoped injection
 still needs ordinary deployment verification without exposing key values.
 
-Four-provider/fallback evidence, full quality cohorts, exact-head independent
-review, Netcup isolation/coexistence, production cutover, rollback and handoff
-remain required. Removing funding functionality is not an approval of missing
-review or deployment evidence.
+## Owner scope update — 2026-09-12
+
+The owner selected a DeepSeek-only operation for this migration. The production
+workflow and runtime enable only the DeepSeek entry; GLM, Kimi and Grok remain
+disabled, and no provider fallback is attempted. The earlier unshipped Kimi
+Code account-cap draft is discarded: its subscription key, CNY ledger variant,
+manual qualification input and Coding endpoint are not part of this design.
+Kimi Code subscriptions are intended for personal interactive use, so an
+automatic CI request is not an eligible use of that credential. No Extra Usage
+setting changes this boundary. Any future Kimi or other-provider integration
+requires a separate route, budget and eligibility review.
+
+This update narrows the active operation only; historical provider IDs,
+receipt decoding and disabled-provider schema entries remain for compatibility.
+The DeepSeek USD 1 per PR, USD 20 pilot/monthly limits, request bounds and
+current-head publication protections are unchanged.
+
+DeepSeek-only evidence, full quality cohorts, exact-head independent review,
+Netcup isolation/coexistence, production cutover, rollback and handoff remain
+required. Multi-provider fallback evidence is outside this active scope and
+requires a separately reviewed task. Narrowing the active provider is not an
+approval of missing review or deployment evidence.
 
 ## Outcome and evidence boundary
 
-Replace the GLM/Kimi Claude Code action and Grok CLI invocation with PR-Agent
-running on the existing Netcup server, using the owner's provider API accounts.
-Keep complete review input, current-head provenance, test-scope advice,
-independent publication and honest failure outcomes. A framework exit code,
-valid JSON or an available runner is not proof of a useful completed review.
+Replace the GLM/Kimi Claude Code action and Grok CLI invocation with a
+DeepSeek-backed PR-Agent running on the existing Netcup server, using the
+owner's DeepSeek API account. Keep complete review input, current-head
+provenance, test-scope advice, independent publication and honest failure
+outcomes. A framework exit code, valid JSON or an available runner is not proof
+of a useful completed review.
 
 The baseline is LMDJ `8c6f2ac493f2756b0ba3a71746af550029467a2a`.
 PR #1127 run `34388846394/1` and #1132 run `34390281428/1` recorded
@@ -70,9 +92,11 @@ GitHub Actions remains the dispatcher and source of run/attempt identity:
    the current head and changed-line locations, and publishes the review/scope.
 5. Preserve the existing merged-PR mapping and downstream scope consumers.
 
-Use one production review path, with configured provider fallback inside it.
-Shadow evaluation is a separate explicitly triggered read-only path until
-acceptance. It must never mint production scope authority.
+Use one production review path with DeepSeek as the only active provider.
+Provider fallback remains an inactive framework capability for historical
+compatibility; it is not enabled by this migration. Shadow evaluation is a
+separate explicitly triggered read-only path until acceptance. It must never
+mint production scope authority.
 
 ## Upstream identity and configuration
 
@@ -168,19 +192,19 @@ used to satisfy new-engine coverage. Historical evidence is not rewritten.
 The backend registry retains IDs `glm`, `kimi`, `grok` and adds `deepseek`.
 The actual providers are respectively `zai`, `moonshot`, `xai`, `deepseek`;
 engine identity is separately `pr-agent` plus its source/bundle hashes.
-Provider support remains four-way, but availability is explicit policy, not an
-assumed four-way live chain. Initial activation candidate is DeepSeek first;
-other providers remain disabled until their account route, model and quota are
-verified. Kimi is disabled for the exhausted weekly window reported by the
-owner; do not retry it or purchase extra usage to bypass that hold. Record
-skipped/disabled suppliers separately from attempted failures. Preserve the
-four-supplier health and fallback acceptance gap until all are verified.
+Provider support remains four-way for compatibility, but the active policy is
+DeepSeek-only: only `deepseek` is enabled and the effective enabled order is
+`[deepseek]`. GLM, Kimi and Grok are skipped/disabled and cannot become a
+fallback through a runtime or workflow default. Any future provider activation
+is a separately reviewed task with its own account route, model, budget and
+eligibility evidence. Historical receipts continue to decode under their
+recorded producer identities.
 
 The owner entered the DeepSeek key on 2026-09-10. GitHub secret metadata
 confirms `PR_AGENT_DEEPSEEK_API_KEY` updated at 2026-09-10T03:45:18Z; its
-value, authentication and balance were not read or verified. Allocate these
-GitHub Actions Secret names for operator entry: `PR_AGENT_DEEPSEEK_API_KEY`,
-`PR_AGENT_ZAI_API_KEY`, `PR_AGENT_KIMI_API_KEY`, `PR_AGENT_XAI_API_KEY`.
+value, authentication and balance were not read or verified. The only active
+GitHub Actions secret is `PR_AGENT_DEEPSEEK_API_KEY`; inactive provider secret
+names remain historical inventory and are not injected into the workflow.
 The first candidate endpoint/model is `https://api.deepseek.com` /
 `deepseek-flash`; the owner selected DeepSeek-V4.1-Flash on 2026-09-11,
 explicitly replacing the earlier Pro candidate. The official pricing page
@@ -188,18 +212,19 @@ confirms this API name and effective version. No Pro fallback is configured.
 This model alias can change upstream, so retain the actual response model and
 source/pricing observation in every cohort. Do not claim live health before a
 budget-admitted request succeeds. The initial enabled candidate order is
-`[deepseek]`; the registry order for subsequent verified activation is
-`[deepseek, glm, grok, kimi]`. Inactive suppliers have `enabled=false` and
+`[deepseek]`; the registry retains disabled provider entries only for schema
+and receipt compatibility. Inactive suppliers have `enabled=false` and
 null endpoint/model bindings, not guessed defaults. T2 must support all four
 provider adapters and reject activation without an explicit trusted endpoint,
 model, pricing revision and credential reference. T4 records reviewed
 activation configuration when those inputs are available; supplier account
 balances and quotas are checked manually, not as an adapter activation gate.
-This inactive state is a complete initial configuration, not four-supplier
-acceptance; T5/T6 remain blocked until their live supplier criteria pass.
+This inactive state is a complete DeepSeek-only configuration, not a
+multi-provider activation. Any later supplier activation belongs to a separate
+task with its own live criteria.
 Do not reuse Coding-plan/login secrets as general API credentials without
-verifying the account route. Workflow references to `XAI_API_KEY` do not prove
-that secret exists.
+verifying the account route. Workflow references to inactive provider keys do
+not prove that those secrets exist or authorize their use.
 
 ## Retry and cost admission
 
@@ -225,13 +250,15 @@ been read. Only DeepSeek has a configured dedicated credential reference;
 its paid probes still require request-level admission. Coding-plan and general
 API keys are not interchangeable without verified account-route eligibility.
 
-LMDJ owns provider fallback. Set PR-Agent `fallback_models=[]` and client
-`num_retries=0`; disable timeout retries. The pinned handler also has a bounded
-two-attempt decorator that must be included in the call allowance and tested
-at the actual dispatch boundary. Every HTTP request, including that retry,
-requires its own ledger admission; wrapping only the outer engine invocation
-is insufficient. Use a narrow handler admission seam without replacing the
-stock provider/model integration. Disable client retries that multiply retries.
+LMDJ owns retry and provider-selection policy. DeepSeek is the only active
+provider, so PR-Agent `fallback_models=[]` and client `num_retries=0` remain
+mandatory; no provider fallback is enabled. The pinned handler also has a
+bounded two-attempt decorator that must be included in the call allowance and
+tested at the actual dispatch boundary. Every HTTP request, including that
+retry, requires its own ledger admission; wrapping only the outer engine
+invocation is insufficient. Use a narrow handler admission seam without
+replacing the stock provider/model integration. Disable client retries that
+multiply retries.
 Authentication/invalid-parameter/unsupported-model errors advance or stop
 without retrying the same request. Bound transient retries, backoff, provider
 attempt count and total wall time. Deadline expiration terminates the process
@@ -324,9 +351,10 @@ Official documentation checked 2026-09-10 distinguishes these routes:
   Keep that subscription route disabled for this integration; do not impersonate
   another tool. General Z.AI API funding must be checked independently.
 - Kimi Code has subscription-backed coding endpoints and a console/`/usage`
-  quota view, while Kimi Platform uses a separately funded route. The owner
-  reported the weekly coding quota exhausted, so no Kimi request is admitted
-  until reset and eligibility are verified. No Extra Usage auto-fallback.
+  quota view, while Kimi Platform uses a separately funded route. Kimi Code
+  subscriptions are not used by automatic CI because they are limited to
+  personal interactive use; no Kimi request or Extra Usage fallback is
+  admitted in this migration.
 - xAI API requests deduct API credits or accrue configured API invoice usage.
   Grok app subscription availability is not evidence of funded API access.
 - ChatGPT/Codex subscription usage remains available for supervised development
@@ -337,6 +365,7 @@ Official documentation checked 2026-09-10 distinguishes these routes:
   consume money previously topped up.
 
 Sources: [Z.AI supported tools](https://docs.z.ai/devpack/tool/others),
+[Kimi Code community guidelines](https://www.kimi.com/code/docs/kimi-code/community-guidelines.html),
 [Kimi Code membership](https://www.kimi.com/code/docs/en/kimi-code/membership.html),
 [xAI API billing](https://docs.x.ai/developers/faq/billing),
 [OpenAI pricing modes](https://learn.chatgpt.com/docs/pricing), and
@@ -420,15 +449,17 @@ start a new cohort and retain the failed cohort rather than replacing it.
   heads separately; they do not count as successful reviews. Use replacement
   samples only for a separately disclosed eligibility cohort, never erase the
   initial denominator. Insufficient eligible heads/budget is an acceptance gap.
-- Prove successful API operation for each of the four configured suppliers;
-  live fallback recovery and deterministic failure injection are separate
-  evidence. Do not claim one supplier is healthy because another succeeds.
+- Prove successful API operation for the one enabled DeepSeek supplier. Live
+  multi-provider fallback recovery and deterministic failure injection remain
+  separate future-task evidence; a DeepSeek pass does not claim inactive
+  suppliers are healthy.
 - Resource peak must remain inside the reserved limits; document co-running
   heavy work and any contention, without manufacturing unrelated production
   load or stopping another user's job.
 - Cutover acceptance must read back current-head review, scope and merged-map
-  identity, a real fallback, no duplicate write after replay, explicit all-failed
-  state, stale-head refusal, and controlled rollback followed by restoration.
+  identity, a real DeepSeek review, no duplicate write after replay, explicit
+  all-failed state, stale-head refusal, and controlled rollback followed by
+  restoration.
   Keep synthetic negative-path evidence distinct from real API/publication runs.
 
 The lead independently examines finding disposition and full journey evidence.
@@ -455,12 +486,12 @@ The engine source, dependency lock and image are separately recorded tool IDs.
 
 ## Documentation Impact
 
-Documentation impact: none
-Reason: this design describes a proposed migration and does not change current
-Portal behavior or deployed review operation. Run the declared docs-site check.
-T4/T6 must update `/operations/testing-and-proof/` in
-`apps/docs-site/docs/operations/testing-and-proof.mdx` when their documented
-operation becomes current; update its source paths in the same Task.
+Documentation impact: required
+Affected portal pages: /operations/testing-and-proof/
+Reason: the active provider policy is now DeepSeek-only, so the current Portal
+page must state the disabled-provider and no-fallback boundary. The docs-site
+check was run for this change; no Product Build or release snapshot is
+allocated.
 
 ## Sources
 

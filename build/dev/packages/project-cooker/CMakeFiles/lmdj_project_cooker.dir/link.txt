@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../lib/liblmdj_project_cooker.a CMakeFiles/lmdj_project_cooker.dir/src/wav_reader.cpp.o CMakeFiles/lmdj_project_cooker.dir/src/wav_selection.cpp.o CMakeFiles/lmdj_project_cooker.dir/src/sample_analysis.cpp.o CMakeFiles/lmdj_project_cooker.dir/src/project_cooker.cpp.o CMakeFiles/lmdj_project_cooker.dir/src/performance_replay.cpp.o CMakeFiles/lmdj_project_cooker.dir/src/runtime_content.cpp.o
+/usr/bin/ranlib ../../lib/liblmdj_project_cooker.a

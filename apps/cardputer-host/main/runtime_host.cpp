@@ -10,7 +10,8 @@ using facade::RuntimeResult;
 
 RuntimeHost::RuntimeHost(facade::RuntimeConfig config, HostProfile profile,
                          AudioSession& audio)
-    : runtime_(config), profile_(profile), audio_(audio) {}
+    : runtime_(config), profile_(profile), audio_(audio),
+      pending_pad_commands_(config.maximum_pending_commands, 0xff) {}
 
 RuntimeHost::~RuntimeHost() {
   (void)shutdown();
@@ -34,8 +35,18 @@ void RuntimeHost::collect_receipts() noexcept {
   do {
     count = runtime_.poll(receipts);
     for (std::size_t i = 0; i < count; ++i) {
+      if (receipts[i].epoch != epoch_) continue;
       status_.last_receipt_sequence = receipts[i].sequence;
       status_.last_receipt_outcome = receipts[i].outcome;
+      // poll returns accepted commands in sequence order and returns their
+      // credits. The same serialized owner records each submit before it can
+      // poll, so even a receipt published during submit retains its metadata.
+      auto& command = pending_pad_commands_[receipts[i].sequence % pending_pad_commands_.size()];
+      if (command != 0xff) {
+        status_.pad_active[command & 3U] = (command & 4U) != 0 &&
+            receipts[i].outcome == facade::RuntimeCommandOutcome::voice_started;
+        command = 0xff;
+      }
     }
   } while (count == receipts.size());
 }
@@ -50,9 +61,18 @@ void RuntimeHost::poll() noexcept {
 
 HostResult RuntimeHost::start() noexcept {
   if (audio_owned_ || status_.armed) return fail(HostResult::wrong_state);
+  if (observation_.generation == std::numeric_limits<std::uint64_t>::max())
+    return fail(HostResult::wrong_state);
   status_.core_result = runtime_.start(epoch_);
   if (status_.core_result != RuntimeResult::ok) return fail(HostResult::core_error);
+  const auto generation = observation_.generation + 1;
+  observation_ = {};
+  observation_.generation = generation;
+  observation_.content_sha256 = status_.content_sha256;
+  observation_.content_bytes = status_.content_bytes;
   sequence_ = 0;
+  std::fill(pending_pad_commands_.begin(), pending_pad_commands_.end(), 0xff);
+  status_.pad_active = {};
   status_.last_receipt_sequence = 0;
   status_.last_receipt_outcome = {};
   audio_owned_ = true; // Including partial start failure, until joined.
@@ -62,6 +82,7 @@ HostResult RuntimeHost::start() noexcept {
     return fail(HostResult::audio_error);
   }
   status_.phase = RuntimePhase::running;
+  observation_.start_succeeded = true;
   status_.error = HostResult::ok;
   return HostResult::ok;
 }
@@ -69,11 +90,24 @@ HostResult RuntimeHost::start() noexcept {
 HostResult RuntimeHost::stop() noexcept {
   runtime_.stop();
   collect_receipts();
+  std::fill(pending_pad_commands_.begin(), pending_pad_commands_.end(), 0xff);
+  status_.pad_active = {};
   if (audio_owned_ || !status_.physical_stopped) {
     status_.phase = RuntimePhase::draining;
     const auto result = audio_.stop_and_join();
     audio_owned_ = !result.quiescent;
     status_.physical_stopped = result.quiescent && result.silent;
+    if (observation_.generation != 0) {
+      observation_.quiescent = result.quiescent;
+      observation_.silent = status_.physical_stopped;
+      if (result.quiescent && !observation_.diagnostics_available) {
+        AudioDiagnosticsSnapshot snapshot;
+        if (audio_.read_diagnostics(snapshot)) {
+          observation_.diagnostics = snapshot;
+          observation_.diagnostics_available = true;
+        }
+      }
+    }
     if (!status_.physical_stopped) return fail(HostResult::audio_error);
   }
   if (!status_.physical_stopped) return fail(HostResult::audio_error);
@@ -81,7 +115,16 @@ HostResult RuntimeHost::stop() noexcept {
   return HostResult::ok;
 }
 
+bool RuntimeHost::read_audio_observation(HostAudioObservation& result) const noexcept {
+  result = {};
+  if (audio_owned_ || observation_.generation == 0 || !observation_.quiescent) return false;
+  result = observation_;
+  return true;
+}
+
 void RuntimeHost::clear_content() noexcept {
+  std::fill(pending_pad_commands_.begin(), pending_pad_commands_.end(), 0xff);
+  status_.pad_active = {};
   status_.pads = {};
   status_.pad_count = 0;
   status_.content_sha256 = {};
@@ -178,6 +221,8 @@ HostResult RuntimeHost::handle_key(KeyEvent event) noexcept {
         static_cast<std::uint8_t>(pad.bank * 16 + pad.pad), 127});
     if (status_.core_result != RuntimeResult::accepted) return fail(HostResult::core_error);
     ++sequence_; // queue_full does not consume this counter.
+    pending_pad_commands_[sequence_ % pending_pad_commands_.size()] =
+        static_cast<std::uint8_t>(key | (event.pressed ? 4U : 0U));
     return HostResult::accepted;
   }
   if (!event.pressed) return HostResult::ok;
@@ -194,10 +239,18 @@ HostResult RuntimeHost::handle_key(KeyEvent event) noexcept {
   return HostResult::ok;
 }
 
+#ifdef ESP_PLATFORM
+void RuntimeHost::read_resources(ResourceObservation& result) const noexcept {
+  result = capture_control_resources();
+  result.audio_task_stack_high_water_bytes = audio_.stopped_stack_high_water_bytes();
+}
+#endif
+
 }  // namespace lmdj::cardputer
 
 #ifdef ESP_PLATFORM
 #include <atomic>
+#include "resource_observation.hpp"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -221,6 +274,7 @@ struct EspAudioSession::Impl {
   std::atomic<bool> stop_requested{}, retry_cleanup{}, failed{};
   std::atomic<std::uint32_t> settings{};
   bool silent{}; // Written before finished release; read after acquire only.
+  std::optional<std::size_t> stack_high_water_bytes;
   static_assert(std::atomic<Phase>::is_always_lock_free);
 
   static void worker(void* argument) {
@@ -263,6 +317,7 @@ struct EspAudioSession::Impl {
     }
     s.silent = s.driver.physical_stopped();
     if (!s.silent) s.failed.store(true, std::memory_order_release);
+    s.stack_high_water_bytes = current_task_stack_high_water_bytes();
     s.phase.store(Phase::finished, std::memory_order_release);
     // Last access to s above. The control owner may now reclaim callback state;
     // the FreeRTOS idle task separately reclaims this task's private stack.
@@ -300,6 +355,7 @@ bool EspAudioSession::start(Render render, void* context, std::uint8_t volume,
       pdMS_TO_TICKS(s.config.handshake_timeout_ms) == 0) return false;
   s.render = render; s.context = context;
   s.diagnostics.reset();
+  s.stack_high_water_bytes.reset();
   s.stop_requested.store(false); s.retry_cleanup.store(false); s.failed.store(false);
   s.silent = false;
   set_output(volume, muted);
@@ -342,6 +398,11 @@ bool EspAudioSession::read_diagnostics(AudioDiagnosticsSnapshot& result) const n
   if (impl_->phase.load(std::memory_order_acquire) != Impl::Phase::finished) return false;
   result = impl_->diagnostics.snapshot();
   return true;
+}
+
+std::optional<std::size_t> EspAudioSession::stopped_stack_high_water_bytes() const noexcept {
+  if (impl_->phase.load(std::memory_order_acquire) != Impl::Phase::finished) return std::nullopt;
+  return impl_->stack_high_water_bytes;
 }
 }  // namespace lmdj::cardputer
 #endif

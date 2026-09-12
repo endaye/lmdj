@@ -534,10 +534,11 @@ void RealtimeEngine::start_pattern_voice(
   voice->pattern_generation = pattern_slots_[voice->pattern_slot].generation;
   voice->active = true;
   voice_scan_extent_ = std::max(
-      voice_scan_extent_, static_cast<std::size_t>(voice - voices_.data()) + 1);
+      voice_scan_extent_, static_cast<std::size_t>(voice - voices_.begin()) + 1);
   ++pattern_slots_[voice->pattern_slot].active_voices;
   started_voices_ += 1;
   active_voices_ += 1;
+  peak_voices_ = std::max(peak_voices_, active_voices_);
 }
 
 void RealtimeEngine::schedule_pattern_events(
@@ -1618,6 +1619,7 @@ foundation::Result<void> RealtimeEngine::start() {
   started_voices_ = 0;
   completed_voices_ = 0;
   active_voices_ = 0;
+  peak_voices_ = 0;
   cancelled_voices_ = 0;
   invalid_events_ = 0;
   audio_invalid_events_ = 0;
@@ -2201,12 +2203,13 @@ void RealtimeEngine::render(
     }
     voice->active = true;
     voice_scan_extent_ = std::max(
-        voice_scan_extent_, static_cast<std::size_t>(voice - voices_.data()) + 1);
+        voice_scan_extent_, static_cast<std::size_t>(voice - voices_.begin()) + 1);
     if (auto* const owner = bank_slot_for(bank_slot); owner != nullptr) {
       ++owner->active_voices;
     }
     started_voices_ += 1;
     active_voices_ += 1;
+    peak_voices_ = std::max(peak_voices_, active_voices_);
     if (!replay && !audition) {
       if (trigger_outcome_ring_.try_push(RuntimeTriggerOutcomeEvent{
               event.sequence,

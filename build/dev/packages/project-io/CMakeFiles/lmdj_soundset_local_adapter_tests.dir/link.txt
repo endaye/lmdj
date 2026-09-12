@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/lmdj_soundset_local_adapter_tests.dir/__/__/tests/core/project_io/soundset_local_adapter_test.cpp.o -o ../../bin/lmdj_soundset_local_adapter_tests  ../../lib/liblmdj_project_io_testable.a ../../lib/liblmdj_authoring_domain.a ../../lib/liblmdj_foundation.a 
