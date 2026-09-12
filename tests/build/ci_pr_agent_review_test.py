@@ -2111,7 +2111,8 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         prompt = "\n".join(str(item.get("content", "")) for item in calls[0]["messages"])
         self.assertIn("nonempty review.general_comments summary", prompt)
         system_prompt = next(item["content"] for item in calls[0]["messages"] if item["role"] == "system")
-        example = system_prompt.split("Example output:\n```yaml\n", 1)[1].split("```", 1)[0]
+        example = system_prompt.split("Example output:\n", 1)[1].split("Write your own summary", 1)[0]
+        self.assertNotIn("```", example)
         # Validate the example actually sent through the real PRReviewer and
         # LiteLLM handler. The upstream example asks for fields our consumer
         # rejects even when their feature flags are disabled.
@@ -2243,6 +2244,7 @@ class RealHandlerIntegrationTests(unittest.TestCase):
                 self.assertEqual(result["status"], "not-reviewed")
                 self.assertEqual(result["attempts"][0]["error_class"], "invalid_output")
                 self.assertEqual(result["attempts"][0]["usage"]["prompt_tokens"], 10)
+                self.assertIn(f"finish_reason={finish_reason or 'unknown'}", result["attempts"][0]["error"])
                 self.assertEqual(len(calls), 1)
                 self.assertEqual(
                     {json.loads(line)["status"] for line in ledger.read_text().splitlines()},
@@ -2569,6 +2571,56 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             adapter._strict_native_yaml(upstream, "review:\n  general_comments: clean\n")
         with self.assertRaisesRegex(adapter.EngineError, "empty or oversized"):
             adapter._strict_native_yaml(upstream, "x" * (adapter.MAX_NATIVE_OUTPUT_BYTES + 1))
+
+    def test_single_fenced_yaml_reaches_actual_handler_review(self):
+        async def fake_acompletion(**kwargs):
+            return FakeCompletion({
+                "model": "fixture-deepseek-served",
+                "choices": [{"message": {"content": (
+                    "```yaml\nreview:\n  general_comments: |-\n"
+                    "    Checked error handling: caller state is preserved.\n"
+                    "  key_issues_to_review: []\n```\n"
+                )}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            })
+
+        result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "reviewed", result["attempts"][0]["error"])
+        attempt = result["attempts"][0]
+        self.assertEqual(attempt["review"], {
+            "summary": "Checked error handling: caller state is preserved.", "findings": [],
+        })
+        self.assertTrue(attempt["coverage"]["complete"])
+        self.assertEqual(attempt["usage"]["num_ai_calls"], 1)
+        self.assertEqual([json.loads(line)["status"] for line in ledger.read_text().splitlines()],
+                         ["reserved", "reconciled"])
+
+    def test_yaml_envelope_does_not_hide_invalid_documents(self):
+        hostile = self.root / "engine"
+        hostile.mkdir()
+        with adapter._isolated_environment(hostile, "__never_read__", "__never_read__"):
+            upstream = adapter._import_upstream(self.source_root)
+        valid = "review:\n  general_comments: clean\n  key_issues_to_review: []\n"
+        cases = [
+            "prose\n```yaml\n" + valid + "```",
+            "```yaml\n" + valid + "```\nprose",
+            "```yaml\n" + valid + "```\n```yaml\n" + valid + "```",
+            "```yaml\n" + valid,
+            "```yaml\nreview:\n  general_comments: one\n  general_comments: two\n  key_issues_to_review: []\n```",
+            "```yaml\nreview: &r\n  general_comments: clean\n  key_issues_to_review: []\n```",
+            "```yaml\n" + valid + "  extra_field: forbidden\n```",
+        ]
+        for text in cases:
+            with self.subTest(text=text), self.assertRaises(adapter.EngineError):
+                adapter._strict_native_yaml(upstream, text)
+
+    def test_yaml_syntax_diagnostic_has_location_and_no_model_text(self):
+        text = "review:\n  general_comments: secret-marker: invalid\n  key_issues_to_review: []\n"
+        with self.assertRaises(adapter.EngineError) as raised:
+            adapter._strict_native_yaml({}, text)
+        self.assertIn("line=2", raised.exception.safe_message)
+        self.assertIn("sha256=" + hashlib.sha256(text.encode()).hexdigest(), raised.exception.safe_message)
+        self.assertNotIn("secret-marker", raised.exception.safe_message)
 
     def test_oversized_raw_prediction_fails_at_the_actual_handler_boundary(self):
         calls = []
