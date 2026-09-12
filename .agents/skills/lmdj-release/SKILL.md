@@ -5,65 +5,46 @@ description: Use when auditing or operating an LMDJ tag, Draft Release, Release 
 
 # LMDJ Release
 
-Treat every transition as a separate authorization and verification boundary.
+One overall release authorization covers its scoped transitions; each transition
+remains a separate verification boundary. Explicit narrower user restrictions win.
 
-## Complete response contract
+## Authority and execution
 
 Before responding, read `docs/governance/git-workflow.md`,
 `docs/governance/version-management.md`,
 `docs/release-evidence/release-intents.json`, and
 `docs/design/2026-08-13-lmdj-standard-release-pipeline-design.md`.
-Identify one exact tag from the request and ledger.
+Read current `AGENTS.md` for standing authorization. Resolve the exact tag,
+candidate, deployment targets and Channel from the request and established
+configuration. Ask only when that scope is missing or ambiguous, not merely
+because the next covered transition changes external state.
 
-For any initial, multi-transition, or blanket request, the entire response/action is exactly:
+Begin release operations with `scripts/release.sh audit --remote --tag TAG`.
+For an audit-only, design or development request, keep release mutations out of
+scope. For an authorized release, execute covered transitions sequentially,
+verify each result, and continue without renewed approval while its gates pass.
+A boundary-specific restriction still stops at that boundary. This permission
+does not imply an unattended controller exists or that credentials are usable.
 
-Verified state: Run and describe only `scripts/release.sh audit --remote --tag TAG`; report the exact observed historical/current state; no mutation yet.
+Only a verified releasable intent admits new preparation/tag/Draft/publication.
+For an already published identity, audit and verify it without republishing or
+rewriting history; continue only any separately verified, covered deployment or
+promotion still due. An allocated identity needs candidate evidence and a
+reviewed releasable intent first. Refuse abandoned or superseded-unreleased
+identities. Stop on unknown, conflict, unverifiable or external-error; report
+the last verified state, evidence and remedy. Never turn a failed gate into a
+new approval prompt that would bypass it.
 
-Next authorization: After audit, use exactly one of the actionable or no-permitted-transition templates below.
-
-Unperformed states: List only mutation/state-transition actions not executed in this turn; never list an audit or verification already reported under Verified state, and never relabel historically completed tag or Release states as unperformed.
-
-After audit, if no transition is permitted, the entire response/action is exactly:
-
-Verified state: Report the observed historical/current state accurately.
-
-Next authorization: none; explain why no permitted mutation exists.
-
-Unperformed states: List only mutation/state-transition actions not executed in this turn; never list an audit or verification already reported under Verified state, and never relabel historically completed tag or Release states as unperformed.
-
-Use that template for published (audit-only), abandoned, superseded-unreleased,
-allocated (not releasable), or an audit result of unknown, conflict,
-unverifiable, or external-error.
-
-After audit, if the state is actionable releasable, the entire response/action is exactly:
-
-Verified state: Report the exact current state and the successful audit gate.
-
-Next authorization: Name exactly one permitted next stable transition and request authorization for that boundary.
-
-Unperformed states: List only mutation/state-transition actions not executed in this turn; never list an audit or verification already reported under Verified state, and never relabel historically completed tag or Release states as unperformed.
-
-Only an actionable releasable state may name exactly one next authorization.
-
-For a later boundary-specific authorized turn with actionable releasable state, the entire response/action is exactly:
-
-Verified state: Audit first and report the current state.
-
-Next authorization: Execute exactly the named one stable mutation if the gate passes, rerun audit, then name exactly one next boundary without executing it only if the resulting state remains actionable; otherwise use the no-permitted-transition template.
-
-Unperformed states: List only mutation/state-transition actions not executed in this turn; never list an audit or verification already reported under Verified state, and never relabel historically completed tag or Release states as unperformed.
-
-Do not output an ordered multi-stage command/action sequence; the template is the complete response.
-
-Treat “all confirmed”, “all approved”, urgency, and any request naming multiple
-transitions as the initial-request template. A boundary-specific turn invokes
-at most one authorized mutation. Stop after that mutation; the only follow-up
-command is the exact read-only audit.
+Report publication, each Deployment, Channel promotion and remaining work
+separately. Do not relabel historically completed states as unperformed.
+Missing external authentication, required external approval, scope expansion
+and unresolved product decisions are real stops. Never forge an owner-only
+review waiver or manual acceptance, or alter protection to continue.
 
 ## Command mapping
 
-Choose the single candidate from `scripts/release.sh prepare TAG`,
-`scripts/release.sh push-tag TAG`, or `scripts/release.sh create-draft TAG`.
+Use `scripts/release.sh prepare TAG`, `scripts/release.sh push-tag TAG`, and
+`scripts/release.sh create-draft TAG` in order when covered and admissible.
 Use `scripts/release.sh verify-draft TAG RELEASE_ID PLAN_SHA256` only for
 read-only Draft verification. Use
 `scripts/release.sh verify-published TAG RELEASE_ID PLAN_SHA256` for the
@@ -131,11 +112,20 @@ rewrite history or infer executor event from the queue request kind.
 A full dispatch is evidence, not authorization: completing one authorizes no
 tag, Draft, publication, deployment or promotion.
 
-When a verified Draft is ready for publication, print the protected workflow
-inputs `tag`, `release_id`, and `plan_sha256`. Do not approve the protected
-`release` Environment or claim publication on the user's behalf. Keep
-Deployment and Channel promotion separate; report only independently verified
-status and never infer either from Release publication.
+When a verified Draft is ready and publication is covered, dispatch the protected
+`publish-release.yml` on main using its verified `tag`, `release_id`, and
+`plan_sha256`, wait for the exact run and verify publication. Do not approve
+someone else's required approval or bypass the protected `release` Environment.
+After verified publication, ship an evidence-only reviewed PR recording the
+observed Release and changing its intent to published; verify the live main
+ledger and rerun audit. Publication does not update that ledger automatically,
+and promote requires a published intent. Do not change the candidate target or
+rewrite the published Release during this handoff.
+Then dispatch each covered Host deployment using the exact tag, verify its
+retained evidence, and continue to covered Channel promotion through its normal
+reviewed PR. Report only independently verified status; Release publication
+alone never proves Deployment or Channel promotion. If publication is not
+covered, report the verified inputs without dispatching.
 
 If `publish-release.yml` fails at `verify-published`, read the live Release by
 numeric ID and compare it with the immutable plan before concluding publication

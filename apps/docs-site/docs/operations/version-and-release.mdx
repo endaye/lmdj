@@ -3,7 +3,7 @@ title: Version 与 Release
 area: operations
 status: implemented
 owners: [release, core]
-source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, docs/deploy/creator-web.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py, docs/prd/decisions/2026-08-24-build-manifest-detached.md, .github/workflows/self-test-report.yml, scripts/ci/batch_runtime.py, scripts/ci/incremental_storage.json, tools/release/batch_evidence.py, tools/release/batch_reference.py]
+source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/orchestration-policy.json, tools/release/orchestration_policy.py, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, docs/deploy/creator-web.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py, docs/prd/decisions/2026-08-24-build-manifest-detached.md, .github/workflows/self-test-report.yml, scripts/ci/batch_runtime.py, scripts/ci/incremental_storage.json, tools/release/batch_evidence.py, tools/release/batch_reference.py]
 ---
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
@@ -122,7 +122,14 @@ gate 会报告 authority、expected、found 与 consumer path；生成物 stale 
 
 这些版本变化按公开边界独立分配；历史身份及快照保持只读。已分配身份、branch-local Proof 或 immutable snapshot 都不等于 merged-main Proof、团队测试、Release 或 Channel promotion。
 ## Git 与发布
-Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion 是不同授权与证据。
+Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion
+分别保留证据。Task 请求覆盖正常交付；一次整体发版请求覆盖其发布序列，不重复逐段询问。
+每段验证通过才继续；门禁失败、外部认证 / 必需审批、范围缺失或显式限制仍须停止。
+
+编排默认配置已定义为 `web-hosts-dev`：canary publication、Runtime / Creator 两个 Host、
+验证后晋级 dev，以及 GitHub Release / doc-site 两份同源 changelog。配置解析拒绝未知范围、
+缺少任一 Host / changelog 目标、越权 Channel 与无界重试。它目前只是经过校验的默认范围，
+不是发布授权，也不表示 run / resume 总控、非交互签名或双端 changelog 发布已经实现。
 
 ## 标准 Release 控制面
 
@@ -135,9 +142,9 @@ exact-target、merged-main Proof、完整 CI 与 protected-main ancestry 门禁�
 仓库已实现四段正常路径：`scripts/release.sh prepare TAG` 只准备并验证本地状态，
 `scripts/release.sh push-tag TAG` 只 push/reconcile 一个 exact tag，
 `scripts/release.sh create-draft TAG` 只创建或补全一个 Draft，最后由 dispatch-only
-`publish-release.yml` 发布同一个已验证 Draft。每段是独立授权；发布 job 在 publication 后以
+`publish-release.yml` 发布同一个已验证 Draft。整体发版授权覆盖各段；发布 job 在 publication 后以
 `scripts/release.sh verify-published TAG RELEASE_ID PLAN_SHA256` 按 numeric Release ID 读取并验证 live
-Release，其他 mutation 后停止并重新运行 `scripts/release.sh audit --remote --tag TAG`。Audit 从 policy、release intent ledger 与 live
+Release，其他 mutation 后重新运行 `scripts/release.sh audit --remote --tag TAG`，通过后继续已授权的下一段。Audit 从 policy、release intent ledger 与 live
 Git/GitHub 重建真相；historical exception 只能由 audit 显式报告，不能满足新的 prospective gate。
 
 当前 `complete-test-v2` 要求 Owner 在 reviewed intent 中恰好引用一种来源：旧
@@ -184,7 +191,7 @@ assets 与 v3 marker 全部通过，不把 allocated/abandoned/superseded 当作
 policy。Publish 以一次 PATCH 设置 Draft、
 prerelease 与 make-latest policy，前后重新验证 exact tag、numeric Release ID、plan digest 和闭合
 资产；这是并发漂移检测，不宣称 API 提供强条件更新。Runtime deployment 是另一个 manual-only
-exact-tag dispatch，之后的 Channel promotion 仍需第三份授权与证据。仓库中已有 release/deploy
+exact-tag dispatch，之后的 Channel promotion 仍需独立证据；整体授权覆盖这些步骤。仓库中已有 release/deploy
 tooling 不表示当前 Product Build 已经 released、deployed 或 promoted。
 
 ## PATCH、Assembly 与证据链

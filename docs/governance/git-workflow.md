@@ -122,9 +122,9 @@ tooling, projected identities or documented source facts. Full self-test batches
 still include portal verification; unrelated PRs do not acquire a hidden
 all-portal pre-push build.
 
-Coding agents normally commit completed verified Tasks autonomously; this
-covers local commits only. Explicitly restricted draft work stays uncommitted.
-Every later state transition remains separately authorized.
+Coding agents complete verified Tasks under the standing authorization in
+`AGENTS.md`: commit, push, PR, current-head review and guarded squash merge.
+Explicitly restricted draft or local-only work retains its narrower boundary.
 
 ## 5. Pull Request and merge
 
@@ -225,7 +225,7 @@ authorization.
 
 ## 6. Releases and urgent fixes
 
-Releases remain manual from an explicitly chosen, verified exact main-history
+Releases begin with a user request for an explicitly chosen, verified exact main-history
 candidate under [version-management.md](version-management.md) and the
 `lmdj-release` skill. A green complete self-test is reusable only if the canonical
 release verifier accepts its complete, current, exact-candidate evidence; it
@@ -237,8 +237,10 @@ Use only `scripts/release.sh`, beginning with a fresh exact-tag remote audit.
 Publication uses the separately dispatched `publish-release.yml` workflow and
 its protected `release` Environment; a self-test does not invoke it.
 Prepare, one exact tag push, Draft creation, protected publication, each Host
-deployment and Channel promotion are separate authorization and verification
-boundaries. Follow the canonical policy's current asset inventory, signatures,
+deployment and Channel promotion are separate verification boundaries covered
+by one overall release authorization. Continue covered transitions after each
+successful verification without asking again; stop for a failed gate, required
+external approval or missing scope. Follow the canonical policy's current asset inventory, signatures,
 profile and historical exceptions rather than duplicating them here.
 The [Web Host release and deployment policy](version-management.md) is
 authoritative for the release profile, signed asset inventory, independent Host
@@ -267,6 +269,7 @@ designed → planned → implemented → committed → pushed → merged
          → channel-promoted → release-verified
 ```
 
-A completed state does not imply permission for the next one. In particular,
-a commit does not authorize push, Pull Request creation, merge, tag, release,
-deployment, or Channel promotion.
+A completed state does not itself imply permission for the next one. Permission
+comes from the user's Task or release request and the standing rules in
+`AGENTS.md`, not from a green check or prior transition. Task authorization does
+not initiate a release, and a release request does not authorize protection bypass.
