@@ -33,6 +33,11 @@ class AudioSession {
   virtual AudioStopResult stop_and_join() noexcept = 0;
   virtual void set_output(std::uint8_t volume, bool muted) noexcept = 0;
   virtual bool healthy() const noexcept = 0;
+  // Optional capability keeps existing fake/alternate sessions source
+  // compatible; the ESP implementation publishes it after its finish barrier.
+  virtual std::optional<std::size_t> stopped_stack_high_water_bytes() const noexcept {
+    return std::nullopt;
+  }
 };
 
 enum class HostResult : std::uint8_t {
@@ -122,7 +127,7 @@ class EspAudioSession final : public AudioSession {
   bool read_diagnostics(AudioDiagnosticsSnapshot&) const noexcept;
   // Same owner/barrier as diagnostics. Unavailable if no worker ran. Captured
   // before task deletion; does not establish idle-task memory reclamation.
-  std::optional<std::size_t> stopped_stack_high_water_bytes() const noexcept;
+  std::optional<std::size_t> stopped_stack_high_water_bytes() const noexcept override;
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

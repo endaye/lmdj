@@ -49,3 +49,15 @@ The first review found that the signature-only component test linked the full
 Facade library unnecessarily. The fix removes that link and adds only the
 public Facade and project-cooker include directories; the assertion now cannot
 mask link coupling or hide a runtime-library dependency.
+
+The follow-up also routes the already-published ESP audio-task stack value
+through the Host boundary. The base session method is optional so existing
+alternate sessions remain source-compatible; `nullopt` is preserved when no
+worker has completed.
+
+After this extension, the resource and unchanged audio lifecycle component
+tests pass 32/32 in both dev and ASan/UBSan (`/tmp/cardputer-resource-host-api-reviewfix3-dev-tests.log`,
+`/tmp/cardputer-resource-host-api-reviewfix3-asan-tests.log`). The refreshed
+EIM build exits 0 (`/tmp/cardputer-resource-host-api-reviewfix3-eim.log`), the
+portal check remains 116/116 with 46 routes (`/tmp/cardputer-resource-host-api-reviewfix3-portal.log`),
+and staged ownership remains 72/72 (`/tmp/cardputer-resource-host-api-reviewfix2-scope.log`).

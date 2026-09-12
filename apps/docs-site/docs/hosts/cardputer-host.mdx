@@ -94,3 +94,7 @@ measurements remain pending; these APIs do not establish device acceptance.
 the sampler. It returns a caller-owned value and adds no status bytes or wire
 opcode. A future diagnostics transport must bind the value to its session and
 phase; calling this method alone does not provide that binding.
+
+The same snapshot includes the optional audio-task stack high-water value when
+the concrete session has published its finished barrier. Alternate sessions
+may leave it unavailable; it is never inferred from the control-task value.
