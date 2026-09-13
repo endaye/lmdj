@@ -297,6 +297,22 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME build.release_candidate_snapshot_recovery
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_snapshot_test.py SnapshotRecoveryTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_snapshot_safety
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_snapshot_test.py SnapshotSafetyTest SnapshotStateTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
   NAME build.release_candidate_workspace_recovery
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_workspace_test.py WorkspaceRecoveryTest

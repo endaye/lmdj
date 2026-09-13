@@ -59,6 +59,36 @@ def _spec(scope):
     return result
 
 
+def verify_tracked_bytes(local, revision, *, mutable_paths=()):
+    """Compare filesystem bytes to Git objects without running clean filters."""
+    for row in filter(None, local.git("ls-tree", "-r", "-z", revision).split(b"\0")):
+        metadata, name = row.split(b"\t", 1)
+        mode, kind, oid = metadata.split(b" ")
+        relative = Path(os.fsdecode(name))
+        require(not relative.is_absolute() and ".." not in relative.parts and kind == b"blob", "tracked path or object is unsafe")
+        filename = local.root / relative
+        for parent in filename.parents:
+            if parent == local.root:
+                break
+            require(not parent.is_symlink(), "tracked parent is a symlink")
+        info = filename.lstat()
+        if mode == b"120000":
+            require(stat.S_ISLNK(info.st_mode), "tracked symlink type changed")
+            raw = os.fsencode(os.readlink(filename))
+            actual = sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
+        else:
+            require(mode in (b"100644", b"100755") and stat.S_ISREG(info.st_mode)
+                    and bool(info.st_mode & 0o111) == (mode == b"100755"), "tracked file mode changed")
+            if relative.as_posix() in mutable_paths:
+                continue
+            hasher = sha1(b"blob " + str(info.st_size).encode() + b"\0")
+            with filename.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+            actual = hasher.hexdigest()
+        require(actual == oid.decode(), "tracked bytes differ from tested tree")
+
+
 class PublicationTaskVerifier:
     def __init__(self, root, repository, *, authorize, path):
         self.root, self.repository = root, Path(repository).absolute()
@@ -80,30 +110,7 @@ class PublicationTaskVerifier:
                 and local.revision_from_index() == spec["tree_sha"], "head or index differs from tested identity")
         require(local.git("symbolic-ref", "--short", "HEAD").decode().strip() == pr_document(spec)["head"], "branch is not operation-bound")
         require(not local.git("ls-files", "--others", "--exclude-standard", "-z"), "untracked Task inputs exist")
-        for row in filter(None, local.git("ls-tree", "-r", "-z", spec["head_sha"]).split(b"\0")):
-            metadata, name = row.split(b"\t", 1)
-            mode, kind, oid = metadata.split(b" ")
-            relative = Path(os.fsdecode(name))
-            require(not relative.is_absolute() and ".." not in relative.parts and kind == b"blob", "tracked path or object is unsafe")
-            filename = self.repository / relative
-            for parent in filename.parents:
-                if parent == self.repository:
-                    break
-                require(not parent.is_symlink(), "tracked parent is a symlink")
-            info = filename.lstat()
-            if mode == b"120000":
-                require(stat.S_ISLNK(info.st_mode), "tracked symlink type changed")
-                raw = os.fsencode(os.readlink(filename))
-                actual = sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
-            else:
-                require(mode in (b"100644", b"100755") and stat.S_ISREG(info.st_mode)
-                        and bool(info.st_mode & 0o111) == (mode == b"100755"), "tracked file mode changed")
-                hasher = sha1(b"blob " + str(info.st_size).encode() + b"\0")
-                with filename.open("rb") as stream:
-                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                        hasher.update(chunk)
-                actual = hasher.hexdigest()
-            require(actual == oid.decode(), "tracked bytes differ from tested tree")
+        verify_tracked_bytes(local, spec["head_sha"])
 
     @staticmethod
     def _state(journal, scope, *, initialize=False):
