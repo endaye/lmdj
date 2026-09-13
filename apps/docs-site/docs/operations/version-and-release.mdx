@@ -176,6 +176,16 @@ current docs-site 的 docs、diagrams、static/diagrams。版本快照、构建/
 也不是通用 PR 门禁；它防止切版前纳入本请求未冻结的输入。Gitlink 只绑定外部 commit
 身份，不证明外部依赖内容已经取得或通过验证。这个检查不验证 GitHub main 的授权，
 不分配 BUILD，不创建快照或切版 PR；这些及正式候选 CI 仍须由父级顺序接通。
+BUILD 编号预留已提供独立的本机持久化组件：显式 enrollment 后，在单 writer 下按
+原请求及候选输入摘要保存编号，写入后回读，恢复同一请求复用原编号。新编号取原基线
+完整 Product version 历史与已有预留记录的最大 BUILD 加一，保持 Milestone / Minor，
+PATCH 归零；已回退的历史高编号与失败预留仍占用编号。源码竞争会拒绝，不改选新基线。
+观察到的 main 即使已回退到相同文件，只要历史 BUILD 高水位前进，也拒绝首次预留或恢复，
+不偷偷给同一请求换号。
+catalogue 缺失、损坏、换 scope 或非私有存储均拒绝，resume 不重建 catalogue。
+这不是已分配、已评审的 Product Build：尚须父级认证原授权、main 与基线 CI，统一配置
+所有分配者使用同一 catalogue，并接通 version / Assembly / lock、快照、切版 PR 和 witness。
+不能用另一目录重新 enrollment 绕过既有预留，也不能把本地编号回执当发布资格。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
 私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
 不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。
