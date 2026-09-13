@@ -27,6 +27,62 @@ from tools.release.model import (  # noqa: E402
     load_ledger_document,
     load_policy,
 )
+from tools.release.orchestration_policy import (  # noqa: E402
+    OrchestrationPolicyError, load_orchestration_policy,
+)
+
+
+class OrchestrationPolicyTest(unittest.TestCase):
+    def setUp(self):
+        self.release = load_policy(ROOT / "tools/release/policy.json")
+        self.document = json.loads((ROOT / "tools/release/orchestration-policy.json").read_text())
+
+    def load(self, document):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            path.write_text(json.dumps(document))
+            return load_orchestration_policy(path, self.release)
+
+    def test_default_binds_both_hosts_and_changelog_destinations(self):
+        policy = self.load(self.document)
+        self.assertEqual(policy.hosts, ("runtime", "creator"))
+        self.assertEqual(policy.changelog_destinations, ("github-release", "doc-site"))
+        self.assertEqual((policy.publication_channel, policy.target_channel), ("canary", "dev"))
+        self.assertEqual(policy.digest, canonical_sha256(self.document))
+        self.assertEqual(policy.candidate_test_requests, 1)
+        self.assertIs(policy.select(), policy)
+
+    def test_unknown_profile_is_not_inferred(self):
+        with self.assertRaisesRegex(OrchestrationPolicyError, "why:.*remedy:"):
+            self.load(self.document).select("stable")
+
+    def test_scope_cannot_omit_hosts_or_changelog_or_expand_channel(self):
+        for field, value in (("hosts", ["runtime"]), ("hosts", ["creator", "runtime"]),
+                             ("changelog_destinations", ["github-release"]),
+                             ("target_channel", "stable"), ("publication_channel", "dev"),
+                             ("release_profile", "source-only")):
+            with self.subTest(field=field, value=value):
+                document = copy.deepcopy(self.document)
+                document["profiles"]["web-hosts-dev"][field] = value
+                with self.assertRaises(OrchestrationPolicyError):
+                    self.load(document)
+
+    def test_closed_keys_and_boolean_retry_limits_are_rejected(self):
+        for key, value in (("read_attempts", True), ("read_attempts", 0),
+                           ("read_attempts", 6), ("candidate_test_requests", 2),
+                           ("write_retries", 3)):
+            with self.subTest(key=key, value=value):
+                document = copy.deepcopy(self.document)
+                document["recovery"][key] = value
+                with self.assertRaises(OrchestrationPolicyError):
+                    self.load(document)
+
+    def test_duplicate_json_keys_are_not_last_writer_wins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            path.write_text('{"schema": "first", "schema": "second"}')
+            with self.assertRaisesRegex(OrchestrationPolicyError, "duplicate"):
+                load_orchestration_policy(path, self.release)
 
 
 class ReleaseModelTest(unittest.TestCase):

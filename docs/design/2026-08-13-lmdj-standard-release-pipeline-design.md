@@ -4,6 +4,12 @@
 
 状态：规格已批准
 
+修订：2026-09-13 — 授权遵循当前 `AGENTS.md`：一次整体发版请求覆盖 prepare、tag push、
+Draft、protected publication、各 Host deployment 和 Channel promotion；逐段验证后继续，
+不逐段索要批准。下文历史的“分别授权 / mutation 后停止”措辞不再覆盖该规则。
+仅审计、设计、开发请求不启动发布；失败 gate、外部认证或必需审批、未定 scope 和显式
+用户限制仍须停止。本修订不表示 durable 总控已经实现，不改变不可变性、签名或验收要求。
+
 修订：2026-09-08 — B2 激活 `complete-test-v2`：新候选必须恰好引用旧完整 16-suite
 `self_test_evidence` 或新完整 16-suite passed `batch_test_evidence`，缺失/混合引用、
 focused/none、旧 14-lane scope 都不能授权。新来源由 reviewed policy 的固定
