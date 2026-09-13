@@ -618,6 +618,24 @@ class GitHubClient:
                                  content_type=None if document is None else "application/json")
         return _json_response(response, {201} if method == "POST" else {200})
 
+    def get_dispatch_evidence(self, path: str, *, raw: bool = False) -> object:
+        """GET-only exact-run release correlation; no dispatch route."""
+        prefix = "/repos/endaye/lmdj"
+        if type(path) is not str or not path.startswith(prefix) or type(raw) is not bool:
+            raise GitHubApiError("why: dispatch evidence route is not canonical; remedy: use the closed exact-run reader")
+        suffix = path[len(prefix):]
+        identifier, page = r"[1-9][0-9]*", r"(?:[1-9]|[1-9][0-9]|100)"
+        if raw:
+            if re.fullmatch(rf"/actions/artifacts/{identifier}/zip", suffix) is None:
+                raise GitHubApiError("why: dispatch archive route is invalid; remedy: select the authenticated numeric artifact")
+            return self._download_artifact_archive(path, 2 * 1024 * 1024)
+        workflows = ("publish-release.yml", "deploy-web-runtime-host.yml", "deploy-creator-web.yml")
+        if not (suffix == "/branches/main" or suffix in ("/actions/workflows/"+w for w in workflows)
+                or re.fullmatch(rf"/actions/runs/{identifier}(?:/attempts/1)?", suffix)
+                or re.fullmatch(rf"/actions/runs/{identifier}/(?:attempts/1/jobs|artifacts)\?per_page=100&page={page}", suffix)):
+            raise GitHubApiError("why: dispatch JSON route is outside the allowlist; remedy: use the exact first-attempt read interface")
+        return _json_response(self._request("GET", path), {200})
+
     def get_changelog_site_evidence(self, path: str, *, raw: bool = False) -> object:
         """Closed read-only transport for exact Portal deployment evidence."""
         prefix = "/repos/endaye/lmdj"
