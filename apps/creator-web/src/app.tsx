@@ -13,6 +13,7 @@ import {ErrorPanel} from "./components/error_panel";
 import {
   HardwareConsole,
   readCreatorLayout,
+  readStoredCreatorLayout,
   writeCreatorLayout,
   type CreatorLayout,
 } from "./components/hardware_console";
@@ -1090,7 +1091,7 @@ function Workspace({
     if (unmigrated) {
       // Session-only: do not write Host preference.
       setLayout("workspace");
-    } else if (readCreatorLayout() === "hardware") {
+    } else if (readStoredCreatorLayout() === "hardware") {
       setLayout("hardware");
     }
     setActiveMode(mode);
@@ -1123,7 +1124,8 @@ function Workspace({
   const enterHardwareLayout = () => {
     writeCreatorLayout("hardware");
     if (activeMode === "perform" || activeMode === "slice" || activeMode === "soundset") {
-      setActiveMode("project");
+      selectMode("project");
+      return;
     }
     setLayout("hardware");
   };
