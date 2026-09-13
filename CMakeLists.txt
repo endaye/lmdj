@@ -521,6 +521,30 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME build.release_branch_observation
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_branch_observation_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_pr_sequence
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_pr_sequence_test.py SequenceTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_pr_sequence_boundaries
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_pr_sequence_test.py -v BoundaryTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
   NAME build.release_candidate_branch
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_branch_test.py

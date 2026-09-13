@@ -244,6 +244,11 @@ witness、版本分配竞争复查或完整 CI；远端 PR 总控仍待接线。
 不重建；Git 子进程继承 writer lock，控制进程退出也不能让另一 writer 与未结束推送
 重叠。文档超限在持久化登记前拒绝，已登记状态缺失不会重新初始化。
 它仍需要真实授权、Task/source 与版本竞争核验；分支回执不代表 PR 或候选完成。
+候选分支至 PR 的持久化子流程已连接这两个具体控制器：先登记子状态，再确认分支，
+最后创建 PR 并等待精确 head 审查及 squash 核验。远端只读观察不会推送或创建 PR；
+分支未知会阻止 PR 操作，已登记父子状态缺失不会重新初始化。实际 push / POST / PUT
+之前复查父级状态、授权与 writer，并再次检查子 writer；中断后只核对原操作结果。
+该子流程返回 merged 而非候选完成；witness、完整测试和生产父级接线仍未完成。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
 私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
 不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。
