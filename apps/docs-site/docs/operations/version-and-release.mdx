@@ -186,6 +186,15 @@ push、合并或认证发布授权；总控必须提供刚核验的公开记录�
 状态写入前验证读回容量，授权回调错误不输出原始异常文本。
 传输器仍要求可信调用方核验原请求、真实 Task 结果、完整源码与有效保护；尚未与生产
 总控 / PR 控制器接通，也没有在本次开发中向 canonical remote 实际推送。
+内部 Task verifier 可在已提交的证据分支上实际执行 Portal、ownership 和空白检查，逐项
+保存退出码与输出摘要，并绑定 exact head / tree、请求及 control revision。空白检查显式
+比较 Task base；执行前后直接核对全部 tracked 文件字节、类型和 index，不把 Git stat
+缓存或 assume-unchanged 当作干净源码。未完成或失败的命令保留原回执，不自动重跑；
+恢复只有完整的固定命令集全部通过才能提供 Task 摘要。输出正文不写入回执，子进程不
+继承凭据或个人 Python / Node / Git 配置环境。这是可信本机服务的执行证明，不是
+对同账户伪造存储的密码学防护；依赖准备、原请求 / 源码授权及生产总控组合仍需接通。
+独立登记标记在首份状态前持久保存；状态缺失或初始化中断不会被当作新测试重跑。
+写入先检查读回容量，run / verify 授权回调不透传异常正文；只读查证缺失回执不登记新执行。
 内部证据 PR 状态机已提供受限 GitHub 创建 / squash merge 传输：绑定 operation、请求、
 远端分支、exact head、认证 actor、numeric repository 和 Task 证据摘要，写操作前持久保存
 意图。POST / PUT ACK 不算完成；超时只查证同一 PR，结果不明不重发。每次恢复重新读取
