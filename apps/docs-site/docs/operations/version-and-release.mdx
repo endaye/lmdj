@@ -249,6 +249,11 @@ witness、版本分配竞争复查或完整 CI；远端 PR 总控仍待接线。
 分支未知会阻止 PR 操作，已登记父子状态缺失不会重新初始化。实际 push / POST / PUT
 之前复查父级状态、授权与 writer，并再次检查子 writer；中断后只核对原操作结果。
 该子流程返回 merged 而非候选完成；witness、完整测试和生产父级接线仍未完成。
+保留来源对象的工作区可用 `scripts/docs-site.sh verify-witness PRODUCT_BUILD INTRODUCING_REVISION`
+只读核验已生成的 witness：绑定实际引入提交及其 metadata，逐字比较正式生成器的预期
+产物，输出路径、长度和摘要回执，不覆盖文件或重新生成。该检查用于生成端恢复，
+不替代缺少来源对象的新克隆验收、完整快照证明或真实 main / 审查授权；持久化 witness
+命令及其后续证据 PR 仍待接线。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
 私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
 不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。
