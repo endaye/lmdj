@@ -170,6 +170,10 @@ origin / admission / verdict 三份 artifact 的期限；任一途中到期均�
 partial clone 缺少对象也不会 lazy fetch，而是拒绝该次证据读取，等待可信本地对象完整。
 完整 CI 证据 ZIP 仅接受 stored / deflated 成员，逐成员限额读取并限制解压输出；
 不能只信任 ZIP 声明大小。解析后仍验证完整候选语义与摘要，这不是完整压缩尾部认证。
+Runtime / Creator 的 `deploy_orchestrator.py evidence-validate-document CONTRACT`
+提供只读证据 schema 校验：从 stdin 读取，验证成功后输出与原 writer 相同的规范 JSON，
+不写证据文件、不访问 Site。该入口只证明文档内部一致；原 run / artifact 来源、固定
+candidate / Site、线上 HTTP / browser 状态仍需由后续 effect verifier 独立认证。
 GitHub 没有 expected-head dispatch CAS，末次读取后的 main 漂移仍可能产生不同 control
 运行；该运行不得被认领为请求成功。父级请求服务、effect readiness、全局 tag / Site
 互斥和生产总控仍未接通，不能据此承诺完整无人值守发版。
