@@ -1088,6 +1088,7 @@ function Workspace({
   const applyMode = (mode: CreatorMode) => {
     const unmigrated = mode === "perform" || mode === "slice" || mode === "soundset";
     if (unmigrated) {
+      // Session-only: do not write Host preference.
       setLayout("workspace");
     } else if (readCreatorLayout() === "hardware") {
       setLayout("hardware");
@@ -1121,6 +1122,9 @@ function Workspace({
   };
   const enterHardwareLayout = () => {
     writeCreatorLayout("hardware");
+    if (activeMode === "perform" || activeMode === "slice" || activeMode === "soundset") {
+      setActiveMode("project");
+    }
     setLayout("hardware");
   };
   const enterWorkspaceLayout = () => {
