@@ -154,8 +154,15 @@ git_root is an existing complete checkout; reads never fetch or execute source.
             members = archive.infolist()
             require(len(members) == len(filenames) and {m.filename for m in members} == set(filenames), "artifact ZIP entries are not closed")
             require(all(not m.is_dir() and m.file_size <= MAX_BYTES and (m.external_attr >> 16) & 0o170000 != 0o120000 for m in members), "unsafe or oversized ZIP entry")
-            documents = {m.filename: json.loads(archive.read(m), object_pairs_hook=test_scope.change_scope.reject_duplicates,
-                    parse_constant=lambda _: require(False, "nonfinite artifact JSON")) for m in members}
+            documents = {}
+            for member in members:
+                require(member.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED),
+                        "compression does not support bounded decoding")
+                with archive.open(member) as stream:
+                    payload = stream.read(MAX_BYTES + 1)
+                require(len(payload) <= MAX_BYTES, "decoded artifact member exceeds evidence budget")
+                documents[member.filename] = json.loads(payload, object_pairs_hook=test_scope.change_scope.reject_duplicates,
+                    parse_constant=lambda _: require(False, "nonfinite artifact JSON"))
         require(expires > self.now, "original controller or verdict artifact expired", "unverifiable")
         if retention is not None:retention.append(expires)
         return documents

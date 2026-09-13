@@ -12,12 +12,14 @@ import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import subprocess
+import struct
 import sys
 import tempfile
 import threading
 import unittest
 from unittest.mock import patch
 import zipfile
+import zlib
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -347,6 +349,49 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
     def test_incomplete_pagination_is_external_error(self):
         self.routes[self.prefix + "/actions/runs/102/attempts/1/jobs?per_page=100&page=1"]["total_count"] += 1
         self.rejected("declared total", "external-error")
+
+    def test_forged_zip_metadata_cannot_request_unbounded_decode(self):
+        self.assertEqual(self.verify(), self.verdict)
+        prefix = json.dumps(self.origin_snapshot).encode()
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("result.json", prefix + b" " * (8 * consumer.MAX_BYTES))
+        forged = bytearray(output.getvalue())
+        central = forged.index(b"PK\x01\x02")
+        for offset in (14, central + 16):
+            struct.pack_into("<I", forged, offset, zlib.crc32(prefix))
+        for offset in (22, central + 24):
+            struct.pack_into("<I", forged, offset, len(prefix))
+        self.downloads[1] = bytes(forged)
+        self.artifacts[101][0]["size_in_bytes"] = len(forged)
+        self.assertLess(len(forged), consumer.MAX_BYTES)
+        factory = zipfile._get_decompressor
+        observed = []
+        class RecordingDecompressor:
+            def __init__(self, inner):
+                self.inner = inner
+            def __getattr__(self, name):
+                return getattr(self.inner, name)
+            def decompress(self, data, max_length=0):
+                result = self.inner.decompress(data, max_length)
+                observed.append((max_length, len(result)))
+                return result
+        with patch.object(zipfile, "_get_decompressor", side_effect=lambda *a: RecordingDecompressor(factory(*a))):
+            self.assertEqual(self.verify(), self.verdict)
+        self.assertTrue(observed)
+        self.assertTrue(all(0 < limit <= consumer.MAX_BYTES + 1 and size <= consumer.MAX_BYTES + 1
+                            for limit, size in observed), observed)
+
+    def test_zip_compression_without_bounded_decoder_is_refused(self):
+        self.assertEqual(self.verify(), self.verdict)
+        for compression in (zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA):
+            with self.subTest(compression=compression):
+                output = io.BytesIO()
+                with zipfile.ZipFile(output, "w", compression=compression) as archive:
+                    archive.writestr("result.json", json.dumps(self.origin_snapshot))
+                self.downloads[1] = output.getvalue()
+                self.artifacts[101][0]["size_in_bytes"] = len(self.downloads[1])
+                self.rejected("compression does not support bounded decoding")
 
     def test_bad_zip_is_conflict(self):
         self.downloads[3] = b"invalid ZIP"
