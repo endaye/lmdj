@@ -574,6 +574,26 @@ class GitHubClient:
         """Download one artifact archive without forwarding credentials onward."""
         return self._download_artifact_archive(artifact.archive_download_url, _CI_SCOPE_SIZE_CAP)
 
+    def get_release_review_page(self, number, kind, cursor=None, thread_id=None) -> object:
+        """Fixed read-only GraphQL inventory queries; no caller query/mutation."""
+        from .review_inventory import query_document
+        document = query_document(number, kind, cursor, thread_id)
+        response = self._request("POST", "/graphql", json.dumps(document).encode("utf-8"),
+                                 content_type="application/json")
+        if len(response.body) > 16 * 1024 * 1024:
+            raise GitHubApiError("GitHub release review page exceeds read limit")
+        value = _json_response(response, {200})
+        # A duplicated JSON identity must not silently become last-key-wins.
+        def unique(pairs):
+            result = {}
+            for key, item in pairs:
+                if key in result:
+                    raise GitHubApiError("GitHub release review page has duplicate JSON fields")
+                result[key] = item
+            return result
+        json.loads(response.body, object_pairs_hook=unique)
+        return value
+
     def release_pr_request(self, method: str, suffix: str, document=None) -> object:
         """Narrow evidence-PR transport; no admin, auto-merge or branch writes."""
         if type(method) is not str or type(suffix) is not str:
