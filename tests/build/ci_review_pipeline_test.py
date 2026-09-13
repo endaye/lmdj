@@ -20,6 +20,7 @@ import unittest
 from unittest import mock
 import contextlib
 import io
+import urllib.error
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
@@ -171,6 +172,72 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("review pipeline operation failed", stderr)
         self.assertNotIn("review chain did not finish", stderr)
+
+    def publisher_error(self, operation):
+        errors = io.StringIO()
+        with mock.patch.object(sys, "argv", ["review_pipeline.py", "publish",
+                "--directory", str(self.directory)]), \
+                mock.patch.object(pipeline, "publish", side_effect=operation), \
+                contextlib.redirect_stderr(errors):
+            self.assertEqual(pipeline.main(), 1)
+        return errors.getvalue()
+
+    def test_publish_reports_http_status_through_real_api_error_wrapper(self):
+        secret = "PRIVATE-token-url-body-header"
+        response = io.BytesIO(secret.encode())
+        error = urllib.error.HTTPError("https://example.invalid/" + secret,
+                                      403, secret, {"secret": secret}, response)
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": secret}), \
+                mock.patch.object(pipeline.pr_review_target.urllib.request,
+                                  "urlopen", side_effect=error):
+            stderr = self.publisher_error(lambda _: pipeline.api("/" + secret))
+        self.assertIn("category=http-error status=403", stderr)
+        self.assertNotIn(secret, stderr)
+        self.assertEqual(response.tell(), 0)
+
+    def test_publish_distinguishes_network_failure_from_http_refusal(self):
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "PRIVATE"}), \
+                mock.patch.object(pipeline.pr_review_target.urllib.request, "urlopen",
+                                  side_effect=urllib.error.URLError("PRIVATE")):
+            stderr = self.publisher_error(lambda _: pipeline.api("/PRIVATE"))
+        self.assertIn("category=network-error", stderr)
+        self.assertNotIn("PRIVATE", stderr)
+
+    def test_publish_unknown_error_does_not_print_message_or_dynamic_class(self):
+        error = type("PRIVATE", (Exception,), {})("PRIVATE")
+        stderr = self.publisher_error(error)
+        self.assertIn("category=unexpected-error", stderr)
+        self.assertNotIn("PRIVATE", stderr)
+
+    def test_publish_does_not_emit_non_numeric_http_status(self):
+        error = urllib.error.HTTPError("PRIVATE", "PRIVATE", "PRIVATE", {}, None)
+        stderr = self.publisher_error(error)
+        self.assertIn("category=http-error", stderr)
+        self.assertNotIn("status=", stderr)
+        self.assertNotIn("PRIVATE", stderr)
+
+    def test_publish_cyclic_causes_terminate_without_printing_exception(self):
+        error = RuntimeError("PRIVATE")
+        error.__cause__ = error
+        stderr = self.publisher_error(error)
+        self.assertIn("category=unexpected-error", stderr)
+        self.assertNotIn("PRIVATE", stderr)
+
+    def test_publish_known_failure_categories_are_literal_and_secret_safe(self):
+        for error, category in (
+            (TimeoutError("PRIVATE"), "timeout"),
+            (subprocess.TimeoutExpired(["PRIVATE"], 60, output="PRIVATE"), "timeout"),
+            (FileNotFoundError("PRIVATE"), "file-missing"),
+            (PermissionError("PRIVATE"), "permission-denied"),
+            (json.JSONDecodeError("PRIVATE", "PRIVATE", 0), "invalid-json"),
+            (UnicodeError("PRIVATE"), "invalid-encoding"),
+            (KeyError("PRIVATE"), "missing-field"),
+            (OSError("PRIVATE"), "os-error"),
+        ):
+            with self.subTest(category=category, error_type=type(error).__name__):
+                stderr = self.publisher_error(error)
+                self.assertIn("category=" + category, stderr)
+                self.assertNotIn("PRIVATE", stderr)
 
     def test_attempt_after_success_is_refused(self):
         self.capture("glm")
