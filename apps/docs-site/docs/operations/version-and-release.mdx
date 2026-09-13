@@ -151,6 +151,14 @@ unknown，只有单一认证匹配返回 correlated。任何结果都不允许�
 重新初始化为“未发送”。POST 前还核对 numeric actor / repository / workflow 和 main SHA。
 原授权每次都需复核，首次发送的 readiness 条件只在写入前检查；恢复不能要求已公开的
 Release 重新变成 Draft，也不能因此重发。
+父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
+私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
+不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。
+publication evidence PR 的创建 POST 与合并 PUT 也在最后一次子级预检后复核父级
+授权与 writer，再检查子级 writer；任一失效均保留未决 intent，恢复不会重发。
+关联成功后还必须调用独立的只读 effect verifier；pending / unknown / conflict 均不会
+推进后续部署或晋级。保存的证据摘要同时绑定真实关联回执与 effect 证据，恢复再次核验。
+这些接口已连接本地编排器，但生产候选绑定与 effect verifier 组合仍待完成。
 GitHub 没有 expected-head dispatch CAS，末次读取后的 main 漂移仍可能产生不同 control
 运行；该运行不得被认领为请求成功。父级请求服务、effect readiness、全局 tag / Site
 互斥和生产总控仍未接通，不能据此承诺完整无人值守发版。

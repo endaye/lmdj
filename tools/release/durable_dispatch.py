@@ -120,29 +120,41 @@ class DurableDispatch:
 
     def start(self,spec):
         """Enroll only a newly created directory; existing storage is resume-only."""
+        return self._visit(spec,initialize=True,advance=True)
+
+    def observe(self,spec,*,initialize=False):
+        """No remote writes. Optional local enrollment is only for a new parent leg."""
+        return self._visit(spec,initialize=initialize,advance=False)
+
+    def resume(self,spec,*,before_post=None):
+        return self._visit(spec,initialize=False,advance=True,before_post=before_post)
+
+    def _visit(self,spec,*,initialize,advance,before_post=None):
+        require(before_post is None or callable(before_post),"parent write guard is invalid")
         self._authorize(spec)
         require(self.root.resolve()==self.root,"directory is not canonical")
-        try:
-            self.root.mkdir(mode=0o700)
-        except FileExistsError:
-            return self.resume(spec)
-        parent=os.open(self.root.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
-        try:os.fsync(parent)
-        finally:os.close(parent)
-        with RequestJournal(self.root) as journal:
-            state={"schema":"lmdj.durable-dispatch.v1","spec":deepcopy(spec),"baseline":None,"post_intent":False}
-            self._save(journal,state)
-            return self._advance(journal,state)
-
-    def resume(self,spec):
-        self._authorize(spec)
+        created=False
+        if initialize:
+            try:
+                self.root.mkdir(mode=0o700)
+                created=True
+            except FileExistsError:
+                pass
+            if created:
+                parent=os.open(self.root.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+                try:os.fsync(parent)
+                finally:os.close(parent)
         if not self.root.exists():return {"status":"unknown","binding":None}
         with RequestJournal(self.root) as journal:
-            state=self._read(journal,spec)
+            if created:
+                state={"schema":"lmdj.durable-dispatch.v1","spec":deepcopy(spec),"baseline":None,"post_intent":False}
+                self._save(journal,state)
+            else:
+                state=self._read(journal,spec)
             if state is None:return {"status":"unknown","binding":None}
-            return self._advance(journal,state)
+            return self._advance(journal,state,before_post=before_post) if advance else self._observe(journal,state)
 
-    def _advance(self,journal,state):
+    def _advance(self,journal,state,*,before_post=None):
         spec=state["spec"]
         self._authorize(spec)
         if not state["post_intent"]:
@@ -160,18 +172,24 @@ class DurableDispatch:
             state.update(baseline=baseline,post_intent=True)
             self._save(journal,state)
             journal._active()
-            def before_post():
+            def write_guard():
                 journal._active()
                 self._authorize(spec)
                 self._ready(spec)
+                if before_post is not None:before_post()
                 journal._active()
             try:
-                self.client.dispatch_release(deepcopy(spec),before_post=before_post)
+                self.client.dispatch_release(deepcopy(spec),before_post=write_guard)
             except Exception:
                 # Includes timeouts and explicit API refusal. The durable
                 # intent cannot be erased or used to justify another POST.
                 pass
+        return self._observe(journal,state)
+
+    def _observe(self,journal,state):
+        spec=state["spec"]
         journal._active()
         self._authorize(spec)
+        if not state["post_intent"]:return {"status":"absent","binding":None}
         return self.consumer.discover(actor_id=spec["actor_id"],control_revision=spec["control_revision"],
                                       inputs=spec["inputs"],prior_run_ids=state["baseline"])

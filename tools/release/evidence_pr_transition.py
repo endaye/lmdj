@@ -32,9 +32,11 @@ class EvidencePrTransition:
         observed.validate()
         return observed
 
-    def advance(self, state, operation):
+    def advance(self, state, operation, *, before_write):
+        if not callable(before_write):
+            raise JournalError("why: managed PR lacks its final parent guard; remedy: supply the trusted driver authority and writer check before each child write")
         if (not self._bound(state, operation) or not state["transitions"]
                 or state["transitions"][-1] != operation or operation["status"] != "intent"):
             raise JournalError("why: managed PR has no durable frontier intent; remedy: initialize its parent transition before any child effect")
         # Its return value is not accepted as completion: parent re-observes.
-        self.controller.advance(self.spec, require_initialized=True)
+        self.controller.advance(self.spec, require_initialized=True, before_write=before_write)
