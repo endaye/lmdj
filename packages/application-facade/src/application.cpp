@@ -50,6 +50,7 @@
 #include <lmdj/project_io/workspace_cache.hpp>
 #include <lmdj/provider/capability.hpp>
 
+#include "pattern_admission_controller.hpp"
 #include "testing_hooks.hpp"
 
 namespace lmdj::facade {
@@ -2142,11 +2143,7 @@ struct Application::Impl {
     ReplayRuntimeStatus status;
   };
 
-  struct PressedSequencePad {
-    std::uint64_t raw_attack_tick{};
-    std::uint32_t onset_tick{};
-    std::uint8_t velocity{};
-  };
+  using PressedSequencePad = detail::PatternOwnedPress;
 
   struct SequenceRuntime {
     foundation::SequenceSessionId session_id;
@@ -2503,63 +2500,9 @@ struct Application::Impl {
     return static_cast<std::uint8_t>(slot.bank * 16U + slot.pad);
   }
 
-  static void merge_pending(
-      SequenceRuntime& runtime,
-      domain::PatternEvent event) {
-    auto merged = domain::merge_pattern_events(
-        runtime.pending_events, {std::move(event)});
-    if (merged != runtime.pending_events) {
-      runtime.pending_events = std::move(merged);
-      ++runtime.overlay_generation;
-    }
-  }
-
-  static void finalize_pressed(
-      SequenceRuntime& runtime,
-      domain::PadSlotId slot,
-      std::uint64_t raw_release_tick,
-      bool remove_press) {
-    const auto found = runtime.pressed.find(slot);
-    if (found == runtime.pressed.end()) {
-      return;
-    }
-    const auto loop_length = domain::pattern_length_ticks(runtime.bars);
-    merge_pending(
-        runtime,
-        domain::PatternEvent{
-            slot,
-            found->second.onset_tick,
-            domain::normalize_duration_tick(
-                found->second.raw_attack_tick,
-                raw_release_tick,
-                found->second.onset_tick,
-                loop_length),
-            found->second.velocity,
-        });
-    if (remove_press) {
-      runtime.pressed.erase(found);
-    }
-  }
-
-  static std::vector<domain::PatternEvent> recoverable_tail(
-      const SequenceRuntime& runtime) {
-    auto result = runtime.pending_events;
-    const auto loop_length = domain::pattern_length_ticks(runtime.bars);
-    for (const auto& [slot, press] : runtime.pressed) {
-      result = domain::merge_pattern_events(
-          result,
-          {domain::PatternEvent{
-              slot,
-              press.onset_tick,
-              domain::normalize_duration_tick(
-                  press.raw_attack_tick,
-                  press.raw_attack_tick + domain::kSixteenthTicks,
-                  press.onset_tick,
-                  loop_length),
-              press.velocity,
-          }});
-    }
-    return result;
+  static detail::PatternEventReducer event_reducer(SequenceRuntime& runtime) {
+    return {runtime.bars, runtime.quantize_enabled, runtime.swing_percent,
+            runtime.overlay_generation, runtime.pending_events, runtime.pressed};
   }
 
   static foundation::Result<void> validate_sequence_path_and_session(
@@ -2768,25 +2711,13 @@ struct Application::Impl {
     }
     const auto previous_pending = runtime.pending_events;
     const auto previous_pressed = runtime.pressed;
+    auto reducer = event_reducer(runtime);
     if (request.event.pressed) {
-      finalize_pressed(runtime, request.event.slot, ticks.value(), true);
-      const auto loop_length = domain::pattern_length_ticks(runtime.bars);
-      runtime.pressed.insert_or_assign(
-          request.event.slot,
-          PressedSequencePad{
-              ticks.value(),
-              domain::quantize_onset_tick(
-                  ticks.value(), loop_length, runtime.quantize_enabled,
-                  runtime.swing_percent),
-              request.event.velocity,
-          });
-    } else {
-      if (!runtime.pressed.contains(request.event.slot)) {
-        return foundation::Result<SequenceMutationResult>::failure(
-            sequence_error(ErrorCode::invalid_argument,
-                           "Sequence release has no matching press"));
-      }
-      finalize_pressed(runtime, request.event.slot, ticks.value(), true);
+      reducer.press(request.event.slot, ticks.value(), request.event.velocity);
+    } else if (!reducer.release(request.event.slot, ticks.value())) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Sequence release has no matching press"));
     }
     const auto durable = sequence_journals.append_tail(
         request.project_path,
@@ -2794,7 +2725,7 @@ struct Application::Impl {
         runtime.pattern_id,
         runtime.expected_revision,
         request.event.input_sequence,
-        recoverable_tail(runtime));
+        reducer.recoverable_tail());
     if (!durable.has_value()) {
       runtime.pending_events = previous_pending;
       runtime.pressed = previous_pressed;
@@ -2808,16 +2739,7 @@ struct Application::Impl {
   }
 
   static void finalize_unreleased(SequenceRuntime& runtime, bool clear) {
-    std::vector<domain::PadSlotId> slots;
-    slots.reserve(runtime.pressed.size());
-    for (const auto& [slot, press] : runtime.pressed) {
-      (void)press;
-      slots.push_back(slot);
-    }
-    for (const auto slot : slots) {
-      const auto attack = runtime.pressed.at(slot).raw_attack_tick;
-      finalize_pressed(runtime, slot, attack + domain::kSixteenthTicks, clear);
-    }
+    event_reducer(runtime).finalize_unreleased(clear);
   }
 
   foundation::Result<void> activate_switched_pattern(

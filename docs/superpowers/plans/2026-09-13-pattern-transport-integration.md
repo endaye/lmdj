@@ -21,7 +21,7 @@ Source: `e5195d1524b0581c777ecf8ee4bb14773fc3fa07` (PR #1265 merged). These are 
 
 One Facade coordinator owns the transport operation and journal; one audio owner applies clocks; one existing input controller retains live input/result authority. Creator only submits intents and renders projections. No second Runtime, no page-owned recording state, no engine-wide Stop as Pattern Stop, no dummy Pattern or silence publication.
 
-Implement T0 → T1 → T2 → T3 → T4. Each is one isolated, declared Task and Conventional Commit, with current-head review through `issue-done`. Shared files have one writer. Broad CI repair remains with the other agent. A foundational Task is not global transport acceptance and must not enable Creator prematurely.
+Implement T0 → T1a → T1b → T2 → T3 → T4. Each is one isolated, declared Task and Conventional Commit, with current-head review through `issue-done`. T1a/T1b together retain the complete T1 acceptance below. Shared files have one writer. Broad CI repair remains with the other agent. A foundational Task is not global transport acceptance and must not enable Creator prematurely.
 
 ### T0 — Prove the execution port before transporting IO through it
 
@@ -59,6 +59,10 @@ The browser journey retains the full sequence: actual write held before flush �
 If the current platform cannot implement this port without changing #725 successful/failed/unknown admission outcomes or violating single-owner Asyncify/lease rules, record that exact dependency and stop the adapter implementation. Do not weaken the approved architecture to fit the existing dispatch loop.
 
 ### T1 — Prepared journal, acknowledged admission and exactly-once transfer
+
+Execution boundary: ship T1a (shared production event reducer) before T1b (prepared admission, durable candidate conversion and recovery). T1a extracts the existing `SequenceRuntime` Pad math into the declared internal controller files, makes the existing Sequence path consume it, and tests the acknowledged-origin/nonzero-phase calculation and correlation rules. It allocates no storage format or public API and does not satisfy the durable T1 acceptance checkboxes below. T1b must still prove every native/OPFS transfer, crash/retry, cutoff and recovery leg. This producer/consumer split prevents a second overdub algorithm from being introduced while the admission storage adapter is built.
+
+**T1a local evidence (2026-09-13):** the first build of `lmdj_pattern_admission_tests` failed for the absent internal controller header. After extracting the production reducer, `facade.pattern_admission` passes seven scenarios: retained-origin tick math versus a reset origin, orphan/stale release correlation, retrigger and terminal completion, legacy release/quantization/idempotent merge, Swing, Pattern-end duration clipping and multi-bar onset. The existing Sequence lifecycle/recovery/rebase shards also pass (25 scenarios); the same four CTests pass under native Mac ASan. The origin test supplies an anchor explicitly: it does not prove that the not-yet-implemented prepared-admission caller obtains the correct audio receipt. No T1 checkbox is discharged by these reducer tests. Sequence still owns validation, its mutex, storage append, rollback and acknowledgment. No new concurrency, public ABI, storage format, module boundary or user-data operation is introduced. The current Facade page describes the extracted internal owner boundary; its existing module diagram remains accurate.
 
 **Defect caught:** mid-loop Record uses the button frame as tick zero, a pre-admission release fabricates an event, or retry transfers the same retained candidates twice.
 
@@ -166,7 +170,7 @@ For concurrency changes use the equivalent registered targets in `asan` and `tsa
 
 ## Version Management
 
-Version impact: none for the planning change and staged T0 source Task; no active manifests, Product Build or Assembly changed.
+Version impact: none for the planning change, staged T0 source Task and T1a internal reducer extraction; no active manifests, Product Build or Assembly changed.
 
 T0 implementation is staged source only: a new additive C++ port/header and conformance-only Web probe, with no existing public layout or Web protocol change. No active manifest identity or Product Build is allocated; distribution still requires the assessment below.
 
