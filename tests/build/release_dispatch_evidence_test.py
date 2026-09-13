@@ -89,6 +89,8 @@ class EvidenceTest(unittest.TestCase):
             "/actions/runs/40/attempts/1/jobs?per_page=100&page=1":{"total_count":1,"jobs":[self.job]},
             "/actions/runs/40/artifacts?per_page=100&page=1":{"total_count":1,"artifacts":[self.artifact]}}
         self.calls=[];self.after_download=None
+        self.extra_zips={}
+        self.routes["/actions/workflows/"+self.workflow+"/runs?per_page=100&page=1"]={"total_count":1,"workflow_runs":[self.run]}
         self.pack()
         self.client=GitHubClient(http_transport=self.transport)
         self.consumer=DispatchEvidenceConsumer(api_get=self.client.get_dispatch_evidence,git_root=self.root,
@@ -105,6 +107,8 @@ class EvidenceTest(unittest.TestCase):
     def transport(self,method,url,headers,body):
         self.calls.append((method,url));self.assertEqual(method,"GET");self.assertIsNone(body)
         prefix="/repos/endaye/lmdj";self.assertTrue(url.startswith(prefix));suffix=url[len(prefix):]
+        if suffix in self.extra_zips:
+            return HttpResponse(200,{"Content-Type":"application/zip"},self.extra_zips[suffix])
         if suffix=="/actions/artifacts/70/zip":
             if self.after_download:self.after_download()
             return HttpResponse(200,{"Content-Type":"application/zip"},self.zip)
@@ -112,6 +116,79 @@ class EvidenceTest(unittest.TestCase):
 
     def verify(self):
         return self.consumer.verify(run_id=40,actor_id=20,control_revision=self.source,inputs=self.inputs)
+
+    def discover(self,prior=None):
+        return self.consumer.discover(actor_id=20,control_revision=self.source,inputs=self.inputs,
+                                      prior_run_ids=[] if prior is None else prior)
+
+    def another_run(self,number,request_id=None,control=None):
+        control=control or self.source
+        row={**deepcopy(self.run),"id":number,"head_sha":control}
+        job={**deepcopy(self.job),"id":number+100,"run_id":number,"head_sha":control}
+        artifact={**deepcopy(self.artifact),"id":number+200}
+        artifact["workflow_run"].update(id=number,head_sha=control)
+        document=deepcopy(self.document)
+        document.update(run_id=number,head_sha=control,workflow_sha=control,tooling_revision=control)
+        if request_id is not None:document["inputs"]["request_id"]=request_id
+        stream=io.BytesIO()
+        with zipfile.ZipFile(stream,"w") as archive:archive.writestr("receipt.json",canonical_json(document))
+        raw=stream.getvalue();artifact.update(size_in_bytes=len(raw),digest="sha256:"+hashlib.sha256(raw).hexdigest())
+        self.extra_zips[f"/actions/artifacts/{artifact['id']}/zip"]=raw
+        self.routes.update({f"/actions/runs/{number}":row,f"/actions/runs/{number}/attempts/1":row,
+            f"/actions/runs/{number}/attempts/1/jobs?per_page=100&page=1":{"total_count":1,"jobs":[job]},
+            f"/actions/runs/{number}/artifacts?per_page=100&page=1":{"total_count":1,"artifacts":[artifact]}})
+        inventory=self.routes["/actions/workflows/"+self.workflow+"/runs?per_page=100&page=1"]
+        inventory["workflow_runs"].append(row);inventory["total_count"]+=1
+        return row
+
+    def test_discovery_correlates_original_run_without_post(self):
+        result=self.discover()
+        self.assertEqual(result["status"],"correlated");self.assertEqual(result["binding"]["run_id"],40)
+        self.assertTrue(all(method=="GET" for method,_ in self.calls))
+
+    def test_empty_discovery_is_unknown_not_absence_or_retry(self):
+        self.routes["/actions/workflows/"+self.workflow+"/runs?per_page=100&page=1"]={"total_count":0,"workflow_runs":[]}
+        self.assertEqual(self.discover(),{"status":"unknown","binding":None})
+
+    def test_duplicate_original_request_is_conflict(self):
+        self.another_run(41)
+        self.assertEqual(self.discover(),{"status":"conflict","binding":None})
+
+    def test_duplicate_request_on_newer_control_is_also_conflict(self):
+        self.git("-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","--allow-empty","-qm","new-main")
+        newer=self.git("rev-parse","HEAD")
+        self.routes["/branches/main"]["commit"]["sha"]=newer
+        self.another_run(41,control=newer)
+        self.assertEqual(self.discover()["status"],"conflict")
+
+    def test_unrelated_authenticated_request_does_not_hide_match(self):
+        self.another_run(41,request_id="f"*64)
+        self.assertEqual(self.discover()["binding"]["run_id"],40)
+
+    def test_unreadable_new_candidate_prevents_uniqueness(self):
+        self.another_run(41,request_id="f"*64)
+        self.routes[f"/actions/runs/41/artifacts?per_page=100&page=1"]={"total_count":0,"artifacts":[]}
+        self.assertEqual(self.discover()["status"],"unknown")
+
+    def test_pre_post_baseline_excludes_only_preexisting_ids(self):
+        self.another_run(41,request_id="f"*64)
+        del self.routes["/actions/runs/41"]
+        self.assertEqual(self.discover(prior=[41])["binding"]["run_id"],40)
+        self.assertFalse(any(url.endswith("/actions/runs/41") for _,url in self.calls))
+
+    def test_new_candidate_during_scan_is_unknown(self):
+        self.after_download=lambda:self.another_run(41)
+        self.assertEqual(self.discover()["status"],"unknown")
+
+    def test_scan_wrong_total_does_not_claim_unique_match(self):
+        self.routes["/actions/workflows/"+self.workflow+"/runs?per_page=100&page=1"]["total_count"]=2
+        self.assertEqual(self.discover()["status"],"unknown")
+
+    def test_actual_input_read_does_not_weaken_exact_input_verifier(self):
+        self.document["inputs"]["request_id"]="f"*64;self.pack()
+        read=self.consumer.read(run_id=40,actor_id=20,control_revision=self.source)
+        self.assertEqual(read["inputs"]["request_id"],"f"*64)
+        with self.assertRaises(DispatchEvidenceError):self.verify()
 
     def test_producer_zip_correlates_failed_effect_without_claiming_success_or_writing(self):
         before=self.git("status","--porcelain")
