@@ -631,6 +631,7 @@ class GitHubClient:
             return self._download_artifact_archive(path, 2 * 1024 * 1024)
         workflows = ("publish-release.yml", "deploy-web-runtime-host.yml", "deploy-creator-web.yml")
         if not (suffix == "/branches/main" or suffix in ("/actions/workflows/"+w for w in workflows)
+                or any(re.fullmatch(rf"/actions/workflows/{re.escape(w)}/runs\?per_page=100&page={page}", suffix) for w in workflows)
                 or re.fullmatch(rf"/actions/runs/{identifier}(?:/attempts/1)?", suffix)
                 or re.fullmatch(rf"/actions/runs/{identifier}/(?:attempts/1/jobs|artifacts)\?per_page=100&page={page}", suffix)):
             raise GitHubApiError("why: dispatch JSON route is outside the allowlist; remedy: use the exact first-attempt read interface")

@@ -97,6 +97,14 @@ class DispatchEvidenceConsumer:
         # rejected here: correlation proves origin, not the effect's outcome.
 
     def verify(self, *, run_id, actor_id, control_revision, inputs):
+        require(type(inputs) is dict, "expected inputs are missing")
+        return self._read(run_id=run_id, actor_id=actor_id, control_revision=control_revision, inputs=inputs)
+
+    def read(self, *, run_id, actor_id, control_revision):
+        """Authenticate actual inputs, including those of unrelated requests."""
+        return self._read(run_id=run_id, actor_id=actor_id, control_revision=control_revision, inputs=None)
+
+    def _read(self, *, run_id, actor_id, control_revision, inputs):
         require(positive(run_id) and positive(actor_id) and sha(control_revision), "request identity is invalid")
         main = self.get("/branches/main")
         require(type(main) is dict and main.get("name") == "main" and main.get("protected") is True
@@ -150,6 +158,8 @@ class DispatchEvidenceConsumer:
                 require(len(payload) <= LIMIT, "decoded payload exceeds size limit")
             document = json.loads(payload, object_pairs_hook=unique)
             require(type(document) is dict and sha(document.get("tooling_revision")), "receipt tooling identity is invalid")
+            if inputs is None:
+                inputs = document.get("inputs")
             env = {"GITHUB_REPOSITORY_ID":str(self.repository_id),"GITHUB_ACTOR_ID":str(actor_id),
                 "GITHUB_RUN_ID":str(run_id),"GITHUB_RUN_ATTEMPT":"1","GITHUB_EVENT_NAME":"workflow_dispatch",
                 "GITHUB_REF":"refs/heads/main","GITHUB_REPOSITORY":"endaye/lmdj",
@@ -178,3 +188,66 @@ class DispatchEvidenceConsumer:
                 "artifact_id":artifact["id"],"artifact_sha256":hashlib.sha256(raw).hexdigest(),
                 "receipt_sha256":canonical_sha256(document),"inputs":dict(inputs),
                 "control_revision":control_revision,"tooling_revision":document["tooling_revision"]}
+
+    def discover(self, *, actor_id, control_revision, inputs, prior_run_ids):
+        """Reconcile an unknown POST read-only. No result permits another POST.
+
+        Scan the complete workflow inventory, including other control SHAs.
+        prior_run_ids MUST be the complete API snapshot frozen in the trusted
+        operation journal before its sole POST intent, not a caller's later
+        reconstruction or an artifact claim. This reader does not attest when
+        a snapshot was taken. Only those prior runs and API-proven other
+        actors/events/refs are excluded. Unreadable candidate runs prevent
+        uniqueness; empty inventory never proves that a delayed POST cannot land.
+        """
+        require(positive(actor_id) and sha(control_revision) and type(inputs) is dict
+                and type(inputs.get("request_id")) is str and type(prior_run_ids) is list
+                and all(positive(identifier) for identifier in prior_run_ids)
+                and len(prior_run_ids) == len(set(prior_run_ids)), "discovery scope is invalid")
+        inventory_path = "/actions/workflows/" + self.workflow + "/runs"
+        def inventory():
+            rows = self.pages(inventory_path, "workflow_runs")
+            identities = []
+            for row in rows:
+                actor, repo, head_repo = row.get("actor"), row.get("repository"), row.get("head_repository")
+                require(type(row.get("workflow_id")) is int and row["workflow_id"] == self.workflow_id
+                        and row.get("path") == ".github/workflows/"+self.workflow
+                        and type(actor) is dict and positive(actor.get("id")) and sha(row.get("head_sha"))
+                        and type(row.get("event")) is str and type(row.get("head_branch")) is str,
+                        "discovery run identity is incomplete")
+                for candidate in (repo, head_repo):
+                    require(type(candidate) is dict and positive(candidate.get("id"))
+                            and candidate["id"] == self.repository_id and candidate.get("full_name") == "endaye/lmdj",
+                            "discovery run repository differs")
+                identities.append({"id":row["id"],"actor_id":actor["id"],"head_sha":row["head_sha"],
+                                   "event":row["event"],"head_branch":row["head_branch"]})
+            return sorted(identities, key=lambda row:row["id"])
+        try:
+            first = inventory()
+            candidates, unknown = [], False
+            for row in first:
+                if row["id"] in prior_run_ids or row["actor_id"] != actor_id or row["event"] != "workflow_dispatch" or row["head_branch"] != "main":
+                    continue
+                try:
+                    observed = self.read(run_id=row["id"],actor_id=actor_id,control_revision=row["head_sha"])
+                except DispatchEvidenceError:
+                    unknown = True
+                    continue
+                if observed["inputs"]["request_id"] == inputs["request_id"]:
+                    candidates.append(observed)
+            second = inventory()
+            if first != second:
+                return {"status":"unknown","binding":None}
+            if len(candidates) > 1 or any(item["inputs"] != inputs or item["control_revision"] != control_revision for item in candidates):
+                return {"status":"conflict","binding":None}
+            if unknown or not candidates:
+                return {"status":"unknown","binding":None}
+            # Revalidate the unique receipt after the full scan. The caller's
+            # durable single-write intent is still needed to preclude a later
+            # duplicate dispatch; this is an observation, not a global lock.
+            binding = self.verify(run_id=candidates[0]["run_id"], actor_id=actor_id,
+                                  control_revision=control_revision, inputs=inputs)
+            require(binding == candidates[0], "discovered receipt changed before binding")
+            return {"status":"correlated","binding":binding}
+        except DispatchEvidenceError:
+            return {"status":"unknown","binding":None}

@@ -141,7 +141,11 @@ API run、留存 artifact 及可信源码；未知 POST 不得凭回执文件、
 完整 jobs / artifacts、成功的回执上传步骤、ZIP digest 与冻结输入，并回读运行身份。
 它还核验受信 producer、workflow 与 tooling 在受保护 main 上的源码祖先关系。
 发布失败或仍在执行的运行也可能拥有真实关联回执，因此返回关联信息不表示发布成功。
-未知 POST 的全量查找、重复请求排除和生产总控恢复仍未接通，不能据此自动重发。
+只读 discovery 已提供完整分页运行查找：以原 operation journal 在唯一 POST 前保存的
+完整 run-ID 清单排除旧运行，再读取新运行的认证输入。不能用事后扫描补造这个基线。
+跨 control revision 的重复 operation 同样报 conflict；候选不可读、零匹配或清单变化报
+unknown，只有单一认证匹配返回 correlated。任何结果都不允许重发，也不表示发布成功。
+durable 基线／POST 控制器与生产总控恢复仍未接通，当前不能据此承诺无人值守恢复。
 
 发布请求的持久状态层已实现：固定 request / scope / policy / revision，独占 writer 在
 每一步外部操作前持久化 intent；结果必须有匹配 operation 的证据回执才能推进。
