@@ -162,7 +162,14 @@ Release 正文按冻结 Markdown 逐字核对。内部 Release plan marker v4（
 `scripts/release.sh publication-record TAG RELEASE_ID PLAN_SHA256` 现可重新核验 exact
 公开 Release 并输出一条 canonical JSON 公开记录；发布日期取自 API，缺失时拒绝猜测。
 核验期间 Release / intent 漂移会失败。该命令不写 ledger、不创建 Release、不生成
-页面，也不证明网站已上线。回执合入的证据 PR、线上内容 smoke、新总控强制准入和
+页面，也不证明网站已上线。
+`scripts/release.sh publication-patch TAG RELEASE_ID PLAN_SHA256` 会重新核验同一公开
+事实，输出证据 PR 所需的 Git patch：仅更新对应 intent 的 published 状态、追加公开
+记录及版本页、更新索引，并按新增页数递增独立文档页数清单。已有完整一致记录输出空
+patch；历史页缺失、内容冲突或本地 intent 与 canonical 不同均拒绝。命令不自动应用
+patch 或提交 PR，也不编辑历史快照。Ledger 目标行仅替换 disposition 值，保留其他
+字节及 JSON 转义。与现有 CLI 一致，用户选定的根目录会先规范化（可用根目录别名）；
+该根目录内部的证据文件及父目录不允许符号链接。回执合入的证据 PR、线上内容 smoke、新总控强制准入和
 显式追加更正记录的接口仍待接入，不表示每次 Release 已自动交付两端日志。
 
 本地日志生成现先在忽略目录暂存完整字节并同步，再通过 create-only 原子 rename
