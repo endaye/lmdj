@@ -1086,10 +1086,11 @@ function Workspace({
   const soundSetEnabled = isSoundSetSession(session);
   const recording = ["recording", "switch-pending", "flushing"].includes(sequence.phase);
   const applyMode = (mode: CreatorMode) => {
-    if (layoutRef.current === "hardware" &&
-      (mode === "perform" || mode === "slice" || mode === "soundset")) {
-      writeCreatorLayout("workspace");
+    const unmigrated = mode === "perform" || mode === "slice" || mode === "soundset";
+    if (unmigrated) {
       setLayout("workspace");
+    } else if (readCreatorLayout() === "hardware") {
+      setLayout("hardware");
     }
     setActiveMode(mode);
   };

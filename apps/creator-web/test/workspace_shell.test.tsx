@@ -2137,6 +2137,10 @@ test("opts into the hardware shell with a read-only overview and returns to the 
   expect(screen.getByRole("button", {name: "Project"}).getAttribute("aria-current"))
     .toBe("page");
   expect(screen.getByText("Project 11111111")).toBeTruthy();
+  await user.click(screen.getByRole("button", {name: "Sample"}));
+  expect(screen.getByRole("heading", {name: "Sample editor"})).toBeTruthy();
+  expect(screen.getByTestId("hardware-console")).toBeTruthy();
+  await user.click(screen.getByRole("button", {name: "Project"}));
 
   await user.click(screen.getByRole("button", {name: "Existing workspace"}));
   expect(screen.queryByTestId("hardware-console")).toBeNull();

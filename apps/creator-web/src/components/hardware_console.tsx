@@ -7,10 +7,7 @@ export function readCreatorLayout(): CreatorLayout {
   if (typeof window === "undefined") return "workspace";
   try {
     const query = new URLSearchParams(window.location.search).get("layout");
-    if (query === "hardware" || query === "workspace") {
-      window.localStorage.setItem(LAYOUT_STORAGE_KEY, query);
-      return query;
-    }
+    if (query === "hardware" || query === "workspace") return query;
     const stored = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
     if (stored === "hardware" || stored === "workspace") return stored;
   } catch {
