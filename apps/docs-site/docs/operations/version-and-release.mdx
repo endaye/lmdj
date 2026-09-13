@@ -233,6 +233,12 @@ binding，再暂存、验证、以 expected-source 更新分支并复验。中�
 它保留父提交允许新增的文档，拒绝产品输入漂移、丢失父提交内容或多父 merge；后续
 main 推进不重新选择候选。此本地对象证明不替代真实 main 认证、Task 测试、独立审查、
 witness、版本分配竞争复查或完整 CI；远端 PR 总控仍待接线。
+候选 PR 子控制器已复用持久化 PR 状态机，但采用独立的候选 scope 和分支 transport：
+创建和 squash 合并各只记录并发送一次，未知结果只按原请求观测，不重试写入。
+它不把分支 head 称为发布 target；必须经受信来源/Task/分配/保护检查及完整 review，
+合并后复核实际 squash。生产端和 transport 共享文档边界，候选与发布记录分支互不放行；
+正文越界在登记意图前拒绝。witness、分支 push、真实 gate factory 和父级候选步骤尚待组合，
+本地 child 的 verified 不代表候选总步骤或发布已完成。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
 私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
 不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。
