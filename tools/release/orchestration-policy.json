@@ -1,0 +1,19 @@
+{
+  "schema": "lmdj.release-orchestration-policy.v1",
+  "default_profile": "web-hosts-dev",
+  "profiles": {
+    "web-hosts-dev": {
+      "release_profile": "web-hosts",
+      "publication_channel": "canary",
+      "target_channel": "dev",
+      "hosts": ["runtime", "creator"],
+      "changelog_destinations": ["github-release", "doc-site"]
+    }
+  },
+  "recovery": {
+    "read_attempts": 3,
+    "read_backoff_seconds": 10,
+    "poll_interval_seconds": 30,
+    "candidate_test_requests": 1
+  }
+}

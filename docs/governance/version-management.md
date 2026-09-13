@@ -214,7 +214,7 @@ commit。源码中的 `assembly.lock.json` 也不能保存包含它自身的 Git
 - tag 是不可变身份，不得移动、覆盖或复用。
 - tag 创建前必须解析并记录完整目标 SHA。
 - 创建 tag 不代表获准 push、创建 GitHub Release、部署或发布。
-- push tag、Release、部署和渠道晋级都需要各自独立授权与证据。
+- 一次整体发版授权覆盖 push tag、Release、部署和渠道晋级，各段仍需独立证据；用户明确限制范围时遵循较窄授权。
 - 错误 tag 不移动；创建更正 tag，并在事故记录中说明旧 tag。
 - 不对普通工作分支的每个 commit 打 tag。
 
@@ -284,7 +284,7 @@ Product tag 只指向已合入 `main`、CI 通过并生成匹配 Build Manifest 
 
 New Product tags require merged-main Proof first. 该 Proof 必须绑定将成为 tag target
 的精确 `main` revision、Product Build 与 Assembly lock hash；创建、签名、push tag、
-Release、部署和 Channel promotion 仍是分别授权和分别验证的动作。
+Release、部署和 Channel promotion 仍是分别验证的动作；整体发版授权覆盖这些转换。
 
 ### 5.4 Module、Contract 与 Provider tag
 
@@ -558,8 +558,9 @@ release-verified
 
 正常发布只通过 `scripts/release.sh` 与受保护 workflow 完成。每次操作先运行 exact-tag
 remote audit；随后 `prepare`、单 tag push、Draft 创建、Draft 发布、Runtime deployment 与
-Channel promotion（`promote`，见 §3.1）分别授权、分别验证，并在一个 mutation 后停止。命令输出的下一步只是导航，
-不构成下一权限边界的批准。
+Channel promotion（`promote`，见 §3.1）分别验证。按照 `AGENTS.md`，一次整体发版授权覆盖
+这些转换；每段通过后继续执行已覆盖的下一段，不重复询问。仅当门禁失败、范围缺失、
+必需外部审批或显式用户限制时停止。命令输出本身不是授权来源。
 
 `docs/release-evidence/release-intents.json` 是经 review 的 release intent ledger：它记录允许
 考虑的 exact identity、target、disposition、channel、profile 与 evidence path，但不缓存或
@@ -650,7 +651,7 @@ Release ID 和 plan digest 重建并验证 Draft，通过受保护 `release` Env
 与资产不变。GitHub Release API 没有本流程可依赖的强条件更新契约，所以 mutation 前后验证用于
 检测并 fail closed，而不宣称消除 TOCTOU。当前单人维护者模式明确要求零 required reviewer，
 `prevent_self_review` 不启用，并且只允许 exact `main` branch policy；显式 workflow dispatch 与
-每次独立授权是人工边界，remote audit 对 GitHub 侧配置 fail closed。Publication 不触发
+整体发版授权是人工边界，remote audit 对 GitHub 侧配置 fail closed。Publication 不触发
 Runtime deployment；后者保持 manual-only exact-tag dispatch，并与 Channel promotion 分离。
 
 所有 non-stable Release 都是 prerelease 且 `latest=false`。Stable 是否成为 `latest` 只由 ledger
