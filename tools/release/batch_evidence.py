@@ -48,8 +48,12 @@ git_root is an existing complete checkout; reads never fetch or execute source.
         self.api_get, self.root = api_get, Path(git_root)
         self.repository, self.repository_id, self.workflow_id = repository, repository_id, workflow_id
         self.producer_revision = producer_revision
-        self.now = now if now is not None else datetime.now(timezone.utc)
+        self._fixed_now = now
         require(isinstance(self.now, datetime) and self.now.tzinfo is not None, "evidence verification clock is not timezone-aware")
+
+    @property
+    def now(self):
+        return self._fixed_now if self._fixed_now is not None else datetime.now(timezone.utc)
 
     def get(self, suffix, *, raw=False):
         try:
@@ -121,7 +125,7 @@ git_root is an existing complete checkout; reads never fetch or execute source.
                 "durable-claim attestation has no successful started controller")
         return run, jobs
 
-    def artifact(self, run, name, filenames):
+    def artifact(self, run, name, filenames, *, retention=None):
         matches = [a for a in self.pages(f"/actions/runs/{run['id']}/artifacts", "artifacts") if a.get("name") == name]
         require(bool(matches), "required original controller or verdict artifact is absent", "unverifiable")
         require(len(matches) == 1, "artifact name is ambiguous")
@@ -144,11 +148,14 @@ git_root is an existing complete checkout; reads never fetch or execute source.
             members = archive.infolist()
             require(len(members) == len(filenames) and {m.filename for m in members} == set(filenames), "artifact ZIP entries are not closed")
             require(all(not m.is_dir() and m.file_size <= MAX_BYTES and (m.external_attr >> 16) & 0o170000 != 0o120000 for m in members), "unsafe or oversized ZIP entry")
-            return {m.filename: json.loads(archive.read(m), object_pairs_hook=test_scope.change_scope.reject_duplicates,
+            documents = {m.filename: json.loads(archive.read(m), object_pairs_hook=test_scope.change_scope.reject_duplicates,
                     parse_constant=lambda _: require(False, "nonfinite artifact JSON")) for m in members}
+        require(expires > self.now, "original controller or verdict artifact expired", "unverifiable")
+        if retention is not None:retention.append(expires)
+        return documents
 
-    def snapshot(self, run, expected_digest):
-        result = self.artifact(run, f"batch-controller-{run['id']}-1", ("result.json",))["result.json"]
+    def snapshot(self, run, expected_digest, *, retention=None):
+        result = self.artifact(run, f"batch-controller-{run['id']}-1", ("result.json",),retention=retention)["result.json"]
         require(isinstance(result, dict) and set(result) == {"schema", "action", "reason", "request", "executor", "state"}
                 and result["schema"] == "lmdj.ci-batch-runtime.v1" and self_test.digest_of(result) == expected_digest,
                 "controller attestation schema or digest conflicts")
@@ -214,7 +221,10 @@ git_root is an existing complete checkout; reads never fetch or execute source.
         # Complete current inventory is also pinned against canonical scope lanes.
         require(set(policy.suite_ids) == CI_SCOPE_LANES | {"core_tsan_stress", "core_release_stress"}, "policy is not the complete sixteen-suite inventory")
         require(request["selection"]["kind"] == "full" and set(request["selection"]["suites"]) == set(policy.suite_ids), "focused or none selection cannot certify a candidate")
-        first = self.snapshot(origin, ref["origin_record_digest"])
+        # Per-verification state: all contributing artifacts must remain live
+        # through the final verdict, not merely their individual downloads.
+        retention = []
+        first = self.snapshot(origin, ref["origin_record_digest"],retention=retention)
         require(first["action"] in {"execute", "waiting"} and equal(first["state"].get("requests", {}).get(request["id"]), request), "origin attestation does not retain the original request")
         if first["action"] == "waiting":
             require(request["kind"] in {"candidate", "node"} and isinstance(first["state"]["queue"], list)
@@ -223,7 +233,7 @@ git_root is an existing complete checkout; reads never fetch or execute source.
             require(equal(first["request"], request) and equal(first["state"]["active"], {
                 "request_id": request["id"], "executor_run": request["origin_run"], "claim": request["origin_run"]}),
                 "origin execution attestation has no matching admission claim")
-        admitted = self.snapshot(executor, ref["admission_record_digest"])
+        admitted = self.snapshot(executor, ref["admission_record_digest"],retention=retention)
         require(first["state"]["epoch"] == admitted["state"]["epoch"], "origin and admission attestation epochs differ")
         require(admitted["action"] == "execute" and equal(admitted["request"], request)
                 and equal(admitted["state"].get("requests", {}).get(request["id"]), request)
@@ -234,7 +244,7 @@ git_root is an existing complete checkout; reads never fetch or execute source.
         visibility = [s for s in producers[0]["steps"] if isinstance(s, dict) and s.get("name") == "Keep failed selected work visible"]
         require(len(visibility) == 1 and visibility[0].get("status") == "completed"
                 and visibility[0].get("conclusion") == "skipped", "full candidate producer visibility step is not terminal skipped")
-        bundle = self.artifact(executor, f"batch-verdict-{target_revision}-{run_id}-1", ("verdict.json", "execution.json", "needs.json"))
+        bundle = self.artifact(executor, f"batch-verdict-{target_revision}-{run_id}-1", ("verdict.json", "execution.json", "needs.json"),retention=retention)
         checked, _ = shared.validate_bundle(bundle, request, executor, policy)
         execution = bundle["execution.json"]
         require(equal(execution["identity"], checked["identity"]) and equal(execution["selection"], checked["selection"])
@@ -242,4 +252,7 @@ git_root is an existing complete checkout; reads never fetch or execute source.
                 "execution projection types differ from independently resolved identity and selection")
         shared.validate_job_observations(checked, producers[0], jobs)
         require(checked["status"] == "passed" and checked["evidence_digest"] == ref["evidence_digest"], "full candidate verdict is not the referenced passed evidence")
+        now = self.now
+        require(len(retention) == 3 and all(expires > now for expires in retention),
+                "original controller or verdict artifact expired before complete verification", "unverifiable")
         return deepcopy(checked), deepcopy(executor)

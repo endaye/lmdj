@@ -163,6 +163,9 @@ Release、签名资产、完整 notes 与冻结候选，并在前后重新认证
 回执。运行仍在执行返回 pending，失败阻断后续步骤；仅有成功运行但 Release / 内容校验
 失败同样不会通过。发布记录摘要在 ledger 正常变为 published 后保持一致，不重复发布。
 生产候选绑定、可信 context / 授权组合及两个部署 effect 的总控接入仍待完成。
+完整候选 CI 证据也使用实时 UTC：下载解析后复核有效期，并在全部校验结束前再次检查
+origin / admission / verdict 三份 artifact 的期限；任一途中到期均拒绝认证。
+已发布版本的历史 provenance 路径不读取这些临时 artifact，也不会提供新候选 verdict。
 GitHub 没有 expected-head dispatch CAS，末次读取后的 main 漂移仍可能产生不同 control
 运行；该运行不得被认领为请求成功。父级请求服务、effect readiness、全局 tag / Site
 互斥和生产总控仍未接通，不能据此承诺完整无人值守发版。

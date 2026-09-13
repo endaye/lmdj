@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,6 +35,66 @@ def zipped(documents):
 
 
 class BatchReleaseEvidenceTest(unittest.TestCase):
+    def live_clock(self):
+        class Clock(datetime):
+            current=(2026,9,8)
+            @classmethod
+            def now(cls,tz=None):return cls(*cls.current,tzinfo=tz)
+        mocked=patch.object(consumer,"datetime",Clock)
+        mocked.start();self.addCleanup(mocked.stop)
+        self.reader=consumer.BatchEvidenceConsumer(api_get=self.get,git_root=self.root,repository="endaye/lmdj",
+            repository_id=11,workflow_id=7,producer_revision=self.control)
+        return Clock
+
+    def test_reused_reader_refuses_expired_complete_candidate(self):
+        clock=self.live_clock()
+        self.assertEqual(self.verify(),self.verdict)
+        clock.current=(2026,10,8)
+        self.rejected("expired",code="unverifiable")
+
+    def test_artifact_expiry_during_download_is_refused(self):
+        clock=self.live_clock()
+        self.assertEqual(self.verify(),self.verdict)
+        original=self.reader.api_get
+        def download(path,*,raw=False):
+            result=original(path,raw=raw)
+            if path.endswith("/artifacts/3/zip"):clock.current=(2026,10,8)
+            return result
+        self.reader.api_get=download
+        self.rejected("expired",code="unverifiable")
+
+    def test_earlier_origin_expiry_during_later_valid_download_is_refused(self):
+        clock=self.live_clock()
+        self.artifacts[101][0]["expires_at"]="2026-09-09T00:00:00Z"
+        self.assertEqual(self.verify(),self.verdict)
+        original=self.reader.api_get
+        def download(path,*,raw=False):
+            result=original(path,raw=raw)
+            if path.endswith("/artifacts/3/zip"):clock.current=(2026,9,9)
+            return result
+        self.reader.api_get=download
+        self.rejected("expired",code="unverifiable")
+
+    def test_expiry_during_final_job_validation_is_refused(self):
+        clock=self.live_clock()
+        self.assertEqual(self.verify(),self.verdict)
+        original=shared.validate_job_observations
+        def validate(*args):
+            result=original(*args)
+            clock.current=(2026,10,8)
+            return result
+        with patch.object(shared,"validate_job_observations",validate):
+            self.rejected("expired",code="unverifiable")
+
+    def test_published_history_keeps_provenance_only_after_retention(self):
+        clock=self.live_clock()
+        self.assertEqual(self.verify(),self.verdict)
+        clock.current=(2026,10,8)
+        self.calls.clear()
+        verdict,run=self.reader.verify_run(self.ref,run_id=102,target_revision=self.control,published=True)
+        self.assertIsNone(verdict);self.assertEqual(run["id"],102)
+        self.assertTrue(all("/artifacts" not in path for path,_ in self.calls))
+
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
