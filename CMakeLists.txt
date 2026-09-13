@@ -610,6 +610,30 @@ foreach(witness_source_group IN ITEMS Binding Merge History Authority)
   )
 endforeach()
 
+# Each producer-backed case includes a real source/Task and process lifecycle.
+# Keep bounded individual cases rather than sharing a live fixture concurrently.
+foreach(witness_check_case IN ITEMS
+    ChecksLifecycleTest.test_actual_six_commands_bind_output_and_cold_resume_does_not_replay
+    ChecksFailureTest.test_failed_command_preserves_real_result_and_never_replays
+    ChecksFailureTest.test_missing_enrolled_state_never_resets_command_budget
+    ChecksFailureTest.test_controller_death_after_actual_command_is_unknown_not_replayed
+    ChecksFailureTest.test_final_authority_loss_keeps_exit_zero_unconfirmed
+    ChecksFailureTest.test_tracked_drift_after_command_is_not_verified
+    ChecksReaderTest.test_forged_pr_digest_is_not_actual_command_evidence
+    ChecksReaderTest.test_same_type_authority_exception_cannot_expose_secret
+    ChecksReaderTest.test_reader_authority_cannot_delete_then_recreate_history
+    ChecksReaderTest.test_committed_fixture_without_staged_commands_cannot_claim_them
+    ChecksReaderTest.test_rebound_command_or_control_is_rejected
+    ChecksResumeTest.test_death_after_task_commit_continues_only_unstarted_committed_phase)
+  lmdj_add_test(
+    NAME "build.release_witness_checks_${witness_check_case}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_witness_checks_test.py "${witness_check_case}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120
+  )
+endforeach()
+
 lmdj_add_test(
   NAME build.release_candidate_pr_sequence_boundaries
   TIER contract

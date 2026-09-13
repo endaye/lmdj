@@ -27,7 +27,7 @@ from tools.release.candidate_cut import CandidateCutWorkspace
 from tools.release.candidate_source import CandidateSourceVerifier
 from tools.release.candidate_witness import CandidateWitnessRun
 from tools.release.candidate_witness_task import CandidateWitnessTask
-from tools.release.task_verification import PublicationTaskVerifier
+from tools.release.witness_checks import WitnessTaskChecks
 from tools.release.model import canonical_json, canonical_sha256
 
 
@@ -89,6 +89,7 @@ def main():
             for name in ("tools/release/candidate_snapshot.py", "tools/release/candidate_cut.py",
                          "tools/release/candidate_source.py", "tools/release/candidate_witness.py",
                          "tools/release/task_verification.py", "tools/release/candidate_witness_task.py",
+                         "tools/release/witness_checks.py",
                          "tools/release/publication_workspace.py")}})
     dependencies = ROOT / "apps/docs-site/node_modules"
     assert dependencies.is_dir(), "install this control worktree's locked Node dependencies first"
@@ -195,26 +196,34 @@ def main():
         return CandidateWitnessTask(witness_root, CandidateWitnessRun(CandidateSourceVerifier(cut_workspace),
             authorize=authorize, observe_main=lambda: introducing, path=args.tool_path))
     task = new_task()
-    executor = PublicationTaskVerifier(None, witness_root, authorize=authorize, path=args.tool_path)
-    def verify_witness_task(root, phase, binding):
-        assert root == witness_root
-        assert (root / witness).read_bytes() == witness_raw, "Task did not import exact emitted witness bytes"
-        for vector in (("bash", "scripts/docs-site.sh", "check"),
-                       ("python3", "tests/build/ci_change_scope_test.py"),
-                       ("git", "diff", "--cached", "--check", introducing)):
-            result = executor._execute(task._journal, vector, 900)
-            record({"stage":"witness-task-" + phase, "command":list(vector), "result":list(result)})
-            assert result[0] == 0, "real witness Task gate failed; retain actual output"
+    def authorize_checks(scope):
+        assert scope["binding"]["request_sha256"] == canonical_sha256(request), "fixture Task request drift"
+        assert scope["control_revision"] == base and scope["path"] == args.tool_path
+        material.inputs.verify(frozen, base)
+    def new_checks():
+        return WitnessTaskChecks(task, control_revision=base, authorize=authorize_checks, path=args.tool_path)
     task_arguments = dict(receipt=resumed, base_revision=introducing, **witness_arguments,
         author_name="Candidate Rehearsal", author_email="fixture@example.invalid",
-        timestamp=int(time.time()), verify=verify_witness_task)
+        timestamp=int(time.time()))
     with patch("tools.release.task_verification.tempfile.TemporaryFile", retained_output):
-        task_receipt = task.prepare(**task_arguments)
+        checked = new_checks().prepare(**task_arguments)
+        task_receipt = checked["task"]
         record({"stage":"witness-task", "receipt":task_receipt})
+        task_journal = Path(task.git("rev-parse", "--absolute-git-dir").decode().strip()) / task.JOURNAL_NAME
+        checks_raw = (task_journal / WitnessTaskChecks.STATE).read_bytes()
+        checks_state = json.loads(checks_raw)
+        assert canonical_json(checks_state) == checks_raw
+        assert [row["phase"] for row in checks_state["commands"]] == ["staged"] * 3 + ["committed"] * 3
+        assert all(row["status"] == "verified" and row["result"][0] == 0 for row in checks_state["commands"])
+        assert checked["checks"]["sha256"] == sha256(checks_raw).hexdigest()
+        record({"stage":"witness-task-checks", "receipt":checked["checks"], "state":checks_state})
+        output_count = sum("executed_output" in event for event in events)
         task = new_task()
-        cold_task = task.prepare(**task_arguments)
-        record({"stage":"witness-task-cold-resume", "receipt":cold_task})
-    assert task_receipt == cold_task, "cold Task resume changed its bound commit"
+        cold = new_checks().prepare(**task_arguments)
+        record({"stage":"witness-task-cold-resume", "receipt":cold["task"], "checks":cold["checks"]})
+        assert sum("executed_output" in event for event in events) == output_count, "cold Task replayed checks"
+        assert (task_journal / WitnessTaskChecks.STATE).read_bytes() == checks_raw, "cold Task rewrote command history"
+    assert checked == cold, "cold Task resume changed its bound commit or actual command evidence"
     assert before == (local.git("rev-parse", "HEAD"), local.git("show-ref"), index_path.read_bytes()), "Task changed original candidate Git state"
     assert task.git("cat-file", "blob", task_receipt["commit"] + ":" + witness) == witness_raw
     assert not task.git("status", "--porcelain").strip(), "completed witness Task is dirty"

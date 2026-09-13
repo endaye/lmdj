@@ -192,8 +192,9 @@ class PublicationTaskVerifier:
         finally:
             os.close(fd)
 
-    def _execute(self, journal, vector, timeout):
-        result, _ = self._execute_output(journal, vector, timeout, capture_limit=None)
+    def _execute(self, journal, vector, timeout, *, retained_locks=()):
+        result, _ = self._execute_output(journal, vector, timeout, capture_limit=None,
+                                        retained_locks=retained_locks)
         return result
 
     def _execute_capture(self, journal, vector, timeout, *, limit):
@@ -209,8 +210,11 @@ class PublicationTaskVerifier:
                 "capture limit must be an integer between 1 and 65536 bytes")
         return self._execute_output(journal, vector, timeout, capture_limit=limit)
 
-    def _execute_output(self, journal, vector, timeout, *, capture_limit):
+    def _execute_output(self, journal, vector, timeout, *, capture_limit, retained_locks=()):
         journal._active()
+        require(type(retained_locks) is tuple and all(type(fd) is int and fd >= 0 for fd in retained_locks),
+                "retained writer descriptors are invalid")
+        writer_fds = tuple(dict.fromkeys((journal.lock, *retained_locks)))
         with tempfile.TemporaryDirectory(prefix="lmdj-task-environment-") as directory:
             # No inherited credentials, injection settings or personal tool config.
             env = dict(PATH=self.path, HOME=directory, TMPDIR=directory, LC_ALL="C",
@@ -225,7 +229,7 @@ class PublicationTaskVerifier:
                 scratch = Path(directory) / "git"
                 initialized = subprocess.run(["git", "init", "--bare", "--template=", str(scratch)],
                     cwd=directory, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    timeout=30, pass_fds=(journal.lock,))
+                    timeout=30, pass_fds=writer_fds)
                 require(initialized.returncode == 0, "isolated whitespace repository is unavailable")
                 local = PublicationWorkspace(self.repository)
                 for setting, name in (("GIT_INDEX_FILE", "index"), ("GIT_OBJECT_DIRECTORY", "objects")):
@@ -233,7 +237,7 @@ class PublicationTaskVerifier:
                 vector = ("git", "--git-dir=" + str(scratch), *vector[1:])
             with tempfile.TemporaryFile() as output:
                 with subprocess.Popen(vector, cwd=self.repository, env=env, stdout=output,
-                        stderr=subprocess.STDOUT, pass_fds=(journal.lock,), start_new_session=True) as child:
+                        stderr=subprocess.STDOUT, pass_fds=writer_fds, start_new_session=True) as child:
                     try:
                         code = child.wait(timeout=timeout)
                     except subprocess.TimeoutExpired:

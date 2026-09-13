@@ -48,19 +48,21 @@ class CandidateWitnessTask(PublicationWorkspace):
         return super()._check_workspace(*args, **kwargs)
 
     def prepare(self, *, receipt, base_revision, request, source, cut, frozen,
-                merge_revision, author_name, author_email, timestamp, verify):
+                merge_revision, author_name, author_email, timestamp, verify=None, verify_locked=None):
         try:
             return self._prepare(receipt=deepcopy(receipt), base=base_revision,
                 inputs=deepcopy(dict(request=request, source=source, cut=cut, frozen=frozen,
                                      merge_revision=merge_revision)),
-                author_name=author_name, author_email=author_email, timestamp=timestamp, verify=verify)
+                author_name=author_name, author_email=author_email, timestamp=timestamp,
+                verify=verify, verify_locked=verify_locked)
         except WitnessTaskError:
             raise
         except Exception:
             raise WitnessTaskError("why: witness Task source, state or verification is unavailable; remedy: inspect retained evidence and restore the same operation without exposing child output or inventing a passing Task") from None
 
-    def _prepare(self, *, receipt, base, inputs, author_name, author_email, timestamp, verify):
-        require(sha(base) and callable(verify), "base or trusted Task verifier is invalid")
+    def _prepare(self, *, receipt, base, inputs, author_name, author_email, timestamp, verify, verify_locked):
+        require(sha(base) and ((callable(verify) and verify_locked is None)
+                or (verify is None and callable(verify_locked))), "base or trusted Task verifier is invalid")
         require(type(timestamp) is int and 1 <= timestamp <= 253402300799, "timestamp is invalid")
         require(type(author_name) is str and re.fullmatch(r"[A-Za-z0-9 ._-]{1,80}", author_name)
                 and type(author_email) is str and re.fullmatch(r"[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+", author_email), "author is invalid")
@@ -152,7 +154,10 @@ class CandidateWitnessTask(PublicationWorkspace):
                         require(same(read(journal, "task-operation.json"), binding)
                                 and same(read(journal, "binding.json"), binding), "binding changed at verification boundary")
                         phase = "staged" if self.revision("HEAD") == base else "committed"
-                        verify(root, phase, deepcopy(binding))
+                        if verify_locked is not None:
+                            verify_locked(root, phase, deepcopy(binding), guard=guard)
+                        else:
+                            verify(root, phase, deepcopy(binding))
                         guard()
                         require(same(read(journal, "task-operation.json"), binding)
                                 and same(read(journal, "binding.json"), binding), "binding changed during verification")

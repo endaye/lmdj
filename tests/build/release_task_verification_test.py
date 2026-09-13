@@ -370,6 +370,42 @@ class VerificationTest(unittest.TestCase):
                 time.sleep(0.025)
         self.assertEqual((self.repo / ".task-count").read_text(), "run\n")
 
+    def test_orphaned_command_retains_both_original_writer_locks(self):
+        source_store = self.root / "source-journal"
+        script = ("printf 'run\\n' >> .task-count\ntouch .ready\n"
+                  "for i in $(seq 1 200); do [ ! -f .release ] || exit 0; sleep 0.025; done\nexit 1\n")
+        pid = os.fork()
+        if pid == 0:
+            with RequestJournal(source_store) as source, RequestJournal(self.store) as task:
+                self.verifier()._execute(task, ("bash", "-c", script), 10, retained_locks=(source.lock,))
+            os._exit(99)
+        try:
+            deadline = time.monotonic() + 3
+            while not (self.repo / ".ready").exists() and time.monotonic() < deadline:
+                time.sleep(0.025)
+            self.assertTrue((self.repo / ".ready").exists(), "actual child must start before controller death")
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            pid = None
+            for store in (source_store, self.store):
+                with self.assertRaises(JournalError):
+                    with RequestJournal(store): pass
+        finally:
+            (self.repo / ".release").touch()
+            if pid is not None:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+        deadline = time.monotonic() + 3
+        for store in (source_store, self.store):
+            while True:
+                try:
+                    with RequestJournal(store): pass
+                    break
+                except JournalError:
+                    if time.monotonic() >= deadline: self.fail("actual child did not release both writers")
+                    time.sleep(0.025)
+        self.assertEqual((self.repo / ".task-count").read_text(), "run\n")
+
 
 if __name__ == "__main__":
     unittest.main()

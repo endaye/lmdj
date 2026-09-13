@@ -273,6 +273,10 @@ witness、版本分配竞争复查或完整 CI；远端 PR 总控仍待接线。
 加唯一见证文件；保留后续普通 main 更新，但拒绝见证或不可变快照的改写及改后撤回。
 核验缺失对象或状态时只报错，不自动 fetch、重生成或修改候选 target；来源证明不替代完整 Task
 命令证据、独立审查或线上保护检查。
+见证 Task 检查执行器在提交前后各运行 Portal、ownership 与原 base 的 whitespace 检查，
+将真实退出码、完整输出摘要和长度绑定到 Task／控制版本；PR 使用这份持久化证据的摘要。
+恢复只继续尚未启动的检查，已确认命令不重跑，失败或未知结果不能自动重试；子进程保留源与
+Task 两把 writer 锁，避免控制进程退出后另一个 writer 与仍存活的检查重叠。
 实际授权、来源、完整 Task 检查和审查由受信 gates 负责，生产父级接线与线上验收仍未完成；
 本地新克隆快照演练或模拟 review 不代表候选或发版完成。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
