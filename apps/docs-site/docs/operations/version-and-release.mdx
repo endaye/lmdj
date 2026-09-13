@@ -131,6 +131,13 @@ Task commit、push、PR、squash merge、signed product tag、Release、部署�
 缺少任一 Host / changelog 目标、越权 Channel 与无界重试。它目前只是经过校验的默认范围，
 不是发布授权，也不表示 run / resume 总控、非交互签名或双端 changelog 发布已经实现。
 
+发布请求的持久状态层已实现：固定 request / scope / policy / revision，独占 writer 在
+每一步外部操作前持久化 intent；结果必须有匹配 operation 的证据回执才能推进。
+崩溃留下的 intent 需要核对，不允许重新 begin；校验失败或状态损坏也不自动清空。
+私有目录、原子写入、fsync、锁和 inode 校验只证明本机状态管理；future driver 仍须
+认证请求授权并重新核验 Git/GitHub/部署证据，不能把保存的 verified 标记当作外部成功。
+该层尚未接通真实发布命令或安装为常驻服务。
+
 ## 标准 Release 控制面
 
 源码 Product Build 与匹配的 immutable snapshot 可以先完成分配，此时允许没有 release intent；
