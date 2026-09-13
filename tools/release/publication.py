@@ -18,6 +18,10 @@ class PublicationError(ValueError):
 
 
 def collect_publication(tag, release_id, plan_sha256, context):
+    return collect_publication_state(tag, release_id, plan_sha256, context)[0]
+
+
+def collect_publication_state(tag, release_id, plan_sha256, context):
     verified = verify_published_state(tag, release_id, plan_sha256, context)
     intent, release = verified.authority.intent, verified.release
     if intent.changelog is None:
@@ -35,4 +39,4 @@ def collect_publication(tag, release_id, plan_sha256, context):
                 {"schema": "lmdj.release-changelog-publications.v1", "entries": [record]})
     except ChangelogError:
         raise PublicationError("why: verified Release lacks valid publication metadata; remedy: reconcile the numeric Release; never invent its publication date") from None
-    return record
+    return record, intent
