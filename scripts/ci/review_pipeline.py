@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 
 import change_scope
 import review_scope
@@ -689,6 +690,58 @@ def publish(directory):
     authenticate(identity)  # A race remains historical evidence, never current.
 
 
+def http_refusal_evidence(error):
+    """Bounded diagnostic hints, never a retry decision or raw response log."""
+    endpoint = "unknown"
+    numbers = {}
+    reason = "unknown"
+    try:
+        url = urllib.parse.urlsplit(error.url)
+        if url.scheme == "https" and url.netloc == "api.github.com":
+            repo = r"/repos/[^/]+/[^/]+"
+            for pattern, category in (
+                (repo + r"/actions/runs/[0-9]+/attempts/[0-9]+", "run-attempt"),
+                (repo + r"/actions/runs/[0-9]+(?:/attempts/[0-9]+)?/jobs", "run-jobs"),
+                (repo + r"/actions/workflows/[^/]+", "workflow"),
+                (repo + r"/pulls/[0-9]+/reviews", "reviews"),
+                (repo + r"/pulls/[0-9]+", "pull-request"),
+                (repo + r"/issues/[0-9]+/labels", "labels"),
+                (repo, "repository"),
+                (r"/users/[^/]+", "user"),
+            ):
+                if re.fullmatch(pattern, url.path):
+                    endpoint = category
+                    break
+        for header, field in (("x-ratelimit-remaining", "remaining"),
+                              ("x-ratelimit-reset", "reset"),
+                              ("retry-after", "retry-after")):
+            value = error.headers.get(header) if error.headers is not None else None
+            if isinstance(value, str) and re.fullmatch(r"[0-9]{1,10}", value):
+                numbers[field] = str(int(value))
+        if numbers.get("remaining") == "0":
+            reason = "primary-rate-limit"
+        else:
+            # Read once, with an extra byte solely to detect overflow. A write
+            # adapter may already have consumed this stream: empty is unknown.
+            raw = error.read(4097)
+            if isinstance(raw, bytes) and len(raw) <= 4096:
+                body = json.loads(raw, object_pairs_hook=change_scope.reject_duplicates)
+                message = body.get("message") if isinstance(body, dict) else None
+                if isinstance(message, str):
+                    if message.startswith("You have exceeded a secondary rate limit"):
+                        reason = "secondary-rate-limit"
+                    elif message == "Resource not accessible by integration":
+                        reason = "integration-permission"
+                    elif message == "Resource not accessible by personal access token":
+                        reason = "token-permission"
+    except Exception:
+        # Diagnostic parsing failure must neither mask the original HTTP error
+        # nor expose its message. Any previously validated fields remain useful.
+        pass
+    return f" endpoint={endpoint} reason={reason}" + "".join(
+        f" {field}={value}" for field, value in numbers.items())
+
+
 def publisher_error_category(error):
     """Project only closed categories; API wrappers retain an explicit cause.
 
@@ -700,6 +753,8 @@ def publisher_error_category(error):
         if isinstance(error, urllib.error.HTTPError):
             code = error.code
             suffix = f" status={code}" if type(code) is int and 100 <= code <= 599 else ""
+            if type(code) is int and code in (403, 429):
+                suffix += http_refusal_evidence(error)
             return "http-error" + suffix
         for kind, category in (
             (TimeoutError, "timeout"),

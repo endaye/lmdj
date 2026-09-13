@@ -193,7 +193,82 @@ class PipelineTests(unittest.TestCase):
             stderr = self.publisher_error(lambda _: pipeline.api("/" + secret))
         self.assertIn("category=http-error status=403", stderr)
         self.assertNotIn(secret, stderr)
-        self.assertEqual(response.tell(), 0)
+        self.assertLessEqual(response.tell(), 4097)
+
+    def http_refusal(self, body, headers=None, url=None, code=403):
+        response = body if hasattr(body, "read") else io.BytesIO(body)
+        error = urllib.error.HTTPError(url or
+            "https://api.github.com/repos/endaye/lmdj/actions/runs/99/attempts/1",
+            code, "PRIVATE", headers or {}, response)
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "PRIVATE"}), \
+                mock.patch.object(pipeline.pr_review_target.urllib.request,
+                                  "urlopen", side_effect=error):
+            stderr = self.publisher_error(lambda _: pipeline.api("/PRIVATE"))
+        self.assertNotIn("PRIVATE", stderr)
+        return stderr
+
+    def test_http_primary_limit_retains_numeric_headers_through_api_wrapper(self):
+        stderr = self.http_refusal(b'{"message":"PRIVATE"}', {
+            "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1789310000",
+            "retry-after": "60", "authorization": "PRIVATE"})
+        self.assertIn("reason=primary-rate-limit", stderr)
+        self.assertIn("endpoint=run-attempt", stderr)
+        self.assertIn("remaining=0 reset=1789310000 retry-after=60", stderr)
+
+    def test_http_secondary_limit_uses_closed_message_category(self):
+        stderr = self.http_refusal(json.dumps({"message":
+            "You have exceeded a secondary rate limit. PRIVATE"}).encode(), code=429)
+        self.assertIn("status=429", stderr)
+        self.assertIn("reason=secondary-rate-limit", stderr)
+
+    def test_http_permission_refusal_uses_closed_message_category(self):
+        stderr = self.http_refusal(b'{"message":"Resource not accessible by integration"}')
+        self.assertIn("reason=integration-permission", stderr)
+
+    def test_non_refusal_http_status_does_not_read_response_body(self):
+        body = io.BytesIO(b"PRIVATE")
+        stderr = self.http_refusal(body, code=500)
+        self.assertIn("category=http-error status=500", stderr)
+        self.assertNotIn("reason=", stderr)
+        self.assertEqual(body.tell(), 0)
+
+    def test_non_publish_http_failure_never_reads_or_projects_response(self):
+        body = io.BytesIO(b"PRIVATE")
+        error = urllib.error.HTTPError("PRIVATE", 403, "PRIVATE", {}, body)
+        errors = io.StringIO()
+        with mock.patch.object(sys, "argv", ["review_pipeline.py", "finalize",
+                "--directory", str(self.directory)]), \
+                mock.patch.object(pipeline, "finalize", side_effect=error), \
+                contextlib.redirect_stderr(errors):
+            self.assertEqual(pipeline.main(), 1)
+        self.assertNotIn("PRIVATE", errors.getvalue())
+        self.assertNotIn("category=", errors.getvalue())
+        self.assertEqual(body.tell(), 0)
+
+    def test_http_refusal_drops_non_decimal_or_overlong_headers_and_unknown_url(self):
+        for value in ("PRIVATE", "1\nPRIVATE", "9" * 100, "-1", "１２"):
+            with self.subTest(value=value):
+                stderr = self.http_refusal(b'{"message":"PRIVATE"}', {
+                    "x-ratelimit-remaining": value, "x-ratelimit-reset": value,
+                    "retry-after": value}, "https://PRIVATE.invalid/PRIVATE")
+                self.assertIn("endpoint=unknown reason=unknown", stderr)
+                self.assertNotIn("remaining=", stderr)
+                self.assertNotIn("reset=", stderr)
+                self.assertNotIn("retry-after=", stderr)
+
+    def test_http_refusal_body_is_bounded_and_never_uses_partial_json(self):
+        body = io.BytesIO(b'{"message":"Resource not accessible by integration",'
+                          b'"padding":"' + b'x' * 10000 + b'"}')
+        self.assertIn("reason=unknown", self.http_refusal(body))
+        self.assertEqual(body.tell(), 4097)
+
+    def test_http_refusal_unreadable_or_invalid_body_keeps_original_failure(self):
+        broken = mock.Mock()
+        broken.read.side_effect = TimeoutError("PRIVATE")
+        for body in (b"PRIVATE", b"[]", b'{"message":null}', b"\xff", broken):
+            with self.subTest(body_type=type(body).__name__):
+                self.assertIn("status=403 endpoint=run-attempt reason=unknown",
+                              self.http_refusal(body))
 
     def test_publish_distinguishes_network_failure_from_http_refusal(self):
         with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "PRIVATE"}), \
