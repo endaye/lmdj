@@ -4,6 +4,7 @@ import ast
 import base64
 from copy import deepcopy
 import hashlib
+import importlib.util
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -13,7 +14,7 @@ import threading
 import unittest
 from unittest.mock import patch
 from urllib.parse import urlsplit
-from urllib.request import Request, build_opener
+from urllib.request import Request, build_opener, urlopen
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(Path(__file__).parent))
@@ -116,6 +117,64 @@ print(json.dumps({'manifest':f.manifest,'payloads':{k:base64.b64encode(v).decode
         self.verifier = live_host.LiveHostVerifier(self.reader)
 
     def verify(self): return self.verifier.verify(self.host, self.expected)
+
+    def test_freeze_site_uses_two_actual_reads_and_canonical_digest(self):
+        frozen = self.verifier.freeze_site(self.host, "site-123")
+        self.assertEqual(self.api_calls, 2)
+        self.assertEqual(frozen["sha256"], live_host.canonical_sha256(frozen["site"]))
+        self.assertEqual(frozen["site"]["published_deploy"]["id"], "deploy-456")
+        self.assertTrue(all(kind == "api" for kind,_,_ in self.calls))
+        frozen["site"]["published_deploy"]["id"] = "caller-edit"
+        self.assertEqual(self.verifier.freeze_site(self.host, "site-123")["site"]["published_deploy"]["id"], "deploy-456")
+
+    def test_freeze_empty_site_preserves_absent_pointer(self):
+        self.site["published_deploy"] = None
+        self.assertIsNone(self.verifier.freeze_site(self.host, "site-123")["site"]["published_deploy"])
+        self.assertEqual(self.api_calls, 2)
+
+    def test_freeze_rejects_pointer_change_between_reads(self):
+        self.api_hook = lambda:self.site.update(published_deploy=None) if self.api_calls == 2 else None
+        with self.assertRaises(JournalError): self.verifier.freeze_site(self.host, "site-123")
+        self.assertEqual(self.api_calls, 2)
+
+    def test_freeze_rejects_wrong_host_site(self):
+        self.site["ssl_url"] = "https://other.netlify.app"
+        with self.assertRaises(JournalError): self.verifier.freeze_site(self.host, "site-123")
+        self.assertEqual(self.api_calls, 1)
+
+    def test_freeze_rejects_disabled_site(self):
+        self.site["disabled"] = True
+        with self.assertRaises(JournalError): self.verifier.freeze_site(self.host, "site-123")
+        self.assertEqual(self.api_calls, 1)
+
+    def test_actual_snapshot_digest_is_accepted_by_actual_host_command(self):
+        host_id = live_host.HOSTS[self.host][0]
+        filename = ROOT / "apps" / host_id / "test/deploy_command_test.py"
+        spec = importlib.util.spec_from_file_location("_prior_command_" + self.host, filename)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        self.addCleanup(sys.modules.pop, spec.name, None)
+        spec.loader.exec_module(module)
+        command = module.DeployCommandTest()
+        command.setUp(); self.addCleanup(command.tearDown)
+
+        def routed_site(method, endpoint, document, deadline):
+            # Only replace the fixed-origin transport; use the actual Site
+            # parser/freezer and the same API fixture the deploy command reads.
+            self.assertEqual((method, endpoint, document, deadline),
+                             ("GET", "/sites/site-123", None, None))
+            request = Request(f"http://127.0.0.1:{command.server.server_port}/api/v1" + endpoint,
+                              headers={"Authorization":"Bearer fixture-secret"})
+            with urlopen(request, timeout=10) as response:
+                return json.load(response)
+
+        with patch.object(self.reader, "_json_request", side_effect=routed_site):
+            frozen = self.verifier.freeze_site(self.host, "site-123")
+        completed = command.run_command("deploy", module.TAG, environment={
+            "LMDJ_RELEASE_REQUEST_ID":"a" * 64, "LMDJ_PRIOR_SITE_SHA256":frozen["sha256"]})
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(command.server.current_deploy_id, module.DEPLOY_ID)
+        self.assertTrue((command.deploy_root / "evidence.json").exists())
 
     def test_fresh_reads_verify_both_urls_every_asset_and_current_pointer(self):
         first = self.verify(); calls = len(self.calls)

@@ -1099,6 +1099,72 @@ def verify_distribution(dist_root, repo_root):
             "  scripts/web-runtime-deploy.sh smoke BASE_URL PRODUCT_BUILD HOST_VERSION\n",
         )
 
+    def frozen_request_environment(self) -> dict[str, str]:
+        prior = None if not self.server.current_deploy_id else {
+            "id": self.server.current_deploy_id, "site_id": SITE_ID,
+            "deploy_ssl_url": self.server.current_deploy_url, "state": "ready",
+        }
+        site = {"id": SITE_ID, "state": "current", "ssl_url": PRODUCTION_URL,
+                "published_deploy": prior}
+        raw = (json.dumps(site, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        return {"LMDJ_RELEASE_REQUEST_ID": "a" * 64,
+                "LMDJ_PRIOR_SITE_SHA256": hashlib.sha256(raw).hexdigest()}
+
+    def assert_request_refused_before_site_write(self, environment: dict[str, str]) -> None:
+        completed = self.run_command("deploy", TAG, environment=environment)
+        self.assertNotEqual(completed.returncode, 0, completed.stderr)
+        for write in ("netlify create-draft", "netlify publish same-id",
+                      "netlify restore prior-id", "netlify disable-site"):
+            self.assertNotIn(write, self.command_log())
+        self.assertFalse((self.deploy_root / "evidence.json").exists())
+        self.assertFalse((self.deploy_root / "recovery-evidence.json").exists())
+
+    def test_managed_request_accepts_exact_frozen_site(self) -> None:
+        completed = self.run_command("deploy", TAG, environment=self.frozen_request_environment())
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.server.current_deploy_id, DEPLOY_ID)
+
+    def test_managed_request_refuses_prior_changed_before_workflow(self) -> None:
+        environment = self.frozen_request_environment()
+        self.server.current_deploy_id = "other-789"
+        self.server.current_deploy_url = "https://other-789--lmdj-runtime.netlify.app"
+        self.assert_request_refused_before_site_write(environment)
+        self.assertEqual(self.server.current_deploy_id, "other-789")
+
+    def test_managed_first_publication_refuses_new_prior(self) -> None:
+        self.server.current_deploy_id = ""
+        environment = self.frozen_request_environment()
+        self.server.current_deploy_id = PRIOR_DEPLOY_ID
+        self.assert_request_refused_before_site_write(environment)
+        self.assertEqual(self.server.current_deploy_id, PRIOR_DEPLOY_ID)
+
+    def test_managed_request_requires_prior_digest(self) -> None:
+        environment = self.frozen_request_environment()
+        environment["LMDJ_PRIOR_SITE_SHA256"] = ""
+        self.assert_request_refused_before_site_write(environment)
+
+    def test_managed_request_refuses_different_frozen_digest(self) -> None:
+        environment = self.frozen_request_environment()
+        environment["LMDJ_PRIOR_SITE_SHA256"] = "f" * 64
+        self.assert_request_refused_before_site_write(environment)
+
+    def test_managed_request_rejects_malformed_prior_digest(self) -> None:
+        environment = self.frozen_request_environment()
+        environment["LMDJ_PRIOR_SITE_SHA256"] = "not-a-digest"
+        self.assert_request_refused_before_site_write(environment)
+
+    def test_managed_request_accepts_exact_empty_site(self) -> None:
+        self.server.current_deploy_id = ""
+        completed = self.run_command("deploy", TAG, environment=self.frozen_request_environment())
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.server.current_deploy_id, DEPLOY_ID)
+
+    def test_managed_request_preserves_zero_file_prior_projection(self) -> None:
+        self.server.site_files_response = []
+        completed = self.run_command("deploy", TAG, environment=self.frozen_request_environment())
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIsNone(json.loads((self.deploy_root / "evidence.json").read_bytes())["prior_good"])
+
     def test_deploy_orders_real_stage_api_smoke_restore_and_production_smoke(self) -> None:
         completed = self.run_command("deploy", TAG)
         self.assertEqual(completed.returncode, 0, completed.stderr)

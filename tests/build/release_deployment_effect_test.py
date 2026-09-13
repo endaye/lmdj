@@ -18,8 +18,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(Path(__file__).parent))
 import release_managed_dispatch_test as managed_fixture
 from tools.release.deployment_effect import DeploymentEffect, HOSTS, LIMIT
-from tools.release.model import canonical_json
-from tools.release.orchestration import STEPS
+from tools.release.model import canonical_json, canonical_sha256
+from tools.release.orchestration import STEPS, JournalError
 from tools.release.orchestration_driver import Observation
 from tools.release.orchestration_driver import ReleaseDriver
 import release_orchestration_driver_test as driver_fixture
@@ -43,6 +43,7 @@ class RuntimeEffectTest(unittest.TestCase):
         self.document["github_actions"] = {"run_id":"41", "run_url":"https://github.com/endaye/lmdj/actions/runs/41"}
         c = m.child; f = c.fixture
         c.spec["inputs"]["tag"] = self.document["tag"]
+        c.spec["inputs"]["prior_site_sha256"] = canonical_sha256(self.document["prior_good"]["site_response"])
         f.inputs = deepcopy(c.spec["inputs"]); f.document["inputs"] = deepcopy(f.inputs); f.pack()
         m.adapter.spec = deepcopy(c.spec)
         f.run.update(status="completed", conclusion="success")
@@ -67,7 +68,7 @@ class RuntimeEffectTest(unittest.TestCase):
         c.client._http_transport = complete
         d = self.document; prior = d["prior_good"]
         self.expected = {**{k:deepcopy(d[k]) for k in ("product_build", "host_version", "site_id", "archive", "release_files")},
-            "target_revision":d["git_revision"], "prior":{
+            "target_revision":d["git_revision"], "prior_site_sha256":c.spec["inputs"]["prior_site_sha256"], "prior":{
                 **{k:prior[k] for k in ("deploy_id", "deploy_url", "product_build", "host_version")},
                 **{k:prior["immutable"]["http"]["result"][k] for k in ("index_sha256", "manifest_sha256")}}}
         self.effect = DeploymentEffect(consumer=f.consumer, spec=c.spec, expected=self.expected)
@@ -100,6 +101,13 @@ class RuntimeEffectTest(unittest.TestCase):
         self.assertEqual(self.observe().status, "verified")
         self.assertEqual(self.managed.new_driver().resume(self.managed.request["id"]), result)
         self.assertEqual(len(self.managed.child.posts), 1)
+
+    def test_expected_prior_digest_must_match_original_dispatch_at_construction(self):
+        expected = {**self.expected, "prior_site_sha256":"f" * 64}
+        with self.assertRaisesRegex(JournalError, "original Site snapshot"):
+            DeploymentEffect(consumer=self.managed.child.fixture.consumer,
+                             spec=self.managed.child.spec, expected=expected)
+        self.assertEqual(self.managed.child.posts, [])
 
     def test_pending_run_does_not_advance(self):
         self.managed.child.fixture.run.update(status="in_progress", conclusion=None)

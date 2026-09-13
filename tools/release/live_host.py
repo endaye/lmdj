@@ -87,6 +87,26 @@ class LiveHostVerifier:
         require(type(reader) is SiteReader, "trusted read-only Site reader is missing")
         self.reader = reader
 
+    def freeze_site(self, host, site_id):
+        """Observe a configured pointer, not prior health or release authority.
+
+        The trusted caller must persist this exact digest in the original
+        dispatch spec. Never replace it during recovery with a fresh snapshot.
+        """
+        require(type(host) is str and host in HOSTS and type(site_id) is str
+                and SITE_PATTERN.fullmatch(site_id), "snapshot scope is invalid")
+        production = f"https://{HOSTS[host][1]}.netlify.app"
+        before = self.reader.get_site(site_id=site_id)
+        require(before.id == site_id and before.state == "current"
+                and before.ssl_url == production, "snapshot Site identity differs")
+        prior = before.published_deploy
+        require(prior is None or (prior.site_id == site_id and prior.state == "ready"
+                and prior.deploy_ssl_url == f"https://{prior.id.lower()}--{HOSTS[host][1]}.netlify.app"),
+                "snapshot prior identity differs")
+        require(self.reader.get_site(site_id=site_id) == before, "snapshot changed between reads")
+        site = asdict(before)
+        return {"site":site, "sha256":canonical_sha256(site)}
+
     def verify(self, host, expected):
         expected = deepcopy(expected)
         require(host in HOSTS and type(expected) is dict and set(expected) == {

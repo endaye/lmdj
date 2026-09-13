@@ -172,13 +172,24 @@ Host 验证组合：固定 Site API 的只读 GET 禁止重定向和部署写接
 摘要在解析清单和下载资产前比对；内容漂移不会继续下载其资产。前后回读 Site 指针，
 必须仍为冻结的 deploy ID / Site，之后再次认证原部署证据。每次恢复都重新读取网络；
 漂移或不可读阻止后续步骤，不重新部署。稳定摘要不是缓存，也不保证观察之后站点
-不会变化；这不是新一轮浏览器验收。生产候选与授权组合、部署前 prior 冻结、最终完整
+不会变化；这不是新一轮浏览器验收。生产候选与授权组合、prior 冻结的父级组合、最终完整
 双 Site / Release / Portal / Channel 验收及旧晋级 reader 接入仍待完成。
 两个 Host 的部署脚本在 preflight 保存完整 Site 投影，并在候选 immutable 验证后、
 公开写入前再次限时读取。身份、指针或 serving state 变化及读取失败均拒绝公开；
 此时尚未标记 publication attempted，不恢复 prior、不禁用站点、不覆盖别人的新指针。
 可能已创建的未公开 draft 不自动删除。这是写前观察保护，不是 Netlify 原子 CAS；
-末次读取后的并发窗口仍存在，原始请求的 prior 绑定和全局 Site 互斥仍须接通。
+末次读取后的并发窗口仍存在，全局 Site 互斥仍须接通。
+托管 Host 派发要求 `prior_site_sha256`，与原 request ID 一同冻结到 durable spec 和
+认证 workflow receipt。只读 `freeze_site` 对配置指定的 Site 执行两次一致读取，返回
+完整规范化投影及摘要；它不证明 prior 内容健康，也不提供授权。部署 preflight 比对
+摘要，变化时在创建 draft 前拒绝，不更换 prior、恢复旧状态或重发请求。空站点与
+零文件 prior 仍保留各自实际 Site 投影，不能混成同一身份。摘要采用排序键、紧凑 UTF-8
+JSON 加一个 LF 的 SHA256；两个 Host 格式一致。不带 request ID 的原手动部署保留，
+带 request ID 却缺少或提供无效摘要则拒绝。旧缺摘要回执不满足新托管输入合同，
+只能显式核对原操作，不能因此补发 workflow。部署 effect 绑定相同摘要，有 prior-good
+时还比对其实际 Site 投影；首发或零文件证据依赖认证成功 workflow 执行的写前检查，
+不把 null prior 当作空站点证明。受信父级仍须组合快照采集、原授权与持久化登记，
+恢复时不能重新冻结线上状态来替换旧摘要；这不是完整总控或无人值守验收。
 完整候选 CI 证据也使用实时 UTC：下载解析后复核有效期，并在全部校验结束前再次检查
 origin / admission / verdict 三份 artifact 的期限；任一途中到期均拒绝认证。
 已发布版本的历史 provenance 路径不读取这些临时 artifact，也不会提供新候选 verdict。

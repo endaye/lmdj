@@ -204,15 +204,19 @@ class EvidenceTest(unittest.TestCase):
         self.run.update(status="in_progress",conclusion=None)
         self.assertEqual(self.verify()["run_id"],40)
 
-    def test_each_host_dispatch_uses_its_own_workflow_and_tag_only_inputs(self):
+    def test_each_host_dispatch_binds_its_workflow_tag_and_original_site(self):
         for workflow in ("deploy-web-runtime-host.yml","deploy-creator-web.yml"):
             with self.subTest(workflow=workflow):
                 self.consumer.workflow=workflow
                 self.inputs={k:v for k,v in self.inputs.items() if k in ("tag","request_id")}
+                self.inputs["prior_site_sha256"] = "e" * 64
                 self.run["path"]=".github/workflows/"+workflow
                 self.routes["/actions/workflows/"+workflow]={"id":50,"path":self.run["path"],"state":"active"}
                 self.document.update(workflow=workflow,inputs=dict(self.inputs));self.pack()
                 self.assertEqual(self.verify()["inputs"],self.inputs)
+                self.document["inputs"]["prior_site_sha256"] = "f" * 64
+                self.pack()
+                with self.assertRaises(DispatchEvidenceError): self.verify()
 
     def test_one_changed_run_identity_is_refused(self):
         original=deepcopy(self.run)

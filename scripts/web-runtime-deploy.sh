@@ -628,6 +628,21 @@ preflight_prior_good() {
   local fields=''
   get_current_site_preflight
   preflight_site_json="$current_site_json"
+  if [[ -n "${LMDJ_PRIOR_SITE_SHA256:-}" ]]; then
+    local observed_site_sha256=''
+    observed_site_sha256="$(
+      without_deploy_secrets "$python_bin" -c '
+import hashlib,json,sys
+site=json.load(sys.stdin)
+raw=(json.dumps(site,ensure_ascii=False,sort_keys=True,separators=(",", ":"))+"\n").encode("utf-8")
+print(hashlib.sha256(raw).hexdigest())
+' <<<"$preflight_site_json"
+    )"
+    [[ "$observed_site_sha256" == "$LMDJ_PRIOR_SITE_SHA256" ]] || {
+      fail "why: Site differs from original request; remedy: reconcile the frozen request and current Site without replacing its prior or deploying"
+      return
+    }
+  fi
   [[ "$current_site_state" != 'disabled' ]] || {
     fail "Netlify site is already disabled; refusing automatic enable or publication"
     return
@@ -948,6 +963,16 @@ print(json.dumps(document,sort_keys=True,separators=(",",":")))
 deploy_release() {
   local selected_tag="$1"
   tag="$selected_tag"
+  if [[ -n "${LMDJ_RELEASE_REQUEST_ID:-}" ]]; then
+    [[ "$LMDJ_RELEASE_REQUEST_ID" =~ ^[0-9a-f]{64}$ && "${LMDJ_PRIOR_SITE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || {
+      fail "why: managed deployment has no valid original Site binding; remedy: restore the original request ID and frozen Site digest, never redispatch with a new prior"
+      return
+    }
+  fi
+  if [[ -n "${LMDJ_PRIOR_SITE_SHA256:-}" && ! "$LMDJ_PRIOR_SITE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+    fail "why: frozen Site digest is malformed; remedy: restore its original canonical SHA256 before deployment"
+    return
+  fi
   require_secret GITHUB_TOKEN
   require_secret NETLIFY_RUNTIME_SITE_ID
   require_secret NETLIFY_AUTH_TOKEN

@@ -45,8 +45,11 @@ class DeploymentEffect:
                 and consumer.workflow_id == spec["workflow_id"] and consumer.producer == spec["producer_revision"],
                 "reader configuration differs")
         require(type(expected) is dict and set(expected) == {
-            "target_revision", "product_build", "host_version", "site_id", "archive", "release_files", "prior"},
+            "target_revision", "product_build", "host_version", "site_id", "archive", "release_files", "prior", "prior_site_sha256"},
             "frozen projection is missing")
+        require(digest(expected["prior_site_sha256"])
+                and expected["prior_site_sha256"] == spec["inputs"]["prior_site_sha256"],
+                "original Site snapshot differs from dispatch")
         require(sha(expected["target_revision"]) and all(type(expected[k]) is str and expected[k]
                 for k in ("product_build", "host_version", "site_id")), "frozen identity is invalid")
         require(type(expected["archive"]) is dict and set(expected["archive"]) == {"filename", "sha256"}
@@ -146,10 +149,13 @@ class DeploymentEffect:
             document, artifact, inventory, expires = self._document(binding)
             prior = document["prior_good"]
             if prior is not None:
+                if canonical_sha256(prior["site_response"]) != self.spec["inputs"]["prior_site_sha256"]:
+                    return Observation("conflict")
                 prior = {**{k:prior[k] for k in ("deploy_id", "deploy_url", "product_build", "host_version")},
                          **{k:prior["immutable"]["http"]["result"][k] for k in ("index_sha256", "manifest_sha256")}}
             projection = {**{k:document[k] for k in ("product_build", "host_version", "site_id", "archive", "release_files")},
-                          "target_revision":document["git_revision"], "prior":prior}
+                          "target_revision":document["git_revision"], "prior":prior,
+                          "prior_site_sha256":self.spec["inputs"]["prior_site_sha256"]}
             if (projection != self.expected or document["tag"] != self.spec["inputs"]["tag"]
                     or document["github_actions"]["run_id"] != str(binding["run_id"])):
                 return Observation("conflict")

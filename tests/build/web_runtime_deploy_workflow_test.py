@@ -315,6 +315,8 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
                 ),
                 "NETLIFY_AUTH_TOKEN": "${{ secrets.NETLIFY_AUTH_TOKEN }}",
                 "LMDJ_RELEASE_TAG": "${{ needs.preflight.outputs.tag }}",
+                "LMDJ_RELEASE_REQUEST_ID": "${{ inputs.request_id }}",
+                "LMDJ_PRIOR_SITE_SHA256": "${{ inputs.prior_site_sha256 }}",
             },
         )
 
