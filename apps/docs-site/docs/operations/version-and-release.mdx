@@ -154,7 +154,11 @@ Release 重新变成 Draft，也不能因此重发。
 父级 driver 的重复请求准入会在原 journal writer lock 下查找同仓库的未完成请求。
 新 transport ID 若仍属于同 actor、policy、control revision、mode 和 exact tag，
 会恢复原请求；新的 main 观察值与授权引用不覆盖旧基线或旧授权。新请求和原授权均须
-重新认证，返回的是原 request ID，不写入一个别名请求。相同 ID 的所有字段仍须完全
+重新认证，返回的是原 request ID，不创建第二条发布流程。新 ID 会以私有、不可重绑的
+alias 记录绑定完整输入与原 request ID / digest，在继续执行前原子落盘并 fsync。
+原流程完成后，同一 ID 的重投或 resume 仍解析到原流程，不再次分配版本。alias 恢复
+再次认证两份原始授权；缺失目标、损坏关联、同 ID 同时为 alias 和原记录均拒绝。
+alias 不允许链式引用，也不能用 create 转为新发版。相同 ID 的所有字段仍须完全
 一致；不同范围、多条未完成记录、损坏或读取中变化的清单均拒绝。已完成历史不阻止新发版，
 但既有请求的未知写意图仍只核对结果，不再次执行。此能力只在同一受信 journal 目录内生效，
 不替代生产入口认证、原请求 adapter 构造、跨目录去重或全局 Site 互斥。

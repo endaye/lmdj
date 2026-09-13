@@ -101,11 +101,17 @@ class ReleaseDriver:
                 # Incoming authority does not renew or replace the original
                 # grant. All adapters and operations stay bound to this state.
                 self._authenticate(state["request"])
+                journal.bind_alias(request, state)
             return self._advance(journal, state)
 
     def resume(self, request_id: str) -> DriveResult:
         with RequestJournal(self.root) as journal:
-            state = journal.read(request_id)
+            alias = journal.read_alias(request_id)
+            if alias is not None:
+                self._authenticate(alias["request"])
+                state = journal.resolve_active(alias["request"])
+            else:
+                state = journal.read(request_id)
             if state is None:
                 raise JournalError("why: request is missing; remedy: use the original request ID")
             self._authenticate(state["request"])

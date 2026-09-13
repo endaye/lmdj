@@ -126,6 +126,8 @@ class ReleaseDriverTest(unittest.TestCase):
         result = self.driver.run(incoming)
         self.assertEqual((result.request_id, result.status), ("release-1", "complete"))
         self.assertEqual(self.backend.calls, list(STEPS))
+        self.assertEqual(self.driver.run(incoming), result)
+        self.assertEqual(self.backend.calls, list(STEPS))
 
     def test_duplicate_request_cannot_replace_revoked_original_authority(self):
         original = request()
@@ -139,6 +141,115 @@ class ReleaseDriverTest(unittest.TestCase):
         self.assertEqual(self.state(), frozen)
         self.assertEqual(self.backend.calls, calls)
         self.assertFalse((self.journal / "release-2.json").exists())
+
+    def alias_fixture(self):
+        original = request()
+        incoming = dict(original, id="release-2", authority_ref="thread:release-2")
+        self.admit_requests(original, incoming)
+        self.backend.post_pending = "changelog_site"
+        self.driver.run(original)
+        result = self.driver.run(incoming)
+        return original, incoming, result
+
+    def test_alias_resume_retains_original_operation_and_immutable_record(self):
+        original, incoming, first = self.alias_fixture()
+        filename = self.journal / "release-2.alias"
+        raw = filename.read_bytes()
+        self.assertEqual(filename.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.driver.resume(incoming["id"]), first)
+        self.backend.override.clear(); self.backend.post_pending = None
+        result = self.driver.resume(incoming["id"])
+        self.assertEqual((result.request_id, result.status), (original["id"], "complete"))
+        self.assertEqual(self.driver.resume(incoming["id"]), result)
+        self.assertEqual(filename.read_bytes(), raw)
+        self.assertEqual(self.backend.calls, list(STEPS))
+
+    def test_alias_replay_refuses_changed_full_request(self):
+        original, incoming, _ = self.alias_fixture()
+        changed = dict(incoming, base_revision="f" * 40)
+        self.admit_requests(original, incoming, changed)
+        with self.assertRaisesRegex(JournalError, "alias request ID"):
+            self.driver.run(changed)
+        self.assertFalse((self.journal / "release-2.json").exists())
+
+    def test_alias_resume_rechecks_both_authorities(self):
+        original, incoming, _ = self.alias_fixture()
+        calls = list(self.backend.calls)
+        for allowed in (original, incoming):
+            self.admit_requests(allowed)
+            with self.subTest(allowed=allowed["id"]), self.assertRaises(JournalError):
+                self.driver.resume(incoming["id"])
+        self.assertEqual(self.backend.calls, calls)
+
+    def test_alias_id_cannot_be_created_as_an_original(self):
+        _, incoming, _ = self.alias_fixture()
+        with RequestJournal(self.journal) as journal:
+            with self.assertRaisesRegex(JournalError, "alias ID must resume"):
+                journal.create(incoming)
+        self.assertFalse((self.journal / "release-2.json").exists())
+
+    def test_oversized_alias_is_refused_before_storage_changes(self):
+        import tools.release.orchestration as orchestration
+        original = request()
+        initial = {"schema":"lmdj.release-request.v1", "request":original,
+                   "request_digest":canonical_sha256(original), "transitions":[]}
+        original["repository"] += "x" * (
+            orchestration._MAX_BYTES - len(RequestJournal._encode(initial)) - 100)
+        incoming = dict(original, id="release-2", authority_ref="a" * 256)
+        with RequestJournal(self.journal) as journal:
+            state = journal.create(original)
+            before = (self.journal / "release-1.json").read_bytes()
+            self.assertEqual(len(before), orchestration._MAX_BYTES - 100)
+            actual_write = journal._write
+            def observe_alias(filename, raw):
+                self.assertEqual(filename, "release-2.alias")
+                self.assertGreater(len(raw), orchestration._MAX_BYTES)
+                return actual_write(filename, raw)
+            with patch.object(journal, "_write", side_effect=observe_alias), \
+                    self.assertRaisesRegex(JournalError, "size limit"):
+                journal.bind_alias(incoming, state)
+            self.assertEqual((self.journal / "release-1.json").read_bytes(), before)
+            self.assertFalse((self.journal / "release-2.alias").exists())
+            self.assertEqual(sorted(p.name for p in self.journal.iterdir()),
+                             ["release-1.json", "writer.lock"])
+
+    def test_dangling_alias_refuses_instead_of_allocating_again(self):
+        _, incoming, _ = self.alias_fixture()
+        (self.journal / "release-1.json").rename(self.journal / "retained-original")
+        calls = list(self.backend.calls)
+        with self.assertRaisesRegex(JournalError, "original is missing"):
+            self.driver.run(incoming)
+        self.assertEqual(self.backend.calls, calls)
+        self.assertFalse((self.journal / "release-2.json").exists())
+
+    def test_corrupt_alias_is_not_ignored_for_a_new_id(self):
+        original, incoming, _ = self.alias_fixture()
+        (self.journal / "release-2.alias").write_bytes(b"{}")
+        third = dict(original, id="release-3")
+        self.admit_requests(original, incoming, third)
+        with self.assertRaisesRegex(JournalError, "fields are missing"):
+            self.driver.run(third)
+        self.assertFalse((self.journal / "release-3.json").exists())
+
+    def test_process_death_after_alias_save_resumes_original(self):
+        import os
+        original = request()
+        incoming = dict(original, id="release-2", authority_ref="thread:release-2")
+        self.admit_requests(original, incoming)
+        self.backend.post_pending = "changelog_site"
+        self.driver.run(original)
+        child = os.fork()
+        if child == 0:
+            self.driver._advance = lambda *args: os._exit(76)
+            try: self.driver.run(incoming)
+            finally: os._exit(77)
+        _, result = os.waitpid(child, 0)
+        self.assertEqual(os.waitstatus_to_exitcode(result), 76)
+        self.assertTrue((self.journal / "release-2.alias").exists())
+        self.backend.override.clear(); self.backend.post_pending = None
+        fresh = ReleaseDriver(self.journal, POLICY, self.backend)
+        self.assertEqual(fresh.resume(incoming["id"]).status, "complete")
+        self.assertEqual(self.backend.calls, list(STEPS))
 
     def test_duplicate_request_refuses_changed_scope(self):
         original = request()
