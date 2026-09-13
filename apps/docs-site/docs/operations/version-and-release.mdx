@@ -269,6 +269,10 @@ witness、版本分配竞争复查或完整 CI；远端 PR 总控仍待接线。
 只创建精确 Task 分支，绑定原回执、文件字节、Task 证据及不变候选 target；复用当前 head
 审查和 expected-head squash，持久化未知结果，恢复不重复 push、POST 或 PUT。
 见证、切版、发布记录使用互不混用的身份和状态；PR 合并后仍须核对实际 squash 与产物。
+见证来源验证器现从原始命令历史和独立 Task 绑定核验精确提交，再核验实际 squash 是其父提交
+加唯一见证文件；保留后续普通 main 更新，但拒绝见证或不可变快照的改写及改后撤回。
+核验缺失对象或状态时只报错，不自动 fetch、重生成或修改候选 target；来源证明不替代完整 Task
+命令证据、独立审查或线上保护检查。
 实际授权、来源、完整 Task 检查和审查由受信 gates 负责，生产父级接线与线上验收仍未完成；
 本地新克隆快照演练或模拟 review 不代表候选或发版完成。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级

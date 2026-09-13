@@ -599,6 +599,17 @@ foreach(witness_group IN ITEMS Pr Branch Sequence Journey)
   )
 endforeach()
 
+foreach(witness_source_group IN ITEMS Binding Merge History Authority)
+  string(TOLOWER "${witness_source_group}" witness_source_lower)
+  lmdj_add_test(
+    NAME "build.release_witness_source_${witness_source_lower}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_witness_source_test.py "Source${witness_source_group}Test" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120
+  )
+endforeach()
+
 lmdj_add_test(
   NAME build.release_candidate_pr_sequence_boundaries
   TIER contract

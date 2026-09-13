@@ -22,6 +22,7 @@ from tools.release.model import canonical_json, canonical_sha256
 from tools.release.orchestration import JournalError, RequestJournal
 from tools.release.orchestration_driver import Observation
 from tools.release.witness_pr import WitnessBranch, WitnessPullRequest, WitnessPrSequence, pr_document, validate_spec
+from tools.release.witness_source import CandidateWitnessSourceVerifier, WitnessSourceError
 
 
 def artifact(build, raw=b"fixture witness\n"):
@@ -351,6 +352,13 @@ class WitnessJourneyTest(task_fixture.TaskFixture):
         b.git("-C", str(far), "config", "user.email", "fixture@example.invalid")
         merged = []
         verified_blobs = []
+        source_results = []
+        source_verifier = CandidateWitnessSourceVerifier(self.task)
+        def source_check(merge=None):
+            return source_verifier.verify(b.spec, receipt=self.receipt, request=self.request,
+                source=self.source, cut=self.cut_receipt, frozen=self.fixture.frozen,
+                main_revision=self.main, merge_revision=merge)
+        self.assertIsNone(source_check()["merge_sha"])
         original_http = p.http
         def http(method, url, headers, body):
             if method == "GET" and url.endswith("/git/ref/heads/" + p.document["head"]):
@@ -379,6 +387,10 @@ class WitnessJourneyTest(task_fixture.TaskFixture):
             b.git("-C", str(far), "-c", "commit.gpgsign=false", "commit", "-m", "fixture witness squash")
             sha = b.git("-C", str(far), "rev-parse", "HEAD").strip()
             merged.append(sha)
+            # Reproduce far-side object availability explicitly. The production
+            # source verifier never fetches on miss or moves a retained ref.
+            b.git("-C", str(self.destination), "fetch", "--no-tags", str(far), sha)
+            self.main = sha
             p.row.update(merged=True, state="closed", merged_at="2026-09-14T00:00:00Z", merge_commit_sha=sha)
         p.merge_row = merge_row
         def authorize(spec):
@@ -393,8 +405,15 @@ class WitnessJourneyTest(task_fixture.TaskFixture):
             actual = branch_fixture.subprocess.check_output(
                 ["git", "-C", str(far), "cat-file", "blob", merged[0] + ":" + self.witness_name])
             verified_blobs.append(actual)
-            if actual != raw:
+            try:
+                proof = source_check(merged[0])
+            except WitnessSourceError as error:
+                self.assertTrue(corrupt, str(error))
+                self.assertIn("squash differs", str(error))
+                source_results.append("refused")
                 return Observation("conflict", None)
+            source_results.append(proof)
+            self.assertEqual(actual, raw)
             self.assertEqual(b.git("-C", str(far), "rev-parse", "HEAD^{tree}").strip(), task["tree"])
             return Observation("verified", {"sha256":canonical_sha256({"merge":merged[0], "witness":task["witness"]}),
                                              "reference":"fixture-merged:" + merged[0]})
@@ -413,6 +432,11 @@ class WitnessJourneyTest(task_fixture.TaskFixture):
             self.assertEqual(new_sequence().advance(b.spec, before_write=lambda: authorize(b.spec)), result)
         self.assertTrue(verified_blobs, "far-side blob verification must actually fire")
         self.assertEqual(set(verified_blobs), {raw + b" " if corrupt else raw})
+        self.assertTrue(source_results, "production source proof must actually fire")
+        if corrupt:
+            self.assertEqual(set(source_results), {"refused"})
+        else:
+            self.assertTrue(all(value["merge_sha"] == merged[0] for value in source_results))
         self.assertEqual(b.pushes, 1)
         self.assertEqual([call[0] for call in p.writes()], ["POST", "PUT"])
         self.assertEqual(len(merged), 1)
