@@ -1,6 +1,7 @@
 """Complete private review input, not review eligibility or merge authority."""
 
 from copy import deepcopy
+import hashlib
 import re
 
 from .batch_reference import positive, sha
@@ -23,12 +24,13 @@ def text(value):
 BOUNDARY = """id databaseId number headRefOid baseRefName state isDraft merged
   mergeCommit { oid } headRepository { databaseId nameWithOwner }"""
 PAGE = "totalCount pageInfo { hasNextPage endCursor }"
+AUTHOR = "author { login ... on User { databaseId } ... on Bot { databaseId } }"
 FIELDS = {
-    "reviews": "id databaseId body state submittedAt updatedAt commit { oid } author { login }",
-    "comments": "id databaseId body createdAt updatedAt author { login }",
+    "reviews": "id databaseId body state submittedAt updatedAt commit { oid } " + AUTHOR,
+    "comments": "id databaseId body createdAt updatedAt " + AUTHOR,
     "reviewThreads": "id isResolved isOutdated path comments { totalCount }",
     "closingIssuesReferences": "id databaseId number repository { databaseId nameWithOwner }",
-    "threadComments": """id databaseId body createdAt updatedAt author { login }
+    "threadComments": "id databaseId body createdAt updatedAt " + AUTHOR + """
       originalCommit { oid } commit { oid } path diffHunk originalLine line
       pullRequest { databaseId number } pullRequestReview { id databaseId }""",
 }
@@ -201,3 +203,72 @@ def validate_node(kind, node, number, pr_id):
                 and all(key in node and (node[key] is None or
                     (type(node[key]) is dict and sha(node[key].get("oid")))) for key in ("commit", "originalCommit")),
                 "inline source context is incomplete")
+
+
+def bind_eligibility(collected, eligibility):
+    """Link trusted reader outputs; does not decide whether a PR may merge.
+
+    Both arguments must come from the trusted live readers. Their self-reported
+    hashes or flags are not an authentication mechanism for arbitrary callers.
+    Unlinked objects and all threads/closing relations remain decision inputs.
+    """
+    require(type(collected) is dict and set(collected) == {"inventory", "sha256"}, "collector result is invalid")
+    inventory = collected["inventory"]
+    require(type(inventory) is dict and inventory.get("schema") == "lmdj.release-review-inventory.v1"
+            and canonical_sha256(inventory) == collected["sha256"], "collector body digest differs")
+    pr = inventory.get("pr")
+    require(type(pr) is dict and positive(pr.get("number")) and sha(pr.get("headRefOid")), "collector PR identity is invalid")
+    require(type(eligibility) is dict and eligibility.get("schema") == "lmdj.current-head-review.v1"
+            and eligibility.get("repository") == inventory.get("repository") == "endaye/lmdj"
+            and positive(eligibility.get("repository_id")) and positive(inventory.get("repository_id"))
+            and eligibility["repository_id"] == inventory["repository_id"]
+            and type(eligibility.get("pr_number")) is int and eligibility["pr_number"] == pr["number"]
+            and eligibility.get("head_sha") == pr["headRefOid"]
+            and eligibility.get("eligible") is True and eligibility.get("status") == "eligible"
+            and eligibility.get("merge_authorized") is False
+            and eligibility.get("conversation_protection") == "not_evaluated"
+            and type(eligibility.get("evidence")) is list and eligibility["evidence"], "eligibility is not a matching qualified observation")
+    objects = {}
+    for kind in ("reviews", "comments"):
+        rows = inventory.get(kind)
+        require(type(rows) is list, "complete text inventory is missing")
+        for row in rows:
+            require(type(row) is dict and positive(row.get("databaseId")), "text object lacks database identity")
+            key = (kind, row["databaseId"])
+            require(key not in objects, "text object database identity repeats")
+            objects[key] = row
+    linked, seen = [], set()
+    for evidence in eligibility["evidence"]:
+        require(type(evidence) is dict and evidence.get("kind") in ("automated", "takeover", "waiver"), "eligible evidence kind is invalid")
+        kind, field = ("reviews", "review_id") if evidence["kind"] == "automated" else ("comments", "comment_id")
+        require(positive(evidence.get(field)), "eligible evidence database identity is invalid")
+        key = (kind, evidence[field])
+        require(key in objects and key not in seen, "eligible evidence is missing or ambiguous in the complete inventory")
+        row, observation = objects[key], evidence.get("body_observation")
+        require(type(observation) is dict and set(observation) == {"sha256", "byte_length", "author_id", "author_login"}
+                and positive(observation["author_id"]) and text(observation["author_login"])
+                and type(observation["byte_length"]) is int and observation["byte_length"] >= 0,
+                "eligible evidence lacks a complete body observation")
+        # REST renders authenticated Bot logins with [bot], GraphQL without it.
+        # Only the eligibility verifier's authenticated automated evidence gets
+        # that representation alternative; numeric identity remains mandatory.
+        logins = {observation["author_login"]}
+        if evidence["kind"] == "automated" and observation["author_login"].endswith("[bot]"):
+            logins.add(observation["author_login"][:-5])
+        require(type(row.get("body")) is str and type(row.get("author")) is dict
+                and row["author"].get("login") in logins
+                and positive(row["author"].get("databaseId"))
+                and row["author"]["databaseId"] == observation["author_id"], "body author differs between readers")
+        raw = row["body"].encode("utf-8")
+        require(len(raw) == observation["byte_length"] and hashlib.sha256(raw).hexdigest() == observation["sha256"],
+                "body bytes differ between readers")
+        seen.add(key)
+        linked.append({"kind": kind, "database_id": key[1], "body_observation": deepcopy(observation)})
+    require(all(type(inventory.get(key)) is list for key in ("reviewThreads", "closingIssuesReferences")),
+            "conversation or closing inventory is missing")
+    return {"schema": "lmdj.release-review-binding.v1", "inventory_sha256": collected["sha256"],
+            "eligibility_sha256": canonical_sha256(eligibility), "linked": linked,
+            "unlinked_reviews": sorted(key[1] for key in objects if key[0] == "reviews" and key not in seen),
+            "unlinked_comments": sorted(key[1] for key in objects if key[0] == "comments" and key not in seen),
+            "thread_count": len(inventory["reviewThreads"]),
+            "closing_count": len(inventory["closingIssuesReferences"])}
