@@ -147,8 +147,14 @@ Product release changelog 的冻结模块已实现：固定同 profile 已发布
 从完整 Git 历史枚举候选范围，要求每个 commit 有变更条目或经审查的排除理由；
 GitHub 与 doc-site 将共享其 Markdown 内容及摘要。它拒绝浅历史、范围外来源、重复或
 遗漏提交及不安全文本。提交范围校验不证明文字真实性；基线 Release 的真实签名和
-公开状态仍须外部 audit，正文仍须 PR 审查。prepare / Draft / published 验证与网站
-生成器尚未接入此模块，当前不能声称每次 Release 已自动交付两端 changelog。
+公开状态仍须外部 audit，正文仍须 PR 审查。
+
+带 `changelog` 的 reviewed intent 现已接通 prepare / Draft / published 验证：正文
+进入 plan 摘要，prepare 重验真实 Git 范围，恢复时检查本地 notes，Draft 与公开
+Release 正文按冻结 Markdown 逐字核对。内部 Release plan marker v4（不是产品 Contract）绑定内容
+及 notes 摘要，独立 remote audit 也校验正文；仍是原六项资产，不增加日志附件。
+无 changelog 的历史 intent / plan 保留原 v1–v3 协议，不重写历史。网站生成器和
+新总控的强制 changelog admission 尚待接入，不能声称每次 Release 已自动交付两端日志。
 
 ## 标准 Release 控制面
 
