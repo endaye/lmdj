@@ -138,6 +138,11 @@ Task commit、push、PR、squash merge、signed product tag、Release、部署�
 认证请求授权并重新核验 Git/GitHub/部署证据，不能把保存的 verified 标记当作外部成功。
 该层尚未接通真实发布命令或安装为常驻服务。
 
+顺序驱动器现已连接该状态层与受信 adapter 协议：恢复逐项重新核验证据，按原操作 ID
+认领已完成结果；未知写结果不重发，doc-site 待发布阻止后续部署，Creator 失败阻止晋级。
+当前仅用隔离文件系统模拟外部 API 做故障验收；真实 candidate / GitHub / 部署 adapter、
+`run / status / resume` 命令与服务安装仍待接入，不能据此声称已能无人值守发版。
+
 ## 标准 Release 控制面
 
 源码 Product Build 与匹配的 immutable snapshot 可以先完成分配，此时允许没有 release intent；
