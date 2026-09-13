@@ -170,6 +170,14 @@ patch；历史页缺失、内容冲突或本地 intent 与 canonical 不同均�
 patch 或提交 PR，也不编辑历史快照。Ledger 目标行仅替换 disposition 值，保留其他
 字节及 JSON 转义。与现有 CLI 一致，用户选定的根目录会先规范化（可用根目录别名）；
 该根目录内部的证据文件及父目录不允许符号链接。
+内部 publication workspace 执行器现可将同一 patch 安装到 operation 绑定的专属 linked
+worktree：先持久绑定 base / patch / tree / commit，再核对 OLD / NEW 文件后恢复写入；
+原始字节和模式校验不执行 Git clean filter，也不接受 index skip 标记隐藏改动。文件
+先在同设备的私有 journal 目录暂存并同步，再原子替换；写入中断不会留下半截目标文件。
+Task 验证通过且内容没有漂移时，才通过 expected-old ref 更新生成唯一 Conventional
+Commit。验证失败保留现场与原 branch head，重启仍使用同一提交身份。它不创建 PR、
+push、合并或认证发布授权；总控必须提供刚核验的公开记录及可信 Task 验证器，不能
+把内部 API 返回的 committed 状态当作已审查、已合入或网站已发布。
 现有 `scripts/docs-site.sh smoke BASE_URL` 已接入发布日志内容检查：从同一冻结源核对
 索引及逐版本 HTML 的完整正文、分类、身份、摘要和链接，不只核对摘要标签。重定向、
 非 HTML、缺失页面或内容漂移都失败；输出的逐页回执带 source / content / response
