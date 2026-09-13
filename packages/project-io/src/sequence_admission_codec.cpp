@@ -85,7 +85,7 @@ template <> SequenceAdmissionIdentity decode<SequenceAdmissionIdentity>(const Js
 }
 
 template <> SequenceAdmissionPreparation decode<SequenceAdmissionPreparation>(const Json& input) {
-  require(input.is_object() && input.size() == 8, "invalid SequenceAdmissionPreparation shape");
+  require(input.is_object() && input.size() == 10, "invalid SequenceAdmissionPreparation shape");
   return {decode<SequenceAdmissionIdentity>(input.at("identity")),
           decode<foundation::ProjectId>(input.at("project_id")),
           decode<foundation::PatternId>(input.at("pattern_id")),
@@ -93,7 +93,9 @@ template <> SequenceAdmissionPreparation decode<SequenceAdmissionPreparation>(co
           decode<std::uint64_t>(input.at("first_watermark")),
           decode<std::uint32_t>(input.at("candidate_limit")),
           decode<std::uint32_t>(input.at("candidate_byte_limit")),
-          decode<std::uint32_t>(input.at("fence_timeout_ms"))};
+          decode<std::uint32_t>(input.at("fence_timeout_ms")),
+          decode<bool>(input.at("quantize_enabled")),
+          decode<std::uint8_t>(input.at("swing_percent"))};
 }
 
 template <> SequenceAdmissionCandidate decode<SequenceAdmissionCandidate>(const Json& input) {
@@ -173,8 +175,22 @@ template <> SequenceAdmissionTransfer decode<SequenceAdmissionTransfer>(const Js
           decode<SequenceAdmissionCheckpoint>(input.at("checkpoint"))};
 }
 
+template <> SequenceAdmissionTimingProfile decode<SequenceAdmissionTimingProfile>(const Json& input) {
+  require(input.is_object() && input.size() == 10, "invalid SequenceAdmissionTimingProfile shape");
+  return {decode<foundation::CommandId>(input.at("command_id")),
+          decode<std::uint64_t>(input.at("first_watermark")),
+          decode<foundation::PatternId>(input.at("pattern_id")),
+          decode<std::uint64_t>(input.at("publication_generation")),
+          decode<std::uint64_t>(input.at("expected_revision")),
+          decode<std::uint64_t>(input.at("runtime_frame")),
+          decode<std::uint64_t>(input.at("tick_numerator")),
+          decode<std::uint16_t>(input.at("bpm")),
+          decode<bool>(input.at("quantize_enabled")),
+          decode<std::uint8_t>(input.at("swing_percent"))};
+}
+
 template <> SequenceAdmissionState decode<SequenceAdmissionState>(const Json& input) {
-  require(input.is_object() && input.size() == 9, "invalid SequenceAdmissionState shape");
+  require(input.is_object() && input.size() == 10, "invalid SequenceAdmissionState shape");
   return {decode<SequenceAdmissionPreparation>(input.at("preparation")),
           decode<std::vector<SequenceAdmissionCandidate>>(input.at("candidates")),
           decode<std::optional<SequenceAdmissionFence>>(input.at("admission_fence")),
@@ -183,7 +199,8 @@ template <> SequenceAdmissionState decode<SequenceAdmissionState>(const Json& in
           decode<std::vector<SequenceAdmissionTransfer>>(input.at("transfers")),
           decode<std::vector<SequencePublicationAuthority>>(input.at("applied_switches")),
           decode<std::uint64_t>(input.at("segment_generation")),
-          decode<bool>(input.at("completed"))};
+          decode<bool>(input.at("completed")),
+          decode<std::vector<SequenceAdmissionTimingProfile>>(input.at("timing_profiles"))};
 }
 }  // namespace
 
@@ -213,7 +230,9 @@ Json encode(const SequenceAdmissionPreparation& value) {
           {"first_watermark", value_json(value.first_watermark)},
           {"candidate_limit", value_json(value.candidate_limit)},
           {"candidate_byte_limit", value_json(value.candidate_byte_limit)},
-          {"fence_timeout_ms", value_json(value.fence_timeout_ms)}};
+          {"fence_timeout_ms", value_json(value.fence_timeout_ms)},
+          {"quantize_enabled", value.quantize_enabled},
+          {"swing_percent", value.swing_percent}};
 }
 
 Json encode(const SequenceAdmissionCandidate& value) {
@@ -285,6 +304,19 @@ Json encode(const SequenceAdmissionTransfer& value) {
           {"checkpoint", value_json(value.checkpoint)}};
 }
 
+Json encode(const SequenceAdmissionTimingProfile& value) {
+  return {{"command_id", value.command_id.value()},
+          {"first_watermark", value.first_watermark},
+          {"pattern_id", value.pattern_id.value()},
+          {"publication_generation", value.publication_generation},
+          {"expected_revision", value.expected_revision},
+          {"runtime_frame", value.runtime_frame},
+          {"tick_numerator", value.tick_numerator},
+          {"bpm", value.bpm},
+          {"quantize_enabled", value.quantize_enabled},
+          {"swing_percent", value.swing_percent}};
+}
+
 Json encode(const SequenceAdmissionState& value) {
   return {{"preparation", value_json(value.preparation)},
           {"candidates", value_json(value.candidates)},
@@ -294,7 +326,8 @@ Json encode(const SequenceAdmissionState& value) {
           {"transfers", value_json(value.transfers)},
           {"applied_switches", value_json(value.applied_switches)},
           {"segment_generation", value_json(value.segment_generation)},
-          {"completed", value_json(value.completed)}};
+          {"completed", value_json(value.completed)},
+          {"timing_profiles", value_json(value.timing_profiles)}};
 }
 
 
@@ -325,7 +358,9 @@ void preparation_valid(const SequenceAdmissionPreparation& p) {
               p.candidate_byte_limit &&
               p.candidate_byte_limit <= kSequenceAdmissionCandidateBytes &&
               p.fence_timeout_ms &&
-              p.fence_timeout_ms <= kSequenceAdmissionFenceTimeoutMs,
+              p.fence_timeout_ms <= kSequenceAdmissionFenceTimeoutMs &&
+              p.swing_percent >= domain::kSwingPercentMin &&
+              p.swing_percent <= domain::kSwingPercentMax,
           "admission preparation limits are invalid");
 }
 void candidate_valid(const SequenceAdmissionCandidate& c) {
@@ -498,6 +533,32 @@ void switches_valid(const SequenceAdmissionState& s) {
             "cutoff does not match last applied publication");
   }
 }
+void profiles_valid(const SequenceAdmissionState& s, std::uint64_t revision) {
+  std::set<std::string> commands;
+  const SequenceAdmissionTimingProfile* previous = nullptr;
+  for (const auto& p : s.timing_profiles) {
+    uuid(p.command_id);
+    uuid(p.pattern_id);
+    const auto authority = segment(s, p.publication_generation);
+    require(s.admission_fence && commands.insert(p.command_id.value()).second &&
+                authority.pattern_id == p.pattern_id &&
+                p.publication_generation <= s.segment_generation &&
+                p.first_watermark >= s.preparation.first_watermark &&
+                p.expected_revision <= revision && p.runtime_frame >= authority.frame &&
+                p.bpm >= 40 && p.bpm <= 240 &&
+                p.swing_percent >= domain::kSwingPercentMin &&
+                p.swing_percent <= domain::kSwingPercentMax,
+            "invalid admission timing authority");
+    if (previous) {
+      require(p.first_watermark >= previous->first_watermark &&
+                  p.publication_generation >= previous->publication_generation &&
+                  p.expected_revision >= previous->expected_revision &&
+                  p.runtime_frame >= previous->runtime_frame,
+              "admission timing history regressed");
+    }
+    previous = &p;
+  }
+}
 SequenceAdmissionCheckpoint checkpoint(
     const SequenceAdmissionState& s, const foundation::PatternId& current_pattern) {
   const auto current = segment(s);
@@ -625,7 +686,7 @@ void preflight(std::string_view bytes) {
           (frames.size() == 2 && name == "journal") ||
           (frames.size() == 3 && frames.back().name == "journal" && name == "admission") ||
           (array && frames.size() == 4 && frames.back().name == "admission" &&
-           (name == "transfers" || name == "applied_switches")) ||
+           (name == "transfers" || name == "applied_switches" || name == "timing_profiles")) ||
           (array && frames.size() == 3 && frames.back().name == "journal" &&
            (name == "flushes" || name == "pending_events" || name == "rebases")) ||
           (array && name == "events" &&
@@ -698,6 +759,29 @@ bool apply(ActiveSequenceJournal& journal, const Json& record,
   require(journal.admission.has_value(), "admission is not prepared");
   auto& s = *journal.admission;
   require(s.preparation.identity == identity, "admission generation or operation mismatch");
+  if (kind == "admission-profile") {
+    const auto p = decode<SequenceAdmissionTimingProfile>(data);
+    for (const auto& existing : s.timing_profiles) {
+      if (existing.command_id == p.command_id) {
+        require(existing == p, "immutable timing profile collision");
+        return false;
+      }
+    }
+    const auto previous = last_watermark(s);
+    require(!s.completed && !s.closure && !terminal_retained(s) &&
+                s.admission_fence && !pending_switch(s) &&
+                (journal.state == SequenceSessionState::active ||
+                 journal.state == SequenceSessionState::switching) &&
+                p.pattern_id == journal.pattern_id &&
+                p.publication_generation == s.segment_generation &&
+                p.expected_revision == journal.expected_revision &&
+                p.runtime_frame >= checkpoint(s, journal.pattern_id).last_runtime_frame &&
+                (!previous || p.first_watermark > *previous),
+            "timing profile lacks current authority or rewrites retained input");
+    s.timing_profiles.push_back(p);
+    profiles_valid(s, journal.expected_revision);
+    return true;
+  }
   if (kind == "admission-candidate") {
     const auto c = decode<SequenceAdmissionCandidate>(data);
     candidate_valid(c);
@@ -884,6 +968,7 @@ SequenceAdmissionState snapshot(const Json& input, const ActiveSequenceJournal& 
   preparation_valid(s.preparation);
   fences_valid(s);
   switches_valid(s);
+  profiles_valid(s, journal.expected_revision);
   // Completed admission is historical evidence: later ordinary journal switches
   // do not rewrite its retained segment or immutable receipts.
   if (!s.completed) {

@@ -21,6 +21,7 @@
 #include <lmdj/project_io/sequence_journal.hpp>
 
 #include "packages/application-facade/src/testing_hooks.hpp"
+#include "packages/application-facade/src/pattern_admission_controller.hpp"
 
 #include "tests/core/support/test.hpp"
 
@@ -1858,6 +1859,95 @@ void test_admission_recovery_preserves_owned_press_checkpoint() {
   check_transferred_admission_recovery(false);
 }
 
+void test_converted_admission_survives_lost_response_and_recovers_once() {
+  using namespace lmdj::project_io;
+  using lmdj::facade::detail::commit_admission_transfer;
+  for (const bool alternate : {false, true}) {
+    TempDirectory temp;
+    const auto project = temp.path() / "converted-admission.lmdj";
+    const PatternId pattern{uuid(940)}, target{uuid(941)};
+    const SequenceSessionId session{uuid(942)};
+    {
+      Application creator(config(temp.path()));
+      create_recordable_project(creator, project, pattern);
+      LMDJ_CHECK(creator.command({{"operation", "pattern.create"},
+          {"project_path", project.generic_string()}, {"command_id", uuid(943)},
+          {"expected_revision", 2}, {"pattern_id", target.value()}, {"bars", 1}})
+          .value("ok", false));
+    }
+    ProjectStore store;
+    const auto before = store.load(project).value();
+    SequenceJournal journals;
+    LMDJ_CHECK(journals.begin(project, session, pattern, 1,
+        sequence_pattern_fingerprint(before.patterns.at(pattern)), before.revision).has_value());
+    SequenceAdmissionPreparation preparation{
+        {CommandId{uuid(944)}, 7, 11}, before.id, pattern, 21, 10};
+    preparation.quantize_enabled = before.quantize_enabled;
+    preparation.swing_percent = before.swing_percent;
+    LMDJ_CHECK(journals.prepare_admission(project, session, preparation).has_value());
+    LMDJ_CHECK(journals.append_admission_candidate(project, session, preparation.identity,
+        {10, 25000, {0, 0}, SequenceCandidateKind::press, 90, 72}).has_value());
+    LMDJ_CHECK(journals.append_admission_candidate(project, session, preparation.identity,
+        {11, 31000, {0, 0}, SequenceCandidateKind::release, 0, 72}).has_value());
+    const auto path = project / "recovery/active/sequence.jsonl";
+    const auto unknown_bytes = read_bytes(path);
+    LMDJ_CHECK(!commit_admission_transfer(journals, project, session, preparation.identity,
+        CommandId{uuid(947)}, 11, false).has_value());
+    LMDJ_CHECK(read_bytes(path) == unknown_bytes);
+    SequenceAdmissionFence fence{SequenceFenceKind::admission, CommandId{uuid(945)},
+        11, 13000, 1000, pattern, 21, 120, true, {}, SequenceSwitchOutcome::none, {}};
+    LMDJ_CHECK(journals.retain_admission_fence(project, session, preparation.identity, fence).has_value());
+    fence.kind = SequenceFenceKind::cutoff;
+    fence.command_id = CommandId{uuid(946)};
+    fence.transport_epoch = 12;
+    fence.effective_frame = 32000;
+    LMDJ_CHECK(journals.retain_admission_fence(project, session, preparation.identity, fence).has_value());
+    LMDJ_CHECK(journals.close_admission(project, session, preparation.identity,
+        {11, SequenceAdmissionCloseReason::requested}).has_value());
+    const auto child = ::fork();
+    LMDJ_CHECK(child >= 0);
+    if (child == 0) {
+      SequenceJournal owner;
+      const auto transferred = commit_admission_transfer(owner, project, session,
+          preparation.identity, CommandId{uuid(947)}, 11, false);
+      if (!transferred.has_value()) ::_exit(20);
+      // The caller never receives this successful durable result.
+      ::raise(SIGSTOP);
+      ::_exit(21);
+    }
+    int status = 0;
+    LMDJ_CHECK(::waitpid(child, &status, WUNTRACED) == child && WIFSTOPPED(status));
+    LMDJ_CHECK(::kill(child, SIGKILL) == 0);
+    LMDJ_CHECK(::waitpid(child, &status, 0) == child && WIFSIGNALED(status));
+    LMDJ_CHECK(WTERMSIG(status) == SIGKILL);
+    SequenceJournal reopened;
+    const auto durable = reopened.read_active(project).value();
+    const std::vector<lmdj::domain::PatternEvent> expected{{{0, 0}, 960, 240, 90}};
+    LMDJ_CHECK(durable.pending_events == expected);
+    LMDJ_CHECK(durable.admission->candidates.empty());
+    LMDJ_CHECK(durable.admission->transfers.size() == 1);
+    const auto committed_bytes = read_bytes(path);
+    const auto retry = commit_admission_transfer(reopened, project, session,
+        preparation.identity, CommandId{uuid(947)}, 11, false);
+    LMDJ_CHECK(retry.has_value() && retry.value() == durable.admission->transfers.front());
+    LMDJ_CHECK(read_bytes(path) == committed_bytes);
+    LMDJ_CHECK(commit_admission_transfer(reopened, project, session, preparation.identity,
+        CommandId{uuid(948)}, 0, true).has_value());
+    LMDJ_CHECK(reopened.seal(project, session, "owner_lost").has_value());
+    Application recovery(config(temp.path()));
+    const auto destination = alternate ? std::optional{target} : std::nullopt;
+    LMDJ_CHECK(recovery.apply_sequence_recovery({project, session, destination}).has_value());
+    const auto recovered = store.load(project).value();
+    LMDJ_CHECK(recovered.revision == before.revision + 1);
+    LMDJ_CHECK(recovered.patterns.at(alternate ? target : pattern).events == expected);
+    LMDJ_CHECK(recovered.patterns.at(alternate ? pattern : target) ==
+        before.patterns.at(alternate ? pattern : target));
+    LMDJ_CHECK(recovered.assets == before.assets && recovered.banks == before.banks);
+    LMDJ_CHECK(!recovery.apply_sequence_recovery({project, session, destination}).has_value());
+    LMDJ_CHECK(store.load(project).value() == recovered);
+  }
+}
+
 using Scenario = void (*)();
 
 constexpr std::array<Scenario, 7> kLifecycleScenarios{
@@ -1870,7 +1960,8 @@ constexpr std::array<Scenario, 7> kLifecycleScenarios{
     test_owner_loss_apply_and_discard_are_explicit,
 };
 
-constexpr std::array<Scenario, 11> kRecoveryScenarios{
+constexpr std::array<Scenario, 12> kRecoveryScenarios{
+    test_converted_admission_survives_lost_response_and_recovers_once,
     test_terminal_admission_recovers_uncommitted_canonical_tail,
     test_admission_recovery_preserves_owned_press_checkpoint,
     test_admission_recovery_preserves_unconverted_input,

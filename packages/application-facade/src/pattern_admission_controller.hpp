@@ -6,8 +6,21 @@
 #include <vector>
 
 #include <lmdj/domain/project.hpp>
+#include <lmdj/project_io/sequence_journal.hpp>
 
 namespace lmdj::facade::detail {
+
+// Builds one immutable receipt from durable input only. Does not enqueue live
+// input, consult Project settings, or mutate a journal. The worker owner writes
+// the returned receipt and reconciles that same identity on an unknown response.
+foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transfer(
+    const project_io::ActiveSequenceJournal& journal,
+    foundation::CommandId transfer_id, std::uint64_t last_watermark, bool terminal);
+foundation::Result<project_io::SequenceAdmissionTransfer> commit_admission_transfer(
+    project_io::SequenceJournal& journals, const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session,
+    const project_io::SequenceAdmissionIdentity& identity,
+    foundation::CommandId transfer_id, std::uint64_t last_watermark, bool terminal);
 
 struct PatternOwnedPress {
   std::uint64_t raw_attack_tick{};

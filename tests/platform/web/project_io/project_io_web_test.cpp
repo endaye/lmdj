@@ -31,6 +31,8 @@
 
 // Fixture reporting only; every transition below uses SequenceJournal's public API.
 #include "../../../../packages/project-io/src/sequence_admission_codec.hpp"
+#include "../../../../packages/application-facade/src/pattern_admission_controller.hpp"
+#include <lmdj/facade/application.hpp>
 
 namespace lmdj::project_io {
 std::shared_ptr<ProjectStoragePlatform> make_web_project_storage_platform();
@@ -460,6 +462,8 @@ std::optional<nlohmann::json> run_admission_action() {
   const auto path = bundle / "recovery/active/sequence.jsonl";
   const auto step = query("step");
   const bool target = query("target") == "1";
+  const bool convert = query("convert") == "1";
+  const bool timed = query("timed") == "1";
   auto platform = make_web_project_storage_platform();
   ProjectStore store{platform};
   SequenceJournal journal{platform};
@@ -471,11 +475,12 @@ std::optional<nlohmann::json> run_admission_action() {
       {foundation::CommandId{uuid("305")}, 7, 11}, project, source_pattern.id, 21, 10};
   if (query("limit") == "2") preparation.candidate_limit = 2;
   const auto& identity = preparation.identity;
-  const SequenceAdmissionCandidate press{target ? 12U : 10U, target ? 1600U : 1000U,
+  SequenceAdmissionCandidate press{target ? 12U : 10U, target ? 1600U : 1000U,
       {0, 0}, SequenceCandidateKind::press, 100, target ? 72U : 71U};
+  if (convert) press.runtime_frame = timed ? 49000 : 25000;
   auto release = press;
   ++release.watermark;
-  release.runtime_frame += 100;
+  release.runtime_frame += convert ? (timed ? 12000 : 6000) : 100;
   release.kind = SequenceCandidateKind::release;
   release.velocity = 0;
   const auto& pattern = target ? target_pattern : source_pattern;
@@ -486,6 +491,10 @@ std::optional<nlohmann::json> run_admission_action() {
   SequenceAdmissionFence fence{SequenceFenceKind::admission,
       foundation::CommandId{uuid("306")}, 11, 900, 0, source_pattern.id, 21,
       120, true, std::nullopt, SequenceSwitchOutcome::none, std::nullopt};
+  if (convert) {
+    fence.effective_frame = 13000;
+    fence.origin_frame = 1000;
+  }
   if (step == "cutoff") {
     fence.kind = SequenceFenceKind::cutoff;
     fence.command_id = foundation::CommandId{uuid("307")};
@@ -494,6 +503,10 @@ std::optional<nlohmann::json> run_admission_action() {
     fence.pattern_id = pattern.id;
     fence.publication_generation = target ? 22 : 21;
     fence.origin_frame = target ? 1500 : 0;
+    if (convert) {
+      fence.effective_frame = timed ? 62000 : 32000;
+      fence.origin_frame = 1000;
+    }
   }
   const auto candidates = nlohmann::json::array({admission_codec::encode(press),
                                                  admission_codec::encode(release)});
@@ -543,7 +556,7 @@ std::optional<nlohmann::json> run_admission_action() {
       };
     });
   }
-  const bool listing = step == "list" || step == "read-invalid-sealed";
+  const bool listing = step == "list" || step == "read-invalid-sealed" || step == "recover";
   const auto before = listing ? std::vector<std::byte>{}
       : value(platform->read_complete(path), "admission before bytes");
   const int flush_before = lmdj_opfs_append_flush_count();
@@ -556,7 +569,17 @@ std::optional<nlohmann::json> run_admission_action() {
   } else if (step == "fence" || step == "cutoff") {
     mutation = journal.retain_admission_fence(bundle, session, identity, fence);
   } else if (step == "transfer" || step == "terminal") {
-    mutation = journal.transfer_admission_prefix(bundle, session, identity, transfer);
+    if (convert) {
+      const auto converted = facade::detail::commit_admission_transfer(journal,
+          bundle, session, identity, transfer.transfer_id,
+          step == "terminal" ? 0 : release.watermark, step == "terminal");
+      mutation = converted.has_value() ? Result<void>::success()
+                                      : Result<void>::failure(converted.error());
+    } else mutation = journal.transfer_admission_prefix(bundle, session, identity, transfer);
+  } else if (step == "profile") {
+    mutation = journal.retain_admission_timing_profile(bundle, session, identity,
+        {foundation::CommandId{uuid("313")}, 10, source_pattern.id, 21, 0,
+         37000, 4'147'200'000, 60, true, 60});
   } else if (step == "close") {
     mutation = journal.close_admission(bundle, session, identity,
         {release.watermark, SequenceAdmissionCloseReason::requested});
@@ -575,6 +598,15 @@ std::optional<nlohmann::json> run_admission_action() {
   } else if (step == "complete") mutation = journal.complete_admission(bundle, session, identity);
   else if (step == "seal") {
     (void)value(journal.seal(bundle, session, "owner_lost"), "admission seal owner loss");
+  } else if (step == "recover") {
+    facade::ApplicationConfig config{std::filesystem::path{"/lmdj-workspace"},
+        nullptr, {}, {}, std::nullopt, platform, nullptr, nullptr, nullptr,
+        facade::make_unavailable_performance_replay_controller()};
+    facade::Application application{std::move(config)};
+    const auto applied = application.apply_sequence_recovery(
+        {bundle, session, target ? std::optional{target_pattern.id} : std::nullopt});
+    mutation = applied.has_value() ? Result<void>::success()
+                                  : Result<void>::failure(applied.error());
   } else if (step != "inspect" && !listing && step != "read-invalid") {
     throw std::runtime_error("unknown admission fixture step");
   }
@@ -622,7 +654,7 @@ std::optional<nlohmann::json> run_admission_action() {
       admission_response_barrier(marker.c_str());
     }
   }
-  if (step == "flush" || step == "inspect") {
+  if (step == "flush" || step == "inspect" || step == "recover") {
     const auto truth = value(store.inspect_committed(bundle), "admission committed truth");
     result["truth"] = {{"project_id", truth.id.value()}, {"revision", truth.revision},
         {"source_events", admission_events(truth.patterns.at(source_pattern.id).events)},
