@@ -33,9 +33,10 @@ export function OverviewDisplay({
   buildIdentity,
 }: OverviewDisplayProps) {
   const project = state.project.current;
-  const pattern = project?.patterns.find((item) =>
-    item.patternId === (sequence.selectedPatternId ?? project.patternId),
-  ) ?? project?.patterns[0];
+  const selectedPatternId = sequence.selectedPatternId ?? project?.patternId ?? null;
+  const pattern = selectedPatternId === null
+    ? undefined
+    : project?.patterns.find((item) => item.patternId === selectedPatternId);
   const patternIndex = pattern === undefined || project === null
     ? null
     : project.patterns.findIndex((item) => item.patternId === pattern.patternId) + 1;

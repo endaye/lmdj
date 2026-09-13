@@ -13,7 +13,6 @@ import {ErrorPanel} from "./components/error_panel";
 import {
   HardwareConsole,
   readCreatorLayout,
-  readStoredCreatorLayout,
   writeCreatorLayout,
   type CreatorLayout,
 } from "./components/hardware_console";
@@ -265,7 +264,7 @@ function Workspace({
   const inputController = useRef<ReturnType<typeof createCreatorInputController> | null>(null);
   const inputAdverseState = useRef<string | null>(null);
   const activeModeRef = useRef(activeMode);
-  const layoutRef = useRef(layout);
+  const hardwareSessionRef = useRef(layout === "hardware");
   const performControllerRef = useRef<PerformController | null>(null);
   const projectProjectionRefreshRef = useRef<Readonly<{
     id: string;
@@ -282,7 +281,6 @@ function Workspace({
   sequenceRef.current = sequence;
   armedCaptureSlotRef.current = armedCaptureSlot;
   activeModeRef.current = activeMode;
-  layoutRef.current = layout;
   if (sequenceAuthoringProjectId.current !== (state.project.current?.projectId ?? null)) {
     sequenceAuthoringProjectId.current = state.project.current?.projectId ?? null;
     sequenceAuthoringRevision.current = state.project.current?.revision ?? 0;
@@ -1091,7 +1089,7 @@ function Workspace({
     if (unmigrated) {
       // Session-only: do not write Host preference.
       setLayout("workspace");
-    } else if (readStoredCreatorLayout() === "hardware") {
+    } else if (hardwareSessionRef.current) {
       setLayout("hardware");
     }
     setActiveMode(mode);
@@ -1123,6 +1121,7 @@ function Workspace({
   };
   const enterHardwareLayout = () => {
     writeCreatorLayout("hardware");
+    hardwareSessionRef.current = true;
     if (activeMode === "perform" || activeMode === "slice" || activeMode === "soundset") {
       selectMode("project");
       return;
@@ -1131,6 +1130,7 @@ function Workspace({
   };
   const enterWorkspaceLayout = () => {
     writeCreatorLayout("workspace");
+    hardwareSessionRef.current = false;
     setLayout("workspace");
   };
   const runtimeActions = session && inputController.current
