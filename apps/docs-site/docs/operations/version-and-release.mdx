@@ -178,6 +178,14 @@ Task 验证通过且内容没有漂移时，才通过 expected-old ref 更新生
 Commit。验证失败保留现场与原 branch head，重启仍使用同一提交身份。它不创建 PR、
 push、合并或认证发布授权；总控必须提供刚核验的公开记录及可信 Task 验证器，不能
 把内部 API 返回的 committed 状态当作已审查、已合入或网站已发布。
+内部证据 PR 状态机已提供受限 GitHub 创建 / squash merge 传输：绑定 operation、请求、
+远端分支、exact head、认证 actor、numeric repository 和 Task 证据摘要，写操作前持久保存
+意图。POST / PUT ACK 不算完成；超时只查证同一 PR，结果不明不重发。每次恢复重新读取
+PR，合并还须可信调用方提供完整审查 / 对话 / 保护门禁及实际 squash source 验证。
+这些门禁尚未接入生产 backend，也未开放 run / resume；该内部状态机不 push 分支、
+伪造 owner review adoption 或触发 Release / 部署，不能据此宣称已经一键发版。
+持久状态写入不超过读取端容量；独立 enrollment 标记避免把丢失状态当首次运行。
+状态丢失或初始化中断需要核对原请求，不盲目重发；回调错误以固定诊断返回，不透传敏感文本。
 现有 `scripts/docs-site.sh smoke BASE_URL` 已接入发布日志内容检查：从同一冻结源核对
 索引及逐版本 HTML 的完整正文、分类、身份、摘要和链接，不只核对摘要标签。重定向、
 非 HTML、缺失页面或内容漂移都失败；输出的逐页回执带 source / content / response
