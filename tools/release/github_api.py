@@ -152,6 +152,7 @@ class GitHubRelease:
     upload_url: str
     assets: tuple[GitHubAsset, ...]
     target_commitish: str
+    published_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1193,9 +1194,17 @@ def _parse_release(
         make_latest = None
     else:
         raise GitHubApiError("GitHub Release projection is invalid")
+    published_at = document.get("published_at")
+    if published_at is not None:
+        if type(published_at) is not str or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", published_at) is None:
+            raise GitHubApiError("why: GitHub Release publication timestamp is not canonical UTC; remedy: reconcile the numeric Release API response; do not substitute a local date")
+        try:
+            datetime.strptime(published_at, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            raise GitHubApiError("why: GitHub Release publication timestamp is not a valid calendar time; remedy: reconcile the numeric Release API response; do not substitute a local date") from None
     return GitHubRelease(
         identifier, tag, name, body, draft, prerelease, make_latest, html_url, upload_url,
-        tuple(_parse_asset(item, repository, identifier) for item in assets), target_commitish,
+        tuple(_parse_asset(item, repository, identifier) for item in assets), target_commitish, published_at,
     )
 
 

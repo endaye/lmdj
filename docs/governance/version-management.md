@@ -656,6 +656,13 @@ prepare 负责重验真实 Git 范围。文档进入 canonical plan，统一 ren
 旧调用者；新总控的强制日志准入与网站发布验证需完成各自接入，不能用兼容路径宣称
 完整自动发布已实现。
 
+公开记录采集使用 `scripts/release.sh publication-record TAG RELEASE_ID PLAN_SHA256`，
+重新执行 exact published verification，并以 API 的真实 `published_at`、numeric ID、
+冻结 tag / target / plan / changelog digests 输出 canonical JSON。日期缺失或两次观察间
+Release / intent 变化时拒绝采集，不拿本机时间替代。输出记录不是 ledger 变更或网站
+发布证明；后续证据 Task 仍须经 review 合入 published intent 与公开记录，生成页面、
+同步独立页数清单，再完成正常 Git-triggered 发布和线上验证。
+
 公开 publication 只由 dispatch-only `publish-release.yml` 完成。Workflow 以 exact tag、numeric
 Release ID 和 plan digest 重建并验证 Draft，通过受保护 `release` Environment 的 exact-main
 策略门后，以一次 PATCH 设置 `draft=false`、精确 prerelease 与 exact make-latest policy，随后重新验证 metadata

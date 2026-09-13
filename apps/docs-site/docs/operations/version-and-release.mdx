@@ -159,7 +159,10 @@ Release 正文按冻结 Markdown 逐字核对。内部 Release plan marker v4（
 生成，公开记录必须与 published intent 的 tag / target / 内容摘要一致。显式
 `npm run release-changelogs` 只新增版本页并更新索引，拒绝覆盖旧版本或悄悄丢掉历史页；
 正常 build / start 会检查投影，生产仍走 Git-triggered 发布。当前没有补造任何历史日志。
-这些是本地生成与校验能力；真实公开回执采集、线上内容 smoke、新总控强制准入和
+`scripts/release.sh publication-record TAG RELEASE_ID PLAN_SHA256` 现可重新核验 exact
+公开 Release 并输出一条 canonical JSON 公开记录；发布日期取自 API，缺失时拒绝猜测。
+核验期间 Release / intent 漂移会失败。该命令不写 ledger、不创建 Release、不生成
+页面，也不证明网站已上线。回执合入的证据 PR、线上内容 smoke、新总控强制准入和
 显式追加更正记录的接口仍待接入，不表示每次 Release 已自动交付两端日志。
 
 本地日志生成现先在忽略目录暂存完整字节并同步，再通过 create-only 原子 rename
