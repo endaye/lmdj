@@ -162,7 +162,12 @@ publication evidence PR 的创建 POST 与合并 PUT 也在最后一次子级预
 Release、签名资产、完整 notes 与冻结候选，并在前后重新认证 exact run / attempt 及关联
 回执。运行仍在执行返回 pending，失败阻断后续步骤；仅有成功运行但 Release / 内容校验
 失败同样不会通过。发布记录摘要在 ledger 正常变为 published 后保持一致，不重复发布。
-生产候选绑定、可信 context / 授权组合及两个部署 effect 的总控接入仍待完成。
+两个 Host 的部署 effect 已可接入同一 dispatch adapter：认证原始请求回执、exact
+run / attempt、成功的 preflight / deploy 与证据上传，并核对唯一 artifact 来源与摘要。
+复用受信本地 Host 校验器，匹配冻结的 tag、target、Build、Site、发布文件与 exact prior；
+返回前复查关联、库存和期限。recovery 记录不代替成功，未知或失败不重复部署或晋级。
+这些是保留证据检查，不证明当前生产别名或线上内容；生产候选与授权组合、部署前 prior
+冻结、最终双 Site 实时复验及旧晋级 reader 接入仍待完成。
 完整候选 CI 证据也使用实时 UTC：下载解析后复核有效期，并在全部校验结束前再次检查
 origin / admission / verdict 三份 artifact 的期限；任一途中到期均拒绝认证。
 已发布版本的历史 provenance 路径不读取这些临时 artifact，也不会提供新候选 verdict。
