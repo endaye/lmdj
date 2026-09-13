@@ -3,6 +3,7 @@ import {fileURLToPath} from 'node:url';
 import {readFile} from 'node:fs/promises';
 import {checkBuild} from './lib/build-check.mjs';
 import {projectReleaseChangelogs} from './lib/release-changelogs.mjs';
+import {smokeReleaseChangelogs} from './lib/release-site-smoke.mjs';
 
 const portalRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const facts = JSON.parse(await readFile(path.join(portalRoot, 'src/generated/site-facts.json'), 'utf8'));
@@ -37,6 +38,15 @@ const errors = await checkBuild({
     Object.entries(versionFacts).map(([version, metadata]) => [version, metadata.schema_version]),
   ),
 });
+// Exercise the same source-content verifier against built HTML before upload.
+// Production/Preview still require separate HTTP observations via smoke.mjs.
+const releaseContent = await smokeReleaseChangelogs({
+  baseUrl: 'https://docs.lmdj.workers.dev', pages: releasePages,
+  fetchImpl: async (url) => new Response(await readFile(
+    path.join(portalRoot, 'build', new URL(url).pathname, 'index.html')),
+  {headers: {'Content-Type': 'text/html'}}),
+});
+errors.push(...releaseContent.errors);
 
 if (errors.length) {
   console.error(errors.join('\n'));
