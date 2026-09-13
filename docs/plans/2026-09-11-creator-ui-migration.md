@@ -182,6 +182,8 @@ export function HardwareConsole(props: HardwareConsoleProps) {
 
 **交付范围：** 首个完整新UI切片：上屏轨道/进度只读，触摸区编辑现有Tempo/Swing/Quantize、Pattern选择与创建；录制、叠录、切换、停止、持久化和恢复复用既有actions。新视觉控件不得改变当前提交时机、参数范围或flush边界；图中Copy等未核实能力不作为已实现。
 
+2026-09-13 接续：音频基础 #1247、持久化 admission #1260、独立 WebKit 准备 #1265 已合并；它们不证明全局录放或 U2 完成。[Facade/runtime/Creator 接入计划](../superpowers/plans/2026-09-13-pattern-transport-integration.md) 从 `e5195d15` 核对当前源码，先证明不会阻塞输入或重入 Asyncify 的执行端口，再实现 journal admission、协调器、公开接口与 Creator 单一全局 owner。demo 不做旧 Sequence 存储兼容，但保留用户数据；U0–U8 范围及 U7/U8 实际验收、观察和退场条件不变。
+
 **Files（拟创建或修改，测试路径已列入）：**
 
 - `apps/creator-web/src/app.tsx`
