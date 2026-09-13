@@ -618,6 +618,37 @@ class GitHubClient:
                                  content_type=None if document is None else "application/json")
         return _json_response(response, {201} if method == "POST" else {200})
 
+    def dispatch_release(self, spec, *, before_post):
+        """One exact main dispatch, called only after durable intent persistence.
+
+        No retry, run-name correlation or ACK-as-completion. Main may advance
+        after this read: the receipt consumer refuses a different control SHA.
+        Publication/deployment workflows retain their own protected gates.
+        """
+        from .durable_dispatch import validate_spec
+        validate_spec(spec)
+        if not callable(before_post):
+            raise GitHubApiError("why: dispatch write guard is missing; remedy: use the durable controller")
+        workflow,inputs,repository_id,actor_id,workflow_id,control_revision=(spec[key] for key in
+            ("workflow","inputs","repository_id","actor_id","workflow_id","control_revision"))
+        prefix="/repos/endaye/lmdj"
+        actor=_json_response(self._request("GET","/user"),{200})
+        repo=_json_response(self._request("GET",prefix),{200})
+        selected=_json_response(self._request("GET",prefix+"/actions/workflows/"+workflow),{200})
+        main=_json_response(self._request("GET",prefix+"/branches/main"),{200})
+        if not (type(actor) is dict and type(actor.get("id")) is int and actor["id"]==actor_id
+                and type(repo) is dict and type(repo.get("id")) is int and repo["id"]==repository_id and repo.get("full_name")=="endaye/lmdj"
+                and type(selected) is dict and type(selected.get("id")) is int and selected["id"]==workflow_id
+                and selected.get("path")==".github/workflows/"+workflow and selected.get("state")=="active"
+                and type(main) is dict and main.get("name")=="main" and main.get("protected") is True
+                and type(main.get("commit")) is dict and main["commit"].get("sha")==control_revision):
+            raise GitHubApiError("why: dispatch actor, workflow or main scope changed; remedy: reconcile the original operation without retry")
+        before_post()
+        response=self._request("POST",prefix+"/actions/workflows/"+workflow+"/dispatches",
+                               json.dumps({"ref":"main","inputs":inputs}).encode(),content_type="application/json")
+        if response.status != 204:
+            raise GitHubApiError("why: dispatch result is unconfirmed; remedy: reconcile the original durable intent without another POST")
+
     def get_dispatch_evidence(self, path: str, *, raw: bool = False) -> object:
         """GET-only exact-run release correlation; no dispatch route."""
         prefix = "/repos/endaye/lmdj"

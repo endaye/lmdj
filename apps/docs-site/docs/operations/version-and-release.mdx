@@ -145,7 +145,15 @@ API run、留存 artifact 及可信源码；未知 POST 不得凭回执文件、
 完整 run-ID 清单排除旧运行，再读取新运行的认证输入。不能用事后扫描补造这个基线。
 跨 control revision 的重复 operation 同样报 conflict；候选不可读、零匹配或清单变化报
 unknown，只有单一认证匹配返回 correlated。任何结果都不允许重发，也不表示发布成功。
-durable 基线／POST 控制器与生产总控恢复仍未接通，当前不能据此承诺无人值守恢复。
+内部 durable POST 控制器已接通：新 operation 私有目录保存固定 scope；首次 POST 前将
+完整 run-ID 基线与写意图原子落盘。已有意图只允许读取认证回执，不因超时、重启或
+缺失结果重发。原授权失效、writer 被替换、状态损坏或丢失会阻断写入；已有目录不会被
+重新初始化为“未发送”。POST 前还核对 numeric actor / repository / workflow 和 main SHA。
+原授权每次都需复核，首次发送的 readiness 条件只在写入前检查；恢复不能要求已公开的
+Release 重新变成 Draft，也不能因此重发。
+GitHub 没有 expected-head dispatch CAS，末次读取后的 main 漂移仍可能产生不同 control
+运行；该运行不得被认领为请求成功。父级请求服务、effect readiness、全局 tag / Site
+互斥和生产总控仍未接通，不能据此承诺完整无人值守发版。
 
 发布请求的持久状态层已实现：固定 request / scope / policy / revision，独占 writer 在
 每一步外部操作前持久化 intent；结果必须有匹配 operation 的证据回执才能推进。
