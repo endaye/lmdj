@@ -222,6 +222,12 @@ binding，再暂存、验证、以 expected-source 更新分支并复验。中�
 不证明远端 PR/squash、witness、实际候选 target 或发布资格；这些连接仍待完成。
 快照状态 v2 单独记录已完成后置授权、源码和产物检查的命令边界；仅有 exit 0 不能
 借用旧快照确认来提交切版。缺少该边界的旧 v1 状态拒绝消费，不自动补写成功记录。
+候选路径另有显式集成演练脚本 `tests/build/release_candidate_portal_journey.py`，使用新建
+本地仓库运行真实 Portal 生成、完整切版及新克隆中的 squash/witness 校验，保留逐步日志。
+它不放入会被其自身调用的 npm/CTest 套件，也不请求真实发布。演练状态须以具体运行
+回执为准；脚本存在不等于完整旅程已通过，更不证明远端审查、签名或无人值守服务可用。
+快照 inventory、可变版本清单、切版暂存及 witness 使用 `apps/architecture-portal` 的
+实际 Git 路径；`apps/docs-site` 的兼容符号链接仍属于不可变来源，不能作为暂存路径。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
 私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
 不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。
