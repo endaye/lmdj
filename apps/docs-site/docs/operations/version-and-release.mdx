@@ -186,6 +186,14 @@ catalogue 缺失、损坏、换 scope 或非私有存储均拒绝，resume 不�
 这不是已分配、已评审的 Product Build：尚须父级认证原授权、main 与基线 CI，统一配置
 所有分配者使用同一 catalogue，并接通 version / Assembly / lock、快照、切版 PR 和 witness。
 不能用另一目录重新 enrollment 绕过既有预留，也不能把本地编号回执当发布资格。
+候选构建材料生成器已消费实际预留记录，并从原基线 Git 对象导出受限的被动输入。
+它校验 Git blob 字节身份，复用版本工具的 Assembly / compiled assembly / lock 生成和
+原材料验证逻辑，生成 `version.json`、`assembly.json`、`assembly.lock.json`、
+`compiled_assembly.cpp` 四份确定性字节及路径/长度/摘要绑定；恢复复用原编号和材料。
+不会执行候选代码，也不把脏文件或未跟踪 manifest 混入输入；旧 Assembly 或 lock
+不一致时拒绝并保留编号，不顺便修复候选。生成阶段不改源工作树、index 或 ref。
+这仍不是完成切版：持久化安装、Portal snapshot、切版 PR、witness 和 post-squash
+target 绑定尚须继续接通，不把生成字节回执当成已分配或已发布的 Build。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
 私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
 不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。
