@@ -34,6 +34,7 @@ prior_manifest_sha256=''
 staged_index_sha256=''
 staged_manifest_sha256=''
 current_site_json='{}'
+preflight_site_json=''
 current_site_file_count=0
 prior_immutable_http_result='{}'
 prior_immutable_browser_result='{}'
@@ -626,6 +627,7 @@ preflight_prior_good() {
   local identity_json=''
   local fields=''
   get_current_site_preflight
+  preflight_site_json="$current_site_json"
   [[ "$current_site_state" != 'disabled' ]] || {
     fail "Netlify site is already disabled; refusing automatic enable or publication"
     return
@@ -855,6 +857,18 @@ run_browser_smoke() {
 }
 
 publish_deploy() {
+  # Compare the actual Site projection immediately before any public write.
+  # Refusal is not a publication attempt: recovery must not touch another
+  # operator's pointer. This observation is not an atomic Netlify CAS.
+  [[ -n "$preflight_site_json" ]] || {
+    fail "why: Netlify publication has no frozen preflight Site; remedy: restore verified preflight evidence before starting a new deployment"
+    return
+  }
+  get_current_site 30
+  [[ "$current_site_json" == "$preflight_site_json" ]] || {
+    fail "why: Netlify Site changed since preflight; refusing publication; remedy: reconcile the current Site with the original deployment request without restoring or disabling it"
+    return
+  }
   publication_attempted=1
   publish_response_json="$(
     with_netlify_credential \

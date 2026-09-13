@@ -174,6 +174,11 @@ Host 验证组合：固定 Site API 的只读 GET 禁止重定向和部署写接
 漂移或不可读阻止后续步骤，不重新部署。稳定摘要不是缓存，也不保证观察之后站点
 不会变化；这不是新一轮浏览器验收。生产候选与授权组合、部署前 prior 冻结、最终完整
 双 Site / Release / Portal / Channel 验收及旧晋级 reader 接入仍待完成。
+两个 Host 的部署脚本在 preflight 保存完整 Site 投影，并在候选 immutable 验证后、
+公开写入前再次限时读取。身份、指针或 serving state 变化及读取失败均拒绝公开；
+此时尚未标记 publication attempted，不恢复 prior、不禁用站点、不覆盖别人的新指针。
+可能已创建的未公开 draft 不自动删除。这是写前观察保护，不是 Netlify 原子 CAS；
+末次读取后的并发窗口仍存在，原始请求的 prior 绑定和全局 Site 互斥仍须接通。
 完整候选 CI 证据也使用实时 UTC：下载解析后复核有效期，并在全部校验结束前再次检查
 origin / admission / verdict 三份 artifact 的期限；任一途中到期均拒绝认证。
 已发布版本的历史 provenance 路径不读取这些临时 artifact，也不会提供新候选 verdict。
