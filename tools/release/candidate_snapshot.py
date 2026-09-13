@@ -101,46 +101,91 @@ class CandidateSnapshotRun:
         except Exception:
             raise CandidateSnapshotError("why: candidate snapshot authority, state or execution is unavailable; remedy: inspect the retained private attempt and restore its original trusted source; never repeat generation") from None
 
-    def _run(self, request, source):
+    def scope(self, request, source):
         validate_request(request)
         source = deepcopy(source)
         require(source.pop("status", None) == "source-committed" and set(source.pop("files", [])) == FILES,
                 "requires the completed source receipt")
         require(source.get("request_sha256") == canonical_sha256(request), "request differs from source binding")
-        scope = {"request":deepcopy(request), "source":source, "channel":"canary",
-                 "path":self.path, "verification_limit":self.limit}
+        return {"request":deepcopy(request), "source":source, "channel":"canary",
+                "path":self.path, "verification_limit":self.limit}
+
+    def _state(self, journal, scope):
+        marker = read(journal, "snapshot-operation.json", optional=True)
+        envelope = read(journal, "snapshot-state.json", optional=True)
+        if marker is None:
+            require(envelope is None, "state exists without original enrollment")
+            return None
+        require(marker == scope and type(envelope) is dict
+                and set(envelope) == {"state", "sha256"}, "enrollment changed or state disappeared")
+        state = envelope["state"]
+        require(canonical_sha256(state) == envelope["sha256"] and type(state) is dict
+                and set(state) == {"schema", "scope", "commands", "snapshot", "verified_command_count"}
+                and state["schema"] == "lmdj.candidate-snapshot-run.v2" and state["scope"] == scope,
+                "state digest or scope changed")
+        require(type(state["commands"]) is list and 1 <= len(state["commands"]) <= 1 + self.limit,
+                "command inventory is invalid")
+        for index, row in enumerate(state["commands"]):
+            require(type(row) is dict and set(row) == {"arguments", "result"}
+                    and row["arguments"] == self._vector(scope["source"], index == 0), "command identity changed")
+            result = row["result"]
+            require(result is None or (type(result) is list and len(result) == 3
+                and type(result[0]) is int and -255 <= result[0] <= 255
+                and type(result[1]) is str and len(result[1]) == 64
+                and all(c in "0123456789abcdef" for c in result[1])
+                and type(result[2]) is int and result[2] >= 0), "command result is invalid")
+        confirmed = state["verified_command_count"]
+        require(type(confirmed) is int and 0 <= confirmed <= len(state["commands"])
+                and ((state["snapshot"] is None and confirmed == 0)
+                    or (state["snapshot"] is not None and confirmed >= 2
+                        and state["commands"][confirmed - 1]["result"] is not None
+                        and state["commands"][confirmed - 1]["result"][0] == 0)),
+                "snapshot confirmation boundary is invalid")
+        return state
+
+    @staticmethod
+    def receipt(state):
+        require(state["verified_command_count"] == len(state["commands"]) and state["snapshot"] is not None,
+                "snapshot verification is incomplete")
+        source = state["scope"]["source"]
+        return {"status":"snapshot-verified", "source_commit":source["commit"],
+                "product_build":source["product_build"],
+                "sha256":canonical_sha256({"source":source, "channel":"canary", "snapshot":state["snapshot"]}),
+                "command_history_sha256":canonical_sha256(state)}
+
+    def verified_state(self, journal, request, source, snapshot_sha256):
+        """Authenticate stored successful evidence; caller verifies live bytes.
+
+        This permits the cut installer to verify the same evidence after HEAD
+        advances; it does not claim the historical source is still checked out.
+        """
+        scope = self.scope(request, source)
+        require(read(journal, "binding.json") == scope["source"], "source differs from durable installation binding")
+        self._authorize(scope)
+        state = self._state(journal, scope)
+        require(state is not None and state["snapshot"] is not None and len(state["commands"]) >= 2
+                and state["verified_command_count"] == len(state["commands"])
+                and state["commands"][-1]["result"] is not None
+                and state["commands"][-1]["result"][0] == 0, "snapshot verification is incomplete")
+        require(self.receipt(state)["sha256"] == snapshot_sha256, "snapshot receipt identity changed")
+        return deepcopy(state)
+
+    def _run(self, request, source):
+        scope = self.scope(request, source)
+        source = scope["source"]
         local = self.workspace
         gitdir = Path(local.git("rev-parse", "--absolute-git-dir").decode().strip())
         with local._locked(gitdir) as journal:
             require(read(journal, "binding.json") == source, "source differs from durable installation binding")
             self._authorize(scope)
             self._checkout(source)
-            marker = read(journal, "snapshot-operation.json", optional=True)
-            envelope = read(journal, "snapshot-state.json", optional=True)
-            if marker is None:
-                require(envelope is None, "state exists without original enrollment")
+            state = self._state(journal, scope)
+            if state is None:
                 self._checkout(source, fresh=True)
                 journal._write("snapshot-operation.json", canonical_json(scope))
-                state = {"schema":"lmdj.candidate-snapshot-run.v1", "scope":scope, "commands":[], "snapshot":None}
+                state = {"schema":"lmdj.candidate-snapshot-run.v2", "scope":scope, "commands":[],
+                         "snapshot":None, "verified_command_count":0}
             else:
-                require(marker == scope and type(envelope) is dict
-                        and set(envelope) == {"state", "sha256"}, "enrollment changed or state disappeared")
-                state = envelope["state"]
-                require(canonical_sha256(state) == envelope["sha256"] and type(state) is dict
-                        and set(state) == {"schema", "scope", "commands", "snapshot"}
-                        and state["schema"] == "lmdj.candidate-snapshot-run.v1" and state["scope"] == scope,
-                        "state digest or scope changed")
-                require(type(state["commands"]) is list and 1 <= len(state["commands"]) <= 1 + self.limit,
-                        "command inventory is invalid")
-                for index, row in enumerate(state["commands"]):
-                    require(type(row) is dict and set(row) == {"arguments", "result"}
-                            and row["arguments"] == self._vector(source, index == 0), "command identity changed")
-                    result = row["result"]
-                    require(result is None or (type(result) is list and len(result) == 3
-                        and type(result[0]) is int and -255 <= result[0] <= 255
-                        and type(result[1]) is str and len(result[1]) == 64
-                        and all(c in "0123456789abcdef" for c in result[1])
-                        and type(result[2]) is int and result[2] >= 0), "command result is invalid")
                 require(state["snapshot"] is None or state["snapshot"] == self._snapshot(source),
                         "previously verified snapshot bytes changed")
             # Enrollment persists before this first command intent. If the
@@ -153,11 +198,9 @@ class CandidateSnapshotRun:
             require(state["snapshot"] is None or state["snapshot"] == inventory,
                     "verified snapshot bytes changed during command")
             state["snapshot"] = inventory
+            state["verified_command_count"] = len(state["commands"])
             self._save(journal, state)
-            return {"status":"snapshot-verified", "source_commit":source["commit"],
-                    "product_build":source["product_build"],
-                    "sha256":canonical_sha256({"source":source, "channel":"canary", "snapshot":inventory}),
-                    "command_history_sha256":canonical_sha256(state)}
+            return self.receipt(state)
 
     @staticmethod
     def _vector(source, generation):
