@@ -562,6 +562,34 @@ class GitHubClient:
         """Download one artifact archive without forwarding credentials onward."""
         return self._download_artifact_archive(artifact.archive_download_url, _CI_SCOPE_SIZE_CAP)
 
+    def release_pr_request(self, method: str, suffix: str, document=None) -> object:
+        """Narrow evidence-PR transport; no admin, auto-merge or branch writes."""
+        if type(method) is not str or type(suffix) is not str:
+            raise GitHubApiError("why: release PR request identity is invalid; remedy: use the exact evidence PR controller")
+        branch = r"docs/release-evidence-[0-9a-f]{64}"
+        number = r"[1-9][0-9]*"
+        page = r"(?:[1-9]|[1-9][0-9]|100)"
+        valid = False
+        if method == "GET" and document is None:
+            valid = (suffix in ("", "/branches/main", "/user")
+                     or re.fullmatch(rf"/git/ref/heads/{branch}", suffix)
+                     or re.fullmatch(rf"/pulls/{number}", suffix)
+                     or re.fullmatch(rf"/pulls\?state=all&head=endaye:{branch}&base=main&per_page=100&page={page}", suffix))
+        elif method == "POST" and suffix == "/pulls" and type(document) is dict:
+            valid = (set(document) == {"title", "body", "head", "base", "draft", "maintainer_can_modify"}
+                     and type(document.get("head")) is str and re.fullmatch(branch, document["head"])
+                     and document.get("base") == "main" and document.get("draft") is False
+                     and document.get("maintainer_can_modify") is False
+                     and all(type(document.get(k)) is str and 0 < len(document[k]) <= 20000 for k in ("title", "body")))
+        elif method == "PUT" and re.fullmatch(rf"/pulls/{number}/merge", suffix) and type(document) is dict:
+            valid = set(document) == {"sha", "merge_method"} and _sha(document.get("sha")) and document.get("merge_method") == "squash"
+        if not valid:
+            raise GitHubApiError("why: release PR route or mutation is outside the closed interface; remedy: use the exact evidence PR controller")
+        url = "/user" if suffix == "/user" else "/repos/endaye/lmdj" + suffix
+        response = self._request(method, url, None if document is None else json.dumps(document).encode(),
+                                 content_type=None if document is None else "application/json")
+        return _json_response(response, {201} if method == "POST" else {200})
+
     def get_changelog_site_evidence(self, path: str, *, raw: bool = False) -> object:
         """Closed read-only transport for exact Portal deployment evidence."""
         prefix = "/repos/endaye/lmdj"
