@@ -79,7 +79,9 @@ class ManagedTest(unittest.TestCase):
         # pending PR forever, even when the first merge is now admissible.
         observe, execute = self.backend.observe, self.backend.execute
         self.backend.observe = lambda state, op: self.adapter.observe(state, op) if op["step"] == "published_record" else observe(state, op)
-        self.backend.execute = lambda state, op: self.adapter.advance(state, op) if op["step"] == "published_record" else execute(state, op)
+        # Explicit fixture authority, not a production opaque-backend guard.
+        guard = lambda: self.backend.authenticate(self.request, driver_fixture.POLICY)
+        self.backend.execute = lambda state, op: self.adapter.advance(state, op, before_write=guard) if op["step"] == "published_record" else execute(state, op)
         opaque = ReleaseDriver(self.parent, driver_fixture.POLICY, self.backend)
         self.pr.review_state = "pending"
         self.assertEqual(opaque.run(self.request).status, "pending")
@@ -168,7 +170,7 @@ class ManagedTest(unittest.TestCase):
 
     def test_parent_crash_before_child_effect_preserves_initialized_state(self):
         advance = self.adapter.advance
-        def crash(*args):
+        def crash(*args, **kwargs):
             raise driver_fixture.Crash()
         self.adapter.advance = crash
         with self.assertRaises(driver_fixture.Crash):
@@ -205,6 +207,106 @@ class ManagedTest(unittest.TestCase):
         with self.assertRaisesRegex(JournalError, "authority"):
             self.driver.resume(self.request["id"])
         self.assertEqual(self.mutations(), ["POST"])
+
+    def _lost_parent_at_child_write(self, boundary, fault):
+        real = self.pr.controller._request
+        faulted = False
+        def request(method, path, document=None):
+            nonlocal faulted
+            result = real(method, path, document)
+            child = self.pr.root / "pr-state.json"
+            if not faulted and method == "GET" and path == "/branches/main" and child.exists():
+                saved = json.loads(child.read_bytes())
+                if saved[boundary + "_intent"]:
+                    faulted = True
+                    if fault == "authority":
+                        self.backend.auth = False
+                    else:
+                        (self.parent / "writer.lock").rename(self.parent / "retained.lock")
+                        fd = os.open(self.parent / "writer.lock", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                        os.close(fd)
+            return result
+        self.pr.controller._request = request
+        try:
+            self.driver.run(self.request)
+        except JournalError:
+            pass  # A replaced parent writer may also refuse the final read.
+        self.assertTrue(faulted)
+        expected = [] if boundary == "create" else ["POST"]
+        self.assertEqual(self.mutations(), expected)
+        raw = (self.pr.root / "pr-state.json").read_bytes()
+        self.assertTrue(json.loads(raw)[boundary + "_intent"])
+        self.backend.auth = True
+        self.pr.controller._request = real
+        # New controller opens the actual retained journals. Even positive
+        # absence cannot authorize replay of a durable, unresolved intent.
+        self.driver = self.new_driver()
+        result = self.driver.resume(self.request["id"])
+        self.assertEqual((result.status, result.step), ("unknown", "published_record"))
+        self.assertEqual(self.mutations(), expected)
+        self.assertEqual((self.pr.root / "pr-state.json").read_bytes(), raw)
+
+    def test_parent_authority_lost_before_child_create_blocks_post(self):
+        self._lost_parent_at_child_write("create", "authority")
+
+    def test_parent_writer_replaced_before_child_create_blocks_post(self):
+        self._lost_parent_at_child_write("create", "writer")
+
+    def test_parent_authority_lost_before_child_merge_blocks_put(self):
+        self._lost_parent_at_child_write("merge", "authority")
+
+    def test_parent_writer_replaced_before_child_merge_blocks_put(self):
+        self._lost_parent_at_child_write("merge", "writer")
+
+    def _child_writer_replaced_in_parent_guard(self, boundary):
+        authenticate = self.backend.authenticate
+        faulted = False
+        def guard(request, policy):
+            nonlocal faulted
+            authenticate(request, policy)
+            child = self.pr.root / "pr-state.json"
+            if not faulted and child.exists() and json.loads(child.read_bytes())[boundary + "_intent"]:
+                faulted = True
+                (self.pr.root / "writer.lock").rename(self.pr.root / "retained.lock")
+                fd = os.open(self.pr.root / "writer.lock", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                os.close(fd)
+        self.backend.authenticate = guard
+        result = self.driver.run(self.request)
+        self.assertTrue(faulted)
+        self.assertEqual((result.status, result.step), ("unknown", "published_record"))
+        self.assertEqual(self.mutations(), [] if boundary == "create" else ["POST"])
+
+    def test_child_writer_rechecked_after_parent_create_guard(self):
+        self._child_writer_replaced_in_parent_guard("create")
+
+    def test_child_writer_rechecked_after_parent_merge_guard(self):
+        self._child_writer_replaced_in_parent_guard("merge")
+
+    def test_managed_pr_requires_callable_parent_guard(self):
+        self.pr.review_state = "pending"
+        self.driver.run(self.request)
+        state = self.state()
+        with self.assertRaisesRegex(JournalError, "final parent guard"):
+            self.adapter.advance(state, state["transitions"][-1], before_write=None)
+        self.assertEqual(self.mutations(), ["POST"])
+
+    def _private_guard_error(self, boundary):
+        def guard():
+            saved = json.loads((self.pr.root / "pr-state.json").read_bytes())
+            if saved[boundary + "_intent"]:
+                raise EvidencePrError("PRIVATE-GUARD-SENTINEL")
+        # Exercise the actual public child entrypoint without the parent's
+        # exception wrapper masking its own responsibility to sanitize gates.
+        result = self.pr.controller.advance(self.pr.spec, before_write=guard)
+        self.assertEqual(result["status"], "unavailable")
+        self.assertNotIn("PRIVATE-GUARD-SENTINEL", repr(result))
+        self.assertEqual(self.mutations(), [] if boundary == "create" else ["POST"])
+
+    def test_create_guard_same_type_exception_is_sanitized(self):
+        self._private_guard_error("create")
+
+    def test_merge_guard_same_type_exception_is_sanitized(self):
+        self._private_guard_error("merge")
 
     def test_child_binding_rebound_cannot_create_or_merge(self):
         self.adapter.spec["request_sha256"] = "f" * 64

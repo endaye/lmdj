@@ -75,16 +75,21 @@ class ReleaseDriver:
     its own durable POST/PUT intents still forbid unknown-write replay.
     """
 
-    def __init__(self, root, policy: OrchestrationPolicy, backend: TransitionBackend, *, publication_pr=None):
+    def __init__(self, root, policy: OrchestrationPolicy, backend: TransitionBackend, *, publication_pr=None, dispatches=()):
         # Deferred import avoids the PR controller's Observation import cycle.
         from .evidence_pr_transition import EvidencePrTransition
+        from .dispatch_transition import DispatchTransition
         if publication_pr is not None and type(publication_pr) is not EvidencePrTransition:
             raise JournalError("why: unsupported managed release adapter; remedy: use the concrete publication PR transition, not an arbitrary retry callback")
         self.root, self.policy, self.backend = root, policy, backend
         self.publication_pr = publication_pr
+        if (type(dispatches) not in (tuple,list) or any(type(item) is not DispatchTransition for item in dispatches)
+                or len({item.step for item in dispatches}) != len(dispatches)):
+            raise JournalError("why: unsupported or duplicate managed dispatch; remedy: compose one concrete dispatch transition per release step")
+        self.dispatches = {item.step:item for item in dispatches}
 
     def _managed(self, operation):
-        return self.publication_pr if operation["step"] == "published_record" else None
+        return self.publication_pr if operation["step"] == "published_record" else self.dispatches.get(operation["step"])
 
     def run(self, request: dict) -> DriveResult:
         with RequestJournal(self.root) as journal:
@@ -127,7 +132,14 @@ class ReleaseDriver:
         self._authenticate(state["request"])
         journal._active()
         try:
-            self._managed(operation).advance(deepcopy(state), deepcopy(operation))
+            managed = self._managed(operation)
+            def before_write():
+                self._authenticate(state["request"])
+                journal._active()
+            if operation["step"] in self.dispatches:
+                managed.advance(deepcopy(state),deepcopy(operation),before_post=before_write)
+            else:
+                managed.advance(deepcopy(state), deepcopy(operation), before_write=before_write)
         except Exception:
             return Observation("unknown")
         return self._observe(journal.read(state["request"]["id"]), operation)

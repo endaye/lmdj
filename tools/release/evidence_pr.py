@@ -256,9 +256,19 @@ class EvidencePullRequest:
             except Exception:
                 return {"status": "unknown", "evidence": None}
 
-    def advance(self, spec, *, require_initialized=False):
+    @staticmethod
+    def _before_write(callback):
+        if callback is not None:
+            try:
+                callback()
+            except Exception:
+                # Even a callback using our own error type is untrusted text.
+                raise RuntimeError("release PR parent guard unavailable") from None
+
+    def advance(self, spec, *, require_initialized=False, before_write=None):
         validate_spec(spec)
         require(type(require_initialized) is bool, "initialization requirement is invalid")
+        require(before_write is None or callable(before_write), "final parent guard is invalid")
         spec = deepcopy(spec)
         pr_document(spec)  # Both entry points preflight before any enrollment.
         with RequestJournal(self.root) as journal:
@@ -284,6 +294,7 @@ class EvidencePullRequest:
                     state["create_intent"] = True
                     self._save(journal, state)
                     self._authorize(spec)
+                    self._before_write(before_write)
                     journal._active()
                     try:
                         self._request("POST", "/pulls", pr_document(spec))
@@ -316,6 +327,7 @@ class EvidencePullRequest:
                     self._authorize(spec)
                     row = self._pr(spec, state["number"])
                     require(not row["merged"] and row.get("mergeable") is True, "PR changed at the merge write boundary")
+                    self._before_write(before_write)
                     journal._active()
                     try:
                         self._request("PUT", f"/pulls/{row['number']}/merge", {"sha": spec["head_sha"], "merge_method": "squash"})
