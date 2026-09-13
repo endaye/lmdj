@@ -176,7 +176,14 @@ patch 或提交 PR，也不编辑历史快照。Ledger 目标行仅替换 dispos
 摘要。Git-triggered Portal 发布沿用该入口检查 Preview 和 production，并分别将匹配
 当前 Git revision / URL 的逐页回执保存到部署证据；exit 0 但回执缺失仍失败。build checker
 也在上传前校验本地 HTML。它证明静态内容一致，不替代浏览器验收、真实发布回执认证
-或总控完成判定。回执合入的证据 PR、新总控强制准入和
+或总控完成判定。
+新增只读回执消费者会验证配置绑定的 repository / workflow numeric ID、
+protected main 上的 source ancestry、首次 push run / deploy steps，以及未过期 ZIP 的
+API digest 和唯一成员；逐页 source 摘要必须匹配该 source 的完整日志投影，Preview /
+production 的 content 摘要必须一致。默认每次读取当前时间，核验结束重新检查期限、
+run 和 main，拒绝核验中到期、重跑或保护漂移。
+这只认证留存证据，不证明当前线上状态；尚未激活生产总控配置，仍需绑定已合入证据 PR、
+重新执行线上内容检查，再准入 Host 部署。回执合入的证据 PR、新总控强制准入和
 显式追加更正记录的接口仍待接入，不表示每次 Release 已自动交付两端日志。
 
 本地日志生成现先在忽略目录暂存完整字节并同步，再通过 create-only 原子 rename
