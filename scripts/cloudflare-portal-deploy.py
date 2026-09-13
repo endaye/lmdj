@@ -14,6 +14,43 @@ WORKER = "docs"
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def smoke_receipt(output, revision, base_url):
+    """Retain only a closed, identity-matched successful smoke receipt."""
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError()
+            result[key] = value
+        return result
+    try:
+        receipt = json.loads(output.strip().split("\n")[-1], object_pairs_hook=unique)
+        if (type(receipt) is not dict or set(receipt) != {"schema", "revision", "pages"}
+                or receipt["schema"] != "lmdj.release-changelog-smoke.v1"
+                or receipt["revision"] != revision or type(receipt["pages"]) is not list
+                or not receipt["pages"]):
+            raise ValueError()
+        routes = set()
+        for page in receipt["pages"]:
+            if type(page) is not dict or set(page) != {"route", "url", "source_sha256", "content_sha256", "response_sha256", "response_bytes"}:
+                raise ValueError()
+            route = page["route"]
+            if (type(route) is not str or re.fullmatch(r"/releases/(?:(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){3}/)?", route) is None
+                    or route in routes or page["url"] != base_url.rstrip("/") + route):
+                raise ValueError()
+            routes.add(route)
+            for key in ("source_sha256", "content_sha256", "response_sha256"):
+                if type(page[key]) is not str or re.fullmatch(r"[0-9a-f]{64}", page[key]) is None:
+                    raise ValueError()
+            if type(page["response_bytes"]) is not int or not 0 < page["response_bytes"] <= 8 * 1024 * 1024:
+                raise ValueError()
+        if "/releases/" not in routes:
+            raise ValueError()
+        return receipt
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError):
+        raise RuntimeError("why: Portal smoke receipt is absent or mismatched; remedy: reconcile the exact Git revision and deployment URL before proceeding") from None
+
+
 def publish():
     if os.environ.get("GITHUB_EVENT_NAME") != "push" or os.environ.get("GITHUB_REF") != "refs/heads/main":
         raise RuntimeError("Portal production requires a main push; run the Git-triggered workflow")
@@ -41,8 +78,9 @@ def publish():
     def smoke(url):
         env = {k: v for k, v in os.environ.items() if k not in {"CLOUDFLARE_API_TOKEN", "GITHUB_TOKEN"}}
         env["PORTAL_REVISION"] = revision
-        subprocess.run(["node", "scripts/smoke.mjs", url], cwd=ROOT / "apps/docs-site",
-                       env=env, check=True, timeout=240)
+        result = subprocess.run(["node", "scripts/smoke.mjs", url], cwd=ROOT / "apps/docs-site",
+                                env=env, check=True, timeout=240, stdout=subprocess.PIPE, text=True)
+        return smoke_receipt(result.stdout, revision, url)
 
     exists = WORKER in {s["id"] for s in api("scripts")}
     prior = state() if exists else []
@@ -73,8 +111,8 @@ def publish():
         route = api(f"scripts/{WORKER}/subdomain")
         api(f"scripts/{WORKER}/subdomain", {"enabled": route["enabled"], "previews_enabled": True})
         preview = f"https://{version[:8]}-{WORKER}.lmdj.workers.dev"
-        smoke(preview)
-        evidence["preview"] = {"url": preview, "status": "passed"}
+        receipt = smoke(preview)
+        evidence["preview"] = {"url": preview, "status": "passed", "changelogs": receipt}
         current = state()
         if exists and current != prior:
             raise RuntimeError("active deployment changed during preview; reconcile the other deployment")
@@ -85,7 +123,7 @@ def publish():
         api(f"scripts/{WORKER}/subdomain", {"enabled": True, "previews_enabled": True})
         for attempt in range(4):
             try:
-                smoke("https://docs.lmdj.workers.dev")
+                receipt = smoke("https://docs.lmdj.workers.dev")
                 break
             except subprocess.CalledProcessError:
                 if attempt == 3:
@@ -93,7 +131,7 @@ def publish():
                 time.sleep(5)
         if state()[0]["versions"] != [{"version_id": version, "percentage": 100}]:
             raise RuntimeError("active version changed after verification; inspect the concurrent deployment")
-        evidence["production"] = {"url": "https://docs.lmdj.workers.dev", "status": "passed"}
+        evidence["production"] = {"url": "https://docs.lmdj.workers.dev", "status": "passed", "changelogs": receipt}
         evidence["status"] = "passed"
     except BaseException:
         evidence["status"] = "failed"
