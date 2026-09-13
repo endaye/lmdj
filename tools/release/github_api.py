@@ -22,6 +22,18 @@ class GitHubApiError(RuntimeError):
     """A GitHub release projection or request is unavailable or malformed."""
 
 
+def valid_release_pr_document(document) -> bool:
+    """Pure POST preflight shared by the producer and the actual transport."""
+    return (type(document) is dict
+            and set(document) == {"title", "body", "head", "base", "draft", "maintainer_can_modify"}
+            and type(document.get("head")) is str
+            and re.fullmatch(r"docs/release-evidence-[0-9a-f]{64}", document["head"]) is not None
+            and document.get("base") == "main" and document.get("draft") is False
+            and document.get("maintainer_can_modify") is False
+            and all(type(document.get(k)) is str and 0 < len(document[k]) <= 20000
+                    for k in ("title", "body")))
+
+
 class CiScopeUnavailableError(GitHubApiError):
     """The exact run retains no readable scope manifest for its head SHA.
 
@@ -576,11 +588,7 @@ class GitHubClient:
                      or re.fullmatch(rf"/pulls/{number}", suffix)
                      or re.fullmatch(rf"/pulls\?state=all&head=endaye:{branch}&base=main&per_page=100&page={page}", suffix))
         elif method == "POST" and suffix == "/pulls" and type(document) is dict:
-            valid = (set(document) == {"title", "body", "head", "base", "draft", "maintainer_can_modify"}
-                     and type(document.get("head")) is str and re.fullmatch(branch, document["head"])
-                     and document.get("base") == "main" and document.get("draft") is False
-                     and document.get("maintainer_can_modify") is False
-                     and all(type(document.get(k)) is str and 0 < len(document[k]) <= 20000 for k in ("title", "body")))
+            valid = valid_release_pr_document(document)
         elif method == "PUT" and re.fullmatch(rf"/pulls/{number}/merge", suffix) and type(document) is dict:
             valid = set(document) == {"sha", "merge_method"} and _sha(document.get("sha")) and document.get("merge_method") == "squash"
         if not valid:

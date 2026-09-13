@@ -46,6 +46,25 @@ class PrTest(unittest.TestCase):
         return EvidencePullRequest(self.root, api=self.client.release_pr_request,
             authorize=self.authorize, review=self.review, verify_merged=self.verify_merged)
 
+    def test_oversized_generated_document_is_rejected_before_enrollment(self):
+        self.spec["tag"] = "lmdj-v" + "1" * 10000 + ".0.0.0"
+        with self.assertRaisesRegex(EvidencePrError, "document.*transport"):
+            self.controller.advance(self.spec)
+        self.assertFalse(self.root.exists(), "local validation must precede enrollment")
+        self.assertEqual(self.calls, [], "invalid document must not reach HTTP")
+
+    def test_largest_generated_document_within_transport_bound_is_sent(self):
+        self.spec["tag"] = "lmdj-v1.0.0.0"
+        baseline = len(pr_document(self.spec)["body"])
+        digits = 1 + (20000 - baseline) // 2  # Tag appears twice in the body.
+        self.spec["tag"] = "lmdj-v" + "1" * digits + ".0.0.0"
+        self.document = pr_document(self.spec)
+        self.assertLessEqual(len(self.document["body"]), 20000)
+        self.assertGreater(len(self.document["body"]) + 2, 20000)
+        self.assertEqual(self.controller.advance(self.spec)["status"], "verified")
+        posted = [body for method, _, body in self.calls if method == "POST"]
+        self.assertEqual(posted, [self.document])
+
     def authorize(self, spec):
         self.assertEqual(spec, self.spec)
         self.authorizations += 1

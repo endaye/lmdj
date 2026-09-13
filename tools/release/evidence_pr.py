@@ -12,6 +12,7 @@ import re
 import uuid
 
 from .batch_reference import digest, positive, sha
+from .github_api import valid_release_pr_document
 from .model import canonical_json, canonical_sha256
 from .orchestration import RequestJournal, _validate_evidence
 from .orchestration_driver import Observation
@@ -40,7 +41,7 @@ def validate_spec(spec):
 def pr_document(spec):
     validate_spec(spec)
     build = spec["tag"].removeprefix("lmdj-v")
-    return {"title": f"docs(release): record {spec['tag']} publication",
+    document = {"title": f"docs(release): record {spec['tag']} publication",
         "body": ("## Publication evidence\n\n"
             f"Release: https://github.com/endaye/lmdj/releases/tag/{spec['tag']}\n\n"
             f"Candidate target: `{spec['target_revision']}`\n\n"
@@ -53,6 +54,8 @@ def pr_document(spec):
             f"<!-- lmdj-release-evidence-pr.v1 {canonical_sha256(spec)} -->\n"),
         "head": "docs/release-evidence-" + spec["operation_id"], "base": "main",
         "draft": False, "maintainer_can_modify": False}
+    require(valid_release_pr_document(document), "generated document is outside the transport bounds")
+    return document
 
 
 class EvidencePullRequest:
@@ -216,6 +219,7 @@ class EvidencePullRequest:
     def advance(self, spec):
         validate_spec(spec)
         spec = deepcopy(spec)
+        pr_document(spec)  # Deterministic local refusal must precede durable intent.
         with RequestJournal(self.root) as journal:
             state = self._state(journal, spec)
             def result(status, evidence=None):
