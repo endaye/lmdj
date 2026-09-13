@@ -297,6 +297,22 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME build.release_candidate_source_projection
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_source_test.py SourceProjectionTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_source_binding
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_source_test.py SourceBindingTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
   NAME build.release_candidate_cut_recovery
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_cut_test.py CutRecoveryTest

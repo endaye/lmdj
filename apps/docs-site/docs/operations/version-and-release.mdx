@@ -228,6 +228,11 @@ binding，再暂存、验证、以 expected-source 更新分支并复验。中�
 回执为准；脚本存在不等于完整旅程已通过，更不证明远端审查、签名或无人值守服务可用。
 快照 inventory、可变版本清单、切版暂存及 witness 使用 `apps/architecture-portal` 的
 实际 Git 路径；`apps/docs-site` 的兼容符号链接仍属于不可变来源，不能作为暂存路径。
+候选源码核验器读取私有来源、快照及切版 binding，按已记录的原始字节重建切版树；
+合入时在实际 squash 父提交上核对原候选输入，再验证候选改动完整叠加后的树。
+它保留父提交允许新增的文档，拒绝产品输入漂移、丢失父提交内容或多父 merge；后续
+main 推进不重新选择候选。此本地对象证明不替代真实 main 认证、Task 测试、独立审查、
+witness、版本分配竞争复查或完整 CI；远端 PR 总控仍待接线。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
 私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
 不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。
