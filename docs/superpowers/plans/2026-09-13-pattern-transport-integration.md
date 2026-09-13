@@ -33,6 +33,9 @@ Implement T0 → T1 → T2 → T3 → T4. Each is one isolated, declared Task an
 - `packages/application-facade/CMakeLists.txt` and new `tests/core/facade/pattern_transport_executor_test.cpp`.
 - `packages/web-runtime-platform/src/bridge.cpp`, `packages/web-runtime-platform/include/lmdj/web_runtime/control_runtime.hpp`, `packages/web-runtime-platform/src/control_runtime.cpp`, `packages/web-runtime-platform/CMakeLists.txt`.
 - `packages/web-runtime-platform/test/control_runtime_test.cpp`, `packages/web-runtime-platform/test/performance_bridge_test.cpp`, `tests/platform/web/audio/realtime_failure.spec.mjs`, `tests/platform/web/audio/realtime_audio_worklet.spec.mjs`, `tests/platform/web/audio/realtime_audio_worklet.html`.
+- New conformance-only `packages/web-runtime-platform/test/pattern_transport_opfs_probe.hpp` and `.cpp` own the real storage probe, keeping Project I/O includes out of production Host source. Only the conformance link compiles them.
+- `scripts/web-toolchain-conformance.sh` runs the new paused-OPFS journey on the already configured isolated WebKit environment as well as the existing Chromium audio suite, catching cross-worker lease/Asyncify regressions on both platforms.
+- `scripts/ci/scope_policy.json`: admit only the two new conformance probe paths to their owning Web lanes. The staged ownership suite found these exact paths unclassified; no general CI repair or broad fallback rule is included.
 - `apps/docs-site/docs/core/modules/application-facade.mdx`, `apps/docs-site/docs/core/modules/web-runtime-platform.mdx`, corresponding `apps/docs-site/diagrams/application-facade.architecture.json` and `web-runtime-platform.architecture.json`, plus generated outputs from the canonical diagram command.
 
 **Port contract:** submit reserves a bounded ticket and returns without invoking blocking preparation/IO inline. Ticket binds runtime generation, transport epoch, command ID and monotonically identified step. Poll returns pending or one retained completion, with typed success/refusal/unknown outcome. Explicit consume is required before ticket reuse. Duplicate submit with changed payload is refused; timeout neither erases a ticket nor retries an effect. Queue exhaustion is a refusal before effect. No timer qualifies as completion.
@@ -41,11 +44,17 @@ Execution ownership must be proven in this Task. A dedicated non-audio execution
 
 During pre-admission preparation and after acknowledged cutoff, live input remains live-only and must run while IO is paused. During admission and fence retention, preserve existing post-enqueue append result semantics: a trigger that needs durable candidate retention cannot be reported successful early. This is not permission to move input into a second queue or make journaling fire-and-forget.
 
-- [ ] Register the native component target `lmdj_pattern_transport_executor_tests` / CTest `facade.pattern_transport_executor`; use a deterministic latch to hold work and assert submit returns and the owner can inspect pending state.
-- [ ] Add stale completion, duplicate request, queue full, unknown result and disposal/join tests. Dispose must settle or preserve recovery, not detach a worker retaining freed Facade memory.
-- [ ] In real browser conformance, hold an actual OPFS operation across dispatch turns; prove a live press/release and its existing receipt complete before unblocking prepare/flush. Then release IO, consume completion once and inspect persisted data.
-- [ ] Preserve the existing reentry guard and bridge serialization tests. Extend the declared existing audio browser specs discovered by standard Web toolchain proof; add any additional harness source to this declaration before editing. Do not create an undiscovered spec.
-- [ ] Run native component, relevant bridge tests, real Chromium/isolated WebKit proof and ASan/TSan for any new shared-thread state. Do not proceed to global opt-in if only a fake executor passed.
+- [x] Register the native component target `lmdj_pattern_transport_executor_tests` / CTest `facade.pattern_transport_executor`; use a deterministic latch to hold work and assert submit returns and the owner can inspect pending state.
+- [x] Add stale completion, duplicate request, queue full, unknown result and disposal/join tests. Dispose must settle or preserve recovery, not detach a worker retaining freed Facade memory. Completion is bound to the retained request cell; no externally supplied completion identity can overwrite it. Stale generation/step/epoch and wrong-ticket consume are rejected.
+- [x] In real browser conformance, hold an actual OPFS operation across dispatch turns; prove a live press/release and its existing receipt complete before unblocking prepare/flush. Then release IO, consume completion once and inspect persisted data. The T0 probe pauses `create_immutable` after write/before flush; actual Sequence preparation remains T1.
+- [x] Preserve the existing reentry guard and bridge serialization tests. Extend the declared existing audio browser specs discovered by standard Web toolchain proof; add any additional harness source to this declaration before editing. Do not create an undiscovered spec.
+- [x] Run native component, relevant bridge tests, real Chromium/isolated WebKit proof and ASan/TSan for any new shared-thread state. Do not proceed to global opt-in if only a fake executor passed.
+
+T0 local evidence (Mac arm64, 2026-09-13): six executor cases pass in `dev`, `asan` and `tsan`; `host.web_control_runtime`, `host.web_performance_bridge` and `host.web_source_boundary` pass. The conformance-off Web target builds without the probe exports/hook. `scripts/docs-site.sh check` passes (144 tests, 47 routes); staged ownership passes 74/74 after adding the two exact probe paths.
+
+The complete `scripts/web-toolchain-conformance.sh proof` passes with `EMSDK=/Users/endaye/Projects/lmdj/build/toolchains/emsdk`, `TMPDIR=/private/tmp`, `CMAKE_BUILD_PARALLEL_LEVEL=6` and the supported `LMDJ_WEBKIT_OPFS_EXECUTABLE=/Users/endaye/Library/Caches/ms-playwright/webkit-2336/pw_run.sh` override. This is native arm64 WebKit 26.5, not the unfinished 26.6 download and not a Windows/WSL cache copy. Chromium: toolchain 2, Project I/O 31, audio 23 pass. WebKit: toolchain 1 pass/1 existing capability skip; persistent-profile Project I/O 23 pass/8 existing Chromium-owned skips; new paused-OPFS journey 1 pass. Skips are not positive platform acceptance. The default Mac `/var` temporary path initially failed the existing environment resolver's canonical-path assertions; the same five tests pass with canonical `TMPDIR`, without assertion or resolver changes.
+
+The browser journey retains the full sequence: actual write held before flush → existing Bank/live press/voice outcome and release receipt → nonblocking shutdown request plus Control status → IO release and exact readback → once-only consumption and worker-owned lease destruction → new-worker lease reacquisition/readback → browser reads identical persisted bytes. T1–T4, production lifecycle barriers and Creator global opt-in remain pending; T0 adds no Project storage migration or deletion.
 
 If the current platform cannot implement this port without changing #725 successful/failed/unknown admission outcomes or violating single-owner Asyncify/lease rules, record that exact dependency and stop the adapter implementation. Do not weaken the approved architecture to fit the existing dispatch loop.
 
@@ -157,13 +166,17 @@ For concurrency changes use the equivalent registered targets in `asan` and `tsa
 
 ## Version Management
 
-Version impact: none for this planning Task; no active manifests, Product Build or Assembly changed.
+Version impact: none for the planning change and staged T0 source Task; no active manifests, Product Build or Assembly changed.
+
+T0 implementation is staged source only: a new additive C++ port/header and conformance-only Web probe, with no existing public layout or Web protocol change. No active manifest identity or Product Build is allocated; distribution still requires the assessment below.
 
 T0–T4 are staged source integration until allocation. They add public Facade/runtime APIs and change Host behavior. Assess C++ ABI (including changed layouts), Web protocol capability/version and the complete active manifest consumer closure before distributing a build. Carry forward the staged Audio Runtime ABI and Sequence storage format boundaries from the preceding plans. No old storage reader/writer compatibility is required; unsupported data remains preserved. Do not hand-edit generated Assembly locks or reuse old binaries across the ABI boundary. A team-test/release allocation is a separate version Task requiring current manifest-derived identities and an immutable portal snapshot; no version number is guessed here.
 
 ## Documentation Impact
 
-Documentation impact: none — this Task adds future integration instructions and links them from the migration plan, without changing current implemented portal facts.
+Documentation impact: required
+Affected portal pages: /core/modules/application-facade/ /core/modules/web-runtime-platform/
+The original planning-only change had no portal impact. T0 updates current pages and architecture diagram sources/generated outputs to distinguish the executor foundation from the still-pending global coordinator/Creator integration.
 
 Implementation Tasks declare Documentation impact: required with their exact affected routes listed above, update current pages/diagram sources and run the portal check in the same Task. Any additional affected route/file must be added to the owning declaration before editing. Do not rewrite prior snapshots or describe the full transport as implemented when only a dependency is present.
 

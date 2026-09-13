@@ -165,9 +165,11 @@ if(EMSCRIPTEN)
     _lmdj_web_audio_callback_heartbeat
   )
   if(LMDJ_WEB_AUDIO_CONFORMANCE)
+    target_sources(lmdj_web_runtime_host PRIVATE test/pattern_transport_opfs_probe.cpp)
     list(
       APPEND lmdj_web_runtime_exports
       _lmdj_web_audio_test_poll
+      _lmdj_web_audio_test_transport_probe
       _lmdj_web_audio_test_render_calls
       _lmdj_web_audio_test_output_energy
       _lmdj_web_audio_test_reset_output_energy

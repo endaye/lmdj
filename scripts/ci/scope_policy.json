@@ -107,6 +107,8 @@
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/performance_master_capture.test.mjs"}, "lanes": ["portal", "web_toolchain", "web_runtime_host", "creator"]},
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/performance_master_tap_worklet.test.mjs"}, "lanes": ["portal", "web_toolchain", "web_runtime_host", "creator"]},
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/performance_protocol.test.mjs"}, "lanes": ["portal", "web_toolchain", "web_runtime_host", "creator"]},
+    {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/pattern_transport_opfs_probe.cpp"}, "lanes": ["web_toolchain"], "note": "only the LMDJ_WEB_AUDIO_CONFORMANCE target compiles this paused-OPFS probe"},
+    {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/pattern_transport_opfs_probe.hpp"}, "lanes": ["web_toolchain"], "note": "conformance-only probe interface; not included by production Web targets"},
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/protocol.test.mjs"}, "lanes": ["portal", "web_toolchain", "web_runtime_host", "creator"]},
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/runtime_loader.test.mjs"}, "lanes": ["portal", "web_toolchain", "web_runtime_host", "creator"]},
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/runtime_session.test.mjs"}, "lanes": ["portal", "web_toolchain", "web_runtime_host", "creator"]},

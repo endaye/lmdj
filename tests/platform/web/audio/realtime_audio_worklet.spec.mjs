@@ -1,4 +1,5 @@
 import {expect, test} from "@playwright/test";
+import {test as opfsTest} from "../project_io/opfs_browser.fixture.mjs";
 
 
 const FORMAL_HOST_PAGE = "/formal-audio/lmdj-web-runtime.html";
@@ -57,6 +58,66 @@ async function activateFromClick(page, sampleRate) {
   return page.evaluate(() => window.__lmdjFormalActivation);
 }
 
+
+opfsTest("live press and release complete while an executor owns a paused OPFS write", async ({page}) => {
+  opfsTest.setTimeout(120_000);
+  await waitForFormalHost(page);
+  expect((await activateFromClick(page, 48_000)).ok).toBe(true);
+  const command = (action) => page.evaluate((value) =>
+    window.Module._lmdj_web_audio_test_transport_probe(value), action);
+  const until = async (expected) => {
+    await expect.poll(async () => {
+      expect(await command(2)).toBeGreaterThanOrEqual(0);
+      const state = await command(0);
+      expect(state, "OPFS probe failed").not.toBe(9);
+      return state;
+    }, {timeout: 30_000}).toBe(expected);
+  };
+  try {
+    expect(await command(1)).toBe(1);
+    await expect.poll(async () => {
+      await command(2);
+      expect(await command(0), "OPFS prepare failed").not.toBe(9);
+      return command(5);
+    }, {timeout: 30_000}).toBe(1);
+    expect(await command(0)).toBe(1);
+
+    // This is the existing real Bank/press/voice outcome journey, on the same
+    // control lane which would be blocked by an inline storage operation.
+    const proof = await page.evaluate(() =>
+      window.lmdjWebRuntimeHostTest.runSharedEngineProof());
+    expect(proof.outcome).toMatchObject({
+      sequence: proof.admittedSequence, outcome: "voice_started",
+    });
+    expect(proof.outputEnergy).toBeGreaterThan(0);
+    const released = await page.evaluate(() =>
+      window.lmdjWebRuntimeHost.transport.send({
+        protocol_version: 1, request_id: crypto.randomUUID(),
+        operation: "trigger", payload: {slot: 0, kind: "release"},
+      }));
+    expect(released).toMatchObject({ok: true, result: {accepted: true}});
+    expect(await command(0)).toBe(1); // IO still held, no early completion.
+    await expect.poll(() => command(4)).toBe(1);
+    const status = await page.evaluate(() =>
+      window.lmdjWebRuntimeHost.transport.send({
+        protocol_version: 1, request_id: crypto.randomUUID(),
+        operation: "host.status", payload: {},
+      }));
+    expect(status.ok).toBe(true); // Shutdown request did not join inline.
+    expect(await command(0)).toBe(1);
+    expect(await command(6)).toBe(1);
+    await until(4); // Exact bytes read, completion consumed once, owner stopped.
+    await expect.poll(() => command(3)).toBe(1);
+    await until(6); // New worker reacquires lease and reads the same exact bytes.
+    expect(await page.evaluate(async () => {
+      const root = await navigator.storage.getDirectory();
+      const directory = await root.getDirectoryHandle("transport-executor-proof");
+      return (await (await directory.getFileHandle("receipt")).getFile()).text();
+    })).toBe("retained OPFS transport completion");
+  } finally {
+    await command(6); // Never leave the intentional latch held on assertion failure.
+  }
+});
 
 test("compatibility press renders the published Bank through the Wasm AudioWorklet", async ({page}) => {
   test.setTimeout(120_000);

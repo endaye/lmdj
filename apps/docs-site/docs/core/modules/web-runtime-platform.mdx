@@ -35,6 +35,15 @@ Runtime Session 启动只运行一次真实 Control Worker/OPFS capability probe
 ## 8. 测试与证据
 C++ manifest/control/realtime tests、Node Runtime Session tests、Chromium/WebKit browser proof 与分发验证覆盖共享边界；C++ 生产路径精确验证 live hit 后 pending event 从下一 Bar 重复、BPM rebuild 不丢 overlay、owner loss 清理 active overlay、cleanup publication failure 停止/清空 engine、Stop exact replay 恢复一次 clean-publication failure，且无重复/空洞/陈旧 overlay。failure hook 只编入 private testable target，production archive symbol/marker gate 阻止泄漏。Node 精确断言 Host suspend 未完成时 `AudioContext` 仍为 running，Creator packaged Proof 覆盖真实 Sample Cook split 后的 suspend→activate→Retry Prepare，并继续覆盖 recovery readiness 的 `false -> true -> false -> running` 序列。Stage 10 的新增覆盖：`performance_master_tap_worklet.test.mjs` 覆盖 tap 的分批、控制消息精确形状与停止确认；`performance_master_capture.test.mjs` 覆盖消费侧的精确键校验、generation 隔离、sequence 连续性与停止超时结算；`performance_protocol.test.mjs` 覆盖 Pattern Slot 与 Performance 操作在 Host 协议上的注册与信封校验；`performance_bridge_test.cpp` 覆盖 Control 侧的 Performance 桥接；`manifest_gate_test.cpp` 覆盖九项 resource limit 与 `perform_master_tap_worklet` 角色计数门禁。
 ## 9. 限制与下一门禁
+
+全局 Pattern transport 的 T0 conformance 使用 Facade 独立执行线程：真实 OPFS
+immutable write 在写入后、flush 前暂停时，同一 Control lane 仍完成既有 Bank
+准备、live press/voice receipt、release 与状态查询；释放后检查完整落盘字节，
+原线程销毁 writer lease，再由新执行线程重新获取并读取。测试暂停钩子和导出仅存在于
+`LMDJ_WEB_AUDIO_CONFORMANCE` 构建。生产 ControlBridge 的串行 dispatch 和 OPFS
+Asyncify 重入拒绝保持不变；此基础验证不代表生产 Sequence 已迁移到异步线程，
+也不代表全局播放/录制六态、session teardown barrier 或 Creator 默认入口已验收。
+
 自动化不替代物理 MIDI、Safari/iPad Touch、声学延迟或主观听感验收；Perform 录制与 master tap 的自动化绿色只证明消息形状、状态机与分发身份，物理验收仍为 deferred。分发门禁通过也不代表已经产生不可变快照、标签、Release、部署或 Channel 提升，这些是各自独立的后续授权边界。
 ## 10. 版本身份
 版本和依赖由 `module.json` 与 Product Assembly Lock 派生。

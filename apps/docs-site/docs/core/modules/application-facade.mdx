@@ -28,6 +28,14 @@ transport 的输入转换、历史 Quantize/Swing 权威信息和恢复 UI 已�
 
 ## 3. 所有权与依赖
 
+`pattern_transport_ports.hpp` 提供 staged 的单单元异步执行端口：ticket 绑定
+Runtime generation、transport epoch、Command ID 和单调 step；请求与结果 metadata
+各有固定上限。重复请求不重新执行，未消费的 immutable completion 占用容量，
+异常/不合规结果保留为 `unknown`，不能据此重试副作用。work owner 的创建、执行、
+writer lease 释放全部在同一非音频线程，控制侧 submit/inspect 不等待 IO。
+shutdown 请求只停止接收新工作；已接收操作继续结算，调用方观察 stopped 后才销毁。
+该端口尚未接入全局 transport coordinator，既有 Sequence admission 行为不变。
+
 依赖全部六个下层 Module；Native/CLI/MCP Host 只依赖本 Facade，浏览器 Host 只依赖封装本 Facade 的 Web Runtime Platform。Performance 协作者由 Host 或 Product Assembly 注入，Facade 只依赖其接口，不依赖任何具体平台实现。
 
 同一 Module 内的 `lmdj::performance_runtime` 静态目标独立拥有

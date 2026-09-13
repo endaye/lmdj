@@ -343,6 +343,12 @@ case "$command_name" in
       --project=chromium \
       "$web_test_root/audio/realtime_audio_worklet.spec.mjs" \
       "$web_test_root/audio/realtime_failure.spec.mjs"
+    # A dedicated storage worker must not suspend live Control admission on
+    # either OPFS platform. Reuse the isolated persistent WebKit fixture.
+    run_proof_specs transport-opfs-webkit \
+      --project=webkit \
+      "$web_test_root/audio/realtime_audio_worklet.spec.mjs" \
+      --grep 'executor owns a paused OPFS'
     cleanup_proof_server
     echo "Web Toolchain Conformance Proof: PASS"
     ;;
