@@ -9,11 +9,13 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 import zipfile
+import zlib
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -21,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_changelog_binding_test as fixtures
 from tools.release.changelog import binding
 from tools.release.changelog_site import project, LEDGER, PUBLICATIONS
-from tools.release.changelog_site_evidence import ChangelogSiteEvidenceConsumer, SiteEvidenceError, WORKFLOW
+from tools.release.changelog_site_evidence import ChangelogSiteEvidenceConsumer, SiteEvidenceError, WORKFLOW, MAX_BYTES
 from tools.release.github_api import GitHubClient, GitHubApiError, HttpResponse
 from tools.release.model import load_ledger_document, canonical_json
 
@@ -238,6 +240,51 @@ class SiteEvidenceTest(unittest.TestCase):
         self.pack(payload=payload)
         with self.assertRaisesRegex(SiteEvidenceError, "JSON"):
             self.verify()
+
+    def test_forged_zip_size_cannot_request_unbounded_decompression(self):
+        self.assertEqual(self.verify()["run_id"], 101)
+        prefix = canonical_json(self.document)
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("cloudflare-portal-101.json", prefix + b" " * (16 * MAX_BYTES))
+        forged = bytearray(stream.getvalue())
+        central = forged.index(b"PK\x01\x02")
+        for offset in (14, central + 16):
+            struct.pack_into("<I", forged, offset, zlib.crc32(prefix))
+        for offset in (22, central + 24):
+            struct.pack_into("<I", forged, offset, len(prefix))
+        self.zip = bytes(forged)
+        self.artifact.update(size_in_bytes=len(self.zip), digest="sha256:" + hashlib.sha256(self.zip).hexdigest())
+        self.assertLess(len(self.zip), MAX_BYTES)
+        factory = zipfile._get_decompressor
+        observed = []
+        class RecordingDecompressor:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self.inner, name)
+
+            def decompress(self, data, max_length=0):
+                result = self.inner.decompress(data, max_length)
+                observed.append((max_length, len(result)))
+                return result
+        with patch.object(zipfile, "_get_decompressor", side_effect=lambda *a: RecordingDecompressor(factory(*a))):
+            self.assertEqual(self.verify()["run_id"], 101)
+        self.assertTrue(observed)
+        self.assertTrue(all(0 < limit <= MAX_BYTES + 1 and size <= MAX_BYTES + 1
+                            for limit, size in observed), observed)
+
+    def test_compression_without_bounded_decoder_is_refused(self):
+        for compression in (zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA):
+            with self.subTest(compression=compression):
+                stream = io.BytesIO()
+                with zipfile.ZipFile(stream, "w", compression=compression) as archive:
+                    archive.writestr("cloudflare-portal-101.json", canonical_json(self.document))
+                self.zip = stream.getvalue()
+                self.artifact.update(size_in_bytes=len(self.zip), digest="sha256:" + hashlib.sha256(self.zip).hexdigest())
+                with self.assertRaisesRegex(SiteEvidenceError, "compression does not support bounded decoding"):
+                    self.verify()
 
     def test_publication_record_drift_cannot_reuse_site_receipt(self):
         self.record["release_id"] += 1

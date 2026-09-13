@@ -32,6 +32,22 @@ command returns are retained in the agent execution transcript, not the older
 log paths below. No real release, provider, remote artifact or live-site
 acceptance is claimed; commit and current-head PR review remain pending.
 
+PR #1276 review run `34743493795/1` on `b626ee10` published successfully.
+Independent reproduction confirmed its ZIP resource-bound finding: a forged
+small central-directory size permits an unbounded `archive.read` to inflate a
+large stream before truncating to the declared size. The real-consumer regression
+failed with a requested decompression limit of 1 GiB. Decoding now uses a bounded
+member read and accepts only stored/deflated ZIP methods; BZIP2/LZMA's stdlib
+decoders do not honor that output limit and are refused. The companion pagination
+finding is false: an independent real `pages()` exercise returned 10,000 rows in
+exactly 100 calls, pages 1 through 100; Python's range stop is exclusive.
+Amendment verification passes: consumer 22/22, selected CTest suite 1/1 and API
+39/39 (all exit 0). Independent `/root/native_output_review` inspected the three
+amended files, independently ran 22/22 and replayed the forged stream: actual
+decompression output is now bounded to 2,097,153 bytes instead of about 16 MiB.
+No remaining actionable finding. Portal content/tooling is unchanged from the
+delivery's full 144-test/47-route check; current-head PR rereview remains pending.
+
 ## Scope
 
 Add a read-only consumer and closed GitHub GET transport. Reviewed controller

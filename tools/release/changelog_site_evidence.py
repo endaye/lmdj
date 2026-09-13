@@ -178,7 +178,11 @@ class ChangelogSiteEvidenceConsumer:
                 require(len(members) == 1 and members[0].filename == f"cloudflare-portal-{run_id}.json"
                         and not members[0].is_dir() and members[0].file_size <= MAX_BYTES
                         and (members[0].external_attr >> 16) & 0o170000 != 0o120000, "artifact member identity or size is unsafe")
-                payload = archive.read(members[0])
+                require(members[0].compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED),
+                        "artifact compression does not support bounded decoding")
+                with archive.open(members[0]) as member:
+                    payload = member.read(MAX_BYTES + 1)
+                require(len(payload) <= MAX_BYTES, "artifact decoded payload is oversized")
         except (zipfile.BadZipFile, OSError, RuntimeError):
             raise SiteEvidenceError("artifact ZIP is unreadable") from None
         document = _json(payload)
