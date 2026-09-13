@@ -1588,6 +1588,31 @@ void admission_timing_profile_cannot_backdate_a_transferred_checkpoint() {
   LMDJ_CHECK(f.state().admission->timing_profiles == std::vector{profile});
 }
 
+void admission_snapshot_rechecks_profile_against_earlier_input() {
+  for (const bool transferred : {false, true}) {
+    AdmissionFixture f;
+    f.prepare();
+    f.retain();
+    LMDJ_CHECK(f.candidate(f.press).has_value());
+    if (transferred) LMDJ_CHECK(f.transfer(f.transfer()).has_value());
+    auto profile = f.profile();
+    profile.first_watermark = 11;
+    profile.runtime_frame = 1000;
+    LMDJ_CHECK(f.journal.retain_admission_timing_profile(
+        f.bundle, f.session, f.preparation.identity, profile).has_value());
+    const auto sealed = f.journal.seal(f.bundle, f.session, "owner_lost");
+    LMDJ_CHECK(sealed.has_value());
+    LMDJ_CHECK(f.journal.list_recoverable(f.bundle).has_value());
+    rewrite_last_record(sealed.value(), [&](auto& envelope) {
+      envelope["payload"]["journal"]["admission"]["timing_profiles"][0]["runtime_frame"] = 999;
+      envelope["checksum"] = sha256(lmdj::foundation::canonical_json(envelope.at("payload")));
+    });
+    const auto bytes = read_text(sealed.value());
+    LMDJ_CHECK(!f.journal.list_recoverable(f.bundle).has_value());
+    LMDJ_CHECK(read_text(sealed.value()) == bytes);
+  }
+}
+
 void admission_missing_historical_settings_preserves_unsupported_bytes() {
   AdmissionFixture f;
   f.prepare();
@@ -2489,6 +2514,7 @@ int main(int argc, char** argv) {
     admission_exact_retry_and_collisions();
     admission_timing_profiles_reopen_and_cannot_rewrite_input();
     admission_timing_profile_cannot_backdate_a_transferred_checkpoint();
+    admission_snapshot_rechecks_profile_against_earlier_input();
     admission_missing_historical_settings_preserves_unsupported_bytes();
     admission_bounds_and_integer_extremes();
     admission_final_slot_closes_atomically();

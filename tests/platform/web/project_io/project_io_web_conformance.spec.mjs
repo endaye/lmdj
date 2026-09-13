@@ -482,6 +482,38 @@ test.describe("S2 actual OPFS admission", () => {
     await retainAdmissionEvidence(testInfo, "reserved-terminal.json", {full, fenced, cutoff, transferred, terminal, flushed, completed, reopened, retry});
   });
 
+  for (const transferred of [false, true]) {
+    test(`sealed timing profile rechecks earlier ${transferred ? "transfer" : "candidate"}`, async ({context, page}, testInfo) => {
+      test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
+      const bundle = `admission-profile-history-${transferred}-${Date.now()}`;
+      const options = {convert: "1"};
+      for (const step of ["prepare", "fence", "candidate", "release",
+        ...(transferred ? ["transfer"] : [])]) {
+        expect((await admissionRun(context, bundle, step, options)).mutation).toEqual(STORAGE_SUCCEEDED);
+      }
+      expect((await admissionRun(context, bundle, "profile", {...options, after: "1"})).mutation)
+        .toEqual(STORAGE_SUCCEEDED);
+      const sealed = await admissionRun(context, bundle, "seal", options);
+      expect(sealed.recoveries).toHaveLength(1);
+      const relative = sealed.recoveries[0].path.split(`${bundle}.lmdj/`)[1];
+      const original = await admissionFile(page, bundle, relative);
+      const newline = original.indexOf("\n");
+      const envelope = JSON.parse(original.slice(0, newline));
+      envelope.payload.journal.admission.timing_profiles[0].runtime_frame = 30999;
+      envelope.checksum = admissionDigest(envelope.payload);
+      const corrupt = canonicalJson(envelope) + original.slice(newline);
+      await admissionFile(page, bundle, relative, corrupt);
+      const rejections = [];
+      for (let reopen = 0; reopen < 2; ++reopen) {
+        const rejected = await admissionRun(context, bundle, "read-invalid-sealed");
+        expect(rejected.read).toEqual({status: "failed", errorCode: "INVALID_PROJECT", storageCondition: ""});
+        expect(await admissionFile(page, bundle, relative)).toBe(corrupt);
+        rejections.push(rejected);
+      }
+      await retainAdmissionEvidence(testInfo, "invalid-profile-history.json", {bundle, relative, transferred, original, corrupt, rejections});
+    });
+  }
+
   for (const sealed of [false, true]) {
     for (const version of ["v1", "v2", "v99"]) {
       test(`${sealed ? "sealed" : "active"} ${version} discriminator rejected without byte mutation`, async ({context, page}, testInfo) => {

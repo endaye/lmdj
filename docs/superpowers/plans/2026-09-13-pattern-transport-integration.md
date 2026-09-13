@@ -78,6 +78,8 @@ Portal check passes (144 tests, 47 routes), dependency/active-tree checks pass, 
 
 The complete native dev target graph builds. `python3 tests/build/facade_surface_sharding_test.py build/core/dev` then passes. Its first invocation lacked the required build-directory argument; the second could not discover commands for unbuilt executables in the partial build. Building the registered binaries cleared discovery without editing the gate or shard inventory; the new recovery case remains in the existing recovery shard.
 
+**PR #1295 review follow-up:** retained review run `34765825201`, attempt 2, identified a real snapshot validation gap. The native regression first failed because a rechecksummed sealed profile could predate an earlier candidate; the shared validator now checks earlier candidates and nonterminal transfer checkpoints on both append and snapshot reads, without constraining old settings by later input or a terminal cutoff. Native and real OPFS regressions separately exercise retained-candidate and transferred-prefix histories, reopen a valid sealed snapshot first, then reject the damaged snapshot while preserving every byte. A separate converter case checks initial Quantize enabled/Swing 60 without a timing profile (14 reducer/converter scenarios). These remain conversion-producer tests, not prepared-owner or global transport acceptance. Both failed review publication attempts remain recorded; neither is current-head review approval.
+
 **Files:**
 
 - `packages/application-facade/include/lmdj/facade/application.hpp`, `packages/application-facade/src/application.cpp`.

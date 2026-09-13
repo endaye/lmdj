@@ -556,6 +556,21 @@ void profiles_valid(const SequenceAdmissionState& s, std::uint64_t revision) {
                   p.runtime_frame >= previous->runtime_frame,
               "admission timing history regressed");
     }
+    // Recheck the temporal boundary when opening a sealed snapshot too. Only
+    // earlier input constrains this anchor; later transfers (and the terminal
+    // cutoff, whose watermark is zero) must not invalidate historical settings.
+    for (const auto& candidate : s.candidates) {
+      if (candidate.watermark < p.first_watermark) {
+        require(candidate.runtime_frame <= p.runtime_frame,
+                "admission timing profile predates earlier candidate");
+      }
+    }
+    for (const auto& transfer : s.transfers) {
+      if (!transfer.terminal && transfer.last_watermark < p.first_watermark) {
+        require(transfer.checkpoint.last_runtime_frame <= p.runtime_frame,
+                "admission timing profile predates earlier transfer");
+      }
+    }
     previous = &p;
   }
 }

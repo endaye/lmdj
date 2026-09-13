@@ -577,9 +577,11 @@ std::optional<nlohmann::json> run_admission_action() {
                                       : Result<void>::failure(converted.error());
     } else mutation = journal.transfer_admission_prefix(bundle, session, identity, transfer);
   } else if (step == "profile") {
+    const bool after_input = query("after") == "1";
     mutation = journal.retain_admission_timing_profile(bundle, session, identity,
-        {foundation::CommandId{uuid("313")}, 10, source_pattern.id, 21, 0,
-         37000, 4'147'200'000, 60, true, 60});
+        {foundation::CommandId{uuid("313")}, after_input ? 12U : 10U,
+         source_pattern.id, 21, 0, after_input ? 31000U : 37000U,
+         after_input ? 3'456'000'000ULL : 4'147'200'000ULL, 60, true, 60});
   } else if (step == "close") {
     mutation = journal.close_admission(bundle, session, identity,
         {release.watermark, SequenceAdmissionCloseReason::requested});

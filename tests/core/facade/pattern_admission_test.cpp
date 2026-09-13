@@ -50,6 +50,21 @@ void durable_candidates_use_the_retained_origin() {
   LMDJ_CHECK(transfer.value().journal_input_sequence == 1);
 }
 
+void preparation_preserves_nondefault_quantization_without_a_profile() {
+  using namespace lmdj;
+  auto journal = retained_fixture();
+  journal.admission->preparation.quantize_enabled = true;
+  journal.admission->preparation.swing_percent = 60;
+  journal.admission->candidates[0].runtime_frame = 31000;
+  journal.admission->candidates[1].runtime_frame = 37000;
+  LMDJ_CHECK(journal.admission->timing_profiles.empty());
+  const auto transfer = facade::detail::build_admission_transfer(
+      journal, foundation::CommandId{uuid(6)}, 11, false);
+  LMDJ_CHECK(transfer.has_value());
+  LMDJ_CHECK(transfer.value().recoverable_tail ==
+      std::vector<PatternEvent>({{{0, 1}, 1248, 240, 90}}));
+}
+
 void retained_profiles_preserve_clock_and_quantization_history() {
   using namespace lmdj;
   using namespace project_io;
@@ -280,6 +295,7 @@ void multi_bar_onset_does_not_wrap_at_one_bar() {
 int main() {
   try {
     durable_candidates_use_the_retained_origin();
+    preparation_preserves_nondefault_quantization_without_a_profile();
     retained_profiles_preserve_clock_and_quantization_history();
     cutoff_excludes_orphans_and_uses_ordinary_terminal_completion();
     conversion_retry_returns_the_retained_identity_without_new_input();
@@ -292,7 +308,7 @@ int main() {
     swing_uses_the_existing_odd_sixteenth_grid();
     release_duration_stops_at_the_pattern_end();
     multi_bar_onset_does_not_wrap_at_one_bar();
-    std::cout << "pattern admission tests: PASS (13 scenarios)\n";
+    std::cout << "pattern admission tests: PASS (14 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
