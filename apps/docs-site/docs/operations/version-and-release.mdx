@@ -178,6 +178,14 @@ Task 验证通过且内容没有漂移时，才通过 expected-old ref 更新生
 Commit。验证失败保留现场与原 branch head，重启仍使用同一提交身份。它不创建 PR、
 push、合并或认证发布授权；总控必须提供刚核验的公开记录及可信 Task 验证器，不能
 把内部 API 返回的 committed 状态当作已审查、已合入或网站已发布。
+内部分支传输器现可向固定 canonical remote 推送一个 exact commit 到 operation 绑定的
+证据分支；使用独立 Git 配置、同一认证 token 和 expected-absent lease，不覆盖已有 ref。
+持久意图先于推送；ACK 丢失后只观察同一 ref，无法证明结果时不重推，已存在的精确 ref
+可复用但删除后不会重建。Git 子进程继承 writer lock，控制器退出不释放仍在推送的独占权。
+首次登记会先持久保存独立标记；标记存在而状态缺失时停止核对，不将未知推送重置为新请求。
+状态写入前验证读回容量，授权回调错误不输出原始异常文本。
+传输器仍要求可信调用方核验原请求、真实 Task 结果、完整源码与有效保护；尚未与生产
+总控 / PR 控制器接通，也没有在本次开发中向 canonical remote 实际推送。
 内部证据 PR 状态机已提供受限 GitHub 创建 / squash merge 传输：绑定 operation、请求、
 远端分支、exact head、认证 actor、numeric repository 和 Task 证据摘要，写操作前持久保存
 意图。POST / PUT ACK 不算完成；超时只查证同一 PR，结果不明不重发。每次恢复重新读取
