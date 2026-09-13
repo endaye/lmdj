@@ -13,6 +13,7 @@ from typing import Callable, Protocol
 
 from .ci_evidence import verify_release_ci
 from .batch_reference import thaw
+from .changelog import ChangelogError, render as render_changelog, verify_source as verify_changelog_source
 from .github_api import (
     BranchProjection,
     CiScopeProjection,
@@ -119,6 +120,11 @@ def prepare(tag: str, context: PrepareContext) -> PreparedRelease:
     if resolved.git.remote_tag_state(tag) is not None:
         raise PrepareError("remote tag already exists; prepare refuses remote tag conflicts")
     run = _verify_ci(resolved, intent)
+    if intent.changelog is not None:
+        try:
+            verify_changelog_source(resolved.repo_root, intent, ledger, thaw(intent.changelog))
+        except ChangelogError as error:
+            raise PrepareError(str(error)) from None
 
     existing = resolved.git.local_tag_state(tag)
     if existing is not None and not _matching_tag(existing, intent.target_revision, resolved.tag_signer_fingerprint):
@@ -310,7 +316,17 @@ def _plan_document(
     if intent.batch_test_evidence is not None:
         document["ci"]["batch_test_evidence"] = thaw(intent.batch_test_evidence)
         document["ci"]["target_revision"] = intent.target_revision
+    if intent.changelog is not None:
+        document["changelog"] = thaw(intent.changelog)
     return document
+
+
+def notes_for_plan(document: dict[str, object]) -> str:
+    if "changelog" in document:
+        return render_changelog(document["changelog"])
+    # Preserve historical plans byte-for-byte; new orchestration admission must
+    # require a frozen changelog. Legacy callers are not cut over here.
+    return f"# { _release_name_from_document(document) }\n\nPrepared locally for `{document['tag']}`.\n"
 
 
 def _release_name(plan: ReleasePlan) -> str:
@@ -342,7 +358,7 @@ def _write_output(
         (staged / "release-plan.json").write_bytes(canonical_json(document))
         (staged / "release-plan.sha256").write_text(digest + "\n", encoding="ascii", newline="\n")
         (staged / "release-notes.md").write_text(
-            f"# { _release_name_from_document(document) }\n\nPrepared locally for `{document['tag']}`.\n",
+            notes_for_plan(document),
             encoding="utf-8", newline="\n",
         )
         os.replace(staged, output)
@@ -479,7 +495,7 @@ def _matches_existing_output(
             return False
         if (output / "release-plan.sha256").read_text(encoding="ascii") != digest + "\n":
             return False
-        expected_notes = f"# { _release_name_from_document(document) }\n\nPrepared locally for `{document['tag']}`.\n"
+        expected_notes = notes_for_plan(document)
         if (output / "release-notes.md").read_text(encoding="utf-8") != expected_notes:
             return False
         assets_root = output / "assets"
