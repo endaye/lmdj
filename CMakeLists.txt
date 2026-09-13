@@ -345,6 +345,14 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME build.release_dispatch_receipt
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_dispatch_receipt_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
   NAME build.release_review_inventory
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_review_inventory_test.py
