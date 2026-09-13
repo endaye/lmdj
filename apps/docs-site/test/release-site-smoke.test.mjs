@@ -93,6 +93,20 @@ test('heading category structure cannot be replaced with the same text paragraph
   assert.equal(result.errors.length, 1);
 });
 
+test('served links cannot use source MDX or index aliases instead of rendered routes', async () => {
+  for (const suffix of ['.mdx', '/index']) {
+    const result = await verify(async (url) => {
+      const $ = load(documents.get(new URL(url).pathname));
+      const link = $('a[href="/releases/1.0.1.0"]');
+      if (new URL(url).pathname === '/releases/') assert.equal(link.length, 1);
+      link.attr('href', '/releases/1.0.1.0' + suffix);
+      return response($.html());
+    });
+    assert.equal(result.errors.length, 1, `served ${suffix} alias must be refused`);
+    assert.equal(result.receipts.length, 1);
+  }
+});
+
 test('extra text outside a paragraph cannot evade the comparison', async () => {
   const result = await verify(async (url) => response(documents.get(new URL(url).pathname).replace('</div>', 'unreviewed claim</div>')));
   assert.equal(result.errors.length, 2);

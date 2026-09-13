@@ -18,7 +18,7 @@ function routeFor(page) {
   return name === 'index' ? '/releases/' : `/releases/${name}/`;
 }
 
-function contentProjection(html, sourceUrl) {
+function contentProjection(html, sourceUrl, sourceMdx = false) {
   const $ = load(html);
   const main = $('.theme-doc-markdown');
   if (main.length !== 1) fail('page has no unique rendered documentation content');
@@ -49,7 +49,10 @@ function contentProjection(html, sourceUrl) {
     try {url = new URL(href, sourceUrl);} catch {fail('rendered link is invalid');}
     if (url.protocol !== 'https:' || url.username || url.password) fail('rendered link is unsafe');
     if (url.origin === sourceUrl.origin) {
-      url.pathname = url.pathname.replace(/\.mdx$/, '').replace(/\/index$/, '').replace(/\/$/, '') || '/';
+      // Convert reviewed source filenames to rendered routes only on the
+      // expected side. A live .mdx or /index target is not route evidence.
+      if (sourceMdx) url.pathname = url.pathname.replace(/\.mdx$/, '').replace(/\/index$/, '');
+      url.pathname = url.pathname.replace(/\/$/, '') || '/';
     }
     return [normalizeText($(element).text()), url.href];
   });
@@ -65,7 +68,7 @@ export async function expectedReleaseContent(page, baseUrl) {
   // arbitrary remote MDX. The source is already the Release's shared renderer.
   const {default: Content} = await evaluate(matter(page.content).content, {...runtime});
   const html = renderToStaticMarkup(runtime.jsx('div', {className: 'theme-doc-markdown', children: runtime.jsx(Content, {})}));
-  return {route, projection: contentProjection(html, sourceUrl), sourceUrl,
+  return {route, projection: contentProjection(html, sourceUrl, true), sourceUrl,
     source_sha256: hash(page.content)};
 }
 

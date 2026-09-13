@@ -119,6 +119,26 @@ local behind PR #1266.
 
 ## Version Management
 
+### Delivery review correction
+
+Runs `34742478622/1` and `34742621673/1` both completed model review but failed
+in publication before `scope.json`; retain both failures. The remote cause is
+not established. Local retained-input/result and live read-only API provenance
+checks do not explain the runner failure; host inspection requires fresh
+Tailscale authentication. No owner waiver or successful remote review is assumed.
+
+The second retained review exposed live-link alias equivalence. A new regression
+first failed on `68a7ae79`: replacing the served version link with `.mdx` still
+returned zero errors. Only expected source filenames now undergo MDX/index route
+conversion; live links retain those suffixes and fail comparison. Trailing slash
+normalization remains. Node 16/16, Python deployment 15/15 and full Portal
+144/144 plus 47 routes passed (exit 0). The actual theme fixture also passed
+both pages, retained at `lmdj-release-render-62swqd` under the same temporary
+parent as the prior fixture. Independent reviewer reran 16 tests and accepted
+the fix. Remaining findings describe unreachable current callers, intentional
+success-only receipts, the closed four-part version grammar, or a timer claim
+explicitly withdrawn in its own body; they do not justify weakening checks.
+
 Version impact: none
 
 Reason: internal Portal verification tooling; no Product Build, Assembly,
