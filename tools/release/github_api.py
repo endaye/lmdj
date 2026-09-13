@@ -562,6 +562,24 @@ class GitHubClient:
         """Download one artifact archive without forwarding credentials onward."""
         return self._download_artifact_archive(artifact.archive_download_url, _CI_SCOPE_SIZE_CAP)
 
+    def get_changelog_site_evidence(self, path: str, *, raw: bool = False) -> object:
+        """Closed read-only transport for exact Portal deployment evidence."""
+        prefix = "/repos/endaye/lmdj"
+        if type(path) is not str or not path.startswith(prefix) or type(raw) is not bool:
+            raise GitHubApiError("why: Portal evidence route is not canonical; remedy: use the exact read-only consumer")
+        suffix = path[len(prefix):]
+        identifier = r"[1-9][0-9]*"
+        page = r"(?:[1-9]|[1-9][0-9]|100)"
+        if raw:
+            if re.fullmatch(rf"/actions/artifacts/{identifier}/zip", suffix) is None:
+                raise GitHubApiError("why: Portal archive route is invalid; remedy: select the authenticated numeric artifact")
+            return self._download_artifact_archive(path, 2 * 1024 * 1024)
+        if not (suffix in ("/branches/main", "/actions/workflows/deploy-cloudflare-portal.yml")
+                or re.fullmatch(rf"/actions/runs/{identifier}(?:/attempts/1)?", suffix)
+                or re.fullmatch(rf"/actions/runs/{identifier}/(?:attempts/1/jobs|artifacts)\?per_page=100&page={page}", suffix)):
+            raise GitHubApiError("why: Portal JSON route is outside the allowlist; remedy: use exact run, first attempt and bounded inventories")
+        return _json_response(self._request("GET", path), {200})
+
     def get_batch_evidence(self, path: str, *, raw: bool = False) -> object:
         """Closed GET-only transport for the inactive full-batch consumer.
 
