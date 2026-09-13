@@ -166,8 +166,14 @@ Release、签名资产、完整 notes 与冻结候选，并在前后重新认证
 run / attempt、成功的 preflight / deploy 与证据上传，并核对唯一 artifact 来源与摘要。
 复用受信本地 Host 校验器，匹配冻结的 tag、target、Build、Site、发布文件与 exact prior；
 返回前复查关联、库存和期限。recovery 记录不代替成功，未知或失败不重复部署或晋级。
-这些是保留证据检查，不证明当前生产别名或线上内容；生产候选与授权组合、部署前 prior
-冻结、最终双 Site 实时复验及旧晋级 reader 接入仍待完成。
+这些保留证据检查本身不证明当前生产别名或线上内容。新增 live effect 将它们与实时
+Host 验证组合：固定 Site API 的只读 GET 禁止重定向和部署写接口；immutable / production
+分别复用完整 HTTP smoke，核对所有资产、安全响应头与负路径。冻结的 index / manifest
+摘要在解析清单和下载资产前比对；内容漂移不会继续下载其资产。前后回读 Site 指针，
+必须仍为冻结的 deploy ID / Site，之后再次认证原部署证据。每次恢复都重新读取网络；
+漂移或不可读阻止后续步骤，不重新部署。稳定摘要不是缓存，也不保证观察之后站点
+不会变化；这不是新一轮浏览器验收。生产候选与授权组合、部署前 prior 冻结、最终完整
+双 Site / Release / Portal / Channel 验收及旧晋级 reader 接入仍待完成。
 完整候选 CI 证据也使用实时 UTC：下载解析后复核有效期，并在全部校验结束前再次检查
 origin / admission / verdict 三份 artifact 的期限；任一途中到期均拒绝认证。
 已发布版本的历史 provenance 路径不读取这些临时 artifact，也不会提供新候选 verdict。
