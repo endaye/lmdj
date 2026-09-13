@@ -158,7 +158,11 @@ publication evidence PR 的创建 POST 与合并 PUT 也在最后一次子级预
 授权与 writer，再检查子级 writer；任一失效均保留未决 intent，恢复不会重发。
 关联成功后还必须调用独立的只读 effect verifier；pending / unknown / conflict 均不会
 推进后续部署或晋级。保存的证据摘要同时绑定真实关联回执与 effect 证据，恢复再次核验。
-这些接口已连接本地编排器，但生产候选绑定与 effect verifier 组合仍待完成。
+这些接口已连接本地编排器。Publication effect 已复用正式公开记录 verifier，核验实际
+Release、签名资产、完整 notes 与冻结候选，并在前后重新认证 exact run / attempt 及关联
+回执。运行仍在执行返回 pending，失败阻断后续步骤；仅有成功运行但 Release / 内容校验
+失败同样不会通过。发布记录摘要在 ledger 正常变为 published 后保持一致，不重复发布。
+生产候选绑定、可信 context / 授权组合及两个部署 effect 的总控接入仍待完成。
 GitHub 没有 expected-head dispatch CAS，末次读取后的 main 漂移仍可能产生不同 control
 运行；该运行不得被认领为请求成功。父级请求服务、effect readiness、全局 tag / Site
 互斥和生产总控仍未接通，不能据此承诺完整无人值守发版。

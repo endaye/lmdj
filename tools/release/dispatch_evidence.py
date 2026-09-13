@@ -95,6 +95,7 @@ class DispatchEvidenceConsumer:
                     "run actor differs")
         # Failure or still-running publication/deployment is intentionally not
         # rejected here: correlation proves origin, not the effect's outcome.
+        return value
 
     def verify(self, *, run_id, actor_id, control_revision, inputs):
         require(type(inputs) is dict, "expected inputs are missing")
@@ -186,6 +187,7 @@ class DispatchEvidenceConsumer:
                 "repository_id":self.repository_id,"actor_id":actor_id,
                 "workflow":self.workflow,"workflow_id":self.workflow_id,"producer_revision":self.producer,
                 "artifact_id":artifact["id"],"artifact_sha256":hashlib.sha256(raw).hexdigest(),
+                "artifact_expires_at":artifact["expires_at"],
                 "receipt_sha256":canonical_sha256(document),"inputs":dict(inputs),
                 "control_revision":control_revision,"tooling_revision":document["tooling_revision"]}
 
