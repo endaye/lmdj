@@ -28,6 +28,14 @@ transport 的输入转换、历史 Quantize/Swing 权威信息和恢复 UI 已�
 
 ## 3. 所有权与依赖
 
+现有 Sequence 的 Pad 事件计算由内部 `PatternEventReducer` 统一实现：
+量化/Swing、同 Pad 重触发、duration 截断、canonical tail 与未释放按键的
+240-tick 收尾继续复用 Domain 规则。它只是受调用方串行保护的同步 overlay
+视图，不拥有 journal、writer lease 或音频时钟；持久化失败的回滚仍由
+Sequence owner 负责。可选 press correlation 为后续 admission 转换提供匹配
+能力，现有 Sequence 仍按 Pad 匹配 release。这里没有新增公共 API、存储格式
+或模块依赖，prepared admission、durable transfer 与全局 transport 接入仍待实现。
+
 `pattern_transport_ports.hpp` 提供 staged 的单单元异步执行端口：ticket 绑定
 Runtime generation、transport epoch、Command ID 和单调 step；请求与结果 metadata
 各有固定上限。重复请求不重新执行，未消费的 immutable completion 占用容量，
