@@ -186,6 +186,13 @@ PR，合并还须可信调用方提供完整审查 / 对话 / 保护门禁及实
 伪造 owner review adoption 或触发 Release / 部署，不能据此宣称已经一键发版。
 持久状态写入不超过读取端容量；独立 enrollment 标记避免把丢失状态当首次运行。
 状态丢失或初始化中断需要核对原请求，不盲目重发；回调错误以固定诊断返回，不透传敏感文本。
+源码门禁现可从真实 Git blobs 重建该次发布的完整预期 tree：PR head 必须是声明 base 上
+唯一一个精确证据提交；squash 必须是 main 上的独立单父提交，tree 必须等于在其实际
+parent 上重新投影的结果。这样既保留期间 main 的无关变更，也拒绝夹带改动、丢失变更
+或用普通 merge / fast-forward 充当 squash。合入后还检查当前 main 的记录及完整页面
+投影，历史祖先中存在 merge 不足以掩盖后续撤回。合法追加的 promotion 不重写原发布
+证明，也不由此门禁获得部署 / 晋级验收。该组件可组合现有公开 Release verifier；真实
+审查、Task 测试回执、请求授权与完整生产总控仍须接通。
 现有 `scripts/docs-site.sh smoke BASE_URL` 已接入发布日志内容检查：从同一冻结源核对
 索引及逐版本 HTML 的完整正文、分类、身份、摘要和链接，不只核对摘要标签。重定向、
 非 HTML、缺失页面或内容漂移都失败；输出的逐页回执带 source / content / response
