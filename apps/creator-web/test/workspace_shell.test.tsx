@@ -2125,13 +2125,16 @@ test("opts into the hardware shell with a read-only overview and returns to the 
   expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
   await user.click(screen.getByRole("button", {name: "Hardware layout"}));
 
+  expect(screen.getByRole("complementary", {name: "Physical controls"})).toBeTruthy();
   const display = screen.getByRole("region", {name: "Overview display"});
   expect(within(display).queryAllByRole("button")).toHaveLength(0);
   expect(within(display).queryAllByRole("link")).toHaveLength(0);
   expect(within(display).queryAllByRole("textbox")).toHaveLength(0);
   expect(screen.getByTestId("hardware-console")).toBeTruthy();
-  expect(within(screen.getByRole("region", {name: "Touch workspace"}))
-    .getByRole("button", {name: "Existing workspace"})).toBeTruthy();
+  expect(screen.getByRole("region", {name: "Pad matrix"})).toBeTruthy();
+  const touch = screen.getByRole("region", {name: "Touch workspace"});
+  expect(within(touch).getByRole("button", {name: "Existing workspace"})).toBeTruthy();
+  expect(within(touch).getByRole("button", {name: "Activate audio"})).toBeTruthy();
   expect(within(screen.getByRole("region", {name: "Pad matrix"}))
     .getByRole("button", {name: "Pad A1 — empty — Key Q"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Project"}).getAttribute("aria-current"))
