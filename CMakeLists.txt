@@ -337,6 +337,14 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME build.release_task_verification
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_task_verification_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 60
+)
+
+lmdj_add_test(
   NAME build.release_evidence_source
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_evidence_source_test.py
