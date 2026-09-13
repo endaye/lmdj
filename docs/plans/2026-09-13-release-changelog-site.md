@@ -115,6 +115,36 @@ defect is directly expressed by its regression. Real publication collection,
 Git-triggered online acceptance, mandatory admission, corrections and complete
 driver/service integration remain required subsequent work.
 
+### Remote review disposition and retained recovery obligations
+
+PR #1272 review run `34739796206/1` identified missing fsync barriers and
+interrupted final-page/index staging writes. Both are accepted limitations of
+the standalone local generator, deferred within the still-open full release
+goal, not fixed by this projection Task. Source generation is not a durable
+release transition: it must still pass exact Git review/commit and website
+verification. Committed historical truth is not rewritten by recovery, and a
+stale, truncated or unknown output remains a failed check. Before admitting the
+generator to an unattended workflow, durable publication-workspace integration
+must demonstrate interrupted write, link/install, index replacement and restart
+recovery with per-transition byte checks. File/directory fsync and any hardlink
+recovery window must be covered; no copy fallback may bypass create-only history.
+
+The same review questioned the plan digest's trust source. A projector cannot
+reconstruct the complete plan from this ledger alone: signed asset identities
+and complete verified Release state are not its inputs. Keep the digest, but
+label it explicitly as a reviewed publication-record value; only Content/Notes
+digests are recomputed here. The upcoming `publication-record` collector must
+use the full published Release verifier before producing that input. This
+clarification does not authenticate existing records or stand in for the
+collector, and the initial inventory remains empty.
+
+Clarification verification: Python projection 7/7, Node 22 projection 9/9 and
+registered CTest (0.28s) passed, as did compilation and complete Portal check
+(125 tests, production build, 47 routes/internal links, exit 0;
+`/tmp/lmdj-site-delivery-record-label-portal.log`). Independent review read the
+three-file clarification and confirmed the trust-boundary wording, not a repair
+or waiver of the two remaining crash/durability findings.
+
 ## Version Management
 
 Version impact: none

@@ -43,6 +43,8 @@ class ChangelogSiteTest(unittest.TestCase):
         self.assertIn("https://github.com/endaye/lmdj/releases/tag/" + self.intent.tag, body)
         self.assertIn(self.publication["published_at"], body)
         self.assertIn(self.publication["notes_sha256"], body)
+        self.assertIn("Plan SHA-256 (reviewed publication record)", body)
+        self.assertIn("不在此处重新认证远端 Release", body)
         self.assertIn("不表示两个 Host 已部署或已晋级", body)
         self.assertNotIn("versioned_docs", pages[1]["file"])
 

@@ -100,7 +100,8 @@ def project(ledger, publications):
                    + render(document)
                    + f"\nContent SHA-256: `{digests['sha256']}`\n\n"
                    + f"Notes SHA-256: `{digests['notes_sha256']}`\n\n"
-                   + f"Plan SHA-256: `{publication['plan_sha256']}`\n\n"
+                   + f"Plan SHA-256 (reviewed publication record): `{publication['plan_sha256']}`\n\n"
+                   + "本投影重算 Content / Notes 摘要；Plan 摘要、Release ID 与公开时间来自经审查的公开记录，不在此处重新认证远端 Release。\n\n"
                    + "[Creator Host 日志](../operations/creator-changelog.mdx) · "
                      "[Runtime Host 日志](../operations/runtime-changelog.mdx)\n")
         rows.append((date, intent.identity, {"file": filename, "content": content}))
