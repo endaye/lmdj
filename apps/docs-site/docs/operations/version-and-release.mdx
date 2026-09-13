@@ -137,7 +137,11 @@ repository / actor / run numeric ID、首次 attempt，以及 event / workflow /
 它只证明请求被该运行接收，不证明签名、发布、部署或授权；缺省时保留原有手动路径。
 关联回执生成或上传失败会停止该 preflight，不进入后续发布／部署。消费端仍须认证实际
 API run、留存 artifact 及可信源码；未知 POST 不得凭回执文件、run-name 或最新成功盲目重发。
-此回执生产端已实现，完整关联消费者和生产总控恢复尚未接通。
+回执生产端及 exact-run 只读认证消费者已实现：消费者核对真实 API run / actor / workflow、
+完整 jobs / artifacts、成功的回执上传步骤、ZIP digest 与冻结输入，并回读运行身份。
+它还核验受信 producer、workflow 与 tooling 在受保护 main 上的源码祖先关系。
+发布失败或仍在执行的运行也可能拥有真实关联回执，因此返回关联信息不表示发布成功。
+未知 POST 的全量查找、重复请求排除和生产总控恢复仍未接通，不能据此自动重发。
 
 发布请求的持久状态层已实现：固定 request / scope / policy / revision，独占 writer 在
 每一步外部操作前持久化 intent；结果必须有匹配 operation 的证据回执才能推进。
