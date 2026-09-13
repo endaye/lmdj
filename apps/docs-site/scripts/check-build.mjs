@@ -2,10 +2,12 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {readFile} from 'node:fs/promises';
 import {checkBuild} from './lib/build-check.mjs';
+import {projectReleaseChangelogs} from './lib/release-changelogs.mjs';
 
 const portalRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const facts = JSON.parse(await readFile(path.join(portalRoot, 'src/generated/site-facts.json'), 'utf8'));
 const versionFacts = JSON.parse(await readFile(path.join(portalRoot, 'src/generated/version-facts.json'), 'utf8'));
+const releasePages = await projectReleaseChangelogs(path.resolve(portalRoot, '../..'));
 const requiredRoutes = [
   '/', '/product/positioning/', '/product/capability-map/', '/product/workflows/',
   '/core/overview/', '/core/modules/foundation/', '/core/modules/authoring-domain/',
@@ -22,6 +24,10 @@ const requiredRoutes = [
   '/operations/documentation-governance/', '/history/legacy-patch-architecture/',
   '/diagrams/lmdj-product.html', '/diagrams/lmdj-product.svg', '/diagrams/lmdj-core.html',
   '/diagrams/web-runtime-platform.html', '/diagrams/web-runtime-platform.svg',
+  ...releasePages.map(({file}) => {
+    const identity = path.basename(file, '.mdx');
+    return identity === 'index' ? '/releases/' : `/releases/${identity}/`;
+  }),
 ];
 const errors = await checkBuild({
   buildRoot: path.join(portalRoot, 'build'),

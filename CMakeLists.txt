@@ -329,6 +329,22 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME build.release_changelog_site
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_changelog_site_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_changelog_install
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_changelog_install_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
   NAME build.release_model
   TIER contract
   COMMAND

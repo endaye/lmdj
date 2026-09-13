@@ -1,13 +1,21 @@
 # LMDJ Docs
 
-LMDJ 文档站：使用与开发说明、架构和交付规范的发布源码，未来也承载 Changelog。
-本次重命名不启用 Changelog 功能，不改变现有网站地址。
+LMDJ 文档站：使用与开发说明、架构和交付规范的发布源码。
+现包含 Host prepared 日志及 Product release 日志投影；没有公开回执的版本不会补造日志。
+构建需要 Node 22 和 Python 3.11+：Product 日志复用 Python Release renderer，避免两端正文漂移。
 
 ```bash
 scripts/docs-site.sh install
 scripts/docs-site.sh dev
 scripts/docs-site.sh check
 ```
+
+经审查的公开记录更新后，在本目录运行 `npm run release-changelogs` 生成版本页和索引。
+新版本页需在同一 Task 同步快照的独立页数清单；生成器拒绝覆盖既有版本页。
+写入安装要求 Darwin/Linux 文件系统支持 exclusive rename；不支持时拒绝，不回退覆盖或复制。
+完整字节在忽略的 `build/release/changelog-pages/` 下暂存并同步，版本页安装完成后才更新索引。
+进程中断后的暂存残留不参与页面库存，重跑可补齐输出；残留不会自动清理。
+生产仍由正常 Git-triggered workflow 发布，生成成功不代表网站已上线。
 
 旧命令 `scripts/architecture-portal.sh` 兼容转发到新命令。
 

@@ -153,8 +153,21 @@ GitHub 与 doc-site 将共享其 Markdown 内容及摘要。它拒绝浅历史�
 进入 plan 摘要，prepare 重验真实 Git 范围，恢复时检查本地 notes，Draft 与公开
 Release 正文按冻结 Markdown 逐字核对。内部 Release plan marker v4（不是产品 Contract）绑定内容
 及 notes 摘要，独立 remote audit 也校验正文；仍是原六项资产，不增加日志附件。
-无 changelog 的历史 intent / plan 保留原 v1–v3 协议，不重写历史。网站生成器和
-新总控的强制 changelog admission 尚待接入，不能声称每次 Release 已自动交付两端日志。
+无 changelog 的历史 intent / plan 保留原 v1–v3 协议，不重写历史。
+
+[Product release 日志](../releases/index.mdx) 及逐版本页面现由同一 Python renderer
+生成，公开记录必须与 published intent 的 tag / target / 内容摘要一致。显式
+`npm run release-changelogs` 只新增版本页并更新索引，拒绝覆盖旧版本或悄悄丢掉历史页；
+正常 build / start 会检查投影，生产仍走 Git-triggered 发布。当前没有补造任何历史日志。
+这些是本地生成与校验能力；真实公开回执采集、线上内容 smoke、新总控强制准入和
+显式追加更正记录的接口仍待接入，不表示每次 Release 已自动交付两端日志。
+
+本地日志生成现先在忽略目录暂存完整字节并同步，再通过 create-only 原子 rename
+安装版本页；全部版本页持久化后才替换索引。进程在暂存或索引替换前后中断时，重跑
+保留旧页面并补齐输出；不使用可能留下双硬链接的安装方式，不以复制回退绕过历史保护。
+Darwin/Linux 原生安装与同步顺序、Darwin 进程中断恢复已有测试；真实断电及生产文件系统
+不由这些测试证明。忽略目录中的崩溃暂存不阻塞恢复，也不会自动清理；无人值守总控仍需
+受控工作区和 writer lock，不能将本地生成当作完整发布验收。
 
 ## 标准 Release 控制面
 
