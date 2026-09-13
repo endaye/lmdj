@@ -193,6 +193,23 @@ class PublicationTaskVerifier:
             os.close(fd)
 
     def _execute(self, journal, vector, timeout):
+        result, _ = self._execute_output(journal, vector, timeout, capture_limit=None)
+        return result
+
+    def _execute_capture(self, journal, vector, timeout, *, limit):
+        """Return (exit/digest/length, complete bytes or None on overflow).
+
+        This is the original combined stdout/stderr, not a validated receipt.
+        Callers must reject nonzero exits, overflow and invalid output before
+        using it, and must not persist arbitrary child output in public logs.
+        Existing execution callers remain digest-only. The temporary spool's
+        disk usage is unchanged; the limit bounds only retained memory bytes.
+        """
+        require(type(limit) is int and 1 <= limit <= MAX_STATE_BYTES,
+                "capture limit must be an integer between 1 and 65536 bytes")
+        return self._execute_output(journal, vector, timeout, capture_limit=limit)
+
+    def _execute_output(self, journal, vector, timeout, *, capture_limit):
         journal._active()
         with tempfile.TemporaryDirectory(prefix="lmdj-task-environment-") as directory:
             # No inherited credentials, injection settings or personal tool config.
@@ -225,10 +242,17 @@ class PublicationTaskVerifier:
                         raise TaskVerificationError("why: Task command exceeded its execution budget; remedy: retain the unfinished attempt and diagnose it; no automatic rerun") from None
                 output.seek(0)
                 hasher, length = sha256(), 0
+                captured = None if capture_limit is None else bytearray()
                 for chunk in iter(lambda: output.read(1024 * 1024), b""):
                     hasher.update(chunk)
                     length += len(chunk)
-                return code, hasher.hexdigest(), length
+                    if captured is not None:
+                        if length <= capture_limit:
+                            captured.extend(chunk)
+                        else:
+                            captured = None
+                return ((code, hasher.hexdigest(), length),
+                        None if captured is None else bytes(captured))
 
     @staticmethod
     def _receipt(state):
