@@ -1,10 +1,25 @@
 import {CandidateSurface, isCandidateSession} from "./components/candidate_surface";
-import {useCallback, useEffect, useReducer, useRef, useState} from "react";
+import {
+  useCallback,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 
 import {BankSelector} from "./components/bank_selector";
 import {ErrorPanel} from "./components/error_panel";
+import {
+  HardwareConsole,
+  readCreatorLayout,
+  writeCreatorLayout,
+  type CreatorLayout,
+} from "./components/hardware_console";
 import {ModeRail, type CreatorMode} from "./components/mode_rail";
+import {OverviewDisplay} from "./components/overview_display";
 import {PadSurface} from "./components/pad_surface";
+import {PhysicalControls} from "./components/physical_controls";
 import {PerformSurface} from "./components/perform_surface";
 import {ProjectSurface} from "./components/project_surface";
 import {SampleSurface} from "./components/sample_surface";
@@ -57,6 +72,7 @@ import type {
 import {
   creatorReducer,
   initialCreatorState,
+  selectCanActivateAudio,
   selectCanImportProject,
   selectCanOpenProject,
   selectCreatorPhase,
@@ -225,6 +241,7 @@ function Workspace({
   const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
   const [showLocalProjects, setShowLocalProjects] = useState(false);
   const [activeMode, setActiveMode] = useState<CreatorMode>("project");
+  const [layout, setLayout] = useState<CreatorLayout>(readCreatorLayout);
   const [inputControllerEpoch, setInputControllerEpoch] = useState(0);
   const [inputControllerRevision, setInputControllerRevision] = useState(0);
   const [armedCaptureSlot, setArmedCaptureSlot] = useState<number | null>(null);
@@ -247,6 +264,7 @@ function Workspace({
   const inputController = useRef<ReturnType<typeof createCreatorInputController> | null>(null);
   const inputAdverseState = useRef<string | null>(null);
   const activeModeRef = useRef(activeMode);
+  const layoutRef = useRef(layout);
   const performControllerRef = useRef<PerformController | null>(null);
   const projectProjectionRefreshRef = useRef<Readonly<{
     id: string;
@@ -263,6 +281,7 @@ function Workspace({
   sequenceRef.current = sequence;
   armedCaptureSlotRef.current = armedCaptureSlot;
   activeModeRef.current = activeMode;
+  layoutRef.current = layout;
   if (sequenceAuthoringProjectId.current !== (state.project.current?.projectId ?? null)) {
     sequenceAuthoringProjectId.current = state.project.current?.projectId ?? null;
     sequenceAuthoringRevision.current = state.project.current?.revision ?? 0;
@@ -1058,192 +1077,444 @@ function Workspace({
   const staleSampleRuntime = state.sample.lastError?.code === "COOK_FAILED" &&
     state.sample.lastError.retryPrepare && state.sample.savedRevision !== null &&
     state.sample.runtimeRevision !== state.sample.savedRevision;
+  const sequenceEnabled = isSequenceSession(session) &&
+    state.project.phase === "ready" && state.project.current !== null;
+  const performEnabled = performController !== null && performCaptureConfigured &&
+    state.project.phase === "ready" && state.project.current !== null;
+  const sliceEnabled = isCandidateSession(session) && state.project.phase === "ready" &&
+    state.project.current !== null && sequence.phase === "stopped";
+  const soundSetEnabled = isSoundSetSession(session);
+  const recording = ["recording", "switch-pending", "flushing"].includes(sequence.phase);
+  const applyMode = (mode: CreatorMode) => {
+    if (layoutRef.current === "hardware" &&
+      (mode === "perform" || mode === "slice" || mode === "soundset")) {
+      writeCreatorLayout("workspace");
+      setLayout("workspace");
+    }
+    setActiveMode(mode);
+  };
+  const selectMode = (mode: CreatorMode) => {
+    inputController.current?.clearPressed();
+    if (activeModeRef.current === "perform" && mode !== "perform" &&
+      performControllerRef.current !== null) {
+      void performControllerRef.current.leave().then(
+        () => applyMode(mode),
+        () => {},
+      );
+      return;
+    }
+    if (mode === "sample" && ["recording", "switch-pending", "flushing"]
+      .includes(sequenceRef.current.phase)) {
+      if (sequenceRef.current.phase !== "flushing") {
+        void stopSequence().then((stopped) => {
+          if (stopped) applyMode("sample");
+        });
+      }
+      return;
+    }
+    applyMode(mode);
+  };
+  const selectBank = (bank: typeof state.activeBank) => {
+    inputController.current?.clearPressed();
+    dispatch({type: "bank-selected", bank});
+  };
+  const enterHardwareLayout = () => {
+    writeCreatorLayout("hardware");
+    setLayout("hardware");
+  };
+  const enterWorkspaceLayout = () => {
+    writeCreatorLayout("workspace");
+    setLayout("workspace");
+  };
+  const runtimeActions = session && inputController.current
+    ? {
+        audioActivationReady: runtimeHostState === "audio-suspended",
+        onActivateAudio: (event: ReactMouseEvent<HTMLButtonElement>) => {
+          void activateAudio(event.nativeEvent);
+        },
+        onSuspendAudio: () => { void suspendAudio(); },
+        onEnableMidi: () => { void inputController.current?.enableMidi(); },
+        onExportReport: exportReport,
+      }
+    : {};
+  const padSurface = (
+    <PadSurface
+      state={state}
+      armedCaptureSlot={armedCaptureSlot}
+      {...(inputController.current ? {controller: inputController.current} : {})}
+    />
+  );
 
   return (
-    <div className="workspace">
-      <StatusBar
-        state={state}
-        midi={midi}
-        {...(buildIdentity ? {buildIdentity} : {})}
-        {...(session && inputController.current
-          ? {
-              audioActivationReady: runtimeHostState === "audio-suspended",
-              onActivateAudio: (event) => { void activateAudio(event.nativeEvent); },
-              onSuspendAudio: () => { void suspendAudio(); },
-              onEnableMidi: () => { void inputController.current?.enableMidi(); },
-              onExportReport: exportReport,
-            }
-          : {})}
-      />
-      <ModeRail
-        activeMode={activeMode}
-        soundSetEnabled={isSoundSetSession(session)}
-        sliceEnabled={isCandidateSession(session) && state.project.phase === "ready" &&
-          state.project.current !== null && sequence.phase === "stopped"}
-        sequenceEnabled={isSequenceSession(session) &&
-          state.project.phase === "ready" && state.project.current !== null}
-        performEnabled={performController !== null && performCaptureConfigured &&
-          state.project.phase === "ready" && state.project.current !== null}
-        onSelect={(mode) => {
-          inputController.current?.clearPressed();
-          if (activeModeRef.current === "perform" && mode !== "perform" &&
-            performControllerRef.current !== null) {
-            void performControllerRef.current.leave().then(
-              () => setActiveMode(mode),
-              () => {},
-            );
-            return;
-          }
-          if (mode === "sample" && ["recording", "switch-pending", "flushing"]
-            .includes(sequenceRef.current.phase)) {
-            if (sequenceRef.current.phase !== "flushing") {
-              void stopSequence().then((stopped) => {
-                if (stopped) setActiveMode("sample");
-              });
-            }
-            return;
-          }
-          setActiveMode(mode);
-        }}
-      />
-      {candidateAudio !== null && candidateAudio.projectId === state.project.current?.projectId &&
-        (candidateAudio.preparing || state.sample.savedRevision !== state.sample.runtimeRevision) ? (
-        <section className="sample-runtime-stale" aria-label="Project audio status">
-          <p role="status">{candidateAudio.preparing
-            ? `Preparing audio at revision ${candidateAudio.revision}…`
-            : `Saved at revision ${candidateAudio.revision}; audio is not ready.`}</p>
-          <button type="button" disabled={candidateAudio.preparing || projectActions.busy || runtimePhase !== "ready"}
-            onClick={() => { void refreshCandidateProject(candidateAudio.projectId).catch(() => {}); }}>
-            Retry audio preparation
-          </button>
-        </section>
-      ) : null}
-      {activeMode === "project" ? (
-        <>
-          <ProjectSurface
-            state={state}
-            canOpen={canOpenProject}
-            canImport={canImportProject}
-            showLocalProjects={showLocalProjects}
-            onShowLocal={() => setShowLocalProjects(true)}
-            onHideLocal={() => setShowLocalProjects(false)}
-            onOpen={(summary) => { void openProject(summary); }}
-            onImport={(file) => { void importProject(file); }}
-          />
-          <section className="pads" aria-label="Instrument">
-            <BankSelector
+    <div className={layout === "hardware" ? "hardware-workspace" : "workspace"}>
+      {layout === "hardware" ? (
+        <HardwareConsole
+          physicalControls={
+            <PhysicalControls
+              activeMode={activeMode}
               activeBank={state.activeBank}
-              onSelect={(bank) => {
-                inputController.current?.clearPressed();
-                dispatch({type: "bank-selected", bank});
-              }}
+              sequenceEnabled={sequenceEnabled}
+              performEnabled={performEnabled}
+              onSelectMode={selectMode}
+              onSelectBank={selectBank}
+              onRecord={() => { void recordSequence(); }}
+              recordEnabled={sequenceEnabled && state.audio.phase === "running"}
+              recording={recording}
             />
-            <PadSurface
+          }
+          overview={
+            <OverviewDisplay
               state={state}
-              {...(inputController.current ? {controller: inputController.current} : {})}
+              activeMode={activeMode}
+              sequence={sequence}
+              midi={midi}
+              {...(buildIdentity ? {buildIdentity} : {})}
             />
-          </section>
-        </>
-      ) : activeMode === "sample" ? (
+          }
+          pads={padSurface}
+          touchWorkspace={
+            <>
+              <section className="touch-system" aria-label="System">
+                <button
+                  type="button"
+                  disabled={!selectCanActivateAudio(state) ||
+                    runtimeActions.onActivateAudio === undefined ||
+                    runtimeActions.audioActivationReady !== true}
+                  onClick={runtimeActions.onActivateAudio}
+                >
+                  Activate audio
+                </button>
+                <button
+                  type="button"
+                  disabled={state.audio.phase !== "running" ||
+                    runtimeActions.onSuspendAudio === undefined}
+                  onClick={runtimeActions.onSuspendAudio}
+                >
+                  Suspend audio
+                </button>
+                <button
+                  type="button"
+                  disabled={state.runtime.phase !== "ready" ||
+                    runtimeActions.onEnableMidi === undefined ||
+                    midi?.permission === "granted" ||
+                    midi?.permission === "requesting"}
+                  onClick={runtimeActions.onEnableMidi}
+                >
+                  Enable MIDI
+                </button>
+                <button
+                  type="button"
+                  disabled={state.runtime.phase !== "ready" ||
+                    runtimeActions.onExportReport === undefined}
+                  onClick={runtimeActions.onExportReport}
+                >
+                  Export report
+                </button>
+                <button type="button" onClick={enterWorkspaceLayout}>
+                  Existing workspace
+                </button>
+                <button
+                  type="button"
+                  disabled={!sliceEnabled}
+                  aria-label={sliceEnabled
+                    ? "Slice"
+                    : "Slice — open a Project with candidate support"}
+                  onClick={() => selectMode("slice")}
+                >
+                  Slice
+                </button>
+                <button
+                  type="button"
+                  disabled={!soundSetEnabled}
+                  aria-label={soundSetEnabled
+                    ? "Sound Sets"
+                    : "Sound Sets — wait for the Runtime to start"}
+                  onClick={() => selectMode("soundset")}
+                >
+                  Sound Sets
+                </button>
+              </section>
+              {candidateAudio !== null && candidateAudio.projectId === state.project.current?.projectId &&
+                (candidateAudio.preparing || state.sample.savedRevision !== state.sample.runtimeRevision) ? (
+                <section className="sample-runtime-stale" aria-label="Project audio status">
+                  <p role="status">{candidateAudio.preparing
+                    ? `Preparing audio at revision ${candidateAudio.revision}…`
+                    : `Saved at revision ${candidateAudio.revision}; audio is not ready.`}</p>
+                  <button type="button" disabled={candidateAudio.preparing || projectActions.busy || runtimePhase !== "ready"}
+                    onClick={() => { void refreshCandidateProject(candidateAudio.projectId).catch(() => {}); }}>
+                    Retry audio preparation
+                  </button>
+                </section>
+              ) : null}
+              {activeMode === "project" ? (
+                <ProjectSurface
+                  state={state}
+                  canOpen={canOpenProject}
+                  canImport={canImportProject}
+                  showLocalProjects={showLocalProjects}
+                  onShowLocal={() => setShowLocalProjects(true)}
+                  onHideLocal={() => setShowLocalProjects(false)}
+                  onOpen={(summary) => { void openProject(summary); }}
+                  onImport={(file) => { void importProject(file); }}
+                />
+              ) : activeMode === "sample" ? (
+                <>
+                  {state.sample.lastError?.code === "UNSUPPORTED_AUDIO" ? (
+                    <p className="sample-error" role="status">
+                      Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz
+                    </p>
+                  ) : null}
+                  {staleSampleRuntime ? (
+                    <section className="sample-runtime-stale" aria-label="Sample Runtime status">
+                      <p role="status">
+                        Saved at revision {state.sample.savedRevision}; Runtime is still revision{
+                          " "}{state.sample.runtimeRevision === null
+                          ? "unavailable"
+                          : state.sample.runtimeRevision}
+                      </p>
+                      <button
+                        type="button"
+                        disabled={sampleRetryAction.current !== null ||
+                          state.sample.pendingAction !== null}
+                        onClick={() => { void retryPrepare(); }}
+                      >
+                        Retry Prepare
+                      </button>
+                    </section>
+                  ) : null}
+                </>
+              ) : activeMode === "sequence" && state.project.current !== null ? (
+                <SequenceSurface
+                  project={state.project.current}
+                  state={sequence}
+                  ready={isSequenceSession(session) && state.audio.phase === "running"}
+                  onRecord={() => { void recordSequence(); }}
+                  onStop={() => { void stopSequence(); }}
+                  onRefresh={() => { void refreshSequence(); }}
+                  onSwitch={(patternId) => { void selectSequencePattern(patternId); }}
+                  onCreatePattern={(bars) => { void createPattern(bars); }}
+                  onSettingsChange={(changes) => { void updateSequenceSettings(changes); }}
+                  onRecover={(candidate, destinationPatternId) => {
+                    if (!isSequenceSession(session)) return;
+                    void session.applySequenceRecovery({
+                      sessionId: candidate.sessionId,
+                      destinationPatternId,
+                    }).then((status) => {
+                      if (status.committedRevision !== null) {
+                        dispatch({type: "project-revision-updated", revision: status.committedRevision});
+                      }
+                      return refreshSequence();
+                    }, sequenceFailure);
+                  }}
+                  onDiscard={(candidate) => {
+                    if (!isSequenceSession(session)) return;
+                    void session.discardSequenceRecovery(candidate.sessionId)
+                      .then(() => refreshSequence(), sequenceFailure);
+                  }}
+                />
+              ) : (
+                <p className="touch-fallback-note">
+                  This mode stays on the existing workspace during U1.
+                </p>
+              )}
+              <ErrorPanel
+                code={state.runtime.errorCode}
+                details={state.runtime.errorDetails}
+                {...(session && state.runtime.errorCode === "DUPLICATE_ID"
+                  ? {onOpenLocalProject: () => {
+                      setShowLocalProjects(true);
+                      setListAttempt((attempt) => attempt + 1);
+                    }}
+                  : {})}
+                {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry
+                  ? {onRetryProject: () => {
+                      if (busyRetry.kind === "list") {
+                        setListAttempt((attempt) => attempt + 1);
+                      } else {
+                        void openProject(busyRetry.project);
+                      }
+                    }}
+                  : {})}
+                {...(state.runtime.errorCode === "HOST_RESTART_REQUIRED" ||
+                  state.runtime.errorCode === "HOST_TIMEOUT") && onRetryRuntime
+                  ? {onRetryRuntime}
+                  : {}}
+                {...(state.runtime.phase === "ready"
+                  ? {onDismiss: () => dispatch({type: "runtime-error-dismissed"})}
+                  : {})}
+              />
+            </>
+          }
+        />
+      ) : (
         <>
-          {state.sample.lastError?.code === "UNSUPPORTED_AUDIO" ? (
-            <p className="sample-error" role="status">
-              Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz
-            </p>
-          ) : null}
-          {staleSampleRuntime ? (
-            <section className="sample-runtime-stale" aria-label="Sample Runtime status">
-              <p role="status">
-                Saved at revision {state.sample.savedRevision}; Runtime is still revision{
-                  " "}{state.sample.runtimeRevision === null
-                  ? "unavailable"
-                  : state.sample.runtimeRevision}
-              </p>
-              <button
-                type="button"
-                disabled={sampleRetryAction.current !== null ||
-                  state.sample.pendingAction !== null}
-                onClick={() => { void retryPrepare(); }}
-              >
-                Retry Prepare
+          <header className="status-bar-host">
+            <StatusBar
+              state={state}
+              midi={midi}
+              {...(buildIdentity ? {buildIdentity} : {})}
+              {...runtimeActions}
+            />
+            <button type="button" className="layout-opt-in" onClick={enterHardwareLayout}>
+              Hardware layout
+            </button>
+          </header>
+          <ModeRail
+            activeMode={activeMode}
+            soundSetEnabled={soundSetEnabled}
+            sliceEnabled={sliceEnabled}
+            sequenceEnabled={sequenceEnabled}
+            performEnabled={performEnabled}
+            onSelect={selectMode}
+          />
+          {candidateAudio !== null && candidateAudio.projectId === state.project.current?.projectId &&
+            (candidateAudio.preparing || state.sample.savedRevision !== state.sample.runtimeRevision) ? (
+            <section className="sample-runtime-stale" aria-label="Project audio status">
+              <p role="status">{candidateAudio.preparing
+                ? `Preparing audio at revision ${candidateAudio.revision}…`
+                : `Saved at revision ${candidateAudio.revision}; audio is not ready.`}</p>
+              <button type="button" disabled={candidateAudio.preparing || projectActions.busy || runtimePhase !== "ready"}
+                onClick={() => { void refreshCandidateProject(candidateAudio.projectId).catch(() => {}); }}>
+                Retry audio preparation
               </button>
             </section>
           ) : null}
-        </>
-      ) : activeMode === "sequence" && state.project.current !== null ? (
-        <>
-          <SequenceSurface
-            project={state.project.current}
-            state={sequence}
-            ready={isSequenceSession(session) && state.audio.phase === "running"}
-            onRecord={() => { void recordSequence(); }}
-            onStop={() => { void stopSequence(); }}
-            onRefresh={() => { void refreshSequence(); }}
-            onSwitch={(patternId) => { void selectSequencePattern(patternId); }}
-            onCreatePattern={(bars) => { void createPattern(bars); }}
-            onSettingsChange={(changes) => { void updateSequenceSettings(changes); }}
-            onRecover={(candidate, destinationPatternId) => {
-              if (!isSequenceSession(session)) return;
-              void session.applySequenceRecovery({
-                sessionId: candidate.sessionId,
-                destinationPatternId,
-              }).then((status) => {
-                if (status.committedRevision !== null) {
-                  dispatch({type: "project-revision-updated", revision: status.committedRevision});
-                }
-                return refreshSequence();
-              }, sequenceFailure);
-            }}
-            onDiscard={(candidate) => {
-              if (!isSequenceSession(session)) return;
-              void session.discardSequenceRecovery(candidate.sessionId)
-                .then(() => refreshSequence(), sequenceFailure);
-            }}
+          {activeMode === "project" ? (
+            <>
+              <ProjectSurface
+                state={state}
+                canOpen={canOpenProject}
+                canImport={canImportProject}
+                showLocalProjects={showLocalProjects}
+                onShowLocal={() => setShowLocalProjects(true)}
+                onHideLocal={() => setShowLocalProjects(false)}
+                onOpen={(summary) => { void openProject(summary); }}
+                onImport={(file) => { void importProject(file); }}
+              />
+              <section className="pads" aria-label="Instrument">
+                <BankSelector
+                  activeBank={state.activeBank}
+                  onSelect={selectBank}
+                />
+                {padSurface}
+              </section>
+            </>
+          ) : activeMode === "sample" ? (
+            <>
+              {state.sample.lastError?.code === "UNSUPPORTED_AUDIO" ? (
+                <p className="sample-error" role="status">
+                  Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz
+                </p>
+              ) : null}
+              {staleSampleRuntime ? (
+                <section className="sample-runtime-stale" aria-label="Sample Runtime status">
+                  <p role="status">
+                    Saved at revision {state.sample.savedRevision}; Runtime is still revision{
+                      " "}{state.sample.runtimeRevision === null
+                      ? "unavailable"
+                      : state.sample.runtimeRevision}
+                  </p>
+                  <button
+                    type="button"
+                    disabled={sampleRetryAction.current !== null ||
+                      state.sample.pendingAction !== null}
+                    onClick={() => { void retryPrepare(); }}
+                  >
+                    Retry Prepare
+                  </button>
+                </section>
+              ) : null}
+            </>
+          ) : activeMode === "sequence" && state.project.current !== null ? (
+            <>
+              <SequenceSurface
+                project={state.project.current}
+                state={sequence}
+                ready={isSequenceSession(session) && state.audio.phase === "running"}
+                onRecord={() => { void recordSequence(); }}
+                onStop={() => { void stopSequence(); }}
+                onRefresh={() => { void refreshSequence(); }}
+                onSwitch={(patternId) => { void selectSequencePattern(patternId); }}
+                onCreatePattern={(bars) => { void createPattern(bars); }}
+                onSettingsChange={(changes) => { void updateSequenceSettings(changes); }}
+                onRecover={(candidate, destinationPatternId) => {
+                  if (!isSequenceSession(session)) return;
+                  void session.applySequenceRecovery({
+                    sessionId: candidate.sessionId,
+                    destinationPatternId,
+                  }).then((status) => {
+                    if (status.committedRevision !== null) {
+                      dispatch({type: "project-revision-updated", revision: status.committedRevision});
+                    }
+                    return refreshSequence();
+                  }, sequenceFailure);
+                }}
+                onDiscard={(candidate) => {
+                  if (!isSequenceSession(session)) return;
+                  void session.discardSequenceRecovery(candidate.sessionId)
+                    .then(() => refreshSequence(), sequenceFailure);
+                }}
+              />
+              <section className="pads" aria-label="Sequence instrument">
+                <BankSelector activeBank={state.activeBank} onSelect={selectBank} />
+                {padSurface}
+              </section>
+            </>
+          ) : activeMode === "slice" && isCandidateSession(session) && state.project.current !== null ? (
+            <CandidateSurface key={state.project.current.projectId}
+              session={session} projectId={state.project.current.projectId}
+              projectRevision={state.project.current.revision}
+              onRefreshProject={(revision) => refreshCandidateProject(state.project.current!.projectId, revision)} />
+          ) : activeMode === "soundset" && isSoundSetSession(session) ? (
+            <SoundSetSurface
+              session={session}
+              projectRevision={state.project.current?.revision ?? null}
+              activeBank={state.activeBank}
+              onBankChange={selectBank}
+              onInstalled={(revision) => {
+                dispatch({type: "project-revision-updated", revision});
+                void refreshPerformProject().catch(() => {});
+              }}
+            />
+          ) : activeMode === "perform" && state.project.current !== null &&
+            performController !== null ? (
+            <PerformSurface
+              controller={performController}
+              creatorState={state}
+              project={state.project.current}
+              bank={state.activeBank}
+              onBankChange={selectBank}
+              {...(inputController.current ? {padController: inputController.current} : {})}
+            />
+          ) : null}
+          <ErrorPanel
+            code={state.runtime.errorCode}
+            details={state.runtime.errorDetails}
+            {...(session && state.runtime.errorCode === "DUPLICATE_ID"
+              ? {onOpenLocalProject: () => {
+                  setShowLocalProjects(true);
+                  setListAttempt((attempt) => attempt + 1);
+                }}
+              : {})}
+            {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry
+              ? {onRetryProject: () => {
+                  if (busyRetry.kind === "list") {
+                    setListAttempt((attempt) => attempt + 1);
+                  } else {
+                    void openProject(busyRetry.project);
+                  }
+                }}
+              : {})}
+            {...(state.runtime.errorCode === "HOST_RESTART_REQUIRED" ||
+              state.runtime.errorCode === "HOST_TIMEOUT") && onRetryRuntime
+              ? {onRetryRuntime}
+              : {}}
+            {...(state.runtime.phase === "ready"
+              ? {onDismiss: () => dispatch({type: "runtime-error-dismissed"})}
+              : {})}
           />
-          <section className="pads" aria-label="Sequence instrument">
-            <BankSelector activeBank={state.activeBank} onSelect={(bank) => {
-              inputController.current?.clearPressed();
-              dispatch({type: "bank-selected", bank});
-            }} />
-            <PadSurface state={state} armedCaptureSlot={armedCaptureSlot}
-              {...(inputController.current ? {controller: inputController.current} : {})} />
-          </section>
         </>
-      ) : activeMode === "slice" && isCandidateSession(session) && state.project.current !== null ? (
-        <CandidateSurface key={state.project.current.projectId}
-          session={session} projectId={state.project.current.projectId}
-          projectRevision={state.project.current.revision}
-          onRefreshProject={(revision) => refreshCandidateProject(state.project.current!.projectId, revision)} />
-      ) : activeMode === "soundset" && isSoundSetSession(session) ? (
-        <SoundSetSurface
-          session={session}
-          projectRevision={state.project.current?.revision ?? null}
-          activeBank={state.activeBank}
-          onBankChange={(bank) => {
-            inputController.current?.clearPressed();
-            dispatch({type: "bank-selected", bank});
-          }}
-          onInstalled={(revision) => {
-            // The install committed ordinary Assets and Pad assignments, so
-            // the Pad projection every other surface reads is now stale.
-            dispatch({type: "project-revision-updated", revision});
-            void refreshPerformProject().catch(() => {});
-          }}
-        />
-      ) : activeMode === "perform" && state.project.current !== null &&
-        performController !== null ? (
-        <PerformSurface
-          controller={performController}
-          creatorState={state}
-          project={state.project.current}
-          bank={state.activeBank}
-          onBankChange={(bank) => {
-            inputController.current?.clearPressed();
-            dispatch({type: "bank-selected", bank});
-          }}
-          {...(inputController.current ? {padController: inputController.current} : {})}
-        />
-      ) : null}
+      )}
       {activeMode === "sample" || armedCaptureSlot !== null ||
       sequence.phase === "trim-overlay" ||
       (activeMode === "sequence" && state.sampleProjectionRefresh !== null) ? (
@@ -1276,32 +1547,6 @@ function Workspace({
           />
         </div>
       ) : null}
-      <ErrorPanel
-        code={state.runtime.errorCode}
-        details={state.runtime.errorDetails}
-        {...(session && state.runtime.errorCode === "DUPLICATE_ID"
-          ? {onOpenLocalProject: () => {
-              setShowLocalProjects(true);
-              setListAttempt((attempt) => attempt + 1);
-            }}
-          : {})}
-        {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry
-          ? {onRetryProject: () => {
-              if (busyRetry.kind === "list") {
-                setListAttempt((attempt) => attempt + 1);
-              } else {
-                void openProject(busyRetry.project);
-              }
-            }}
-          : {})}
-        {...(state.runtime.errorCode === "HOST_RESTART_REQUIRED" ||
-          state.runtime.errorCode === "HOST_TIMEOUT") && onRetryRuntime
-          ? {onRetryRuntime}
-          : {}}
-        {...(state.runtime.phase === "ready"
-          ? {onDismiss: () => dispatch({type: "runtime-error-dismissed"})}
-          : {})}
-      />
     </div>
   );
 }
