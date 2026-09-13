@@ -109,6 +109,26 @@ no actionable finding remained. No production PR, Release or deployment was
 created during verification. Existing locked dependency advisories remain
 outside this Task; no automatic dependency repair was applied.
 
+## Current-head review follow-up
+
+Run `34757633088/1` successfully published review `5190686665` for head
+`9837605e4d8456dcbf94a866a0fa9d6fb8ca8709`; original publisher failure
+`34744833430/1` remains unexplained and retained, not reclassified as passing.
+
+The inventory-amplification finding reproduced: 100 distinct rows caused 100
+detail reads before the already-required multiple-PR rejection. Rejecting the
+second distinct identity immediately preserves that invariant and limits detail
+reads to one per discovery. Duplicate identity refusal remains unchanged.
+
+The stale-mergeability finding does not establish an unsafe merge: the observation
+is only a precondition, not a transaction lock. GitHub enforces conflict/protection
+and exact-head constraints on PUT, and this controller verifies the actual merged
+source afterward. Repeated identical GETs cannot remove the race. A new real
+transport-fixture HTTP 409 regression confirms stale `mergeable=true` followed
+by server refusal stays `unknown-merge`, preserves the PR unmerged, and reopening
+never repeats PUT. It uses the same expected SHA and squash payload; it does not
+prove live GitHub semantics or grant retry permission.
+
 ## Version Management
 
 Version impact: none

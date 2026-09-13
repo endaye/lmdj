@@ -388,6 +388,33 @@ class PrTest(unittest.TestCase):
             self.advance()
         self.assertFalse(self.writes())
 
+    def test_multiple_pr_inventory_stops_before_per_row_read_amplification(self):
+        rows = [{"number": number} for number in range(1, 101)]
+        with patch.object(self.controller, "_request", side_effect=[rows, []]), \
+                patch.object(self.controller, "_pr", return_value={}) as detail:
+            with self.assertRaisesRegex(EvidencePrError, "multiple PRs"):
+                self.controller._find(self.spec)
+        self.assertLessEqual(detail.call_count, 1)
+        self.assertFalse(self.writes())
+
+    def test_conflict_after_mergeable_observation_never_repeats_merge_put(self):
+        def conflict(method, url, headers, body):
+            if method == "PUT":
+                self.calls.append((method, url, json.loads(body)))
+                self.assertTrue(self.row["mergeable"])
+                self.assertEqual(json.loads(body), {"sha": self.spec["head_sha"], "merge_method": "squash"})
+                return HttpResponse(409, {"Content-Type": "application/json"}, b'{"message":"SECRET conflict"}')
+            return self.http(method, url, headers, body)
+        self.client = GitHubClient(http_transport=conflict, token="fixture-private-token")
+        self.controller = self.new_controller()
+        first = self.advance()
+        self.assertEqual(first["status"], "unknown-merge")
+        self.assertNotIn("SECRET", json.dumps(first))
+        self.assertFalse(self.row["merged"])
+        self.controller = self.new_controller()
+        self.assertEqual(self.advance()["status"], "unknown-merge")
+        self.assertEqual(sum(call[0] == "PUT" for call in self.calls), 1)
+
     def test_saved_merge_identity_cannot_be_replaced(self):
         self.advance()
         self.row["merge_commit_sha"] = "f" * 40

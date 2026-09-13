@@ -123,6 +123,7 @@ class EvidencePullRequest:
             for row in rows:
                 require(type(row) is dict and positive(row.get("number")) and row["number"] not in ids, "PR inventory repeats or lacks identity")
                 ids.add(row["number"])
+                require(len(ids) <= 1, "operation has multiple PRs")
                 result.append(self._pr(spec, row["number"]))
             if len(rows) < 100:
                 require(len(result) <= 1, "operation has multiple PRs")
