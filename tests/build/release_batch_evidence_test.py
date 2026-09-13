@@ -8,10 +8,13 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import io
 import json
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -35,6 +38,60 @@ def zipped(documents):
 
 
 class BatchReleaseEvidenceTest(unittest.TestCase):
+    def test_ambient_git_dir_cannot_rebind_provenance(self):
+        self.assertEqual(self.reader.git("rev-parse", "HEAD").decode().strip(), self.control)
+        with tempfile.TemporaryDirectory() as directory:
+            subprocess.run(["git", "init", "--bare", "-q", directory], check=True)
+            with patch.dict(os.environ, {"GIT_DIR": directory}):
+                self.assertEqual(self.reader.git("rev-parse", "HEAD").decode().strip(), self.control)
+
+    def test_partial_clone_cannot_lazy_fetch_missing_provenance(self):
+        oid = self.git("rev-parse", "HEAD:scripts/ci/scope_policy.json")
+        with tempfile.TemporaryDirectory() as directory:
+            bare, partial = Path(directory) / "remote.git", Path(directory) / "partial"
+            def git(*args):
+                return subprocess.run(["git", *map(str, args)], check=True, capture_output=True, text=True).stdout
+            git("clone", "--bare", self.root, bare)
+            git("-C", bare, "config", "uploadpack.allowFilter", "true")
+            git("clone", "--filter=blob:none", "--no-checkout", bare.as_uri(), partial)
+            self.assertIn("?" + oid, git("-C", partial, "rev-list", "--objects", "--all", "--missing=print"))
+            requests = []
+            class Reject(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    requests.append(self.path)
+                    self.send_error(500)
+                def log_message(self, *args):
+                    pass
+            server = HTTPServer(("127.0.0.1", 0), Reject)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                git("-C", partial, "remote", "set-url", "origin", f"http://127.0.0.1:{server.server_port}/remote.git")
+                env = {k: v for k, v in os.environ.items() if k in ("PATH", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP")}
+                env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GIT_ALLOW_PROTOCOL="http", GIT_TERMINAL_PROMPT="0")
+                baseline = subprocess.run(["git", "-C", str(partial), "cat-file", "blob", oid],
+                                          env=env, capture_output=True, timeout=10)
+                self.assertNotEqual(baseline.returncode, 0)
+                self.assertTrue(requests)
+                requests.clear()
+                self.reader.root = partial
+                execute = subprocess.run
+                def legacy_git(*args, **kwargs):
+                    # Preserve real Git transport behavior even on versions
+                    # that support the optional no-lazy-fetch environment flag.
+                    kwargs["env"] = dict(kwargs.get("env", os.environ))
+                    kwargs["env"].pop("GIT_NO_LAZY_FETCH", None)
+                    return execute(*args, **kwargs)
+                with patch.object(consumer.subprocess, "run", side_effect=legacy_git):
+                    with self.assertRaises(consumer.BatchEvidenceError):
+                        self.reader.git("cat-file", "blob", oid)
+                self.assertEqual(requests, [])
+                self.assertIn("?" + oid, git("-C", partial, "rev-list", "--objects", "--all", "--missing=print"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
+
     def live_clock(self):
         class Clock(datetime):
             current=(2026,9,8)

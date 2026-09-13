@@ -10,6 +10,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import zipfile
@@ -62,7 +63,12 @@ git_root is an existing complete checkout; reads never fetch or execute source.
             raise BatchEvidenceError("external-error", "read-only GitHub evidence request failed; external state remains unknown") from None
 
     def git(self, *args):
-        result = subprocess.run(["git", "--no-replace-objects", "-C", str(self.root), *args], capture_output=True, timeout=60)
+        env = {k: v for k, v in os.environ.items() if k in ("PATH", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP")}
+        env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                   GIT_NO_REPLACE_OBJECTS="1", GIT_GRAFT_FILE=os.devnull,
+                   GIT_NO_LAZY_FETCH="1", GIT_ALLOW_PROTOCOL="", LC_ALL="C")
+        result = subprocess.run(["git", "--no-replace-objects", "-C", str(self.root), *args],
+                                env=env, capture_output=True, timeout=60)
         require(result.returncode == 0, "complete local Git provenance cannot be verified", "unverifiable")
         return result.stdout
 
