@@ -13,6 +13,9 @@ from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "scripts/ci"), str(ROOT / "tests/build")]
+sys.path.insert(0, str(ROOT))
+from tools.release.model import canonical_sha256
+from tools.release.review_inventory import bind_eligibility, ReviewInventoryError
 import ci_review_failure_report_test as fixtures
 import review_wait as wait
 import review_scope
@@ -186,6 +189,130 @@ class AdmissionTests(unittest.TestCase):
         self.assertTrue(result["eligible"], result)
         self.assertEqual(result["conversation_protection"], "not_evaluated")
         self.assertFalse(result["merge_authorized"])
+
+    def body_inventory(self):
+        # GraphQL-shaped decision input; collector pagination has its own real
+        # client tests. Eligibility below still uses the actual artifact reader.
+        inventory = {"schema": "lmdj.release-review-inventory.v1", "repository": REPO,
+            "repository_id": self.repo["id"], "pr": {"number": 7, "headRefOid": A},
+            "reviews": [], "comments": [], "reviewThreads": [], "closingIssuesReferences": []}
+        for kind, rows in (("reviews", self.reviews), ("comments", self.comments)):
+            inventory[kind] = [{"id": f"{kind}-{row['id']}", "databaseId": row["id"],
+                "body": row["body"], "author": {"login": row["user"]["login"], "databaseId":row["user"]["id"]}} for row in rows]
+        return {"inventory": inventory, "sha256": canonical_sha256(inventory)}
+
+    def test_qualified_automated_body_binds_without_granting_merge_authority(self):
+        self.render_v2()
+        eligibility, collected = self.check(), self.body_inventory()
+        binding = bind_eligibility(collected, eligibility)
+        expected = self.reviews[0]["body"].encode("utf-8")
+        observed = eligibility["evidence"][0]["body_observation"]
+        self.assertEqual(observed["sha256"], hashlib.sha256(expected).hexdigest())
+        self.assertEqual(observed["byte_length"], len(expected))
+        self.assertEqual(observed["author_id"], self.bot["id"])
+        self.assertEqual(binding["linked"][0]["database_id"], 60)
+        self.assertEqual(binding["eligibility_sha256"], canonical_sha256(eligibility))
+        self.assertNotIn("eligible", binding)
+        self.assertNotIn("merge_authorized", binding)
+
+    def test_owner_record_body_binding_counts_utf8_bytes_not_characters(self):
+        record = self.attest("takeover")
+        record["reason"] = "独立审查完成；保留自动审查失败记录。"
+        self.comments[0]["body"] = json.dumps(record, ensure_ascii=False)
+        eligibility = self.check()
+        binding = bind_eligibility(self.body_inventory(), eligibility)
+        raw = self.comments[0]["body"].encode("utf-8")
+        self.assertEqual(binding["linked"][0]["body_observation"]["byte_length"], len(raw))
+        self.assertGreater(len(raw), len(self.comments[0]["body"]))
+
+    def bot_graphql_inventory(self):
+        collected = self.body_inventory()
+        collected["inventory"]["reviews"][0]["author"]["login"] = self.bot["login"].removesuffix("[bot]")
+        collected["sha256"] = canonical_sha256(collected["inventory"])
+        return collected
+
+    def test_authenticated_bot_rest_suffix_matches_graphql_login(self):
+        eligibility = self.check()
+        binding = bind_eligibility(self.bot_graphql_inventory(), eligibility)
+        self.assertEqual(binding["linked"][0]["database_id"], 60)
+
+    def test_bot_login_projection_still_requires_exact_numeric_identity(self):
+        eligibility = self.check()
+        collected = self.bot_graphql_inventory()
+        collected["inventory"]["reviews"][0]["author"]["databaseId"] += 1
+        collected["sha256"] = canonical_sha256(collected["inventory"])
+        with self.assertRaisesRegex(ReviewInventoryError, "body author differs"):
+            bind_eligibility(collected, eligibility)
+
+    def test_owner_login_does_not_get_bot_suffix_normalization(self):
+        self.attest()
+        eligibility = self.check()
+        collected = self.body_inventory()
+        eligibility["evidence"][0]["body_observation"]["author_login"] += "[bot]"
+        with self.assertRaisesRegex(ReviewInventoryError, "body author differs"):
+            bind_eligibility(collected, eligibility)
+
+    def test_same_review_id_edited_body_cannot_reuse_old_observation(self):
+        eligibility = self.check()
+        self.reviews[0]["body"] += "\nNew objection after the observation"
+        with self.assertRaisesRegex(ReviewInventoryError, "body bytes differ"):
+            bind_eligibility(self.body_inventory(), eligibility)
+
+    def test_same_comment_id_edited_body_cannot_reuse_old_observation(self):
+        self.attest()
+        eligibility = self.check()
+        self.comments[0]["body"] += " "
+        with self.assertRaisesRegex(ReviewInventoryError, "body bytes differ"):
+            bind_eligibility(self.body_inventory(), eligibility)
+
+    def test_author_change_cannot_reuse_body_observation(self):
+        eligibility = self.check()
+        self.reviews[0]["user"] = {"id": 99, "login": "another-user"}
+        with self.assertRaisesRegex(ReviewInventoryError, "body author differs"):
+            bind_eligibility(self.body_inventory(), eligibility)
+
+    def test_binding_preserves_unlinked_content_and_conversation_obligations(self):
+        eligibility = self.check()
+        self.reviews.append({"id": 91, "user": self.owner, "body": "Earlier unresolved review"})
+        self.comments.append({"id": 92, "user": self.owner, "body": "Please verify migration"})
+        collected = self.body_inventory()
+        collected["inventory"]["reviewThreads"] = [{"id":"thread","isResolved":False}]
+        collected["inventory"]["closingIssuesReferences"] = [{"number":9,"repository":{"nameWithOwner":REPO}}]
+        collected["sha256"] = canonical_sha256(collected["inventory"])
+        binding = bind_eligibility(collected, eligibility)
+        self.assertEqual(binding["unlinked_reviews"], [91])
+        self.assertEqual(binding["unlinked_comments"], [92])
+        self.assertEqual((binding["thread_count"],binding["closing_count"]), (1,1))
+
+    def test_reused_login_with_another_numeric_author_cannot_bind(self):
+        eligibility = self.check()
+        self.reviews[0]["user"] = {**self.bot, "id":99}
+        with self.assertRaisesRegex(ReviewInventoryError, "body author differs"):
+            bind_eligibility(self.body_inventory(), eligibility)
+
+    def test_same_repository_name_with_another_numeric_identity_cannot_bind(self):
+        eligibility = self.check()
+        eligibility["repository_id"] += 1
+        with self.assertRaisesRegex(ReviewInventoryError, "matching qualified observation"):
+            bind_eligibility(self.body_inventory(), eligibility)
+
+    def test_old_eligibility_without_body_observation_cannot_bind(self):
+        eligibility = self.check()
+        del eligibility["evidence"][0]["body_observation"]
+        with self.assertRaisesRegex(ReviewInventoryError, "lacks a complete body observation"):
+            bind_eligibility(self.body_inventory(), eligibility)
+
+    def test_eligibility_for_another_head_cannot_bind(self):
+        eligibility = self.check()
+        eligibility["head_sha"] = B
+        with self.assertRaisesRegex(ReviewInventoryError, "matching qualified observation"):
+            bind_eligibility(self.body_inventory(), eligibility)
+
+    def test_collector_body_changed_without_digest_cannot_bind(self):
+        eligibility, collected = self.check(), self.body_inventory()
+        collected["inventory"]["reviews"][0]["body"] += "new text"
+        with self.assertRaisesRegex(ReviewInventoryError, "collector body digest differs"):
+            bind_eligibility(collected, eligibility)
 
     def test_authentic_v2_review_is_eligible_after_full_artifact_validation(self):
         self.render_v2()
