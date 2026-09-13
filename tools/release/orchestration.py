@@ -259,6 +259,46 @@ class RequestJournal(AbstractContextManager):
             except FileNotFoundError:
                 pass
 
+    def resolve_active(self, request):
+        """Read-only admission under the writer lock; never replace authority."""
+        self._active()
+        validate_request(request)
+        existing = self.read(request["id"])
+        if existing is not None:
+            if existing["request"] != request:
+                _fail("request ID cannot be rebound to another scope")
+        active = []
+        names = sorted(os.listdir(self.directory))
+        for name in names:
+            if not name.endswith(".json"):
+                continue
+            state = self.read(name[:-5])
+            if state is None:
+                _fail("request inventory changed during admission")
+            records = state["transitions"]
+            complete = len(records) == len(STEPS) and records[-1]["status"] == "verified"
+            if state["request"]["repository"] == request["repository"] and not complete:
+                active.append(state)
+        self._active()
+        if sorted(os.listdir(self.directory)) != names:
+            _fail("request inventory changed during admission")
+        if len(active) > 1:
+            _fail("unfinished release inventory is ambiguous")
+        if existing is not None:
+            if self.read(request["id"]) != existing:
+                _fail("original release changed during admission")
+            return existing
+        if not active:
+            return None
+        original = active[0]
+        fields = ("repository", "actor_id", "policy_digest", "control_revision",
+                  "mode", "requested_tag")
+        if any(original["request"][key] != request[key] for key in fields):
+            _fail("unfinished release belongs to another scope")
+        if self.read(original["request"]["id"]) != original:
+            _fail("original release changed during admission")
+        return original
+
     def create(self, request):
         self._active()
         validate_request(request)

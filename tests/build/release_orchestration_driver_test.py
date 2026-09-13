@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -102,6 +103,155 @@ class ReleaseDriverTest(unittest.TestCase):
         self.assertEqual(self.driver.resume("release-1"), result)
         self.assertEqual(self.backend.observations, list(STEPS))
         self.assertEqual(self.backend.calls, list(STEPS))
+
+    def admit_requests(self, *requests):
+        def authenticate(bound, policy):
+            if not self.backend.auth or policy != POLICY or bound not in requests:
+                raise PermissionError("untrusted request")
+        self.backend.authenticate = authenticate
+
+    def test_duplicate_request_resumes_original_baseline_and_operation(self):
+        original = request()
+        incoming = dict(original, id="release-2", base_revision="d" * 40,
+                        authority_ref="thread:release-2")
+        self.admit_requests(original, incoming)
+        self.backend.post_pending = "changelog_site"
+        first = self.driver.run(original)
+        frozen = self.state()
+        self.assertEqual(self.driver.run(incoming), first)
+        self.assertEqual(self.state(), frozen)
+        self.assertFalse((self.journal / "release-2.json").exists())
+        self.backend.override.clear()
+        self.backend.post_pending = None
+        result = self.driver.run(incoming)
+        self.assertEqual((result.request_id, result.status), ("release-1", "complete"))
+        self.assertEqual(self.backend.calls, list(STEPS))
+
+    def test_duplicate_request_cannot_replace_revoked_original_authority(self):
+        original = request()
+        incoming = dict(original, id="release-2", authority_ref="thread:release-2")
+        self.backend.post_pending = "changelog_site"
+        self.driver.run(original)
+        frozen = self.state()
+        calls = list(self.backend.calls)
+        self.admit_requests(incoming)
+        with self.assertRaises(JournalError): self.driver.run(incoming)
+        self.assertEqual(self.state(), frozen)
+        self.assertEqual(self.backend.calls, calls)
+        self.assertFalse((self.journal / "release-2.json").exists())
+
+    def test_duplicate_request_refuses_changed_scope(self):
+        original = request()
+        self.backend.post_pending = "changelog_site"
+        self.driver.run(original)
+        frozen = self.state()
+        for key, value in {"actor_id":456, "control_revision":"d" * 40,
+                           "policy_digest":"e" * 64, "mode":"tag"}.items():
+            incoming = dict(original, id="release-2", **{key:value})
+            if key == "mode": incoming["requested_tag"] = "lmdj-v1.0.56.0"
+            self.admit_requests(original, incoming)
+            with self.subTest(key=key), self.assertRaises(JournalError):
+                self.driver.run(incoming)
+            self.assertEqual(self.state(), frozen)
+            self.assertFalse((self.journal / "release-2.json").exists())
+
+    def test_completed_history_does_not_deduplicate_a_new_request(self):
+        original = request()
+        incoming = dict(original, id="release-2", authority_ref="thread:release-2")
+        self.admit_requests(original, incoming)
+        self.assertEqual(self.driver.run(original).status, "complete")
+        result = self.driver.run(incoming)
+        self.assertEqual((result.request_id, result.status), ("release-2", "complete"))
+        self.assertEqual(self.backend.calls, list(STEPS) * 2)
+        self.assertEqual(len(list(self.remote.iterdir())), len(STEPS) * 2)
+
+    def test_duplicate_unknown_write_never_reexecutes(self):
+        original = request()
+        incoming = dict(original, id="release-2", authority_ref="thread:release-2")
+        self.admit_requests(original, incoming)
+        self.backend.failure = "draft"
+        first = self.driver.run(original)
+        self.backend.failure = None
+        self.assertEqual(self.driver.run(incoming), first)
+        self.assertEqual(self.backend.calls.count("draft"), 1)
+        self.assertNotIn("publication", self.backend.calls)
+
+    def test_same_id_still_refuses_changed_baseline(self):
+        original = request()
+        changed = dict(original, base_revision="d" * 40)
+        self.admit_requests(original, changed)
+        self.backend.post_pending = "changelog_site"
+        self.driver.run(original)
+        frozen = self.state()
+        with self.assertRaises(JournalError): self.driver.run(changed)
+        self.assertEqual(self.state(), frozen)
+
+    def test_exact_tag_request_cannot_adopt_another_tag(self):
+        original = dict(request(), mode="tag", requested_tag="lmdj-v1.0.56.0")
+        incoming = dict(original, id="release-2", requested_tag="lmdj-v1.0.57.0")
+        self.admit_requests(original, incoming)
+        self.backend.post_pending = "changelog_site"
+        self.driver.run(original)
+        with self.assertRaises(JournalError): self.driver.run(incoming)
+        self.assertFalse((self.journal / "release-2.json").exists())
+
+    def test_ambiguous_active_inventory_is_not_resolved_by_first_match(self):
+        original = request()
+        incoming = dict(original, id="release-3")
+        self.admit_requests(original, incoming)
+        with RequestJournal(self.journal) as journal:
+            state = journal.create(original)
+            other = dict(original, id="release-2")
+            # Reproduce retained conflicting state without weakening admission.
+            state.update(request=other, request_digest=canonical_sha256(other))
+            journal._save(state)
+        for selected in (incoming, original):
+            with self.subTest(id=selected["id"]), self.assertRaisesRegex(JournalError, "ambiguous"):
+                self.driver.run(selected)
+        self.assertEqual(self.backend.calls, [])
+        self.assertFalse((self.journal / "release-3.json").exists())
+
+    def test_corrupt_inventory_cannot_be_ignored_as_unrelated(self):
+        original = request()
+        incoming = dict(original, id="release-2")
+        self.admit_requests(original, incoming)
+        self.backend.post_pending = "changelog_site"
+        self.driver.run(original)
+        (self.journal / "broken.json").write_bytes(b"{}")
+        (self.journal / "broken.json").chmod(0o600)
+        calls = list(self.backend.calls)
+        with self.assertRaisesRegex(JournalError, "fields are missing"): self.driver.run(incoming)
+        self.assertEqual(self.backend.calls, calls)
+        self.assertFalse((self.journal / "release-2.json").exists())
+
+    def test_duplicate_admission_requires_the_existing_writer_lock(self):
+        incoming = dict(request(), id="release-2")
+        self.admit_requests(request(), incoming)
+        with RequestJournal(self.journal) as journal:
+            journal.create(request())
+            with self.assertRaises(JournalError): self.driver.run(incoming)
+        self.assertEqual(self.backend.calls, [])
+
+    def test_inventory_change_during_resolution_refuses_before_advance(self):
+        import os
+        incoming = dict(request(), id="release-2")
+        self.admit_requests(request(), incoming)
+        self.backend.post_pending = "changelog_site"
+        self.driver.run(request())
+        original_list = os.listdir
+        reads = 0
+        def changed(directory):
+            nonlocal reads
+            reads += 1
+            if reads == 2:
+                (self.journal / ".new-entry").write_bytes(b"fixture")
+            return original_list(directory)
+        calls = list(self.backend.calls)
+        with patch("tools.release.orchestration.os.listdir", side_effect=changed):
+            with self.assertRaisesRegex(JournalError, "inventory changed"):
+                self.driver.run(incoming)
+        self.assertEqual(self.backend.calls, calls)
+        self.assertFalse((self.journal / "release-2.json").exists())
 
     def test_crash_after_publication_recovers_same_operation_without_republish(self):
         self.backend.crash = "publication"

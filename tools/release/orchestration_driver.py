@@ -94,7 +94,13 @@ class ReleaseDriver:
     def run(self, request: dict) -> DriveResult:
         with RequestJournal(self.root) as journal:
             self._authenticate(request)
-            state = journal.create(request)
+            state = journal.resolve_active(request)
+            if state is None:
+                state = journal.create(request)
+            else:
+                # Incoming authority does not renew or replace the original
+                # grant. All adapters and operations stay bound to this state.
+                self._authenticate(state["request"])
             return self._advance(journal, state)
 
     def resume(self, request_id: str) -> DriveResult:

@@ -151,6 +151,13 @@ unknown，只有单一认证匹配返回 correlated。任何结果都不允许�
 重新初始化为“未发送”。POST 前还核对 numeric actor / repository / workflow 和 main SHA。
 原授权每次都需复核，首次发送的 readiness 条件只在写入前检查；恢复不能要求已公开的
 Release 重新变成 Draft，也不能因此重发。
+父级 driver 的重复请求准入会在原 journal writer lock 下查找同仓库的未完成请求。
+新 transport ID 若仍属于同 actor、policy、control revision、mode 和 exact tag，
+会恢复原请求；新的 main 观察值与授权引用不覆盖旧基线或旧授权。新请求和原授权均须
+重新认证，返回的是原 request ID，不写入一个别名请求。相同 ID 的所有字段仍须完全
+一致；不同范围、多条未完成记录、损坏或读取中变化的清单均拒绝。已完成历史不阻止新发版，
+但既有请求的未知写意图仍只核对结果，不再次执行。此能力只在同一受信 journal 目录内生效，
+不替代生产入口认证、原请求 adapter 构造、跨目录去重或全局 Site 互斥。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
 私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
 不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。
