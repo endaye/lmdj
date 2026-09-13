@@ -299,7 +299,7 @@ lmdj_add_test(
 lmdj_add_test(
   NAME build.release_candidate_source_projection
   TIER contract
-  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_source_test.py SourceProjectionTest
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_source_test.py SourceProjectionTest -v
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   TIMEOUT 30
 )
@@ -308,6 +308,25 @@ lmdj_add_test(
   NAME build.release_candidate_source_binding
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_source_test.py SourceBindingTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+foreach(witness_group IN ITEMS Lifecycle State Boundary Output)
+  string(TOLOWER "${witness_group}" witness_group_lower)
+  lmdj_add_test(
+    NAME "build.release_candidate_witness_${witness_group_lower}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_witness_test.py "Witness${witness_group}Test" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120
+  )
+endforeach()
+
+lmdj_add_test(
+  NAME build.release_candidate_witness_schema
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_witness_test.py WitnessSchemaTest -v
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   TIMEOUT 30
 )

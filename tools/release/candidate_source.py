@@ -5,6 +5,7 @@ This consumer uses the actual private snapshot/cut bindings, not a PR label.
 Private indexes may add trees; no checkout, ref update, fetch or remote write.
 """
 from hashlib import sha256
+from contextlib import nullcontext
 from pathlib import Path
 import tempfile
 
@@ -49,10 +50,22 @@ class CandidateSourceVerifier:
         except Exception:
             raise CandidateSourceError("why: candidate source binding, objects or input projection are unavailable; remedy: retain the original request and restore exact history; do not fetch or invent a successful proof") from None
 
-    def _verify(self, request, source, cut, frozen, main, merged):
+    def verify_locked(self, journal, *, request, source, cut, frozen, main_revision, merge_revision):
+        """Use only this workspace's active writer, held by its caller."""
+        try:
+            require(journal is not None and journal is self.local._journal,
+                    "supplied journal is not the active source writer")
+            journal._active()
+            return self._verify(request, source, cut, frozen, main_revision, merge_revision, journal)
+        except CandidateSourceError:
+            raise
+        except Exception:
+            raise CandidateSourceError("why: candidate source locked proof is unavailable; remedy: retain the original workspace and restore its writer and exact history") from None
+
+    def _verify(self, request, source, cut, frozen, main, merged, held_journal=None):
         local = self.local
         gitdir = Path(local.git("rev-parse", "--absolute-git-dir").decode().strip())
-        with local._locked(gitdir) as journal:
+        with (local._locked(gitdir) if held_journal is None else nullcontext(held_journal)) as journal:
             state = self.cut.snapshot.verified_state(journal, request, source, cut["snapshot_sha256"])
             installed = state["scope"]["source"]
             binding = read(journal, "cut-binding.json")

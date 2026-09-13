@@ -24,6 +24,8 @@ from tools.release.candidate_material import CandidateBuildMaterial
 from tools.release.candidate_workspace import CandidateSourceWorkspace
 from tools.release.candidate_snapshot import CandidateSnapshotRun
 from tools.release.candidate_cut import CandidateCutWorkspace
+from tools.release.candidate_source import CandidateSourceVerifier
+from tools.release.candidate_witness import CandidateWitnessRun
 from tools.release.model import canonical_json, canonical_sha256
 
 
@@ -82,7 +84,9 @@ def main():
     base = git(ROOT, "rev-parse", "HEAD")[1].decode().strip()
     record({"control_revision":base, "harness_sha256":sha256(Path(__file__).read_bytes()).hexdigest()})
     record({"controller_sha256": {name: sha256((ROOT / name).read_bytes()).hexdigest()
-            for name in ("tools/release/candidate_snapshot.py", "tools/release/candidate_cut.py")}})
+            for name in ("tools/release/candidate_snapshot.py", "tools/release/candidate_cut.py",
+                         "tools/release/candidate_source.py", "tools/release/candidate_witness.py",
+                         "tools/release/task_verification.py")}})
     dependencies = ROOT / "apps/docs-site/node_modules"
     assert dependencies.is_dir(), "install this control worktree's locked Node dependencies first"
     repository = evidence / "repository"
@@ -137,7 +141,8 @@ def main():
                 result = runner.executor._execute(local._journal, vector, 900)
                 record({"stage":"cut-" + phase, "command":list(vector), "result":list(result)})
                 assert result[0] == 0, "real candidate Task gate failed; inspect retained executed logs"
-        cut = CandidateCutWorkspace(runner).prepare(request=request, source=source,
+        cut_workspace = CandidateCutWorkspace(runner)
+        cut = cut_workspace.prepare(request=request, source=source,
             snapshot_sha256=snapshot["sha256"], author_name="Candidate Rehearsal",
             author_email="fixture@example.invalid", timestamp=int(time.time()), verify=verify_cut)
         record({"stage":"cut", "receipt":cut})
@@ -159,8 +164,25 @@ def main():
     # introducing commit back to the retained-source repository; never hydrate
     # the source object into the far-side consumer merely to make it pass.
     git(repository, "fetch", "--no-tags", str(far), introducing)
-    command(["bash", "scripts/docs-site.sh", "witness", cut["product_build"], introducing], cwd=worktree)
+    witness_arguments = dict(request=request, source=source, cut=cut, frozen=frozen, merge_revision=introducing)
+    index_path = Path(local.git("rev-parse", "--path-format=absolute", "--git-path", "index").decode().strip())
+    before = (local.git("rev-parse", "HEAD"), local.git("show-ref"), index_path.read_bytes())
+    with patch("tools.release.task_verification.tempfile.TemporaryFile", retained_output):
+        first = CandidateWitnessRun(CandidateSourceVerifier(cut_workspace), authorize=authorize,
+            observe_main=lambda: introducing, path=args.tool_path).run(**witness_arguments)
+        record({"stage":"witness-verified", "receipt":first})
+        resumed = CandidateWitnessRun(CandidateSourceVerifier(cut_workspace), authorize=authorize,
+            observe_main=lambda: introducing, path=args.tool_path).run(**witness_arguments)
+        record({"stage":"witness-cold-resume", "receipt":resumed})
+    assert first["receipt"] == resumed["receipt"], "cold resume changed witness identity"
+    assert first["command_history_sha256"] != resumed["command_history_sha256"], "cold resume omitted actual verification"
+    assert before == (local.git("rev-parse", "HEAD"), local.git("show-ref"), index_path.read_bytes()), "witness runner changed source Git state"
+    journal = index_path.parent / local.JOURNAL_NAME
+    witness_state = json.loads((journal / "witness-state.json").read_bytes())["state"]
+    assert [row["arguments"][2] for row in witness_state["commands"]] == ["witness", "verify-witness", "verify-witness"]
+    assert witness_state["confirmed"] == 3 and all(row["result"][0] == 0 for row in witness_state["commands"])
     witness_raw = (worktree / witness).read_bytes()
+    assert resumed["receipt"]["witness"] == {"path":witness, "bytes":len(witness_raw), "sha256":sha256(witness_raw).hexdigest()}
     (far / witness).parent.mkdir(parents=True, exist_ok=True)
     with (far / witness).open("xb") as output:
         output.write(witness_raw)
@@ -170,7 +192,7 @@ def main():
     command(["bash", "scripts/docs-site.sh", "check"], cwd=far)
     assert not git(far, "status", "--porcelain")[1].strip(), "fresh-clone final worktree is dirty"
     assert git(far, "cat-file", "-e", source["commit"], expected=None)[0] != 0, "verification unexpectedly hydrated source into main object store"
-    record({"stage":"complete", "scope":"local candidate generator/cut/fresh-clone squash/witness only",
+    record({"stage":"complete", "scope":"local candidate generator/cut/squash/durable witness/cold resume/fresh-clone Portal only",
             "base":base, "source":source["commit"], "cut":cut["commit"], "introducing":introducing,
             "product_build":cut["product_build"], "witness":witness,
             "remote_release_or_deployment":False})

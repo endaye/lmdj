@@ -10,9 +10,17 @@ from tools.release.candidate_source import CandidateSourceVerifier, CandidateSou
 
 
 class SourceFixture(fixture.CutFixture):
+    def _prepare_seed(self):
+        super()._prepare_seed()
+        # This class tests the consumer of a completed cut, not cut creation.
+        # Produce that exact precondition once; CutFixture copies its complete
+        # private Git/journal state back to the same temp paths for every case.
+        # CutRecoveryTest/CutSafetyTest still execute their producer per case.
+        type(self).seed_cut_receipt = self.prepare_cut()
+
     def setUp(self):
         super().setUp()
-        self.cut_receipt = self.prepare_cut()
+        self.cut_receipt = deepcopy(self.seed_cut_receipt)
         self.verifier = CandidateSourceVerifier(self.cut)
 
     def check(self, **changes):

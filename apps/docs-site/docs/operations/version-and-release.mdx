@@ -252,12 +252,17 @@ witness、版本分配竞争复查或完整 CI；远端 PR 总控仍待接线。
 保留来源对象的工作区可用 `scripts/docs-site.sh verify-witness PRODUCT_BUILD INTRODUCING_REVISION`
 只读核验已生成的 witness：绑定实际引入提交及其 metadata，逐字比较正式生成器的预期
 产物，输出路径、长度和摘要回执，不覆盖文件或重新生成。该检查用于生成端恢复，
-不替代缺少来源对象的新克隆验收、完整快照证明或真实 main / 审查授权；持久化 witness
-命令及其后续证据 PR 仍待接线。
+不替代缺少来源对象的新克隆验收、完整快照证明或真实 main / 审查授权。
 内部命令执行器已提供有界原始输出读取：只有完整的 stdout / stderr 合并流未超限时才
 返回原始字节；超限不返回截断前缀，但仍记录实际退出码、完整输出长度和摘要。
 这只是读取核验器回执的基础接口，不等于回执有效或 witness 恢复完成；调用方仍须核验
 退出码、schema、候选身份、实际文件及授权，并持久化验证结果。
+本地 witness runner 已在原候选工作区的同一 writer lock 下连接具体来源核验器、正式
+生成及核验命令。生成前持久化登记意图，未知或失败的生成不重放；已有产物只做核验。
+恢复核对固定 squash、实际 main 祖先关系和原来源绑定，重新核验原产物，保留失败记录
+并限制核验次数。成功回执绑定核验器实际输出的字节及 canonical 文件的长度、摘要；
+原 cut 的 HEAD、index 和 tracked 文件不变。状态丢失、产物漂移或授权失效即停止。
+witness 的 reviewed PR 和生产父级接线仍未完成；本地新克隆快照演练不代表候选或发版完成。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
 私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
 不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。
