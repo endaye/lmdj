@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import urllib.error
 
 import change_scope
 import review_scope
@@ -688,6 +689,37 @@ def publish(directory):
     authenticate(identity)  # A race remains historical evidence, never current.
 
 
+def publisher_error_category(error):
+    """Project only closed categories; API wrappers retain an explicit cause.
+
+    Never format an external exception: messages, URLs, commands, HTTP bodies
+    and even custom exception class names can carry credentials. The bounded
+    walk also terminates for malformed or cyclic cause chains.
+    """
+    for _ in range(8):
+        if isinstance(error, urllib.error.HTTPError):
+            code = error.code
+            suffix = f" status={code}" if type(code) is int and 100 <= code <= 599 else ""
+            return "http-error" + suffix
+        for kind, category in (
+            (TimeoutError, "timeout"),
+            (subprocess.TimeoutExpired, "timeout"),
+            (urllib.error.URLError, "network-error"),
+            (FileNotFoundError, "file-missing"),
+            (PermissionError, "permission-denied"),
+            (json.JSONDecodeError, "invalid-json"),
+            (UnicodeError, "invalid-encoding"),
+            (KeyError, "missing-field"),
+            (OSError, "os-error"),
+        ):
+            if isinstance(error, kind):
+                return category
+        error = error.__cause__
+        if error is None:
+            break
+    return "unexpected-error"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["collect", "collect-t2", "capture", "finalize", "publish"])
@@ -738,6 +770,13 @@ def main():
             # so its refusals are authored literals about identity and
             # inventory, with no provider text in scope to leak.
             print(str(error), file=sys.stderr)
+            return 1
+        if args.command == "publish":
+            print("why: review pipeline operation failed "
+                  f"(category={publisher_error_category(error)}); "
+                  "remedy: inspect the failure category and reconcile the exact "
+                  "run's retained evidence and GitHub state before retrying; "
+                  "take over review if unresolved", file=sys.stderr)
             return 1
         # CLI/provider exceptions can contain credentials or raw model text.
         print("why: review pipeline operation failed; remedy: inspect bounded structured receipts and retry or review manually", file=sys.stderr)
