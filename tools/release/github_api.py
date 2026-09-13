@@ -32,6 +32,11 @@ def valid_candidate_pr_document(document) -> bool:
     return _valid_task_pr_document(document, r"feat/release-candidate-[0-9a-f]{64}")
 
 
+def valid_witness_pr_document(document) -> bool:
+    """Witness-only follow-up; never reuse allocation/publication branches."""
+    return _valid_task_pr_document(document, r"docs/release-witness-[0-9a-f]{64}")
+
+
 def _valid_task_pr_document(document, branch) -> bool:
     return (type(document) is dict
             and set(document) == {"title", "body", "head", "base", "draft", "maintainer_can_modify"}
@@ -610,6 +615,10 @@ class GitHubClient:
     def candidate_pr_request(self, method: str, suffix: str, document=None) -> object:
         """Candidate-only PR routes; publication branch scope stays unchanged."""
         return self._task_pr_request(method, suffix, document, r"feat/release-candidate-[0-9a-f]{64}")
+
+    def witness_pr_request(self, method: str, suffix: str, document=None) -> object:
+        """Closed witness PR routes; no new kind of mutation is authorized."""
+        return self._task_pr_request(method, suffix, document, r"docs/release-witness-[0-9a-f]{64}")
 
     def _task_pr_request(self, method, suffix, document, branch):
         if type(method) is not str or type(suffix) is not str:

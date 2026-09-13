@@ -27,8 +27,14 @@ def require(value, reason):
 
 
 class CandidatePrSequence:
+    _validate_spec = staticmethod(validate_spec)
+    _document = staticmethod(pr_document)
+    _branch_type, _pr_type = CandidateBranch, CandidatePullRequest
+    _state_file = "candidate-pr-sequence.json"
+    _schema = "lmdj.candidate-pr-sequence.v1"
+
     def __init__(self, root, *, branch, pr):
-        require(type(branch) is CandidateBranch and type(pr) is CandidatePullRequest,
+        require(type(branch) is self._branch_type and type(pr) is self._pr_type,
                 "requires the concrete candidate children")
         self.root, self.branch, self.pr = Path(root).absolute(), branch, pr
         self._children()
@@ -64,34 +70,34 @@ class CandidatePrSequence:
             finally:
                 os.close(fd)
 
-    @staticmethod
-    def _read(journal, spec):
+    @classmethod
+    def _read(cls, journal, spec):
         journal._active()
         try:
-            fd = os.open("candidate-pr-sequence.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=journal.directory)
+            fd = os.open(cls._state_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=journal.directory)
         except FileNotFoundError:
             return None
         try:
             journal._private(fd)
-            CandidatePrSequence._enrollment(journal)
+            cls._enrollment(journal)
             with os.fdopen(fd, "rb", closefd=False) as stream:
                 raw = stream.read(MAX_STATE_BYTES + 1)
             state = json.loads(raw)
             require(len(raw) <= MAX_STATE_BYTES and canonical_json(state) == raw and type(state) is dict
                     and set(state) == {"schema", "spec", "phase"}
-                    and state["schema"] == "lmdj.candidate-pr-sequence.v1"
+                    and state["schema"] == cls._schema
                     and canonical_json(state["spec"]) == canonical_json(spec)
                     and state["phase"] in ("initializing", "branch", "pr-initializing", "pr"), "state is invalid or rebound")
             return state
         finally:
             os.close(fd)
 
-    @staticmethod
-    def _save(journal, state, phase):
+    @classmethod
+    def _save(cls, journal, state, phase):
         updated = dict(state, phase=phase)
         encoded = canonical_json(updated)
         require(len(encoded) <= MAX_STATE_BYTES, "state exceeds its read bound")
-        journal._write("candidate-pr-sequence.json", encoded)
+        journal._write(cls._state_file, encoded)
         state["phase"] = phase
 
     def observe(self, spec, *, initialize=False):
@@ -103,9 +109,9 @@ class CandidatePrSequence:
         return self._run(spec, initialize=False, mutate=True, before_write=before_write)
 
     def _run(self, spec, *, initialize, mutate, before_write=None):
-        validate_spec(spec)
+        self._validate_spec(spec)
         spec = deepcopy(spec)
-        pr_document(spec)  # Validate before enrolling any parent or child state.
+        self._document(spec)  # Validate before enrolling any parent or child state.
         self._children()
         with RequestJournal(self.root) as journal:
             try:
@@ -114,7 +120,7 @@ class CandidatePrSequence:
                     if not initialize:
                         return {"status":"unknown", "phase":None, "evidence":None}
                     self._enrollment(journal, create=True)
-                    state = {"schema":"lmdj.candidate-pr-sequence.v1", "spec":spec, "phase":"initializing"}
+                    state = {"schema":self._schema, "spec":spec, "phase":"initializing"}
                     self._save(journal, state, "initializing")
 
                 def guard():

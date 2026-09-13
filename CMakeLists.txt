@@ -582,6 +582,23 @@ lmdj_add_test(
   TIMEOUT 30
 )
 
+foreach(witness_group IN ITEMS Pr Branch Sequence Journey)
+  string(TOLOWER "${witness_group}" witness_group_lower)
+  set(witness_budget 60)
+  if(witness_group STREQUAL "Pr")
+    set(witness_budget 30)
+  elseif(witness_group STREQUAL "Journey")
+    set(witness_budget 120)
+  endif()
+  lmdj_add_test(
+    NAME "build.release_witness_pr_${witness_group_lower}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_witness_pr_test.py "Witness${witness_group}Test" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT "${witness_budget}"
+  )
+endforeach()
+
 lmdj_add_test(
   NAME build.release_candidate_pr_sequence_boundaries
   TIER contract
