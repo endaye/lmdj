@@ -1,6 +1,7 @@
 """Durable local witness production; not witness PR or release acceptance."""
 from base64 import b64decode, b64encode
 from copy import deepcopy
+from contextlib import contextmanager
 from hashlib import sha256
 import json
 import os
@@ -61,10 +62,11 @@ class CandidateWitnessRun:
                     + 2048)
         require(required <= 65536, "scope exceeds its durable command-history budget")
 
-    def _artifact(self, name, *, optional=False):
-        filename = self.local.root / name
+    @staticmethod
+    def _read_artifact(root, name, *, optional=False, capture=False):
+        filename = root / name
         for parent in filename.parents:
-            if parent == self.local.root:
+            if parent == root:
                 break
             require(parent.is_dir() and not parent.is_symlink(), "artifact parent is unsafe")
         try:
@@ -77,7 +79,7 @@ class CandidateWitnessRun:
             require(stat.S_ISREG(before.st_mode) and not before.st_mode & 0o111
                     and before.st_nlink == 1 and before.st_size <= 64 * 1024 * 1024,
                     "artifact is not a bounded single-link regular file")
-            hasher, length = sha256(), 0
+            hasher, length, chunks = sha256(), 0, [] if capture else None
             while True:
                 chunk = os.read(fd, 65536)
                 if not chunk:
@@ -85,13 +87,19 @@ class CandidateWitnessRun:
                 length += len(chunk)
                 require(length <= 64 * 1024 * 1024, "artifact exceeded its byte bound")
                 hasher.update(chunk)
+                if capture:
+                    chunks.append(chunk)
             after, current = os.fstat(fd), filename.lstat()
             identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
             require(identity(before) == identity(after) == identity(current) and length == before.st_size,
                     "artifact changed during reading")
-            return {"path":name, "bytes":length, "sha256":hasher.hexdigest()}
+            fact = {"path":name, "bytes":length, "sha256":hasher.hexdigest()}
+            return (fact, b"".join(chunks)) if capture else fact
         finally:
             os.close(fd)
+
+    def _artifact(self, name, *, optional=False):
+        return self._read_artifact(self.local.root, name, optional=optional)
 
     @staticmethod
     def _bindings(journal):
@@ -137,7 +145,47 @@ class CandidateWitnessRun:
         require(other <= {self._names(scope)[1]}, "unrelated untracked files exist")
         require(local.revision(cut["source_retention_ref"]) == inputs["source"]["commit"], "source retention changed")
         journal._active()
+        proof["main"] = main
         return proof
+
+    @contextmanager
+    def verified_artifact(self, receipt, *, request, source, cut, frozen, merge_revision):
+        """Consume actual confirmed bytes without executing another command.
+
+        The trusted destination must call the yielded guard before mutations
+        and after its verification callbacks. The source writer stays held for
+        the whole context; no proof survives release of that writer.
+        """
+        inputs = deepcopy(dict(request=request, source=source, cut=cut, frozen=frozen,
+                               merge_revision=merge_revision))
+        receipt = deepcopy(receipt)
+        scope = self._scope(inputs)
+        self._check_scope_budget(scope)
+        gitdir = Path(self.local.git("rev-parse", "--absolute-git-dir").decode().strip())
+        with self.local._locked(gitdir) as journal:
+            proof = self._guard(journal, scope, inputs)
+            state = self._state(journal, scope)
+            require(state is not None and state["confirmed"] == len(state["commands"])
+                    and state["confirmed"] > int(state["generate"]), "last command is not fully confirmed")
+            emitted = self._decode(state["commands"][-1])
+            require(same(receipt, {"status":"witness-verified", "receipt":emitted,
+                    "command_history_sha256":canonical_sha256(state)}), "consumer receipt differs from command history")
+            require(same(emitted, self._expected(scope, inputs)), "confirmed artifacts changed")
+            fact, raw = self._read_artifact(self.local.root, emitted["witness"]["path"], capture=True)
+            require(same(fact, emitted["witness"]), "captured witness differs from emitted receipt")
+
+            def guard():
+                self._guard(journal, scope, inputs, proof)
+                require(same(self._state(journal, scope), state), "consumer command history changed")
+                require(same(self._expected(scope, inputs), emitted), "consumer artifacts changed")
+                return proof["main"]
+
+            guard()
+            yield deepcopy(emitted), raw, guard
+            # The consumer guards its final mutation/check while its own writer
+            # is still held. Do not invoke another callback after that consumer
+            # releases its nested writer and has already checked its result.
+            journal._active()
 
     @staticmethod
     def _save(journal, state):

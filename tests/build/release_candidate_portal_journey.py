@@ -26,6 +26,8 @@ from tools.release.candidate_snapshot import CandidateSnapshotRun
 from tools.release.candidate_cut import CandidateCutWorkspace
 from tools.release.candidate_source import CandidateSourceVerifier
 from tools.release.candidate_witness import CandidateWitnessRun
+from tools.release.candidate_witness_task import CandidateWitnessTask
+from tools.release.task_verification import PublicationTaskVerifier
 from tools.release.model import canonical_json, canonical_sha256
 
 
@@ -86,7 +88,8 @@ def main():
     record({"controller_sha256": {name: sha256((ROOT / name).read_bytes()).hexdigest()
             for name in ("tools/release/candidate_snapshot.py", "tools/release/candidate_cut.py",
                          "tools/release/candidate_source.py", "tools/release/candidate_witness.py",
-                         "tools/release/task_verification.py")}})
+                         "tools/release/task_verification.py", "tools/release/candidate_witness_task.py",
+                         "tools/release/publication_workspace.py")}})
     dependencies = ROOT / "apps/docs-site/node_modules"
     assert dependencies.is_dir(), "install this control worktree's locked Node dependencies first"
     repository = evidence / "repository"
@@ -183,16 +186,48 @@ def main():
     assert witness_state["confirmed"] == 3 and all(row["result"][0] == 0 for row in witness_state["commands"])
     witness_raw = (worktree / witness).read_bytes()
     assert resumed["receipt"]["witness"] == {"path":witness, "bytes":len(witness_raw), "sha256":sha256(witness_raw).hexdigest()}
-    (far / witness).parent.mkdir(parents=True, exist_ok=True)
-    with (far / witness).open("xb") as output:
-        output.write(witness_raw)
-    record({"stage":"witness-transfer", "bytes":len(witness_raw), "sha256":sha256(witness_raw).hexdigest()})
-    git(far, "add", "--", witness)
-    git(far, "-c", "commit.gpgsign=false", "commit", "-m", "docs(release): fixture squash witness")
+    witness_operation = canonical_sha256({"request":canonical_sha256(request), "step":"candidate-witness"})
+    witness_branch = "docs/release-witness-" + witness_operation
+    witness_root = evidence / "witness-task"
+    git(far, "worktree", "add", "-b", witness_branch, str(witness_root), introducing)
+    shutil.copytree(dependencies, witness_root / "apps/docs-site/node_modules", symlinks=True)
+    def new_task():
+        return CandidateWitnessTask(witness_root, CandidateWitnessRun(CandidateSourceVerifier(cut_workspace),
+            authorize=authorize, observe_main=lambda: introducing, path=args.tool_path))
+    task = new_task()
+    executor = PublicationTaskVerifier(None, witness_root, authorize=authorize, path=args.tool_path)
+    def verify_witness_task(root, phase, binding):
+        assert root == witness_root
+        assert (root / witness).read_bytes() == witness_raw, "Task did not import exact emitted witness bytes"
+        for vector in (("bash", "scripts/docs-site.sh", "check"),
+                       ("python3", "tests/build/ci_change_scope_test.py"),
+                       ("git", "diff", "--cached", "--check", introducing)):
+            result = executor._execute(task._journal, vector, 900)
+            record({"stage":"witness-task-" + phase, "command":list(vector), "result":list(result)})
+            assert result[0] == 0, "real witness Task gate failed; retain actual output"
+    task_arguments = dict(receipt=resumed, base_revision=introducing, **witness_arguments,
+        author_name="Candidate Rehearsal", author_email="fixture@example.invalid",
+        timestamp=int(time.time()), verify=verify_witness_task)
+    with patch("tools.release.task_verification.tempfile.TemporaryFile", retained_output):
+        task_receipt = task.prepare(**task_arguments)
+        record({"stage":"witness-task", "receipt":task_receipt})
+        task = new_task()
+        cold_task = task.prepare(**task_arguments)
+        record({"stage":"witness-task-cold-resume", "receipt":cold_task})
+    assert task_receipt == cold_task, "cold Task resume changed its bound commit"
+    assert before == (local.git("rev-parse", "HEAD"), local.git("show-ref"), index_path.read_bytes()), "Task changed original candidate Git state"
+    assert task.git("cat-file", "blob", task_receipt["commit"] + ":" + witness) == witness_raw
+    assert not task.git("status", "--porcelain").strip(), "completed witness Task is dirty"
+    git(far, "merge", "--squash", task_receipt["commit"])
+    git(far, "-c", "commit.gpgsign=false", "commit", "-m", "docs(release): fixture reviewed witness squash")
+    witness_merged = git(far, "rev-parse", "HEAD")[1].decode().strip()
+    assert (far / witness).read_bytes() == witness_raw, "witness squash changed transferred bytes"
+    record({"stage":"witness-transfer", "bytes":len(witness_raw), "sha256":sha256(witness_raw).hexdigest(),
+            "task_commit":task_receipt["commit"], "squash_commit":witness_merged, "github_review_exercised":False})
     command(["bash", "scripts/docs-site.sh", "check"], cwd=far)
     assert not git(far, "status", "--porcelain")[1].strip(), "fresh-clone final worktree is dirty"
     assert git(far, "cat-file", "-e", source["commit"], expected=None)[0] != 0, "verification unexpectedly hydrated source into main object store"
-    record({"stage":"complete", "scope":"local candidate generator/cut/squash/durable witness/cold resume/fresh-clone Portal only",
+    record({"stage":"complete", "scope":"local source/cut/squash/witness/Task/cold recovery/fresh-clone Portal only; no GitHub review",
             "base":base, "source":source["commit"], "cut":cut["commit"], "introducing":introducing,
             "product_build":cut["product_build"], "witness":witness,
             "remote_release_or_deployment":False})

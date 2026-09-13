@@ -262,7 +262,11 @@ witness、版本分配竞争复查或完整 CI；远端 PR 总控仍待接线。
 恢复核对固定 squash、实际 main 祖先关系和原来源绑定，重新核验原产物，保留失败记录
 并限制核验次数。成功回执绑定核验器实际输出的字节及 canonical 文件的长度、摘要；
 原 cut 的 HEAD、index 和 tracked 文件不变。状态丢失、产物漂移或授权失效即停止。
-witness 的 reviewed PR 和生产父级接线仍未完成；本地新克隆快照演练不代表候选或发版完成。
+已确认的 witness 可在保留原 writer 的上下文中交给独立 Task 工作区；消费回执不重复执行
+生成或核验命令，也不消耗额外核验次数。Task 只添加精确 witness 文件，绑定真实引入 SHA、
+原命令历史和独立分支，在暂存及提交后分别验证；崩溃后恢复同一提交，状态丢失或来源变化即停止。
+该 Task 不改原候选 target 或快照，不推送原候选分支。witness 的 reviewed PR 和生产父级接线
+仍未完成；本地新克隆快照演练不代表候选或发版完成。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
 私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
 不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。

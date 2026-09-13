@@ -331,6 +331,25 @@ lmdj_add_test(
   TIMEOUT 30
 )
 
+foreach(witness_task_group IN ITEMS Lifecycle Boundary Authority Crash)
+  string(TOLOWER "${witness_task_group}" witness_task_group_lower)
+  lmdj_add_test(
+    NAME "build.release_candidate_witness_task_${witness_task_group_lower}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_witness_task_test.py "Task${witness_task_group}Test" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120
+  )
+endforeach()
+
+lmdj_add_test(
+  NAME build.release_candidate_witness_task_artifact
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_witness_task_test.py ArtifactCaptureTest -v
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
 lmdj_add_test(
   NAME build.release_candidate_cut_recovery
   TIER contract
