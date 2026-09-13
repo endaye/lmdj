@@ -18,7 +18,7 @@ and index updates are allowed. All sources/output checks precede writes. Check
 mode writes nothing. No existing versioned_docs or frozen snapshot is modified.
 Version pages record publication, never infer deployment or promotion.
 
-Crash-recovery boundary found during delivery review: rerunning preserves
+Historical crash-recovery boundary found before the repair below: rerunning preserved
 complete, byte-identical pages, but an interrupted write can leave a truncated
 version page or `.index-*` temporary file. The standalone generator safely
 refuses those states; it does not yet automatically reconcile arbitrary crash
@@ -35,7 +35,9 @@ reviewed record nor this generator replaces far-side API or public-site checks.
 Declared files:
 
 - `tools/release/changelog_site.py`
+- `tools/release/install_changelog_page.py`
 - `tests/build/release_changelog_site_test.py`
+- `tests/build/release_changelog_install_test.py`
 - `CMakeLists.txt`
 - `docs/release-evidence/changelog-publications.json`
 - `apps/docs-site/scripts/generate-release-changelogs.mjs`
@@ -144,6 +146,69 @@ registered CTest (0.28s) passed, as did compilation and complete Portal check
 `/tmp/lmdj-site-delivery-record-label-portal.log`). Independent review read the
 three-file clarification and confirmed the trust-boundary wording, not a repair
 or waiver of the two remaining crash/durability findings.
+
+### Actual crash/durability repair after the clarification
+
+The two findings above are now addressed by implementation, not only deferred.
+The generator writes complete pages into unique private staging directories
+under ignored `build/release/changelog-pages/`, validates same-device staging,
+syncs file and directory, then installs new pages with atomic create-only native
+rename. Linux uses `renameat2(RENAME_NOREPLACE)`; Darwin uses
+`renameatx_np(RENAME_EXCL)`. Unsupported symbols/filesystems and cross-device
+operations fail without a copying or overwriting fallback. This deliberately
+avoids the link-then-unlink crash window. Every version page is persisted before
+the mutable index is replaced and its directory synced. Resume also syncs
+already-complete pages, including a prior install interrupted before its final
+directory barrier. Complete staging leftovers after abrupt process death stay
+in the ignored staging tree, never in the source page inventory; they do not
+block another run and are not automatically garbage-collected.
+
+The original `c14130df` generator reproduced the partial-final-page defect with
+real SIGKILL: the assertion that no final path existed failed with `Missing
+expected rejection` (exit 1), retained at
+`/tmp/lmdj-site-durable-partial-red.log`. The corrected Node 22 suite passes 12
+tests, including real kills during page writing and before/after index rename,
+then a complete resumed byte check of every old/new page. Native installer
+tests cover real exclusive refusal, changed input, no EXDEV fallback, actual
+fsync ordering, and process exits before/after native rename, including single
+link counts. Six tests passed on Darwin and in a local, network-disabled Linux
+container using existing image
+`sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea`
+(Python 3.12, linux/amd64 under local Colima emulation, temporary filesystem).
+Node log: `/tmp/lmdj-site-durable-node-v2.log`; Darwin installer log:
+`/tmp/lmdj-site-durable-install.log`.
+
+Independent review reran native 6 and Node 12 on Darwin and found no actionable
+finding in the controlled single-writer workflow. These are real process-death
+tests and fsync call-order checks, not physical power-cut tests or production
+filesystem acceptance. Linux Node/Portal has not been exercised here. Different
+concurrent inventories are not serialized by this generator; unattended service
+integration still requires its own controlled workspace and writer lock. It
+does not defend against malicious same-account filesystem substitution. The
+whole release goal remains open for service/authority, published-record and
+online Release/Host/Channel integration and full end-to-end acceptance.
+
+Native API references: [Linux rename manual](https://man7.org/linux/man-pages/man2/rename.2.html)
+and [Apple exclusive rename support](https://developer.apple.com/documentation/foundation/urlresourcevalues/volumesupportsexclusiverenaming).
+Darwin flag and signature were also checked against the installed SDK and
+`man 2 rename`; no platform fallback was inferred from a stub.
+
+Final repair checks: both registered CTest suites passed (0.22s total), staged
+ownership 74/74 passed, Python compilation passed, and full Node 22 Portal
+check passed 128 tests plus production build and 47 routes/internal links
+(exit 0). Actual version-and-release HTML includes atomic installation and
+remaining writer-lock boundaries. Logs: `/tmp/lmdj-site-durable-portal.log`,
+`/tmp/lmdj-site-durable-ownership.log`, `/tmp/lmdj-site-durable-linux.log`.
+
+The subsequent c14130df remote review also alleged silent loss of index entries.
+Independent real Python-projector/Node-writer checks established a successful
+baseline then tested three mutations: missing publication fails in Python;
+missing publication and ledger entry fails Node's retained-page inventory;
+changed publication date alters the frozen version page and fails before the
+index write. All failures preserved index and historical page bytes. That
+finding is rejected on actual consumer behavior, not by synthesizing history.
+Deleting every source and output together remains a Git-review history boundary,
+not evidence this local generator can independently recover erased history.
 
 ## Version Management
 

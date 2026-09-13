@@ -3,7 +3,8 @@ import test, {after} from 'node:test';
 import {mkdtemp, mkdir, readFile, writeFile, symlink, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {execFile} from 'node:child_process';
+import {execFile, spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {compile} from '@mdx-js/mdx';
@@ -116,3 +117,59 @@ print(json.dumps({'pages': fixture.project(), 'notes': render(fixture.document)}
   const compiled = await compile(source.content);
   assert.ok(String(compiled).length > 0);
 });
+
+for (const point of ['partial-page', 'before-index', 'after-index']) {
+  test(`real process death at ${point} resumes without changing history`, async () => {
+    const root = await fixture();
+    await applyReleasePages(root, pages, {check: false});
+    const next = [{...pages[0], content: 'new index\n'}, pages[1],
+      {file: prefix + '1.0.2.0.mdx', content: 'new frozen version\n'}];
+    const moduleUrl = new URL('../scripts/lib/release-changelogs.mjs', import.meta.url).href;
+    // Instrument real filesystem calls in an isolated child, not production hooks.
+    const script = `
+      import fs from 'node:fs/promises';
+      import {syncBuiltinESMExports} from 'node:module';
+      const pause = async () => {setInterval(() => {}, 1000); process.send('at-boundary'); await new Promise(() => {});};
+      const write = fs.writeFile, rename = fs.rename;
+      fs.writeFile = async (file, content, options) => {
+        if (${JSON.stringify(point)} === 'partial-page' && content === 'new frozen version\\n') {
+          await write(file, content.slice(0, 5), options); await pause();
+        }
+        return write(file, content, options);
+      };
+      fs.rename = async (from, to) => {
+        if (${JSON.stringify(point)} === 'before-index') await pause();
+        const result = await rename(from, to);
+        if (${JSON.stringify(point)} === 'after-index') await pause();
+        return result;
+      };
+      syncBuiltinESMExports();
+      const {applyReleasePages} = await import(${JSON.stringify(moduleUrl)});
+      await applyReleasePages(${JSON.stringify(root)}, ${JSON.stringify(next)}, {check: false});
+    `;
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script],
+      {stdio: ['ignore', 'pipe', 'pipe', 'ipc']});
+    const exited = once(child, 'exit');
+    let errors = '';
+    child.stderr.on('data', (data) => {errors += data;});
+    const timeout = setTimeout(() => child.kill('SIGKILL'), 10000);
+    try {
+      const boundary = await Promise.race([
+        once(child, 'message').then(([message]) => message),
+        exited.then(() => {throw new Error(`child exited before crash boundary: ${errors}`);}),
+      ]);
+      assert.equal(boundary, 'at-boundary');
+      child.kill('SIGKILL');
+      const [, signal] = await exited;
+      assert.equal(signal, 'SIGKILL');
+    } finally {clearTimeout(timeout); child.kill('SIGKILL');}
+    assert.equal(await readFile(path.join(root, pages[1].file), 'utf8'), pages[1].content);
+    if (point === 'partial-page') await assert.rejects(readFile(path.join(root, next[2].file)), {code: 'ENOENT'});
+    else assert.equal(await readFile(path.join(root, next[2].file), 'utf8'), next[2].content);
+    assert.equal(await readFile(path.join(root, pages[0].file), 'utf8'),
+      point === 'after-index' ? next[0].content : pages[0].content);
+    await applyReleasePages(root, next, {check: false});
+    await applyReleasePages(root, next);
+    for (const page of next) assert.deepEqual(await readFile(path.join(root, page.file)), Buffer.from(page.content));
+  });
+}

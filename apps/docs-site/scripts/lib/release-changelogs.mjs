@@ -1,14 +1,30 @@
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {lstat, mkdir, readFile, readdir, rename, writeFile, unlink} from 'node:fs/promises';
+import {lstat, mkdir, mkdtemp, open, readFile, readdir, rename, writeFile, unlink, rmdir} from 'node:fs/promises';
 import path from 'node:path';
-import {randomUUID} from 'node:crypto';
+import {createHash} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
 
 const run = promisify(execFile);
 const prefix = 'apps/docs-site/docs/releases/';
+const installer = fileURLToPath(new URL('../../../../tools/release/install_changelog_page.py', import.meta.url));
 const fail = (why) => {throw new Error(`why: release changelog ${why}; remedy: reconcile frozen history and regenerate the index`);};
 async function info(file) {
   try {return await lstat(file);} catch (error) {if (error.code === 'ENOENT') return null; throw error;}
+}
+
+async function sync(file) {
+  const handle = await open(file, 'r');
+  try {await handle.sync();} finally {await handle.close();}
+}
+
+async function safeDirectory(directory) {
+  const observed = await info(directory);
+  if (observed && (!observed.isDirectory() || observed.isSymbolicLink())) fail('staging directory is unsafe');
+  if (!observed) {
+    await mkdir(directory, {mode: 0o700});
+    await sync(path.dirname(directory));
+  }
 }
 
 export async function projectReleaseChangelogs(repoRoot, {check = true} = {}) {
@@ -51,23 +67,51 @@ export async function applyReleasePages(repoRoot, pages, {check = true} = {}) {
       missing.push([target, content, existing !== null]);
     }
   }
-  // Preflight every frozen page before any mutation. Reruns retain complete,
-  // byte-identical pages. A crash within a write can leave a truncated page or
-  // index temporary file: fail closed for reconciliation, not automatic recovery.
+  // All sources are preflighted before writes. Interrupted staging stays under
+  // ignored build/release, never in the immutable page inventory. Install whole
+  // pages create-only, persist every page, then replace the mutable index last.
   if (!check) {
-    if (!directoryInfo) await mkdir(directory);
-    for (const [target, content, replaceIndex] of missing) {
-      if (!replaceIndex) await writeFile(target, content, {flag: 'wx'});
-      else {
-        const temporary = path.join(directory, `.index-${randomUUID()}`);
-        try {
-          await writeFile(temporary, content, {flag: 'wx'});
+    await safeDirectory(directory);
+    let stagingRoot;
+    if (missing.length) {
+      for (const relative of ['build', 'build/release', 'build/release/changelog-pages']) {
+        await safeDirectory(path.join(repoRoot, relative));
+      }
+      stagingRoot = path.join(repoRoot, 'build/release/changelog-pages');
+      if ((await lstat(stagingRoot)).dev !== (await lstat(directory)).dev) fail('staging and pages are on different filesystems');
+    }
+    const index = path.join(directory, 'index.mdx');
+    const ordered = [...missing.filter(([target]) => target !== index), ...missing.filter(([target]) => target === index)];
+    // On resume even already-installed pages must acquire their durability
+    // barrier before an index can reference them.
+    for (const [file] of expected) {
+      if (file !== prefix + 'index.mdx' && await info(path.join(repoRoot, file))) await sync(path.join(repoRoot, file));
+    }
+    await sync(directory);
+    for (const [target, content, replaceIndex] of ordered) {
+      const staging = await mkdtemp(path.join(stagingRoot, 'page-'));
+      const temporary = path.join(staging, 'page');
+      await sync(stagingRoot);
+      try {
+        await writeFile(temporary, content, {flag: 'wx', mode: 0o600});
+        await sync(temporary);
+        await sync(staging);
+        if (!replaceIndex) {
+          const digest = createHash('sha256').update(content, 'utf8').digest('hex');
+          await run('python3', [installer, temporary, target, digest]);
+        } else {
           await rename(temporary, target);
-        } finally {
-          await unlink(temporary).catch((error) => {if (error.code !== 'ENOENT') throw error;});
+          await sync(directory);
+          await sync(staging);
         }
+      } finally {
+        await unlink(temporary).catch((error) => {if (error.code !== 'ENOENT') throw error;});
+        await rmdir(staging);
+        await sync(stagingRoot);
       }
     }
+    await sync(index);
+    await sync(directory);
   }
   return pages;
 }
