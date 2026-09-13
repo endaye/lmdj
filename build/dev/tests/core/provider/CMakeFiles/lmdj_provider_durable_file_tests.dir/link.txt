@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/lmdj_provider_durable_file_tests.dir/durable_file_test.cpp.o -o ../../../bin/lmdj_provider_durable_file_tests  ../../../lib/liblmdj_provider_sdk.a ../../../lib/liblmdj_foundation.a 

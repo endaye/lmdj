@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/lmdj_project_store_tests.dir/__/__/tests/core/project_io/project_store_test.cpp.o -o ../../bin/lmdj_project_store_tests  ../../lib/liblmdj_project_io_testable.a ../../lib/liblmdj_authoring_domain.a ../../lib/liblmdj_foundation.a 

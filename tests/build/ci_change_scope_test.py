@@ -447,6 +447,24 @@ class ChangeScopeTest(unittest.TestCase):
         ]
         self.assertEqual(unmatched, [], "unclassified tracked paths:\n" + "\n".join(unmatched))
 
+    def test_generated_dev_outputs_are_not_tracked(self):
+        inventory = subprocess.run(
+            ["git", "ls-files", "--", "build/dev/"], cwd=ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout
+        self.assertEqual(inventory, "",
+                         "why: generated build/dev outputs are tracked; "
+                         "remedy: remove only generated outputs from the index, retaining local files")
+
+    def test_generated_dev_outputs_are_ignored(self):
+        result = subprocess.run(
+            ["git", "check-ignore", "--no-index", "--", "build/dev/CMakeCache.txt"],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0,
+                         "why: build/dev outputs can be staged accidentally; "
+                         "remedy: restore the build/dev/ ignore rule")
+
     def test_every_document_a_test_reads_reaches_that_test_lane(self):
         # A test that asserts on a document's content is a gate over that
         # document, so editing the document must run the lane that holds the

@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/lmdj_domain_command_handler_tests.dir/__/__/tests/core/domain/command_handler_test.cpp.o -o ../../bin/lmdj_domain_command_handler_tests  ../../lib/liblmdj_authoring_domain.a ../../lib/liblmdj_foundation.a 

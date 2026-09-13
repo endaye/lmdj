@@ -1,2 +1,0 @@
-/usr/bin/ar qc ../../lib/liblmdj_web_runtime_manifest_gate.a CMakeFiles/lmdj_web_runtime_manifest_gate.dir/src/manifest_gate.cpp.o
-/usr/bin/ranlib ../../lib/liblmdj_web_runtime_manifest_gate.a

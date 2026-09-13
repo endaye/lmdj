@@ -1,2 +1,0 @@
-/usr/bin/ar qc ../../lib/liblmdj_authoring_domain.a CMakeFiles/lmdj_authoring_domain.dir/src/project.cpp.o CMakeFiles/lmdj_authoring_domain.dir/src/migration.cpp.o CMakeFiles/lmdj_authoring_domain.dir/src/command_handler.cpp.o
-/usr/bin/ranlib ../../lib/liblmdj_authoring_domain.a

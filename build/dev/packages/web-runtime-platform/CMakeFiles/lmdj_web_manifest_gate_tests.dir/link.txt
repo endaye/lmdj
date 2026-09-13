@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/lmdj_web_manifest_gate_tests.dir/test/manifest_gate_test.cpp.o -o ../../bin/lmdj_web_manifest_gate_tests  ../../lib/liblmdj_web_runtime_manifest_gate.a ../../lib/liblmdj_foundation.a 
