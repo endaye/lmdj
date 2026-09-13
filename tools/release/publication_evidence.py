@@ -82,12 +82,30 @@ def _rewrite_entry(original, tag):
         return original
     if entry["disposition"] != "releasable":
         fail("intent is not releasable or published")
-    entry["disposition"] = "published"
     old = lines[index]
-    indent = old[:len(old) - len(old.lstrip())]
-    comma = "," if old.strip().endswith(",") else ""
-    ending = "\n" if old.endswith("\n") else ""
-    lines[index] = indent + json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + comma + ending
+    # The parsed entry was validated above. Walk top-level JSON values to find
+    # the one token, retaining every other byte (including escapes/spacing).
+    # raw_decode consumes nested objects and strings without confusing their
+    # disposition-like text with the target entry's field.
+    decoder = json.JSONDecoder()
+    cursor = old.index("{") + 1
+    while True:
+        while old[cursor] in " \t\r\n":
+            cursor += 1
+        key, cursor = decoder.raw_decode(old, cursor)
+        while old[cursor] in " \t\r\n":
+            cursor += 1
+        cursor += 1  # colon in the already validated JSON object
+        while old[cursor] in " \t\r\n":
+            cursor += 1
+        start = cursor
+        _, cursor = decoder.raw_decode(old, cursor)
+        if key == "disposition":
+            lines[index] = old[:start] + '"published"' + old[cursor:]
+            break
+        while old[cursor] in " \t\r\n":
+            cursor += 1
+        cursor += 1  # comma; validated entry contains disposition
     return "".join(lines)
 
 

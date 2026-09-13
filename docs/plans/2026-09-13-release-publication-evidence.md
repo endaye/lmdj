@@ -89,6 +89,37 @@ the lockfile/dependencies are unchanged and no audit fix was applied.
 No production API, signing, Git-triggered deployment or cold-start service
 acceptance is inferred from these local/fixture checks.
 
+## Remote review follow-up
+
+PR #1274 initial head `8f0b918f6150dc01b84eeaa8fa03b4ed92eb4c5a`:
+run 34741542766/1 failed during input collection, before any provider call,
+with no retained artifacts and only a generic error. Local same-range input
+construction passed; this does not determine the remote failure cause.
+One fresh dispatch 34741622429/1 succeeded and reported two findings.
+
+Accepted byte-preservation finding: re-serializing the selected ledger line
+changed unrelated whitespace/escapes despite equal parsed objects. A real Git
+apply regression reproduced that failure (exit 1). The writer now locates the
+top-level decoded disposition key with JSON token boundaries and replaces only
+its value span. Tests retain escaped slash/Unicode, spacing, nested fields and
+trailing bytes. No textual global replacement or formatting normalization.
+
+Root-alias finding is rejected as a changed-authority claim: the stable CLI
+already resolves the caller-selected root before context construction. The
+planner emits a relative patch only, verifies the complete canonical intent,
+and performs no apply or remote write. Root aliases are explicitly supported;
+symlinks inside that selected resolved root remain forbidden. A paired test
+proves identical patch through a root alias, then refusal of a symlinked page
+directory with retained target bytes unchanged. This is not protection against
+a malicious same-account concurrent filesystem writer; durable workspace
+ownership and crash-safe patch application remain the next integration leg.
+
+Follow-up verification passed: evidence 19/19 (including red-to-green actual
+Git apply), publication 10/10, CTest 3/3 (3.35 seconds), ownership 74/74 and
+Python compilation. Node 22 Portal recheck passed 128 tests, build and 47
+routes/internal links. Independent review of the four-file repair reran 19
+tests and found no actionable issue. No dependency or timeout changes.
+
 ## Version Management
 
 Version impact: none

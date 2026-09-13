@@ -109,6 +109,44 @@ class PublicationEvidenceTest(unittest.TestCase):
         with self.assertRaisesRegex(ChangelogError, "canonical intents differ"):
             self.collect()
 
+    def test_target_entry_preserves_spacing_and_json_escapes_byte_for_byte(self):
+        original = (self.root / LEDGER).read_text()
+        old_line = original.split("\n")[3]
+        # Equivalent JSON from another serializer: only representation changes.
+        alternate = "    " + json.dumps(self.entry, ensure_ascii=True).replace("/", "\\/").replace("Fixture", "\\u0046ixture")
+        original = original.replace(old_line, alternate)
+        self.write(LEDGER, original)
+        delta = self.collect()
+        self.git("apply", "--check", "-", input=delta)
+        self.git("apply", "-", input=delta)
+        expected = original.replace('"disposition": "releasable"', '"disposition": "published"')
+        self.assertNotEqual(expected, original)
+        self.assertEqual((self.root / LEDGER).read_bytes(), expected.encode())
+
+    def test_rewrite_targets_only_top_level_decoded_disposition_key(self):
+        original = '{"tag":"t", "nested":{"disposition":"releasable"}, "di\\u0073position" : "releasable", "tail":"releasable"}\n'
+        expected = original.replace('"di\\u0073position" : "releasable"', '"di\\u0073position" : "published"')
+        # Match the same target-entry selection used by the real ledger.
+        original = original.replace('"tag":"t",', '"tag":"t","kind":"product",')
+        expected = expected.replace('"tag":"t",', '"tag":"t","kind":"product",')
+        self.assertEqual(_rewrite_entry(original, "t"), expected)
+
+    def test_selected_root_alias_produces_same_patch_but_internal_symlink_is_refused(self):
+        from tools.release.publication_evidence import plan_publication_patch
+        alias = self.root / "checkout-alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        expected = self.collect()
+        actual = plan_publication_patch(alias, self.f.policy, self.f.ledger.entries[0], self.journey.collect())
+        self.assertEqual(actual, expected)
+        pages = self.root / PAGES
+        retained = self.root / "retained-pages"
+        pages.rename(retained)
+        pages.symlink_to(retained, target_is_directory=True)
+        original = (retained / "index.mdx").read_bytes()
+        with self.assertRaisesRegex(ChangelogError, "parent is unsafe"):
+            self.collect()
+        self.assertEqual((retained / "index.mdx").read_bytes(), original)
+
     def test_unpublished_api_prevents_patch(self):
         self.f.github.release = replace(self.f.github.release, draft=True)
         with self.assertRaises(TransitionError):
