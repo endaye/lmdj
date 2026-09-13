@@ -201,6 +201,12 @@ target 绑定尚须继续接通，不把生成字节回执当成已分配或已�
 官方 snapshot generator 要求干净 HEAD，此来源提交只提供该前置状态。
 它不是完整切版 Task，不提前推送；仍须通过官方入口生成快照、形成完整切版提交，
 再经 PR 评审、squash、witness 及 exact-target 验证。来源提交不代表 Build 已获发布资格。
+完整快照已生成但末尾检查中断时，可运行
+`scripts/docs-site.sh resume-version PRODUCT_BUILD CHANNEL SOURCE_SHA`：显式绑定原来源
+HEAD 与 channel，核验 schema 2 元数据、全部来源/产物字节及精确生成边界，再运行完整
+Portal 检查并重新核验。不重新生成、不改变冻结时间，也不覆盖旧快照；残缺、漂移或已
+提交的快照不适用这一入口。来源版本列表兼容当前站点指向历史存储的固定符号链接，
+拒绝其他链接目标。调用方仍须持有独占工作区和原请求绑定，父级自动接线尚未完成。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
 私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
 不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。

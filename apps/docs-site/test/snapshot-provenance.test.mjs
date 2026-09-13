@@ -19,6 +19,7 @@ import {
   SOURCE_DOCUMENT_COUNT,
 } from '../scripts/lib/snapshot-provenance.mjs';
 import {checkSnapshotProjection} from '../scripts/check-snapshot-projection.mjs';
+import {resumeVersion} from '../scripts/lib/version-docs.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -170,6 +171,104 @@ function verifierOptions(fixture, metadata, headRevision) {
 }
 
 const METADATA_PATH = `apps/architecture-portal/versioned_metadata/version-${VERSION}.json`;
+
+test('resume authenticates actual generated files and retains bytes after failed final check', async () => {
+  const fixture = await initializeFixture();
+  try {
+    const metadata = await generateWorkingSnapshot(fixture);
+    const metadataPath = path.join(fixture.repoRoot, METADATA_PATH);
+    const original = await readFile(metadataPath);
+    const options = {...fixture, requestedVersion: VERSION, channel: 'canary',
+      facts: {...facts, revision: fixture.revision},
+      verifyProvenance: (input) => verifySnapshotProvenance({...verifierOptions(fixture, input.metadata, input.headRevision)}),
+      run: async () => { throw new Error('fixture final check interrupted'); }};
+    await assert.rejects(resumeVersion(options), /final check interrupted/);
+    assert.deepEqual(await readFile(metadataPath), original);
+    let gateRuns = 0;
+    const result = await resumeVersion({...options, run: async () => { gateRuns++; }});
+    assert.equal(result.status, 'snapshot-verified');
+    assert.equal(gateRuns, 1);
+    assert.deepEqual(await readFile(metadataPath), original);
+    assert.equal(JSON.parse(original).frozen_at_utc, FREEZE_DATE);
+    assert.deepEqual(await verifySnapshotProvenance(verifierOptions(fixture, metadata, fixture.revision)), []);
+  } finally { await rm(fixture.repoRoot, {recursive: true, force: true}); }
+});
+
+test('resume reads committed versions through the canonical compatibility alias', async () => {
+  const fixture = await initializeFixture();
+  try {
+    await put(fixture.repoRoot, 'apps/architecture-portal/versions.json', '[]\n');
+    const alias = path.join(fixture.repoRoot, 'apps/docs-site');
+    await mkdir(alias);
+    await symlink('../architecture-portal/versions.json', path.join(alias, 'versions.json'));
+    await mkdir(path.join(fixture.portalRoot, 'versioned_metadata'));
+    await writeFile(path.join(fixture.portalRoot, 'versioned_metadata/.gitkeep'), '');
+    await symlink('../architecture-portal/versioned_metadata', path.join(alias, 'versioned_metadata'));
+    fixture.revision = await commit(fixture.repoRoot, 'compatibility aliases', SOURCE_DATE);
+    await generateWorkingSnapshot(fixture);
+    let gateRuns = 0;
+    const result = await resumeVersion({...fixture, portalRoot: alias, requestedVersion: VERSION,
+      channel: 'canary', facts: {...facts, revision: fixture.revision},
+      verifyProvenance: (input) => verifySnapshotProvenance(verifierOptions(fixture, input.metadata, input.headRevision)),
+      run: async () => { gateRuns++; }});
+    assert.equal(result.status, 'snapshot-verified');
+    assert.equal(gateRuns, 1);
+    assert.equal((await git(fixture.repoRoot, ['show', `${fixture.revision}:apps/docs-site/versions.json`])).stdout,
+      '../architecture-portal/versions.json');
+  } finally { await rm(fixture.repoRoot, {recursive: true, force: true}); }
+});
+
+for (const scenario of ['different alias target', 'chained canonical target']) {
+  test(`resume refuses ${scenario} instead of following arbitrary source links`, async () => {
+    const fixture = await initializeFixture();
+    try {
+      const canonical = 'apps/architecture-portal/versions.json';
+      await put(fixture.repoRoot, 'apps/architecture-portal/other-versions.json', '[]\n');
+      if (scenario === 'chained canonical target') {
+        await symlink('other-versions.json', path.join(fixture.repoRoot, canonical));
+      } else {
+        await put(fixture.repoRoot, canonical, '[]\n');
+      }
+      const alias = path.join(fixture.repoRoot, 'apps/docs-site');
+      await mkdir(alias);
+      await symlink(scenario === 'different alias target'
+        ? '../architecture-portal/other-versions.json'
+        : '../architecture-portal/versions.json', path.join(alias, 'versions.json'));
+      await mkdir(path.join(fixture.portalRoot, 'versioned_metadata'));
+      await writeFile(path.join(fixture.portalRoot, 'versioned_metadata/.gitkeep'), '');
+      await symlink('../architecture-portal/versioned_metadata', path.join(alias, 'versioned_metadata'));
+      fixture.revision = await commit(fixture.repoRoot, 'invalid compatibility alias', SOURCE_DATE);
+      await generateWorkingSnapshot(fixture);
+      const metadataPath = path.join(fixture.repoRoot, METADATA_PATH);
+      const original = await readFile(metadataPath);
+      const before = (await git(fixture.repoRoot, ['status', '--porcelain=v1', '--untracked-files=all'])).stdout;
+      await assert.rejects(resumeVersion({...fixture, portalRoot: alias, requestedVersion: VERSION,
+        channel: 'canary', facts: {...facts, revision: fixture.revision},
+        run: async () => assert.fail('must not run after source alias refusal'),
+      }), scenario === 'different alias target'
+        ? /source versions symlink is not the canonical compatibility alias/
+        : /canonical source versions is not a regular tracked file/);
+      assert.deepEqual(await readFile(metadataPath), original);
+      assert.equal((await git(fixture.repoRoot, ['status', '--porcelain=v1', '--untracked-files=all'])).stdout, before);
+      assert.equal((await git(fixture.repoRoot, ['rev-parse', 'HEAD'])).stdout.trim(), fixture.revision);
+    } finally { await rm(fixture.repoRoot, {recursive: true, force: true}); }
+  });
+}
+
+test('resume refuses a missing generated diagram without recreating it', async () => {
+  const fixture = await initializeFixture();
+  try {
+    await generateWorkingSnapshot(fixture);
+    const asset = path.join(fixture.portalRoot, `static/versions/${VERSION}/diagrams/${DIAGRAMS[0]}.svg`);
+    await rm(asset);
+    await assert.rejects(resumeVersion({...fixture, requestedVersion: VERSION, channel: 'canary',
+      facts: {...facts, revision: fixture.revision},
+      verifyProvenance: (input) => verifySnapshotProvenance(verifierOptions(fixture, input.metadata, input.headRevision)),
+      run: async () => assert.fail('must not run on a partial snapshot'),
+    }), /diagram asset.*missing/);
+    await assert.rejects(readFile(asset), {code: 'ENOENT'});
+  } finally { await rm(fixture.repoRoot, {recursive: true, force: true}); }
+});
 
 test('new snapshots authenticate renamed source while retaining stable archive paths', async () => {
   const fixture = await initializeFixture();

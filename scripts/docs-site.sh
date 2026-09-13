@@ -12,6 +12,7 @@ usage:
   scripts/docs-site.sh build
   scripts/docs-site.sh check
   scripts/docs-site.sh version PRODUCT_BUILD [CHANNEL]
+  scripts/docs-site.sh resume-version PRODUCT_BUILD CHANNEL SOURCE_SHA
   scripts/docs-site.sh witness PRODUCT_BUILD [INTRODUCING_REVISION]
   scripts/docs-site.sh smoke BASE_URL
 EOF
@@ -50,6 +51,10 @@ case "$command_name" in
   witness)
     [[ $# -ge 1 && $# -le 2 ]] || { usage; exit 64; }
     exec node scripts/create-squash-witness.mjs "$@"
+    ;;
+  resume-version)
+    [[ $# -eq 3 ]] || { usage; exit 64; }
+    exec node scripts/resume-version.mjs "$@"
     ;;
   smoke)
     [[ $# -eq 1 ]] || { usage; exit 64; }

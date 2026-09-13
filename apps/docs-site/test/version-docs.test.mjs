@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {fileURLToPath} from 'node:url';
 import * as versionDocs from '../scripts/lib/version-docs.mjs';
 
 const {freezeVersion} = versionDocs;
@@ -160,4 +163,89 @@ test('release documentation rejects identity drift and invalid freeze evidence',
     'snapshot revision must be a full Git SHA',
     'snapshot frozen_at_utc must be an ISO timestamp',
   ]);
+});
+
+function resumeFixture(overrides = {}) {
+  const metadata = {...facts, schema_version: 2, product_build: facts.product.version,
+    revision, frozen_at_utc: '2026-08-04T00:00:00.000Z'};
+  return {portalRoot: '/portal', repoRoot: '/repo', requestedVersion: facts.product.version,
+    revision, channel: 'canary', facts, getHeadRevision: async () => revision,
+    readMetadata: async () => JSON.stringify(metadata), readVersions: async () => [facts.product.version],
+    readSourceVersions: async () => [], verifyProvenance: async () => [], run: async () => {},
+    ...overrides};
+}
+
+test('resume only runs the full check between two provenance validations', async () => {
+  const calls = [];
+  const result = await versionDocs.resumeVersion(resumeFixture({
+    verifyProvenance: async () => { calls.push('verify'); return []; },
+    run: async (command, args) => { calls.push([command, args]); },
+  }));
+  assert.deepEqual(calls, ['verify', ['npm', ['run', 'check']], 'verify']);
+  assert.deepEqual(result, {status: 'snapshot-verified', product_build: facts.product.version,
+    revision, channel: 'canary'});
+});
+
+test('resume refuses a different source HEAD before running checks', async () => {
+  await assert.rejects(versionDocs.resumeVersion(resumeFixture({
+    getHeadRevision: async () => 'b'.repeat(40), run: async () => assert.fail('must not run'),
+  })), /HEAD differs/);
+});
+
+test('resume refuses an original-channel mismatch', async () => {
+  await assert.rejects(versionDocs.resumeVersion(resumeFixture({channel: 'dev',
+    run: async () => assert.fail('must not run'),
+  })), /source SHA or channel differs/);
+});
+
+test('resume refuses legacy metadata without provenance', async () => {
+  await assert.rejects(versionDocs.resumeVersion(resumeFixture({
+    readMetadata: async () => JSON.stringify({schema_version: 1}),
+    run: async () => assert.fail('must not run'),
+  })), /schema 2/);
+});
+
+test('resume refuses changed historical versions inventory', async () => {
+  await assert.rejects(versionDocs.resumeVersion(resumeFixture({
+    readSourceVersions: async () => ['1.0.12.0'], run: async () => assert.fail('must not run'),
+  })), /versions inventory differs/);
+});
+
+test('resume preserves failed gate and does not claim completion', async () => {
+  let checks = 0;
+  await assert.rejects(versionDocs.resumeVersion(resumeFixture({
+    verifyProvenance: async () => { checks++; return []; },
+    run: async () => { throw new Error('fixture gate failure'); },
+  })), /fixture gate failure/);
+  assert.equal(checks, 1);
+});
+
+test('resume refuses metadata mutation by a successful child', async () => {
+  const options = resumeFixture();
+  const raw = await options.readMetadata();
+  let current = raw;
+  await assert.rejects(versionDocs.resumeVersion({...options,
+    readMetadata: async () => current, run: async () => { current += '\n'; },
+  }), /metadata changed/);
+  assert.equal(current, raw + '\n');
+});
+
+test('resume revalidates provenance after a successful child', async () => {
+  let after = false;
+  await assert.rejects(versionDocs.resumeVersion(resumeFixture({
+    run: async () => { after = true; },
+    verifyProvenance: async () => after ? ['fixture snapshot drift'] : [],
+  })), /fixture snapshot drift/);
+});
+
+test('stable resume entrypoint requires all three bound arguments', async () => {
+  const script = fileURLToPath(new URL('../../../scripts/docs-site.sh', import.meta.url));
+  await assert.rejects(promisify(execFile)('bash', [script, 'resume-version', '1.0.13.0', 'canary']),
+    (error) => error.code === 64 && /resume-version PRODUCT_BUILD CHANNEL SOURCE_SHA/.test(error.stderr));
+});
+
+test('stable resume entrypoint forwards original SHA to the concrete verifier', async () => {
+  const script = fileURLToPath(new URL('../../../scripts/docs-site.sh', import.meta.url));
+  await assert.rejects(promisify(execFile)('bash', [script, 'resume-version', '1.0.13.0', 'canary', 'not-a-sha']),
+    (error) => error.code === 1 && /requires the original full source SHA/.test(error.stderr));
 });
