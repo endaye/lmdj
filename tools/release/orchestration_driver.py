@@ -67,14 +67,24 @@ class DriveResult:
 class ReleaseDriver:
     """Advance under one journal lock; pending work yields to the service loop.
 
-    A resumed unresolved intent is observe-only. Even positive absence cannot
+    A resumed opaque unresolved intent is observe-only. Even positive absence cannot
     prove an earlier timed-out write will not arrive later. It is never replayed
     automatically. The backend may observe a positively identified completed run,
-    but may not dispatch from observe. Recovery therefore preserves unknowns.
+    but may not dispatch from observe. The concrete enrolled publication PR
+    child may advance its next unattempted effect after pending/absent observation;
+    its own durable POST/PUT intents still forbid unknown-write replay.
     """
 
-    def __init__(self, root, policy: OrchestrationPolicy, backend: TransitionBackend):
+    def __init__(self, root, policy: OrchestrationPolicy, backend: TransitionBackend, *, publication_pr=None):
+        # Deferred import avoids the PR controller's Observation import cycle.
+        from .evidence_pr_transition import EvidencePrTransition
+        if publication_pr is not None and type(publication_pr) is not EvidencePrTransition:
+            raise JournalError("why: unsupported managed release adapter; remedy: use the concrete publication PR transition, not an arbitrary retry callback")
         self.root, self.policy, self.backend = root, policy, backend
+        self.publication_pr = publication_pr
+
+    def _managed(self, operation):
+        return self.publication_pr if operation["step"] == "published_record" else None
 
     def run(self, request: dict) -> DriveResult:
         with RequestJournal(self.root) as journal:
@@ -103,7 +113,8 @@ class ReleaseDriver:
 
     def _observe(self, state, operation):
         try:
-            result = self.backend.observe(deepcopy(state), deepcopy(operation))
+            observer = self._managed(operation) or self.backend
+            result = observer.observe(deepcopy(state), deepcopy(operation))
         except Exception:
             # Read failures carry no negative proof and may contain secrets.
             return Observation("unknown")
@@ -111,6 +122,15 @@ class ReleaseDriver:
             raise JournalError("why: invalid adapter result; remedy: repair the trusted adapter")
         result.validate()
         return result
+
+    def _advance_managed(self, journal, state, operation):
+        self._authenticate(state["request"])
+        journal._active()
+        try:
+            self._managed(operation).advance(deepcopy(state), deepcopy(operation))
+        except Exception:
+            return Observation("unknown")
+        return self._observe(journal.read(state["request"]["id"]), operation)
 
     def _advance(self, journal, state):
         verified = []
@@ -129,6 +149,8 @@ class ReleaseDriver:
                 if observed.evidence != operation["evidence"]:
                     return result("evidence-conflict", operation["step"])
             else:
+                if self._managed(operation) and observed.status in ("absent", "pending"):
+                    observed = self._advance_managed(journal, journal.read(request_id), operation)
                 if observed.status != "verified":
                     return result("unknown" if observed.status == "absent" else observed.status,
                                   operation["step"])
@@ -142,10 +164,15 @@ class ReleaseDriver:
                 {"request": state["request_digest"], "step": step}),
                 "status": "intent", "evidence": None}
             observed = self._observe(state, operation)
-            if observed.status not in ("absent", "verified"):
+            managed = self._managed(operation)
+            if observed.status not in (("absent", "verified", "pending") if managed else ("absent", "verified")):
                 return result(observed.status, step)
             journal.begin(request_id, step)
-            if observed.status == "absent":
+            if managed and observed.status != "verified":
+                observed = self._advance_managed(journal, journal.read(request_id), operation)
+                if observed.status != "verified":
+                    return result("unknown" if observed.status == "absent" else observed.status, step)
+            elif observed.status == "absent":
                 # Intent is durable before anything that can perform a write.
                 # An auth failure here leaves an unresolved intent, not a retry.
                 self._authenticate(state["request"])

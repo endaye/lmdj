@@ -345,6 +345,14 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME build.release_managed_pr_transition
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_managed_pr_transition_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
   NAME build.release_evidence_source
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_evidence_source_test.py

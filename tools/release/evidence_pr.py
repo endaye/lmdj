@@ -216,11 +216,57 @@ class EvidencePullRequest:
         result.validate()
         return result
 
-    def advance(self, spec):
+    def observe(self, spec, *, initialize=False):
+        """GET-only far-side observation; optional private-state initialization.
+
+        The parent may initialize before recording its own intent. Thereafter
+        missing child storage is unknown, never evidence that a POST/PUT was
+        not attempted. No observation creates a PR or requests its merge.
+        """
         validate_spec(spec)
+        require(type(initialize) is bool, "initialization mode is invalid")
         spec = deepcopy(spec)
         pr_document(spec)  # Deterministic local refusal must precede durable intent.
         with RequestJournal(self.root) as journal:
+            try:
+                self._authorize(spec, branch=False)
+                try:
+                    os.stat("pr-state.json", dir_fd=journal.directory, follow_symlinks=False)
+                except FileNotFoundError:
+                    if not initialize:
+                        return {"status": "unknown", "evidence": None}
+                state = self._state(journal, spec)
+                if initialize:
+                    self._save(journal, state)
+                row = self._pr(spec, state["number"]) if state["number"] else self._find(spec)
+                if row is None:
+                    return {"status": "unknown" if state["create_intent"] else "absent", "evidence": None}
+                if not row["merged"]:
+                    return {"status": "unknown" if state["merge_intent"] else "pending", "evidence": None}
+                gate = self._gate(self.verify_merged, spec, row, state["review_evidence"])
+                if gate.status != "verified":
+                    return {"status": gate.status, "evidence": None}
+                self._authorize(spec, branch=False)
+                latest = self._pr(spec, row["number"])
+                require(latest["merged"] and latest["merge_commit_sha"] == row["merge_commit_sha"]
+                        and state["merge_sha"] in (None, latest["merge_commit_sha"]), "merged identity changed during observation")
+                return {"status": "verified", "evidence": gate.evidence}
+            except EvidencePrError:
+                raise
+            except Exception:
+                return {"status": "unknown", "evidence": None}
+
+    def advance(self, spec, *, require_initialized=False):
+        validate_spec(spec)
+        require(type(require_initialized) is bool, "initialization requirement is invalid")
+        spec = deepcopy(spec)
+        pr_document(spec)  # Both entry points preflight before any enrollment.
+        with RequestJournal(self.root) as journal:
+            if require_initialized:
+                try:
+                    os.stat("pr-state.json", dir_fd=journal.directory, follow_symlinks=False)
+                except FileNotFoundError:
+                    return {"status": "unknown", "evidence": None}
             state = self._state(journal, spec)
             def result(status, evidence=None):
                 return {"status": status, "operation_id": spec["operation_id"], "number": state["number"],
