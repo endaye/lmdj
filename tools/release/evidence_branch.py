@@ -33,6 +33,9 @@ def require(value, reason):
 
 
 class PublicationBranch:
+    _validate_spec = staticmethod(validate_spec)
+    _document = staticmethod(pr_document)
+
     def __init__(self, root, repository, *, token, authorize):
         self.root, self.repository = root, Path(repository)
         require(type(token) is str and bool(token) and not any(c in token for c in "\r\n\0"), "credential is unavailable")
@@ -139,7 +142,7 @@ class PublicationBranch:
         return subprocess.run(command, env=env, capture_output=True, timeout=30, pass_fds=(journal.lock,))
 
     def _observe(self, journal, scratch, spec):
-        ref = "refs/heads/" + pr_document(spec)["head"]
+        ref = "refs/heads/" + self._document(spec)["head"]
         result = self._git(journal, scratch, "ls-remote", "--refs", "--exit-code", REMOTE, ref)
         if result.returncode == 2 and result.stdout == b"":
             return "absent"
@@ -148,9 +151,9 @@ class PublicationBranch:
         return "verified"
 
     def advance(self, spec):
-        validate_spec(spec)
+        self._validate_spec(spec)
         spec = deepcopy(spec)
-        pr_document(spec)  # Reject local document limits before durable enrollment.
+        self._document(spec)  # Reject local document limits before durable enrollment.
         with RequestJournal(self.root) as journal:
             state = self._state(journal, spec)
             try:
@@ -169,7 +172,7 @@ class PublicationBranch:
                         state["claimed"] = True
                         self._save(journal, state)
                         self._authorize(spec)
-                        ref = "refs/heads/" + pr_document(spec)["head"]
+                        ref = "refs/heads/" + self._document(spec)["head"]
                         try:
                             self._git(journal, scratch, "push", "--porcelain", "--atomic",
                                       "--force-with-lease=" + ref + ":", REMOTE, spec["head_sha"] + ":" + ref)
@@ -183,8 +186,8 @@ class PublicationBranch:
                     state["claimed"] = True  # Never recreate an adopted ref after deletion.
                     self._save(journal, state)
                     return {"status": "verified", "evidence": {
-                        "sha256": canonical_sha256({"spec": spec, "ref": pr_document(spec)["head"]}),
-                        "reference": "branch:" + pr_document(spec)["head"]}}
+                        "sha256": canonical_sha256({"spec": spec, "ref": self._document(spec)["head"]}),
+                        "reference": "branch:" + self._document(spec)["head"]}}
             except EvidenceBranchError:
                 raise
             except Exception:

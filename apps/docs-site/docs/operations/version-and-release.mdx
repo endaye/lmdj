@@ -237,8 +237,13 @@ witness、版本分配竞争复查或完整 CI；远端 PR 总控仍待接线。
 创建和 squash 合并各只记录并发送一次，未知结果只按原请求观测，不重试写入。
 它不把分支 head 称为发布 target；必须经受信来源/Task/分配/保护检查及完整 review，
 合并后复核实际 squash。生产端和 transport 共享文档边界，候选与发布记录分支互不放行；
-正文越界在登记意图前拒绝。witness、分支 push、真实 gate factory 和父级候选步骤尚待组合，
+正文越界在登记意图前拒绝。witness、真实 gate factory 和父级候选步骤尚待组合，
 本地 child 的 verified 不代表候选总步骤或发布已完成。
+候选分支传输已复用仅创建的 Git 协议，以原请求绑定的候选分支和完整 cut SHA 发送，
+不推送私有来源保留引用或 tag。远端竞争不覆盖，未知结果不重发，已认领后删除的分支
+不重建；Git 子进程继承 writer lock，控制进程退出也不能让另一 writer 与未结束推送
+重叠。文档超限在持久化登记前拒绝，已登记状态缺失不会重新初始化。
+它仍需要真实授权、Task/source 与版本竞争核验；分支回执不代表 PR 或候选完成。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
 私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
 不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。
