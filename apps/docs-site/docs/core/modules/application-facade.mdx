@@ -88,6 +88,15 @@ audio port 与 engine 的 submit/inspect/acknowledge 共享同一 serialized con
 owner，音频线程不调用。一个 controller 绑定一个 runtime/session/Pattern；过期
 runtime generation 按 stale 拒绝。
 
+自由函数形态的 controller 用默认 storage platform 全新实例自持 Journal/Store；
+原生/OPFS 的 bundle writer 锁按 open file description 生效，因此当 Host 已经过
+`Application::acquire_project_writer` 持有 lease 时，自由函数 controller 的首次
+admission 写入会得到 `project_busy` 拒绝（释放对方 lease 后同一 command identity
+可恢复）。真实 Host 形态应改用 `Application::make_pattern_transport_controller(audio,
+config)` 成员工厂：controller 的 Journal/Store 共享该 Application 的单一
+storage_platform 实例，同实例 writers_ 注册表允许同进程共享 lease，Host 持有的
+writer lease 与 transport 录制写入不再互斥；Host 依然只拼 Facade/Audio 类型。
+
 同一公开头还提供候选注入 seam `admit(const PatternTransportCandidate&)`：Host 在
 enqueue 接受处给 live input 打上单调 watermark 与 engine rendered_frames，经该
 Facade 层类型（watermark/runtime_frame/`domain::PadSlotId`/pressed/velocity/

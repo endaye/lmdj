@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include <lmdj/facade/pattern_transport_controller_factory.hpp>
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
 
@@ -44,8 +45,14 @@ class AudioPortBridge final : public detail::PatternTransportAudioPort {
 }  // namespace
 
 struct PatternTransportController::Impl {
-  Impl(PatternTransportAudioPort& audio, PatternTransportControllerConfig config)
+  Impl(PatternTransportAudioPort& audio, PatternTransportControllerConfig config,
+       std::shared_ptr<project_io::ProjectStoragePlatform> platform)
       : bridge(audio),
+        // A null platform default-constructs inside both collaborators, which
+        // is exactly the free-function behavior; a caller-owned instance makes
+        // the writer-lease registry shared.
+        journals(platform),
+        store(std::move(platform)),
         coordinator(bridge, journals, store, std::move(config.bundle),
                     config.session, std::move(config.project),
                     std::move(config.pattern), config.runtime_generation) {}
@@ -98,13 +105,22 @@ foundation::Result<PatternAdmissionAdmit> PatternTransportController::admit(
           : PatternAdmissionAdmit::live_only);
 }
 
-std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
-    PatternTransportAudioPort& audio, PatternTransportControllerConfig config) {
+std::unique_ptr<PatternTransportController>
+detail::PatternTransportControllerInternalFactory::make(
+    lmdj::facade::PatternTransportAudioPort& audio,
+    PatternTransportControllerConfig config,
+    std::shared_ptr<project_io::ProjectStoragePlatform> platform) {
   return std::unique_ptr<PatternTransportController>(
       new PatternTransportController(
           std::unique_ptr<PatternTransportController::Impl>(
-              new PatternTransportController::Impl(audio,
-                                                   std::move(config)))));
+              new PatternTransportController::Impl(
+                  audio, std::move(config), std::move(platform)))));
+}
+
+std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
+    PatternTransportAudioPort& audio, PatternTransportControllerConfig config) {
+  return detail::PatternTransportControllerInternalFactory::make(
+      audio, std::move(config), nullptr);
 }
 
 }  // namespace lmdj::facade
