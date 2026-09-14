@@ -29,6 +29,14 @@ recheck executes no tests or PR files. Runtime claims requiring execution,
 unavailable/expired original artifacts, unsupported path moves and incomplete
 source evidence require manual review. New findings also prevent auto-resolution.
 
+GitHub currently requires `contents: write` as well as `pull-requests: write`
+for `resolveReviewThread` / `unresolveReviewThread` with installation tokens
+([GitHub issue](https://github.com/github/gh-aw/issues/35726)). Only the separate
+publisher job holds that permission; target and model jobs remain read-only.
+The publisher executes trusted main control code, never PR files or merge calls.
+A successfully posted evidence reply does not prove that thread resolution
+succeeded: check the final GraphQL thread state and the retained receipt.
+
 The separate publisher validates the current head and conversation again,
 replies with the verdict and evidence, and resolves only the selected bot
 thread. Human threads are never selected. Retry receipts prevent duplicate

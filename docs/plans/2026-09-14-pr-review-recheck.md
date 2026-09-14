@@ -133,3 +133,23 @@ from trusted main after review and merge; no installed adapter change is needed.
 
 Version impact: none. Internal CI publication only.
 Documentation impact: none. Uses the already documented conservative fallback.
+
+## Live acceptance follow-up: GraphQL resolution permission
+
+Run 34828892963 posted the bot's resolved-verdict evidence reply, then GitHub
+refused the thread mutation. Its installation-token GraphQL interface requires
+contents write in addition to PR write (github/gh-aw#35726). Grant contents
+write only to the existing trusted publisher job. Target/model jobs retain
+read-only permissions, and the publisher still executes no PR code or merge
+operation. Observe actual thread resolution; a posted verdict is insufficient.
+
+Declared files: `.github/workflows/pr-review.yml`,
+`tests/build/ci_pr_review_workflow_test.py`,
+`docs/quality/2026-09-10-pr-agent-netcup-operations.md`,
+`apps/docs-site/docs/operations/testing-and-proof.mdx`, and this plan.
+Run workflow tests, actionlint with ShellCheck, and docs-site check; review via
+trusted-main dispatch, merge, then repeat the complete live recheck.
+
+Version impact: none. Internal CI permissions only.
+Documentation impact: required. Document the actual publisher permission.
+Affected portal pages: /operations/testing-and-proof
