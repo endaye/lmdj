@@ -29,7 +29,8 @@ PatternTransportCoordinator::PatternTransportCoordinator(
     std::uint64_t runtime_generation)
     : audio_(audio), owner_(journals, std::move(bundle), session),
       session_(session), project_(std::move(project)),
-      pattern_(std::move(pattern)), runtime_generation_(runtime_generation) {}
+      pattern_(std::move(pattern)), runtime_generation_(runtime_generation),
+      last_pattern_generation_(audio.pattern_generation()) {}
 
 audio::PatternTransportAction PatternTransportCoordinator::audio_action(
     PatternTransportIntent intent) const {
@@ -92,9 +93,12 @@ PatternTransportSubmit PatternTransportCoordinator::request(
   }
 
   audio::PatternTransportCommand command{
-      runtime_generation_, request.expected_epoch, audio_.pattern_generation(),
+      runtime_generation_, request.expected_epoch, last_pattern_generation_,
       audio_action(request.intent), {}};
   if (playing_) command.pending_switch = audio_.pending_switch();
+  if (!command.pending_switch) {
+    command.expected_pattern_generation = audio_.pattern_generation();
+  }
   const auto submitted = audio_.submit(command);
   if (submitted != audio::PatternTransportSubmit::accepted) {
     error_ = foundation::Error{foundation::ErrorCode::invalid_argument,
@@ -131,12 +135,26 @@ foundation::Result<void> PatternTransportCoordinator::apply_receipt(
     recording_ = true;
   }
   if (closing) {
+    if (receipt.switch_decision ==
+        audio::PatternCutoffDecision::applied_before_cutoff) {
+      if (!receipt.switch_authority || !receipt.switch_applied_frame) {
+        return foundation::Result<void>::failure(
+            {foundation::ErrorCode::invalid_argument,
+             "Pattern transport applied switch is missing authority"});
+      }
+      const project_io::SequencePublicationAuthority authority{
+          receipt.switch_authority->pattern_id,
+          receipt.switch_authority->generation, *receipt.switch_applied_frame};
+      const auto retained = owner_.retain_switch(authority);
+      if (!retained.has_value()) return retained;
+    }
     const auto cut = owner_.cutoff(fence_from(
         receipt, project_io::SequenceFenceKind::cutoff, request.command_id));
     if (!cut.has_value()) return cut;
   }
   playing_ = receipt.playing;
   origin_frame_ = receipt.origin_frame;
+  last_pattern_generation_ = receipt.pattern_generation;
   if (!audio_.acknowledge(receipt.runtime_generation, receipt.epoch)) {
     return foundation::Result<void>::failure(
         {foundation::ErrorCode::invalid_argument,

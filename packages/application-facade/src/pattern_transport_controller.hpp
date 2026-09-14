@@ -56,6 +56,7 @@ class PatternTransportCoordinator {
   foundation::ProjectId project_;
   foundation::PatternId pattern_;
   std::uint64_t runtime_generation_;
+  std::uint64_t last_pattern_generation_{};
   bool playing_{};
   bool recording_{};
   std::uint64_t origin_frame_{};
