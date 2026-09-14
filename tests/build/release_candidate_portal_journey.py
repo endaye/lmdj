@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 from scripts import version
 from tools.release.candidate_material import CandidateBuildMaterial
 from tools.release.candidate_workspace import CandidateSourceWorkspace
+from tools.release.candidate_source_setup import CandidateSourceSetup
 from tools.release.candidate_snapshot import CandidateSnapshotRun
 from tools.release.candidate_cut import CandidateCutWorkspace
 from tools.release.candidate_checks import CandidateTaskChecks
@@ -37,6 +38,72 @@ from tools.release.github_api import GitHubClient, HttpResponse
 from tools.release.orchestration import RequestJournal
 from tools.release.orchestration_driver import Observation, ReleaseDriver
 from tools.release.orchestration_policy import load_orchestration_policy
+
+
+def source_setup_journey(*, evidence, logs, repository, material, request, tool_path, record, git):
+    """Actual official install -> actual source consumer; no snapshot/PR claim."""
+    local = CandidateSourceWorkspace(evidence / "candidate", material)
+    root = evidence / "source-setup"
+    def authorize(original):
+        assert canonical_json(original) == canonical_json(request)
+    def new_setup():
+        return CandidateSourceSetup(root, local, repository_root=repository, request=request,
+            authorize=authorize, observe_main=lambda: request["base_revision"], path=tool_path)
+    @contextmanager
+    def retained_output(*unused, **kwargs):
+        output = tempfile.NamedTemporaryFile(mode="w+b", prefix="source-install-", suffix=".log", dir=logs, delete=False)
+        record({"executed_output":output.name, "status":"started"})
+        try:
+            yield output
+        finally:
+            output.flush()
+            os.fsync(output.fileno())
+            output.close()
+    setup = new_setup()
+    assert setup.observe()["status"] == "absent"
+    assert setup.observe(initialize=True)["status"] == "pending"
+    with patch("tools.release.task_verification.tempfile.TemporaryFile", retained_output):
+        result = setup.prepare(before_write=lambda: authorize(request))
+    assert result["status"] == "verified"
+    spools = sorted(logs.glob("source-install-*.log"))
+    assert len(spools) == 1
+    raw = spools[0].read_bytes()
+    history = json.loads((root / setup.STATE).read_bytes())
+    assert history["install"] == dict(arguments=["bash", "scripts/docs-site.sh", "install"],
+        status="verified", result=[0, sha256(raw).hexdigest(), len(raw)])
+    record({"stage":"source-setup", "evidence":result["evidence"], "reservation":result["reservation"],
+            "frozen_sha256":canonical_sha256(result["frozen"]), "install_output":str(spools[0]),
+            "install_output_bytes":len(raw), "install_output_sha256":sha256(raw).hexdigest()})
+    retained = [root / setup.STATE, root / setup.MARKER, material.reservations.state_root / "build-reservations"]
+    before = [filename.read_bytes() for filename in retained]
+    with patch("tools.release.task_verification.tempfile.TemporaryFile", retained_output):
+        assert canonical_json(new_setup().observe()) == canonical_json(result)
+        assert canonical_json(new_setup().prepare(before_write=lambda: authorize(request))) == canonical_json(result)
+    assert [filename.read_bytes() for filename in retained] == before
+    assert sorted(logs.glob("source-install-*.log")) == spools
+    verified = []
+    def verify_source(worktree):
+        current = version.load_version(worktree / "products/lmdj/version.json")
+        assembly_path = worktree / "products/lmdj/assembly.json"
+        assembly = version._verify_assembly(current, assembly_path)
+        version._verify_lock(current, assembly_path, assembly,
+            worktree / "products/lmdj/assembly.lock.json", repo_root=worktree)
+        verified.append(str(current))
+    source = local.prepare_source(request=request, frozen=result["frozen"], main_revision=request["base_revision"],
+        author_name="Candidate Rehearsal", author_email="fixture@example.invalid", timestamp=int(time.time()), verify=verify_source)
+    assert verified and source["product_build"] == result["reservation"]["version"]
+    assert local.revision("HEAD") == source["commit"]
+    assert git(local.root, "status", "--porcelain")[1] == b""
+    with patch("tools.release.task_verification.tempfile.TemporaryFile", retained_output):
+        assert canonical_json(new_setup().observe()) == canonical_json(result)
+    assert [filename.read_bytes() for filename in retained] == before
+    assert sorted(logs.glob("source-install-*.log")) == spools
+    assert spools[0].read_bytes() == raw
+    record({"stage":"complete", "scope":"actual source setup/official npm install/cold recovery/actual source consumer only",
+            "source":source, "source_checks":verified,
+            "retained_history":[dict(path=str(filename), bytes=len(content), sha256=sha256(content).hexdigest())
+                                for filename, content in zip(retained, before)],
+            "remote_release_or_deployment":False})
 
 
 def managed_journey(*, evidence, repository, local, source, checked_cut, frozen, request,
@@ -226,8 +293,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence-root", required=True, type=Path)
     parser.add_argument("--tool-path", required=True)
-    parser.add_argument("--managed-candidate", action="store_true",
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--managed-candidate", action="store_true",
                         help="exercise the actual post-cut parent, owned install and driver with a local GitHub fixture")
+    modes.add_argument("--owned-source-setup-only", action="store_true",
+                       help="exercise owned source creation, actual npm install and source consumption; no Portal snapshot or PR")
     args = parser.parse_args()
     evidence = args.evidence_root.resolve()
     evidence.mkdir(mode=0o700)  # Existing runs are never overwritten or resumed.
@@ -287,10 +357,14 @@ def main():
             "tools/release/orchestration_driver.py", "tools/release/candidate_pr_sequence.py",
             "tools/release/evidence_pr.py", "tools/release/evidence_branch.py", "tools/release/witness_source.py",
             "tools/release/witness_pr.py", "tools/release/candidate_pr.py", "tools/release/candidate_branch.py")
+    if args.owned_source_setup_only:
+        controllers += ("tools/release/candidate.py", "tools/release/candidate_inputs.py", "tools/release/candidate_material.py",
+                        "tools/release/candidate_source_setup.py", "tools/release/candidate_workspace.py")
     record({"managed_candidate":args.managed_candidate,
             "controller_sha256": {name:sha256((ROOT / name).read_bytes()).hexdigest() for name in controllers}})
     dependencies = ROOT / "apps/docs-site/node_modules"
-    assert dependencies.is_dir(), "install this control worktree's locked Node dependencies first"
+    if not args.owned_source_setup_only:
+        assert dependencies.is_dir(), "install this control worktree's locked Node dependencies first"
     repository = evidence / "repository"
     command(["git", "clone", "--shared", "--no-checkout", str(ROOT), str(repository)])
     git(repository, "config", "user.name", "Candidate Rehearsal")
@@ -303,6 +377,10 @@ def main():
         request.update(repository="endaye/lmdj", policy_digest=policy.digest)
     material = CandidateBuildMaterial(repository, evidence / "reservations")
     material.reservations.enroll(request["repository"])
+    if args.owned_source_setup_only:
+        source_setup_journey(evidence=evidence, logs=logs, repository=repository, material=material,
+            request=request, tool_path=args.tool_path, record=record, git=git)
+        return 0
     frozen = material.inputs.freeze(base)
     operation = canonical_sha256({"request":canonical_sha256(request), "step":"candidate"})
     branch = "feat/release-candidate-" + operation

@@ -145,6 +145,17 @@ class CandidateReservations:
         No recovery path silently chooses another number. This catalogue does
         not authenticate remote main, original user authority or baseline CI.
         """
+        return self._resolve(request, frozen, main_revision, allocate=True)
+
+    def observe(self, request, frozen, main_revision):
+        """Read the original reservation, never allocate or enroll a catalogue.
+
+        None is positive absence in the verified existing catalogue. A parent
+        with an outstanding allocation intent cannot treat it as retry authority.
+        """
+        return self._resolve(request, frozen, main_revision, allocate=False)
+
+    def _resolve(self, request, frozen, main_revision, *, allocate):
         validate_request(request)
         if request["mode"] != "new" or frozen.get("base_revision") != request["base_revision"]:
             _fail("BUILD reservation must bind the original new-release baseline")
@@ -169,6 +180,8 @@ class CandidateReservations:
                             or self._parse_version(record["version"]).minor != current.minor):
                         _fail("BUILD reservation cannot be rebound")
                     return deepcopy(record)
+            if not allocate:
+                return None
             previous = self._parse_version(records[-1]["version"]).build if records else -1
             version = ProductVersion(current.milestone, current.minor, max(floor, previous) + 1, 0)
             record = {"request":deepcopy(request), "request_sha256":canonical_sha256(request),

@@ -509,6 +509,21 @@ lmdj_add_test(
   TIMEOUT 30
 )
 
+foreach(source_setup_group IN ITEMS ReservationReaderTest SetupLifecycleTest SetupBoundaryTest SetupInstallFailureTest SetupOrphanTest)
+  string(TOLOWER "${source_setup_group}" source_setup_lower)
+  set(source_setup_budget 60)
+  if(source_setup_group STREQUAL "SetupLifecycleTest")
+    set(source_setup_budget 120)
+  endif()
+  lmdj_add_test(
+    NAME "build.release_candidate_source_setup_${source_setup_lower}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_source_setup_test.py "${source_setup_group}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT "${source_setup_budget}"
+  )
+endforeach()
+
 lmdj_add_test(
   NAME build.release_candidate
   TIER contract
