@@ -96,3 +96,21 @@ suites; retain rejection tests for wrong run head and wrong PR association.
 Version impact: none. Internal CI authentication only.
 Documentation impact: none. This restores the already documented behavior;
 no Architecture Portal route or documented contract changes.
+
+## Live acceptance follow-up: source quote encoding
+
+Run 34827038614 authenticated the historical finding and reached the model,
+but its source quote failed exact original-line validation. Clarify source
+quote formatting in the prompt: JSON-compatible double-quoted YAML preserves
+leading indentation and avoids implicit final newlines. Keep exact source and
+anchor validation unchanged. The old seam returned JSON, so update it to carry
+the quote example actually sent to the handler back as YAML through parsing,
+validation and far-side resolution.
+
+Declared files: `scripts/ci/pr_agent_review.py`,
+`tests/build/ci_pr_agent_review_test.py`, and this plan. Run the pinned adapter
+suite including the real handler child and recheck tests. Review source, install
+a new immutable adapter overlay, then repeat the live recheck before acceptance.
+
+Version impact: none. Internal prompt formatting only.
+Documentation impact: none. The documented exact-evidence contract is unchanged.

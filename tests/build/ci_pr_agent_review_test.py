@@ -2156,8 +2156,17 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             self.assertIn(adapter.repair_prompt_block(request), prompt)
             self.assertIn("An author saying fixed/done", prompt)
             self.assertIsNone(os.environ.get("GITHUB_TOKEN"))
+            # Return the quote syntax actually shown at the real handler seam,
+            # rather than bypassing YAML formatting with a JSON response.
+            quote_example = prompt.split("Source quote encoding example:\n", 1)[1].split("End source quote example.", 1)[0]
+            expected = native_fixture()["review"]["repair_recheck"]
+            response_yaml = ("review:\n  general_comments: The changed return value is two.\n"
+                             "  key_issues_to_review: []\n  repair_recheck:\n"
+                             "    comment_id: 70\n    verdict: resolved\n"
+                             + "    reason: " + json.dumps(expected["reason"]) + "\n"
+                             + "    start_line: 2\n    end_line: 2\n" + quote_example)
             return FakeCompletion({"model": "fixture-deepseek-served", "model_version": "fixture-version-1",
-                                   "choices": [{"message": {"content": json.dumps(native_fixture())}, "finish_reason": "stop"}],
+                                   "choices": [{"message": {"content": response_yaml}, "finish_reason": "stop"}],
                                    "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}})
 
         result, _, ledger = self.run_with_fake(completion)
