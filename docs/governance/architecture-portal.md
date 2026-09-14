@@ -100,7 +100,12 @@ squash-equivalent source projection。若 fresh clone 在 squash 后不再包含
 commit object，验证器仍须用冻结的 raw commit bytes 自认证 canonical revision、tree
 与 committer time，并从 introducing squash tree 重建和逐项核对 projection、facts、
 source docs/sidebar/diagrams；对象缺失本身不能放宽证据。`versions.json` 允许追加未来版本，但每个
-Product Build 条目必须唯一。既有 schema-1 快照保持只读兼容，不回写。
+Product Build 条目必须唯一。仓库只保留最近 5 个 Product Build 快照
+（`versioned_docs`、`versioned_sidebars`、`versioned_metadata`、
+`versioned_provenance`、`static/versions/` 五类文件与 `versions.json`
+同步增删）；更旧的快照作为历史发布证据保留在其发布时的 Git revision
+中，可按 revision 检出审计，不随 HEAD 携带。既有 schema-1 快照保持只读
+兼容，不回写。
 
 若 squash introducing tree 合法包含冻结之后的 mutable current/non-projection
 更新，因而不能逐字等同 source projection，必须另行提交由
