@@ -49,6 +49,7 @@ using lmdj::foundation::SequenceSessionId;
 constexpr auto kProject = "00000000-0000-4000-8000-000000000004";
 constexpr auto kPattern = "00000000-0000-4000-8000-000000000002";
 constexpr auto kPatternB = "00000000-0000-4000-8000-00000000000b";
+constexpr auto kPatternC = "00000000-0000-4000-8000-00000000000c";
 
 std::string uuid(unsigned suffix) {
   const auto tail = std::to_string(suffix);
@@ -142,14 +143,24 @@ struct EnginePort final : PatternTransportAudioPort {
     }
     return std::nullopt;
   }
-  void queue_switch(std::uint64_t activation_frame) {
-    auto view = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB));
+  lmdj::audio::PatternPublication try_switch(
+      const char* pattern_id, std::uint64_t activation_frame,
+      std::optional<lmdj::audio::PatternReplacementAuthority> authority =
+          std::nullopt) {
+    auto view = PreparedPatternView::from_snapshot(pattern_snapshot(pattern_id));
     LMDJ_CHECK(view.has_value());
-    const auto pending =
-        engine.publish_pattern_view(std::move(view.value()), activation_frame);
-    LMDJ_CHECK(pending.result == PatternPublishResult::accepted);
-    queued_switch_ = lmdj::audio::PatternReplacementAuthority{
-        pending.generation, PatternId{kPatternB}, pending.activation_frame};
+    const auto publication = engine.publish_pattern_view(
+        std::move(view.value()), activation_frame, authority);
+    if (publication.result == PatternPublishResult::accepted) {
+      queued_switch_ = lmdj::audio::PatternReplacementAuthority{
+          publication.generation, PatternId{pattern_id},
+          publication.activation_frame};
+    }
+    return publication;
+  }
+  void queue_switch(std::uint64_t activation_frame) {
+    LMDJ_CHECK(try_switch(kPatternB, activation_frame).result ==
+               PatternPublishResult::accepted);
   }
   void render(std::uint64_t frames = 1) {
     std::array<float, 256> left{};
@@ -248,6 +259,8 @@ struct Fixture {
     state.patterns.emplace(pattern, lmdj::domain::Pattern{pattern, 1, {}});
     state.patterns.emplace(PatternId{kPatternB},
                            lmdj::domain::Pattern{PatternId{kPatternB}, 1, {}});
+    state.patterns.emplace(PatternId{kPatternC},
+                           lmdj::domain::Pattern{PatternId{kPatternC}, 1, {}});
     LMDJ_CHECK(store.create(bundle, state).has_value());
     LMDJ_CHECK(journals
                    .begin(bundle, session, pattern, 1,
@@ -535,6 +548,53 @@ void switch_applied_before_cutoff_drains_target_segment() {
   LMDJ_CHECK(!project.value().patterns.at(PatternId{kPattern}).events.empty());
   LMDJ_CHECK(!project.value().patterns.at(PatternId{kPatternB}).events.empty());
 }
+
+void refused_switch_publication_retries_without_a_ghost_applied() {
+  Fixture f;
+  const auto before = f.store.load(f.bundle);
+  LMDJ_CHECK(before.has_value());
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  f.audio.queue_switch(100);
+  const auto pending = f.audio.pending_switch();
+  LMDJ_CHECK(pending.has_value());
+  LMDJ_CHECK(pending->pattern_id == PatternId{kPatternB});
+  // Real engine refusal: an ordinary publication cannot supersede a pending
+  // publication for a different Pattern.
+  const auto refused = f.audio.try_switch(kPatternC, 2);
+  LMDJ_CHECK(refused.result == PatternPublishResult::publication_pending);
+  // No ghost: the refused publication never became pending authority.
+  const auto retained = f.audio.pending_switch();
+  LMDJ_CHECK(retained.has_value());
+  LMDJ_CHECK(retained->pattern_id == PatternId{kPatternB});
+  LMDJ_CHECK(retained->generation == pending->generation);
+  LMDJ_CHECK(retained->activation_frame == pending->activation_frame);
+  // Retry with the exact pending authority replaces the pending switch once.
+  const auto retried = f.audio.try_switch(kPatternC, 2, pending);
+  LMDJ_CHECK(retried.result == PatternPublishResult::accepted);
+  f.audio.render(10);
+  LMDJ_CHECK(f.audio.engine.current_pattern_id() == PatternId{kPatternC});
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  const auto cutoff = cutoff_of(f);
+  LMDJ_CHECK(cutoff.switch_outcome == SequenceSwitchOutcome::applied_before_cutoff);
+  LMDJ_CHECK(cutoff.switch_applied_frame && *cutoff.switch_applied_frame == 2);
+  LMDJ_CHECK(cutoff.switch_authority &&
+             cutoff.switch_authority->pattern_id == PatternId{kPatternC});
+  const auto journal = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(journal.has_value());
+  LMDJ_CHECK(journal.value().pattern_id == PatternId{kPatternC});
+  // Exactly one applied switch is retained despite the refused first attempt.
+  LMDJ_CHECK(journal.value().admission &&
+             journal.value().admission->applied_switches.size() == 1);
+  LMDJ_CHECK(journal.value().admission->applied_switches.front().pattern_id ==
+             PatternId{kPatternC});
+  LMDJ_CHECK(journal.value().admission->applied_switches.front().frame == 2);
+  LMDJ_CHECK(f.audio.engine.current_pattern_id() == PatternId{kPatternC});
+  LMDJ_CHECK(f.coordinator.inspect().playing);
+  const auto project = f.store.load(f.bundle);
+  LMDJ_CHECK(project.has_value());
+  LMDJ_CHECK(project.value().patterns.at(PatternId{kPatternC}).events.empty());
+  LMDJ_CHECK(project.value().revision == before.value().revision);
+}
 }  // namespace
 
 int main() {
@@ -554,7 +614,8 @@ int main() {
     switch_applied_before_cutoff_is_retained();
     switch_applied_before_cutoff_drains_source_prefix();
     switch_applied_before_cutoff_drains_target_segment();
-    std::cout << "pattern transport tests: PASS (15 scenarios)\n";
+    refused_switch_publication_retries_without_a_ghost_applied();
+    std::cout << "pattern transport tests: PASS (16 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
