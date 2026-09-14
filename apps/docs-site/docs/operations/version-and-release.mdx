@@ -3,7 +3,7 @@ title: Version 与 Release
 area: operations
 status: implemented
 owners: [release, core]
-source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/orchestration-policy.json, tools/release/orchestration_policy.py, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, docs/deploy/creator-web.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py, docs/prd/decisions/2026-08-24-build-manifest-detached.md, .github/workflows/self-test-report.yml, scripts/ci/batch_runtime.py, scripts/ci/incremental_storage.json, tools/release/batch_evidence.py, tools/release/batch_reference.py]
+source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/orchestration-policy.json, tools/release/orchestration_policy.py, tools/release/orchestration.py, tools/release/orchestration_driver.py, tools/release/orchestration_backend.py, tools/release/cli.py, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, docs/deploy/creator-web.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py, docs/prd/decisions/2026-08-24-build-manifest-detached.md, .github/workflows/self-test-report.yml, scripts/ci/batch_runtime.py, scripts/ci/incremental_storage.json, tools/release/batch_evidence.py, tools/release/batch_reference.py]
 ---
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
@@ -298,6 +298,18 @@ exact-target、merged-main Proof、完整 CI 与 protected-main ancestry 门禁�
 `scripts/release.sh verify-published TAG RELEASE_ID PLAN_SHA256` 按 numeric Release ID 读取并验证 live
 Release，其他 mutation 后重新运行 `scripts/release.sh audit --remote --tag TAG`，通过后继续已授权的下一段。Audit 从 policy、release intent ledger 与 live
 Git/GitHub 重建真相；historical exception 只能由 audit 显式报告，不能满足新的 prospective gate。
+
+单入口顺序总控的命令面已交付：`scripts/release.sh run --authority REF` 从已认证的 canonical control 冻结一份
+release request 并交给唯一的顺序 driver，`scripts/release.sh status [REQUEST_ID]` 只读取本地 request
+journal 的进度记录，`scripts/release.sh resume REQUEST_ID` 用同一 ID 继续同一请求。journal 在
+`<git-dir>/lmdj-release-requests` 下独占写入：intent 在任何外部写之前落盘，未解决的 intent 不允许
+重放，恢复时逐步重新验证 far side，本地记录不被当作外部证明。请求、actor 身份、pinned control
+revision 与 orchestration policy digest 一并冻结，`--base-revision` 与 control 一样必须在 canonical
+main 历史内可到达，重复运行同一 scope 幂等。`status` 只读该本地记录：它不联系网络、不重建材料、
+不授予任何权限，其可见范围就是该目录当前账号权限（0700/0600，无凭据）。
+
+各步仍由该步自己的 far-side 验证器确认；尚未接入某一步 carrier 时，`run`/`resume` 在创建请求前
+拒绝启动并逐项列出缺失步骤，不用 fixture、空结果或 completed 标记代替真实验收。
 
 当前 `complete-test-v2` 要求 Owner 在 reviewed intent 中恰好引用一种来源：旧
 `self-test-v1` 的 `self_test_evidence`，或增量 full 批次的 `batch_test_evidence`。
