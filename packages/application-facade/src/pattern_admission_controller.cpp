@@ -15,6 +15,9 @@ TransferResult conversion_error(const char* reason) {
       "Pattern admission conversion is unresolved",
       {{"reason", reason}, {"journal_retained", true}}});
 }
+foundation::Result<void> owner_error(const char* reason) {
+  return foundation::Result<void>::failure(conversion_error(reason).error());
+}
 }  // namespace
 
 foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transfer(
@@ -187,6 +190,80 @@ foundation::Result<project_io::SequenceAdmissionTransfer> commit_admission_trans
   const auto durable = journals.transfer_admission_prefix(bundle, session, identity, transfer.value());
   if (!durable.has_value()) return TransferResult::failure(durable.error());
   return transfer;
+}
+
+PatternAdmissionOwner::PatternAdmissionOwner(
+    project_io::SequenceJournal& journals, std::filesystem::path bundle,
+    foundation::SequenceSessionId session)
+    : journals_(journals), bundle_(std::move(bundle)), session_(std::move(session)) {}
+
+foundation::Result<void> PatternAdmissionOwner::prepare(
+    const project_io::SequenceAdmissionPreparation& preparation) {
+  const auto prepared = journals_.prepare_admission(bundle_, session_, preparation);
+  if (!prepared.has_value()) return prepared;
+  identity_ = preparation.identity;
+  return foundation::Result<void>::success();
+}
+
+foundation::Result<void> PatternAdmissionOwner::activate(
+    const project_io::SequenceAdmissionFence& fence) {
+  if (!identity_) return owner_error("admission_identity_missing");
+  if (fence.kind != project_io::SequenceFenceKind::admission) {
+    return owner_error("admission_fence_unresolved");
+  }
+  return journals_.retain_admission_fence(bundle_, session_, *identity_, fence);
+}
+
+foundation::Result<PatternAdmissionAdmit> PatternAdmissionOwner::admit(
+    const project_io::SequenceAdmissionCandidate& candidate) {
+  if (!identity_) {
+    return foundation::Result<PatternAdmissionAdmit>::failure(
+        conversion_error("admission_identity_missing").error());
+  }
+  const auto journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) {
+    return foundation::Result<PatternAdmissionAdmit>::failure(journal.error());
+  }
+  if (journal.value().session_id != session_ || !journal.value().admission) {
+    return foundation::Result<PatternAdmissionAdmit>::failure(
+        conversion_error("admission_identity_mismatch").error());
+  }
+  const auto& admission = *journal.value().admission;
+  if (journal.value().state == project_io::SequenceSessionState::owner_lost ||
+      journal.value().state == project_io::SequenceSessionState::abandoned ||
+      admission.completed || admission.closure || !admission.admission_fence ||
+      candidate.runtime_frame < admission.admission_fence->effective_frame) {
+    return foundation::Result<PatternAdmissionAdmit>::success(
+        PatternAdmissionAdmit::live_only);
+  }
+  const auto durable = journals_.append_admission_candidate(
+      bundle_, session_, *identity_, candidate);
+  if (!durable.has_value()) {
+    return foundation::Result<PatternAdmissionAdmit>::failure(durable.error());
+  }
+  return foundation::Result<PatternAdmissionAdmit>::success(
+      PatternAdmissionAdmit::retained);
+}
+
+foundation::Result<void> PatternAdmissionOwner::close(
+    const project_io::SequenceAdmissionClosure& closure) {
+  if (!identity_) return owner_error("admission_identity_missing");
+  return journals_.close_admission(bundle_, session_, *identity_, closure);
+}
+
+foundation::Result<project_io::SequenceAdmissionTransfer>
+PatternAdmissionOwner::drain(
+    foundation::CommandId transfer_id, std::uint64_t last_watermark, bool terminal) {
+  if (!identity_) return conversion_error("admission_identity_missing");
+  const auto journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) return TransferResult::failure(journal.error());
+  if (journal.value().state == project_io::SequenceSessionState::owner_lost ||
+      journal.value().state == project_io::SequenceSessionState::abandoned) {
+    return conversion_error("admission_fence_unresolved");
+  }
+  return commit_admission_transfer(
+      journals_, bundle_, session_, *identity_, transfer_id, last_watermark,
+      terminal);
 }
 
 PatternEventReducer::PatternEventReducer(
