@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <unistd.h>
 
 #include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/audio/realtime_engine.hpp>
@@ -67,7 +68,7 @@ class TempDirectory {
  public:
   explicit TempDirectory() {
     path_ = std::filesystem::temp_directory_path() /
-            ("lmdj-transport-" +
+            ("lmdj-transport-" + std::to_string(::getpid()) + "-" +
              std::to_string(std::chrono::steady_clock::now()
                                 .time_since_epoch()
                                 .count()));

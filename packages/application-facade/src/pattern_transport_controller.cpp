@@ -37,7 +37,7 @@ audio::PatternTransportAction PatternTransportCoordinator::audio_action(
     return playing_ ? audio::PatternTransportAction::stop
                     : audio::PatternTransportAction::start;
   }
-  if (playing_ && recording_) return audio::PatternTransportAction::fence;
+  // Playing Record and Record-off both fence so origin is unchanged.
   if (playing_) return audio::PatternTransportAction::fence;
   return audio::PatternTransportAction::start;
 }
@@ -84,7 +84,6 @@ PatternTransportSubmit PatternTransportCoordinator::request(
     const auto prepared = owner_.prepare(preparation);
     if (!prepared.has_value()) {
       error_ = prepared.error();
-      phase_ = PatternTransportPhase::error;
       return PatternTransportSubmit::refused;
     }
   }
@@ -96,7 +95,6 @@ PatternTransportSubmit PatternTransportCoordinator::request(
   if (submitted != audio::PatternTransportSubmit::accepted) {
     error_ = foundation::Error{foundation::ErrorCode::invalid_argument,
                                "Pattern transport audio submit refused"};
-    phase_ = PatternTransportPhase::error;
     return PatternTransportSubmit::refused;
   }
   pending_ = request;
