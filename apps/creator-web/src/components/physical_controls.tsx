@@ -111,7 +111,7 @@ export function PhysicalControls({
         <PhysicalKey label="←" ariaLabel="Left — unassigned until direction mapping is approved" disabled />
         <PhysicalKey label="→" ariaLabel="Right — unassigned until direction mapping is approved" disabled />
         <PhysicalKey
-          label="Record"
+          label="●"
           ariaLabel={recording
             ? "Record — recording Pad events into the current Pattern"
             : "Record"}
@@ -119,7 +119,7 @@ export function PhysicalControls({
           {...(onRecord === undefined ? {} : {onClick: onRecord})}
         />
         <PhysicalKey
-          label="Play"
+          label="▶"
           ariaLabel="Play — Pattern Play requires global Pattern transport"
           disabled
         />
