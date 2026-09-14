@@ -1,6 +1,17 @@
 #include <lmdj/audio/prepared_sample_bank.hpp>
+#include <lmdj/facade/pattern_transport_ports.hpp>
+#include <lmdj/project_io/project_store.hpp>
+#include <lmdj/project_io/sequence_journal.hpp>
 
+#include <chrono>
+#include <filesystem>
+#include <functional>
 #include <iostream>
+#include <memory>
+#include <optional>
+#include <span>
+#include <thread>
+#include <vector>
 
 #include "packages/application-facade/src/pattern_admission_controller.hpp"
 #include "tests/core/support/test.hpp"
@@ -290,6 +301,392 @@ void multi_bar_onset_does_not_wrap_at_one_bar() {
   LMDJ_CHECK(reducer.release({1, 3}, 4240));
   LMDJ_CHECK(state.events == std::vector<PatternEvent>({{{1, 3}, 4000, 240, 95}}));
 }
+
+class TempDirectory {
+ public:
+  explicit TempDirectory(std::string_view label) {
+    path_ = std::filesystem::temp_directory_path() /
+            ("lmdj-admission-owner-" + std::string(label) + "-" +
+             std::to_string(std::chrono::steady_clock::now()
+                                .time_since_epoch()
+                                .count()));
+    std::filesystem::create_directories(path_);
+  }
+  ~TempDirectory() {
+    std::error_code ignored;
+    std::filesystem::remove_all(path_, ignored);
+  }
+  const std::filesystem::path& path() const { return path_; }
+  TempDirectory(const TempDirectory&) = delete;
+  TempDirectory& operator=(const TempDirectory&) = delete;
+ private:
+  std::filesystem::path path_;
+};
+
+class FailingAppendStorage final : public lmdj::project_io::ProjectStoragePlatform {
+ public:
+  std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner =
+      lmdj::project_io::make_default_project_storage_platform();
+  int fail_appends = 0;
+
+  lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path& path) override {
+    return inner->acquire_writer(path);
+  }
+  lmdj::foundation::Result<void> ensure_directory(
+      const std::filesystem::path& path) override {
+    return inner->ensure_directory(path);
+  }
+  lmdj::foundation::Result<bool> exists(
+      const std::filesystem::path& path) const override {
+    return inner->exists(path);
+  }
+  lmdj::foundation::Result<std::uint64_t> byte_length(
+      const std::filesystem::path& path) const override {
+    return inner->byte_length(path);
+  }
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(
+      const std::filesystem::path& path) const override {
+    return inner->read_complete(path);
+  }
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return inner->create_immutable(path, bytes);
+  }
+  lmdj::foundation::Result<void> replace_complete(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return inner->replace_complete(path, bytes);
+  }
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& path, std::uint64_t prefix,
+      std::span<const std::byte> bytes) override {
+    if (fail_appends > 0) {
+      --fail_appends;
+      return lmdj::foundation::Result<void>::failure(
+          {lmdj::foundation::ErrorCode::io_error,
+           "injected admission append failure",
+           {{"journal_retained", true}}});
+    }
+    return inner->append_durable(path, prefix, bytes);
+  }
+  lmdj::foundation::Result<void> remove(
+      const std::filesystem::path& path) override {
+    return inner->remove(path);
+  }
+  lmdj::foundation::Result<std::vector<std::string>> list_names(
+      const std::filesystem::path& path) const override {
+    return inner->list_names(path);
+  }
+  lmdj::foundation::Result<void> validate_managed_tree(
+      const std::filesystem::path& path) const override {
+    return inner->validate_managed_tree(path);
+  }
+};
+
+struct OwnerFixture {
+  std::shared_ptr<FailingAppendStorage> platform{
+      std::make_shared<FailingAppendStorage>()};
+  TempDirectory directory;
+  lmdj::project_io::ProjectStore store;
+  std::filesystem::path bundle;
+  lmdj::project_io::SequenceJournal journals;
+  lmdj::foundation::SequenceSessionId session{uuid(1)};
+  lmdj::foundation::PatternId pattern{uuid(2)};
+  lmdj::project_io::SequenceAdmissionPreparation preparation{
+      {lmdj::foundation::CommandId{uuid(3)}, 7, 11},
+      lmdj::foundation::ProjectId{uuid(4)}, pattern, 21, 10};
+  std::chrono::steady_clock::time_point now{
+      std::chrono::steady_clock::now()};
+  lmdj::facade::detail::PatternAdmissionOwner owner;
+
+  OwnerFixture()
+      : directory("owner"),
+        bundle(directory.path() / "project.lmdj"),
+        journals(platform),
+        owner(journals, bundle, session, [this] { return now; }) {
+    auto created = lmdj::domain::create_project(preparation.project_id, 120);
+    LMDJ_CHECK(created.has_value());
+    auto state = std::move(created.value());
+    state.patterns.emplace(pattern, lmdj::domain::Pattern{pattern, 1, {}});
+    LMDJ_CHECK(store.create(bundle, state).has_value());
+    LMDJ_CHECK(journals
+                   .begin(bundle, session, pattern, 1,
+                          lmdj::project_io::sequence_pattern_fingerprint(
+                              state.patterns.at(pattern)),
+                          0)
+                   .has_value());
+  }
+
+  lmdj::project_io::SequenceAdmissionFence fence() const {
+    return {lmdj::project_io::SequenceFenceKind::admission,
+            lmdj::foundation::CommandId{uuid(5)}, 11, 13000, 1000, pattern, 21,
+            120, true, {}, lmdj::project_io::SequenceSwitchOutcome::none, {}};
+  }
+
+  lmdj::project_io::SequenceAdmissionFence cutoff_fence() const {
+    return {lmdj::project_io::SequenceFenceKind::cutoff,
+            lmdj::foundation::CommandId{uuid(7)}, 12, 40000, 1000, pattern, 21,
+            120, true, {}, lmdj::project_io::SequenceSwitchOutcome::none, {}};
+  }
+};
+
+void prepared_owner_uses_origin_not_the_admission_frame() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  OwnerFixture f;
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  const auto live = f.owner.admit(
+      {9, 12000, {0, 1}, project_io::SequenceCandidateKind::press, 80, 60});
+  LMDJ_CHECK(live.has_value() && live.value() == PatternAdmissionAdmit::live_only);
+  LMDJ_CHECK(f.owner.admit(
+      {10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
+                 .value() == PatternAdmissionAdmit::retained);
+  LMDJ_CHECK(f.owner.admit(
+      {11, 31000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 72})
+                 .value() == PatternAdmissionAdmit::retained);
+  const auto transfer = f.owner.drain(foundation::CommandId{uuid(6)}, 11, false);
+  LMDJ_CHECK(transfer.has_value());
+  LMDJ_CHECK(transfer.value().recoverable_tail ==
+             std::vector<PatternEvent>({{{0, 1}, 960, 240, 90}}));
+  const auto journal = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(journal.has_value());
+  LMDJ_CHECK(journal.value().admission->candidates.empty());
+  LMDJ_CHECK(journal.value().admission->transfers.size() == 1);
+  LMDJ_CHECK(journal.value().admission->admission_fence->origin_frame == 1000);
+}
+
+void prepared_owner_keeps_post_close_input_live_only() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  OwnerFixture f;
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  LMDJ_CHECK(f.owner.admit(
+      {10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
+                 .value() == PatternAdmissionAdmit::retained);
+  LMDJ_CHECK(f.owner
+                 .close({10, project_io::SequenceAdmissionCloseReason::capacity})
+                 .has_value());
+  LMDJ_CHECK(f.owner.admit(
+      {11, 31000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 72})
+                 .value() == PatternAdmissionAdmit::live_only);
+  const auto journal = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(journal.value().admission->candidates.size() == 1);
+  LMDJ_CHECK(journal.value().admission->closure.has_value());
+}
+
+void prepared_owner_leaves_unresolved_fence_after_owner_loss() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  OwnerFixture f;
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  LMDJ_CHECK(f.journals.set_state(
+      f.bundle, f.session, project_io::SequenceSessionState::owner_lost)
+                 .has_value());
+  LMDJ_CHECK(f.owner.admit(
+      {10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
+                 .value() == PatternAdmissionAdmit::live_only);
+  LMDJ_CHECK(!f.owner.drain(foundation::CommandId{uuid(6)}, 10, false).has_value());
+  const auto journal = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(journal.value().state == project_io::SequenceSessionState::owner_lost);
+  LMDJ_CHECK(journal.value().admission->admission_fence.has_value());
+  LMDJ_CHECK(journal.value().admission->candidates.empty());
+}
+
+void prepared_owner_drains_through_the_execution_port() {
+  using namespace lmdj;
+  using namespace facade;
+  OwnerFixture prepared;
+  LMDJ_CHECK(prepared.owner.prepare(prepared.preparation).has_value());
+  LMDJ_CHECK(prepared.owner.activate(prepared.fence()).has_value());
+  LMDJ_CHECK(prepared.owner.admit(
+      {10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
+                 .has_value());
+  LMDJ_CHECK(prepared.owner.admit(
+      {11, 31000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 72})
+                 .has_value());
+  class Worker final : public PatternTransportWorkOwner {
+   public:
+    Worker(std::filesystem::path bundle, foundation::SequenceSessionId session,
+           project_io::SequenceAdmissionIdentity identity)
+        : bundle_(std::move(bundle)), session_(session), identity_(identity) {}
+    PatternTransportWorkCompletion execute(
+        const PatternTransportWorkRequest&) override {
+      const auto transfer = detail::commit_admission_transfer(
+          journals_, bundle_, session_, identity_,
+          foundation::CommandId{uuid(6)}, 11, false);
+      if (!transfer.has_value()) {
+        return {PatternTransportWorkOutcome::refused, {}, transfer.error()};
+      }
+      return {PatternTransportWorkOutcome::success,
+              transfer.value().candidates_sha256, {}};
+    }
+   private:
+    project_io::SequenceJournal journals_;
+    std::filesystem::path bundle_;
+    foundation::SequenceSessionId session_;
+    project_io::SequenceAdmissionIdentity identity_;
+  };
+  PatternTransportExecutor executor(7, [&] {
+    return std::make_unique<Worker>(
+        prepared.bundle, prepared.session, prepared.preparation.identity);
+  });
+  const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (!executor.inspect().ready) {
+    LMDJ_CHECK(std::chrono::steady_clock::now() < end);
+    std::this_thread::yield();
+  }
+  const PatternTransportWorkRequest request{
+      {7, 11, foundation::CommandId{uuid(6)}, 1}, "drain"};
+  LMDJ_CHECK(executor.submit(request) == PatternTransportWorkSubmit::accepted);
+  while (executor.inspect().completion == nullptr) {
+    LMDJ_CHECK(std::chrono::steady_clock::now() < end);
+    std::this_thread::yield();
+  }
+  LMDJ_CHECK(executor.inspect().completion->outcome ==
+             PatternTransportWorkOutcome::success);
+  LMDJ_CHECK(executor.consume(request.identity));
+  const auto journal = prepared.journals.read_active(prepared.bundle);
+  LMDJ_CHECK(journal.value().admission->transfers.size() == 1);
+  LMDJ_CHECK(journal.value().admission->transfers.front().recoverable_tail ==
+             std::vector<PatternEvent>({{{0, 1}, 960, 240, 90}}));
+}
+
+void prepared_owner_closes_at_capacity_and_drains_after_delayed_cutoff() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  OwnerFixture f;
+  f.preparation.candidate_limit = 1;
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  LMDJ_CHECK(f.owner.admit(
+      {10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
+                 .value() == PatternAdmissionAdmit::retained);
+  const auto closed = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(closed.value().admission->closure ==
+             (project_io::SequenceAdmissionClosure{
+                 10, project_io::SequenceAdmissionCloseReason::capacity}));
+  LMDJ_CHECK(f.owner.admit(
+      {11, 31000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 72})
+                 .value() == PatternAdmissionAdmit::live_only);
+  const auto still_closed = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(still_closed.value().admission->candidates.size() == 1);
+  LMDJ_CHECK(!f.owner.drain(foundation::CommandId{uuid(6)}, 10, false).has_value());
+  LMDJ_CHECK(f.owner.cutoff(f.cutoff_fence()).has_value());
+  const auto transfer = f.owner.drain(foundation::CommandId{uuid(6)}, 10, false);
+  LMDJ_CHECK(transfer.has_value());
+  LMDJ_CHECK(transfer.value().recoverable_tail ==
+             std::vector<PatternEvent>({{{0, 1}, 960, 240, 90}}));
+  const auto retry = f.owner.drain(foundation::CommandId{uuid(6)}, 10, false);
+  LMDJ_CHECK(retry.has_value());
+  LMDJ_CHECK(retry.value() == transfer.value());
+  const auto journal = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(journal.value().admission->candidates.empty());
+  LMDJ_CHECK(journal.value().admission->transfers.size() == 1);
+  LMDJ_CHECK(f.owner.admit(
+      {12, 37000, {0, 1}, project_io::SequenceCandidateKind::press, 80, 80})
+                 .value() == PatternAdmissionAdmit::live_only);
+}
+
+void prepared_owner_closes_an_empty_prefix_at_deadline() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  OwnerFixture f;
+  f.preparation.fence_timeout_ms = 1;
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  f.now += std::chrono::milliseconds{2};
+  LMDJ_CHECK(f.owner.admit(
+      {10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
+                 .value() == PatternAdmissionAdmit::live_only);
+  const auto closed = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(closed.value().admission->candidates.empty());
+  LMDJ_CHECK(closed.value().admission->closure ==
+             (project_io::SequenceAdmissionClosure{
+                 std::nullopt, project_io::SequenceAdmissionCloseReason::deadline}));
+  LMDJ_CHECK(!f.owner.drain(foundation::CommandId{uuid(6)}, 0, false).has_value());
+}
+
+void prepared_owner_closes_at_deadline_before_the_next_candidate() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  OwnerFixture f;
+  f.preparation.fence_timeout_ms = 1;
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  LMDJ_CHECK(f.owner.admit(
+      {10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
+                 .value() == PatternAdmissionAdmit::retained);
+  f.now += std::chrono::milliseconds{2};
+  LMDJ_CHECK(f.owner.admit(
+      {11, 31000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 72})
+                 .value() == PatternAdmissionAdmit::live_only);
+  const auto closed = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(closed.value().admission->candidates.size() == 1);
+  LMDJ_CHECK(closed.value().admission->closure ==
+             (project_io::SequenceAdmissionClosure{
+                 10, project_io::SequenceAdmissionCloseReason::deadline}));
+  LMDJ_CHECK(f.owner.cutoff(f.cutoff_fence()).has_value());
+  const auto transfer = f.owner.drain(foundation::CommandId{uuid(6)}, 10, false);
+  LMDJ_CHECK(transfer.has_value());
+  LMDJ_CHECK(transfer.value().recoverable_tail ==
+             std::vector<PatternEvent>({{{0, 1}, 960, 240, 90}}));
+}
+
+void prepared_owner_reports_an_uncertain_suffix_on_storage_failure() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  OwnerFixture f;
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  LMDJ_CHECK(f.owner.admit(
+      {10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
+                 .value() == PatternAdmissionAdmit::retained);
+  f.platform->fail_appends = 1;
+  const auto failed = f.owner.admit(
+      {11, 31000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 72});
+  LMDJ_CHECK(!failed.has_value());
+  LMDJ_CHECK(failed.error().details.at("uncertain_suffix_watermark") == 11);
+  LMDJ_CHECK(failed.error().details.at("last_retained_watermark") == 10);
+  const auto closed = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(closed.value().admission->candidates.size() == 1);
+  LMDJ_CHECK(closed.value().admission->closure ==
+             (project_io::SequenceAdmissionClosure{
+                 10, project_io::SequenceAdmissionCloseReason::storage_failure}));
+  LMDJ_CHECK(f.owner.admit(
+      {12, 37000, {0, 1}, project_io::SequenceCandidateKind::press, 80, 80})
+                 .value() == PatternAdmissionAdmit::live_only);
+  LMDJ_CHECK(f.owner.cutoff(f.cutoff_fence()).has_value());
+  const auto transfer = f.owner.drain(foundation::CommandId{uuid(6)}, 10, false);
+  LMDJ_CHECK(transfer.has_value());
+  LMDJ_CHECK(transfer.value().recoverable_tail ==
+             std::vector<PatternEvent>({{{0, 1}, 960, 240, 90}}));
+}
+
+void prepared_owner_surfaces_a_failed_storage_failure_close() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  OwnerFixture f;
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  LMDJ_CHECK(f.owner.admit(
+      {10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
+                 .value() == PatternAdmissionAdmit::retained);
+  f.platform->fail_appends = 2;
+  const auto failed = f.owner.admit(
+      {11, 31000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 72});
+  LMDJ_CHECK(!failed.has_value());
+  LMDJ_CHECK(failed.error().details.at("uncertain_suffix_watermark") == 11);
+  LMDJ_CHECK(failed.error().details.at("last_retained_watermark") == 10);
+  LMDJ_CHECK(failed.error().details.at("closure_unresolved") == true);
+  const auto journal = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(!journal.value().admission->closure.has_value());
+  LMDJ_CHECK(journal.value().admission->candidates.size() == 1);
+}
 }  // namespace
 
 int main() {
@@ -308,7 +705,16 @@ int main() {
     swing_uses_the_existing_odd_sixteenth_grid();
     release_duration_stops_at_the_pattern_end();
     multi_bar_onset_does_not_wrap_at_one_bar();
-    std::cout << "pattern admission tests: PASS (14 scenarios)\n";
+    prepared_owner_uses_origin_not_the_admission_frame();
+    prepared_owner_keeps_post_close_input_live_only();
+    prepared_owner_leaves_unresolved_fence_after_owner_loss();
+    prepared_owner_drains_through_the_execution_port();
+    prepared_owner_closes_at_capacity_and_drains_after_delayed_cutoff();
+    prepared_owner_closes_an_empty_prefix_at_deadline();
+    prepared_owner_closes_at_deadline_before_the_next_candidate();
+    prepared_owner_reports_an_uncertain_suffix_on_storage_failure();
+    prepared_owner_surfaces_a_failed_storage_failure_close();
+    std::cout << "pattern admission tests: PASS (23 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

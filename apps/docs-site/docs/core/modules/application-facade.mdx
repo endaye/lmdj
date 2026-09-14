@@ -44,9 +44,14 @@ Project I/O 写出绑定逐候选 SHA-256 的不可变 receipt，只有 append �
 后续 Pattern segment 缺少时间锚点时拒绝转换。cutoff 后 release 不伪造收尾时间，
 terminal 沿用普通 240-tick 默认完成。
 
-这些函数尚未接入 prepared session owner 或全局 transport：输入验证、设置变更与
-历史锚点的串行持久化、deadline、switch 协调和 lifecycle barrier 仍待实现。
-测试中的 fence/settings anchor 是显式 fixture，不证明实际音频 receipt 获取。
+内部 `PatternAdmissionOwner` 消费上述转换函数：closed prepare/activate、
+admission fence 之后才保留 post-enqueue 候选，fence 前、closure 后与 owner-loss
+输入保持 live-only。容量耗尽由 journal 在最后一槽原子关闭；fence-wait deadline
+在处理下一候选前于 watermark B 关闭；存储失败保留已知前缀并报告不确定后缀。
+关闭后的延迟 cutoff 仍可 drain 该前缀一次。drain 走 `commit_admission_transfer`，
+并可经 T0 执行端口提交。它仍不是全局 transport coordinator：设置变更串行、
+switch 协调、Creator 接入和真实音频 receipt 获取仍待后续 Task。测试中的
+fence/settings anchor 是 owner 显式激活输入，不证明引擎已经发出该 receipt。
 同一生产转换函数已有 native 进程终止及 Chromium/独立 WebKit OPFS 回应丢失后
 重开、精确重试、原 Pattern/实际存在的另一 Pattern 恢复旅程；这些旅程从已知 cutoff
 开始，不能替代未知 cutoff 的恢复验收，也不是 Creator、听感或设备验收。
