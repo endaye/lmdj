@@ -646,7 +646,7 @@ class PipelineTests(unittest.TestCase):
 
     def publish_with_doubles(self, *, stale=False, unavailable=False, prior_reviews=None):
         calls = []
-        def auth(identity):
+        def auth(identity, store=None, reuse=False):
             calls.append("authenticate")
             if stale:
                 raise review_scope.ReviewScopeError("why: stale head; remedy: retry")
@@ -724,6 +724,47 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(writes), 1)
         self.assertIn(self.model["summary"], writes[0]["body"])
         self.assertEqual(pipeline.codec.unavailable_identities(writes[0]["body"]), [identity])
+
+    def test_api_store_reuses_identical_paths_and_uncached_calls_refetch(self):
+        calls = []
+
+        def fake_api(path):
+            calls.append(path)
+            return {"id": 7, "path": path}
+
+        store = {}
+        with mock.patch.object(pipeline.pr_review_target, "_api", side_effect=fake_api):
+            first = pipeline.api("/repos/endaye/lmdj", store)
+            second = pipeline.api("/repos/endaye/lmdj", store)
+            third = pipeline.api("/repos/endaye/lmdj")
+        self.assertEqual(first, second)
+        self.assertEqual(calls, ["/repos/endaye/lmdj", "/repos/endaye/lmdj"])
+        self.assertEqual(third["path"], "/repos/endaye/lmdj")
+
+    def test_previous_records_authenticate_duplicate_priors_once(self):
+        identity = {**self.identity, "backend": "glm"}
+        prior = test_scope.build_record(test_scope.load_policy(ROOT),
+            changed_paths=["docs/notes/a.md"], ai_labels=["test:full"], **identity)
+        posted = {"commit_id": identity["head_sha"], "user": {"id": 5},
+                  "body": pipeline.codec.encode(prior)}
+        auths = []
+
+        def fake_auth(ident, store=None, reuse=False):
+            token = ("identity", ident["repository"], ident["run_id"], ident["run_attempt"])
+            if reuse and store is not None and token in store:
+                return store[token]
+            auths.append(ident["run_id"])
+            if reuse and store is not None:
+                store[token] = ident
+            return ident
+
+        with mock.patch.object(pipeline, "api", return_value={"id": 5}), \
+                mock.patch.object(pipeline, "pages", return_value=[posted, posted]), \
+                mock.patch.object(pipeline, "authenticate", side_effect=fake_auth):
+            records, unavailable = pipeline.previous_records(identity, test_scope.load_policy(ROOT), {})
+        self.assertEqual(auths, [identity["run_id"]])
+        self.assertEqual(len(records), 2)
+        self.assertFalse(unavailable)
 
     def test_same_head_unavailable_receipt_is_not_silently_ignored(self):
         identity = {**self.identity, "backend": "glm"}

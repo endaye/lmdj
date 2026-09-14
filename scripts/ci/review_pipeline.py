@@ -235,8 +235,13 @@ def fetch(*refs):
     git("-c", "http.extraheader=AUTHORIZATION: basic " + credential, "fetch", "--no-tags", "origin", *refs)
 
 
-def api(path):
-    return pr_review_target._api(path)
+def api(path, store=None):
+    if store is not None and path in store:
+        return store[path]
+    result = pr_review_target._api(path)
+    if store is not None:
+        store[path] = result
+    return result
 
 
 def pages(path, key=None):
@@ -543,11 +548,14 @@ def finalize(directory):
     return result["status"]
 
 
-def authenticate(identity):
+def authenticate(identity, store=None, reuse=False):
+    token = ("identity", identity["repository"], identity["run_id"], identity["run_attempt"])
+    if reuse and store is not None and token in store:
+        return store[token]
     repo = identity["repository"]
     run = api(f"/repos/{repo}/actions/runs/{identity['run_id']}/attempts/{identity['run_attempt']}")
-    workflow = api(f"/repos/{repo}/actions/workflows/pr-review.yml")
-    repository = api(f"/repos/{repo}")
+    workflow = api(f"/repos/{repo}/actions/workflows/pr-review.yml", store)
+    repository = api(f"/repos/{repo}", store)
     pull = api(f"/repos/{repo}/pulls/{identity['pr_number']}")
     jobs = pages(f"/repos/{repo}/actions/runs/{identity['run_id']}/attempts/{identity['run_attempt']}/jobs", "jobs")
     producers = [j for j in jobs if j.get("name") == "Review fallback"]
@@ -555,30 +563,33 @@ def authenticate(identity):
     fetch("main", run["head_sha"], identity["control_sha"])
     ancestor = subprocess.run(["git", "-C", str(ROOT), "merge-base", "--is-ancestor", identity["control_sha"], "origin/main"],
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE).returncode == 0
-    return review_scope.authenticate_context(identity, run=run, workflow=workflow, producer_job=producers[0], pull=pull,
+    result = review_scope.authenticate_context(identity, run=run, workflow=workflow, producer_job=producers[0], pull=pull,
         repository_id=repository["id"], workflow_id=workflow["id"], producer_job_name="Review fallback",
         control_is_main_history=ancestor,
         run_workflow_bytes=git("show", run["head_sha"] + ":.github/workflows/pr-review.yml"),
         control_workflow_bytes=git("show", identity["control_sha"] + ":.github/workflows/pr-review.yml"))
+    if reuse and store is not None:
+        store[token] = result
+    return result
 
 
-def previous_records(identity, policy):
+def previous_records(identity, policy, store=None):
     """Read immutable same-head records; mutable labels never enter selection."""
     repo, number = identity["repository"], identity["pr_number"]
-    bot = api("/users/github-actions%5Bbot%5D")
+    bot = api("/users/github-actions%5Bbot%5D", store)
     records, unavailable = [], False
     for posted in pages(f"/repos/{repo}/pulls/{number}/reviews"):
         if posted.get("commit_id") != identity["head_sha"] or posted.get("user", {}).get("id") != bot.get("id"):
             continue
         for receipt in codec.unavailable_identities(posted.get("body", "")):
             if all(receipt[key] == identity[key] for key in ("repository", "pr_number", "head_sha")):
-                authenticate(receipt)
+                authenticate(receipt, store, reuse=True)
                 unavailable = True
         prior = codec.decode(posted.get("body", ""))
         if prior is None:
             continue
         prior_identity = {key: prior[key] for key in test_scope.IDENTITY_KEYS}
-        authenticate(prior_identity)
+        authenticate(prior_identity, store, reuse=True)
         review_scope.require(all(prior_identity[key] == identity[key]
                                  for key in ("repository", "pr_number", "head_sha", "base_sha")),
                              "prior scope belongs to a different review target")
@@ -643,7 +654,8 @@ def publish(directory):
         and identity["run_id"] == int(os.environ["GITHUB_RUN_ID"])
         and identity["run_attempt"] == int(os.environ["GITHUB_RUN_ATTEMPT"])
         and identity["control_sha"] == git("rev-parse", "HEAD").decode().strip(), "artifact identity differs from publisher context")
-    authenticate(identity)
+    store = {}
+    authenticate(identity, store)
     policy = test_scope.load_policy(ROOT)
     fetch(identity["base_sha"], identity["head_sha"])
     actual = change_scope.read_git_inventory(ROOT, identity["base_sha"], identity["head_sha"])
@@ -668,7 +680,7 @@ def publish(directory):
                                            coverages=coverages if is_v2_history(history) else None,
                                            collector=collector, trusted_config=trusted)
     review_scope.require(result == expected, "producer result is inconsistent with actual input and validated history")
-    prior, scope_unavailable = previous_records(identity, policy)
+    prior, scope_unavailable = previous_records(identity, policy, store)
     result = review_scope.prepare_result(policy, identity, changed_paths=paths,
                                         history=history, previous_records=prior,
                                         coverages=coverages if is_v2_history(history) else None,
@@ -715,12 +727,12 @@ def publish(directory):
     if not duplicate:
         publish_model(identity, record, original, scope_unavailable=scope_unavailable,
                       coverage=coverage, history=history)
-    authenticate(identity)  # Head check immediately before label mutation.
+    authenticate(identity, store)  # Head check immediately before label mutation.
     labels_url = f"https://api.github.com/repos/{identity['repository']}/issues/{identity['pr_number']}/labels"
     # Additive labels cannot remove another session's label. Structured records,
     # not mutable accumulated labels, are authoritative for actual selection.
     pr_review_target.github_request("POST", labels_url, token, {"labels": result["publication"]["labels"]})
-    authenticate(identity)  # A race remains historical evidence, never current.
+    authenticate(identity, store)  # A race remains historical evidence, never current.
     if repair_native is not None:
         import review_recheck
         receipt = review_recheck.publish(review_recheck.client(identity["repository"]), repair_document,
