@@ -297,6 +297,274 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME build.release_candidate_source_projection
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_source_test.py SourceProjectionTest -v
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_source_binding
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_source_test.py SourceBindingTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+foreach(witness_group IN ITEMS Lifecycle State Boundary Output)
+  string(TOLOWER "${witness_group}" witness_group_lower)
+  lmdj_add_test(
+    NAME "build.release_candidate_witness_${witness_group_lower}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_witness_test.py "Witness${witness_group}Test" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120
+  )
+endforeach()
+
+lmdj_add_test(
+  NAME build.release_candidate_merge_receipt
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_receipt_recovery_test.py MergeReceiptTest -v
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+foreach(witness_receipt_case IN ITEMS
+    test_absence_is_passive_and_does_not_create_a_marker
+    test_authority_exception_cannot_leak_through_full_traceback
+    test_cold_success_needs_no_extra_verification_even_at_budget_limit
+    test_unconfirmed_command_output_is_pending_without_reexecution
+    test_changed_actual_artifact_cannot_recover_a_success_bit
+    test_missing_enrolled_history_is_not_absence
+    test_artifact_changed_by_final_authority_check_is_refused)
+  lmdj_add_test(
+    NAME "build.release_candidate_receipt_${witness_receipt_case}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_receipt_recovery_test.py "WitnessReceiptTest.${witness_receipt_case}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 60
+  )
+endforeach()
+
+foreach(candidate_workspace_case IN ITEMS
+    WorkspaceTest.test_late_source_guard_cannot_recreate_workspace_history
+    WorkspaceTest.test_late_source_guard_cannot_accept_missing_installed_history
+    WorkspaceTest.test_observation_does_not_create_worktree_or_install
+    WorkspaceTest.test_real_owned_checkout_install_and_cold_recovery
+    WorkspaceTest.test_unowned_existing_path_is_not_adopted_or_overwritten
+    WorkspaceTest.test_process_death_after_checkout_recovers_exact_creation_once
+    WorkspaceTest.test_process_death_after_install_never_replays_unknown_command
+    WorkspaceTest.test_missing_enrolled_state_is_not_recreated
+    WorkspaceTest.test_authority_loss_at_install_intent_stops_child
+    InstallFailureTest.test_nonzero_install_is_retained_and_never_replayed)
+  lmdj_add_test(
+    NAME "build.release_candidate_task_workspace_${candidate_workspace_case}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_task_workspace_test.py "${candidate_workspace_case}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 90
+  )
+endforeach()
+
+foreach(candidate_parent_case IN ITEMS
+    test_unknown_cut_post_cannot_be_replayed_by_parent
+    test_unknown_cut_put_cannot_be_replayed_by_parent
+    test_confirmed_witness_recovers_after_parent_checkpoint_interruption
+    test_started_workspace_without_child_enrollment_is_not_recreated
+    test_main_observer_cannot_recreate_missing_parent_history
+    test_original_authority_exception_has_no_secret_traceback
+    test_cut_review_pending_cannot_generate_witness_or_install)
+  lmdj_add_test(
+    NAME "build.release_candidate_transition_${candidate_parent_case}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_transition_test.py "TransitionTest.${candidate_parent_case}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120
+  )
+endforeach()
+
+# Entire real-Git parent journey, including two PRs and cold receipt recovery.
+# Content checks are explicit fixtures; this does not replace the full Portal
+# rehearsal or live GitHub/protection/review and release acceptance.
+lmdj_add_test(
+  NAME build.release_candidate_transition_journey
+  TIER e2e
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_transition_test.py TransitionTest.test_cut_merge_is_pending_until_the_reviewed_witness_squash -v
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 900
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_witness_schema
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_witness_test.py WitnessSchemaTest -v
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+foreach(witness_task_group IN ITEMS Lifecycle Boundary Authority Crash)
+  string(TOLOWER "${witness_task_group}" witness_task_group_lower)
+  lmdj_add_test(
+    NAME "build.release_candidate_witness_task_${witness_task_group_lower}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_witness_task_test.py "Task${witness_task_group}Test" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120
+  )
+endforeach()
+
+lmdj_add_test(
+  NAME build.release_candidate_witness_task_artifact
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_witness_task_test.py ArtifactCaptureTest -v
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+foreach(candidate_check_case IN ITEMS
+    ChecksLifecycleTest.test_six_actual_results_and_cold_resume_without_replay
+    ChecksFailureTest.test_failed_command_retains_result_without_replay
+    ChecksFailureTest.test_controller_death_after_command_is_unknown
+    ChecksFailureTest.test_final_authority_loss_keeps_zero_exit_unconfirmed
+    ChecksFailureTest.test_snapshot_history_loss_after_command_is_not_verified
+    ChecksFailureTest.test_tracked_drift_after_command_is_not_verified
+    ChecksReaderTest.test_missing_enrolled_history_cannot_reset_budget
+    ChecksReaderTest.test_committed_cut_cannot_invent_staged_checks
+    ChecksReaderTest.test_pr_digest_and_cut_identity_must_match
+    ChecksReaderTest.test_rebound_command_or_control_is_refused
+    ChecksReaderTest.test_reader_authority_cannot_remove_history
+    ChecksResumeTest.test_death_after_cut_commit_continues_unstarted_committed_phase)
+  lmdj_add_test(
+    NAME "build.release_candidate_checks_${candidate_check_case}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_checks_test.py "${candidate_check_case}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 60
+  )
+endforeach()
+
+lmdj_add_test(
+  NAME build.release_candidate_cut_recovery
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_cut_test.py CutRecoveryTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_cut_safety
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_cut_test.py CutSafetyTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_snapshot_recovery
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_snapshot_test.py SnapshotRecoveryTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_snapshot_safety
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_snapshot_test.py SnapshotSafetyTest SnapshotStateTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_workspace_recovery
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_workspace_test.py WorkspaceRecoveryTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_workspace_crash
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_workspace_test.py WorkspaceCrashTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_workspace_safety
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_workspace_test.py WorkspaceSafetyTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_material
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_material_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+foreach(preparation_case IN ITEMS
+    PreparationJourneyTest.test_actual_all_legs_then_cold_observation_preserves_every_history
+    PreparationCrashTest.test_source_child_success_survives_parent_checkpoint_death
+    PreparationCrashTest.test_snapshot_child_success_survives_parent_checkpoint_death_without_resume
+    PreparationCrashTest.test_cut_child_success_survives_parent_checkpoint_death_without_commands)
+  lmdj_add_test(
+    NAME "build.release_candidate_preparation_${preparation_case}"
+    TIER e2e
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_preparation_test.py "${preparation_case}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 900
+  )
+endforeach()
+
+foreach(preparation_group IN ITEMS PreparationEnrollmentTest PreparationSourceGuardTest)
+  lmdj_add_test(
+    NAME "build.release_candidate_preparation_${preparation_group}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_preparation_test.py "${preparation_group}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120
+  )
+endforeach()
+
+foreach(source_setup_group IN ITEMS ReservationReaderTest SetupLifecycleTest SetupBoundaryTest SetupInstallFailureTest SetupOrphanTest)
+  string(TOLOWER "${source_setup_group}" source_setup_lower)
+  set(source_setup_budget 60)
+  if(source_setup_group STREQUAL "SetupLifecycleTest")
+    set(source_setup_budget 120)
+  endif()
+  lmdj_add_test(
+    NAME "build.release_candidate_source_setup_${source_setup_lower}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_source_setup_test.py "${source_setup_group}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT "${source_setup_budget}"
+  )
+endforeach()
+
+lmdj_add_test(
+  NAME build.release_candidate
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_inputs
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_inputs_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
   NAME build.release_orchestration
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_orchestration_test.py
@@ -350,6 +618,30 @@ lmdj_add_test(
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_task_verification_test.py
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   TIMEOUT 60
+)
+
+lmdj_add_test(
+  NAME build.release_command_output
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_command_output_test.py -v
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_live_host
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_live_host_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 90
+)
+
+lmdj_add_test(
+  NAME build.release_deployment_effect
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_deployment_effect_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 120
 )
 
 lmdj_add_test(
@@ -417,6 +709,90 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME build.release_branch_observation
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_branch_observation_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_pr_sequence
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_pr_sequence_test.py SequenceTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+foreach(witness_group IN ITEMS Pr Branch Sequence Journey)
+  string(TOLOWER "${witness_group}" witness_group_lower)
+  set(witness_budget 60)
+  if(witness_group STREQUAL "Pr")
+    set(witness_budget 30)
+  elseif(witness_group STREQUAL "Journey")
+    set(witness_budget 120)
+  endif()
+  lmdj_add_test(
+    NAME "build.release_witness_pr_${witness_group_lower}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_witness_pr_test.py "Witness${witness_group}Test" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT "${witness_budget}"
+  )
+endforeach()
+
+foreach(witness_source_group IN ITEMS Binding Merge History Authority)
+  string(TOLOWER "${witness_source_group}" witness_source_lower)
+  lmdj_add_test(
+    NAME "build.release_witness_source_${witness_source_lower}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_witness_source_test.py "Source${witness_source_group}Test" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120
+  )
+endforeach()
+
+# Each producer-backed case includes a real source/Task and process lifecycle.
+# Keep bounded individual cases rather than sharing a live fixture concurrently.
+foreach(witness_check_case IN ITEMS
+    ChecksLifecycleTest.test_actual_six_commands_bind_output_and_cold_resume_does_not_replay
+    ChecksFailureTest.test_failed_command_preserves_real_result_and_never_replays
+    ChecksFailureTest.test_missing_enrolled_state_never_resets_command_budget
+    ChecksFailureTest.test_controller_death_after_actual_command_is_unknown_not_replayed
+    ChecksFailureTest.test_final_authority_loss_keeps_exit_zero_unconfirmed
+    ChecksFailureTest.test_tracked_drift_after_command_is_not_verified
+    ChecksReaderTest.test_forged_pr_digest_is_not_actual_command_evidence
+    ChecksReaderTest.test_same_type_authority_exception_cannot_expose_secret
+    ChecksReaderTest.test_reader_authority_cannot_delete_then_recreate_history
+    ChecksReaderTest.test_committed_fixture_without_staged_commands_cannot_claim_them
+    ChecksReaderTest.test_rebound_command_or_control_is_rejected
+    ChecksResumeTest.test_death_after_task_commit_continues_only_unstarted_committed_phase)
+  lmdj_add_test(
+    NAME "build.release_witness_checks_${witness_check_case}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_witness_checks_test.py "${witness_check_case}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120
+  )
+endforeach()
+
+lmdj_add_test(
+  NAME build.release_candidate_pr_sequence_boundaries
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_pr_sequence_test.py -v BoundaryTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_branch
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_branch_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
   NAME build.release_evidence_branch
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_evidence_branch_test.py
@@ -444,6 +820,14 @@ lmdj_add_test(
   NAME build.release_changelog_site_evidence
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_changelog_site_evidence_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_candidate_pr
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_pr_test.py
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   TIMEOUT 30
 )

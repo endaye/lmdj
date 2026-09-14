@@ -32,6 +32,9 @@ def require(value, reason):
 
 
 class PublicationWorkspace:
+    JOURNAL_NAME = "lmdj-publication-workspace"
+    VERIFY_LABEL = "publication"
+
     def __init__(self, root):
         self.root = Path(root).absolute()
         self._journal = None
@@ -75,7 +78,7 @@ class PublicationWorkspace:
     @contextmanager
     def _locked(self, gitdir):
         require(self._journal is None, "writer context is already active")
-        with RequestJournal(gitdir / "lmdj-publication-workspace") as journal:
+        with RequestJournal(gitdir / self.JOURNAL_NAME) as journal:
             self._journal = journal
             try:
                 yield journal
@@ -205,31 +208,47 @@ class PublicationWorkspace:
                            "base_revision": base_revision, "patch_sha256": sha256(patch).hexdigest(),
                            "tree": tree, "commit": commit, "branch": branch}
                 self._binding(journal, binding)
-                head = self.revision("HEAD")
-                require(head in (base_revision, commit), "branch advanced to an unrelated commit")
-                self._check_workspace(base_revision, tree, selected, expected)
-                if head == base_revision:
-                    # Each known OLD/NEW file may be recovered after interruption.
-                    # Never checkout arbitrary paths or execute a target hook.
-                    for name in sorted(files):
-                        journal._active()
-                        require(self._file(name) in (selected.get(name), expected[name]), "file changed before installation")
-                        self._install(name, expected[name], selected.get(name))
-                    self.git("read-tree", tree)
-                self._check_workspace(base_revision, tree, selected, expected, complete=True)
-                try:
-                    verify(self.root)
-                except Exception:
-                    raise PublicationWorkspaceError("why: publication Task verification failed; remedy: inspect retained verification output and resume the same operation without bypassing checks") from None
-                journal._active()
-                self._check_workspace(base_revision, tree, selected, expected, complete=True)
-                require(self.git("symbolic-ref", "--short", "HEAD").decode().strip() == branch, "branch changed during verification")
-                if head == base_revision:
-                    self.git("update-ref", "refs/heads/" + branch, commit, base_revision)
-                require(self.revision("HEAD") == commit and self.revision_from_index() == tree, "commit identity drifted")
-                self._check_workspace(base_revision, tree, selected, expected, complete=True)
+                self._install_commit(journal, base_revision, tree, commit, branch,
+                                     selected, expected, index, verify)
                 return dict(binding, tag=intent.tag, target_revision=intent.target_revision,
                             files=sorted(files), status="committed")
+
+    def _install_commit(self, journal, base_revision, tree, commit, branch,
+                        selected, expected, index, verify, *, before_write=None):
+        """Shared atomic OLD/NEW recovery after the planner freezes binding."""
+        head = self.revision("HEAD")
+        require(head in (base_revision, commit), "branch advanced to an unrelated commit")
+        self._check_workspace(base_revision, tree, selected, expected)
+        def checkpoint():
+            if before_write is not None:
+                before_write()
+                journal._active()
+                require(self.revision("HEAD") == head, "HEAD changed during write authorization")
+                require(self.git("symbolic-ref", "--short", "HEAD").decode().strip() == branch,
+                        "branch changed during write authorization")
+                self._check_workspace(base_revision, tree, selected, expected)
+        if head == base_revision:
+            for name in sorted(expected):
+                checkpoint()
+                journal._active()
+                require(self._file(name) in (selected.get(name), expected[name]), "file changed before installation")
+                self._install(name, expected[name], selected.get(name))
+            checkpoint()
+            self.git("read-tree", tree)
+        self._check_workspace(base_revision, tree, selected, expected, complete=True)
+        try:
+            verify(self.root)
+        except Exception:
+            raise PublicationWorkspaceError(f"why: {self.VERIFY_LABEL} Task verification failed; remedy: inspect retained verification output and resume the same operation without bypassing checks") from None
+        journal._active()
+        self._check_workspace(base_revision, tree, selected, expected, complete=True)
+        require(self.git("symbolic-ref", "--short", "HEAD").decode().strip() == branch, "branch changed during verification")
+        if head == base_revision:
+            checkpoint()
+            self._check_workspace(base_revision, tree, selected, expected, complete=True)
+            self.git("update-ref", "refs/heads/" + branch, commit, base_revision)
+        require(self.revision("HEAD") == commit and self.revision_from_index() == tree, "commit identity drifted")
+        self._check_workspace(base_revision, tree, selected, expected, complete=True)
 
     def revision_from_index(self, index=None):
         value = self.git("write-tree", index=index).decode().strip()

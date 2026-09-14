@@ -557,9 +557,12 @@ def _provider_source_package_sha256(
 def _product_assembly_source_package_sha256(
     version: ProductVersion,
     compiled_assembly_bytes: bytes | None = None,
+    *,
+    repo_root: Path | None = None,
 ) -> str:
+    resolved_root = REPO_ROOT if repo_root is None else repo_root
     compiled_assembly_path = (
-        REPO_ROOT / "products/lmdj/src/compiled_assembly.cpp"
+        resolved_root / "products/lmdj/src/compiled_assembly.cpp"
     )
     return _source_package_sha256(
         "product-assembly-source-package",
@@ -568,9 +571,10 @@ def _product_assembly_source_package_sha256(
             "product_version": str(version),
         },
         [
-            REPO_ROOT / "products/lmdj/CMakeLists.txt",
+            resolved_root / "products/lmdj/CMakeLists.txt",
             compiled_assembly_path,
         ],
+        repo_root=resolved_root,
         content_overrides=(
             {}
             if compiled_assembly_bytes is None
@@ -579,11 +583,12 @@ def _product_assembly_source_package_sha256(
     )
 
 
-def _component_source(field: str, component_id: str) -> Path:
+def _component_source(field: str, component_id: str, *, repo_root: Path | None = None) -> Path:
+    resolved_root = REPO_ROOT if repo_root is None else repo_root
     roots = {
-        "modules": REPO_ROOT / "packages",
-        "hosts": REPO_ROOT / "apps",
-        "providers": REPO_ROOT / "providers",
+        "modules": resolved_root / "packages",
+        "hosts": resolved_root / "apps",
+        "providers": resolved_root / "providers",
     }
     if field in roots:
         matches = []
@@ -598,11 +603,11 @@ def _component_source(field: str, component_id: str) -> Path:
         path = matches[0]
     elif field == "contracts":
         matches = sorted(
-            (REPO_ROOT / "contracts").glob(
+            (resolved_root / "contracts").glob(
                 f"*/{component_id}.schema.json"
             )
         )
-        matches += sorted((REPO_ROOT / "contracts").glob(f"*/{component_id}.md"))
+        matches += sorted((resolved_root / "contracts").glob(f"*/{component_id}.md"))
         if len(matches) != 1:
             raise ValueError(
                 f"contract {component_id} must resolve to exactly one source; remedy: reconcile schema/profile inventory"
@@ -652,6 +657,8 @@ def _cpp_string(value: str) -> str:
 def _render_compiled_assembly(
     version: ProductVersion,
     assembly: dict[str, Any],
+    *,
+    repo_root: Path | None = None,
 ) -> bytes:
     assembly_contract = next(
         (
@@ -670,6 +677,7 @@ def _render_compiled_assembly(
     assembly_schema = _component_source(
         "contracts",
         assembly_contract["id"],
+        repo_root=repo_root,
     )
     _validate_component_source(
         "contracts",
@@ -680,7 +688,7 @@ def _render_compiled_assembly(
 
     provider_wiring: list[tuple[dict[str, Any], str, str]] = []
     for provider in assembly["providers"]:
-        module_path = _component_source("providers", provider["id"])
+        module_path = _component_source("providers", provider["id"], repo_root=repo_root)
         _validate_component_source(
             "providers",
             provider["id"],
@@ -783,6 +791,9 @@ def _lock_document(
     assembly_path: str | Path,
     assembly: dict[str, Any],
     compiled_assembly_bytes: bytes | None = None,
+    *,
+    repo_root: Path | None = None,
+    assembly_bytes: bytes | None = None,
 ) -> dict[str, Any]:
     document: dict[str, Any] = {
         "product": {"id": "lmdj", "version": str(version)},
@@ -792,9 +803,11 @@ def _lock_document(
             "sha256": _product_assembly_source_package_sha256(
                 version,
                 compiled_assembly_bytes,
+                repo_root=repo_root,
             ),
         },
-        "assembly_sha256": _sha256(Path(assembly_path)),
+        "assembly_sha256": (_sha256(Path(assembly_path)) if assembly_bytes is None
+                            else hashlib.sha256(assembly_bytes).hexdigest()),
     }
     for field in COMPONENT_FIELDS:
         locked: list[dict[str, str]] = []
@@ -802,7 +815,7 @@ def _lock_document(
         for component in sorted(components, key=lambda value: value["id"]):
             component_id = component["id"]
             component_version = component["version"]
-            source = _component_source(field, component_id)
+            source = _component_source(field, component_id, repo_root=repo_root)
             _validate_component_source(
                 field,
                 component_id,
@@ -818,6 +831,7 @@ def _lock_document(
                             component_id,
                             component_version,
                             source,
+                            repo_root=repo_root,
                         )
                         if field == "providers"
                         else _sha256(source)
@@ -955,6 +969,8 @@ def _verify_lock(
     assembly: dict[str, Any],
     lock_path: str | Path,
     version_path: str | Path = "products/lmdj/version.json",
+    *,
+    repo_root: Path | None = None,
 ) -> None:
     lock = _load_object(lock_path, "assembly lock")
     for field in ("product", "product_assembly"):
@@ -971,8 +987,9 @@ def _verify_lock(
                 )
             )
 
-    compiled_path = REPO_ROOT / "products/lmdj/src/compiled_assembly.cpp"
-    expected_compiled = _render_compiled_assembly(version, assembly)
+    resolved_root = REPO_ROOT if repo_root is None else repo_root
+    compiled_path = resolved_root / "products/lmdj/src/compiled_assembly.cpp"
+    expected_compiled = _render_compiled_assembly(version, assembly, repo_root=repo_root)
     actual_compiled = compiled_path.read_bytes()
     if actual_compiled != expected_compiled:
         try:
@@ -1004,12 +1021,58 @@ def _verify_lock(
         assembly_path,
         assembly,
         expected_compiled,
+        repo_root=repo_root,
     )
     if lock != expected:
         raise ValueError(
             "assembly lock does not match resolved assembly in "
             f"{_repo_relative(lock_path)}; remedy: {LOCK_REMEDY}"
         )
+
+
+def render_build_material(
+    repo_root: Path,
+    expected: ProductVersion,
+    reserved: ProductVersion,
+) -> dict[str, bytes]:
+    """Render four candidate files using canonical Assembly generators.
+
+    The caller supplies a passive, exact-input tree and a verified reservation.
+    This function does not allocate a number, modify that tree, run candidate
+    code, freeze a Portal snapshot or establish release/main authority.
+    """
+    if type(expected) is not ProductVersion or type(reserved) is not ProductVersion:
+        raise ValueError("why: typed Product versions are required; remedy: use the verified candidate reservation")
+    if (reserved.milestone, reserved.minor) != (expected.milestone, expected.minor) or reserved.build <= expected.build or reserved.patch != 0:
+        raise ValueError("why: reservation is not a new BUILD on the original product line; remedy: reconcile the original reservation without changing PATCH or product scope")
+    root = Path(repo_root).absolute()
+    if root.resolve() != root:
+        raise ValueError("why: candidate source root is a symlink; remedy: materialize exact passive Git inputs")
+    version_name = "products/lmdj/version.json"
+    assembly_name = "products/lmdj/assembly.json"
+    lock_name = "products/lmdj/assembly.lock.json"
+    compiled_name = "products/lmdj/src/compiled_assembly.cpp"
+    for name in (version_name, assembly_name, lock_name, compiled_name):
+        filename = root / name
+        if not filename.is_file() or filename.is_symlink():
+            raise ValueError("why: candidate build input is not a regular file; remedy: restore the exact original build materials")
+    current = load_version(root / version_name)
+    if current != expected:
+        raise ValueError("why: candidate Product version differs from original baseline; remedy: restore the original frozen input")
+    assembly = _verify_assembly(current, root / assembly_name, root / version_name)
+    _verify_lock(current, root / assembly_name, assembly, root / lock_name,
+                 root / version_name, repo_root=root)
+    version_document = _load_object(root / version_name, "Product version")
+    version_document.update(milestone=reserved.milestone, minor=reserved.minor,
+                            build=reserved.build, patch=reserved.patch)
+    assembly["product"]["version"] = str(reserved)
+    assembly_bytes = _canonical_json(assembly).encode("utf-8")
+    compiled = _render_compiled_assembly(reserved, assembly, repo_root=root)
+    lock = _lock_document(reserved, root / assembly_name, assembly, compiled,
+                          repo_root=root, assembly_bytes=assembly_bytes)
+    return {version_name:_canonical_json(version_document).encode("utf-8"),
+            assembly_name:assembly_bytes, lock_name:_canonical_json(lock).encode("utf-8"),
+            compiled_name:compiled}
 
 
 def _artifact_overlays(

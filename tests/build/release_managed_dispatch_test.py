@@ -37,6 +37,7 @@ class ManagedDispatchTest(unittest.TestCase):
         c.spec["inputs"]["request_id"]=op
         if workflow!="publish-release.yml":
             c.spec["inputs"].pop("release_id",None);c.spec["inputs"].pop("plan_sha256",None)
+            c.spec["inputs"]["prior_site_sha256"] = "e" * 64
         f.inputs=deepcopy(c.spec["inputs"])
         f.document.update(inputs=deepcopy(f.inputs),workflow=workflow)
         f.run["path"]=".github/workflows/"+workflow
@@ -103,6 +104,18 @@ class ManagedDispatchTest(unittest.TestCase):
         self.assertEqual(c.controller.observe(c.spec)["status"],"absent")
         self.assertEqual((c.root/"dispatch.json").read_bytes(),raw)
         self.assertEqual(c.posts,[])
+
+    def test_original_site_digest_is_durable_and_cannot_change_on_resume(self):
+        self.configure("deploy-web-runtime-host.yml")
+        self.assertEqual(self.driver.run(self.request).status, "pending")
+        original = (self.child.root / "dispatch.json").read_bytes()
+        self.assertEqual(json.loads(original)["spec"]["inputs"]["prior_site_sha256"], "e" * 64)
+        self.child.spec["inputs"]["prior_site_sha256"] = "f" * 64
+        self.adapter.spec = deepcopy(self.child.spec)
+        self.assertEqual(self.new_driver().resume(self.request["id"]).status, "unknown")
+        self.assertEqual((self.child.root / "dispatch.json").read_bytes(), original)
+        self.assertEqual(len(self.child.posts), 1)
+        self.assertNotIn("creator", self.backend.calls)
 
     def test_parent_crash_before_child_post_recovers_the_first_send(self):
         advance=self.adapter.advance

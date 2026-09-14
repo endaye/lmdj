@@ -151,6 +151,162 @@ unknown，只有单一认证匹配返回 correlated。任何结果都不允许�
 重新初始化为“未发送”。POST 前还核对 numeric actor / repository / workflow 和 main SHA。
 原授权每次都需复核，首次发送的 readiness 条件只在写入前检查；恢复不能要求已公开的
 Release 重新变成 Draft，也不能因此重发。
+父级 driver 的重复请求准入会在原 journal writer lock 下查找同仓库的未完成请求。
+新 transport ID 若仍属于同 actor、policy、control revision、mode 和 exact tag，
+会恢复原请求；新的 main 观察值与授权引用不覆盖旧基线或旧授权。新请求和原授权均须
+重新认证，返回的是原 request ID，不创建第二条发布流程。新 ID 会以私有、不可重绑的
+alias 记录绑定完整输入与原 request ID / digest，在继续执行前原子落盘并 fsync。
+原流程完成后，同一 ID 的重投或 resume 仍解析到原流程，不再次分配版本。alias 恢复
+再次认证两份原始授权；缺失目标、损坏关联、同 ID 同时为 alias 和原记录均拒绝。
+alias 不允许链式引用，也不能用 create 转为新发版。相同 ID 的所有字段仍须完全
+一致；不同范围、多条未完成记录、损坏或读取中变化的清单均拒绝。已完成历史不阻止新发版，
+但既有请求的未知写意图仍只核对结果，不再次执行。此能力只在同一受信 journal 目录内生效，
+不替代生产入口认证、原请求 adapter 构造、跨目录去重或全局 Site 互斥。
+候选输入检查已能从 exact Git commit 冻结完整 path / mode / object 清单及 Product
+manifest 身份。它复用受信版本解析器与禁止 fetch、replace refs、grafts 的 Git 读取，
+不执行候选脚本，不读取本地脏文件作为版本真相。重新计算原基线，再要求新 main 是其
+后代且冻结清单一致；源码变化即使没有更新 Assembly lock 也会拒绝。缺对象、浅克隆、
+歧义路径或伪造的冻结记录均不当作有效输入证明。
+仅明确的文档路径可前进：`docs/` 中除 governance/release-evidence/quality 之外的文件，以及
+current docs-site 的 docs、diagrams、static/diagrams。版本快照、构建/测试/控制工具、
+治理、正式质量证据与发布分配记录、未知新增路径仍属于候选输入。软链接直接引用的
+仓库内文件或目录也纳入冻结，即使原本属于文档排除范围；拒绝绝对/越界/悬空链接、
+链式或中间路径链接，以及目标目录内的链接和 Gitlink，不读取工作区链接目标。
+此范围不是 Portal snapshot 的投影，
+也不是通用 PR 门禁；它防止切版前纳入本请求未冻结的输入。Gitlink 只绑定外部 commit
+身份，不证明外部依赖内容已经取得或通过验证。这个检查不验证 GitHub main 的授权，
+不分配 BUILD，不创建快照或切版 PR；这些及正式候选 CI 仍须由父级顺序接通。
+BUILD 编号预留已提供独立的本机持久化组件：显式 enrollment 后，在单 writer 下按
+原请求及候选输入摘要保存编号，写入后回读，恢复同一请求复用原编号。新编号取原基线
+完整 Product version 历史与已有预留记录的最大 BUILD 加一，保持 Milestone / Minor，
+PATCH 归零；已回退的历史高编号与失败预留仍占用编号。源码竞争会拒绝，不改选新基线。
+观察到的 main 即使已回退到相同文件，只要历史 BUILD 高水位前进，也拒绝首次预留或恢复，
+不偷偷给同一请求换号。
+catalogue 缺失、损坏、换 scope 或非私有存储均拒绝，resume 不重建 catalogue。
+这不是已分配、已评审的 Product Build：尚须父级认证原授权、main 与基线 CI，统一配置
+所有分配者使用同一 catalogue，并接通 version / Assembly / lock、快照、切版 PR 和 witness。
+不能用另一目录重新 enrollment 绕过既有预留，也不能把本地编号回执当发布资格。
+候选构建材料生成器已消费实际预留记录，并从原基线 Git 对象导出受限的被动输入。
+它校验 Git blob 字节身份，复用版本工具的 Assembly / compiled assembly / lock 生成和
+原材料验证逻辑，生成 `version.json`、`assembly.json`、`assembly.lock.json`、
+`compiled_assembly.cpp` 四份确定性字节及路径/长度/摘要绑定；恢复复用原编号和材料。
+不会执行候选代码，也不把脏文件或未跟踪 manifest 混入输入；旧 Assembly 或 lock
+不一致时拒绝并保留编号，不顺便修复候选。生成阶段不改源工作树、index 或 ref。
+这仍不是完成切版：Portal snapshot、切版 PR、witness 和 post-squash
+target 绑定尚须继续接通，不把生成字节回执当成已分配或已发布的 Build。
+内部候选来源提交已能在请求绑定的独立工作树中安装这四份材料：先固定持久化 binding，
+再仅原子安装已知 OLD/NEW 字节、暂存、执行来源材料验证，并以 expected-old ref 原子提交。
+中断后重新验证并复用同一个来源提交；未知工作区改动、隐藏索引标记、改号或 binding
+漂移都会拒绝。共享安装器保留过滤器禁用、原始文件字节核对及 fsync / 原子替换。
+官方 snapshot generator 要求干净 HEAD，此来源提交只提供该前置状态。
+它不是完整切版 Task，不提前推送；仍须通过官方入口生成快照、形成完整切版提交，
+再经 PR 评审、squash、witness 及 exact-target 验证。来源提交不代表 Build 已获发布资格。
+完整快照已生成但末尾检查中断时，可运行
+`scripts/docs-site.sh resume-version PRODUCT_BUILD CHANNEL SOURCE_SHA`：显式绑定原来源
+HEAD 与 channel，核验 schema 2 元数据、全部来源/产物字节及精确生成边界，再运行完整
+Portal 检查并重新核验。不重新生成、不改变冻结时间，也不覆盖旧快照；残缺、漂移或已
+提交的快照不适用这一入口。来源版本列表兼容当前站点指向历史存储的固定符号链接，
+拒绝其他链接目标。调用方仍须持有独占工作区和原请求绑定，服务总控接线尚未完成。
+候选快照命令执行器已连接真实来源安装回执与这两个官方入口，复用来源工作区 writer
+锁，在首次生成前记录 enrollment 与命令意图。生成失败或控制进程中断后只允许恢复
+校验，不再次生成；首次核验后固定所有生成文件的路径、长度与摘要，后续不接受字节漂移。
+版本列表只允许历史存储中的正式路径变化，站点符号链接本身仍须保持原始字节。
+状态丢失、源码漂移或恢复预算耗尽会拒绝。每次调用重新认证原授权，
+并核验实际子命令结果；保存的成功标记不代替新验证。此处仍需受信父级提供原授权、
+控制工具和环境认证；上游冻结、材料与快照生产至无人值守服务的接线尚未完成。
+源码工作区准备器已提供独立子接口：绑定原请求和冻结输入，先登记父级可识别的意图，
+再认领实际 BUILD 预留、创建操作专属 linked worktree，执行一次正式依赖安装。
+只读预留查询不分配新编号或重建 catalogue；每个新效果和成功回执前，在最后授权回调后
+回读实际预留及原状态。已完成的预留、checkout 可按精确事实认回；创建结果未知、安装失败
+或安装结果未知均保留并停止，不重复写入。请求和状态以 canonical 字节比较，不能把数字
+类型变化当作身份不变。安装回执只证明原安装步骤，后续源码、快照、cut 仍分别校验真实内容。
+该子接口尚未组成完整请求工厂或 `run/status/resume` 服务，不能据此宣称无人值守可用。
+本地完整切版提交器已消费来源安装与快照验证的持久化证据：把四份源码和该 Build 的
+正式存储路径中的快照组成一个以原基线为父提交的 Conventional Commit，先固定
+binding，再暂存、验证、以 expected-source 更新分支并复验。中断后只恢复原树和
+原提交，不重生成快照；未知改动、保留引用冲突或验证失败均拒绝。原来源对象保存在
+请求绑定的本地引用中，后续 witness 完成前不清理。该回执只证明本地切版提交，
+不证明远端 PR/squash、witness、实际候选 target 或发布资格；后续由独立候选父级核验。
+切版 Task 的具体检查器现于暂存和提交后各执行 Portal、ownership 和对原 base 的 whitespace
+检查，将真实退出码、完整输出长度与摘要绑定原来源、快照历史、cut 和控制版本，供候选 PR
+核验。命令启动前持久化意图，执行后重新核对授权、来源、快照、分支、index 与原始文件字节；
+exit 0 但后置核验失败仍不算通过。冷恢复只继续未启动的检查，失败、未知或丢失的历史不重置；
+已提交但没有暂存检查历史的 cut 不允许补造证明。执行子进程继承原来源 writer 锁。
+这补齐的是本地切版命令凭据，不替代远端审查、真实 main／分配授权或完整候选父级流程。
+快照状态 v2 单独记录已完成后置授权、源码和产物检查的命令边界；仅有 exit 0 不能
+借用旧快照确认来提交切版。缺少该边界的旧 v1 状态拒绝消费，不自动补写成功记录。
+候选路径另有显式集成演练脚本 `tests/build/release_candidate_portal_journey.py`，使用新建
+本地仓库运行真实 Portal 生成、完整切版及新克隆中的 squash/witness 校验，保留逐步日志。
+它不放入会被其自身调用的 npm/CTest 套件，也不请求真实发布。演练状态须以具体运行
+回执为准；脚本存在不等于完整旅程已通过，更不证明远端审查、签名或无人值守服务可用。
+快照 inventory、可变版本清单、切版暂存及 witness 使用 `apps/architecture-portal` 的
+实际 Git 路径；`apps/docs-site` 的兼容符号链接仍属于不可变来源，不能作为暂存路径。
+候选源码核验器读取私有来源、快照及切版 binding，按已记录的原始字节重建切版树；
+合入时在实际 squash 父提交上核对原候选输入，再验证候选改动完整叠加后的树。
+它保留父提交允许新增的文档，拒绝产品输入漂移、丢失父提交内容或多父 merge；后续
+main 推进不重新选择候选。此本地对象证明不替代真实 main 认证、Task 测试、独立审查、
+witness、版本分配竞争复查或完整 CI；生产授权与 review factory 仍须单独配置并验收。
+候选 PR 子控制器已复用持久化 PR 状态机，但采用独立的候选 scope 和分支 transport：
+创建和 squash 合并各只记录并发送一次，未知结果只按原请求观测，不重试写入。
+它不把分支 head 称为发布 target；必须经受信来源/Task/分配/保护检查及完整 review，
+合并后复核实际 squash。生产端和 transport 共享文档边界，候选与发布记录分支互不放行；
+正文越界在登记意图前拒绝。真实 gate factory 与线上候选验收仍未完成，
+本地 child 的 verified 不代表候选总步骤或发布已完成。
+候选分支传输已复用仅创建的 Git 协议，以原请求绑定的候选分支和完整 cut SHA 发送，
+不推送私有来源保留引用或 tag。远端竞争不覆盖，未知结果不重发，已认领后删除的分支
+不重建；Git 子进程继承 writer lock，控制进程退出也不能让另一 writer 与未结束推送
+重叠。文档超限在持久化登记前拒绝，已登记状态缺失不会重新初始化。
+它仍需要真实授权、Task/source 与版本竞争核验；分支回执不代表 PR 或候选完成。
+候选分支至 PR 的持久化子流程已连接这两个具体控制器：先登记子状态，再确认分支，
+最后创建 PR 并等待精确 head 审查及 squash 核验。远端只读观察不会推送或创建 PR；
+分支未知会阻止 PR 操作，已登记父子状态缺失不会重新初始化。实际 push / POST / PUT
+之前复查父级状态、授权与 writer，并再次检查子 writer；中断后只核对原操作结果。
+该子流程返回 merged 而非候选完成；必须继续后续 witness 父级步骤，完整测试另行核验。
+保留来源对象的工作区可用 `scripts/docs-site.sh verify-witness PRODUCT_BUILD INTRODUCING_REVISION`
+只读核验已生成的 witness：绑定实际引入提交及其 metadata，逐字比较正式生成器的预期
+产物，输出路径、长度和摘要回执，不覆盖文件或重新生成。该检查用于生成端恢复，
+不替代缺少来源对象的新克隆验收、完整快照证明或真实 main / 审查授权。
+内部命令执行器已提供有界原始输出读取：只有完整的 stdout / stderr 合并流未超限时才
+返回原始字节；超限不返回截断前缀，但仍记录实际退出码、完整输出长度和摘要。
+这只是读取核验器回执的基础接口，不等于回执有效或 witness 恢复完成；调用方仍须核验
+退出码、schema、候选身份、实际文件及授权，并持久化验证结果。
+本地 witness runner 已在原候选工作区的同一 writer lock 下连接具体来源核验器、正式
+生成及核验命令。生成前持久化登记意图，未知或失败的生成不重放；已有产物只做核验。
+恢复核对固定 squash、实际 main 祖先关系和原来源绑定，重新核验原产物，保留失败记录
+并限制核验次数。成功回执绑定核验器实际输出的字节及 canonical 文件的长度、摘要；
+原 cut 的 HEAD、index 和 tracked 文件不变。状态丢失、产物漂移或授权失效即停止。
+已确认的 witness 可在保留原 writer 的上下文中交给独立 Task 工作区；消费回执不重复执行
+生成或核验命令，也不消耗额外核验次数。Task 只添加精确 witness 文件，绑定真实引入 SHA、
+原命令历史和独立分支，在暂存及提交后分别验证；崩溃后恢复同一提交，状态丢失或来源变化即停止。
+该 Task 不改原候选 target 或快照，不推送原候选分支。witness 现有独立分支与 PR 子流程：
+只创建精确 Task 分支，绑定原回执、文件字节、Task 证据及不变候选 target；复用当前 head
+审查和 expected-head squash，持久化未知结果，恢复不重复 push、POST 或 PUT。
+见证、切版、发布记录使用互不混用的身份和状态；PR 合并后仍须核对实际 squash 与产物。
+见证来源验证器现从原始命令历史和独立 Task 绑定核验精确提交，再核验实际 squash 是其父提交
+加唯一见证文件；保留后续普通 main 更新，但拒绝见证或不可变快照的改写及改后撤回。
+核验缺失对象或状态时只报错，不自动 fetch、重生成或修改候选 target；来源证明不替代完整 Task
+命令证据、独立审查或线上保护检查。
+见证 Task 检查执行器在提交前后各运行 Portal、ownership 与原 base 的 whitespace 检查，
+将真实退出码、完整输出摘要和长度绑定到 Task／控制版本；PR 使用这份持久化证据的摘要。
+恢复只继续尚未启动的检查，已确认命令不重跑，失败或未知结果不能自动重试；子进程保留源与
+Task 两把 writer 锁，避免控制进程退出后另一个 writer 与仍存活的检查重叠。
+候选父级现接入 release driver 的具体 candidate adapter，消费已经完成上述检查的 cut，
+顺序连接候选 PR、实际 squash、官方 witness、独立工作区、见证 Task 检查和见证 PR。
+PR 的只读合并回执提供已核验的 numeric ID、number 和实际 squash SHA，不从不透明的
+evidence reference 或分支 head 猜测 target。已确认 witness 的只读恢复重验原始命令回执
+与实际产物，不重跑命令，也不消耗核验次数。独立工作区的创建及官方依赖安装入口均记录
+意图和结果；创建可按精确工作区事实恢复，未知或失败的安装不重试。父级保存前核对原始
+持久化状态，回调删除或改写状态时不重建历史；错误输出包括异常链均须清洗。
+只有两个实际 squash、原来源、不可变产物、完整 Task 命令和受信审查证明都通过，candidate
+步骤才返回成功；候选 target 始终是切版 squash，不被见证提交或普通后续 main 推进替换。
+本地候选准备层现连接原始请求、专属工作区安装、源文件生成、官方快照和切版前后六项检查，
+输出真实 source／frozen／checked-cut 回执供候选 PR 父级消费。各阶段先落盘意图，恢复时
+只读核验原始记录与实际字节；完整快照不再执行 `run()`，完整检查不再运行子命令。
+源文件写入前、索引与分支更新前均复核父级授权；切版时间在快照完成后一次固定。
+子级历史丢失或命令结果未知时停止，不通过重新登记、重装或重新生成恢复“成功”。
+这不是完整发版或生产服务验收：请求至 PR adapter 的生产 factory、真实授权/保护/
+review 接入、完整候选 CI 和发布/部署仍须逐段接通并验收。本地新克隆演练或模拟 review
+不代表线上候选或发版完成。
 父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
 私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
 不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。
@@ -162,6 +318,45 @@ publication evidence PR 的创建 POST 与合并 PUT 也在最后一次子级预
 Release、签名资产、完整 notes 与冻结候选，并在前后重新认证 exact run / attempt 及关联
 回执。运行仍在执行返回 pending，失败阻断后续步骤；仅有成功运行但 Release / 内容校验
 失败同样不会通过。发布记录摘要在 ledger 正常变为 published 后保持一致，不重复发布。
+两个 Host 的部署 effect 已可接入同一 dispatch adapter：认证原始请求回执、exact
+run / attempt、成功的 preflight / deploy 与证据上传，并核对唯一 artifact 来源与摘要。
+复用受信本地 Host 校验器，匹配冻结的 tag、target、Build、Site、发布文件与 exact prior；
+返回前复查关联、库存和期限。recovery 记录不代替成功，未知或失败不重复部署或晋级。
+这些保留证据检查本身不证明当前生产别名或线上内容。新增 live effect 将它们与实时
+Host 验证组合：固定 Site API 的只读 GET 禁止重定向和部署写接口；immutable / production
+分别复用完整 HTTP smoke，核对所有资产、安全响应头与负路径。冻结的 index / manifest
+摘要在解析清单和下载资产前比对；内容漂移不会继续下载其资产。前后回读 Site 指针，
+必须仍为冻结的 deploy ID / Site，之后再次认证原部署证据。每次恢复都重新读取网络；
+漂移或不可读阻止后续步骤，不重新部署。稳定摘要不是缓存，也不保证观察之后站点
+不会变化；这不是新一轮浏览器验收。生产候选与授权组合、prior 冻结的父级组合、最终完整
+双 Site / Release / Portal / Channel 验收及旧晋级 reader 接入仍待完成。
+两个 Host 的部署脚本在 preflight 保存完整 Site 投影，并在候选 immutable 验证后、
+公开写入前再次限时读取。身份、指针或 serving state 变化及读取失败均拒绝公开；
+此时尚未标记 publication attempted，不恢复 prior、不禁用站点、不覆盖别人的新指针。
+可能已创建的未公开 draft 不自动删除。这是写前观察保护，不是 Netlify 原子 CAS；
+末次读取后的并发窗口仍存在，全局 Site 互斥仍须接通。
+托管 Host 派发要求 `prior_site_sha256`，与原 request ID 一同冻结到 durable spec 和
+认证 workflow receipt。只读 `freeze_site` 对配置指定的 Site 执行两次一致读取，返回
+完整规范化投影及摘要；它不证明 prior 内容健康，也不提供授权。部署 preflight 比对
+摘要，变化时在创建 draft 前拒绝，不更换 prior、恢复旧状态或重发请求。空站点与
+零文件 prior 仍保留各自实际 Site 投影，不能混成同一身份。摘要采用排序键、紧凑 UTF-8
+JSON 加一个 LF 的 SHA256；两个 Host 格式一致。不带 request ID 的原手动部署保留，
+带 request ID 却缺少或提供无效摘要则拒绝。旧缺摘要回执不满足新托管输入合同，
+只能显式核对原操作，不能因此补发 workflow。部署 effect 绑定相同摘要，有 prior-good
+时还比对其实际 Site 投影；首发或零文件证据依赖认证成功 workflow 执行的写前检查，
+不把 null prior 当作空站点证明。受信父级仍须组合快照采集、原授权与持久化登记，
+恢复时不能重新冻结线上状态来替换旧摘要；这不是完整总控或无人值守验收。
+完整候选 CI 证据也使用实时 UTC：下载解析后复核有效期，并在全部校验结束前再次检查
+origin / admission / verdict 三份 artifact 的期限；任一途中到期均拒绝认证。
+已发布版本的历史 provenance 路径不读取这些临时 artifact，也不会提供新候选 verdict。
+完整 CI 的 Git provenance 读取隔离环境配置，并独立禁止全部 Git transport；即使
+partial clone 缺少对象也不会 lazy fetch，而是拒绝该次证据读取，等待可信本地对象完整。
+完整 CI 证据 ZIP 仅接受 stored / deflated 成员，逐成员限额读取并限制解压输出；
+不能只信任 ZIP 声明大小。解析后仍验证完整候选语义与摘要，这不是完整压缩尾部认证。
+Runtime / Creator 的 `deploy_orchestrator.py evidence-validate-document CONTRACT`
+提供只读证据 schema 校验：从 stdin 读取，验证成功后输出与原 writer 相同的规范 JSON，
+不写证据文件、不访问 Site。该入口只证明文档内部一致；原 run / artifact 来源、固定
+candidate / Site、线上 HTTP / browser 状态仍需由后续 effect verifier 独立认证。
 生产候选绑定、可信 context / 授权组合及两个部署 effect 的总控接入仍待完成。
 GitHub 没有 expected-head dispatch CAS，末次读取后的 main 漂移仍可能产生不同 control
 运行；该运行不得被认领为请求成功。父级请求服务、effect readiness、全局 tag / Site

@@ -3,6 +3,11 @@ name: Deploy Web Runtime Host
 on:
   workflow_dispatch:
     inputs:
+      prior_site_sha256:
+        description: Frozen canonical Site digest required for managed release requests
+        required: false
+        default: ""
+        type: string
       request_id:
         description: Optional release operation digest for correlation only
         required: false
@@ -130,6 +135,8 @@ jobs:
           NETLIFY_RUNTIME_SITE_ID: ${{ secrets.NETLIFY_RUNTIME_SITE_ID }}
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           LMDJ_RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          LMDJ_RELEASE_REQUEST_ID: ${{ inputs.request_id }}
+          LMDJ_PRIOR_SITE_SHA256: ${{ inputs.prior_site_sha256 }}
         run: |
           set -euo pipefail
           mkdir -p build/deploy/web-runtime-host

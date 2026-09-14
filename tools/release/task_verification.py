@@ -59,6 +59,36 @@ def _spec(scope):
     return result
 
 
+def verify_tracked_bytes(local, revision, *, mutable_paths=()):
+    """Compare filesystem bytes to Git objects without running clean filters."""
+    for row in filter(None, local.git("ls-tree", "-r", "-z", revision).split(b"\0")):
+        metadata, name = row.split(b"\t", 1)
+        mode, kind, oid = metadata.split(b" ")
+        relative = Path(os.fsdecode(name))
+        require(not relative.is_absolute() and ".." not in relative.parts and kind == b"blob", "tracked path or object is unsafe")
+        filename = local.root / relative
+        for parent in filename.parents:
+            if parent == local.root:
+                break
+            require(not parent.is_symlink(), "tracked parent is a symlink")
+        info = filename.lstat()
+        if mode == b"120000":
+            require(stat.S_ISLNK(info.st_mode), "tracked symlink type changed")
+            raw = os.fsencode(os.readlink(filename))
+            actual = sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
+        else:
+            require(mode in (b"100644", b"100755") and stat.S_ISREG(info.st_mode)
+                    and bool(info.st_mode & 0o111) == (mode == b"100755"), "tracked file mode changed")
+            if relative.as_posix() in mutable_paths:
+                continue
+            hasher = sha1(b"blob " + str(info.st_size).encode() + b"\0")
+            with filename.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+            actual = hasher.hexdigest()
+        require(actual == oid.decode(), "tracked bytes differ from tested tree")
+
+
 class PublicationTaskVerifier:
     def __init__(self, root, repository, *, authorize, path):
         self.root, self.repository = root, Path(repository).absolute()
@@ -80,30 +110,7 @@ class PublicationTaskVerifier:
                 and local.revision_from_index() == spec["tree_sha"], "head or index differs from tested identity")
         require(local.git("symbolic-ref", "--short", "HEAD").decode().strip() == pr_document(spec)["head"], "branch is not operation-bound")
         require(not local.git("ls-files", "--others", "--exclude-standard", "-z"), "untracked Task inputs exist")
-        for row in filter(None, local.git("ls-tree", "-r", "-z", spec["head_sha"]).split(b"\0")):
-            metadata, name = row.split(b"\t", 1)
-            mode, kind, oid = metadata.split(b" ")
-            relative = Path(os.fsdecode(name))
-            require(not relative.is_absolute() and ".." not in relative.parts and kind == b"blob", "tracked path or object is unsafe")
-            filename = self.repository / relative
-            for parent in filename.parents:
-                if parent == self.repository:
-                    break
-                require(not parent.is_symlink(), "tracked parent is a symlink")
-            info = filename.lstat()
-            if mode == b"120000":
-                require(stat.S_ISLNK(info.st_mode), "tracked symlink type changed")
-                raw = os.fsencode(os.readlink(filename))
-                actual = sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
-            else:
-                require(mode in (b"100644", b"100755") and stat.S_ISREG(info.st_mode)
-                        and bool(info.st_mode & 0o111) == (mode == b"100755"), "tracked file mode changed")
-                hasher = sha1(b"blob " + str(info.st_size).encode() + b"\0")
-                with filename.open("rb") as stream:
-                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                        hasher.update(chunk)
-                actual = hasher.hexdigest()
-            require(actual == oid.decode(), "tracked bytes differ from tested tree")
+        verify_tracked_bytes(local, spec["head_sha"])
 
     @staticmethod
     def _state(journal, scope, *, initialize=False):
@@ -185,8 +192,29 @@ class PublicationTaskVerifier:
         finally:
             os.close(fd)
 
-    def _execute(self, journal, vector, timeout):
+    def _execute(self, journal, vector, timeout, *, retained_locks=()):
+        result, _ = self._execute_output(journal, vector, timeout, capture_limit=None,
+                                        retained_locks=retained_locks)
+        return result
+
+    def _execute_capture(self, journal, vector, timeout, *, limit):
+        """Return (exit/digest/length, complete bytes or None on overflow).
+
+        This is the original combined stdout/stderr, not a validated receipt.
+        Callers must reject nonzero exits, overflow and invalid output before
+        using it, and must not persist arbitrary child output in public logs.
+        Existing execution callers remain digest-only. The temporary spool's
+        disk usage is unchanged; the limit bounds only retained memory bytes.
+        """
+        require(type(limit) is int and 1 <= limit <= MAX_STATE_BYTES,
+                "capture limit must be an integer between 1 and 65536 bytes")
+        return self._execute_output(journal, vector, timeout, capture_limit=limit)
+
+    def _execute_output(self, journal, vector, timeout, *, capture_limit, retained_locks=()):
         journal._active()
+        require(type(retained_locks) is tuple and all(type(fd) is int and fd >= 0 for fd in retained_locks),
+                "retained writer descriptors are invalid")
+        writer_fds = tuple(dict.fromkeys((journal.lock, *retained_locks)))
         with tempfile.TemporaryDirectory(prefix="lmdj-task-environment-") as directory:
             # No inherited credentials, injection settings or personal tool config.
             env = dict(PATH=self.path, HOME=directory, TMPDIR=directory, LC_ALL="C",
@@ -201,7 +229,7 @@ class PublicationTaskVerifier:
                 scratch = Path(directory) / "git"
                 initialized = subprocess.run(["git", "init", "--bare", "--template=", str(scratch)],
                     cwd=directory, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    timeout=30, pass_fds=(journal.lock,))
+                    timeout=30, pass_fds=writer_fds)
                 require(initialized.returncode == 0, "isolated whitespace repository is unavailable")
                 local = PublicationWorkspace(self.repository)
                 for setting, name in (("GIT_INDEX_FILE", "index"), ("GIT_OBJECT_DIRECTORY", "objects")):
@@ -209,7 +237,7 @@ class PublicationTaskVerifier:
                 vector = ("git", "--git-dir=" + str(scratch), *vector[1:])
             with tempfile.TemporaryFile() as output:
                 with subprocess.Popen(vector, cwd=self.repository, env=env, stdout=output,
-                        stderr=subprocess.STDOUT, pass_fds=(journal.lock,), start_new_session=True) as child:
+                        stderr=subprocess.STDOUT, pass_fds=writer_fds, start_new_session=True) as child:
                     try:
                         code = child.wait(timeout=timeout)
                     except subprocess.TimeoutExpired:
@@ -218,10 +246,17 @@ class PublicationTaskVerifier:
                         raise TaskVerificationError("why: Task command exceeded its execution budget; remedy: retain the unfinished attempt and diagnose it; no automatic rerun") from None
                 output.seek(0)
                 hasher, length = sha256(), 0
+                captured = None if capture_limit is None else bytearray()
                 for chunk in iter(lambda: output.read(1024 * 1024), b""):
                     hasher.update(chunk)
                     length += len(chunk)
-                return code, hasher.hexdigest(), length
+                    if captured is not None:
+                        if length <= capture_limit:
+                            captured.extend(chunk)
+                        else:
+                            captured = None
+                return ((code, hasher.hexdigest(), length),
+                        None if captured is None else bytes(captured))
 
     @staticmethod
     def _receipt(state):

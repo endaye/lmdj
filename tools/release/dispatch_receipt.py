@@ -17,8 +17,8 @@ from .model import canonical_json
 
 WORKFLOWS = {
     "publish-release.yml": {"tag", "release_id", "plan_sha256", "request_id"},
-    "deploy-web-runtime-host.yml": {"tag", "request_id"},
-    "deploy-creator-web.yml": {"tag", "request_id"},
+    "deploy-web-runtime-host.yml": {"tag", "request_id", "prior_site_sha256"},
+    "deploy-creator-web.yml": {"tag", "request_id", "prior_site_sha256"},
 }
 
 
@@ -28,7 +28,7 @@ class ReceiptError(ValueError):
 
 def require(value):
     if not value:
-        raise ReceiptError("why: release dispatch context is invalid; remedy: use the original exact inputs on main with a new attempt-1 dispatch; do not treat this receipt as release approval")
+        raise ReceiptError("why: release dispatch context is invalid; remedy: recover and reconcile the original frozen inputs and original attempt on trusted main; never redispatch to repair a missing or invalid receipt; this is not release approval")
 
 
 def numeric(value):
@@ -46,6 +46,8 @@ def receipt(event, env, workflow, tooling_revision):
     if workflow == "publish-release.yml":
         numeric(inputs["release_id"])
         require(re.fullmatch(r"[0-9a-f]{64}", inputs["plan_sha256"]))
+    else:
+        require(re.fullmatch(r"[0-9a-f]{64}", inputs["prior_site_sha256"]))
     repository_id = numeric(env.get("GITHUB_REPOSITORY_ID"))
     actor_id = numeric(env.get("GITHUB_ACTOR_ID"))
     run_id = numeric(env.get("GITHUB_RUN_ID"))

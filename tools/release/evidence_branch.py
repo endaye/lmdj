@@ -6,6 +6,7 @@ The caller supplies trusted authority/Task/source/protection verification.
 
 from base64 import b64encode
 from copy import deepcopy
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -33,6 +34,9 @@ def require(value, reason):
 
 
 class PublicationBranch:
+    _validate_spec = staticmethod(validate_spec)
+    _document = staticmethod(pr_document)
+
     def __init__(self, root, repository, *, token, authorize):
         self.root, self.repository = root, Path(repository)
         require(type(token) is str and bool(token) and not any(c in token for c in "\r\n\0"), "credential is unavailable")
@@ -139,7 +143,7 @@ class PublicationBranch:
         return subprocess.run(command, env=env, capture_output=True, timeout=30, pass_fds=(journal.lock,))
 
     def _observe(self, journal, scratch, spec):
-        ref = "refs/heads/" + pr_document(spec)["head"]
+        ref = "refs/heads/" + self._document(spec)["head"]
         result = self._git(journal, scratch, "ls-remote", "--refs", "--exit-code", REMOTE, ref)
         if result.returncode == 2 and result.stdout == b"":
             return "absent"
@@ -147,20 +151,79 @@ class PublicationBranch:
         require(result.stdout == f"{spec['head_sha']}\t{ref}\n".encode(), "remote ref conflicts")
         return "verified"
 
-    def advance(self, spec):
-        validate_spec(spec)
+    @contextmanager
+    def _scratch(self, journal):
+        with tempfile.TemporaryDirectory(prefix="lmdj-evidence-branch-") as directory:
+            scratch = Path(directory) / "git"
+            result = self._git(journal, scratch, "init", "--bare", "--template=", str(scratch))
+            require(result.returncode == 0, "scratch Git initialization failed")
+            yield scratch
+
+    def _evidence(self, spec):
+        return {"status":"verified", "evidence": {
+            "sha256":canonical_sha256({"spec":spec, "ref":self._document(spec)["head"]}),
+            "reference":"branch:" + self._document(spec)["head"]}}
+
+    @staticmethod
+    def _exists(journal):
+        journal._active()
+        try:
+            os.stat("branch-state.json", dir_fd=journal.directory, follow_symlinks=False)
+            return True
+        except FileNotFoundError:
+            return False
+
+    def observe(self, spec, *, initialize=False):
+        """Observe without remote writes; enroll only before the parent's intent."""
+        self._validate_spec(spec)
+        require(type(initialize) is bool, "initialization mode is invalid")
         spec = deepcopy(spec)
-        pr_document(spec)  # Reject local document limits before durable enrollment.
+        self._document(spec)
         with RequestJournal(self.root) as journal:
+            try:
+                self._authorize(spec)
+                if not initialize and not self._exists(journal):
+                    return {"status":"unknown", "evidence":None}
+                state = self._state(journal, spec)
+                if initialize:
+                    self._save(journal, state)
+                with self._scratch(journal) as scratch:
+                    observed = self._observe(journal, scratch, spec)
+                    if observed == "absent":
+                        return {"status":"unknown" if state["claimed"] else "absent", "evidence":None}
+                    # Retain adoption even if final authority or observation fails.
+                    state["claimed"] = True
+                    self._save(journal, state)
+                    self._authorize(spec)
+                    require(self._observe(journal, scratch, spec) == "verified", "remote ref disappeared")
+                    return self._evidence(spec)
+            except EvidenceBranchError:
+                raise
+            except Exception:
+                return {"status":"unknown", "evidence":None}
+
+    @staticmethod
+    def _before_write(callback):
+        if callback is not None:
+            try:
+                callback()
+            except Exception:
+                raise RuntimeError("branch parent guard unavailable") from None
+
+    def advance(self, spec, *, require_initialized=False, before_write=None):
+        self._validate_spec(spec)
+        require(type(require_initialized) is bool, "initialization requirement is invalid")
+        require(before_write is None or callable(before_write), "final parent guard is invalid")
+        spec = deepcopy(spec)
+        self._document(spec)  # Reject local document limits before durable enrollment.
+        with RequestJournal(self.root) as journal:
+            if require_initialized and not self._exists(journal):
+                return {"status":"unknown", "evidence":None}
             state = self._state(journal, spec)
             try:
                 self._authorize(spec)
                 self._save(journal, state)
-                with tempfile.TemporaryDirectory(prefix="lmdj-evidence-branch-") as directory:
-                    scratch = Path(directory) / "git"
-                    # init uses the same isolated environment; no global template.
-                    result = self._git(journal, scratch, "init", "--bare", "--template=", str(scratch))
-                    require(result.returncode == 0, "scratch Git initialization failed")
+                with self._scratch(journal) as scratch:
                     observed = self._observe(journal, scratch, spec)
                     if observed == "absent":
                         if state["claimed"]:
@@ -169,7 +232,9 @@ class PublicationBranch:
                         state["claimed"] = True
                         self._save(journal, state)
                         self._authorize(spec)
-                        ref = "refs/heads/" + pr_document(spec)["head"]
+                        ref = "refs/heads/" + self._document(spec)["head"]
+                        self._before_write(before_write)
+                        journal._active()
                         try:
                             self._git(journal, scratch, "push", "--porcelain", "--atomic",
                                       "--force-with-lease=" + ref + ":", REMOTE, spec["head_sha"] + ":" + ref)
@@ -182,9 +247,7 @@ class PublicationBranch:
                     require(self._observe(journal, scratch, spec) == "verified", "remote ref disappeared")
                     state["claimed"] = True  # Never recreate an adopted ref after deletion.
                     self._save(journal, state)
-                    return {"status": "verified", "evidence": {
-                        "sha256": canonical_sha256({"spec": spec, "ref": pr_document(spec)["head"]}),
-                        "reference": "branch:" + pr_document(spec)["head"]}}
+                    return self._evidence(spec)
             except EvidenceBranchError:
                 raise
             except Exception:

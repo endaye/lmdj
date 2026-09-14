@@ -34,6 +34,8 @@ class ReceiptTest(unittest.TestCase):
         for name, fields in WORKFLOWS.items():
             event = deepcopy(self.event)
             event["inputs"] = {k:v for k,v in event["inputs"].items() if k in fields}
+            if name != "publish-release.yml":
+                event["inputs"]["prior_site_sha256"] = "f" * 64
             env = {**self.env, "GITHUB_WORKFLOW_REF": f"endaye/lmdj/.github/workflows/{name}@refs/heads/main"}
             result = receipt(event, env, name, "e" * 40)
             self.assertEqual(result["inputs"], event["inputs"])
@@ -45,6 +47,31 @@ class ReceiptTest(unittest.TestCase):
     def test_short_main_event_ref_uses_full_platform_ref(self):
         self.event["ref"] = "main"
         self.assertEqual(self.produce()["ref"], "refs/heads/main")
+
+    def test_managed_deploy_requires_exact_digest_shape(self):
+        self.workflow = "deploy-web-runtime-host.yml"
+        self.env["GITHUB_WORKFLOW_REF"] = f"endaye/lmdj/.github/workflows/{self.workflow}@refs/heads/main"
+        self.event["inputs"] = {k:v for k,v in self.event["inputs"].items() if k in ("tag", "request_id")}
+        with self.assertRaises(ReceiptError): self.produce()
+        for value in ("", "F" * 64, "bad", 3):
+            self.event["inputs"]["prior_site_sha256"] = value
+            with self.subTest(value=value), self.assertRaises(ReceiptError): self.produce()
+        self.event["inputs"]["prior_site_sha256"] = "f" * 64
+        self.assertEqual(self.produce()["inputs"]["prior_site_sha256"], "f" * 64)
+
+    def test_deploy_workflow_passes_original_inputs_as_environment(self):
+        for name in ("deploy-web-runtime-host.yml", "deploy-creator-web.yml"):
+            source = (ROOT / ".github/workflows" / name).read_text()
+            self.assertIn("      prior_site_sha256:", source)
+            self.assertIn("LMDJ_RELEASE_REQUEST_ID: ${{ inputs.request_id }}", source)
+            self.assertIn("LMDJ_PRIOR_SITE_SHA256: ${{ inputs.prior_site_sha256 }}", source)
+
+    def test_invalid_receipt_does_not_advise_a_new_dispatch(self):
+        self.event["inputs"].pop("request_id")
+        with self.assertRaises(ReceiptError) as caught:
+            self.produce()
+        self.assertIn("never redispatch", str(caught.exception))
+        self.assertNotIn("new attempt-1 dispatch", str(caught.exception))
 
     def test_each_platform_identity_refuses_one_changed_fact(self):
         for key, value in {"GITHUB_REPOSITORY_ID":"11", "GITHUB_ACTOR_ID":"21",

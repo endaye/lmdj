@@ -59,6 +59,9 @@ def pr_document(spec):
 
 
 class EvidencePullRequest:
+    _validate_spec = staticmethod(validate_spec)
+    _document = staticmethod(pr_document)
+
     def __init__(self, root, *, api, authorize, review, verify_merged):
         """Trusted gates, not values obtained from PR text or a user plugin.
 
@@ -92,14 +95,14 @@ class EvidencePullRequest:
         require(type(main) is dict and main.get("name") == "main" and main.get("protected") is True
                 and type(main.get("commit")) is dict and sha(main["commit"].get("sha")), "main is not protected/readable")
         if branch:
-            ref = self._request("GET", "/git/ref/heads/" + pr_document(spec)["head"])
-            require(type(ref) is dict and ref.get("ref") == "refs/heads/" + pr_document(spec)["head"]
+            ref = self._request("GET", "/git/ref/heads/" + self._document(spec)["head"])
+            require(type(ref) is dict and ref.get("ref") == "refs/heads/" + self._document(spec)["head"]
                 and type(ref.get("object")) is dict and ref["object"].get("type") == "commit"
                 and ref["object"].get("sha") == spec["head_sha"], "remote Task branch differs")
 
     def _pr(self, spec, number):
         row = self._request("GET", f"/pulls/{number}")
-        document = pr_document(spec)
+        document = self._document(spec)
         require(type(row) is dict and type(row.get("number")) is int and row["number"] == number
                 and positive(row.get("id")) and row.get("html_url") == f"https://github.com/endaye/lmdj/pull/{number}"
                 and type(row.get("user")) is dict and type(row["user"].get("id")) is int
@@ -121,7 +124,7 @@ class EvidencePullRequest:
     def _find(self, spec):
         result, ids = [], set()
         for page in range(1, 101):
-            rows = self._request("GET", f"/pulls?state=all&head=endaye:{pr_document(spec)['head']}&base=main&per_page=100&page={page}")
+            rows = self._request("GET", f"/pulls?state=all&head=endaye:{self._document(spec)['head']}&base=main&per_page=100&page={page}")
             require(type(rows) is list and len(rows) <= 100, "PR inventory is invalid")
             for row in rows:
                 require(type(row) is dict and positive(row.get("number")) and row["number"] not in ids, "PR inventory repeats or lacks identity")
@@ -223,10 +226,23 @@ class EvidencePullRequest:
         missing child storage is unknown, never evidence that a POST/PUT was
         not attempted. No observation creates a PR or requests its merge.
         """
-        validate_spec(spec)
+        return self._observe(spec, initialize=initialize, include_merge=False)
+
+    def observe_merge(self, spec):
+        """GET-only actual merge identity, gated identically to observation.
+
+        Consumers must not recover a candidate target by parsing the gate's
+        opaque evidence reference or by treating the branch head as its squash.
+        No enrollment is performed and unverified results expose no merge facts.
+        """
+        result = self._observe(spec, initialize=False, include_merge=True)
+        return dict(result, merge=result.get("merge"))
+
+    def _observe(self, spec, *, initialize, include_merge):
+        self._validate_spec(spec)
         require(type(initialize) is bool, "initialization mode is invalid")
         spec = deepcopy(spec)
-        pr_document(spec)  # Deterministic local refusal must precede durable intent.
+        self._document(spec)  # Deterministic local refusal must precede durable intent.
         with RequestJournal(self.root) as journal:
             try:
                 self._authorize(spec, branch=False)
@@ -248,9 +264,17 @@ class EvidencePullRequest:
                     return {"status": gate.status, "evidence": None}
                 self._authorize(spec, branch=False)
                 latest = self._pr(spec, row["number"])
-                require(latest["merged"] and latest["merge_commit_sha"] == row["merge_commit_sha"]
+                require(latest["merged"] and latest["id"] == row["id"]
+                        and latest["number"] == row["number"]
+                        and latest["merge_commit_sha"] == row["merge_commit_sha"]
                         and state["merge_sha"] in (None, latest["merge_commit_sha"]), "merged identity changed during observation")
-                return {"status": "verified", "evidence": gate.evidence}
+                journal._active()
+                require(self._state(journal, spec) == state, "PR state changed during observation")
+                result = {"status": "verified", "evidence": gate.evidence}
+                if include_merge:
+                    result["merge"] = {"id":latest["id"], "number":latest["number"],
+                        "head_sha":spec["head_sha"], "merge_sha":latest["merge_commit_sha"]}
+                return result
             except EvidencePrError:
                 raise
             except Exception:
@@ -266,11 +290,11 @@ class EvidencePullRequest:
                 raise RuntimeError("release PR parent guard unavailable") from None
 
     def advance(self, spec, *, require_initialized=False, before_write=None):
-        validate_spec(spec)
+        self._validate_spec(spec)
         require(type(require_initialized) is bool, "initialization requirement is invalid")
         require(before_write is None or callable(before_write), "final parent guard is invalid")
         spec = deepcopy(spec)
-        pr_document(spec)  # Both entry points preflight before any enrollment.
+        self._document(spec)  # Both entry points preflight before any enrollment.
         with RequestJournal(self.root) as journal:
             if require_initialized:
                 try:
@@ -297,7 +321,7 @@ class EvidencePullRequest:
                     self._before_write(before_write)
                     journal._active()
                     try:
-                        self._request("POST", "/pulls", pr_document(spec))
+                        self._request("POST", "/pulls", self._document(spec))
                     except Exception:
                         pass  # ACK or error is not proof; never repeat the POST.
                     row = self._find(spec)

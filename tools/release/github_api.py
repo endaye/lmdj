@@ -24,10 +24,24 @@ class GitHubApiError(RuntimeError):
 
 def valid_release_pr_document(document) -> bool:
     """Pure POST preflight shared by the producer and the actual transport."""
+    return _valid_task_pr_document(document, r"docs/release-evidence-[0-9a-f]{64}")
+
+
+def valid_candidate_pr_document(document) -> bool:
+    """Same bounded document contract, with a disjoint candidate branch scope."""
+    return _valid_task_pr_document(document, r"feat/release-candidate-[0-9a-f]{64}")
+
+
+def valid_witness_pr_document(document) -> bool:
+    """Witness-only follow-up; never reuse allocation/publication branches."""
+    return _valid_task_pr_document(document, r"docs/release-witness-[0-9a-f]{64}")
+
+
+def _valid_task_pr_document(document, branch) -> bool:
     return (type(document) is dict
             and set(document) == {"title", "body", "head", "base", "draft", "maintainer_can_modify"}
             and type(document.get("head")) is str
-            and re.fullmatch(r"docs/release-evidence-[0-9a-f]{64}", document["head"]) is not None
+            and re.fullmatch(branch, document["head"]) is not None
             and document.get("base") == "main" and document.get("draft") is False
             and document.get("maintainer_can_modify") is False
             and all(type(document.get(k)) is str and 0 < len(document[k]) <= 20000
@@ -596,9 +610,19 @@ class GitHubClient:
 
     def release_pr_request(self, method: str, suffix: str, document=None) -> object:
         """Narrow evidence-PR transport; no admin, auto-merge or branch writes."""
+        return self._task_pr_request(method, suffix, document, r"docs/release-evidence-[0-9a-f]{64}")
+
+    def candidate_pr_request(self, method: str, suffix: str, document=None) -> object:
+        """Candidate-only PR routes; publication branch scope stays unchanged."""
+        return self._task_pr_request(method, suffix, document, r"feat/release-candidate-[0-9a-f]{64}")
+
+    def witness_pr_request(self, method: str, suffix: str, document=None) -> object:
+        """Closed witness PR routes; no new kind of mutation is authorized."""
+        return self._task_pr_request(method, suffix, document, r"docs/release-witness-[0-9a-f]{64}")
+
+    def _task_pr_request(self, method, suffix, document, branch):
         if type(method) is not str or type(suffix) is not str:
             raise GitHubApiError("why: release PR request identity is invalid; remedy: use the exact evidence PR controller")
-        branch = r"docs/release-evidence-[0-9a-f]{64}"
         number = r"[1-9][0-9]*"
         page = r"(?:[1-9]|[1-9][0-9]|100)"
         valid = False
@@ -608,7 +632,7 @@ class GitHubClient:
                      or re.fullmatch(rf"/pulls/{number}", suffix)
                      or re.fullmatch(rf"/pulls\?state=all&head=endaye:{branch}&base=main&per_page=100&page={page}", suffix))
         elif method == "POST" and suffix == "/pulls" and type(document) is dict:
-            valid = valid_release_pr_document(document)
+            valid = _valid_task_pr_document(document, branch)
         elif method == "PUT" and re.fullmatch(rf"/pulls/{number}/merge", suffix) and type(document) is dict:
             valid = set(document) == {"sha", "merge_method"} and _sha(document.get("sha")) and document.get("merge_method") == "squash"
         if not valid:

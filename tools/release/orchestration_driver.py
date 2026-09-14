@@ -75,10 +75,14 @@ class ReleaseDriver:
     its own durable POST/PUT intents still forbid unknown-write replay.
     """
 
-    def __init__(self, root, policy: OrchestrationPolicy, backend: TransitionBackend, *, publication_pr=None, dispatches=()):
+    def __init__(self, root, policy: OrchestrationPolicy, backend: TransitionBackend, *, publication_pr=None, dispatches=(), candidate=None):
         # Deferred import avoids the PR controller's Observation import cycle.
         from .evidence_pr_transition import EvidencePrTransition
         from .dispatch_transition import DispatchTransition
+        from .candidate_transition import CandidateTransition
+        if candidate is not None and type(candidate) is not CandidateTransition:
+            raise JournalError("why: unsupported managed candidate; remedy: use the concrete checked-cut and witness transition, not an arbitrary retry callback")
+        self.candidate = candidate
         if publication_pr is not None and type(publication_pr) is not EvidencePrTransition:
             raise JournalError("why: unsupported managed release adapter; remedy: use the concrete publication PR transition, not an arbitrary retry callback")
         self.root, self.policy, self.backend = root, policy, backend
@@ -89,17 +93,31 @@ class ReleaseDriver:
         self.dispatches = {item.step:item for item in dispatches}
 
     def _managed(self, operation):
+        if operation["step"] == "candidate":
+            return self.candidate
         return self.publication_pr if operation["step"] == "published_record" else self.dispatches.get(operation["step"])
 
     def run(self, request: dict) -> DriveResult:
         with RequestJournal(self.root) as journal:
             self._authenticate(request)
-            state = journal.create(request)
+            state = journal.resolve_active(request)
+            if state is None:
+                state = journal.create(request)
+            else:
+                # Incoming authority does not renew or replace the original
+                # grant. All adapters and operations stay bound to this state.
+                self._authenticate(state["request"])
+                journal.bind_alias(request, state)
             return self._advance(journal, state)
 
     def resume(self, request_id: str) -> DriveResult:
         with RequestJournal(self.root) as journal:
-            state = journal.read(request_id)
+            alias = journal.read_alias(request_id)
+            if alias is not None:
+                self._authenticate(alias["request"])
+                state = journal.resolve_active(alias["request"])
+            else:
+                state = journal.read(request_id)
             if state is None:
                 raise JournalError("why: request is missing; remedy: use the original request ID")
             self._authenticate(state["request"])

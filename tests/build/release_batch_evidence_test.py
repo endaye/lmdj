@@ -8,12 +8,18 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import io
 import json
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import subprocess
+import struct
 import sys
 import tempfile
+import threading
 import unittest
+from unittest.mock import patch
 import zipfile
+import zlib
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -34,6 +40,120 @@ def zipped(documents):
 
 
 class BatchReleaseEvidenceTest(unittest.TestCase):
+    def test_ambient_git_dir_cannot_rebind_provenance(self):
+        self.assertEqual(self.reader.git("rev-parse", "HEAD").decode().strip(), self.control)
+        with tempfile.TemporaryDirectory() as directory:
+            subprocess.run(["git", "init", "--bare", "-q", directory], check=True)
+            with patch.dict(os.environ, {"GIT_DIR": directory}):
+                self.assertEqual(self.reader.git("rev-parse", "HEAD").decode().strip(), self.control)
+
+    def test_partial_clone_cannot_lazy_fetch_missing_provenance(self):
+        oid = self.git("rev-parse", "HEAD:scripts/ci/scope_policy.json")
+        with tempfile.TemporaryDirectory() as directory:
+            bare, partial = Path(directory) / "remote.git", Path(directory) / "partial"
+            def git(*args):
+                return subprocess.run(["git", *map(str, args)], check=True, capture_output=True, text=True).stdout
+            git("clone", "--bare", self.root, bare)
+            git("-C", bare, "config", "uploadpack.allowFilter", "true")
+            git("clone", "--filter=blob:none", "--no-checkout", bare.as_uri(), partial)
+            self.assertIn("?" + oid, git("-C", partial, "rev-list", "--objects", "--all", "--missing=print"))
+            requests = []
+            class Reject(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    requests.append(self.path)
+                    self.send_error(500)
+                def log_message(self, *args):
+                    pass
+            server = HTTPServer(("127.0.0.1", 0), Reject)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                git("-C", partial, "remote", "set-url", "origin", f"http://127.0.0.1:{server.server_port}/remote.git")
+                env = {k: v for k, v in os.environ.items() if k in ("PATH", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP")}
+                env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GIT_ALLOW_PROTOCOL="http", GIT_TERMINAL_PROMPT="0")
+                baseline = subprocess.run(["git", "-C", str(partial), "cat-file", "blob", oid],
+                                          env=env, capture_output=True, timeout=10)
+                self.assertNotEqual(baseline.returncode, 0)
+                self.assertTrue(requests)
+                requests.clear()
+                self.reader.root = partial
+                execute = subprocess.run
+                def legacy_git(*args, **kwargs):
+                    # Preserve real Git transport behavior even on versions
+                    # that support the optional no-lazy-fetch environment flag.
+                    kwargs["env"] = dict(kwargs.get("env", os.environ))
+                    kwargs["env"].pop("GIT_NO_LAZY_FETCH", None)
+                    return execute(*args, **kwargs)
+                with patch.object(consumer.subprocess, "run", side_effect=legacy_git):
+                    with self.assertRaises(consumer.BatchEvidenceError):
+                        self.reader.git("cat-file", "blob", oid)
+                self.assertEqual(requests, [])
+                self.assertIn("?" + oid, git("-C", partial, "rev-list", "--objects", "--all", "--missing=print"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
+
+    def live_clock(self):
+        class Clock(datetime):
+            current=(2026,9,8)
+            @classmethod
+            def now(cls,tz=None):return cls(*cls.current,tzinfo=tz)
+        mocked=patch.object(consumer,"datetime",Clock)
+        mocked.start();self.addCleanup(mocked.stop)
+        self.reader=consumer.BatchEvidenceConsumer(api_get=self.get,git_root=self.root,repository="endaye/lmdj",
+            repository_id=11,workflow_id=7,producer_revision=self.control)
+        return Clock
+
+    def test_reused_reader_refuses_expired_complete_candidate(self):
+        clock=self.live_clock()
+        self.assertEqual(self.verify(),self.verdict)
+        clock.current=(2026,10,8)
+        self.rejected("expired",code="unverifiable")
+
+    def test_artifact_expiry_during_download_is_refused(self):
+        clock=self.live_clock()
+        self.assertEqual(self.verify(),self.verdict)
+        original=self.reader.api_get
+        def download(path,*,raw=False):
+            result=original(path,raw=raw)
+            if path.endswith("/artifacts/3/zip"):clock.current=(2026,10,8)
+            return result
+        self.reader.api_get=download
+        self.rejected("expired",code="unverifiable")
+
+    def test_earlier_origin_expiry_during_later_valid_download_is_refused(self):
+        clock=self.live_clock()
+        self.artifacts[101][0]["expires_at"]="2026-09-09T00:00:00Z"
+        self.assertEqual(self.verify(),self.verdict)
+        original=self.reader.api_get
+        def download(path,*,raw=False):
+            result=original(path,raw=raw)
+            if path.endswith("/artifacts/3/zip"):clock.current=(2026,9,9)
+            return result
+        self.reader.api_get=download
+        self.rejected("expired",code="unverifiable")
+
+    def test_expiry_during_final_job_validation_is_refused(self):
+        clock=self.live_clock()
+        self.assertEqual(self.verify(),self.verdict)
+        original=shared.validate_job_observations
+        def validate(*args):
+            result=original(*args)
+            clock.current=(2026,10,8)
+            return result
+        with patch.object(shared,"validate_job_observations",validate):
+            self.rejected("expired",code="unverifiable")
+
+    def test_published_history_keeps_provenance_only_after_retention(self):
+        clock=self.live_clock()
+        self.assertEqual(self.verify(),self.verdict)
+        clock.current=(2026,10,8)
+        self.calls.clear()
+        verdict,run=self.reader.verify_run(self.ref,run_id=102,target_revision=self.control,published=True)
+        self.assertIsNone(verdict);self.assertEqual(run["id"],102)
+        self.assertTrue(all("/artifacts" not in path for path,_ in self.calls))
+
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -229,6 +349,49 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
     def test_incomplete_pagination_is_external_error(self):
         self.routes[self.prefix + "/actions/runs/102/attempts/1/jobs?per_page=100&page=1"]["total_count"] += 1
         self.rejected("declared total", "external-error")
+
+    def test_forged_zip_metadata_cannot_request_unbounded_decode(self):
+        self.assertEqual(self.verify(), self.verdict)
+        prefix = json.dumps(self.origin_snapshot).encode()
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("result.json", prefix + b" " * (8 * consumer.MAX_BYTES))
+        forged = bytearray(output.getvalue())
+        central = forged.index(b"PK\x01\x02")
+        for offset in (14, central + 16):
+            struct.pack_into("<I", forged, offset, zlib.crc32(prefix))
+        for offset in (22, central + 24):
+            struct.pack_into("<I", forged, offset, len(prefix))
+        self.downloads[1] = bytes(forged)
+        self.artifacts[101][0]["size_in_bytes"] = len(forged)
+        self.assertLess(len(forged), consumer.MAX_BYTES)
+        factory = zipfile._get_decompressor
+        observed = []
+        class RecordingDecompressor:
+            def __init__(self, inner):
+                self.inner = inner
+            def __getattr__(self, name):
+                return getattr(self.inner, name)
+            def decompress(self, data, max_length=0):
+                result = self.inner.decompress(data, max_length)
+                observed.append((max_length, len(result)))
+                return result
+        with patch.object(zipfile, "_get_decompressor", side_effect=lambda *a: RecordingDecompressor(factory(*a))):
+            self.assertEqual(self.verify(), self.verdict)
+        self.assertTrue(observed)
+        self.assertTrue(all(0 < limit <= consumer.MAX_BYTES + 1 and size <= consumer.MAX_BYTES + 1
+                            for limit, size in observed), observed)
+
+    def test_zip_compression_without_bounded_decoder_is_refused(self):
+        self.assertEqual(self.verify(), self.verdict)
+        for compression in (zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA):
+            with self.subTest(compression=compression):
+                output = io.BytesIO()
+                with zipfile.ZipFile(output, "w", compression=compression) as archive:
+                    archive.writestr("result.json", json.dumps(self.origin_snapshot))
+                self.downloads[1] = output.getvalue()
+                self.artifacts[101][0]["size_in_bytes"] = len(self.downloads[1])
+                self.rejected("compression does not support bounded decoding")
 
     def test_bad_zip_is_conflict(self):
         self.downloads[3] = b"invalid ZIP"

@@ -259,18 +259,22 @@ class RequestJournal(AbstractContextManager):
             _fail("journal is open for reading only")
         _validate_state(state)
         encoded = self._encode(state)
-        if len(encoded) > _MAX_BYTES:
+        self._write(state["request"]["id"] + ".json", encoded)
+
+    def _write(self, filename, raw):
+        self._active()
+        if len(raw) > _MAX_BYTES:
             _fail("journal exceeds size limit")
         temporary = ".pending-" + uuid.uuid4().hex
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                      0o600, dir_fd=self.directory)
         try:
             with os.fdopen(fd, "wb", closefd=False) as output:
-                output.write(encoded)
+                output.write(raw)
                 output.flush()
                 os.fsync(fd)
             self._active()
-            os.replace(temporary, state["request"]["id"] + ".json",
+            os.replace(temporary, filename,
                        src_dir_fd=self.directory, dst_dir_fd=self.directory)
             os.fsync(self.directory)
         finally:
@@ -280,9 +284,124 @@ class RequestJournal(AbstractContextManager):
             except FileNotFoundError:
                 pass
 
+    def read_alias(self, request_id):
+        self._active()
+        if not _match(_ID, request_id):
+            _fail("invalid alias request ID")
+        try:
+            fd = os.open(request_id + ".alias", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         dir_fd=self.directory)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            _fail("request alias is unsafe or unavailable")
+        try:
+            self._private(fd)
+            with os.fdopen(fd, "rb", closefd=False) as source:
+                raw = source.read(_MAX_BYTES + 1)
+            if len(raw) > _MAX_BYTES:
+                _fail("request alias exceeds size limit")
+            envelope = json.loads(raw, object_pairs_hook=_pairs)
+            _keys(envelope, ("alias", "sha256"))
+            alias = envelope["alias"]
+            _keys(alias, ("schema", "request", "original_id", "original_digest"))
+            validate_request(alias["request"])
+            if (alias["schema"] != "lmdj.release-request-alias.v1"
+                    or alias["request"]["id"] != request_id
+                    or not _match(_ID, alias["original_id"])
+                    or alias["original_id"] == request_id
+                    or not _match(_DIGEST, alias["original_digest"])
+                    or envelope["sha256"] != canonical_sha256(alias)
+                    or raw != canonical_json(envelope)):
+                _fail("request alias identity or canonical content differs")
+            original = self.read(alias["original_id"])
+            if original is None or original["request_digest"] != alias["original_digest"]:
+                _fail("request alias original is missing or changed")
+            if self.read(request_id) is not None:
+                _fail("request ID is both an alias and an original")
+            fields = ("repository", "actor_id", "policy_digest", "control_revision", "mode", "requested_tag")
+            if any(alias["request"][k] != original["request"][k] for k in fields):
+                _fail("request alias scope differs from original")
+            return alias
+        except (ValueError, UnicodeError):
+            _fail("request alias JSON is malformed")
+        finally:
+            os.close(fd)
+
+    def bind_alias(self, request, original):
+        self._active()
+        validate_request(request)
+        _validate_state(original)
+        if request["id"] == original["request"]["id"]:
+            return
+        if self.resolve_active(request) != original:
+            _fail("request alias admission changed")
+        alias = {"schema":"lmdj.release-request-alias.v1", "request":deepcopy(request),
+                 "original_id":original["request"]["id"], "original_digest":original["request_digest"]}
+        existing = self.read_alias(request["id"])
+        if existing is not None:
+            if existing != alias:
+                _fail("request alias cannot be rebound")
+            return
+        self._write(request["id"] + ".alias",
+                    canonical_json({"alias":alias, "sha256":canonical_sha256(alias)}))
+
+    def resolve_active(self, request):
+        """Read-only admission under the writer lock; never replace authority."""
+        self._active()
+        validate_request(request)
+        alias = self.read_alias(request["id"])
+        if alias is not None and alias["request"] != request:
+            _fail("alias request ID cannot be rebound to another scope")
+        existing = self.read(request["id"])
+        if existing is not None:
+            if existing["request"] != request:
+                _fail("request ID cannot be rebound to another scope")
+        active = []
+        names = sorted(os.listdir(self.directory))
+        for name in names:
+            if name.endswith(".alias"):
+                if self.read_alias(name[:-6]) is None:
+                    _fail("alias inventory changed during admission")
+                continue
+            if not name.endswith(".json"):
+                continue
+            state = self.read(name[:-5])
+            if state is None:
+                _fail("request inventory changed during admission")
+            records = state["transitions"]
+            complete = len(records) == len(STEPS) and records[-1]["status"] == "verified"
+            if state["request"]["repository"] == request["repository"] and not complete:
+                active.append(state)
+        self._active()
+        if sorted(os.listdir(self.directory)) != names:
+            _fail("request inventory changed during admission")
+        if len(active) > 1:
+            _fail("unfinished release inventory is ambiguous")
+        if alias is not None:
+            if self.read_alias(request["id"]) != alias:
+                _fail("request alias changed during admission")
+            return self.read(alias["original_id"])
+        if existing is not None:
+            if self.read(request["id"]) != existing:
+                _fail("original release changed during admission")
+            return existing
+        if not active:
+            return None
+        original = active[0]
+        fields = ("repository", "actor_id", "policy_digest", "control_revision",
+                  "mode", "requested_tag")
+        if any(original["request"][key] != request[key] for key in fields):
+            _fail("unfinished release belongs to another scope")
+        if self.read(original["request"]["id"]) != original:
+            _fail("original release changed during admission")
+        return original
+
     def create(self, request):
         self._active()
         validate_request(request)
+        if self.read_alias(request["id"]) is not None:
+            _fail("alias ID must resume its original request, not create a release")
         existing = self.read(request["id"])
         if existing is not None:
             if existing["request"] != request:
