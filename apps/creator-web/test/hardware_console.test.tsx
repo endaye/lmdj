@@ -46,15 +46,15 @@ test("names Figma 15 physical keys on the control panel", () => {
   for (const name of [
     "Project", "Sample", "Sequence", "Perform",
     "Bank A", "Bank B", "Bank C", "Bank D",
-    "Record",
   ]) {
     expect(screen.getByRole("button", {name}).textContent).toBe(
       name.startsWith("Bank ") ? name.slice(-1) : name,
     );
   }
+  expect(screen.getByRole("button", {name: "Record"}).textContent).toBe("●");
   expect(screen.getByRole("button", {
     name: "Play — Pattern Play requires global Pattern transport",
-  }).textContent).toBe("Play");
+  }).textContent).toBe("▶");
   expect(screen.getByRole("group", {name: "Encoders"})).toBeTruthy();
   expect(screen.getAllByRole("button", {
     name: /Encoder \d — unassigned until hardware mapping is approved/,

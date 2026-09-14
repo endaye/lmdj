@@ -682,10 +682,16 @@ button:disabled { color: #737b87; }
 .physical-key[aria-label^="Record —"] {
   color: #f25f5c;
   border-color: #f25f5c;
+  font-size: 14px;
+  line-height: 1;
+  white-space: nowrap;
 }
 .physical-key[aria-label^="Play"] {
   color: #c8f04d;
   border-color: #c8f04d;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
 }
 .overview-display {
   display: grid;
