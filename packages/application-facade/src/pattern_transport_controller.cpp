@@ -142,15 +142,36 @@ foundation::Result<void> PatternTransportCoordinator::apply_receipt(
          "Pattern transport receipt was not acknowledged"});
   }
   if (closing) {
-    const auto closed = owner_.close(
-        {std::nullopt, project_io::SequenceAdmissionCloseReason::requested});
-    if (!closed.has_value()) return closed;
-    recording_ = false;
+    close_pending_ = true;
+    return finish_close();
   }
   return foundation::Result<void>::success();
 }
 
+foundation::Result<void> PatternTransportCoordinator::finish_close() {
+  const auto closed = owner_.close(
+      {std::nullopt, project_io::SequenceAdmissionCloseReason::requested});
+  if (!closed.has_value()) return closed;
+  recording_ = false;
+  close_pending_ = false;
+  return foundation::Result<void>::success();
+}
+
 foundation::Result<void> PatternTransportCoordinator::continue_operation() {
+  if (close_pending_ && pending_) {
+    const auto closed = finish_close();
+    if (!closed.has_value()) {
+      error_ = closed.error();
+      phase_ = PatternTransportPhase::flushing;
+      return closed;
+    }
+    error_.reset();
+    retained_.insert_or_assign(pending_->command_id, *pending_);
+    last_ = pending_;
+    pending_.reset();
+    phase_ = PatternTransportPhase::idle;
+    return foundation::Result<void>::success();
+  }
   if (!pending_ || phase_ != PatternTransportPhase::awaiting_audio) {
     return foundation::Result<void>::success();
   }
@@ -160,7 +181,8 @@ foundation::Result<void> PatternTransportCoordinator::continue_operation() {
   const auto applied = apply_receipt(*receipt, *pending_);
   if (!applied.has_value()) {
     error_ = applied.error();
-    phase_ = PatternTransportPhase::error;
+    phase_ = close_pending_ ? PatternTransportPhase::flushing
+                            : PatternTransportPhase::awaiting_audio;
     return applied;
   }
   retained_.insert_or_assign(pending_->command_id, *pending_);

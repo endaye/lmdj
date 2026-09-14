@@ -46,6 +46,7 @@ class PatternTransportCoordinator {
   foundation::Result<void> apply_receipt(
       const audio::PatternTransportReceipt& receipt,
       const PatternTransportRequest& request);
+  foundation::Result<void> finish_close();
 
   PatternTransportAudioPort& audio_;
   PatternAdmissionOwner owner_;
@@ -61,6 +62,7 @@ class PatternTransportCoordinator {
   std::map<foundation::CommandId, PatternTransportRequest> retained_;
   PatternTransportPhase phase_{PatternTransportPhase::idle};
   std::optional<foundation::Error> error_;
+  bool close_pending_{};
 };
 
 }  // namespace lmdj::facade::detail

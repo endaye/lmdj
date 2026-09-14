@@ -4,14 +4,18 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <unistd.h>
+#include <vector>
 
 #include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/domain/project.hpp>
 #include <lmdj/facade/pattern_transport_ports.hpp>
+#include <lmdj/foundation/error.hpp>
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
+#include <lmdj/project_io/storage_platform.hpp>
 
 #include "packages/application-facade/src/pattern_transport_controller.hpp"
 #include "tests/core/support/test.hpp"
@@ -126,7 +130,71 @@ struct EnginePort final : PatternTransportAudioPort {
   }
 };
 
+class FailingAppendStorage final : public lmdj::project_io::ProjectStoragePlatform {
+ public:
+  std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner =
+      lmdj::project_io::make_default_project_storage_platform();
+  int fail_appends = 0;
+
+  lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path& path) override {
+    return inner->acquire_writer(path);
+  }
+  lmdj::foundation::Result<void> ensure_directory(
+      const std::filesystem::path& path) override {
+    return inner->ensure_directory(path);
+  }
+  lmdj::foundation::Result<bool> exists(
+      const std::filesystem::path& path) const override {
+    return inner->exists(path);
+  }
+  lmdj::foundation::Result<std::uint64_t> byte_length(
+      const std::filesystem::path& path) const override {
+    return inner->byte_length(path);
+  }
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(
+      const std::filesystem::path& path) const override {
+    return inner->read_complete(path);
+  }
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return inner->create_immutable(path, bytes);
+  }
+  lmdj::foundation::Result<void> replace_complete(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return inner->replace_complete(path, bytes);
+  }
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& path, std::uint64_t prefix,
+      std::span<const std::byte> bytes) override {
+    if (fail_appends > 0) {
+      --fail_appends;
+      return lmdj::foundation::Result<void>::failure(
+          {lmdj::foundation::ErrorCode::io_error,
+           "injected admission append failure",
+           {{"journal_retained", true}}});
+    }
+    return inner->append_durable(path, prefix, bytes);
+  }
+  lmdj::foundation::Result<void> remove(
+      const std::filesystem::path& path) override {
+    return inner->remove(path);
+  }
+  lmdj::foundation::Result<std::vector<std::string>> list_names(
+      const std::filesystem::path& path) const override {
+    return inner->list_names(path);
+  }
+  lmdj::foundation::Result<void> validate_managed_tree(
+      const std::filesystem::path& path) const override {
+    return inner->validate_managed_tree(path);
+  }
+};
+
 struct Fixture {
+  std::shared_ptr<FailingAppendStorage> platform{
+      std::make_shared<FailingAppendStorage>()};
   TempDirectory directory;
   lmdj::project_io::ProjectStore store;
   std::filesystem::path bundle;
@@ -138,6 +206,7 @@ struct Fixture {
 
   Fixture()
       : bundle(directory.path() / "project.lmdj"),
+        journals(platform),
         coordinator(audio, journals, bundle, session, ProjectId{kProject},
                     pattern, 7) {
     auto created = lmdj::domain::create_project(ProjectId{kProject}, 120);
@@ -288,6 +357,26 @@ void recording_stop_retains_cutoff_before_ack() {
   LMDJ_CHECK(!f.coordinator.inspect().playing);
   LMDJ_CHECK(!f.coordinator.inspect().recording);
 }
+
+void close_failure_after_ack_keeps_audio_and_retries() {
+  Fixture f;
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  f.audio.before_ack = [&] { f.platform->fail_appends = 1; };
+  const auto stop = f.make(7, 2, PatternTransportIntent::play_stop);
+  LMDJ_CHECK(f.coordinator.request(stop) == PatternTransportSubmit::accepted);
+  f.audio.render(1);
+  LMDJ_CHECK(!f.coordinator.continue_operation().has_value());
+  const auto failed = f.coordinator.inspect();
+  LMDJ_CHECK(!failed.playing);
+  LMDJ_CHECK(failed.recording);
+  LMDJ_CHECK(failed.phase == PatternTransportPhase::flushing);
+  LMDJ_CHECK(f.coordinator.request(stop) == PatternTransportSubmit::replayed);
+  LMDJ_CHECK(f.coordinator.continue_operation().has_value());
+  const auto recovered = f.coordinator.inspect();
+  LMDJ_CHECK(!recovered.playing);
+  LMDJ_CHECK(!recovered.recording);
+  LMDJ_CHECK(recovered.phase == PatternTransportPhase::idle);
+}
 }  // namespace
 
 int main() {
@@ -302,7 +391,8 @@ int main() {
     earlier_command_does_not_toggle_after_a_later_one();
     wrong_session_or_project_is_invalid();
     recording_stop_retains_cutoff_before_ack();
-    std::cout << "pattern transport tests: PASS (10 scenarios)\n";
+    close_failure_after_ack_keeps_audio_and_retries();
+    std::cout << "pattern transport tests: PASS (11 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
