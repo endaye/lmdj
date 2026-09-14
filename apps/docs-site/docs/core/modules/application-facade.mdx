@@ -52,7 +52,8 @@ admission fence 之后才保留 post-enqueue 候选，fence 前、closure 后与
 并可经 T0 执行端口提交。内部 `PatternTransportCoordinator` 按六格表解析
 Play/Stop 与 Record：只播放不建 journal；停止态 Record 用 start 收据激活
 admission；播放中 Record 用 fence 且 origin 不变；录音中 Record 关闭准入并保持
-播放；录音中 Play/Stop 先停调度再关闭准入。它仍不是公开 Host API、Creator
+播放；录音中 Play/Stop 先停调度再关闭准入。请求校验 session/project；关闭录音时先耐久 cutoff 再 acknowledge 收据。
+它仍不是公开 Host API、Creator
 opt-in、settings/rebase、switch 段或未知 cutoff 恢复。测试用生产
 `RealtimeEngine` 收据，不是 Creator 或听感验收。
 同一生产转换函数已有 native 进程终止及 Chromium/独立 WebKit OPFS 回应丢失后

@@ -28,7 +28,7 @@ PatternTransportCoordinator::PatternTransportCoordinator(
     foundation::ProjectId project, foundation::PatternId pattern,
     std::uint64_t runtime_generation)
     : audio_(audio), owner_(journals, std::move(bundle), session),
-      project_(std::move(project)),
+      session_(session), project_(std::move(project)),
       pattern_(std::move(pattern)), runtime_generation_(runtime_generation) {}
 
 audio::PatternTransportAction PatternTransportCoordinator::audio_action(
@@ -63,6 +63,9 @@ PatternTransportSubmit PatternTransportCoordinator::request(
   if (request.runtime_generation != runtime_generation_ ||
       !domain::is_valid_uuid(request.command_id.value())) {
     return PatternTransportSubmit::stale;
+  }
+  if (request.session != session_ || request.project_id != project_) {
+    return PatternTransportSubmit::invalid;
   }
   if (pending_) {
     return *pending_ == request ? PatternTransportSubmit::replayed
@@ -130,10 +133,6 @@ foundation::Result<void> PatternTransportCoordinator::apply_receipt(
     const auto cut = owner_.cutoff(fence_from(
         receipt, project_io::SequenceFenceKind::cutoff, request.command_id));
     if (!cut.has_value()) return cut;
-    const auto closed = owner_.close(
-        {std::nullopt, project_io::SequenceAdmissionCloseReason::requested});
-    if (!closed.has_value()) return closed;
-    recording_ = false;
   }
   playing_ = receipt.playing;
   origin_frame_ = receipt.origin_frame;
@@ -141,6 +140,12 @@ foundation::Result<void> PatternTransportCoordinator::apply_receipt(
     return foundation::Result<void>::failure(
         {foundation::ErrorCode::invalid_argument,
          "Pattern transport receipt was not acknowledged"});
+  }
+  if (closing) {
+    const auto closed = owner_.close(
+        {std::nullopt, project_io::SequenceAdmissionCloseReason::requested});
+    if (!closed.has_value()) return closed;
+    recording_ = false;
   }
   return foundation::Result<void>::success();
 }
