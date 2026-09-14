@@ -54,6 +54,8 @@ class PatternTransportCoordinator {
   foundation::Result<void> finish_close();
 
   PatternTransportAudioPort& audio_;
+  project_io::SequenceJournal& journals_;
+  std::filesystem::path bundle_;
   PatternAdmissionOwner owner_;
   project_io::ProjectStore& store_;
   foundation::SequenceSessionId session_;

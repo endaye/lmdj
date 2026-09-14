@@ -39,7 +39,8 @@ PatternTransportCoordinator::PatternTransportCoordinator(
     project_io::ProjectStore& store, std::filesystem::path bundle,
     foundation::SequenceSessionId session, foundation::ProjectId project,
     foundation::PatternId pattern, std::uint64_t runtime_generation)
-    : audio_(audio), owner_(journals, std::move(bundle), session), store_(store),
+    : audio_(audio), journals_(journals), bundle_(bundle),
+      owner_(journals, bundle, session), store_(store),
       session_(session), project_(std::move(project)),
       pattern_(std::move(pattern)), runtime_generation_(runtime_generation),
       last_pattern_generation_(audio.pattern_generation()) {}
@@ -94,6 +95,42 @@ PatternTransportSubmit PatternTransportCoordinator::request(
   const auto opens_journal =
       request.intent == PatternTransportIntent::record && !recording_;
   if (opens_journal) {
+    // The journal is Facade-owned: a Record request lazily begins it when no
+    // active journal exists, while playback alone never creates one.
+    const auto active = journals_.read_active(bundle_);
+    if (!active.has_value()) {
+      if (active.error().code != foundation::ErrorCode::not_found) {
+        error_ = active.error();
+        return PatternTransportSubmit::refused;
+      }
+      const auto loaded = store_.load(bundle_);
+      if (!loaded.has_value()) {
+        error_ = loaded.error();
+        return PatternTransportSubmit::refused;
+      }
+      if (request.expected_revision &&
+          *request.expected_revision != loaded.value().revision) {
+        error_ = foundation::Error{
+            foundation::ErrorCode::revision_conflict,
+            "Pattern transport record expected a different Project revision"};
+        return PatternTransportSubmit::refused;
+      }
+      const auto found = loaded.value().patterns.find(pattern_);
+      if (found == loaded.value().patterns.end()) {
+        error_ = foundation::Error{
+            foundation::ErrorCode::not_found,
+            "Pattern transport record target Pattern is missing"};
+        return PatternTransportSubmit::refused;
+      }
+      const auto begun = journals_.begin(
+          bundle_, session_, pattern_, found->second.bars,
+          project_io::sequence_pattern_fingerprint(found->second),
+          loaded.value().revision);
+      if (!begun.has_value()) {
+        error_ = begun.error();
+        return PatternTransportSubmit::refused;
+      }
+    }
     project_io::SequenceAdmissionPreparation preparation{
         {request.command_id, runtime_generation_, request.expected_epoch},
         project_, pattern_, audio_.pattern_generation(), 10};
@@ -192,7 +229,7 @@ foundation::Result<void> PatternTransportCoordinator::finish_close() {
   }
   const auto reconciled = owner_.reconcile_switch(store_);
   if (!reconciled.has_value()) return reconciled;
-  if (pending_) {
+  if (pending_ && close_applied_switch_) {
     const auto target = owner_.drain_target_segment(
         store_, derive_command(pending_->command_id, 1, 'a'),
         derive_command(pending_->command_id, 2, 'b'),
@@ -201,14 +238,15 @@ foundation::Result<void> PatternTransportCoordinator::finish_close() {
   }
   const auto closed = owner_.close_requested();
   if (!closed.has_value()) return closed;
-  // A close without an applied switch settles the admission with a terminal
-  // transfer once closure is durable; the applied-switch close is unchanged.
+  // A close without an applied switch settles the admission: the frozen prefix
+  // is drained once, the terminal receipt seals it, its tail is committed to
+  // Project Truth exactly once, and the settled journal is removed.
   if (pending_ && !close_applied_switch_) {
-    const auto terminal = owner_.drain(
-        derive_command(pending_->command_id, 4, 'd'), 0, true);
-    if (!terminal.has_value()) {
-      return foundation::Result<void>::failure(terminal.error());
-    }
+    const auto settled = owner_.settle_close(
+        store_, derive_command(pending_->command_id, 1, 'a'),
+        derive_command(pending_->command_id, 4, 'd'),
+        derive_command(pending_->command_id, 2, 'b'));
+    if (!settled.has_value()) return settled;
   }
   recording_ = false;
   close_pending_ = false;

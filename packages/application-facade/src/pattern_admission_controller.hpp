@@ -60,6 +60,13 @@ class PatternAdmissionOwner {
   foundation::Result<void> close(
       const project_io::SequenceAdmissionClosure& closure);
   foundation::Result<void> close_requested();
+  // Settles a fully closed admission: drains the frozen prefix once, retains
+  // the terminal receipt, flushes the final tail to Project Truth exactly
+  // once, completes the admission and removes the settled journal. Every step
+  // replays under its command identity so a failed close can retry.
+  foundation::Result<void> settle_close(
+      project_io::ProjectStore& store, foundation::CommandId transfer_id,
+      foundation::CommandId terminal_id, foundation::CommandId flush_id);
   foundation::Result<project_io::SequenceAdmissionTransfer> drain(
       foundation::CommandId transfer_id, std::uint64_t last_watermark,
       bool terminal);

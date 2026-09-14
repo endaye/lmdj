@@ -509,6 +509,58 @@ foundation::Result<void> PatternAdmissionOwner::close_requested() {
   return close_at(project_io::SequenceAdmissionCloseReason::requested);
 }
 
+foundation::Result<void> PatternAdmissionOwner::settle_close(
+    project_io::ProjectStore& store, foundation::CommandId transfer_id,
+    foundation::CommandId terminal_id, foundation::CommandId flush_id) {
+  if (!identity_) return owner_error("admission_identity_missing");
+  auto journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) {
+    return foundation::Result<void>::failure(journal.error());
+  }
+  if (journal.value().session_id != session_ || !journal.value().admission) {
+    return owner_error("admission_identity_mismatch");
+  }
+  if (!journal.value().admission->candidates.empty()) {
+    const auto transfer = drain(
+        transfer_id, journal.value().admission->candidates.back().watermark,
+        false);
+    if (!transfer.has_value()) {
+      return foundation::Result<void>::failure(transfer.error());
+    }
+  }
+  const auto terminal = drain(terminal_id, 0, true);
+  if (!terminal.has_value()) {
+    return foundation::Result<void>::failure(terminal.error());
+  }
+  // The terminal receipt re-exposes the finalized tail as pending events;
+  // flush it to Project Truth exactly once before completion.
+  if (!terminal.value().recoverable_tail.empty()) {
+    journal = journals_.read_active(bundle_);
+    if (!journal.has_value()) {
+      return foundation::Result<void>::failure(journal.error());
+    }
+    if (journal.value().session_id != session_) {
+      return owner_error("admission_identity_mismatch");
+    }
+    const auto flush = journals_.append_flush(
+        bundle_, session_, flush_id, journal.value().pattern_id,
+        journal.value().expected_revision, terminal.value().recoverable_tail);
+    if (!flush.has_value()) {
+      return foundation::Result<void>::failure(flush.error());
+    }
+    const auto executed = store.execute_sequence_flush(
+        bundle_, {session_, flush.value().flush_seq, flush_id,
+                  journal.value().pattern_id});
+    if (!executed.has_value()) {
+      return foundation::Result<void>::failure(executed.error());
+    }
+  }
+  const auto completed =
+      journals_.complete_admission(bundle_, session_, *identity_);
+  if (!completed.has_value()) return completed;
+  return journals_.remove_active_if_complete(bundle_, session_);
+}
+
 foundation::Result<project_io::SequenceAdmissionTransfer>
 PatternAdmissionOwner::drain(
     foundation::CommandId transfer_id, std::uint64_t last_watermark, bool terminal) {
