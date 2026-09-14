@@ -326,7 +326,7 @@ class FailingAppendStorage final : public lmdj::project_io::ProjectStoragePlatfo
  public:
   std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner =
       lmdj::project_io::make_default_project_storage_platform();
-  bool fail_next_append = false;
+  int fail_appends = 0;
 
   lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
   acquire_writer(const std::filesystem::path& path) override {
@@ -361,8 +361,8 @@ class FailingAppendStorage final : public lmdj::project_io::ProjectStoragePlatfo
   lmdj::foundation::Result<void> append_durable(
       const std::filesystem::path& path, std::uint64_t prefix,
       std::span<const std::byte> bytes) override {
-    if (fail_next_append) {
-      fail_next_append = false;
+    if (fail_appends > 0) {
+      --fail_appends;
       return lmdj::foundation::Result<void>::failure(
           {lmdj::foundation::ErrorCode::io_error,
            "injected admission append failure",
@@ -626,7 +626,7 @@ void prepared_owner_reports_an_uncertain_suffix_on_storage_failure() {
   LMDJ_CHECK(f.owner.admit(
       {10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
                  .value() == PatternAdmissionAdmit::retained);
-  f.platform->fail_next_append = true;
+  f.platform->fail_appends = 1;
   const auto failed = f.owner.admit(
       {11, 31000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 72});
   LMDJ_CHECK(!failed.has_value());
@@ -645,6 +645,27 @@ void prepared_owner_reports_an_uncertain_suffix_on_storage_failure() {
   LMDJ_CHECK(transfer.has_value());
   LMDJ_CHECK(transfer.value().recoverable_tail ==
              std::vector<PatternEvent>({{{0, 1}, 960, 240, 90}}));
+}
+
+void prepared_owner_surfaces_a_failed_storage_failure_close() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  OwnerFixture f;
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  LMDJ_CHECK(f.owner.admit(
+      {10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
+                 .value() == PatternAdmissionAdmit::retained);
+  f.platform->fail_appends = 2;
+  const auto failed = f.owner.admit(
+      {11, 31000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 72});
+  LMDJ_CHECK(!failed.has_value());
+  LMDJ_CHECK(failed.error().details.at("uncertain_suffix_watermark") == 11);
+  LMDJ_CHECK(failed.error().details.at("last_retained_watermark") == 10);
+  LMDJ_CHECK(failed.error().details.at("closure_unresolved") == true);
+  const auto journal = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(!journal.value().admission->closure.has_value());
+  LMDJ_CHECK(journal.value().admission->candidates.size() == 1);
 }
 }  // namespace
 
@@ -671,7 +692,8 @@ int main() {
     prepared_owner_closes_at_capacity_and_drains_after_delayed_cutoff();
     prepared_owner_closes_at_deadline_before_the_next_candidate();
     prepared_owner_reports_an_uncertain_suffix_on_storage_failure();
-    std::cout << "pattern admission tests: PASS (21 scenarios)\n";
+    prepared_owner_surfaces_a_failed_storage_failure_close();
+    std::cout << "pattern admission tests: PASS (22 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

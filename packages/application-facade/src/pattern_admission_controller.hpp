@@ -55,7 +55,6 @@ class PatternAdmissionOwner {
 
  private:
   foundation::Result<void> close_at(
-      const project_io::SequenceAdmissionState& admission,
       project_io::SequenceAdmissionCloseReason reason);
   bool deadline_elapsed(
       const project_io::SequenceAdmissionPreparation& preparation) const;

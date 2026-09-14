@@ -244,8 +244,15 @@ bool PatternAdmissionOwner::deadline_elapsed(
 }
 
 foundation::Result<void> PatternAdmissionOwner::close_at(
-    const project_io::SequenceAdmissionState& admission,
     project_io::SequenceAdmissionCloseReason reason) {
+  const auto journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) {
+    return foundation::Result<void>::failure(journal.error());
+  }
+  if (journal.value().session_id != session_ || !journal.value().admission) {
+    return owner_error("admission_identity_mismatch");
+  }
+  const auto& admission = *journal.value().admission;
   if (admission.closure) return foundation::Result<void>::success();
   return close({last_retained_watermark(admission), reason});
 }
@@ -276,8 +283,8 @@ foundation::Result<PatternAdmissionAdmit> PatternAdmissionOwner::admit(
         PatternAdmissionAdmit::live_only);
   }
   if (deadline_elapsed(admission.preparation)) {
-    const auto closed = close_at(
-        admission, project_io::SequenceAdmissionCloseReason::deadline);
+    const auto closed =
+        close_at(project_io::SequenceAdmissionCloseReason::deadline);
     if (!closed.has_value()) {
       return foundation::Result<PatternAdmissionAdmit>::failure(closed.error());
     }
@@ -297,9 +304,10 @@ foundation::Result<PatternAdmissionAdmit> PatternAdmissionOwner::admit(
     const auto prefix = last_retained_watermark(admission);
     if (prefix) error.details["last_retained_watermark"] = *prefix;
     const auto closed = close_at(
-        admission, project_io::SequenceAdmissionCloseReason::storage_failure);
-    if (!closed.has_value() && error.details["journal_retained"] != true) {
-      return foundation::Result<PatternAdmissionAdmit>::failure(closed.error());
+        project_io::SequenceAdmissionCloseReason::storage_failure);
+    if (!closed.has_value()) {
+      error.details["closure_unresolved"] = true;
+      error.details["closure_error"] = closed.error().message;
     }
     return foundation::Result<PatternAdmissionAdmit>::failure(std::move(error));
   }
