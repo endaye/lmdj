@@ -23,12 +23,16 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
 
 API_ROOT = "https://api.github.com"
 API_VERSION = "2022-11-28"
+# One primary window is at most one hour. Jobs wait this bound, then fail closed.
+PRIMARY_WAIT_CAP_SECONDS = 20 * 60
+PRIMARY_RETRY_LIMIT = 1
 
 EXIT_OK = 0
 EXIT_UNREADABLE = 2
@@ -42,6 +46,76 @@ class TargetUnavailable(RuntimeError):
     """The Pull Request could not be read; nothing about it is known."""
 
 
+def _now() -> float:
+    return time.time()
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _header_values(headers, name: str) -> list[str]:
+    if headers is None:
+        return []
+    getter = getattr(headers, "get_all", None)
+    if callable(getter):
+        values = getter(name, [])
+        return [value for value in values if isinstance(value, str)]
+    if not hasattr(headers, "items"):
+        return []
+    wanted = name.lower()
+    return [value for key, value in headers.items()
+            if str(key).lower() == wanted and isinstance(value, str)]
+
+
+def _decimal_header(headers, name: str) -> int | None:
+    values = _header_values(headers, name)
+    if len(values) != 1:
+        return None
+    value = values[0]
+    if 1 <= len(value) <= 12 and value.isascii() and value.isdecimal():
+        return int(value)
+    return None
+
+
+def _primary_wait_seconds(error: BaseException) -> float | None:
+    """Seconds until X-RateLimit-Reset when remaining is 0; otherwise not retryable."""
+    if not isinstance(error, urllib.error.HTTPError) or error.code not in (403, 429):
+        return None
+    remaining = _decimal_header(error.headers, "X-RateLimit-Remaining")
+    reset = _decimal_header(error.headers, "X-RateLimit-Reset")
+    if remaining == 0 and reset is not None:
+        return max(0.0, float(reset) - _now())
+    return None
+
+
+def _open_github(make_request: Callable[[], urllib.request.Request]) -> bytes:
+    """Retry one refused primary-quota call until reset, inside the job bound."""
+    retries = 0
+    deadline = _now() + PRIMARY_WAIT_CAP_SECONDS
+    while True:
+        try:
+            with urllib.request.urlopen(make_request(), timeout=60) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            wait = _primary_wait_seconds(error)
+            if wait is None or retries >= PRIMARY_RETRY_LIMIT or _now() + wait > deadline:
+                raise
+            try:
+                error.close()
+            except OSError:
+                pass
+            if wait > 0:
+                print(
+                    f"why: GitHub REST remaining=0 until reset in {int(wait)}s; "
+                    "remedy: wait the bounded primary window, then continue fail-closed",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                _sleep(wait)
+            retries += 1
+
+
 def github_request(
     method: str,
     url: str,
@@ -50,20 +124,22 @@ def github_request(
 ) -> object:
     """One authenticated GitHub REST call; only the trusted publisher uses writes."""
     data = None if payload is None else json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=data,
-        method=method,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": API_VERSION,
-            "User-Agent": "lmdj-pr-review",
-        },
-    )
+
+    def make_request() -> urllib.request.Request:
+        return urllib.request.Request(
+            url,
+            data=data,
+            method=method,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": API_VERSION,
+                "User-Agent": "lmdj-pr-review",
+            },
+        )
+
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            body = response.read()
+        body = _open_github(make_request)
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"GitHub {method} {url} failed: {error.code} {detail[:2000]}") from error
@@ -79,18 +155,20 @@ def _api(path: str) -> object:
             "why: GITHUB_TOKEN is unset, so the Pull Request head cannot be read; "
             "remedy: pass secrets.GITHUB_TOKEN to the step"
         )
-    request = urllib.request.Request(
-        f"{API_ROOT}{path}",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": API_VERSION,
-            "User-Agent": "lmdj-pr-review-target",
-        },
-    )
+
+    def make_request() -> urllib.request.Request:
+        return urllib.request.Request(
+            f"{API_ROOT}{path}",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": API_VERSION,
+                "User-Agent": "lmdj-pr-review-target",
+            },
+        )
+
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return json.loads(response.read().decode("utf-8"))
+        return json.loads(_open_github(make_request).decode("utf-8"))
     except (urllib.error.URLError, ValueError) as error:
         detail = getattr(error, "code", None) or str(error)
         raise TargetUnavailable(
