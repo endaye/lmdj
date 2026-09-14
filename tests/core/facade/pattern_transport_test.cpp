@@ -1,6 +1,7 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <unistd.h>
@@ -86,6 +87,7 @@ class TempDirectory {
 struct EnginePort final : PatternTransportAudioPort {
   RealtimeEngine engine;
   std::uint64_t generation{};
+  std::function<void()> before_ack;
   EnginePort() {
     LMDJ_CHECK(engine.enable_pattern_transport(7).has_value());
     LMDJ_CHECK(engine.publish_sample_bank(
@@ -107,6 +109,7 @@ struct EnginePort final : PatternTransportAudioPort {
     return engine.inspect_pattern_transport_receipt(runtime_generation, epoch);
   }
   bool acknowledge(std::uint64_t runtime_generation, std::uint64_t epoch) override {
+    if (before_ack) before_ack();
     return engine.acknowledge_pattern_transport_receipt(
         runtime_generation, epoch);
   }
@@ -259,6 +262,32 @@ void earlier_command_does_not_toggle_after_a_later_one() {
   LMDJ_CHECK(f.coordinator.inspect().playing);
   LMDJ_CHECK(f.coordinator.inspect().recording);
 }
+
+void wrong_session_or_project_is_invalid() {
+  Fixture f;
+  auto session = f.make(6, 1, PatternTransportIntent::play_stop);
+  session.session = SequenceSessionId{uuid(99)};
+  LMDJ_CHECK(f.coordinator.request(session) == PatternTransportSubmit::invalid);
+  auto project = f.make(7, 1, PatternTransportIntent::play_stop);
+  project.project_id = ProjectId{uuid(98)};
+  LMDJ_CHECK(f.coordinator.request(project) == PatternTransportSubmit::invalid);
+}
+
+void recording_stop_retains_cutoff_before_ack() {
+  Fixture f;
+  bool cutoff_before_ack = false;
+  f.audio.before_ack = [&] {
+    const auto journal = f.journals.read_active(f.bundle);
+    cutoff_before_ack = journal.has_value() && journal.value().admission &&
+        journal.value().admission->cutoff_fence.has_value();
+  };
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  cutoff_before_ack = false;
+  f.settle(f.make(7, 2, PatternTransportIntent::play_stop));
+  LMDJ_CHECK(cutoff_before_ack);
+  LMDJ_CHECK(!f.coordinator.inspect().playing);
+  LMDJ_CHECK(!f.coordinator.inspect().recording);
+}
 }  // namespace
 
 int main() {
@@ -271,7 +300,9 @@ int main() {
     recording_record_commits_and_keeps_playing();
     duplicate_command_does_not_toggle_twice();
     earlier_command_does_not_toggle_after_a_later_one();
-    std::cout << "pattern transport tests: PASS (8 scenarios)\n";
+    wrong_session_or_project_is_invalid();
+    recording_stop_retains_cutoff_before_ack();
+    std::cout << "pattern transport tests: PASS (10 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

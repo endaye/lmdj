@@ -49,6 +49,7 @@ class PatternTransportCoordinator {
 
   PatternTransportAudioPort& audio_;
   PatternAdmissionOwner owner_;
+  foundation::SequenceSessionId session_;
   foundation::ProjectId project_;
   foundation::PatternId pattern_;
   std::uint64_t runtime_generation_;
