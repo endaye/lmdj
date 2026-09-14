@@ -132,6 +132,7 @@ jobs:
             ${{ env.REVIEW_DIR }}/failure.json
             ${{ env.REVIEW_DIR }}/t2-input.json
             ${{ env.REVIEW_DIR }}/collection-receipt.json
+            ${{ env.REVIEW_DIR }}/collection-failure.json
             ${{ env.REVIEW_DIR }}/t2-config-witness.json
             ${{ env.REVIEW_DIR }}/t2-result.json
             ${{ env.REVIEW_DIR }}/collector.json

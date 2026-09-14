@@ -166,8 +166,9 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("artifact identity differs from publisher context", stderr)
         self.assertNotIn("review pipeline operation failed", stderr)
 
-    def test_only_publish_gets_the_specific_message(self):
-        """Other commands retain generic diagnostics while provider text is in scope."""
+    def test_commands_with_provider_text_in_scope_keep_the_generic_message(self):
+        """finalize/capture retain generic diagnostics while provider text is in scope;
+        publish and pre-model collect-t2 print their authored refusals instead."""
         code, stderr = self.cli("finalize")
         self.assertEqual(code, 1)
         self.assertIn("review pipeline operation failed", stderr)
@@ -1076,7 +1077,8 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(bounded_witness_output.exists(), "failed CLI collection must emit no success witness")
         with self.assertRaisesRegex(review_scope.ReviewScopeError, "successful-producer witness"):
             pipeline.trusted_collector_t2(bounded_output)
-        self.assertIn("review pipeline operation failed", errors.getvalue())
+        self.assertIn(str(raised.exception), errors.getvalue())
+        self.assertNotIn("review pipeline operation failed", errors.getvalue())
         print(json.dumps({
             "cli_returncode": 1,
             "failure_receipt": failure,

@@ -190,6 +190,15 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
             self.assertIn(f"${{{{ env.REVIEW_DIR }}}}/{name}", upload,
                           f"why: publish/wait/failure readers open {name} from the artifact; remedy: upload it")
 
+    def test_artifact_retains_the_refusal_fence_receipt(self):
+        """A refused collection writes only collection-failure.json; without it in the
+        upload list the always() artifact step errors with if-no-files-found and hides
+        the refusal behind a secondary failure (#1310)."""
+        upload = self.jobs["review"].split("      - uses: actions/upload-artifact", 1)[1].split("      - name:", 1)[0]
+        self.assertIn("${{ env.REVIEW_DIR }}/collection-failure.json", upload,
+                      "why: a refused collection leaves only collection-failure.json, so the artifact step "
+                      "fails with if-no-files-found and the refusal receipt is lost; remedy: upload it")
+
     def test_publisher_is_a_short_trusted_data_consumer(self):
         job = self.jobs["publish"]
         self.assertIn("pull-requests: write", job)
