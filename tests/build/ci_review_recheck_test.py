@@ -3,6 +3,8 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import sys
+import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -90,7 +92,7 @@ class Platform:
             return (history.A + "\n").encode()
         if args == ("show", history.A + ":src/example.py"):
             return request_fixture()["original_content"].encode()
-        if args == ("diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", history.A, "c" * 40, "--", "src/example.py"):
+        if args == ("diff", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", history.A, "c" * 40, "--", "src/example.py"):
             return request_fixture()["fix_diff"].encode()
         raise AssertionError(args)
 
@@ -130,6 +132,34 @@ class RecheckTests(unittest.TestCase):
         self.assertTrue(self.api.publish()["resolved"])
         self.assertTrue(self.api.resolved)
         self.assertEqual(self.api.writes, ["reply", "resolveReviewThread"])
+
+    def test_fix_diff_is_identical_across_git_object_abbreviation_settings(self):
+        with tempfile.TemporaryDirectory(prefix="lmdj-recheck-git-") as temporary:
+            repo = Path(temporary)
+            def command(*args):
+                return subprocess.check_output(["git", "-C", str(repo), *args], stderr=subprocess.PIPE)
+            command("-c", "init.defaultBranch=main", "init", "--quiet")
+            source = repo / "src/example.py"
+            source.parent.mkdir()
+            revisions = []
+            for content in (request_fixture()["original_content"], "def value():\n    return 2\n"):
+                source.write_text(content)
+                command("add", "src/example.py")
+                command("-c", "user.name=Recheck Test", "-c", "user.email=recheck@example.invalid",
+                        "commit", "--quiet", "-m", "source fixture")
+                revisions.append(command("rev-parse", "HEAD").decode().strip())
+            original_git = self.api.git
+            def collect_with(abbreviation):
+                def git(*args):
+                    if args[0] == "diff":
+                        mapped = [revisions[0] if a == history.A else revisions[1] if a == "c" * 40 else a for a in args]
+                        return command("-c", "core.abbrev=" + abbreviation, *mapped)
+                    return original_git(*args)
+                return recheck.collect(self.api, self.api.document, 70, git=git, fetch=lambda ref: None)
+            short, long = collect_with("8"), collect_with("12")
+            self.assertEqual(short, long)
+            self.assertRegex(short["fix_diff"], r"index [0-9a-f]{40}\.\.[0-9a-f]{40} 100644")
+            self.assertIn("-    return 1\n+    return 2\n", short["fix_diff"])
 
     def test_nonresolved_verdict_explains_and_keeps_thread_open(self):
         self.api.collect()

@@ -155,7 +155,7 @@ def collect(api, document, comment_id, *, git, fetch, allow_resolved=False):
     fetch(original)
     require(git("merge-base", original, head).decode().strip() == original, "original reviewed head is not an ancestor")
     original_content = git("show", original + ":" + path).decode("utf-8")
-    fix_diff = git("diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", original, head, "--", path).decode("utf-8")
+    fix_diff = git("diff", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", original, head, "--", path).decode("utf-8")
     request = {"comment_id": comment_id, "thread_id": thread, "original_head": original,
                "path": path, "original_line": comment["original_line"], "body": comment["body"], "original_content": original_content,
                "fix_diff": fix_diff, "conversation": conversation}
