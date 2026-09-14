@@ -152,7 +152,9 @@ jobs:
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 5
     permissions:
-      contents: read
+      # GitHub requires contents write for resolveReviewThread as well as PR
+      # write. Only this trusted data consumer gets it; it never runs PR code.
+      contents: write
       pull-requests: write
       actions: read
     steps:

@@ -68,6 +68,10 @@ attempt 失败。YAML block scalar 的末尾换行仅在能匹配精确路径时
 从源码证明、附有原始/当前精确代码引用和因果说明的修复，才能关闭选中的 bot 线程。
 此流程不执行测试，需要运行证据的问题保留人工复核，人工 reviewer 的线程也不会关闭。
 
+GitHub 的线程 resolve 接口还要求 `contents: write`，因此仅独立发布 job 持有该权限及
+`pull-requests: write`。target 和模型 job 保持只读；发布器运行可信 main 控制代码，
+不执行 PR 文件，也不调用合并接口。
+
 发布器再次核对 head、对话和模型输出，先回复证据，再执行 resolve。重试使用回执
 避免重复回复；发现 resolve 后 head 或对话变化时尝试重新打开线程。GitHub 没有
 绑定 head 的原子 resolve，取消或 API 失败仍需人工检查；它不替代合并前的

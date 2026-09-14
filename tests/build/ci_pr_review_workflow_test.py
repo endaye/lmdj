@@ -194,7 +194,10 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         job = self.jobs["publish"]
         self.assertIn("pull-requests: write", job)
         self.assertIn("timeout-minutes: 5", job)
-        self.assertNotIn("contents: write", job)
+        self.assertIn("contents: write", job,
+                      "why: GitHub requires contents write for resolveReviewThread; remedy: grant it only to the trusted publisher")
+        for reader in ("target", "review"):
+            self.assertNotIn("contents: write", self.jobs[reader])
         self.assertNotIn("issues: write", job)
         self.assertIn('HEAD_SHA: ${{ needs.target.outputs.head_sha }}', job)
         self.assertIn("review_pipeline.py publish", job)
@@ -208,8 +211,9 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
     def test_review_has_no_heavy_dependency_and_no_merge_authority(self):
         jobs = self.source.split("\njobs:\n", 1)[1]
         for forbidden in ("queue_ticket", "phase_gate", "pr" + "_gate",
-                          "lmdj-native-heavy", "needs: [change-scope", "contents: write"):
+                          "lmdj-native-heavy", "needs: [change-scope", "gh pr merge"):
             self.assertNotIn(forbidden, jobs)
+        self.assertNotIn("contents: write", self.jobs["review"])
         self.assertIn("required_conversation_resolution", self.source)
         self.assertIn("#707", self.source)
         self.assertIn("not a new gate", self.source)
