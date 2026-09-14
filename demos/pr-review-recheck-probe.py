@@ -7,7 +7,7 @@ exactly that many payload bytes. The byte count excludes the header itself.
 
 def encode_frame(payload: bytes) -> bytes:
     """Encode one complete frame for a receiver using the wire format above."""
-    payload_byte_count = len(payload) + 4
+    payload_byte_count = len(payload)
     return payload_byte_count.to_bytes(4, "big") + payload
 
 
@@ -19,4 +19,4 @@ def payload_is_complete(frame: bytes) -> bool:
     if len(frame) < 4:
         return False
     payload_byte_count = int.from_bytes(frame[:4], "big")
-    return len(frame) - 4 >= payload_byte_count
+    return len(frame) - 4 == payload_byte_count
