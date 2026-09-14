@@ -1348,6 +1348,7 @@ function Workspace({
                 ) : (
                   <main className="perform-surface" aria-label="Perform">
                     <h1>Perform</h1>
+                    <p>Launch and FX wait for running audio and capture storage.</p>
                   </main>
                 )
               ) : (
@@ -1554,9 +1555,10 @@ function Workspace({
         </>
       )}
       {(layout === "workspace" && activeMode === "sample") ||
-      armedCaptureSlot !== null ||
-      sequence.phase === "trim-overlay" ||
-      (activeMode === "sequence" && state.sampleProjectionRefresh !== null) ? (
+      ((armedCaptureSlot !== null ||
+        sequence.phase === "trim-overlay" ||
+        (activeMode === "sequence" && state.sampleProjectionRefresh !== null)) &&
+        !(layout === "hardware" && activeMode === "sample")) ? (
         <div className={sequence.phase === "trim-overlay" ? "sample-overlay-host" : ""}
           hidden={activeMode !== "sample" && sequence.phase !== "trim-overlay"}>
           <SampleSurface

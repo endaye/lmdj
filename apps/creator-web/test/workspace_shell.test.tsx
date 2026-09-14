@@ -2168,7 +2168,7 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
   await user.click(screen.getByRole("button", {name: "Sample"}));
   expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SAMPLE");
   expect(padA1()).toBeTruthy();
-  expect(within(touch()).getByRole("heading", {name: "Sample editor"})).toBeTruthy();
+  expect(within(touch()).getAllByRole("heading", {name: "Sample editor"})).toHaveLength(1);
 
   await user.click(screen.getByRole("button", {name: "Sequence"}));
   expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SEQUENCE");
@@ -2182,6 +2182,7 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
   expect(padA1()).toBeTruthy();
   expect(within(touch()).getByRole("heading", {name: "Perform"})).toBeTruthy();
   expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
+  expect(within(touch()).queryByText(/Launch and FX wait/i)).toBeTruthy();
   expect(screen.getByTestId("hardware-console")).toBeTruthy();
 
   await user.click(screen.getByRole("button", {name: "Project"}));
