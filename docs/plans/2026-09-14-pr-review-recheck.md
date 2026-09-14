@@ -153,3 +153,21 @@ trusted-main dispatch, merge, then repeat the complete live recheck.
 Version impact: none. Internal CI permissions only.
 Documentation impact: required. Document the actual publisher permission.
 Affected portal pages: /operations/testing-and-proof
+
+## Live acceptance follow-up: canonical Git object IDs
+
+Run 34830825814 retained a fix diff with nine-digit object abbreviations; a
+fresh collector emitted eight digits for the same Git objects, so publisher
+byte comparison correctly refused the differing request. Use `git diff
+--full-index` for repair evidence, independently of repository object count and
+`core.abbrev`. Preserve exact source/diff/conversation comparison.
+
+Declared files: `scripts/ci/review_recheck.py`,
+`tests/build/ci_review_recheck_test.py`, and this plan. The new regression uses
+a real temporary Git repository and actual collectors under core.abbrev=8 and
+12, asserts identical full requests and 40-digit object IDs, and retains the
+causal changed lines. Run recheck, workflow and pipeline suites, then repeat
+trusted-main live publication after source review/merge. No adapter reinstall.
+
+Version impact: none. Internal evidence encoding only.
+Documentation impact: none. Restores the documented exact-request behavior.
