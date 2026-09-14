@@ -105,6 +105,10 @@ TEXT_LIMIT = 1200
 #: Retry budget for a refused API call. Three tries with the injected sleep;
 #: the delays are seconds and the caller may pass a no-op.
 RETRY_DELAYS = (5.0, 20.0)
+#: One GitHub REST primary window is at most one hour. Controller, relay and
+#: reporter GETs wait this bound for remaining=0; a later reset stays deferred.
+PRIMARY_WAIT_CAP_SECONDS = 20 * 60
+PRIMARY_RETRY_LIMIT = 1
 
 
 class RetryBudget:
@@ -481,29 +485,38 @@ class UrllibGitHubApi:
 
 def with_retry(call: Callable[[], object], *, sleep: Callable[[float], None],
                delays: Sequence[float] = RETRY_DELAYS, clock: Callable[[], float] = time.time,
-               deadline: float | None = None, budget: RetryBudget | None = None) -> object:
+               deadline: float | None = None, budget: RetryBudget | None = None,
+               secondary: bool = True) -> object:
     """Retry idempotent reads on secondary throttling or exhausted primary quota.
 
-    The bounded deadline is deliberately not extended by a reset wait.  A
-    reset beyond it remains an unknown/deferred read for the next health tick.
-    Callers must never use this helper for writes.
+    Primary remaining=0 waits until X-RateLimit-Reset inside PRIMARY_WAIT_CAP_SECONDS
+    and does not consume the short secondary budget. A reset beyond the cap stays
+    an unknown/deferred read for the next health tick. Secondary 429/5xx/transport
+    retries stay on delays plus RetryBudget. Callers must never use this for writes.
     """
     attempt = 0
+    primary_retries = 0
     budget = RetryBudget(sum(delays)) if budget is None else budget
     started = clock()
     if deadline is None:
         deadline = started + sum(delays)
+    primary_deadline = started + PRIMARY_WAIT_CAP_SECONDS
     while True:
         try:
             return call()
         except GitHubApiError as error:
             primary_exhausted = error.status == 403 and error.remaining == 0 and error.reset is not None
-            retryable = error.status == 429 or error.status >= 500 or error.status == 0 or primary_exhausted
+            if primary_exhausted:
+                delay = max(0.0, float(error.reset) - clock())
+                if primary_retries >= PRIMARY_RETRY_LIMIT or clock() + delay > primary_deadline:
+                    raise
+                primary_retries += 1
+                sleep(delay)
+                continue
+            retryable = secondary and (error.status == 429 or error.status >= 500 or error.status == 0)
             if not retryable or attempt >= len(delays):
                 raise
             delay = error.retry_after if error.status == 429 and error.retry_after is not None else delays[attempt]
-            if primary_exhausted:
-                delay = max(0.0, float(error.reset) - clock())
             if clock() + delay > deadline or not budget.consume(delay):
                 raise
             sleep(delay)

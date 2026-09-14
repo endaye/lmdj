@@ -136,9 +136,8 @@ class GitHubJournalTransport:
             # Journal writes and GraphQL reads are POSTs: never replay an
             # unknown POST. Only an idempotent REST GET may be retried.
             if method == "GET":
-                if self.lock_held():
-                    return call()
-                return with_retry(call, sleep=time.sleep, clock=self.clock, budget=self.retry_budget)
+                return with_retry(call, sleep=time.sleep, clock=self.clock,
+                                  budget=self.retry_budget, secondary=not self.lock_held())
             return call()
         except Exception as error:
             raise JournalBlocked("why: GitHub journal request unavailable or write outcome unknown; remedy: reconcile existing intent without repeating a write") from error

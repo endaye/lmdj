@@ -170,6 +170,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args(argv)
+    runtime = None
     try:
         require(not args.output.exists(), 'receipt output already exists')
         from incremental_entry import load_storage
@@ -180,7 +181,10 @@ def main(argv=None):
             stream.write(self_test.canonical_json(document) + '\n')
         print(self_test.canonical_json(document), flush=True)
         return 0
-    except Exception:
+    except Exception as error:
+        from incremental_entry import emit_diagnostic
+        stage = getattr(runtime, 'diagnostic_stage', None)
+        emit_diagnostic('relay', stage if type(stage) is str else 'authenticate', error)
         print('why: completion relay could not authenticate its source; remedy: inspect exact source and let the independent health tick reconcile durable state')
         return 1
 

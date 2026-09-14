@@ -160,17 +160,17 @@ class RuntimeTests(unittest.TestCase):
             GitHubApiError(403, "quota", remaining=0, reset=120),
             {"ok": True},
             GitHubApiError(403, "quota", remaining=0, reset=140),
+            {"ok": True},
         ])
         sleeps = []
         instance.clock = lambda: clock[0]
         instance.transport.clock = instance.clock
         with mock.patch.object(runtime.time, "sleep", side_effect=lambda delay: (sleeps.append(delay), clock.__setitem__(0, clock[0] + delay))):
             self.assertEqual(instance.call("GET", "/first"), {"ok": True})
-            with self.assertRaises(runtime.storage.JournalBlocked):
-                instance.transport._call("GET", "/second")
-        self.assertEqual(sleeps, [20.0])
-        self.assertLess(instance.retry_budget.remaining, 25.0)
-        self.assertEqual(self.api._request.call_count, 3)
+            self.assertEqual(instance.transport._call("GET", "/second"), {"ok": True})
+        self.assertEqual(sleeps, [20.0, 20.0])
+        self.assertEqual(instance.retry_budget.remaining, 25.0)
+        self.assertEqual(self.api._request.call_count, 4)
 
     def test_runtime_forbidden_and_malformed_reset_are_not_retried(self):
         instance = runtime.Runtime(self.config, root=self.root, api=self.api,
@@ -203,8 +203,8 @@ class RuntimeTests(unittest.TestCase):
     def test_lock_held_quota_does_not_sleep_or_mutate_and_later_context_recovers(self):
         instance = self.make()
         self.api._request = mock.Mock(side_effect=[
-            GitHubApiError(403, "quota", remaining=0, reset=120),
-            GitHubApiError(403, "quota", remaining=0, reset=120)])
+            GitHubApiError(403, "forbidden", remaining=10, reset=120),
+            GitHubApiError(429, "secondary")])
         sleeps = []
         with mock.patch.object(runtime.time, "sleep", side_effect=sleeps.append):
             with self.assertRaises(batch.BatchError):
@@ -216,6 +216,19 @@ class RuntimeTests(unittest.TestCase):
         later = self.make()
         self.api._request = mock.Mock(return_value={"healthy": True})
         self.assertEqual(later.call("GET", "/later-health"), {"healthy": True})
+
+    def test_lock_held_primary_quota_waits_until_reset_and_is_not_not_live(self):
+        instance = self.make()
+        clock = [100.0]
+        instance.clock = lambda: clock[0]
+        instance.transport.clock = instance.clock
+        self.api._request = mock.Mock(side_effect=[
+            GitHubApiError(403, "quota", remaining=0, reset=120), {"healthy": True}])
+        sleeps = []
+        with mock.patch.object(runtime.time, "sleep", side_effect=lambda delay: (sleeps.append(delay), clock.__setitem__(0, clock[0] + delay))):
+            self.assertEqual(instance.call("GET", "/locked-primary"), {"healthy": True})
+        self.assertEqual(sleeps, [20.0])
+        self.assertEqual(self.api._request.call_count, 2)
 
     def test_unlocked_transport_unknown_post_is_attempted_once_without_retry(self):
         instance = runtime.Runtime(self.config, root=self.root, api=self.api,

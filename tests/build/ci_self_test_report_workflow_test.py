@@ -108,6 +108,9 @@ class SelfTestReportWorkflowTest(unittest.TestCase):
         self.assertEqual(pending, {auto: 50})
         self.assertTrue(set(range(51, 61)) <= set(running.values()))
 
+    def test_controller_timeout_covers_the_primary_reset_wait(self):
+        self.assertEqual(field(self.job, "timeout-minutes", 4), "25")
+
     def test_outer_admission_never_owns_the_shared_journal_lock(self):
         for event in ("push", "schedule", "workflow_run", "workflow_dispatch"):
             self.assertNotEqual(self.wakeup_group(event, 101), "self-test-report",
