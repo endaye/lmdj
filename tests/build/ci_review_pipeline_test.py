@@ -643,7 +643,7 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("issues: write", source)
         self.assertNotIn("actions: write", source)
 
-    def publish_with_doubles(self, *, stale=False, unavailable=False):
+    def publish_with_doubles(self, *, stale=False, unavailable=False, prior_reviews=None):
         calls = []
         def auth(identity):
             calls.append("authenticate")
@@ -655,7 +655,10 @@ class PipelineTests(unittest.TestCase):
         with mock.patch.dict(os.environ, environment), \
                 mock.patch.object(pipeline, "git", return_value=("c" * 40 + "\n").encode()), \
                 mock.patch.object(pipeline, "fetch"), mock.patch.object(pipeline, "authenticate", side_effect=auth), \
-                mock.patch.object(pipeline, "previous_records", return_value=([], unavailable)), \
+                (mock.patch.object(pipeline, "previous_records", return_value=([], unavailable))
+                 if prior_reviews is None else contextlib.nullcontext()), \
+                mock.patch.object(pipeline, "api", return_value={"id": 5}), \
+                mock.patch.object(pipeline, "pages", return_value=prior_reviews or []), \
                 mock.patch.object(pipeline.change_scope, "read_git_inventory", return_value=[pipeline.change_scope.ChangedFile("M", ("docs/notes/a.md",))]), \
                 mock.patch.object(pipeline, "publish_model", side_effect=lambda identity, record, model, **kwargs: calls.append(("review", {"summary": model["summary"] + model["test_scope"]["reason"] + pipeline.codec.encode(record)}))), \
                 mock.patch.object(pipeline.pr_review_target, "github_request", side_effect=lambda *a: calls.append(("labels", a))):
@@ -729,6 +732,22 @@ class PipelineTests(unittest.TestCase):
             records, unavailable = pipeline.previous_records(identity, test_scope.load_policy(ROOT))
         self.assertEqual(records, [])
         self.assertTrue(unavailable)
+
+    def test_same_head_review_after_control_update_publishes_with_full_scope(self):
+        self.capture("glm")
+        pipeline.finalize(self.directory)
+        prior_identity = {**self.identity, "backend": "glm", "control_sha": "d" * 40, "run_id": 98}
+        prior = test_scope.build_record(test_scope.load_policy(ROOT),
+            changed_paths=["docs/notes/a.md"], ai_labels=["test:full"], **prior_identity)
+        posted = {"commit_id": self.identity["head_sha"], "user": {"id": 5}, "body": pipeline.codec.encode(prior)}
+        calls = self.publish_with_doubles(prior_reviews=[posted])
+        record = pipeline.read(self.directory / "scope.json")
+        self.assertEqual(record["control_sha"], self.identity["control_sha"])
+        self.assertFalse(record["complete"])
+        self.assertEqual(record["effective"]["kind"], "full")
+        self.assertEqual([c[0] for c in calls if isinstance(c, tuple)], ["review", "labels"])
+        self.assertEqual(next(c[1][-1] for c in calls if isinstance(c, tuple) and c[0] == "labels"),
+                         {"labels": ["test:full"]})
 
     def test_later_same_head_review_keeps_unavailable_scope_full(self):
         self.capture("glm")
