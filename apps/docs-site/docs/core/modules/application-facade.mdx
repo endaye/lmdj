@@ -58,7 +58,7 @@ close 在 ack 之后失败时保持已应用的音频状态，并以 flushing �
 延迟读过 S 也不应用被取消的 Pattern；S < F 先 `retain_admission_switch` 再 cutoff，
 journal 保留 `applied_before_cutoff` 与实际 S；先 drain S 之前的源前缀并 flush，
 再 `switch_pattern` 推进 `segment_generation`，然后 drain 目标段候选并 flush，最后 close。
-它仍不是公开 Host API、Creator
+它仍不是 Creator
 opt-in、settings/rebase、terminal transfer 或未知 cutoff 恢复。测试用生产
 `RealtimeEngine` 收据，不是 Creator 或听感验收。
 同一生产转换函数已有 native 进程终止及 Chromium/独立 WebKit OPFS 回应丢失后
@@ -73,6 +73,21 @@ Runtime generation、transport epoch、Command ID 和单调 step；请求与结�
 writer lease 释放全部在同一非音频线程，控制侧 submit/inspect 不等待 IO。
 shutdown 请求只停止接收新工作；已接收操作继续结算，调用方观察 stopped 后才销毁。
 该端口尚未接入全局 transport coordinator，既有 Sequence admission 行为不变。
+
+`pattern_transport_controller.hpp` 把上述 coordinator 包装成 Host 可消费的公开
+`facade::PatternTransportController`，由 `make_pattern_transport_controller(audio, config)`
+构造，形态与 `make_engine_performance_adapter` 先例一致：Host 只提供实现公开
+`facade::PatternTransportAudioPort` 的音频端口（submit/inspect/acknowledge/
+pattern_generation/pending_switch，全部只含 Audio Runtime 与 Foundation 类型），
+controller 在 Facade 编译单元内自持 Sequence Journal 与 Project Store，公开签名
+不出现任何 Project I/O 类型，因此浏览器 Host 在不越过 Host 源码边界的前提下驱动
+transport。`request`/`inspect`/`continue_operation` 都是串行 control lane 短步：
+request 只解析一次 toggle 并保留 command/epoch，continuation 由 Host 在自己的
+control lane 上重入（无收据时立即成功返回，绝不等待），不得搬到 executor 工作线程；
+audio port 与 engine 的 submit/inspect/acknowledge 共享同一 serialized control
+owner，音频线程不调用。一个 controller 绑定一个 runtime/session/Pattern；过期
+runtime generation 按 stale 拒绝。该公开面属于 staged source：C++ 静态库为兼容
+追加，C ABI 与 api_version 不变，Module 版本与 Assembly 选择留待后续集成 Build。
 
 依赖全部六个下层 Module；Native/CLI/MCP Host 只依赖本 Facade，浏览器 Host 只依赖封装本 Facade 的 Web Runtime Platform。Performance 协作者由 Host 或 Product Assembly 注入，Facade 只依赖其接口，不依赖任何具体平台实现。
 
