@@ -309,11 +309,13 @@ foundation::Result<void> PatternAdmissionOwner::drain_source_prefix(
     if (!executed.has_value()) {
       return foundation::Result<void>::failure(executed.error());
     }
-    journal = journals_.read_active(bundle_);
-    if (!journal.has_value()) {
-      return foundation::Result<void>::failure(journal.error());
-    }
-    break;
+  }
+  journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) {
+    return foundation::Result<void>::failure(journal.error());
+  }
+  if (journal.value().session_id != session_ || !journal.value().admission) {
+    return owner_error("admission_identity_mismatch");
   }
   std::optional<std::uint64_t> last_watermark;
   for (const auto& candidate : journal.value().admission->candidates) {

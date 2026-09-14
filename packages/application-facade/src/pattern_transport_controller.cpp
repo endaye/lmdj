@@ -24,7 +24,8 @@ foundation::CommandId flush_command(const foundation::CommandId& command) {
   auto value = command.value();
   const auto dash = value.rfind('-');
   if (dash != std::string::npos && dash + 1 < value.size()) {
-    value[dash + 1] = 'f';
+    auto& digit = value[dash + 1];
+    digit = digit == 'f' ? 'e' : 'f';
   }
   return foundation::CommandId{value};
 }
