@@ -112,7 +112,7 @@ class CandidateWitnessRun:
             self.authorize(deepcopy(scope))
             main = self.observe_main()
         except Exception:
-            require(False, "original authority or main observation is unavailable")
+            raise CandidateWitnessError("why: candidate witness original authority or main observation is unavailable; remedy: restore the original source and authorization without exposing callback output or replaying generation") from None
         journal._active()
         bindings = self._bindings(journal)
         if proof is None:
@@ -295,6 +295,43 @@ class CandidateWitnessRun:
             row["output"] = candidate["output"]
             state["confirmed"] = len(state["commands"])
             self._save(journal, state)
+
+    def observe(self, *, request, source, cut, frozen, merge_revision):
+        """Recover confirmed command bytes without executing or enrolling work.
+
+        Absent means neither original witness marker nor state exists. A parent
+        that already recorded a child-start intent must not treat that absence
+        as permission to enroll again. Pending retains the existing verification
+        budget; it never proves generation or an unknown verifier completed.
+        """
+        try:
+            inputs = deepcopy(dict(request=request, source=source, cut=cut, frozen=frozen,
+                                   merge_revision=merge_revision))
+            scope = self._scope(inputs)
+            self._check_scope_budget(scope)
+            gitdir = Path(self.local.git("rev-parse", "--absolute-git-dir").decode().strip())
+            with self.local._locked(gitdir) as journal:
+                proof = self._guard(journal, scope, inputs)
+                state = self._state(journal, scope)
+                receipt = None
+                status = "absent" if state is None else "pending"
+                if state is not None and state["confirmed"] == len(state["commands"]):
+                    require(state["confirmed"] > int(state["generate"]), "confirmed verifier is missing")
+                    emitted = self._decode(state["commands"][-1])
+                    require(same(emitted, self._expected(scope, inputs)), "confirmed artifacts changed")
+                    receipt = {"status":"witness-verified", "receipt":emitted,
+                               "command_history_sha256":canonical_sha256(state)}
+                    status = "verified"
+                self._guard(journal, scope, inputs, proof)
+                require(same(self._state(journal, scope), state), "observation command history changed")
+                if receipt is not None:
+                    require(same(self._expected(scope, inputs), receipt["receipt"]), "observation artifacts changed")
+                journal._active()
+                return {"status":status, "receipt":receipt}
+        except CandidateWitnessError:
+            raise
+        except Exception:
+            raise CandidateWitnessError("why: candidate witness observation is unavailable; remedy: restore the original source, authority and command evidence without executing another command or exposing callback output") from None
 
     def run(self, *, request, source, cut, frozen, merge_revision):
         try:

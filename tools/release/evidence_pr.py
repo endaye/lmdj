@@ -226,6 +226,19 @@ class EvidencePullRequest:
         missing child storage is unknown, never evidence that a POST/PUT was
         not attempted. No observation creates a PR or requests its merge.
         """
+        return self._observe(spec, initialize=initialize, include_merge=False)
+
+    def observe_merge(self, spec):
+        """GET-only actual merge identity, gated identically to observation.
+
+        Consumers must not recover a candidate target by parsing the gate's
+        opaque evidence reference or by treating the branch head as its squash.
+        No enrollment is performed and unverified results expose no merge facts.
+        """
+        result = self._observe(spec, initialize=False, include_merge=True)
+        return dict(result, merge=result.get("merge"))
+
+    def _observe(self, spec, *, initialize, include_merge):
         self._validate_spec(spec)
         require(type(initialize) is bool, "initialization mode is invalid")
         spec = deepcopy(spec)
@@ -251,9 +264,17 @@ class EvidencePullRequest:
                     return {"status": gate.status, "evidence": None}
                 self._authorize(spec, branch=False)
                 latest = self._pr(spec, row["number"])
-                require(latest["merged"] and latest["merge_commit_sha"] == row["merge_commit_sha"]
+                require(latest["merged"] and latest["id"] == row["id"]
+                        and latest["number"] == row["number"]
+                        and latest["merge_commit_sha"] == row["merge_commit_sha"]
                         and state["merge_sha"] in (None, latest["merge_commit_sha"]), "merged identity changed during observation")
-                return {"status": "verified", "evidence": gate.evidence}
+                journal._active()
+                require(self._state(journal, spec) == state, "PR state changed during observation")
+                result = {"status": "verified", "evidence": gate.evidence}
+                if include_merge:
+                    result["merge"] = {"id":latest["id"], "number":latest["number"],
+                        "head_sha":spec["head_sha"], "merge_sha":latest["merge_commit_sha"]}
+                return result
             except EvidencePrError:
                 raise
             except Exception:

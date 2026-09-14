@@ -324,6 +324,79 @@ foreach(witness_group IN ITEMS Lifecycle State Boundary Output)
 endforeach()
 
 lmdj_add_test(
+  NAME build.release_candidate_merge_receipt
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_receipt_recovery_test.py MergeReceiptTest -v
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+foreach(witness_receipt_case IN ITEMS
+    test_absence_is_passive_and_does_not_create_a_marker
+    test_authority_exception_cannot_leak_through_full_traceback
+    test_cold_success_needs_no_extra_verification_even_at_budget_limit
+    test_unconfirmed_command_output_is_pending_without_reexecution
+    test_changed_actual_artifact_cannot_recover_a_success_bit
+    test_missing_enrolled_history_is_not_absence
+    test_artifact_changed_by_final_authority_check_is_refused)
+  lmdj_add_test(
+    NAME "build.release_candidate_receipt_${witness_receipt_case}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_receipt_recovery_test.py "WitnessReceiptTest.${witness_receipt_case}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 60
+  )
+endforeach()
+
+foreach(candidate_workspace_case IN ITEMS
+    WorkspaceTest.test_late_source_guard_cannot_recreate_workspace_history
+    WorkspaceTest.test_late_source_guard_cannot_accept_missing_installed_history
+    WorkspaceTest.test_observation_does_not_create_worktree_or_install
+    WorkspaceTest.test_real_owned_checkout_install_and_cold_recovery
+    WorkspaceTest.test_unowned_existing_path_is_not_adopted_or_overwritten
+    WorkspaceTest.test_process_death_after_checkout_recovers_exact_creation_once
+    WorkspaceTest.test_process_death_after_install_never_replays_unknown_command
+    WorkspaceTest.test_missing_enrolled_state_is_not_recreated
+    WorkspaceTest.test_authority_loss_at_install_intent_stops_child
+    InstallFailureTest.test_nonzero_install_is_retained_and_never_replayed)
+  lmdj_add_test(
+    NAME "build.release_candidate_task_workspace_${candidate_workspace_case}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_task_workspace_test.py "${candidate_workspace_case}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 90
+  )
+endforeach()
+
+foreach(candidate_parent_case IN ITEMS
+    test_unknown_cut_post_cannot_be_replayed_by_parent
+    test_unknown_cut_put_cannot_be_replayed_by_parent
+    test_confirmed_witness_recovers_after_parent_checkpoint_interruption
+    test_started_workspace_without_child_enrollment_is_not_recreated
+    test_main_observer_cannot_recreate_missing_parent_history
+    test_original_authority_exception_has_no_secret_traceback
+    test_cut_review_pending_cannot_generate_witness_or_install)
+  lmdj_add_test(
+    NAME "build.release_candidate_transition_${candidate_parent_case}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_transition_test.py "TransitionTest.${candidate_parent_case}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120
+  )
+endforeach()
+
+# Entire real-Git parent journey, including two PRs and cold receipt recovery.
+# Content checks are explicit fixtures; this does not replace the full Portal
+# rehearsal or live GitHub/protection/review and release acceptance.
+lmdj_add_test(
+  NAME build.release_candidate_transition_journey
+  TIER e2e
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_transition_test.py TransitionTest.test_cut_merge_is_pending_until_the_reviewed_witness_squash -v
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 900
+)
+
+lmdj_add_test(
   NAME build.release_candidate_witness_schema
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_witness_test.py WitnessSchemaTest -v
