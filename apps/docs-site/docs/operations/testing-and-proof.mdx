@@ -18,7 +18,7 @@ DeepSeek-V4.1-Flash（API 模型名 `deepseek-flash`），运行在 Netcup 主�
 `netcup01` 上已安装的 release 内。步骤顺序固定为 `collect-t2`（完整可信输入：
 base/head 全量字节与精确 diff）→ `run-engine.sh --witness`（读回安装的引擎、
 bundle 与 `runtime.toml` 身份）→ `run-engine.sh --input`（引擎，`flock` 单槽位）→
-`capture --backend deepseek` → `finalize`；publisher 与 merged-PR scope map 不变。
+`capture --backend deepseek` → `finalize`；随后由独立 publisher 发布，merged-PR scope map 不变。
 引擎进程只拿到 `PR_AGENT_DEEPSEEK_API_KEY`，没有 GitHub token；每次请求显式
 `thinking: disabled`，`max_tokens` 4096，单请求 60 秒、单次评审 600 秒上限。
 预算由引擎内的 append-only ledger 强制：每 PR USD 1、试点累计 USD 20、
@@ -57,6 +57,22 @@ attempt 失败。YAML block scalar 的末尾换行仅在能匹配精确路径时
 引擎崩溃或被拒绝时，`capture` 记一次失败的 deepseek attempt（有限错误类别），
 `finalize` 报告 not-reviewed，job 变红并保留 artifact；不存在 clean 伪装。
 `test_scope` 仍是确定性 `test:full` 下限。
+
+### 修复复核与线程关闭
+
+安装支持 Issue #1305 的 adapter 后，可在 main 上手动运行 PR Review，填写
+`pr_number` 和可选的 `recheck_comment_id`（原始 LMDJ bot inline 评论的数字 ID）。
+默认评审不变；push 或回复“fixed”不会自动关闭线程。
+复核输入包括已认证的原 finding、完整对话、原始文件和修复 diff。
+模型必须明确返回 `resolved`、`unresolved` 或 `insufficient_evidence`；只有可以
+从源码证明、附有原始/当前精确代码引用和因果说明的修复，才能关闭选中的 bot 线程。
+此流程不执行测试，需要运行证据的问题保留人工复核，人工 reviewer 的线程也不会关闭。
+
+发布器再次核对 head、对话和模型输出，先回复证据，再执行 resolve。重试使用回执
+避免重复回复；发现 resolve 后 head 或对话变化时尝试重新打开线程。GitHub 没有
+绑定 head 的原子 resolve，取消或 API 失败仍需人工检查；它不替代合并前的
+current-head review 和 conversation protection。旧引擎缺少显式复核结果时拒绝关闭。
+操作命令、制品和安装边界见 `docs/quality/2026-09-10-pr-agent-netcup-operations.md`。
 
 ## 测试层级
 unit/component 验证局部边界，integration/e2e 验证组合，stress 验证锁自由/并发，Proof 验证 Headless Core 交付链。

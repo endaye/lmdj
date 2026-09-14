@@ -345,6 +345,14 @@ def collect_t2(directory):
         and latest["base_sha"] == target["base_sha"],
         "PR target moved before complete-input publication",
     )
+    requested_comment = os.environ.get("RECHECK_COMMENT_ID", "")
+    if requested_comment:
+        import review_recheck
+        review_scope.require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+                             and re.fullmatch(r"[1-9][0-9]*", requested_comment),
+                             "repair recheck requires an explicit dispatch comment ID")
+        request = review_recheck.collect(review_recheck.client(repo), document, int(requested_comment), git=git, fetch=fetch)
+        review_recheck.attach(document, request)
     changed_paths = review_scope.changed_path_inventory(document["files"])
     context_identity = {
         "repository": repo,
@@ -674,6 +682,22 @@ def publish(directory):
     coverage = coverages.get(attempts[-1]["coverage_sha256"]) if is_v2_history(history) else None
     review_scope.validate_review(policy, original, coverage=coverage, collector=collector, trusted_config=trusted)
     review_scope.require(original == attempts[-1]["review"], "original review artifact mismatch")
+    repair_document = read(directory / "t2-input.json") if is_v2_history(history) else {}
+    requested_comment = os.environ.get("RECHECK_COMMENT_ID", "")
+    repair_native = None
+    if requested_comment or "repair_request" in repair_document:
+        review_scope.require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+                             and re.fullmatch(r"[1-9][0-9]*", requested_comment)
+                             and repair_document.get("repair_request", {}).get("comment_id") == int(requested_comment),
+                             "repair artifact differs from explicit dispatch request")
+        raw_result = read(directory / "t2-result.json")
+        raw_history, _ = adapt_t2_result(raw_result, identity=identity, changed_paths=paths,
+                                        collector=collector, trusted_config=trusted)
+        review_scope.require(raw_history == history, "repair native result differs from authenticated review history")
+        selected = raw_result["attempts"][raw_result["selected_attempt"]]
+        repair_native = selected["native_review"]
+        mapped = t2._validate_native_mapping(repair_native, t2.authenticate_input(repair_document))
+        review_scope.require(mapped == selected["review"], "repair native verdict differs from captured review")
     token = os.environ["GITHUB_TOKEN"]
     # Immutable COMMENT review stores the complete scope record beyond artifact
     # retention. The marker is outside untrusted model text and base64 encoded.
@@ -688,6 +712,11 @@ def publish(directory):
     # not mutable accumulated labels, are authoritative for actual selection.
     pr_review_target.github_request("POST", labels_url, token, {"labels": result["publication"]["labels"]})
     authenticate(identity)  # A race remains historical evidence, never current.
+    if repair_native is not None:
+        import review_recheck
+        receipt = review_recheck.publish(review_recheck.client(identity["repository"]), repair_document,
+                                          repair_native, git=git, fetch=fetch)
+        save(directory / "repair-recheck.json", receipt)
 
 
 def http_refusal_evidence(error):

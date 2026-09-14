@@ -191,12 +191,9 @@ def automated(reader, posted, repo, number, head, bot):
     else:
         coverage = None
     history_marker = pipeline.codec.encode_history(history) if v2 else None
-    payloads = []
-    pipeline.pr_review_target.publish_review(repository, number, head, str(run), str(attempt), backend,
-        {"summary": model["summary"], "findings": model["findings"]}, api=reader.get,
-        coverage=coverage, history_digest=history_digest, history_marker=history_marker,
-        write=lambda path, data: payloads.append(data))
-    expected = payloads[0]
+    expected = pipeline.pr_review_target.review_payload(repository, number, head, str(run), str(attempt), backend,
+        {"summary": model["summary"], "findings": model["findings"]},
+        coverage=coverage, history_digest=history_digest, history_marker=history_marker)
     require(posted["body"].startswith(expected["body"] + "\n\nScope "), "published summary differs from authentic model artifact")
     comments = reader.pages(f"/repos/{repository}/pulls/{number}/reviews/{posted['id']}/comments")
     require(len(comments) == len(expected["comments"]), "published findings inventory differs")

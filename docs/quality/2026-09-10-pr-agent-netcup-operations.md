@@ -5,6 +5,47 @@ Date: 2026-09-10 (Asia/Shanghai)
 Task: LMDJ #1153 / umbrella #1149 T4
 Status: production pilot implementation in progress; see the current record below.
 
+## Explicit repair recheck (Issue #1305)
+
+After the updated adapter is installed, a maintainer can request one source
+repair recheck using the existing workflow on main:
+
+```bash
+gh workflow run pr-review.yml --ref main \
+  -f pr_number=PR_NUMBER -f recheck_comment_id=ORIGINAL_BOT_COMMENT_ID
+```
+
+Use the numeric ID in the original inline comment's GitHub API URL, not its
+review ID or a reply ID. This is opt-in; pushes and “fixed” replies do not
+automatically trigger resolution. Ordinary review is unchanged when the input
+is empty. The existing provider timeout, token and monetary budgets apply.
+
+The collector authenticates the selected LMDJ bot finding against its retained
+review artifact, captures the full conversation and original-to-current source
+change, and binds them to the current PR input. The model returns `resolved`,
+`unresolved` or `insufficient_evidence`. Only source-provable repairs with
+concrete original/current quotes and a causal explanation can resolve. The
+recheck executes no tests or PR files. Runtime claims requiring execution,
+unavailable/expired original artifacts, unsupported path moves and incomplete
+source evidence require manual review. New findings also prevent auto-resolution.
+
+The separate publisher validates the current head and conversation again,
+replies with the verdict and evidence, and resolves only the selected bot
+thread. Human threads are never selected. Retry receipts prevent duplicate
+replies for the same captured request; uncertain writes are reconciled by
+reading their actual state. A detected head/conversation race after resolve
+causes a compensating reopen. GitHub has no conditional-head thread mutation:
+cancellation, API failure or a change after the final read can leave a race
+requiring manual inspection. Current-head review and merge conversation checks
+remain required; this result never grants merge authority.
+
+`pr-review-result-HEAD-RUN-ATTEMPT` retains `t2-input.json` (including
+`repair_request`) and `t2-result.json` (including the native `repair_recheck`
+verdict). The publisher's scope artifact also retains `repair-recheck.json`
+on successful recheck publication. A missing/invalid verdict from an older
+installed adapter fails closed. Install a reviewed adapter with the existing
+`install.sh` procedure below; preserve the previous release and shared ledger.
+
 ## 2026-09-12 takeover and current installation
 
 The owner requested direct DeepSeek integration; the current Task is
