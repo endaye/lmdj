@@ -1,5 +1,6 @@
 #include "pattern_admission_controller.hpp"
 
+#include <chrono>
 #include <utility>
 #include <algorithm>
 #include <limits>
@@ -17,6 +18,15 @@ TransferResult conversion_error(const char* reason) {
 }
 foundation::Result<void> owner_error(const char* reason) {
   return foundation::Result<void>::failure(conversion_error(reason).error());
+}
+std::optional<std::uint64_t> last_retained_watermark(
+    const project_io::SequenceAdmissionState& admission) {
+  if (!admission.candidates.empty()) return admission.candidates.back().watermark;
+  for (auto it = admission.transfers.rbegin(); it != admission.transfers.rend();
+       ++it) {
+    if (!it->terminal) return it->last_watermark;
+  }
+  return std::nullopt;
 }
 }  // namespace
 
@@ -194,14 +204,17 @@ foundation::Result<project_io::SequenceAdmissionTransfer> commit_admission_trans
 
 PatternAdmissionOwner::PatternAdmissionOwner(
     project_io::SequenceJournal& journals, std::filesystem::path bundle,
-    foundation::SequenceSessionId session)
-    : journals_(journals), bundle_(std::move(bundle)), session_(std::move(session)) {}
+    foundation::SequenceSessionId session, Clock clock)
+    : journals_(journals), bundle_(std::move(bundle)), session_(std::move(session)),
+      clock_(clock ? std::move(clock)
+                   : Clock{[] { return std::chrono::steady_clock::now(); }}) {}
 
 foundation::Result<void> PatternAdmissionOwner::prepare(
     const project_io::SequenceAdmissionPreparation& preparation) {
   const auto prepared = journals_.prepare_admission(bundle_, session_, preparation);
   if (!prepared.has_value()) return prepared;
   identity_ = preparation.identity;
+  prepared_at_ = clock_();
   return foundation::Result<void>::success();
 }
 
@@ -212,6 +225,29 @@ foundation::Result<void> PatternAdmissionOwner::activate(
     return owner_error("admission_fence_unresolved");
   }
   return journals_.retain_admission_fence(bundle_, session_, *identity_, fence);
+}
+
+foundation::Result<void> PatternAdmissionOwner::cutoff(
+    const project_io::SequenceAdmissionFence& fence) {
+  if (!identity_) return owner_error("admission_identity_missing");
+  if (fence.kind != project_io::SequenceFenceKind::cutoff) {
+    return owner_error("admission_fence_unresolved");
+  }
+  return journals_.retain_admission_fence(bundle_, session_, *identity_, fence);
+}
+
+bool PatternAdmissionOwner::deadline_elapsed(
+    const project_io::SequenceAdmissionPreparation& preparation) const {
+  if (!prepared_at_) return false;
+  const auto elapsed = clock_() - *prepared_at_;
+  return elapsed >= std::chrono::milliseconds{preparation.fence_timeout_ms};
+}
+
+foundation::Result<void> PatternAdmissionOwner::close_at(
+    const project_io::SequenceAdmissionState& admission,
+    project_io::SequenceAdmissionCloseReason reason) {
+  if (admission.closure) return foundation::Result<void>::success();
+  return close({last_retained_watermark(admission), reason});
 }
 
 foundation::Result<PatternAdmissionAdmit> PatternAdmissionOwner::admit(
@@ -231,7 +267,24 @@ foundation::Result<PatternAdmissionAdmit> PatternAdmissionOwner::admit(
   const auto& admission = *journal.value().admission;
   if (journal.value().state == project_io::SequenceSessionState::owner_lost ||
       journal.value().state == project_io::SequenceSessionState::abandoned ||
-      admission.completed || admission.closure || !admission.admission_fence ||
+      admission.completed) {
+    return foundation::Result<PatternAdmissionAdmit>::success(
+        PatternAdmissionAdmit::live_only);
+  }
+  if (admission.closure) {
+    return foundation::Result<PatternAdmissionAdmit>::success(
+        PatternAdmissionAdmit::live_only);
+  }
+  if (deadline_elapsed(admission.preparation)) {
+    const auto closed = close_at(
+        admission, project_io::SequenceAdmissionCloseReason::deadline);
+    if (!closed.has_value()) {
+      return foundation::Result<PatternAdmissionAdmit>::failure(closed.error());
+    }
+    return foundation::Result<PatternAdmissionAdmit>::success(
+        PatternAdmissionAdmit::live_only);
+  }
+  if (!admission.admission_fence ||
       candidate.runtime_frame < admission.admission_fence->effective_frame) {
     return foundation::Result<PatternAdmissionAdmit>::success(
         PatternAdmissionAdmit::live_only);
@@ -239,7 +292,16 @@ foundation::Result<PatternAdmissionAdmit> PatternAdmissionOwner::admit(
   const auto durable = journals_.append_admission_candidate(
       bundle_, session_, *identity_, candidate);
   if (!durable.has_value()) {
-    return foundation::Result<PatternAdmissionAdmit>::failure(durable.error());
+    auto error = durable.error();
+    error.details["uncertain_suffix_watermark"] = candidate.watermark;
+    const auto prefix = last_retained_watermark(admission);
+    if (prefix) error.details["last_retained_watermark"] = *prefix;
+    const auto closed = close_at(
+        admission, project_io::SequenceAdmissionCloseReason::storage_failure);
+    if (!closed.has_value() && error.details["journal_retained"] != true) {
+      return foundation::Result<PatternAdmissionAdmit>::failure(closed.error());
+    }
+    return foundation::Result<PatternAdmissionAdmit>::failure(std::move(error));
   }
   return foundation::Result<PatternAdmissionAdmit>::success(
       PatternAdmissionAdmit::retained);
