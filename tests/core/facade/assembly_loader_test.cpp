@@ -1,5 +1,6 @@
 #include <lmdj/facade/assembly_loader.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -13,10 +14,12 @@
 #include <nlohmann/json.hpp>
 
 #include <lmdj/foundation/error.hpp>
+#include <lmdj/providers/local_sample_slice/factory.hpp>
 #include <lmdj/provider/capability.hpp>
 #include <lmdj/provider/provider.hpp>
 #include <lmdj/provider/registry.hpp>
 #include "tests/core/support/test.hpp"
+#include "tests/core/provider/byte_fixture.hpp"
 
 namespace {
 
@@ -71,10 +74,8 @@ class ProofProvider final : public Provider {
     return {"proof.candidate.v2"};
   }
 
-  AttemptResult run(
-      AttemptId attempt_id,
-      const CapabilityRequest&,
-      ArtifactSink) override {
+  AttemptResult run(lmdj::provider::ProviderRunContext context) override {
+    const auto attempt_id = context.attempt_id;
     return AttemptResult{
         std::move(attempt_id),
         std::nullopt,
@@ -130,13 +131,13 @@ CapabilityDescriptor proof_capability() {
 ProviderRegistration registration(
     std::string id,
     std::optional<ModelIdentity> model_identity = std::nullopt) {
-  return ProviderRegistration{
+  return byte_fixture::opaque(ProviderRegistration{
       std::make_shared<ProofProvider>(std::move(id)),
-      "1.0.5",
+      "2.0.2",
       std::string(64, 'a'),
       std::move(model_identity),
       {proof_capability()},
-  };
+   {}, {} });
 }
 
 std::optional<ModelIdentity> declared_model_identity(
@@ -180,7 +181,7 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
       {
           CompiledProvider{
               "local.proof.success",
-              "1.0.5",
+              "2.0.2",
               [success_model] {
                 return registration(
                     "local.proof.success", success_model);
@@ -189,13 +190,15 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
           },
           CompiledProvider{
               "local.proof.failure",
-              "1.0.5",
+              "2.0.2",
               [failure_model] {
                 return registration(
                     "local.proof.failure", failure_model);
               },
               failure_model,
           },
+          CompiledProvider{"local.sample.slice", "1.0.2",
+              lmdj::providers::local_sample_slice_registration, std::nullopt},
       },
   };
 }
@@ -228,7 +231,7 @@ void success_and_filtering() {
   auto loaded =
       lmdj::facade::load_assembly(assembly_path, schema_path, compiled);
   LMDJ_CHECK(loaded.has_value());
-  LMDJ_CHECK(loaded.value().providers->list().size() == 2);
+  LMDJ_CHECK(loaded.value().providers->list().size() == 3);
   LMDJ_CHECK(loaded.value().provider_policy.allowed_regions ==
              std::vector<std::string>{"local"});
   LMDJ_CHECK(
@@ -252,7 +255,7 @@ void success_and_filtering() {
       std::vector<std::string>{"edge"});
 
   auto filtered = assembly;
-  filtered["providers"].erase(filtered["providers"].begin() + 1);
+  filtered["providers"].erase(filtered["providers"].begin() + 1, filtered["providers"].end());
   const auto filtered_path = temp.path() / "filtered.json";
   write_json(filtered_path, filtered);
   loaded =
@@ -386,9 +389,53 @@ void rejects_invalid_and_unavailable_components() {
   LMDJ_CHECK(!altered.has_value());
 }
 
+void installed_slice_reference_boundary() {
+  const auto loaded = lmdj::facade::load_installed_assembly(
+      std::filesystem::absolute("products/lmdj/assembly.json"));
+  LMDJ_CHECK(loaded.has_value());
+  const auto providers = loaded.value().providers->list();
+  LMDJ_CHECK(providers.size() == 3);
+  const auto slice = std::find_if(providers.begin(), providers.end(),
+      [](const auto& value) { return value.id == "local.sample.slice"; });
+  LMDJ_CHECK(slice != providers.end());
+  const auto lock = read_json("products/lmdj/assembly.lock.json");
+  for (const auto& entry : lock.at("providers")) {
+    if (entry.at("id") == slice->id) {
+      LMDJ_CHECK(slice->artifact_sha256 == entry.at("sha256").get<std::string>());
+      LMDJ_CHECK(slice->version == entry.at("version").get<std::string>());
+    }
+  }
+  LMDJ_CHECK(slice->capabilities.front().platforms == std::vector<std::string>{"test"});
+  TemporaryDirectory temp;
+  const auto clock = [] { return std::string("2026-09-09T00:00:00.000Z"); };
+  lmdj::provider::AttemptStore store(temp.path(), loaded.value().provider_policy, clock);
+  LMDJ_CHECK(!store.selected_provider("sample.slice.v1").has_value());
+  LMDJ_CHECK(store.set_provider_selection("sample.slice.v1", slice->id, *loaded.value().providers).has_value());
+  const CapabilityRequest request{"sample.slice.v1", {{"source_audio", {std::string(64, 'a'), "audio/wav", 44}}},
+      nlohmann::json::object(), "public", "test", "local", {"sample.slice.execute"}};
+  const lmdj::provider::ExecutionOptions options{nullptr, 16777216, 262144,
+      std::make_shared<lmdj::provider::StagingBudget>(67108864)};
+  const auto denied = store.execute(AttemptId{"slice-denied"}, request, *loaded.value().providers, options);
+  LMDJ_CHECK(denied.has_value() && denied.value().error.has_value());
+  LMDJ_CHECK(denied.value().error->code == lmdj::foundation::ErrorCode::permission_denied);
+  auto policy = loaded.value().provider_policy;
+  policy.granted_permissions.push_back("sample.slice.execute");
+  lmdj::provider::AttemptStore authorized(temp.path(), policy, clock);
+  const auto missing = authorized.execute(AttemptId{"slice-no-owner"}, request, *loaded.value().providers, options);
+  LMDJ_CHECK(missing.has_value() && missing.value().error.has_value());
+  LMDJ_CHECK(missing.value().error->details.at("reason") == "input_artifact_unavailable");
+  lmdj::provider::AttemptStore reopened(temp.path(), policy, clock);
+  for (const auto& result : {denied.value(), missing.value()}) {
+    const auto terminal = reopened.inspect(result.attempt_id);
+    LMDJ_CHECK(terminal.has_value() && terminal.value().error->code == result.error->code);
+    LMDJ_CHECK(terminal.value().candidate_outputs.empty());
+  }
+}
+
 }  // namespace
 
 int main() {
+  installed_slice_reference_boundary();
   success_and_filtering();
   rejects_invalid_and_unavailable_components();
   return 0;

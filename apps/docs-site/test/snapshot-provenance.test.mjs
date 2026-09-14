@@ -7,6 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
+import {glob} from 'glob';
 import {
   createSquashWitness,
   createSnapshotMetadata,
@@ -15,10 +16,17 @@ import {
   readRepoFactsAtRevision,
   resolveIntroducingRevision,
   verifySnapshotProvenance,
+  SOURCE_DOCUMENT_COUNT,
 } from '../scripts/lib/snapshot-provenance.mjs';
 import {checkSnapshotProjection} from '../scripts/check-snapshot-projection.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+
+test('current page inventory agrees with the independent snapshot completeness pin', async () => {
+  const pages = await glob('**/*.mdx', {cwd: path.join(REPO_ROOT, 'apps/docs-site/docs')});
+  assert.equal(pages.length, SOURCE_DOCUMENT_COUNT,
+    'why: current pages would fail the snapshot completeness gate; remedy: reconcile the page inventory and SOURCE_DOCUMENT_COUNT in the same Task');
+});
 
 const execFileAsync = promisify(execFile);
 const VERSION = '1.0.14.0';
@@ -775,6 +783,41 @@ test('the squash witness remedy derives its introducing revision from HEAD', asy
       }),
       /snapshot metadata path is absent at HEAD/,
     );
+  } finally {
+    await rm(fixture.repoRoot, {recursive: true, force: true});
+  }
+});
+
+test('historical page inventory is bound to its source rather than the current freeze count', async () => {
+  const fixture = await initializeFixture();
+  try {
+    const metadata = await generateWorkingSnapshot(fixture);
+    const options = verifierOptions(fixture, metadata, fixture.revision);
+    delete options.expectedDocCount;
+    assert.deepEqual(await verifySnapshotProvenance(options), []);
+    const incomplete = structuredClone(metadata);
+    incomplete.source_documents.pop();
+    assert.match((await verifySnapshotProvenance({...options, metadata: incomplete})).join('\n'),
+      /source document inventory does not match source revision/);
+  } finally {
+    await rm(fixture.repoRoot, {recursive: true, force: true});
+  }
+});
+
+
+test('binary profile projection follows registration at the recorded revision', async () => {
+  const fixture = await initializeFixture();
+  try {
+    const profile = 'contracts/artifact-audio/lmdj.audio.pcm16-wav.v1.md';
+    await put(fixture.repoRoot, profile, 'binary profile bytes');
+    await put(fixture.repoRoot, 'products/lmdj/assembly.json', JSON.stringify({contracts: []}));
+    const before = await commit(fixture.repoRoot, 'unregistered profile', SOURCE_DATE);
+    assert.equal((await projectionManifest(fixture.repoRoot, before)).files.some(({path}) => path === profile), false);
+    await put(fixture.repoRoot, 'products/lmdj/assembly.json', JSON.stringify({contracts: [{id: 'lmdj.audio.pcm16-wav.v1', version: '1.0.0'}]}));
+    const after = await commit(fixture.repoRoot, 'register profile', INTRO_DATE);
+    assert.equal((await projectionManifest(fixture.repoRoot, after)).files.some(({path}) => path === profile), true);
+    assert.equal((await projectionManifest(fixture.repoRoot, before)).files.some(({path}) => path === profile), false,
+      'historical projection must not absorb a later registration; remedy: select using the recorded Assembly');
   } finally {
     await rm(fixture.repoRoot, {recursive: true, force: true});
   }

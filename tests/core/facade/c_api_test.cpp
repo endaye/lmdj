@@ -294,9 +294,10 @@ void test_assembly_composition_through_c_abi() {
   const auto parsed = nlohmann::json::parse(response);
   lmdj_string_free(response);
   const auto& providers = parsed.at("result").at("providers");
-  LMDJ_CHECK(providers.size() == 2);
+  LMDJ_CHECK(providers.size() == 3);
   LMDJ_CHECK(providers.at(0).at("id") == "local.proof.failure");
   LMDJ_CHECK(providers.at(1).at("id") == "local.proof.success");
+  LMDJ_CHECK(providers.at(2).at("id") == "local.sample.slice");
   lmdj_engine_free(engine);
 
   const auto invalid = assembly_config_json(

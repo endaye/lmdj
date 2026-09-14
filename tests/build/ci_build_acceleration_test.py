@@ -207,7 +207,6 @@ class CiBuildAccelerationTest(unittest.TestCase):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertIn("change-scope", job)
-                self.assertIn("pre-heavy-gate", job)
 
     def test_linux_native_jobs_retain_every_host_capacity_lock_waiter(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
@@ -267,7 +266,6 @@ class CiBuildAccelerationTest(unittest.TestCase):
     def test_package_uses_lfs_and_bounded_acceleration_without_ccache(self) -> None:
         job = self.workflow_job("package")
         self.assertIn("change-scope", job)
-        self.assertIn("pre-heavy-gate", job)
         self.assertIn(CORE_ROLE, job)
         self.assertNotIn("select-ubuntu-runner", job)
         self.assertIn("lfs: true", job)
@@ -301,7 +299,7 @@ class CiBuildAccelerationTest(unittest.TestCase):
         for index, job_name in enumerate(HEAVY_JOBS):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                for dependency in ("change-scope", "pre-heavy-gate", *HEAVY_JOBS[:index]):
+                for dependency in ("change-scope", *HEAVY_JOBS[:index]):
                     self.assertIn(dependency, job)
                 for later in HEAVY_JOBS[index + 1:]:
                     self.assertNotIn(

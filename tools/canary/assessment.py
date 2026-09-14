@@ -14,6 +14,11 @@ from . import planning, records as r
 import review_scope
 
 BACKENDS = review_scope.BACKENDS
+# Compatibility consumers retain their historical opt-in three-backend policy;
+# the protocol registry is exposed separately so DeepSeek cannot be mistaken
+# for a replacement of the canary's configured Claude/Grok routes.
+V2_BACKENDS = review_scope.V2_BACKENDS
+BACKEND_PROVIDERS = review_scope.BACKEND_PROVIDERS
 MAX_BACKEND_SECONDS = review_scope.MAX_BACKEND_SECONDS
 MAX_INPUT_BYTES = 400000
 MAX_OUTPUT_BYTES = 64000

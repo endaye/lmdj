@@ -37,7 +37,7 @@ class ReleaseSkillTest(unittest.TestCase):
 
     def test_skill_is_navigation_not_policy(self) -> None:
         source = self.read(SKILL)
-        for command in ("audit", "prepare", "push-tag", "create-draft", "verify-draft", "promote"):
+        for command in ("audit", "prepare", "push-tag", "create-draft", "verify-draft", "verify-published", "promote"):
             self.assertIn(f"scripts/release.sh {command}", source)
 
         policy = json.loads(self.read(RELEASE_POLICY))
@@ -59,7 +59,7 @@ class ReleaseSkillTest(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertNotIn(value, source)
 
-    def test_skill_reads_authority_and_stops_after_one_mutation(self) -> None:
+    def test_skill_reads_authority_and_verifies_each_transition(self) -> None:
         source = self.read(SKILL)
         for authority in (
             "docs/governance/git-workflow.md",
@@ -68,39 +68,37 @@ class ReleaseSkillTest(unittest.TestCase):
             "docs/design/2026-08-13-lmdj-standard-release-pipeline-design.md",
         ):
             self.assertIn(authority, source)
-        self.assertIn("at most one authorized mutation", source)
-        self.assertIn("Stop after that mutation", source)
+        self.assertIn("current `AGENTS.md`", source)
+        self.assertIn("verify each result, and continue without renewed approval", source)
         self.assertGreaterEqual(
             source.count("scripts/release.sh audit --remote --tag TAG"),
             2,
         )
 
-    def test_skill_rejects_blanket_authority_and_continuous_transition_plans(self) -> None:
+    def test_skill_preserves_overall_authority_and_explicit_restrictions(self) -> None:
         source = self.read(SKILL)
-        self.assertIn("## Complete response contract", source)
-        contract = source.index("## Complete response contract")
-        first_command = source.index("scripts/release.sh audit --remote --tag TAG")
-        self.assertLess(contract, first_command)
         for expected in (
-            "For any initial, multi-transition, or blanket request, the entire response/action is exactly:",
-            "Verified state: Run and describe only `scripts/release.sh audit --remote --tag TAG`; report the exact observed historical/current state; no mutation yet.",
-            "Next authorization: After audit, use exactly one of the actionable or no-permitted-transition templates below.",
-            "Unperformed states: List only mutation/state-transition actions not executed in this turn; never list an audit or verification already reported under Verified state, and never relabel historically completed tag or Release states as unperformed.",
-            "After audit, if the state is actionable releasable, the entire response/action is exactly:",
-            "Next authorization: Name exactly one permitted next stable transition and request authorization for that boundary.",
-            "For a later boundary-specific authorized turn with actionable releasable state, the entire response/action is exactly:",
-            "Verified state: Audit first and report the current state.",
-            "Unperformed states: List only mutation/state-transition actions not executed in this turn; never list an audit or verification already reported under Verified state, and never relabel historically completed tag or Release states as unperformed.",
-            "Do not output an ordered multi-stage command/action sequence; the template is the complete response.",
+            "One overall release authorization covers its scoped transitions",
+            "Explicit narrower user restrictions win",
+            "For an audit-only, design or development request, keep release mutations out of",
+            "A boundary-specific restriction still stops at that boundary",
+            "does not imply an unattended controller exists",
         ):
             self.assertIn(expected, source)
+        for obsolete in (
+            "at most one authorized mutation",
+            "Stop after that mutation",
+            "request authorization for that boundary",
+            "Do not output an ordered multi-stage",
+        ):
+            self.assertNotIn(obsolete, source)
 
     def test_skill_reports_authority_boundaries_without_crossing_them(self) -> None:
         source = self.read(SKILL)
         for expected in (
-            "Verified state",
-            "Next authorization",
-            "Unperformed states",
+            "last verified state",
+            "scope expansion",
+            "remaining work",
             "tag",
             "release_id",
             "plan_sha256",
@@ -114,23 +112,27 @@ class ReleaseSkillTest(unittest.TestCase):
     def test_skill_reports_non_actionable_state_without_rewriting_history(self) -> None:
         source = self.read(SKILL)
         for expected in (
-            "After audit, if no transition is permitted, the entire response/action is exactly:",
-            "Verified state: Report the observed historical/current state accurately.",
-            "Next authorization: none; explain why no permitted mutation exists.",
-            "Unperformed states: List only mutation/state-transition actions not executed in this turn; never list an audit or verification already reported under Verified state, and never relabel historically completed tag or Release states as unperformed.",
-            "published (audit-only)",
+            "without republishing or",
+            "Do not relabel historically completed states as unperformed",
             "abandoned",
             "superseded-unreleased",
-            "allocated (not releasable)",
+            "allocated identity needs candidate evidence",
             "unknown",
             "conflict",
             "unverifiable",
             "external-error",
-            "Only an actionable releasable state may name exactly one next authorization.",
+            "Only a verified releasable intent admits new preparation/tag/Draft/publication",
         ):
             self.assertIn(expected, source)
         self.assertNotIn("all are unperformed", source)
         self.assertNotIn("release verification as unperformed", source.lower())
+
+    def test_publication_records_ledger_before_promotion(self) -> None:
+        source = self.read(SKILL)
+        self.assertIn("evidence-only reviewed PR", source)
+        self.assertIn("promote requires a published intent", source)
+        self.assertLess(source.index("changing its intent to published"),
+                        source.index("continue to covered Channel promotion"))
 
     def test_skill_states_the_full_exact_main_evidence_precondition(self) -> None:
         source = self.read(SKILL)
@@ -186,7 +188,7 @@ class ReleaseSkillTest(unittest.TestCase):
             "complete, current, exact-candidate evidence",
             "Expired or missing evidence",
             "new authorized test request",
-            "separate authorization and verification",
+            "separate verification boundaries",
         ):
             with self.subTest(document="git-workflow", expected=expected):
                 self.assertIn(expected, git_workflow)

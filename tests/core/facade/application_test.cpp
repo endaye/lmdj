@@ -515,7 +515,7 @@ FacadeBundleFixture facade_bundle_fixture(
   nlohmann::json index{
       {"compression", "none"},
       {"contract", "lmdj.project-bundle.v1"},
-      {"contract_version", "1.2.0"},
+      {"contract_version", "1.3.0"},
       {"entries", std::move(encoded_entries)},
       {"project_contract", project_contract},
       {"project_id", std::move(declared_project_id)},
@@ -1034,20 +1034,20 @@ void test_module_versions_and_dependencies_are_exact() {
        nlohmann::json{
            {"contract", "lmdj.module.v1"},
            {"module", "application-facade"},
-           {"version", "3.1.0"},
-           {"api_version", 2},
+           {"version", "5.3.0"},
+           {"api_version", 3},
            {"dependencies",
             {
                 {"foundation", "0.4.0"},
-                {"authoring-domain", "3.0.0"},
-                {"project-io", "3.0.0"},
-                {"project-cooker", "1.1.0"},
-                {"audio-runtime", "3.0.0"},
-                {"provider-sdk", "1.1.4"},
+                {"authoring-domain", "4.1.0"},
+                {"project-io", "4.1.0"},
+                {"project-cooker", "1.2.0"},
+                {"audio-runtime", "4.0.3"},
+                {"provider-sdk", "2.2.0"},
             }},
        }));
   LMDJ_CHECK(project_io.at("module") == "project-io");
-  LMDJ_CHECK(project_io.at("version") == "3.0.0");
+  LMDJ_CHECK(project_io.at("version") == "4.1.0");
 }
 
 void test_all_operations_share_one_facade_and_revision_contract() {
@@ -1078,7 +1078,7 @@ void test_all_operations_share_one_facade_and_revision_contract() {
           "pattern_slots",
           "performances",
       });
-  LMDJ_CHECK(projected.at("contract") == "lmdj.project.v4");
+  LMDJ_CHECK(projected.at("contract") == "lmdj.project.v5");
   LMDJ_CHECK(projected.at("revision") == 5);
   LMDJ_CHECK(projected.at("patterns").at(kPatternId).at("events").size() == 4);
 
@@ -1126,10 +1126,9 @@ void test_all_operations_share_one_facade_and_revision_contract() {
       response.at("result").at("provider_id") ==
       "local.proof.success");
 
-  response = application.command(
-      {
+  auto provider_request = nlohmann::json{
           {"operation", "provider.run"},
-          {"attempt_id", "attempt-facade-success"},
+          {"attempt_id", "attempt-facade-bound-refusal"},
           {"capability", kCapability},
           {"inputs",
            nlohmann::json::array({
@@ -1149,7 +1148,18 @@ void test_all_operations_share_one_facade_and_revision_contract() {
           {"region", "local"},
           {"required_permissions",
            nlohmann::json::array({"proof.execute"})},
-      });
+      };
+  response = application.command(provider_request);
+  check_error(response, "NOT_FOUND");
+  LMDJ_CHECK(response.at("error").at("details").at("reason") == "input_artifact_unavailable");
+  const auto refused = application.query({{"operation", "attempt.inspect"},
+      {"attempt_id", "attempt-facade-bound-refusal"}});
+  check_success(refused, nullptr);
+  LMDJ_CHECK(refused.at("result").at("status") == "failed");
+  LMDJ_CHECK(refused.at("result").at("request").at("inputs") == provider_request.at("inputs"));
+  provider_request["inputs"] = nlohmann::json::array();
+  provider_request["attempt_id"] = "attempt-facade-success";
+  response = application.command(provider_request);
   check_success(response, nullptr);
   check_exact_keys(
       response.at("result"),
@@ -1183,8 +1193,7 @@ void test_all_operations_share_one_facade_and_revision_contract() {
              "attempt-facade-success");
   LMDJ_CHECK(response.at("result").at("status") == "succeeded");
   LMDJ_CHECK(
-      response.at("result").at("request").at("inputs").at(0).at("port") ==
-      "inputs");
+      response.at("result").at("request").at("inputs").empty());
   LMDJ_CHECK(
       response.at("result").at("minted_outputs") == expected_outputs);
   LMDJ_CHECK(
@@ -1873,6 +1882,7 @@ void test_exact_shapes_routing_and_invalid_scalars_fail_before_mutation() {
       "sequence.recovery.apply",
       "sequence.recovery.discard",
       "render.offline",
+      "provider.permissions.configure",
       "provider.select",
       "provider.run",
   };
@@ -2127,7 +2137,7 @@ void test_project_inspect_projects_v4_lineage_and_recording_revision() {
        "sequence_settings",
        "pattern_slots",
        "performances"});
-  LMDJ_CHECK(projected.at("contract") == "lmdj.project.v4");
+  LMDJ_CHECK(projected.at("contract") == "lmdj.project.v5");
   LMDJ_CHECK(projected.at("assets").at(uuid(702)).at("lineage").is_null());
   LMDJ_CHECK(
       projected.at("performances").at(uuid(705)).at("recording_revision") ==

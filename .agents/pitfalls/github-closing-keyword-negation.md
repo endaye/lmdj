@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-03
     occurrence: https://github.com/endaye/lmdj/pull/477
     observed_by: Codex GPT-5
+  - date: 2026-09-09
+    occurrence: https://github.com/endaye/lmdj/pull/1121
+    observed_by: Codex gpt-5.6-luna (implementation); Codex coordinator (review)
 exit: gate:tests/build/ci_pr_body_lint_test.py
 ---
 
@@ -52,9 +55,24 @@ Before `gh pr create`, run the deterministic check the shipping flow mandates in
 python3 tests/build/ci_pr_body_lint.py --body-file <pr-body-file>
 ```
 
-Its regression coverage over the four real recurrences is
+Its regression tests cover the deterministic subset of four historical
+recurrences; they do not emulate GitHub's complete external parser or replace
+the live relation inspection. The UTC 2026-09-09 recurrence was PR #1121: its
+non-adjacent negation passed the existing lint, but GitHub still emitted a
+ClosedEvent with PR1121 as the closer for #666. The coordinator reopened #666
+and recorded the recovery at
+https://github.com/endaye/lmdj/issues/666#issuecomment-5606083941.
+
+The regression coverage over the four historical fixtures is
 [`tests/build/ci_pr_body_lint_test.py`](../../tests/build/ci_pr_body_lint_test.py).
 The lint reads the body only, so it cannot see a closing directive added later
 through the GitHub web editor: after every merge that intentionally preserves an
 Issue, still query that Issue's live state, and if it was closed, reopen it and
-record why.
+record why. The PR #1121 recurrence adds a second boundary: before a guarded
+merge, the shipping skill must inspect the complete paginated live
+`closingIssuesReferences` connection and compare it with every explicitly
+retained/deferred Issue in the body. If GitHub reports an unintended closing
+relation, the premerge check fails with `why: live parser relation contradicts
+the retained/deferred Issue` and `remedy: remove the closing directive, rerun
+the body lint, and re-query until the relation is absent`; this is external
+parser inspection in the skill, not a fuzzy-prose or new required-CI gate.

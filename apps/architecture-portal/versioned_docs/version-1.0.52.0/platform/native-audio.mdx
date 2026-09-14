@@ -1,0 +1,64 @@
+---
+title: Native Audio
+area: platform
+status: partial
+owners: [audio, platform]
+source_paths:
+  - packages/audio-runtime
+  - apps/native-host/src/capture_writer.cpp
+  - apps/native-host/src/main.cpp
+  - tests/core/audio/coreaudio_output_test.cpp
+  - docs/design/2026-08-02-native-realtime-coreaudio-probe-design.md
+  - docs/research/2026-09-09-cardputer-audio-hearing.md
+  - docs/prd/decisions/2026-09-10-cardputer-runtime-host-first-slice.md
+  - docs/design/2026-09-10-cardputer-runtime-host.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {StatusBadge} from '@site/src/components/StatusBadge';
+
+<BuildIdentity />
+
+## 已实现范围
+<StatusBadge status="partial" /> 实时引擎、Pattern origin、整数 transport anchor、Bar-boundary SPSC、CoreAudio output 自动化 Probe 与 Native Host Sequence capture 已实现。
+## 实时边界
+非实时线程准备 Snapshot/样本；实时回调只推进整数 transport、发布有界 Bar/Voice 状态并写设备 buffer。Project mutation、journal 与 quantization 永不进入回调。
+
+Engine 的完整 64 位 telemetry 值通过固定三缓冲发布，多个非实时观察者只在读取侧串行，音频线程不获取该 mutex。Native Host 使用已有 Facade mutex 串行 CaptureWriter drain 与其他 Engine control 操作；等待和 join 不持有它。capture origin 在 active/首个 ring event 之前发布，最终计数在 idle 之前发布，保证 writer 在 callback 返回前 drain 或收尾也能观察正确值。start/stop 仍要求 callback quiescence；32 位同步实现不构成设备 deadline 证据。
+## 自动化证据
+单元、stress 与 CoreAudio output 测试验证算法、队列和平台接线。
+## 物理验收
+声卡/扬声器、主观手感、端到端延迟和长时间设备生命周期必须单列证据，自动化结果不能代替。
+
+### Cardputer ADV：指定探针已听测，完整 Host 未验收
+
+[2026-09-09 音频对照记录](https://github.com/endaye/lmdj/blob/main/docs/research/2026-09-09-cardputer-audio-hearing.md)
+保留了早期听测未符合预期，以及后续同机内置扬声器的人工确认：固定 1000 Hz
+短音的直出／Core 对照经两次原样复听一致；独立的原幅度／两倍／原幅度长音
+两轮符合预期，无刺耳或破音。完整源码／镜像／素材／日志身份与数字旅程在报告中
+分开记录；这不是当前 Product Build 的产品验收。
+
+外部 Host 的已验证顺序是静音启钟、实际发送至少半秒静音后 unmute、播放、
+stop 后零块、先 mute 再排空 DMA／disable／quiesce，最后回收。
+保持 PCM 格式显式配置与寄存器读回；I2S 阻塞写和 codec 操作不进入 Core render。
+不能将一个配置项独自判为根因，或把独立发生器的长音能力视为 Core 长素材能力。
+该探针没有确定正式默认音量；物理 I2S／模拟波形、声压／失真、p99.9／underrun、
+端到端延迟、持续音乐负载和完整 Host 断连／替换／恢复旅程仍待验证。
+
+### 首版设计与待测目标
+
+[首版 Decision](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-09-10-cardputer-runtime-host-first-slice.md)
+已批准 USB 装载后本地演奏的四 Pad 鼓机范围；
+[工程设计](https://github.com/endaye/lmdj/blob/main/docs/design/2026-09-10-cardputer-runtime-host.md)
+固定了合计 1 秒 PCM16 鼓音、至少 4 声部和 30 分钟运行的验收口径。256-frame／
+48 kHz 输出的最差 CPU 服务目标保留 20% 周期余量，同时独立记录调度、DMA deadline
+与实际 underrun；物理输入到模拟输出以同步测量证明，软件注入不替代完整时延。
+音量由 Host 输出档位与静音控制，不改变 Project；默认低档与增益 ramp 是待实现
+策略，不是已经通过的扬声器质量或声压结论。
+
+先完成真实资源测量，再接入音频 Driver/Host、键盘/显示与 USB；正式物理验收前
+必须有可追溯测试 Build 及其不可变快照。未测的 I2S、声音质量、容量和恢复旅程
+仍保持待验证，不能用设计批准或新一轮单音 PASS 填入产品验收行。
+
+## 下一门禁
+正式产品 Host 需要保留设备矩阵、测量数据与可复核录制。

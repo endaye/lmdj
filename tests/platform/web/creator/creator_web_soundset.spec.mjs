@@ -59,7 +59,7 @@
 // Pad under an occupied Set slot, which this Bundle does not contain, and is
 // proved natively in `tests/host/cli_test.py::soundset_acceptance_journey`.
 import {spawn} from "node:child_process";
-import {writeFileSync} from "node:fs";
+import {readFileSync, writeFileSync} from "node:fs";
 import {dirname, resolve} from "node:path";
 import {fileURLToPath} from "node:url";
 
@@ -95,6 +95,17 @@ const UNSUPPORTED = "Fixture Unsupported Audio Kit";
 // four occupied slots and a demo are four objects on the wire, not five.
 const ATTRIBUTION_SHARED_ARTIFACT =
   "e51f446a04207989eea06f7206befd4306362d8a9bcd34b5638100062e2af29c";
+// The one expectation every Host is measured against for this Catalog. The
+// Native and CLI Hosts assert the same file in
+// `tests/host/soundset_catalog_partition_test.py`, so a Web Host that
+// disagrees with them now fails here rather than passing its own suite. Before
+// this, the browser only checked that the two reason strings appeared
+// *somewhere* in a list of four -- two refusals could swap their tokens and
+// nothing noticed.
+const CATALOG_PARTITION = JSON.parse(
+  readFileSync(resolve(fixtureRoot, "catalog-partition.json"), "utf8"),
+);
+
 const IMPORT_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUT_MS = 30_000 + 5_000;
 
@@ -215,6 +226,21 @@ async function installProjectTap(page, catalogEndpoint) {
                 error: response?.error ?? null,
               });
             }
+            // #799. Every Sound Set operation, in order, so the audition leg
+            // can read the Host's own reply rather than inferring it from the
+            // surface -- an audition changes nothing visible on success, which
+            // is the defect that leg exists for.
+            if (typeof request?.operation === "string" &&
+                request.operation.startsWith("soundset.")) {
+              window.__soundsetOperations ??= [];
+              window.__soundsetOperations.push({
+                operation: request.operation,
+                payload: request.payload,
+                ok: response?.ok ?? null,
+                result: response?.result ?? null,
+                error: response?.error ?? null,
+              });
+            }
             if (request?.operation === "project.inspect" && response?.ok) {
               window.__lastProjectTruth = response.result?.project ?? null;
               // Counted so a leg can wait for a Project read that is newer
@@ -283,6 +309,27 @@ async function openSoundSets(page) {
     .toBeVisible();
 }
 
+// The Host's own last answer for one Sound Set operation. `null` until the
+// operation has crossed the tap, which is what the polls below wait for.
+async function lastSoundsetOperation(page, operation) {
+  return page.evaluate(
+    (name) =>
+      (window.__soundsetOperations ?? [])
+        .filter((entry) => entry.operation === name)
+        .at(-1) ?? null,
+    operation,
+  );
+}
+
+async function soundsetOperationCount(page, operation) {
+  return page.evaluate(
+    (name) =>
+      (window.__soundsetOperations ?? [])
+        .filter((entry) => entry.operation === name).length,
+    operation,
+  );
+}
+
 async function occupancyOf(page, bank) {
   return page.evaluate((index) => {
     const truth = window.__lastProjectTruth;
@@ -317,9 +364,31 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   await expect(listing.getByRole("heading", {name: UNSUPPORTED})).toBeVisible();
   await expect(listing.getByRole("listitem")).toHaveCount(3);
   const refusals = page.getByRole("list", {name: "Unavailable Sound Sets"});
-  await expect(refusals.getByRole("listitem")).toHaveCount(4);
-  await expect(refusals).toContainText("soundset_content_mismatch");
-  await expect(refusals).toContainText("soundset_license_ineligible");
+  const expectedRefusals = CATALOG_PARTITION.refused;
+  const expectedSetIds = Object.keys(expectedRefusals).sort();
+  await expect(refusals.getByRole("listitem"))
+    .toHaveCount(expectedSetIds.length);
+  // Which Set carries which locked token, not just that the tokens appear.
+  // Each row renders `<setId> <version> — <CODE> (<reason>)`, so the surface
+  // can be read back into the same shape the Native and CLI Hosts answer with
+  // and compared as one object: a swap between two refusals, a changed code,
+  // or a Set moving across the eligible line all fail here.
+  const observedRefusals = Object.fromEntries(
+    (await refusals.getByRole("listitem").allInnerTexts()).map((row) => {
+      const match = row.match(
+        /^(\S+)\s+\S+\s+—\s+([A-Z_]+)\s+\(([a-z_]+)\)$/u,
+      );
+      expect(match, `unreadable refusal row: ${row}`).not.toBeNull();
+      return [match[1], {code: match[2], reason: match[3]}];
+    }),
+  );
+  expect(Object.keys(observedRefusals).sort()).toEqual(expectedSetIds);
+  for (const setId of expectedSetIds) {
+    expect(observedRefusals[setId], `refusal for ${setId}`).toEqual({
+      code: expectedRefusals[setId].code,
+      reason: expectedRefusals[setId].reason,
+    });
+  }
   // The CC-BY-4.0 credit comes from the verified manifest and reaches listing.
   await expect(listing.locator(".soundset-attribution")).toHaveText(
     "Fixture Attribution Kit by Bea Waveform (CC BY 4.0)",
@@ -387,6 +456,129 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
     "no project.inspect reached the tap -- fix that before reading the rest",
   ).not.toBeNull();
   expect(Object.keys(before.pads)).toHaveLength(16);
+
+  // Leg 3b -- audition and stop. Until this leg existed, Web audition had
+  // never run in a browser at all: this file contained no occurrence of the
+  // word, and the only proof of `soundset.audition` was in-process.
+  //
+  // Far side: the Host's own reply, read off the transport rather than off the
+  // surface, because a successful audition changes nothing the surface shows.
+  // That is exactly the defect `played` fixes -- before it, "the preview
+  // played" and "the preview silently did not" were the same reply -- so the
+  // assertion is on `played` being present and boolean, and on the geometry
+  // that says which bytes it was.
+  const revisionBeforeAudition = (await lastSoundsetOperation(
+    page, "soundset.map.preview")).result.project_revision;
+  expect(typeof revisionBeforeAudition).toBe("number");
+  const previewsBeforeAudition = await soundsetOperationCount(
+    page, "soundset.map.preview");
+
+  await page.getByRole("button", {name: "Audition set demo"}).click();
+  await expect.poll(
+    async () => await lastSoundsetOperation(page, "soundset.audition"),
+    {timeout: REQUEST_TIMEOUT_MS},
+  ).not.toBeNull();
+  const auditioned = await lastSoundsetOperation(page, "soundset.audition");
+  expect(auditioned.ok).toBe(true);
+  // The set-level demo is addressed by identity alone; a `slot_index` here
+  // would mean the surface auditioned slot 0's Artifact instead.
+  expect(auditioned.payload.slot_index).toBeUndefined();
+  expect(auditioned.result.slot_index).toBeNull();
+  // The Attribution Kit's demo declares its slot 0 Artifact, so the bytes the
+  // Host reports playing are the ones this journey already fetched once.
+  expect(auditioned.result.artifact.sha256).toBe(ATTRIBUTION_SHARED_ARTIFACT);
+  expect(auditioned.result.audio.prepared_frames).toBeGreaterThan(0);
+  expect(auditioned.result.audio.sample_rate).toBe(48_000);
+  // The field this leg exists for, pinned to the state every Creator session
+  // starts in: a Project is open and its snapshot is published, but audio has
+  // never been activated, so the engine is stopped, `enqueue_control` refuses
+  // the voice, and nothing sounds. Before `played`, this reply was byte for
+  // byte the reply of an audition that did sound.
+  expect(auditioned.result.played).toBe(false);
+  // The other half, and the one that matters: `played === true` after audio is
+  // activated, with the Host still standing afterwards.
+  //
+  // This used to be an acceptance gap rather than a missing test. Driving it
+  // answered `{"ok":true,...,"played":true}` and then, inside a second and
+  // with no page error and no console error, `creator-phase` went to `failed`
+  // with "formal Web Host transport is terminated". The cause was in the
+  // engine, not in this field: `RealtimeEngine::render` suppressed the
+  // `started` voice-state edge for auditions but not the `completed` one, so
+  // an audition published a completion carrying `sequence == 0` -- an audition
+  // is enqueued as `PadControlEvent{0, 0, 127, audition_start, {}}` and has no
+  // request to number. `runtime_session.mjs` requires a positive sequence,
+  // rejected the event and failed the whole Host with
+  // HOST_PROTOCOL_MISMATCH. `an_audition_publishes_no_voice_state_edge` pins
+  // the engine half; this leg is the one that would have caught it, because
+  // the defect needs a voice that actually finishes and no in-process test
+  // rendered one to completion.
+  await page.getByRole("button", {name: "Activate audio"}).click();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+    timeout: REQUEST_TIMEOUT_MS,
+  });
+  const auditionsBefore = await soundsetOperationCount(page, "soundset.audition");
+  await page.getByRole("button", {name: "Audition set demo"}).click();
+  await expect.poll(
+    async () => await soundsetOperationCount(page, "soundset.audition"),
+    {timeout: REQUEST_TIMEOUT_MS},
+  ).toBeGreaterThan(auditionsBefore);
+  const audible = await lastSoundsetOperation(page, "soundset.audition");
+  expect(audible.ok).toBe(true);
+  // The far side of "a Set is audible on the Web Host": the engine was
+  // running, the voice started, and the Host says so.
+  expect(audible.result.played).toBe(true);
+  expect(audible.result.artifact.sha256).toBe(ATTRIBUTION_SHARED_ARTIFACT);
+
+  // and the Host is still alive well after the preview has finished playing.
+  // One second was the whole window in which it used to die, so this waits
+  // past it rather than reading the phase immediately.
+  await page.waitForTimeout(3000);
+  await expect(page.getByTestId("creator-phase")).toHaveText("running");
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  // A second audition still answers, which a terminated transport cannot do.
+  const secondBefore = await soundsetOperationCount(page, "soundset.audition");
+  await page.getByRole("button", {name: "Audition set demo"}).click();
+  await expect.poll(
+    async () => await soundsetOperationCount(page, "soundset.audition"),
+    {timeout: REQUEST_TIMEOUT_MS},
+  ).toBeGreaterThan(secondBefore);
+  expect((await lastSoundsetOperation(page, "soundset.audition")).ok).toBe(true);
+
+  // Auditioning is Workspace-scoped: the operation never learns a Project, so
+  // the Host reports no revision for it. This is the structural half of "the
+  // Project did not move" -- an operation with no Project cannot write one.
+  expect(auditioned.result.project_revision).toBeNull();
+
+  await page.getByRole("button", {name: "Stop audition"}).click();
+  await expect.poll(
+    async () => await lastSoundsetOperation(page, "soundset.audition.stop"),
+    {timeout: REQUEST_TIMEOUT_MS},
+  ).not.toBeNull();
+  const auditionStopped = await lastSoundsetOperation(
+    page, "soundset.audition.stop");
+  expect(auditionStopped.ok).toBe(true);
+  expect(auditionStopped.result.accepted).toBe(true);
+  // Stopping addresses this Host's engine and no Set, so it carries no
+  // identity at all.
+  expect(auditionStopped.payload).toEqual({});
+
+  // The measured half of "the Project did not move": a fresh Host read of the
+  // Project after the audition, not the projection cached before it. A second
+  // `soundset.map.preview` is Project-scoped, so its `project_revision` comes
+  // from Project Truth as it stands now.
+  await page.getByRole("button", {name: "Preview mapping into Bank A"})
+    .click();
+  // Wait for a *newer* preview than the one that produced the number above.
+  // Reading the revision straight away would read that same reply back and
+  // pass on the first tick without ever asking the Host anything.
+  await expect.poll(async () =>
+    await soundsetOperationCount(page, "soundset.map.preview"),
+  {timeout: REQUEST_TIMEOUT_MS}).toBeGreaterThan(previewsBeforeAudition);
+  const afterAudition = await lastSoundsetOperation(
+    page, "soundset.map.preview");
+  expect(afterAudition.ok).toBe(true);
+  expect(afterAudition.result.project_revision).toBe(revisionBeforeAudition);
 
   // Leg 4 -- install `keep`. The 64-Pad proof fixture fills every Bank, so
   // every one of this Set's four occupied slots collides and `keep` has

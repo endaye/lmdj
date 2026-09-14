@@ -94,11 +94,16 @@ RuntimeResult RuntimeFacade::load(std::span<const std::byte> bytes,
     }
     const auto& footprint = inspected.value();
     RuntimeBudget budget;
+    const auto queue_bytes = audio::RealtimeEngine::receipt_bounded_storage_bytes(
+        self.config.maximum_pending_commands);
+    if (!queue_bytes) return RuntimeResult::budget_exceeded;
     budget.fixed_bytes = sizeof(RuntimeFacade) + sizeof(Impl) +
-                         sizeof(audio::RealtimeEngine);
+                         sizeof(audio::RealtimeEngine) + *queue_bytes;
     budget.encoded_bytes = footprint.encoded_bytes;
     budget.pcm_bytes = footprint.pcm_bytes;
-    budget.prepared_float_bytes = footprint.prepared_float_bytes;
+    // This narrow runtime reuses decoded immutable PCM for both live Pads and
+    // Pattern voices. The codec's generic float footprint remains unchanged.
+    budget.prepared_float_bytes = 0;
     // Payload accounting; allocator/control-block overhead and capacity
     // rounding belong to the explicit platform reserve, not hidden constants.
     budget.metadata_bytes = sizeof(cooker::RuntimeSnapshot) +
@@ -109,7 +114,7 @@ RuntimeResult RuntimeFacade::load(std::span<const std::byte> bytes,
         static_cast<std::uint64_t>(footprint.events) *
             (sizeof(cooker::ResolvedEvent) + sizeof(audio::PreparedPatternEvent)) +
         6 * 37 + 65 + sizeof(std::uint32_t);
-    budget.preparation_workspace_bytes = footprint.largest_float_sample_bytes +
+    budget.preparation_workspace_bytes =
         static_cast<std::uint64_t>(footprint.events) * sizeof(domain::PatternEvent) +
         sizeof(audio::PreparedSampleBank) + sizeof(audio::PreparedPatternView);
     budget.platform_reserve_bytes = self.config.platform_reserve_bytes;
@@ -125,6 +130,12 @@ RuntimeResult RuntimeFacade::load(std::span<const std::byte> bytes,
     if (budget.admitted_bytes > self.config.maximum_admitted_bytes) {
       return RuntimeResult::budget_exceeded;
     }
+    // Reserve large fixed blocks before variable decoded/prepared storage can
+    // fragment a bounded platform heap. Keep the candidate local: any later
+    // failure still destroys it and leaves the Facade empty and retryable.
+    auto engine = std::make_unique<audio::RealtimeEngine>(
+        audio::RealtimeEngine::ReceiptBoundedVoiceStates{},
+        self.config.maximum_pending_commands);
     auto decoded = cooker::decode_runtime_content(bytes, identity, self.config.content_limits);
     if (!decoded.has_value()) {
       return decoded.error().code == foundation::ErrorCode::internal_error
@@ -134,24 +145,17 @@ RuntimeResult RuntimeFacade::load(std::span<const std::byte> bytes,
     auto bank = audio::PreparedSampleBank::empty(snapshot->project_id,
                                                 snapshot->project_revision);
     // The complete decoder already validated Pad order, PCM, playback and
-    // identity. Avoid the desktop quota-diagnostic JSON workspace here.
+    // identity. Its internally owned PCM has no Host-visible mutable alias.
+    // Avoid desktop float conversion and quota-diagnostic JSON workspace here.
     for (const auto& pad : snapshot->pads) {
-      const auto& sample = *pad.sample;
-      const auto frames = sample.interleaved.size() / sample.channels;
-      std::vector<float> mono(frames);
-      const audio::PreparedSampleMaterialView material{
-          sample.interleaved.data(), static_cast<std::uint32_t>(frames), sample.channels};
-      for (std::uint32_t frame = 0; frame < frames; ++frame) {
-        mono[frame] = audio::prepared_material_sample(material, frame);
-      }
-      if (!bank.set_sample(static_cast<std::uint8_t>(pad.slot.bank * 16 + pad.slot.pad),
-                           mono, pad.playback).has_value()) {
+      if (!bank.set_pcm_sample(
+              static_cast<std::uint8_t>(pad.slot.bank * 16 + pad.slot.pad),
+              pad.sample, pad.playback).has_value()) {
         return RuntimeResult::preparation_failed;
       }
     }
     auto pattern = audio::PreparedPatternView::from_canonical_snapshot(*snapshot);
     if (!pattern.has_value()) return RuntimeResult::preparation_failed;
-    auto engine = std::make_unique<audio::RealtimeEngine>();
     if (engine->publish_sample_bank(std::move(bank)) != audio::PublishResult::accepted ||
         engine->publish_pattern_view(std::move(pattern.value())).result !=
             audio::PatternPublishResult::accepted) {
@@ -226,6 +230,9 @@ RuntimeResult RuntimeFacade::submit(const RuntimeCommand& command) noexcept {
 
 std::size_t RuntimeFacade::poll(std::span<RuntimeReceipt> receipts) noexcept {
   auto& self = *impl_;
+  // Capacity proof: acquire completed render before draining its state edges;
+  // retire pending slots only afterward. Moving this load after drain could
+  // acknowledge a start whose edge is still queued and invalidate 2*N + Voices.
   const auto consumed = self.consumed.load(std::memory_order_acquire);
   self.drain_events();
   std::size_t count = 0;
@@ -284,6 +291,29 @@ RuntimePhase RuntimeFacade::phase() const noexcept { return impl_->phase; }
 RuntimeBudget RuntimeFacade::budget() const noexcept { return impl_->budget; }
 std::optional<RuntimeContentIdentity> RuntimeFacade::content_identity() const {
   return impl_->identity;
+}
+
+RuntimeContentSummary RuntimeFacade::content_summary() const noexcept {
+  RuntimeContentSummary result;
+  if (!impl_->snapshot) return result;
+  // load publishes only a fully validated snapshot: <=64 canonical Pad Slots.
+  // Project-domain types stay behind this narrow Facade projection.
+  for (const auto& pad : impl_->snapshot->pads) {
+    RuntimeTriggerMode mode{};
+    switch (pad.playback.trigger_mode) {
+      case domain::TriggerMode::one_shot: mode = RuntimeTriggerMode::one_shot; break;
+      case domain::TriggerMode::gate: mode = RuntimeTriggerMode::gate; break;
+      case domain::TriggerMode::loop_gate: mode = RuntimeTriggerMode::loop_gate; break;
+      case domain::TriggerMode::loop_toggle: mode = RuntimeTriggerMode::loop_toggle; break;
+    }
+    result.pads[result.count++] = {pad.slot.bank, pad.slot.pad, mode};
+  }
+  return result;
+}
+
+std::optional<std::uint32_t> RuntimeFacade::stopped_peak_voices() const noexcept {
+  if (impl_->phase != RuntimePhase::stopped || !impl_->engine) return std::nullopt;
+  return impl_->engine->peak_voices_audio();
 }
 
 void RuntimeFacade::render(float* left, float* right, std::uint32_t frames) noexcept {

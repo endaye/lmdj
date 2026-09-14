@@ -21,6 +21,18 @@ struct ProviderPolicy {
 
 using TimestampSource = std::function<std::string()>;
 
+// The owner keeps its buffer stable throughout ingress. The SDK copies it;
+// ownership of a const shared_ptr alone is not an immutability guarantee.
+using ArtifactResolver = std::function<foundation::Result<
+    std::shared_ptr<const std::vector<std::byte>>>(const foundation::ArtifactRef&)>;
+
+struct ExecutionOptions {
+  ArtifactResolver resolve_input;
+  std::uint64_t maximum_input_bytes;
+  std::uint64_t maximum_output_bytes;
+  std::shared_ptr<StagingBudget> staging_budget;
+};
+
 // These typed values expose SDK-owned Workspace state to Hosts. Their
 // persisted JSON is an implementation-private format, not a versioned
 // cross-language Contract.
@@ -85,10 +97,34 @@ class AttemptStore {
   foundation::Result<TerminalAttempt> inspect(
       foundation::AttemptId attempt_id) const;
 
+  // Reads only an exact output binding of a successful immutable terminal.
+  // Checks the caller's allocation bound before reading, then verifies complete
+  // length and digest. Missing/corrupt bytes never alter the terminal ledger.
+  foundation::Result<std::vector<std::byte>> read_candidate_artifact(
+      foundation::AttemptId attempt_id,
+      const foundation::ArtifactRef& artifact,
+      std::uint64_t maximum_bytes) const;
+
+  // Checks the selected Provider and policy without resolving or validating inputs.
+  foundation::Result<void> validate_execution_policy(
+      const CapabilityRequest& request,
+      const Registry& registry) const;
+
   foundation::Result<AttemptResult> execute(
       foundation::AttemptId attempt_id,
       const CapabilityRequest& request,
-      const Registry& registry);
+      const Registry& registry,
+      const ExecutionOptions& options);
+
+  // Runs once after atomic reservation and before owner input reads or Provider
+  // execution. Failure retains the reservation without writing a terminal;
+  // exceptions become outer IO errors. An empty callback is a no-op.
+  foundation::Result<AttemptResult> execute(
+      foundation::AttemptId attempt_id,
+      const CapabilityRequest& request,
+      const Registry& registry,
+      const ExecutionOptions& options,
+      const std::function<foundation::Result<void>()>& after_reservation);
 
  private:
   std::filesystem::path workspace_root_;

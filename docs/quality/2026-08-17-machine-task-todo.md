@@ -1,5 +1,42 @@
 # Machine Task TODO — 2026-08-17
 
+## Creator 新 UI 迁移入口（2026-09-11）
+
+总追踪 [#1207](https://github.com/endaye/lmdj/issues/1207)，精确文件、依赖和验收见
+[渐进迁移计划](../plans/2026-09-11-creator-ui-migration.md)。
+U0 #1214 承接四线总计划 W1/W2 的功能映射、状态与原型确认；可开始设计准备。
+U1 #1215 的可回退四区外壳等待 U0 稳定切片获批，再做 U2 #1216 Sequence 完整流程。
+后续 U3 Project #1217、U4 Sample #1218、U5 Slice/Sound Sets #1219、U6 Perform #1220
+按计划依赖实施；U7 #1221 默认切换和 U8 #1222 旧布局退场等待适用验收/观察证据。
+这是任务入口，不是本轮实施授权；不重复创建原有缺陷/设备验收，不因迁移关闭 #522。
+共享 app.tsx、样式和门户页由单一整合负责人排队，不能按页面名假定可无冲突并行。
+
+## 四条主线当前入口（2026-09-11）
+
+统一依赖与工作拆分见[四线总计划](../plans/2026-09-11-parallel-product-roadmap.md)。
+可立即准备：Stage 12 S1 #1166、Stem T1 #1171、Pattern P1 #1173；
+Embedded CPU #1176 与 H1 #1107 问题归因/修复；Web Creator W1 交互及能力矩阵。
+R2 #1131 等相关修复后按原口径复测；W2–W4 等各自前置与精确 Task 拆分。
+B1 #1110 已 CLOSED 只登记构建事实，后续集成缺口仍由 #1104 核定责任。
+
+CI 第四主线：复用 #1089/#1149，由原执行 Agent 继续既有任务；T1–T3 已交付，
+T4 #1153 源码与实际主机验收分列，T5 #1154 → T6 #1155 按原依赖推进。
+CI 剩余修复按已有计划的精确文件/测试执行，不另建重复任务或接管活动分支。
+
+## Stage 12 当前入口（2026-09-10）
+
+完整列表与精确文件/验证见[独立交付计划](../plans/2026-09-10-stage12-independent-delivery.md)。
+可开始准备：S1 验收包 [#1166](https://github.com/endaye/lmdj/issues/1166)、
+T1 Stem 范围/评测设计 [#1171](https://github.com/endaye/lmdj/issues/1171)、
+P1 Pattern 产品设计 [#1173](https://github.com/endaye/lmdj/issues/1173)。
+设计准备不自动裁定未决产品问题；人工/决策入口见对应 Human TODO。
+后续：S3 质量/耗时评测 [#1168](https://github.com/endaye/lmdj/issues/1168) 等待 S1；
+T2 Stem 实测与实施拆分 [#1172](https://github.com/endaye/lmdj/issues/1172) 等待获评审的 T1；
+S5 文档与验收核销 [#1170](https://github.com/endaye/lmdj/issues/1170) 等待 S4 及阻塞修复重验。
+总追踪 #472；12A/12B/12C 可分别交付，未执行的平台和生产缺口继续保留。
+
+## 历史台账范围
+
 Everything a coding agent can complete without a human in the loop. Its
 companion is [`2026-08-17-manual-verification-todo.md`](2026-08-17-manual-verification-todo.md),
 which holds the verifications and decisions that require a person. Between them

@@ -71,6 +71,10 @@ def requires_full(document):
 def review_record(body):
     """Reuse publisher codec; unavailable evidence can only widen to full."""
     require(not codec.unavailable_identities(body), "publisher scope was unavailable; use full")
+    # Validate the digest-bound v2 marker even though the scope record remains
+    # the map's public projection.  A historical v1 scope record is still
+    # readable, but it cannot make a v2 review appear complete by itself.
+    codec.decode_history(body)
     return codec.decode(body)
 
 

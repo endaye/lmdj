@@ -152,7 +152,7 @@ lmdj::domain::ProjectState new_v4_project() {
   auto project =
       lmdj::domain::create_project(ProjectId{test_uuid("project")}, 120);
   LMDJ_CHECK(project.has_value());
-  LMDJ_CHECK(project.value().contract == ProjectContract::v4);
+  LMDJ_CHECK(project.value().contract == ProjectContract::v5);
   return project.value();
 }
 
@@ -236,7 +236,7 @@ void test_install_commits_every_asset_and_pad_in_exactly_one_revision() {
   LMDJ_CHECK(reopened.has_value());
   LMDJ_CHECK(reopened.value().revision == 1);
   LMDJ_CHECK(reopened.value().assets.size() == 3);
-  LMDJ_CHECK(reopened.value().contract == ProjectContract::v4);
+  LMDJ_CHECK(reopened.value().contract == ProjectContract::v5);
   for (const auto& slot : fixture.request.slots) {
     const auto& pad = reopened.value().banks.at(kBank).at(slot.slot.pad);
     LMDJ_CHECK(pad.asset_id == slot.asset_id);
@@ -438,7 +438,7 @@ void test_a_promoted_v3_project_still_reopens_after_an_install() {
           PadPlayback{4, 12, TriggerMode::gate, 6000, true},
       });
   LMDJ_CHECK(promoted.has_value());
-  LMDJ_CHECK(promoted.value().state.contract == ProjectContract::v4);
+  LMDJ_CHECK(promoted.value().state.contract == ProjectContract::v5);
 
   auto fixture = install_fixture("promoted-install", 1);
   const auto installed = store.install_soundset(bundle, fixture.request);
@@ -448,7 +448,7 @@ void test_a_promoted_v3_project_still_reopens_after_an_install() {
   const auto reopened = store.load(bundle);
   LMDJ_CHECK(reopened.has_value());
   LMDJ_CHECK(reopened.value() == installed.value().state);
-  LMDJ_CHECK(reopened.value().contract == ProjectContract::v4);
+  LMDJ_CHECK(reopened.value().contract == ProjectContract::v5);
   for (const auto& slot : fixture.request.slots) {
     LMDJ_CHECK(
         reopened.value().banks.at(kBank).at(slot.slot.pad).asset_id ==

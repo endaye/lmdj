@@ -39,6 +39,7 @@
 #include <lmdj/providers/local_proof_success/factory.hpp>
 
 #include "tests/core/support/test.hpp"
+#include "tests/core/provider/byte_fixture.hpp"
 
 namespace {
 
@@ -358,8 +359,7 @@ CapabilityRequest valid_request() {
           ArtifactBinding{
               "inputs",
               ArtifactRef{
-                  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "85638a90a2b6d1e2f6be9814c961764f8a1be74871b15d9b05bc1c4017fd38b1",
                   "audio/wav",
                   12,
               },
@@ -393,7 +393,7 @@ void test_succeeded_attempt_leaves_a_coherent_ledger() {
   select(store, registry, "local.proof.success");
 
   const auto executed =
-      store.execute(AttemptId{"ledger-success"}, valid_request(), registry);
+      store.execute(AttemptId{"ledger-success"}, valid_request(), registry, byte_fixture::options());
   LMDJ_CHECK(executed.has_value());
   LMDJ_CHECK(executed.value().candidate.has_value());
 
@@ -409,7 +409,7 @@ void test_failed_attempt_leaves_a_coherent_ledger() {
   select(store, registry, "local.proof.failure");
 
   const auto executed =
-      store.execute(AttemptId{"ledger-failure"}, valid_request(), registry);
+      store.execute(AttemptId{"ledger-failure"}, valid_request(), registry, byte_fixture::options());
   LMDJ_CHECK(executed.has_value());
   LMDJ_CHECK(!executed.value().candidate.has_value());
   LMDJ_CHECK(executed.value().error.has_value());
@@ -429,13 +429,13 @@ void test_mixed_attempt_sequence_stays_coherent() {
   auto store = store_at(temp.path());
 
   select(store, registry, "local.proof.success");
-  LMDJ_CHECK(store.execute(AttemptId{"seq-a"}, valid_request(), registry)
+  LMDJ_CHECK(store.execute(AttemptId{"seq-a"}, valid_request(), registry, byte_fixture::options())
                  .has_value());
   select(store, registry, "local.proof.failure");
-  LMDJ_CHECK(store.execute(AttemptId{"seq-b"}, valid_request(), registry)
+  LMDJ_CHECK(store.execute(AttemptId{"seq-b"}, valid_request(), registry, byte_fixture::options())
                  .has_value());
   select(store, registry, "local.proof.success");
-  LMDJ_CHECK(store.execute(AttemptId{"seq-c"}, valid_request(), registry)
+  LMDJ_CHECK(store.execute(AttemptId{"seq-c"}, valid_request(), registry, byte_fixture::options())
                  .has_value());
 
   const auto attempts = temp.path() / ".lmdj-workspace/attempts";
@@ -454,7 +454,7 @@ void test_harness_detects_each_corruption() {
     const auto registry = proof_registry();
     auto store = store_at(temp.path());
     select(store, registry, "local.proof.success");
-    LMDJ_CHECK(store.execute(AttemptId{"probe"}, valid_request(), registry)
+    LMDJ_CHECK(store.execute(AttemptId{"probe"}, valid_request(), registry, byte_fixture::options())
                    .has_value());
     return temp.path() / ".lmdj-workspace/attempts";
   };
@@ -527,7 +527,7 @@ void test_orphan_reservation_is_detected_and_blocks_reuse() {
   // Retrying the same id still fails because the directory remains a live
   // reservation from the store's point of view.
   const auto retried =
-      store.execute(AttemptId{"orphaned"}, valid_request(), registry);
+      store.execute(AttemptId{"orphaned"}, valid_request(), registry, byte_fixture::options());
   LMDJ_CHECK(!retried.has_value());
   LMDJ_CHECK(retried.error().code == ErrorCode::duplicate_id);
 }

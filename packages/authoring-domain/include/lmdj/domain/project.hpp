@@ -23,6 +23,7 @@ enum class ProjectContract : std::uint8_t {
   v2,
   v3,
   v4,
+  v5,
 };
 
 inline constexpr std::uint32_t kPpq = 960;
@@ -113,6 +114,41 @@ struct SoundSetInstallLineageDerivation {
   bool operator==(const SoundSetInstallLineageDerivation&) const = default;
 };
 
+// Immutable terminal evidence; no dependency on the Provider SDK ABI.
+struct CapabilityLineageIdentity {
+  std::string id;
+  std::string contract;
+  std::string version;
+  bool operator==(const CapabilityLineageIdentity&) const = default;
+};
+
+struct ImplementationLineageIdentity {
+  std::string id;
+  std::string version;
+  std::string artifact_sha256;
+  bool operator==(const ImplementationLineageIdentity&) const = default;
+};
+
+// The type fixes recipe.kind to slice_interval_v1; future recipes need review.
+struct SliceIntervalRecipe {
+  std::uint64_t start_frame{};
+  std::uint64_t end_frame{};
+  std::uint32_t frame_rate{};
+  bool operator==(const SliceIntervalRecipe&) const = default;
+};
+
+struct CapabilityAdoptionLineageDerivation {
+  CapabilityLineageIdentity capability;
+  ImplementationLineageIdentity provider;
+  std::optional<ImplementationLineageIdentity> model_identity;
+  std::string parameters_sha256;
+  foundation::AttemptId attempt_id;
+  foundation::AssetId source_asset_id;
+  foundation::ArtifactRef output_artifact;
+  SliceIntervalRecipe recipe;
+  bool operator==(const CapabilityAdoptionLineageDerivation&) const = default;
+};
+
 enum class AssetLineageSourceKind : std::uint8_t {
   asset_artifact,
   soundset,
@@ -121,13 +157,15 @@ enum class AssetLineageSourceKind : std::uint8_t {
 enum class AssetLineageDerivationKind : std::uint8_t {
   resample,
   soundset_install,
+  capability_adoption,
 };
 
 using AssetLineageSource =
     std::variant<AssetArtifactLineageSource, SoundSetLineageSource>;
 
 using AssetLineageDerivation =
-    std::variant<ResampleLineageDerivation, SoundSetInstallLineageDerivation>;
+    std::variant<ResampleLineageDerivation, SoundSetInstallLineageDerivation,
+                 CapabilityAdoptionLineageDerivation>;
 
 struct AssetLineage {
   AssetLineageSource source;

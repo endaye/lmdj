@@ -954,7 +954,46 @@ Headless Test 代替。
 9. Sequence；
 10. Perform；
 11. Sound Set；
-12. Stem / Slice / Pattern Intelligence Providers。
+12. Intelligence Providers 总追踪（[#472](https://github.com/endaye/lmdj/issues/472)），
+    分成三个可独立交付、分别验收的工作项：
+    - **12A Slice**：参考切片与 Candidate 采纳链路的验收、质量评测和交付收口
+      （[#1163](https://github.com/endaye/lmdj/issues/1163)）；优先推进。
+    - **12B Stem**：独立的分离场景、执行环境、候选评测、Contract 与产品接入
+      （[#1164](https://github.com/endaye/lmdj/issues/1164)）；先做可行性设计。
+    - **12C Pattern Intelligence**：独立的候选生成、预览、采纳与音乐性验收
+      （[#1165](https://github.com/endaye/lmdj/issues/1165)）；先裁定产品语义。
+
+上述拆分依据 [2026-09-10 范围决策](../prd/decisions/2026-09-10-stage12-independent-delivery.md)，
+具体任务、依赖、文件和验收见
+[Stage 12 独立交付计划](../plans/2026-09-10-stage12-independent-delivery.md)。
+12A 可独立验收，不以此宣布整个 Stage 12 完成；Stem 与 Pattern 的原始目标
+继续保留。Stem/Pattern 复用 Provider、Attempt、Artifact 基础设施，新增结果
+及采纳语义分别设计；模型选型、Pattern Merge 和模型事件生成不由拆分决定。
+后两项的设计研究可与 Slice 验收并行，实施须先有获评审的精确 Task 边界。
+
+### 当前四条并行主线（2026-09-11）
+
+上述 Stage 编号保留历史交付语义，不要求当前工作全部串行。主线现按以下四线推进，
+依赖、状态与验收见[四线总计划](../plans/2026-09-11-parallel-product-roadmap.md)：
+
+- **Stage 12 / #472**：12A Slice 验收优先；12B Stem 与 12C Pattern 独立设计和交付。
+- **Embedded / Cardputer Runtime / #1104**：H1 生命周期与静音、R2/CPU 容量、
+  B1 固定候选、A1 完整真机旅程。B1 #1110 已 CLOSED、有构建证据，
+  H1 #1107、R2 #1131、CPU #1176、A1 #1111 仍 OPEN；构建不替代设备验收。
+- **Web Creator / #1207、#522**：四区设计参考已合并，继续上下文/映射决策、
+  原型与状态补齐、稳定布局、分工作流接入和真实设备验收。设计进展不计作实现完成。
+
+- **CI 可靠性、成本与 AI Review / #1089、#1149**：作为独立工程主线，由当前
+  CI 执行 Agent 继续既有计划；可靠性剩余真实运行验收与 PR-Agent T4 主机验收
+  → T5 影子评审 → T6 正式切换/回滚/交接分别核销。源码交付不替代部署与切换验收。
+  保留 Stage 3 的 CLI + MCP 定义，不将 CI 优化塞入既有产品阶段。
+
+三条产品线共享 Core/Facade/Contracts；Creator 使用既有能力可独立迭代，Slice 验收
+不等待新版 UI，Cardputer 首版不依赖设备端编辑或 Provider。
+Stage 13 标签 #1189 保留为后续扩展，不成为三线当前交付的统一前置。
+原 Stage 0–11 人工验收缺口仍按各自台账追踪；CI 作为第四主线服务产品交付，Cloudflare 部署迁移仍保留自身范围与验收。
+
+### 早期并行验证与首个用户价值里程碑
 
 与第 1 步同期启动 **Web 实时音频 Spike**：最小化验证
 AudioWorklet + WASM 线程、SharedArrayBuffer 所需的 Cross-Origin Isolation、

@@ -37,17 +37,16 @@ _ROOT_KEYS = {
 _ENTRY_KEYS = {"bytes", "offset", "path", "sha256"}
 # The container version this tool writes, and every container version it
 # still reads. Widening the Project Contract enum is an additive Contract
-# MINOR, so a 1.2.0 reader accepts every 1.0.0 and 1.1.0 index unchanged.
-CONTRACT_VERSION = "1.2.0"
-READABLE_CONTRACT_VERSIONS = frozenset({"1.0.0", "1.1.0", CONTRACT_VERSION})
-# Every Project Contract level a Bundle may name. `lmdj.project.v4` is the
-# only level this Build writes, so omitting it made every new Project
-# unpackable (#784).
+# MINOR; current readers retain every earlier envelope version unchanged.
+CONTRACT_VERSION = "1.3.0"
+READABLE_CONTRACT_VERSIONS = frozenset({"1.0.0", "1.1.0", "1.2.0", CONTRACT_VERSION})
+# Every Project Contract level a Bundle may name; keep all readers aligned.
 PROJECT_CONTRACTS = frozenset({
     "lmdj.project.v1",
     "lmdj.project.v2",
     "lmdj.project.v3",
     "lmdj.project.v4",
+    "lmdj.project.v5",
 })
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _UUID = re.compile(

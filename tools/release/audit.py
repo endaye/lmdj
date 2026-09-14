@@ -16,6 +16,8 @@ from typing import Callable, Iterable, Iterator
 import unicodedata
 
 from .ci_evidence import verify_release_ci
+from .batch_reference import thaw
+from .changelog import binding as changelog_binding, render as render_changelog
 from .commands import sanitize_diagnostic
 from .github_api import GitHubAsset, GitHubEnvironment, GitHubRelease
 from .model import (
@@ -36,13 +38,13 @@ from .profiles import (
     ProfileError,
     canonical_product_asset_names,
 )
-from scripts.version import _provider_source_package_sha256
+from scripts.version import _provider_source_package_sha256, _validate_component_source
 
 
 _REPORT_SCHEMA = "lmdj.release-audit.v1"
 _SUCCESS_CODES = frozenset(("ok", "ok-with-historical-exception"))
 _CODES = frozenset((*_SUCCESS_CODES, "missing", "conflict", "unauthorized", "unverifiable", "external-error"))
-_MARKER = re.compile(r"<!-- (lmdj\.release-plan-marker\.v[123]) (\{[^\r\n]*\}) -->")
+_MARKER = re.compile(r"<!-- (lmdj\.release-plan-marker\.v[1234]) (\{[^\r\n]*\}) -->")
 _STATIC_PROJECTION_MESSAGE = (
     "active Product, Assembly lock or immutable snapshot projection is inconsistent"
 )
@@ -706,7 +708,7 @@ def _verify_active_components(root: Path, assembly: object, lock: object) -> Non
             if not all(isinstance(value, str) and value for value in (identifier, version, digest)):
                 raise ValueError(f"locked {source_kind} entry has a non-string identity or digest")
             path = _component_path(root, source_kind, identifier)
-            document = _json_file(path)
+            document = _json_file(path) if path.suffix != ".md" else None
             if source_kind == "provider":
                 observed_digest = _provider_source_package_sha256(
                     identifier, version, path, repo_root=root,
@@ -716,8 +718,7 @@ def _verify_active_components(root: Path, assembly: object, lock: object) -> Non
             if observed_digest != digest:
                 raise ValueError(f"{source_kind} {identifier} source digest does not match the lock")
             if source_kind == "contract":
-                if not isinstance(document, dict) or document.get("x-lmdj-contract-version") != version:
-                    raise ValueError(f"contract {identifier} does not declare version {version}")
+                _validate_component_source("contracts", identifier, version, path)
             elif not isinstance(document, dict) or document.get("module") != identifier or document.get("version") != version:
                 raise ValueError(f"{source_kind} {identifier} does not declare version {version}")
 
@@ -737,8 +738,9 @@ def _component_path(root: Path, kind: str, identifier: str) -> Path:
         path = candidates[0]
     else:
         candidates = list((root / "contracts").glob(f"*/{identifier}.schema.json"))
+        candidates += list((root / "contracts").glob(f"*/{identifier}.md"))
         if len(candidates) != 1:
-            raise ValueError(f"contract {identifier} does not have exactly one schema")
+            raise ValueError(f"contract {identifier} does not have exactly one source; remedy: reconcile schema/profile inventory")
         path = candidates[0]
     if not path.is_file() or path.is_symlink():
         raise ValueError(f"{kind} {identifier} manifest is unavailable")
@@ -860,8 +862,8 @@ def _release_problem(
         return "GitHub Release target_commitish conflicts with canonical identity"
     markers = _MARKER.findall(release.body)
     if not markers:
-        return None if allow_missing_marker and intent.self_test_evidence is None and intent.batch_test_evidence is None else "GitHub Release plan marker is missing"
-    if len(markers) != 1 or release.body.count("lmdj.release-plan-marker.") != 2:
+        return None if allow_missing_marker and intent.self_test_evidence is None and intent.batch_test_evidence is None and intent.changelog is None else "GitHub Release plan marker is missing"
+    if len(markers) != 1 or (intent.changelog is None and release.body.count("lmdj.release-plan-marker.") != 2):
         return "GitHub Release plan marker is ambiguous"
     try:
         def reject_duplicates(pairs):
@@ -880,6 +882,15 @@ def _release_problem(
         return "GitHub Release intent has mixed complete evidence references"
     schema = "lmdj.release-plan-marker.v3" if batch_reference is not None else "lmdj.release-plan-marker.v2" if reference is not None else "lmdj.release-plan-marker.v1"
     keys = {"schema", "plan_schema", "plan_sha256", "tag", "tag_object", "target_revision", "intent"}
+    if intent.changelog is not None:
+        schema = "lmdj.release-plan-marker.v4"
+        keys.add("changelog")
+        changelog = thaw(intent.changelog)
+        if not isinstance(marker, dict) or marker.get("changelog") != changelog_binding(changelog):
+            return "why: GitHub Release marker does not bind the frozen changelog; remedy: reconcile the remote Release identity with the reviewed plan without rewriting published history"
+        expected_body = render_changelog(changelog).rstrip() + "\n\n" + _MARKER.search(release.body).group(0)
+        if release.body != expected_body:
+            return "why: GitHub Release body differs from the frozen changelog; remedy: investigate remote body drift against the reviewed plan without rewriting published history"
     if batch_reference is not None:
         keys.add("ci")
         expected_ci = {

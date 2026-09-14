@@ -9,7 +9,7 @@ recurrences:
   - date: 2026-08-30
     occurrence: https://github.com/endaye/lmdj/pull/444
     observed_by: Codex (GPT-5)
-exit: gate:tests/build/ci_queue_evidence_mode_test.py
+exit: gate:tests/build/ci_retired_queue_mechanisms_test.py
 escalation: https://github.com/endaye/lmdj/issues/447
 ---
 
@@ -35,3 +35,6 @@ Do not add a ninth independent `full` check. Do not fold operator empty
 `workflow_dispatch` (release evidence) or `SKIPPABLE_CHECKS` (PR Gate
 vouches for a Core skip) into the predicate. A drift fails that gate
 with `why` and `remedy`.
+
+Retired 2026-09-09 (#1089 P2.1): the merge queue and its PR gate were removed;
+the exit now asserts their absence.

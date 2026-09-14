@@ -10,7 +10,8 @@
     "docusaurus": "docusaurus",
     "start": "npm run validate:changelogs && docusaurus start",
     "changelogs": "node scripts/generate-host-changelogs.mjs --write",
-    "validate:changelogs": "node scripts/generate-host-changelogs.mjs --check",
+    "validate:changelogs": "node scripts/generate-host-changelogs.mjs --check && node scripts/generate-release-changelogs.mjs --check",
+    "release-changelogs": "node scripts/generate-release-changelogs.mjs --write",
     "facts": "node scripts/generate-facts.mjs",
     "validate:docs": "node scripts/validate-docs.mjs",
     "diagrams": "node scripts/render-diagrams.mjs",
@@ -39,6 +40,7 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
+    "@mdx-js/mdx": "3.1.1",
     "@docusaurus/module-type-aliases": "3.10.2",
     "@docusaurus/tsconfig": "3.10.2",
     "@docusaurus/types": "3.10.2",

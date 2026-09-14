@@ -277,6 +277,220 @@ class GitHubJournalTest(unittest.TestCase):
         self.api._request = request
         self.assertEqual(len(self.transport.page(782, None)['comments']), 4)
 
+    def diverse_controls(self, count):
+        ids = list(range(17, 17 + count))
+        request = self.multiple_writers(ids)
+        controls = {run_id: f'{run_id:040x}' for run_id in ids}
+        for node, run_id in zip(self.api.comments, ids):
+            node['body'] = wrapped('event', {'id': str(run_id)},
+                {**WRITER, 'run_id': run_id, 'control_sha': controls[run_id]})
+        seen = []
+
+        def distinct(method, path, **kwargs):
+            seen.append((method, path))
+            normalized = path
+            for control in controls.values():
+                normalized = normalized.replace(control, 'a' * 40)
+            value = request(method, normalized, **kwargs)
+            if path.endswith('/attempts/1'):
+                value['head_sha'] = controls[value['id']]
+            if '/compare/' in path:
+                control = path.split('/compare/', 1)[1].split('...', 1)[0]
+                value['base_commit']['sha'] = control
+                value['merge_base_commit']['sha'] = control
+            return value
+
+        self.api._request = distinct
+        return distinct, seen
+
+    def test_distinct_hundred_controls_share_only_common_page_proofs(self):
+        _, seen = self.diverse_controls(100)
+        page = self.transport.page(782, None)
+        reads = [path for method, path in seen if method == 'GET']
+        self.assertEqual(len(page['comments']), 100)
+        self.assertEqual(sum(path.endswith('/attempts/1') for path in reads), 100)
+        self.assertEqual(sum('/jobs?' in path for path in reads), 100)
+        self.assertEqual(len({path for path in reads if '/compare/' in path}), 100)
+        self.assertEqual(len({path for path in reads if '/contents/' in path}), 100)
+        self.assertEqual(len(reads), 402,
+            'why: different controls reread common page identities; remedy: share only validated main/workflow proofs')
+
+    def test_transaction_reuses_immutable_proofs_across_pages_with_same_history(self):
+        def read_pages(reuse):
+            self.setUp()
+            self.multiple_writers([17, 18, 19, 20])
+            self.api.comment_pages = 2
+            first = self.transport.page(782, None)
+            if not reuse:
+                # Executable baseline for the prior page-local proof scope.
+                self.transport._page_session['control_proofs'] = github._PageControlProofs()
+            second = self.transport.page(782, first['next'])
+            return (first['comments'] + second['comments'], second['next']), len(self.api.calls)
+
+        before_output, before_calls = read_pages(False)
+        after_output, after_calls = read_pages(True)
+        self.assertEqual(before_output, after_output)
+        self.assertIsNone(after_output[1])
+        self.assertEqual([row['provenance']['run_id'] for row in after_output[0]], [17, 18, 19, 20],
+                         'why: proof reuse changed the complete journal history; remedy: preserve every page and record order')
+        self.assertEqual(before_calls, 18,
+                         'why: baseline no longer measures page-local proof requests; remedy: retain the unoptimized comparator')
+        self.assertEqual(after_calls, 15,
+                         'why: immutable control proofs were repeated across one read transaction; remedy: retain only immutable transaction proofs')
+
+    def test_shared_main_failure_is_single_attempt_and_retry_reauthenticates_page(self):
+        request, _ = self.diverse_controls(4)
+        failed = []
+        def unavailable(method, path, **kwargs):
+            if path.endswith('/git/ref/heads/main'):
+                failed.append(path)
+                raise OSError('private unavailable main')
+            return request(method, path, **kwargs)
+        self.api._request = unavailable
+        with self.assertRaisesRegex(JournalBlocked, 'why:.*remedy:'):
+            self.transport.page(782, None)
+        self.assertFalse(self.transport._checked_writers)
+        self.assertEqual(len(failed), 1,
+            'why: page retried a failed shared main read; remedy: share failure only for this page')
+        self.api._request = request
+        self.assertEqual(len(self.transport.page(782, None)['comments']), 4)
+
+    def test_distinct_controls_use_one_main_even_when_ref_advances(self):
+        request, _ = self.diverse_controls(4)
+        original_main, advanced = self.api.main_sha, 'd' * 40
+        comparisons, refs = [], []
+        def moving(method, path, **kwargs):
+            if path.endswith('/git/ref/heads/main'):
+                refs.append(path)
+                value = request(method, path, **kwargs)
+                self.api.main_sha = advanced
+                return value
+            if '/compare/' in path:
+                comparisons.append(path)
+                # The fake's endpoint matcher follows main; the actual compare
+                # endpoint also accepts the now-historical pinned main SHA.
+                path = path.replace('...' + original_main, '...' + advanced)
+            return request(method, path, **kwargs)
+        self.api._request = moving
+        self.transport.page(782, None)
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(len(comparisons), 4)
+        self.assertTrue(all('...' + original_main + '?' in path for path in comparisons),
+            'why: one page mixed main observations; remedy: compare every control to the captured page main')
+
+    def test_control_newer_than_page_main_cannot_refresh_its_way_to_trust(self):
+        request, _ = self.diverse_controls(2)
+        original_main, advanced = self.api.main_sha, 'd' * 40
+        refs = []
+        def moving(method, path, **kwargs):
+            if path.endswith('/git/ref/heads/main'):
+                refs.append(path)
+                value = request(method, path, **kwargs)
+                self.api.main_sha = advanced
+                return value
+            if '/compare/' in path:
+                value = request(method, path.replace('...' + original_main, '...' + advanced), **kwargs)
+                if f'/compare/{18:040x}...{original_main}' in path:
+                    value['status'] = 'behind'
+                return value
+            return request(method, path, **kwargs)
+        self.api._request = moving
+        with self.assertRaisesRegex(JournalBlocked, 'main history'):
+            self.transport.page(782, None)
+        self.assertFalse(self.transport._checked_writers)
+        self.assertEqual(len(refs), 1,
+            'why: stale page main was silently replaced; remedy: fail the entire page and retry independently')
+
+    def test_different_workflows_have_separate_common_identity_proofs(self):
+        request, _ = self.diverse_controls(2)
+        other_path = '.github/workflows/other-writer.yml'
+        self.transport.workflows[other_path] = 8
+        document = github.decode(self.api.comments[1]['body'])
+        document['writer'].update(workflow_path=other_path, workflow_id=8)
+        self.api.comments[1]['body'] = json.dumps(document)
+        workflows = []
+        def other(method, path, **kwargs):
+            if '/actions/workflows/' in path:
+                workflows.append(path)
+                if path.endswith('/8'):
+                    return {'id': 8, 'path': other_path}
+            value = request(method, path.replace(other_path, PATH), **kwargs)
+            if path.endswith('/runs/18/attempts/1'):
+                value.update(workflow_id=8, path=other_path)
+            if '/contents/' + other_path in path:
+                value['path'] = other_path
+            return value
+        self.api._request = other
+        self.assertEqual(len(self.transport.page(782, None)['comments']), 2)
+        self.assertEqual(sorted(workflows), ['/repos/endaye/lmdj/actions/workflows/7',
+                                           '/repos/endaye/lmdj/actions/workflows/8'])
+
+    def test_malformed_common_proof_blocks_all_writers_and_is_not_retained(self):
+        for endpoint in ('main', 'workflow'):
+            with self.subTest(endpoint=endpoint):
+                self.setUp()
+                request, _ = self.diverse_controls(4)
+                paths = []
+                def malformed(method, path, **kwargs):
+                    value = request(method, path, **kwargs)
+                    if ((endpoint == 'main' and path.endswith('/git/ref/heads/main')) or
+                            (endpoint == 'workflow' and '/actions/workflows/' in path)):
+                        paths.append(path)
+                        return {'object': {'sha': 'not-a-sha'}} if endpoint == 'main' else {'id': 8, 'path': PATH}
+                    return value
+                self.api._request = malformed
+                with self.assertRaisesRegex(JournalBlocked, 'why:.*remedy:'):
+                    self.transport.page(782, None)
+                self.assertEqual(len(paths), 1)
+                self.assertFalse(self.transport._checked_writers)
+                self.api._request = request
+                self.assertEqual(len(self.transport.page(782, None)['comments']), 4)
+
+    def test_later_page_reuses_pinned_main_but_refreshes_workflow_identity(self):
+        for endpoint in ('main', 'workflow'):
+            with self.subTest(endpoint=endpoint):
+                self.setUp()
+                request, _ = self.diverse_controls(2)
+                self.api.comment_pages = 1
+                first = self.transport.page(782, None)
+                before = len(self.api.calls)
+                def changed(method, path, **kwargs):
+                    value = request(method, path, **kwargs)
+                    if endpoint == 'main' and path.endswith('/git/ref/heads/main'):
+                        return {'object': {'sha': None}}
+                    if endpoint == 'workflow' and '/actions/workflows/' in path:
+                        return {'id': 7, 'path': '.github/workflows/renamed.yml'}
+                    return value
+                self.api._request = changed
+                if endpoint == 'workflow':
+                    with self.assertRaisesRegex(JournalBlocked, 'workflow API identity'):
+                        self.transport.page(782, first['next'])
+                    self.assertEqual(sum('/actions/workflows/' in path for _, path, _ in self.api.calls[before:]), 1)
+                else:
+                    second = self.transport.page(782, first['next'])
+                    self.assertIsNone(second['next'])
+                    self.assertFalse(any(path.endswith('/git/ref/heads/main')
+                                         for _, path, _ in self.api.calls[before:]),
+                                     'why: immutable main proof was repeated; remedy: retain the pinned proof')
+
+    def test_one_bad_distinct_control_proof_discards_whole_page_trust(self):
+        for endpoint in ('source', 'ancestry'):
+            with self.subTest(endpoint=endpoint):
+                self.setUp()
+                request, _ = self.diverse_controls(4)
+                def invalid(method, path, **kwargs):
+                    value = request(method, path, **kwargs)
+                    if f'{18:040x}' in path:
+                        if endpoint == 'source' and '/contents/' in path:
+                            value['content'] = ''
+                        if endpoint == 'ancestry' and '/compare/' in path:
+                            value['merge_base_commit']['sha'] = 'f' * 40
+                    return value
+                self.api._request = invalid
+                with self.assertRaisesRegex(JournalBlocked, 'why:.*remedy:'):
+                    self.transport.page(782, None)
+                self.assertFalse(self.transport._checked_writers)
+
     def test_new_page_does_not_reuse_shared_control_from_failed_writer_page(self):
         request = self.multiple_writers([17, 18])
         def wrong_job(method, path, **kwargs):
@@ -316,14 +530,51 @@ class GitHubJournalTest(unittest.TestCase):
         self.assertEqual(sum('/contents/' in path for path in seen), 2)
         self.assertTrue(any('/compare/' + other in path for path in seen))
 
-    def test_later_page_with_new_writer_rechecks_control_source(self):
+    def test_later_page_with_new_writer_reuses_control_source_proof(self):
         self.multiple_writers([17, 18])
         self.api.comment_pages = 1
         first = self.transport.page(782, None)
+        before = len(self.api.calls)
         self.api.compare_status = 'diverged'
-        with self.assertRaisesRegex(JournalBlocked, 'main history'):
+        second = self.transport.page(782, first['next'])
+        self.assertIsNone(second['next'])
+        self.assertEqual(sum('/actions/workflows/' in path for _, path, _ in self.api.calls[before:]), 1)
+        self.assertFalse(any('/compare/' in path or '/contents/' in path
+                             for _, path, _ in self.api.calls[before:]),
+                         'why: immutable control proof was repeated; remedy: reuse it within this read transaction')
+
+    def test_new_read_transaction_rechecks_mutable_writer_state(self):
+        self.multiple_writers([17, 18])
+        self.api.comment_pages = 1
+        first = self.transport.page(782, None)
+        self.assertIsNone(self.transport.page(782, first['next'])['next'])
+        self.api.run_changes = {'head_branch': 'untrusted'}
+        with self.assertRaisesRegex(JournalBlocked, 'control provenance'):
+            self.transport.page(782, None)
+
+    def test_later_page_rechecks_mutable_writer_state(self):
+        self.multiple_writers([17, 17])
+        self.api.comment_pages = 1
+        first = self.transport.page(782, None)
+        self.api.run_changes = {'head_branch': 'untrusted'}
+        with self.assertRaisesRegex(JournalBlocked, 'control provenance'):
             self.transport.page(782, first['next'])
-        self.assertEqual(len(self.transport._checked_writers), 1)
+
+    def test_later_page_rechecks_mutable_writer_jobs(self):
+        self.multiple_writers([17, 17])
+        self.api.comment_pages = 1
+        first = self.transport.page(782, None)
+        self.api.job_changes = {'name': 'untrusted job'}
+        with self.assertRaisesRegex(JournalBlocked, 'writer job is missing'):
+            self.transport.page(782, first['next'])
+
+    def test_later_page_still_rejects_comment_edit_after_proof_reuse(self):
+        self.multiple_writers([17, 18])
+        self.api.comment_pages = 1
+        first = self.transport.page(782, None)
+        self.api.comments[1]['editor'] = {'__typename': 'User', 'id': 'human'}
+        with self.assertRaisesRegex(JournalBlocked, 'comment was edited'):
+            self.transport.page(782, first['next'])
 
     def test_reopened_transport_reauthenticates_previously_shared_proof(self):
         self.multiple_writers([17, 18])

@@ -3,7 +3,7 @@
   "meta": {"title": "Project I/O Module", "summary": "Project Store、portable Bundle、session-kind journal 与 journaled atomic publication"},
   "boundaries": [],
   "components": [
-    {"id": "project", "label": "Project Truth", "detail": "v1/v2/v3 read · v4 write", "kind": "host", "x": 50, "y": 150, "width": 220, "height": 96},
+    {"id": "project", "label": "Project Truth", "detail": "legacy read · current Contract write", "kind": "host", "x": 50, "y": 150, "width": 220, "height": 96},
     {"id": "bundle-in", "label": "Project Bundle", "detail": "transfer-only input", "kind": "host", "x": 50, "y": 390, "width": 220, "height": 96},
     {"id": "io", "label": "Project I/O", "detail": "validate · pack · publish", "kind": "core", "x": 390, "y": 270, "width": 250,"height": 96},
     {"id": "stage", "label": "Journal Overlay", "detail": "session kind · tail · receipt", "kind": "core", "x": 770, "y": 270, "width": 240, "height": 96},
@@ -21,9 +21,9 @@
     {"from": "draft", "to": "store", "label": "save or discard"}
   ],
   "cards": [
-    {"title": "Dependencies", "body": "Foundation + Authoring Domain."},
+    {"title": "Dependencies", "body": "Foundation + Authoring Domain. Committed inspection acquires the owner lease without authoring recovery or scavenging."},
     {"title": "Failure model", "body": "Writer-lease admission closes mutation races; immutable command payload enables replay, while tail-last residual merge preserves only uncommitted owner-loss work."},
     {"title": "Session kinds", "body": "The journal separates sequence and performance sessions; a Performance draft begins under the writer lease and resolves to save or discard."},
-    {"title": "Forbidden boundary", "body": "Bundle is transfer-only; Runtime Snapshot is never persisted as Project Truth. Asset Lineage requires v4."}
+    {"title": "Forbidden boundary", "body": "Bundle is transfer-only; Runtime Snapshot is never persisted as Project Truth. Slice lineage persists terminal evidence, never Workspace lifecycle state."}
   ]
 }

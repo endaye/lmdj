@@ -19,7 +19,7 @@
 namespace lmdj::project_io {
 
 inline constexpr std::string_view kProjectWriterContract =
-    "lmdj.project.v4";
+    "lmdj.project.v5";
 
 struct SequenceFlushIdentity {
   foundation::SequenceSessionId session_id;
@@ -198,10 +198,32 @@ class ProjectStore {
     std::vector<SoundSetInstallSlotRequest> slots;
   };
 
+  struct CandidateAdoptionSlotRequest {
+    domain::PadSlotId slot;
+    foundation::AssetId asset_id;
+    std::string media_type;
+    std::span<const std::byte> bytes;
+    domain::AssetLineage lineage;
+  };
+  struct CandidateAdoptionRequest {
+    domain::CommandMeta meta;
+    foundation::ProjectId project_id;
+    foundation::AssetId source_asset_id;
+    foundation::ArtifactRef source_artifact;
+    std::vector<CandidateAdoptionSlotRequest> slots;
+  };
+  // Public adoption refuses stale revisions before consulting any receipt.
+  foundation::Result<domain::AppliedCommand> adopt_candidates(
+      const std::filesystem::path& bundle, const CandidateAdoptionRequest& request);
+
   foundation::Result<void> create(
       const std::filesystem::path& bundle,
       const domain::ProjectState& initial);
   foundation::Result<domain::ProjectState> load(
+      const std::filesystem::path& bundle) const;
+  // Reads only committed authoring state under the owner lease. Unlike load,
+  // this never recovers interrupted writes or scavenges unpublished files.
+  foundation::Result<domain::ProjectState> inspect_committed(
       const std::filesystem::path& bundle) const;
   foundation::Result<domain::AppliedCommand> execute(
       const std::filesystem::path& bundle,
@@ -317,6 +339,14 @@ class ProjectStore {
       const std::filesystem::path& bundle,
       const foundation::SequenceSessionId& session_id,
       domain::PadSlotId slot);
+  // Read only committed ownership and bytes under one writer lease. Does not
+  // recover authoring transactions or scavenge staging.
+  foundation::Result<std::vector<std::byte>> read_asset_artifact(
+      const std::filesystem::path& bundle,
+      const foundation::ProjectId& project_id,
+      const foundation::AssetId& asset_id,
+      const foundation::ArtifactRef& artifact) const;
+
   foundation::Result<std::vector<std::byte>> read_artifact(
       const std::filesystem::path& bundle,
       const foundation::ArtifactRef& artifact) const;

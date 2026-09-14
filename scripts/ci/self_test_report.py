@@ -33,6 +33,8 @@ the thing that failed.
 Everything that reaches GitHub goes through one small client so a test can
 stand a strict fake in its place. The retry sleeps through an injected
 callable; nothing here reads a clock.
+Opted-in CLI diagnostics separately measure HTTP attempts and elapsed time;
+those observations never affect reporting decisions or retry policy.
 """
 
 from __future__ import annotations
@@ -49,6 +51,8 @@ import json
 import os
 import re
 import sys
+import time
+from threading import Lock
 from typing import Protocol
 import urllib.error
 import urllib.parse
@@ -56,6 +60,7 @@ import urllib.request
 import zipfile
 
 import self_test
+from api_observation import observed_open
 from self_test_evidence import validate_verdict_document
 
 
@@ -86,12 +91,34 @@ FAILURE_CLASSES = ("test_failure", "infrastructure_failure", "blocked", "missing
 #: Batch-level keys that are not a suite.
 BATCH_INVALID_KEY = "self-test-batch-invalid"
 MISSING_KEY = "self-test-missing"
+#: Common infrastructure reports are keyed by the source event, not by a
+#: suite or a coincident run timestamp.
+COMMON_EVENT_REPORT_PREFIX = "self-test-infrastructure-event-"
+# Only reports carrying this closed, bot-authored marker are eligible for
+# automatic recovery.  The marker is an affirmative protocol identity; issue
+# titles, prose and historical numbers are never interpreted as authority.
+MANAGED_BUCKET_SCHEMA = "lmdj.self-test-managed-bucket.v1"
+RECOVERY_SCHEMA = "lmdj.self-test-recovery.v1"
 #: Bound on any log or diagnostic text copied into an Issue. The text is data
 #: from a test run, not prose written for the Issue.
 TEXT_LIMIT = 1200
 #: Retry budget for a refused API call. Three tries with the injected sleep;
 #: the delays are seconds and the caller may pass a no-op.
 RETRY_DELAYS = (5.0, 20.0)
+
+
+class RetryBudget:
+    """Cumulative wait allowance shared by one read operation context."""
+    def __init__(self, allowance: float = sum(RETRY_DELAYS)) -> None:
+        self.remaining = float(allowance)
+        self._lock = Lock()
+
+    def consume(self, delay: float) -> bool:
+        with self._lock:
+            if delay < 0 or delay > self.remaining:
+                return False
+            self.remaining -= delay
+            return True
 # Positive list visibility is the condition; elapsed time is never success.
 WRITE_VISIBILITY_DELAYS = (1.0, 4.0, 10.0)
 #: Bounded recovery within the producer's 30-day retention window. Every
@@ -111,6 +138,113 @@ _KEY = re.compile(r"^[a-z][a-z0-9_-]*$")
 _KEY_MARKER = "<!-- lmdj-self-test: key={key} -->"
 _OBS_MARKER = "<!-- lmdj-self-test: key={key} obs={obs} -->"
 _MARKER_SCAN = re.compile(r"<!-- lmdj-self-test: key=(?P<key>[a-z0-9_-]+)(?: obs=(?P<obs>[^ >]+))? -->")
+_COMMON_EVENT_ID = re.compile(r"^[0-9a-f]{64}$")
+_MANAGED_FIELDS = ("schema", "epoch", "key", "suite", "failure_class", "policy",
+                   "selection", "target", "request", "run", "attempt", "order")
+_MANAGED_TOKEN = re.compile(r"^[a-z][a-z0-9_-]*$")
+_MANAGED_HEX = re.compile(r"^[0-9a-f]{64}$")
+_MANAGED_SHA = re.compile(r"^[0-9a-f]{40}$")
+_MANAGED_MARKER = "<!-- lmdj-self-test: managed=v1 {fields} -->"
+_PROVENANCE_MARKER = "<!-- lmdj-self-test: provenance=v1 {fields} -->"
+_RECOVERY_MARKER = "<!-- lmdj-self-test: recovery=v1 {fields} -->"
+
+
+def managed_bucket_key(epoch, policy, suite, failure_class):
+    """Stable namespace for a new machine-managed suite/class bucket."""
+    if (not isinstance(epoch, str) or not _KEY.fullmatch(epoch)
+            or not isinstance(policy, str) or not _MANAGED_HEX.fullmatch(policy)
+            or not isinstance(suite, str) or not _KEY.fullmatch(suite)
+            or failure_class not in FAILURE_CLASSES):
+        raise ValueError("managed bucket namespace is invalid")
+    return f"self-test-managed-{epoch}-{policy}-{suite}-{failure_class}".replace("_", "-")
+
+
+def common_event_report_key(event_id: str) -> str:
+    if not isinstance(event_id, str) or not _COMMON_EVENT_ID.fullmatch(event_id):
+        raise ValueError("common event ID is not an exact digest")
+    return COMMON_EVENT_REPORT_PREFIX + event_id
+
+
+def _management_fields(management):
+    if not isinstance(management, dict) or set(management) != set(_MANAGED_FIELDS):
+        raise ValueError("managed bucket identity is not closed")
+    if management["schema"] != MANAGED_BUCKET_SCHEMA:
+        raise ValueError("managed bucket schema is unsupported")
+    if not isinstance(management["epoch"], str) or not management["epoch"]:
+        raise ValueError("managed bucket epoch is invalid")
+    if not isinstance(management["key"], str) or not _KEY.fullmatch(management["key"]):
+        raise ValueError("managed bucket key is invalid")
+    if not isinstance(management["suite"], str) or not _KEY.fullmatch(management["suite"]):
+        raise ValueError("managed bucket suite is invalid")
+    if not isinstance(management["failure_class"], str) or management["failure_class"] not in FAILURE_CLASSES:
+        raise ValueError("managed bucket failure class is invalid")
+    for name in ("policy", "selection"):
+        if not isinstance(management[name], str) or not _MANAGED_HEX.fullmatch(management[name]):
+            raise ValueError(f"managed bucket {name} digest is invalid")
+    if not isinstance(management["target"], str) or not _MANAGED_SHA.fullmatch(management["target"]):
+        raise ValueError("managed bucket target is invalid")
+    if not isinstance(management["request"], str) or not management["request"]:
+        raise ValueError("managed bucket request identity is invalid")
+    for name in ("run", "attempt", "order"):
+        if type(management[name]) is not int or management[name] <= 0:
+            raise ValueError(f"managed bucket {name} is invalid")
+    return management
+
+
+def managed_marker(management):
+    fields = _management_fields(management)
+    tokens = [f"schema={fields['schema']}", f"epoch={fields['epoch']}", f"key={fields['key']}",
+              f"suite={fields['suite']}", f"class={fields['failure_class']}", f"policy={fields['policy']}"]
+    return _MANAGED_MARKER.format(fields=" ".join(tokens))
+
+
+def management_provenance_marker(management):
+    fields = _management_fields(management)
+    tokens = [f"selection={fields['selection']}", f"target={fields['target']}",
+              f"request={fields['request']}", f"run={fields['run']}",
+              f"attempt={fields['attempt']}", f"order={fields['order']}"]
+    return _PROVENANCE_MARKER.format(fields=" ".join(tokens))
+
+
+def parse_managed_marker(issue, key):
+    """Return machine metadata only for an exact trusted bot-authored marker."""
+    if not isinstance(issue, Mapping) or not _trusted_marker_author(issue):
+        return None
+    body = str(issue.get("body") or "")
+    matches = re.findall(r"<!-- lmdj-self-test: managed=v1 (?P<fields>[^>]+) -->", body)
+    if len(matches) != 1:
+        return None
+    values = {}
+    for token in matches[0].split():
+        if "=" not in token:
+            return None
+        name, value = token.split("=", 1)
+        if name in values:
+            return None
+        values[name] = value
+    if set(values) != {"schema", "epoch", "key", "suite", "class", "policy"}:
+        return None
+    try:
+        provenance = re.findall(r"<!-- lmdj-self-test: provenance=v1 (?P<fields>[^>]+) -->", body)
+        if len(provenance) != 1:
+            return None
+        details = {}
+        for token in provenance[0].split():
+            if "=" not in token:
+                return None
+            name, value = token.split("=", 1)
+            if name in details:
+                return None
+            details[name] = value
+        if set(details) != {"selection", "target", "request", "run", "attempt", "order"}:
+            return None
+        details.update({name: int(details[name]) for name in ("run", "attempt", "order")})
+        values = {"schema": values["schema"], "epoch": values["epoch"], "key": values["key"], "suite": values["suite"],
+                  "failure_class": values["class"], "policy": values["policy"], **details}
+        _management_fields(values)
+    except (ValueError, TypeError):
+        return None
+    return values if values["key"] == key and managed_marker(values) in body else None
 
 #: Which suites carry a candidate-blocking severity when they fail as tests.
 #: Everything else is medium; infrastructure and blocked are never high on
@@ -134,9 +268,13 @@ class WriteVisibilityError(ReportingError):
 
 
 class GitHubApiError(RuntimeError):
-    def __init__(self, status: int, message: str) -> None:
+    def __init__(self, status: int, message: str, *, remaining: int | None = None,
+                 reset: int | None = None, retry_after: int | None = None) -> None:
         super().__init__(f"GitHub API {status}: {message}")
         self.status = status
+        self.remaining = remaining
+        self.reset = reset
+        self.retry_after = retry_after
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +343,8 @@ class UrllibGitHubApi:
         })
         try:
             # Never let an API redirect forward the issues-write token.
-            with urllib.request.build_opener(NoRedirect()).open(request, timeout=30) as response:
+            with observed_open(urllib.request.build_opener(NoRedirect()), request,
+                               family='graphql' if path == '/graphql' else 'rest', timeout=30) as response:
                 payload = response.read(VERDICT_LIMIT_BYTES * 8 + 1)
         except urllib.error.HTTPError as error:
             if raw and error.code in (301, 302, 303, 307, 308):
@@ -214,14 +353,22 @@ class UrllibGitHubApi:
                     raise ReportingError("artifact download Location must use HTTPS") from error
                 download = urllib.request.Request(location, headers={"User-Agent": "lmdj-self-test-report"})
                 try:
-                    with urllib.request.build_opener(SafeDownloadRedirect()).open(download, timeout=30) as response:
+                    with observed_open(urllib.request.build_opener(SafeDownloadRedirect()), download,
+                                       family='artifact', timeout=30) as response:
                         payload = response.read(VERDICT_LIMIT_BYTES * 8 + 1)
                 except (urllib.error.URLError, TimeoutError, OSError) as failure:
                     raise GitHubApiError(0, "artifact download failed") from failure
                 if len(payload) > VERDICT_LIMIT_BYTES * 8:
                     raise ReportingError("artifact download exceeds size limit")
                 return payload
-            raise GitHubApiError(error.code, error.reason or "") from error
+            def header_int(name):
+                value = error.headers.get(name) if error.headers is not None else None
+                return int(value) if (isinstance(value, str) and value.isascii() and value.isdecimal()
+                                      and 1 <= len(value) <= 12) else None
+            raise GitHubApiError(error.code, error.reason or "",
+                                 remaining=header_int("X-RateLimit-Remaining"),
+                                 reset=header_int("X-RateLimit-Reset"),
+                                 retry_after=header_int("Retry-After")) from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             raise GitHubApiError(0, "GitHub request transport failure") from error
         if len(payload) > VERDICT_LIMIT_BYTES * 8:
@@ -333,17 +480,33 @@ class UrllibGitHubApi:
 
 
 def with_retry(call: Callable[[], object], *, sleep: Callable[[float], None],
-               delays: Sequence[float] = RETRY_DELAYS) -> object:
-    """Retry a refused call on 429 and 5xx only. 403 and 404 are answers."""
+               delays: Sequence[float] = RETRY_DELAYS, clock: Callable[[], float] = time.time,
+               deadline: float | None = None, budget: RetryBudget | None = None) -> object:
+    """Retry idempotent reads on secondary throttling or exhausted primary quota.
+
+    The bounded deadline is deliberately not extended by a reset wait.  A
+    reset beyond it remains an unknown/deferred read for the next health tick.
+    Callers must never use this helper for writes.
+    """
     attempt = 0
+    budget = RetryBudget(sum(delays)) if budget is None else budget
+    started = clock()
+    if deadline is None:
+        deadline = started + sum(delays)
     while True:
         try:
             return call()
         except GitHubApiError as error:
-            retryable = error.status == 429 or error.status >= 500 or error.status == 0
+            primary_exhausted = error.status == 403 and error.remaining == 0 and error.reset is not None
+            retryable = error.status == 429 or error.status >= 500 or error.status == 0 or primary_exhausted
             if not retryable or attempt >= len(delays):
                 raise
-            sleep(delays[attempt])
+            delay = error.retry_after if error.status == 429 and error.retry_after is not None else delays[attempt]
+            if primary_exhausted:
+                delay = max(0.0, float(error.reset) - clock())
+            if clock() + delay > deadline or not budget.consume(delay):
+                raise
+            sleep(delay)
             attempt += 1
 
 
@@ -570,6 +733,11 @@ class Report:
     labels: tuple[str, ...]
     summary: str
     detail: str
+    # Legacy and human-investigated reports intentionally leave this unset.
+    # Incremental report_runtime supplies the complete identity for a new
+    # machine-managed suite/class bucket.
+    management: dict | None = None
+    causal_order: int | None = None
 
     @property
     def key_marker(self) -> str:
@@ -579,9 +747,24 @@ class Report:
     def observation_marker(self) -> str:
         return _OBS_MARKER.format(key=self.key, obs=self.observation)
 
+    @property
+    def managed_marker(self) -> str:
+        if self.management is None:
+            return ""
+        return managed_marker(self.management)
+
+    @property
+    def provenance_marker(self) -> str:
+        if self.management is None:
+            return ""
+        return management_provenance_marker(self.management)
+
     def issue_body(self, assignee: str) -> str:
+        markers = [self.key_marker]
+        if self.management is not None:
+            markers.extend([self.managed_marker, self.provenance_marker])
         return "\n".join([
-            self.key_marker,
+            *markers,
             f"## {self.title}",
             "",
             "Filed by `self-test-report.yml` from a self-test verdict. This Issue is a suite/class failure bucket:",
@@ -602,6 +785,53 @@ class Report:
         heading = "### First observation" if first else "### New observation"
         return "\n".join([self.observation_marker, heading, "", self.summary, "", self.detail])
 
+
+@dataclass(frozen=True)
+class Recovery:
+    """An authenticated later-success attempt to discharge one bucket."""
+
+    key: str
+    suite: str
+    failure_class: str
+    observation: str
+    target: str
+    request: str
+    run: int
+    attempt: int
+    policy: str
+    selection: str
+    epoch: str
+    order: int
+    evidence: str
+    summary: str
+
+    @property
+    def identity(self):
+        values = {"schema": RECOVERY_SCHEMA, "key": self.key, "suite": self.suite,
+                  "class": self.failure_class, "observation": self.observation,
+                  "target": self.target, "request": self.request, "run": self.run,
+                  "attempt": self.attempt, "policy": self.policy, "selection": self.selection,
+                  "epoch": self.epoch,
+                  "order": self.order, "evidence": self.evidence}
+        return values
+
+    @property
+    def recovery_id(self):
+        import hashlib
+        return hashlib.sha256(json.dumps(self.identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+    @property
+    def marker(self):
+        fields = " ".join([f"schema={RECOVERY_SCHEMA}", f"key={self.key}", f"suite={self.suite}",
+                            f"class={self.failure_class}", f"target={self.target}",
+                            f"request={self.request}", f"run={self.run}", f"attempt={self.attempt}",
+                            f"policy={self.policy}", f"selection={self.selection}", f"epoch={self.epoch}",
+                            f"order={self.order}", f"evidence={self.evidence}"])
+        return _RECOVERY_MARKER.format(fields=fields)
+
+    def comment_body(self):
+        return "\n".join([self.marker, "### Recovery observation", "", self.summary,
+                            "", "This automated recovery is evidence for this exact suite only; it is not release evidence."])
 
 def _run_link(run: RunView) -> str:
     suffix = f"/attempts/{run.attempt}" if run.attempt > 1 else ""
@@ -696,13 +926,22 @@ def _trusted_marker_author(document: Mapping[str, object]) -> bool:
             and user.get("type") == "Bot")
 
 
-def _find_issue(api: GitHubApi, key: str, *, sleep: Callable[[float], None]) -> Mapping[str, object] | None:
+def _find_issue(api: GitHubApi, key: str, *, sleep: Callable[[float], None], managed=None) -> Mapping[str, object] | None:
     marker = _KEY_MARKER.format(key=key)
     issues = with_retry(lambda: api.list_issues(label=REPORT_LABEL, state="all"), sleep=sleep)
     if not isinstance(issues, list) or any(not isinstance(issue, dict) for issue in issues):
         raise ReportingError("why: malformed issue list; remedy: inspect the API response before deduplication")
+    def same_stable_management(issue):
+        if managed is None:
+            return True
+        actual = parse_managed_marker(issue, key)
+        if actual is None:
+            return False
+        stable = ("schema", "epoch", "key", "suite", "failure_class", "policy")
+        return all(actual[name] == managed[name] for name in stable)
     matching = [issue for issue in issues if _trusted_marker_author(issue)
-                and marker in str(issue.get("body") or "")]
+                and marker in str(issue.get("body") or "")
+                and same_stable_management(issue)]
     if not matching:
         return None
     if len(matching) != 1 or not _positive_id(matching[0].get("number")):
@@ -759,12 +998,12 @@ def _write_state(api: GitHubApi) -> _WriteState:
 
 def _wait_for_receipt(api: GitHubApi, report: Report, *, state: _WriteState,
                       expected: tuple[int, int | None] | None,
-                      sleep: Callable[[float], None]) -> tuple[int, int | None]:
+                      sleep: Callable[[float], None], managed=None) -> tuple[int, int | None]:
     """Only reads here. A negative or stale read never authorizes another POST."""
     for delay in (0.0, *WRITE_VISIBILITY_DELAYS):
         if delay:
             sleep(delay)
-        issue = _find_issue(api, report.key, sleep=sleep)
+        issue = _find_issue(api, report.key, sleep=sleep, managed=managed)
         if issue is None:
             continue
         known_bucket = state.buckets.get(report.key)
@@ -786,7 +1025,7 @@ def _wait_for_receipt(api: GitHubApi, report: Report, *, state: _WriteState,
 
 def _post_once(api: GitHubApi, report: Report, *, state: _WriteState,
                issue_number: int | None, assignee: str,
-               sleep: Callable[[float], None]) -> tuple[int, bool]:
+               sleep: Callable[[float], None], managed=None) -> tuple[int, bool]:
     """POST once, then require an actual unique receipt in the dedupe read path."""
     state.unresolved = f"key={report.key} obs={report.observation}"
     expected = None
@@ -812,7 +1051,8 @@ def _post_once(api: GitHubApi, report: Report, *, state: _WriteState,
         except (ValueError, TypeError, KeyError, AssertionError):
             # Malformed successful response may follow a persisted write.
             pass
-        receipt = _wait_for_receipt(api, report, state=state, expected=expected, sleep=sleep)
+        receipt = _wait_for_receipt(api, report, state=state, expected=expected, sleep=sleep,
+                                    managed=managed)
         state.unresolved = None
         return receipt[0], acknowledged
     except (ReportingError, GitHubApiError, ValueError, TypeError, KeyError) as error:
@@ -846,12 +1086,12 @@ def _apply_report(api: GitHubApi, report: Report, *, assignee: str,
     if state.unresolved is not None:
         raise WriteVisibilityError(_diagnostic(f"prior write remains unresolved: {state.unresolved}",
                                               "stop; manually reconcile it before any new-process retry"))
-    issue = _find_issue(api, report.key, sleep=sleep)
+    issue = _find_issue(api, report.key, sleep=sleep, managed=report.management)
     if issue is None and report.key in state.buckets:
         state.unresolved = f"known bucket disappeared: {report.key} issue={state.buckets[report.key]}"
         for delay in WRITE_VISIBILITY_DELAYS:
             sleep(delay)
-            issue = _find_issue(api, report.key, sleep=sleep)
+            issue = _find_issue(api, report.key, sleep=sleep, managed=report.management)
             if issue is not None:
                 break
         if issue is None:
@@ -859,7 +1099,7 @@ def _apply_report(api: GitHubApi, report: Report, *, assignee: str,
         state.unresolved = None
     if issue is None:
         number, acknowledged = _post_once(api, report, state=state, issue_number=None,
-                                         assignee=assignee, sleep=sleep)
+                                         assignee=assignee, sleep=sleep, managed=report.management)
         return Outcome(report.key, "created" if acknowledged else "duplicate", number)
     number = int(issue["number"])  # type: ignore[arg-type]
     if report.key in state.buckets and state.buckets[report.key] != number:
@@ -874,15 +1114,17 @@ def _apply_report(api: GitHubApi, report: Report, *, assignee: str,
         return Outcome(report.key, "duplicate", number)
     if known is not None:
         state.unresolved = f"known observation disappeared: {report.key} obs={report.observation}"
-        _wait_for_receipt(api, report, state=state, expected=known, sleep=sleep)
+        _wait_for_receipt(api, report, state=state, expected=known, sleep=sleep, managed=report.management)
         state.unresolved = None
         return Outcome(report.key, "duplicate", number)
     action = "commented"
     if str(issue.get("state")) == "closed":
-        with_retry(lambda: api.set_issue_state(number, "open"), sleep=sleep)
+        # PATCH has a potentially unknown write outcome. Never replay it via
+        # the read retry helper; reconciliation owns any later retry.
+        api.set_issue_state(number, "open")
         action = "reopened"
     number, acknowledged = _post_once(api, report, state=state, issue_number=number,
-                                     assignee=assignee, sleep=sleep)
+                                     assignee=assignee, sleep=sleep, managed=report.management)
     return Outcome(report.key, action if acknowledged else "duplicate", number)
 
 

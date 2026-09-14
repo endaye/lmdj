@@ -124,7 +124,7 @@ class SelfTestBatchWorkflowTest(unittest.TestCase):
                               f"why: {job_id} reads change-scope outputs; remedy: list it in needs")
 
     def test_adjudicators_and_control_plane_check_out_the_control_revision(self) -> None:
-        for job_id in sorted(ADJUDICATORS | CONTROL_PLANE | {"pre-heavy-gate", "batch-verdict"}):
+        for job_id in sorted(ADJUDICATORS | CONTROL_PLANE | {"batch-verdict"}):
             with self.subTest(job=job_id):
                 self.assertNotIn(TARGET_REF, job_body(self.ci, job_id),
                                  f"why: {job_id} runs the control revision's scripts, not the product; "
@@ -158,7 +158,7 @@ class SelfTestBatchWorkflowTest(unittest.TestCase):
                 self.assertIn(f"suite: {suite}", body)
                 self.assertIn("target_revision: ${{ needs.change-scope.outputs.self-test-target }}", body)
                 self.assertIn("needs.change-scope.outputs.self-test-action == 'run'", body)
-                self.assertIn("needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success'", body)
+                self.assertIn("needs.change-scope.outputs.self-test == 'true'", body)
                 self.assertIn("needs.change-scope.outputs.trusted-head == 'true'", body)
 
     # -- the verdict job ---------------------------------------------------
@@ -178,7 +178,7 @@ class SelfTestBatchWorkflowTest(unittest.TestCase):
         self.assertIn("change-scope", needs)
         self.assertNotIn("pre-heavy-gate", needs)
         self.assertIn("if: ${{ always() && needs.change-scope.outputs.batch-mode == 'true' && needs.change-scope.outputs.batch-execution != '' }}", body)
-        self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]", body)
+        self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]", body)
 
     def test_verdict_aliases_and_dependencies_mirror_the_needs_graph(self):
         body = job_body(self.ci, "batch-verdict")

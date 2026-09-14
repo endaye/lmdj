@@ -90,11 +90,9 @@ def provider_source_package_identity(
             "provider_version": component_version,
         },
         paths=[
-            provider_root / "include/lmdj/providers"
-            / component_id.replace(".", "_")
-            / "factory.hpp",
             provider_root / "module.json",
-            provider_root / "src/provider.cpp",
+            *provider_root.glob("include/**/*.hpp"),
+            *provider_root.glob("src/**/*.cpp"),
         ],
         root=root,
     )
@@ -139,6 +137,7 @@ def component_source(field: str, component_id: str) -> Path:
                 f"*/{component_id}.schema.json"
             )
         )
+        matches += sorted((REPO_ROOT / "contracts").glob(f"*/{component_id}.md"))
         assert len(matches) == 1, (component_id, matches)
         return matches[0]
     raise AssertionError(field)
@@ -571,7 +570,7 @@ with tempfile.TemporaryDirectory(prefix="lmdj-version-lock-") as temp:
         "providers": [
             {
                 "id": "local.proof.success",
-                "version": "1.0.5",
+                "version": "2.0.2",
                 "capabilities": [],
                 "model_identity": None,
             }

@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCOPE_POLICY = REPO_ROOT / "scripts/ci/scope_policy.json"
 MAIN_WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 PORTAL_WORKFLOW = REPO_ROOT / ".github/workflows/architecture-portal.yml"
+PR_CONTRACT_WORKFLOW = REPO_ROOT / ".github/workflows/pr-contract.yml"
 WEB_PROOF_ACTION = REPO_ROOT / ".github/actions/web-ci-proof/action.yml"
 
 FORMAL_LANE_JOBS = (
@@ -57,11 +58,10 @@ SELF_HOSTED_JOBS = (
 )
 HOSTED_CONTROL_PLANE_JOBS = (
     "change-scope",
-    "pre-heavy-gate",
     "select-macos-runner",
     # Judges a self-test batch from `needs` and retains the verdict; runs the
     # control revision's scripts, never the target's, and must outlive the
-    # pool it judges for the same reason PR Gate must.
+    # pool it judges for the same reason batch verdict must.
     "batch-verdict",
 )
 # Hosted Ubuntu jobs that are not control plane: each republishes an already
@@ -145,13 +145,8 @@ RELEASE_NODE_CONSUMERS = (
 )
 FORMAL_RESULTS = FORMAL_LANE_JOBS + SUPPORT_JOBS
 # Review is exclusively in pr-review.yml; Core CI has no non-lane reviewers.
-GENERAL_ROLE_NON_LANE_JOBS = ("change-scope", "pre-heavy-gate", "select-macos-runner",
+GENERAL_ROLE_NON_LANE_JOBS = ("change-scope", "select-macos-runner",
                               "core-macos", "core-asan-macos", "batch-verdict")
-GATING_PREFLIGHT_JOBS = (
-    "docs-static", "ci-contract", "deploy-contract", "chameleon-lab",
-    "web-toolchain-conformance", "web-runtime-host", "creator-web",
-    "web-runtime-lab",
-)
 HEAVY_JOBS = (
     "portal", "core-ubuntu", "package", "core-coverage", "core-asan",
 )
@@ -188,6 +183,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.main_source = MAIN_WORKFLOW.read_text(encoding="utf-8")
         cls.portal_source = PORTAL_WORKFLOW.read_text(encoding="utf-8")
+        cls.pr_contract_source = PR_CONTRACT_WORKFLOW.read_text(encoding="utf-8")
         cls.web_proof_source = WEB_PROOF_ACTION.read_text(encoding="utf-8")
 
     def workflow_job(self, job_name: str, *, portal: bool = False) -> str:
@@ -223,6 +219,16 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         raw = match.group("needs").strip("[]")
         return {value.strip() for value in raw.split(",") if value.strip()}
 
+    def pr_contract_job(self, job_name: str) -> str:
+        match = re.search(
+            rf"^  {re.escape(job_name)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:|\Z)",
+            self.pr_contract_source,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(match, f"PR contract job is missing: {job_name}")
+        assert match is not None
+        return match.group("body")
+
     def called_impact_step(self) -> str:
         match = re.search(
             r"^      - name: Check Pull Request documentation impact\n"
@@ -256,6 +262,72 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         default: ""
 '''
         self.assertIn(expected, self.portal_source)
+
+    def test_pr_contract_is_pull_request_only_and_never_executes_forks_or_drafts(self) -> None:
+        events = self.event_block(self.pr_contract_source)
+        self.assertIn("pull_request:", events)
+        self.assertIn("types: [opened, synchronize, reopened, edited, ready_for_review]", events)
+        directives = "\n".join(
+            line for line in self.pr_contract_source.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        self.assertNotIn("pull_request_target:", directives)
+        change_scope = self.pr_contract_job("change-scope")
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", change_scope)
+        self.assertIn("github.event.pull_request.draft == false", change_scope)
+        for job_name in ("ci-contract", "docs-static", "documentation-impact"):
+            with self.subTest(job=job_name):
+                self.assertIn("needs.change-scope.outputs.trusted-head == 'true'", self.pr_contract_job(job_name))
+
+    def test_pr_contract_selects_only_the_deterministic_floor(self) -> None:
+        scope = self.pr_contract_job("change-scope")
+        self.assertIn("--event pull_request", scope)
+        self.assertIn("--base-sha \"$BASE_SHA\"", scope)
+        self.assertIn("--head-sha \"$HEAD_SHA\"", scope)
+        self.assertIn("--head-repository \"$HEAD_REPOSITORY\"", scope)
+        self.assertNotIn("--lanes", scope)
+        self.assertNotIn("AI", scope)
+        self.assertIn("fromJSON(needs.change-scope.outputs.manifest).lanes.ci_contract", self.pr_contract_job("ci-contract"))
+        self.assertIn("fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static", self.pr_contract_job("docs-static"))
+        impact = self.pr_contract_job("documentation-impact")
+        self.assertNotIn("lanes.portal", impact)
+        self.assertNotIn("uses: ./.github/workflows/ci.yml", self.pr_contract_source)
+
+    def test_pr_contract_checks_every_selected_job_at_the_exact_head(self) -> None:
+        for job_name in ("change-scope", "ci-contract", "docs-static", "documentation-impact"):
+            with self.subTest(job=job_name):
+                job = self.pr_contract_job(job_name)
+                self.assertIn("uses: actions/checkout@v6", job)
+                self.assertIn("fetch-depth: 0", job)
+                self.assertIn("ref: ${{", job)
+                self.assertIn('test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"', job)
+        self.assertIn('git diff --check "$BASE_SHA...$HEAD_SHA"', self.pr_contract_job("docs-static"))
+
+    def test_pr_contract_runs_complete_ci_contract_and_exact_impact_checker(self) -> None:
+        ci = self.pr_contract_job("ci-contract")
+        self.assertIn("ACTIONLINT_VERSION: 1.7.12", self.pr_contract_source)
+        self.assertIn("ACTIONLINT_SHA256:", self.pr_contract_source)
+        self.assertIn("python3 -m unittest discover -s tests/build -p 'ci_*_test.py'", ci)
+        impact = self.pr_contract_job("documentation-impact")
+        for text in (
+            "PORTAL_PR_BODY: ${{ needs.change-scope.outputs.pull-request-body }}",
+            "PORTAL_BASE_SHA: ${{ needs.change-scope.outputs.base-sha }}",
+            "PORTAL_HEAD_SHA: ${{ needs.change-scope.outputs.head-sha }}",
+            "run: node apps/docs-site/scripts/check-doc-impact.mjs",
+        ):
+            self.assertIn(text, impact)
+
+    def test_pr_contract_documentation_impact_installs_node_before_checker(self) -> None:
+        impact = self.pr_contract_job("documentation-impact")
+        setup = impact.index("- uses: actions/setup-node@v6")
+        checker = impact.index("run: node apps/docs-site/scripts/check-doc-impact.mjs")
+        self.assertIn('node-version: "22"', impact)
+        self.assertLess(
+            setup,
+            checker,
+            "why: documentation-impact needs Node before invoking its checker; "
+            "remedy: keep actions/setup-node@v6 with Node 22 before the checker",
+        )
 
     def test_portal_impact_check_uses_explicit_base_and_head_inputs(self) -> None:
         step = self.called_impact_step()
@@ -362,21 +434,21 @@ class CiWorkflowTopologyTest(unittest.TestCase):
 
     def test_change_scope_has_three_minute_limit_zero_dependency_install_and_live_pr_read(self):
         job = self.workflow_job("change-scope")
-        for text in ("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]", "timeout-minutes: 3", "fetch-depth: 0", "batch_execution.py prepare"):
+        for text in (GENERAL_ROLE, "timeout-minutes: 3", "fetch-depth: 0", "batch_execution.py prepare"):
             self.assertIn(text, job)
         for forbidden in (r"\bnpm\b", r"\bpip(?:3)?\b", r"\bcmake\b", "actions/runners", "SELF_HOSTED_RUNNER_READ_TOKEN"):
             self.assertNotRegex(job, forbidden)
         self.assertNotIn("pull-requests:", self.main_source)
 
-    def test_control_plane_stays_on_contabo_separate_from_heavy_executors(self) -> None:
-        """Paid Linux is not an automatic control-availability fallback."""
+    def test_control_plane_uses_the_dual_node_general_role(self) -> None:
+        """Control work can use either trusted general host, never paid Linux."""
         for job_name in HOSTED_CONTROL_PLANE_JOBS:
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]", job)
+                self.assertIn(GENERAL_ROLE, job)
                 self.assertNotIn("ci-web-heavy", job)
                 self.assertNotIn("ci-core", job)
-        # macOS adjudication also uses Contabo; only actual Mac recovery is paid.
+        # macOS adjudication also uses the general role; only actual Mac recovery is paid.
         hosted = re.findall(r"(?m)^    runs-on: ubuntu-24\.04$", self.main_source)
         self.assertEqual(
             len(hosted),
@@ -515,9 +587,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         for job_name in GENERAL_REUSABLE_JOBS:
             with self.subTest(job=job_name):
                 caller = self.workflow_job(job_name)
-                self.assertEqual(
-                    self.job_needs(job_name), {"change-scope", "pre-heavy-gate"}
-                )
+                self.assertEqual(self.job_needs(job_name), {"change-scope"})
                 self.assertIn(TRUST_CONDITION, caller)
                 self.assertNotIn("runs-on:", caller)
         called = self.workflow_job("portal", portal=True)
@@ -623,49 +693,53 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertEqual(set(re.findall(r"lanes\.([a-z_]+)", job)), {"core_macos"})
         self.assertIn("if: ${{ !cancelled()", job)
 
-    def test_portal_is_same_run_reusable_job_and_pr_gate_needs_it(self):
+    def test_portal_is_same_run_reusable_job_and_batch_verdict_needs_it(self):
         portal = self.workflow_job("portal")
         for text in ("uses: ./.github/workflows/architecture-portal.yml", "check_documentation_impact:", "base_sha:", "head_sha:", "pull_request_body:"):
             self.assertIn(text, portal)
         self.assertIn("portal", self.job_needs("batch-verdict"))
 
-    def test_pr_gate_has_every_formal_lane_in_static_needs_and_runs_with_always(self):
+    def test_batch_verdict_has_every_formal_lane_in_static_needs_and_runs_with_always(self):
         job = self.workflow_job("batch-verdict")
         self.assertEqual(self.job_needs("batch-verdict"), {"change-scope", "macos-fallback", "nightly-tsan", "nightly-stress", *FORMAL_RESULTS})
         self.assertIn("always()", job)
         self.assertIn("NEEDS_JSON: ${{ toJSON(needs) }}", job)
         self.assertIn("batch_execution.from_needs", job)
 
-    def test_pre_heavy_gate_is_closed_self_hosted_preflight_admission(self) -> None:
-        job = self.workflow_job("pre-heavy-gate")
-        self.assertIn("fetch-depth: 0", job)
-        self.assertEqual(
-            self.job_needs("pre-heavy-gate"),
-            {"change-scope", *GATING_PREFLIGHT_JOBS},
-            msg=("why: product preflight must not wait for advisory review; "
-                 "remedy: keep only actual product dependencies in pre-heavy-gate"),
+    def test_no_job_depends_on_an_always_false_admission_gate(self) -> None:
+        """Heavy lanes must not depend on a dead batch-mode admission job.
+
+        `change-scope` hard-codes batch mode true, so a `batch-mode == 'false'`
+        condition can never admit a job. This catches reintroducing either the
+        retired gate itself or a new always-false prerequisite of a lane.
+        """
+        directives = "\n".join(
+            line for line in self.main_source.splitlines()
+            if not line.lstrip().startswith("#")
         )
-        self.assertIn("if: ${{ !cancelled() && needs.change-scope.outputs.batch-mode == 'false' }}", job)
-        self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]", job)
-        self.assertIn("timeout-minutes: 3", job)
-        for forbidden in (
-            "ci-web-heavy", "ci-core", "runs-on: ubuntu-24.04",
-            "permissions:",
-        ):
-            with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, job)
-        result_keys = set(re.findall(
-            r'"([a-z0-9-]+)":\{"result":"\$\{\{ needs\.[a-z0-9-]+\.result \}\}"\}',
-            job,
-        ))
-        self.assertEqual(result_keys, set(GATING_PREFLIGHT_JOBS))
-        for job_name in (
-            "select-macos-runner", "macos-primary", "macos-fallback",
-            "core-macos", "core-asan-macos",
-        ):
-            with self.subTest(job=job_name):
-                self.assertNotIn(job_name, self.job_needs("pre-heavy-gate"))
-                self.assertNotIn(f"needs.{job_name}.result", job)
+        self.assertNotIn("pre-heavy-gate", directives)
+        self.assertNotIn(
+            "batch-mode == 'false'", directives,
+            "why: a batch-mode false admission condition is unreachable; "
+            "remedy: remove the dead gate and keep only live lane selection",
+        )
+        for job_name in re.findall(r"^  ([a-z0-9-]+):\n", self.main_source, re.MULTILINE):
+            body = self.workflow_job(job_name)
+            needs_match = re.search(r"^    needs: (?P<needs>\[[^\n]+\]|[a-z0-9-]+)$", body, re.MULTILINE)
+            if not needs_match:
+                continue
+            needs = needs_match.group("needs")
+            self.assertNotRegex(
+                body,
+                r"batch-mode == 'false'",
+                msg=f"why: {job_name} has an unreachable admission condition; "
+                    "remedy: remove the dead prerequisite and condition",
+            )
+            self.assertNotIn(
+                "pre-heavy-gate", needs,
+                msg=f"why: {job_name} depends on a retired dead admission job; "
+                    "remedy: keep only live product dependencies",
+            )
 
     def test_heavy_jobs_form_the_sparse_predecessor_chain(self) -> None:
         for index, job_name in enumerate(HEAVY_JOBS):
@@ -674,9 +748,9 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 earlier = HEAVY_JOBS[:index]
                 self.assertEqual(
                     self.job_needs(job_name),
-                    {"change-scope", "pre-heavy-gate", *earlier},
+                    {"change-scope", *earlier},
                 )
-                self.assertIn("needs.pre-heavy-gate.result == 'success'", job)
+                self.assertIn("needs.change-scope.outputs.self-test == 'true'", job)
                 self.assertIn(TRUST_CONDITION, job)
                 for predecessor in earlier:
                     self.assertIn(
@@ -698,16 +772,16 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         buy paid Ubuntu. Naming the literal label set makes them queue on a
         saturated or absent role rather than diverting a whole manifest to paid
         runners. Each retains direct Change Scope and trust dependencies, then
-        adds Pre-heavy Gate plus every earlier native-heavy predecessor. The
-        exact job set keeps a later lane from inheriting the route without its
-        own proof run.
+        waits only for every earlier native-heavy predecessor. The exact job
+        set keeps a later lane from inheriting the route without its own proof
+        run.
         """
         for job_name, lane in CORE_JOBS.items():
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertEqual(
                     self.job_needs(job_name),
-                    {"change-scope", "pre-heavy-gate", *HEAVY_JOBS[:HEAVY_JOBS.index(job_name)]},
+                    {"change-scope", *HEAVY_JOBS[:HEAVY_JOBS.index(job_name)]},
                 )
                 self.assertIn(CORE_ROLE, job)
                 self.assertNotIn("runs-on: ubuntu-24.04", job)
@@ -722,7 +796,6 @@ class CiWorkflowTopologyTest(unittest.TestCase):
     def test_scope_and_gate_timeouts_are_three_minutes_and_lane_limits_match_policy(self) -> None:
         expected = {
             "change-scope": 3,
-            "pre-heavy-gate": 3,
             "batch-verdict": 5,
             "docs-static": 10,
             "ci-contract": 10,

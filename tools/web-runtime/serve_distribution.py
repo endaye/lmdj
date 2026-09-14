@@ -97,20 +97,14 @@ class _RefuseRedirect(HTTPRedirectHandler):
         return None
 
 
-# The host class is deliberately narrower than WHATWG's: `new URL()` leaves
-# `!"$&'()*+,;=`{}~` and a leading `.` or `-` untouched in a host, and none of
-# them belongs in a Catalog address. `_` is admitted because some internal
-# names really are spelled `a_b.example`. Narrower means this side refuses a
-# few values production would accept, which is the safe direction and is
-# asserted rather than assumed -- see `UPSTREAM_PARITY_REFUSED`.
-#
-# The one grammar a configured upstream must match, derived by measurement
-# rather than from spec recall: the path class is exactly the ASCII characters
-# `new URL()` leaves untouched inside a path, so anything the Worker would
-# rewrite is outside it. Enumerating WHATWG's normalisations instead was tried
-# and lost -- two review passes kept finding spellings it had missed, because a
-# list of behaviours is always one behaviour behind the parser.
-# Deciding what a valid upstream looks like is finite; chasing a parser is not.
+# Shared Catalog character admission, mirrored locally by the standalone
+# Worker before its parsed canonical URL checks. `_` is admitted for internal
+# names such as `a_b.example`; exotic host punctuation and a literal path `^`
+# are refused on both sides. URL serialization alone does not define admission:
+# Node 22 preserves `^` while Node 26 percent-encodes it.
+# Keep this alphabet explicit and use CatalogUpstreamParityTest to verify the
+# same accepted/refused corpus across both implementations and Node versions.
+# The proof-only loopback HTTP exception is checked below; Worker stays HTTPS.
 # `(?:/[class]*)*/` is the classic catastrophic-backtracking shape and is not
 # one here: the class excludes `/`, so each iteration must consume the
 # separator and the decomposition of any input is unique -- there is nothing to
@@ -172,11 +166,10 @@ def _host_is_canonical(host: str) -> bool:
 def normalize_catalog_upstream(upstream: str) -> str:
     """Return the upstream base, or raise for one this server will not forward to.
 
-    The Worker refuses any value that is not already the base it composes,
-    which is a property of having a WHATWG parser. This side has none, so it
-    decides the same question with a closed grammar instead. The two agree
-    exactly as far as that grammar is faithful, and
-    `CatalogUpstreamParityTest` is what keeps them honest about it.
+    Both implementations apply the same character admission grammar. The
+    Worker then checks parsed canonical URL equality; this server checks host,
+    port and path canonical forms explicitly. CatalogUpstreamParityTest covers
+    their shared outcomes and the proof-only loopback HTTP exception.
 
     Every rejection is a `ServerError`. Nothing here may raise anything else:
     an escaping exception is not a refusal, it is a crash the proof server's

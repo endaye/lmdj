@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -12,6 +13,7 @@
 #include <vector>
 
 #include <lmdj/audio/detail/fixed_spsc_queue.hpp>
+#include <lmdj/audio/detail/runtime_spsc_storage.hpp>
 #include <lmdj/audio/detail/value_channel.hpp>
 #include <lmdj/audio/master_fx.hpp>
 #include <lmdj/audio/prepared_sample_bank.hpp>
@@ -53,6 +55,10 @@ inline constexpr std::size_t kRealtimeTriggerOutcomeCapacity = 4'096;
 // remains observable to callers that do not yet consume the Stage 8 stream.
 inline constexpr std::size_t kRealtimeVoiceStateCapacity =
     (kRealtimeCaptureCapacity + kRealtimeQueueCapacity) * 2;
+// Receipt-bounded callers drain states before retiring consumed commands.
+// At most two edges per pending command, plus one terminal per existing Voice.
+inline constexpr std::size_t kRealtimeReceiptVoiceStateCapacity =
+    kRealtimeQueueCapacity * 2 + kRealtimeVoiceCapacity;
 
 enum class RealtimeState : std::uint8_t { stopped, running };
 enum class EnqueueResult : std::uint8_t {
@@ -79,6 +85,7 @@ enum class PatternPublishResult : std::uint8_t {
   pattern_slots_full,
   publish_queue_full,
   generation_exhausted,
+  phase_mismatch,
 };
 
 struct PatternPublication {
@@ -96,6 +103,35 @@ struct PatternReplacementAuthority {
   std::uint64_t generation;
   foundation::PatternId pattern_id;
   std::uint64_t activation_frame;
+};
+
+enum class PatternTransportAction : std::uint8_t { start, stop, fence };
+enum class PatternTransportSubmit : std::uint8_t {
+  accepted, busy, disabled, not_running, stale_generation,
+  stale_epoch, identity_mismatch, invalid_action
+};
+enum class PatternCutoffDecision : std::uint8_t {
+  none, applied_before_cutoff, canceled_at_cutoff
+};
+struct PatternTransportCommand {
+  std::uint64_t runtime_generation{};
+  std::uint64_t epoch{};
+  std::uint64_t expected_pattern_generation{};
+  PatternTransportAction action{};
+  std::optional<PatternReplacementAuthority> pending_switch;
+};
+struct PatternTransportReceipt {
+  std::uint64_t runtime_generation{};
+  std::uint64_t epoch{};
+  std::uint64_t effective_frame{};
+  std::uint64_t origin_frame{};
+  std::uint64_t pattern_generation{};
+  foundation::PatternId pattern_id;
+  std::uint16_t bpm{};
+  bool playing{};
+  PatternCutoffDecision switch_decision{};
+  std::optional<PatternReplacementAuthority> switch_authority;
+  std::optional<std::uint64_t> switch_applied_frame;
 };
 
 struct PatternTelemetry {
@@ -223,6 +259,7 @@ struct BankTelemetry {
 
 struct ReclaimedBankTelemetry {
   std::size_t count;
+  // Project Bank reservation refund; reserved audition storage is excluded.
   std::uint64_t decoded_pcm_bytes;
 };
 
@@ -253,6 +290,100 @@ struct RuntimeVoiceStateTelemetry {
 };
 
 namespace detail {
+
+// Natural alignment removes padding without changing the public event ABI.
+struct RuntimeVoiceStateCell {
+  std::uint64_t sequence;
+  std::uint64_t runtime_frame;
+  std::uint32_t source_frame;
+  std::uint8_t slot;
+  RuntimeVoiceState state;
+};
+static_assert(sizeof(RuntimeVoiceStateCell) <= 24);
+static_assert(std::is_trivially_copyable_v<RuntimeVoiceStateCell>);
+
+template <std::size_t Capacity>
+class RuntimeVoiceStateQueue {
+  // Natural alignment removes per-cell padding without changing the public
+  // event's aggregate order, widths or ABI. Queue ownership remains SPSC.
+  using Cell = RuntimeVoiceStateCell;
+
+ public:
+  static consteval std::size_t capacity() noexcept { return Capacity; }
+
+  bool try_push(const RuntimeVoiceStateEvent& event) noexcept {
+    return queue_.try_push(Cell{
+        event.sequence, event.runtime_frame, event.source_frame,
+        event.slot, event.state});
+  }
+
+  bool try_pop(RuntimeVoiceStateEvent& event) noexcept {
+    Cell cell;
+    if (!queue_.try_pop(cell)) {
+      return false;
+    }
+    event = RuntimeVoiceStateEvent{
+        cell.sequence, cell.slot, cell.state,
+        cell.runtime_frame, cell.source_frame};
+    return true;
+  }
+
+  std::size_t size_approx() const noexcept { return queue_.size_approx(); }
+  std::size_t clear_quiescent() noexcept { return queue_.clear_quiescent(); }
+
+ private:
+  FixedSpscQueue<Cell, Capacity> queue_;
+};
+
+// Construct once on the control side; selection and pointees never change.
+// All capacities retain the same SPSC publication and compact-cell format.
+class RuntimeVoiceStateStorage {
+ public:
+  using Full = RuntimeVoiceStateQueue<kRealtimeVoiceStateCapacity>;
+  using ReceiptBounded = RuntimeVoiceStateQueue<kRealtimeReceiptVoiceStateCapacity>;
+
+  static constexpr std::optional<std::size_t> receipt_capacity(
+      std::size_t pending) noexcept {
+    if (pending == 0 || pending > kRealtimeQueueCapacity) return std::nullopt;
+    return pending * 2 + kRealtimeVoiceCapacity;
+  }
+  static constexpr std::optional<std::size_t> receipt_allocation_bytes(
+      std::size_t pending) noexcept {
+    const auto capacity = receipt_capacity(pending);
+    return capacity ? RuntimeSpscStorage<RuntimeVoiceStateCell>::allocation_bytes(*capacity)
+                    : std::nullopt;
+  }
+
+  explicit RuntimeVoiceStateStorage(
+      bool receipt_bounded = false,
+      std::size_t pending = kRealtimeQueueCapacity)
+      : queue_(receipt_bounded ? checked_receipt_capacity(pending)
+                               : kRealtimeVoiceStateCapacity) {}
+
+  bool try_push(const RuntimeVoiceStateEvent& event) noexcept {
+    return queue_.try_push(RuntimeVoiceStateCell{
+        event.sequence, event.runtime_frame, event.source_frame,
+        event.slot, event.state});
+  }
+  bool try_pop(RuntimeVoiceStateEvent& event) noexcept {
+    RuntimeVoiceStateCell cell;
+    if (!queue_.try_pop(cell)) return false;
+    event = RuntimeVoiceStateEvent{
+        cell.sequence, cell.slot, cell.state, cell.runtime_frame, cell.source_frame};
+    return true;
+  }
+  std::size_t capacity() const noexcept { return queue_.capacity(); }
+  std::size_t size_approx() const noexcept { return queue_.size_approx(); }
+  std::size_t clear_quiescent() noexcept { return queue_.clear_quiescent(); }
+
+ private:
+  static std::size_t checked_receipt_capacity(std::size_t pending) {
+    const auto capacity = receipt_capacity(pending);
+    if (!capacity) throw std::bad_array_new_length{};
+    return *capacity;
+  }
+  RuntimeSpscStorage<RuntimeVoiceStateCell> queue_;
+};
 
 struct RealtimeEngineAudioAccess;
 
@@ -307,6 +438,37 @@ std::size_t drain_voice_states_fail_closed(
 // for the full model.
 class RealtimeEngine final {
  public:
+  // Construction allocates the complete Voice-state queue, before publication
+  // to audio. Default callers retain the full Capture-backlog capacity.
+  RealtimeEngine() = default;
+  // Quiescent, before start. Nonzero generations strictly increase across
+  // enable calls on this Engine only; exhaustion requires a fresh Engine.
+  // No ordering across Engines, Projects, processes or opaque session IDs.
+  foundation::Result<void> enable_pattern_transport(std::uint64_t generation);
+  // These three methods share the serialized control owner (not observers).
+  // One reservation lasts through receipt acknowledgment. Inspect copies the
+  // historical value; the caller must retain it before acknowledgment.
+  PatternTransportSubmit submit_pattern_transport(const PatternTransportCommand&);
+  std::optional<PatternTransportReceipt> inspect_pattern_transport_receipt(
+      std::uint64_t generation, std::uint64_t epoch) const;
+  bool acknowledge_pattern_transport_receipt(
+      std::uint64_t generation, std::uint64_t epoch) noexcept;
+  // Opt-in only for a caller retaining <= kRealtimeQueueCapacity commands until
+  // receipt retirement. It must acquire audio consumption, drain Voice states,
+  // then retire receipts, in that order. No switching after construction.
+  struct ReceiptBoundedVoiceStates {};
+  explicit RealtimeEngine(ReceiptBoundedVoiceStates) : voice_state_ring_(true) {}
+  // Explicit N profile: control/outcomes N, Voice states 2*N + 128. The old
+  // tag-only overload retains 1024 controls / 4096 outcomes / 2176 states.
+  // N outside 1..1024 throws invalid_argument before allocating queues.
+  RealtimeEngine(ReceiptBoundedVoiceStates, std::size_t maximum_pending_commands);
+  static constexpr std::size_t receipt_bounded_voice_state_storage_bytes() noexcept {
+    return *detail::RuntimeVoiceStateStorage::receipt_allocation_bytes(kRealtimeQueueCapacity);
+  }
+  // Exact independent queue payloads for the N profile; add sizeof(Engine)
+  // once for the wrappers. nullopt rejects invalid capacity or byte overflow.
+  static std::optional<std::uint64_t> receipt_bounded_storage_bytes(
+      std::size_t maximum_pending_commands) noexcept;
   // Control thread, quiescent. May reallocate sample storage.
   foundation::Result<void> load_sample(
       std::uint8_t slot, std::span<const float> mono_pcm);
@@ -344,6 +506,13 @@ class RealtimeEngine final {
   // racing this call cannot make the internally observed frame stale.
   PatternPublication publish_pattern_view_immediate(
       PreparedPatternView&& pattern) noexcept;
+  // Serialized control owner, like all publication/reclaim APIs. Requires the
+  // exact current generation and identical Project/Pattern, BPM, PPQ and loop.
+  // Refuses pending publications or a reserved transport command. Applies at
+  // the first effective render frame without changing origin or sounding voices.
+  // Explicit Pattern-stopped remains stopped; legacy scheduling stays enabled.
+  PatternPublication publish_pattern_view_preserving_phase(
+      PreparedPatternView&& pattern, std::uint64_t expected_generation) noexcept;
   // Control thread, concurrent with render. Cancels the exact pending
   // publication until the render apply point claims it. False means the
   // authority was stale or the apply point already won.
@@ -365,7 +534,13 @@ class RealtimeEngine final {
   ReclaimedBankTelemetry reclaim_retired_bank_telemetry() noexcept;
   // Compatibility count-only reclaim surface.
   std::size_t reclaim_retired_banks() noexcept;
-  // Control thread, concurrent with render.
+  // Serialized control thread, concurrent with render. Idempotently allocates
+  // the full Capture ring without arming. False means allocation failed; no
+  // state changes or allocating error payload. Retained until destruction.
+  bool prepare_capture() noexcept;
+  // Control thread, concurrent with render. Implicitly prepares for existing
+  // callers. Allocation failure is internal_error with empty message/null
+  // details (allocation-free); Hosts can preflight before opening a session.
   foundation::Result<void> arm_capture() noexcept;
   foundation::Result<void> disarm_capture() noexcept;
   // Control thread, concurrent with render. Sole consumer of the capture ring.
@@ -399,6 +574,9 @@ class RealtimeEngine final {
   std::uint64_t consumed_controls_audio() const noexcept {
     return dequeued_events_;
   }
+  // Sole audio consumer or quiescent caller only. Counts actual allocated
+  // voices, including overlap wholly inside a block; reset by start, not stop.
+  std::uint32_t peak_voices_audio() const noexcept { return peak_voices_; }
   // Any non-realtime thread (including control), not the audio callback.
   // Counters are exact after quiescence and a best-effort snapshot while running.
   RealtimeTelemetry telemetry() const noexcept;
@@ -436,6 +614,7 @@ class RealtimeEngine final {
   enum class PatternPublicationTiming : std::uint8_t {
     scheduled,
     immediate,
+    preserve_phase,
   };
   static_assert(std::atomic<BankState>::is_always_lock_free);
   static_assert(std::atomic<PatternState>::is_always_lock_free);
@@ -476,6 +655,7 @@ class RealtimeEngine final {
     std::uint64_t generation = 0;
     std::uint64_t activation_frame = 0;
     std::size_t active_voices = 0;
+    bool preserve_phase = false;
   };
 
   struct PatternPublishEntry {
@@ -484,6 +664,47 @@ class RealtimeEngine final {
     std::uint64_t activation_frame;
   };
   static_assert(std::is_trivially_copyable_v<PatternPublishEntry>);
+
+  struct PatternTransportCommandCell {
+    std::uint64_t generation{};
+    std::uint64_t epoch{};
+    std::uint64_t switch_generation{};
+    PatternTransportAction action{};
+    std::uint8_t switch_slot{kNoPatternSlot};
+  };
+  struct PatternTransportReceiptCell {
+    std::uint64_t generation{};
+    std::uint64_t epoch{};
+    std::uint64_t effective_frame{};
+    std::uint64_t origin_frame{};
+    std::uint64_t pattern_generation{};
+    std::uint64_t switch_applied_frame{};
+    std::uint8_t pattern_slot{kNoPatternSlot};
+    bool playing{};
+    PatternCutoffDecision decision{};
+  };
+  static_assert(std::is_trivially_copyable_v<PatternTransportCommandCell>);
+  static_assert(std::is_trivially_copyable_v<PatternTransportReceiptCell>);
+  void apply_pattern_transport(std::uint64_t frame) noexcept;
+  detail::FixedSpscQueue<PatternTransportCommandCell, 1> pattern_transport_commands_;
+  mutable detail::FixedSpscQueue<PatternTransportReceiptCell, 1> pattern_transport_receipts_;
+  mutable std::optional<PatternTransportReceiptCell> retained_transport_receipt_;
+  std::array<std::optional<foundation::PatternId>, kRealtimePatternCapacity>
+      retained_transport_ids_;
+  std::array<std::uint16_t, kRealtimePatternCapacity> retained_transport_bpms_{};
+  std::optional<PatternReplacementAuthority> retained_transport_switch_;
+  // Control-owned, published to audio only by the command queue.
+  std::uint64_t pattern_transport_generation_{};
+  std::uint64_t last_pattern_transport_generation_{};
+  std::uint64_t pattern_transport_epoch_{};
+  std::uint64_t acknowledged_pattern_generation_{};
+  bool pattern_transport_reserved_{};
+  bool control_pattern_playing_{};
+  // Mode is quiescent-only; playing and applied frames are audio-owned.
+  bool pattern_transport_enabled_{};
+  bool pattern_playing_{};
+  std::uint64_t transport_canceled_publications_{};
+  std::array<std::uint64_t, kRealtimePatternCapacity> pattern_applied_frames_{};
 
   enum class MasterFxControlKind : std::uint8_t { gesture, tempo };
   struct MasterFxControlEvent {
@@ -495,6 +716,7 @@ class RealtimeEngine final {
 
   struct Voice {
     std::uint64_t sequence = 0;
+    std::uint64_t pattern_generation = 0;
     std::uint8_t slot = 0;
     const float* samples = nullptr;
     PreparedSampleMaterialView material{};
@@ -524,11 +746,18 @@ class RealtimeEngine final {
   void capture_voice_start(
       const PadControlEvent& event,
       std::uint64_t absolute_start_frame) noexcept;
-  const std::vector<float>& current_sample(std::uint8_t slot) const noexcept;
+  struct SampleView {
+    const float* samples{};
+    PreparedSampleMaterialView material{};
+    std::size_t frame_count{};
+  };
+  static SampleView bank_sample(const PreparedSampleBank& bank,
+                                std::uint8_t slot) noexcept;
+  SampleView current_sample(std::uint8_t slot) const noexcept;
   // Resolves `Voice::bank_slot` to the slot that owns the voice's samples,
   // across both pools. Returns nullptr for `kLegacyBankSlot`, which owns none.
   BankSlot* bank_slot_for(std::uint8_t bank_slot) noexcept;
-  const std::vector<float>& audition_sample(std::uint8_t slot) const noexcept;
+  SampleView audition_sample(std::uint8_t slot) const noexcept;
   void retire_audition(std::uint8_t slot) noexcept;
   void apply_published_audition(std::uint8_t slot) noexcept;
   cooker::ResolvedPlayback published_playback(
@@ -540,6 +769,7 @@ class RealtimeEngine final {
       std::uint32_t source_frame) noexcept;
   void stop_voice(Voice& voice, std::uint64_t runtime_frame) noexcept;
   void deactivate_voice(Voice& voice) noexcept;
+  void trim_voice_scan_extent() noexcept;
   void apply_published_pattern(
       const PatternPublishEntry& publication,
       std::uint64_t runtime_frame) noexcept;
@@ -547,14 +777,15 @@ class RealtimeEngine final {
       PreparedPatternView&& pattern,
       std::optional<std::uint64_t> activation_frame,
       std::optional<PatternReplacementAuthority> replacement_authority,
-      PatternPublicationTiming timing) noexcept;
+      PatternPublicationTiming timing,
+      std::uint64_t expected_generation = 0) noexcept;
   void schedule_pattern_events(std::uint64_t runtime_frame) noexcept;
   void start_pattern_voice(
       const PreparedPatternEvent& event,
       std::uint64_t loop_origin_frame) noexcept;
 
   std::array<std::vector<float>, kRealtimeSampleSlots> samples_;
-  detail::FixedSpscQueue<PadControlEvent, kRealtimeQueueCapacity> queue_;
+  detail::RuntimeSpscStorage<PadControlEvent> queue_{kRealtimeQueueCapacity};
   detail::FixedSpscQueue<MasterFxControlEvent, kRealtimeQueueCapacity>
       fx_queue_;
   MasterFxChain master_fx_;
@@ -576,19 +807,18 @@ class RealtimeEngine final {
       publish_queue_;
   std::array<PatternSlot, kRealtimePatternCapacity> pattern_slots_{};
   std::optional<PatternPublishEntry> audio_pending_pattern_;
-  detail::FixedSpscQueue<
-      CapturedTriggerEvent,
-      kRealtimeCaptureCapacity>
-      capture_ring_;
-  detail::FixedSpscQueue<
-      RuntimeTriggerOutcomeEvent,
-      kRealtimeTriggerOutcomeCapacity>
-      trigger_outcome_ring_;
-  detail::FixedSpscQueue<
-      RuntimeVoiceStateEvent,
-      kRealtimeVoiceStateCapacity>
-      voice_state_ring_;
+  using CaptureRing = detail::FixedSpscQueue<
+      CapturedTriggerEvent, kRealtimeCaptureCapacity>;
+  // Initialized once by control before release-publishing arm_pending. Audio
+  // only dereferences after acquiring an admitted CaptureState. Never replaced
+  // or freed on disarm/stop: unread events still belong to the control drain.
+  std::unique_ptr<CaptureRing> capture_ring_;
+  detail::RuntimeSpscStorage<RuntimeTriggerOutcomeEvent>
+      trigger_outcome_ring_{kRealtimeTriggerOutcomeCapacity};
+  detail::RuntimeVoiceStateStorage voice_state_ring_;
   std::array<Voice, kRealtimeVoiceCapacity> voices_{};
+  // Audio-owned upper bound, not a count: inactive holes retain slot order.
+  std::size_t voice_scan_extent_ = 0;
   std::array<cooker::ResolvedPlayback, kRealtimeSampleSlots> previews_{};
   std::uint64_t preview_mask_ = 0;
   // Full 64-Pad mask, read only by control after acquire pending == 0. The
@@ -610,6 +840,7 @@ class RealtimeEngine final {
   std::uint64_t started_voices_ = 0;
   std::uint64_t completed_voices_ = 0;
   std::uint32_t active_voices_ = 0;
+  std::uint32_t peak_voices_ = 0;
   std::uint64_t cancelled_voices_ = 0;
   std::uint64_t invalid_events_ = 0;
   std::uint64_t audio_invalid_events_ = 0;
@@ -692,6 +923,7 @@ class RealtimeEngine final {
     std::uint64_t claimed_through = 0;
     std::uint64_t current_pattern_generation = 0;
     PatternObservation pending{};
+    std::uint64_t transport_canceled_publications{};
   };
   struct ControlObservation {
     std::uint64_t start_epoch_ = 0;

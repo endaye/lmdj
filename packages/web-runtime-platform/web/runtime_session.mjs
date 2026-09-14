@@ -4405,6 +4405,22 @@ function createRuntimeSessionController(options = {}) {
         throw error;
       }
       runtime = await loadRuntime(manifest);
+      if (window?.lmdjWebRuntimeHost === runtime) {
+        // The packaged Host already publishes this runtime namespace. Expose
+        // the same session methods for trusted programmatic callers through
+        // its ordinary control lane, with no private Wasm or test-only API.
+        Object.defineProperty(runtime, "candidates", {
+          value: Object.freeze({runCandidateJob, inspectCandidateJob, cancelCandidateJob,
+            discardCandidateSet, auditionCandidate, stopCandidateAudition, adoptCandidates}),
+          configurable: false, writable: false,
+        });
+        Object.defineProperty(runtime, "providers", {
+          value: Object.freeze({listProviders, configureProviderPermissions,
+            selectProvider, runProvider, inspectAttempt}),
+          configurable: false,
+          writable: false,
+        });
+      }
       machine.transition("storage-ready", { reason: "runtime_loaded" });
       machine.transition("core-ready", { reason: "runtime_ready" });
       machine.transition("audio-suspended", { reason: "activation_required" });
@@ -4696,6 +4712,17 @@ function createRuntimeSessionController(options = {}) {
       throw typedError(
         "HOST_PROTOCOL_MISMATCH", "Sound Set audition geometry is invalid");
     }
+    // #799, review finding. The Host answers `ok` for an audition it could not
+    // play -- no running engine, an exhausted audition pool -- so the geometry
+    // alone cannot tell a caller whether any sound came out. `played` is that
+    // fact, and it is required rather than defaulted: a missing one means this
+    // session and the Host disagree about the reply, which is the class
+    // `HOST_PROTOCOL_MISMATCH` names. Defaulting it to `false` would report a
+    // silence that never happened, and to `true` the very lie this fixes.
+    if (typeof result.played !== "boolean") {
+      throw typedError(
+        "HOST_PROTOCOL_MISMATCH", "Sound Set audition outcome is invalid");
+    }
     const slotIndex = result.slot_index ?? null;
     // A slot audition always names the Artifact it played; only a set-level
     // demo may answer without one. Accepting `null` here would hand the
@@ -4713,6 +4740,7 @@ function createRuntimeSessionController(options = {}) {
       manifestSha256: result.manifest_sha256,
       slotIndex,
       artifact: normalizeSoundSetArtifact(result.artifact ?? null),
+      played: result.played,
       audio: Object.freeze({
         sampleRate: audio.sample_rate,
         channels: audio.channels,
@@ -4809,7 +4837,95 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  async function candidateRequest(operation, request) {
+    if (!started || closing || ["closed", "failed", "restart-required"].includes(machine.state)) {
+      throw typedError("HOST_STATE_INVALID", "Candidate Host is unavailable");
+    }
+    const result = await boundedRequest(operation, request);
+    const mismatch = () => { throw protocolMismatch("Candidate response does not match the request"); };
+    if (request.job_id !== undefined && result.job_id !== undefined && result.job_id !== request.job_id) mismatch();
+    if (operation === "candidate.audition") {
+      if (result.set_id !== request.set_id || result.candidate_id !== request.candidate_id ||
+          result.project_revision !== request.expected_revision) mismatch();
+    }
+    if (operation === "candidate.job.run" && !result.history.some((entry) =>
+      entry.intent.attempt_id === request.attempt_id && entry.intent.source.project_id === request.project_id &&
+      entry.intent.source.asset_id === request.asset_id && entry.intent.source.project_revision === request.expected_revision)) mismatch();
+    if (operation === "candidate.set.discard" && !result.sets.some((set) => set.set_id === request.set_id && set.status === "discarded")) mismatch();
+    if (operation === "candidate.job.cancel" && !result.history.some((entry) => entry.intent.attempt_id === request.attempt_id && entry.status === "cancelled")) mismatch();
+    if (operation === "candidate.adopt") {
+      if (result.set_id !== request.set_id || result.project_revision !== request.expected_revision + 1 ||
+        result.adopted.length !== request.selections.length || !request.selections.every((selection) =>
+          result.adopted.some((entry) => entry.candidate_id === selection.candidate_id &&
+            entry.bank === selection.bank && entry.pad === selection.pad))) mismatch();
+    }
+    return result;
+  }
+  /** @param {import("./runtime_types.d.ts").CandidateRunRequest} request */
+  function runCandidateJob(request) {
+    return serializeProjectAction(() => candidateRequest("candidate.job.run", request));
+  }
+  function inspectCandidateJob(jobId) {
+    return candidateRequest("candidate.job.inspect", {job_id: jobId});
+  }
+  function cancelCandidateJob(jobId, attemptId) {
+    return serializeProjectAction(() => candidateRequest("candidate.job.cancel", {job_id: jobId, attempt_id: attemptId}));
+  }
+  function discardCandidateSet(jobId, setId) {
+    return serializeProjectAction(() => candidateRequest("candidate.set.discard", {job_id: jobId, set_id: setId}));
+  }
+  /** @param {import("./runtime_types.d.ts").CandidateAuditionRequest} request */
+  function auditionCandidate(request) {
+    return serializeProjectAction(() => candidateRequest("candidate.audition", request));
+  }
+  function stopCandidateAudition() {
+    return serializeProjectAction(() => candidateRequest("candidate.audition.stop", {}));
+  }
+  /** @param {import("./runtime_types.d.ts").CandidateAdoptRequest} request */
+  function adoptCandidates(request) {
+    // A lost response is an unknown commit: propagate it, never replay the command.
+    // The caller refreshes Project inspection before presenting another adoption.
+    return serializeProjectAction(() => candidateRequest("candidate.adopt", request));
+  }
+
+  // Explicit Host settings and execution share the serialized control lane.
+  // Payloads use the Facade names, except owner filesystem paths are forbidden.
+  async function listProviders() {
+    const result = await boundedRequest("provider.list", {});
+    if (!exactKeys(result, ["providers", "granted_permissions", "project_revision"]) ||
+        !Array.isArray(result.providers) || result.project_revision !== null ||
+        !Array.isArray(result.granted_permissions) ||
+        !result.granted_permissions.every((permission) => typeof permission === "string" &&
+          /^[A-Za-z0-9._-]{1,128}$/.test(permission) && permission !== "." && permission !== "..") ||
+        new Set(result.granted_permissions).size !== result.granted_permissions.length) {
+      throw protocolMismatch("Provider permission readback is invalid");
+    }
+    return result;
+  }
+  function configureProviderPermissions(grantedPermissions) {
+    return serializeProjectAction(() => boundedRequest(
+      "provider.permissions.configure", {granted_permissions: grantedPermissions}));
+  }
+  function selectProvider(capability, providerId) {
+    return serializeProjectAction(() => boundedRequest(
+      "provider.select", {capability, provider_id: providerId}));
+  }
+  /** @param {import("./runtime_types.d.ts").ProviderRunRequest} request */
+  function runProvider(request) {
+    return serializeProjectAction(() => boundedRequest("provider.run", request));
+  }
+  function inspectAttempt(attemptId) {
+    return boundedRequest("attempt.inspect", {attempt_id: attemptId});
+  }
+
   const session = Object.freeze({
+    runCandidateJob, inspectCandidateJob, cancelCandidateJob, discardCandidateSet,
+    auditionCandidate, stopCandidateAudition, adoptCandidates,
+    listProviders,
+    configureProviderPermissions,
+    selectProvider,
+    runProvider,
+    inspectAttempt,
     start,
     trigger,
     listLocalProjects,

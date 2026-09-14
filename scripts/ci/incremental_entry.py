@@ -16,6 +16,7 @@ import subprocess
 from urllib.error import HTTPError
 
 import batch_runtime
+from api_observation import observe
 import incremental_completion
 import incremental_batch as batch
 import report_runtime
@@ -32,6 +33,8 @@ WORKFLOWS = {
     ".github/workflows/pr-review.yml": "review",
 }
 EVENTS = {"push", "schedule", "workflow_run"}
+SCHEDULER_HEALTH = "7,22,37,52 * * * *"
+REPORT_HEALTH = "9,24,39,54 * * * *"
 DIAGNOSTIC_STAGES = frozenset({
     "output-preflight", "entry-construction", "event-read", "output-write",
     "authenticate", "auth-lock", "auth-checkout", "auth-main-refresh",
@@ -60,6 +63,16 @@ def http_diagnostic(error):
                         if type(value) is str and 1 <= len(value) <= 12 and value.isascii() and value.isdecimal():
                             result[key] = int(value)
             return result
+        if type(error) is GitHubApiError:
+            result = {}
+            if type(error.status) is int and 100 <= error.status <= 599:
+                result['status'] = error.status
+            for attr, key in (('remaining', 'remaining'), ('reset', 'reset'), ('retry_after', 'retry_after')):
+                value = getattr(error, attr, None)
+                if type(value) is int and 0 <= value <= 10**12:
+                    result[key] = value
+            if len(result) > 1:
+                return result
         if type(error) not in (batch.BatchError, JournalBlocked, GitHubApiError):
             break
         error = error.__context__
@@ -139,6 +152,11 @@ class Entry:
         if kind == "push":
             require(payload.get("ref") == "refs/heads/main" and payload.get("deleted") is False
                     and payload.get("after") == self.runtime.control, "push is not exact nondeleted main control")
+        if kind == "schedule":
+            schedule = payload.get("schedule")
+            require(type(schedule) is str and schedule in (SCHEDULER_HEALTH, REPORT_HEALTH),
+                    "schedule is not an exact scheduler or report health role")
+            return ("report-health" if schedule == REPORT_HEALTH else kind), None
         if kind != "workflow_run":
             return kind, None
         require(payload.get("action") == "completed" and isinstance(payload.get("workflow_run"), dict), "callback is not a completed run event")
@@ -195,6 +213,7 @@ class Entry:
         self.authenticate()
         self.diagnostic_stage = "event-authenticate"
         source, run = self.event(payload)
+        require(source != "report-health", "report health cannot authorize product control")
         # Read-only provenance for actual callback-chain audits. This proves
         # authenticated source identity, not admission, health or chain depth.
         # Never print the raw event, credentials or unvalidated source hints.
@@ -273,6 +292,7 @@ class Entry:
         return {"schema": REPORT_SCHEMA, "status": "error" if failed else "ready", "source": source, "outcomes": outcomes}
 
 
+@observe('entry')
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("control", "reports"))

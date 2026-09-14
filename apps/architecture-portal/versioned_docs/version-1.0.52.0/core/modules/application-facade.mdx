@@ -1,0 +1,211 @@
+---
+title: Application Facade
+area: core
+status: implemented
+owners: [core, hosts]
+module: application-facade
+source_paths: [packages/application-facade, tests/core/facade, docs/research/2026-09-09-cardputer-audio-hearing.md]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
+
+<BuildIdentity kind="modules" id="application-facade" />
+
+<DiagramFrame title="Application Facade Module" diagramId="application-facade" />
+
+## 1. 目的与非职责
+提供 Host 唯一 Core 入口并编排模块；不承载 Host UI、协议或产品特例。
+## 2. 当前实现状态
+Application Facade 提供 Host-neutral Sequence begin/event/flush/stop/switch/status/settings/recovery、Pattern create、Pattern Slot assign/clear/move，以及既有 Project/Bundle/Sample/Runtime/Provider surface。本 Build 追加 Host-neutral 的 Sound Set 操作集，共五个：`soundset.catalog.list`、`soundset.inspect`、`soundset.map.preview`、`soundset.install` 与 `soundset.audition`；配套追加 `SoundSetCatalogSource`、`make_workspace_soundset_catalog`、`SuppliedSoundSetCatalog`/`make_supplied_soundset_catalog`，以及 `SoundSetStoreLimits` 别名——Host 由 Facade 配置 Set Store 上限，因此不必也不允许直呼 Project I/O 类型。`ApplicationConfig` 相应在**末尾追加** `soundset_catalog_transport`、`soundset_catalog_source` 与 `soundset_store_limits` 三个成员：仓库内每一处 brace 初始化都是位置式，中间插入会按类型静默改绑 Host 的协作者。上述 Sound Set surface 在引入时属于兼容追加。Stage 12 L3 的 typed ProjectState 返回值暴露新的 lineage variant，因此此次 Facade 分配 MAJOR；C ABI 形状与 api_version 保持不变。本版新增 Host-neutral 的 Performance 操作集，共二十个：`performance.record.begin`、`performance.record.event`、`performance.record.launch-request`、`performance.record.flush`、`performance.record.status`、`performance.record.stop`、`performance.recording.bind`、`performance.save`、`performance.discard`、`performance.list`、`performance.inspect`、`performance.rename`、`performance.delete`、`performance.replay.begin`、`performance.replay.status`、`performance.replay.stop`、`performance.recovery.list`、`performance.recovery.apply`、`performance.recovery.discard`、`performance.resample.commit`。`ApplicationConfig` 相应接受一组 Facade 自有协作者接口：`PerformanceClock`（权威音乐时间，一次成功 admission 恰好消费一次读取）、`PerformanceInputSequencer`（权威 admission 次序，replayed receipt 不消费序号）、`PatternLaunchAcknowledger`（Core Runtime 拥有小节边界次序与 exactly-once outcome，Host 不解析 Slot）与 `PerformanceReplayController`（含 `ReferencePerformanceReplayController` 与 `PerformanceReplayRuntimeSink`）。`make_engine_performance_adapter` 把这些协作者聚合成 `EnginePerformanceAdapter`，`make_headless_performance_runtime_bridge(make_steady_performance_time_source())` 为 headless Host 提供同一组协作者与一个 `service` 泵。`sample.quota` 以 Project Truth 和目标 Pad 为输入，返回计算所用 revision、Bank/Project target-exclusive 用量、有效剩余额度与目标 Bank 的逐 Pad 占用；查询不读取 Runtime publication residency。Facade 统一持有 writer lease、录音 session、选择性 rebase、幂等 receipt 与 recovery policy。每个 Sequence event 先把 completed events 与未释放 press 的 240-tick 默认形态组成 canonical tail 并耐久 append，成功后才更新内存 state 与 acknowledgement；release 的后续 snapshot 替换真实 duration。运行中的 session 会在 journal append 后保留 exact in-flight flush；post-commit 返回失败的重试先完成该 identity，只消费 immutable original command payload，后到事件仍等待新命令。effective recovery 依 flush 顺序合并 incomplete residual、最后合并最新 durable tail，使同-key acknowledgement 覆盖旧值；active/recoverable status、list 与 apply 共享这一 canonical unique batch，因此 completion 过滤不改变 replay identity、不会恢复已提交事件或重计重叠输入。当前 source 还向匹配的 active session owner 提供带单调 generation 的 immutable pending-overlay projection；它是 Runtime 派生输入，不是 Project Truth、revision 或 receipt。Performance 侧遵循同一分层：`performance.record.status` 返回的权威状态（未闭合的 Pad/FX 手势、HOLD 位、最后一次已确认的 Pattern launch）由 Facade 与 Core 拥有，Host 不得用本地预测替代；`performance.replay.*` 消费 Project Cooker 的 `PerformanceReplayProjection` 并回报 `ReplayState {playing, stopped, complete}`、event cursor、event count 与 resolved revision，这些同样是派生状态，不是 Project Truth。只有 `performance.save`/`rename`/`delete`/`recovery.apply`/`recording.bind`/`resample.commit` 这类提交路径才改变 Project Truth，并且照旧经由 writer lease、幂等 receipt 与 `expected_revision` 完成。Flush/Stop mutation result 保留 committed Pattern identity，使 Host 能在 Project commit 后的 Runtime publication failure 上通过 exact receipt replay 恢复，而不重做 Project mutation。非 Sequence authoring 的本机会话检查、孤儿 journal reconciliation 和 Store mutation 位于同一个 Project-scoped admission critical section，消除 begin-vs-authoring 的检查/使用间隙。选择性 rebase 是封闭白名单：除 BPM、Quantize/Swing 外，只允许 Sequence begin 时登记的空 Pad Capture 以同 session、同 Pad、同 expected revision 提交。Project publication 前先 durable 记录原 command/asset/artifact identity；publication 中断后的 retry/restart 只有在 transaction、receipt、revision、Asset 与 Pad Truth 精确吻合时才完成原提交。未发布时，checked Discard/disarm 仅在无 receipt 且 Project Truth 未变时追加 durable abort。durable marker 存在期间 settings 以 `armed_capture_recovery_pending` 拒绝；所有路径都保留 pending events 并在冲突时 fail closed。
+## 3. 所有权与依赖
+依赖全部六个下层 Module；Native/CLI/MCP Host 只依赖本 Facade，浏览器 Host 只依赖封装本 Facade 的 Web Runtime Platform。Performance 协作者由 Host 或 Product Assembly 注入，Facade 只依赖其接口，不依赖任何具体平台实现。
+
+同一 Module 内的 `lmdj::performance_runtime` 静态目标独立拥有
+`performance_runtime.cpp`、`performance_replay.cpp`、`performance_engine_adapter.cpp`。
+完整的 `lmdj::application` 单向 PUBLIC 链接它，保留旧调用方的链接入口；实现没有在
+两个 archive 中重复编译。窄目标通过 Audio Runtime 依赖 Cooker、Authoring Domain
+和 Foundation，不链接 Project IO / Provider SDK；这些仍属于完整 Facade 的依赖。
+它不是新增的独立 Module；T3 的 `lmdj::runtime_facade` 是另一个同 Module 内的
+窄目标，直接链接 Cooker/Audio Runtime，不依赖 Performance、Project IO 或 Provider。
+完整 `lmdj::application` 单向链接两个窄目标，保留既有桌面入口。
+
+`performance_ports.hpp` 提供原有 clock、input sequencer、Pattern launch 与 gesture
+协作者声明，`application.hpp` 继续包含它，保持原 namespace、签名及配置布局。
+`performance_runtime.hpp` / `performance_engine_adapter.hpp` 直接包含 ports 和既有
+`performance_replay.hpp`，不再通过完整 `application.hpp` 获得声明。
+## 4. 架构与数据流
+Host 或 Web Runtime Platform 请求 → Facade → Domain/I/O/Cooker/Runtime/Provider SDK → typed response/stream result。Sequence session/receipt、pending-overlay projection、Sample import token、cache 与 Project writer lease 均由 Facade/Core 拥有；overlay projection 只复制当前内存事件，不扩大 JSON/C API 或持久化 surface。Performance 录制沿同一路径：Host 提交手势 → Facade 用 `PerformanceClock` 定 tick、用 `PerformanceInputSequencer` 定次序 → Project I/O 在 performance session kind 的 journal 上耐久 append → 返回权威 status；replay 则是 Project Truth → `cook_performance_replay` → `PerformanceReplayController` → Runtime sink 的单向派生流。
+## 5. API 与 Contract 边界
+C++ typed API 与严格 JSON/C API/MCP/CLI parity 保持跨 Host 边界；`sample.quota` 请求恰含 `operation/project_path/slot`，成功结果中的 `project_revision` 必须作为后续 `sample.import.begin.expected_revision`。Bundle/Sample streaming API 不暴露 Project internals；Assembly Loader 校验锁定身份。
+## 6. 状态、错误与并发
+当前 source 追加 typed `export_runtime_content(RuntimeContentExportRequest)`：Host
+提供绝对 Project 路径、期望 Project ID/revision、一个 Pattern ID、额外 live Pad 列表
+及显式 codec limits，只得到不透明字节和完整 SHA-256/byte length identity。
+Facade 对一次加载的确定版本取事件 Pad 与 live Pad 的并集，在 detached Project value
+上清除无关绑定后 Cook/encode，不写回该选择、不发布 Runtime generation。
+重复 live Pad、未分配素材、ID/revision 不符、无效内容或超限均拒绝。
+
+ProjectStore 仍先检查所有 source Asset 的完整性，损坏的未选素材也会使加载失败；
+codec limits 不限制此前电脑端 source load/WAV Cook 的内存峰值。
+`facade.runtime_content_export` 通过真实 Facade 建 Project/导入/分配验证闭包、来源、
+重复身份、重开、损坏拒绝及恢复重试，并逐文件比较 Truth 未被导出改写。
+这项导出 API 未增加 CLI/UI 或 JSON/C API；MINOR 与 Assembly lock
+在后续 B2 集成分配，新 Contract 尚未代表 desktop Assembly 已选择的能力。
+
+### Runtime-only 生命周期（T3 source）
+
+`runtime_facade.hpp` 只暴露不透明字节、完整内容身份、资源配置、进程内 opaque
+epoch、Pad 命令和回执，不暴露 Snapshot、Engine、Project 路径或 Provider 对象。
+一个串行控制调用方负责 `load/start/submit/poll/request_stop/finish_stop/stop/unload/reset`；
+一个音频调用方调用 `render`。生命周期为 empty → ready → running → draining →
+stopped → empty；stopped 也可重启同一内容，running/draining 不接受 load/unload。
+替换使用 stop → unload → load；坏内容、预算或分配失败不会发布半成品，保持 empty
+并允许正确内容重试。`reset` 先停再卸载，不重置 epoch 耗尽计数。
+`content_identity` 返回 Core 保存的完整 SHA-256/byte length 副本，成功 load 才存在，
+卸载/reset 后为空；不是 Host 对最近一次请求的预测。该控制侧值复制可分配内存。
+
+每次成功 start 产生独立 epoch；命令必须带当前 epoch 和从 1 开始的精确下一序号。
+旧 epoch、重复、跳号、非法命令与计数耗尽明确拒绝，既不重放也不绕回。
+`accepted` 只表示已入队，`poll` 才报告 render 消费后的 applied、voice_started、
+voice_capacity，或停止时未消费的 cancelled。applied 不等于可听声音：mute、release
+和 stop 命令可能无新 Voice。队列/待取回执额度满不消耗序号，原命令可重试；回执
+有界且按序只取一次，未取回执跨 unload/reset 保留，新 start 必须先取完。
+opaque epoch 不是持久化或设备传输协议，跨 Facade 实例也不能复用。
+
+Facade 用同一个 lock-free atomic32 的 OPEN/BUSY 位关闭回调 admission 并观察活跃
+Core render 退出；`finish_stop` 在 BUSY 清除前只返回 draining，不调用 Engine stop
+或回收内存。`stop` 在控制线程等待这个屏障；回调不等待，关闭或重入时输出静音。
+Host 仍须负责自己的设备/DMA 回调生命周期，并在析构 Facade 前停止再次调用 render。
+
+load 在分配 PCM 前复用完整内容校验，报告固定对象（含 Engine 与独立 Voice-state 队列）、借入 encoded
+bytes、去重 PCM、per-Pad float 展开、metadata 和准备临时空间，溢出或超总额度拒绝。
+配置还必须显式提供 platform reserve，覆盖 allocator/control-block/capacity rounding、
+平台 stack、Host buffers 等；数值必须由平台测量，不是 Core 推断的可用 RAM。
+完整校验与预算通过后，先构造候选 Engine 及其固定队列，再分配解码 PCM 与准备数据，
+避免变量存储先切碎大块空闲区。所有候选仍在控制线程局部持有，全部准备成功才提交；
+后续分配失败会完整回收并保持 empty/静音/可重试。总量 admission 不保证任意碎片化
+平台都有足够大的连续块，实际分配失败仍返回 allocation_failed。
+已取走并由 Host 保留的历史 epoch/回执内存属于 Host。此入口不准备 Master FX 动态
+缓冲，不提供 FX 命令；资源报告不是 ESP32 map/stack/heap、DMA 或实时性能验收。
+
+Runtime-only 显式选择 2176-entry Voice-state 存储，不改桌面默认 10240-entry 队列。
+最多 1024 条 accepted 命令直到回执取走才释放名额；`poll` 必须先 acquire 消费位置，
+再 drain 事件，最后取回执，从而把未读状态限制为 `2 × 1024 + 128`（命令的
+started/terminal 加既有 Voice 的 terminal）。空/部分回执 span 也保持该顺序。
+128 Voice、控制/结果队列容量、完整事件、命令结果和 stop/drain/unload/reset
+语义不变。独立存储在 load 构造 Engine 时分配并计入 fixed_bytes；不是把占用移出
+sizeof 后省略。分配失败的 empty/静音/重试以及满额并发回执由组件和 stress 测试覆盖。
+
+错误翻译保留公共类别与配额详情；查询和 Sample commit 共用 Audio Runtime 的 overflow-checked Bank/generation 账本，较小的 remaining 约束生效、相等时 Bank 优先。提交恰好允许 effective remaining frames，超一 mono frame 确定性返回 `BANK_QUOTA_EXHAUSTED` 或 `PROJECT_QUOTA_EXHAUSTED`；revision 漂移先返回 `REVISION_CONFLICT`，拒绝不会修改 Project Truth 或已发布 generation。Runtime Snapshot 准备复用同一账本，publication residency 仍是独立瞬态 Host/Attempt 状态。本地 Sequence mutex 只负责进程内 admission 排序，Project I/O 仍在 writer lease 内重判持久 authority；C API stress 验证并发生命周期。
+## 7. 产品使用方
+CLI、MCP、Native Host，以及通过 Web Runtime Platform 接入的 Creator/Diagnostic Web Host。
+## 8. 测试与证据
+Application、Sample quota exact/+1-frame、target replacement、revision binding、session/atomicity/cache/privacy/replay、CLI/MCP/Native parity、Bundle round trip/import cancellation、Sequence pending-overlay owner/generation/replace/reject/flush、begin-vs-authoring deterministic gate、orphan-journal seal-before-authoring、armed-Pad Capture commit/rebase、pre-publication abort/disarm、receipt completion、真实子进程 `SIGKILL` 后 acknowledged tail 恢复/identity/order/单 revision gate、inverse completion 后 exact original retry 与 residual 单次 apply、F0(A-old)+tail(A-new+B) 的 unique count/tail-last/apply-once、assembly loader、C API、stress 与 dynamic-load 测试；`performance_operation_contract_test.cpp`、`performance_session_test.cpp`、`performance_gesture_admission_test.cpp`、`performance_replay_test.cpp`、`performance_engine_adapter_test.cpp`、`performance_runtime_bridge_test.cpp`、`performance_rebase_matrix_test.cpp` 与 `resample_performance_test.cpp` 覆盖 Performance 操作形状、录制会话、手势 admission、replay 投影消费、engine adapter/headless bridge 装配、rebase 矩阵与 resample 提交。
+### Cardputer ADV 有界听测证据
+
+2026-09-09 的[独立探针记录](https://github.com/endaye/lmdj/blob/main/docs/research/2026-09-09-cardputer-audio-hearing.md)
+绑定被测源码、完整 ELF 与 RuntimeContent identity。两次 1000 Hz／50 ms
+直出／Runtime Facade 对照各通过完整 100 项数字旅程，操作者两次确认三组响度与
+清晰度一致；该素材送入 I2S 前的峰值／RMS 汇总也一致。后续独立长音幅度对照
+获操作者确认符合预期、无刺耳或破音，但不链接 Core。
+这些是指定镜像的人工证据，不是由自动化推断的听感，也不把早期失败镜像改为 PASS。
+未修改 Core 增益或产品默认音量；四次 Core 旅程最小处理余量仅约 48 µs。
+完整 Cardputer Host、新内容替换、传输／断连、正常音乐容量和模拟测量仍未验收。
+
+## 9. 限制与下一门禁
+Facade 不授权 Host 绕过 Project/Provider/Assembly 不变量。Performance 操作集的自动化绿色只证明状态与边界，不构成任何设备、听感或物理演奏验收。
+
+窄消费者 `facade.performance_runtime_consumer` 包含四个 runtime/port 头文件，只链接
+`lmdj::performance_runtime`，并调用三份实现的 factory；编译时拒绝泄漏的 Project IO /
+Provider SDK include roots。现有 bridge/adapter 测试也使用窄目标，完整 Application、
+Replay、Sequence 与 C API 消费者保留旧目标，验证单向传递链接兼容。
+这项隔离只解决现有 Performance 的依赖组合：下层 archive 仍可能包含 offline 或文件
+路径，engine adapter 仍暴露 Core 类型；单凭这项隔离不得宣称 wire Contract、设备
+admission、无文件系统闭包、资源预算或 ESP32 编译已经实现。另行实现的 T2 内容
+编码/电脑导出也不完成上述设备侧门禁。T3 另行提供了上述主机可验证的设备中立
+admission/lifecycle，但 T4 exact-revision ESP-IDF 完整闭包和静态预算探针、T5 真机
+仍未由这些测试完成。
+
+`facade.runtime_facade` 链接生产窄目标，覆盖完整生命周期、每个 load 分配点的失败
+与重试、预算 exact/-1、回执和计数边界，并在 render 禁止普通及 aligned new/delete。
+`facade.runtime_facade_quiescence` 使用既有 Engine-only 测试 seam 暂停已 admission
+的真实 render，验证 stop/drain/unload 屏障；生产目标没有该 hook。
+`facade.runtime_facade_stress` 则链接生产目标，让音频调用持续穿过 300 代
+load/start/stop/reset；该压力注册不进入 coverage，确定性交错注册仍进入 coverage。
+## 10. 版本身份
+版本和完整依赖集由模块清单与 Product Assembly 固定。
+
+## Provider owner API
+
+`provider.run` 可追加 `input_owners`，每个输入恰有一个
+`{port, occurrence, project_path, project_id, asset_id}`。Facade 在 SDK 完成权限、
+绑定和预算门禁后才调用 Project I/O 的 verified owner read；未提供 owner 的输入仍以
+`NOT_FOUND/input_artifact_unavailable` 形成失败 Attempt。读取的副本进入 SDK source，
+Project 路径不会进入 Provider 参数或 terminal，且不创建持久 owner 索引。
+
+`provider.permissions.configure` 接受严格的 `granted_permissions` 数组，替换当前
+Application 会话的 grant。未知或重复权限拒绝且不改变旧策略；区域和分类保持原值。
+重建 AttemptStore 保留已选择 Provider 和耐久 Attempt，重启不保留显式 grant。
+它是可信 Host settings API，不是多租户鉴权边界。
+
+`facade.provider_owner` 与 `host.provider_owner` 覆盖真实导入、输入读取、完整输出
+identity、失败终态和重启；无 owner、错误身份、损坏及 busy 不修改 Project Truth。
+
+## Workspace Slice Candidate Jobs
+
+`candidate.job.run` 接受显式 Job/新 Attempt ID、source Project/Asset、
+`expected_revision`、参数与执行策略。Facade 读取并绑定完整 source Artifact 与原始
+revision。先通过 SDK selection/policy 预检，再以不触发恢复清理的 committed inspection
+读取绑定；SDK 原子取得 Attempt reservation 后，回调耐久保存 intent 和预分配 Set ID，
+最后调用已注册的 `sample.slice.v1`。普通 Provider 调用无法抢占这个 reservation，
+重复 ID 的拒绝不会把别人的 terminal 发布到 Job。
+`candidate.job.inspect` 返回有序 history、active Set 及其稳定 interval recipe IDs。
+这些记录只属于 Workspace，不写入 Project Truth，也不增加 SDK terminal Candidate 数量。
+
+成功终端的 slice points 经 SDK 校验输出字节、Facade 校验 source/参数/执行上下文后展开：
+无 onset 为成功的空 Set；否则使用去重的 0、onset、EOF 边界生成所有非空相邻区间。
+新 Set、active pointer、history 与旧 Set supersession 在一次 owner-state replacement
+中发布。失败重试保留旧 active Set。每次查询重新核对终端和输出完整身份；损坏、篡改
+配方或不一致状态会拒绝，不能用持久索引绕过验证。
+
+每个 Job 的执行 lease 跨越 Provider run；短 Workspace mutation lease 串行化发布。
+同 Job 并发执行以 `INVALID_ARGUMENT/job_busy` 拒绝。恢复只检查已记录 Attempt，
+不扫描 blob：成功终端可发布一次，缺失终端记为 interrupted，显式重试必须用新 ID。
+进程内互斥补足 storage writer 的可重入语义，跨进程使用既有平台 writer lease。
+
+`facade.candidate_job` 验证真实 Slice Provider、区间、空结果、失败重试、重启及损坏拒绝；
+`facade.candidate_store_recovery` 在独立进程退出后检查 intent/terminal/publication
+三个边界，并验证 live Job 不会被误恢复或重入。全部拒绝路径保持 Project 文件不变。
+采纳与持久谱系已接入下述原子命令；取消/丢弃和 Host preview 仍由后续 L4–L5 完成。
+
+## Explicit Candidate adoption
+
+`candidate.adopt` is a command with exactly `project_path`, `project_id`,
+`expected_revision`, `command_id`, `job_id`, `set_id` and `selections` in addition
+to `operation`. Each selection contains exactly `candidate_id`, `bank` (0–3),
+and `pad` (0–15). The list must be nonempty, all recipes must belong to the one
+active set, and targets must be unique. Targets sort by Bank/Pad before deterministic
+Asset ID allocation. The same recipe on two Pads creates two Assets and incurs
+two prepared-PCM charges; its materialized byte buffer can be shared transiently.
+
+The Workspace mutation lease remains held across source verification,
+materialization, complete final-binding quota preflight and the Project commit.
+Project ID, current revision and source Asset/full ArtifactRef are checked before
+materialization and under the Project writer. A relocated Project remains eligible
+by identity; an unrelated edit requires the caller's current revision but retains
+the original analysis revision in lineage. Every affected Bank and the whole
+generation are checked after removing all replaced target charges. Runtime resident
+publication limits remain a separate boundary.
+
+Success persists exactly one revision, independent PCM16 WAV artifacts and closed
+terminal-authoritative lineage, retaining the source Asset and bytes. Failure before
+manifest publication changes no Project/Pad/Asset state. Adoption writes no Candidate
+Index status and does not consume the set. An old-revision repeat is a conflict even
+when its command receipt exists; a newly confirmed adoption uses the current revision
+and a fresh command ID. There is no public idempotent replay promise: inspect the
+Project after an unknown commit response before deciding to adopt again.
+
+`candidate_adoption_test.cpp` exercises terminal-to-commit/reopen, identity and quota
+refusals, source changes, storage failures and eligibility ownership. Actual
+cancel/discard-versus-adoption race journeys require L4 integration.

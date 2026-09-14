@@ -2,6 +2,11 @@
 
 日期：2026-08-31
 
+2026-09-09 状态增补：C-Q1～C-Q5 确认不等于本 Candidate 草案整体批准。
+候选 API 版本与 #467 K2 的边界、recipe 端点和生命周期待决项见
+[R2 与 L1～L5 任务包](../plans/2026-09-09-stage12-decision-followups.md)。
+本文 SDK 2.0.0 是历史提议，不能与 K2 各自重复分配同一版本。
+
 状态：**草案，待评审**——本文是
 [#471](https://github.com/endaye/lmdj/issues/471) 的设计半部：定义所有
 Stage 12 智能结果共用的 Candidate → Preview → 用户选择 → Derived Asset

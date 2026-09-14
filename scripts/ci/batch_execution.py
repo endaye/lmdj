@@ -22,6 +22,47 @@ def require(condition, why):
         raise ValueError(f"why: {why}; remedy: pass the authenticated frozen request to its admitted fresh-run DAG")
 
 
+def common_events_from_needs(identity, selection, needs, rows, owners):
+    """Publish only real shared control-dependency failures from ``needs``.
+
+    A coincident product failure, timestamp or broad request is not a cause.
+    The event is admitted only when a non-product dependency actually failed
+    and at least one selected suite has a skipped job blocked by that exact
+    dependency. ``batch_evidence_validation`` later rebuilds this value from
+    the retained raw needs artifact before accepting the producer output.
+    """
+    events = []
+    causes = sorted({row.blocked_by for row in rows if row.blocked_by})
+    for cause in causes:
+        if cause in owners:
+            continue
+        source = needs.get(cause)
+        # ``blocked_by`` also records cancelled/skipped upstreams. They are
+        # ordinary verification debt, not proof of a shared cause.
+        if not isinstance(source, dict) or source.get("result") != "failure":
+            continue
+        require(set(source) <= {"result", "outputs"}
+                and isinstance(source.get("outputs", {}), dict)
+                and all(isinstance(key, str) and isinstance(value, str)
+                        for key, value in source.get("outputs", {}).items()),
+                "shared dependency cause is not an exact failed control job")
+        source_value = {"result": source["result"], "outputs": dict(source.get("outputs", {}))}
+        blocked_suites = sorted({row.suite for row in rows if row.blocked_by == cause})
+        event = {"kind": "shared_dependency_failure", "request_id": identity["request_id"],
+                 "run_id": identity["run_id"], "run_attempt": identity["run_attempt"],
+                 "cause": cause,
+                 "source": {"job": cause, "result": source_value["result"],
+                            "outputs": source_value["outputs"],
+                            "digest": incremental_batch.digest(source_value)},
+                 "blocked_suites": blocked_suites}
+        event["event_id"] = incremental_batch.digest({"request_id": identity["request_id"],
+                                           "run_id": identity["run_id"],
+                                           "run_attempt": identity["run_attempt"],
+                                           "cause": cause})
+        events.append(event)
+    return events
+
+
 def git(repo, *args):
     result = subprocess.run(["git", "--no-replace-objects", "-C", str(repo), *args],
                             capture_output=True, timeout=60)
@@ -65,7 +106,8 @@ function alone grants no permission to start a product job.
             "suites": {suite.id: suite.id in selected for suite in policy.inventory.suites}}
 
 
-def from_needs(policy, identity, selection, needs, *, aliases=None, dependencies=None):
+def from_needs(policy, identity, selection, needs, *, aliases=None, dependencies=None,
+               emit_common_events=True):
     """Use actual needs context, reject extra product execution, retain missing.
 
 Unknown control jobs are ignored: they are not product-suite evidence. A
@@ -106,7 +148,11 @@ canonical product job outside selection may only be skipped, never executed.
     rows, diagnostics = self_test.observations_from_needs(
         legacy_identity, policy.inventory, needs, aliases=aliases, dependencies=dependencies)
     require(not diagnostics, "needs observations are not valid terminal results")
-    return batch_verdict.build(policy, identity, selection, [asdict(row) for row in rows if row.suite in selected])
+    selected_rows = [row for row in rows if row.suite in selected]
+    require(type(emit_common_events) is bool, "common-event publication mode is not explicit")
+    events = common_events_from_needs(identity, selection, needs, selected_rows, owners) if emit_common_events else []
+    return batch_verdict.build(policy, identity, selection, [asdict(row) for row in selected_rows],
+                               common_events=events)
 
 
 def read(path):

@@ -361,6 +361,8 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
             [
                 "Checkout protected main tooling",
                 "Set up Python",
+                "Record dispatch correlation",
+                "Upload dispatch correlation",
                 "Select exact signed Product tag",
                 "Verify signed Runtime Host release",
             ],
@@ -450,6 +452,8 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         self.assertIn("timeout-minutes: 75", source)
 
         preflight_budgets = {
+            "Record dispatch correlation": 1,
+            "Upload dispatch correlation": 1,
             "Checkout protected main tooling": 5,
             "Set up Python": 3,
             "Select exact signed Product tag": 2,

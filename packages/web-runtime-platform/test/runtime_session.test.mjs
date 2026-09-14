@@ -9,6 +9,13 @@ import {createRuntimeSession} from "../web/runtime_session.mjs";
 const TEST_PRODUCT_BUILD = "9.8.7.6";
 
 const API = [
+  "runCandidateJob", "inspectCandidateJob", "cancelCandidateJob", "discardCandidateSet",
+  "auditionCandidate", "stopCandidateAudition", "adoptCandidates",
+  "listProviders",
+  "configureProviderPermissions",
+  "selectProvider",
+  "runProvider",
+  "inspectAttempt",
   "activateAudio",
   "applyPerformanceRecovery",
   "applySequenceRecovery",
@@ -169,6 +176,7 @@ function fixture({
   capabilityProbeTimeoutMs,
   inputConfiguration = {},
   runtimeTransport,
+  publishRuntime = false,
   runtimeTerminator,
   audioCallbackHeartbeat,
   startAudioWorklet,
@@ -248,7 +256,8 @@ function fixture({
         ? {}
         : {capabilityProbeTimeoutMs}),
       createAudioContext: () => context,
-      loadRuntime: async () => ({
+      loadRuntime: async () => {
+        const loaded = {
         registerAudioContext: () => 1,
         registerAudioNode: registerAudioNode ?? (() => 2),
         audioCallbackHeartbeat:
@@ -262,7 +271,10 @@ function fixture({
         ...(runtimeTransport === undefined
           ? {}
           : {transport: runtimeTransport}),
-      }),
+        };
+        if (publishRuntime) browserWindow.lmdjWebRuntimeHost = loaded;
+        return loaded;
+      },
       preflight: preflight ?? (async () => {}),
       ...(createPerformanceMasterTap === undefined
         ? {}
@@ -5038,14 +5050,16 @@ test("forwards the occupied Pad policy only when the caller chose one", async ()
 // may answer without one. Accepting `null` would hand the caller a result the
 // documented type says cannot occur -- the same class
 // `normalizeSoundSetSlot` already refuses for an occupied slot.
-test("a slot audition that names no Artifact is refused", async () => {
-  const auditionWith = (artifact, slotIndex) => fixture({
+// `played` has no default on purpose: `undefined` here means the Host sent no
+// outcome at all, and a default would silently repair the case under test.
+function auditionFixture(artifact, slotIndex, played) {
+  return fixture({
     soundsetCatalog: null,
     send(envelope) {
       if (envelope.operation !== "soundset.audition") {
         return success(envelope, defaultResult(envelope.operation));
       }
-      return success(envelope, {
+      const result = {
         set_id: SET_ID,
         version: "1.0.0",
         manifest_sha256: MANIFEST_SHA,
@@ -5058,9 +5072,21 @@ test("a slot audition that names no Artifact is refused", async () => {
           prepared_bytes: 11_520,
           prepared_frames: 2_880,
         },
-      });
+      };
+      // `undefined` stands for a Host that sent no `played` at all, which is
+      // the drift the normaliser refuses; every other value is passed through
+      // so the type check itself can be exercised.
+      if (played !== undefined) {
+        result.played = played;
+      }
+      return success(envelope, result);
     },
   });
+}
+
+test("a slot audition that names no Artifact is refused", async () => {
+  const auditionWith = (artifact, slotIndex) =>
+    auditionFixture(artifact, slotIndex, true);
   const identity = {
     setId: SET_ID,
     version: "1.0.0",
@@ -5088,6 +5114,44 @@ test("a slot audition that names no Artifact is refused", async () => {
     .session.auditionSoundSet({...identity, slotIndex: 0});
   assert.equal(played.artifact.sha256, BLOB_SHA);
   assert.equal(played.audio.preparedFrames, 2_880);
+});
+
+// #799, review finding. The geometry is answered from the bytes the Facade
+// resolved, so it is identical whether or not this Host's engine played them.
+// `played` is the only part of the reply that separates the two, which is why
+// it crosses this boundary and why an absent one is drift rather than `false`.
+test("an audition carries whether a voice actually started", async () => {
+  const identity = {
+    setId: SET_ID,
+    version: "1.0.0",
+    manifestSha256: MANIFEST_SHA,
+  };
+  const artifact = {sha256: BLOB_SHA, media_type: "audio/wav", byte_length: 64};
+
+  const audible = await auditionFixture(artifact, 0, true)
+    .session.auditionSoundSet({...identity, slotIndex: 0});
+  assert.equal(audible.played, true);
+
+  const silent = await auditionFixture(artifact, 0, false)
+    .session.auditionSoundSet({...identity, slotIndex: 0});
+  assert.equal(silent.played, false);
+  // The two differ in exactly one field: everything a caller could otherwise
+  // read is the same, which is the defect stated as an assertion.
+  assert.deepEqual(
+    {...audible, played: null}, {...silent, played: null});
+
+  // A Host that sends no outcome, and one that sends a non-boolean, are both
+  // drift rather than a silence to be assumed.
+  await assert.rejects(
+    auditionFixture(artifact, 0, undefined)
+      .session.auditionSoundSet({...identity, slotIndex: 0}),
+    (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+  );
+  await assert.rejects(
+    auditionFixture(artifact, 0, "true")
+      .session.auditionSoundSet({...identity, slotIndex: 0}),
+    (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+  );
 });
 
 test("a Set slot that disagrees with itself about being empty is refused", async () => {
@@ -5153,4 +5217,199 @@ test("a Set slot that disagrees with itself about being empty is refused", async
     stray.inspectSoundSet(identity),
     (error) => error.code === "HOST_PROTOCOL_MISMATCH",
   );
+});
+
+test("Provider commands retain explicit grant-select-run order on the existing lane", async () => {
+  const operations = [];
+  let release;
+  const blocked = new Promise((resolve) => {release = resolve;});
+  const {session} = fixture({send: async (envelope) => {
+    const {operation, payload} = envelope;
+    if (operation.startsWith("provider.") || operation === "attempt.inspect") {
+      operations.push({operation, payload: structuredClone(payload)});
+      if (operation === "provider.permissions.configure") await blocked;
+      return success(envelope, operation === "provider.list"
+        ? {providers: [], granted_permissions: [], project_revision: null} : {operation});
+    }
+    return success(envelope, defaultResult(operation));
+  }});
+  await session.start();
+  await session.listProviders();
+  const grant = session.configureProviderPermissions(["sample.slice.execute"]);
+  const selection = session.selectProvider("sample.slice.v1", "local.sample.slice");
+  const request = {
+    attempt_id: "owned", capability: "sample.slice.v1", inputs: [], parameters: {},
+    data_classification: "public", platform: "test", region: "local", required_permissions: ["sample.slice.execute"],
+  };
+  const execution = session.runProvider(request);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(operations.map((entry) => entry.operation), ["provider.list", "provider.permissions.configure"]);
+  release(); await Promise.all([grant, selection, execution]);
+  await session.inspectAttempt("owned");
+  assert.deepEqual(operations.map((entry) => entry.operation), [
+    "provider.list", "provider.permissions.configure", "provider.select", "provider.run", "attempt.inspect"]);
+  assert.deepEqual(operations[3].payload, request);
+  assert.deepEqual(operations[1].payload, {granted_permissions: ["sample.slice.execute"]});
+  await session.close();
+});
+
+test("Provider run does not grant permissions and preserves the owner's safe failure category", async () => {
+  const operations = [];
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation.startsWith("provider.")) operations.push(envelope.operation);
+    if (envelope.operation === "provider.run") {
+      return {protocol_version: 1, request_id: envelope.request_id, ok: false,
+        error: {code: "IO_ERROR", message: "input rejected", details: {reason: "input_artifact_mismatch", attempt_id: "owned"}}};
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  const request = {attempt_id: "owned", capability: "sample.slice.v1", inputs: [], parameters: {},
+    data_classification: "public", platform: "test", region: "local", required_permissions: ["sample.slice.execute"]};
+  await assert.rejects(session.runProvider(request), (error) => {
+    assert.equal(error.code, "IO_ERROR");
+    assert.deepEqual(error.details, {reason: "input_artifact_mismatch", attempt_id: "owned"});
+    return true;
+  });
+  assert.deepEqual(operations, ["provider.run"]);
+  await session.close();
+});
+
+const CANDIDATE_PROJECT_ID = "00000000-0000-4000-8000-000000000111";
+const CANDIDATE_REQUEST = {project_id: CANDIDATE_PROJECT_ID, expected_revision: 3,
+  job_id: "slice-job", set_id: "set", candidate_id: "recipe"};
+const CANDIDATE_AUDIO = {job_id: "slice-job", set_id: "set", candidate_id: "recipe",
+  artifact: {sha256: "a".repeat(64), media_type: "audio/wav", byte_length: 52},
+  sample_rate: 48000, channels: 1, source_frames: 4, project_revision: 3, played: true};
+const CANDIDATE_ADOPT = {project_id: CANDIDATE_PROJECT_ID, expected_revision: 3,
+  command_id: CANDIDATE_PROJECT_ID, job_id: "slice-job", set_id: "set",
+  selections: [{candidate_id: "recipe", bank: 0, pad: 2}]};
+const CANDIDATE_ADOPTED = {set_id: "set", project_revision: 4,
+  adopted: [{candidate_id: "recipe", bank: 0, pad: 2, asset_id: CANDIDATE_PROJECT_ID}]};
+
+test("Candidate audition and stop serialize and preserve raw result fields", async () => {
+  let release;
+  const blocked = new Promise((resolve) => {release = resolve;});
+  const seen = [];
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation.startsWith("candidate.")) seen.push(envelope.operation);
+    if (envelope.operation === "candidate.audition") {await blocked; return success(envelope, CANDIDATE_AUDIO);}
+    if (envelope.operation === "candidate.audition.stop") return success(envelope, {accepted: true});
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  const preview = session.auditionCandidate(CANDIDATE_REQUEST);
+  const stopped = session.stopCandidateAudition();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(seen, ["candidate.audition"]);
+  release(); assert.deepEqual(await preview, CANDIDATE_AUDIO);
+  assert.deepEqual(await stopped, {accepted: true});
+  assert.deepEqual(seen, ["candidate.audition", "candidate.audition.stop"]);
+  await session.close();
+  await assert.rejects(session.auditionCandidate(CANDIDATE_REQUEST), {code: "HOST_STATE_INVALID"});
+  await assert.rejects(session.stopCandidateAudition(), {code: "HOST_STATE_INVALID"});
+  await assert.rejects(session.inspectCandidateJob("slice-job"), {code: "HOST_STATE_INVALID"});
+  assert.equal(seen.length, 2);
+});
+
+test("Candidate audition refuses mismatched identity, revision and malformed playback replies", async () => {
+  for (const change of [{job_id: "other"}, {set_id: "other"}, {candidate_id: "other"},
+    {project_revision: 4}, {played: undefined}]) {
+    const {session} = fixture({send: async (envelope) => success(envelope,
+      envelope.operation === "candidate.audition" ? {...CANDIDATE_AUDIO, ...change} : defaultResult(envelope.operation))});
+    await session.start();
+    await assert.rejects(session.auditionCandidate(CANDIDATE_REQUEST), {code: "HOST_PROTOCOL_MISMATCH"});
+    await session.close();
+  }
+});
+
+test("Candidate adoption validates one revision and every explicit target without retrying unknown commits", async () => {
+  for (const change of [null, {set_id: "other"}, {project_revision: 3},
+    {adopted: [{...CANDIDATE_ADOPTED.adopted[0], pad: 1}]}]) {
+    const seen = [];
+    const {session} = fixture({send: async (envelope) => {
+      if (envelope.operation === "candidate.adopt") {
+        seen.push(structuredClone(envelope.payload));
+        return success(envelope, {...CANDIDATE_ADOPTED, ...change});
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    }});
+    await session.start();
+    if (change === null) assert.deepEqual(await session.adoptCandidates(CANDIDATE_ADOPT), CANDIDATE_ADOPTED);
+    else await assert.rejects(session.adoptCandidates(CANDIDATE_ADOPT), {code: "HOST_PROTOCOL_MISMATCH"});
+    assert.deepEqual(seen, [CANDIDATE_ADOPT]);
+    await session.close();
+  }
+  let calls = 0;
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation === "candidate.adopt") {calls++; throw Object.assign(new Error("lost"), {code: "HOST_TIMEOUT"});}
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  await assert.rejects(session.adoptCandidates(CANDIDATE_ADOPT), {code: "HOST_TIMEOUT"});
+  assert.equal(calls, 1);
+  await session.inspectProject();
+  assert.equal(calls, 1);
+  await session.close();
+});
+
+test("Candidate group extends the retained packaged Host beside providers", async () => {
+  const browserWindow = {};
+  const {session} = fixture({browserWindow, publishRuntime: true});
+  await session.start();
+  const runtime = browserWindow.lmdjWebRuntimeHost;
+  assert.equal(typeof runtime.registerAudioContext, "function");
+  assert.equal(runtime.providers.listProviders, session.listProviders);
+  assert.ok(Object.isFrozen(runtime.candidates));
+  for (const name of ["runCandidateJob", "inspectCandidateJob", "cancelCandidateJob", "discardCandidateSet",
+    "auditionCandidate", "stopCandidateAudition", "adoptCandidates"]) {
+    assert.equal(runtime.candidates[name], session[name]);
+  }
+  await session.close();
+  assert.equal(browserWindow.lmdjWebRuntimeHost, runtime);
+});
+
+test("Candidate Job lifecycle returns validated Facade fields and rejects wrong Job bindings", async () => {
+  const source = {project_id: CANDIDATE_PROJECT_ID,
+    asset_id: CANDIDATE_PROJECT_ID, project_revision: 3, artifact: CANDIDATE_AUDIO.artifact, frame_rate: 48000, frame_count: 4};
+  const intent = {attempt_id: "attempt", source, parameters_sha256: "b".repeat(64), data_classification: "public",
+    platform: "test", region: "local", required_permissions: []};
+  let wrongJob = false;
+  let status = "interrupted";
+  const calls = [];
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation.startsWith("candidate.")) {
+      calls.push(structuredClone(envelope.payload));
+      if (envelope.operation === "candidate.job.cancel") status = "cancelled";
+      return success(envelope, {job_id: wrongJob ? "other" : "slice-job", active_set_id: null,
+        sets: [], history: [{intent, set_id: "set", status}], project_revision: null});
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  const request = {job_id: "slice-job", attempt_id: "attempt", project_id: CANDIDATE_PROJECT_ID,
+    asset_id: CANDIDATE_PROJECT_ID, expected_revision: 3, parameters: {}, data_classification: "public",
+    platform: "test", region: "local", required_permissions: []};
+  const result = await session.runCandidateJob(request);
+  assert.equal(result.project_revision, null);
+  assert.deepEqual(result.history[0].intent.source, source);
+  assert.equal((await session.inspectCandidateJob("slice-job")).history[0].status, "interrupted");
+  assert.equal((await session.cancelCandidateJob("slice-job", "attempt")).history[0].status, "cancelled");
+  assert.deepEqual(calls, [request, {job_id: "slice-job"}, {job_id: "slice-job", attempt_id: "attempt"}]);
+  wrongJob = true;
+  await assert.rejects(session.inspectCandidateJob("slice-job"), {code: "HOST_PROTOCOL_MISMATCH"});
+  await assert.rejects(session.runCandidateJob({...request, project_path: "/projects/example.lmdj"}), {code: "HOST_PROTOCOL_MISMATCH"});
+  assert.equal(calls.length, 4);
+  await session.close();
+});
+
+test("Provider permission readback rejects absent or duplicate grants and preserves existing grants", async () => {
+  for (const granted_permissions of [undefined, ["sample.slice.execute", "sample.slice.execute"], ["other.execute"]]) {
+    const {session} = fixture({send: async (envelope) => success(envelope,
+      envelope.operation === "provider.list" ? {providers: [], granted_permissions, project_revision: null} : defaultResult(envelope.operation))});
+    await session.start();
+    if (granted_permissions?.length === 1) assert.deepEqual((await session.listProviders()).granted_permissions, ["other.execute"]);
+    else await assert.rejects(session.listProviders(), {code: "HOST_PROTOCOL_MISMATCH"});
+    await session.close();
+  }
 });

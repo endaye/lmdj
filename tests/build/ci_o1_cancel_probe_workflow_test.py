@@ -154,7 +154,7 @@ class CancelWorkflowTests(unittest.TestCase):
             self.assertIn(value, condition)
         self.assertEqual(field(waiter, 'permissions', 4), '{}')
         self.assertEqual(field(waiter, 'timeout-minutes', 4), '5')
-        self.assertEqual(field(waiter, 'runs-on', 4), '[self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]')
+        self.assertEqual(field(waiter, 'runs-on', 4), '[self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]')
         for forbidden in ('concurrency:', 'always()', 'uses:', 'GITHUB_TOKEN', 'secrets.', 'continue-on-error', 'GITHUB_OUTPUT'):
             self.assertNotIn(forbidden, waiter)
         self.assertIn('sleep 285', waiter)

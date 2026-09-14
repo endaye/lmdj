@@ -319,6 +319,26 @@ struct SoundSetAuditionAudio {
   std::shared_ptr<const cooker::PcmSample> prepared;
 };
 
+// Read-only Workspace recipe preview; no Artifact is persisted or adopted.
+struct CandidateAuditionRequest {
+  std::filesystem::path project_path;
+  foundation::ProjectId project_id;
+  std::uint64_t expected_revision;
+  std::string job_id;
+  std::string set_id;
+  std::string candidate_id;
+};
+
+struct CandidateAuditionAudio {
+  // Identity and geometry of the selected interval WAV, held only in memory.
+  foundation::ArtifactRef artifact;
+  std::uint32_t sample_rate;
+  std::uint16_t channels;
+  std::uint64_t source_frames;
+  // Non-null PCM at the fixed Runtime rate (48 kHz), ready for Host audition.
+  std::shared_ptr<const cooker::PcmSample> prepared;
+};
+
 struct SampleWaveformRequest {
   std::filesystem::path project_path;
   domain::PadSlotId slot;
@@ -565,6 +585,9 @@ class Application {
       std::string_view token);
   foundation::Result<SampleInspectResult> inspect_sample(
       const SampleInspectRequest& request) const;
+  foundation::Result<CandidateAuditionAudio> audition_candidate(
+      const CandidateAuditionRequest& request) const;
+
   foundation::Result<SoundSetAuditionAudio> audition_soundset(
       const SoundSetAuditionRequest& request) const;
   foundation::Result<cooker::WaveformEnvelope> query_sample_waveform(

@@ -15,6 +15,7 @@ import time
 import zipfile
 
 import change_scope
+import review_pipeline as pipeline
 import review_scope
 import review_merge_map as mapping
 import self_test_report as reporting
@@ -201,9 +202,18 @@ def collect(api, repository, run_id, attempt):
                 raise reporting.ReportingError('why: historical mapping receipt or API shape cannot be authenticated; '
                     'remedy: restore the exact retained mapping evidence; do not infer a review or backend failure') from error
         return None
-    producer = job("Review fallback", "success")
-    for name in ("Collect complete fixed input without executing PR files", "Save honest final result", "Run actions/upload-artifact@v4"):
+    conclusion = producers[0].get("conclusion")
+    require(conclusion in {"success", "failure"}, "review producer did not retain a completed result")
+    producer = job("Review fallback", conclusion)
+    for name in ("Collect complete fixed input without executing PR files", "Run actions/upload-artifact@v4"):
         _step(producer, name)
+    _step(producer, "Save honest final result", conclusion)
+    if conclusion == "failure":
+        # The current finalizer saves complete failure receipts before exiting 1.
+        # A cancelled/otherwise broken producer is not an all-backend verdict.
+        require(all(step.get("conclusion") in {"success", "skipped"}
+                    for step in producer["steps"] if step.get("name") != "Save honest final result"),
+                "failed review producer has an additional incomplete or failed step")
     # Explicit total_count check: the shared convenience artifact method reads
     # one page; truncation must not silently select an incomplete receipt set.
     inventory = api._request("GET", prefix + f"/actions/runs/{run_id}/artifacts?per_page=100")
@@ -219,9 +229,23 @@ def collect(api, repository, run_id, attempt):
     require(isinstance(payload, bytes) and len(payload) <= LIMIT, "review archive exceeds budget")
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = archive.namelist()
-        require(len(names) == len(set(names)) and set(names) in (
-            {"context.json", "history.json", "result.json", "failure.json"},
-            {"context.json", "history.json", "result.json", "review.json"}), "review archive schema is not closed")
+        history_document = (json.loads(archive.read("history.json"), object_pairs_hook=change_scope.reject_duplicates)
+                            if "history.json" in names else None)
+        v2_archive = isinstance(history_document, dict) and history_document.get("schema") == review_scope.HISTORY_SCHEMA_V2
+        required = [{"context.json", "history.json", "result.json", "failure.json"},
+                    {"context.json", "history.json", "result.json", "review.json"}]
+        if v2_archive:
+            required = [{*entry, "collector.json", "t2-config-witness.json"} for entry in required]
+        # The current T2 producer retains these diagnostic JSON files alongside
+        # the canonical receipts. They are bounded/parsed below but never supply
+        # review authority. Historical v2 archives may omit them; v1 may not add
+        # them. Keep every other member and canonical-receipt check closed.
+        diagnostics = {"t2-input.json", "collection-receipt.json", "t2-result.json"} if v2_archive else set()
+        base_names = {name for name in names if not name.startswith("coverage-") and name not in diagnostics}
+        coverage_names = {name for name in names if name.startswith("coverage-")}
+        require(len(names) == len(set(names)) and base_names in required
+                and all(name.endswith(".json") and name != "coverage-.json" for name in coverage_names),
+                "review archive schema is not closed")
         require(sum(i.file_size for i in archive.infolist()) <= LIMIT, "expanded review archive exceeds budget")
         documents = {name: json.loads(archive.read(name), object_pairs_hook=change_scope.reject_duplicates) for name in names}
     context = documents["context.json"]
@@ -247,15 +271,31 @@ def collect(api, repository, run_id, attempt):
                                                object_pairs_hook=change_scope.reject_duplicates)
         for name in ("scope_policy.json", "self_test_policy.json", "test_scope_policy.json")])
     history = documents["history.json"]
-    review_scope.validate_history(policy, history)
-    require(bool(history), "review history is empty")
+    coverages = {review_scope.coverage_digest(documents[name]): documents[name] for name in coverage_names}
+    collector_witness = documents.get("collector.json") if isinstance(history, dict) else None
+    trusted_config = documents.get("t2-config-witness.json") if isinstance(history, dict) else None
+    if isinstance(history, dict) and history.get("schema") == review_scope.HISTORY_SCHEMA_V2:
+        require(collector_witness is not None and trusted_config is not None,
+                "v2 archive lacks the independently authenticated collector/config witnesses")
+        review_scope.validate_collector(collector_witness, identity=identity)
+        trusted_config = pipeline._trusted_config_witness(trusted_config)
+    review_scope.validate_history(policy, history, identity=identity,
+                                  coverages=coverages if isinstance(history, dict) else None,
+                                  changed_paths=context["changed_paths"], collector=collector_witness,
+                                  trusted_config=trusted_config)
+    attempts = history.get("attempts", []) if isinstance(history, dict) else history
+    require(bool(attempts), "review history is empty")
     final_identity = dict(identity)
-    if history[-1]["status"] == "reviewed":
-        final_identity["backend"] = history[-1]["backend"]
-    expected = review_scope.prepare_result(policy, final_identity, changed_paths=context["changed_paths"], history=history)
+    if attempts[-1]["status"] == "reviewed":
+        final_identity["backend"] = attempts[-1]["backend"]
+    expected = review_scope.prepare_result(policy, final_identity, changed_paths=context["changed_paths"], history=history,
+                                           coverages=coverages if isinstance(history, dict) else None,
+                                           collector=collector_witness, trusted_config=trusted_config)
     require(documents["result.json"] == expected, "saved review result differs from independent history/policy recomputation")
+    require(conclusion != "failure" or expected["status"] == "not-reviewed",
+            "failed review finalizer contradicts the recomputed review result")
     if expected["status"] == "reviewed":
-        require(documents.get("review.json") == history[-1]["review"] and "failure.json" not in documents,
+        require(documents.get("review.json") == attempts[-1]["review"] and "failure.json" not in documents,
                 "valid review has conflicting failure evidence")
         return None
     failure = expected["failure"]

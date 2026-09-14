@@ -347,6 +347,90 @@ void validate_performance_gesture(const Json& event) {
 // The Web Host's mirror of the plan's Locked Facade Surface. The three
 // Workspace-level operations carry no `project_path`, so unlike a Performance
 // operation the Host does not inject the retained Project into them.
+void validate_provider_operation_payload(std::string_view operation, const Json& payload) {
+  if (operation == "provider.list") {
+    require(exact_keys(payload, {}));
+  } else if (operation == "provider.select") {
+    require(exact_keys(payload, {"capability", "provider_id"}));
+  } else if (operation == "provider.permissions.configure") {
+    require(exact_keys(payload, {"granted_permissions"}));
+  } else if (operation == "attempt.inspect") {
+    require(exact_keys(payload, {"attempt_id"}));
+  } else {
+    require(operation == "provider.run");
+    require(exact_keys(payload, {"attempt_id", "capability", "inputs", "parameters",
+                                "data_classification", "platform", "region", "required_permissions"}) ||
+            exact_keys(payload, {"attempt_id", "capability", "inputs", "parameters",
+                                "data_classification", "platform", "region", "required_permissions", "input_owners"}));
+    if (payload.contains("input_owners")) {
+      require(payload.at("input_owners").is_array());
+      for (const auto& owner : payload.at("input_owners")) {
+        // Browser callers never supply a filesystem path, even one matching
+        // the current Project. Only this retained-session boundary adds it.
+        require(exact_keys(owner, {"port", "occurrence", "project_id", "asset_id"}));
+        (void)string_field(owner, "port");
+        (void)safe_unsigned_field(owner, "occurrence");
+        (void)uuid_field(owner, "project_id");
+        (void)uuid_field(owner, "asset_id");
+      }
+    }
+  }
+}
+
+void validate_candidate_operation_payload(std::string_view operation, const Json& payload) {
+  const auto id = [&payload](std::string_view key) {
+    const auto value = string_field(payload, key);
+    require(!value.empty() && value.size() <= 128 && value != "." && value != ".." &&
+      std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+          (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+      }));
+  };
+  if (operation == "candidate.audition.stop") { require(exact_keys(payload, {})); return; }
+  if (operation == "candidate.job.inspect") {
+    require(exact_keys(payload, {"job_id"}));
+  } else if (operation == "candidate.job.cancel") {
+    require(exact_keys(payload, {"job_id", "attempt_id"})); id("attempt_id");
+  } else if (operation == "candidate.set.discard") {
+    require(exact_keys(payload, {"job_id", "set_id"})); id("set_id");
+  } else {
+    if (operation == "candidate.job.run") {
+      require(exact_keys(payload, {"job_id", "attempt_id", "project_id", "asset_id", "expected_revision",
+        "parameters", "data_classification", "platform", "region", "required_permissions"}));
+      id("attempt_id"); id("data_classification"); id("platform"); id("region");
+      (void)uuid_field(payload, "asset_id");
+      require(payload.at("parameters").is_object() && payload.at("required_permissions").is_array());
+      std::set<std::string> permissions;
+      for (const auto& permission : payload.at("required_permissions")) {
+        require(permission.is_string());
+        const auto value = permission.get<std::string>();
+        Json wrapper{{"job_id", value}};
+        validate_candidate_operation_payload("candidate.job.inspect", wrapper);
+        require(permissions.insert(value).second);
+      }
+    } else if (operation == "candidate.audition") {
+      require(exact_keys(payload, {"project_id", "expected_revision", "job_id", "set_id", "candidate_id"}));
+      id("set_id"); id("candidate_id");
+    } else {
+      require(operation == "candidate.adopt" && exact_keys(payload,
+        {"project_id", "expected_revision", "command_id", "job_id", "set_id", "selections"}));
+      id("set_id"); (void)uuid_field(payload, "command_id");
+      const auto& selections = payload.at("selections");
+      require(selections.is_array() && !selections.empty() && selections.size() <= 64);
+      std::set<std::pair<std::uint64_t, std::uint64_t>> targets;
+      for (const auto& selection : selections) {
+        require(exact_keys(selection, {"candidate_id", "bank", "pad"}));
+        Json wrapper{{"job_id", selection.at("candidate_id")}};
+        validate_candidate_operation_payload("candidate.job.inspect", wrapper);
+        require(targets.emplace(safe_unsigned_field(selection, "bank", 3),
+          safe_unsigned_field(selection, "pad", 15)).second);
+      }
+    }
+    (void)uuid_field(payload, "project_id"); (void)safe_unsigned_field(payload, "expected_revision");
+  }
+  id("job_id");
+}
+
 void validate_soundset_operation_payload(
     std::string_view operation,
     const Json& payload) {
@@ -1475,7 +1559,14 @@ struct ControlRuntime::Impl {
   // #799. Publish the audition PCM the Facade decoded into the engine's
   // reserved audition pool and start a voice on it. Best effort by design: see
   // the call site for why a failure here is not an error on a query.
-  void play_audition(const Json& payload) {
+  //
+  // Returns whether a voice was actually started, so the call site can say so.
+  // Every `false` below is a real silence, and the two that a caller meets in
+  // practice are the last two: the pool holds two Banks and nothing in this
+  // Host reclaims them, and `enqueue_control` refuses every audition while the
+  // engine is stopped -- which is the whole life of a Host that has published
+  // a snapshot but never run `audio.activate`.
+  [[nodiscard]] bool play_audition(const Json& payload) {
     facade::SoundSetAuditionRequest request{
         payload.at("set_id").get<std::string>(),
         payload.at("version").get<std::string>(),
@@ -1490,12 +1581,24 @@ struct ControlRuntime::Impl {
     if (!audio.has_value()) {
       // The Facade already refused this request through the envelope the
       // caller is about to receive; there is nothing further to report.
-      return;
+      //
+      // Unreachable from the call site rather than merely unlikely: the same
+      // `audition_soundset` answered the JSON query a few lines above it, and
+      // this branch is only reached when that answer was `ok`. Kept as the
+      // contract check it is, and deliberately not counted as covered.
+      return false;
     }
-    const auto& source = *audio.value().prepared;
-    if (source.channels == 0 || source.interleaved.empty() ||
+    return publish_audition_pcm(audio.value().prepared);
+  }
+
+  [[nodiscard]] bool publish_audition_pcm(const std::shared_ptr<const cooker::PcmSample>& prepared) {
+    if (!prepared) return false;
+    const auto& source = *prepared;
+    if ((source.channels != 1 && source.channels != 2) || source.interleaved.empty() ||
         source.interleaved.size() % source.channels != 0) {
-      return;
+      // Also unreachable through the Facade: `prepared_audition` refuses this
+      // exact shape with `cook_failed` before it can return success.
+      return false;
     }
     // Down-mix to the mono float the Bank stores, exactly as
     // `PreparedSampleBank::from_snapshot` does for a Project Pad.
@@ -1517,17 +1620,24 @@ struct ControlRuntime::Impl {
         audio::kAuditionBankProjectId(),
         audio::kAuditionBankProjectRevision);
     if (!bank.set_sample(audio::kAuditionSampleSlot, mono).has_value()) {
-      return;
+      // Unreachable for the same reason: `mono` is non-empty because `source`
+      // was, slot 0 is in range and unset on a fresh Bank, and a sample decoded
+      // from PCM16 is finite.
+      return false;
     }
     if (engine.publish_audition_bank(std::move(bank)) !=
         audio::PublishResult::accepted) {
       // Both audition slots are still draining an earlier preview. Dropping
       // this one is the honest outcome: the alternative is overwriting bytes a
       // voice is still reading, which is the defect this pool exists to avoid.
-      return;
+      return false;
     }
-    static_cast<void>(engine.enqueue_control(audio::PadControlEvent{
-        0, 0, 127, audio::PadControlKind::audition_start, {}}));
+    // Not discarded. A stopped engine refuses every control event, so this is
+    // the branch that makes an audition silent in a Host that never activated
+    // audio -- exactly the case the caller cannot see from the geometry.
+    return engine.enqueue_control(audio::PadControlEvent{
+               0, 0, 127, audio::PadControlKind::audition_start, {}}) ==
+           audio::EnqueueResult::accepted;
   }
 
   std::optional<Json> enqueue_sample_control(
@@ -2212,6 +2322,104 @@ Json ControlRuntime::dispatch(
       }
       return success({{"staged", staged.value()}});
     }
+    static const std::map<std::string_view, bool> candidate_operations{
+        {"candidate.job.run", false}, {"candidate.job.inspect", true},
+        {"candidate.job.cancel", false}, {"candidate.set.discard", false},
+        {"candidate.adopt", false}, {"candidate.audition", true},
+        {"candidate.audition.stop", true},
+    };
+    if (const auto found = candidate_operations.find(operation); found != candidate_operations.end()) {
+      require(sidecar.empty());
+      validate_candidate_operation_payload(operation, payload);
+      if (operation == "candidate.audition.stop") {
+        if (impl_->runtime_ready) {
+          const auto stopped = impl_->engine.enqueue_control(audio::PadControlEvent{
+            0, 0, 0, audio::PadControlKind::audition_stop, {}});
+          if (stopped != audio::EnqueueResult::accepted &&
+              impl_->engine.telemetry().state != audio::RealtimeState::stopped) return state_error();
+        }
+        return success({{"accepted", true}});
+      }
+      auto request = payload;
+      request["operation"] = operation;
+      if (payload.contains("project_id")) {
+        if (!impl_->session_available()) return state_error();
+        if (payload.at("project_id") != *impl_->project_id) {
+          return normalized_error(Error{ErrorCode::revision_conflict, "Candidate belongs to another Project"});
+        }
+        request["project_path"] = impl_->retained_project_path->generic_string();
+      }
+      impl_->service_performance_adapter();
+      if (operation == "candidate.audition") {
+        const auto audio = impl_->application.audition_candidate(facade::CandidateAuditionRequest{
+          *impl_->retained_project_path, foundation::ProjectId{*impl_->project_id},
+          payload.at("expected_revision").get<std::uint64_t>(), payload.at("job_id").get<std::string>(),
+          payload.at("set_id").get<std::string>(), payload.at("candidate_id").get<std::string>()});
+        if (!audio.has_value()) return normalized_error(audio.error());
+        const auto& value = audio.value();
+        return success({{"job_id", payload.at("job_id")}, {"set_id", payload.at("set_id")},
+          {"candidate_id", payload.at("candidate_id")}, {"artifact", value.artifact},
+          {"sample_rate", value.sample_rate}, {"channels", value.channels}, {"source_frames", value.source_frames},
+          {"project_revision", payload.at("expected_revision")},
+          {"played", impl_->runtime_ready && impl_->publish_audition_pcm(value.prepared)}});
+      }
+      auto response = found->second ? impl_->application.query(request) : impl_->application.command(request);
+      if (!response.value("ok", false)) return normalized_facade_error(response);
+      if (response.at("project_revision").is_number_unsigned())
+        impl_->project_revision = response.at("project_revision").get<std::uint64_t>();
+      // The Web projection preserves Facade identities, never filesystem authority.
+      // Only the Host owns these retained paths; the browser cannot round-trip them.
+      if (operation != "candidate.adopt") {
+        for (auto& entry : response.at("result").at("history"))
+          entry.at("intent").at("source").erase("project_path");
+        for (auto& set : response.at("result").at("sets"))
+          set.at("source").erase("project_path");
+      }
+      return normalized_facade_success(response);
+    }
+    static const std::map<std::string_view, bool> provider_operations{
+        {"provider.list", true}, {"provider.select", false},
+        {"provider.run", false}, {"provider.permissions.configure", false},
+        {"attempt.inspect", true},
+    };
+    if (const auto found = provider_operations.find(operation);
+        found != provider_operations.end()) {
+      require(sidecar.empty());
+      validate_provider_operation_payload(operation, payload);
+      auto request = payload;
+      request["operation"] = operation;
+      if (request.contains("input_owners") && !request.at("input_owners").empty()) {
+        if (!impl_->session_available()) return state_error();
+        for (auto& owner : request.at("input_owners")) {
+          owner["project_path"] = impl_->retained_project_path->generic_string();
+        }
+      }
+      impl_->service_performance_adapter();
+      const auto response = found->second
+          ? impl_->application.query(request) : impl_->application.command(request);
+      if (!response.value("ok", false)) {
+        auto normalized = normalized_facade_error(response);
+        const auto& failure = response.at("error");
+        const auto& details = failure.at("details");
+        if (details.is_object()) {
+          const auto reason = details.value("reason", Json{});
+          const auto code = failure.at("code");
+          if ((code == "NOT_FOUND" && reason == "input_artifact_unavailable") ||
+              (code == "IO_ERROR" && reason == "input_artifact_mismatch") ||
+              (code == "INVALID_ARGUMENT" &&
+               (reason == "input_binding_invalid" || reason == "input_artifact_too_large"))) {
+            normalized["error"]["details"]["reason"] = reason;
+          }
+          if (operation == "provider.run" &&
+              details.value("attempt_id", Json{}) == request.at("attempt_id")) {
+            normalized["error"]["details"]["attempt_id"] = request.at("attempt_id");
+          }
+        }
+        return normalized;
+      }
+      return normalized_facade_success(response);
+    }
+
     // The value is `is_query`, read only by the Facade forwarding at the end
     // of this block. Membership is load-bearing for every entry -- it gates
     // `require(sidecar.empty())` and the payload validation -- but the value
@@ -2284,8 +2492,22 @@ Json ControlRuntime::dispatch(
       // already correct and useful, a Host with no running runtime is a normal
       // state rather than a refusal, and reporting a playback failure through
       // a query's envelope would need vocabulary the Stage has frozen.
-      if (operation == "soundset.audition" && impl_->runtime_ready) {
-        impl_->play_audition(payload);
+      //
+      // It is still reported. `played` says whether a voice started, on the
+      // successful result beside the geometry, so "it played" and "it silently
+      // did not" stop being the same answer. It is not a refusal and adds no
+      // `lmdj.error.v1` code and no `details.reason` token: a query that
+      // answers what happened is the shape the frozen vocabulary leaves open.
+      // Only the fact is reported, never which branch produced it -- a reason
+      // vocabulary here would be the very thing the Stage froze.
+      if (operation == "soundset.audition") {
+        const bool played =
+            impl_->runtime_ready && impl_->play_audition(payload);
+        auto normalized = normalized_facade_success(response);
+        if (normalized.value("ok", false)) {
+          normalized.at("result")["played"] = played;
+        }
+        return normalized;
       }
       return normalized_facade_success(response);
     }

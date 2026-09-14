@@ -27,97 +27,97 @@ expected_modules = {
     ),
     "packages/provider-sdk/module.json": (
         "provider-sdk",
-        "1.1.4",
-        2,
+        "2.2.0",
+        3,
         {"foundation": "0.4.0"},
     ),
     "packages/authoring-domain/module.json": (
         "authoring-domain",
-        "3.0.0",
+        "4.1.0",
         1,
         {"foundation": "0.4.0"},
     ),
     "packages/project-cooker/module.json": (
         "project-cooker",
-        "1.1.0",
+        "1.2.0",
         1,
         {
             "foundation": "0.4.0",
-            "authoring-domain": "3.0.0",
+            "authoring-domain": "4.1.0",
         },
     ),
     "packages/project-io/module.json": (
         "project-io",
-        "3.0.0",
+        "4.1.0",
         1,
         {
             "foundation": "0.4.0",
-            "authoring-domain": "3.0.0",
+            "authoring-domain": "4.1.0",
         },
     ),
     "packages/audio-runtime/module.json": (
         "audio-runtime",
-        "3.1.0",
-        1,
+        "5.0.0",
+        2,
         {
             "foundation": "0.4.0",
-            "project-cooker": "1.1.0",
+            "project-cooker": "1.2.0",
         },
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "3.2.0",
-        2,
+        "6.0.0",
+        3,
         {
             "foundation": "0.4.0",
-            "authoring-domain": "3.0.0",
-            "project-io": "3.0.0",
-            "project-cooker": "1.1.0",
-            "audio-runtime": "3.1.0",
-            "provider-sdk": "1.1.4",
+            "authoring-domain": "4.1.0",
+            "project-io": "4.1.0",
+            "project-cooker": "1.2.0",
+            "audio-runtime": "5.0.0",
+            "provider-sdk": "2.2.0",
         },
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "4.1.0",
-        1,
+        "5.3.0",
+        2,
         {
-            "application-facade": "3.2.0",
-            "audio-runtime": "3.1.0",
+            "application-facade": "6.0.0",
+            "audio-runtime": "5.0.0",
         },
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "3.2.0",
+        "3.3.5",
         2,
-        {"application-facade": "3.2.0"},
+        {"application-facade": "6.0.0"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "3.2.0",
+        "3.4.0",
         2,
-        {"application-facade": "3.2.0"},
+        {"application-facade": "6.0.0"},
     ),
     "apps/native-host/module.json": (
         "native-host",
-        "3.2.0",
+        "3.4.0",
         2,
         {
-            "application-facade": "3.2.0",
-            "audio-runtime": "3.1.0",
+            "application-facade": "6.0.0",
+            "audio-runtime": "5.0.0",
         },
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "4.1.0",
+        "4.3.0",
         2,
-        {"web-runtime-platform": "4.1.0"},
+        {"web-runtime-platform": "5.3.0"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "4.1.0",
+        "4.3.0",
         2,
-        {"web-runtime-platform": "4.1.0"},
+        {"web-runtime-platform": "5.3.0"},
     ),
 }
 for relative, (
@@ -251,7 +251,7 @@ assert assembly["product"] == {"id": "lmdj", "version": current}
 assert assembly["providers"] == [
     {
         "id": "local.proof.success",
-        "version": "1.0.5",
+        "version": "2.0.2",
         "capabilities": [
             {"id": "proof.candidate.v2", "version": "2.0.0"}
         ],
@@ -259,16 +259,18 @@ assert assembly["providers"] == [
     },
     {
         "id": "local.proof.failure",
-        "version": "1.0.5",
+        "version": "2.0.2",
         "capabilities": [
             {"id": "proof.candidate.v2", "version": "2.0.0"}
         ],
         "model_identity": None,
     },
+    {"id": "local.sample.slice", "version": "1.0.2", "capabilities": [{"id": "sample.slice.v1", "version": "1.0.0"}], "model_identity": None},
 ]
+
 provider_module = repo_root / "providers/local-proof-success/module.json"
 provider_digest = _provider_source_package_sha256(
-    "local.proof.success", "1.0.5", provider_module,
+    "local.proof.success", "2.0.2", provider_module,
 )
 assert provider_digest == next(
     item["sha256"] for item in tracked_lock["providers"]
@@ -279,13 +281,14 @@ with tempfile.TemporaryDirectory() as temp_dir:
     copied_provider = authority_root / "providers/local-proof-success"
     shutil.copytree(provider_module.parent, copied_provider)
     assert _provider_source_package_sha256(
-        "local.proof.success", "1.0.5", copied_provider / "module.json",
+        "local.proof.success", "2.0.2", copied_provider / "module.json",
         repo_root=authority_root,
     ) == provider_digest
 assert assembly["contracts"] == [
     {"id": "lmdj.project.v3", "version": "3.0.0"},
     {"id": "lmdj.project.v4", "version": "4.1.0"},
-    {"id": "lmdj.project-bundle.v1", "version": "1.2.0"},
+    {"id": "lmdj.project.v5", "version": "5.0.0"},
+    {"id": "lmdj.project-bundle.v1", "version": "1.3.0"},
     {"id": "lmdj.soundset.v1", "version": "1.1.0"},
     {"id": "lmdj.soundset-catalog.v1", "version": "1.0.0"},
     {"id": "lmdj.capability.v2", "version": "2.0.0"},
@@ -293,6 +296,9 @@ assert assembly["contracts"] == [
     {"id": "lmdj.error.v1", "version": "1.1.0"},
     {"id": "lmdj.module.v1", "version": "1.0.0"},
     {"id": "lmdj.product-version.v1", "version": "1.0.0"},
+    {"id": "lmdj.audio.pcm16-wav.v1", "version": "1.0.0"},
+    {"id": "lmdj.slice-points.v1", "version": "1.0.0"},
+    {"id": "lmdj.cardputer-transfer.v1", "version": "1.0.0"},
 ]
 
 expected_contract_sources = {
@@ -306,10 +312,17 @@ expected_contract_sources = {
     "contracts/project/lmdj.project.v2.schema.json": "2.0.0",
     "contracts/project/lmdj.project.v3.schema.json": "3.0.0",
     "contracts/project/lmdj.project.v4.schema.json": "4.1.0",
-    "contracts/project/lmdj.project-bundle.v1.schema.json": "1.2.0",
+    "contracts/project/lmdj.project.v5.schema.json": "5.0.0",
+    "contracts/project/lmdj.project-bundle.v1.schema.json": "1.3.0",
     "contracts/soundset/lmdj.soundset.v1.schema.json": "1.1.0",
     "contracts/soundset-catalog/lmdj.soundset-catalog.v1.schema.json": "1.0.0",
     "contracts/runtime-content/lmdj.runtime-content.v1.schema.json": "1.0.0",
+    # Formalized by #1049 ahead of the Stage 12 slice work: it has
+    # conformance fixtures but no consumer and no Assembly entry yet.
+    # This gate tracks Contract identity on disk, not Assembly
+    # membership, so it belongs here from the moment the file exists.
+    "contracts/slice-points/lmdj.slice-points.v1.schema.json": "1.0.0",
+    "contracts/cardputer-transfer/lmdj.cardputer-transfer.v1.schema.json": "1.0.0",
     "contracts/version/lmdj.product-version.v1.schema.json": "1.0.0",
 }
 actual_contract_sources = sorted(
@@ -346,19 +359,24 @@ for relative, contract_version in expected_contract_sources.items():
     )
 
 expected_provider_manifests = {
+    "providers/local-sample-slice/module.json": {
+        "contract": "lmdj.module.v1", "module": "local.sample.slice",
+        "version": "1.0.2", "api_version": 3,
+        "dependencies": {"provider-sdk": "2.2.0"},
+    },
     "providers/local-proof-failure/module.json": {
         "contract": "lmdj.module.v1",
         "module": "local.proof.failure",
-        "version": "1.0.5",
-        "api_version": 2,
-        "dependencies": {"provider-sdk": "1.1.4"},
+        "version": "2.0.2",
+        "api_version": 3,
+        "dependencies": {"provider-sdk": "2.2.0"},
     },
     "providers/local-proof-success/module.json": {
         "contract": "lmdj.module.v1",
         "module": "local.proof.success",
-        "version": "1.0.5",
-        "api_version": 2,
-        "dependencies": {"provider-sdk": "1.1.4"},
+        "version": "2.0.2",
+        "api_version": 3,
+        "dependencies": {"provider-sdk": "2.2.0"},
     },
 }
 actual_provider_manifests = sorted(
@@ -515,6 +533,10 @@ generator_spec = importlib.util.spec_from_file_location(
 assert generator_spec is not None and generator_spec.loader is not None
 runtime_identity_generator = importlib.util.module_from_spec(generator_spec)
 generator_spec.loader.exec_module(runtime_identity_generator)
+
+# Fixture coverage below proves the generator, not the committed projections.
+# Check the actual tree too; IdentityError names the drift and regeneration remedy.
+runtime_identity_generator.write_or_check(repo_root, check=True)
 
 with tempfile.TemporaryDirectory() as temp_dir:
     fixture_root = Path(temp_dir) / "repo"
@@ -689,3 +711,38 @@ assert re.search(
 ) is None
 
 print("product version tests: PASS")
+
+# Validator inputs are part of the registered Provider identity, not optional
+# implementation details that may change beneath an unchanged Assembly lock.
+with tempfile.TemporaryDirectory() as directory:
+    authority = Path(directory)
+    target = authority / "providers/local-sample-slice"
+    shutil.copytree(repo_root / "providers/local-sample-slice", target)
+    original = _provider_source_package_sha256("local.sample.slice", "1.0.0", target / "module.json", repo_root=authority)
+    for relative in ["include/lmdj/providers/local_sample_slice/validation.hpp", "src/validation.cpp"]:
+        source = target / relative
+        saved = source.read_bytes()
+        source.write_bytes(saved + b"\n// identity mutation\n")
+        assert _provider_source_package_sha256("local.sample.slice", "1.0.0", target / "module.json", repo_root=authority) != original, "validator change escaped source identity; remedy: include every Provider source/header"
+        source.write_bytes(saved)
+    required_source = target / "src/provider.cpp"
+    saved_source = required_source.read_bytes()
+    required_source.unlink()
+    try:
+        _provider_source_package_sha256("local.sample.slice", "1.0.0", target / "module.json", repo_root=authority)
+    except ValueError as error:
+        assert "source-package file is unavailable" in str(error)
+    else:
+        raise AssertionError("missing required Provider source accepted; remedy: retain required package members")
+    required_source.write_bytes(saved_source)
+    from scripts.version import _validate_component_source
+    profile = authority / "lmdj.audio.pcm16-wav.v1.md"
+    raw = (repo_root / "contracts/artifact-audio" / profile.name).read_text()
+    for contents in [raw.replace("contract_version: 1.0.0", "contract_version: 9.0.0"), raw.replace("contract_id:", "unknown:")]:
+        profile.write_text(contents)
+        try:
+            _validate_component_source("contracts", "lmdj.audio.pcm16-wav.v1", "1.0.0", profile)
+        except ValueError as error:
+            assert "profile identity mismatch" in str(error)
+        else:
+            raise AssertionError("invalid profile identity accepted; remedy: authenticate formal frontmatter")

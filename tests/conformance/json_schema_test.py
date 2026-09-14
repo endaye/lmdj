@@ -104,9 +104,13 @@ referenced = {
 valid({"p": "drums"}, referenced)
 invalid({"p": "Drums"}, referenced, "does not match pattern")
 
-# allOf / oneOf / if-then
+# allOf / anyOf / oneOf / if-then
 valid(4, {"allOf": [{"type": "integer"}, {"minimum": 4}]})
 invalid(3, {"allOf": [{"type": "integer"}, {"minimum": 4}]}, "below minimum")
+any_of = {"anyOf": [{"const": "a"}, {"type": "integer", "minimum": 2}]}
+valid("a", any_of)
+valid(2, any_of)
+invalid("b", any_of, "at least one anyOf branch")
 one_of = {"oneOf": [{"const": "a"}, {"const": "b"}]}
 valid("a", one_of)
 invalid("c", one_of, "matched 0")

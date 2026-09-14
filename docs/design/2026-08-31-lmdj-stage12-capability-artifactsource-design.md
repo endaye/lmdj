@@ -2,6 +2,12 @@
 
 日期：2026-08-31
 
+2026-09-09 状态增补：用户已确认 C-Q1～C-Q5 的方向与参考预算，
+确认范围及仍需精确收口的公开值见
+[决策记录](../prd/decisions/2026-09-09-stage12-byte-boundary.md)。
+下文「待批准」保留原评审历史；当前 readiness 以
+[后续任务包](../plans/2026-09-09-stage12-decision-followups.md) 为准。
+
 状态：**草案，待评审**——本文是
 [#467](https://github.com/endaye/lmdj/issues/467) 的设计半部：选定首个正式
 结构化字节消费方、锁定其 Capability Contract 文档形状，并设计 provider-sdk

@@ -25,12 +25,17 @@ add_subdirectory("${LMDJ_REPO_ROOT}/packages/authoring-domain" authoring-domain)
 set(LMDJ_PROJECT_IO_WEB_TESTING ON)
 add_subdirectory("${LMDJ_REPO_ROOT}/packages/project-io" project-io)
 target_compile_definitions(lmdj_project_io PRIVATE LMDJ_PROJECT_IO_TESTING=1)
+add_subdirectory("${LMDJ_REPO_ROOT}/packages/project-cooker" project-cooker EXCLUDE_FROM_ALL)
+add_subdirectory("${LMDJ_REPO_ROOT}/packages/audio-runtime" audio-runtime EXCLUDE_FROM_ALL)
+add_subdirectory("${LMDJ_REPO_ROOT}/packages/provider-sdk" provider-sdk EXCLUDE_FROM_ALL)
+add_subdirectory("${LMDJ_REPO_ROOT}/packages/application-facade" application-facade EXCLUDE_FROM_ALL)
 
 add_executable(project_io_web_test project_io_web_test.cpp)
 target_link_libraries(
   project_io_web_test
   PRIVATE
     lmdj::project_io
+    lmdj::application
     lmdj_picosha2
 )
 target_compile_options(

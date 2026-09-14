@@ -10,6 +10,7 @@ add_library(
     src/workspace_cache.cpp
     src/project_bundle_transfer.cpp
     src/sequence_journal.cpp
+    src/sequence_admission_codec.cpp
     src/soundset_store.cpp
     ${lmdj_project_io_platform_source}
 )
@@ -28,6 +29,10 @@ target_link_libraries(
     lmdj_picosha2
 )
 if(EMSCRIPTEN)
+  # Journal validation uses throw/catch to return structured failures. Emscripten
+  # otherwise aborts on these paths; enable JS-based EH in compilation and linkage.
+  target_compile_options(lmdj_project_io PUBLIC -fexceptions)
+  target_link_options(lmdj_project_io INTERFACE -fexceptions)
   set(
     lmdj_project_io_async_imports
     "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_directory_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable','lmdj_opfs_replace_complete','lmdj_opfs_append_durable','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_list_directories','lmdj_opfs_remove_tree','lmdj_opfs_publish_directory_if_absent','lmdj_opfs_validate_tree']"
@@ -66,6 +71,7 @@ if(BUILD_TESTING)
       src/workspace_cache.cpp
       src/project_bundle_transfer.cpp
       src/sequence_journal.cpp
+      src/sequence_admission_codec.cpp
       src/soundset_store.cpp
       src/native/storage_platform.cpp
   )
@@ -307,6 +313,7 @@ if(BUILD_TESTING)
     lmdj_session_mutual_exclusion_tests
     PRIVATE
       lmdj_project_io_testable
+      lmdj_picosha2
       nlohmann_json::nlohmann_json
       Threads::Threads
   )
@@ -446,6 +453,36 @@ if(BUILD_TESTING)
     NAME project_io.soundset_install_commit
     TIER component
     COMMAND lmdj_project_io_soundset_install_commit_tests
+    LABELS persistence
+    TIMEOUT 30
+  )
+  add_executable(
+    lmdj_project_io_candidate_adoption_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/project_io/candidate_adoption_test.cpp"
+  )
+  target_include_directories(
+    lmdj_project_io_candidate_adoption_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_project_io_candidate_adoption_tests
+    PRIVATE
+      lmdj_project_io_testable
+      lmdj_picosha2
+      nlohmann_json::nlohmann_json
+  )
+  target_compile_definitions(
+    lmdj_project_io_candidate_adoption_tests
+    PRIVATE
+      LMDJ_PROJECT_IO_TESTING=1
+  )
+  lmdj_target_warnings(lmdj_project_io_candidate_adoption_tests)
+  lmdj_target_sanitizers(lmdj_project_io_candidate_adoption_tests)
+  lmdj_add_test(
+    NAME project_io.candidate_adoption
+    TIER component
+    COMMAND lmdj_project_io_candidate_adoption_tests
     LABELS persistence
     TIMEOUT 30
   )

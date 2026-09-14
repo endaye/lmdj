@@ -18,6 +18,8 @@ from threading import Lock
 
 from incremental_batch_journal import JournalBlocked
 from self_test_report import UrllibGitHubApi
+from self_test_report import RetryBudget, with_retry
+import time
 
 SCHEMA = "lmdj.ci-journal-object.v1"
 LIMIT = 60000
@@ -67,11 +69,12 @@ def decode(body):
 
 
 class _PageControlProofs:
-    """Single-flight verification, discarded with the page, never API data.
+    """Single-flight proofs, never raw API responses.
 
-    Only validated control identities enter here. Both success and failure are
-    shared for this page; a retry/new page redoes the verification. Individual
-    run/jobs and the transport's all-or-nothing writer trust set remain separate.
+    The caller scopes this helper either to one page (for mutable workflow
+    identity) or to one authenticated read transaction (for immutable control
+    ancestry/source and the pinned main SHA). Individual mutable run/jobs
+    observations and atomic writer trust remain separate.
     """
 
     def __init__(self):
@@ -86,17 +89,17 @@ class _PageControlProofs:
             proof = self._proofs[key]
         if owner:
             try:
-                check()
+                result = check()
             except BaseException as error:
                 proof.set_exception(error)
             else:
-                proof.set_result(None)
-        proof.result()
+                proof.set_result(result)
+        return proof.result()
 
 
 class GitHubJournalTransport:
     def __init__(self, *, repository, issue_number, issue_node_id, bot_node_id,
-                 workflows, writer, api=None, token=None, lock_held):
+                 workflows, writer, api=None, token=None, lock_held, retry_budget=None, clock=time.time):
         require(isinstance(repository, str) and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository), "invalid fixed repository")
         require(positive(issue_number), "invalid fixed Issue number")
         require(all(isinstance(value, str) and value for value in (issue_node_id, bot_node_id)), "missing stable Issue/Bot node ID")
@@ -106,20 +109,39 @@ class GitHubJournalTransport:
         self.repository, self.number, self.issue_node_id = repository, issue_number, issue_node_id
         self.bot_node_id, self.workflows = bot_node_id, deepcopy(workflows)
         self.writer, self.lock_held = deepcopy(writer), lock_held
+        self.retry_budget = retry_budget if retry_budget is not None else RetryBudget()
+        self.clock = clock
         try:
             self.api = api if api is not None else UrllibGitHubApi(repository, token)
         except Exception:
             raise JournalBlocked("why: journal API credentials unavailable; remedy: restore scoped GitHub access") from None
         self._page_session = None
-        self._checked_writers = set()  # one short controller transaction only
+        self._checked_writers = set()  # current page's mutable writer observations
+
+    def _begin_read_transaction(self):
+        """Discard every proof from the previous authenticated read.
+
+        A page sequence is one read transaction. Only immutable control proofs
+        are carried from one page to the next; mutable run/job observations
+        are reset at every page and at every new transaction.
+        """
+        self._page_session = None
+        self._checked_writers = set()
 
     def _call(self, method, path, body=None):
         try:
             # raw=False is intentional: reporter raw downloads allow artifact
             # redirects. Normal JSON requests use its NoRedirect opener.
-            return self.api._request(method, path, body=body, raw=False)
-        except Exception:
-            raise JournalBlocked("why: GitHub journal request unavailable or write outcome unknown; remedy: reconcile existing intent without repeating a write") from None
+            call = lambda: self.api._request(method, path, body=body, raw=False)
+            # Journal writes and GraphQL reads are POSTs: never replay an
+            # unknown POST. Only an idempotent REST GET may be retried.
+            if method == "GET":
+                if self.lock_held():
+                    return call()
+                return with_retry(call, sleep=time.sleep, clock=self.clock, budget=self.retry_budget)
+            return call()
+        except Exception as error:
+            raise JournalBlocked("why: GitHub journal request unavailable or write outcome unknown; remedy: reconcile existing intent without repeating a write") from error
 
     def _repo(self, suffix):
         return f"/repos/{self.repository}{suffix}"
@@ -157,16 +179,27 @@ class GitHubJournalTransport:
         else:
             require(self._bot(node["author"]), "checkpoint author is not the trusted bot")
 
-    def _control(self, writer):
-        """Prove exact workflow/control provenance, not any writer's execution."""
-        path, control = writer['workflow_path'], writer['control_sha']
+    def _workflow(self, writer):
         workflow = self._call("GET", self._repo(f"/actions/workflows/{writer['workflow_id']}"))
         require(isinstance(workflow, dict) and type(workflow.get("id")) is int
-                and workflow["id"] == writer["workflow_id"] and workflow.get("path") == path, "workflow API identity differs")
+                and workflow["id"] == writer["workflow_id"]
+                and workflow.get("path") == writer["workflow_path"], "workflow API identity differs")
+
+    def _main(self):
         ref = self._call("GET", self._repo("/git/ref/heads/main"))
         ref_object = ref.get("object") if isinstance(ref, dict) else None
         main = ref_object.get("sha") if isinstance(ref_object, dict) else None
         require(isinstance(main, str) and re.fullmatch(r"[0-9a-f]{40}", main), "main ref is unavailable")
+        return main
+
+    def _control(self, writer, control_proofs=None):
+        """Prove each control against one transaction-pinned main."""
+        path, control = writer['workflow_path'], writer['control_sha']
+        if control_proofs is None:
+            self._workflow(writer)
+            main = self._main()
+        else:
+            main = control_proofs.verify(('main', self.repository), self._main)
         # Only ancestry metadata is used here. Changed files appear on page 1;
         # page 2 avoids that payload and is never a scope/commit inventory.
         comparison = self._call("GET", self._repo(f"/compare/{control}...{main}?per_page=1&page=2"))
@@ -184,7 +217,7 @@ class GitHubJournalTransport:
         except Exception:
             raise JournalBlocked("why: trusted workflow source is malformed; remedy: restore exact-control source visibility") from None
 
-    def _writer(self, writer, *, remember=True, control_proofs=None):
+    def _writer(self, writer, *, remember=True, control_proofs=None, workflow_proofs=None):
         require(isinstance(writer, dict) and set(writer) == {
             "repository", "issue_number", "run_id", "run_attempt", "control_sha", "workflow_path", "workflow_id", "job_name"},
             "writer identity schema is not closed")
@@ -216,8 +249,14 @@ class GitHubJournalTransport:
         if control_proofs is None:
             self._control(writer)
         else:
-            control_proofs.verify((self.repository, path, writer['workflow_id'], control),
-                                  lambda: self._control(writer))
+            # Workflow identity is a mutable API observation. Recheck it once
+            # per page, while transaction proofs cover only immutable source,
+            # ancestry and the exact main SHA captured by that transaction.
+            (workflow_proofs or control_proofs).verify(
+                ('workflow', self.repository, path, writer['workflow_id']),
+                lambda: self._workflow(writer))
+            control_proofs.verify(('control', self.repository, path, writer['workflow_id'], control),
+                                  lambda: self._control(writer, control_proofs))
         jobs, total, seen = [], None, set()
         for page in range(1, 101):
             document = self._call("GET", self._repo(f"/actions/runs/{writer['run_id']}/attempts/1/jobs?per_page=100&page={page}"))
@@ -261,15 +300,24 @@ class GitHubJournalTransport:
 
     def read_body(self, issue_id):
         self._fixed(issue_id)
+        self._begin_read_transaction()
         payload, writer = self._unpack(self._query(BODY_QUERY), "checkpoint")
         return {"checkpoint": payload, "provenance": writer}
 
     def page(self, issue_id, cursor):
         self._fixed(issue_id)
         if cursor is None:
-            self._page_session = {"count": 0, "total": None, "next": None, "seen": set()}
+            self._begin_read_transaction()
+            self._page_session = {"count": 0, "total": None, "next": None, "seen": set(),
+                                  "control_proofs": _PageControlProofs(),
+                                  "workflow_proofs": _PageControlProofs()}
         session = self._page_session
         require(session is not None and cursor == session["next"], "comment pagination cursor is out of sequence")
+        if cursor is not None:
+            # A continuation is still the same read transaction for immutable
+            # proofs, but mutable writer state and workflow identity are fresh.
+            self._checked_writers = set()
+            session["workflow_proofs"] = _PageControlProofs()
         issue = self._query(COMMENTS_QUERY, cursor)
         connection = issue.get("comments")
         require(isinstance(connection, dict) and type(connection.get("totalCount")) is int
@@ -304,12 +352,16 @@ class GitHubJournalTransport:
         if unchecked:
             # The production HTTP client creates a separate Request/opener/response
             # per call. Workers use only _writer's GET path, never pagination,
-            # anchors, writes or the trust-cache mutation. Only the common
-            # control proof is single-flight; no mutable API responses are cached.
+            # anchors, writes or the trust-cache mutation. Only control and
+            # common identity proofs are single-flight; no raw mutable
+            # responses are cached. All controls compare to the same
+            # transaction-pinned main.
             # Exiting the context joins all readers even when one future fails.
-            control_proofs = _PageControlProofs()
+            control_proofs = session["control_proofs"]
             with ThreadPoolExecutor(max_workers=min(4, len(unchecked))) as readers:
-                futures = [readers.submit(self._writer, writer, remember=False, control_proofs=control_proofs)
+                futures = [readers.submit(self._writer, writer, remember=False,
+                                           control_proofs=control_proofs,
+                                           workflow_proofs=session["workflow_proofs"])
                            for writer in unchecked.values()]
                 for future in futures:
                     future.result()

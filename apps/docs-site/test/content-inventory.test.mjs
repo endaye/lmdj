@@ -15,9 +15,9 @@ const requiredRoutes = [
   'core/overview', 'core/modules/foundation', 'core/modules/authoring-domain', 'core/modules/project-io',
   'core/modules/project-cooker', 'core/modules/audio-runtime', 'core/modules/provider-sdk',
   'core/modules/application-facade', 'core/modules/web-runtime-platform', 'hosts/overview',
-  'hosts/core-cli', 'hosts/core-mcp', 'hosts/native-host', 'hosts/web-runtime',
+  'hosts/core-cli', 'hosts/core-mcp', 'hosts/native-host', 'hosts/cardputer-host', 'hosts/web-runtime',
   'hosts/creator-web', 'providers/overview', 'providers/local-proof',
-  'contracts/overview', 'contracts/project', 'contracts/project-bundle', 'contracts/runtime-snapshot',
+  'contracts/overview', 'contracts/cardputer-transfer', 'contracts/project', 'contracts/project-bundle', 'contracts/runtime-snapshot',
   'contracts/capability', 'contracts/assembly', 'contracts/error-module-version',
   'assembly/lmdj', 'platform/native-audio', 'platform/web-runtime', 'platform/storage',
   'platform/input', 'operations/testing-and-proof', 'operations/version-and-release',
@@ -90,16 +90,14 @@ test('current truth tracks the formal Web Host, candidate lifecycle, and evidenc
   const webRuntime = facts.hosts.find(({id}) => id === 'web-runtime-host');
   assert.ok(creatorWeb, 'current assembly includes Creator Web Host');
   assert.ok(webRuntime, 'current assembly includes Formal Web Runtime Host');
-  assert.ok(
-    capability.includes(
-      `Creator Web Host \`${creatorWeb.version}\` 与 Formal Web Runtime Host \`${webRuntime.version}\` 已装配`,
-    ),
-    'capability map uses current generated Host identities',
-  );
+  for (const host of [creatorWeb, webRuntime]) {
+    assert.ok(capability.includes(`<BuildIdentity kind="hosts" id="${host.id}" />`),
+      'capability map must bind each Host to generated identity; remedy: render its BuildIdentity');
+  }
   assert.match(capability, /Web Runtime Lab[^。]+独立实验工具/);
 
   const proof = await readFile(path.join(docsRoot, 'operations/testing-and-proof.mdx'), 'utf8');
-  assert.match(proof, new RegExp(`Product Build \`${facts.product.version.replaceAll('.', '\\.')}\``));
+  assert.ok(proof.includes('<BuildIdentity />'), 'Proof page must render current Product identity; remedy: bind BuildIdentity to active facts');
   assert.match(proof, /lmdj\.project\.v3/);
   assert.match(proof, /record→overdub→switch→trim→reload→recover/);
   assert.match(proof, /docs\/quality\/2026-08-11-web-runtime-hardening-acceptance\.md/);

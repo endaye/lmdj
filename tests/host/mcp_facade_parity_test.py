@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import os
@@ -173,6 +174,7 @@ def cli_request(
     surface: str,
     request: dict,
     assembly: Path | None = None,
+    expected_returncode: int = 0,
 ) -> dict:
     command = [
         str(executable),
@@ -195,7 +197,7 @@ def cli_request(
         capture_output=True,
         timeout=TIMEOUT_SECONDS,
     )
-    assert completed.returncode == 0, (
+    assert completed.returncode == expected_returncode, (
         completed.returncode,
         completed.stdout,
         completed.stderr,
@@ -298,6 +300,9 @@ class MCP:
                 stderr,
             )
         line = self.process.stdout.readline()
+        if not line:
+            _, stderr = communicate_with_timeout(self.process)
+            raise AssertionError("MCP exited before responding", self.process.returncode, stderr.decode("utf-8", errors="replace"))
         response = json.loads(line)
         assert line == (canonical_json(response) + "\n").encode("utf-8")
         assert response["jsonrpc"] == "2.0"
@@ -649,16 +654,7 @@ def provider_binding_parity(
     arguments = {
         "attempt_id": "attempt-binding-parity",
         "capability": capability,
-        "inputs": [
-            {
-                "port": "inputs",
-                "artifact": {
-                    "sha256": "a" * 64,
-                    "media_type": "application/octet-stream",
-                    "byte_length": 1,
-                },
-            }
-        ],
+        "inputs": [],
         "parameters": {},
         "data_classification": "public",
         "platform": "test",
@@ -701,7 +697,6 @@ def provider_binding_parity(
         None,
     )
     mcp_result = mcp.tool("lmdj.provider.run", arguments)
-    mcp.close()
 
     assert mcp_result == cli_result
     assert cli_result["result"]["outputs"][0]["port"] == "candidate"
@@ -709,6 +704,47 @@ def provider_binding_parity(
         "port",
         "artifact",
     }
+
+    bound = {
+        **arguments,
+        "attempt_id": "attempt-missing-owner-parity",
+        "inputs": [
+            {
+                "port": "inputs",
+                "artifact": {
+                    "sha256": "a" * 64,
+                    "media_type": "application/octet-stream",
+                    "byte_length": 1,
+                },
+            }
+        ],
+    }
+    cli_denied = cli_request(
+        cli, cli_workspace, "command", {"operation": "provider.run", **bound},
+        assembly, expected_returncode=2,
+    )
+    mcp_denied = mcp.tool("lmdj.provider.run", bound)
+    assert cli_denied == mcp_denied
+    assert cli_denied["ok"] is False
+    assert cli_denied["error"]["code"] == "NOT_FOUND"
+    assert cli_denied["error"]["details"]["reason"] == "input_artifact_unavailable"
+    mcp.close()
+
+    for workspace in (cli_workspace, mcp_workspace):
+        reopened = MCP(library, workspace, assembly)
+        cli_terminal = cli_request(
+            cli, workspace, "query",
+            {"operation": "attempt.inspect", "attempt_id": bound["attempt_id"]}, assembly,
+        )
+        mcp_terminal = reopened.tool("lmdj.attempt.inspect", {"attempt_id": bound["attempt_id"]})
+        assert cli_terminal == mcp_terminal
+        terminal = cli_terminal["result"]
+        assert terminal["status"] == "failed"
+        assert terminal["error"]["details"]["reason"] == "input_artifact_unavailable"
+        assert terminal["request"]["inputs"] == bound["inputs"]
+        assert terminal["candidate_outputs"] == []
+        assert terminal["minted_outputs"] == []
+        reopened.close()
 
 
 def sequence_cross_host_observer(
@@ -910,7 +946,82 @@ def sequence_cross_host_observer(
     ) == 4
 
 
+
+def candidate_schema_checks() -> None:
+    # Independent of a native build: enforce the advertised and runtime MCP
+    # shape together, including nested bounds before the C ABI is called.
+    sys.path.insert(0, str(REPO_ROOT / "apps/core-mcp"))
+    from lmdj_core_mcp.server import TOOLS_BY_NAME, validates
+    project = {"project_path": "/tmp/candidate.lmdj", "project_id": PROJECT_ID,
+               "expected_revision": 1}
+    selector = {"job_id": "slice", "set_id": "set"}
+    cases = {
+        "candidate.job.run": {**project, "job_id": "slice", "attempt_id": "attempt",
+            "asset_id": KICK_ASSET_ID, "parameters": {"refractory_frames": 1},
+            "data_classification": "public", "platform": "test", "region": "local",
+            "required_permissions": ["sample.slice.execute"]},
+        "candidate.job.inspect": {"job_id": "slice"},
+        "candidate.job.cancel": {"job_id": "slice", "attempt_id": "attempt"},
+        "candidate.set.discard": selector,
+        "candidate.audition": {**project, **selector, "candidate_id": "recipe"},
+        "candidate.adopt": {**project, **selector, "command_id": uuid(21),
+            "selections": [{"candidate_id": "recipe", "bank": 0, "pad": 3}]},
+    }
+    assert "lmdj.candidate.audition.stop" not in TOOLS_BY_NAME
+    for operation, request in cases.items():
+        tool = TOOLS_BY_NAME["lmdj." + operation]
+        assert tool.surface == ("query" if operation in
+            {"candidate.job.inspect", "candidate.audition"} else "command")
+        schema = tool.input_schema
+        assert set(schema["required"]) == set(request)
+        assert schema["additionalProperties"] is False
+        assert validates(schema, request), operation
+        assert not validates(schema, {**request, "unexpected": True})
+        for field in request:
+            missing = dict(request); missing.pop(field)
+            assert not validates(schema, missing), (operation, field)
+        for field in ("job_id", "set_id", "candidate_id", "attempt_id"):
+            if field in request:
+                for value in ("", "x" * 129, "bad/path", 1, True):
+                    assert not validates(schema, {**request, field: value})
+        if "expected_revision" in request:
+            assert validates(schema, {**request, "expected_revision": 2**64 - 1})
+            for value in (-1, 2**64, True, 1.5, "1"):
+                assert not validates(schema, {**request, "expected_revision": value})
+    schema = TOOLS_BY_NAME["lmdj.candidate.adopt"].input_schema
+    request = cases["candidate.adopt"]
+    for selections in ([], request["selections"] * 65,
+        [{"candidate_id": "recipe", "bank": 4, "pad": 0}],
+        [{"candidate_id": "recipe", "bank": 0, "pad": 16}],
+        [{"candidate_id": "recipe", "bank": False, "pad": 0}],
+        [{"candidate_id": "recipe", "bank": 0, "pad": 0, "path": "x"}]):
+        assert not validates(schema, {**request, "selections": selections})
+    assert validates(schema, {**request, "selections": [
+        {"candidate_id": "recipe", "bank": bank, "pad": pad}
+        for bank in range(4) for pad in range(16)]})
+    schema = TOOLS_BY_NAME["lmdj.candidate.job.run"].input_schema
+    request = cases["candidate.job.run"]
+    for parameters in ({"threshold_pcm16": 0}, {"threshold_pcm16": 32768},
+        {"threshold_pcm16": True}, {"refractory_frames": 48001},
+        {"refractory_frames": 1.5}, {"source_path": "/tmp/source.wav"}):
+        assert not validates(schema, {**request, "parameters": parameters})
+    assert not validates(schema, {**request, "required_permissions": ["x", "x"]})
+    output = TOOLS_BY_NAME["lmdj.candidate.audition"].output_schema
+    good = {"ok": True, "project_revision": 1, "result": {
+        **selector, "candidate_id": "recipe",
+        "artifact": {"sha256": "a" * 64, "byte_length": 48, "media_type": "audio/wav"},
+        "sample_rate": 48000, "channels": 1, "source_frames": 2}}
+    assert validates(output, good)
+    for field in good["result"]:
+        bad = copy.deepcopy(good); bad["result"].pop(field)
+        assert not validates(output, bad)
+    for field, value in (("played", True), ("stop", True), ("channels", 0),
+                         ("source_frames", 0), ("sample_rate", 96000)):
+        bad = copy.deepcopy(good); bad["result"][field] = value
+        assert not validates(output, bad)
+
 def main() -> int:
+    candidate_schema_checks()
     if len(sys.argv) != 3:
         raise SystemExit(
             "usage: mcp_facade_parity_test.py "

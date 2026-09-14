@@ -134,6 +134,24 @@ struct InstallSoundSet {
   std::vector<SoundSetInstallAssignment> assignments;
 };
 
+// Explicit atomic adoption, independent of Sound Set mapping semantics.
+struct CandidateAdoptionAssignment {
+  PadSlotId slot;
+  Asset asset;
+  bool operator==(const CandidateAdoptionAssignment&) const = default;
+};
+struct AdoptCandidates {
+  CommandMeta meta;
+  foundation::ProjectId project_id;
+  foundation::AssetId source_asset_id;
+  foundation::ArtifactRef source_artifact;
+  std::vector<CandidateAdoptionAssignment> assignments;
+};
+foundation::Result<void> validate_candidate_source(
+    const ProjectState& state, const foundation::ProjectId& project_id,
+    std::uint64_t expected_revision, const foundation::AssetId& source_asset_id,
+    const foundation::ArtifactRef& source_artifact);
+
 using Command = std::variant<
     ImportAsset,
     AssignPad,
@@ -146,6 +164,10 @@ using Command = std::variant<
 
 struct AppliedCommand;
 struct CommandReceipt;
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state, const AdoptCandidates& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts);
 
 foundation::Result<AppliedCommand> apply(
     const ProjectState& state,

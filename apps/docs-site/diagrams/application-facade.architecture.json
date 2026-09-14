@@ -1,33 +1,164 @@
 {
   "schema_version": 1,
-  "meta": {"title": "Application Facade Module", "summary": "Native Host 与共享 Web Runtime Platform 的唯一 Core 入口"},
+  "meta": {
+    "title": "Application Facade Module",
+    "summary": "Native Host 与共享 Web Runtime Platform 的唯一 Core 入口"
+  },
   "boundaries": [],
   "components": [
-    {"id": "native-hosts", "label": "Native Hosts", "detail": "CLI · MCP · Native", "kind": "host", "x": 40, "y": 140, "width": 220, "height": 96},
-    {"id": "web-hosts", "label": "Web Hosts", "detail": "Creator · Diagnostic", "kind": "host", "x": 40, "y": 380, "width": 220, "height": 96},
-    {"id": "platform", "label": "Web Runtime Platform", "detail": "shared browser adapter", "kind": "core", "x": 340, "y": 380, "width": 250, "height": 96},
-    {"id": "facade", "label": "Application Facade", "detail": "Project · Sample · Sequence · Performance", "kind": "core", "x": 680, "y": 250, "width": 250, "height": 96},
-    {"id": "modules", "label": "Core Modules", "detail": "domain · I/O · cook · audio", "kind": "core", "x": 1010, "y": 250, "width": 220, "height": 96},
-    {"id": "result", "label": "Typed Response", "detail": "receipt · opaque export + identity", "kind": "host", "x": 1310, "y": 250, "width": 210, "height": 96},
-    {"id": "performance", "label": "Performance Ops", "detail": "record · replay · recovery · resample", "kind": "core", "x": 1010, "y": 430, "width": 250, "height": 96},
-    {"id": "collaborators", "label": "Performance Runtime", "detail": "ports · bridge · replay · engine adapter", "kind": "core", "x": 1310, "y": 430, "width": 250, "height": 96},
-    {"id": "runtime-only", "label": "Runtime-only Facade", "detail": "content · epoch · drain gate", "kind": "core", "x": 680, "y": 100, "width": 280, "height": 96}
+    {
+      "id": "native-hosts",
+      "label": "Native Hosts",
+      "detail": "desktop · Cardputer source",
+      "kind": "host",
+      "x": 40,
+      "y": 140,
+      "width": 220,
+      "height": 96
+    },
+    {
+      "id": "web-hosts",
+      "label": "Web Hosts",
+      "detail": "Creator · Diagnostic",
+      "kind": "host",
+      "x": 40,
+      "y": 380,
+      "width": 220,
+      "height": 96
+    },
+    {
+      "id": "platform",
+      "label": "Web Runtime Platform",
+      "detail": "shared browser adapter",
+      "kind": "core",
+      "x": 340,
+      "y": 380,
+      "width": 250,
+      "height": 96
+    },
+    {
+      "id": "facade",
+      "label": "Application Facade",
+      "detail": "Project · Sample · Sequence · Performance",
+      "kind": "core",
+      "x": 680,
+      "y": 250,
+      "width": 250,
+      "height": 96
+    },
+    {
+      "id": "modules",
+      "label": "Core Modules",
+      "detail": "domain · I/O · cook · audio",
+      "kind": "core",
+      "x": 1010,
+      "y": 250,
+      "width": 220,
+      "height": 96
+    },
+    {
+      "id": "result",
+      "label": "Typed Response",
+      "detail": "receipt · opaque export + identity",
+      "kind": "host",
+      "x": 1310,
+      "y": 250,
+      "width": 210,
+      "height": 96
+    },
+    {
+      "id": "performance",
+      "label": "Performance Ops",
+      "detail": "record · replay · recovery · resample",
+      "kind": "core",
+      "x": 1010,
+      "y": 430,
+      "width": 250,
+      "height": 96
+    },
+    {
+      "id": "collaborators",
+      "label": "Performance Runtime",
+      "detail": "ports · bridge · replay · engine adapter",
+      "kind": "core",
+      "x": 1310,
+      "y": 430,
+      "width": 250,
+      "height": 96
+    },
+    {
+      "id": "runtime-only",
+      "label": "Runtime-only Facade",
+      "detail": "content · Pad summary · epoch",
+      "kind": "core",
+      "x": 680,
+      "y": 100,
+      "width": 280,
+      "height": 96
+    }
   ],
   "connections": [
-    {"from": "native-hosts", "to": "facade", "label": "Facade API"},
-    {"from": "web-hosts", "to": "platform", "label": "Platform API"},
-    {"from": "platform", "to": "facade", "label": "Facade API"},
-    {"from": "facade", "to": "modules", "label": "orchestrate"},
-    {"from": "modules", "to": "result"},
-    {"from": "facade", "to": "performance", "label": "20 operations"},
-    {"from": "performance", "to": "collaborators", "label": "one-way link"},
-    {"from": "native-hosts", "to": "runtime-only", "label": "narrow source API"},
-    {"from": "runtime-only", "to": "modules", "label": "Cooker + Audio only"}
+    {
+      "from": "native-hosts",
+      "to": "facade",
+      "label": "Facade API"
+    },
+    {
+      "from": "web-hosts",
+      "to": "platform",
+      "label": "Platform API"
+    },
+    {
+      "from": "platform",
+      "to": "facade",
+      "label": "Facade API"
+    },
+    {
+      "from": "facade",
+      "to": "modules",
+      "label": "orchestrate"
+    },
+    {
+      "from": "modules",
+      "to": "result"
+    },
+    {
+      "from": "facade",
+      "to": "performance",
+      "label": "20 operations"
+    },
+    {
+      "from": "performance",
+      "to": "collaborators",
+      "label": "one-way link"
+    },
+    {
+      "from": "native-hosts",
+      "to": "runtime-only",
+      "label": "narrow source API"
+    },
+    {
+      "from": "runtime-only",
+      "to": "modules",
+      "label": "Cooker + Audio only"
+    }
   ],
   "cards": [
-    {"title": "Dependencies", "body": "Full Facade links Performance Runtime and Runtime-only Facade, two independent narrow targets in the same Module. Runtime-only links Cooker/Audio, never Project IO or Provider SDK."},
-    {"title": "Runtime content export", "body": "Expected Project ID/revision + one Pattern + extra live Pads. Load verified Truth, narrow a detached value, Cook and encode; return opaque bytes plus complete identity. No Project write or runtime publication."},
-    {"title": "Performance authority", "body": "Twenty Performance operations plus three Pattern Slot commands; open gestures, HOLD and the last acknowledged launch come from record status, never from Host prediction."},
-    {"title": "Runtime boundary", "body": "Budget before preparation. OPEN/BUSY drain before stop/reclaim. Accepted is not applied. No Host UI, wire command protocol, product wiring or physical-device proof."}
+    {
+      "title": "Dependencies",
+      "body": "Full Facade links Performance Runtime and Runtime-only Facade, two independent narrow targets in the same Module. Runtime-only links Cooker/Audio, never Project IO or Provider SDK. Host owner selector → Facade → SDK policy/binding/budget gates → Project IO verified Asset read under one writer lease → owned source/sink. Session grants reset on restart; durable Attempts never contain Project paths or alter Truth. Persist intent before execute. One live Attempt per Job; short owner lease publishes stable Set, ordered history, active pointer and supersession atomically. Recover only recorded Attempts; verify terminal bytes on each read. Project Truth remains unchanged."
+    },
+    {
+      "title": "Candidate adoption / runtime export",
+      "body": "One active set, explicit sorted Pad targets. Hold Workspace eligibility through bounded interval materialization, final-binding Bank/generation quota and one Project commit. Recheck Project/source identity under the writer. Retain source and terminal lineage; no Index adopted write and no public receipt replay. Cancel exact pending Attempt; discard active Set with durable tombstone. Share mutation ownership with adoption; late cancelled success never publishes. Keep immutable history/blobs, no GC or TTL. Runtime export: Expected Project ID/revision + one Pattern + extra live Pads. Load verified Truth, narrow a detached value, Cook and encode; return opaque bytes plus complete identity. No Project write or runtime publication. Candidate audition holds active eligibility through verified bounded PCM selection and final source/revision checks; transient prepared PCM only, no files or Truth writes. CLI/MCP return metadata; Native/Web own actual voice admission and stop."
+    },
+    {
+      "title": "Performance authority",
+      "body": "Twenty Performance operations plus three Pattern Slot commands; open gestures, HOLD and the last acknowledged launch come from record status, never from Host prediction. Staged transport executor: one bounded retained ticket binds generation/epoch/command/step. Worker owns work and lease destruction; Control submit/inspect never waits for IO. Consume after reconciliation; unknown never authorizes retry. Global integration pending."
+    },
+    {
+      "title": "Runtime boundary",
+      "body": "Budget Engine plus 2176-state receipt-bounded storage. Acquire consumption, drain states, retire receipts. OPEN/BUSY drain before reclaim. Control-only Pad summary is an owned, allocation-free canonical 64-slot value; Host profile does not narrow Core capacity. Cardputer serial control owns load and receipts; its audio task alone renders. Device join and physical silence remain separate from Core stopped. No physical-device proof."
+    }
   ]
 }

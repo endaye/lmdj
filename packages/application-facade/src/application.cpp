@@ -1,4 +1,5 @@
 #include <lmdj/facade/application.hpp>
+#include <lmdj/facade/candidate_store.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -44,10 +45,12 @@
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/project_bundle_transfer.hpp>
 #include <lmdj/project_io/project_store.hpp>
+#include <lmdj/project_io/storage_platform.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
 #include <lmdj/project_io/workspace_cache.hpp>
 #include <lmdj/provider/capability.hpp>
 
+#include "pattern_admission_controller.hpp"
 #include "testing_hooks.hpp"
 
 namespace lmdj::facade {
@@ -157,6 +160,12 @@ const std::map<std::string, OperationKind>& operations() {
   static const std::map<std::string, OperationKind> value{
       {"asset.import", OperationKind::command},
       {"attempt.inspect", OperationKind::query},
+      {"candidate.job.run", OperationKind::command},
+      {"candidate.adopt", OperationKind::command},
+      {"candidate.audition", OperationKind::query},
+      {"candidate.job.cancel", OperationKind::command},
+      {"candidate.set.discard", OperationKind::command},
+      {"candidate.job.inspect", OperationKind::query},
       {"pad.assign", OperationKind::command},
       {"pattern.slot.assign", OperationKind::command},
       {"pattern.slot.clear", OperationKind::command},
@@ -185,6 +194,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"project.create", OperationKind::command},
       {"project.inspect", OperationKind::query},
       {"provider.list", OperationKind::query},
+      {"provider.permissions.configure", OperationKind::command},
       {"provider.run", OperationKind::command},
       {"provider.select", OperationKind::command},
       {"provider.selected", OperationKind::query},
@@ -634,7 +644,7 @@ nlohmann::json project_json(const domain::ProjectState& state) {
   auto assets = nlohmann::json::object();
   for (const auto& [id, asset] : state.assets) {
     auto encoded_asset = nlohmann::json{{"artifact", asset.artifact}};
-    if (state.contract == domain::ProjectContract::v4) {
+    if (state.contract >= domain::ProjectContract::v4) {
       encoded_asset["lineage"] =
           asset.lineage.has_value()
               ? domain::asset_lineage_json(*asset.lineage)
@@ -655,7 +665,9 @@ nlohmann::json project_json(const domain::ProjectState& state) {
   }
   nlohmann::json encoded{
       {"contract",
-       state.contract == domain::ProjectContract::v4
+       state.contract == domain::ProjectContract::v5
+           ? std::string_view{"lmdj.project.v5"}
+           : state.contract == domain::ProjectContract::v4
            ? "lmdj.project.v4"
            : "lmdj.project.v3"},
       {"project_id", state.id.value()},
@@ -668,7 +680,7 @@ nlohmann::json project_json(const domain::ProjectState& state) {
       {"assets", std::move(assets)},
       {"patterns", std::move(patterns)},
   };
-  if (state.contract == domain::ProjectContract::v4) {
+  if (state.contract >= domain::ProjectContract::v4) {
     auto pattern_slots = nlohmann::json::array();
     for (const auto& pattern_id : state.pattern_slots) {
       pattern_slots.push_back(
@@ -1652,6 +1664,31 @@ std::string derived_asset_id(
          value.substr(20, 12);
 }
 
+std::string candidate_asset_id(
+    std::string_view command_id,
+    std::string_view candidate_id,
+    std::uint8_t bank,
+    std::uint8_t pad) {
+  const auto seed = std::string("lmdj.candidate.adopt.asset\n") +
+                    std::string(command_id) + "\n" +
+                    std::string(candidate_id) + "\n" +
+                    std::to_string(static_cast<unsigned>(bank)) + "\n" +
+                    std::to_string(static_cast<unsigned>(pad));
+  const auto digest = canonical_manifest_digest(seed);
+  auto value = digest.substr(0, 32);
+  // A lowercase canonical UUID with the version-4 nibble and the RFC variant
+  // bits, so `domain::is_valid_uuid` accepts it like any other Asset id.
+  value.at(12) = '4';
+  constexpr std::string_view variants = "89ab";
+  value.at(16) = variants.at(
+      static_cast<std::size_t>(
+          std::string_view("0123456789abcdef").find(value.at(16))) %
+      variants.size());
+  return value.substr(0, 8) + "-" + value.substr(8, 4) + "-" +
+         value.substr(12, 4) + "-" + value.substr(16, 4) + "-" +
+         value.substr(20, 12);
+}
+
 nlohmann::json soundset_artifact_json(const foundation::ArtifactRef& artifact) {
   return {
       {"sha256", artifact.sha256},
@@ -2106,11 +2143,7 @@ struct Application::Impl {
     ReplayRuntimeStatus status;
   };
 
-  struct PressedSequencePad {
-    std::uint64_t raw_attack_tick{};
-    std::uint32_t onset_tick{};
-    std::uint8_t velocity{};
-  };
+  using PressedSequencePad = detail::PatternOwnedPress;
 
   struct SequenceRuntime {
     foundation::SequenceSessionId session_id;
@@ -2207,18 +2240,20 @@ struct Application::Impl {
             config.soundset_store_limits.value_or(
                 kDefaultSoundSetStoreLimits)),
         soundset_sets(workspace_root, soundset_limits, storage_platform),
+        candidates(workspace_root, storage_platform),
         projects(storage_platform),
         sequence_journals(storage_platform),
         bundle_transfers(storage_platform),
         waveform_cache(
             workspace_root / ".lmdj-host/workspace-cache",
             storage_platform),
-        attempts(
-            workspace_root,
-            std::move(config.provider_policy),
+        provider_policy(std::move(config.provider_policy)),
+        provider_timestamp_source(
             config.timestamp_source
                 ? std::move(config.timestamp_source)
-                : default_timestamp_source()) {
+                : default_timestamp_source()),
+        attempts(workspace_root, provider_policy,
+                 [this] { return provider_timestamp_source(); }) {
     if (!workspace_root.is_absolute()) {
       throw std::invalid_argument("workspace_root must be absolute");
     }
@@ -2465,63 +2500,9 @@ struct Application::Impl {
     return static_cast<std::uint8_t>(slot.bank * 16U + slot.pad);
   }
 
-  static void merge_pending(
-      SequenceRuntime& runtime,
-      domain::PatternEvent event) {
-    auto merged = domain::merge_pattern_events(
-        runtime.pending_events, {std::move(event)});
-    if (merged != runtime.pending_events) {
-      runtime.pending_events = std::move(merged);
-      ++runtime.overlay_generation;
-    }
-  }
-
-  static void finalize_pressed(
-      SequenceRuntime& runtime,
-      domain::PadSlotId slot,
-      std::uint64_t raw_release_tick,
-      bool remove_press) {
-    const auto found = runtime.pressed.find(slot);
-    if (found == runtime.pressed.end()) {
-      return;
-    }
-    const auto loop_length = domain::pattern_length_ticks(runtime.bars);
-    merge_pending(
-        runtime,
-        domain::PatternEvent{
-            slot,
-            found->second.onset_tick,
-            domain::normalize_duration_tick(
-                found->second.raw_attack_tick,
-                raw_release_tick,
-                found->second.onset_tick,
-                loop_length),
-            found->second.velocity,
-        });
-    if (remove_press) {
-      runtime.pressed.erase(found);
-    }
-  }
-
-  static std::vector<domain::PatternEvent> recoverable_tail(
-      const SequenceRuntime& runtime) {
-    auto result = runtime.pending_events;
-    const auto loop_length = domain::pattern_length_ticks(runtime.bars);
-    for (const auto& [slot, press] : runtime.pressed) {
-      result = domain::merge_pattern_events(
-          result,
-          {domain::PatternEvent{
-              slot,
-              press.onset_tick,
-              domain::normalize_duration_tick(
-                  press.raw_attack_tick,
-                  press.raw_attack_tick + domain::kSixteenthTicks,
-                  press.onset_tick,
-                  loop_length),
-              press.velocity,
-          }});
-    }
-    return result;
+  static detail::PatternEventReducer event_reducer(SequenceRuntime& runtime) {
+    return {runtime.bars, runtime.quantize_enabled, runtime.swing_percent,
+            runtime.overlay_generation, runtime.pending_events, runtime.pressed};
   }
 
   static foundation::Result<void> validate_sequence_path_and_session(
@@ -2730,25 +2711,13 @@ struct Application::Impl {
     }
     const auto previous_pending = runtime.pending_events;
     const auto previous_pressed = runtime.pressed;
+    auto reducer = event_reducer(runtime);
     if (request.event.pressed) {
-      finalize_pressed(runtime, request.event.slot, ticks.value(), true);
-      const auto loop_length = domain::pattern_length_ticks(runtime.bars);
-      runtime.pressed.insert_or_assign(
-          request.event.slot,
-          PressedSequencePad{
-              ticks.value(),
-              domain::quantize_onset_tick(
-                  ticks.value(), loop_length, runtime.quantize_enabled,
-                  runtime.swing_percent),
-              request.event.velocity,
-          });
-    } else {
-      if (!runtime.pressed.contains(request.event.slot)) {
-        return foundation::Result<SequenceMutationResult>::failure(
-            sequence_error(ErrorCode::invalid_argument,
-                           "Sequence release has no matching press"));
-      }
-      finalize_pressed(runtime, request.event.slot, ticks.value(), true);
+      reducer.press(request.event.slot, ticks.value(), request.event.velocity);
+    } else if (!reducer.release(request.event.slot, ticks.value())) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Sequence release has no matching press"));
     }
     const auto durable = sequence_journals.append_tail(
         request.project_path,
@@ -2756,7 +2725,7 @@ struct Application::Impl {
         runtime.pattern_id,
         runtime.expected_revision,
         request.event.input_sequence,
-        recoverable_tail(runtime));
+        reducer.recoverable_tail());
     if (!durable.has_value()) {
       runtime.pending_events = previous_pending;
       runtime.pressed = previous_pressed;
@@ -2770,16 +2739,7 @@ struct Application::Impl {
   }
 
   static void finalize_unreleased(SequenceRuntime& runtime, bool clear) {
-    std::vector<domain::PadSlotId> slots;
-    slots.reserve(runtime.pressed.size());
-    for (const auto& [slot, press] : runtime.pressed) {
-      (void)press;
-      slots.push_back(slot);
-    }
-    for (const auto slot : slots) {
-      const auto attack = runtime.pressed.at(slot).raw_attack_tick;
-      finalize_pressed(runtime, slot, attack + domain::kSixteenthTicks, clear);
-    }
+    event_reducer(runtime).finalize_unreleased(clear);
   }
 
   foundation::Result<void> activate_switched_pattern(
@@ -3340,6 +3300,19 @@ struct Application::Impl {
     if (candidate == listed.value().end()) {
       return foundation::Result<SequenceMutationResult>::failure(sequence_error(
           ErrorCode::not_found, "Sequence recovery candidate was not found"));
+    }
+    // Event-only recovery cannot consume raw candidates or an owned-press
+    // checkpoint. A terminal transfer proves all admission input was resolved;
+    // admission.completed would be too strict because its flush may be pending.
+    const auto& admission = candidate->journal.admission;
+    if (admission.has_value() &&
+        (admission->transfers.empty() || !admission->transfers.back().terminal)) {
+      return foundation::Result<SequenceMutationResult>::failure(sequence_error(
+          ErrorCode::invalid_argument,
+          "Sequence admission is unresolved; retain the recording until its "
+          "input conversion is finalized, or explicitly discard it",
+          {{"reason", "sequence_admission_unresolved"},
+           {"journal_retained", true}}));
     }
     auto loaded = projects.load(request.project_path);
     if (!loaded.has_value()) {
@@ -3911,9 +3884,18 @@ struct Application::Impl {
     if (operation == "render.offline") {
       return render_offline(request);
     }
+    if (operation == "provider.permissions.configure") {
+      return provider_permissions_configure(request);
+    }
     if (operation == "provider.select") {
       return provider_select(request);
     }
+    if (operation == "candidate.adopt") return candidate_adopt(request);
+    if (operation == "candidate.audition") return candidate_audition(request);
+    if (operation == "candidate.job.cancel") return candidate_job_cancel(request);
+    if (operation == "candidate.set.discard") return candidate_set_discard(request);
+    if (operation == "candidate.job.run") return candidate_job_run(request);
+    if (operation == "candidate.job.inspect") return candidate_job_inspect(request);
     if (operation == "provider.run") {
       return provider_run(request);
     }
@@ -7568,6 +7550,37 @@ struct Application::Impl {
         loaded.value().revision);
   }
 
+  nlohmann::json provider_permissions_configure(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "granted_permissions"}),
+            "provider.permissions.configure request shape is invalid");
+    const auto& encoded = request.at("granted_permissions");
+    require(encoded.is_array(), "granted_permissions must be an array");
+    std::set<std::string> known;
+    for (const auto& descriptor : registry->list()) {
+      for (const auto& capability : descriptor.capabilities) {
+        known.insert(capability.policy.required_permissions.begin(),
+                     capability.policy.required_permissions.end());
+      }
+    }
+    std::set<std::string> unique;
+    std::vector<std::string> permissions;
+    for (const auto& value : encoded) {
+      require(value.is_string(), "permission must be a string");
+      const auto permission = value.get<std::string>();
+      require(known.contains(permission), "permission is not registered");
+      require(unique.insert(permission).second, "permissions must be unique");
+      permissions.push_back(permission);
+    }
+    auto policy = provider_policy;
+    policy.granted_permissions = permissions;
+    // Policy is session-local; selections and terminal Attempts remain in the
+    // existing Workspace store. Preserve the timestamp callable's state too.
+    attempts = provider::AttemptStore{
+        workspace_root, policy, [this] { return provider_timestamp_source(); }};
+    provider_policy = std::move(policy);
+    return success_envelope({{"granted_permissions", permissions}}, std::nullopt);
+  }
+
   nlohmann::json provider_select(const nlohmann::json& request) {
     require(
         exact_keys(
@@ -7588,7 +7601,328 @@ struct Application::Impl {
         std::nullopt);
   }
 
-  nlohmann::json provider_run(const nlohmann::json& request) {
+  foundation::Result<CandidateAuditionAudio> audition_candidate(
+      const CandidateAuditionRequest& request) {
+    using Result = foundation::Result<CandidateAuditionAudio>;
+    // Apply the same selector validation to typed and JSON callers.
+    const nlohmann::json selector{
+        {"project_path", request.project_path.generic_string()},
+        {"project_id", request.project_id.value()},
+        {"expected_revision", request.expected_revision},
+        {"job_id", request.job_id}, {"set_id", request.set_id},
+        {"candidate_id", request.candidate_id}};
+    const auto path = absolute_path_field(selector, "project_path");
+    (void)uuid_field(selector, "project_id");
+    (void)unsigned_field(selector, "expected_revision");
+    (void)file_id_field(selector, "job_id");
+    (void)file_id_field(selector, "set_id");
+    (void)file_id_field(selector, "candidate_id");
+    // Retain the existing Workspace eligibility ownership until preparation
+    // and the final owner/byte checks finish. lease_active never recovers.
+    auto eligible = candidates.lease_active(request.job_id, request.set_id, attempts);
+    if (!eligible.has_value()) return Result::failure(eligible.error());
+    const auto& set = eligible.value().candidate_set;
+    const auto& source = set.at("source");
+    if (source.at("project_id") != request.project_id.value())
+      return Result::failure(Error{ErrorCode::revision_conflict, "Candidate belongs to another Project"});
+    const auto source_id = foundation::AssetId{source.at("asset_id").get<std::string>()};
+    const auto artifact = source.at("artifact").get<foundation::ArtifactRef>();
+    const auto validate_current = [&]() -> foundation::Result<void> {
+      const auto current = projects.inspect_committed(path);
+      if (!current.has_value()) return foundation::Result<void>::failure(current.error());
+      return domain::validate_candidate_source(current.value(), request.project_id,
+          request.expected_revision, source_id, artifact);
+    };
+    const auto fresh = validate_current();
+    if (!fresh.has_value()) return Result::failure(fresh.error());
+    const auto& recipes = set.at("recipes");
+    const auto recipe = std::find_if(recipes.begin(), recipes.end(), [&](const auto& value) {
+      return value.at("candidate_id") == request.candidate_id;
+    });
+    if (recipe == recipes.end()) return Result::failure(Error{ErrorCode::not_found,
+        "Candidate recipe is unavailable", {{"reason", "candidate_unavailable"}}});
+    if (!sample_limits || artifact.byte_length > 16777216U)
+      return Result::failure(invalid_sample_request("Candidate source exceeds preparation byte limit"));
+    const auto bytes = projects.read_asset_artifact(path, request.project_id, source_id, artifact);
+    if (!bytes.has_value()) return Result::failure(bytes.error());
+    const auto metadata = cooker::inspect_wav(bytes.value());
+    if (!metadata.has_value()) return Result::failure(metadata.error());
+    if (metadata.value().sample_rate != source.at("frame_rate") ||
+        metadata.value().source_frames != source.at("frame_count"))
+      return Result::failure(Error{ErrorCode::revision_conflict, "Candidate source metadata changed",
+          {{"reason", "candidate_source_changed"}}});
+    const auto interval = cooker::select_pcm16_wav(bytes.value(),
+        recipe->at("start_frame").get<std::uint64_t>(),
+        recipe->at("end_frame").get<std::uint64_t>());
+    if (!interval.has_value()) return Result::failure(interval.error());
+    if (!sample_limits->allows_artifact_bytes(interval.value().size()))
+      return Result::failure(invalid_sample_request("Candidate Artifact exceeds preparation byte limit"));
+    const auto decoded = cooker::decode_wav(interval.value());
+    if (!decoded.has_value()) return Result::failure(decoded.error());
+    auto prepared = decoded.value();
+    if (prepared->sample_rate != 48'000) {
+      auto resampled = cooker::prepare_runtime_pcm(*prepared);
+      if (!resampled.has_value()) return Result::failure(resampled.error());
+      prepared = std::move(resampled.value());
+    }
+    // Re-read verified source bytes after preparation, then validate the
+    // current expected revision. Neither Project read performs load recovery.
+    const auto final_bytes = projects.read_asset_artifact(path, request.project_id, source_id, artifact);
+    if (!final_bytes.has_value()) return Result::failure(final_bytes.error());
+    const auto final_current = validate_current();
+    if (!final_current.has_value()) return Result::failure(final_current.error());
+    const auto& selected = interval.value();
+    return Result::success(CandidateAuditionAudio{
+        {canonical_manifest_digest(std::string_view{
+             reinterpret_cast<const char*>(selected.data()), selected.size()}),
+         "audio/wav", static_cast<std::uint64_t>(selected.size())},
+        decoded.value()->sample_rate, decoded.value()->channels,
+        static_cast<std::uint64_t>(decoded.value()->interleaved.size() / decoded.value()->channels),
+        std::move(prepared)});
+  }
+
+  nlohmann::json candidate_audition(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "project_path", "project_id",
+        "expected_revision", "job_id", "set_id", "candidate_id"}),
+        "candidate.audition request shape is invalid");
+    const auto revision = unsigned_field(request, "expected_revision");
+    const CandidateAuditionRequest typed{absolute_path_field(request, "project_path"),
+        foundation::ProjectId{uuid_field(request, "project_id")}, revision,
+        file_id_field(request, "job_id"), file_id_field(request, "set_id"),
+        file_id_field(request, "candidate_id")};
+    const auto audio = audition_candidate(typed);
+    if (!audio.has_value()) return error_envelope(audio.error());
+    return success_envelope({{"job_id", typed.job_id}, {"set_id", typed.set_id},
+        {"candidate_id", typed.candidate_id}, {"artifact", audio.value().artifact},
+        {"sample_rate", audio.value().sample_rate}, {"channels", audio.value().channels},
+        {"source_frames", audio.value().source_frames}}, revision);
+  }
+
+  nlohmann::json candidate_adopt(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "project_path", "project_id",
+        "expected_revision", "command_id", "job_id", "set_id", "selections"}),
+        "candidate.adopt request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto project_id = foundation::ProjectId{uuid_field(request, "project_id")};
+    const auto revision = unsigned_field(request, "expected_revision");
+    const auto command_id = uuid_field(request, "command_id");
+    const auto job_id = file_id_field(request, "job_id");
+    const auto set_id = file_id_field(request, "set_id");
+    const auto& selections = request.at("selections");
+    require(selections.is_array() && !selections.empty() && selections.size() <= 64,
+        "adoption requires a nonempty explicit Pad list");
+    std::map<std::pair<std::uint8_t, std::uint8_t>, std::string> targets;
+    for (const auto& selection : selections) {
+      require(exact_keys(selection, {"candidate_id", "bank", "pad"}), "adoption selection shape is invalid");
+      const auto bank = static_cast<std::uint8_t>(unsigned_field(selection, "bank", 3));
+      const auto pad = static_cast<std::uint8_t>(unsigned_field(selection, "pad", 15));
+      require(targets.emplace(std::make_pair(bank, pad), file_id_field(selection, "candidate_id")).second,
+          "adoption targets must be unique");
+    }
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) return error_envelope(admitted.error());
+    auto eligible = candidates.lease_active(job_id, set_id, attempts);
+    if (!eligible.has_value()) return error_envelope(eligible.error());
+    const auto& set = eligible.value().candidate_set;
+    const auto& source = set.at("source");
+    if (source.at("project_id") != project_id.value())
+      return error_envelope(Error{ErrorCode::revision_conflict, "Candidate belongs to another Project"});
+    const auto source_id = foundation::AssetId{source.at("asset_id").get<std::string>()};
+    const auto artifact = source.at("artifact").get<foundation::ArtifactRef>();
+    const auto loaded = projects.inspect_committed(path);
+    if (!loaded.has_value()) return error_envelope(loaded.error());
+    const auto fresh = domain::validate_candidate_source(loaded.value(), project_id,
+        revision, source_id, artifact);
+    if (!fresh.has_value()) return error_envelope(fresh.error());
+    std::map<std::string, nlohmann::json> recipes;
+    for (const auto& recipe : set.at("recipes"))
+      recipes.emplace(recipe.at("candidate_id").get<std::string>(), recipe);
+    for (const auto& [target, id] : targets) {
+      (void)target;
+      if (!recipes.contains(id)) return error_envelope(Error{ErrorCode::not_found,
+          "Candidate recipe is unavailable", {{"reason", "candidate_unavailable"}}});
+    }
+    // All identities and targets were checked before source read/materialization.
+    const auto bytes = projects.read_asset_artifact(path, project_id, source_id, artifact);
+    if (!bytes.has_value()) return error_envelope(bytes.error());
+    const auto metadata = cooker::inspect_wav(bytes.value());
+    if (!metadata.has_value()) return error_envelope(metadata.error());
+    if (metadata.value().sample_rate != source.at("frame_rate") ||
+        metadata.value().source_frames != source.at("frame_count"))
+      return error_envelope(Error{ErrorCode::revision_conflict, "Candidate source metadata changed",
+          {{"reason", "candidate_source_changed"}}});
+    if (!sample_limits) return error_envelope(invalid_sample_request("Sample quota is unavailable"));
+    auto final_baseline = loaded.value();
+    for (const auto& [target, id] : targets) {
+      (void)id;
+      final_baseline.banks.at(target.first).at(target.second).asset_id.reset();
+    }
+    auto ledger = compute_bank_ledger(path, final_baseline, 0, 0);
+    if (!ledger.has_value()) return error_envelope(ledger.error());
+    // Recipes partition the bounded source. Own one buffer per selected
+    // recipe, while every target still receives its own identity and charge.
+    std::map<std::string, std::vector<std::byte>> materialized;
+    std::vector<project_io::ProjectStore::CandidateAdoptionSlotRequest> slots;
+    auto adopted = nlohmann::json::array();
+    for (const auto& [target, id] : targets) {
+      const auto& recipe = recipes.at(id);
+      auto selected = materialized.find(id);
+      if (selected == materialized.end()) {
+        auto interval = cooker::select_pcm16_wav(bytes.value(),
+            recipe.at("start_frame").get<std::uint64_t>(), recipe.at("end_frame").get<std::uint64_t>());
+        if (!interval.has_value()) return error_envelope(interval.error());
+        selected = materialized.emplace(id, std::move(interval.value())).first;
+      }
+      if (!sample_limits->allows_artifact_bytes(selected->second.size()))
+        return error_envelope(invalid_sample_request("Candidate Artifact exceeds preparation byte limit"));
+      const auto measured = measure_prepared_quota(selected->second);
+      if (!measured.has_value()) return error_envelope(measured.error());
+      const auto& usage = measured.value();
+      const auto assessment = audio::assess_runtime_quota(
+          ledger.value().bank_used_bytes.at(target.first), ledger.value().project_used_bytes,
+          usage.bytes, *sample_limits);
+      if (!assessment) return error_envelope(Error{ErrorCode::invalid_project, "Candidate quota ledger is invalid"});
+      if (assessment->constraint == audio::RuntimeQuotaConstraint::user_bank)
+        return error_envelope(runtime_bank_quota_error({target.first, target.second},
+            usage.bytes, usage.frames, assessment->user_bank_remaining_bytes,
+            sample_limits->maximum_user_bank_bytes, {}));
+      if (assessment->constraint == audio::RuntimeQuotaConstraint::generation)
+        return error_envelope(runtime_project_quota_error(usage.bytes, usage.frames,
+            ledger.value().project_used_bytes, assessment->generation_remaining_bytes,
+            sample_limits->maximum_generation_bytes, ledger.value().bank_used_bytes));
+      ledger.value().bank_used_bytes.at(target.first) += usage.bytes;
+      ledger.value().project_used_bytes += usage.bytes;
+      auto lineage_recipe = recipe;
+      lineage_recipe.erase("candidate_id");
+      auto lineage = domain::asset_lineage_from_json({
+          {"source", {{"kind", "asset_artifact"}, {"artifact_sha256", artifact.sha256},
+                      {"project_revision", source.at("project_revision")}}},
+          {"derivation", {{"kind", "capability_adoption"}, {"capability", set.at("capability")},
+              {"provider", set.at("provider")}, {"model_identity", set.at("model_identity")},
+              {"parameters_sha256", set.at("parameters_sha256")}, {"attempt_id", set.at("attempt_id")},
+              {"source_asset_id", source_id.value()}, {"output_artifact", set.at("output_artifact")},
+              {"recipe", std::move(lineage_recipe)}}}});
+      if (!lineage.has_value()) return error_envelope(lineage.error());
+      const auto asset_id = candidate_asset_id(command_id, id, target.first, target.second);
+      slots.push_back({{target.first, target.second}, foundation::AssetId{asset_id}, "audio/wav",
+          selected->second, std::move(lineage.value())});
+      adopted.push_back({{"candidate_id", id}, {"bank", target.first}, {"pad", target.second}, {"asset_id", asset_id}});
+    }
+    const auto committed = projects.adopt_candidates(path, {{foundation::CommandId{command_id}, revision},
+        project_id, source_id, artifact, std::move(slots)});
+    if (!committed.has_value()) return error_envelope(committed.error());
+    return success_envelope({{"set_id", set_id}, {"adopted", std::move(adopted)}}, committed.value().state.revision);
+  }
+
+  nlohmann::json candidate_job_cancel(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "job_id", "attempt_id"}),
+            "candidate.job.cancel request shape is invalid");
+    const auto result = candidates.cancel(file_id_field(request, "job_id"),
+                                           file_id_field(request, "attempt_id"));
+    if (!result.has_value()) return error_envelope(result.error());
+    return success_envelope(result.value(), std::nullopt);
+  }
+
+  nlohmann::json candidate_set_discard(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "job_id", "set_id"}),
+            "candidate.set.discard request shape is invalid");
+    const auto result = candidates.discard(file_id_field(request, "job_id"),
+                                            file_id_field(request, "set_id"));
+    if (!result.has_value()) return error_envelope(result.error());
+    return success_envelope(result.value(), std::nullopt);
+  }
+
+  nlohmann::json candidate_job_inspect(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "job_id"}),
+            "candidate.job.inspect request shape is invalid");
+    const auto result = candidates.inspect(file_id_field(request, "job_id"), attempts);
+    if (!result.has_value()) return error_envelope(result.error());
+    return success_envelope(result.value(), std::nullopt);
+  }
+
+  nlohmann::json candidate_job_run(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "job_id", "attempt_id", "project_path",
+        "project_id", "asset_id", "expected_revision", "parameters", "data_classification",
+        "platform", "region", "required_permissions"}),
+        "candidate.job.run request shape is invalid");
+    const auto job_id = file_id_field(request, "job_id");
+    const auto attempt_id = file_id_field(request, "attempt_id");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto project_id = foundation::ProjectId{uuid_field(request, "project_id")};
+    const auto asset_id = foundation::AssetId{uuid_field(request, "asset_id")};
+    const auto revision = unsigned_field(request, "expected_revision");
+    require(request.at("parameters").is_object(), "parameters must be an object");
+    const auto classification = file_id_field(request, "data_classification");
+    const auto platform = file_id_field(request, "platform");
+    const auto region = file_id_field(request, "region");
+    const auto& permissions = request.at("required_permissions");
+    require(permissions.is_array(), "required_permissions must be an array");
+    std::set<std::string> unique;
+    for (const auto& permission : permissions) {
+      require(permission.is_string() && safe_file_id(permission.get<std::string>()), "permission is invalid");
+      require(unique.insert(permission.get<std::string>()).second, "permissions must be unique");
+    }
+    const auto admitted = attempts.validate_execution_policy(
+        provider::CapabilityRequest{"sample.slice.v1", {}, request.at("parameters"),
+            classification, platform, region, permissions.get<std::vector<std::string>>()},
+        *registry);
+    if (!admitted.has_value()) return error_envelope(admitted.error());
+    // Inspect first so an interrupted prior run can be explicitly retried with
+    // a fresh Attempt ID; a live executor's Job lease still refuses begin.
+    const auto prior = candidates.inspect(job_id, attempts);
+    if (!prior.has_value() && prior.error().details.value("reason", "") != "job_not_found")
+      return error_envelope(prior.error());
+    if (prior.has_value()) {
+      for (const auto& entry : prior.value().at("history"))
+        if (entry.at("status") == "pending") return error_envelope(Error{
+            ErrorCode::invalid_argument, "Candidate Job is already running", {{"reason", "job_busy"}}});
+    }
+    const auto loaded = projects.inspect_committed(path);
+    if (!loaded.has_value()) return error_envelope(loaded.error());
+    if (loaded.value().id != project_id || loaded.value().revision != revision)
+      return error_envelope(Error{ErrorCode::revision_conflict, "Analysis Project identity or revision changed"});
+    const auto found = loaded.value().assets.find(asset_id);
+    if (found == loaded.value().assets.end()) return error_envelope(Error{
+        ErrorCode::not_found, "Analysis source Asset is missing", {{"reason", "source_asset_missing"}}});
+    const auto& artifact = found->second.artifact;
+    require(artifact.byte_length <= 16777216, "Slice source exceeds input byte bound");
+    const auto bytes = projects.read_asset_artifact(path, project_id, asset_id, artifact);
+    if (!bytes.has_value()) return error_envelope(bytes.error());
+    const auto metadata = cooker::inspect_wav(bytes.value());
+    if (!metadata.has_value()) return error_envelope(metadata.error());
+    nlohmann::json intent{{"attempt_id", attempt_id},
+      {"source", {{"project_path", path.generic_string()}, {"project_id", project_id.value()},
+                   {"asset_id", asset_id.value()}, {"project_revision", revision}, {"artifact", artifact},
+                   {"frame_rate", metadata.value().sample_rate}, {"frame_count", metadata.value().source_frames}}},
+      {"parameters_sha256", picosha2::hash256_hex_string(foundation::canonical_json(request.at("parameters")))},
+      {"data_classification", classification}, {"platform", platform}, {"region", region},
+      {"required_permissions", permissions}};
+    std::optional<detail::CandidateStore::Run> run;
+    const auto reserved = [&]() -> foundation::Result<void> {
+      auto begun = candidates.begin(job_id, intent);
+      if (!begun.has_value()) return foundation::Result<void>::failure(begun.error());
+      run.emplace(std::move(begun.value()));
+      return foundation::Result<void>::success();
+    };
+    const auto executed = provider_run({{"operation", "provider.run"}, {"attempt_id", attempt_id},
+        {"capability", "sample.slice.v1"},
+        {"inputs", nlohmann::json::array({{{"port", "source_audio"}, {"artifact", artifact}}})},
+        {"input_owners", nlohmann::json::array({{{"port", "source_audio"}, {"occurrence", 0},
+            {"project_path", path.generic_string()}, {"project_id", project_id.value()}, {"asset_id", asset_id.value()}}})},
+        {"parameters", request.at("parameters")}, {"data_classification", classification},
+        {"platform", platform}, {"region", region}, {"required_permissions", permissions}}, reserved);
+    // No owner intent exists unless this execution won the immutable SDK
+    // reservation. In particular, a duplicate raw Provider run cannot donate
+    // its terminal to this Job, including after process restart.
+    if (!run) return executed;
+    const auto finished = candidates.finish(*run, attempts);
+    if (!finished.has_value()) return error_envelope(finished.error());
+    if (!executed.at("ok").get<bool>()) return executed;
+    return success_envelope(finished.value(), std::nullopt);
+  }
+
+  nlohmann::json provider_run(const nlohmann::json& request,
+      const std::function<foundation::Result<void>()>& after_reservation = {}) {
     require(
         exact_keys(
             request,
@@ -7602,7 +7936,10 @@ struct Application::Impl {
                 "platform",
                 "region",
                 "required_permissions",
-            }),
+            }) ||
+        exact_keys(request, {"operation", "attempt_id", "capability", "inputs",
+                             "parameters", "data_classification", "platform",
+                             "region", "required_permissions", "input_owners"}),
         "provider.run request shape is invalid");
     const auto attempt_id = file_id_field(request, "attempt_id");
     const auto capability = file_id_field(request, "capability");
@@ -7657,6 +7994,61 @@ struct Application::Impl {
           std::move(artifact),
       });
     }
+    provider::ArtifactResolver resolver;
+    if (request.contains("input_owners")) {
+      const auto& encoded_owners = request.at("input_owners");
+      require(encoded_owners.is_array() && encoded_owners.size() == inputs.size(),
+              "input_owners must name every input occurrence exactly once");
+      struct Owner {
+        foundation::ArtifactRef artifact;
+        std::filesystem::path path;
+        foundation::ProjectId project;
+        foundation::AssetId asset;
+      };
+      std::map<std::string, std::uint64_t> occurrences;
+      std::map<std::pair<std::string, std::uint64_t>, foundation::ArtifactRef> bindings;
+      for (const auto& input : inputs) {
+        bindings.emplace(std::pair{input.port, occurrences[input.port]++}, input.artifact);
+      }
+      std::map<std::string, Owner> owners;
+      for (const auto& encoded : encoded_owners) {
+        require(exact_keys(encoded, {"port", "occurrence", "project_path",
+                                     "project_id", "asset_id"}),
+                "input owner shape is invalid");
+        const auto key = std::pair{string_field(encoded, "port"),
+                                   unsigned_field(encoded, "occurrence")};
+        const auto bound = bindings.find(key);
+        require(bound != bindings.end(), "input owner occurrence is unbound or duplicated");
+        const auto artifact = bound->second;
+        owners.emplace(artifact.sha256,
+            Owner{artifact, absolute_path_field(encoded, "project_path"),
+                  foundation::ProjectId{uuid_field(encoded, "project_id")},
+                  foundation::AssetId{uuid_field(encoded, "asset_id")}});
+        bindings.erase(bound);
+      }
+      resolver = [this, owners = std::move(owners)](const foundation::ArtifactRef& artifact) {
+        using OwnedBytes = foundation::Result<std::shared_ptr<const std::vector<std::byte>>>;
+        const auto found = owners.find(artifact.sha256);
+        if (found == owners.end() || found->second.artifact != artifact) {
+          return OwnedBytes::failure(Error{ErrorCode::not_found, "input owner unavailable"});
+        }
+        const auto& owner = found->second;
+        auto bytes = projects.read_asset_artifact(
+            owner.path, owner.project, owner.asset, artifact);
+        if (!bytes.has_value()) {
+          const bool mismatch = bytes.error().details.is_object() &&
+              bytes.error().details.value("storage_condition", nlohmann::json{}) ==
+                  project_io::kStorageConditionArtifactMismatch;
+          return OwnedBytes::failure(Error{
+              mismatch ? ErrorCode::io_error : ErrorCode::not_found,
+              "input Artifact owner read failed",
+              {{"reason", mismatch ? "input_artifact_mismatch" : "input_artifact_unavailable"}},
+          });
+        }
+        return OwnedBytes::success(
+            std::make_shared<const std::vector<std::byte>>(std::move(bytes.value())));
+      };
+    }
     const auto& encoded_permissions = request.at("required_permissions");
     require(
         encoded_permissions.is_array(),
@@ -7687,7 +8079,10 @@ struct Application::Impl {
             region,
             std::move(permissions),
         },
-        *registry);
+        *registry,
+        provider::ExecutionOptions{
+            std::move(resolver), 16777216, 262144,
+            std::make_shared<provider::StagingBudget>(67108864)}, after_reservation);
     if (!executed.has_value()) {
       return error_envelope(executed.error());
     }
@@ -7772,7 +8167,8 @@ struct Application::Impl {
       providers.push_back(provider_descriptor_json(descriptor));
     }
     return success_envelope(
-        {{"providers", std::move(providers)}},
+        {{"providers", std::move(providers)},
+         {"granted_permissions", provider_policy.granted_permissions}},
         std::nullopt);
   }
 
@@ -8521,10 +8917,13 @@ struct Application::Impl {
   std::shared_ptr<SoundSetCatalogSource> soundset_source;
   project_io::SoundSetStoreLimits soundset_limits;
   project_io::SoundSetStore soundset_sets;
+  detail::CandidateStore candidates;
   project_io::ProjectStore projects;
   project_io::SequenceJournal sequence_journals;
   project_io::ProjectBundleTransfer bundle_transfers;
   project_io::WorkspaceCacheStore waveform_cache;
+  provider::ProviderPolicy provider_policy;
+  provider::TimestampSource provider_timestamp_source;
   provider::AttemptStore attempts;
   mutable std::mutex sample_mutex;
   mutable std::mutex replay_mutex;
@@ -8831,6 +9230,20 @@ foundation::Result<void> Application::abort_project_bundle_import(
             ErrorCode::internal_error,
             "unexpected Application Facade Host API failure",
         });
+  }
+}
+
+foundation::Result<CandidateAuditionAudio> Application::audition_candidate(
+    const CandidateAuditionRequest& request) const {
+  try {
+    testing::invoke_api_entry_hook();
+    return impl_->audition_candidate(request);
+  } catch (const InvalidRequest& error) {
+    return foundation::Result<CandidateAuditionAudio>::failure(
+        Error{ErrorCode::invalid_argument, error.what()});
+  } catch (...) {
+    return foundation::Result<CandidateAuditionAudio>::failure(
+        Error{ErrorCode::internal_error, "Candidate audition failed"});
   }
 }
 

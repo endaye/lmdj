@@ -18,6 +18,7 @@
 #include <lmdj/providers/local_proof_failure/factory.hpp>
 
 #include "tests/core/support/test.hpp"
+#include "tests/core/provider/byte_fixture.hpp"
 
 namespace {
 
@@ -143,7 +144,7 @@ void test_failing_provider_cannot_mutate_project_truth() {
           "local",
           {"proof.execute"},
       },
-      registry);
+      registry, byte_fixture::options());
   LMDJ_CHECK(executed.has_value());
   LMDJ_CHECK(executed.value().error.has_value());
   LMDJ_CHECK(executed.value().error->code == ErrorCode::provider_failed);

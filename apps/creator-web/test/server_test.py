@@ -257,7 +257,7 @@ class CreatorServerTest(unittest.TestCase):
 
 
 # Every value parsing would silently reinterpret, or that neither forwarder
-# will forward to. `cloudflare_worker.test.mjs` holds the same list, and
+# will forward to. `cloudflare_worker.test.mjs` pins a subset, and
 # `CatalogUpstreamParityTest` below drives both implementations over it: a
 # value one accepts and the other rewrites is how a proof server quietly stops
 # standing in for production, which is the defect class that
@@ -331,18 +331,13 @@ UPSTREAM_PARITY_REFUSED = (
     "https://catalog.example.test/a<b>/",
     "https://catalog.example.test/a`b/",
     "https://catalog.example.test/a{b}/",
-    "https://catalog.example.test/a^b/",
     "https://catalog.example.test/a\x00b/",
     "https://catalog.example.test/a\x01b/",
     "https://catalog.example.test/a\x7fb/",
-)
-# Values where the two deliberately disagree in the SAFE direction: the proof
-# server refuses what the Worker would accept, so the lane can never be
-# configured with something production cannot serve. Listed and asserted rather
-# than left implicit, because an unasserted disagreement is indistinguishable
-# from one nobody noticed -- and because the direction is the whole point. If
-# one of these ever flips, the proof server has become the permissive side.
-UPSTREAM_PARITY_PROOF_SERVER_STRICTER = (
+    # Explicit admission excludes a literal caret, whether the URL parser
+    # preserves it (Node 22) or percent-encodes it (Node 26).
+    "https://catalog.example.test/a^b/",
+    "https://catalog.example.test/b/\n",
     # Host bytes `new URL()` leaves untouched that a Catalog address has no
     # business carrying. `_` is deliberately NOT here: it is admitted by both.
     "https://catalog!example.test/b/",
@@ -360,6 +355,9 @@ UPSTREAM_PARITY_ACCEPTED = (
     "https://catalog.example.test/sets/",
     "https://catalog.example.test:8443/b/",
     "https://catalog.example.test/%41/",
+    "https://catalog.example.test/a%5Eb/",
+    "https://catalog.example.test:65535/b/",
+    "https://[2001:db8::1]:8443/b/",
     "https://catalog.example.test/a%2eb/",
     "https://catalog.example.test/v1%2e0/",
     "https://catalog.example.test/sets%2ejson/",
@@ -726,7 +724,6 @@ process.stdout.write(JSON.stringify(
         for upstream in (
             UPSTREAM_PARITY_REFUSED
             + UPSTREAM_PARITY_ACCEPTED
-            + UPSTREAM_PARITY_PROOF_SERVER_STRICTER
         ):
             with self.subTest(upstream=upstream):
                 python_kind, python_detail = self.python_outcome(upstream)
@@ -751,26 +748,12 @@ process.stdout.write(JSON.stringify(
                 self.assertEqual(expected[0], "accept", "proof server")
                 self.assertEqual(self.worker_outcome(upstream), expected)
 
-    def test_soundness_over_a_generated_corpus(self) -> None:
-        """Every value this side accepts, the Worker accepts with the same base.
+    def test_parity_over_a_generated_corpus(self) -> None:
+        """Both endpoints must give the same outcome for every generated HTTPS base.
 
-        This, not "the grammar is faithful", is the property that matters, and
-        it is the one that is reachable. Three adversarial rounds produced 27
-        then 49 divergences and the gap did not close, because "would `new URL`
-        rewrite this?" has no finite hand-written answer -- a list of parser
-        behaviours is always one behaviour behind the parser.
-
-        So the direction is what is asserted. **Soundness** is required: an
-        upstream this side accepts must reach the same place in production, or
-        the acceptance journey proves something the deployment does not do.
-        **Incompleteness is free**: refusing a value the Worker would accept
-        costs only that an exotic Catalog cannot be proof-tested, and the
-        operator gets a clear refusal saying so.
-
-        The corpus is generated from this grammar's own alphabet, so it probes
-        inside what this side admits rather than sampling the whole string
-        space. The fixed lists above stay as regression pins for the values two
-        reviewers found by hand; this covers what neither of us thought of.
+        Generate inside the grammar's alphabet to exercise canonical host,
+        port and path checks after character admission. Keep the fixed reviewed
+        corpus above as regression pins, including disallowed characters.
         """
         rng = random.Random(901)
         alphabet = "abcdefghijklmnopqrstuvwxyz0123456789.-_"
@@ -792,36 +775,37 @@ process.stdout.write(JSON.stringify(
         for upstream in corpus:
             kind, base = self.python_outcome(upstream)
             self.assertNotEqual(kind, "crash", f"{upstream}: {base}")
-            if kind != "accept":
-                continue
-            accepted += 1
             self.assertEqual(
-                self.worker_outcome(upstream), ("accept", base),
-                f"UNSOUND: the proof server accepts {upstream!r} and the "
-                f"deployment does not compose the same base for it",
+                self.worker_outcome(upstream), (kind, base),
+                f"Catalog admission parity differs for {upstream!r}; "
+                "keep the shared grammar and canonical URL checks aligned",
             )
+            if kind == "accept":
+                accepted += 1
         # A corpus that accepted nothing would assert nothing.
         self.assertGreater(accepted, 50, "the corpus exercises too few accepts")
 
-    def test_the_proof_server_is_the_stricter_side_where_they_differ(self) -> None:
-        for upstream in UPSTREAM_PARITY_PROOF_SERVER_STRICTER:
-            with self.subTest(upstream=upstream):
-                self.assertEqual(
-                    self.python_outcome(upstream), ("refuse", None),
-                    "the proof server must be the stricter side",
-                )
-                self.assertEqual(
-                    self.worker_outcome(upstream)[0], "accept",
-                    "if the Worker also refuses, move this to REFUSED",
-                )
+    def test_ascii_character_admission_matches_in_host_and_path(self) -> None:
+        for codepoint in range(128):
+            character = chr(codepoint)
+            for upstream in (
+                f"https://a{character}b.example.test/",
+                f"https://catalog.example.test/a{character}b/",
+            ):
+                with self.subTest(upstream=upstream):
+                    expected = self.python_outcome(upstream)
+                    self.assertNotEqual(expected[0], "crash", expected[1])
+                    self.assertEqual(self.worker_outcome(upstream), expected)
 
     def test_the_one_intended_difference_is_plaintext_loopback(self) -> None:
         # The proof server admits a loopback `http` Catalog because the
         # acceptance fixture is one; the Worker admits `https` alone. This is
         # the only disagreement, and it is asserted so it stays the only one.
-        loopback = "http://127.0.0.1:8099/"
-        self.assertEqual(self.python_outcome(loopback), ("accept", loopback))
-        self.assertEqual(self.worker_outcome(loopback), ("refuse", None))
+        for host in ("localhost", "127.0.0.1", "[::1]"):
+            loopback = f"http://{host}:8099/"
+            with self.subTest(upstream=loopback):
+                self.assertEqual(self.python_outcome(loopback), ("accept", loopback))
+                self.assertEqual(self.worker_outcome(loopback), ("refuse", None))
         for elsewhere in ("http://catalog.example.test/", "http://127.0.0.2/"):
             self.assertEqual(self.python_outcome(elsewhere), ("refuse", None))
             self.assertEqual(self.worker_outcome(elsewhere), ("refuse", None))

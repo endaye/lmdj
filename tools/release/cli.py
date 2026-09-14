@@ -28,7 +28,10 @@ from tools.release.hydrate import (  # noqa: E402
     hydrate_release_intent_targets,
 )
 from tools.release.github_api import GitHubApiError, GitHubClient  # noqa: E402
-from tools.release.model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, ReleaseModelError  # noqa: E402
+from tools.release.model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, ReleaseModelError, canonical_json  # noqa: E402
+from tools.release.publication import PublicationError, collect_publication  # noqa: E402
+from tools.release.publication_evidence import collect_publication_patch  # noqa: E402
+from tools.release.changelog import ChangelogError  # noqa: E402
 from tools.release.openpgp import OpenPgpError, OpenPgpVerifier  # noqa: E402
 from tools.release.prepare import (  # noqa: E402
     PrepareContext, PrepareError, default_profile_builder, default_profile_verifier,
@@ -57,6 +60,7 @@ from tools.release.transitions import (  # noqa: E402
     publish_draft,
     push_tag,
     verify_draft,
+    verify_published,
 )
 
 
@@ -74,6 +78,18 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     verified.add_argument("tag")
     verified.add_argument("release_id", type=int)
     verified.add_argument("plan_sha256")
+    published_verified = commands.add_parser("verify-published")
+    published_verified.add_argument("tag")
+    published_verified.add_argument("release_id", type=int)
+    published_verified.add_argument("plan_sha256")
+    recorded = commands.add_parser("publication-record")
+    recorded.add_argument("tag")
+    recorded.add_argument("release_id", type=int)
+    recorded.add_argument("plan_sha256")
+    evidence = commands.add_parser("publication-patch")
+    evidence.add_argument("tag")
+    evidence.add_argument("release_id", type=int)
+    evidence.add_argument("plan_sha256")
     published = commands.add_parser("publish-draft")
     published.add_argument("tag")
     published.add_argument("release_id", type=int)
@@ -281,6 +297,16 @@ def main(argv: list[str] | None = None) -> int:
                 options.tag, options.release_id, options.plan_sha256, context,
             )
             _print_release_result(result)
+        elif options.command == "verify-published":
+            result = verify_published(
+                options.tag, options.release_id, options.plan_sha256, context,
+            )
+            _print_release_result(result)
+        elif options.command == "publication-record":
+            record = collect_publication(options.tag, options.release_id, options.plan_sha256, context)
+            print(canonical_json(record).decode("utf-8"), end="")
+        elif options.command == "publication-patch":
+            print(collect_publication_patch(options.tag, options.release_id, options.plan_sha256, context), end="")
         elif options.command == "publish-draft":
             result = publish_draft(
                 options.tag, options.release_id, options.plan_sha256, context,
@@ -293,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
     except (
         CommandError, GitHubApiError, GitRepositoryError, HydrateError, OpenPgpError,
         PrepareError, ProfileError, PromotionError, RehearsalError, ReleaseModelError,
-        TransitionError, OSError,
+        TransitionError, PublicationError, ChangelogError, OSError,
     ) as error:
         detail = error.detail if isinstance(error, (CommandError, HydrateError)) else ""
         suffix = f": {detail}" if detail else ""

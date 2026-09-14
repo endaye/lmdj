@@ -1,0 +1,312 @@
+"""Durable single-writer release requests; records are not external-state proof.
+
+Only a trusted driver may confirm a transition after verifying its far side.
+On resume the driver must revalidate receipts against canonical external state.
+An outstanding intent forbids another begin: it requires reconciliation first.
+"""
+
+from contextlib import AbstractContextManager
+from copy import deepcopy
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import threading
+import uuid
+
+from .model import canonical_json, canonical_sha256
+
+
+STEPS = ("candidate", "verification", "intent", "changelog", "prepared", "tag",
+         "draft", "publication", "published_record", "changelog_site", "runtime",
+         "creator", "promotion", "final")
+_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,79}\Z")
+_SHA = re.compile(r"[0-9a-f]{40}\Z")
+_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_TAG = re.compile(r"lmdj-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\."
+                  r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
+_MAX_BYTES = 1024 * 1024
+
+
+class JournalError(RuntimeError):
+    pass
+
+
+def _fail(reason):
+    raise JournalError(f"why: {reason}; remedy: reconcile the original request and its verified evidence")
+
+
+def _keys(value, expected):
+    if type(value) is not dict or set(value) != set(expected):
+        _fail("journal fields are missing or unknown")
+
+
+def _match(pattern, value):
+    return type(value) is str and pattern.fullmatch(value) is not None
+
+
+def validate_request(request):
+    _keys(request, ("id", "repository", "actor_id", "authority_ref", "policy_digest",
+                    "control_revision", "base_revision", "mode", "requested_tag"))
+    if not _match(_ID, request["id"]):
+        _fail("invalid request ID")
+    if not _match(re.compile(r"[a-z0-9_.-]+/[a-z0-9_.-]+\Z"), request["repository"]):
+        _fail("invalid request repository")
+    if type(request["actor_id"]) is not int or request["actor_id"] <= 0:
+        _fail("invalid authenticated actor identity")
+    # An opaque reference to an independently authenticated authorization record,
+    # never the chat body, access token, or owner attestation itself.
+    if not _match(re.compile(r"[A-Za-z0-9:/_.#-]{1,256}\Z"), request["authority_ref"]):
+        _fail("invalid authorization reference")
+    if not _match(_DIGEST, request["policy_digest"]):
+        _fail("invalid policy identity")
+    for key in ("control_revision", "base_revision"):
+        if not _match(_SHA, request[key]):
+            _fail("invalid request revision")
+    if request["mode"] == "new":
+        if request["requested_tag"] is not None:
+            _fail("new release request cannot silently select an existing tag")
+    elif request["mode"] == "tag":
+        if not _match(_TAG, request["requested_tag"]):
+            _fail("exact Product tag required")
+    else:
+        _fail("unknown release request mode")
+
+
+def _validate_state(state):
+    _keys(state, ("schema", "request", "request_digest", "transitions"))
+    if state["schema"] != "lmdj.release-request.v1":
+        _fail("unknown release journal schema")
+    validate_request(state["request"])
+    if state["request_digest"] != canonical_sha256(state["request"]):
+        _fail("request binding differs")
+    records = state["transitions"]
+    if type(records) is not list or len(records) > len(STEPS):
+        _fail("invalid transition inventory")
+    for index, record in enumerate(records):
+        _keys(record, ("step", "operation_id", "status", "evidence"))
+        if record["step"] != STEPS[index] or not _match(_DIGEST, record["operation_id"]):
+            _fail("transition order or operation identity differs")
+        expected = canonical_sha256({"request": state["request_digest"], "step": record["step"]})
+        if record["operation_id"] != expected:
+            _fail("transition operation is not request-bound")
+        if record["status"] == "intent":
+            if index != len(records) - 1 or record["evidence"] is not None:
+                _fail("an unresolved intent cannot have successors or evidence")
+        elif record["status"] == "verified":
+            _validate_evidence(record["evidence"])
+        else:
+            _fail("unknown transition status")
+
+
+def _validate_evidence(evidence):
+    _keys(evidence, ("sha256", "reference"))
+    if not _match(_DIGEST, evidence["sha256"]):
+        _fail("invalid evidence digest")
+    if not _match(re.compile(r"[A-Za-z0-9:/_.#-]{1,256}\Z"), evidence["reference"]):
+        _fail("invalid evidence reference")
+
+
+def _pairs(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            _fail("duplicate journal key")
+        value[key] = item
+    return value
+
+
+class RequestJournal(AbstractContextManager):
+    """Use a dedicated private directory on a local POSIX filesystem.
+
+    The lock covers the entire driver's execution, not just JSON writes. Separate
+    callers cannot interleave remote effects. This is not protection against a
+    malicious process running as the same trusted account.
+    """
+
+    def __init__(self, root: Path):
+        self.root = Path(root).absolute()
+        self.directory = None
+        self.lock = None
+        self.owner = None
+
+    def __enter__(self):
+        if self.directory is not None:
+            _fail("journal context is already open")
+        if self.root.resolve() != self.root:
+            _fail("journal directory or ancestor is a symlink")
+        self.owner = (os.getpid(), threading.get_ident())
+        try:
+            try:
+                self.root.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+            else:
+                parent = os.open(self.root.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                try:
+                    os.fsync(parent)
+                finally:
+                    os.close(parent)
+            self.directory = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            self._private(self.directory, directory=True)
+            self.lock = os.open("writer.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                                0o600, dir_fd=self.directory)
+            self._private(self.lock)
+            fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.fsync(self.directory)
+        except (OSError, JournalError):
+            self.__exit__(None, None, None)
+            _fail("journal is unsafe, unavailable or owned by another writer")
+        return self
+
+    def __exit__(self, *args):
+        if (self.owner is not None and self.owner[0] == os.getpid()
+                and self.owner[1] != threading.get_ident()):
+            _fail("journal context belongs to another thread")
+        # A fork child may close its inherited descriptors, but must never
+        # LOCK_UN the shared open-file description and unlock its parent's work.
+        if self.lock is not None:
+            os.close(self.lock)
+            self.lock = None
+        if self.directory is not None:
+            os.close(self.directory)
+            self.directory = None
+        self.owner = None
+
+    def _private(self, descriptor, directory=False):
+        info = os.fstat(descriptor)
+        valid = stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
+        if (not valid or info.st_uid != os.geteuid() or info.st_mode & 0o077
+                or (not directory and info.st_nlink != 1)):
+            _fail("journal storage must be private and owned by the current account")
+
+    def _active(self):
+        if self.owner != (os.getpid(), threading.get_ident()):
+            _fail("journal requires its owning process and thread in a live exclusive context")
+        if self.directory is None or self.lock is None:
+            _fail("journal requires a live exclusive context")
+        self._private(self.directory, directory=True)
+        self._private(self.lock)
+        # Detect replacement of the lock/path before every operation. Holding an
+        # unlinked old inode must never authorize a second writer's state updates.
+        for name, fd in ((None, self.directory), ("writer.lock", self.lock)):
+            observed = (os.stat(self.root, follow_symlinks=False) if name is None else
+                        os.stat(name, dir_fd=self.directory, follow_symlinks=False))
+            actual = os.fstat(fd)
+            if (actual.st_dev, actual.st_ino) != (observed.st_dev, observed.st_ino):
+                _fail("journal path or writer lock was replaced")
+
+    def read(self, request_id):
+        self._active()
+        if not _match(_ID, request_id):
+            _fail("invalid request ID")
+        try:
+            fd = os.open(request_id + ".json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         dir_fd=self.directory)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            _fail("journal request is unsafe or unavailable")
+        try:
+            self._private(fd)
+            with os.fdopen(fd, "rb", closefd=False) as source:
+                raw = source.read(_MAX_BYTES + 1)
+            if len(raw) > _MAX_BYTES:
+                _fail("journal exceeds size limit")
+            envelope = json.loads(raw, object_pairs_hook=_pairs)
+            _keys(envelope, ("state", "sha256"))
+            if envelope["sha256"] != canonical_sha256(envelope["state"]):
+                _fail("journal content digest differs")
+            _validate_state(envelope["state"])
+            if envelope["state"]["request"]["id"] != request_id:
+                _fail("journal filename and request differ")
+            if raw != self._encode(envelope["state"]):
+                _fail("journal serialization is not canonical")
+            return envelope["state"]
+        except (ValueError, UnicodeError):
+            _fail("journal JSON is malformed")
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def _encode(state):
+        return canonical_json({"state": state, "sha256": canonical_sha256(state)})
+
+    def _save(self, state):
+        self._active()
+        _validate_state(state)
+        encoded = self._encode(state)
+        if len(encoded) > _MAX_BYTES:
+            _fail("journal exceeds size limit")
+        temporary = ".pending-" + uuid.uuid4().hex
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=self.directory)
+        try:
+            with os.fdopen(fd, "wb", closefd=False) as output:
+                output.write(encoded)
+                output.flush()
+                os.fsync(fd)
+            self._active()
+            os.replace(temporary, state["request"]["id"] + ".json",
+                       src_dir_fd=self.directory, dst_dir_fd=self.directory)
+            os.fsync(self.directory)
+        finally:
+            os.close(fd)
+            try:
+                os.unlink(temporary, dir_fd=self.directory)
+            except FileNotFoundError:
+                pass
+
+    def create(self, request):
+        self._active()
+        validate_request(request)
+        existing = self.read(request["id"])
+        if existing is not None:
+            if existing["request"] != request:
+                _fail("request ID cannot be rebound to another scope")
+            return existing
+        for name in os.listdir(self.directory):
+            if name.endswith(".json"):
+                state = self.read(name[:-5])
+                records = state["transitions"]
+                complete = len(records) == len(STEPS) and records[-1]["status"] == "verified"
+                if state["request"]["repository"] == request["repository"] and not complete:
+                    _fail("another release request is unfinished for this repository")
+        state = {"schema": "lmdj.release-request.v1", "request": deepcopy(request),
+                 "request_digest": canonical_sha256(request), "transitions": []}
+        self._save(state)
+        return deepcopy(state)
+
+    def begin(self, request_id, step):
+        state = self.read(request_id)
+        if state is None:
+            _fail("release request is missing")
+        records = state["transitions"]
+        if records and records[-1]["status"] == "intent":
+            _fail("outstanding intent needs reconciliation, not another execution")
+        if len(records) == len(STEPS) or step != STEPS[len(records)]:
+            _fail("transition is not the next release step")
+        record = {"step": step,
+                  "operation_id": canonical_sha256({"request": state["request_digest"], "step": step}),
+                  "status": "intent", "evidence": None}
+        records.append(record)
+        self._save(state)
+        return deepcopy(record)
+
+    def confirm(self, request_id, operation_id, evidence):
+        _validate_evidence(evidence)
+        state = self.read(request_id)
+        if state is None or not state["transitions"]:
+            _fail("no transition to reconcile")
+        record = state["transitions"][-1]
+        if record["operation_id"] != operation_id:
+            _fail("confirmation does not match the outstanding operation")
+        if record["status"] == "verified":
+            if record["evidence"] != evidence:
+                _fail("verified transition evidence is immutable")
+            return deepcopy(record)
+        record.update(status="verified", evidence=deepcopy(evidence))
+        self._save(state)
+        return deepcopy(record)

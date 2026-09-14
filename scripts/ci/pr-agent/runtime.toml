@@ -1,0 +1,54 @@
+# Production PR-Agent runtime configuration for the Netcup review host.
+#
+# scripts/ci/pr-agent/install.sh copies this file into the installed release
+# next to the pinned engine; the engine refuses any configuration outside that
+# installation. Editing this file changes nothing until it is installed again.
+# No secret lives here: the API key is the GitHub Actions secret named by
+# `credential_ref`, passed to the review step's environment only.
+schema = "lmdj.pr-agent-config.v1"
+# DeepSeek is the only active provider. Disabled registry entries below remain
+# for schema and historical-receipt compatibility, not runtime fallback.
+provider_order = ["deepseek"]
+
+[budget]
+approval_id = "pr-agent-pilot-2026-09-10"
+timezone = "Asia/Shanghai"
+monthly_usd = 20.0
+pilot_usd = 20.0
+per_pr_usd = 1.0
+max_requests = 8
+max_requests_per_provider = 2
+request_timeout_seconds = 60
+backoff_seconds = 5
+engine_deadline_seconds = 600
+output_token_cap = 4096
+
+# DeepSeek-V4.1-Flash, served under the API model name `deepseek-flash`.
+# Prices are the published peak cache-miss rates (USD 0.30 / 1M input,
+# USD 1.20 / 1M output) from https://api-docs.deepseek.com/quick_start/pricing/
+# read on 2026-09-11; the ledger reserves the full 1M context at these rates
+# per request, which stays under the USD 1 per-PR cap for two requests.
+# Thinking is disabled per request by the engine, so completion tokens are
+# plain output.
+[providers.deepseek]
+enabled = true
+endpoint = "https://api.deepseek.com"
+model = "deepseek/deepseek-flash"
+priced_response_model = "deepseek-flash"
+credential_ref = "PR_AGENT_DEEPSEEK_API_KEY"
+pricing_revision = "deepseek-v4.1-flash-peak-2026-09-11"
+pricing_verified = true
+input_price_usd_per_token = 0.0000003
+output_price_usd_per_token = 0.0000012
+context_token_limit = 1048576
+fixed_request_charge_usd = 0.0
+billable_categories = ["input_tokens", "output_tokens", "fixed_request"]
+
+[providers.glm]
+enabled = false
+
+[providers.xai]
+enabled = false
+
+[providers.kimi]
+enabled = false

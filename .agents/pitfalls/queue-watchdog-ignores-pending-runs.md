@@ -9,7 +9,7 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/actions/runs/34155431379
     observed_by: Codex
-exit: gate:tests/build/ci_merge_queue_api_test.py
+exit: gate:tests/build/ci_retired_queue_mechanisms_test.py
 ---
 
 # A queue item waiting its turn under `queue: max` has GitHub run status `pending`, which the watchdog's live-run check did not count, so any item behind a validation longer than 20 minutes was declared stalled and lost its authorization while still in line.
@@ -60,3 +60,6 @@ was insufficient. The companion transport tests cover the closed queued,
 waiting, requested and pending set with the same started-writer requirement.
 Only queued/pending were observed remotely here; requested/waiting remain local
 fixture coverage. Do not infer historical failure causality from a later read.
+
+Retired 2026-09-09 (#1089 P2.1): the merge queue and its PR gate were removed;
+the exit now asserts their absence.

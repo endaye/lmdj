@@ -3,7 +3,7 @@ title: Version 与 Release
 area: operations
 status: implemented
 owners: [release, core]
-source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, docs/deploy/creator-web.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py, docs/prd/decisions/2026-08-24-build-manifest-detached.md, .github/workflows/self-test-report.yml, scripts/ci/batch_runtime.py, scripts/ci/incremental_storage.json, tools/release/batch_evidence.py, tools/release/batch_reference.py]
+source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/orchestration-policy.json, tools/release/orchestration_policy.py, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, docs/deploy/creator-web.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py, docs/prd/decisions/2026-08-24-build-manifest-detached.md, .github/workflows/self-test-report.yml, scripts/ci/batch_runtime.py, scripts/ci/incremental_storage.json, tools/release/batch_evidence.py, tools/release/batch_reference.py]
 ---
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
@@ -23,9 +23,55 @@ Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 Sem
 将静态页面一起提交，再按 Product 分配规则冻结快照。构建仅检查投影是否一致，
 不会自动改写源码或历史快照。此展示功能不启动版本准备、部署或发布。
 
+## 手动 canary 版本评估入口
+
+`Canary Assessment`（`.github/workflows/canary-assessment.yml`）提供独立的手动
+评估路径，不按日期运行，也不阻塞 PR 合入或主干自测。它只产生 Host 版本与
+changelog 建议及失败报告，**不分配 Product Build、不创建版本 PR、不发布、不部署**。
+自动的结果驱动调度、版本进度和后续交付仍是单独的实施与验收任务。
+
+新评估默认禁用。启用 `CANARY_ASSESSMENT_EXECUTION_READY=true` 前，运营方必须验收
+专用 disposable VM/microVM、受保护的 `canary-assessment` Environment，以及
+`tools/canary/executor_policy.json` 中固定 SHA-256 的 root-owned 原生工具。
+执行器使用 `lmdj-ai-isolated` 标签，不能同时承担普通 CI/pool 或部署任务；标签、
+私有目录、单独用户或 readiness 变量本身都不是隔离证据。工作流不安装工具，
+不读取机器上的登录态，只使用显式配置的 GLM/Kimi coding key 与 Grok coding auth。
+工具缺失或校验失败不会运行 PATH 中的替代程序。GLM → Kimi → Grok 全部失败时保留
+blocked 结果，由后续报告步骤提 Issue，不在 CI 内修复。
+
+所有操作只能从 `main` 发起新的第一次运行。每次 dispatch 都必须提供完整 `storage`
+JSON：顶层恰好是 `assessment`、`outbox`；两项各包含 `repository`、`issue_number`、
+`issue_node_id`、`bot_node_id`、`workflow_id`、`epoch`。ID 必须从实际 GitHub API
+读取；两项使用相同仓库、工作流及 Bot 身份，但 Issue number/node ID 不同。
+epoch 分别以 `canary-assessment-inputs-`、`canary-assessment-outbox-` 开头。
+不能复用现有 scheduler、report 或 review journal，也不会自动新建或初始化存储。
+
+- `init-assessment` / `init-outbox`：一次只初始化一个已明确预留的独立 Issue，
+  `request` 为 `{}`；Issue 必须没有评论，正文精确为
+  `<!-- lmdj-ci-journal-uninitialized-v1 -->` 加一个换行。不是清空或重置命令。
+- `claim`：`request` 为 `{"base_sha":"<完整 SHA>","target_sha":"<完整 SHA>"}`。
+  检查完整 main 历史后，先持久领取并保留完整输入 artifact，再释放短写锁执行 AI。
+  `base_sha` 是明确选择的版本评估起点，不会自动采用主干测试进度。单次输入超限会
+  拒绝，不截断或假装全覆盖；后续协调器仍需实现大区间的完整覆盖方案。
+- 原运行终止后，在**新 dispatch** 中使用 `settle`，`request` 为
+  `{"input_digest":"<原控制器摘要中的完整 digest>"}`。它校验原 run/attempt/control、
+  producer job、上传步骤和完整结果，再持久记录；不会重新调用模型。
+- `report` 使用同一个 digest 和 storage，先 reconcile 原结果，再通过独立 durable
+  outbox 提 Issue 或恢复已有回执。未知 POST 不能盲目重发；不自动修复、关闭 Issue。
+  已持久结果不依赖 artifact 继续存活。原结果缺失、损坏或过期则报告待核对义务，
+  不能重置领取、用新 control 重新 claim 来冒充恢复。
+
+恢复与报告不受新任务 readiness 开关影响。原执行中的结果保持 pending；原终止运行
+没有成功上传时保留领取并要求核对。有效 blocked 结果先成功上传，由独立可见性 job
+标红，这不代表结果遗失。Artifact 保留 30 天，应及时 settle/report；本手动入口
+尚不自动接收完成回调或排空报告积压。源码和本地夹具测试不代表上述远端前置条件已验收。
+
 ## Assembly Lock
 锁文件记录确切组件版本与 source hash，门户同样从它生成身份，防止文档手填漂移。
-当前 source candidate 是 Product Build `1.0.44.0 · canary · g<short-sha>`，在 Build 43 之上装配 Stage 11 的 Sound Set 能力。Contract 侧新增 `lmdj.soundset.v1 · 1.1.0` 与 `lmdj.soundset-catalog.v1 · 1.0.0`，并把 `lmdj.project-bundle.v1` 由 `1.1.0` 升到 `1.2.0`——`project_contract` 枚举补齐 `lmdj.project.v4`，这是 backward-compatible addition，也是必需的：自 Build 43 起本 Build 写出的每一个 Project 都是 v4，枚举不补齐则它们全都无法打包为 Bundle。`lmdj.project.v4` 保持 `4.1.0`，active Contract 由八个增至十个。Module 侧 Foundation `0.4.0`、Authoring Domain `3.0.0`、Project I/O `3.0.0`、Application Facade `3.1.0`、Web Runtime Platform `4.0.0`；Project Cooker `1.1.0`、Audio Runtime `3.0.0` 与 Provider SDK `1.1.4` 不变。Host 侧 CLI/MCP/Native Test Host `3.1.0`，Formal Web Runtime Host 与 Creator Web `4.0.0`。`resource_limits` 由九项增至十三项，两个本地 Proof Provider、Provider policy、Bank 共享配额与两份分发清单的资产计数都不动。这些身份同时写入 `products/lmdj/assembly.json`，因此 Assembly source hash 与 Assembly Lock hash 一并改变，本 Build 的不可变门户快照按 Build-cut 规则随分配在同一 Pull Request 内冻结。当前 source 可以没有 active Product intent；candidate、快照、tag、Release、部署与 Channel promotion 仍是独立状态。
+当前 Product、Channel 与 revision 以上方 Build Identity 为准。此次 Assembly 注册 Slice 参考 Provider 及其二进制输入规范与输出 Contract；默认 policy 仍不授予 Slice 执行权限，Host 输入 owner 接线属于 K5。不可变快照随 Build 分配冻结，分配不构成发布证据。
+
+历史 Product Build `1.0.45.0 · canary · g<short-sha>`，在 Build 44 之上装配 Stage 11 的 Sound Set 试听字节通路。Contract 侧不动：试听不持久化任何东西，也不跨新的进程边界，`lmdj.soundset.v1` 保持 `1.1.0`。Module 侧 Audio Runtime 升到 `3.1.0`（保留 audition Bank 池、audition 控制种类与哨兵身份，纯追加）、Application Facade 升到 `3.2.0`（交回已重采样 PCM 的类型化试听方法，纯追加）、Web Runtime Platform 升到 `4.1.0`（追加操作面）；Foundation `0.4.0`、Authoring Domain `3.0.0`、Project I/O `3.0.0`、Project Cooker `1.1.0` 与 Provider SDK `1.1.4` 不变。Host 侧 CLI、MCP 与 Native Host 升到 `3.2.0`，Formal Web Runtime Host 与 Creator Web 升到 `4.1.0`——其中只有 Creator Web 有源码改动，其余四个是依赖 pin 跟随，与 Build 44 同一先例。这些身份同时写入 `products/lmdj/assembly.json`，因此 Assembly source hash 与 Assembly Lock hash 一并改变，本 Build 的不可变门户快照按 Build-cut 规则随分配在同一 Pull Request 内冻结。当前 source 可以没有 active Product intent；candidate、快照、tag、Release、部署与 Channel promotion 仍是独立状态。
+Product Build `1.0.44.0 · canary · g<short-sha>` 曾是 Stage 11 Sound Set 安装能力的 source candidate，装配在 Build 43 之上。Contract 侧新增 `lmdj.soundset.v1 · 1.1.0` 与 `lmdj.soundset-catalog.v1 · 1.0.0`，并把 `lmdj.project-bundle.v1` 由 `1.1.0` 升到 `1.2.0`——`project_contract` 枚举补齐 `lmdj.project.v4`，这是 backward-compatible addition，也是必需的：自 Build 43 起本 Build 写出的每一个 Project 都是 v4，枚举不补齐则它们全都无法打包为 Bundle。`lmdj.project.v4` 保持 `4.1.0`，active Contract 由八个增至十个。Module 侧 Foundation `0.4.0`、Authoring Domain `3.0.0`、Project I/O `3.0.0`、Application Facade `3.1.0`、Web Runtime Platform `4.0.0`；Project Cooker `1.1.0`、Audio Runtime `3.0.0` 与 Provider SDK `1.1.4` 不变。Host 侧 CLI/MCP/Native Test Host `3.1.0`，Formal Web Runtime Host 与 Creator Web `4.0.0`。`resource_limits` 由九项增至十三项，两个本地 Proof Provider、Provider policy、Bank 共享配额与两份分发清单的资产计数都不动。这些身份同时写入 `products/lmdj/assembly.json`，因此 Assembly source hash 与 Assembly Lock hash 一并改变，该 Build 的不可变门户快照也按 Build-cut 规则在同一 Pull Request 内冻结。
 Product Build `1.0.42.0 · canary · g<short-sha>` 曾是 Stage 10 Perform 集成的 source candidate：它引入 `lmdj.project.v4 · 4.0.0`，把 Authoring Domain 与 Project I/O 升至 `2.0.0`、Project Cooker 升至 `1.1.0`，Audio Runtime、Application Facade、Web Runtime Platform 与五个 Host 升至 `3.0.0`，并为 `resource_limits` 新增 `perform_recording_frames` 与 `perform_recording_queue_batches`、为 Creator 分发新增唯一的 `perform_master_tap_worklet` 资产。
 Product Build `1.0.41.0 · canary · g<short-sha>` 曾是双 Web Host 六资产 Release 与独立部署控制面的 source candidate。
 Product Build `1.0.26.0 · canary · g<short-sha>` 曾是 G3 Host settings crash-recovery/identity source candidate。
@@ -52,21 +98,23 @@ gate 会报告 authority、expected、found 与 consumer path；生成物 stale 
 `scripts/version.py lock` 或 `tools/web-runtime/generate_runtime_identity.py` remedy。修复命令只
 恢复派生物，不会自动修改 reviewed Assembly、release intent、snapshot 或分配新 Product Build。
 
-| Identity | 当前版本 | 变化边界 |
+以下表格记录历史 Build 45 的身份；当前各组件身份见对应 Module、Host 与 Contract 页面自动生成的 Build Identity。
+
+| Identity | Build 45 版本 | 变化边界 |
 | --- | --- | --- |
 | Foundation | `0.4.0` | Artifact/JSON/Sequence 身份，新增 Sound Set 清单解析 |
 | Authoring Domain | `3.0.0` | Project v4、Asset Lineage 的封闭 variant、`create_project` 直接产出 v4 |
 | Project I/O | `3.0.0` | v4-only writer、Sequence journal/receipt/recovery、Set Store、Bundle 1.2 |
 | Project Cooker | `1.1.0` | Project v4 确定性 Runtime Snapshot |
-| Audio Runtime | `3.0.0` | Pattern origin、整数 BPM anchor 与 Bar boundary |
+| Audio Runtime | `3.1.0` | Pattern origin、整数 BPM anchor 与 Bar boundary |
 | Provider SDK | `1.1.4` | Provider/Attempt boundary 不变 |
-| Application Facade | `3.1.0` | Host-neutral Sequence/Performance/Sound Set 操作集 |
-| Web Runtime Platform | `4.0.0` | frame-stamped unified input、Sequence bridge、十三项 manifest 上限 |
-| Core CLI | `3.1.0` | Project v4、Sequence 与 Sound Set Facade surface |
-| Core MCP | `3.1.0` | 长生命周期 Sequence owner 与 CLI parity，含 Sound Set 工具 |
-| Native Host | `3.1.0` | Audio-frame CaptureWriter、Sequence lifecycle 与 Sound Set 转发 |
-| Web Runtime Host | `4.0.0` | Diagnostic Sequence/cross-window evidence，十三项上限分发清单 |
-| Creator Web | `4.0.0` | Sequence Surface、Perform、Sound Set 目录与安装 surface |
+| Application Facade | `3.2.0` | Host-neutral Sequence/Performance/Sound Set 操作集 |
+| Web Runtime Platform | `4.1.0` | frame-stamped unified input、Sequence bridge、十三项 manifest 上限 |
+| Core CLI | `3.2.0` | Project v4、Sequence 与 Sound Set Facade surface |
+| Core MCP | `3.2.0` | 长生命周期 Sequence owner 与 CLI parity，含 Sound Set 工具 |
+| Native Host | `3.2.0` | Audio-frame CaptureWriter、Sequence lifecycle 与 Sound Set 转发 |
+| Web Runtime Host | `4.1.0` | Diagnostic Sequence/cross-window evidence，十三项上限分发清单 |
+| Creator Web | `4.1.0` | Sequence Surface、Perform、Sound Set 目录与安装 surface |
 | Project Contract | `lmdj.project.v4 · 4.1.0` | 唯一写入真相；v1/v2/v3 仅迁移读取 |
 | Project Bundle | `lmdj.project-bundle.v1 · 1.2.0` | 打包 head checkpoint 的 Contract 级别，可命名 v4；1.0/1.1 容器兼容读取 |
 | Sound Set | `lmdj.soundset.v1 · 1.1.0` | Set 清单，含可选 `demo` Artifact |
@@ -74,7 +122,166 @@ gate 会报告 authority、expected、found 与 consumer path；生成物 stale 
 
 这些版本变化按公开边界独立分配；历史身份及快照保持只读。已分配身份、branch-local Proof 或 immutable snapshot 都不等于 merged-main Proof、团队测试、Release 或 Channel promotion。
 ## Git 与发布
-Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion 是不同授权与证据。
+Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion
+分别保留证据。Task 请求覆盖正常交付；一次整体发版请求覆盖其发布序列，不重复逐段询问。
+每段验证通过才继续；门禁失败、外部认证 / 必需审批、范围缺失或显式限制仍须停止。
+
+编排默认配置已定义为 `web-hosts-dev`：canary publication、Runtime / Creator 两个 Host、
+验证后晋级 dev，以及 GitHub Release / doc-site 两份同源 changelog。配置解析拒绝未知范围、
+缺少任一 Host / changelog 目标、越权 Channel 与无界重试。它目前只是经过校验的默认范围，
+不是发布授权，也不表示 run / resume 总控、非交互签名或双端 changelog 发布已经实现。
+
+三个发布／部署 workflow 已提供可选的 `request_id`（固定 operation 的 64 位小写十六进制摘要）。
+携带它时，preflight 在现有门禁前生成并上传 `release-dispatch-correlation`，记录 exact inputs、
+repository / actor / run numeric ID、首次 attempt，以及 event / workflow / tooling revision。
+它只证明请求被该运行接收，不证明签名、发布、部署或授权；缺省时保留原有手动路径。
+关联回执生成或上传失败会停止该 preflight，不进入后续发布／部署。消费端仍须认证实际
+API run、留存 artifact 及可信源码；未知 POST 不得凭回执文件、run-name 或最新成功盲目重发。
+回执生产端及 exact-run 只读认证消费者已实现：消费者核对真实 API run / actor / workflow、
+完整 jobs / artifacts、成功的回执上传步骤、ZIP digest 与冻结输入，并回读运行身份。
+它还核验受信 producer、workflow 与 tooling 在受保护 main 上的源码祖先关系。
+发布失败或仍在执行的运行也可能拥有真实关联回执，因此返回关联信息不表示发布成功。
+只读 discovery 已提供完整分页运行查找：以原 operation journal 在唯一 POST 前保存的
+完整 run-ID 清单排除旧运行，再读取新运行的认证输入。不能用事后扫描补造这个基线。
+跨 control revision 的重复 operation 同样报 conflict；候选不可读、零匹配或清单变化报
+unknown，只有单一认证匹配返回 correlated。任何结果都不允许重发，也不表示发布成功。
+内部 durable POST 控制器已接通：新 operation 私有目录保存固定 scope；首次 POST 前将
+完整 run-ID 基线与写意图原子落盘。已有意图只允许读取认证回执，不因超时、重启或
+缺失结果重发。原授权失效、writer 被替换、状态损坏或丢失会阻断写入；已有目录不会被
+重新初始化为“未发送”。POST 前还核对 numeric actor / repository / workflow 和 main SHA。
+原授权每次都需复核，首次发送的 readiness 条件只在写入前检查；恢复不能要求已公开的
+Release 重新变成 Draft，也不能因此重发。
+父级 driver 已支持 publication / Runtime / Creator 的具体 dispatch adapter：先注册子级
+私有状态，再落盘父级 intent，最后执行子级首次 POST。只读观察不派发；已有父级 intent
+不能重建丢失的子级状态。发送前同时复核父子 writer、原授权和候选绑定。
+publication evidence PR 的创建 POST 与合并 PUT 也在最后一次子级预检后复核父级
+授权与 writer，再检查子级 writer；任一失效均保留未决 intent，恢复不会重发。
+关联成功后还必须调用独立的只读 effect verifier；pending / unknown / conflict 均不会
+推进后续部署或晋级。保存的证据摘要同时绑定真实关联回执与 effect 证据，恢复再次核验。
+这些接口已连接本地编排器。Publication effect 已复用正式公开记录 verifier，核验实际
+Release、签名资产、完整 notes 与冻结候选，并在前后重新认证 exact run / attempt 及关联
+回执。运行仍在执行返回 pending，失败阻断后续步骤；仅有成功运行但 Release / 内容校验
+失败同样不会通过。发布记录摘要在 ledger 正常变为 published 后保持一致，不重复发布。
+生产候选绑定、可信 context / 授权组合及两个部署 effect 的总控接入仍待完成。
+GitHub 没有 expected-head dispatch CAS，末次读取后的 main 漂移仍可能产生不同 control
+运行；该运行不得被认领为请求成功。父级请求服务、effect readiness、全局 tag / Site
+互斥和生产总控仍未接通，不能据此承诺完整无人值守发版。
+
+发布请求的持久状态层已实现：固定 request / scope / policy / revision，独占 writer 在
+每一步外部操作前持久化 intent；结果必须有匹配 operation 的证据回执才能推进。
+崩溃留下的 intent 需要核对，不允许重新 begin；校验失败或状态损坏也不自动清空。
+私有目录、原子写入、fsync、锁和 inode 校验只证明本机状态管理；future driver 仍须
+认证请求授权并重新核验 Git/GitHub/部署证据，不能把保存的 verified 标记当作外部成功。
+该层尚未接通真实发布命令或安装为常驻服务。
+
+顺序驱动器现已连接该状态层与受信 adapter 协议：恢复逐项重新核验证据，按原操作 ID
+认领已完成结果；未知写结果不重发，doc-site 待发布阻止后续部署，Creator 失败阻止晋级。
+当前仅用隔离文件系统模拟外部 API 做故障验收；真实 candidate / GitHub / 部署 adapter、
+`run / status / resume` 命令与服务安装仍待接入，不能据此声称已能无人值守发版。
+
+Product release changelog 的冻结模块已实现：固定同 profile 已发布祖先 tag / target，
+从完整 Git 历史枚举候选范围，要求每个 commit 有变更条目或经审查的排除理由；
+GitHub 与 doc-site 将共享其 Markdown 内容及摘要。它拒绝浅历史、范围外来源、重复或
+遗漏提交及不安全文本。提交范围校验不证明文字真实性；基线 Release 的真实签名和
+公开状态仍须外部 audit，正文仍须 PR 审查。
+
+带 `changelog` 的 reviewed intent 现已接通 prepare / Draft / published 验证：正文
+进入 plan 摘要，prepare 重验真实 Git 范围，恢复时检查本地 notes，Draft 与公开
+Release 正文按冻结 Markdown 逐字核对。内部 Release plan marker v4（不是产品 Contract）绑定内容
+及 notes 摘要，独立 remote audit 也校验正文；仍是原六项资产，不增加日志附件。
+无 changelog 的历史 intent / plan 保留原 v1–v3 协议，不重写历史。
+
+[Product release 日志](../releases/index.mdx) 及逐版本页面现由同一 Python renderer
+生成，公开记录必须与 published intent 的 tag / target / 内容摘要一致。显式
+`npm run release-changelogs` 只新增版本页并更新索引，拒绝覆盖旧版本或悄悄丢掉历史页；
+正常 build / start 会检查投影，生产仍走 Git-triggered 发布。当前没有补造任何历史日志。
+`scripts/release.sh publication-record TAG RELEASE_ID PLAN_SHA256` 现可重新核验 exact
+公开 Release 并输出一条 canonical JSON 公开记录；发布日期取自 API，缺失时拒绝猜测。
+核验期间 Release / intent 漂移会失败。该命令不写 ledger、不创建 Release、不生成
+页面，也不证明网站已上线。
+`scripts/release.sh publication-patch TAG RELEASE_ID PLAN_SHA256` 会重新核验同一公开
+事实，输出证据 PR 所需的 Git patch：仅更新对应 intent 的 published 状态、追加公开
+记录及版本页、更新索引，并按新增页数递增独立文档页数清单。已有完整一致记录输出空
+patch；历史页缺失、内容冲突或本地 intent 与 canonical 不同均拒绝。命令不自动应用
+patch 或提交 PR，也不编辑历史快照。Ledger 目标行仅替换 disposition 值，保留其他
+字节及 JSON 转义。与现有 CLI 一致，用户选定的根目录会先规范化（可用根目录别名）；
+该根目录内部的证据文件及父目录不允许符号链接。
+内部 publication workspace 执行器现可将同一 patch 安装到 operation 绑定的专属 linked
+worktree：先持久绑定 base / patch / tree / commit，再核对 OLD / NEW 文件后恢复写入；
+原始字节和模式校验不执行 Git clean filter，也不接受 index skip 标记隐藏改动。文件
+先在同设备的私有 journal 目录暂存并同步，再原子替换；写入中断不会留下半截目标文件。
+Task 验证通过且内容没有漂移时，才通过 expected-old ref 更新生成唯一 Conventional
+Commit。验证失败保留现场与原 branch head，重启仍使用同一提交身份。它不创建 PR、
+push、合并或认证发布授权；总控必须提供刚核验的公开记录及可信 Task 验证器，不能
+把内部 API 返回的 committed 状态当作已审查、已合入或网站已发布。
+内部分支传输器现可向固定 canonical remote 推送一个 exact commit 到 operation 绑定的
+证据分支；使用独立 Git 配置、同一认证 token 和 expected-absent lease，不覆盖已有 ref。
+持久意图先于推送；ACK 丢失后只观察同一 ref，无法证明结果时不重推，已存在的精确 ref
+可复用但删除后不会重建。Git 子进程继承 writer lock，控制器退出不释放仍在推送的独占权。
+首次登记会先持久保存独立标记；标记存在而状态缺失时停止核对，不将未知推送重置为新请求。
+状态写入前验证读回容量，授权回调错误不输出原始异常文本。
+传输器仍要求可信调用方核验原请求、真实 Task 结果、完整源码与有效保护；尚未与生产
+总控 / PR 控制器接通，也没有在本次开发中向 canonical remote 实际推送。
+内部 Task verifier 可在已提交的证据分支上实际执行 Portal、ownership 和空白检查，逐项
+保存退出码与输出摘要，并绑定 exact head / tree、请求及 control revision。空白检查显式
+比较 Task base；执行前后直接核对全部 tracked 文件字节、类型和 index，不把 Git stat
+缓存或 assume-unchanged 当作干净源码。未完成或失败的命令保留原回执，不自动重跑；
+恢复只有完整的固定命令集全部通过才能提供 Task 摘要。输出正文不写入回执，子进程不
+继承凭据或个人 Python / Node / Git 配置环境。这是可信本机服务的执行证明，不是
+对同账户伪造存储的密码学防护；依赖准备、原请求 / 源码授权及生产总控组合仍需接通。
+独立登记标记在首份状态前持久保存；状态缺失或初始化中断不会被当作新测试重跑。
+写入先检查读回容量，run / verify 授权回调不透传异常正文；只读查证缺失回执不登记新执行。
+内部证据 PR 状态机已提供受限 GitHub 创建 / squash merge 传输：绑定 operation、请求、
+远端分支、exact head、认证 actor、numeric repository 和 Task 证据摘要，写操作前持久保存
+意图。POST / PUT ACK 不算完成；超时只查证同一 PR，结果不明不重发。每次恢复重新读取
+PR，合并还须可信调用方提供完整审查 / 对话 / 保护门禁及实际 squash source 验证。
+这些门禁尚未接入生产 backend，也未开放 run / resume；该内部状态机不 push 分支、
+伪造 owner review adoption 或触发 Release / 部署，不能据此宣称已经一键发版。
+持久状态写入不超过读取端容量；独立 enrollment 标记避免把丢失状态当首次运行。
+状态丢失或初始化中断需要核对原请求，不盲目重发；回调错误以固定诊断返回，不透传敏感文本。
+该具体 PR 状态机现可接入外层 `published_record` 步骤：恢复先重验全部前序发布证据，
+再允许子流程在等待审查后执行尚未尝试的首次合并，不重复创建 PR。子状态在外层意图
+落盘前初始化；之后缺失子状态或 POST / PUT 结果不明都只读核对，不重新启动写操作。
+此接入不把任意 callback 变成可重试动作；其他 opaque 转换继续只读恢复。实际请求、
+源码 / Task / 审查 / 保护门禁及完整生产 backend 仍需组合，测试中的成功链路不是实际发版。
+审查输入采集器现可分页读取全部 review、Issue comment、review thread 及每条 thread 的
+完整 comments，同时读取带仓库身份的 Issue 关闭关系。旧 head、dismissed、outdated 和
+resolved 内容均保留；两轮完整读取必须一致，任何缺页、API 错误或身份漂移都拒绝。
+这些正文只作为私有判定输入，不写入公开日志。清单摘要不等于 eligible，更不等于
+意见已处置或可合并；真实 eligibility、意见处置、有效保护与历史审查回执仍待接入。
+资格 reader 现附带每个已认领 review / owner comment 的完整 UTF-8 正文摘要、长度和
+API author 身份，供绑定器与完整清单逐项核对。同一 ID 的正文或作者变化不能沿用旧
+观察；未认领的意见、thread 和 Issue 关闭关系仍保留为后续判定输入。这只绑定两次
+读取看到的字节，不增强自由文本的认证、不证明意见已处置，也不授予合并权限。
+源码门禁现可从真实 Git blobs 重建该次发布的完整预期 tree：PR head 必须是声明 base 上
+唯一一个精确证据提交；squash 必须是 main 上的独立单父提交，tree 必须等于在其实际
+parent 上重新投影的结果。这样既保留期间 main 的无关变更，也拒绝夹带改动、丢失变更
+或用普通 merge / fast-forward 充当 squash。合入后还检查当前 main 的记录及完整页面
+投影，历史祖先中存在 merge 不足以掩盖后续撤回。合法追加的 promotion 不重写原发布
+证明，也不由此门禁获得部署 / 晋级验收。该组件可组合现有公开 Release verifier；真实
+审查、Task 测试回执、请求授权与完整生产总控仍须接通。
+现有 `scripts/docs-site.sh smoke BASE_URL` 已接入发布日志内容检查：从同一冻结源核对
+索引及逐版本 HTML 的完整正文、分类、身份、摘要和链接，不只核对摘要标签。重定向、
+非 HTML、缺失页面或内容漂移都失败；输出的逐页回执带 source / content / response
+摘要。Git-triggered Portal 发布沿用该入口检查 Preview 和 production，并分别将匹配
+当前 Git revision / URL 的逐页回执保存到部署证据；exit 0 但回执缺失仍失败。build checker
+也在上传前校验本地 HTML。它证明静态内容一致，不替代浏览器验收、真实发布回执认证
+或总控完成判定。
+新增只读回执消费者会验证配置绑定的 repository / workflow numeric ID、
+protected main 上的 source ancestry、首次 push run / deploy steps，以及未过期 ZIP 的
+API digest 和唯一成员；逐页 source 摘要必须匹配该 source 的完整日志投影，Preview /
+production 的 content 摘要必须一致。默认每次读取当前时间，核验结束重新检查期限、
+run 和 main，拒绝核验中到期、重跑或保护漂移。
+这只认证留存证据，不证明当前线上状态；尚未激活生产总控配置，仍需绑定已合入证据 PR、
+重新执行线上内容检查，再准入 Host 部署。回执合入的证据 PR、新总控强制准入和
+显式追加更正记录的接口仍待接入，不表示每次 Release 已自动交付两端日志。
+
+本地日志生成现先在忽略目录暂存完整字节并同步，再通过 create-only 原子 rename
+安装版本页；全部版本页持久化后才替换索引。进程在暂存或索引替换前后中断时，重跑
+保留旧页面并补齐输出；不使用可能留下双硬链接的安装方式，不以复制回退绕过历史保护。
+Darwin/Linux 原生安装与同步顺序、Darwin 进程中断恢复已有测试；真实断电及生产文件系统
+不由这些测试证明。忽略目录中的崩溃暂存不阻塞恢复，也不会自动清理；无人值守总控仍需
+受控工作区和 writer lock，不能将本地生成当作完整发布验收。
 
 ## 标准 Release 控制面
 
@@ -87,8 +294,9 @@ exact-target、merged-main Proof、完整 CI 与 protected-main ancestry 门禁�
 仓库已实现四段正常路径：`scripts/release.sh prepare TAG` 只准备并验证本地状态，
 `scripts/release.sh push-tag TAG` 只 push/reconcile 一个 exact tag，
 `scripts/release.sh create-draft TAG` 只创建或补全一个 Draft，最后由 dispatch-only
-`publish-release.yml` 发布同一个已验证 Draft。每段是独立授权；每次 mutation 后停止并重新运行
-`scripts/release.sh audit --remote --tag TAG`。Audit 从 policy、release intent ledger 与 live
+`publish-release.yml` 发布同一个已验证 Draft。整体发版授权覆盖各段；发布 job 在 publication 后以
+`scripts/release.sh verify-published TAG RELEASE_ID PLAN_SHA256` 按 numeric Release ID 读取并验证 live
+Release，其他 mutation 后重新运行 `scripts/release.sh audit --remote --tag TAG`，通过后继续已授权的下一段。Audit 从 policy、release intent ledger 与 live
 Git/GitHub 重建真相；historical exception 只能由 audit 显式报告，不能满足新的 prospective gate。
 
 当前 `complete-test-v2` 要求 Owner 在 reviewed intent 中恰好引用一种来源：旧
@@ -135,7 +343,7 @@ assets 与 v3 marker 全部通过，不把 allocated/abandoned/superseded 当作
 policy。Publish 以一次 PATCH 设置 Draft、
 prerelease 与 make-latest policy，前后重新验证 exact tag、numeric Release ID、plan digest 和闭合
 资产；这是并发漂移检测，不宣称 API 提供强条件更新。Runtime deployment 是另一个 manual-only
-exact-tag dispatch，之后的 Channel promotion 仍需第三份授权与证据。仓库中已有 release/deploy
+exact-tag dispatch，之后的 Channel promotion 仍需独立证据；整体授权覆盖这些步骤。仓库中已有 release/deploy
 tooling 不表示当前 Product Build 已经 released、deployed 或 promoted。
 
 ## PATCH、Assembly 与证据链
@@ -145,11 +353,41 @@ PATCH may not change Product Assembly identity or `assembly.lock`. Any module/pr
 权威链必须逐环核验并分别记录：Product Build -> signed tag -> tag revision -> merged PR -> source revision -> snapshot provenance/witness -> merged-main Proof revision -> evidence-only documentation revision。branch-local Proof、快照、CI、tag 或后写的证据文档都不能替代链中其他一环。
 ## 不可变性
 已发布 tag 不移动；交付测试或正式发布的文档快照按 Product Build 冻结，current 文档持续跟随 main。普通 PR Preview 不创建永久快照。
-schema-2 快照冻结 39 页源码、sidebar、十张图的 20 个 HTML/SVG 资产、源提交与 source projection；后续 current 或 diagram 变化不能改写已冻结版本。生成前允许的脏路径仅限该 Product Build 的精确生成边界，提交后还必须验证 introducing commit、时间顺序以及 direct-parent 或获准的 squash-equivalent projection。
+schema-2 快照冻结 41 页源码、sidebar、十张图的 20 个 HTML/SVG 资产、源提交与 source projection；后续 current 或 diagram 变化不能改写已冻结版本。生成前允许的脏路径仅限该 Product Build 的精确生成边界，提交后还必须验证 introducing commit、时间顺序以及 direct-parent 或获准的 squash-equivalent projection。
+### 已冻结快照的已知错误（勘误）
+
+不可变性是双向的：快照保存的是冻结那一刻 current 页面所说的话，**包括当时已经为假的话**。
+快照文件不得改写，因此已知错误记录在这里。
+
+**`1.0.45.0`（canary）** 冻结时携带了三处当时已被合并代码推翻的陈述，来源是 Build 44 之后
+未被同步的 current 页面：
+
+- `contracts/soundset.mdx`：称 `soundset.audition` 只由三个原生 Host 服务、Web Host 的
+  bridge 与 protocol 尚未注册它、Creator 还没有试听控制。三者在 `45756035`(#999) 与
+  `917decee`(#1023) 之后均为假。
+- `contracts/soundset.mdx`：称 [#900](https://github.com/endaye/lmdj/issues/900) 仍阻断
+  Web Host 浏览与安装。该缺陷在 `f1293997` 修复，六腿浏览器 journey 自 `b5d8ca93`(#978)
+  起无援转绿。
+- `product/workflows.mdx`：同一条"只由三个原生 Host 服务、Creator 尚无试听控制"。
+
+同一次冻结还保存了 Build 44 的版本号：`core/modules/*`、`hosts/*` 与
+`operations/version-and-release.mdx` 当时仍写 Application Facade `3.1.0`、Audio Runtime
+`3.0.0`、Web Runtime Platform `4.0.0` 与各 Host 的 Build 44 版本，而 `1.0.45.0` 的
+Assembly 已分别 pin 到 `3.2.0`、`3.1.0`、`4.1.0` 与 `3.2.0`/`4.1.0`。
+
+**为什么门禁没拦住。** 门禁按页固定内容，而它固定的是子集——`overview/index.mdx`、
+`core/overview.mdx`、`product/capability-map.mdx` 与 `operations/testing-and-proof.mdx`
+在 `content-inventory` 与 `repo-facts` 里有内容断言，上述页面没有。分配 Build 45 时只有
+被固定的四页被同步，其余静默留在 Build 44 的叙述上，并被原样冻结。**门禁通过只证明机械
+一致，不证明叙述为真**；这一条同时记在
+`.agents/pitfalls/portal-gate-pins-a-subset-of-pages.md`。
+
+current 页面已在同一变更中更正。`1.0.45.0` 快照按政策保持不变。
+
 ## 发布门禁
 实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
 
-当前候选 Product tag 文本为 `lmdj-v1.0.44.0`，仅是未来 tag 文本；只能在 squash merge、完整 CI、精确 tag-target 的 merged-main Proof 与单独授权之后创建 signed annotated tag。当前源码身份不宣称远端 CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 Portal 校验器判定；历史 Build 证据不自动升级。
+候选 Product tag 必须由选定 Build 的 manifest 派生；只能在 squash merge、完整 CI、精确 tag-target 的 merged-main Proof 与单独授权之后创建 signed annotated tag。当前源码身份不宣称远端 CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 Portal 校验器判定；历史 Build 证据不自动升级。
 
 ## 双 Web Host Product Release
 
@@ -186,7 +424,7 @@ API error 都先 reconcile alias；若仍指向本次 Deploy 就恢复 exact pri
 HTTP JSON、browser、publish/restore response 和时间。它定义可审计的操作路径；实际发布
 状态必须由与精确身份绑定的 evidence 独立报告。
 
-该能力已进入仓库源码，但其存在不等于当前 Product Build `1.0.44.0` 或任何历史 Product Build 已获得 remote verified
+该能力已进入仓库源码，但其存在不等于当前 Product Build（身份见上方 Build Identity） 或任何历史 Product Build 已获得 remote verified
 tag、Release、Deploy ID、immutable URL、production alias、deployment evidence 或 Channel
 promotion。历史 `1.0.15.2` 的 tag、Release 或部署证据不自动升级为当前候选证据；只有与
 精确 Product/Host 身份绑定的实际 evidence record 才能让 Portal 报告公共部署。本地工具、

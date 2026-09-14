@@ -148,6 +148,14 @@ class OutboxTests(unittest.TestCase):
         self.assertFalse(self.memory.comments)
         self.assertFalse(self.api.calls)
 
+    def test_unknown_transition_fails_closed_without_mutating_reducer_state(self):
+        state = outbox.new_state("report-epoch")
+        event = {"id": "outbox:report-epoch:0", "epoch": "report-epoch", "generation": 0,
+                 "type": "unknown-transition", "data": {}}
+        with self.assertRaisesRegex(outbox.OutboxBlocked, "unknown outbox transition"):
+            outbox.reduce(state, event)
+        self.assertEqual(state, outbox.new_state("report-epoch"))
+
     def test_claim_response_loss_never_sends_business_post_on_restart(self):
         self.memory.fail = ("claim", "after")
         with self.assertRaises(outbox.OutboxBlocked):

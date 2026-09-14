@@ -339,7 +339,7 @@ class EntryTests(unittest.TestCase):
         for kind in ("push", "schedule"):
             with self.subTest(kind=kind):
                 self.scheduler.runs[17]["event"] = kind
-                payload = self.push() if kind == "push" else {"repository": self.push()["repository"]}
+                payload = self.push() if kind == "push" else {"repository": self.push()["repository"], "schedule": "7,22,37,52 * * * *"}
                 payload["private_fixture"] = "must-not-appear"
                 output = io.StringIO()
                 with redirect_stdout(output):
@@ -605,15 +605,29 @@ class EntryTests(unittest.TestCase):
 
     def test_schedule_observes_pending_but_never_creates_date_named_request(self):
         self.scheduler.runs[17]["event"] = "schedule"
-        answer = self.make(kind="schedule").control({"repository": self.push()["repository"], "schedule": "*/15 * * * *"})
+        answer = self.make(kind="schedule").control({"repository": self.push()["repository"], "schedule": "7,22,37,52 * * * *"})
         self.assertEqual(answer["action"], "execute")
         self.assertEqual(answer["request"]["kind"], "bootstrap")
         self.assertNotIn("schedule", answer["request"]["id"])
         before = deepcopy(answer["state"]["active"])
         self.add_run(18, event="schedule")
-        next_answer = self.make(18, "schedule").control({"repository": self.push()["repository"]})
+        next_answer = self.make(18, "schedule").control({"repository": self.push()["repository"], "schedule": "7,22,37,52 * * * *"})
         self.assertEqual(next_answer["action"], "waiting")
         self.assertEqual(next_answer["state"]["active"], before)
+
+    def test_report_health_cannot_claim_a_product_batch(self):
+        self.scheduler.runs[17]["event"] = "schedule"
+        payload = {"repository": self.push()["repository"], "schedule": "9,24,39,54 * * * *"}
+        with self.assertRaisesRegex(entry.batch.BatchError, 'why:.*report.*remedy:'):
+            self.make(kind="schedule").control(payload)
+        self.assertFalse(self.writes(), 'why: report health wrote scheduler state; remedy: reject before reconcile')
+
+    def test_unknown_health_schedule_cannot_admit(self):
+        self.scheduler.runs[17]["event"] = "schedule"
+        for schedule in (None, '', '*/15 * * * *', '9,24,39,54 * * * * ', [], True):
+            with self.subTest(schedule=schedule), self.assertRaisesRegex(entry.batch.BatchError, 'why:.*schedule.*remedy:'):
+                self.make(kind="schedule").control({"repository": self.push()["repository"], "schedule": schedule})
+        self.assertFalse(self.writes())
 
     def test_exact_active_completion_settles_and_idle_completion_cannot_loop(self):
         original = self.make().control(self.push())

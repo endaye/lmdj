@@ -25,6 +25,7 @@ enum class RealtimeHookPoint : std::size_t {
   fx_reserved,
   fx_popped,
   bank_mask_written,
+  bank_applied_before_pending_release,
   before_pattern_claim,
   pattern_admission_closed,
   control_pattern_admission_retry,

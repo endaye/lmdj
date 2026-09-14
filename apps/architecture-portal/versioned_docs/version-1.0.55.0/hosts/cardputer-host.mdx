@@ -1,0 +1,29 @@
+---
+title: Cardputer Host
+area: hosts
+status: implemented
+owners: [product, native-host]
+host: cardputer-host
+source_paths: [apps/cardputer-host, apps/cardputer-host/module.json]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## B1 测试候选
+
+Cardputer Host `1.0.0` is included in Product Build `1.0.55.0` as a team-test
+candidate. Product Assembly supplies the ESP32-S3/Cardputer ADV pin profile,
+runtime limits, and Assembly identity; the Host does not choose those values.
+
+Build with the pinned EIM-managed ESP-IDF environment:
+
+```bash
+scripts/cardputer-host.sh configure
+scripts/cardputer-host.sh build
+```
+
+This candidate has no public Release, deployment, Channel promotion, or
+physical A1 acceptance. USB producer/consumer wiring, combined-load
+measurements, and the complete A1 journey remain required.

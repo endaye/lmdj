@@ -414,3 +414,83 @@ export interface PerformanceRuntimeSession {
     projectRevision: number;
   }>>;
 }
+
+/** Programmatic Provider request; owner paths are supplied by the retained Host. */
+export interface ProviderRunRequest {
+  attempt_id: string;
+  capability: string;
+  inputs: readonly {
+    port: string;
+    artifact: {sha256: string; media_type: string; byte_length: number};
+  }[];
+  input_owners?: readonly {
+    port: string;
+    occurrence: number;
+    project_id: string;
+    asset_id: string;
+  }[];
+  parameters: Record<string, unknown>;
+  data_classification: string;
+  platform: string;
+  region: string;
+  required_permissions: readonly string[];
+}
+
+
+export interface CandidateRunRequest {
+  job_id: string; attempt_id: string; project_id: string; asset_id: string;
+  expected_revision: number; parameters: Record<string, unknown>;
+  data_classification: string; platform: string; region: string;
+  required_permissions: readonly string[];
+}
+export interface CandidateAuditionRequest {
+  project_id: string; expected_revision: number; job_id: string; set_id: string; candidate_id: string;
+}
+export interface CandidateSelection { candidate_id: string; bank: number; pad: number; }
+export interface CandidateAdoptRequest {
+  project_id: string; expected_revision: number; command_id: string;
+  job_id: string; set_id: string; selections: readonly CandidateSelection[];
+}
+export interface CandidateArtifact { sha256: string; media_type: string; byte_length: number; }
+export interface CandidateSource {
+  project_id: string; asset_id: string; project_revision: number;
+  artifact: CandidateArtifact; frame_rate: number; frame_count: number;
+}
+export interface CandidateIntent {
+  attempt_id: string; source: CandidateSource; parameters_sha256: string;
+  data_classification: string; platform: string; region: string; required_permissions: readonly string[];
+}
+export interface CandidateRecipe {
+  candidate_id: string; kind: "slice_interval_v1"; start_frame: number; end_frame: number; frame_rate: number;
+}
+export interface CandidateSet {
+  set_id: string; status: "active" | "superseded" | "discarded";
+  attempt_id: string; sdk_candidate_id: string; source: CandidateSource;
+  output_artifact: CandidateArtifact;
+  capability: {id: string; contract: string; version: string};
+  provider: {id: string; version: string; artifact_sha256: string};
+  model_identity: {id: string; version: string; artifact_sha256: string} | null;
+  parameters_sha256: string; recipes: readonly CandidateRecipe[];
+}
+export interface CandidateJobResult {
+  job_id: string; active_set_id: string | null; project_revision: null;
+  history: readonly {intent: CandidateIntent; set_id: string;
+    status: "pending" | "succeeded" | "failed" | "interrupted" | "cancelled"}[];
+  sets: readonly CandidateSet[];
+}
+export interface CandidateAuditionResult {
+  job_id: string; set_id: string; candidate_id: string; artifact: CandidateArtifact;
+  sample_rate: number; channels: number; source_frames: number; project_revision: number; played: boolean;
+}
+export interface CandidateAdoptResult {
+  set_id: string; adopted: readonly (CandidateSelection & {asset_id: string})[]; project_revision: number;
+}
+export interface CandidateRuntimeSession {
+  runCandidateJob(request: CandidateRunRequest): Promise<CandidateJobResult>;
+  inspectCandidateJob(jobId: string): Promise<CandidateJobResult>;
+  cancelCandidateJob(jobId: string, attemptId: string): Promise<CandidateJobResult>;
+  discardCandidateSet(jobId: string, setId: string): Promise<CandidateJobResult>;
+  auditionCandidate(request: CandidateAuditionRequest): Promise<CandidateAuditionResult>;
+  stopCandidateAudition(): Promise<{accepted: true}>;
+  adoptCandidates(request: CandidateAdoptRequest): Promise<CandidateAdoptResult>;
+}

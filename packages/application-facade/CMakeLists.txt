@@ -32,8 +32,11 @@ add_library(
   lmdj_application
   STATIC
     src/application.cpp
+    src/candidate_store.cpp
     src/assembly_loader.cpp
     src/mutation_publish_scope.cpp
+    src/pattern_admission_controller.cpp
+    src/pattern_transport_executor.cpp
     src/soundset_catalog.cpp
 )
 add_library(lmdj::application ALIAS lmdj_application)
@@ -112,6 +115,68 @@ lmdj_target_warnings(lmdj_core_c)
 lmdj_target_sanitizers(lmdj_core_c)
 
 if(BUILD_TESTING)
+  add_executable(lmdj_pattern_admission_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_admission_test.cpp")
+  target_include_directories(lmdj_pattern_admission_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_pattern_admission_tests PRIVATE lmdj::application)
+  lmdj_target_warnings(lmdj_pattern_admission_tests)
+  lmdj_target_sanitizers(lmdj_pattern_admission_tests)
+  lmdj_add_test(NAME facade.pattern_admission TIER component
+    COMMAND lmdj_pattern_admission_tests)
+  add_executable(lmdj_pattern_transport_executor_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_transport_executor_test.cpp")
+  target_include_directories(lmdj_pattern_transport_executor_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_pattern_transport_executor_tests PRIVATE lmdj::application)
+  lmdj_target_warnings(lmdj_pattern_transport_executor_tests)
+  lmdj_target_sanitizers(lmdj_pattern_transport_executor_tests)
+  lmdj_add_test(NAME facade.pattern_transport_executor TIER component
+    COMMAND lmdj_pattern_transport_executor_tests LABELS concurrency)
+  if(UNIX AND NOT EMSCRIPTEN)
+    add_executable(lmdj_facade_candidate_store_tests
+      "${CMAKE_SOURCE_DIR}/tests/core/facade/candidate_store_test.cpp")
+    target_include_directories(lmdj_facade_candidate_store_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+    target_link_libraries(lmdj_facade_candidate_store_tests PRIVATE lmdj::application)
+    lmdj_target_warnings(lmdj_facade_candidate_store_tests)
+    lmdj_target_sanitizers(lmdj_facade_candidate_store_tests)
+    lmdj_add_test(NAME facade.candidate_store_recovery TIER e2e
+      COMMAND lmdj_facade_candidate_store_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+    lmdj_add_test(NAME facade.candidate_store_stress TIER stress
+      COMMAND lmdj_facade_candidate_store_tests --stress WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      LABELS concurrency)
+  endif()
+  add_executable(lmdj_facade_candidate_job_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/candidate_job_test.cpp")
+  target_include_directories(lmdj_facade_candidate_job_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_facade_candidate_job_tests PRIVATE lmdj::application)
+  lmdj_target_warnings(lmdj_facade_candidate_job_tests)
+  lmdj_target_sanitizers(lmdj_facade_candidate_job_tests)
+  lmdj_add_test(NAME facade.candidate_job TIER component
+    COMMAND lmdj_facade_candidate_job_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+  add_executable(lmdj_facade_candidate_audition_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/candidate_audition_test.cpp")
+  target_include_directories(lmdj_facade_candidate_audition_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_facade_candidate_audition_tests PRIVATE lmdj::application)
+  lmdj_target_warnings(lmdj_facade_candidate_audition_tests)
+  lmdj_target_sanitizers(lmdj_facade_candidate_audition_tests)
+  lmdj_add_test(NAME facade.candidate_audition TIER component
+    COMMAND lmdj_facade_candidate_audition_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+  add_executable(lmdj_facade_candidate_adoption_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/candidate_adoption_test.cpp")
+  target_include_directories(lmdj_facade_candidate_adoption_tests PRIVATE "${CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/internal")
+  target_link_libraries(lmdj_facade_candidate_adoption_tests PRIVATE lmdj::application)
+  lmdj_target_warnings(lmdj_facade_candidate_adoption_tests)
+  lmdj_target_sanitizers(lmdj_facade_candidate_adoption_tests)
+  lmdj_add_test(NAME facade.candidate_adoption TIER component
+    COMMAND lmdj_facade_candidate_adoption_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+  add_executable(lmdj_facade_provider_owner_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/provider_owner_test.cpp")
+  target_include_directories(lmdj_facade_provider_owner_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_facade_provider_owner_tests PRIVATE lmdj::application)
+  lmdj_target_warnings(lmdj_facade_provider_owner_tests)
+  lmdj_target_sanitizers(lmdj_facade_provider_owner_tests)
+  lmdj_add_test(NAME facade.provider_owner TIER component
+    COMMAND lmdj_facade_provider_owner_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
   add_executable(lmdj_runtime_facade_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/runtime_facade_test.cpp")
   target_include_directories(lmdj_runtime_facade_tests PRIVATE "${CMAKE_SOURCE_DIR}")

@@ -99,6 +99,7 @@ using PersistedCommand = std::variant<
     domain::UpdateSequenceSettings,
     domain::ImportAssignSample,
     domain::InstallSoundSet,
+    domain::AdoptCandidates,
     domain::UpdatePadPlayback,
     domain::ResetPadPlayback,
     PerformanceMutation,
@@ -135,6 +136,11 @@ bool valid_sha256(std::string_view value) {
                return (character >= '0' && character <= '9') ||
                       (character >= 'a' && character <= 'f');
              });
+}
+
+bool valid_candidate_source_profile(
+    std::string_view media_type, std::uint64_t byte_length) {
+  return media_type == "audio/wav" && byte_length <= 16777216U;
 }
 
 Error invalid_project(
@@ -438,14 +444,14 @@ domain::ProjectState canonical_projection(
   return projected;
 }
 
-// Every Project this Build persists is written as lmdj.project.v4, so a
+// Every Project this Build persists is written as lmdj.project.v5, so a
 // Project's Contract level never has to be inferred from its command history.
-// An existing v3 Project on disk still loads at v3 and is promoted to v4 the
+// An existing v3/v4 Project retains its Contract on load and is promoted to v5 the
 // first time it is persisted; nothing is rewritten merely by opening it.
 domain::ProjectState persisted_projection(
     const domain::ProjectState& state) {
   auto projected = canonical_projection(state);
-  projected.contract = domain::ProjectContract::v4;
+  projected.contract = domain::ProjectContract::v5;
   return projected;
 }
 
@@ -493,7 +499,7 @@ nlohmann::json project_json(const domain::ProjectState& state) {
   for (const auto& [id, asset] : state.assets) {
     nlohmann::json encoded_asset{
         {"artifact", asset.artifact}, {"asset_id", id.value()}};
-    if (state.contract == domain::ProjectContract::v4) {
+    if (state.contract >= domain::ProjectContract::v4) {
       encoded_asset["lineage"] =
           asset.lineage.has_value()
               ? domain::asset_lineage_json(*asset.lineage)
@@ -512,8 +518,10 @@ nlohmann::json project_json(const domain::ProjectState& state) {
       {"banks", std::move(banks)},
       {"bpm", state.bpm},
       {"contract",
-       state.contract == domain::ProjectContract::v4
-           ? kProjectWriterContract
+       state.contract == domain::ProjectContract::v5
+           ? std::string_view{"lmdj.project.v5"}
+           : state.contract == domain::ProjectContract::v4
+           ? std::string_view{"lmdj.project.v4"}
            : std::string_view{"lmdj.project.v3"}},
       {"patterns", std::move(patterns)},
       {"project_id", state.id.value()},
@@ -524,7 +532,7 @@ nlohmann::json project_json(const domain::ProjectState& state) {
            {"swing_percent", state.swing_percent},
        }},
   };
-  if (state.contract == domain::ProjectContract::v4) {
+  if (state.contract >= domain::ProjectContract::v4) {
     auto pattern_slots = nlohmann::json::array();
     for (const auto& pattern_id : state.pattern_slots) {
       pattern_slots.push_back(
@@ -896,7 +904,8 @@ foundation::Result<domain::ProjectState> parse_project(
     const bool is_v1 = contract == "lmdj.project.v1";
     const bool is_v2 = contract == "lmdj.project.v2";
     const bool is_v3 = contract == "lmdj.project.v3";
-    const bool is_v4 = contract == "lmdj.project.v4";
+    const bool is_v5 = contract == "lmdj.project.v5";
+    const bool is_v4 = contract == "lmdj.project.v4" || is_v5;
     const bool legacy_shape =
         (is_v1 || is_v2) &&
         exact_object_keys(
@@ -980,7 +989,8 @@ foundation::Result<domain::ProjectState> parse_project(
           invalid_project("project metadata is invalid", path));
     }
     auto state = std::move(created.value());
-    state.contract = is_v4 ? domain::ProjectContract::v4
+    state.contract = is_v5 ? domain::ProjectContract::v5
+                           : is_v4 ? domain::ProjectContract::v4
                            : domain::ProjectContract::v3;
     state.revision = *revision;
     if (is_v3 || is_v4) {
@@ -1139,6 +1149,11 @@ foundation::Result<domain::ProjectState> parse_project(
                     "project Asset Lineage is invalid",
                     path,
                     parsed_lineage.error().message));
+          }
+          if (!is_v5 && domain::asset_lineage_derivation_kind(parsed_lineage.value()) ==
+                            domain::AssetLineageDerivationKind::capability_adoption) {
+            return foundation::Result<domain::ProjectState>::failure(
+                invalid_project("capability adoption requires Project v5", path));
           }
           lineage = std::move(parsed_lineage.value());
         }
@@ -1385,7 +1400,8 @@ nlohmann::json command_json(const PersistedCommand& command) {
               {"type", "ImportAssignSample"},
           };
         } else if constexpr (
-            std::is_same_v<Type, domain::InstallSoundSet>) {
+            std::is_same_v<Type, domain::InstallSoundSet> ||
+            std::is_same_v<Type, domain::AdoptCandidates>) {
           auto assignments = nlohmann::json::array();
           for (const auto& assignment : value.assignments) {
             assignments.push_back({
@@ -1402,11 +1418,18 @@ nlohmann::json command_json(const PersistedCommand& command) {
                 {"slot", slot_json(assignment.slot)},
             });
           }
-          return {
+          nlohmann::json encoded{
               {"assignments", std::move(assignments)},
               {"meta", meta_json(value.meta)},
               {"type", "InstallSoundSet"},
           };
+          if constexpr (std::is_same_v<Type, domain::AdoptCandidates>) {
+            encoded["type"] = "AdoptCandidates";
+            encoded["project_id"] = value.project_id.value();
+            encoded["source_asset_id"] = value.source_asset_id.value();
+            encoded["source_artifact"] = value.source_artifact;
+          }
+          return encoded;
         } else if constexpr (
             std::is_same_v<Type, domain::UpdatePadPlayback>) {
           return {
@@ -1805,6 +1828,60 @@ foundation::Result<PersistedCommand> parse_command(
               std::move(assignments),
           }});
     }
+    if (type == "AdoptCandidates") {
+      if (!exact_object_keys(input, {"assignments", "meta", "type", "project_id", "source_asset_id", "source_artifact"}) ||
+          !input.at("assignments").is_array() ||
+          input.at("assignments").empty()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "AdoptCandidates transaction shape is invalid", path));
+      }
+      const auto& source = input.at("source_artifact");
+      if (!input.at("project_id").is_string() ||
+          !domain::is_valid_uuid(input.at("project_id").get<std::string>()) ||
+          !input.at("source_asset_id").is_string() ||
+          !domain::is_valid_uuid(input.at("source_asset_id").get<std::string>()) ||
+          !exact_object_keys(source, {"sha256", "media_type", "byte_length"}) ||
+          !source.at("sha256").is_string() ||
+          !valid_sha256(source.at("sha256").get<std::string>()) ||
+          !source.at("media_type").is_string() ||
+          !nonnegative_integer(source.at("byte_length")) ||
+          !valid_candidate_source_profile(
+              source.at("media_type").get_ref<const std::string&>(),
+              source.at("byte_length").get<std::uint64_t>()) ||
+          input.at("assignments").size() > 64)
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project("AdoptCandidates source identity is invalid", path));
+      std::vector<domain::CandidateAdoptionAssignment> assignments;
+      for (const auto& encoded : input.at("assignments")) {
+        if (!exact_object_keys(encoded, {"asset", "slot"})) {
+          return foundation::Result<PersistedCommand>::failure(
+              invalid_project(
+                  "AdoptCandidates assignment shape is invalid", path));
+        }
+        auto slot = parse_slot(encoded.at("slot"), path);
+        if (!slot.has_value()) {
+          return foundation::Result<PersistedCommand>::failure(slot.error());
+        }
+        auto asset = parse_transaction_asset(encoded.at("asset"));
+        if (!asset.has_value()) {
+          return foundation::Result<PersistedCommand>::failure(asset.error());
+        }
+        assignments.push_back(
+            domain::CandidateAdoptionAssignment{
+                slot.value(),
+                std::move(asset.value()),
+            });
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::AdoptCandidates{
+              std::move(meta.value()),
+              foundation::ProjectId{input.at("project_id").get<std::string>()},
+              foundation::AssetId{input.at("source_asset_id").get<std::string>()},
+              input.at("source_artifact").get<foundation::ArtifactRef>(),
+              std::move(assignments),
+          }});
+    }
     if (type == "UpdatePadPlayback") {
       if (!exact_object_keys(
               input, {"meta", "playback", "slot", "type"})) {
@@ -2177,7 +2254,7 @@ foundation::Result<domain::AppliedCommand> apply_command(
               event_type = "performance.deleted";
             }
           }
-          next.contract = domain::ProjectContract::v4;
+          next.contract = std::max(next.contract, domain::ProjectContract::v4);
           ++next.revision;
           nlohmann::json event = {
               {"command_id", value.meta.command_id.value()},
@@ -2197,6 +2274,7 @@ foundation::Result<domain::AppliedCommand> apply_command(
         } else if constexpr (
             std::is_same_v<Type, domain::ImportAssignSample> ||
             std::is_same_v<Type, domain::InstallSoundSet> ||
+            std::is_same_v<Type, domain::AdoptCandidates> ||
             std::is_same_v<Type, domain::UpdatePadPlayback> ||
             std::is_same_v<Type, domain::ResetPadPlayback>) {
           return domain::apply(state, value, receipts);
@@ -2233,6 +2311,7 @@ foundation::Result<domain::Command> legacy_command(
         if constexpr (
             std::is_same_v<Type, domain::ImportAssignSample> ||
             std::is_same_v<Type, domain::InstallSoundSet> ||
+            std::is_same_v<Type, domain::AdoptCandidates> ||
             std::is_same_v<Type, domain::UpdatePadPlayback> ||
             std::is_same_v<Type, domain::ResetPadPlayback> ||
             std::is_same_v<Type, PerformanceMutation> ||
@@ -2274,7 +2353,8 @@ bool safe_relative_path(
 
 foundation::Result<LoadedProject> load_project(
     const ProjectStoragePlatform& platform,
-    const std::filesystem::path& bundle) {
+    const std::filesystem::path& bundle,
+    bool verify_asset_bytes = true) {
   const auto manifest_path = bundle / "manifest.json";
   auto manifest_result = read_json(platform, manifest_path);
   if (!manifest_result.has_value()) {
@@ -2331,7 +2411,8 @@ foundation::Result<LoadedProject> load_project(
     }
     const bool checkpoint_is_current =
         checkpoint_json.value().at("contract") == "lmdj.project.v3" ||
-        checkpoint_json.value().at("contract") == "lmdj.project.v4";
+        checkpoint_json.value().at("contract") == "lmdj.project.v4" ||
+        checkpoint_json.value().at("contract") == "lmdj.project.v5";
 
     LoadedProject loaded{
         std::move(initial.value()),
@@ -2472,6 +2553,11 @@ foundation::Result<LoadedProject> load_project(
               bundle / head_checkpoint));
     }
 
+    // Owner resolution verifies only its selected Artifact after checking
+    // ownership. Every authoring load keeps the complete asset verification.
+    if (!verify_asset_bytes) {
+      return foundation::Result<LoadedProject>::success(std::move(loaded));
+    }
     for (const auto& [asset_id, asset] : loaded.state.assets) {
       (void)asset_id;
       const auto blob =
@@ -3095,7 +3181,8 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   // Both families stage bytes and publish blobs before the manifest settles,
   // so they share the same injected fault points; without this a Sound Set
   // install would have no atomicity coverage at all.
-  const bool staged_artifact_commit = sample_import || soundset_install;
+  const bool candidate_adoption = std::holds_alternative<domain::AdoptCandidates>(command);
+  const bool staged_artifact_commit = sample_import || soundset_install || candidate_adoption;
   if (staged_artifact_commit) {
     const auto fault = sample_after_event_preparation_fault(bundle);
     if (!fault.has_value()) {
@@ -3104,7 +3191,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     }
   }
 
-  // Every Project this Build persists is written as lmdj.project.v4, so an
+  // Every Project this Build persists is written as lmdj.project.v5, so an
   // existing v3 Project is promoted on its first persist. Promote the state
   // being committed, not just the bytes, so the checkpoint on disk, the state
   // returned to the caller, and the next load all agree on the Contract level.
@@ -3156,7 +3243,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     }
   } else if (
       std::holds_alternative<domain::ImportAsset>(command) ||
-      sample_import || soundset_install) {
+      sample_import || soundset_install || candidate_adoption) {
     std::vector<const domain::Asset*> assets;
     if (const auto* import = std::get_if<domain::ImportAsset>(&command)) {
       assets.push_back(&import->asset);
@@ -3164,6 +3251,9 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
         const auto* sample =
             std::get_if<domain::ImportAssignSample>(&command)) {
       assets.push_back(&sample->asset);
+    } else if (candidate_adoption) {
+      for (const auto& assignment : std::get<domain::AdoptCandidates>(command).assignments)
+        assets.push_back(&assignment.asset);
     } else {
       for (const auto& assignment :
            std::get<domain::InstallSoundSet>(command).assignments) {
@@ -3628,6 +3718,73 @@ foundation::Result<domain::AppliedCommand> execute_persisted(
       nullptr);
 }
 
+foundation::Result<std::vector<std::byte>> read_verified_artifact(
+    const ProjectStoragePlatform& platform,
+    const std::filesystem::path& bundle,
+    const foundation::ArtifactRef& artifact) {
+  const auto path =
+      bundle / "assets" / (artifact.sha256 + ".wav");
+  auto existing = platform.exists(path);
+  if (!existing.has_value()) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        existing.error());
+  }
+  if (!existing.value()) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        Error{
+            ErrorCode::not_found,
+            "project artifact does not exist",
+            {{"path", path.generic_string()}},
+        });
+  }
+  auto length = platform.byte_length(path);
+  if (!length.has_value()) {
+    return foundation::Result<std::vector<std::byte>>::failure(length.error());
+  }
+  if (length.value() != artifact.byte_length) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        Error{
+            ErrorCode::cook_failed,
+            "project artifact byte length does not match its reference",
+            {{"path", path.generic_string()},
+             {"storage_condition", std::string{kStorageConditionArtifactMismatch}}},
+        });
+  }
+  auto read = platform.read_complete(path);
+  if (!read.has_value()) {
+    return foundation::Result<std::vector<std::byte>>::failure(read.error());
+  }
+  auto bytes = std::move(read.value());
+  if (bytes.size() != artifact.byte_length) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        Error{
+            ErrorCode::cook_failed,
+            "project artifact byte length changed while it was being read",
+            {{"path", path.generic_string()},
+             {"storage_condition", std::string{kStorageConditionArtifactMismatch}}},
+        });
+  }
+
+  picosha2::hash256_one_by_one hasher;
+  if (!bytes.empty()) {
+    const auto* hash_begin =
+        reinterpret_cast<const unsigned char*>(bytes.data());
+    hasher.process(hash_begin, hash_begin + bytes.size());
+  }
+  hasher.finish();
+  if (picosha2::get_hash_hex_string(hasher) != artifact.sha256) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        Error{
+            ErrorCode::cook_failed,
+            "project artifact hash does not match its reference",
+            {{"path", path.generic_string()},
+             {"storage_condition", std::string{kStorageConditionArtifactMismatch}}},
+        });
+  }
+  return foundation::Result<std::vector<std::byte>>::success(
+      std::move(bytes));
+}
+
 }  // namespace
 
 struct PerformanceOwnerLock::Impl {
@@ -3799,7 +3956,7 @@ foundation::Result<void> ProjectStore::create(
         });
   }
   // The Contract level of `initial` does not survive: every Project this Build
-  // persists is written as lmdj.project.v4. A caller that wants a v3 Project on
+  // persists is written as lmdj.project.v5. A caller that wants a v3 Project on
   // disk has to write one, which is what tests/core/support/legacy_project.hpp
   // is for.
   const auto persisted_initial = persisted_projection(initial);
@@ -6071,6 +6228,7 @@ ProjectStore::reconcile_sequence_recovery(
   }
   const bool has_pending =
       !active.value().pending_events.empty() ||
+      (active.value().admission && !active.value().admission->completed) ||
       std::any_of(
           active.value().flushes.begin(), active.value().flushes.end(),
           [](const auto& flush) { return !flush.completed; });
@@ -6491,7 +6649,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
     return foundation::Result<domain::AppliedCommand>::failure(
         loaded.error());
   }
-  if (loaded.value().state.contract != domain::ProjectContract::v4) {
+  if (loaded.value().state.contract < domain::ProjectContract::v4) {
     return foundation::Result<domain::AppliedCommand>::failure(
         Error{
             ErrorCode::invalid_argument,
@@ -6534,6 +6692,160 @@ foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
       std::nullopt,
       std::nullopt,
       replayed ? std::vector<ArtifactStage>{} : std::move(stages));
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::adopt_candidates(
+    const std::filesystem::path& bundle,
+    const CandidateAdoptionRequest& request) {
+  if (!domain::is_valid_uuid(request.meta.command_id.value())) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "command id must be a lowercase UUID",
+        });
+  }
+  if (request.slots.empty() || request.slots.size() > 64) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "adopting Candidates requires 1 to 64 assignments",
+        });
+  }
+  for (const auto& slot : request.slots) {
+    if (!domain::is_valid_slot(slot.slot)) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "pad slot is invalid",
+          });
+    }
+    if (!domain::is_valid_uuid(slot.asset_id.value())) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "asset id must be a lowercase UUID",
+          });
+    }
+    if (slot.media_type != "audio/wav") {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "adopted artifacts must use audio/wav",
+          });
+    }
+    // Refuse oversized materialized intervals before writer contention.
+    if (slot.bytes.size() > 16777216U) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "candidate artifact exceeds the Slice byte limit",
+              {{"maximum_byte_length", 16777216U}},
+          });
+    }
+    const auto valid_lineage = domain::validate_asset_lineage(slot.lineage);
+    if (!valid_lineage.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          valid_lineage.error());
+    }
+  }
+  // Same ordering point as the byte imports: the cheap bundle check precedes
+  // the full-artifact hashes, so a missing bundle costs no hashing at all.
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+  }
+  std::vector<domain::CandidateAdoptionAssignment> assignments;
+  std::vector<ArtifactStage> stages;
+  assignments.reserve(request.slots.size());
+  stages.reserve(request.slots.size());
+  for (const auto& slot : request.slots) {
+    const auto artifact = describe_bytes(slot.bytes, slot.media_type);
+    assignments.push_back(
+        domain::CandidateAdoptionAssignment{
+            slot.slot,
+            domain::Asset{slot.asset_id, artifact, slot.lineage},
+        });
+    stages.push_back(ArtifactStage{{}, artifact, slot.bytes, true});
+  }
+  const PersistedCommand command = domain::AdoptCandidates{
+      request.meta,
+      request.project_id,
+      request.source_asset_id,
+      request.source_artifact,
+      std::move(assignments),
+  };
+  auto lock_result = platform_->acquire_writer(bundle);
+  if (!lock_result.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        lock_result.error());
+  }
+  auto lock = std::move(lock_result.value());
+  (void)lock;
+  tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+  }
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        loaded.error());
+  }
+  const auto fresh = domain::validate_candidate_source(loaded.value().state,
+      request.project_id, request.meta.expected_revision,
+      request.source_asset_id, request.source_artifact);
+  if (!fresh.has_value())
+    return foundation::Result<domain::AppliedCommand>::failure(fresh.error());
+  // Revalidate actual bytes while the Project writer excludes source mutation.
+  if (!valid_candidate_source_profile(
+          request.source_artifact.media_type, request.source_artifact.byte_length)) {
+    return foundation::Result<domain::AppliedCommand>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Candidate source must be audio/wav and at most 16 MiB",
+    });
+  }
+  const auto source_bytes = describe_artifact(*platform_,
+      bundle / "assets" / (request.source_artifact.sha256 + ".wav"),
+      request.source_artifact.media_type);
+  if (!source_bytes.has_value())
+    return foundation::Result<domain::AppliedCommand>::failure(source_bytes.error());
+  if (source_bytes.value() != request.source_artifact)
+    return foundation::Result<domain::AppliedCommand>::failure(Error{
+        ErrorCode::revision_conflict, "Candidate source bytes changed",
+        {{"reason", "candidate_source_changed"}}});
+  const auto recovered = recover_uncommitted(
+      *platform_, bundle, loaded.value());
+  if (!recovered.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        recovered.error());
+  }
+  auto performance_admitted =
+      admit_performance_sample_class(platform_, bundle);
+  if (!performance_admitted.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        performance_admitted.error());
+  }
+  auto admitted = admit_sequence_authoring(platform_, bundle);
+  if (!admitted.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        admitted.error());
+  }
+  auto scavenged = scavenge_sample_staging(*platform_, bundle);
+  if (!scavenged.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        scavenged.error());
+  }
+  // Freshness was checked before the shared full-command identity check.
+  // Adoption never serves an old-revision receipt at this public boundary.
+  return commit_loaded(
+      platform_,
+      bundle,
+      std::move(loaded.value()),
+      command,
+      std::nullopt,
+      nullptr,
+      std::nullopt,
+      std::nullopt,
+      std::move(stages));
 }
 
 foundation::Result<domain::AppliedCommand>
@@ -6613,7 +6925,7 @@ ProjectStore::import_assign_sample_bytes(
         loaded.error());
   }
   if (request.lineage.has_value() &&
-      loaded.value().state.contract != domain::ProjectContract::v4) {
+      loaded.value().state.contract < domain::ProjectContract::v4) {
     return foundation::Result<domain::AppliedCommand>::failure(Error{
         ErrorCode::invalid_argument,
         "Asset Lineage requires lmdj.project.v4 Project Truth",
@@ -6872,64 +7184,57 @@ foundation::Result<std::vector<std::byte>> ProjectStore::read_artifact(
         tree.error());
   }
 
-  const auto path =
-      bundle / "assets" / (artifact.sha256 + ".wav");
-  auto existing = platform_->exists(path);
-  if (!existing.has_value()) {
-    return foundation::Result<std::vector<std::byte>>::failure(
-        existing.error());
-  }
-  if (!existing.value()) {
-    return foundation::Result<std::vector<std::byte>>::failure(
-        Error{
-            ErrorCode::not_found,
-            "project artifact does not exist",
-            {{"path", path.generic_string()}},
-        });
-  }
-  auto length = platform_->byte_length(path);
-  if (!length.has_value()) {
-    return foundation::Result<std::vector<std::byte>>::failure(length.error());
-  }
-  if (length.value() != artifact.byte_length) {
-    return foundation::Result<std::vector<std::byte>>::failure(
-        Error{
-            ErrorCode::cook_failed,
-            "project artifact byte length does not match its reference",
-            {{"path", path.generic_string()}},
-        });
-  }
-  auto read = platform_->read_complete(path);
-  if (!read.has_value()) {
-    return foundation::Result<std::vector<std::byte>>::failure(read.error());
-  }
-  auto bytes = std::move(read.value());
-  if (bytes.size() != artifact.byte_length) {
-    return foundation::Result<std::vector<std::byte>>::failure(
-        Error{
-            ErrorCode::cook_failed,
-            "project artifact byte length changed while it was being read",
-            {{"path", path.generic_string()}},
-        });
-  }
+  return read_verified_artifact(*platform_, bundle, artifact);
+}
 
-  picosha2::hash256_one_by_one hasher;
-  if (!bytes.empty()) {
-    const auto* hash_begin =
-        reinterpret_cast<const unsigned char*>(bytes.data());
-    hasher.process(hash_begin, hash_begin + bytes.size());
+foundation::Result<std::vector<std::byte>> ProjectStore::read_asset_artifact(
+    const std::filesystem::path& bundle,
+    const foundation::ProjectId& project_id,
+    const foundation::AssetId& asset_id,
+    const foundation::ArtifactRef& artifact) const {
+  using BytesResult = foundation::Result<std::vector<std::byte>>;
+  if (bundle.extension() != ".lmdj" ||
+      !domain::is_valid_uuid(project_id.value()) ||
+      !domain::is_valid_uuid(asset_id.value()) ||
+      !valid_sha256(artifact.sha256) || artifact.media_type.empty() ||
+      artifact.byte_length > kMaximumArtifactBytes) {
+    return BytesResult::failure(
+        Error{ErrorCode::invalid_argument, "Artifact owner selector is invalid"});
   }
-  hasher.finish();
-  if (picosha2::get_hash_hex_string(hasher) != artifact.sha256) {
-    return foundation::Result<std::vector<std::byte>>::failure(
-        Error{
-            ErrorCode::cook_failed,
-            "project artifact hash does not match its reference",
-            {{"path", path.generic_string()}},
-        });
+  auto tree = platform_->validate_managed_tree(bundle);
+  if (!tree.has_value()) return BytesResult::failure(tree.error());
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) return BytesResult::failure(lease.error());
+  tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) return BytesResult::failure(tree.error());
+  // The internal reader replays committed metadata only. Public load also
+  // recovers/scavenges authoring state, which owner resolution must not do.
+  const auto loaded = load_project(*platform_, bundle, false);
+  if (!loaded.has_value()) return BytesResult::failure(loaded.error());
+  const auto& state = loaded.value().state;
+  const auto owner = state.assets.find(asset_id);
+  if (state.id != project_id || owner == state.assets.end() ||
+      owner->second.artifact != artifact) {
+    return BytesResult::failure(
+        Error{ErrorCode::not_found, "Project Asset does not own Artifact"});
   }
-  return foundation::Result<std::vector<std::byte>>::success(
-      std::move(bytes));
+  return read_verified_artifact(*platform_, bundle, artifact);
+}
+
+foundation::Result<domain::ProjectState> ProjectStore::inspect_committed(
+    const std::filesystem::path& bundle) const {
+  using Result = foundation::Result<domain::ProjectState>;
+  if (bundle.extension() != ".lmdj")
+    return Result::failure(invalid_project("project bundle extension is invalid", bundle));
+  auto tree = platform_->validate_managed_tree(bundle);
+  if (!tree.has_value()) return Result::failure(tree.error());
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) return Result::failure(lease.error());
+  tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) return Result::failure(tree.error());
+  auto loaded = load_project(*platform_, bundle, false);
+  if (!loaded.has_value()) return Result::failure(loaded.error());
+  return Result::success(std::move(loaded.value().state));
 }
 
 }  // namespace lmdj::project_io

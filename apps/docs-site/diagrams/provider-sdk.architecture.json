@@ -1,1 +1,82 @@
-{"schema_version":1,"meta":{"title":"Provider SDK Module","summary":"Capability 解析、Attempt 隔离与 Artifact-only Provider 端口"},"boundaries":[],"components":[{"id":"request","label":"Capability Request","detail":"Host / Workspace","kind":"host","x":50,"y":190,"width":250,"height":96},{"id":"registry","label":"Registry + Attempt","detail":"selection / lifecycle","kind":"core","x":420,"y":190,"width":270,"height":96},{"id":"provider","label":"Provider","detail":"Artifact ports","kind":"provider","x":830,"y":190,"width":230,"height":96},{"id":"artifact","label":"Artifact Result","detail":"or typed error","kind":"host","x":1210,"y":190,"width":240,"height":96}],"connections":[{"from":"request","to":"registry"},{"from":"registry","to":"provider"},{"from":"provider","to":"artifact"}],"cards":[{"title":"Dependency","body":"Foundation only."},{"title":"Owned state","body":"Registry and Attempt state; failure never enters Project Truth."},{"title":"Forbidden boundary","body":"Provider never receives mutable Project or bundle path."}]}
+{
+  "schema_version": 1,
+  "meta": {
+    "title": "Provider SDK Module",
+    "summary": "Owned ArtifactSource、共享预算、同步回调与验证后 terminal 可见性"
+  },
+  "boundaries": [],
+  "components": [
+    {
+      "id": "request",
+      "label": "Capability Request",
+      "detail": "owner resolver / shared budget",
+      "kind": "host",
+      "x": 50,
+      "y": 190,
+      "width": 250,
+      "height": 96
+    },
+    {
+      "id": "registry",
+      "label": "Registry + Attempt",
+      "detail": "copy / hash / length",
+      "kind": "core",
+      "x": 420,
+      "y": 190,
+      "width": 270,
+      "height": 96
+    },
+    {
+      "id": "provider",
+      "label": "Provider",
+      "detail": "owned context / sync callbacks",
+      "kind": "provider",
+      "x": 830,
+      "y": 190,
+      "width": 230,
+      "height": 96
+    },
+    {
+      "id": "artifact",
+      "label": "Artifact Result",
+      "detail": "validator → publish → terminal",
+      "kind": "host",
+      "x": 1210,
+      "y": 190,
+      "width": 240,
+      "height": 96
+    }
+  ],
+  "connections": [
+    {
+      "from": "request",
+      "to": "registry"
+    },
+    {
+      "from": "registry",
+      "to": "provider"
+    },
+    {
+      "from": "provider",
+      "to": "artifact"
+    }
+  ],
+  "cards": [
+    {
+      "title": "Dependency",
+      "body": "Foundation only."
+    },
+    {
+      "title": "Owned state",
+      "body": "Retained input handles keep leases; closed callbacks reject without terminal mutation."
+    },
+    {
+      "title": "Forbidden boundary",
+      "body": "Provider never receives mutable Project or bundle path."
+    },
+    {
+      "title": "Verified output reader",
+      "body": "Read only a successful terminal output binding under an explicit byte bound. Verify regular file, length and SHA-256; return owned bytes without exposing private paths or modifying terminal evidence."
+    }
+  ]
+}

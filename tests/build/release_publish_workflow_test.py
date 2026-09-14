@@ -11,6 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/publish-release.yml"
 ACTION_PINS = {
+    "actions/upload-artifact": ("ea165f8d65b6e75b540449e92b4886f43607fa02", "v4.6.2"),
     "actions/checkout": ("de0fac2e4500dabe0009e67214ff5f5447ce83dd", "v6.0.2"),
     "actions/setup-python": ("a309ff8b426b58ec0e2a45f0f869d46889d02405", "v6.2.0"),
 }
@@ -76,13 +77,16 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
         inputs = self.mapping_block(dispatch, "inputs", 4)
         self.assertEqual(
             set(self.direct_mapping(inputs, 6)),
-            {"tag", "release_id", "plan_sha256"},
+            {"tag", "release_id", "plan_sha256", "request_id"},
         )
         expected = {
             "tag": ("Exact verified tag", "string"),
             "release_id": ("Numeric Draft Release ID", "string"),
             "plan_sha256": ("Exact plan SHA-256", "string"),
         }
+        self.assertEqual(self.direct_mapping(self.mapping_block(inputs, "request_id", 6), 8), {
+            "description": "Optional release operation digest for correlation only",
+            "required": "false", "default": '""', "type": "string"})
         for name, (description, kind) in expected.items():
             with self.subTest(name=name):
                 fields = self.direct_mapping(self.mapping_block(inputs, name, 6), 8)
@@ -124,19 +128,17 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
         self.assertLess(verify_index, publish_index)
         self.assertLess(audit_index, publish_index)
 
-    def test_exact_tag_audit_runs_in_preflight_immediately_before_publish_and_afterward(self) -> None:
+    def test_exact_tag_audit_runs_in_preflight_and_immediately_before_publish(self) -> None:
         preflight = self.job("preflight")
         publish = self.job("publish")
         audit_command = "scripts/release.sh audit --remote --tag"
         self.assertEqual(preflight.count(audit_command), 1)
-        self.assertEqual(publish.count(audit_command), 2)
+        self.assertEqual(publish.count(audit_command), 1)
         verify_index = publish.index("scripts/release.sh verify-draft")
         prepublication_audit = publish.index(audit_command)
         publication = publish.index("scripts/release.sh publish-draft")
-        postpublication_audit = publish.rindex(audit_command)
         self.assertLess(verify_index, prepublication_audit)
         self.assertLess(prepublication_audit, publication)
-        self.assertLess(publication, postpublication_audit)
 
     def test_both_jobs_use_pinned_protected_main_checkouts_without_credentials(self) -> None:
         source = self.source()
@@ -203,12 +205,15 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
                     )
                     self.assertEqual(env.get("GIT_CONFIG_VALUE_0"), "https://github.com/")
 
-    def test_publication_finishes_with_exact_tag_read_only_audit(self) -> None:
+    def test_publication_finishes_with_numeric_id_post_publish_verification(self) -> None:
         publish = self.job("publish")
         publish_index = publish.index("scripts/release.sh publish-draft")
-        audit_index = publish.rindex("scripts/release.sh audit --remote --tag")
-        self.assertLess(publish_index, audit_index)
-        self.assertIn('"$RELEASE_TAG"', publish[audit_index:])
+        verification_index = publish.index("scripts/release.sh verify-published")
+        final_verification = publish[verification_index:]
+        self.assertLess(publish_index, verification_index)
+        self.assertNotIn("scripts/release.sh audit --remote", final_verification)
+        for identifier in ('"$RELEASE_TAG"', '"$RELEASE_ID"', '"$PLAN_SHA256"'):
+            self.assertIn(identifier, final_verification)
 
 
 if __name__ == "__main__":

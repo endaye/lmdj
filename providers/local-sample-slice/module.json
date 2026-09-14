@@ -1,0 +1,9 @@
+{
+  "contract": "lmdj.module.v1",
+  "module": "local.sample.slice",
+  "version": "1.0.2",
+  "api_version": 3,
+  "dependencies": {
+    "provider-sdk": "2.2.0"
+  }
+}

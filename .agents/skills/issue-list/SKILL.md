@@ -18,8 +18,33 @@ When invoked without cleanup intent, list and triage open tasks:
 ### 1. Query GitHub Issues & Project Ledgers
 1. **Query GitHub Live Issues**:
    ```bash
-   gh issue list --state open --limit 50 --json number,title,labels,assignees
+   gh issue list --state open --search '-label:"ci:storage"' --limit 1000 \
+     --json number,title,labels,assignees
    ```
+   `gh issue list` paginates its API requests up to `--limit`, but GitHub
+   Search caps results at 1,000. Treat a result count of exactly 1,000 as
+   truncated: do not call it complete or claim that no actionable work exists.
+   Instead, use the complete REST fallback (which also excludes pull requests)
+   and filter labels in the paginated stream:
+   ```bash
+   gh api --paginate --slurp \
+     'repos/endaye/lmdj/issues?state=open&per_page=100' \
+     --jq '.[][] | select(has("pull_request") | not) | select(([.labels[].name] | index("ci:storage")) == null) | {number,title,labels,assignees}'
+   ```
+   The default inventory excludes `ci:storage` journal/state issues. When a
+   storage audit is explicitly requested, run a separate positive query with
+   `--label "ci:storage" --limit 1000`, apply the same cap check and use the
+   paginated REST fallback if capped, changing only the label predicate to
+   `select(([.labels[].name] | index("ci:storage")) != null)`:
+   ```bash
+   gh api --paginate --slurp \
+     'repos/endaye/lmdj/issues?state=open&per_page=100' \
+     --jq '.[][] | select(has("pull_request") | not) | select(([.labels[].name] | index("ci:storage")) != null) | {number,title,labels,assignees}'
+   ```
+   Label the output as a storage audit.
+   Never mutate journals or bulk-close those Issues. Keep the output concise
+   and state whether it is a complete actionable inventory, an incomplete
+   capped result, or the explicit storage audit.
 2. **Cross-reference Project Task Ledgers**:
    - `docs/quality/2026-08-17-machine-task-todo.md` (Machine-executable tasks & blockers)
    - `docs/quality/2026-08-17-manual-verification-todo.md` (Human verification & decision gates)

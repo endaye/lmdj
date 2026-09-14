@@ -1,0 +1,119 @@
+{
+  "cases": [
+    {
+      "name": "silence",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": []
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "valid",
+      "canonical_utf8": "{\"contract\":\"lmdj.slice-points.v1\",\"frame_rate\":48000,\"points\":[],\"source_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
+    },
+    {
+      "name": "frame zero",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "valid",
+      "canonical_utf8": "{\"contract\":\"lmdj.slice-points.v1\",\"frame_rate\":48000,\"points\":[{\"frame\":0}],\"source_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
+    },
+    {
+      "name": "last valid frame",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 999
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "valid"
+    },
+    {
+      "name": "optional confidence zero and unicode",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0,
+            "confidence": 0,
+            "label": "起点"
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "valid"
+    },
+    {
+      "name": "optional confidence one",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0,
+            "confidence": 1
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "valid"
+    },
+    {
+      "name": "44100 source",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 44100,
+        "points": [
+          {
+            "frame": 50
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 44100,
+        "frame_count": 1000
+      },
+      "expected_layer": "valid"
+    }
+  ]
+}

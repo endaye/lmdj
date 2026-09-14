@@ -1,0 +1,24 @@
+{
+  "contract": "lmdj.cardputer-transfer.v1",
+  "version": "1.0.0",
+  "frames": [
+    {
+      "name": "hello-empty",
+      "hex": "4c4d435001010000010000000000000000000000000000000000000057a31d23",
+      "version": 1,
+      "opcode": 1,
+      "request_id": 1,
+      "nonce_hex": "00000000000000000000000000000000",
+      "payload_hex": ""
+    },
+    {
+      "name": "begin-small",
+      "hex": "4c4d43500103030002000000000102030405060708090a0b0c0d0e0f616263741a4236",
+      "version": 1,
+      "opcode": 3,
+      "request_id": 2,
+      "nonce_hex": "000102030405060708090a0b0c0d0e0f",
+      "payload_hex": "616263"
+    }
+  ]
+}

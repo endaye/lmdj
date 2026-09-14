@@ -1,0 +1,40 @@
+---
+title: Native Host
+area: hosts
+status: implemented
+owners: [hosts, audio]
+host: native-host
+source_paths: [apps/native-host, tests/host/native_host_test.py]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="hosts" id="native-host" />
+
+## 目的
+Native Host `3.2.0` 是正式无界面 Host（binary `lmdj-native-host`）：从真实 Project v4 经 Application Facade `3.2.0` 进入控制面，并用 Audio Runtime `3.1.0` 的 frame clock、CaptureWriter 与实时数据面执行 Sequence recording 和设备验证；不承担产品 UI。本 Build 起它另外转发五个 Sound Set 操作，并保持独立于 Performance 操作表，使 P10-D20 的 Performance 清单仍然只是 Performance 清单。其中 `soundset.audition` 不止转发：Facade 解析、把关、解码后交回已重采样的 PCM，本 Host 把它发布进引擎保留的双槽 audition 池并起声，自己从不读 Set Store，并在结果上带 `played` 说明这一次是否真的起了声。它没有停止操作——试听是 `one_shot`，后一次按池的替换语义取代前一次，确定性后端在写出响应之前就已把预览渲染完毕。固定 Project 会话同时暴露 Facade 原样的 `sample.quota` 查询，用于取得 revision-bound Bank/Project headroom。它随每个分发包发出，分发成员资格受 `docs/governance/distribution-contents.md` 约束。
+## 数据流
+Pad input → Audio Runtime frame stamp → bounded CaptureWriter → Application Facade Sequence session/receipt；`sample.quota` → Application Facade → Project Truth ledger；Snapshot/Voice 数据面独立进入设备输出。Native Host 不解析 Bundle 或复制配额公式。
+## Performance 接入
+Host 用 `make_engine_performance_adapter(engine, make_engine_pattern_publication_gateway(engine))` 把 Facade 的 Performance 协作者接到真实设备数据面：adapter 提供的 clock、input sequencer、launch acknowledger 与 replay controller 直接写入 `ApplicationConfig`，因此 Performance 时间与 Pattern launch acknowledgement 来自 Audio Runtime，而不是 wall clock。命令边界上 Host 先 `performance_adapter_.service()`（并 drain trigger outcomes），再 `application_.service_performance()`；后者的失败被粘住并原样上报，不在 Host 侧掩盖。
+Host 转发 23 个 Facade 操作：`pattern.slot.assign` / `slot.clear` / `slot.move`，以及二十个 `performance.*` 操作——`performance.record.begin` / `record.event` / `record.launch-request` / `record.flush` / `record.stop` / `record.status`、`performance.save` / `discard` / `recording.bind`、`performance.list` / `inspect` / `rename` / `delete`、`performance.replay.begin` / `replay.status` / `replay.stop`、`performance.recovery.list` / `recovery.apply` / `recovery.discard` 与 `performance.resample.commit`。每个名字只决定 command/query surface，请求内容按原样交给 Facade；revision、authority、acknowledged launch 与 Project Truth 全部由 Core 决定。
+## 生命周期
+Host 管理设备开启、停止和 capture 文件；实时引擎所有权仍在 Audio Runtime。
+`record.begin` 在创建 Sequence 会话和 CaptureWriter 之前，由控制线程预先准备
+Capture 缓冲。内存不足返回 `INTERNAL_ERROR` 与明确的 insufficient-memory 消息，
+不创建录制会话、不写录制文件、不停止现有播放；可以使用相同 session ID/revision
+重试。成功申请的原容量缓冲保留到 Engine 销毁，不在停止录制时释放未读事件。
+## 测试与证据
+Native host 测试验证协议、与 CLI 一致的 Sample quota 输出及设备输出；物理听感和端到端延迟单独验收。Performance 接入当前只有自动化状态与边界证据，没有物理演奏验收。
+`host.native_capture_allocation_failure` 使用真实 Host 源码与 test-only allocator
+interposition，验证失败前后完整 Project 文件身份不变、frame/Voice 继续推进、
+同一 session 重试、停止持久化、reload 与 CLI reopen 后的 revision/event。
+生产 binary 不含故障开关；no-device 证据不代表物理音频或听感验收。
+## 限制
+它是薄 Host，不应扩展为隐藏的产品专属 Core。Performance adapter 已接入设备数据面不等于已完成物理演奏、听感或延迟验收，也不表示 tag、Release、部署或 Channel promotion 已发生。
+
+当前 Host 随 Facade/Platform 的 owned Provider 字节 ABI 集成更新依赖身份，transport
+操作保持原形状。无绑定 Proof 可运行；带输入绑定的 Provider 请求在 owner 尚未接线时
+返回可查询的 `input_artifact_unavailable` Attempt，Slice 工作流仍待后续集成。
+
+本次集成已为 Audio Runtime 的 Engine ABI 变更及其依赖重建分配匹配版本，当前身份以上方 Build Identity 为准。Slice 参考注册不增加此 Host 的切片操作或默认执行权限。

@@ -109,9 +109,7 @@ AppliedCommand applied(
     std::string_view type,
     const CommandMeta& meta,
     ProjectContract contract = ProjectContract::v3) {
-  state.contract = state.contract == ProjectContract::v4
-                       ? ProjectContract::v4
-                       : contract;
+  state.contract = std::max(state.contract, contract);
   ++state.revision;
   const auto committed_revision = state.revision;
   return AppliedCommand{
@@ -226,6 +224,18 @@ foundation::Result<AppliedCommand> apply_new_command(
   if (!valid_artifact(command.asset.artifact)) {
     return invalid("artifact reference is invalid");
   }
+  if (command.asset.lineage) {
+    const auto valid = validate_asset_lineage(*command.asset.lineage);
+    if (!valid.has_value()) {
+      return foundation::Result<AppliedCommand>::failure(valid.error());
+    }
+    if (state.contract < ProjectContract::v4 ||
+        (asset_lineage_derivation_kind(*command.asset.lineage) ==
+             AssetLineageDerivationKind::capability_adoption &&
+         state.contract < ProjectContract::v5)) {
+      return invalid("Asset Lineage is not supported by this Project Contract");
+    }
+  }
   if (state.assets.contains(command.asset.id)) {
     return foundation::Result<AppliedCommand>::failure(
         foundation::Error{
@@ -281,6 +291,18 @@ foundation::Result<AppliedCommand> apply_new_command(
   if (!valid_artifact(command.asset.artifact)) {
     return invalid("artifact reference is invalid");
   }
+  if (command.asset.lineage) {
+    const auto valid = validate_asset_lineage(*command.asset.lineage);
+    if (!valid.has_value()) {
+      return foundation::Result<AppliedCommand>::failure(valid.error());
+    }
+    if (state.contract < ProjectContract::v4 ||
+        (asset_lineage_derivation_kind(*command.asset.lineage) ==
+             AssetLineageDerivationKind::capability_adoption &&
+         state.contract < ProjectContract::v5)) {
+      return invalid("Asset Lineage is not supported by this Project Contract");
+    }
+  }
   if (state.assets.contains(command.asset.id)) {
     return foundation::Result<AppliedCommand>::failure(
         foundation::Error{
@@ -298,9 +320,56 @@ foundation::Result<AppliedCommand> apply_new_command(
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state, const AdoptCandidates& command) {
+  const auto fresh = validate_candidate_source(state, command.project_id,
+      command.meta.expected_revision, command.source_asset_id, command.source_artifact);
+  if (!fresh.has_value()) return foundation::Result<AppliedCommand>::failure(fresh.error());
+  if (command.assignments.empty() || command.assignments.size() > 64)
+    return invalid("adoption requires explicit Pad targets");
+  std::set<std::pair<std::uint8_t, std::uint8_t>> targets;
+  std::set<foundation::AssetId> ids;
+  std::optional<CapabilityAdoptionLineageDerivation> evidence;
+  std::optional<AssetArtifactLineageSource> analysis;
+  for (const auto& assignment : command.assignments) {
+    if (!is_valid_slot(assignment.slot) ||
+        !targets.emplace(assignment.slot.bank, assignment.slot.pad).second)
+      return invalid("adoption targets must be valid and unique");
+    if (!is_valid_uuid(assignment.asset.id.value()) ||
+        !ids.insert(assignment.asset.id).second || state.assets.contains(assignment.asset.id))
+      return invalid("adoption Asset IDs must be new and unique");
+    if (!valid_artifact(assignment.asset.artifact) ||
+        assignment.asset.artifact.media_type != "audio/wav" || !assignment.asset.lineage)
+      return invalid("adoption requires WAV artifacts and valid lineage");
+    const auto& lineage = *assignment.asset.lineage;
+    const auto valid = validate_asset_lineage(lineage);
+    if (!valid.has_value()) return invalid(valid.error().message);
+    const auto* source = std::get_if<AssetArtifactLineageSource>(&lineage.source);
+    const auto* derivation = std::get_if<CapabilityAdoptionLineageDerivation>(&lineage.derivation);
+    if (!source || !derivation || source->artifact_sha256 != command.source_artifact.sha256 ||
+        source->project_revision > state.revision || derivation->source_asset_id != command.source_asset_id)
+      return invalid("adoption lineage must match its source binding");
+    if (evidence) {
+      auto comparable = *derivation;
+      comparable.recipe = evidence->recipe;
+      if (comparable != *evidence || *source != *analysis)
+        return invalid("adoption requires one analysis identity");
+    } else { evidence = *derivation; analysis = *source; }
+  }
+  auto copy = state;
+  for (const auto& assignment : command.assignments) {
+    copy.assets.emplace(assignment.asset.id, assignment.asset);
+    auto& pad = copy.banks.at(assignment.slot.bank).at(assignment.slot.pad);
+    pad.asset_id = assignment.asset.id;
+    pad.playback = PadPlayback{};
+  }
+  return foundation::Result<AppliedCommand>::success(
+      applied(std::move(copy), "candidate.adopted", command.meta, ProjectContract::v5));
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
     const ProjectState& state,
     const InstallSoundSet& command) {
-  if (state.contract != ProjectContract::v4) {
+  if (state.contract < ProjectContract::v4) {
     return invalid(
         "installing a Sound Set requires lmdj.project.v4 Project Truth");
   }
@@ -570,6 +639,35 @@ resolve_soundset_write_set(
     }
   }
   return foundation::Result<WriteSet>::success(std::move(kept));
+}
+
+foundation::Result<void> validate_candidate_source(
+    const ProjectState& state, const foundation::ProjectId& project_id,
+    std::uint64_t expected_revision, const foundation::AssetId& source_asset_id,
+    const foundation::ArtifactRef& source_artifact) {
+  using foundation::Error;
+  using foundation::ErrorCode;
+  using Result = foundation::Result<void>;
+  if (state.id != project_id || state.revision != expected_revision)
+    return Result::failure(Error{ErrorCode::revision_conflict, "Adoption Project identity or revision changed"});
+  const auto source = state.assets.find(source_asset_id);
+  if (source == state.assets.end()) return Result::failure(Error{ErrorCode::not_found,
+      "Candidate source Asset is missing", {{"reason", "source_asset_missing"}}});
+  if (source->second.artifact != source_artifact)
+    return Result::failure(Error{ErrorCode::revision_conflict, "Candidate source binding changed",
+        {{"reason", "candidate_source_changed"}}});
+  return Result::success();
+}
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state, const AdoptCandidates& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts) {
+  const auto fresh = validate_candidate_source(state, command.project_id,
+      command.meta.expected_revision, command.source_asset_id, command.source_artifact);
+  if (!fresh.has_value()) return foundation::Result<AppliedCommand>::failure(fresh.error());
+  if (receipts.contains(command.meta.command_id))
+    return invalid("adoption requires a new explicit command identity");
+  return apply_checked(state, command, receipts);
 }
 
 foundation::Result<AppliedCommand> apply(

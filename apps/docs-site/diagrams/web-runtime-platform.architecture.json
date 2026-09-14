@@ -28,8 +28,8 @@
   ],
   "cards": [
     {"title": "Product identity", "body": "Product CMake 注入 Product Build、Platform version 与精确 Host triple。"},
-    {"title": "Shared runtime", "body": "两个 Host 共用 frame-stamped input、BPM-safe overlay、exact boundary flush、bounded Stop replay 与 fail-closed owner-loss cleanup。"},
+    {"title": "Shared runtime", "body": "两个 Host 共用 frame-stamped input、BPM-safe overlay、exact boundary flush、bounded Stop replay 与 fail-closed owner-loss cleanup。 Strict retained-Project routing, explicit permission readback and target plan. Facade prepares transient PCM; Host audition pool reports actual admission and consumes stop. Serialize adoption once; unknown response requires inspection. No Host bundle parsing or automatic retry."},
     {"title": "Master tap", "body": "Platform 自有 master tap worklet；capture 状态沿 unconfigured → configured → ready 前进，失败为 unavailable，capture 只能从 ready 启动，每条消息逐键校验。"},
-    {"title": "Forbidden boundary", "body": "Project Bundle 只进入 Facade，不连接 Creator internals，也不替代 Project Truth。"}
+    {"title": "Forbidden boundary", "body": "Project Bundle 只进入 Facade，不连接 Creator internals，也不替代 Project Truth。Transport T0 conformance: executor owns paused OPFS while Control admits live press/release. Resume, verify bytes, consume once, release on owner thread and reacquire on a new worker. Production dispatch remains serialized; no global opt-in yet."}
   ]
 }

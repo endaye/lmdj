@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -20,6 +21,7 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include <poll.h>
 #include <unistd.h>
@@ -134,6 +136,39 @@ constexpr std::array<std::pair<std::string_view, FacadeSurface>, 5>
         {"soundset.map.preview", FacadeSurface::query},
         {"soundset.install", FacadeSurface::command},
     }};
+
+constexpr std::array<std::pair<std::string_view, FacadeSurface>, 5>
+    kProviderOperations{{
+        {"provider.list", FacadeSurface::query},
+        {"provider.select", FacadeSurface::command},
+        {"provider.run", FacadeSurface::command},
+        {"provider.permissions.configure", FacadeSurface::command},
+        {"attempt.inspect", FacadeSurface::query},
+    }};
+
+constexpr std::array<std::pair<std::string_view, FacadeSurface>, 6>
+    kCandidateOperations{{
+        {"candidate.job.run", FacadeSurface::command},
+        {"candidate.job.inspect", FacadeSurface::query},
+        {"candidate.job.cancel", FacadeSurface::command},
+        {"candidate.set.discard", FacadeSurface::command},
+        {"candidate.adopt", FacadeSurface::command},
+        {"candidate.audition", FacadeSurface::query},
+    }};
+
+std::optional<FacadeSurface> candidate_surface(std::string_view operation) {
+  for (const auto& [name, surface] : kCandidateOperations) {
+    if (name == operation) return surface;
+  }
+  return std::nullopt;
+}
+
+std::optional<FacadeSurface> provider_surface(std::string_view operation) {
+  for (const auto& [name, surface] : kProviderOperations) {
+    if (name == operation) return surface;
+  }
+  return std::nullopt;
+}
 
 std::optional<FacadeSurface> performance_surface(std::string_view operation) {
   for (const auto& [name, surface] : kPerformanceOperations) {
@@ -604,10 +639,16 @@ class NativeHost final {
         has_operation ? performance_surface(name) : std::nullopt;
     const auto soundset =
         has_operation ? soundset_surface(name) : std::nullopt;
+    const auto provider =
+        has_operation ? provider_surface(name) : std::nullopt;
+    const auto candidate =
+        has_operation ? candidate_surface(name) : std::nullopt;
     const bool query_operation =
         name == "sample.quota" || name == "status" ||
         (performance.has_value() && *performance == FacadeSurface::query) ||
-        (soundset.has_value() && *soundset == FacadeSurface::query);
+        (soundset.has_value() && *soundset == FacadeSurface::query) ||
+        (provider.has_value() && *provider == FacadeSurface::query) ||
+        (candidate.has_value() && *candidate == FacadeSurface::query);
     if (!has_operation || query_operation) {
       service_runtime_once();
     } else {
@@ -631,6 +672,15 @@ class NativeHost final {
       }
       if (soundset.has_value()) {
         return soundset_operation(request, *soundset);
+      }
+      if (provider.has_value()) {
+        return provider_operation(request, *provider);
+      }
+      if (candidate.has_value()) {
+        return candidate_operation(request, *candidate);
+      }
+      if (name == "candidate.audition.stop") {
+        return stop_candidate_audition(request);
       }
       if (name == "trigger") {
         return trigger(request);
@@ -699,6 +749,73 @@ class NativeHost final {
                : application_.query(request);
   }
 
+  Json provider_operation(const Json& request, FacadeSurface surface) {
+    if (request.contains("input_owners")) {
+      const auto& owners = request.at("input_owners");
+      if (!owners.is_array()) return invalid_request("input_owners must be an array");
+      for (const auto& owner : owners) {
+        if (!owner.is_object() || !owner.contains("project_path") ||
+            !owner.at("project_path").is_string() ||
+            owner.at("project_path").get<std::string>() != invocation_.project.generic_string()) {
+          return invalid_request("Provider owner must target the Native Host Project");
+        }
+      }
+    }
+    std::lock_guard lock(facade_mutex_);
+    return surface == FacadeSurface::command
+        ? application_.command(request) : application_.query(request);
+  }
+
+  Json candidate_operation(const Json& request, FacadeSurface surface) {
+    const auto project = request.find("project_path");
+    if (project != request.end() &&
+        (!project->is_string() ||
+         project->get<std::string>() != invocation_.project.generic_string())) {
+      return invalid_request("Candidate operation must target the Native Host Project");
+    }
+    Json response;
+    bool played = false;
+    {
+      std::lock_guard lock(facade_mutex_);
+      response = surface == FacadeSurface::command
+          ? application_.command(request) : application_.query(request);
+      if (response.value("ok", false) &&
+          request.at("operation") == "candidate.audition") {
+        // The JSON Facade validates the exact request shape before typed
+        // preparation. Propagate a preparation refusal, including external
+        // owner changes, instead of misreporting stale metadata as success.
+        const auto audio = application_.audition_candidate(
+            lmdj::facade::CandidateAuditionRequest{
+                invocation_.project,
+                lmdj::foundation::ProjectId{request.at("project_id").get<std::string>()},
+                request.at("expected_revision").get<std::uint64_t>(),
+                request.at("job_id").get<std::string>(),
+                request.at("set_id").get<std::string>(),
+                request.at("candidate_id").get<std::string>(),
+            });
+        if (!audio.has_value()) return error_response(audio.error());
+        played = running_ && publish_audition_locked(*audio.value().prepared);
+        response["result"]["played"] = played;
+      }
+    }
+    if (played) drain_no_device_trigger();
+    return response;
+  }
+
+  Json stop_candidate_audition(const Json& request) {
+    if (!exact_keys(request, {"operation"})) {
+      return invalid_request("Candidate audition stop takes no selectors");
+    }
+    std::lock_guard lock(facade_mutex_);
+    if (running_ && engine_.enqueue_control(lmdj::audio::PadControlEvent{
+            0, 0, 0, lmdj::audio::PadControlKind::audition_stop, {},
+        }) != EnqueueResult::accepted) {
+      return invalid_request("Candidate audition stop was not admitted");
+    }
+    drive_no_device_once();
+    return success_response("candidate.audition.stop", {{"stopped", true}});
+  }
+
   // Workspace-level Sound Set operations carry no `project_path` at all, and
   // the Project-scoped two must name this Host's Project, so the check is the
   // presence-conditional one rather than a required field.
@@ -710,10 +827,138 @@ class NativeHost final {
       return invalid_request(
           "Sound Set operation must target the Native Host Project");
     }
-    std::lock_guard lock(facade_mutex_);
-    return surface == FacadeSurface::command
-               ? application_.command(request)
-               : application_.query(request);
+    bool played = false;
+    Json response;
+    {
+      std::lock_guard lock(facade_mutex_);
+      response = surface == FacadeSurface::command
+                     ? application_.command(request)
+                     : application_.query(request);
+      // #799. The Facade has answered with the geometry; this Host owns an
+      // engine, so it also plays the bytes. A stopped Host is a normal state
+      // rather than a refusal, so `running_` gates the playback and never the
+      // answer.
+      //
+      // #1059 established `played` on the other engine-owning Host: without it
+      // "it played" and "it silently did not" are the same reply, and the
+      // branch a caller actually meets is a Host that has published a snapshot
+      // and never started its backend, where `enqueue_control` refuses every
+      // audition. This carries that field with the same meaning -- a voice was
+      // admitted -- and never a reason for `false`, because a reason
+      // vocabulary here is what Stage 11 froze. It is a Host field on the
+      // result, not a Facade one: `soundset.audition` through the CLI or
+      // core-mcp carries no `played`, because neither owns an engine to answer
+      // for.
+      //
+      // `find` rather than `operator[]`: on a non-const `Json` the subscript
+      // inserts a null member for a missing key, so probing `result` that way
+      // would edit the envelope it is only supposed to read.
+      const auto result = response.find("result");
+      if (response.value("ok", false) && result != response.end() &&
+          result->is_object() &&
+          request.at("operation").get<std::string>() == "soundset.audition") {
+        played = running_ && play_audition_locked(request);
+        (*result)["played"] = played;
+      }
+    }
+    if (played) {
+      // The deterministic backend has no clock of its own: nothing renders
+      // until this Host drives it, which is why `trigger` drains here too. In
+      // device mode this returns immediately and the audio callback owns the
+      // voice.
+      drain_no_device_trigger();
+    }
+    return response;
+  }
+
+  // #799. Publish the audition PCM the Facade decoded into the engine's
+  // reserved audition pool and start a voice on it.
+  //
+  // `audition_soundset` is the typed Facade method the Web Host's
+  // `play_audition` also calls: the Facade resolves the Set, applies S11-D3's
+  // whole-Set audio decision and the locked refusal order, decodes and
+  // resamples, and hands back prepared PCM. This Host never reads the Set
+  // Store -- the relationship `sample.preview.set` already has with
+  // `inspect_sample` -- which is what keeps audition inside "Hosts use only
+  // the Application Facade".
+  //
+  // Not an error by design, exactly as in `control_runtime.cpp`: the metadata
+  // answer the caller is about to receive is already correct, and reporting a
+  // playback failure as a refusal would need error vocabulary Stage 11 has
+  // frozen. Returns whether a voice was actually admitted, which the caller
+  // reports as `played` rather than discarding.
+  //
+  // Called with `facade_mutex_` held.
+  [[nodiscard]] bool play_audition_locked(const Json& request) {
+    // The three identity fields are strings whenever the Facade answered `ok`:
+    // `soundset_audition` admits only the two exact key sets and type-checks
+    // each field before it resolves anything.
+    lmdj::facade::SoundSetAuditionRequest audition{
+        request.at("set_id").get<std::string>(),
+        request.at("version").get<std::string>(),
+        request.at("manifest_sha256").get<std::string>(),
+        std::nullopt,
+    };
+    if (request.contains("slot_index")) {
+      audition.slot_index = static_cast<std::uint8_t>(
+          request.at("slot_index").get<std::uint64_t>());
+    }
+    const auto audio = application_.audition_soundset(audition);
+    if (!audio.has_value()) {
+      // The Facade already refused this request through the envelope the
+      // caller is about to receive; there is nothing further to report.
+      return false;
+    }
+    return publish_audition_locked(*audio.value().prepared);
+  }
+
+  // Both typed Facade audition surfaces use this Host-owned reserved pool.
+  [[nodiscard]] bool publish_audition_locked(const lmdj::cooker::PcmSample& source) {
+    if (source.channels == 0 || source.interleaved.empty() ||
+        source.interleaved.size() % source.channels != 0) {
+      return false;
+    }
+    const auto frames = source.interleaved.size() / source.channels;
+    if (frames > std::numeric_limits<std::uint32_t>::max()) {
+      return false;
+    }
+    // Down-mix to the mono float a Bank stores through the same public helper
+    // `PreparedSampleBank::from_snapshot` uses for a Project Pad, so an
+    // audition and a Pad cannot disagree about what stereo means.
+    const lmdj::audio::PreparedSampleMaterialView material{
+        source.interleaved.data(),
+        static_cast<std::uint32_t>(frames),
+        source.channels,
+    };
+    std::vector<float> mono;
+    mono.reserve(frames);
+    for (std::uint32_t frame = 0; frame < frames; ++frame) {
+      mono.push_back(lmdj::audio::prepared_material_sample(material, frame));
+    }
+    auto bank = PreparedSampleBank::empty(
+        lmdj::audio::kAuditionBankProjectId(),
+        lmdj::audio::kAuditionBankProjectRevision);
+    if (!bank.set_sample(lmdj::audio::kAuditionSampleSlot, mono).has_value()) {
+      return false;
+    }
+    if (engine_.publish_audition_bank(std::move(bank)) !=
+        PublishResult::accepted) {
+      // Both reserved audition slots are still draining an earlier preview.
+      // Dropping this one is the honest outcome: the alternative is
+      // overwriting bytes a voice is still reading, which is the defect the
+      // two-slot pool exists to avoid. Retiring from here instead is not an
+      // option -- publication primes an `empty` slot and the audio thread
+      // applies and retires inside `render`, which is what serialises
+      // retirement against voice starts.
+      return false;
+    }
+    return engine_.enqueue_control(lmdj::audio::PadControlEvent{
+               0,
+               0,
+               127,
+               lmdj::audio::PadControlKind::audition_start,
+               {},
+           }) == EnqueueResult::accepted;
   }
 
   Json sample_quota(const Json& request) {
@@ -994,6 +1239,12 @@ class NativeHost final {
     Json begun;
     {
       std::lock_guard lock(facade_mutex_);
+      // Prepare before creating any durable Sequence session or writer. A
+      // failed optional allocation must leave the current playback untouched.
+      if (!engine_.prepare_capture()) {
+        return error_response(
+            "INTERNAL_ERROR", "Insufficient memory for Capture recording buffer");
+      }
       const auto result = application_.begin_sequence({
           invocation_.project,
           SequenceSessionId{*session},

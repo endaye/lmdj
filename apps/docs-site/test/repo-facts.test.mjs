@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdtemp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
+import {cp, readdir, mkdtemp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import test from 'node:test';
 import path from 'node:path';
@@ -66,14 +66,15 @@ test('facts match the current locked product composition', async () => {
     'web-runtime-platform',
   ]);
   assert.deepEqual(facts.hosts.map(({id, version}) => ({id, version})), [
-    {id: 'core-cli', version: '3.2.0'},
-    {id: 'core-mcp', version: '3.2.0'},
-    {id: 'creator-web', version: '4.1.0'},
-    {id: 'native-host', version: '3.2.0'},
-    {id: 'web-runtime-host', version: '4.1.0'},
+    {id: 'cardputer-host', version: '1.0.0'},
+    {id: 'core-cli', version: '3.3.5'},
+    {id: 'core-mcp', version: '3.4.0'},
+    {id: 'creator-web', version: '4.3.0'},
+    {id: 'native-host', version: '3.4.0'},
+    {id: 'web-runtime-host', version: '4.3.0'},
   ]);
-  assert.equal(facts.providers.length, 2);
-  assert.equal(facts.contracts.length, 10);
+  assert.equal(facts.providers.length, 3);
+  assert.equal(facts.contracts.length, 14);
 });
 
 test('facts name each Product Build consumer that mismatches authority', async (t) => {
@@ -98,4 +99,42 @@ test('facts name each Product Build consumer that mismatches authority', async (
       (error) => assertProductMismatch(error, {found: '9.8.7.5', consumer: current.consumer}),
     );
   }
+});
+
+
+test('registered Slice validator and binary profile remain authenticated', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'lmdj-slice-facts-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  for (const directory of ['products', 'providers', 'contracts']) {
+    await cp(path.join(repoRoot, directory), path.join(root, directory), {recursive: true});
+  }
+  for (const directory of ['packages', 'apps']) {
+    await mkdir(path.join(root, directory), {recursive: true});
+    for (const entry of await readdir(path.join(repoRoot, directory))) {
+      const relative = `${directory}/${entry}/module.json`;
+      const source = await readFile(path.join(repoRoot, relative)).catch(() => null);
+      if (!source) continue;
+      await mkdir(path.dirname(path.join(root, relative)), {recursive: true});
+      await writeFile(path.join(root, relative), source);
+    }
+  }
+  const inspect = () => readRepoFacts({repoRoot: root, revision: 'abcdef123456', channel: 'canary'});
+  assert.equal((await inspect()).providers.length, 3);
+  for (const relative of ['providers/local-sample-slice/src/validation.cpp',
+    'providers/local-sample-slice/include/lmdj/providers/local_sample_slice/validation.hpp']) {
+    const file = path.join(root, relative);
+    const original = await readFile(file);
+    await writeFile(file, Buffer.concat([original, Buffer.from('\n// identity mutation\n')]));
+    await assert.rejects(inspect, /providers source hash mismatch for local.sample.slice/);
+    await writeFile(file, original);
+  }
+  const requiredSource = path.join(root, 'providers/local-sample-slice/src/provider.cpp');
+  const savedSource = await readFile(requiredSource);
+  await rm(requiredSource);
+  await assert.rejects(inspect, /source-package file is unavailable/);
+  await writeFile(requiredSource, savedSource);
+  const profile = path.join(root, 'contracts/artifact-audio/lmdj.audio.pcm16-wav.v1.md');
+  const original = await readFile(profile, 'utf8');
+  await writeFile(profile, original.replace('contract_version: 1.0.0', 'contract_version: 9.0.0'));
+  await assert.rejects(inspect, /contract profile identity mismatch/);
 });

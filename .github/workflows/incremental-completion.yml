@@ -15,7 +15,7 @@ jobs:
       contents: read
       actions: read
     if: github.ref == 'refs/heads/main' && github.run_attempt == '1'
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v6

@@ -1,12 +1,15 @@
 ---
 id: worktree-checkout-flattens-symlinks
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/commit/cdeb4c3e7f417e1bf17b5266f98f26d86376052a
     observed_by: Codex
-exit: none
+  - date: 2026-09-09
+    occurrence: https://github.com/endaye/lmdj/issues/1037
+    observed_by: Codex
+exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
 # A Linux worktree inheriting `core.symlinks=false` can be Git-clean while tracked directory links are unusable regular files.
@@ -41,6 +44,8 @@ active worktrees and is not an appropriate implicit repair.
 - Rerun the original failing check and retain its full result. Do not replace
   links with copied snapshot trees or weaken the snapshot assertions.
 
-No automatic mechanism is installed: determining the task filesystem's link
-support and shared-config scope requires an environment preflight. A future
-worktree skill can absorb that decision; this entry grants no cleanup authority.
+The shipping skill now requires checking tracked link modes against actual
+filesystem types before interpreting these path failures, and prescribes a
+pristine, command-local repair. K5 encountered the same ENOTDIR failure in its
+isolated Linux worktree; restoring the unchanged tracked links made the
+historical snapshot test pass. This skill exit grants no cleanup authority.

@@ -27,6 +27,7 @@ add_subdirectory(packages/audio-runtime)
 add_subdirectory(packages/provider-sdk)
 add_subdirectory(providers/local-proof-success)
 add_subdirectory(providers/local-proof-failure)
+add_subdirectory(providers/local-sample-slice)
 add_subdirectory(tests/core/provider)
 add_subdirectory(packages/application-facade)
 
@@ -53,6 +54,16 @@ lmdj_add_test(
   LABELS provider benchmark
 )
 
+lmdj_add_test(
+  NAME provider.benchmark_slice_score
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tools/provider-benchmark/tests/score_slice_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  LABELS provider benchmark
+  )
+
 add_subdirectory(apps/web-runtime-host)
 add_subdirectory(packages/web-runtime-platform)
 
@@ -68,6 +79,73 @@ if(APPLE AND TARGET lmdj_native_audio_probe)
     LABELS audio
   )
 endif()
+
+set(
+  lmdj_mcp_test_environment
+  "PYTHONPATH=${CMAKE_SOURCE_DIR}/apps/core-mcp"
+)
+if(LMDJ_SANITIZER STREQUAL "address")
+  if(APPLE)
+    set(lmdj_asan_runtime_name libclang_rt.asan_osx_dynamic.dylib)
+  elseif(UNIX)
+    set(lmdj_asan_runtime_name libasan.so)
+  endif()
+  if(DEFINED lmdj_asan_runtime_name)
+    execute_process(
+      COMMAND
+        "${CMAKE_CXX_COMPILER}"
+        "--print-file-name=${lmdj_asan_runtime_name}"
+      RESULT_VARIABLE lmdj_asan_runtime_status
+      OUTPUT_VARIABLE lmdj_asan_runtime
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(
+      NOT lmdj_asan_runtime_status EQUAL 0
+      OR NOT IS_ABSOLUTE "${lmdj_asan_runtime}"
+      OR NOT EXISTS "${lmdj_asan_runtime}"
+    )
+      message(
+        FATAL_ERROR
+        "Unable to locate the AddressSanitizer runtime for MCP Host tests"
+      )
+    endif()
+    if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      # CPython loads the C ABI with dlopen. Make the C++ exception runtime
+      # available when libasan initializes its __cxa_throw interceptor.
+      execute_process(
+        COMMAND "${CMAKE_CXX_COMPILER}" "--print-file-name=libstdc++.so"
+        RESULT_VARIABLE lmdj_asan_cxx_runtime_status
+        OUTPUT_VARIABLE lmdj_asan_cxx_runtime
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+      )
+      if(NOT lmdj_asan_cxx_runtime_status EQUAL 0
+         OR NOT IS_ABSOLUTE "${lmdj_asan_cxx_runtime}"
+         OR NOT EXISTS "${lmdj_asan_cxx_runtime}")
+        message(FATAL_ERROR "Unable to locate the C++ runtime for MCP ASAN tests")
+      endif()
+      string(APPEND lmdj_asan_runtime ":${lmdj_asan_cxx_runtime}")
+    endif()
+    list(
+      APPEND lmdj_mcp_test_environment
+      "LMDJ_ASAN_RUNTIME=${lmdj_asan_runtime}"
+    )
+    if(APPLE)
+      list(
+        APPEND lmdj_mcp_test_environment
+        "ASAN_OPTIONS=verify_interceptors=0"
+      )
+    elseif(UNIX)
+      # libasan is preloaded into an otherwise uninstrumented CPython process
+      # for ctypes coverage. Ignore CPython's process-lifetime allocations in
+      # these Host tests only; native C++ sanitizer tests retain leak checks.
+      list(
+        APPEND lmdj_mcp_test_environment
+        "ASAN_OPTIONS=detect_leaks=0"
+      )
+    endif()
+  endif()
+endif()
+
 
 add_subdirectory(apps/core-cli)
 add_subdirectory(apps/native-host)
@@ -132,10 +210,18 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_provider_attempt_ledger_invariant_tests
     lmdj_provider_host_settings_invariant_tests
     lmdj_provider_spec_regression_tests
+    lmdj_provider_sample_slice_tests
+    lmdj_provider_artifact_source_tests
+    lmdj_provider_output_validation_tests
+    lmdj_provider_attempt_output_read_tests
+    lmdj_provider_execution_crash_tests
     lmdj_facade_performance_runtime_consumer_tests
     lmdj_runtime_facade_tests
     lmdj_runtime_facade_concurrency_tests
     lmdj_application_facade_tests
+    lmdj_facade_candidate_store_tests
+    lmdj_facade_candidate_job_tests
+    lmdj_facade_candidate_audition_tests
     lmdj_facade_runtime_content_export_tests
     lmdj_application_facade_failure_tests
     lmdj_facade_sequence_surface_tests
@@ -160,6 +246,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_application_dynamic_load_tests
     lmdj_core_cli
     lmdj_native_host
+    lmdj_native_capture_allocation_failure
     lmdj_core_c
     lmdj_sequence_journal_tests
     lmdj_performance_journal_tests
@@ -201,61 +288,180 @@ if(LMDJ_ENABLE_COVERAGE)
   )
 endif()
 
-set(
-  lmdj_mcp_test_environment
-  "PYTHONPATH=${CMAKE_SOURCE_DIR}/apps/core-mcp"
-)
-if(LMDJ_SANITIZER STREQUAL "address")
-  if(APPLE)
-    set(lmdj_asan_runtime_name libclang_rt.asan_osx_dynamic.dylib)
-  elseif(UNIX)
-    set(lmdj_asan_runtime_name libasan.so)
-  endif()
-  if(DEFINED lmdj_asan_runtime_name)
-    execute_process(
-      COMMAND
-        "${CMAKE_CXX_COMPILER}"
-        "--print-file-name=${lmdj_asan_runtime_name}"
-      RESULT_VARIABLE lmdj_asan_runtime_status
-      OUTPUT_VARIABLE lmdj_asan_runtime
-      OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-    if(
-      NOT lmdj_asan_runtime_status EQUAL 0
-      OR NOT IS_ABSOLUTE "${lmdj_asan_runtime}"
-      OR NOT EXISTS "${lmdj_asan_runtime}"
-    )
-      message(
-        FATAL_ERROR
-        "Unable to locate the AddressSanitizer runtime for MCP Host tests"
-      )
-    endif()
-    list(
-      APPEND lmdj_mcp_test_environment
-      "LMDJ_ASAN_RUNTIME=${lmdj_asan_runtime}"
-    )
-    if(APPLE)
-      list(
-        APPEND lmdj_mcp_test_environment
-        "ASAN_OPTIONS=verify_interceptors=0"
-      )
-    elseif(UNIX)
-      # libasan is preloaded into an otherwise uninstrumented CPython process
-      # for ctypes coverage. Ignore CPython's process-lifetime allocations in
-      # these Host tests only; native C++ sanitizer tests retain leak checks.
-      list(
-        APPEND lmdj_mcp_test_environment
-        "ASAN_OPTIONS=detect_leaks=0"
-      )
-    endif()
-  endif()
-endif()
 
 lmdj_add_test(
   NAME build.active_tree
   TIER contract
   COMMAND "${BASH_EXECUTABLE}" tests/build/test_active_tree.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+lmdj_add_test(
+  NAME build.release_orchestration
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_orchestration_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_orchestration_driver
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_orchestration_driver_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_changelog
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_changelog_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_changelog_binding
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_changelog_binding_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_changelog_site
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_changelog_site_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_task_verification
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_task_verification_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 60
+)
+
+lmdj_add_test(
+  NAME build.release_publication_effect
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_publication_effect_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_managed_dispatch
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_managed_dispatch_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_durable_dispatch
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_durable_dispatch_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_dispatch_evidence
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_dispatch_evidence_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_dispatch_receipt
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_dispatch_receipt_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_review_inventory
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_review_inventory_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_managed_pr_transition
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_managed_pr_transition_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_evidence_source
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_evidence_source_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 60
+)
+
+lmdj_add_test(
+  NAME build.release_evidence_branch
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_evidence_branch_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 60
+)
+
+lmdj_add_test(
+  NAME build.release_changelog_install
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_changelog_install_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_publication_workspace
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_publication_workspace_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 60
+)
+
+lmdj_add_test(
+  NAME build.release_changelog_site_evidence
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_changelog_site_evidence_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_evidence_pr
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_evidence_pr_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_publication_evidence
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_publication_evidence_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_publication
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_publication_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
 )
 
 lmdj_add_test(
@@ -678,6 +884,15 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME fixtures.cardputer_music
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/cardputer_music_fixture_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+lmdj_add_test(
   NAME fixtures.soundset_corpus
   TIER contract
   COMMAND
@@ -726,3 +941,25 @@ lmdj_add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   TIMEOUT 10
 )
+
+if(BUILD_TESTING)
+  lmdj_add_test(
+    NAME build.cardputer_host
+    TIER component
+    COMMAND "${Python3_EXECUTABLE}" tests/build/cardputer_host_build_test.py
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  lmdj_add_test(
+    NAME build.cardputer_transfer
+    TIER component
+    COMMAND "${Python3_EXECUTABLE}" tests/build/cardputer_transfer_test.py
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  lmdj_add_test(
+    NAME conformance.cardputer_transfer
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/conformance/cardputer_transfer_contract_test.py
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  add_subdirectory(tests/platform/cardputer)
+endif()

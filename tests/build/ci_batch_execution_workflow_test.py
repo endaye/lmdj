@@ -93,7 +93,7 @@ class WorkflowContracts(unittest.TestCase):
     def test_stress_is_selected_per_suite_not_per_batch(self):
         for job, suite in (("nightly-tsan", "core_tsan_stress"), ("nightly-stress", "core_release_stress")):
             self.assertIn(f"fromJSON(needs.change-scope.outputs.batch-execution).suites.{suite}", job_body(SOURCE, job))
-            self.assertIn("needs.change-scope.outputs.batch-mode == 'false' ||", job_body(SOURCE, job))
+            self.assertNotIn("needs.change-scope.outputs.batch-mode == 'false'", job_body(SOURCE, job))
 
     def test_verdict_reads_all_actual_product_jobs_and_retains_raw_needs(self):
         needed = set(job_needs(job_body(SOURCE, "batch-verdict")))
@@ -377,6 +377,48 @@ class WorkflowScripts(unittest.TestCase):
         suite = next(s for s in verdict["suites"] if s["id"] == "core_tsan_stress")
         self.assertEqual(suite["scheduler_outcome"], "infrastructure")
         self.assertEqual(suite["failures"], [])
+
+    def test_real_shared_dependency_failure_publishes_source_bound_event(self):
+        execution = self.prepare(POLICY.suite_ids)
+        results = {"change-scope": {"result": "failure", "outputs": {"reason": "shared control failure"}}}
+        results.update({ALIASES.get(job, job): {"result": "skipped", "outputs": {}}
+                        for job in POLICY.inventory.job_owner})
+        results["macos-fallback"] = {"result": "skipped", "outputs": {}}
+        result, _, verdict, needs = self.judge(execution, results)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(verdict["evidence_schema"], batch_verdict.COMMON_EVENT_SCHEMA)
+        self.assertEqual(len(verdict["common_events"]), 1)
+        event = verdict["common_events"][0]
+        self.assertEqual((event["request_id"], event["run_id"], event["run_attempt"], event["cause"]),
+                         (execution["identity"]["request_id"], 51, 1, "change-scope"))
+        self.assertEqual(event["source"]["result"], needs["change-scope"]["result"])
+        self.assertEqual(set(event["blocked_suites"]), set(POLICY.suite_ids))
+
+    def test_simultaneous_product_failures_do_not_publish_common_event(self):
+        execution = self.prepare(["creator", "core_ubuntu"])
+        results = {"creator-web": {"result": "failure", "outputs": {}},
+                   "core-ubuntu": {"result": "failure", "outputs": {}}}
+        result, _, verdict, _ = self.judge(execution, results)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(next(s for s in verdict["suites"] if s["id"] == "creator")["failures"], ["creator-web"])
+        self.assertEqual(next(s for s in verdict["suites"] if s["id"] == "core_ubuntu")["failures"], ["core-ubuntu"])
+        self.assertNotIn("common_events", verdict)
+
+    def test_cancelled_or_skipped_shared_upstream_stays_ordinary_debt(self):
+        execution = self.prepare(["creator"])
+        for upstream in ("cancelled", "skipped"):
+            with self.subTest(upstream=upstream):
+                needs = {
+                    "change-scope": {"result": upstream, "outputs": {}},
+                    "creator-web": {"result": "skipped", "outputs": {}}}
+                verdict = batch_execution.from_needs(
+                    POLICY, execution["identity"], execution["selection"], needs,
+                    aliases=ALIASES,
+                    dependencies={job: ["change-scope"] for job in POLICY.inventory.job_owner})
+                self.assertNotIn("common_events", verdict)
+                creator = next(s for s in verdict["suites"] if s["id"] == "creator")
+                self.assertTrue(creator["verification_debt"])
+                self.assertEqual(creator["scheduler_outcome"], "blocked")
 
     def test_macos_fallback_success_reuses_complete_alternative_rule(self):
         result, _, verdict, _ = self.judge(self.prepare(["core_macos"]),

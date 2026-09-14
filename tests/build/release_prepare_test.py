@@ -33,7 +33,36 @@ def current_product_build() -> str:
     )
 
 
+# Every root a `module.json` may live under, in the order the source
+# boundaries in CLAUDE.md list them. Hardcoding `apps` would have made
+# `current_module_identity("application-facade")` raise FileNotFoundError for
+# `apps/application-facade/module.json`, a path that was never valid for that
+# module, instead of saying the module is not there.
+MODULE_ROOTS = ("apps", "packages", "providers")
+
+
+def current_module_identity(module_id: str) -> str:
+    """`<module>@<version>` read from the module's own manifest.
+
+    Pinning a literal here made this test fail whenever the module was bumped,
+    for a reason that has nothing to do with what it checks: that the real
+    exact-target validator accepts every supported identity kind. The manifest
+    is the same authority the validator itself resolves against, so reading it
+    removes that failure reason without weakening the check.
+    """
+    for root in MODULE_ROOTS:
+        path = ROOT / root / module_id / "module.json"
+        if path.is_file():
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            return f"{manifest['module']}@{manifest['version']}"
+    raise AssertionError(
+        f"no module.json for {module_id!r} under any of "
+        f"{', '.join(MODULE_ROOTS)}"
+    )
+
+
 CURRENT_PRODUCT_BUILD = current_product_build()
+CURRENT_CORE_CLI_IDENTITY = current_module_identity("core-cli")
 
 from tools.release.commands import CommandError, CommandRunner, sanitize_diagnostic  # noqa: E402
 from tools.release.github_api import (  # noqa: E402
@@ -1252,9 +1281,9 @@ class ReleaseTargetValidationIntegrationTest(unittest.TestCase):
                 ReleaseKind.PRODUCT, CURRENT_PRODUCT_BUILD,
                 "web-runtime-host", "canary", CURRENT_PRODUCT_BUILD,
             ),
-            (ReleaseKind.MODULE, "core-cli@3.1.0", "source-only", None, None),
+            (ReleaseKind.MODULE, CURRENT_CORE_CLI_IDENTITY, "source-only", None, None),
             (ReleaseKind.CONTRACT, "lmdj.capability.v2@2.0.0", "source-only", None, None),
-            (ReleaseKind.PROVIDER, "local.proof.success@1.0.5", "source-only", None, None),
+            (ReleaseKind.PROVIDER, current_module_identity("local-proof-success"), "source-only", None, None),
         )
         for kind, identity, profile, channel, snapshot in cases:
             with self.subTest(kind=kind.value):

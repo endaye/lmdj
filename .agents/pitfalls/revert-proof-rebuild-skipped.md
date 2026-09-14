@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/issues/769
     observed_by: Claude Code (Opus 5)
+  - date: 2026-09-09
+    occurrence: https://github.com/endaye/lmdj/issues/1058
+    observed_by: Claude Code (Opus 5)
 exit: none
 ---
 
@@ -47,3 +50,19 @@ verification method, not in any product code, so no product test can catch it.
 - When a single-assertion proof needs one test to run first, reorder the call
   in `main()` rather than deleting the other calls: `-Werror=unused-function`
   will fail the build, and a skipped build is exactly what hides the problem.
+
+## Second occurrence, 2026-09-09: the same mechanism with `.pyc`
+
+Perturbing `apps/core-mcp/lmdj_core_mcp/__init__.py`, then restoring it with
+`cp`, left the restored file older than
+`__pycache__/__init__.cpython-*.pyc`. Python reused the bytecode of the broken
+version, so the run *after* the restore still failed on the perturbation's own
+line while `grep` showed the source was already correct. Deleting
+`__pycache__` made it pass immediately.
+
+The dangerous direction is the other one. If the restore precedes the
+*breaking* run, a perturbation that never actually took effect reports green,
+and a perturbation proof that proves nothing gets written into a report as if
+it did. Escalated as
+https://github.com/endaye/lmdj/issues/1058: use `git checkout --` rather than
+`cp` to roll back, because it stamps the current mtime.

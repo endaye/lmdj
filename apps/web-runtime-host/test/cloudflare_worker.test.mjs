@@ -306,7 +306,7 @@ test("only GET is admitted", async () => {
 test("a malformed or non-https upstream fails closed", async () => {
   // Every value here is one that parsing would silently reinterpret, or that
   // this Worker will not forward to at all. `UPSTREAM_PARITY_REFUSED` in
-  // `apps/creator-web/test/server_test.py` is the same list: the two
+  // `apps/creator-web/test/server_test.py` is the full shared corpus: the two
   // implementations must refuse the same set, because a value one accepts and
   // the other rewrites is how a proof server stops standing in for production.
   const rejected = [
@@ -314,6 +314,13 @@ test("a malformed or non-https upstream fails closed", async () => {
     "ftp://catalog.example.test/",
     "not-a-url",
     "",
+    // Explicit character admission must not depend on the URL parser version.
+    "https://catalog.example.test/a^b/",
+    "https://catalog!example.test/b/",
+    "https://catalog~example.test/b/",
+    "https://catalog{example}.test/b/",
+    "https://.catalog.example.test/b/",
+    "https://-catalog.example.test/b/",
     "https://catalog.example.test/?query=1",
     "https://catalog.example.test/#fragment",
     "https://catalog.example.test//double/",

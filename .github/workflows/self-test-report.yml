@@ -13,6 +13,8 @@ on:
     types: [completed]
   schedule:
     - cron: "7,22,37,52 * * * *"
+    # Independent report opportunities even when every scheduler run executes.
+    - cron: "9,24,39,54 * * * *"
   workflow_dispatch:
     inputs:
       run_id:
@@ -60,11 +62,12 @@ on:
 # writes Issues; it holds no pull-request, contents-write or deploy authority.
 permissions: {}
 
-# Coalesce automatic observations before they enter the writer queue. This is
-# a distinct admission group, NOT the journal lock. Every manual command keeps
-# its own admission group; no running controller or product DAG is cancelled.
+# Coalesce scheduler observations and report-only ticks independently. A long
+# product DAG must not hold the admission group needed by report progress.
+# These are NOT journal locks. Every manual command keeps its own admission
+# group; no running controller, report or product DAG is cancelled.
 concurrency:
-  group: self-test-report-wakeup-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'automatic' }}
+  group: self-test-report-wakeup-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *' && 'reports' || 'automatic' }}
   cancel-in-progress: false
   queue: single
 
@@ -82,7 +85,7 @@ jobs:
       github.ref == 'refs/heads/main' && github.run_attempt == '1' &&
       (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_run' ||
        github.event_name == 'workflow_dispatch')
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 10
     concurrency:
       group: self-test-report
@@ -108,7 +111,7 @@ jobs:
           python-version: "3.11"
       - name: Reconcile the isolated journal under the short writer lock
         id: control
-        if: ${{ !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' && inputs.batch_operation != 'cancel-probe' }}
+        if: ${{ !(github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') && !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' && inputs.batch_operation != 'cancel-probe' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATCH_WRITER_LOCK: self-test-report
@@ -172,7 +175,7 @@ jobs:
           PY
       - name: Report durable observations independently
         id: automatic-report
-        if: ${{ always() && github.event_name != 'workflow_dispatch' && steps.control.outcome == 'success' && steps.control.outputs.action != 'execute' }}
+        if: ${{ always() && github.event_name != 'workflow_dispatch' && ((github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') || (steps.control.outcome == 'success' && steps.control.outputs.action != 'execute')) }}
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -186,7 +189,7 @@ jobs:
           exit "$status"
       - name: Recover missed review observations independently
         id: automatic-discovery
-        if: ${{ always() && github.event_name != 'workflow_dispatch' && (github.event_name != 'workflow_run' || github.event.workflow_run.path == '.github/workflows/pr-review.yml') && steps.control.outcome == 'success' && steps.control.outputs.action != 'execute' }}
+        if: ${{ always() && github.event_name != 'workflow_dispatch' && (github.event_name != 'workflow_run' || github.event.workflow_run.path == '.github/workflows/pr-review.yml') && ((github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') || (steps.control.outcome == 'success' && steps.control.outputs.action != 'execute')) }}
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -421,7 +424,7 @@ jobs:
           raise SystemExit(subprocess.run(command, check=False).returncode)
           PY
       - uses: actions/upload-artifact@v4
-        if: ${{ always() && !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' && inputs.batch_operation != 'cancel-probe' }}
+        if: ${{ always() && !(github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') && !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' && inputs.batch_operation != 'cancel-probe' }}
         with:
           name: batch-controller-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/incremental-controller/result.json
@@ -436,7 +439,7 @@ jobs:
       inputs.batch_operation == 'cancel-probe' && needs.controller.result == 'success' &&
       needs.controller.outputs.diagnostic_ready == 'true'
     permissions: {}
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 5
     steps:
       - name: Wait for separately authorized exact-run cancellation

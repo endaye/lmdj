@@ -1,5 +1,42 @@
 # Human TODO — 2026-08-17
 
+## Creator 新 UI 迁移入口（2026-09-11）
+
+见[渐进迁移计划](../plans/2026-09-11-creator-ui-migration.md)与 #1207。
+U0 #1214 需要确认六工作区入口、首个可实施双屏切片、实体映射、Pad选择/触发、
+状态原型、缩放和可访问性；未来双屏内容仍开放，不能在实现中偷偷裁定。
+U7 #1221 复用 #248/#249/#251、#243、#360/#362–#366、#721/#716–#720 和 #1167
+的适用设备追踪，记录新UI精确候选与覆盖；旧截图、自动音频和synthetic blur不核销真实验收。
+U8 #1222 等默认布局实际观察与用户确认，不按合并后时间自动删除。
+跨origin工程迁移仍归 #961；新旧UI回退不依赖已删除旧托管，也不清浏览器存储。
+
+## 四条主线当前入口（2026-09-11）
+
+统一依赖与工作拆分见[四线总计划](../plans/2026-09-11-parallel-product-roadmap.md)。
+Stage 12：S2 #1167 固定候选 Windows 操作/听感及 S4 #1169 适用性裁定。
+Embedded：H1 启动/停止静音、R2 真正设备测量及 A1 #1111 完整旅程；
+B1 #1110 的构建结果不能替代这些验收。
+Web Creator：W1 未决交互确认、W2 真实触摸原型验证、W5 固定候选听感/恢复/
+非开发者可用性验收；#1207 与 #522 各自保留完成范围。
+历史 Safari/iPadOS/MIDI/Sequence/Perform 验收继续保留，不随本次重排结案。
+
+CI 第四主线：#1089 保留实际 report/discovery、后端及负载等运行缺口；
+#1149 保留 T4 主机/供应商/资源验收、T5 质量/可靠性/成本裁定、T6 切换/回滚交接。
+由原执行 Agent 按既有授权推进；自动化实测与所需外部批准分列，不统称人工任务，
+也不以源码或 fixture 测试替代真实运行结果。
+
+## Stage 12 当前入口（2026-09-10）
+
+完整列表与验收腿见[独立交付计划](../plans/2026-09-10-stage12-independent-delivery.md)。
+S2 Windows Creator 操作/听感 [#1167](https://github.com/endaye/lmdj/issues/1167) 等待 S1 验收包；
+实际浏览器能力、OS/音频设备与固定候选身份必须记录，WSL 自动化不代替 Windows 听音。
+S4 Slice 适用性决策 [#1169](https://github.com/endaye/lmdj/issues/1169) 等待 S2/S3；
+T1/T2 的 Stem 环境/候选选择、P1 的 Pattern 首版与采纳语义需要各自评审。
+模型生成事件继续由 [#535](https://github.com/endaye/lmdj/issues/535) 承接；
+当前拆分不提前解决该问题。Windows 记录不覆盖 macOS/iPadOS Safari 或 Native 物理音频。
+
+## 历史台账范围
+
 Everything in this repository that **a human being has to do**: verifications
 automation cannot convert, and decisions a coding agent must not settle alone.
 
@@ -127,7 +164,7 @@ run against the current Build.
 | M1 | Real microphone capture → commit → playback hearing | 1.0.23.0 ([Stage 8B](2026-08-16-stage8b-pad-capture-acceptance.md)) | **`PASS` 2026-08-17** ([evidence](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md)) |
 | M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | **`PASS` 2026-09-01 on `1.0.40.0`** ([evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md)) — the strict non-zero trim boundary, One Shot, Gate release, Loop Gate, Loop Toggle, Volume/Mute, 16 Pads, Replace and reload all passed. Exact replay produced no obvious seam transient; the operator corrected the initially reported rapid texture to normal 40 ms loop playback. The prior 2026-08-17 stopped run remains historical evidence: trim boundaries clicked and the F5 handles could not be aimed; checks 2–8 were not performed then |
 | M3 | Pointer input | inherited from Stage 6/7 | **`PASS` 2026-09-01 on `1.0.40.0`** ([evidence](../release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md)) — tested revision `3aeba5c5`, built-in MacBook trackpad; ordered A1–A16, Bank/corner targets, separated and double clicks, drag-off/mistake targets, mode navigation, audio recovery and report export passed with 115 admissions / 115 outcomes / 0 rejections |
-| M4 | *(optional)* record past 60 s and observe the buffer cap in a browser | E1 in the triage doc; unit coverage only today | open |
+| M4 | *(optional)* record past 60 s and observe the buffer cap in a browser | **`PASS` observed 2026-09-10 on Windows 11 Pro 25H2 / Chrome 152.0.7977.83, Product Build `1.0.42.0`** ([evidence](../release-evidence/2026-09-10-stage8b-m4-windows-chrome-1.0.42.0.md)); this is additional Windows evidence and does not widen the historical macOS Chrome row | done |
 
 ### Session M-B — macOS Chrome with external hardware
 

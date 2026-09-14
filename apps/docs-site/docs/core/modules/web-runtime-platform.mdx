@@ -19,9 +19,9 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 为浏览器 Host 提供共享 Runtime Session、输入 adapter、Control bridge、manifest gate 与 Web Audio 接线；不拥有 Creator UI、诊断 UI、Project Truth 或产品专属身份。
 ## 2. 当前实现状态
-Creator Web 与诊断 Web Runtime Host 共用 Platform `4.0.0` 和同一 Wasm Runtime。Platform 除 Sample surface 外，还桥接 revision-bound `sample.quota`、Sequence begin/event/flush/stop/next-Bar switch/status/settings/recovery，以及 Stage 10 的 Pattern Slot assign/clear/move 与整套 Performance 操作；当前 source 在 accepted event 后读取 Facade typed overlay projection，发布 committed snapshot + overlay；active-session BPM 更新保留同一 overlay/boundary，owner-loss seal 与 flush/Stop 发布 clean committed view，Stop publication failure 可由 exact replay 恢复。若 owner-loss clean publication 自身失败，Host 使用已安装 quiescence contract 停止并清空 Runtime Pattern 后才释放 owner。pointer、keyboard、MIDI admission 统一使用 Audio Runtime frame clock 与单调 `input_sequence`，JavaScript 不计算 musical time。本版新增 Platform 自有的 master tap 与录制通道。`web/performance_master_tap_worklet.js` 是注册为 `lmdj-perform-master-tap` 的 AudioWorklet processor：它把 master bus 直通到输出，同时按 4800 帧成批向控制侧投递。`web/performance_master_capture.mjs` 是唯一消费者，对每条消息做精确键校验：批次为 `{type:"batch", channels:[Float32Array, Float32Array], generation, sequence}`，两个声道等长且不超过 `MAX_BATCH_FRAMES = 4800`，`sequence` 必须严格递增一格；停止确认为 `{type:"stopped", finalSequence, generation}`，失败为 `{type:"failed", reason:"post-message-failed", droppedFrames, generation}`；停止确认的等待上限是 `STOP_ACK_TIMEOUT_MS = 30000`，超时按失败结算。generation 不匹配的消息一律丢弃，Host 无法用陈旧 generation 复活已结束的录制。
+Creator Web 与诊断 Web Runtime Host 共用 Platform 和同一 Wasm Runtime。Platform 除 Sample surface 外，还桥接 revision-bound `sample.quota`、Sequence begin/event/flush/stop/next-Bar switch/status/settings/recovery，以及 Stage 10 的 Pattern Slot assign/clear/move 与整套 Performance 操作；当前 source 在 accepted event 后读取 Facade typed overlay projection，发布 committed snapshot + overlay；active-session BPM 更新保留同一 overlay/boundary，owner-loss seal 与 flush/Stop 发布 clean committed view，Stop publication failure 可由 exact replay 恢复。若 owner-loss clean publication 自身失败，Host 使用已安装 quiescence contract 停止并清空 Runtime Pattern 后才释放 owner。pointer、keyboard、MIDI admission 统一使用 Audio Runtime frame clock 与单调 `input_sequence`，JavaScript 不计算 musical time。本版新增 Platform 自有的 master tap 与录制通道。`web/performance_master_tap_worklet.js` 是注册为 `lmdj-perform-master-tap` 的 AudioWorklet processor：它把 master bus 直通到输出，同时按 4800 帧成批向控制侧投递。`web/performance_master_capture.mjs` 是唯一消费者，对每条消息做精确键校验：批次为 `{type:"batch", channels:[Float32Array, Float32Array], generation, sequence}`，两个声道等长且不超过 `MAX_BATCH_FRAMES = 4800`，`sequence` 必须严格递增一格；停止确认为 `{type:"stopped", finalSequence, generation}`，失败为 `{type:"failed", reason:"post-message-failed", droppedFrames, generation}`；停止确认的等待上限是 `STOP_ACK_TIMEOUT_MS = 30000`，超时按失败结算。generation 不匹配的消息一律丢弃，Host 无法用陈旧 generation 复活已结束的录制。
 ## 3. 所有权与依赖
-只依赖 Application Facade `3.1.0` 与 Audio Runtime `3.0.0`。Product CMake 注入 Product Build、Platform 版本、完整资源上限及精确 Host allowlist。
+只依赖 Application Facade 与 Audio Runtime；当前身份由 Build Identity 派生。Bundle reader 接受 Project v5 transfer，旧 v1/v2/v3/v4 输入继续由 Core 迁移。Product CMake 注入 Product Build、Platform 版本、完整资源上限及精确 Host allowlist。
 ## 4. 架构与数据流
 Creator/Diagnostic Host → Runtime Session → Application Facade；Project/Sample/Sequence actions 共享有界 Host lane，Pointer、Keyboard、MIDI 汇入同一 frame-stamped admission。Control bridge 把 typed overlay projection 合成 immutable Prepared Pattern，AudioWorklet 在下一 Bar 消费并发布 Voice/Bar state；Project Truth 仍只在 flush/Stop commit 后变化。
 ## 5. API 与 Contract 边界
@@ -35,6 +35,38 @@ Runtime Session 启动只运行一次真实 Control Worker/OPFS capability probe
 ## 8. 测试与证据
 C++ manifest/control/realtime tests、Node Runtime Session tests、Chromium/WebKit browser proof 与分发验证覆盖共享边界；C++ 生产路径精确验证 live hit 后 pending event 从下一 Bar 重复、BPM rebuild 不丢 overlay、owner loss 清理 active overlay、cleanup publication failure 停止/清空 engine、Stop exact replay 恢复一次 clean-publication failure，且无重复/空洞/陈旧 overlay。failure hook 只编入 private testable target，production archive symbol/marker gate 阻止泄漏。Node 精确断言 Host suspend 未完成时 `AudioContext` 仍为 running，Creator packaged Proof 覆盖真实 Sample Cook split 后的 suspend→activate→Retry Prepare，并继续覆盖 recovery readiness 的 `false -> true -> false -> running` 序列。Stage 10 的新增覆盖：`performance_master_tap_worklet.test.mjs` 覆盖 tap 的分批、控制消息精确形状与停止确认；`performance_master_capture.test.mjs` 覆盖消费侧的精确键校验、generation 隔离、sequence 连续性与停止超时结算；`performance_protocol.test.mjs` 覆盖 Pattern Slot 与 Performance 操作在 Host 协议上的注册与信封校验；`performance_bridge_test.cpp` 覆盖 Control 侧的 Performance 桥接；`manifest_gate_test.cpp` 覆盖九项 resource limit 与 `perform_master_tap_worklet` 角色计数门禁。
 ## 9. 限制与下一门禁
+
+全局 Pattern transport 的 T0 conformance 使用 Facade 独立执行线程：真实 OPFS
+immutable write 在写入后、flush 前暂停时，同一 Control lane 仍完成既有 Bank
+准备、live press/voice receipt、release 与状态查询；释放后检查完整落盘字节，
+原线程销毁 writer lease，再由新执行线程重新获取并读取。测试暂停钩子和导出仅存在于
+`LMDJ_WEB_AUDIO_CONFORMANCE` 构建。生产 ControlBridge 的串行 dispatch 和 OPFS
+Asyncify 重入拒绝保持不变；此基础验证不代表生产 Sequence 已迁移到异步线程，
+也不代表全局播放/录制六态、session teardown barrier 或 Creator 默认入口已验收。
+
 自动化不替代物理 MIDI、Safari/iPad Touch、声学延迟或主观听感验收；Perform 录制与 master tap 的自动化绿色只证明消息形状、状态机与分发身份，物理验收仍为 deferred。分发门禁通过也不代表已经产生不可变快照、标签、Release、部署或 Channel 提升，这些是各自独立的后续授权边界。
 ## 10. 版本身份
 版本和依赖由 `module.json` 与 Product Assembly Lock 派生。
+
+## Provider 控制面
+
+生产 Wasm 从嵌入的 Product Assembly 与 schema 加载实际注册和默认策略，缺失或漂移
+fail closed。五个 Provider/Attempt 操作通过严格协议和 ControlRuntime 进入 Facade；
+输入 owner 不接受调用方路径，只绑定 retained Project。Provider 操作不接受 sidecar。
+Runtime Session 的公开五个方法共用有界请求，权限、选择与执行使用既有串行 action lane。
+两个 packaged Host 暴露同一 `window.lmdjWebRuntimeHost.providers` namespace。
+
+SDK 读取复用 retained writer lease；跨窗口竞争在 Project open 阶段拒绝，不创建 Attempt。
+拒绝详情只保留可信 owner/ingress reason 与匹配 attempt ID。重启后仍可在打开 Project
+之前检查终态；新运行需要重新显式授权。Slice 的平台声明仍为 `test`。
+
+SDK 的标准文件系统 workspace 与 Project I/O adapter 映射同一 OPFS 根目录；挂载由既有 Project I/O Web platform factory 完成，Host 不直接调用 OPFS。Attempt、输出与 Provider 选择耐久保留，会话 grant 不落盘。
+
+## Candidate routing and audition
+
+两个正式 Host 共享 RuntimeSession Candidate 方法与公开 `candidates` group。
+严格校验 snake_case 请求/响应、无 sidecar 操作和保留的 Project 身份；调用方
+不能提交文件路径。Job/Set 生命周期由 Facade 执行，采用串行提交且不自动重试。
+类型化 audition PCM 进入现有引擎试听池，`played` 仅表示 voice admission；
+Host-only stop 排入真实停止事件。Provider 列表包含当前 session grants，
+Creator 的显式 Slice 授权保留其他权限。成功结果回传 Facade 验证的 Project revision。

@@ -122,9 +122,9 @@ tooling, projected identities or documented source facts. Full self-test batches
 still include portal verification; unrelated PRs do not acquire a hidden
 all-portal pre-push build.
 
-Coding agents normally commit completed verified Tasks autonomously; this
-covers local commits only. Explicitly restricted draft work stays uncommitted.
-Every later state transition remains separately authorized.
+Coding agents complete verified Tasks under the standing authorization in
+`AGENTS.md`: commit, push, PR, current-head review and guarded squash merge.
+Explicitly restricted draft or local-only work retains its narrower boundary.
 
 ## 5. Pull Request and merge
 
@@ -148,8 +148,8 @@ new review of the current change. Empty/NEUTRAL check lists and a model's own
 completion marker are not review evidence. Resolving threads is not a way to
 erase findings without actually evaluating them.
 
-No full test matrix, sanitizer, coverage, portal build, `PR Gate` or Integration
-Queue ticket is a PR merge prerequisite. A non-conflicting branch need
+No full test matrix, sanitizer, coverage, or portal build is a PR merge
+prerequisite. A non-conflicting branch need
 not follow every main advancement. Unknown mergeability is not false or true:
 reread within a bounded interval, then report uncertainty. Resolve real conflicts
 and rerun affected Task checks; rebasing unshared work is preferred, but published
@@ -158,8 +158,7 @@ authority. A self-test failure does not prevent ordinary repair PRs merging.
 
 Read actual protection before merging. If retired required checks or strict
 up-to-date rules reappear, stop and report configuration drift. Shipping
-authority is not permission to bypass or edit protection. Legacy queue scripts
-or labels retained until T6 do not authorize new queue work.
+authority is not permission to bypass or edit protection.
 
 ### Scope diagnostics and batch evidence
 
@@ -201,6 +200,15 @@ for the activation and recovery requirements. Daily product triggers and their
 daily-missing alert are retired together; the independent lightweight health
 tick recovers existing pending work and never creates a date-based test request.
 
+The managed-report exception is deliberately narrower than the historical
+failure rule: only a newly created managed bucket with authenticated causal and
+policy identity, complete required suite/dependency coverage, a later selected
+PASS with no verification debt, and durable success-comment plus close-patch
+receipts may be discharged by recovery. Historical, edited, human-investigated,
+candidate/node, and independent defect Issues remain under manual disposition;
+an unrelated green batch never changes them. Unknown write outcomes remain
+unresolved until positively reconciled.
+
 ### Post-merge provenance and cleanup
 
 A merged PR is not evidence that uncommitted or later local work is retained.
@@ -217,7 +225,7 @@ authorization.
 
 ## 6. Releases and urgent fixes
 
-Releases remain manual from an explicitly chosen, verified exact main-history
+Releases begin with a user request for an explicitly chosen, verified exact main-history
 candidate under [version-management.md](version-management.md) and the
 `lmdj-release` skill. A green complete self-test is reusable only if the canonical
 release verifier accepts its complete, current, exact-candidate evidence; it
@@ -229,8 +237,10 @@ Use only `scripts/release.sh`, beginning with a fresh exact-tag remote audit.
 Publication uses the separately dispatched `publish-release.yml` workflow and
 its protected `release` Environment; a self-test does not invoke it.
 Prepare, one exact tag push, Draft creation, protected publication, each Host
-deployment and Channel promotion are separate authorization and verification
-boundaries. Follow the canonical policy's current asset inventory, signatures,
+deployment and Channel promotion are separate verification boundaries covered
+by one overall release authorization. Continue covered transitions after each
+successful verification without asking again; stop for a failed gate, required
+external approval or missing scope. Follow the canonical policy's current asset inventory, signatures,
 profile and historical exceptions rather than duplicating them here.
 The [Web Host release and deployment policy](version-management.md) is
 authoritative for the release profile, signed asset inventory, independent Host
@@ -259,6 +269,7 @@ designed → planned → implemented → committed → pushed → merged
          → channel-promoted → release-verified
 ```
 
-A completed state does not imply permission for the next one. In particular,
-a commit does not authorize push, Pull Request creation, merge, tag, release,
-deployment, or Channel promotion.
+A completed state does not itself imply permission for the next one. Permission
+comes from the user's Task or release request and the standing rules in
+`AGENTS.md`, not from a green check or prior transition. Task authorization does
+not initiate a release, and a release request does not authorize protection bypass.

@@ -4,6 +4,8 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {readRepoFacts} from './lib/repo-facts.mjs';
 import {smokePortal} from './lib/smoke.mjs';
+import {projectReleaseChangelogs} from './lib/release-changelogs.mjs';
+import {smokeReleaseChangelogs} from './lib/release-site-smoke.mjs';
 
 const baseUrl = process.argv[2];
 if (!baseUrl || process.argv.length !== 3) {
@@ -20,9 +22,12 @@ const errors = await smokePortal({
   productBuild: facts.product.version,
   revision: revision.slice(0, 12),
 });
+const releases = await smokeReleaseChangelogs({baseUrl, pages: await projectReleaseChangelogs(repoRoot)});
+errors.push(...releases.errors);
 if (errors.length) {
   for (const error of errors.sort()) console.error(`portal smoke error: ${error}`);
   process.exitCode = 1;
 } else {
   console.log(`portal smoke: ${baseUrl} serves ${facts.product.version} ${revision.slice(0, 12)}`);
+  console.log(JSON.stringify({schema: 'lmdj.release-changelog-smoke.v1', revision, pages: releases.receipts}));
 }

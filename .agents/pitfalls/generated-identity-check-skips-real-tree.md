@@ -1,12 +1,15 @@
 ---
 id: generated-identity-check-skips-real-tree
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-07
     occurrence: https://github.com/endaye/lmdj/issues/749
     observed_by: claude-opus-5
-exit: none
+  - date: 2026-09-09
+    occurrence: https://github.com/endaye/lmdj/issues/1029
+    observed_by: Codex
+exit: gate:tests/build/version_test.py
 ---
 
 # A freshness check driven only against a test fixture proves the generator works and proves nothing about the artifact the repository actually committed.
@@ -16,8 +19,8 @@ exit: none
 `tools/web-runtime/generate_runtime_identity.py --check` exists to prove that
 `products/lmdj/generated/web-runtime-identity.json` and its `.mjs` twin still
 describe repository truth; both embed `product_build`, `assembly_sha256`,
-`platform.version` and each Web Host's `version`. Nothing runs it against the
-repository. `grep -rn "generate_runtime_identity\|runtime-identity" scripts/
+`platform.version` and each Web Host's `version`. At the first occurrence,
+nothing ran it against the repository. `grep -rn "generate_runtime_identity\|runtime-identity" scripts/
 .github/` returns no matches, and the only consumer,
 `tests/build/version_test.py:480-628`, imports the generator and drives it
 against a synthetic `fixture_root` — never `repo_root`.
@@ -52,7 +55,8 @@ validator and the release evidence chain bind.
   python3 tools/web-runtime/generate_runtime_identity.py --repo-root .
   python3 tools/web-runtime/generate_runtime_identity.py --repo-root . --check
   ```
-  Do not infer freshness from a green `version_test.py`; run `--check` yourself.
+  `version_test.py` now runs this exact check against `repo_root`, separately
+  from its generator fixtures. Do not infer freshness from fixture-only tests.
 - More generally, when a repository ships both a generator and a `--check`
   mode, confirm which tree the check is pointed at before trusting it. Grep for
   the invocation, not for the definition: a check nothing calls is a check
@@ -64,11 +68,11 @@ validator and the release evidence chain bind.
   because anyone declared a mapping for these files, so a check parked in an
   incidentally selected lane stops running the moment that full rule narrows.
 
-`exit: none` because the mechanism is not this entry's to land:
-[#749](https://github.com/endaye/lmdj/issues/749) owns it and names the
-placement that cannot silently stop running — one added assertion in
-`tests/build/version_test.py` calling
+The recurrence at [#1029](https://github.com/endaye/lmdj/issues/1029) exposed
+stale Product, Assembly, Platform and Host projections during canonical canary
+preparation. The existing version test now calls
 `runtime_identity_generator.write_or_check(repo_root, check=True)` beside the
-existing fixture-root coverage, which needs no lane wiring at all. When that
-lands, record it here as `gate:tests/build/version_test.py` and set
-`status: absorbed`.
+unchanged fixture-root coverage, implementing the mechanism requested by
+[#749](https://github.com/endaye/lmdj/issues/749). The check fails with the
+generator's concrete mismatch/staleness reason and regeneration remedy; it
+does not add a new workflow or PR required check.

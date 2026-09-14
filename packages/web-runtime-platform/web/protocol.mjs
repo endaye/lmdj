@@ -82,6 +82,18 @@ export const HOST_OPERATIONS = Object.freeze([
   "soundset.inspect",
   "soundset.map.preview",
   "soundset.install",
+  "candidate.job.run",
+  "candidate.job.inspect",
+  "candidate.job.cancel",
+  "candidate.set.discard",
+  "candidate.audition",
+  "candidate.audition.stop",
+  "candidate.adopt",
+  "provider.list",
+  "provider.select",
+  "provider.run",
+  "provider.permissions.configure",
+  "attempt.inspect",
   "host.close",
 ]);
 
@@ -235,6 +247,167 @@ function validPerformanceName(value) {
   }
   const codePoints = Array.from(value).length;
   return codePoints > 0 && codePoints <= 64;
+}
+
+function requireProviderOperationPayload(operation, payload) {
+  let valid = true;
+  const fileId = (value) => typeof value === "string" &&
+    /^[A-Za-z0-9._-]{1,128}$/.test(value) && value !== "." && value !== "..";
+  const permissions = (value) => Array.isArray(value) && value.every(fileId) &&
+    new Set(value).size === value.length;
+  switch (operation) {
+    case "provider.list":
+      valid = hasExactKeys(payload, []);
+      break;
+    case "provider.select":
+      valid = hasExactKeys(payload, ["capability", "provider_id"]) &&
+        fileId(payload.capability) && fileId(payload.provider_id);
+      break;
+    case "provider.permissions.configure":
+      valid = hasExactKeys(payload, ["granted_permissions"]) && permissions(payload.granted_permissions);
+      break;
+    case "attempt.inspect":
+      valid = hasExactKeys(payload, ["attempt_id"]) && fileId(payload.attempt_id);
+      break;
+    case "provider.run": {
+      const keys = ["attempt_id", "capability", "inputs", "parameters", "data_classification",
+        "platform", "region", "required_permissions"];
+      const owners = Object.hasOwn(payload, "input_owners");
+      valid = hasExactKeys(payload, owners ? [...keys, "input_owners"] : keys) &&
+        ["attempt_id", "capability", "data_classification", "platform", "region"].every((key) => fileId(payload[key])) &&
+        isPlainObject(payload.parameters) && permissions(payload.required_permissions) &&
+        Array.isArray(payload.inputs) && payload.inputs.every((binding) =>
+          hasExactKeys(binding, ["port", "artifact"]) &&
+          typeof binding.port === "string" && /^[a-z][a-z0-9_]*$/.test(binding.port) &&
+          hasExactKeys(binding.artifact, ["sha256", "media_type", "byte_length"]) &&
+          typeof binding.artifact.sha256 === "string" && SHA256_PATTERN.test(binding.artifact.sha256) &&
+          typeof binding.artifact.media_type === "string" && binding.artifact.media_type.length > 0 &&
+          isUnsignedInteger(binding.artifact.byte_length)) &&
+        (!owners || (Array.isArray(payload.input_owners) && payload.input_owners.every((owner) =>
+          hasExactKeys(owner, ["port", "occurrence", "project_id", "asset_id"]) &&
+          typeof owner.port === "string" && /^[a-z][a-z0-9_]*$/.test(owner.port) &&
+          isUnsignedInteger(owner.occurrence) && validUuid(owner.project_id) && validUuid(owner.asset_id))));
+      break;
+    }
+  }
+  if (!valid) throw protocolError("Provider operation payload is invalid", {operation});
+}
+
+const candidateId = (value) => typeof value === "string" &&
+  /^[A-Za-z0-9._-]{1,128}$/.test(value) && value !== "." && value !== "..";
+const candidatePermissions = (value) => Array.isArray(value) &&
+  value.every(candidateId) && new Set(value).size === value.length;
+
+function requireCandidatePayload(operation, value) {
+  if (!operation.startsWith("candidate.")) return;
+  let valid = false;
+  const scoped = () => validUuid(value.project_id) && isUnsignedInteger(value.expected_revision);
+  switch (operation) {
+    case "candidate.job.run":
+      valid = hasExactKeys(value, ["job_id", "attempt_id", "project_id", "asset_id", "expected_revision",
+        "parameters", "data_classification", "platform", "region", "required_permissions"]) &&
+        scoped() && validUuid(value.asset_id) && isPlainObject(value.parameters) &&
+        ["job_id", "attempt_id", "data_classification", "platform", "region"].every((key) => candidateId(value[key])) &&
+        candidatePermissions(value.required_permissions);
+      break;
+    case "candidate.job.inspect":
+      valid = hasExactKeys(value, ["job_id"]) && candidateId(value.job_id); break;
+    case "candidate.job.cancel":
+      valid = hasExactKeys(value, ["job_id", "attempt_id"]) && candidateId(value.job_id) && candidateId(value.attempt_id); break;
+    case "candidate.set.discard":
+      valid = hasExactKeys(value, ["job_id", "set_id"]) && candidateId(value.job_id) && candidateId(value.set_id); break;
+    case "candidate.audition.stop":
+      valid = hasExactKeys(value, []); break;
+    case "candidate.audition":
+      valid = hasExactKeys(value, ["project_id", "expected_revision", "job_id", "set_id", "candidate_id"]) && scoped() &&
+        ["job_id", "set_id", "candidate_id"].every((key) => candidateId(value[key])); break;
+    case "candidate.adopt":
+      valid = hasExactKeys(value, ["project_id", "expected_revision", "command_id", "job_id", "set_id", "selections"]) &&
+        scoped() && validUuid(value.command_id) && candidateId(value.job_id) && candidateId(value.set_id) &&
+        Array.isArray(value.selections) && value.selections.length > 0 && value.selections.length <= 64 &&
+        value.selections.every((entry) => hasExactKeys(entry, ["candidate_id", "bank", "pad"]) &&
+          candidateId(entry.candidate_id) && isUnsignedInteger(entry.bank) && entry.bank < 4 &&
+          isUnsignedInteger(entry.pad) && entry.pad < 16) &&
+        new Set(value.selections.map((entry) => entry.bank * 16 + entry.pad)).size === value.selections.length;
+      break;
+  }
+  if (!valid) throw protocolError("Candidate operation payload is invalid", {operation});
+}
+
+function validCandidateSource(value) {
+  return hasExactKeys(value, ["project_id", "asset_id", "project_revision", "artifact", "frame_rate", "frame_count"]) &&
+    validUuid(value.project_id) && validUuid(value.asset_id) && isUnsignedInteger(value.project_revision) &&
+    validArtifact(value.artifact) && value.artifact.media_type === "audio/wav" && value.artifact.byte_length <= 16777216 &&
+    [44100, 48000].includes(value.frame_rate) && isUnsignedInteger(value.frame_count) && value.frame_count > 0 && value.frame_count <= 8388608;
+}
+function validCandidateIntent(value) {
+  return hasExactKeys(value, ["attempt_id", "source", "parameters_sha256", "data_classification", "platform", "region", "required_permissions"]) &&
+    ["attempt_id", "data_classification", "platform", "region"].every((key) => candidateId(value[key])) &&
+    typeof value.parameters_sha256 === "string" && SHA256_PATTERN.test(value.parameters_sha256) &&
+    candidatePermissions(value.required_permissions) && validCandidateSource(value.source);
+}
+function validCandidateIdentity(value) {
+  return hasExactKeys(value, ["id", "version", "artifact_sha256"]) && candidateId(value.id) &&
+    typeof value.version === "string" && value.version.length > 0 &&
+    typeof value.artifact_sha256 === "string" && SHA256_PATTERN.test(value.artifact_sha256);
+}
+function validCandidateSet(value) {
+  if (!(hasExactKeys(value, ["set_id", "status", "attempt_id", "sdk_candidate_id", "source", "output_artifact", "capability",
+    "provider", "model_identity", "parameters_sha256", "recipes"]) &&
+    ["set_id", "attempt_id", "sdk_candidate_id"].every((key) => candidateId(value[key])) &&
+    ["active", "superseded", "discarded"].includes(value.status) && validCandidateSource(value.source) &&
+    hasExactKeys(value.output_artifact, ["sha256", "media_type", "byte_length"]) &&
+    typeof value.output_artifact.sha256 === "string" && SHA256_PATTERN.test(value.output_artifact.sha256) &&
+    value.output_artifact.media_type === "application/json" && isUnsignedInteger(value.output_artifact.byte_length) &&
+    hasExactKeys(value.capability, ["id", "contract", "version"]) && value.capability.id === "sample.slice.v1" &&
+    value.capability.contract === "lmdj.capability.v2" && value.capability.version === "1.0.0" &&
+    validCandidateIdentity(value.provider) && (value.model_identity === null || validCandidateIdentity(value.model_identity)) &&
+    typeof value.parameters_sha256 === "string" && SHA256_PATTERN.test(value.parameters_sha256) &&
+    Array.isArray(value.recipes) && value.recipes.length <= 4097)) return false;
+  const ids = new Set();
+  let end = 0;
+  for (const recipe of value.recipes) {
+    if (!(hasExactKeys(recipe, ["candidate_id", "kind", "start_frame", "end_frame", "frame_rate"]) &&
+      candidateId(recipe.candidate_id) && !ids.has(recipe.candidate_id) && recipe.kind === "slice_interval_v1" &&
+      isUnsignedInteger(recipe.start_frame) && recipe.start_frame === end && isUnsignedInteger(recipe.end_frame) &&
+      recipe.end_frame > recipe.start_frame && recipe.end_frame <= value.source.frame_count && recipe.frame_rate === value.source.frame_rate)) return false;
+    ids.add(recipe.candidate_id); end = recipe.end_frame;
+  }
+  return value.recipes.length === 0 || end === value.source.frame_count;
+}
+function validCandidateResult(operation, value) {
+  if (!operation.startsWith("candidate.")) return true;
+  if (operation === "candidate.audition.stop") return hasExactKeys(value, ["accepted"]) && value.accepted === true;
+  if (operation === "candidate.audition") return hasExactKeys(value, ["job_id", "set_id", "candidate_id", "artifact", "sample_rate", "channels", "source_frames", "project_revision", "played"]) &&
+    ["job_id", "set_id", "candidate_id"].every((key) => candidateId(value[key])) && validArtifact(value.artifact) &&
+    value.artifact.media_type === "audio/wav" && [44100, 48000].includes(value.sample_rate) && [1, 2].includes(value.channels) &&
+    isUnsignedInteger(value.source_frames) && value.source_frames > 0 && value.source_frames <= 8388608 &&
+    isUnsignedInteger(value.project_revision) && typeof value.played === "boolean";
+  if (operation === "candidate.adopt") return hasExactKeys(value, ["set_id", "adopted", "project_revision"]) &&
+    candidateId(value.set_id) && isUnsignedInteger(value.project_revision) && Array.isArray(value.adopted) &&
+    value.adopted.length > 0 && value.adopted.length <= 64 && value.adopted.every((entry) =>
+      hasExactKeys(entry, ["candidate_id", "bank", "pad", "asset_id"]) && candidateId(entry.candidate_id) && validUuid(entry.asset_id) &&
+      isUnsignedInteger(entry.bank) && entry.bank < 4 && isUnsignedInteger(entry.pad) && entry.pad < 16) &&
+    new Set(value.adopted.map((entry) => entry.bank * 16 + entry.pad)).size === value.adopted.length &&
+    new Set(value.adopted.map((entry) => entry.asset_id)).size === value.adopted.length;
+  if (!(hasExactKeys(value, ["job_id", "history", "active_set_id", "sets", "project_revision"]) &&
+    candidateId(value.job_id) && value.project_revision === null && (value.active_set_id === null || candidateId(value.active_set_id)) &&
+    Array.isArray(value.history) && value.history.every((entry) => hasExactKeys(entry, ["intent", "set_id", "status"]) &&
+      validCandidateIntent(entry.intent) && candidateId(entry.set_id) &&
+      ["pending", "succeeded", "failed", "interrupted", "cancelled"].includes(entry.status)) &&
+    Array.isArray(value.sets) && value.sets.every(validCandidateSet))) return false;
+  const active = value.sets.filter((set) => set.status === "active");
+  return new Set(value.sets.map((set) => set.set_id)).size === value.sets.length &&
+    new Set(value.history.map((entry) => entry.set_id)).size === value.history.length &&
+    new Set(value.history.map((entry) => entry.intent.attempt_id)).size === value.history.length &&
+    value.history.filter((entry) => entry.status === "pending").length <= 1 &&
+    (value.active_set_id === null ? active.length === 0 : active.length === 1 && active[0].set_id === value.active_set_id) &&
+    value.sets.every((set) => value.history.some((entry) => entry.set_id === set.set_id && entry.status === "succeeded" &&
+      entry.intent.attempt_id === set.attempt_id && entry.intent.parameters_sha256 === set.parameters_sha256 &&
+      Object.keys(set.source).every((key) => key === "artifact"
+        ? Object.keys(set.source.artifact).every((field) => entry.intent.source.artifact[field] === set.source.artifact[field])
+        : entry.intent.source[key] === set.source[key]))) &&
+    value.history.every((entry) => entry.status !== "succeeded" || value.sets.some((set) => set.set_id === entry.set_id));
 }
 
 function validArtifact(value) {
@@ -667,6 +840,8 @@ function validateRequestObject(
     throw protocolError("Request payload must be an object");
   }
   requireSampleOperationPayload(envelope.operation, envelope.payload);
+  requireProviderOperationPayload(envelope.operation, envelope.payload);
+  requireCandidatePayload(envelope.operation, envelope.payload);
   requirePerformanceOperationPayload(
     envelope.operation,
     envelope.payload,
@@ -908,7 +1083,7 @@ export function validateResponseEnvelope(envelope, operation = undefined) {
     throw protocolError("Response result must be an object");
   } else if (
     operation !== undefined &&
-    !validPerformanceResult(operation, envelope.result)
+    (!validPerformanceResult(operation, envelope.result) || !validCandidateResult(operation, envelope.result))
   ) {
     throw protocolError("Host Performance result is invalid", {operation});
   }

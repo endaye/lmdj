@@ -8,6 +8,8 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+#include <picosha2.h>
+#include <lmdj/foundation/json.hpp>
 
 #include <lmdj/domain/project.hpp>
 #include <lmdj/project_io/project_store.hpp>
@@ -198,7 +200,7 @@ void test_begin_validates_revision_under_admission_lease() {
       !std::filesystem::exists(bundle / "recovery/active/performance.jsonl"));
 }
 
-void test_v3_sequence_begin_bytes_remain_exactly_unchanged() {
+void test_v3_project_uses_current_sequence_journal_format() {
   TempDirectory temp;
   ProjectStore store;
   auto state = project();
@@ -217,8 +219,15 @@ void test_v3_sequence_begin_bytes_remain_exactly_unchanged() {
               std::string(64, '0'),
               0)
           .has_value());
-  const std::string expected =
-      "{\"checksum\":\"455bd13ba3e1e1065ca12ad54efda40357c4ff647b4a92b714454dc5d0f95863\",\"payload\":{\"armed_capture_slot\":null,\"bars\":1,\"contract\":\"lmdj.sequence.journal.v1\",\"expected_revision\":0,\"kind\":\"begin\",\"pattern_fingerprint\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"pattern_id\":\"10000000-0000-4000-8000-000000000001\",\"session_id\":\"20000000-0000-4000-8000-000000000001\"}}\n";
+  const nlohmann::json payload{
+      {"armed_capture_slot", nullptr}, {"bars", 1},
+      {"contract", "lmdj.sequence.journal.v3"}, {"expected_revision", 0},
+      {"kind", "begin"}, {"pattern_fingerprint", std::string(64, '0')},
+      {"pattern_id", kPatternId}, {"session_id", kSequenceSessionId}};
+  const auto checksum = picosha2::hash256_hex_string(
+      lmdj::foundation::canonical_json(payload));
+  const auto expected = lmdj::foundation::canonical_json(
+      nlohmann::json{{"checksum", checksum}, {"payload", payload}}) + "\n";
   LMDJ_CHECK(
       read_text(bundle / "recovery/active/sequence.jsonl") == expected);
   const auto loaded = journal.read_active(bundle);
@@ -563,7 +572,7 @@ int main(int argc, char** argv) {
     const bool stress = argc == 2 && std::string_view{argv[1]} == "--stress";
     test_sequence_and_performance_are_mutually_exclusive();
     test_begin_validates_revision_under_admission_lease();
-    test_v3_sequence_begin_bytes_remain_exactly_unchanged();
+    test_v3_project_uses_current_sequence_journal_format();
     test_performance_recovery_does_not_poison_sequence_listing();
     test_same_kind_second_begin_prioritizes_active_session();
     test_concurrent_sequence_begins_admit_only_one_session();

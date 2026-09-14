@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import math
 from pathlib import Path
 import re
 
@@ -9,9 +10,11 @@ repo_root = Path(__file__).resolve().parents[2]
 contract_root = repo_root / "contracts"
 
 schema_paths = {
+    "slice_points": contract_root / "slice-points" / "lmdj.slice-points.v1.schema.json",
     "project": contract_root / "project" / "lmdj.project.v1.schema.json",
     "project_v2": contract_root / "project" / "lmdj.project.v2.schema.json",
     "project_v3": contract_root / "project" / "lmdj.project.v3.schema.json",
+    "project_v5": contract_root / "project" / "lmdj.project.v5.schema.json",
     "project_v4": contract_root / "project" / "lmdj.project.v4.schema.json",
     "project_bundle": (
         contract_root / "project" / "lmdj.project-bundle.v1.schema.json"
@@ -38,6 +41,9 @@ schema_paths = {
     "runtime_content": (
         contract_root / "runtime-content" / "lmdj.runtime-content.v1.schema.json"
     ),
+    "cardputer_transfer": (
+        contract_root / "cardputer-transfer" / "lmdj.cardputer-transfer.v1.schema.json"
+    ),
 }
 
 
@@ -62,7 +68,8 @@ schemas = {name: load_json(path) for name, path in schema_paths.items()}
 
 contract_versions = {
     name: (
-        "1.2.0"
+        "5.0.0" if name == "project_v5" else
+        "1.3.0"
         if name == "project_bundle"
         else (
         "1.1.0"
@@ -640,7 +647,7 @@ assert set(project_bundle["required"]) == {
 assert project_bundle["properties"]["contract"]["const"] == (
     "lmdj.project-bundle.v1"
 )
-assert project_bundle["properties"]["contract_version"]["const"] == "1.2.0"
+assert project_bundle["properties"]["contract_version"]["const"] == "1.3.0"
 assert project_bundle["properties"]["compression"]["const"] == "none"
 # S11/#784: every Project Contract level the repository defines must be
 # nameable, or a Project the writer produces cannot be packed at all.
@@ -649,6 +656,7 @@ assert project_bundle["properties"]["project_contract"]["enum"] == [
     "lmdj.project.v2",
     "lmdj.project.v3",
     "lmdj.project.v4",
+    "lmdj.project.v5",
 ]
 assert project_bundle["properties"]["entries"]["maxItems"] == 4096
 assert project_bundle["$defs"]["entry"]["properties"]["bytes"]["maximum"] == (
@@ -1390,8 +1398,192 @@ assert (
     == []
 ), "expected the Schema to accept empty candidate outputs"
 
+# Stage 12 K1: formal shape and independent byte/context conformance.
+# This is a conformance oracle, not the future production C++ validator.
+slice_schema = schemas["slice_points"]
+slice_descriptor = load_json(contract_root / "capability" / "sample.slice.v1.json")
+json_schema.check(slice_descriptor, capability_v2, "sample.slice descriptor")
+assert slice_descriptor["output_artifacts"][0]["schema_id"] == (
+    slice_schema["properties"]["contract"]["const"]
+)
+assert slice_descriptor["output_artifacts"][0]["schema_version"] == (
+    slice_schema["x-lmdj-contract-version"]
+)
+profile_path = contract_root / "artifact-audio" / "lmdj.audio.pcm16-wav.v1.md"
+profile = profile_path.read_text(encoding="utf-8")
+input_port = slice_descriptor["input_artifacts"][0]
+assert f"contract_id: {input_port['schema_id']}" in profile
+assert f"contract_version: {input_port['schema_version']}" in profile
+
+
+def unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def finite_json_float(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("nonfinite JSON number")
+    return number
+
+
+def reject_json_constant(value):
+    raise ValueError(f"non-JSON constant: {value}")
+
+
+def slice_vector_result(raw, context):
+    try:
+        payload = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=unique_json_object,
+            parse_float=finite_json_float,
+            parse_constant=reject_json_constant,
+        )
+        # Escaped lone surrogates are not valid Unicode strings either.
+        json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (ValueError, UnicodeError) as error:
+        return "syntax", [str(error)]
+    shape_errors = json_schema.validate(payload, slice_schema)
+    if shape_errors:
+        return "schema", shape_errors
+    if payload["source_sha256"] != context["source_sha256"]:
+        return "context", ["source hash mismatch"]
+    if payload["frame_rate"] != context["frame_rate"]:
+        return "context", ["source rate mismatch"]
+    previous = -1
+    for point in payload["points"]:
+        if point["frame"] >= context["frame_count"]:
+            return "context", ["frame outside source"]
+        if point["frame"] <= previous:
+            return "context", ["frames not strictly increasing"]
+        previous = point["frame"]
+        if "label" in point and len(point["label"].encode("utf-8")) > 128:
+            return "context", ["label exceeds 128 UTF-8 bytes"]
+    return "valid", []
+
+
+def canonical_slice_bytes(payload):
+    return json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+slice_fixture_root = repo_root / "tests" / "fixtures" / "contracts" / "slice-points"
+slice_cases = []
+for filename in ("valid.json", "invalid.json"):
+    inventory = load_json(slice_fixture_root / filename)
+    assert inventory["cases"], f"{filename}: no Slice vectors discovered"
+    slice_cases.extend(inventory["cases"])
+assert len({case["name"] for case in slice_cases}) == len(slice_cases)
+
+for case in slice_cases:
+    raw = (
+        bytes.fromhex(case["raw_hex"]) if "raw_hex" in case else
+        case["raw_json"].encode("utf-8") if "raw_json" in case else
+        canonical_slice_bytes(case["payload"])
+    )
+    layer, errors = slice_vector_result(raw, case["context"])
+    assert layer == case["expected_layer"], (case["name"], layer, errors)
+    if "expected_error" in case:
+        assert any(case["expected_error"] in error for error in errors), (
+            case["name"], errors,
+        )
+    if "canonical_utf8" in case:
+        assert raw == case["canonical_utf8"].encode("utf-8"), case["name"]
+    if layer == "valid":
+        assert canonical_slice_bytes(json.loads(raw)) == raw, case["name"]
+
+# Boundaries are generated here rather than bloating the fixture inventory.
+slice_base = {
+    "contract": "lmdj.slice-points.v1",
+    "source_sha256": "a" * 64,
+    "frame_rate": 48000,
+    "points": [],
+}
+slice_context = {
+    "source_sha256": "a" * 64, "frame_rate": 48000, "frame_count": 5000,
+}
+slice_boundaries = [
+    ("maximum points", [{"frame": i} for i in range(4096)], "valid", None),
+    ("point count +1", [{"frame": i} for i in range(4097)],
+     "schema", "maxItems 4096"),
+    ("128 UTF-8 bytes", [{"frame": 0, "label": "é" * 64}], "valid", None),
+    ("129 UTF-8 bytes", [{"frame": 0, "label": "é" * 64 + "a"}],
+     "context", "label exceeds 128 UTF-8 bytes"),
+]
+for name, points, expected_layer, expected_error in slice_boundaries:
+    layer, errors = slice_vector_result(
+        canonical_slice_bytes({**slice_base, "points": points}), slice_context,
+    )
+    assert layer == expected_layer, (name, layer, errors)
+    if expected_error:
+        assert any(expected_error in error for error in errors), (name, errors)
+
+print(
+    f"slice-points conformance: {len(slice_cases)} vectors and "
+    f"{len(slice_boundaries)} boundary cases passed; "
+    "syntax/Schema/context layers checked separately"
+)
+
 print(
     f"schema contract checks: {len(schemas)} passed, "
     f"{len(negative_cases)} negative cases, "
     f"{len(module_manifests) + 2} Product artifacts validated"
 )
+
+# L3: the successor schema admits only the approved closed Slice evidence.
+project_v5 = schemas["project_v5"]
+valid_project_v5 = load_json(repo_root / "tests/fixtures/contracts/project-v5-valid.json")
+json_schema.check(valid_project_v5, project_v5, "project-v5-valid")
+lineage_v5 = valid_project_v5["assets"][0]["lineage"]
+for path in ((), ("source",), ("derivation",), ("derivation", "capability"),
+             ("derivation", "provider"), ("derivation", "output_artifact"),
+             ("derivation", "recipe")):
+    target = lineage_v5
+    for key in path:
+        target = target[key]
+    for missing in target:
+        changed = json.loads(json.dumps(valid_project_v5))
+        node = changed["assets"][0]["lineage"]
+        for key in path:
+            node = node[key]
+        del node[missing]
+        assert json_schema.validate(changed, project_v5), (path, missing)
+    changed = json.loads(json.dumps(valid_project_v5))
+    node = changed["assets"][0]["lineage"]
+    for key in path:
+        node = node[key]
+    node["extra"] = True
+    assert json_schema.validate(changed, project_v5), path
+for path, bad in [
+    (["derivation", "recipe", "start_frame"], True),
+    (["derivation", "recipe", "end_frame"], 9007199254740992),
+    (["derivation", "recipe", "frame_rate"], 96000),
+    (["derivation", "output_artifact", "byte_length"], 262145),
+    (["derivation", "parameters_sha256"], "bad"),
+    (["derivation", "attempt_id"], "../attempt"),
+    (["derivation", "attempt_id"], ""),
+    (["derivation", "attempt_id"], "a" * 129),
+    (["derivation", "attempt_id"], "attempt\n"),
+    (["derivation", "model_identity"], {}),
+    (["derivation", "capability", "id"], "stem.separate.v1"),
+]:
+    changed = mutated(valid_project_v5, ["assets", 0, "lineage"] + path, bad)
+    assert json_schema.validate(changed, project_v5), path
+old = dict(valid_project_v5, contract="lmdj.project.v4")
+assert json_schema.validate(old, project_v4)
+for old_lineage in (valid_lineage, valid_soundset_lineage_project_v4["assets"][0]["lineage"]):
+    migrated = mutated(valid_project_v5, ["assets", 0, "lineage"], old_lineage)
+    json_schema.check(migrated, project_v5, "legacy-lineage-v5")
+modeled = mutated(valid_project_v5, ["assets", 0, "lineage", "derivation", "model_identity"],
+                  {"id": "model", "version": "revision-7", "artifact_sha256": "e" * 64})
+json_schema.check(modeled, project_v5, "model-lineage-v5")
+opaque_attempt = mutated(valid_project_v5,
+    ["assets", 0, "lineage", "derivation", "attempt_id"], "slice-job.attempt_1")
+json_schema.check(opaque_attempt, project_v5, "sdk-attempt-id-lineage-v5")

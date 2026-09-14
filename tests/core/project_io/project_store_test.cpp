@@ -88,19 +88,31 @@ class ProjectStoreFaultGuard {
   ProjectStoreFaultGuard& operator=(const ProjectStoreFaultGuard&) = delete;
 };
 
-class MemoryWriterLease final : public ProjectWriterLease {};
+class MemoryWriterLease final : public ProjectWriterLease {
+ public:
+  explicit MemoryWriterLease(bool& held) : held_(held) { held_ = true; }
+  ~MemoryWriterLease() override { held_ = false; }
+ private:
+  bool& held_;
+};
 
 class MemoryStoragePlatform final : public ProjectStoragePlatform {
  public:
   lmdj::foundation::Result<std::unique_ptr<ProjectWriterLease>> acquire_writer(
       const std::filesystem::path&) override {
     ++writer_acquisitions;
+    if (writer_held) {
+      return lmdj::foundation::Result<std::unique_ptr<ProjectWriterLease>>::failure(
+          {ErrorCode::io_error, "Project is busy",
+           {{"storage_condition", "project_busy"}}});
+    }
     return lmdj::foundation::Result<std::unique_ptr<ProjectWriterLease>>::success(
-        std::make_unique<MemoryWriterLease>());
+        std::make_unique<MemoryWriterLease>(writer_held));
   }
 
   lmdj::foundation::Result<void> ensure_directory(
       const std::filesystem::path& path) override {
+    ++write_calls;
     auto current = path.lexically_normal();
     while (!current.empty()) {
       directories_.insert(key(current));
@@ -127,6 +139,7 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
 
   lmdj::foundation::Result<std::uint64_t> byte_length(
       const std::filesystem::path& path) const override {
+    if (require_read_lease) LMDJ_CHECK(writer_held);
     const auto found = files_.find(key(path));
     if (found == files_.end()) {
       return lmdj::foundation::Result<std::uint64_t>::failure(error(path));
@@ -137,6 +150,8 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
 
   lmdj::foundation::Result<std::vector<std::byte>> read_complete(
       const std::filesystem::path& path) const override {
+    if (require_read_lease) LMDJ_CHECK(writer_held);
+    read_paths.push_back(path);
     const auto found = files_.find(key(path));
     if (found == files_.end()) {
       return lmdj::foundation::Result<std::vector<std::byte>>::failure(
@@ -149,6 +164,7 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
   lmdj::foundation::Result<void> create_immutable(
       const std::filesystem::path& path,
       std::span<const std::byte> input) override {
+    ++write_calls;
     const auto normalized = key(path);
     if (fail_next_asset_create &&
         path.parent_path().filename() == "assets") {
@@ -168,6 +184,7 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
   lmdj::foundation::Result<void> replace_complete(
       const std::filesystem::path& path,
       std::span<const std::byte> input) override {
+    ++write_calls;
     files_[key(path)] = {input.begin(), input.end()};
     operation_log.push_back(
         "replace_complete:" + path.lexically_normal().generic_string());
@@ -178,6 +195,7 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
       const std::filesystem::path& path,
       std::uint64_t valid_prefix_length,
       std::span<const std::byte> input) override {
+    ++write_calls;
     const auto found = files_.find(key(path));
     if (found == files_.end()) {
       return lmdj::foundation::Result<void>::failure(error(path));
@@ -192,6 +210,7 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
 
   lmdj::foundation::Result<void> remove(
       const std::filesystem::path& path) override {
+    ++write_calls;
     files_.erase(key(path));
     return lmdj::foundation::Result<void>::success();
   }
@@ -237,8 +256,12 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
   }
 
   std::vector<std::string> operation_log;
+  mutable std::vector<std::filesystem::path> read_paths;
   std::size_t writer_acquisitions = 0;
   bool fail_next_asset_create = false;
+  bool writer_held = false;
+  bool require_read_lease = false;
+  std::size_t write_calls = 0;
 
  private:
   static std::string key(const std::filesystem::path& path) {
@@ -426,7 +449,7 @@ Command decode_create_pattern(const nlohmann::json& input) {
 nlohmann::json legacy_checkpoint(
     nlohmann::json checkpoint,
     std::string_view contract) {
-  LMDJ_CHECK(checkpoint.at("contract") == "lmdj.project.v4");
+  LMDJ_CHECK(checkpoint.at("contract") == "lmdj.project.v5");
   LMDJ_CHECK(
       contract == "lmdj.project.v1" || contract == "lmdj.project.v2");
   auto assets = nlohmann::json::object();
@@ -547,7 +570,7 @@ void test_canonical_checkpoint_round_trip_and_bundle_shape() {
       checkpoint_bytes ==
       lmdj::foundation::canonical_json(checkpoint) + "\n");
   LMDJ_CHECK(checkpoint.size() == 10);
-  LMDJ_CHECK(checkpoint.at("contract") == "lmdj.project.v4");
+  LMDJ_CHECK(checkpoint.at("contract") == "lmdj.project.v5");
   LMDJ_CHECK(
       checkpoint.at("project_id") == initial.id.value());
   LMDJ_CHECK(!checkpoint.contains("id"));
@@ -640,7 +663,7 @@ void test_v1_load_migrates_in_memory_and_first_mutation_writes_v4() {
   };
   const auto committed = store.execute(bundle, command);
   LMDJ_CHECK(committed.has_value());
-  LMDJ_CHECK(committed.value().state.contract == ProjectContract::v4);
+  LMDJ_CHECK(committed.value().state.contract == ProjectContract::v5);
   LMDJ_CHECK(committed.value().state.revision == opened.value().revision + 1);
   LMDJ_CHECK(
       committed.value().state.banks.at(0).at(0).playback == command.playback);
@@ -648,7 +671,7 @@ void test_v1_load_migrates_in_memory_and_first_mutation_writes_v4() {
   const auto manifest = read_json(bundle / "manifest.json");
   const auto checkpoint = read_json(
       bundle / manifest.at("head_checkpoint").get<std::filesystem::path>());
-  LMDJ_CHECK(checkpoint.at("contract") == "lmdj.project.v4");
+  LMDJ_CHECK(checkpoint.at("contract") == "lmdj.project.v5");
   const auto& playback =
       checkpoint.at("banks").at(0).at("pads").at(0).at("playback");
   LMDJ_CHECK(playback.size() == 5);
@@ -743,7 +766,7 @@ void test_v2_total_migration_discards_takes_and_is_byte_stable() {
       bundle / manifest.at("head_checkpoint").get<std::filesystem::path>();
   const auto first_current_bytes = read_bytes(current_path);
   const auto current = read_json(current_path);
-  LMDJ_CHECK(current.at("contract") == "lmdj.project.v4");
+  LMDJ_CHECK(current.at("contract") == "lmdj.project.v5");
   LMDJ_CHECK(!current.contains("takes"));
   LMDJ_CHECK(current.at("assets").is_array());
   LMDJ_CHECK(current.at("patterns").is_array());
@@ -985,7 +1008,7 @@ void test_reset_pad_playback_persists_v2_defaults() {
       ResetPadPlayback{meta("reset-playback", 1), PadSlotId{0, 3}});
   LMDJ_CHECK(reset.has_value());
   LMDJ_CHECK(reset.value().state.revision == 2);
-  LMDJ_CHECK(reset.value().state.contract == ProjectContract::v4);
+  LMDJ_CHECK(reset.value().state.contract == ProjectContract::v5);
   LMDJ_CHECK(
       reset.value().state.banks.at(0).at(3).playback == PadPlayback{});
   const auto reopened = store.load(bundle);
@@ -1255,6 +1278,114 @@ void test_imported_assets_are_content_addressed_and_deduplicated() {
   LMDJ_CHECK(legacy_replayed.value().state.revision == 2);
 }
 
+struct OwnedArtifactFixture {
+  std::filesystem::path bundle{"memory/owner.lmdj"};
+  std::shared_ptr<MemoryStoragePlatform> platform =
+      std::make_shared<MemoryStoragePlatform>();
+  ProjectStore store{platform};
+  lmdj::domain::ProjectState project = new_project();
+  AssetId asset{test_uuid("owner-asset")};
+  std::vector<std::byte> bytes{std::byte{'a'}, std::byte{'b'}};
+  lmdj::foundation::ArtifactRef artifact;
+  OwnedArtifactFixture() {
+    LMDJ_CHECK(store.create(bundle, project).has_value());
+    const auto imported = store.import_artifact_bytes(bundle,
+        {meta("owner-import", 0), asset, "audio/wav", bytes});
+    LMDJ_CHECK(imported.has_value());
+    artifact = imported.value().state.assets.at(asset).artifact;
+  }
+};
+
+void test_owner_read_holds_one_lease_and_never_writes() {
+  OwnedArtifactFixture f;
+  const auto writes = f.platform->write_calls;
+  const auto acquisitions = f.platform->writer_acquisitions;
+  f.platform->require_read_lease = true;
+  const auto read = f.store.read_asset_artifact(
+      f.bundle, f.project.id, f.asset, f.artifact);
+  LMDJ_CHECK(read.has_value());
+  LMDJ_CHECK(read.value() == f.bytes);
+  LMDJ_CHECK(f.platform->writer_acquisitions == acquisitions + 1);
+  LMDJ_CHECK(!f.platform->writer_held);
+  LMDJ_CHECK(f.platform->write_calls == writes);
+}
+
+void test_owner_read_refuses_unowned_identity(int field) {
+  OwnedArtifactFixture f;
+  auto project = f.project.id;
+  auto asset = f.asset;
+  auto artifact = f.artifact;
+  if (field == 0) project = ProjectId{test_uuid("other-owner-project")};
+  if (field == 1) asset = AssetId{test_uuid("other-owner-asset")};
+  if (field == 2) artifact.sha256 = std::string(64, 'f');
+  if (field == 3) artifact.media_type = "application/octet-stream";
+  if (field == 4) ++artifact.byte_length;
+  const auto writes = f.platform->write_calls;
+  f.platform->read_paths.clear();
+  const auto read = f.store.read_asset_artifact(f.bundle, project, asset, artifact);
+  LMDJ_CHECK(std::none_of(f.platform->read_paths.begin(), f.platform->read_paths.end(),
+      [](const auto& path) { return path.parent_path().filename() == "assets"; }));
+  LMDJ_CHECK(!read.has_value());
+  LMDJ_CHECK(read.error().code == ErrorCode::not_found);
+  LMDJ_CHECK(f.platform->write_calls == writes);
+}
+
+void test_owner_read_reports_byte_mismatch(bool length) {
+  OwnedArtifactFixture f;
+  if (length) f.bytes.push_back(std::byte{'x'});
+  else f.bytes[0] = std::byte{'x'};
+  LMDJ_CHECK(f.platform->replace_complete(
+      f.bundle / "assets" / (f.artifact.sha256 + ".wav"), f.bytes).has_value());
+  const auto writes = f.platform->write_calls;
+  const auto read = f.store.read_asset_artifact(
+      f.bundle, f.project.id, f.asset, f.artifact);
+  LMDJ_CHECK(!read.has_value());
+  LMDJ_CHECK(read.error().details.at("storage_condition") == "artifact_mismatch");
+  LMDJ_CHECK(f.platform->write_calls == writes);
+}
+
+void test_owner_read_does_not_read_unselected_audio() {
+  OwnedArtifactFixture f;
+  const AssetId other{test_uuid("unselected-asset")};
+  auto other_bytes = f.bytes;
+  other_bytes[0] = std::byte{'c'};
+  const auto imported = f.store.import_artifact_bytes(f.bundle,
+      {meta("unselected-import", 1), other, "audio/wav", other_bytes});
+  LMDJ_CHECK(imported.has_value());
+  const auto other_path = f.bundle / "assets" /
+      (imported.value().state.assets.at(other).artifact.sha256 + ".wav");
+  other_bytes[0] = std::byte{'d'};
+  LMDJ_CHECK(f.platform->replace_complete(other_path, other_bytes).has_value());
+  f.platform->read_paths.clear();
+  const auto selected = f.store.read_asset_artifact(f.bundle, f.project.id, f.asset, f.artifact);
+  LMDJ_CHECK(selected.has_value() && selected.value() == f.bytes);
+  LMDJ_CHECK(std::find(f.platform->read_paths.begin(), f.platform->read_paths.end(), other_path) ==
+      f.platform->read_paths.end());
+  // Normal Project loading still validates all source Assets.
+  LMDJ_CHECK(!f.store.load(f.bundle).has_value());
+}
+
+void test_owner_read_refuses_busy_project() {
+  OwnedArtifactFixture f;
+  auto lease = f.platform->acquire_writer(f.bundle);
+  LMDJ_CHECK(lease.has_value());
+  const auto read = f.store.read_asset_artifact(
+      f.bundle, f.project.id, f.asset, f.artifact);
+  LMDJ_CHECK(!read.has_value());
+  LMDJ_CHECK(read.error().details.at("storage_condition") == "project_busy");
+}
+
+void test_owner_read_preserves_uncommitted_files() {
+  OwnedArtifactFixture f;
+  const auto orphan = f.bundle / "history/checkpoints/2.json";
+  LMDJ_CHECK(f.platform->create_immutable(orphan, f.bytes).has_value());
+  const auto writes = f.platform->write_calls;
+  LMDJ_CHECK(f.store.read_asset_artifact(
+      f.bundle, f.project.id, f.asset, f.artifact).has_value());
+  LMDJ_CHECK(f.platform->exists(orphan).value());
+  LMDJ_CHECK(f.platform->write_calls == writes);
+}
+
 void test_byte_backed_import_publishes_immutable_artifact_without_staging() {
   const auto bundle = std::filesystem::path{"memory/bytes.lmdj"};
   auto platform = std::make_shared<MemoryStoragePlatform>();
@@ -1471,12 +1602,12 @@ void test_a_v3_project_is_promoted_to_v4_on_its_first_persist() {
           PadPlayback{12, 144, TriggerMode::loop_toggle, -1200, true},
       });
   LMDJ_CHECK(committed.has_value());
-  LMDJ_CHECK(committed.value().state.contract == ProjectContract::v4);
+  LMDJ_CHECK(committed.value().state.contract == ProjectContract::v5);
 
   const auto manifest = read_json(bundle / "manifest.json");
   const auto head = read_json(
       bundle / manifest.at("head_checkpoint").get<std::filesystem::path>());
-  LMDJ_CHECK(head.at("contract") == "lmdj.project.v4");
+  LMDJ_CHECK(head.at("contract") == "lmdj.project.v5");
   LMDJ_CHECK(head.at("pattern_slots").is_array());
   LMDJ_CHECK(head.at("performances").is_array());
   // Checkpoint zero is still the v3 bytes the Project arrived with.
@@ -1484,7 +1615,7 @@ void test_a_v3_project_is_promoted_to_v4_on_its_first_persist() {
 
   const auto reopened = store.load(bundle);
   LMDJ_CHECK(reopened.has_value());
-  LMDJ_CHECK(reopened.value().contract == ProjectContract::v4);
+  LMDJ_CHECK(reopened.value().contract == ProjectContract::v5);
   LMDJ_CHECK(reopened.value() == committed.value().state);
 }
 
@@ -1508,7 +1639,7 @@ void test_import_assign_sample_bytes_commits_one_revision_and_replays_exactly() 
   const auto imported = store.import_assign_sample_bytes(bundle, request);
   LMDJ_CHECK(imported.has_value());
   LMDJ_CHECK(!imported.value().replayed);
-  LMDJ_CHECK(imported.value().state.contract == ProjectContract::v4);
+  LMDJ_CHECK(imported.value().state.contract == ProjectContract::v5);
   LMDJ_CHECK(imported.value().state.revision == 1);
   LMDJ_CHECK(imported.value().state.assets.size() == 1);
   LMDJ_CHECK(
@@ -2313,7 +2444,7 @@ void test_pattern_slots_round_trip_validate_and_preserve_command_identity() {
       Command{UpdateSequenceSettings{
           meta("pattern-slot-settings", 1), 121, {}, {}}});
   LMDJ_CHECK(settings.has_value());
-  LMDJ_CHECK(settings.value().state.contract == ProjectContract::v4);
+  LMDJ_CHECK(settings.value().state.contract == ProjectContract::v5);
   LMDJ_CHECK(settings.value().state.pattern_slots.at(0) == pattern1);
 
   const auto moved = store.execute(
@@ -2393,10 +2524,169 @@ void test_pattern_slots_round_trip_validate_and_preserve_command_identity() {
   LMDJ_CHECK(store.load(bundle).has_value());
 }
 
+void test_capability_lineage_persists_and_replay_compares_all_evidence() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "slice-lineage.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto encoded = nlohmann::json::parse(R"JSON(
+{
+  "source": {
+    "kind": "asset_artifact",
+    "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "project_revision": 7
+  },
+  "derivation": {
+    "kind": "capability_adoption",
+    "capability": {
+      "id": "sample.slice.v1",
+      "contract": "lmdj.capability.v2",
+      "version": "1.0.0"
+    },
+    "provider": {
+      "id": "local.sample.slice",
+      "version": "1.0.0",
+      "artifact_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "model_identity": null,
+    "parameters_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "attempt_id": "10000000-0000-4000-8000-000000000001",
+    "source_asset_id": "20000000-0000-4000-8000-000000000002",
+    "output_artifact": {
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "media_type": "application/json",
+      "byte_length": 128
+    },
+    "recipe": {
+      "kind": "slice_interval_v1",
+      "start_frame": 10,
+      "end_frame": 100,
+      "frame_rate": 48000
+    }
+  }
+}
+)JSON");
+  const auto lineage = lmdj::domain::asset_lineage_from_json(encoded);
+  LMDJ_CHECK(lineage.has_value());
+  const std::vector<std::byte> materialized{
+      std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'}};
+  ProjectStore::ImportAssignSampleBytesRequest request{
+      meta("slice-lineage-import", 0), PadSlotId{0, 0},
+      AssetId{test_uuid("slice-lineage-result")}, "audio/wav", materialized,
+      std::nullopt, lineage.value()};
+  const auto committed = store.import_assign_sample_bytes(bundle, request);
+  LMDJ_CHECK(committed.has_value());
+  LMDJ_CHECK(committed.value().state.revision == 1);
+  const auto reopened = store.load(bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value() == committed.value().state);
+  const auto& asset = reopened.value().assets.at(request.asset_id);
+  LMDJ_CHECK(asset.lineage == lineage.value());
+  LMDJ_CHECK(asset.artifact.sha256 !=
+             std::get<lmdj::domain::AssetArtifactLineageSource>(lineage.value().source).artifact_sha256);
+  // This is the existing internal import command receipt, not AdoptCandidates replay.
+  const auto replay = store.import_assign_sample_bytes(bundle, request);
+  LMDJ_CHECK(replay.has_value());
+  LMDJ_CHECK(replay.value().replayed);
+  LMDJ_CHECK(replay.value().state == reopened.value());
+  const std::vector<std::pair<std::string, nlohmann::json>> mutations{
+      {"/source/artifact_sha256", std::string(64, 'e')},
+      {"/source/project_revision", 8},
+      {"/derivation/capability/version", "1.1.0"},
+      {"/derivation/provider/id", "another.provider"},
+      {"/derivation/provider/version", "1.1.0"},
+      {"/derivation/provider/artifact_sha256", std::string(64, 'e')},
+      {"/derivation/model_identity", {{"id", "model"}, {"version", "1"},
+                                     {"artifact_sha256", std::string(64, 'e')}}},
+      {"/derivation/parameters_sha256", std::string(64, 'e')},
+      {"/derivation/attempt_id", test_uuid("another-attempt")},
+      {"/derivation/source_asset_id", test_uuid("another-source")},
+      {"/derivation/output_artifact/sha256", std::string(64, 'e')},
+      {"/derivation/output_artifact/byte_length", 129},
+      {"/derivation/recipe/start_frame", 11},
+      {"/derivation/recipe/end_frame", 101},
+      {"/derivation/recipe/frame_rate", 44100},
+  };
+  for (const auto& [path, value] : mutations) {
+    auto changed_json = encoded;
+    changed_json[nlohmann::json::json_pointer{path}] = value;
+    auto changed = request;
+    const auto parsed = lmdj::domain::asset_lineage_from_json(changed_json);
+    LMDJ_CHECK(parsed.has_value());
+    changed.lineage = parsed.value();
+    const auto collision = store.import_assign_sample_bytes(bundle, changed);
+    LMDJ_CHECK(!collision.has_value());
+    LMDJ_CHECK(collision.error().code == ErrorCode::invalid_argument);
+    LMDJ_CHECK(store.load(bundle).value() == reopened.value());
+  }
+  const auto manifest = read_json(bundle / "manifest.json");
+  const auto head_path = bundle / manifest.at("head_checkpoint").get<std::string>();
+  auto head = read_json(head_path);
+  LMDJ_CHECK(head["assets"][0]["lineage"] == encoded);
+  head["contract"] = "lmdj.project.v4";
+  write_bytes(head_path, head.dump());
+  LMDJ_CHECK(!store.load(bundle).has_value());
+}
+
+void test_v4_lineage_migration_retains_old_variant_evidence() {
+  for (bool soundset : {false, true}) {
+    TempDirectory temp;
+    const auto bundle = temp.path() / "legacy-lineage.lmdj";
+    ProjectStore store;
+    LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+    const auto zero_path = bundle / "history/checkpoints/0.json";
+    auto zero = read_json(zero_path);
+    zero["contract"] = "lmdj.project.v4";
+    write_bytes(zero_path, zero.dump());
+    LMDJ_CHECK(store.load(bundle).value().contract == ProjectContract::v4);
+    AssetLineage lineage{
+        lmdj::domain::AssetArtifactLineageSource{std::string(64, 'a'), 7},
+        lmdj::domain::ResampleLineageDerivation{
+            {10, 20}, PerformanceId{test_uuid("legacy-performance")}}};
+    if (soundset) {
+      lineage.source = lmdj::domain::SoundSetLineageSource{
+          test_uuid("legacy-set"), "1.2.0", std::string(64, 'b'), 5, std::string(64, 'c')};
+      lineage.derivation = lmdj::domain::SoundSetInstallLineageDerivation{};
+    }
+    const std::vector<std::byte> sample{std::byte{0x01}};
+    const ProjectStore::ImportAssignSampleBytesRequest request{
+        meta("legacy-lineage", 0), PadSlotId{0, 0}, AssetId{test_uuid("legacy-result")},
+        "audio/wav", sample, std::nullopt, lineage};
+    const auto saved = store.import_assign_sample_bytes(bundle, request);
+    LMDJ_CHECK(saved.has_value());
+    LMDJ_CHECK(saved.value().state.contract == ProjectContract::v5);
+    const auto reopened = store.load(bundle);
+    LMDJ_CHECK(reopened.has_value());
+    LMDJ_CHECK(reopened.value() == saved.value().state);
+    LMDJ_CHECK(reopened.value().assets.at(request.asset_id).lineage == lineage);
+    LMDJ_CHECK(store.import_assign_sample_bytes(bundle, request).value().replayed);
+    // A real persisted v4 Asset already has lineage before migration starts.
+    const auto manifest = read_json(bundle / "manifest.json");
+    const auto head_path = bundle / manifest.at("head_checkpoint").get<std::string>();
+    auto head = read_json(head_path);
+    head["contract"] = "lmdj.project.v4";
+    const auto old_bytes = head.dump();
+    write_bytes(head_path, old_bytes);
+    const auto old = store.load(bundle);
+    LMDJ_CHECK(old.has_value());
+    LMDJ_CHECK(old.value().contract == ProjectContract::v4);
+    LMDJ_CHECK(old.value().assets.at(request.asset_id).lineage == lineage);
+    LMDJ_CHECK(read_bytes(head_path) == old_bytes);
+    const auto migrated = store.execute(bundle, Command{UpdateSequenceSettings{
+        meta("promote-v4-lineage", 1), {}, false, 75}});
+    LMDJ_CHECK(migrated.has_value());
+    LMDJ_CHECK(migrated.value().state.contract == ProjectContract::v5);
+    LMDJ_CHECK(migrated.value().state.assets.at(request.asset_id).lineage == lineage);
+    LMDJ_CHECK(store.load(bundle).value() == migrated.value().state);
+  }
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_capability_lineage_persists_and_replay_compares_all_evidence();
+    test_v4_lineage_migration_retains_old_variant_evidence();
     test_common_transactions_use_semantic_storage_obligations();
     test_default_store_remains_copy_list_initializable();
     test_canonical_checkpoint_round_trip_and_bundle_shape();
@@ -2414,6 +2704,13 @@ int main() {
     test_create_rejects_mismatched_existing_initial_checkpoint();
     test_committed_transactions_replay_to_manifest_head();
     test_imported_assets_are_content_addressed_and_deduplicated();
+    test_owner_read_holds_one_lease_and_never_writes();
+    for (int field = 0; field < 5; ++field) test_owner_read_refuses_unowned_identity(field);
+    test_owner_read_reports_byte_mismatch(false);
+    test_owner_read_reports_byte_mismatch(true);
+    test_owner_read_does_not_read_unselected_audio();
+    test_owner_read_refuses_busy_project();
+    test_owner_read_preserves_uncommitted_files();
     test_byte_backed_import_publishes_immutable_artifact_without_staging();
     test_import_assign_sample_bytes_commits_one_revision_and_replays_exactly();
     test_asset_lineage_is_refused_on_a_v3_project_on_disk();

@@ -12,7 +12,7 @@ recurrences:
   - date: 2026-08-30
     occurrence: https://github.com/endaye/lmdj/pull/477
     observed_by: claude-opus-5
-exit: gate:tests/build/ci_merge_queue_test.py
+exit: gate:tests/build/ci_retired_queue_mechanisms_test.py
 ---
 
 # GitHub nulls `mergeable` whenever the base branch moves, and the queue's early gate must not read that transient unknown as a terminal `ineligible-pr`
@@ -46,3 +46,6 @@ and computed `false` (immediate `merge-conflict`). A remaining
 `mergeable-unknown` stop is a genuine uncomputed state past that budget; wait
 for `mergeable=true` (typically `mergeable_state=behind`, not `dirty`) before
 explicitly adding `merge:queue` again.
+
+Retired 2026-09-09 (#1089 P2.1): the merge queue and its PR gate were removed;
+the exit now asserts their absence.

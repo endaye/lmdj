@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -29,6 +30,7 @@
 #include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/audio/runtime_preparation_limits.hpp>
 #include <lmdj/facade/application.hpp>
+#include <lmdj/facade/assembly_loader.hpp>
 #include <lmdj/facade/mutation_publish_scope.hpp>
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/provider/attempt_store.hpp>
@@ -319,7 +321,7 @@ ProjectBundleFixture build_project_bundle_fixture(
       {"bundle_digest", std::string(64, '0')},
       {"compression", "none"},
       {"contract", "lmdj.project-bundle.v1"},
-      {"contract_version", "1.2.0"},
+      {"contract_version", "1.3.0"},
       {"entries", std::move(encoded_entries)},
       {"project_contract", project_contract},
       {"project_id", project_id},
@@ -2228,7 +2230,7 @@ void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
   const auto current = check_exact_success(
       runtime->dispatch("project.inspect", Json::object(), {}),
       {"project", "project_revision"});
-  LMDJ_CHECK(current.at("project").at("contract") == "lmdj.project.v4");
+  LMDJ_CHECK(current.at("project").at("contract") == "lmdj.project.v5");
   LMDJ_CHECK(read_bytes(manifest_path) == original_manifest);
 
   auto forbidden_inspect = Json{{"slot", slot(0, 0)}};
@@ -2304,7 +2306,7 @@ void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
       reinterpret_cast<const char*>(checkpoint_bytes.data()),
       checkpoint_bytes.size());
   LMDJ_CHECK(
-      Json::parse(checkpoint_text).at("contract") == "lmdj.project.v4");
+      Json::parse(checkpoint_text).at("contract") == "lmdj.project.v5");
 
   const auto inspected = check_exact_success(
       runtime->dispatch("sample.inspect", {{"slot", slot(0, 0)}}, {}),
@@ -4587,6 +4589,179 @@ void test_host_catalog_operations_need_a_wired_transport() {
       "HOST_STATE_INVALID");
 }
 
+// #799, review finding. A Sound Set audition answered `ok` whether or not any
+// sound came out of it. `played` is that missing fact: it sits beside the
+// geometry on the successful result and says whether a voice actually started.
+// It is not a refusal and adds no `lmdj.error.v1` code and no `details.reason`
+// token -- reporting *which* branch produced a silence would need exactly the
+// vocabulary the Stage froze, so only the fact is carried.
+//
+// The defect this catches: a Host that publishes a snapshot, never activates
+// audio, auditions a Set, and is told the audition succeeded. That is not a
+// hypothetical -- `enqueue_control` refuses every event while the engine is
+// stopped, so it is the answer every headless Host gets.
+std::vector<std::byte> read_soundset_fixture(
+    const std::filesystem::path& relative) {
+  const std::filesystem::path corpus =
+      std::filesystem::path(LMDJ_SOURCE_DIR) / "tests/fixtures/soundset";
+  std::ifstream stream(corpus / relative, std::ios::binary);
+  LMDJ_CHECK(stream.good());
+  const std::string text(
+      (std::istreambuf_iterator<char>(stream)),
+      std::istreambuf_iterator<char>());
+  std::vector<std::byte> bytes(text.size());
+  std::transform(
+      text.begin(), text.end(), bytes.begin(), [](char value) {
+        return static_cast<std::byte>(static_cast<unsigned char>(value));
+      });
+  return bytes;
+}
+
+// Drive the Host's own Catalog surface until the Workspace Set Store holds
+// every eligible fixture Set, and answer with the last listing. Auditioning
+// needs a real published Set: the geometry, the decode and the PCM all come
+// from the Set Store, so a synthetic identity would only ever reach NOT_FOUND.
+Json publish_fixture_soundsets(ControlRuntime& runtime) {
+  const auto index_bytes = read_soundset_fixture("catalog/index.json");
+  check_locked_success_result(runtime.dispatch(
+      "soundset.catalog.index", {{"available", true}}, index_bytes));
+  Json listed;
+  for (int round = 0; round < 32; ++round) {
+    listed = check_locked_success_result(
+        runtime.dispatch("soundset.catalog.list", Json::object(), {}));
+    const auto pending = check_locked_success_result(
+        runtime.dispatch("soundset.catalog.pending", Json::object(), {}));
+    if (pending.at("objects").empty()) {
+      break;
+    }
+    for (const auto& object : pending.at("objects")) {
+      const auto kind = object.at("object_kind").get<std::string>();
+      const auto sha256 = object.at("sha256").get<std::string>();
+      const auto bytes =
+          read_soundset_fixture(std::filesystem::path(kind) / sha256);
+      check_locked_success_result(runtime.dispatch(
+          "soundset.catalog.supply",
+          {{"object_kind", kind}, {"sha256", sha256}, {"offset", 0},
+           {"byte_length", bytes.size()}},
+          bytes));
+    }
+  }
+  LMDJ_CHECK(listed.at("catalog_available") == true);
+  return listed;
+}
+
+// Every outcome a caller can actually reach, in the order a Host passes
+// through them. Reachability is not uniform and the legs say which is which:
+// three of `play_audition`'s four early returns cannot be reached through the
+// Facade at all, because `prepared_audition` refuses their exact conditions
+// with `cook_failed` before `play_audition` is entered and the dispatch only
+// calls it after the same `audition_soundset` already answered `ok`. Those
+// three stay as contract checks and are deliberately not claimed as covered.
+// What is covered is the pool refusal, the discarded enqueue result, the
+// dispatch's own `runtime_ready` guard, and the success.
+void test_soundset_audition_reports_whether_a_voice_started() {
+  TempDirectory temp;
+  auto catalog = lmdj::facade::make_supplied_soundset_catalog(
+      4ULL * 1024ULL * 1024ULL, 256);
+  auto config = make_application_config(temp.path());
+  config.soundset_catalog_transport = catalog.transport;
+  config.soundset_catalog_source = catalog.source;
+  auto created =
+      ControlRuntime::create(temp.path(), std::move(config), kWebLimits);
+  LMDJ_CHECK(created.has_value());
+  auto runtime = std::move(created.value());
+
+  const auto listed = publish_fixture_soundsets(*runtime);
+  Json foundry;
+  for (const auto& entry : listed.at("sets")) {
+    if (entry.at("name") == "Fixture Foundry CC0") {
+      foundry = entry;
+    }
+  }
+  LMDJ_CHECK(foundry.is_object());
+  // The set-level demo, so every leg auditions the same bytes and the only
+  // variable across them is the state of this Host's engine.
+  LMDJ_CHECK(foundry.at("has_demo") == true);
+  const Json identity{
+      {"set_id", foundry.at("set_id")},
+      {"version", foundry.at("version")},
+      {"manifest_sha256", foundry.at("manifest_sha256")},
+  };
+
+  // Leg 1 -- no Project, so no runtime. The dispatch's `runtime_ready` guard
+  // is the outermost of the silent paths and the only one that never touches
+  // the engine at all.
+  const auto cold = check_locked_success_result(
+      runtime->dispatch("soundset.audition", identity, {}));
+  // The metadata answer is correct and useful, which is why this is a success
+  // and not a refusal: the Facade really did resolve, gate and decode bytes.
+  LMDJ_CHECK(cold.at("audio").at("prepared_frames").get<std::uint64_t>() > 0);
+  LMDJ_CHECK(cold.at("played") == false);
+
+  // Leg 2 -- a published snapshot with a stopped engine. This is the defect in
+  // its most ordinary form: `runtime_ready` is true, the audition Bank really
+  // is published, and `enqueue_control` still refuses because nothing is
+  // rendering. Before `played`, this answered exactly like leg 4 below and
+  // exactly like an audition that made a sound.
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(32);
+  import_and_assign(*runtime, wav, kAssetId, 7991, 7992, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  const auto ready = check_locked_success_result(
+      runtime->dispatch("host.status", Json::object(), {}));
+  LMDJ_CHECK(ready.at("runtime_ready") == true);
+  LMDJ_CHECK(
+      runtime->engine().telemetry().state ==
+      lmdj::audio::RealtimeState::stopped);
+  const auto committed =
+      inspect_project(temp.path(), kProjectId).at("project_revision");
+  const auto silent = check_locked_success_result(
+      runtime->dispatch("soundset.audition", identity, {}));
+  LMDJ_CHECK(silent.at("played") == false);
+
+  // Leg 3 -- a running engine. Far side: a voice really is rendering, so
+  // `played == true` is a statement about the audio thread and not about how
+  // far down `play_audition` got.
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  LMDJ_CHECK(
+      runtime->engine().telemetry().state ==
+      lmdj::audio::RealtimeState::running);
+  OneShotAudioDriver audio(runtime->engine());
+  const auto audible = check_locked_success_result(
+      runtime->dispatch("soundset.audition", identity, {}));
+  LMDJ_CHECK(audible.at("played") == true);
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices == 0);
+  audio.render_one();
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices == 1);
+
+  // Leg 4 -- the audition pool. Two Banks, and nothing in this Host reclaims
+  // them, so leg 2's Bank is still held and leg 3's is current: the next
+  // audition is refused by `publish_audition_bank`. That refusal used to be
+  // invisible.
+  const auto exhausted = check_locked_success_result(
+      runtime->dispatch("soundset.audition", identity, {}));
+  LMDJ_CHECK(exhausted.at("played") == false);
+  // and it is the audition pool that refused, not the Project's.
+  LMDJ_CHECK(runtime->engine().bank_telemetry().bank_slot_rejections == 0);
+
+  // Auditioning is a query with respect to Project Truth in every one of those
+  // states. The far side has to be read from the Project itself rather than
+  // from the reply: `soundset.audition` is Workspace-scoped, so the Facade
+  // never learns a Project and the envelope's `project_revision` is `null`
+  // even with one open -- comparing those nulls would assert nothing.
+  LMDJ_CHECK(silent.at("project_revision").is_null());
+  LMDJ_CHECK(audible.at("project_revision").is_null());
+  LMDJ_CHECK(exhausted.at("project_revision").is_null());
+  LMDJ_CHECK(
+      inspect_project(temp.path(), kProjectId).at("project_revision") ==
+      committed);
+}
+
 void test_bridge_routes_sample_operations_without_a_project_path() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -5830,10 +6005,242 @@ void test_bridge_preserves_error_responses_for_an_externally_failed_runtime() {
   }
 }
 
+std::unique_ptr<ControlRuntime> make_provider_runtime(const std::filesystem::path& root) {
+  auto assembly = lmdj::facade::load_installed_assembly(
+      std::filesystem::path{LMDJ_TEST_ASSEMBLY_PATH});
+  LMDJ_CHECK(assembly.has_value());
+  auto config = make_application_config(root);
+  config.providers = assembly.value().providers;
+  config.provider_policy = assembly.value().provider_policy;
+  auto created = ControlRuntime::create(root, std::move(config), kWebLimits);
+  LMDJ_CHECK(created.has_value());
+  return std::move(created.value());
+}
+
+void test_candidate_host_owns_paths_pcm_stop_and_atomic_adoption() {
+  TempDirectory temp;
+  auto runtime = make_provider_runtime(temp.path());
+  check_success(runtime->dispatch("provider.permissions.configure",
+    {{"granted_permissions", Json::array({"sample.slice.execute"})}}, {}));
+  check_success(runtime->dispatch("provider.select",
+    {{"capability", "sample.slice.v1"}, {"provider_id", "local.sample.slice"}}, {}));
+  Json run{{"job_id", "web-candidate"}, {"attempt_id", "web-candidate-attempt"},
+    {"project_id", kProjectId}, {"asset_id", kAssetId}, {"expected_revision", 1},
+    {"parameters", {{"refractory_frames", 1}}}, {"data_classification", "public"},
+    {"platform", "test"}, {"region", "local"}, {"required_permissions", Json::array({"sample.slice.execute"})}};
+  check_error(runtime->dispatch("candidate.job.run", run, {}), "HOST_STATE_INVALID");
+  check_success(runtime->dispatch("candidate.audition.stop", Json::object(), {}));
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  auto wav = mono_pcm16_wav(4096);
+  for (std::size_t offset = 44; offset < wav.size(); offset += 2) write_u16(wav, offset, 12000);
+  check_success(runtime->dispatch("asset.import", import_payload(820, 0, kAssetId, wav), wav));
+  const auto before = inspect_project(temp.path(), kProjectId);
+  auto injected = run; injected["project_path"] = "/forbidden/project.lmdj";
+  check_error(runtime->dispatch("candidate.job.run", injected, {}), "HOST_PROTOCOL_MISMATCH");
+  check_error(runtime->dispatch("candidate.job.run", run, wav), "HOST_PROTOCOL_MISMATCH");
+  auto wrong = run; wrong["project_id"] = uuid(821);
+  check_error(runtime->dispatch("candidate.job.run", wrong, {}), "REVISION_CONFLICT");
+  auto competing = make_provider_runtime(temp.path());
+  check_error(competing->dispatch("project.open",
+    {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}), "PROJECT_BUSY");
+  check_error(competing->dispatch("candidate.job.run", run, {}), "HOST_STATE_INVALID");
+  check_success(competing->dispatch("host.close", Json::object(), {}));
+  const auto result = check_locked_success_result(runtime->dispatch("candidate.job.run", run, {}));
+  LMDJ_CHECK(result.at("project_revision").is_null());
+  LMDJ_CHECK(result.dump().find("project_path") == std::string::npos);
+  LMDJ_CHECK(result.dump().find(temp.path().generic_string()) == std::string::npos);
+  LMDJ_CHECK(result.at("sets").size() == 1);
+  const auto& set = result.at("sets").at(0);
+  LMDJ_CHECK(set.at("recipes").size() == 1);
+  const auto set_id = set.at("set_id");
+  const auto candidate_id = set.at("recipes").at(0).at("candidate_id");
+  Json preview{{"project_id", kProjectId}, {"expected_revision", 1},
+    {"job_id", "web-candidate"}, {"set_id", set_id}, {"candidate_id", candidate_id}};
+  const auto cold = check_locked_success_result(runtime->dispatch("candidate.audition", preview, {}));
+  LMDJ_CHECK(cold.at("played") == false && cold.at("source_frames") == 4096);
+  LMDJ_CHECK(cold.at("project_revision") == 1);
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == before);
+  check_success(runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  // A prepared but stopped Host can publish an audition Bank without admitting
+  // a voice. Replacing it below must not refund Project Bank reservations.
+  const auto prepared_cold = check_locked_success_result(runtime->dispatch("candidate.audition", preview, {}));
+  LMDJ_CHECK(prepared_cold.at("played") == false);
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == before);
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  struct ObservedPcm { RealtimeEngine* engine; float peak = 0; } observed{&runtime->engine()};
+  OneShotAudioDriver driver(OneShotAudioBackend{&observed,
+    [](void* context) noexcept {return static_cast<ObservedPcm*>(context)->engine->bank_telemetry();},
+    [](void* context, float* left, float* right, std::uint32_t frames) noexcept {
+      auto& state = *static_cast<ObservedPcm*>(context);
+      state.engine->render(left, right, frames);
+      state.peak = 0;
+      for (std::uint32_t frame = 0; frame < frames; ++frame)
+        state.peak = std::max(state.peak, std::abs(left[frame]));
+    }});
+  const auto audible = check_locked_success_result(runtime->dispatch("candidate.audition", preview, {}));
+  LMDJ_CHECK(audible.at("played") == true);
+  driver.render_one();
+  LMDJ_CHECK(observed.peak > 0.0F);
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices == 1);
+  check_error(runtime->dispatch("candidate.audition.stop", {{"set_id", set_id}}, {}), "HOST_PROTOCOL_MISMATCH");
+  check_success(runtime->dispatch("candidate.audition.stop", Json::object(), {}));
+  // Drain the fixed engine release ramp, then assert the far-side block is silent.
+  for (std::uint32_t frames = 0; frames < lmdj::audio::kRealtimeRampFrames; frames += 128) driver.render_one();
+  driver.render_one();
+  LMDJ_CHECK(observed.peak == 0.0F);
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices == 0);
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == before);
+  auto stale = preview; stale["expected_revision"] = 0;
+  check_error(runtime->dispatch("candidate.audition", stale, {}), "REVISION_CONFLICT");
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == before);
+  Json adopt{{"project_id", kProjectId}, {"expected_revision", 1}, {"command_id", uuid(822)},
+    {"job_id", "web-candidate"}, {"set_id", set_id},
+    {"selections", Json::array({{{"candidate_id", candidate_id}, {"bank", 0}, {"pad", 1}},
+      {{"candidate_id", candidate_id}, {"bank", 0}, {"pad", 2}}})}};
+  auto duplicate = adopt; duplicate["selections"][1]["pad"] = 1;
+  check_error(runtime->dispatch("candidate.adopt", duplicate, {}), "HOST_PROTOCOL_MISMATCH");
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == before);
+  const auto adopted = check_locked_success_result(runtime->dispatch("candidate.adopt", adopt, {}));
+  LMDJ_CHECK(adopted.at("project_revision") == 2 && adopted.at("adopted").size() == 2);
+  LMDJ_CHECK(adopted.at("adopted")[0].at("asset_id") != adopted.at("adopted")[1].at("asset_id"));
+  const auto after = inspect_project(temp.path(), kProjectId);
+  check_error(runtime->dispatch("candidate.adopt", adopt, {}), "REVISION_CONFLICT");
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == after);
+  const auto discarded = check_locked_success_result(runtime->dispatch("candidate.set.discard",
+    {{"job_id", "web-candidate"}, {"set_id", set_id}}, {}));
+  LMDJ_CHECK(discarded.at("active_set_id").is_null());
+  preview["expected_revision"] = 2;
+  check_error(runtime->dispatch("candidate.audition", preview, {}), "NOT_FOUND");
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == after);
+  check_error(runtime->dispatch("candidate.job.cancel",
+    {{"job_id", "web-candidate"}, {"attempt_id", "web-candidate-attempt"}}, {}), "INVALID_ARGUMENT");
+  check_success(runtime->dispatch("host.close", Json::object(), {}));
+  check_error(runtime->dispatch("candidate.audition.stop", Json::object(), {}), "HOST_STATE_INVALID");
+  check_error(runtime->dispatch("candidate.job.inspect", {{"job_id", "web-candidate"}}, {}), "HOST_STATE_INVALID");
+  auto reopened = make_provider_runtime(temp.path());
+  const auto restored = check_locked_success_result(reopened->dispatch("candidate.job.inspect", {{"job_id", "web-candidate"}}, {}));
+  LMDJ_CHECK(restored == discarded);
+  LMDJ_CHECK(restored.dump().find("project_path") == std::string::npos);
+  check_success(reopened->dispatch("project.open", {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == after);
+  check_success(reopened->dispatch("host.close", Json::object(), {}));
+}
+
+void test_provider_owner_uses_retained_project_and_survives_restart() {
+  TempDirectory temp;
+  auto runtime = make_provider_runtime(temp.path());
+  const auto listed = check_locked_success_result(runtime->dispatch("provider.list", Json::object(), {}));
+  LMDJ_CHECK(listed.at("providers").size() == 3);
+  check_success(runtime->dispatch("provider.permissions.configure",
+      {{"granted_permissions", Json::array({"sample.slice.execute"})}}, {}));
+  check_success(runtime->dispatch("provider.select",
+      {{"capability", "sample.slice.v1"}, {"provider_id", "local.sample.slice"}}, {}));
+  Json input{{"attempt_id", "web-owner"}, {"capability", "sample.slice.v1"},
+      {"inputs", Json::array({{{"port", "source_audio"}, {"artifact", {
+          {"sha256", std::string(64, 'a')}, {"media_type", "audio/wav"}, {"byte_length", 54}}}}})},
+      {"input_owners", Json::array({{{"port", "source_audio"}, {"occurrence", 0},
+          {"project_id", kProjectId}, {"asset_id", kAssetId}}})},
+      {"parameters", {{"refractory_frames", 1}}}, {"data_classification", "public"},
+      {"platform", "test"}, {"region", "local"}, {"required_permissions", Json::array({"sample.slice.execute"})}};
+  check_error(runtime->dispatch("provider.run", input, {}), "HOST_STATE_INVALID");
+  check_error(runtime->dispatch("attempt.inspect", {{"attempt_id", "web-owner"}}, {}), "NOT_FOUND");
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  auto wav = mono_pcm16_wav(5); write_u16(wav, 46, 5000); write_u16(wav, 50, 8000);
+  const auto imported = check_locked_success_result(runtime->dispatch(
+      "asset.import", import_payload(810, 0, kAssetId, wav), wav));
+  input["inputs"][0]["artifact"] = imported.at("artifact");
+  const auto before = runtime->dispatch("project.inspect", Json::object(), {});
+  auto competing = make_provider_runtime(temp.path());
+  check_error(competing->dispatch("project.open",
+      {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}), "PROJECT_BUSY");
+  check_error(competing->dispatch("provider.run", input, {}), "HOST_STATE_INVALID");
+  check_error(competing->dispatch("attempt.inspect", {{"attempt_id", "web-owner"}}, {}), "NOT_FOUND");
+  check_success(competing->dispatch("host.close", Json::object(), {}));
+  competing.reset();
+  auto injected_path = input;
+  injected_path["input_owners"][0]["project_path"] = "/forbidden/project.lmdj";
+  check_error(runtime->dispatch("provider.run", injected_path, {}), "HOST_PROTOCOL_MISMATCH");
+  check_error(runtime->dispatch("provider.run", input, wav), "HOST_PROTOCOL_MISMATCH");
+  const auto run = check_locked_success_result(runtime->dispatch("provider.run", input, {}));
+  LMDJ_CHECK(run.at("outputs").size() == 1);
+  const auto terminal = runtime->dispatch("attempt.inspect", {{"attempt_id", "web-owner"}}, {});
+  const auto inspected = check_locked_success_result(terminal);
+  LMDJ_CHECK(inspected.at("request").at("inputs") == input.at("inputs"));
+  LMDJ_CHECK(inspected.at("candidate_outputs") == run.at("outputs"));
+  LMDJ_CHECK(inspected.at("status") == "succeeded");
+  LMDJ_CHECK(terminal.dump().find("project_path") == std::string::npos);
+  LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {}) == before);
+  check_success(runtime->dispatch("host.close", Json::object(), {})); runtime.reset();
+  runtime = make_provider_runtime(temp.path());
+  LMDJ_CHECK(runtime->dispatch("attempt.inspect", {{"attempt_id", "web-owner"}}, {}) == terminal);
+  check_success(runtime->dispatch("project.open", {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}));
+  input["attempt_id"] = "web-no-regrant";
+  check_error(runtime->dispatch("provider.run", input, {}), "PERMISSION_DENIED");
+  LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {}) == before);
+  check_success(runtime->dispatch("host.close", Json::object(), {}));
+}
+
+void test_web_provider_owner_refusals_are_persistent(unsigned mode) {
+  TempDirectory temp;
+  auto runtime = make_provider_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  auto wav = mono_pcm16_wav(5);
+  const auto imported = check_locked_success_result(runtime->dispatch(
+      "asset.import", import_payload(811, 0, kAssetId, wav), wav));
+  const auto before = runtime->dispatch("project.inspect", Json::object(), {});
+  check_success(runtime->dispatch("provider.permissions.configure",
+      {{"granted_permissions", Json::array({"sample.slice.execute"})}}, {}));
+  check_success(runtime->dispatch("provider.select",
+      {{"capability", "sample.slice.v1"}, {"provider_id", "local.sample.slice"}}, {}));
+  Json input{{"attempt_id", "web-refusal"}, {"capability", "sample.slice.v1"},
+      {"inputs", Json::array({{{"port", "source_audio"}, {"artifact", imported.at("artifact")}}})},
+      {"input_owners", Json::array({{{"port", "source_audio"}, {"occurrence", 0},
+          {"project_id", kProjectId}, {"asset_id", kAssetId}}})},
+      {"parameters", Json::object()}, {"data_classification", "public"},
+      {"platform", "test"}, {"region", "local"}, {"required_permissions", Json::array({"sample.slice.execute"})}};
+  auto code = "NOT_FOUND"; auto reason = "input_artifact_unavailable";
+  if (mode == 0) input.erase("input_owners");
+  if (mode == 1) input["input_owners"][0]["project_id"] = uuid(999);
+  if (mode == 2) input["input_owners"][0]["asset_id"] = uuid(999);
+  if (mode == 3) input["inputs"][0]["artifact"]["sha256"] = std::string(64, 'b');
+  const auto blob = temp.path() / "projects" / (std::string(kProjectId) + ".lmdj") /
+      "assets" / (imported.at("artifact").at("sha256").get<std::string>() + ".wav");
+  if (mode == 4 || mode == 5) {
+    auto corrupt = wav;
+    if (mode == 4) corrupt.back() = std::byte{1}; else corrupt.push_back(std::byte{1});
+    std::ofstream file(blob, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(corrupt.data()), static_cast<std::streamsize>(corrupt.size()));
+    LMDJ_CHECK(file.good());
+    code = "IO_ERROR"; reason = "input_artifact_mismatch";
+  }
+  if (mode == 6) std::filesystem::remove(blob);
+  const auto refused = check_error(runtime->dispatch("provider.run", input, {}), code);
+  LMDJ_CHECK(refused.at("details").at("reason") == reason);
+  LMDJ_CHECK(refused.at("details").at("attempt_id") == "web-refusal");
+  const auto terminal = runtime->dispatch("attempt.inspect", {{"attempt_id", "web-refusal"}}, {});
+  LMDJ_CHECK(terminal.at("result").at("status") == "failed");
+  LMDJ_CHECK(terminal.at("result").at("minted_outputs").empty());
+  LMDJ_CHECK(terminal.at("result").at("candidate_outputs").empty());
+  check_success(runtime->dispatch("host.close", Json::object(), {})); runtime.reset();
+  runtime = make_provider_runtime(temp.path());
+  LMDJ_CHECK(runtime->dispatch("attempt.inspect", {{"attempt_id", "web-refusal"}}, {}) == terminal);
+  // Inspect works before any Project is reopened, including with corrupt input.
+  if (mode < 4) {
+    check_success(runtime->dispatch("project.open", {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}));
+    LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {}) == before);
+  }
+  check_success(runtime->dispatch("host.close", Json::object(), {}));
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_candidate_host_owns_paths_pcm_stop_and_atomic_adoption();
+    test_provider_owner_uses_retained_project_and_survives_restart();
+    for (unsigned mode = 0; mode < 7; ++mode) test_web_provider_owner_refusals_are_persistent(mode);
     test_one_shot_bank_transition_waits_for_accepted_queue_commit();
     test_one_shot_bank_transition_renders_until_target_is_applied();
     test_one_shot_bank_transition_rejects_overlap_until_completion();
@@ -5881,6 +6288,7 @@ int main() {
     test_host_supplied_catalog_verifies_what_it_serves();
     test_host_supplied_catalog_resolves_only_addressed_objects();
     test_host_catalog_operations_need_a_wired_transport();
+    test_soundset_audition_reports_whether_a_voice_started();
     test_bridge_routes_sample_operations_without_a_project_path();
     test_bridge_defers_parse_dispatch_and_copies_fixed_slots();
     test_bridge_rejects_duplicates_until_response_consumption();

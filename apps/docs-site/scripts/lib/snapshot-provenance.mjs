@@ -361,13 +361,28 @@ function isProjectionPath(relative) {
   return false;
 }
 
+async function projectionPathsAtRevision(repoRoot, revision) {
+  const paths = await listRevisionPaths(repoRoot, revision);
+  const selected = paths.filter(isProjectionPath);
+  const assemblyPath = 'products/lmdj/assembly.json';
+  if (paths.includes(assemblyPath)) {
+    const assembly = JSON.parse((await execGit(repoRoot, ['show', `${revision}:${assemblyPath}`])).stdout);
+    const ids = new Set((assembly.contracts ?? []).map(({id}) => id));
+    // Only registered binary profiles extend the historical projection. K1's
+    // unregistered profile must not rewrite the inventory of older snapshots.
+    selected.push(...paths.filter((file) => /^contracts\/[^/]+\/[^/]+\.md$/.test(file) &&
+      ids.has(path.posix.basename(file, '.md'))));
+  }
+  return selected.sort();
+}
+
 // Exported so the pre-merge gate computes the exact projection this module
 // compares a landed snapshot against, rather than a second implementation
 // that could drift from the verdict it is supposed to predict.
 export async function projectionManifest(repoRoot, revision, requestedPaths) {
   const paths = requestedPaths
     ? [...requestedPaths].map(validateRelativePath).sort()
-    : (await listRevisionPaths(repoRoot, revision)).filter(isProjectionPath);
+    : await projectionPathsAtRevision(repoRoot, revision);
   if (new Set(paths).size !== paths.length) throw new Error('source projection contains duplicate paths');
   const files = [];
   for (const relative of paths) files.push(await revisionEvidence(repoRoot, revision, relative));
@@ -444,7 +459,9 @@ function snapshotDocumentPath(sourcePath, version) {
 // in which no Product Build could be allocated at all, for as long as nobody
 // tried. That is the cost of a pin whose only trigger is a rare operation --
 // worth remembering before adding another one.
-const SOURCE_DOCUMENT_COUNT = 41;
+// K1 (#1049) added artifact-audio and slice-points. The current-tree regression
+// checks this independent inventory pin before the next rare freeze operation.
+export const SOURCE_DOCUMENT_COUNT = 47;
 
 export async function createSnapshotMetadata({
   repoRoot,
@@ -463,7 +480,7 @@ export async function createSnapshotMetadata({
   const projection = await projectionManifest(repoRoot, revision, projectionPaths);
   const sourcePaths = await sourceDocumentPaths(repoRoot, revision);
   if (sourcePaths.length !== expectedDocCount) {
-    throw new Error(`expected ${expectedDocCount} source documents, found ${sourcePaths.length}`);
+    throw new Error(`expected ${expectedDocCount} source documents, found ${sourcePaths.length}; remedy: reconcile the committed page inventory and SOURCE_DOCUMENT_COUNT before freezing`);
   }
   const sourceDocuments = [];
   for (const sourcePath of sourcePaths) {
@@ -643,7 +660,7 @@ export async function verifySnapshotProvenance({
   portalRoot,
   metadata,
   headRevision,
-  expectedDocCount = SOURCE_DOCUMENT_COUNT,
+  expectedDocCount,
   diagramIds = DIAGRAM_IDS,
   projectionPaths,
   readFactsAtRevision: factsReader = readRepoFactsAtRevision,
@@ -728,8 +745,12 @@ export async function verifySnapshotProvenance({
   const expectedIds = validateDiagramIds(diagramIds);
   if (!sameJson(metadata.diagrams?.ids, expectedIds)) errors.push('diagram id inventory does not match expected validated IDs');
   if (metadata.diagrams?.asset_base !== `/versions/${version}/diagrams`) errors.push('diagram asset base is invalid');
-  if (!Array.isArray(metadata.source_documents) || metadata.source_documents.length !== expectedDocCount) {
-    errors.push(`snapshot metadata must contain ${expectedDocCount} source documents`);
+  // Historical archives bind to their recorded source inventory below; only
+  // new freezes use the independent current-page completeness pin.
+  if (!Array.isArray(metadata.source_documents)) {
+    errors.push('snapshot metadata source_documents must be an array; remedy: restore the authenticated source inventory');
+  } else if (expectedDocCount !== undefined && metadata.source_documents.length !== expectedDocCount) {
+    errors.push(`snapshot metadata must contain ${expectedDocCount} source documents; remedy: restore the authenticated source inventory`);
   }
   try {
     const expectedSources = await sourceDocumentPaths(repoRoot, contentRevision);
@@ -762,7 +783,7 @@ export async function verifySnapshotProvenance({
     try {
       const expectedProjectionPaths = projectionPaths
         ? [...projectionPaths].map(validateRelativePath).sort()
-        : (await listRevisionPaths(repoRoot, contentRevision)).filter(isProjectionPath);
+        : await projectionPathsAtRevision(repoRoot, contentRevision);
       const recordedProjectionPaths = metadata.source_projection.files.map((entry) => entry.path);
       if (!sameJson(recordedProjectionPaths, expectedProjectionPaths)) errors.push('source projection inventory is incomplete or unexpected');
       const actualProjection = await projectionManifest(

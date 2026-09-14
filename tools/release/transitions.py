@@ -12,6 +12,7 @@ import tempfile
 from typing import Mapping
 
 from .github_api import GitHubAsset, GitHubRelease
+from .changelog import binding as changelog_binding
 from .model import (
     Disposition,
     ReleaseIntent,
@@ -28,6 +29,7 @@ from .prepare import (
     _verify_key_roles,
     _verify_product_proof,
     _verify_profile_assets,
+    notes_for_plan,
 )
 from .profiles import AssetBuild, ProfileBuild
 
@@ -64,7 +66,8 @@ class _VerifiedRelease:
 _MARKER_SCHEMA = "lmdj.release-plan-marker.v1"
 _SELF_TEST_MARKER_SCHEMA = "lmdj.release-plan-marker.v2"
 _BATCH_MARKER_SCHEMA = "lmdj.release-plan-marker.v3"
-_MARKER_PATTERN = re.compile(r"<!-- (lmdj\.release-plan-marker\.v[123]) (\{[^\r\n]*\}) -->")
+_CHANGELOG_MARKER_SCHEMA = "lmdj.release-plan-marker.v4"
+_MARKER_PATTERN = re.compile(r"<!-- (lmdj\.release-plan-marker\.v[1234]) (\{[^\r\n]*\}) -->")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -153,6 +156,60 @@ def verify_draft(
     return _verify_release_state(tag, release_id, plan_sha256, context).result
 
 
+def verify_published(
+    tag: str, release_id: int, plan_sha256: str, context: PrepareContext,
+) -> TransitionResult:
+    return verify_published_state(tag, release_id, plan_sha256, context).result
+
+
+def verify_published_state(
+    tag: str, release_id: int, plan_sha256: str, context: PrepareContext,
+) -> _VerifiedRelease:
+    """Verify the live published Release without consulting the lagging ledger state."""
+    try:
+        authority = _formal_authority(tag, context, require_local=False, require_remote=True)
+        release = authority.context.github.get_release(
+            authority.context.policy.repository, release_id,
+        )
+        if release is None:
+            raise TransitionError(
+                "why: the numeric Release does not exist; "
+                "remedy: use the Release ID from the protected publication inputs"
+            )
+        if release.draft:
+            raise TransitionError(
+                "why: the live Release is still a Draft; "
+                "remedy: publish the exact verified Draft before post-publish verification"
+            )
+        expected_prerelease, _ = _publication_fields(authority)
+        if release.prerelease is not expected_prerelease:
+            raise TransitionError(
+                "why: the live Release prerelease flag does not match the Channel policy; "
+                "remedy: investigate Release metadata and the immutable release plan"
+            )
+        expected_url = _published_html_url(
+            authority.context.policy.repository, tag,
+        )
+        if release.html_url != expected_url:
+            raise TransitionError(
+                "why: the live Release URL is not the exact tag URL; "
+                "remedy: investigate Release identity and immutable tag state"
+            )
+        verified = _verify_release_state(tag, release_id, plan_sha256, context)
+        if (_release_projection(release) != _release_projection(verified.release)
+                or authority.intent != verified.authority.intent):
+            raise TransitionError("published Release or canonical intent changed during verification")
+        return replace(verified, result=replace(verified.result, status="published"))
+    except TransitionError as error:
+        message = str(error)
+        if not message.startswith("why:"):
+            message = (
+                "why: the live published Release does not match the immutable release plan; "
+                f"remedy: inspect the numeric Release, its assets, and the signed tag ({message})"
+            )
+        raise TransitionError(message) from None
+
+
 def _verify_release_state(
     tag: str, release_id: int, plan_sha256: str, context: PrepareContext,
 ) -> _VerifiedRelease:
@@ -215,6 +272,8 @@ def publish_draft(
         tag, context, require_local=False, require_remote=True,
     )
     _require_releasable(mutation_authority, "Draft publication")
+    if mutation_authority.intent != before.authority.intent:
+        raise TransitionError("why: canonical release intent changed before publication; remedy: reconcile the reviewed intent and reverify the exact Draft before publication")
     prerelease, make_latest = _publication_fields(mutation_authority)
 
     try:
@@ -253,6 +312,8 @@ def marker_for_plan(document: dict[str, object], digest: str) -> str:
         if self_test and batch_test:
             raise TransitionError("release plan has mixed complete evidence references")
         schema = _BATCH_MARKER_SCHEMA if batch_test else _SELF_TEST_MARKER_SCHEMA if self_test else _MARKER_SCHEMA
+        if "changelog" in document:
+            schema = _CHANGELOG_MARKER_SCHEMA
         summary = {
             "schema": schema,
             "plan_schema": document["schema"],
@@ -270,6 +331,8 @@ def marker_for_plan(document: dict[str, object], digest: str) -> str:
             # Fresh remote audit must bind the permanent CI reference without
             # relying on a bounded artifact or an opaque plan hash alone.
             summary["ci"] = ci
+        if "changelog" in document:
+            summary["changelog"] = changelog_binding(document["changelog"])
     except (KeyError, TypeError):
         raise TransitionError("release plan marker input is invalid") from None
     payload = json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -411,12 +474,14 @@ def _release_body(root: Path, document: dict[str, object], digest: str) -> str:
     identity = str(document["tag"]).replace("/", "%2F")
     path = root / "build/release" / identity / "release-notes.md"
     try:
-        notes = path.read_text(encoding="utf-8").rstrip()
+        notes = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         raise TransitionError("local release notes are unavailable") from None
     if not notes:
         raise TransitionError("local release notes are empty")
-    return f"{notes}\n\n{marker_for_plan(document, digest)}"
+    if "changelog" in document and notes != notes_for_plan(document):
+        raise TransitionError("why: local release notes differ from the frozen changelog; remedy: reconcile saved output against the reviewed plan before creating a Draft")
+    return f"{notes.rstrip()}\n\n{marker_for_plan(document, digest)}"
 
 
 def _release_fields(document: dict[str, object]) -> dict[str, object]:
@@ -503,7 +568,7 @@ def _release_pair(
 
 
 def _release_projection(release: GitHubRelease) -> tuple[object, ...]:
-    return (_release_without_draft(release), release.draft, release.html_url)
+    return (_release_without_draft(release), release.draft, release.html_url, release.published_at)
 
 
 def _release_without_draft(release: GitHubRelease) -> tuple[object, ...]:
@@ -532,11 +597,13 @@ def _verify_release_metadata(
     ):
         raise TransitionError("GitHub Release metadata conflicts with the release plan")
     expected_marker = marker_for_plan(document, digest)
+    if "changelog" in document and release.body != f"{notes_for_plan(document).rstrip()}\n\n{expected_marker}":
+        raise TransitionError("why: GitHub Release body differs from the frozen changelog; remedy: investigate remote body drift against the reviewed plan without rewriting published history")
     markers = _MARKER_PATTERN.findall(release.body)
     expected_schema = expected_marker.split(" ", 2)[1]
     if len(markers) != 1 or markers[0][0] != expected_schema or markers[0][1] != expected_marker.split(" ", 2)[2][:-4]:
         raise TransitionError("GitHub Release plan marker is absent or invalid")
-    if release.body.count("lmdj.release-plan-marker.") != 2:
+    if "changelog" not in document and release.body.count("lmdj.release-plan-marker.") != 2:
         # The schema appears once as marker label and once inside its canonical JSON.
         raise TransitionError("GitHub Release plan marker is duplicated or malformed")
 

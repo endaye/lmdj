@@ -98,7 +98,7 @@ test("mode rail glyphs never reuse Pad keyboard letters", () => {
     document.querySelectorAll(".mode-glyph"),
     (glyph) => glyph.textContent ?? "",
   );
-  expect(glyphs).toHaveLength(5);
+  expect(glyphs).toHaveLength(6);
   for (const glyph of glyphs) expect(glyph).not.toMatch(/^[A-Za-z]$/);
 });
 
@@ -236,4 +236,17 @@ test("sequence settings follow committed Project values and pluralise bars", () 
   expect(bpm.value).toBe("120");
   rerender(<SequenceSurface project={{...project, revision: 8, bpm: 104}} {...props} />);
   expect(bpm.value).toBe("104");
+});
+
+
+test("Slice mode exposes its active state only when candidate support is available", async () => {
+  function Rail() {
+    const [active, setActive] = useState<"project" | "slice">("project");
+    return <ModeRail activeMode={active} sliceEnabled onSelect={mode => {
+      if (mode === "slice" || mode === "project") setActive(mode);
+    }} />;
+  }
+  render(<Rail />);
+  await userEvent.click(screen.getByRole("button", {name: "Slice"}));
+  expect(screen.getByRole("button", {name: "Slice"}).getAttribute("aria-current")).toBe("page");
 });

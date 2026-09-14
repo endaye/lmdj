@@ -178,6 +178,18 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "soundset.inspect",
     "soundset.map.preview",
     "soundset.install",
+    "candidate.job.run",
+    "candidate.job.inspect",
+    "candidate.job.cancel",
+    "candidate.set.discard",
+    "candidate.audition",
+    "candidate.audition.stop",
+    "candidate.adopt",
+    "provider.list",
+    "provider.select",
+    "provider.run",
+    "provider.permissions.configure",
+    "attempt.inspect",
     "host.close",
   ]);
   assert.deepEqual(HOST_NOTIFICATIONS, [
@@ -851,4 +863,143 @@ test("duplicate request IDs remain rejected while the first request is in flight
     true,
   );
   await assert.doesNotReject(pending);
+});
+
+function ownerRequest() {
+  return {
+    attempt_id: "owned", capability: "sample.slice.v1",
+    inputs: [{port: "source_audio", artifact: {sha256: "a".repeat(64), media_type: "audio/wav", byte_length: 54}}],
+    input_owners: [{port: "source_audio", occurrence: 0,
+      project_id: "00000000-0000-4000-8000-000000000001", asset_id: "00000000-0000-4000-8000-000000000002"}],
+    parameters: {refractory_frames: 1}, data_classification: "public", platform: "test", region: "local",
+    required_permissions: ["sample.slice.execute"],
+  };
+}
+
+test("Provider owner protocol carries selectors without a filesystem path", () => {
+  const payload = ownerRequest();
+  const envelope = createRequestEnvelope({operation: "provider.run", payload, crypto: webcrypto});
+  assert.deepEqual(decodeRequestEnvelope(encode(envelope)), envelope);
+  delete payload.input_owners;
+  assert.doesNotThrow(() => createRequestEnvelope({operation: "provider.run", payload, crypto: webcrypto}));
+});
+
+for (const [name, mutate] of [
+  ["owner path", (payload) => {payload.input_owners[0].project_path = "/lmdj-workspace/projects/other.lmdj";}],
+  ["extra owner field", (payload) => {payload.input_owners[0].extra = true;}],
+  ["unsafe occurrence", (payload) => {payload.input_owners[0].occurrence = Number.MAX_SAFE_INTEGER + 1;}],
+  ["invalid owner UUID", (payload) => {payload.input_owners[0].asset_id = "other";}],
+  ["malformed Artifact", (payload) => {payload.inputs[0].artifact.byte_length = -1;}],
+]) {
+  test(`Provider protocol rejects ${name} before transport`, () => {
+    const payload = ownerRequest(); mutate(payload);
+    assert.throws(() => createRequestEnvelope({operation: "provider.run", payload, crypto: webcrypto}),
+      (error) => error.code === "HOST_PROTOCOL_MISMATCH");
+  });
+}
+
+test("permission configuration is an exact explicit grant set", () => {
+  for (const payload of [{granted_permissions: []}, {granted_permissions: ["sample.slice.execute"]}]) {
+    assert.doesNotThrow(() => createRequestEnvelope({operation: "provider.permissions.configure", payload, crypto: webcrypto}));
+  }
+  for (const payload of [{granted_permissions: ["sample.slice.execute", "sample.slice.execute"]},
+    {granted_permissions: [], persist: true}, {granted_permissions: "sample.slice.execute"}]) {
+    assert.throws(() => createRequestEnvelope({operation: "provider.permissions.configure", payload, crypto: webcrypto}),
+      (error) => error.code === "HOST_PROTOCOL_MISMATCH");
+  }
+});
+
+const candidateRequest = {
+  project_id: REQUEST_ID, expected_revision: 3, job_id: "slice-job", set_id: "set", candidate_id: "recipe",
+};
+const candidateAudio = {
+  job_id: "slice-job", set_id: "set", candidate_id: "recipe",
+  artifact: {sha256: "a".repeat(64), media_type: "audio/wav", byte_length: 52},
+  sample_rate: 48000, channels: 1, source_frames: 4, project_revision: 3, played: false,
+};
+
+test("Candidate requests reject caller paths, unknown fields, unsafe numbers and implicit targets", () => {
+  const payloads = {
+    "candidate.job.run": {job_id: "slice-job", attempt_id: "attempt", project_id: REQUEST_ID,
+      asset_id: REQUEST_ID, expected_revision: 3, parameters: {}, data_classification: "public",
+      platform: "test", region: "local", required_permissions: ["sample.slice.execute"]},
+    "candidate.job.inspect": {job_id: "slice-job"},
+    "candidate.job.cancel": {job_id: "slice-job", attempt_id: "attempt"},
+    "candidate.set.discard": {job_id: "slice-job", set_id: "set"},
+    "candidate.audition": candidateRequest,
+    "candidate.audition.stop": {},
+    "candidate.adopt": {project_id: REQUEST_ID, expected_revision: 3, command_id: REQUEST_ID,
+      job_id: "slice-job", set_id: "set", selections: [{candidate_id: "recipe", bank: 0, pad: 0}]},
+  };
+  const validate = (operation, payload) => createRequestEnvelope({operation, payload, crypto: webcrypto});
+  for (const [operation, payload] of Object.entries(payloads)) {
+    assert.doesNotThrow(() => validate(operation, payload));
+    assert.throws(() => validate(operation, {...payload, project_path: "/retained/project.lmdj"}), HostProtocolError);
+    assert.throws(() => validate(operation, {...payload, extra: true}), HostProtocolError);
+    for (const key of Object.keys(payload)) {
+      const missing = {...payload}; delete missing[key];
+      assert.throws(() => validate(operation, missing), HostProtocolError);
+    }
+  }
+  for (const expected_revision of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, "3"]) {
+    assert.throws(() => validate("candidate.audition", {...candidateRequest, expected_revision}), HostProtocolError);
+  }
+  for (const job_id of ["../escape", ".", "..", "a".repeat(129)]) {
+    assert.throws(() => validate("candidate.audition", {...candidateRequest, job_id}), HostProtocolError);
+  }
+  for (const selections of [[], [{candidate_id: "recipe"}],
+    [{candidate_id: "recipe", bank: 4, pad: 0}],
+    [{candidate_id: "recipe", bank: 0, pad: 16}],
+    [{candidate_id: "recipe", bank: 0, pad: 0}, {candidate_id: "other", bank: 0, pad: 0}]]) {
+    assert.throws(() => validate("candidate.adopt", {...payloads["candidate.adopt"], selections}), HostProtocolError);
+  }
+  assert.doesNotThrow(() => validate("candidate.adopt", {...payloads["candidate.adopt"],
+    selections: [{candidate_id: "recipe", bank: 0, pad: 0}, {candidate_id: "recipe", bank: 0, pad: 1}]}));
+});
+
+test("Candidate audition response requires explicit playback and bounded geometry", () => {
+  const validate = (result) => validateResponseEnvelope({protocol_version: 1, request_id: REQUEST_ID, ok: true, result}, "candidate.audition");
+  assert.doesNotThrow(() => validate(candidateAudio));
+  for (const key of Object.keys(candidateAudio)) {
+    const missing = {...candidateAudio}; delete missing[key];
+    assert.throws(() => validate(missing), HostProtocolError);
+  }
+  for (const change of [{played: "true"}, {channels: 3}, {sample_rate: 96000}, {source_frames: 0},
+    {source_frames: 8388609}, {project_revision: null}, {artifact: {...candidateAudio.artifact, sha256: "bad"}}, {extra: true}]) {
+    assert.throws(() => validate({...candidateAudio, ...change}), HostProtocolError);
+  }
+});
+
+test("Candidate Job responses validate source, recipes and lifecycle associations", () => {
+  const source = {project_id: REQUEST_ID, asset_id: REQUEST_ID,
+    project_revision: 3, artifact: candidateAudio.artifact, frame_rate: 48000, frame_count: 4};
+  const intent = {attempt_id: "attempt", source, parameters_sha256: "b".repeat(64),
+    data_classification: "public", platform: "test", region: "local", required_permissions: []};
+  const set = {set_id: "set", status: "active", attempt_id: "attempt", sdk_candidate_id: "sdk-candidate", source,
+    output_artifact: {sha256: "c".repeat(64), media_type: "application/json", byte_length: 100},
+    capability: {id: "sample.slice.v1", contract: "lmdj.capability.v2", version: "1.0.0"},
+    provider: {id: "local.sample.slice", version: "1.0.0", artifact_sha256: "d".repeat(64)},
+    model_identity: null, parameters_sha256: "b".repeat(64),
+    recipes: [{candidate_id: "recipe", kind: "slice_interval_v1", start_frame: 0, end_frame: 4, frame_rate: 48000}]};
+  const result = {job_id: "slice-job", history: [{intent, set_id: "set", status: "succeeded"}],
+    active_set_id: "set", sets: [set], project_revision: null};
+  const validate = (value) => validateResponseEnvelope({protocol_version: 1, request_id: REQUEST_ID, ok: true, result: value}, "candidate.job.inspect");
+  assert.doesNotThrow(() => validate(result));
+  const empty = structuredClone(result); empty.sets[0].recipes = [];
+  assert.doesNotThrow(() => validate(empty));
+  for (const mutate of [
+    (v) => {v.active_set_id = "other";},
+    (v) => {v.sets[0].source.project_path = "/forbidden/project.lmdj";},
+    (v) => {v.sets[0].recipes[0].end_frame = 5;},
+    (v) => {v.sets[0].recipes[0].start_frame = 1;},
+    (v) => {v.sets[0].recipes[0].extra = true;},
+    (v) => {v.sets[0].source.artifact.byte_length = -1;},
+    (v) => {v.sets[0].attempt_id = "other";},
+    (v) => {v.history[0].status = "failed";},
+    (v) => {v.sets = [];},
+    (v) => {v.project_revision = 3;},
+  ]) {
+    const malformed = structuredClone(result); mutate(malformed);
+    assert.throws(() => validate(malformed), HostProtocolError);
+  }
 });

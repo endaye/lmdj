@@ -50,6 +50,25 @@ lmdj_target_warnings(lmdj_native_host)
 lmdj_target_sanitizers(lmdj_native_host)
 
 if(BUILD_TESTING)
+  add_executable(lmdj_native_capture_allocation_failure
+    "${CMAKE_SOURCE_DIR}/tests/host/native_capture_allocation_failure_main.cpp"
+    src/capture_writer.cpp)
+  target_link_libraries(lmdj_native_capture_allocation_failure PRIVATE
+    $<TARGET_PROPERTY:lmdj_native_host,LINK_LIBRARIES>)
+  target_compile_definitions(lmdj_native_capture_allocation_failure PRIVATE
+    $<TARGET_PROPERTY:lmdj_native_host,COMPILE_DEFINITIONS>)
+  lmdj_target_warnings(lmdj_native_capture_allocation_failure)
+  lmdj_target_sanitizers(lmdj_native_capture_allocation_failure)
+  lmdj_add_test(
+    NAME host.native_capture_allocation_failure
+    TIER host
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/tests/host/native_capture_allocation_failure_test.py"
+      "$<TARGET_FILE:lmdj_native_capture_allocation_failure>"
+      "$<TARGET_FILE:lmdj_core_cli>"
+      "${CMAKE_SOURCE_DIR}/products/lmdj/assembly.json"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120)
   lmdj_add_test(
     NAME host.native_source_boundary
     TIER contract
@@ -68,6 +87,22 @@ if(BUILD_TESTING)
       "${CMAKE_SOURCE_DIR}/tests/host/native_host_timeout_policy_test.py"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
+  # Cross-Host, but it needs this Host's binary, so it lives here rather than
+  # beside the source-scan gate. The defect it catches is the one no per-Host
+  # suite can see: two Hosts answering the same Catalog differently, each
+  # green against its own idea of the answer.
+  lmdj_add_test(
+    NAME host.soundset_catalog_partition
+    TIER host
+    COMMAND
+      "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/tests/host/soundset_catalog_partition_test.py"
+      "$<TARGET_FILE:lmdj_native_host>"
+      "$<TARGET_FILE:lmdj_core_cli>"
+      "${CMAKE_SOURCE_DIR}/products/lmdj/assembly.json"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120
+  )
   lmdj_add_test(
     NAME host.native
     TIER host
@@ -80,4 +115,13 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     TIMEOUT 120
   )
+  lmdj_add_test(NAME host.provider_owner TIER host
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/tests/host/provider_owner_test.py"
+      "$<TARGET_FILE:lmdj_core_cli>" "$<TARGET_FILE:lmdj_native_host>"
+      "$<TARGET_FILE:lmdj_core_c>"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120)
+  set_tests_properties(host.provider_owner PROPERTIES
+    ENVIRONMENT "${lmdj_mcp_test_environment}")
 endif()

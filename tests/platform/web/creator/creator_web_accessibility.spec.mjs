@@ -145,7 +145,21 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   ]);
   const index = await (await request.get(`${baseURL}/index.html`)).text();
   expect(index).toContain(createHash("sha256").update(manifestBytes).digest("hex"));
-  expect(index).not.toMatch(/https?:\/\//i);
+  // The property is that the shipped document makes no off-origin reference,
+  // because `connect-src 'self'` is the exfiltration barrier around the
+  // Projects and audio this Creator holds in OPFS. A commented-out tag makes
+  // no reference: the browser never fetches it. Matching the raw bytes
+  // conflated the two and read the worked example inside index.html's own
+  // CSP commentary as a live reference (#1064). Strip comments first, and
+  // assert separately that stripping actually worked -- otherwise a change to
+  // the comment syntax would silently turn this into a no-op check. Guarding
+  // on a comment being present keeps two situations apart: a document that
+  // carries no comment at all is fine and the raw-bytes check below is exact
+  // for it, whereas a document that carries one the strip did not remove is
+  // the no-op hazard, and it now says so rather than reporting a byte count.
+  const liveIndex = index.replace(/<!--[\s\S]*?-->/g, "");
+  if (index.includes("<!--")) expect(liveIndex).not.toContain("<!--");
+  expect(liveIndex).not.toMatch(/https?:\/\//i);
   for (const asset of manifest.assets) {
     expect(asset.path).toMatch(/^assets\/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|wasm)$/);
     expect(asset.path).not.toMatch(/(?:fixture|\.map$|test)/i);
@@ -197,10 +211,21 @@ for (const viewport of [
     }
     await expect(page.getByRole("button", {name: "Sample"})).toBeEnabled();
     await expect(page.getByRole("button", {name: "Sequence"})).toBeEnabled();
+    await expect(page.getByRole("button", {name: "Slice", exact: true})).toBeEnabled();
+    // The walk below depends on Sound Sets being tabbable, and `mode_rail.tsx`
+    // gives it `disabled={!soundSetEnabled}`. Without this line a regression
+    // that disables it would surface as an off-by-one tab-order diff -- the
+    // very shape that made #977 read as a Creator defect. Assert the
+    // precondition so that failure names itself instead.
+    await expect(page.getByRole("button", {name: "Sound Sets"})).toBeEnabled();
     await expect(page.getByRole("button", {name: /^Perform/})).toBeEnabled();
     await page.getByRole("button", {name: "Activate audio"}).focus();
+    const expectedFocusOrder = [
+      "Enable MIDI", "Export report", "Hardware layout", "Project", "Sequence",
+      "Sample", "Slice", "Sound Sets", "Perform",
+    ];
     const focusOrder = [];
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < expectedFocusOrder.length; index += 1) {
       await page.keyboard.press("Tab");
       // Mode buttons carry a decorative glyph before their label; read the
       // label so the order does not depend on the glyph set.
@@ -209,11 +234,15 @@ for (const viewport of [
         return (active?.querySelector(".mode-label") ?? active)?.textContent?.trim();
       }));
     }
-    // Product Build 1.0.42.0 activates Perform, so the mode button leaves
-    // tabIndex -1 and joins the rail's tab order after Sample.
-    expect(focusOrder).toEqual([
-      "Enable MIDI", "Export report", "Project", "Sequence", "Sample", "Perform",
-    ]);
+    // The window is the whole rail, not a prefix of it. Product Build
+    // 1.0.42.0 activated Perform, which joined the tab order after Sample;
+    // Stage 11 Task 5 (#846) then inserted Sound Sets between them, and the
+    // six-stop window read at Stage 10 by #664 (`0ffa77c0`) silently dropped
+    // Perform off the end -- so the case failed reporting `Sound Sets` where
+    // it expected `Perform`, and read as a Creator defect when the rail was
+    // right. Asserting the full rail means the next insertion changes the
+    // expected list rather than shifting what the loop can see (#977).
+    expect(focusOrder).toEqual(expectedFocusOrder);
     await page.getByRole("button", {name: "Sample"}).click();
     await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
     const picker = page.locator("input.sample-file-input");

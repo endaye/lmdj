@@ -30,11 +30,15 @@
 #include <emscripten/threading.h>
 
 #include <lmdj/audio/web/realtime_audio_worklet.hpp>
+#include <lmdj/facade/assembly_loader.hpp>
 #include <lmdj/provider/attempt_store.hpp>
 #include <lmdj/provider/registry.hpp>
 #endif
 
 #if defined(__EMSCRIPTEN__) && defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+#include <lmdj/facade/pattern_transport_ports.hpp>
+#include "../test/pattern_transport_opfs_probe.hpp"
+
 namespace {
 struct ConformanceOutcomeMirror {
   std::atomic<std::uint32_t> state{0};
@@ -220,7 +224,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 74> operations{
+  static constexpr std::array<std::string_view, 86> operations{
       "host.status",
       "project.create",
       "project.open",
@@ -294,6 +298,18 @@ bool supported_operation(std::string_view operation) {
       "soundset.inspect",
       "soundset.map.preview",
       "soundset.install",
+      "candidate.job.run",
+      "candidate.job.inspect",
+      "candidate.job.cancel",
+      "candidate.set.discard",
+      "candidate.audition",
+      "candidate.audition.stop",
+      "candidate.adopt",
+      "provider.list",
+      "provider.select",
+      "provider.run",
+      "provider.permissions.configure",
+      "attempt.inspect",
       "host.close",
   };
   return std::find(operations.begin(), operations.end(), operation) !=
@@ -1761,8 +1777,6 @@ using lmdj::audio::web::RealtimeAudioWorkletHooks;
 using lmdj::audio::web::RealtimeAudioWorkletStart;
 using lmdj::audio::web::RealtimeAudioWorkletState;
 using lmdj::facade::ApplicationConfig;
-using lmdj::provider::ProviderPolicy;
-using lmdj::provider::Registry;
 using lmdj::web_runtime::ControlRuntime;
 using lmdj::web_runtime::ManifestExpectation;
 using lmdj::web_runtime::ManifestGate;
@@ -2023,6 +2037,71 @@ bool schedule_audio_install(void*) noexcept {
 }
 
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+// Conformance-only executor/OPFS probe. Its mutable executor belongs to the
+// control thread; the browser observes atomics, never a worker's JS registry.
+std::unique_ptr<lmdj::facade::PatternTransportExecutor> transport_probe;
+std::atomic<std::uint32_t> transport_probe_reached{0};
+std::atomic<std::uint32_t> transport_probe_release{0};
+std::atomic<std::uint32_t> transport_probe_state{0};
+std::atomic<bool> transport_probe_scheduled{false};
+bool transport_probe_submitted{};
+bool transport_probe_verifying{};
+constexpr auto transport_probe_bytes = lmdj::web_runtime::test::kTransportProbeBytes;
+
+lmdj::facade::PatternTransportWorkRequest transport_probe_request() {
+  return {{1, 1, lmdj::foundation::CommandId{
+      "11111111-1111-4111-8111-111111111111"}, 1},
+      transport_probe_verifying ? "verify" : "prepare"};
+}
+
+
+void run_transport_probe_on_control(void* argument) noexcept {
+  const auto action = reinterpret_cast<std::uintptr_t>(argument);
+  try {
+    if (action == 1 || action == 3) {
+      const auto state = transport_probe_state.load();
+      if (transport_probe || (action == 1 ? state != 0 : state != 4))
+        throw std::logic_error("invalid probe start");
+      transport_probe_verifying = action == 3;
+      transport_probe_submitted = false;
+      transport_probe = std::make_unique<lmdj::facade::PatternTransportExecutor>(
+          1, [] { return lmdj::web_runtime::test::make_transport_opfs_probe_owner(
+              transport_probe_reached, transport_probe_release); });
+      transport_probe_state.store(action == 1 ? 1 : 5);
+    }
+    if (transport_probe) {
+      auto status = transport_probe->inspect();
+      if (status.startup_error) throw std::logic_error("probe startup failed");
+      if (status.ready && !transport_probe_submitted) {
+        if (transport_probe->submit(transport_probe_request()) !=
+            lmdj::facade::PatternTransportWorkSubmit::accepted)
+          throw std::logic_error("probe submission failed");
+        transport_probe_submitted = true;
+      }
+      if (action == 4) transport_probe->request_shutdown();
+      status = transport_probe->inspect();
+      if (status.completion) {
+        if (status.completion->outcome != lmdj::facade::PatternTransportWorkOutcome::success ||
+            status.completion->payload != transport_probe_bytes)
+          throw std::logic_error("probe persisted bytes mismatch");
+        transport_probe->request_shutdown();
+        if (status.stopped) {
+          const auto identity = transport_probe_request().identity;
+          if (!transport_probe->consume(identity) || transport_probe->consume(identity))
+            throw std::logic_error("probe completion consumption failed");
+          transport_probe.reset();  // Only after the worker released its lease.
+          transport_probe_state.store(transport_probe_verifying ? 6 : 4);
+        }
+      }
+    }
+  } catch (...) {
+    transport_probe_release.store(1);
+    if (transport_probe) transport_probe->request_shutdown();
+    transport_probe_state.store(9);
+  }
+  transport_probe_scheduled.store(false, std::memory_order_release);
+}
+
 void run_quiescence_timeout_on_control(void*) noexcept {
   auto* adapter = web_audio.load(std::memory_order_acquire);
   if (adapter == nullptr) {
@@ -2837,6 +2916,25 @@ EMSCRIPTEN_KEEPALIVE const char* lmdj_web_audio_test_poll() {
   diagnostic_poll_buffer[required] = '\0';
   return diagnostic_poll_buffer.data();
 }
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_transport_probe(std::uint32_t action) {
+  if (action == 0) return static_cast<int>(transport_probe_state.load());
+  if (action == 5) return static_cast<int>(transport_probe_reached.load());
+  if (action == 6) {
+    transport_probe_release.store(1);
+    return 1;
+  }
+  if (action > 4 || web_proxy_queue == nullptr) return -1;
+  bool expected = false;
+  if (!transport_probe_scheduled.compare_exchange_strong(expected, true)) return 0;
+  if (!emscripten_proxy_async(web_proxy_queue, web_control_thread,
+          &run_transport_probe_on_control,
+          reinterpret_cast<void*>(static_cast<std::uintptr_t>(action)))) {
+    transport_probe_scheduled.store(false);
+    return -1;
+  }
+  return 1;
+}
 #endif
 
 }  // extern "C"
@@ -2882,12 +2980,14 @@ int main() {
   auto catalog = lmdj::facade::make_supplied_soundset_catalog(
       kWebSoundSetStagingBytes,
       kWebSoundSetStagingObjects);
+  auto assembly = lmdj::facade::load_installed_assembly("/lmdj-product/assembly.json");
+  if (!assembly.has_value()) return 1;
   auto created = ControlRuntime::create(
       workspace,
       ApplicationConfig{
           workspace,
-          std::make_shared<Registry>(),
-          ProviderPolicy{},
+          std::move(assembly.value().providers),
+          std::move(assembly.value().provider_policy),
           {},
           limits,
           nullptr,

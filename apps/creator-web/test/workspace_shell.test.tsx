@@ -1,6 +1,6 @@
 import {readFileSync} from "node:fs";
 
-import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
+import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {afterAll, beforeAll, expect, test, vi} from "vitest";
 
@@ -12,6 +12,9 @@ import {initialCreatorState, type CreatorState} from "../src/state/creator_state
 import type {
   CreatorRuntimeSession,
   CreatorSampleRuntimeSession,
+  CreatorCandidateRuntimeSession,
+  CandidateJobView,
+  SnapshotPublication,
   LocalProjectSummary,
   RuntimeHostState,
   PadPlayback,
@@ -105,6 +108,8 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
   const sampleMode = screen.getByRole("button", {name: "Sample"});
   expect(sampleMode.hasAttribute("disabled")).toBe(false);
   expect(sampleMode.tabIndex).toBe(0);
+  expect(screen.getByRole("button", {name: "Slice — open a Project with candidate support"})
+    .hasAttribute("disabled")).toBe(true);
   const sequenceMode = screen.getByRole("button", {
     name: "Sequence — open a playable Project first",
   });
@@ -134,6 +139,9 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
   // action is disabled instead of offering a gesture that cannot run.
   expect(screen.getByRole("button", {name: "Activate audio"})
     .hasAttribute("disabled")).toBe(true);
+  const hardwareLayout = screen.getByRole("button", {name: "Hardware layout"});
+  await user.tab();
+  expect(document.activeElement).toBe(hardwareLayout);
   await user.tab();
   expect(document.activeElement).toBe(projectMode);
   await user.tab();
@@ -673,6 +681,162 @@ function mutableSampleRuntimeFixture() {
     set revision(value: number) { revision = value; },
   };
 }
+
+async function candidatePlaybackFixture() {
+  const fixture = mutableSampleRuntimeFixture();
+  const sourceId = "33333333-3333-4333-8333-333333333333";
+  const adoptedId = "44444444-4444-4444-8444-444444444444";
+  const projectId = listedSummary.projectId;
+  const job: CandidateJobView = {job_id: `slice-${projectId}-${sourceId}`,
+    active_set_id: "set", history: [], sets: [{set_id: "set", status: "active",
+      attempt_id: "attempt", source: {project_id: projectId, asset_id: sourceId, project_revision: 3},
+      recipes: [{candidate_id: "recipe", kind: "slice_interval_v1", start_frame: 0, end_frame: 8, frame_rate: 48000}]}]};
+  const publication = (): SnapshotPublication => ({projectId, patternId: listedSummary.patternId,
+    projectRevision: fixture.revision, runtimeRevision: fixture.revision,
+    runtimeReady: true, generation: 2, snapshotError: null});
+  const prepare = vi.fn(async (_patternId: string) => publication());
+  const trigger = vi.fn(async () => false);
+  const adopt = vi.fn(async (request: Parameters<CreatorCandidateRuntimeSession["adoptCandidates"]>[0]) => {
+    fixture.revision += 1;
+    fixture.assigned.set(1, adoptedId);
+    return {project_revision: fixture.revision, set_id: "set",
+      adopted: request.selections.map(selection => ({...selection, asset_id: adoptedId}))};
+  });
+  const session = Object.assign(fixture.session, {
+    inspectProject: async () => {
+      const value = fixture.inspectProject();
+      for (const asset of Object.values(value.project.assets)) asset.artifact = {
+        sha256: "a".repeat(64), byte_length: 60, media_type: "audio/wav"};
+      return value;
+    },
+    listProviders: async () => ({providers: [], granted_permissions: []}),
+    configureProviderPermissions: async () => ({granted_permissions: []}),
+    selectProvider: async () => ({}),
+    inspectCandidateJob: async () => job,
+    runCandidateJob: async () => job,
+    cancelCandidateJob: async () => job,
+    discardCandidateSet: async () => job,
+    auditionCandidate: async () => ({project_revision: 3, played: false}),
+    stopCandidateAudition: async () => ({}),
+    adoptCandidates: adopt,
+    retryPrepare: prepare,
+    reloadSnapshot: async (patternId: string) => {
+      fixture.calls.push("reloadSnapshot");
+      if (fixture.revision === 3) return {};
+      const value = await prepare(patternId);
+      if (!value.runtimeReady) throw new Error(value.snapshotError?.message ?? "Not ready");
+      return {project_id: value.projectId, project_revision: value.projectRevision,
+        pattern_id: value.patternId, runtime_ready: true, generation: value.generation,
+        snapshot_error: null};
+    },
+    trigger,
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Slice"}));
+  await screen.findByRole("option", {name: /Source 1/});
+  await userEvent.selectOptions(screen.getByRole("combobox", {name: "Slice source"}), sourceId);
+  await screen.findByRole("button", {name: "Add target"});
+  await userEvent.click(screen.getByRole("button", {name: "Add target"}));
+  await userEvent.selectOptions(screen.getByRole("combobox", {name: "Target 1 slice"}), "recipe");
+  await userEvent.selectOptions(screen.getByRole("combobox", {name: "Target 1 Bank"}), "0");
+  await userEvent.selectOptions(screen.getByRole("combobox", {name: "Target 1 Pad"}),
+    screen.getByRole("combobox", {name: "Target 1 Pad"}).querySelector('option[value="1"]')!);
+  return {...fixture, prepare, trigger, adopt, publication, get revision() {return fixture.revision;}};
+}
+
+test("Candidate adoption waits for a new Runtime Bank before reporting playback ready", async () => {
+  const fixture = await candidatePlaybackFixture();
+  const pending = deferred<SnapshotPublication>();
+  fixture.prepare.mockImplementationOnce(() => pending.promise);
+  await userEvent.click(screen.getByRole("button", {name: "Adopt selected slices"}));
+  await waitFor(() => expect(fixture.prepare).toHaveBeenCalledWith(listedSummary.patternId));
+  expect(fixture.adopt).toHaveBeenCalledTimes(1);
+  expect(fixture.revision).toBe(4);
+  expect(screen.queryByText("Adopted 1 slices.")).toBeNull();
+  expect(screen.getByText("Preparing audio at revision 4…")).toBeTruthy();
+  await act(async () => pending.resolve(fixture.publication()));
+  expect(await screen.findByText("Adopted 1 slices.")).toBeTruthy();
+  expect(screen.queryByRole("region", {name: "Project audio status"})).toBeNull();
+});
+
+test("Candidate publication failure retains one commit and retries only preparation", async () => {
+  const fixture = await candidatePlaybackFixture();
+  fixture.prepare.mockImplementationOnce(async () => ({...fixture.publication(),
+    runtimeReady: false, generation: null, runtimeRevision: 3,
+    snapshotError: {code: "COOK_FAILED", message: "Runtime preparation failed", details: {}}}));
+  await userEvent.click(screen.getByRole("button", {name: "Adopt selected slices"}));
+  expect(await screen.findByText("Adopted 1 slices.")).toBeTruthy();
+  expect(screen.getByText("Saved at revision 4; audio is not ready.")).toBeTruthy();
+  expect(fixture.adopt).toHaveBeenCalledTimes(1);
+  expect(fixture.revision).toBe(4);
+  await userEvent.click(screen.getByRole("button", {name: "Retry audio preparation"}));
+  await waitFor(() => expect(fixture.prepare).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.queryByRole("region", {name: "Project audio status"})).toBeNull());
+  expect(fixture.adopt).toHaveBeenCalledTimes(1);
+  expect(fixture.revision).toBe(4);
+});
+
+test.each(["pointer", "keyboard", "midi"])("Candidate preparation blocks %s Pad admission until successful retry", async (source) => {
+  const fixture = await candidatePlaybackFixture();
+  const midiInput = Object.assign(new EventTarget(), {type: "input", state: "connected", id: "candidate-test"});
+  if (source === "midi") {
+    const original = Object.getOwnPropertyDescriptor(navigator, "requestMIDIAccess");
+    Object.defineProperty(navigator, "requestMIDIAccess", {configurable: true,
+      value: async () => ({inputs: new Map([["candidate-test", midiInput]])})});
+    try { await userEvent.click(screen.getByRole("button", {name: "Enable MIDI"})); }
+    finally {
+      if (original) Object.defineProperty(navigator, "requestMIDIAccess", original);
+      else Reflect.deleteProperty(navigator, "requestMIDIAccess");
+    }
+  }
+  const midiMessage = (status: number) => {
+    const event = new Event("midimessage");
+    Object.defineProperty(event, "data", {value: new Uint8Array([status, 36, 100])});
+    midiInput.dispatchEvent(event);
+  };
+  await userEvent.click(screen.getByRole("button", {name: "Activate audio"}));
+  const pending = deferred<SnapshotPublication>();
+  fixture.prepare.mockImplementationOnce(() => pending.promise);
+  await userEvent.click(screen.getByRole("button", {name: "Adopt selected slices"}));
+  await screen.findByText("Preparing audio at revision 4…");
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  const pad = screen.getByRole("button", {name: /^Pad A1 — assigned/});
+  const press = async () => {
+    await act(async () => {
+      if (source === "pointer") {
+        const event = new MouseEvent("pointerdown", {bubbles: true, button: 0});
+        Object.defineProperties(event, {pointerId: {value: 1}, pointerType: {value: "mouse"}, isPrimary: {value: true}});
+        fireEvent(pad, event);
+
+      } else if (source === "midi") {
+        midiMessage(0x90);
+      } else {
+        fireEvent.keyDown(window, {key: "q", code: "KeyQ"});
+
+      }
+    });
+    await act(async () => {
+      if (source === "pointer") fireEvent.pointerUp(pad, {pointerId: 1, pointerType: "mouse", button: 0});
+      else if (source === "midi") midiMessage(0x80);
+      else fireEvent.keyUp(window, {key: "q", code: "KeyQ"});
+    });
+  };
+  await press();
+  expect(fixture.trigger).not.toHaveBeenCalled();
+  await act(async () => pending.resolve({...fixture.publication(), runtimeReady: false,
+    generation: null, runtimeRevision: 3,
+    snapshotError: {code: "COOK_FAILED", message: "Not prepared", details: {}}}));
+  await screen.findByText("Saved at revision 4; audio is not ready.");
+  await press();
+  expect(fixture.trigger).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", {name: "Retry audio preparation"}));
+  await waitFor(() => expect(screen.queryByRole("region", {name: "Project audio status"})).toBeNull());
+  await press();
+  await waitFor(() => expect(fixture.trigger).toHaveBeenCalledTimes(1));
+  expect(fixture.adopt).toHaveBeenCalledTimes(1);
+  expect(fixture.revision).toBe(4);
+});
 
 function busyProjectionFixture(
   source: "project" | "sample",
@@ -1951,4 +2115,76 @@ test("recovers from DUPLICATE_ID to the local Projects list without a reload", a
   expect(fixture.calls.filter((call) => call === "listLocalProjects").length)
     .toBeGreaterThan(listingsBefore);
   expect(importAttempts).toBe(1);
+});
+
+test("opts into the hardware shell with a read-only overview and returns to the workspace", async () => {
+  const user = userEvent.setup();
+  render(<App initialState={ready} />);
+
+  expect(screen.queryByTestId("hardware-console")).toBeNull();
+  expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
+  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
+
+  expect(screen.getByRole("complementary", {name: "Physical controls"})).toBeTruthy();
+  const display = screen.getByRole("region", {name: "Overview display"});
+  expect(within(display).queryAllByRole("button")).toHaveLength(0);
+  expect(within(display).queryAllByRole("link")).toHaveLength(0);
+  expect(within(display).queryAllByRole("textbox")).toHaveLength(0);
+  expect(screen.getByTestId("hardware-console")).toBeTruthy();
+  expect(screen.getByRole("region", {name: "Pad matrix"})).toBeTruthy();
+  const touch = screen.getByRole("region", {name: "Touch workspace"});
+  expect(within(touch).getByRole("button", {name: "Existing workspace"})).toBeTruthy();
+  expect(within(touch).getByRole("button", {name: "Activate audio"})).toBeTruthy();
+  expect(within(screen.getByRole("region", {name: "Pad matrix"}))
+    .getByRole("button", {name: "Pad A1 — empty — Key Q"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Project"}).getAttribute("aria-current"))
+    .toBe("page");
+  expect(screen.getByText("Project 11111111")).toBeTruthy();
+  await user.click(screen.getByRole("button", {name: "Sample"}));
+  expect(screen.getByRole("heading", {name: "Sample editor"})).toBeTruthy();
+  expect(screen.getByTestId("hardware-console")).toBeTruthy();
+  await user.click(screen.getByRole("button", {name: "Project"}));
+
+  await user.click(screen.getByRole("button", {name: "Existing workspace"}));
+  expect(screen.queryByTestId("hardware-console")).toBeNull();
+  expect(screen.getByRole("button", {name: "Hardware layout"})).toBeTruthy();
+  expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
+});
+
+test("keeps pad identity and mounts Project Sample Sequence in the hardware touch screen", async () => {
+  const user = userEvent.setup();
+  render(<App initialState={ready} />);
+  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
+
+  const padMatrix = () => screen.getByRole("region", {name: "Pad matrix"});
+  const touch = () => screen.getByRole("region", {name: "Touch workspace"});
+  const padA1 = () => within(padMatrix()).getByRole("button", {
+    name: "Pad A1 — empty — Key Q",
+  });
+  expect(padA1()).toBeTruthy();
+  expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
+  expect(within(touch()).getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
+
+  await user.click(screen.getByRole("button", {name: "Sample"}));
+  expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SAMPLE");
+  expect(padA1()).toBeTruthy();
+  expect(within(touch()).getAllByRole("heading", {name: "Sample editor"})).toHaveLength(1);
+
+  await user.click(screen.getByRole("button", {name: "Sequence"}));
+  expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SEQUENCE");
+  expect(padA1()).toBeTruthy();
+  expect(within(touch()).getByRole("heading", {name: "Sequence"})).toBeTruthy();
+  expect(within(touch()).getByLabelText("Pattern")).toBeTruthy();
+  expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
+
+  await user.click(screen.getByRole("button", {name: "Perform"}));
+  expect(screen.getByTestId("overview-display").textContent ?? "").toContain("PERFORM");
+  expect(padA1()).toBeTruthy();
+  expect(within(touch()).getByRole("heading", {name: "Perform"})).toBeTruthy();
+  expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
+  expect(within(touch()).queryByText(/Launch and FX wait/i)).toBeTruthy();
+  expect(screen.getByTestId("hardware-console")).toBeTruthy();
+
+  await user.click(screen.getByRole("button", {name: "Project"}));
+  expect(padA1()).toBeTruthy();
 });

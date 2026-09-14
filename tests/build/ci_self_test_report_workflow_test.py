@@ -53,11 +53,12 @@ def scalars(source: str, indent: int) -> dict[str, str]:
     return dict(re.findall(rf"(?m)^{' ' * indent}([\w-]+): (.+)$", source))
 
 
-def wakeup_group(source, event, run_id):
+def wakeup_group(source, event, run_id, schedule="7,22,37,52 * * * *"):
     group = field(block(source, "concurrency", 0), "group", 2)
     prefix, expression = group.split("${{", 1)
     expression = expression.removesuffix("}}").strip()
     expression = expression.replace("github.event_name", repr(event)).replace("github.run_id", str(run_id))
+    expression = expression.replace("github.event.schedule", repr(schedule))
     expression = expression.replace("&&", "and").replace("||", "or")
     # Repository-owned scalar expression, never model text. This models the
     # documented platform key, not actual remote scheduling/locking.
@@ -162,7 +163,7 @@ class SelfTestReportWorkflowTest(unittest.TestCase):
                          ["controller", "cancel-probe-waiter", "execute-batch"])
         policy = json.loads(HOSTED_POLICY.read_text())
         self.assertFalse(any(e["workflow"] == "self-test-report.yml" for e in policy["allowed"]))
-        self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]", self.job)
+        self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]", self.job)
 
     def test_old_daily_missing_and_direct_writer_are_not_reachable(self):
         self.assertNotIn("scripts/ci/self_test_report.py", self.source)
