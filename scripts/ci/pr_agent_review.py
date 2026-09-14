@@ -2465,7 +2465,17 @@ In addition to the two ordinary fields, review MUST contain repair_recheck:
 Quotes for non-resolved verdicts may be empty strings. A resolved current
 quote must include a line actually added by fix_diff and differ from the
 original quote. If ordinary review finds a new issue, do not resolve.
-Use block scalars for all free text. Return one native YAML review document.
+Use block scalars for prose. For original_quote and current_quote only,
+override the ordinary free-text formatting rule: use double-quoted YAML
+strings with JSON-compatible escaping. Preserve every leading space and tab;
+escape internal line breaks as \\n and do not append a final line break.
+Automatic block-scalar indentation detection can remove source indentation.
+Source quote encoding example:
+    original_quote: "    return 1"
+    current_quote: "    return 2"
+End source quote example.
+This example demonstrates encoding only; quote the actual request source and
+use its actual line numbers. Return one native YAML review document.
 """
                 settings.set("pr_reviewer.extra_instructions", instructions)
                 settings.set("pr_review_prompt.system", settings.get("pr_review_prompt.system")
