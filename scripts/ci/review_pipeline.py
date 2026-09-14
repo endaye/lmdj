@@ -312,6 +312,33 @@ def collect(directory):
         output.write("review_schema=" + schema + "\n")
 
 
+def repair_mode(document=None):
+    """Only the trusted synchronize entry or explicit dispatch may request repair."""
+    requested = os.environ.get("RECHECK_COMMENT_ID", "")
+    automatic = os.environ.get("AUTO_RECHECK", "")
+    event = os.environ.get("GITHUB_EVENT_NAME", "")
+    review_scope.require(automatic in ("", "false", "true"), "invalid automatic recheck mode")
+    if automatic == "true":
+        review_scope.require(not requested and event == "pull_request"
+                             and os.environ.get("PR_EVENT_ACTION") == "synchronize",
+                             "automatic repair recheck requires the synchronize entry")
+        mode = "batch"
+    elif requested:
+        review_scope.require(event == "workflow_dispatch" and re.fullmatch(r"[1-9][0-9]*", requested),
+                             "repair recheck requires an explicit dispatch comment ID")
+        mode = "single"
+    else:
+        mode = "none"
+    if document is not None:
+        review_scope.require(("repair_request" in document) == (mode == "single")
+                             and ("repair_requests" in document) == (mode == "batch"),
+                             "repair artifact differs from trusted trigger mode")
+        if mode == "single":
+            review_scope.require(document["repair_request"].get("comment_id") == int(requested),
+                                 "repair artifact differs from explicit dispatch request")
+    return mode
+
+
 def collect_t2(directory):
     """Opt-in complete-input collection; legacy ``collect`` remains unchanged."""
     input_producer._ensure_fresh_directory(Path(directory))
@@ -345,14 +372,22 @@ def collect_t2(directory):
         and latest["base_sha"] == target["base_sha"],
         "PR target moved before complete-input publication",
     )
-    requested_comment = os.environ.get("RECHECK_COMMENT_ID", "")
-    if requested_comment:
+    mode = repair_mode()
+    if mode != "none":
         import review_recheck
-        review_scope.require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
-                             and re.fullmatch(r"[1-9][0-9]*", requested_comment),
-                             "repair recheck requires an explicit dispatch comment ID")
-        request = review_recheck.collect(review_recheck.client(repo), document, int(requested_comment), git=git, fetch=fetch)
-        review_recheck.attach(document, request)
+        api = review_recheck.client(repo)
+        if mode == "single":
+            request = review_recheck.collect(api, document, int(os.environ["RECHECK_COMMENT_ID"]), git=git, fetch=fetch)
+            review_recheck.attach(document, request)
+        else:
+            requests, report = review_recheck.collect_batch(api, document, git=git, fetch=fetch)
+            review_recheck.attach_batch(document, requests)
+            # Operational selection evidence, not model or resolution authority.
+            rendered = json.dumps(report, sort_keys=True, ensure_ascii=True)
+            print("Automatic repair recheck selection: " + rendered)
+            if os.environ.get("GITHUB_STEP_SUMMARY"):
+                with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
+                    summary.write("\nAutomatic repair recheck selection:\n\n<pre>" + html.escape(rendered) + "</pre>\n")
     changed_paths = review_scope.changed_path_inventory(document["files"])
     context_identity = {
         "repository": repo,
@@ -692,13 +727,9 @@ def publish(directory):
     review_scope.validate_review(policy, original, coverage=coverage, collector=collector, trusted_config=trusted)
     review_scope.require(original == attempts[-1]["review"], "original review artifact mismatch")
     repair_document = read(directory / "t2-input.json") if is_v2_history(history) else {}
-    requested_comment = os.environ.get("RECHECK_COMMENT_ID", "")
+    mode = repair_mode(repair_document)
     repair_native = None
-    if requested_comment or "repair_request" in repair_document:
-        review_scope.require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
-                             and re.fullmatch(r"[1-9][0-9]*", requested_comment)
-                             and repair_document.get("repair_request", {}).get("comment_id") == int(requested_comment),
-                             "repair artifact differs from explicit dispatch request")
+    if mode != "none":
         raw_result = read(directory / "t2-result.json")
         raw_history, _ = adapt_t2_result(raw_result, identity=identity, changed_paths=paths,
                                         collector=collector, trusted_config=trusted)
@@ -723,8 +754,12 @@ def publish(directory):
     authenticate(identity)  # A race remains historical evidence, never current.
     if repair_native is not None:
         import review_recheck
-        receipt = review_recheck.publish(review_recheck.client(identity["repository"]), repair_document,
-                                          repair_native, git=git, fetch=fetch)
+        api = review_recheck.client(identity["repository"])
+        if mode == "batch":
+            receipt = review_recheck.publish_batch(api, repair_document, repair_native, git=git, fetch=fetch,
+                        record=lambda value: save(directory / "repair-recheck.json", value))
+        else:
+            receipt = review_recheck.publish(api, repair_document, repair_native, git=git, fetch=fetch)
         save(directory / "repair-recheck.json", receipt)
 
 

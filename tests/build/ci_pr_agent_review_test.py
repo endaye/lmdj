@@ -2179,6 +2179,36 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual([json.loads(line)["status"] for line in ledger.read_text().splitlines()], ["reserved", "reconciled"])
 
+    def test_push_batch_crosses_real_handler_once_and_resolves_each_thread(self):
+        from ci_review_recheck_test import BatchPlatform
+        api = BatchPlatform()
+        self.addCleanup(api.history.source.tearDown)
+        requests, _ = api.collect_batch()
+        self.input_path.write_text(json.dumps(api.document), encoding="utf-8")
+        calls = []
+
+        async def completion(**kwargs):
+            import yaml
+            calls.append(kwargs)
+            prompt = "\n".join(m["content"] for m in kwargs["messages"])
+            for request in requests:
+                self.assertIn(adapter.repair_prompt_block(request), prompt)
+            self.assertIn("repair_rechecks, a YAML list", prompt)
+            self.assertIsNone(os.environ.get("GITHUB_TOKEN"))
+            return FakeCompletion({"model": "fixture-deepseek-served",
+                "choices": [{"message": {"content": yaml.safe_dump(api.native(), default_style='"')}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}})
+
+        result, _, ledger = self.run_with_fake(completion)
+        self.assertEqual(result["status"], "reviewed", result)
+        attempt = result["attempts"][result["selected_attempt"]]
+        self.assertTrue(attempt["coverage"]["complete"])
+        receipt = api.publish_batch(attempt["native_review"])
+        self.assertEqual(len(receipt["receipts"]), 2)
+        self.assertEqual(api.states, {"T70": True, "T71": True})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([json.loads(line)["status"] for line in ledger.read_text().splitlines()], ["reserved", "reconciled"])
+
     def test_stock_reviewer_without_funding_uses_only_the_review_post(self):
         """The actual stock handler must reach review transport without balance work."""
         response_text = (FIXTURES / "valid-native-review.yaml").read_text(encoding="utf-8")

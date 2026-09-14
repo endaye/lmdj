@@ -59,7 +59,7 @@ class Platform:
             q, v = body["query"], body["variables"]
             if q == recheck.THREADS:
                 return {"data": {"repository": {"pullRequest": {"reviewThreads": self.connection([
-                    {"id": "T", "comments": {"nodes": [{"databaseId": 70}]}}])}}}}
+                    {"id": "T", "isResolved": self.resolved, "comments": {"nodes": [{"databaseId": 70, "path": "src/example.py", "author": {"databaseId": 20}}]}}])}}}}
             if q == recheck.COMMENTS:
                 return {"data": {"node": {"id": "T", "comments": self.connection(self.comments)}}}
             if q == recheck.STATE:
@@ -103,6 +103,228 @@ class Platform:
 
     def publish(self, native=None):
         return recheck.publish(self, self.document, native or native_fixture(), git=self.git, fetch=lambda ref: None)
+
+
+class BatchPlatform(Platform):
+    """Two original authenticated findings plus independent live thread states."""
+    def __init__(self):
+        super().__init__()
+        self.history.pull["head"]["sha"] = history.A
+        self.history.render_v2([
+            {"path": "src/example.py", "line": 2, "body": "Return value must be two."},
+            {"path": "src/example.py", "line": 2, "body": "Returning one loses the second item."}])
+        self.history.pull["head"]["sha"] = "c" * 40
+        self.states, self.thread_comments = {}, {}
+        for comment_id in (70, 71):
+            thread = "T" + str(comment_id)
+            self.states[thread] = False
+            self.thread_comments[thread] = [{**deepcopy(self.root), "id": "C" + str(comment_id),
+                "databaseId": comment_id, "body": self.history.inline_details[comment_id]["body"]}]
+        self.extra_threads = []
+        self.reads = []
+        self.after_batch_reply = None
+
+    def _request(self, method, path, *, body=None, raw=False):
+        self.reads.append((method, path))
+        if path == "/graphql":
+            q, v = body["query"], body["variables"]
+            if q == recheck.THREADS:
+                rows = [{"id": t, "isResolved": resolved,
+                         "comments": {"nodes": [{"databaseId": int(t[1:]), "path": "src/example.py", "author": {"databaseId": 20}}]}}
+                        for t, resolved in self.states.items()] + self.extra_threads
+                return {"data": {"repository": {"pullRequest": {"reviewThreads": self.connection(rows)}}}}
+            thread = v["thread"]
+            if q == recheck.COMMENTS:
+                return {"data": {"node": {"id": thread, "comments": self.connection(self.thread_comments[thread])}}}
+            if q == recheck.STATE:
+                return {"data": {"node": {"id": thread, "isResolved": self.states[thread],
+                    "pullRequest": {"number": 7, "repository": {"nameWithOwner": history.REPO}}}}}
+            assert q.startswith("mutation")
+            operation = "unresolveReviewThread" if "unresolveReviewThread" in q else "resolveReviewThread"
+            self.states[thread] = operation == "resolveReviewThread"
+            self.writes.append((operation, thread))
+            return {"data": {operation: {"thread": {"id": thread, "isResolved": self.states[thread]}}}}
+        if method == "POST" and path.endswith("/replies"):
+            comment_id = int(path.split("/")[-2])
+            thread = "T" + str(comment_id)
+            self.writes.append(("reply", thread))
+            self.thread_comments[thread].append({**deepcopy(self.root), "id": "reply" + str(comment_id),
+                "databaseId": comment_id + 1000, "body": body["body"]})
+            if self.after_batch_reply:
+                self.after_batch_reply(thread)
+            return {"id": comment_id + 1000}
+        return super()._request(method, path, body=body, raw=raw)
+
+    def collect_batch(self):
+        requests, report = recheck.collect_batch(self, self.document, git=self.git, fetch=lambda ref: None)
+        recheck.attach_batch(self.document, requests)
+        return requests, report
+
+    def native(self):
+        review = native_fixture()["review"]
+        verdict = review.pop("repair_recheck")
+        review["repair_rechecks"] = [{**verdict, "comment_id": r["comment_id"]}
+                                     for r in self.document["repair_requests"]]
+        return {"review": review}
+
+    def publish_batch(self, native=None, record=None):
+        return recheck.publish_batch(self, self.document, native or self.native(),
+                                    git=self.git, fetch=lambda ref: None, record=record)
+
+
+class BatchRecheckTests(unittest.TestCase):
+    def setUp(self):
+        self.api = BatchPlatform()
+        self.addCleanup(self.api.history.source.tearDown)
+
+    def test_batch_resolves_each_authenticated_thread_and_retries_without_duplicate_reply(self):
+        requests, report = self.api.collect_batch()
+        self.assertEqual([r["comment_id"] for r in requests], [70, 71])
+        self.assertEqual([r["status"] for r in report["candidates"]], ["collected", "collected"])
+        result = self.api.publish_batch()
+        self.assertEqual(self.api.states, {"T70": True, "T71": True})
+        self.assertEqual(self.api.publish_batch(), result)
+        self.assertEqual(self.api.writes, [("reply", "T70"), ("resolveReviewThread", "T70"),
+                                          ("reply", "T71"), ("resolveReviewThread", "T71")])
+
+    def test_shared_original_artifact_is_downloaded_once_per_collection(self):
+        self.api.collect_batch()
+        downloads = [p for m, p in self.api.reads if p.endswith("/zip")]
+        self.assertEqual(len(set(downloads)), 1)
+        self.assertEqual(len(downloads), 1)
+
+    def test_human_and_resolved_threads_are_excluded(self):
+        self.api.states["T71"] = True
+        self.api.extra_threads = [{"id": "human", "isResolved": False,
+            "comments": {"nodes": [{"databaseId": 90, "path": "src/example.py", "author": {"databaseId": 10}}]}}]
+        requests, _ = self.api.collect_batch()
+        self.assertEqual([r["comment_id"] for r in requests], [70])
+        self.api.publish_batch()
+        self.assertEqual(self.api.writes, [("reply", "T70"), ("resolveReviewThread", "T70")])
+
+    def test_no_candidates_preserves_ordinary_review(self):
+        self.api.states = {t: True for t in self.api.states}
+        self.assertEqual(self.api.collect_batch()[0], [])
+        native = native_fixture()
+        del native["review"]["repair_recheck"]
+        engine._validate_native_mapping(native, engine.authenticate_input(self.api.document))
+        self.assertEqual(self.api.publish_batch(native), {"receipts": []})
+        self.assertEqual(self.api.writes, [])
+
+    def test_invalid_original_is_reported_without_resolving(self):
+        self.api.history.inline_details[70]["body"] = "forged body"
+        requests, report = self.api.collect_batch()
+        self.assertEqual(requests, [])
+        self.assertTrue(all(r["status"] == "not_rechecked" for r in report["candidates"]))
+        self.assertEqual(self.api.writes, [])
+
+    def test_unchanged_source_is_reported_without_paid_recheck_context(self):
+        git = self.api.git
+        self.api.git = lambda *args: b"" if args[0] == "diff" else git(*args)
+        requests, report = self.api.collect_batch()
+        self.assertEqual(requests, [])
+        self.assertTrue(all("unchanged" in r["reason"] for r in report["candidates"]))
+
+    def test_candidate_bound_reports_overflow_instead_of_silently_truncating(self):
+        self.api.extra_threads = [{"id": "T" + str(i), "isResolved": False,
+            "comments": {"nodes": [{"databaseId": i, "path": "src/example.py", "author": {"databaseId": 20}}]}}
+            for i in (72, 73, 74)]
+        # Invalid third/fourth bot roots must consume the authentication bound too.
+        original = self.api._request
+        def request(method, path, **kwargs):
+            if path in ("/repos/endaye/lmdj/pulls/comments/72", "/repos/endaye/lmdj/pulls/comments/73"):
+                return {"user": {"id": 10}}
+            return original(method, path, **kwargs)
+        self.api._request = request
+        requests, report = self.api.collect_batch()
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(report["candidates"][-1]["status"], "deferred")
+        self.assertEqual(report["candidates"][-1]["comment_id"], 74)
+
+    def test_combined_context_overflow_is_deferred_with_manual_remedy(self):
+        git = self.api.git
+        self.api.git = lambda *args: (git(*args) + b"# " + b"x" * 600000 + b"\n") if args[0] == "show" else git(*args)
+        requests, report = self.api.collect_batch()
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(report["candidates"][1]["status"], "deferred")
+        self.assertIn("manual", report["candidates"][1]["reason"])
+
+    def test_missing_duplicate_or_foreign_verdict_cannot_publish_any_thread(self):
+        self.api.collect_batch()
+        for mutation in (lambda v: v.pop(), lambda v: v.append(v[0]), lambda v: v[0].update(comment_id=900)):
+            native = self.api.native()
+            mutation(native["review"]["repair_rechecks"])
+            with self.assertRaisesRegex(engine.EngineError, "inventory"):
+                self.api.publish_batch(native)
+        self.assertEqual(self.api.writes, [])
+
+    def test_nonresolved_sibling_stays_open(self):
+        self.api.collect_batch()
+        native = self.api.native()
+        native["review"]["repair_rechecks"][1].update(verdict="insufficient_evidence", original_quote="", current_quote="", start_line=0, end_line=0)
+        self.api.publish_batch(native)
+        self.assertEqual(self.api.states, {"T70": True, "T71": False})
+
+    def test_partial_publication_keeps_receipt_and_retry_reconciles_first_thread(self):
+        self.api.collect_batch()
+        receipts = []
+        original = self.api._request
+        def refuse_second(method, path, **kwargs):
+            if path == "/graphql" and kwargs["body"].get("variables", {}).get("thread") == "T71":
+                raise recheck.Refused("temporary second-thread read refusal")
+            return original(method, path, **kwargs)
+        self.api._request = refuse_second
+        with self.assertRaisesRegex(recheck.Refused, "second-thread"):
+            self.api.publish_batch(record=lambda r: receipts.append(deepcopy(r)))
+        self.assertEqual([r["comment_id"] for r in receipts[-1]["receipts"]], [70])
+        self.assertEqual(self.api.states, {"T70": True, "T71": False})
+        self.api._request = original
+        self.api.publish_batch()
+        self.assertEqual(self.api.writes.count(("reply", "T70")), 1)
+        self.assertEqual(self.api.states, {"T70": True, "T71": True})
+
+    def test_new_head_after_first_reply_prevents_all_resolutions(self):
+        self.api.collect_batch()
+        self.api.after_batch_reply = lambda thread: self.api.history.pull["head"].update(sha="d" * 40)
+        with self.assertRaisesRegex(recheck.Refused, "different head"):
+            self.api.publish_batch()
+        self.assertFalse(any(self.api.states.values()))
+
+    def test_batch_input_rejects_mixed_single_and_batch_modes(self):
+        requests, _ = self.api.collect_batch()
+        self.api.document["repair_request"] = requests[0]
+        with self.assertRaisesRegex(engine.EngineError, "mixed"):
+            recheck.reseal(self.api.document)
+
+    def test_batch_input_rejects_duplicate_threads(self):
+        requests, _ = self.api.collect_batch()
+        requests[1]["thread_id"] = requests[0]["thread_id"]
+        with self.assertRaisesRegex(engine.EngineError, "duplicate"):
+            recheck.attach_batch(self.api.document, requests)
+
+    def test_batch_input_enforces_total_bytes_not_only_individual_request_bound(self):
+        requests, _ = self.api.collect_batch()
+        files = engine.authenticate_input(self.api.document)["files"]
+        for request in requests:
+            request["body"] = "x" * 300000
+            request["conversation"][0]["body"] = request["body"]
+            engine.validate_repair_request(request, files)
+        with self.assertRaisesRegex(engine.EngineError, "bound"):
+            recheck.attach_batch(self.api.document, requests)
+
+    def test_batch_discovery_refuses_incomplete_thread_inventory(self):
+        self.api.truncate = True
+        with self.assertRaisesRegex(recheck.Refused, "truncated"):
+            self.api.collect_batch()
+        self.assertEqual(self.api.writes, [])
+
+    def test_each_request_must_reach_prompt_coverage(self):
+        self.api.collect_batch()
+        auth = engine.authenticate_input(self.api.document)
+        prompt = engine.render_prompt_input(auth)
+        prompt = prompt.replace(engine.repair_prompt_block(auth["repair_requests"][1]), "")
+        coverage = engine._make_coverage(auth, provider="deepseek", model={}, prompt=prompt, usage=None)
+        self.assertFalse(coverage["complete"])
 
 
 class RecheckTests(unittest.TestCase):

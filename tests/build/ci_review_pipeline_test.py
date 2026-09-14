@@ -988,6 +988,52 @@ class PipelineTests(unittest.TestCase):
                     ],
                 }, sort_keys=True))
 
+    def test_synchronize_collection_publishes_authenticated_batch_in_same_input(self):
+        from ci_review_recheck_test import BatchPlatform
+        import review_recheck
+        api = BatchPlatform()
+        self.addCleanup(api.history.source.tearDown)
+        api.document["identity"]["run_id"] = "99"
+        review_recheck.reseal(api.document)
+        output = self.directory / "push-input"
+        head = api.document["identity"]["head_sha"]
+        base = api.document["identity"]["base_sha"]
+        target = {"review": "true", "head_sha": head, "base_sha": base, "body": "fix"}
+        environment = {"GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "7", "HEAD_SHA": head,
+            "GITHUB_RUN_ID": api.document["identity"]["run_id"], "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_EVENT_NAME": "pull_request", "PR_EVENT_ACTION": "synchronize", "AUTO_RECHECK": "true",
+            "RECHECK_COMMENT_ID": "", "GITHUB_OUTPUT": "", "GITHUB_STEP_SUMMARY": str(self.directory / "summary")}
+        def git(*args):
+            if args[0] == "rev-parse": return (api.document["identity"]["control_sha"] + "\n").encode()
+            if args[0] == "merge-base" and args[1] == base: return (base + "\n").encode()
+            return api.git(*args)
+        with mock.patch.dict(os.environ, environment), mock.patch.object(pipeline, "git", side_effect=git), \
+                mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(pipeline.input_producer, "build_input", return_value=copy.deepcopy(api.document)), \
+                mock.patch.object(review_recheck, "client", return_value=api), \
+                mock.patch.object(pipeline.pr_review_target, "resolve_target", return_value=target):
+            # Source transport is supplied; actual auth and atomic publication run.
+            witness = pipeline.collect_t2(output)
+        document = pipeline.read(output / "t2-input.json")
+        self.assertEqual([r["comment_id"] for r in t2.authenticate_input(document)["repair_requests"]], [70, 71])
+        collector = pipeline.trusted_collector_t2(output, witness)
+        self.assertEqual(collector["input_sha256"], document["input_sha256"])
+        self.assertIn("collected", (self.directory / "summary").read_text())
+
+    def test_repair_trigger_binding_refuses_unsolicited_or_wrong_mode_artifacts(self):
+        for event, action, automatic, requested, document in (
+            ("workflow_dispatch", "", "true", "", {"repair_requests": []}),
+            ("pull_request", "opened", "true", "", {"repair_requests": []}),
+            ("pull_request", "synchronize", "true", "70", {"repair_requests": []}),
+            ("pull_request", "synchronize", "false", "", {"repair_requests": []}),
+            ("pull_request", "synchronize", "true", "", {}),
+        ):
+            with self.subTest(event=event, action=action, automatic=automatic, requested=requested), \
+                    mock.patch.dict(os.environ, {"GITHUB_EVENT_NAME": event, "PR_EVENT_ACTION": action,
+                        "AUTO_RECHECK": automatic, "RECHECK_COMMENT_ID": requested}):
+                with self.assertRaises(review_scope.ReviewScopeError):
+                    pipeline.repair_mode(document)
+
     def test_collect_t2_cli_dispatch_publishes_input_and_real_t3_witness(self):
         repository, base, head = self.make_real_t2_repo()
         output = self.directory / "t2-output"

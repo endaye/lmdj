@@ -60,11 +60,13 @@ def pull(*, state="open", draft=False, head_repo="endaye/lmdj", head_sha=HEAD, l
 class StandaloneEntryWorkflowTest(unittest.TestCase):
     """Pins the PR-Agent production route: collect-t2 -> engine -> capture -> finalize -> publish."""
 
-    def test_repair_recheck_is_explicit_dispatch_and_write_authority_stays_in_publisher(self):
+    def test_repair_recheck_push_and_dispatch_keep_write_authority_in_publisher(self):
         self.assertIn("recheck_comment_id:", self.source)
         self.assertNotIn("pull_request_review_comment:", self.source)
         for job in ("review", "publish"):
             self.assertIn("RECHECK_COMMENT_ID: ${{ inputs.recheck_comment_id }}", self.jobs[job])
+            self.assertIn("AUTO_RECHECK: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}", self.jobs[job])
+            self.assertIn("PR_EVENT_ACTION: ${{ github.event.action }}", self.jobs[job])
         self.assertIn("actions: read", self.jobs["review"])
         self.assertNotIn("pull-requests: write", self.jobs["review"])
         self.assertIn("pull-requests: write", self.jobs["publish"])

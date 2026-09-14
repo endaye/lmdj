@@ -5,7 +5,7 @@ Date: 2026-09-10 (Asia/Shanghai)
 Task: LMDJ #1153 / umbrella #1149 T4
 Status: production pilot implementation in progress; see the current record below.
 
-## Explicit repair recheck (Issue #1305)
+## Automatic push and explicit repair recheck (Issues #1322 / #1305)
 
 After the updated adapter is installed, a maintainer can request one source
 repair recheck using the existing workflow on main:
@@ -16,9 +16,29 @@ gh workflow run pr-review.yml --ref main \
 ```
 
 Use the numeric ID in the original inline comment's GitHub API URL, not its
-review ID or a reply ID. This is opt-in; pushes and “fixed” replies do not
-automatically trigger resolution. Ordinary review is unchanged when the input
-is empty. The existing provider timeout, token and monetary budgets apply.
+review ID or a reply ID. After the batch-capable adapter is installed, PR push
+(`pull_request.synchronize`) automatically includes unresolved bot findings in
+the same ordinary model review. Open/reopen/ready events and an empty manual
+dispatch remain ordinary reviews. “fixed” replies and comment commands are not
+triggers. The existing provider timeout, token and monetary budgets apply.
+
+The complete thread inventory excludes human/resolved threads and paths absent
+from the current text input. Original bot roots are considered in comment-ID
+order, with at most four authentication attempts and 1 MiB of combined repair
+context per run. The Actions collection step log and summary report collected,
+not-rechecked and deferred candidates. Unchanged source, unavailable original
+evidence and overflow remain open; use the explicit entry above or manual
+review. A path-only repair proof cannot establish cross-file/runtime fixes.
+The same original artifact is cached within the observation; head and thread
+boundary reads remain fresh. An empty candidate list adds no model call.
+
+Continuous pushes share the existing cancel-in-progress PR concurrency group;
+superseded results must still pass fresh head checks. This is coalescing, not
+a fixed debounce window or guaranteed execution order. Do not dispatch an old
+run concurrently as a retry: it can cancel the current PR run. Retry the current
+head through the existing explicit entry when needed. GitHub event/concurrency
+semantics: [events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows),
+[concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 
 The collector authenticates the selected LMDJ bot finding against its retained
 review artifact, captures the full conversation and original-to-current source
@@ -48,9 +68,11 @@ requiring manual inspection. Current-head review and merge conversation checks
 remain required; this result never grants merge authority.
 
 `pr-review-result-HEAD-RUN-ATTEMPT` retains `t2-input.json` (including
-`repair_request`) and `t2-result.json` (including the native `repair_recheck`
-verdict). The publisher's scope artifact also retains `repair-recheck.json`
-on successful recheck publication. A missing/invalid verdict from an older
+`repair_request` or automatic `repair_requests`) and `t2-result.json` (including
+the native `repair_recheck` or `repair_rechecks` verdicts). The publisher's scope artifact also retains `repair-recheck.json`
+after each successful thread publication, retaining partial batch receipts
+if a later thread refuses publication. Each batch must supply exactly one
+verdict per request before any thread can be mutated. A missing/invalid verdict from an older
 installed adapter fails closed. Install a reviewed adapter with the existing
 `install.sh` procedure below; preserve the previous release and shared ledger.
 
