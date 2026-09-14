@@ -6,6 +6,7 @@
 #include <optional>
 
 #include <lmdj/audio/realtime_engine.hpp>
+#include <lmdj/domain/project.hpp>
 #include <lmdj/facade/pattern_transport_ports.hpp>
 #include <lmdj/foundation/error.hpp>
 #include <lmdj/foundation/ids.hpp>
@@ -42,13 +43,47 @@ struct PatternTransportControllerConfig {
   std::uint64_t runtime_generation{};
 };
 
+// Public mirror of the internal admission verdict: `retained` means the
+// candidate is durably appended to the prepared admission; `live_only` means
+// it stays live input only (pre-fence, closed, or owner-lost recording) and
+// nothing was persisted.
+enum class PatternAdmissionAdmit : std::uint8_t { retained, live_only };
+
+// One post-enqueue live-input observation offered to the recording admission.
+// The Host stamps it where enqueue success is known; it is enqueue
+// eligibility, never proof of audible acceptance. Field meanings map one to
+// one onto the internal admission candidate:
+//
+//   watermark       Host-side monotone input watermark, allocated after
+//                   enqueue acceptance; orders candidates for drain.
+//   runtime_frame   Engine rendered_frames sampled at that point.
+//   slot            Pad Slot the gesture hit.
+//   pressed         true for the press, false for its release.
+//   velocity        Press velocity; unused on release.
+//   correlation     Press ownership identity. It must always carry a value: a
+//                   press names its own identity (its watermark), a release
+//                   repeats the owned press's value to close it. A release
+//                   whose correlation matches no owned press closes nothing
+//                   and never fabricates a press; the conversion checkpoint
+//                   dereferences the stored correlation unconditionally, so a
+//                   valueless press would be undefined behaviour downstream.
+struct PatternTransportCandidate {
+  std::uint64_t watermark{};
+  std::uint64_t runtime_frame{};
+  domain::PadSlotId slot;
+  bool pressed{};
+  std::uint8_t velocity{};
+  std::uint64_t correlation{};
+  bool operator==(const PatternTransportCandidate&) const = default;
+};
+
 // Host-consumable Pattern transport controller: the public ownership wrapper
 // around the internal coordinator. The Facade compilation unit constructs and
 // self-owns the Sequence Journal and Project Store the coordinator needs, so
 // the public signature carries only ports/foundation/audio/std types and a
 // Host never names a Project I/O type or parses a Project bundle.
 //
-// All three operations are short serialized-control-lane steps.
+// All four operations are short serialized-control-lane steps.
 // `request` resolves the toggle once and reserves the command/epoch without
 // waiting for audio or IO; `continue_operation` is the reentrant continuation
 // step that inspects an already-published receipt and settles durable effects,
@@ -70,6 +105,12 @@ class PatternTransportController {
   PatternTransportSubmit request(const PatternTransportRequest& request);
   PatternTransportStatus inspect() const;
   foundation::Result<void> continue_operation();
+  // Offers one post-enqueue candidate to the recording admission. Fails while
+  // no recording is open on this controller's session; succeeds with
+  // `live_only` when the candidate falls outside the acknowledged
+  // admission/cutoff interval. Same control-lane serialization as `request`.
+  foundation::Result<PatternAdmissionAdmit> admit(
+      const PatternTransportCandidate& candidate);
 
  private:
   struct Impl;

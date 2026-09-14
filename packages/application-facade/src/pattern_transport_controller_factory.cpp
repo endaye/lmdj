@@ -80,6 +80,24 @@ foundation::Result<void> PatternTransportController::continue_operation() {
   return impl_->coordinator.continue_operation();
 }
 
+foundation::Result<PatternAdmissionAdmit> PatternTransportController::admit(
+    const PatternTransportCandidate& candidate) {
+  const project_io::SequenceAdmissionCandidate internal{
+      candidate.watermark, candidate.runtime_frame, candidate.slot,
+      candidate.pressed ? project_io::SequenceCandidateKind::press
+                        : project_io::SequenceCandidateKind::release,
+      candidate.velocity, candidate.correlation};
+  const auto admitted = impl_->coordinator.admit(internal);
+  if (!admitted.has_value()) {
+    return foundation::Result<PatternAdmissionAdmit>::failure(
+        admitted.error());
+  }
+  return foundation::Result<PatternAdmissionAdmit>::success(
+      admitted.value() == detail::PatternAdmissionAdmit::retained
+          ? PatternAdmissionAdmit::retained
+          : PatternAdmissionAdmit::live_only);
+}
+
 std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
     PatternTransportAudioPort& audio, PatternTransportControllerConfig config) {
   return std::unique_ptr<PatternTransportController>(

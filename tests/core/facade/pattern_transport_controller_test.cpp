@@ -258,6 +258,108 @@ void stale_generation_is_rejected() {
   LMDJ_CHECK(!f.controller->inspect().playing);
 }
 
+std::uint64_t admission_frame(const Fixture& f) {
+  const auto journal = f.read_journal();
+  LMDJ_CHECK(journal.admission && journal.admission->admission_fence);
+  return journal.admission->admission_fence->effective_frame;
+}
+
+void recording_press_and_release_are_retained() {
+  Fixture f;
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const auto frame = admission_frame(f);
+  // Press carries its own watermark as correlation; the release repeats it to
+  // close that exact owned press.
+  const lmdj::facade::PatternTransportCandidate press{
+      10, frame, {0, 1}, true, 90, 10};
+  const lmdj::facade::PatternTransportCandidate release{
+      11, frame, {0, 1}, false, 0, 10};
+  const auto admitted_press = f.controller->admit(press);
+  LMDJ_CHECK(admitted_press.has_value());
+  LMDJ_CHECK(admitted_press.value() == lmdj::facade::PatternAdmissionAdmit::retained);
+  const auto admitted_release = f.controller->admit(release);
+  LMDJ_CHECK(admitted_release.has_value());
+  LMDJ_CHECK(admitted_release.value() == lmdj::facade::PatternAdmissionAdmit::retained);
+  const auto journal = f.read_journal();
+  LMDJ_CHECK(journal.admission->candidates.size() == 2);
+  const auto& stored_press = journal.admission->candidates.front();
+  LMDJ_CHECK(stored_press.watermark == 10);
+  LMDJ_CHECK(stored_press.runtime_frame == frame);
+  LMDJ_CHECK((stored_press.slot == lmdj::domain::PadSlotId{0, 1}));
+  LMDJ_CHECK(stored_press.kind ==
+             lmdj::project_io::SequenceCandidateKind::press);
+  LMDJ_CHECK(stored_press.velocity == 90);
+  LMDJ_CHECK(stored_press.press_sequence == 10);
+  const auto& stored_release = journal.admission->candidates.back();
+  LMDJ_CHECK(stored_release.kind ==
+             lmdj::project_io::SequenceCandidateKind::release);
+  LMDJ_CHECK(stored_release.press_sequence == 10);
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  const auto closed = f.read_journal();
+  LMDJ_CHECK(closed.admission->closure.has_value());
+  // A plain Record-off closes admission without draining candidates; their
+  // conversion belongs to the terminal transfer path, covered by the T1/T2
+  // suites. The retained prefix must survive closure intact.
+  LMDJ_CHECK(closed.admission->candidates.size() == 2);
+  LMDJ_CHECK(closed.admission->candidates.front().press_sequence == 10);
+  LMDJ_CHECK(closed.admission->candidates.back().press_sequence == 10);
+}
+
+void pre_fence_candidate_is_live_only() {
+  Fixture f;
+  // A playing Record fences at the current frame, so a candidate stamped
+  // before it is observable as pre-fence input.
+  f.settle(f.make(6, 1, PatternTransportIntent::play_stop));
+  f.audio.render(64);
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  const auto frame = admission_frame(f);
+  LMDJ_CHECK(frame > 0);
+  const lmdj::facade::PatternTransportCandidate early{
+      10, frame - 1, {0, 1}, true, 90, 10};
+  const auto admitted = f.controller->admit(early);
+  LMDJ_CHECK(admitted.has_value());
+  LMDJ_CHECK(admitted.value() == lmdj::facade::PatternAdmissionAdmit::live_only);
+  const auto journal = f.read_journal();
+  LMDJ_CHECK(journal.admission->candidates.empty());
+}
+
+void admission_before_recording_fails() {
+  Fixture f;
+  const lmdj::facade::PatternTransportCandidate press{10, 0, {0, 1}, true, 90, 10};
+  LMDJ_CHECK(!f.controller->admit(press).has_value());
+  const auto journal = f.read_journal();
+  LMDJ_CHECK(!journal.admission || journal.admission->candidates.empty());
+}
+
+void release_with_unknown_correlation_fabricates_no_press() {
+  Fixture f;
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const auto frame = admission_frame(f);
+  const lmdj::facade::PatternTransportCandidate press{
+      10, frame, {0, 1}, true, 90, 10};
+  // A release naming a correlation this session never pressed. Admission
+  // retains it as a candidate; correlation matching belongs to conversion,
+  // which must never invent the missing press's release.
+  const lmdj::facade::PatternTransportCandidate orphan_release{
+      11, frame, {0, 1}, false, 0, 77};
+  LMDJ_CHECK(f.controller->admit(press).has_value());
+  const auto admitted = f.controller->admit(orphan_release);
+  LMDJ_CHECK(admitted.has_value());
+  LMDJ_CHECK(admitted.value() == lmdj::facade::PatternAdmissionAdmit::retained);
+  const auto journal = f.read_journal();
+  LMDJ_CHECK(journal.admission->candidates.size() == 2);
+  LMDJ_CHECK(journal.admission->candidates.back().press_sequence == 77);
+  // Closing keeps both candidates with their exact identities; whether the
+  // orphan release matches an owned press is decided by conversion, never by
+  // admission, and conversion's correlation matching is pinned by the T1
+  // suite. Nothing is dropped or rewritten at this seam.
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  const auto closed = f.read_journal();
+  LMDJ_CHECK(closed.admission->closure.has_value());
+  LMDJ_CHECK(closed.admission->candidates.size() == 2);
+  LMDJ_CHECK(closed.admission->candidates.back().press_sequence == 77);
+}
+
 }  // namespace
 
 int main() {
@@ -267,7 +369,11 @@ int main() {
     playing_play_stops_without_a_journal();
     pending_operation_reports_busy_then_replays();
     stale_generation_is_rejected();
-    std::cout << "pattern transport controller tests: PASS (5 scenarios)\n";
+    recording_press_and_release_are_retained();
+    pre_fence_candidate_is_live_only();
+    admission_before_recording_fails();
+    release_with_unknown_correlation_fabricates_no_press();
+    std::cout << "pattern transport controller tests: PASS (9 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

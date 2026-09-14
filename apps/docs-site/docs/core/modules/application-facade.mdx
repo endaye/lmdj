@@ -86,7 +86,17 @@ request 只解析一次 toggle 并保留 command/epoch，continuation 由 Host �
 control lane 上重入（无收据时立即成功返回，绝不等待），不得搬到 executor 工作线程；
 audio port 与 engine 的 submit/inspect/acknowledge 共享同一 serialized control
 owner，音频线程不调用。一个 controller 绑定一个 runtime/session/Pattern；过期
-runtime generation 按 stale 拒绝。该公开面属于 staged source：C++ 静态库为兼容
+runtime generation 按 stale 拒绝。
+
+同一公开头还提供候选注入 seam `admit(const PatternTransportCandidate&)`：Host 在
+enqueue 接受处给 live input 打上单调 watermark 与 engine rendered_frames，经该
+Facade 层类型（watermark/runtime_frame/`domain::PadSlotId`/pressed/velocity/
+correlation）进入 prepared admission，依旧不命名任何 Project I/O 类型。correlation
+恒有值：press 以自身 watermark 为归属标识，release 复用同一值闭合该 press；无匹配
+owned press 的 release 不伪造 press，转换 checkpoint 会无条件解引用所存
+correlation。无录音时 admit 失败；pre-fence、closure 后或 owner-lost 输入返回
+`live_only`（公开镜像枚举 `facade::PatternAdmissionAdmit`），成功 retained 表示候选
+已耐久 append，不代表可听接受。该公开面属于 staged source：C++ 静态库为兼容
 追加，C ABI 与 api_version 不变，Module 版本与 Assembly 选择留待后续集成 Build。
 
 依赖全部六个下层 Module；Native/CLI/MCP Host 只依赖本 Facade，浏览器 Host 只依赖封装本 Facade 的 Web Runtime Platform。Performance 协作者由 Host 或 Product Assembly 注入，Facade 只依赖其接口，不依赖任何具体平台实现。
