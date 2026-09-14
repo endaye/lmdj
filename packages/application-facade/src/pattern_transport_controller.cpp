@@ -140,6 +140,7 @@ foundation::Result<void> PatternTransportCoordinator::apply_receipt(
        (request.intent == PatternTransportIntent::record && playing_));
   const auto opening = request.intent == PatternTransportIntent::record &&
       !recording_;
+  bool retained_switch = false;
   if (opening) {
     const auto activated = owner_.activate(fence_from(
         receipt, project_io::SequenceFenceKind::admission, request.command_id));
@@ -159,6 +160,7 @@ foundation::Result<void> PatternTransportCoordinator::apply_receipt(
           receipt.switch_authority->generation, *receipt.switch_applied_frame};
       const auto retained = owner_.retain_switch(authority);
       if (!retained.has_value()) return retained;
+      retained_switch = true;
     }
     const auto cut = owner_.cutoff(fence_from(
         receipt, project_io::SequenceFenceKind::cutoff, request.command_id));
@@ -173,6 +175,9 @@ foundation::Result<void> PatternTransportCoordinator::apply_receipt(
          "Pattern transport receipt was not acknowledged"});
   }
   if (closing) {
+    // The flag is bound only after the cutoff fence and acknowledgment, so an
+    // early return can never leave it set for a receipt that was not applied.
+    close_applied_switch_ = retained_switch;
     close_pending_ = true;
     return finish_close();
   }
@@ -196,8 +201,18 @@ foundation::Result<void> PatternTransportCoordinator::finish_close() {
   }
   const auto closed = owner_.close_requested();
   if (!closed.has_value()) return closed;
+  // A close without an applied switch settles the admission with a terminal
+  // transfer once closure is durable; the applied-switch close is unchanged.
+  if (pending_ && !close_applied_switch_) {
+    const auto terminal = owner_.drain(
+        derive_command(pending_->command_id, 4, 'd'), 0, true);
+    if (!terminal.has_value()) {
+      return foundation::Result<void>::failure(terminal.error());
+    }
+  }
   recording_ = false;
   close_pending_ = false;
+  close_applied_switch_ = false;
   return foundation::Result<void>::success();
 }
 
@@ -207,6 +222,13 @@ foundation::Result<PatternAdmissionAdmit> PatternTransportCoordinator::admit(
     return foundation::Result<PatternAdmissionAdmit>::failure(
         {foundation::ErrorCode::invalid_argument,
          "Pattern transport admission requires recording"});
+  }
+  // Once the cutoff receipt is applied the candidate set is frozen: input
+  // landing while the close is unresolved stays live-only, so the settlement
+  // drain always sees the same retained prefix.
+  if (close_pending_) {
+    return foundation::Result<PatternAdmissionAdmit>::success(
+        PatternAdmissionAdmit::live_only);
   }
   return owner_.admit(candidate);
 }

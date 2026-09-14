@@ -70,6 +70,7 @@ class PatternTransportCoordinator {
   PatternTransportPhase phase_{PatternTransportPhase::idle};
   std::optional<foundation::Error> error_;
   bool close_pending_{};
+  bool close_applied_switch_{};
 };
 
 }  // namespace lmdj::facade::detail
