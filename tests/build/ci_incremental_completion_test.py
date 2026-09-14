@@ -246,5 +246,24 @@ class CompletionTest(unittest.TestCase):
         self.assertIn('why: completion relay could not authenticate its source; remedy:', log.getvalue())
         self.assertNotIn('quota', log.getvalue().split('why:', 1)[0])
 
+    def test_cli_post_auth_failure_does_not_label_authenticate(self):
+        log = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'receipt.json'
+            event = Path(directory) / 'event.json'
+            event.write_text('{}')
+            runtime = mock.Mock()
+            runtime.diagnostic_stage = None
+            with mock.patch.dict(os.environ, {'GITHUB_EVENT_PATH': str(event)}, clear=False), \
+                    mock.patch('incremental_entry.load_storage', return_value={'scheduler': {}}), \
+                    mock.patch.object(relay.batch_runtime, 'Runtime', return_value=runtime), \
+                    mock.patch.object(relay, 'produce', side_effect=OSError('SECRET')), \
+                    redirect_stdout(log):
+                self.assertEqual(relay.main(['--output', str(output)]), 1)
+        rows = [json.loads(line) for line in log.getvalue().splitlines() if line.startswith('{')]
+        self.assertEqual(rows[0]['stage'], 'unknown')
+        self.assertEqual(rows[0]['error_kind'], 'os-error')
+        self.assertNotIn('SECRET', log.getvalue())
+
 
 if __name__=='__main__': unittest.main()

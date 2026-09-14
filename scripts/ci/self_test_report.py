@@ -105,8 +105,8 @@ TEXT_LIMIT = 1200
 #: Retry budget for a refused API call. Three tries with the injected sleep;
 #: the delays are seconds and the caller may pass a no-op.
 RETRY_DELAYS = (5.0, 20.0)
-#: One GitHub REST primary window is at most one hour. Controller, relay and
-#: reporter GETs wait this bound for remaining=0; a later reset stays deferred.
+#: Controller, relay and reporter GETs wait this bound for remaining=0.
+#: A later reset stays deferred for the next health tick.
 PRIMARY_WAIT_CAP_SECONDS = 20 * 60
 PRIMARY_RETRY_LIMIT = 1
 

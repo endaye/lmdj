@@ -184,7 +184,9 @@ def main(argv=None):
     except Exception as error:
         from incremental_entry import emit_diagnostic
         stage = getattr(runtime, 'diagnostic_stage', None)
-        emit_diagnostic('relay', stage if type(stage) is str else 'authenticate', error)
+        if type(stage) is not str:
+            stage = 'authenticate' if runtime is None else 'unknown'
+        emit_diagnostic('relay', stage, error)
         print('why: completion relay could not authenticate its source; remedy: inspect exact source and let the independent health tick reconcile durable state')
         return 1
 
