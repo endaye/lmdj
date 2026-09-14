@@ -246,6 +246,18 @@ void duplicate_command_does_not_toggle_twice() {
   LMDJ_CHECK(f.coordinator.inspect().playing);
   LMDJ_CHECK(!f.coordinator.inspect().recording);
 }
+
+void earlier_command_does_not_toggle_after_a_later_one() {
+  Fixture f;
+  const auto play = f.make(6, 1, PatternTransportIntent::play_stop);
+  f.settle(play);
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  LMDJ_CHECK(f.coordinator.inspect().playing);
+  LMDJ_CHECK(f.coordinator.inspect().recording);
+  LMDJ_CHECK(f.coordinator.request(play) == PatternTransportSubmit::replayed);
+  LMDJ_CHECK(f.coordinator.inspect().playing);
+  LMDJ_CHECK(f.coordinator.inspect().recording);
+}
 }  // namespace
 
 int main() {
@@ -257,7 +269,8 @@ int main() {
     recording_play_stops_scheduling_and_closes_admission();
     recording_record_commits_and_keeps_playing();
     duplicate_command_does_not_toggle_twice();
-    std::cout << "pattern transport tests: PASS (7 scenarios)\n";
+    earlier_command_does_not_toggle_after_a_later_one();
+    std::cout << "pattern transport tests: PASS (8 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

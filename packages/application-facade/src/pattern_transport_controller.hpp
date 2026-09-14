@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 
 #include <lmdj/audio/realtime_engine.hpp>
@@ -55,7 +56,8 @@ class PatternTransportCoordinator {
   bool recording_{};
   std::uint64_t origin_frame_{};
   std::optional<PatternTransportRequest> pending_;
-  std::optional<PatternTransportRequest> completed_;
+  std::optional<PatternTransportRequest> last_;
+  std::map<foundation::CommandId, PatternTransportRequest> retained_;
   PatternTransportPhase phase_{PatternTransportPhase::idle};
   std::optional<foundation::Error> error_;
 };

@@ -68,9 +68,10 @@ PatternTransportSubmit PatternTransportCoordinator::request(
     return *pending_ == request ? PatternTransportSubmit::replayed
                                 : PatternTransportSubmit::busy;
   }
-  if (completed_ && completed_->command_id == request.command_id) {
-    return *completed_ == request ? PatternTransportSubmit::replayed
-                                  : PatternTransportSubmit::invalid;
+  if (const auto found = retained_.find(request.command_id);
+      found != retained_.end()) {
+    return found->second == request ? PatternTransportSubmit::replayed
+                                    : PatternTransportSubmit::invalid;
   }
   if (phase_ != PatternTransportPhase::idle) return PatternTransportSubmit::busy;
 
@@ -106,11 +107,10 @@ PatternTransportSubmit PatternTransportCoordinator::request(
 PatternTransportStatus PatternTransportCoordinator::inspect() const {
   return {playing_, recording_, phase_, runtime_generation_,
           pending_ ? pending_->expected_epoch
-                   : (completed_ ? completed_->expected_epoch : 0),
+                   : (last_ ? last_->expected_epoch : 0),
           origin_frame_,
           pending_ ? std::optional{pending_->command_id}
-                   : (completed_ ? std::optional{completed_->command_id}
-                                 : std::nullopt),
+                   : (last_ ? std::optional{last_->command_id} : std::nullopt),
           error_};
 }
 
@@ -160,7 +160,8 @@ foundation::Result<void> PatternTransportCoordinator::continue_operation() {
     phase_ = PatternTransportPhase::error;
     return applied;
   }
-  completed_ = pending_;
+  retained_.insert_or_assign(pending_->command_id, *pending_);
+  last_ = pending_;
   pending_.reset();
   phase_ = PatternTransportPhase::idle;
   return foundation::Result<void>::success();
