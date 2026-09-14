@@ -114,3 +114,22 @@ a new immutable adapter overlay, then repeat the live recheck before acceptance.
 
 Version impact: none. Internal prompt formatting only.
 Documentation impact: none. The documented exact-evidence contract is unchanged.
+
+## Live acceptance follow-up: control revision refresh
+
+Run 34827872529 produced a valid source-proven resolved verdict, but normal
+review publication refused to combine a prior same-head scope recorded under
+an older main control. Authenticate its provenance and target, retain that
+historical record, and use the existing incomplete/full-scope fallback when
+control revisions differ. Never merge advice across policies or narrow testing;
+wrong targets and same-control invalid records still fail closed.
+
+Declared files: `scripts/ci/review_pipeline.py`,
+`tests/build/ci_review_pipeline_test.py`, and this plan. A focused regression
+changes the prior control revision and runs actual scope collection/publication
+through emitted full-scope and label assertions. Run pipeline with actual T2
+integration enabled, review-scope and recheck suites. Repeat the live workflow
+from trusted main after review and merge; no installed adapter change is needed.
+
+Version impact: none. Internal CI publication only.
+Documentation impact: none. Uses the already documented conservative fallback.

@@ -579,6 +579,15 @@ def previous_records(identity, policy):
             continue
         prior_identity = {key: prior[key] for key in test_scope.IDENTITY_KEYS}
         authenticate(prior_identity)
+        review_scope.require(all(prior_identity[key] == identity[key]
+                                 for key in ("repository", "pr_number", "head_sha", "base_sha")),
+                             "prior scope belongs to a different review target")
+        if prior_identity["control_sha"] != identity["control_sha"]:
+            # Advice under another control/policy cannot be merged as current
+            # evidence. Retain it historically and use the existing full-scope
+            # fallback instead of suppressing a valid new review publication.
+            unavailable = True
+            continue
         test_scope.validate_record(prior, policy, prior_identity)
         records.append(prior)
     return records, unavailable
