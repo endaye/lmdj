@@ -36,6 +36,7 @@ using lmdj::facade::PatternTransportIntent;
 using lmdj::facade::PatternTransportPhase;
 using lmdj::facade::PatternTransportRequest;
 using lmdj::facade::PatternTransportSubmit;
+using lmdj::project_io::SequenceSwitchOutcome;
 using lmdj::facade::detail::PatternTransportAudioPort;
 using lmdj::facade::detail::PatternTransportCoordinator;
 using lmdj::foundation::CommandId;
@@ -45,17 +46,18 @@ using lmdj::foundation::SequenceSessionId;
 
 constexpr auto kProject = "00000000-0000-4000-8000-000000000004";
 constexpr auto kPattern = "00000000-0000-4000-8000-000000000002";
+constexpr auto kPatternB = "00000000-0000-4000-8000-00000000000b";
 
 std::string uuid(unsigned suffix) {
   const auto tail = std::to_string(suffix);
   return "00000000-0000-4000-8000-" + std::string(12 - tail.size(), '0') + tail;
 }
 
-RuntimeSnapshot pattern_snapshot() {
+RuntimeSnapshot pattern_snapshot(const char* pattern_id = kPattern) {
   auto sample = std::make_shared<const lmdj::cooker::PcmSample>(
       lmdj::cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(128, 1)});
   return RuntimeSnapshot{
-      ProjectId{kProject}, PatternId{kPattern}, 1, 120, 1,
+      ProjectId{kProject}, PatternId{pattern_id}, 1, 120, 1,
       lmdj::domain::kPpq, lmdj::domain::kBarTicks4x4,
       {ResolvedPad{
           PadSlotId{0, 0},
@@ -117,7 +119,25 @@ struct EnginePort final : PatternTransportAudioPort {
     return engine.acknowledge_pattern_transport_receipt(
         runtime_generation, epoch);
   }
-  std::uint64_t pattern_generation() const override { return generation; }
+  std::uint64_t pattern_generation() const override {
+    return engine.pattern_telemetry().current_generation;
+  }
+  std::optional<lmdj::audio::PatternReplacementAuthority> pending_switch()
+      const override {
+    const auto pending = engine.pending_pattern_id();
+    if (!pending) return std::nullopt;
+    const auto telemetry = engine.pattern_telemetry();
+    return lmdj::audio::PatternReplacementAuthority{
+        telemetry.pending_generation, *pending,
+        telemetry.pending_activation_frame};
+  }
+  void queue_switch(std::uint64_t activation_frame) {
+    auto view = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB));
+    LMDJ_CHECK(view.has_value());
+    const auto pending =
+        engine.publish_pattern_view(std::move(view.value()), activation_frame);
+    LMDJ_CHECK(pending.result == PatternPublishResult::accepted);
+  }
   void render(std::uint64_t frames = 1) {
     std::array<float, 256> left{};
     std::array<float, 256> right{};
@@ -377,6 +397,31 @@ void close_failure_after_ack_keeps_audio_and_retries() {
   LMDJ_CHECK(!recovered.recording);
   LMDJ_CHECK(recovered.phase == PatternTransportPhase::idle);
 }
+
+lmdj::project_io::SequenceAdmissionFence cutoff_of(Fixture& f) {
+  const auto journal = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(journal.has_value());
+  LMDJ_CHECK(journal.value().admission && journal.value().admission->cutoff_fence);
+  return *journal.value().admission->cutoff_fence;
+}
+
+void switch_at_or_after_cutoff_is_canceled() {
+  for (const auto activation : {std::uint64_t{2}, std::uint64_t{200}}) {
+    Fixture f;
+    f.settle(f.make(6, 1, PatternTransportIntent::record));
+    f.audio.queue_switch(activation);
+    LMDJ_CHECK(f.audio.pending_switch().has_value());
+    f.settle(f.make(7, 2, PatternTransportIntent::record));
+    f.audio.render(300);
+    const auto cutoff = cutoff_of(f);
+    LMDJ_CHECK(cutoff.switch_outcome == SequenceSwitchOutcome::canceled_at_cutoff);
+    LMDJ_CHECK(!cutoff.switch_applied_frame);
+    LMDJ_CHECK(cutoff.switch_authority &&
+               cutoff.switch_authority->pattern_id == PatternId{kPatternB});
+    LMDJ_CHECK(f.audio.engine.current_pattern_id() == PatternId{kPattern});
+    LMDJ_CHECK(f.coordinator.inspect().playing);
+  }
+}
 }  // namespace
 
 int main() {
@@ -392,7 +437,8 @@ int main() {
     wrong_session_or_project_is_invalid();
     recording_stop_retains_cutoff_before_ack();
     close_failure_after_ack_keeps_audio_and_retries();
-    std::cout << "pattern transport tests: PASS (11 scenarios)\n";
+    switch_at_or_after_cutoff_is_canceled();
+    std::cout << "pattern transport tests: PASS (12 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
