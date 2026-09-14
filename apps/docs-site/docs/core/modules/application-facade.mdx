@@ -53,6 +53,8 @@ admission fence 之后才保留 post-enqueue 候选，fence 前、closure 后与
 Play/Stop 与 Record：只播放不建 journal；停止态 Record 用 start 收据激活
 admission；播放中 Record 用 fence 且 origin 不变；录音中 Record 关闭准入并保持
 播放；录音中 Play/Stop 先停调度再关闭准入。请求校验 session/project；关闭录音时先耐久 cutoff 再 acknowledge 收据。
+close 在 ack 之后失败时保持已应用的音频状态，并以 flushing 重试同一 close，
+不把 Record-off 报成成功。
 它仍不是公开 Host API、Creator
 opt-in、settings/rebase、switch 段或未知 cutoff 恢复。测试用生产
 `RealtimeEngine` 收据，不是 Creator 或听感验收。
