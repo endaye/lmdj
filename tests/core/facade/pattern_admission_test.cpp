@@ -8,6 +8,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <span>
 #include <thread>
 #include <vector>
@@ -591,6 +592,25 @@ void prepared_owner_closes_at_capacity_and_drains_after_delayed_cutoff() {
                  .value() == PatternAdmissionAdmit::live_only);
 }
 
+void prepared_owner_closes_an_empty_prefix_at_deadline() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  OwnerFixture f;
+  f.preparation.fence_timeout_ms = 1;
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  f.now += std::chrono::milliseconds{2};
+  LMDJ_CHECK(f.owner.admit(
+      {10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
+                 .value() == PatternAdmissionAdmit::live_only);
+  const auto closed = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(closed.value().admission->candidates.empty());
+  LMDJ_CHECK(closed.value().admission->closure ==
+             (project_io::SequenceAdmissionClosure{
+                 std::nullopt, project_io::SequenceAdmissionCloseReason::deadline}));
+  LMDJ_CHECK(!f.owner.drain(foundation::CommandId{uuid(6)}, 0, false).has_value());
+}
+
 void prepared_owner_closes_at_deadline_before_the_next_candidate() {
   using namespace lmdj;
   using namespace facade::detail;
@@ -690,10 +710,11 @@ int main() {
     prepared_owner_leaves_unresolved_fence_after_owner_loss();
     prepared_owner_drains_through_the_execution_port();
     prepared_owner_closes_at_capacity_and_drains_after_delayed_cutoff();
+    prepared_owner_closes_an_empty_prefix_at_deadline();
     prepared_owner_closes_at_deadline_before_the_next_candidate();
     prepared_owner_reports_an_uncertain_suffix_on_storage_failure();
     prepared_owner_surfaces_a_failed_storage_failure_close();
-    std::cout << "pattern admission tests: PASS (22 scenarios)\n";
+    std::cout << "pattern admission tests: PASS (23 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

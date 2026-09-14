@@ -301,13 +301,21 @@ foundation::Result<PatternAdmissionAdmit> PatternAdmissionOwner::admit(
   if (!durable.has_value()) {
     auto error = durable.error();
     error.details["uncertain_suffix_watermark"] = candidate.watermark;
-    const auto prefix = last_retained_watermark(admission);
-    if (prefix) error.details["last_retained_watermark"] = *prefix;
     const auto closed = close_at(
         project_io::SequenceAdmissionCloseReason::storage_failure);
     if (!closed.has_value()) {
       error.details["closure_unresolved"] = true;
       error.details["closure_error"] = closed.error().message;
+    }
+    const auto after = journals_.read_active(bundle_);
+    if (after.has_value() && after.value().admission) {
+      const auto prefix = last_retained_watermark(*after.value().admission);
+      if (prefix) error.details["last_retained_watermark"] = *prefix;
+      if (after.value().admission->closure &&
+          after.value().admission->closure->last_retained_watermark) {
+        error.details["last_retained_watermark"] =
+            *after.value().admission->closure->last_retained_watermark;
+      }
     }
     return foundation::Result<PatternAdmissionAdmit>::failure(std::move(error));
   }
