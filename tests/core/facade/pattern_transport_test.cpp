@@ -497,6 +497,44 @@ void switch_applied_before_cutoff_drains_source_prefix() {
   LMDJ_CHECK(!project.value().patterns.at(PatternId{kPattern}).events.empty());
   LMDJ_CHECK(project.value().patterns.at(PatternId{kPatternB}).events.empty());
 }
+
+void switch_applied_before_cutoff_drains_target_segment() {
+  Fixture f;
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const auto opened = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(opened.has_value() && opened.value().admission &&
+             opened.value().admission->admission_fence);
+  const auto press_frame =
+      opened.value().admission->admission_fence->effective_frame;
+  LMDJ_CHECK(press_frame < 2);
+  LMDJ_CHECK(f.coordinator
+                 .admit({10, press_frame, {0, 1}, SequenceCandidateKind::press,
+                         90, 1})
+                 .value() == PatternAdmissionAdmit::retained);
+  LMDJ_CHECK(f.coordinator
+                 .admit({11, press_frame, {0, 1}, SequenceCandidateKind::release,
+                         0, 1})
+                 .value() == PatternAdmissionAdmit::retained);
+  f.audio.queue_switch(2);
+  f.audio.render(10);
+  LMDJ_CHECK(f.audio.engine.current_pattern_id() == PatternId{kPatternB});
+  LMDJ_CHECK(f.coordinator
+                 .admit({12, 3, {0, 2}, SequenceCandidateKind::press, 95, 2})
+                 .value() == PatternAdmissionAdmit::retained);
+  LMDJ_CHECK(f.coordinator
+                 .admit({13, 3, {0, 2}, SequenceCandidateKind::release, 0, 2})
+                 .value() == PatternAdmissionAdmit::retained);
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  const auto journal = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(journal.has_value());
+  LMDJ_CHECK(journal.value().pattern_id == PatternId{kPatternB});
+  LMDJ_CHECK(journal.value().admission &&
+             journal.value().admission->candidates.empty());
+  const auto project = f.store.load(f.bundle);
+  LMDJ_CHECK(project.has_value());
+  LMDJ_CHECK(!project.value().patterns.at(PatternId{kPattern}).events.empty());
+  LMDJ_CHECK(!project.value().patterns.at(PatternId{kPatternB}).events.empty());
+}
 }  // namespace
 
 int main() {
@@ -515,7 +553,8 @@ int main() {
     switch_at_or_after_cutoff_is_canceled();
     switch_applied_before_cutoff_is_retained();
     switch_applied_before_cutoff_drains_source_prefix();
-    std::cout << "pattern transport tests: PASS (14 scenarios)\n";
+    switch_applied_before_cutoff_drains_target_segment();
+    std::cout << "pattern transport tests: PASS (15 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

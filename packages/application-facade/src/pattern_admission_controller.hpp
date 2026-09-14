@@ -52,6 +52,9 @@ class PatternAdmissionOwner {
   foundation::Result<void> drain_source_prefix(
       project_io::ProjectStore& store, foundation::CommandId transfer_id,
       foundation::CommandId flush_id);
+  foundation::Result<void> drain_target_segment(
+      project_io::ProjectStore& store, foundation::CommandId transfer_id,
+      foundation::CommandId flush_id, foundation::CommandId profile_id);
   foundation::Result<PatternAdmissionAdmit> admit(
       const project_io::SequenceAdmissionCandidate& candidate);
   foundation::Result<void> close(

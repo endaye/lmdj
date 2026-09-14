@@ -1,5 +1,6 @@
 #include "pattern_transport_controller.hpp"
 
+#include <cstddef>
 #include <lmdj/domain/project.hpp>
 #include <utility>
 
@@ -20,12 +21,13 @@ project_io::SequenceSwitchOutcome switch_outcome(
   }
 }
 
-foundation::CommandId flush_command(const foundation::CommandId& command) {
+foundation::CommandId derive_command(
+    const foundation::CommandId& command, std::size_t offset, char tag) {
   auto value = command.value();
   const auto dash = value.rfind('-');
-  if (dash != std::string::npos && dash + 1 < value.size()) {
-    auto& digit = value[dash + 1];
-    digit = digit == 'f' ? 'e' : 'f';
+  if (dash != std::string::npos && dash + 1 + offset < value.size()) {
+    auto& digit = value[dash + 1 + offset];
+    digit = digit == tag ? (tag == 'f' ? 'e' : 'f') : tag;
   }
   return foundation::CommandId{value};
 }
@@ -178,15 +180,22 @@ foundation::Result<void> PatternTransportCoordinator::apply_receipt(
 }
 
 foundation::Result<void> PatternTransportCoordinator::finish_close() {
-  const auto closed = owner_.close_requested();
-  if (!closed.has_value()) return closed;
   if (pending_) {
-    const auto drained = owner_.drain_source_prefix(
-        store_, pending_->command_id, flush_command(pending_->command_id));
-    if (!drained.has_value()) return drained;
+    const auto source = owner_.drain_source_prefix(
+        store_, pending_->command_id, derive_command(pending_->command_id, 0, 'f'));
+    if (!source.has_value()) return source;
   }
   const auto reconciled = owner_.reconcile_switch(store_);
   if (!reconciled.has_value()) return reconciled;
+  if (pending_) {
+    const auto target = owner_.drain_target_segment(
+        store_, derive_command(pending_->command_id, 1, 'a'),
+        derive_command(pending_->command_id, 2, 'b'),
+        derive_command(pending_->command_id, 3, 'c'));
+    if (!target.has_value()) return target;
+  }
+  const auto closed = owner_.close_requested();
+  if (!closed.has_value()) return closed;
   recording_ = false;
   close_pending_ = false;
   return foundation::Result<void>::success();
