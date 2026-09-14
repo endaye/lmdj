@@ -241,6 +241,14 @@ class BatchRecheckTests(unittest.TestCase):
         self.assertEqual(report["candidates"][-1]["status"], "deferred")
         self.assertEqual(report["candidates"][-1]["comment_id"], 74)
 
+    def test_combined_context_overflow_is_deferred_with_manual_remedy(self):
+        git = self.api.git
+        self.api.git = lambda *args: (git(*args) + b"# " + b"x" * 600000 + b"\n") if args[0] == "show" else git(*args)
+        requests, report = self.api.collect_batch()
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(report["candidates"][1]["status"], "deferred")
+        self.assertIn("manual", report["candidates"][1]["reason"])
+
     def test_missing_duplicate_or_foreign_verdict_cannot_publish_any_thread(self):
         self.api.collect_batch()
         for mutation in (lambda v: v.pop(), lambda v: v.append(v[0]), lambda v: v[0].update(comment_id=900)):

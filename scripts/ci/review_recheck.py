@@ -200,13 +200,14 @@ def collect_batch(api, document, *, git, fetch):
             continue
         try:
             request = collect(api, document, row["comment_id"], git=git, fetch=fetch, reader=reader, threads=threads)
-            require(len(engine._canonical([*requests, request])) <= engine.MAX_REPAIR_BYTES,
-                    "combined repair context exceeds its byte bound")
         except (ReviewScopeError, review_wait.Refused, engine.EngineError) as error:
             report.append({**row, "status": "not_rechecked", "reason": str(error)})
         else:
-            requests.append(request)
-            report.append({**row, "status": "collected"})
+            if len(engine._canonical([*requests, request])) > engine.MAX_REPAIR_BYTES:
+                report.append({**row, "status": "deferred", "reason": "combined repair byte bound; use manual recheck"})
+            else:
+                requests.append(request)
+                report.append({**row, "status": "collected"})
     current_head(api, repository, number, head)
     return requests, {"head_sha": head, "threads_observed": len(threads), "candidates": report}
 

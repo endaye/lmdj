@@ -97,3 +97,16 @@ Documentation impact: required
 Affected portal pages: /operations/testing-and-proof
 Reason: push now initiates bounded source repair verification automatically;
 document deferred/unavailable cases and the existing manual fallback.
+
+## Review follow-up: distinguish byte-bound deferment
+
+The independent review of `fc7cc28b` identified that combined byte overflow
+was reported as an evidence refusal. Report it as `deferred` with the manual
+remedy. The authentication-attempt limit remains four, including candidates
+that cannot be admitted; do not silently raise API work to fill four slots.
+Declared files: this plan, `scripts/ci/review_recheck.py`, and
+`tests/build/ci_review_recheck_test.py`. The focused regression first observes
+`not_rechecked` for two individually valid 600 kB contexts, then requires one
+collected request and a deferred second candidate. Run the recheck suite.
+Version impact: none. Documentation impact: none — restores the already
+specified overflow behavior; no portal contract changes.
