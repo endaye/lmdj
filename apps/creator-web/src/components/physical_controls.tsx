@@ -57,7 +57,7 @@ export function PhysicalControls({
   return (
     <div className="physical-controls">
       <div className="physical-brand" aria-hidden="true">LMDJ</div>
-      <div className="physical-encoders" aria-label="Encoders">
+      <div className="physical-encoders" role="group" aria-label="Encoders" data-testid="physical-encoders">
         {["1", "2", "3", "4"].map((index) => (
           <button
             key={index}
@@ -68,7 +68,7 @@ export function PhysicalControls({
           />
         ))}
       </div>
-      <div className="physical-keys">
+      <div className="physical-keys" data-testid="physical-keys">
         <PhysicalKey
           label="Project"
           current={activeMode === "project"}

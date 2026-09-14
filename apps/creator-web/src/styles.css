@@ -623,9 +623,12 @@ button:disabled { color: #737b87; }
   border-radius: 12px;
 }
 .physical-controls {
+  /* Three children (brand, encoders, keys). Empty 16px tracks would steal
+     auto-placement and squash the 2×2 knobs into a gutter. */
   display: grid;
   height: 560px;
-  grid-template-rows: 80px 16px 80px 16px 368px;
+  grid-template-rows: 80px 80px 368px;
+  row-gap: 16px;
 }
 .physical-brand {
   display: grid;

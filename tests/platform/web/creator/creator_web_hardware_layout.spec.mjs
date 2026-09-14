@@ -55,6 +55,24 @@ test("opts into the 880×592 hardware shell, keeps overview read-only, and retur
 
   const pad = rounded(await page.getByRole("button", {name: /Pad A1 /}).boundingBox());
   expect(pad).toMatchObject({width: 80, height: 80});
+  const encoders = rounded(await page.getByTestId("physical-encoders").boundingBox());
+  expect(encoders).toMatchObject({
+    x: physical.x,
+    y: physical.y + 80 + 16,
+    width: 80,
+    height: 80,
+  });
+  const encoder = rounded(await page.getByRole("button", {
+    name: "Encoder 1 — unassigned until hardware mapping is approved",
+  }).boundingBox());
+  expect(encoder).toMatchObject({width: 32, height: 32});
+  const keyBlock = rounded(await page.getByTestId("physical-keys").boundingBox());
+  expect(keyBlock).toMatchObject({
+    x: physical.x,
+    y: pads.y,
+    width: 80,
+    height: 368,
+  });
   const keys = page.getByTestId("physical-controls");
   for (const bank of ["Bank A", "Bank B", "Bank C", "Bank D"]) {
     const box = rounded(await keys.getByRole("button", {name: bank, exact: true}).boundingBox());
