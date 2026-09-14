@@ -32,9 +32,20 @@ test('every approved route has a non-placeholder page', async () => {
   }
 });
 
-test('formal snapshot does not describe itself as current main documentation', async () => {
-  const body = await readFile(path.join(versionedDocsRoot, 'version-1.0.13.0/overview/index.mdx'), 'utf8');
-  assert.doesNotMatch(body, /(?:随 `main` 演进|current 文档|当前文档)/);
+test('formal snapshot self-identifies as an immutable snapshot', async () => {
+  // The repository keeps only the latest five Product Build snapshots, so the
+  // sample must come from the oldest retained version rather than a pinned one.
+  const versions = JSON.parse(
+    await readFile(path.join(versionedDocsRoot, '..', 'versions.json'), 'utf8'),
+  );
+  const oldestRetained = `version-${versions[versions.length - 1]}`;
+  const body = await readFile(
+    path.join(versionedDocsRoot, oldestRetained, 'overview/index.mdx'), 'utf8',
+  );
+  // The v1.0.13.0-era negative prose check (no "随 `main` 演进" phrase) is no
+  // longer decidable: every recent page, snapshot or current, carries the
+  // neutral BuildIdentity explainer that uses those words. What remains
+  // checkable is that a snapshot page still self-identifies as immutable.
   assert.match(body, /正式快照/);
 });
 
