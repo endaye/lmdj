@@ -58,8 +58,13 @@ close 在 ack 之后失败时保持已应用的音频状态，并以 flushing �
 延迟读过 S 也不应用被取消的 Pattern；S < F 先 `retain_admission_switch` 再 cutoff，
 journal 保留 `applied_before_cutoff` 与实际 S；先 drain S 之前的源前缀并 flush，
 再 `switch_pattern` 推进 `segment_generation`，然后 drain 目标段候选并 flush，最后 close。
-它仍不是 Creator
-opt-in、settings/rebase、terminal transfer 或未知 cutoff 恢复。测试用生产
+cutoff 前未应用 switch 的 close（普通 Play/Stop 双停、Record-off 与 S ≥ F 取消）在同一
+close 内把当前 Pattern 段的剩余候选经同一 canonical-tail transfer drain 并 flush 提交
+Project Truth、推进 committed revision，并在 closure 耐久后保留 terminal transfer 作为
+admission 输入已全部解析的结算收据；cutoff 收据应用后、close 未决期间到达的输入保持
+live-only，不再进入候选集。close 中途存储失败保持 flushing 重试且不重复提交。
+cutoff 前已应用 switch 的 close 保持原语义，尚无 terminal transfer。它仍不是 Creator
+opt-in、settings/rebase 或未知 cutoff 恢复。测试用生产
 `RealtimeEngine` 收据，不是 Creator 或听感验收。
 同一生产转换函数已有 native 进程终止及 Chromium/独立 WebKit OPFS 回应丢失后
 重开、精确重试、原 Pattern/实际存在的另一 Pattern 恢复旅程；这些旅程从已知 cutoff

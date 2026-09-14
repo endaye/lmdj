@@ -367,10 +367,6 @@ foundation::Result<void> PatternAdmissionOwner::drain_target_segment(
   if (pending_applied_switch(*journal.value().admission)) {
     return owner_error("switch_prefix_requires_reconciliation");
   }
-  if (journal.value().pattern_id ==
-      journal.value().admission->preparation.pattern_id) {
-    return foundation::Result<void>::success();
-  }
   for (const auto& flush : journal.value().flushes) {
     if (flush.completed || flush.pattern_id != journal.value().pattern_id) continue;
     const auto executed = store.execute_sequence_flush(
