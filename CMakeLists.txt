@@ -509,6 +509,30 @@ lmdj_add_test(
   TIMEOUT 30
 )
 
+foreach(preparation_case IN ITEMS
+    PreparationJourneyTest.test_actual_all_legs_then_cold_observation_preserves_every_history
+    PreparationCrashTest.test_source_child_success_survives_parent_checkpoint_death
+    PreparationCrashTest.test_snapshot_child_success_survives_parent_checkpoint_death_without_resume
+    PreparationCrashTest.test_cut_child_success_survives_parent_checkpoint_death_without_commands)
+  lmdj_add_test(
+    NAME "build.release_candidate_preparation_${preparation_case}"
+    TIER e2e
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_preparation_test.py "${preparation_case}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 900
+  )
+endforeach()
+
+foreach(preparation_group IN ITEMS PreparationEnrollmentTest PreparationSourceGuardTest)
+  lmdj_add_test(
+    NAME "build.release_candidate_preparation_${preparation_group}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_preparation_test.py "${preparation_group}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120
+  )
+endforeach()
+
 foreach(source_setup_group IN ITEMS ReservationReaderTest SetupLifecycleTest SetupBoundaryTest SetupInstallFailureTest SetupOrphanTest)
   string(TOLOWER "${source_setup_group}" source_setup_lower)
   set(source_setup_budget 60)

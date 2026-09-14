@@ -31,6 +31,13 @@ class CandidateCutWorkspace:
         require(type(snapshot) is CandidateSnapshotRun, "requires the concrete snapshot executor")
         self.snapshot, self.local = snapshot, snapshot.workspace
 
+    @staticmethod
+    def commit_bytes(source, tree, snapshot_sha256, author_name, author_email, timestamp):
+        identity = f"{author_name} <{author_email}> {timestamp} +0000"
+        message = (f"chore(release): allocate {source['product_build']} candidate\n\nRelease-operation: {source['operation_id']}\n"
+                   f"Candidate-source: {source['commit']}\nSnapshot-sha256: {snapshot_sha256}\n")
+        return f"tree {tree}\nparent {source['base_revision']}\nauthor {identity}\ncommitter {identity}\n\n{message}".encode()
+
     def _check(self, source, tree, commit, *, staged):
         local = self.local
         local._visible_index()
@@ -119,10 +126,7 @@ class CandidateCutWorkspace:
                 tree = local.revision_from_index(index)
                 changed = {name.decode() for name in local.git("diff-tree", "--no-ext-diff", "--no-commit-id", "--name-only", "-r", "-z", source["base_revision"], tree).split(b"\0") if name}
                 require(changed == FILES | set(expected), "final diff is not exact source plus snapshot")
-                identity = f"{author_name} <{author_email}> {timestamp} +0000"
-                message = (f"chore(release): allocate {build} candidate\n\nRelease-operation: {source['operation_id']}\n"
-                           f"Candidate-source: {source['commit']}\nSnapshot-sha256: {snapshot_sha256}\n")
-                raw = f"tree {tree}\nparent {source['base_revision']}\nauthor {identity}\ncommitter {identity}\n\n{message}".encode()
+                raw = self.commit_bytes(source, tree, snapshot_sha256, author_name, author_email, timestamp)
                 commit = local.git("hash-object", "-t", "commit", "-w", "--stdin", data=raw).decode().strip()
                 retention = "refs/lmdj/release-sources/" + source["operation_id"]
                 binding = {"schema":"lmdj.candidate-cut.v1", "source_sha256":canonical_sha256(source),

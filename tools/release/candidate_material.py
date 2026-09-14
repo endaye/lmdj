@@ -74,9 +74,18 @@ class CandidateBuildMaterial:
             filename.write_bytes(blobs[entry["object"]])
 
     def prepare(self, request, frozen, main_revision):
+        return self._prepare(request, frozen, main_revision, allocate=True)
+
+    def observe(self, request, frozen, main_revision):
+        """Reconstruct the original material without allocating a reservation."""
+        return self._prepare(request, frozen, main_revision, allocate=False)
+
+    def _prepare(self, request, frozen, main_revision, *, allocate):
         # Actual durable reservation precedes material generation. A generator
         # failure retains its number; retries use the same reservation.
-        reservation = self.reservations.reserve(request, frozen, main_revision)
+        lookup = self.reservations.reserve if allocate else self.reservations.observe
+        reservation = lookup(request, frozen, main_revision)
+        require(reservation is not None, "original reservation is absent")
         with tempfile.TemporaryDirectory(prefix="lmdj-candidate-material-") as directory:
             root = Path(directory).resolve()
             self._export(frozen, root)
@@ -87,7 +96,7 @@ class CandidateBuildMaterial:
             except Exception:
                 raise JournalError("why: canonical candidate material generation refused; remedy: retain the reservation and repair the original input or reconcile a new candidate, never bypass Assembly validation") from None
         self.inputs.verify(frozen, main_revision)
-        require(self.reservations.reserve(request, frozen, main_revision) == reservation,
+        require(lookup(request, frozen, main_revision) == reservation,
                 "reservation changed during generation")
         inventory = [{"path":name, "size":len(raw), "sha256":sha256(raw).hexdigest()}
                      for name, raw in sorted(files.items())]

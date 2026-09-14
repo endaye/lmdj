@@ -24,6 +24,7 @@ from scripts import version
 from tools.release.candidate_material import CandidateBuildMaterial
 from tools.release.candidate_workspace import CandidateSourceWorkspace
 from tools.release.candidate_source_setup import CandidateSourceSetup
+from tools.release.candidate_preparation import CandidatePreparation
 from tools.release.candidate_snapshot import CandidateSnapshotRun
 from tools.release.candidate_cut import CandidateCutWorkspace
 from tools.release.candidate_checks import CandidateTaskChecks
@@ -38,6 +39,63 @@ from tools.release.github_api import GitHubClient, HttpResponse
 from tools.release.orchestration import RequestJournal
 from tools.release.orchestration_driver import Observation, ReleaseDriver
 from tools.release.orchestration_policy import load_orchestration_policy
+
+
+def prepared_cut_journey(*, evidence, logs, repository, material, request, tool_path, record, git):
+    """Actual parent and every official command, no PR or release transition."""
+    timestamp = int(time.time())
+    spools = []
+    def authorize(original):
+        assert canonical_json(original) == canonical_json(request)
+    def new_parent():
+        return CandidatePreparation(evidence / "preparation", repository_root=repository,
+            source_root=evidence / "candidate", reservation_root=material.reservations.state_root,
+            request=request, authorize=authorize, observe_main=lambda: request["base_revision"],
+            path=tool_path, author_name="Candidate Rehearsal", author_email="fixture@example.invalid",
+            source_timestamp=timestamp, clock=lambda: int(time.time()))
+    @contextmanager
+    def retained_output(*unused, **kwargs):
+        output = tempfile.NamedTemporaryFile(mode="w+b", prefix="prepared-command-", suffix=".log", dir=logs, delete=False)
+        spools.append(Path(output.name))
+        record({"executed_output":output.name, "status":"started"})
+        try:
+            yield output
+        finally:
+            output.flush()
+            os.fsync(output.fileno())
+            output.close()
+    parent = new_parent()
+    assert parent.observe()["status"] == "absent"
+    assert parent.observe(initialize=True)["status"] == "pending"
+    with patch("tools.release.task_verification.tempfile.TemporaryFile", retained_output):
+        result = parent.prepare(before_write=lambda: authorize(request))
+        assert result["status"] == "verified" and len(spools) == 9
+        child = Path(parent.local.git("rev-parse", "--absolute-git-dir").decode().strip()) / parent.local.JOURNAL_NAME
+        histories = [parent.root / parent.STATE, parent.root / parent.MARKER,
+            parent.setup.root / parent.setup.STATE, parent.setup.root / parent.setup.MARKER,
+            material.reservations.state_root / "build-reservations", child / "binding.json",
+            child / "snapshot-state.json", child / "cut-binding.json", child / parent.checks.STATE]
+        before = [name.read_bytes() for name in histories]
+        setup = json.loads((parent.setup.root / parent.setup.STATE).read_bytes())
+        snapshot = json.loads((child / "snapshot-state.json").read_bytes())["state"]
+        checks = json.loads((child / parent.checks.STATE).read_bytes())
+        rows = [setup["install"], *snapshot["commands"], *checks["commands"]]
+        assert len(rows) == len(spools)
+        raw = [name.read_bytes() for name in spools]
+        for row, filename, content in zip(rows, spools, raw):
+            assert row["result"] == [0, sha256(content).hexdigest(), len(content)]
+            record({"command":row["arguments"], "result":row["result"], "output":str(filename)})
+        outputs = list(spools)
+        assert canonical_json(new_parent().observe()) == canonical_json(result)
+        assert canonical_json(new_parent().prepare(before_write=lambda: authorize(request))) == canonical_json(result)
+        assert spools == outputs and [name.read_bytes() for name in spools] == raw
+        assert [name.read_bytes() for name in histories] == before
+    assert parent.local.revision("HEAD") == result["checked_cut"]["cut"]["commit"]
+    assert git(parent.local.root, "status", "--porcelain")[1] == b""
+    record({"stage":"complete", "scope":"actual owned preparation/source/official snapshot/six cut checks/cold recovery only",
+        "source":result["source"], "checked_cut":result["checked_cut"], "evidence":result["evidence"],
+        "histories":[dict(path=str(name), bytes=len(content), sha256=sha256(content).hexdigest())
+                     for name, content in zip(histories, before)], "remote_release_or_deployment":False})
 
 
 def source_setup_journey(*, evidence, logs, repository, material, request, tool_path, record, git):
@@ -298,6 +356,8 @@ def main():
                         help="exercise the actual post-cut parent, owned install and driver with a local GitHub fixture")
     modes.add_argument("--owned-source-setup-only", action="store_true",
                        help="exercise owned source creation, actual npm install and source consumption; no Portal snapshot or PR")
+    modes.add_argument("--prepared-cut-only", action="store_true",
+                       help="exercise the actual preparation parent through official install, snapshot and six cut checks; no PR")
     args = parser.parse_args()
     evidence = args.evidence_root.resolve()
     evidence.mkdir(mode=0o700)  # Existing runs are never overwritten or resumed.
@@ -357,13 +417,15 @@ def main():
             "tools/release/orchestration_driver.py", "tools/release/candidate_pr_sequence.py",
             "tools/release/evidence_pr.py", "tools/release/evidence_branch.py", "tools/release/witness_source.py",
             "tools/release/witness_pr.py", "tools/release/candidate_pr.py", "tools/release/candidate_branch.py")
-    if args.owned_source_setup_only:
+    if args.owned_source_setup_only or args.prepared_cut_only:
         controllers += ("tools/release/candidate.py", "tools/release/candidate_inputs.py", "tools/release/candidate_material.py",
                         "tools/release/candidate_source_setup.py", "tools/release/candidate_workspace.py")
+    if args.prepared_cut_only:
+        controllers += ("tools/release/candidate_preparation.py",)
     record({"managed_candidate":args.managed_candidate,
             "controller_sha256": {name:sha256((ROOT / name).read_bytes()).hexdigest() for name in controllers}})
     dependencies = ROOT / "apps/docs-site/node_modules"
-    if not args.owned_source_setup_only:
+    if not (args.owned_source_setup_only or args.prepared_cut_only):
         assert dependencies.is_dir(), "install this control worktree's locked Node dependencies first"
     repository = evidence / "repository"
     command(["git", "clone", "--shared", "--no-checkout", str(ROOT), str(repository)])
@@ -377,6 +439,10 @@ def main():
         request.update(repository="endaye/lmdj", policy_digest=policy.digest)
     material = CandidateBuildMaterial(repository, evidence / "reservations")
     material.reservations.enroll(request["repository"])
+    if args.prepared_cut_only:
+        prepared_cut_journey(evidence=evidence, logs=logs, repository=repository, material=material,
+            request=request, tool_path=args.tool_path, record=record, git=git)
+        return 0
     if args.owned_source_setup_only:
         source_setup_journey(evidence=evidence, logs=logs, repository=repository, material=material,
             request=request, tool_path=args.tool_path, record=record, git=git)

@@ -214,16 +214,26 @@ class PublicationWorkspace:
                             files=sorted(files), status="committed")
 
     def _install_commit(self, journal, base_revision, tree, commit, branch,
-                        selected, expected, index, verify):
+                        selected, expected, index, verify, *, before_write=None):
         """Shared atomic OLD/NEW recovery after the planner freezes binding."""
         head = self.revision("HEAD")
         require(head in (base_revision, commit), "branch advanced to an unrelated commit")
         self._check_workspace(base_revision, tree, selected, expected)
+        def checkpoint():
+            if before_write is not None:
+                before_write()
+                journal._active()
+                require(self.revision("HEAD") == head, "HEAD changed during write authorization")
+                require(self.git("symbolic-ref", "--short", "HEAD").decode().strip() == branch,
+                        "branch changed during write authorization")
+                self._check_workspace(base_revision, tree, selected, expected)
         if head == base_revision:
             for name in sorted(expected):
+                checkpoint()
                 journal._active()
                 require(self._file(name) in (selected.get(name), expected[name]), "file changed before installation")
                 self._install(name, expected[name], selected.get(name))
+            checkpoint()
             self.git("read-tree", tree)
         self._check_workspace(base_revision, tree, selected, expected, complete=True)
         try:
@@ -234,6 +244,8 @@ class PublicationWorkspace:
         self._check_workspace(base_revision, tree, selected, expected, complete=True)
         require(self.git("symbolic-ref", "--short", "HEAD").decode().strip() == branch, "branch changed during verification")
         if head == base_revision:
+            checkpoint()
+            self._check_workspace(base_revision, tree, selected, expected, complete=True)
             self.git("update-ref", "refs/heads/" + branch, commit, base_revision)
         require(self.revision("HEAD") == commit and self.revision_from_index() == tree, "commit identity drifted")
         self._check_workspace(base_revision, tree, selected, expected, complete=True)

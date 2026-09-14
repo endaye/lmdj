@@ -101,6 +101,31 @@ class CandidateSnapshotRun:
         except Exception:
             raise CandidateSnapshotError("why: candidate snapshot authority, state or execution is unavailable; remedy: inspect the retained private attempt and restore its original trusted source; never repeat generation") from None
 
+    def observe(self, request, source):
+        """Read original command evidence and actual bytes without spending budget."""
+        scope = self.scope(request, source)
+        local = self.workspace
+        gitdir = Path(local.git("rev-parse", "--absolute-git-dir").decode().strip())
+        with local._locked(gitdir) as journal:
+            require(canonical_json(read(journal, "binding.json")) == canonical_json(scope["source"]),
+                    "source differs from durable installation binding")
+            self._authorize(scope)
+            self._checkout(scope["source"])
+            state = self._state(journal, scope)
+            if state is None:
+                return dict(status="absent", snapshot=None)
+            if state["snapshot"] is None or state["verified_command_count"] != len(state["commands"]):
+                return dict(status="pending", snapshot=None)
+            require(state["snapshot"] == self._snapshot(scope["source"]), "observed snapshot bytes changed")
+            self._authorize(scope)
+            journal._active()
+            require(canonical_json(self._state(journal, scope)) == canonical_json(state)
+                    and canonical_json(read(journal, "binding.json")) == canonical_json(scope["source"]),
+                    "history changed during snapshot observation")
+            self._checkout(scope["source"])
+            require(state["snapshot"] == self._snapshot(scope["source"]), "snapshot changed during observation")
+            return dict(status="verified", snapshot=self.receipt(state))
+
     def scope(self, request, source):
         validate_request(request)
         source = deepcopy(source)

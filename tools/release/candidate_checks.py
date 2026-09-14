@@ -194,3 +194,46 @@ class CandidateTaskChecks:
             raise
         except Exception:
             raise CandidateChecksError("why: candidate Task command evidence or authority is unavailable; remedy: restore original private history without inventing a passing receipt") from None
+
+    def observe(self, *, request, source, frozen, main_revision, snapshot_sha256,
+                author_name, author_email, timestamp):
+        """Authenticate completed cut commands and actual objects; execute none."""
+        from .candidate_source import CandidateSourceVerifier
+        local = self.local
+        gitdir = Path(local.git("rev-parse", "--absolute-git-dir").decode().strip())
+        with local._locked(gitdir) as journal:
+            binding = read(journal, "cut-binding.json", optional=True)
+            if binding is None:
+                return dict(status="absent", checked_cut=None)
+            scope = self._scope(journal, binding)
+            self._authorize(scope)
+            self._binding(journal, scope)
+            state = self._state(journal, scope)
+            if any(row["status"] != "verified" for row in state["commands"]):
+                status = "unknown" if state["commands"][-1]["status"] == "started" else "conflict"
+                return dict(status=status, checked_cut=None)
+            if len(state["commands"]) != len(self._commands(scope)):
+                return dict(status="pending", checked_cut=None)
+            require(binding["snapshot_sha256"] == snapshot_sha256, "snapshot identity changed")
+            raw = self.cut.commit_bytes(scope["source"], binding["tree"], snapshot_sha256,
+                                        author_name, author_email, timestamp)
+            require(local.git("cat-file", "commit", binding["commit"]) == raw, "cut author, timestamp or content changed")
+            files = sorted(name.decode() for name in local.git("diff-tree", "--no-commit-id", "--name-only",
+                "-r", "-z", binding["base_revision"], binding["commit"]).split(b"\0") if name)
+            cut = dict(binding, product_build=scope["source"]["product_build"], status="cut-committed", files=files)
+            CandidateSourceVerifier(self.cut).verify_locked(journal, request=request, source=source, cut=cut,
+                frozen=frozen, main_revision=main_revision, merge_revision=None)
+            self.cut._check(scope["source"], binding["tree"], binding["commit"], staged=True)
+            require(local.revision("HEAD") == binding["commit"], "completed cut HEAD changed")
+            self._authorize(scope)
+            # The last authority read still cannot erase consumed history: the
+            # snapshot evidence binding this receipt is re-read after it too.
+            self._binding(journal, scope)
+            try:
+                self.cut.snapshot.verified_state(journal, request, source, binding["snapshot_sha256"])
+            except Exception:
+                raise CandidateChecksError("why: candidate Task snapshot evidence is missing at final observation; remedy: restore the original snapshot history without replaying commands") from None
+            require(canonical_json(self._state(journal, scope)) == canonical_json(state), "command history changed during observation")
+            self.cut._check(scope["source"], binding["tree"], binding["commit"], staged=True)
+            require(local.revision("HEAD") == binding["commit"], "cut HEAD changed during observation")
+            return dict(status="verified", checked_cut=dict(cut=cut, checks=self._receipt(state)))

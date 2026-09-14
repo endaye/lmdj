@@ -8,7 +8,7 @@ import re
 import tempfile
 
 from .candidate_material import CandidateBuildMaterial
-from .model import canonical_sha256
+from .model import canonical_json, canonical_sha256
 from .orchestration import validate_request
 from .publication_workspace import PublicationWorkspace, PublicationWorkspaceError
 
@@ -43,15 +43,28 @@ class CandidateSourceWorkspace(PublicationWorkspace):
         self._visible_index()
         super()._check_workspace(*args, **kwargs)
 
-    def prepare_source(self, *, request, frozen, main_revision, author_name,
-                       author_email, timestamp, verify):
+    def prepare_source(self, **arguments):
         """Commit exact generated source after trusted source-only verification.
 
         Caller authenticates original authority/control/main/baseline CI before
         every call. verify(root) must validate the material Task, not report
         snapshot/release checks as passed before those artifacts exist.
         """
+        return self._source(**arguments, observe=False)
+
+    def observe_source(self, **arguments):
+        """Original binding and actual OLD/NEW bytes, without installation.
+
+        Reconstructs immutable Git objects in private indexes, but never enrolls,
+        allocates, changes the real index/ref/checkout or invokes a Task command.
+        """
+        return self._source(**arguments, observe=True)
+
+    def _source(self, *, request, frozen, main_revision, author_name,
+                author_email, timestamp, verify, observe, before_write=None):
+        from .candidate_snapshot import read
         validate_request(request)
+        require(before_write is None or callable(before_write), "write guard is invalid")
         require(request["mode"] == "new", "requires a new-build request")
         require(type(timestamp) is int and 1 <= timestamp <= 253402300799, "timestamp is invalid")
         require(type(author_name) is str and re.fullmatch(r"[A-Za-z0-9 ._-]{1,80}", author_name)
@@ -68,7 +81,10 @@ class CandidateSourceWorkspace(PublicationWorkspace):
         with self._locked(gitdir) as journal:
             require(self.git("rev-parse", "--is-shallow-repository").strip() == b"false", "history is shallow")
             self._visible_index()
-            generated = self.material.prepare(request, frozen, main_revision)
+            previous = read(journal, "binding.json", optional=True) if observe else None
+            if observe and previous is None:
+                return dict(status="absent", source=None)
+            generated = (self.material.observe if observe else self.material.prepare)(request, frozen, main_revision)
             require(set(generated["files"]) == FILES, "material inventory is not the four source files")
             # The generator may use another worktree; authenticate this object's
             # base too before constructing any checkout state.
@@ -101,6 +117,26 @@ class CandidateSourceWorkspace(PublicationWorkspace):
                            "request_sha256":canonical_sha256(request), "base_revision":base,
                            "material_sha256":generated["sha256"], "product_build":product_build,
                            "tree":tree, "commit":commit, "branch":branch}
+                receipt = dict(binding, files=sorted(files), status="source-committed")
+                if observe:
+                    require(canonical_json(previous) == canonical_json(binding), "observed source binding changed")
+                    require(self.revision("HEAD") in (base, commit), "observed source HEAD changed")
+                    self._check_workspace(base, tree, selected, expected)
+                    if self.revision("HEAD") == base:
+                        return dict(status="pending", source=None)
+                    self._check_workspace(base, tree, selected, expected, complete=True)
+                    verify(self.root)
+                    journal._active()
+                    require(canonical_json(read(journal, "binding.json")) == canonical_json(binding), "source history changed during observation")
+                    require(self.revision("HEAD") == commit, "source HEAD changed during observation")
+                    self._check_workspace(base, tree, selected, expected, complete=True)
+                    return dict(status="verified", source=receipt)
                 self._binding(journal, binding)
-                self._install_commit(journal, base, tree, commit, branch, selected, expected, index, verify)
-                return dict(binding, files=sorted(files), status="source-committed")
+                def guard():
+                    before_write()
+                    journal._active()
+                    require(canonical_json(read(journal, "binding.json")) == canonical_json(binding),
+                            "source binding changed during write authorization")
+                self._install_commit(journal, base, tree, commit, branch, selected, expected, index, verify,
+                                     before_write=guard if before_write is not None else None)
+                return receipt
