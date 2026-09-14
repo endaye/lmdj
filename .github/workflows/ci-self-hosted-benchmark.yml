@@ -79,7 +79,7 @@ jobs:
 
       - name: Retain failed browser evidence
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: self-hosted-web-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

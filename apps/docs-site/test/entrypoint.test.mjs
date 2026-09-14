@@ -26,7 +26,7 @@ test('portal package is private and pins the Node and npm toolchain', async () =
   const manifest = (await import('../package.json', {with: {type: 'json'}})).default;
   assert.equal(manifest.private, true);
   assert.equal(manifest.name, '@lmdj/docs-site');
-  assert.equal(manifest.engines.node, '>=22.13.0');
+  assert.equal(manifest.engines.node, '>=26.0.0');
   assert.equal(manifest.packageManager, 'npm@10.9.3');
 });
 

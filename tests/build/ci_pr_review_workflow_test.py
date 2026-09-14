@@ -198,7 +198,7 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         self.assertNotIn("issues: write", job)
         self.assertIn('HEAD_SHA: ${{ needs.target.outputs.head_sha }}', job)
         self.assertIn("review_pipeline.py publish", job)
-        self.assertIn("actions/download-artifact@v4", job)
+        self.assertIn("actions/download-artifact@v7", job)
         self.assertIn("github.run_attempt", job)
         self.assertIn("Report the review state", job)
         self.assertIn("review the current head manually", job)

@@ -39,7 +39,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
-          node-version: '22.16.0'
+          node-version: '26'
       - name: Build without deployment credentials
         timeout-minutes: 15
         env:
@@ -57,7 +57,7 @@ jobs:
             --source source/apps/docs-site/build \
             --archive "$RUNNER_TEMP/portal-preview-output/static.zip"
       - name: Retain the exact-head artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: portal-preview-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/portal-preview-output/static.zip

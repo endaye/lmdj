@@ -76,7 +76,7 @@ class WorkflowTests(unittest.TestCase):
         for name in ('Report durable observations independently', 'Recover missed review observations independently'):
             self.assertTrue(expression(condition(name), **context),
                 'why: report tick still waits for successful product control; remedy: admit its independent reporting step')
-        upload = CONTROLLER.split('      - uses: actions/upload-artifact@v4\n', 1)[1]
+        upload = CONTROLLER.split('      - uses: actions/upload-artifact@v6\n', 1)[1]
         self.assertFalse(expression(field(upload, 'if', 8), **context))
         execute = field(block(SOURCE, 'execute-batch', 2), 'if', 4)
         self.assertFalse(expression(execute, **context))
