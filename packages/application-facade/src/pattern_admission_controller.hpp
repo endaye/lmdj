@@ -49,10 +49,14 @@ class PatternAdmissionOwner {
   foundation::Result<void> retain_switch(
       const project_io::SequencePublicationAuthority& authority);
   foundation::Result<void> reconcile_switch(project_io::ProjectStore& store);
+  foundation::Result<void> drain_source_prefix(
+      project_io::ProjectStore& store, foundation::CommandId transfer_id,
+      foundation::CommandId flush_id);
   foundation::Result<PatternAdmissionAdmit> admit(
       const project_io::SequenceAdmissionCandidate& candidate);
   foundation::Result<void> close(
       const project_io::SequenceAdmissionClosure& closure);
+  foundation::Result<void> close_requested();
   foundation::Result<project_io::SequenceAdmissionTransfer> drain(
       foundation::CommandId transfer_id, std::uint64_t last_watermark,
       bool terminal);

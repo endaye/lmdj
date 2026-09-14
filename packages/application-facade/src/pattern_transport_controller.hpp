@@ -38,6 +38,8 @@ class PatternTransportCoordinator {
   PatternTransportSubmit request(const PatternTransportRequest& request);
   PatternTransportStatus inspect() const;
   foundation::Result<void> continue_operation();
+  foundation::Result<PatternAdmissionAdmit> admit(
+      const project_io::SequenceAdmissionCandidate& candidate);
 
  private:
   audio::PatternTransportAction audio_action(

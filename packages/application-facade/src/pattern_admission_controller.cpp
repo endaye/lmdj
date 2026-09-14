@@ -19,6 +19,26 @@ TransferResult conversion_error(const char* reason) {
 foundation::Result<void> owner_error(const char* reason) {
   return foundation::Result<void>::failure(conversion_error(reason).error());
 }
+std::optional<project_io::SequencePublicationAuthority> pending_applied_switch(
+    const project_io::SequenceAdmissionState& admission) {
+  if (!admission.applied_switches.empty() &&
+      admission.applied_switches.back().generation > admission.segment_generation) {
+    return admission.applied_switches.back();
+  }
+  if (admission.cutoff_fence &&
+      admission.cutoff_fence->switch_outcome ==
+          project_io::SequenceSwitchOutcome::applied_before_cutoff &&
+      admission.cutoff_fence->switch_authority &&
+      admission.cutoff_fence->switch_applied_frame &&
+      admission.cutoff_fence->switch_authority->generation >
+          admission.segment_generation) {
+    return project_io::SequencePublicationAuthority{
+        admission.cutoff_fence->switch_authority->pattern_id,
+        admission.cutoff_fence->switch_authority->generation,
+        *admission.cutoff_fence->switch_applied_frame};
+  }
+  return std::nullopt;
+}
 std::optional<std::uint64_t> last_retained_watermark(
     const project_io::SequenceAdmissionState& admission) {
   if (!admission.candidates.empty()) return admission.candidates.back().watermark;
@@ -253,23 +273,7 @@ foundation::Result<void> PatternAdmissionOwner::reconcile_switch(
   if (journal.value().session_id != session_ || !journal.value().admission) {
     return owner_error("admission_identity_mismatch");
   }
-  const auto& admission = *journal.value().admission;
-  std::optional<project_io::SequencePublicationAuthority> pending;
-  if (!admission.applied_switches.empty() &&
-      admission.applied_switches.back().generation > admission.segment_generation) {
-    pending = admission.applied_switches.back();
-  } else if (admission.cutoff_fence &&
-             admission.cutoff_fence->switch_outcome ==
-                 project_io::SequenceSwitchOutcome::applied_before_cutoff &&
-             admission.cutoff_fence->switch_authority &&
-             admission.cutoff_fence->switch_applied_frame &&
-             admission.cutoff_fence->switch_authority->generation >
-                 admission.segment_generation) {
-    pending = project_io::SequencePublicationAuthority{
-        admission.cutoff_fence->switch_authority->pattern_id,
-        admission.cutoff_fence->switch_authority->generation,
-        *admission.cutoff_fence->switch_applied_frame};
-  }
+  const auto pending = pending_applied_switch(*journal.value().admission);
   if (!pending) return foundation::Result<void>::success();
   const auto project = store.load(bundle_);
   if (!project.has_value()) {
@@ -283,6 +287,65 @@ foundation::Result<void> PatternAdmissionOwner::reconcile_switch(
       bundle_, session_, pending->pattern_id, found->second.bars,
       project_io::sequence_pattern_fingerprint(found->second),
       journal.value().expected_revision);
+}
+
+foundation::Result<void> PatternAdmissionOwner::drain_source_prefix(
+    project_io::ProjectStore& store, foundation::CommandId transfer_id,
+    foundation::CommandId flush_id) {
+  if (!identity_) return owner_error("admission_identity_missing");
+  auto journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) {
+    return foundation::Result<void>::failure(journal.error());
+  }
+  if (journal.value().session_id != session_ || !journal.value().admission) {
+    return owner_error("admission_identity_mismatch");
+  }
+  const auto pending = pending_applied_switch(*journal.value().admission);
+  if (!pending) return foundation::Result<void>::success();
+  for (const auto& flush : journal.value().flushes) {
+    if (flush.completed || flush.pattern_id != journal.value().pattern_id) continue;
+    const auto executed = store.execute_sequence_flush(
+        bundle_, {session_, flush.flush_seq, flush.command_id, flush.pattern_id});
+    if (!executed.has_value()) {
+      return foundation::Result<void>::failure(executed.error());
+    }
+    journal = journals_.read_active(bundle_);
+    if (!journal.has_value()) {
+      return foundation::Result<void>::failure(journal.error());
+    }
+    break;
+  }
+  std::optional<std::uint64_t> last_watermark;
+  for (const auto& candidate : journal.value().admission->candidates) {
+    if (candidate.runtime_frame < pending->frame) {
+      last_watermark = candidate.watermark;
+    }
+  }
+  if (!last_watermark) return foundation::Result<void>::success();
+  const auto transfer = drain(transfer_id, *last_watermark, false);
+  if (!transfer.has_value()) {
+    return foundation::Result<void>::failure(transfer.error());
+  }
+  if (!transfer.value().journal_input_sequence) {
+    return foundation::Result<void>::success();
+  }
+  journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) {
+    return foundation::Result<void>::failure(journal.error());
+  }
+  const auto flush = journals_.append_flush(
+      bundle_, session_, flush_id, journal.value().pattern_id,
+      journal.value().expected_revision, transfer.value().recoverable_tail);
+  if (!flush.has_value()) {
+    return foundation::Result<void>::failure(flush.error());
+  }
+  const auto executed = store.execute_sequence_flush(
+      bundle_, {session_, flush.value().flush_seq, flush_id,
+                journal.value().pattern_id});
+  if (!executed.has_value()) {
+    return foundation::Result<void>::failure(executed.error());
+  }
+  return foundation::Result<void>::success();
 }
 
 bool PatternAdmissionOwner::deadline_elapsed(
@@ -376,6 +439,10 @@ foundation::Result<void> PatternAdmissionOwner::close(
     const project_io::SequenceAdmissionClosure& closure) {
   if (!identity_) return owner_error("admission_identity_missing");
   return journals_.close_admission(bundle_, session_, *identity_, closure);
+}
+
+foundation::Result<void> PatternAdmissionOwner::close_requested() {
+  return close_at(project_io::SequenceAdmissionCloseReason::requested);
 }
 
 foundation::Result<project_io::SequenceAdmissionTransfer>
