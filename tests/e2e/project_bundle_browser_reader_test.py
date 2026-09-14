@@ -113,7 +113,7 @@ def main() -> None:
     node = shutil.which("node")
     assert node is not None, (
         "why: this case proves the browser Bundle reader accepts what the "
-        "product packs, so it needs Node on PATH. Remedy: install Node 22, "
+        "product packs, so it needs Node on PATH. Remedy: install Node 26, "
         "the version every Core CI lane provisions."
     )
     if run_root.exists():

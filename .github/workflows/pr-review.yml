@@ -114,7 +114,7 @@ jobs:
       - name: Save honest final result
         if: ${{ !cancelled() && steps.input.outcome == 'success' }}
         run: python3 scripts/ci/review_pipeline.py finalize --directory "$REVIEW_DIR"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: ${{ always() }}
         with:
           name: pr-review-result-${{ needs.target.outputs.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -155,7 +155,7 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         if: ${{ github.event.action != 'closed' }}
         with:
           name: pr-review-result-${{ needs.target.outputs.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -167,7 +167,7 @@ jobs:
           PR_NUMBER: ${{ needs.target.outputs.number }}
           HEAD_SHA: ${{ needs.target.outputs.head_sha }}
         run: python3 scripts/ci/review_pipeline.py publish --directory "$RUNNER_TEMP/review-publish"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: ${{ always() && github.event.action != 'closed' }}
         with:
           name: pr-test-scope-${{ needs.target.outputs.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -182,7 +182,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: python3 scripts/ci/review_merge_map.py --output "$RUNNER_TEMP/review-merge-map/map.json"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: ${{ github.event.action == 'closed' && github.event.pull_request.merged == true }}
         with:
           name: pr-review-merge-map-${{ github.event.pull_request.merge_commit_sha }}-${{ github.run_id }}-${{ github.run_attempt }}

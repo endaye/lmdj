@@ -219,7 +219,7 @@ modified working tree because the recorded Git revision would not describe the
 contents. It also writes a detached `<archive>.sha256`.
 
 Web Host proofs run through their own entry points (CI runs both lanes) and
-require the pinned Emscripten `6.0.5`, Node 22, and the locked Playwright
+require the pinned Emscripten `6.0.5`, Node 26, and the locked Playwright
 browsers:
 
 ```bash

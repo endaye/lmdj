@@ -59,7 +59,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/docs-site/package-lock.json
       - name: Install locked portal dependencies

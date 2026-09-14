@@ -59,7 +59,7 @@ jobs:
         run: python3 -m tools.canary.assessment_entry control --directory "$RUNNER_TEMP/canary-assessment-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
       - name: Retain complete claimed input
         if: steps.control.outputs.action == 'execute'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.control.outputs.input_artifact }}
           path: ${{ runner.temp }}/canary-assessment-${{ github.run_id }}-${{ github.run_attempt }}/input/claim.json
@@ -89,7 +89,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Read this exact first-attempt controller input
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ${{ needs.controller.outputs.input_artifact }}
           path: ${{ runner.temp }}/canary-assessment-${{ github.run_id }}-${{ github.run_attempt }}/input
@@ -102,7 +102,7 @@ jobs:
           GROK_AUTH_JSON: ${{ secrets.GROK_AUTH_JSON }}
         run: python3 -m tools.canary.assessment_entry execute --directory "$RUNNER_TEMP/canary-assessment-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
       - name: Retain Host assessment result
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.execute.outputs.result_artifact }}
           path: ${{ runner.temp }}/canary-assessment-${{ github.run_id }}-${{ github.run_attempt }}/result/assessment.json

@@ -120,7 +120,7 @@ def _historical_closed_map(api, repository, repo_id, workflow_id, run, publisher
             and publisher.get('conclusion') == 'success', 'historical mapping did not succeed with an exact attempt')
     _step(publisher, 'Map merged PR without another AI call')
     _step(publisher, 'Publish exact-head review and scope', 'skipped')
-    uploads = [i for i, s in enumerate(publisher.get('steps', [])) if s.get('name') == 'Run actions/upload-artifact@v4' and s.get('conclusion') == 'success']
+    uploads = [i for i, s in enumerate(publisher.get('steps', [])) if s.get('name') == 'Run actions/upload-artifact@v6' and s.get('conclusion') == 'success']
     mapper = next(i for i, s in enumerate(publisher['steps']) if s.get('name') == 'Map merged PR without another AI call')
     require(len(uploads) == 1 and uploads[0] > mapper, 'historical map upload is missing or precedes mapping')
     prefix = f'/repos/{repository}'
@@ -205,7 +205,7 @@ def collect(api, repository, run_id, attempt):
     conclusion = producers[0].get("conclusion")
     require(conclusion in {"success", "failure"}, "review producer did not retain a completed result")
     producer = job("Review fallback", conclusion)
-    for name in ("Collect complete fixed input without executing PR files", "Run actions/upload-artifact@v4"):
+    for name in ("Collect complete fixed input without executing PR files", "Run actions/upload-artifact@v6"):
         _step(producer, name)
     _step(producer, "Save honest final result", conclusion)
     if conclusion == "failure":

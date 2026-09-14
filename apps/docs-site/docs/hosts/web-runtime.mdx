@@ -59,7 +59,7 @@ Main thread 只负责诊断 UI、manifest/hash 装载门、Window 能力、用�
 
 proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WASM MIME；仅 index/manifest 使用 `no-store`，内容哈希资产使用 immutable cache。它不是生产发布服务。
 
-Catalog 同源代理的 `CATALOG_UPSTREAM` 在 Worker 与 proof server 使用相同的显式字符准入规则：host 允许小写字母、数字、内部名称所需的 `_` 及规范地址形式；path 拒绝字面量 `^`。Worker 在字符准入之后仍解析 URL 并校验规范 base 相等，拒绝 userinfo、默认端口、非规范 IPv4/IPv6、dot segment 等会改写目标的配置。URL 序列化本身不能定义准入：Node 22 保留 path 中的 `^`，Node 26 会编码它。生产 Worker 只接受 HTTPS；proof server 额外允许 loopback HTTP，供本地 Catalog fixture 使用。
+Catalog 同源代理的 `CATALOG_UPSTREAM` 在 Worker 与 proof server 使用相同的显式字符准入规则：host 允许小写字母、数字、内部名称所需的 `_` 及规范地址形式；path 拒绝字面量 `^`。Worker 在字符准入之后仍解析 URL 并校验规范 base 相等，拒绝 userinfo、默认端口、非规范 IPv4/IPv6、dot segment 等会改写目标的配置。URL 序列化本身不能定义准入：统一 Node 26 后，proof server 与 Worker 一致地对 path 中的 `^` 编码（Node 22 时代曾保留它，故准入由显式 grammar 而非序列化决定）。生产 Worker 只接受 HTTPS；proof server 额外允许 loopback HTTP，供本地 Catalog fixture 使用。
 
 ## Release 输入边界
 
