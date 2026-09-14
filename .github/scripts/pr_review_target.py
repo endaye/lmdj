@@ -216,26 +216,13 @@ def validate_review(payload: object, *, coverage: Mapping | None = None) -> dict
     return payload
 
 
-def publish_review(repository: str, number: int, head: str, run: str, attempt: str,
-                   backend: str, payload: object, *, api: Request | None = None,
-                   write: Callable[[str, dict], object] | None = None,
-                   coverage: Mapping | None = None, history_digest: str | None = None,
-                   history_marker: str | None = None) -> str:
-    """Only trusted publisher holds PR write permission; reject stale before mutation.
-
-    COMMENT reviews (not APPROVE/REQUEST_CHANGES) keep model text advisory.
-    A clean summary has no inline comments, so creates no blocking thread (#707).
-    Each attempt gets its own immutable review; later runs cannot rewrite evidence.
-    """
+def review_payload(repository: str, number: int, head: str, run: str, attempt: str,
+                   backend: str, payload: object, *, coverage: Mapping | None = None,
+                   history_digest: str | None = None, history_marker: str | None = None) -> dict:
+    """Pure canonical payload for publication and historical artifact verification."""
     model = validate_review(payload, coverage=coverage)
     identity = review_identity(repository, number, head, run, attempt, backend,
                                history_digest=history_digest)
-    target = resolve_target(repository, number, api=api)
-    if target["review"] != "true" or target["base_ref"] != "main":
-        raise TargetUnavailable("why: target is no longer reviewable; remedy: inspect the PR and take over manually")
-    diagnostic = stale_head_diagnostic(head, target["head_sha"], number)
-    if diagnostic:
-        raise TargetUnavailable(diagnostic)
     marker = "<!-- lmdj-grok-review -->" if backend == "grok" else f"<!-- lmdj-review: {backend} -->"
     if history_marker is not None:
         if not history_marker.startswith("<!-- lmdj-review-history-v2 ") or not history_marker.endswith(" -->"):
@@ -249,11 +236,34 @@ def publish_review(repository: str, number: int, head: str, run: str, attempt: s
             "This COMMENT review does not approve, reject or merge the PR.")
     comments = [{"path": item["path"], "line": item["line"], "side": "RIGHT",
                  "body": f"{marker}\n{identity}\n{item['body']}"} for item in model["findings"]]
+    return {"commit_id": head, "event": "COMMENT", "body": body, "comments": comments}
+
+
+def publish_review(repository: str, number: int, head: str, run: str, attempt: str,
+                   backend: str, payload: object, *, api: Request | None = None,
+                   write: Callable[[str, dict], object] | None = None,
+                   coverage: Mapping | None = None, history_digest: str | None = None,
+                   history_marker: str | None = None) -> str:
+    """Only trusted publisher holds PR write permission; reject stale before mutation.
+
+    COMMENT reviews (not APPROVE/REQUEST_CHANGES) keep model text advisory.
+    A clean summary has no inline comments, so creates no blocking thread (#707).
+    Each attempt gets its own immutable review; later runs cannot rewrite evidence.
+    """
+    data = review_payload(repository, number, head, run, attempt, backend, payload,
+                          coverage=coverage, history_digest=history_digest, history_marker=history_marker)
+    identity = review_identity(repository, number, head, run, attempt, backend, history_digest=history_digest)
+    target = resolve_target(repository, number, api=api)
+    if target["review"] != "true" or target["base_ref"] != "main":
+        raise TargetUnavailable("why: target is no longer reviewable; remedy: inspect the PR and take over manually")
+    diagnostic = stale_head_diagnostic(head, target["head_sha"], number)
+    if diagnostic:
+        raise TargetUnavailable(diagnostic)
     if write is None:
         write = lambda path, data: github_request("POST", f"{API_ROOT}{path}",
                                                    os.environ["GITHUB_TOKEN"], data)
     write(f"/repos/{repository}/pulls/{number}/reviews",
-          {"commit_id": head, "event": "COMMENT", "body": body, "comments": comments})
+          data)
     # An unavoidable API race may leave a correctly attached historical review.
     # Never describe it as current; the job fails and the new head needs its own run.
     live = resolve_target(repository, number, api=api)

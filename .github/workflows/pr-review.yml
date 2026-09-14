@@ -16,6 +16,10 @@ on:
         description: Pull Request number to review at its current head.
         required: true
         type: string
+      recheck_comment_id:
+        description: Optional original LMDJ bot comment ID to reverify against the current source before resolving its thread.
+        required: false
+        type: string
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review, closed]
@@ -73,6 +77,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      actions: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -87,6 +92,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.target.outputs.number }}
           HEAD_SHA: ${{ needs.target.outputs.head_sha }}
+          RECHECK_COMMENT_ID: ${{ inputs.recheck_comment_id }}
         run: python3 scripts/ci/review_pipeline.py collect-t2 --directory "$REVIEW_DIR"
       - name: deepseek review
         # PR-Agent runs here as the runner account with no GitHub token in its
@@ -166,12 +172,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.target.outputs.number }}
           HEAD_SHA: ${{ needs.target.outputs.head_sha }}
+          RECHECK_COMMENT_ID: ${{ inputs.recheck_comment_id }}
         run: python3 scripts/ci/review_pipeline.py publish --directory "$RUNNER_TEMP/review-publish"
       - uses: actions/upload-artifact@v4
         if: ${{ always() && github.event.action != 'closed' }}
         with:
           name: pr-test-scope-${{ needs.target.outputs.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/review-publish/scope.json
+          path: |
+            ${{ runner.temp }}/review-publish/scope.json
+            ${{ runner.temp }}/review-publish/repair-recheck.json
           if-no-files-found: error
           retention-days: 30
       - name: Map merged PR without another AI call

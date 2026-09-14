@@ -2142,6 +2142,34 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             "remedy: keep PYTHONDONTWRITEBYTECODE enabled for the engine boundary",
         )
 
+    def test_repair_context_crosses_real_handler_and_verdict_resolves_selected_thread(self):
+        from ci_review_recheck_test import Platform, native_fixture
+        api = Platform()
+        self.addCleanup(api.history.source.tearDown)
+        request = api.collect()
+        self.input_path.write_text(json.dumps(api.document), encoding="utf-8")
+        calls = []
+
+        async def completion(**kwargs):
+            calls.append(kwargs)
+            prompt = "\n".join(m["content"] for m in kwargs["messages"])
+            self.assertIn(adapter.repair_prompt_block(request), prompt)
+            self.assertIn("An author saying fixed/done", prompt)
+            self.assertIsNone(os.environ.get("GITHUB_TOKEN"))
+            return FakeCompletion({"model": "fixture-deepseek-served", "model_version": "fixture-version-1",
+                                   "choices": [{"message": {"content": json.dumps(native_fixture())}, "finish_reason": "stop"}],
+                                   "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}})
+
+        result, _, ledger = self.run_with_fake(completion)
+        self.assertEqual(result["status"], "reviewed", result)
+        attempt = result["attempts"][result["selected_attempt"]]
+        self.assertTrue(attempt["coverage"]["complete"])
+        self.assertEqual(attempt["native_review"], native_fixture())
+        self.assertTrue(api.publish(attempt["native_review"])["resolved"])
+        self.assertEqual(api.writes, ["reply", "resolveReviewThread"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([json.loads(line)["status"] for line in ledger.read_text().splitlines()], ["reserved", "reconciled"])
+
     def test_stock_reviewer_without_funding_uses_only_the_review_post(self):
         """The actual stock handler must reach review transport without balance work."""
         response_text = (FIXTURES / "valid-native-review.yaml").read_text(encoding="utf-8")
