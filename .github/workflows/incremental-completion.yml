@@ -16,7 +16,8 @@ jobs:
       actions: read
     if: github.ref == 'refs/heads/main' && github.run_attempt == '1'
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
-    timeout-minutes: 3
+    # Covers one bounded GitHub REST primary reset wait, not product work.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
         with:

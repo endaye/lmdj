@@ -164,12 +164,12 @@ class Runtime:
     def call(self, method, path, body=None, *, raw=False):
         try:
             call = lambda: self.api._request(method, path, body=body, raw=raw)
-            # Reads made while the short writer lock is held must not sleep
-            # through a primary reset; the next health tick will retry them.
+            # Writer-lock GETs still wait for a known primary reset; they must
+            # not sleep on secondary/transport throttling. A later reset stays
+            # unknown for the next health tick, never "controller not live".
             if method == "GET":
-                if self.lock_held():
-                    return call()
-                return with_retry(call, sleep=time.sleep, clock=self.clock, budget=self.retry_budget)
+                return with_retry(call, sleep=time.sleep, clock=self.clock,
+                                  budget=self.retry_budget, secondary=not self.lock_held())
             return call()
         except Exception as error:
             raise batch.BatchError("why: runtime API unavailable or write outcome unknown; remedy: reconcile without replaying the write") from error
