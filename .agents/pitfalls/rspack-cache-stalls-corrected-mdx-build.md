@@ -45,4 +45,4 @@ if its signal handler exits zero: require complete build and far-side checks.
 
 `exit: none`: cache-associated stalling is not deterministically inferable
 from product source. No automatic cache deletion, retry loop or new global
-gate is justified. Recurrence 2 is escalated as #1299.
+gate is justified. Recurrence 2 is escalated as [#1299](https://github.com/endaye/lmdj/issues/1299).
