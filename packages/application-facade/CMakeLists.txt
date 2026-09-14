@@ -37,6 +37,7 @@ add_library(
     src/mutation_publish_scope.cpp
     src/pattern_admission_controller.cpp
     src/pattern_transport_controller.cpp
+    src/pattern_transport_controller_factory.cpp
     src/pattern_transport_executor.cpp
     src/soundset_catalog.cpp
 )
@@ -132,6 +133,14 @@ if(BUILD_TESTING)
   lmdj_target_sanitizers(lmdj_pattern_transport_tests)
   lmdj_add_test(NAME facade.pattern_transport TIER component
     COMMAND lmdj_pattern_transport_tests)
+  add_executable(lmdj_pattern_transport_controller_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_transport_controller_test.cpp")
+  target_include_directories(lmdj_pattern_transport_controller_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_pattern_transport_controller_tests PRIVATE lmdj::application)
+  lmdj_target_warnings(lmdj_pattern_transport_controller_tests)
+  lmdj_target_sanitizers(lmdj_pattern_transport_controller_tests)
+  lmdj_add_test(NAME facade.pattern_transport_controller TIER component
+    COMMAND lmdj_pattern_transport_controller_tests)
   add_executable(lmdj_pattern_transport_executor_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_transport_executor_test.cpp")
   target_include_directories(lmdj_pattern_transport_executor_tests PRIVATE "${CMAKE_SOURCE_DIR}")
