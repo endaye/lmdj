@@ -207,6 +207,10 @@ using SequenceCaptureTruthInspector = std::function<foundation::Result<
 
 // Returns lowercase SHA-256 of the exact SR-D22 canonical JSON preimage.
 std::string sequence_pattern_fingerprint(const domain::Pattern& pattern);
+SequenceCandidateReceipt sequence_admission_candidate_receipt(
+    const SequenceAdmissionCandidate& candidate);
+std::string sequence_admission_candidates_sha256(
+    std::span<const SequenceAdmissionCandidate> candidates);
 std::string performance_fingerprint(const domain::Performance& performance);
 foundation::Result<PerformanceTransientClosurePreview>
 preview_performance_owner_loss(const ActivePerformanceJournal& journal);
@@ -231,6 +235,10 @@ class SequenceJournal {
       const std::filesystem::path& bundle, foundation::SequenceSessionId session,
       const SequenceAdmissionIdentity& identity,
       const SequencePublicationAuthority& authority);
+  foundation::Result<void> retain_admission_timing_profile(
+      const std::filesystem::path& bundle, foundation::SequenceSessionId session,
+      const SequenceAdmissionIdentity& identity,
+      const SequenceAdmissionTimingProfile& profile);
   foundation::Result<void> close_admission(
       const std::filesystem::path& bundle, foundation::SequenceSessionId session,
       const SequenceAdmissionIdentity& identity,

@@ -100,6 +100,23 @@ const admissionTransfer = (target = false) => {
   };
 };
 
+const convertedTransfer = (timed) => {
+  const candidates = [admissionCandidate(), admissionCandidate(true)].map((candidate, index) => ({
+    ...candidate, runtime_frame: timed ? [49000, 61000][index] : [25000, 31000][index],
+  }));
+  return {
+    transfer_id: admissionId(308), terminal: false, first_watermark: 10, last_watermark: 11,
+    candidates_sha256: admissionDigest(candidates),
+    candidate_receipts: candidates.map(candidate => ({watermark: candidate.watermark,
+      payload_sha256: admissionDigest(candidate)})),
+    pattern_id: admissionId(303), expected_revision: 0, journal_input_sequence: 1,
+    recoverable_tail: [{slot: {bank: 0, pad: 0}, onset_tick: timed ? 1728 : 960,
+      duration_tick: 240, velocity: 100}],
+    checkpoint: {pattern_id: admissionId(303), publication_generation: 21,
+      last_runtime_frame: timed ? 61000 : 31000, owned_presses: []},
+  };
+};
+
 async function admissionPage(context, bundle, step, options = {}) {
   const page = await trackedPage(context);
   const params = new URLSearchParams({action: "admission", bundle, step, ...options});
@@ -156,7 +173,8 @@ async function admissionLostResponse(context, control, bundle, step, options = {
   expect(marker.record.payload).toEqual({kind: `admission-${step === "release" ? "candidate" : step}`, session_id: admissionId(302),
     identity: ADMISSION_IDENTITY,
     data: step === "candidate" || step === "release" ? admissionCandidate(step === "release")
-      : step === "fence" ? admissionFence() : admissionTransfer()});
+      : step === "fence" ? admissionFence()
+        : options.convert === "1" ? convertedTransfer(options.timed === "1") : admissionTransfer()});
   expect(await writer.evaluate(() => window.lmdjProjectIoWeb?.complete === true)).toBe(false);
   // Closing this page abruptly terminates its pthread/OPFS Workers. No journal Stop.
   await writer.close();
@@ -173,6 +191,71 @@ test.describe("S2 actual OPFS admission", () => {
       "S2 requires real OPFS; provide a supported locked-browser environment").toMatchObject({status: "supported"});
   });
 
+  for (const timed of [false, true]) for (const alternate of [false, true]) {
+    test(`Facade converts ${timed ? "retained settings" : "mid-loop origin"} and recovers ${alternate ? "alternate" : "original"} Pattern once`,
+      async ({context, page}, testInfo) => {
+        test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
+        const bundle = `converted-${Number(timed)}-${Number(alternate)}-${Date.now()}`;
+        const options = {convert: "1", timed: timed ? "1" : "0", limit: "2"};
+        const expected = convertedTransfer(timed);
+        const prepared = await admissionRun(context, bundle, "prepare", options);
+        expect(prepared.mutation).toEqual(STORAGE_SUCCEEDED);
+        expect(prepared.journal.admission.candidates).toEqual([]);
+        const fence = await admissionRun(context, bundle, "fence", options);
+        expect(fence.journal.admission.admission_fence).toEqual({
+          ...admissionFence(), effective_frame: 13000, origin_frame: 1000});
+        if (timed) {
+          const profile = await admissionRun(context, bundle, "profile", options);
+          expect(profile.mutation).toEqual(STORAGE_SUCCEEDED);
+          expect(profile.journal.admission.timing_profiles).toEqual([{
+            command_id: admissionId(313), first_watermark: 10, pattern_id: admissionId(303),
+            publication_generation: 21, expected_revision: 0, runtime_frame: 37000,
+            tick_numerator: 4147200000, bpm: 60, quantize_enabled: true, swing_percent: 60,
+          }]);
+        }
+        const press = await admissionRun(context, bundle, "candidate", options);
+        expect(press.mutation).toEqual(STORAGE_SUCCEEDED);
+        const release = await admissionRun(context, bundle, "release", options);
+        expect(release.mutation).toEqual(STORAGE_SUCCEEDED);
+        expect(release.journal.admission.closure).toEqual({last_retained_watermark: 11, reason: 1});
+        const cutoff = await admissionRun(context, bundle, "cutoff", options);
+        expect(cutoff.journal.admission.cutoff_fence).toEqual({
+          ...admissionFence(true), effective_frame: timed ? 62000 : 32000, origin_frame: 1000});
+        const lost = await admissionLostResponse(context, page, bundle, "transfer", options);
+        const reopened = await admissionRun(context, bundle, "inspect", options);
+        expect(reopened.journal.admission.transfers).toEqual([expected]);
+        expect(reopened.journal.pending_events).toEqual(expected.recoverable_tail);
+        expect(reopened.journal.admission.candidates).toEqual([]);
+        expect(reopened.journal.next_tail_seq).toBe(1);
+        expect(reopened.journalSha256).toBe(lost.journalSha256);
+        const retry = await admissionRun(context, bundle, "transfer", options);
+        expect(retry.mutation).toEqual(STORAGE_SUCCEEDED);
+        expect(retry.bytesUnchanged).toBe(true);
+        expect(retry.journal.admission.transfers).toEqual([expected]);
+        const terminal = await admissionRun(context, bundle, "terminal", options);
+        expect(terminal.mutation).toEqual(STORAGE_SUCCEEDED);
+        expect(terminal.journal.admission.transfers.at(-1)).toEqual({...expected,
+          transfer_id: admissionId(310), terminal: true, first_watermark: 0, last_watermark: 0,
+          candidates_sha256: admissionDigest([]), candidate_receipts: [], journal_input_sequence: null,
+          checkpoint: {...expected.checkpoint, last_runtime_frame: timed ? 62000 : 32000}});
+        const sealed = await admissionRun(context, bundle, "seal", options);
+        expect(sealed.recoveries).toHaveLength(1);
+        expect(sealed.recoveries[0].journal.pending_events).toEqual(expected.recoverable_tail);
+        const recovered = await admissionRun(context, bundle, "recover", {
+          ...options, target: alternate ? "1" : "0"});
+        expect(recovered.mutation).toEqual(STORAGE_SUCCEEDED);
+        expect(recovered.truth).toEqual({project_id: admissionId(301), revision: 1,
+          source_events: alternate ? [] : expected.recoverable_tail,
+          target_events: alternate ? expected.recoverable_tail : []});
+        const repeated = await admissionRun(context, bundle, "recover", {
+          ...options, target: alternate ? "1" : "0"});
+        expect(repeated.mutation.status).toBe("failed");
+        expect(repeated.truth).toEqual(recovered.truth);
+        await retainAdmissionEvidence(testInfo, "facade-converted-admission.json",
+          {lost, reopened, retry, terminal, sealed, recovered, repeated});
+      });
+  }
+
   for (const step of ADMISSION_RESPONSE_LOSS_STEPS) {
     test(`${step} survives response loss, exact retry and second reopen`, async ({context, page}, testInfo) => {
       test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
@@ -181,7 +264,8 @@ test.describe("S2 actual OPFS admission", () => {
       expect(prepared.mutation).toEqual(STORAGE_SUCCEEDED);
       expect(prepared.journal.admission.preparation).toEqual({identity: ADMISSION_IDENTITY,
         project_id: admissionId(301), pattern_id: admissionId(303), publication_generation: 21,
-        first_watermark: 10, candidate_limit: 1024, candidate_byte_limit: 1048576, fence_timeout_ms: 5000});
+        first_watermark: 10, candidate_limit: 1024, candidate_byte_limit: 1048576, fence_timeout_ms: 5000,
+        quantize_enabled: false, swing_percent: 50});
       if (step !== "candidate") {
         const press = await admissionRun(context, bundle, "candidate");
         expect(press.journal.admission.candidates).toEqual([admissionCandidate()]);
@@ -398,8 +482,40 @@ test.describe("S2 actual OPFS admission", () => {
     await retainAdmissionEvidence(testInfo, "reserved-terminal.json", {full, fenced, cutoff, transferred, terminal, flushed, completed, reopened, retry});
   });
 
+  for (const transferred of [false, true]) {
+    test(`sealed timing profile rechecks earlier ${transferred ? "transfer" : "candidate"}`, async ({context, page}, testInfo) => {
+      test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
+      const bundle = `admission-profile-history-${transferred}-${Date.now()}`;
+      const options = {convert: "1"};
+      for (const step of ["prepare", "fence", "candidate", "release",
+        ...(transferred ? ["transfer"] : [])]) {
+        expect((await admissionRun(context, bundle, step, options)).mutation).toEqual(STORAGE_SUCCEEDED);
+      }
+      expect((await admissionRun(context, bundle, "profile", {...options, after: "1"})).mutation)
+        .toEqual(STORAGE_SUCCEEDED);
+      const sealed = await admissionRun(context, bundle, "seal", options);
+      expect(sealed.recoveries).toHaveLength(1);
+      const relative = sealed.recoveries[0].path.split(`${bundle}.lmdj/`)[1];
+      const original = await admissionFile(page, bundle, relative);
+      const newline = original.indexOf("\n");
+      const envelope = JSON.parse(original.slice(0, newline));
+      envelope.payload.journal.admission.timing_profiles[0].runtime_frame = 30999;
+      envelope.checksum = admissionDigest(envelope.payload);
+      const corrupt = canonicalJson(envelope) + original.slice(newline);
+      await admissionFile(page, bundle, relative, corrupt);
+      const rejections = [];
+      for (let reopen = 0; reopen < 2; ++reopen) {
+        const rejected = await admissionRun(context, bundle, "read-invalid-sealed");
+        expect(rejected.read).toEqual({status: "failed", errorCode: "INVALID_PROJECT", storageCondition: ""});
+        expect(await admissionFile(page, bundle, relative)).toBe(corrupt);
+        rejections.push(rejected);
+      }
+      await retainAdmissionEvidence(testInfo, "invalid-profile-history.json", {bundle, relative, transferred, original, corrupt, rejections});
+    });
+  }
+
   for (const sealed of [false, true]) {
-    for (const version of ["v1", "v99"]) {
+    for (const version of ["v1", "v2", "v99"]) {
       test(`${sealed ? "sealed" : "active"} ${version} discriminator rejected without byte mutation`, async ({context, page}, testInfo) => {
         test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
         const bundle = `admission-format-${sealed}-${version}-${Date.now()}`;

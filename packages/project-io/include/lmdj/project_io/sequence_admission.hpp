@@ -40,6 +40,8 @@ struct SequenceAdmissionPreparation {
   std::uint32_t candidate_limit{kSequenceAdmissionMaxCandidates};
   std::uint32_t candidate_byte_limit{kSequenceAdmissionCandidateBytes};
   std::uint32_t fence_timeout_ms{kSequenceAdmissionFenceTimeoutMs};
+  bool quantize_enabled{};
+  std::uint8_t swing_percent{50};
   bool operator==(const SequenceAdmissionPreparation&) const = default;
 };
 struct SequenceAdmissionCandidate {
@@ -116,6 +118,23 @@ struct SequenceAdmissionTransfer {
   SequenceAdmissionCheckpoint checkpoint;
   bool operator==(const SequenceAdmissionTransfer&) const = default;
 };
+
+// Durable conversion authority after a settings change or a Pattern boundary.
+// The watermark orders equal-frame settings/input; anchor retains fractional
+// musical time, which cannot be reconstructed from current Project BPM alone.
+struct SequenceAdmissionTimingProfile {
+  foundation::CommandId command_id;
+  std::uint64_t first_watermark{};
+  foundation::PatternId pattern_id;
+  std::uint64_t publication_generation{};
+  std::uint64_t expected_revision{};
+  std::uint64_t runtime_frame{};
+  std::uint64_t tick_numerator{};
+  std::uint16_t bpm{};
+  bool quantize_enabled{};
+  std::uint8_t swing_percent{50};
+  bool operator==(const SequenceAdmissionTimingProfile&) const = default;
+};
 struct SequenceAdmissionState {
   SequenceAdmissionPreparation preparation;
   std::vector<SequenceAdmissionCandidate> candidates;
@@ -127,6 +146,7 @@ struct SequenceAdmissionState {
   // Generation of the segment already reconciled by a durable switch record.
   std::uint64_t segment_generation{};
   bool completed{};
+  std::vector<SequenceAdmissionTimingProfile> timing_profiles{};
   bool operator==(const SequenceAdmissionState&) const = default;
 };
 
