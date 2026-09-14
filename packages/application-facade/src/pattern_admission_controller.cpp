@@ -236,6 +236,13 @@ foundation::Result<void> PatternAdmissionOwner::cutoff(
   return journals_.retain_admission_fence(bundle_, session_, *identity_, fence);
 }
 
+foundation::Result<void> PatternAdmissionOwner::retain_switch(
+    const project_io::SequencePublicationAuthority& authority) {
+  if (!identity_) return owner_error("admission_identity_missing");
+  return journals_.retain_admission_switch(
+      bundle_, session_, *identity_, authority);
+}
+
 bool PatternAdmissionOwner::deadline_elapsed(
     const project_io::SequenceAdmissionPreparation& preparation) const {
   if (!prepared_at_) return false;

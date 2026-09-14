@@ -45,6 +45,8 @@ class PatternAdmissionOwner {
       const project_io::SequenceAdmissionFence& fence);
   foundation::Result<void> cutoff(
       const project_io::SequenceAdmissionFence& fence);
+  foundation::Result<void> retain_switch(
+      const project_io::SequencePublicationAuthority& authority);
   foundation::Result<PatternAdmissionAdmit> admit(
       const project_io::SequenceAdmissionCandidate& candidate);
   foundation::Result<void> close(

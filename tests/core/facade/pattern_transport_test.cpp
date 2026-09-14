@@ -94,6 +94,7 @@ struct EnginePort final : PatternTransportAudioPort {
   RealtimeEngine engine;
   std::uint64_t generation{};
   std::function<void()> before_ack;
+  std::optional<lmdj::audio::PatternReplacementAuthority> queued_switch_;
   EnginePort() {
     LMDJ_CHECK(engine.enable_pattern_transport(7).has_value());
     LMDJ_CHECK(engine.publish_sample_bank(
@@ -125,11 +126,19 @@ struct EnginePort final : PatternTransportAudioPort {
   std::optional<lmdj::audio::PatternReplacementAuthority> pending_switch()
       const override {
     const auto pending = engine.pending_pattern_id();
-    if (!pending) return std::nullopt;
-    const auto telemetry = engine.pattern_telemetry();
-    return lmdj::audio::PatternReplacementAuthority{
-        telemetry.pending_generation, *pending,
-        telemetry.pending_activation_frame};
+    if (pending) {
+      const auto telemetry = engine.pattern_telemetry();
+      return lmdj::audio::PatternReplacementAuthority{
+          telemetry.pending_generation, *pending,
+          telemetry.pending_activation_frame};
+    }
+    if (queued_switch_ &&
+        engine.current_pattern_id() == queued_switch_->pattern_id &&
+        engine.pattern_telemetry().current_generation ==
+            queued_switch_->generation) {
+      return queued_switch_;
+    }
+    return std::nullopt;
   }
   void queue_switch(std::uint64_t activation_frame) {
     auto view = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB));
@@ -137,6 +146,8 @@ struct EnginePort final : PatternTransportAudioPort {
     const auto pending =
         engine.publish_pattern_view(std::move(view.value()), activation_frame);
     LMDJ_CHECK(pending.result == PatternPublishResult::accepted);
+    queued_switch_ = lmdj::audio::PatternReplacementAuthority{
+        pending.generation, PatternId{kPatternB}, pending.activation_frame};
   }
   void render(std::uint64_t frames = 1) {
     std::array<float, 256> left{};
@@ -422,6 +433,31 @@ void switch_at_or_after_cutoff_is_canceled() {
     LMDJ_CHECK(f.coordinator.inspect().playing);
   }
 }
+
+void switch_applied_before_cutoff_is_retained() {
+  Fixture f;
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  f.audio.queue_switch(2);
+  f.audio.render(10);
+  LMDJ_CHECK(f.audio.engine.current_pattern_id() == PatternId{kPatternB});
+  LMDJ_CHECK(!f.audio.engine.pending_pattern_id());
+  LMDJ_CHECK(f.audio.pending_switch().has_value());
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  const auto cutoff = cutoff_of(f);
+  LMDJ_CHECK(cutoff.switch_outcome == SequenceSwitchOutcome::applied_before_cutoff);
+  LMDJ_CHECK(cutoff.switch_applied_frame && *cutoff.switch_applied_frame == 2);
+  LMDJ_CHECK(cutoff.switch_authority &&
+             cutoff.switch_authority->pattern_id == PatternId{kPatternB});
+  LMDJ_CHECK(f.audio.engine.current_pattern_id() == PatternId{kPatternB});
+  LMDJ_CHECK(f.coordinator.inspect().playing);
+  const auto journal = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(journal.has_value());
+  LMDJ_CHECK(journal.value().admission &&
+             journal.value().admission->applied_switches.size() == 1);
+  LMDJ_CHECK(journal.value().admission->applied_switches.front().pattern_id ==
+             PatternId{kPatternB});
+  LMDJ_CHECK(journal.value().admission->applied_switches.front().frame == 2);
+}
 }  // namespace
 
 int main() {
@@ -438,7 +474,8 @@ int main() {
     recording_stop_retains_cutoff_before_ack();
     close_failure_after_ack_keeps_audio_and_retries();
     switch_at_or_after_cutoff_is_canceled();
-    std::cout << "pattern transport tests: PASS (12 scenarios)\n";
+    switch_applied_before_cutoff_is_retained();
+    std::cout << "pattern transport tests: PASS (13 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
