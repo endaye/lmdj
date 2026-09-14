@@ -64,11 +64,11 @@ and inspected with Chromium at `1440x1000` and `390x844`.
   exposed every section plus the version selector. Wide diagrams remain
   horizontally scrollable inside their iframe without widening the document.
 
-Retained screenshots:
-
-- [`output/playwright/architecture-portal-desktop.png`](../../output/playwright/architecture-portal-desktop.png)
-- [`output/playwright/architecture-portal-dark.png`](../../output/playwright/architecture-portal-dark.png)
-- [`output/playwright/architecture-portal-mobile.png`](../../output/playwright/architecture-portal-mobile.png)
+Screenshots: the acceptance-time browser captures were originally retained as
+committed files under `output/playwright/`; the binary artifacts were later
+removed from Git tracking to keep the repository lean. Regenerate them on
+demand with Playwright against `scripts/docs-site.sh` output when visual
+evidence is needed again.
 
 The Docusaurus development preview treats the dotted version directory as a
 file-like path and returns `404` on a direct snapshot refresh. This is not the
