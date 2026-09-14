@@ -1,7 +1,9 @@
 import {render, screen, within} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import {expect, test} from "vitest";
 
 import {HardwareConsole} from "../src/components/hardware_console";
+import {PhysicalControls} from "../src/components/physical_controls";
 
 test("overview contains no action while touch workspace remains actionable", () => {
   render(<HardwareConsole
@@ -28,4 +30,29 @@ test("names the four hardware regions for the console shell", () => {
   expect(screen.getByRole("region", {name: "Overview display"})).toBeTruthy();
   expect(screen.getByRole("region", {name: "Pad matrix"})).toBeTruthy();
   expect(screen.getByRole("region", {name: "Touch workspace"})).toBeTruthy();
+});
+
+test("names Figma 15 physical keys on the control panel", () => {
+  render(<PhysicalControls
+    activeMode="project"
+    activeBank={0}
+    sequenceEnabled
+    performEnabled
+    onSelectMode={() => {}}
+    onSelectBank={() => {}}
+    onRecord={() => {}}
+    recordEnabled
+  />);
+  for (const name of [
+    "Project", "Sample", "Sequence", "Perform",
+    "Bank A", "Bank B", "Bank C", "Bank D",
+    "Record",
+  ]) {
+    expect(screen.getByRole("button", {name}).textContent).toBe(
+      name.startsWith("Bank ") ? name.slice(-1) : name,
+    );
+  }
+  expect(screen.getByRole("button", {
+    name: "Play — Pattern Play requires global Pattern transport",
+  }).textContent).toBe("Play");
 });

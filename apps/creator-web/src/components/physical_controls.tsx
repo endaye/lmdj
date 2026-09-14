@@ -70,26 +70,24 @@ export function PhysicalControls({
       </div>
       <div className="physical-keys">
         <PhysicalKey
-          label="Pj"
-          ariaLabel="Project"
+          label="Project"
           current={activeMode === "project"}
           onClick={() => onSelectMode("project")}
         />
         <PhysicalKey
-          label="Sm"
-          ariaLabel="Sample"
+          label="Sample"
           current={activeMode === "sample"}
           onClick={() => onSelectMode("sample")}
         />
         <PhysicalKey
-          label="Sq"
+          label="Sequence"
           ariaLabel={sequenceEnabled ? "Sequence" : "Sequence — open a playable Project first"}
           current={activeMode === "sequence"}
           disabled={!sequenceEnabled}
           onClick={() => onSelectMode("sequence")}
         />
         <PhysicalKey
-          label="Pf"
+          label="Perform"
           ariaLabel={performEnabled
             ? "Perform"
             : "Perform — requires a playable Project, running audio, and capture storage"}
@@ -113,7 +111,7 @@ export function PhysicalControls({
         <PhysicalKey label="←" ariaLabel="Left — unassigned until direction mapping is approved" disabled />
         <PhysicalKey label="→" ariaLabel="Right — unassigned until direction mapping is approved" disabled />
         <PhysicalKey
-          label="●"
+          label="Record"
           ariaLabel={recording
             ? "Record — recording Pad events into the current Pattern"
             : "Record"}
@@ -121,7 +119,7 @@ export function PhysicalControls({
           {...(onRecord === undefined ? {} : {onClick: onRecord})}
         />
         <PhysicalKey
-          label="▶"
+          label="Play"
           ariaLabel="Play — Pattern Play requires global Pattern transport"
           disabled
         />

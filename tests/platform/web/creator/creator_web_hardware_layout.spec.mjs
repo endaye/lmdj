@@ -55,8 +55,25 @@ test("opts into the 880×592 hardware shell, keeps overview read-only, and retur
 
   const pad = rounded(await page.getByRole("button", {name: /Pad A1 /}).boundingBox());
   expect(pad).toMatchObject({width: 80, height: 80});
-  const bankA = rounded(await page.getByRole("button", {name: "Bank A"}).boundingBox());
-  expect(bankA).toMatchObject({width: 32, height: 32});
+  const keys = page.getByTestId("physical-controls");
+  for (const bank of ["Bank A", "Bank B", "Bank C", "Bank D"]) {
+    const box = rounded(await keys.getByRole("button", {name: bank, exact: true}).boundingBox());
+    expect(box).toMatchObject({width: 32, height: 32});
+  }
+  await expect(keys.getByRole("button", {name: "Project", exact: true})).toBeVisible();
+  await expect(keys.getByRole("button", {name: "Sample", exact: true})).toBeVisible();
+  await expect(keys.getByRole("button", {name: "Sequence — open a playable Project first"}))
+    .toBeVisible();
+  await expect(keys.getByRole("button", {name: /^Perform/})).toBeVisible();
+  await expect(keys.getByRole("button", {name: "Record", exact: true})).toBeVisible();
+  await expect(keys.getByRole("button", {
+    name: "Play — Pattern Play requires global Pattern transport",
+    exact: true,
+  })).toBeVisible();
+  const shot = process.env.LMDJ_HARDWARE_CONSOLE_SHOT;
+  if (shot) {
+    await page.getByTestId("hardware-console").screenshot({path: shot});
+  }
 
   await expect(page.getByTestId("overview-display").locator("button")).toHaveCount(0);
   await expect(page.getByRole("button", {name: "Existing workspace"})).toBeVisible();

@@ -1085,9 +1085,8 @@ function Workspace({
   const soundSetEnabled = isSoundSetSession(session);
   const recording = ["recording", "switch-pending", "flushing"].includes(sequence.phase);
   const applyMode = (mode: CreatorMode) => {
-    const unmigrated = mode === "perform" || mode === "slice" || mode === "soundset";
+    const unmigrated = mode === "slice" || mode === "soundset";
     if (unmigrated) {
-      // Session-only: do not write Host preference.
       setLayout("workspace");
     } else if (hardwareSessionRef.current) {
       setLayout("hardware");
@@ -1122,7 +1121,7 @@ function Workspace({
   const enterHardwareLayout = () => {
     writeCreatorLayout("hardware");
     hardwareSessionRef.current = true;
-    if (activeMode === "perform" || activeMode === "slice" || activeMode === "soundset") {
+    if (activeMode === "slice" || activeMode === "soundset") {
       selectMode("project");
       return;
     }
@@ -1160,8 +1159,10 @@ function Workspace({
             <PhysicalControls
               activeMode={activeMode}
               activeBank={state.activeBank}
-              sequenceEnabled={sequenceEnabled}
-              performEnabled={performEnabled}
+              sequenceEnabled={state.project.phase === "ready" &&
+                state.project.current !== null}
+              performEnabled={state.project.phase === "ready" &&
+                state.project.current !== null}
               onSelectMode={selectMode}
               onSelectBank={selectBank}
               onRecord={() => { void recordSequence(); }}
@@ -1289,6 +1290,21 @@ function Workspace({
                       </button>
                     </section>
                   ) : null}
+                  <SampleSurface
+                    state={state}
+                    dispatch={dispatch}
+                    filePickIntent={sampleFilePickIntent}
+                    captureStopRequest={captureStopRequest}
+                    onCaptureSlotChange={setArmedCaptureSlot}
+                    onCapturePhaseChange={capturePhaseChanged}
+                    onContinueCaptureInSequence={() => {
+                      if (isSequenceSession(session) && state.project.current !== null) {
+                        setActiveMode("sequence");
+                      }
+                    }}
+                    {...(isSampleSession(session) ? {session} : {})}
+                    {...(inputController.current ? {controller: inputController.current} : {})}
+                  />
                 </>
               ) : activeMode === "sequence" && state.project.current !== null ? (
                 <SequenceSurface
@@ -1319,9 +1335,24 @@ function Workspace({
                       .then(() => refreshSequence(), sequenceFailure);
                   }}
                 />
+              ) : activeMode === "perform" && state.project.current !== null ? (
+                performController !== null ? (
+                  <PerformSurface
+                    controller={performController}
+                    creatorState={state}
+                    project={state.project.current}
+                    bank={state.activeBank}
+                    onBankChange={selectBank}
+                    {...(inputController.current ? {padController: inputController.current} : {})}
+                  />
+                ) : (
+                  <main className="perform-surface" aria-label="Perform">
+                    <h1>Perform</h1>
+                  </main>
+                )
               ) : (
                 <p className="touch-fallback-note">
-                  This mode stays on the existing workspace during U1.
+                  Slice and Sound Sets stay on the existing workspace.
                 </p>
               )}
               <ErrorPanel
@@ -1522,7 +1553,8 @@ function Workspace({
           />
         </>
       )}
-      {activeMode === "sample" || armedCaptureSlot !== null ||
+      {(layout === "workspace" && activeMode === "sample") ||
+      armedCaptureSlot !== null ||
       sequence.phase === "trim-overlay" ||
       (activeMode === "sequence" && state.sampleProjectionRefresh !== null) ? (
         <div className={sequence.phase === "trim-overlay" ? "sample-overlay-host" : ""}

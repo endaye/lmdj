@@ -669,6 +669,21 @@ button:disabled { color: #737b87; }
   background: #c8f04d;
   border-color: #c8f04d;
 }
+.physical-key {
+  font-size: 7px;
+  letter-spacing: 0;
+  line-height: 1.05;
+  white-space: pre-wrap;
+}
+.physical-key[aria-label="Record"],
+.physical-key[aria-label^="Record —"] {
+  color: #f25f5c;
+  border-color: #f25f5c;
+}
+.physical-key[aria-label^="Play"] {
+  color: #c8f04d;
+  border-color: #c8f04d;
+}
 .overview-display {
   display: grid;
   gap: 8px;
@@ -741,9 +756,13 @@ button:disabled { color: #737b87; }
 .touch-system button { min-height: 40px; }
 .touch-fallback-note { color: #8b8e82; }
 .hardware-workspace .sequence-surface,
-.hardware-workspace .project-surface {
+.hardware-workspace .project-surface,
+.hardware-workspace .sample-surface,
+.hardware-workspace .perform-surface {
   grid-area: auto;
   padding: 0;
 }
 .hardware-workspace .sequence-surface h1,
-.hardware-workspace .project-surface h1 { font-size: 1.25rem; }
+.hardware-workspace .project-surface h1,
+.hardware-workspace .sample-surface h1,
+.hardware-workspace .perform-surface h1 { font-size: 1.25rem; }

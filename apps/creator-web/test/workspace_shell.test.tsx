@@ -2150,3 +2150,40 @@ test("opts into the hardware shell with a read-only overview and returns to the 
   expect(screen.getByRole("button", {name: "Hardware layout"})).toBeTruthy();
   expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
 });
+
+test("keeps pad identity and mounts Project Sample Sequence in the hardware touch screen", async () => {
+  const user = userEvent.setup();
+  render(<App initialState={ready} />);
+  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
+
+  const padMatrix = () => screen.getByRole("region", {name: "Pad matrix"});
+  const touch = () => screen.getByRole("region", {name: "Touch workspace"});
+  const padA1 = () => within(padMatrix()).getByRole("button", {
+    name: "Pad A1 — empty — Key Q",
+  });
+  expect(padA1()).toBeTruthy();
+  expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
+  expect(within(touch()).getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
+
+  await user.click(screen.getByRole("button", {name: "Sample"}));
+  expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SAMPLE");
+  expect(padA1()).toBeTruthy();
+  expect(within(touch()).getByRole("heading", {name: "Sample editor"})).toBeTruthy();
+
+  await user.click(screen.getByRole("button", {name: "Sequence"}));
+  expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SEQUENCE");
+  expect(padA1()).toBeTruthy();
+  expect(within(touch()).getByRole("heading", {name: "Sequence"})).toBeTruthy();
+  expect(within(touch()).getByLabelText("Pattern")).toBeTruthy();
+  expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
+
+  await user.click(screen.getByRole("button", {name: "Perform"}));
+  expect(screen.getByTestId("overview-display").textContent ?? "").toContain("PERFORM");
+  expect(padA1()).toBeTruthy();
+  expect(within(touch()).getByRole("heading", {name: "Perform"})).toBeTruthy();
+  expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
+  expect(screen.getByTestId("hardware-console")).toBeTruthy();
+
+  await user.click(screen.getByRole("button", {name: "Project"}));
+  expect(padA1()).toBeTruthy();
+});
