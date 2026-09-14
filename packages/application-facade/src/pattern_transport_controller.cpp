@@ -91,9 +91,10 @@ PatternTransportSubmit PatternTransportCoordinator::request(
     }
   }
 
-  const audio::PatternTransportCommand command{
+  audio::PatternTransportCommand command{
       runtime_generation_, request.expected_epoch, audio_.pattern_generation(),
       audio_action(request.intent), {}};
+  if (playing_) command.pending_switch = audio_.pending_switch();
   const auto submitted = audio_.submit(command);
   if (submitted != audio::PatternTransportSubmit::accepted) {
     error_ = foundation::Error{foundation::ErrorCode::invalid_argument,

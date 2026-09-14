@@ -22,6 +22,8 @@ class PatternTransportAudioPort {
       std::uint64_t generation, std::uint64_t epoch) const = 0;
   virtual bool acknowledge(std::uint64_t generation, std::uint64_t epoch) = 0;
   virtual std::uint64_t pattern_generation() const = 0;
+  virtual std::optional<audio::PatternReplacementAuthority> pending_switch()
+      const = 0;
 };
 
 class PatternTransportCoordinator {
