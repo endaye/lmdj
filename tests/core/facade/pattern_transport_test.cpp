@@ -238,12 +238,14 @@ struct Fixture {
   Fixture()
       : bundle(directory.path() / "project.lmdj"),
         journals(platform),
-        coordinator(audio, journals, bundle, session, ProjectId{kProject},
+        coordinator(audio, journals, store, bundle, session, ProjectId{kProject},
                     pattern, 7) {
     auto created = lmdj::domain::create_project(ProjectId{kProject}, 120);
     LMDJ_CHECK(created.has_value());
     auto state = std::move(created.value());
     state.patterns.emplace(pattern, lmdj::domain::Pattern{pattern, 1, {}});
+    state.patterns.emplace(PatternId{kPatternB},
+                           lmdj::domain::Pattern{PatternId{kPatternB}, 1, {}});
     LMDJ_CHECK(store.create(bundle, state).has_value());
     LMDJ_CHECK(journals
                    .begin(bundle, session, pattern, 1,
@@ -457,6 +459,9 @@ void switch_applied_before_cutoff_is_retained() {
   LMDJ_CHECK(journal.value().admission->applied_switches.front().pattern_id ==
              PatternId{kPatternB});
   LMDJ_CHECK(journal.value().admission->applied_switches.front().frame == 2);
+  LMDJ_CHECK(journal.value().pattern_id == PatternId{kPatternB});
+  LMDJ_CHECK(journal.value().admission->segment_generation ==
+             journal.value().admission->applied_switches.front().generation);
 }
 }  // namespace
 

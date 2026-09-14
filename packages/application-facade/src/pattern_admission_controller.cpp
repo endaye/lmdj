@@ -243,6 +243,48 @@ foundation::Result<void> PatternAdmissionOwner::retain_switch(
       bundle_, session_, *identity_, authority);
 }
 
+foundation::Result<void> PatternAdmissionOwner::reconcile_switch(
+    project_io::ProjectStore& store) {
+  if (!identity_) return owner_error("admission_identity_missing");
+  const auto journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) {
+    return foundation::Result<void>::failure(journal.error());
+  }
+  if (journal.value().session_id != session_ || !journal.value().admission) {
+    return owner_error("admission_identity_mismatch");
+  }
+  const auto& admission = *journal.value().admission;
+  std::optional<project_io::SequencePublicationAuthority> pending;
+  if (!admission.applied_switches.empty() &&
+      admission.applied_switches.back().generation > admission.segment_generation) {
+    pending = admission.applied_switches.back();
+  } else if (admission.cutoff_fence &&
+             admission.cutoff_fence->switch_outcome ==
+                 project_io::SequenceSwitchOutcome::applied_before_cutoff &&
+             admission.cutoff_fence->switch_authority &&
+             admission.cutoff_fence->switch_applied_frame &&
+             admission.cutoff_fence->switch_authority->generation >
+                 admission.segment_generation) {
+    pending = project_io::SequencePublicationAuthority{
+        admission.cutoff_fence->switch_authority->pattern_id,
+        admission.cutoff_fence->switch_authority->generation,
+        *admission.cutoff_fence->switch_applied_frame};
+  }
+  if (!pending) return foundation::Result<void>::success();
+  const auto project = store.load(bundle_);
+  if (!project.has_value()) {
+    return foundation::Result<void>::failure(project.error());
+  }
+  const auto found = project.value().patterns.find(pending->pattern_id);
+  if (found == project.value().patterns.end()) {
+    return owner_error("segment_authority_missing");
+  }
+  return journals_.switch_pattern(
+      bundle_, session_, pending->pattern_id, found->second.bars,
+      project_io::sequence_pattern_fingerprint(found->second),
+      journal.value().expected_revision);
+}
+
 bool PatternAdmissionOwner::deadline_elapsed(
     const project_io::SequenceAdmissionPreparation& preparation) const {
   if (!prepared_at_) return false;
