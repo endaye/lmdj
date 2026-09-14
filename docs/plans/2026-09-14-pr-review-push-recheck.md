@@ -110,3 +110,29 @@ Declared files: this plan, `scripts/ci/review_recheck.py`, and
 collected request and a deferred second candidate. Run the recheck suite.
 Version impact: none. Documentation impact: none — restores the already
 specified overflow behavior; no portal contract changes.
+
+## Live follow-up: current repair source line map
+
+Automatic synchronize run 34842846546 collected both authentic findings but
+rejected the model output because current_quote did not match the supplied
+current line span. The original line-10 finding had left the net PR diff after
+repair; only PR-added lines 12–22 had explicit numbers in the prompt. The
+failed result does not retain the native text, so it cannot identify whether
+the mismatch was quote encoding or line counting. Preserve this limitation.
+
+Provide an explicit line/text map for every current repair file, once per
+path, including lines outside the overall PR RIGHT inventory. Require this
+whole derived block in coverage and direct the model to copy text separately
+from line numbers. Keep exact quote/anchor validation unchanged. This improves
+the evidence supplied; it does not certify arbitrary model outputs.
+
+Declared files: this plan, `scripts/ci/pr_agent_review.py`,
+`tests/build/ci_review_recheck_test.py`, `tests/build/ci_pr_agent_review_test.py`.
+Focused tests prove an outside-diff context line has an exact source mapping,
+missing mapping makes prompt coverage incomplete, and the real handler reply
+uses the actually supplied map through YAML parsing and both resolved states.
+Run recheck and pinned adapter suites, review/merge, install a new immutable
+adapter overlay and repeat a real synchronize event on the unmerged acceptance
+PR. No token, time, monetary, permission or source-proof threshold changes.
+Version impact: none. Documentation impact: none — restores the documented
+exact-source verification boundary; no new portal-facing behavior.

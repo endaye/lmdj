@@ -717,6 +717,17 @@ def repair_prompt_block(request: dict[str, Any]) -> str:
     return "BEGIN LMDJ REPAIR RECHECK DATA\n" + _canonical(request).decode("utf-8") + "\nEND LMDJ REPAIR RECHECK DATA"
 
 
+def repair_source_blocks(authenticated):
+    """Number current repair source even when its lines left the overall PR diff."""
+    paths = {r["path"] for r in repair_requests(authenticated)}
+    return ["BEGIN LMDJ REPAIR CURRENT SOURCE\n" + _canonical({
+        "path": file["path"],
+        "lines": [{"line": number, "text": text} for number, text in
+                  enumerate(file["head_bytes"].decode("utf-8").splitlines(), 1)]
+    }).decode("utf-8") + "\nEND LMDJ REPAIR CURRENT SOURCE"
+        for file in authenticated["files"] if file["path"] in paths]
+
+
 def validate_repair_verdict(native: dict[str, Any], authenticated: dict[str, Any]) -> dict[str, Any] | None:
     request = authenticated.get("repair_request")
     verdict = native.get("review", {}).get("repair_recheck")
@@ -826,6 +837,7 @@ def render_prompt_input(authenticated: dict[str, Any]) -> str:
         lines.append("END FILE")
     for request in repair_requests(authenticated):
         lines.append(repair_prompt_block(request))
+    lines.extend(repair_source_blocks(authenticated))
     lines.append("END LMDJ AUTHENTICATED REVIEW INPUT")
     return "\n".join(lines)
 
@@ -1636,6 +1648,8 @@ def _make_coverage(authenticated: dict[str, Any], *, provider: str, model: dict[
     calculated_complete = authenticated.get("input_complete", True) and not remaining_files and not failed_chunks and expected_ids == observed_ids
     for request in repair_requests(authenticated):
         calculated_complete = calculated_complete and prompt is not None and repair_prompt_block(request) in prompt
+    for block in repair_source_blocks(authenticated):
+        calculated_complete = calculated_complete and prompt is not None and block in prompt
     if complete is not None:
         calculated_complete = bool(complete) and calculated_complete
     return {
@@ -2505,6 +2519,11 @@ In addition to the two ordinary fields, review MUST contain repair_recheck:
   current_quote: exact complete lines of the current HEAD file when resolved
   start_line: first quoted HEAD line (integer; 0 for non-resolved)
   end_line: last quoted HEAD line (integer; 0 for non-resolved)
+Use LMDJ REPAIR CURRENT SOURCE for exact current HEAD line numbers and text.
+Its JSON line/text records include lines outside the overall PR diff: a repaired
+old finding can disappear from that diff while still requiring verification.
+Copy text values verbatim, preserving indentation; do not copy line numbers or
+JSON delimiters into current_quote. Use their line values for start_line/end_line.
 Quotes for non-resolved verdicts may be empty strings. A resolved current
 quote must include a line actually added by fix_diff and differ from the
 original quote. If ordinary review finds a new issue, do not resolve.

@@ -318,6 +318,24 @@ class BatchRecheckTests(unittest.TestCase):
             self.api.collect_batch()
         self.assertEqual(self.api.writes, [])
 
+    def test_repair_source_numbers_context_lines_outside_the_pr_right_inventory(self):
+        self.api.collect_batch()
+        auth = engine.authenticate_input(self.api.document)
+        blocks = engine.repair_source_blocks(auth)
+        self.assertEqual(len(blocks), 1)  # two threads in one file share its source
+        payload = json.loads(blocks[0].split("\n", 2)[1])
+        self.assertEqual(payload["lines"][0], {"line": 1, "text": "def value():"})
+        right = {line for file in auth["files"] for hunk in file["hunks"] for line in hunk["right_lines"]}
+        self.assertNotIn(1, right)
+        self.assertIn(blocks[0], engine.render_prompt_input(auth))
+
+    def test_missing_numbered_repair_source_refuses_complete_coverage(self):
+        self.api.collect_batch()
+        auth = engine.authenticate_input(self.api.document)
+        prompt = engine.render_prompt_input(auth).replace(engine.repair_source_blocks(auth)[0], "")
+        coverage = engine._make_coverage(auth, provider="deepseek", model={}, prompt=prompt, usage=None)
+        self.assertFalse(coverage["complete"])
+
     def test_each_request_must_reach_prompt_coverage(self):
         self.api.collect_batch()
         auth = engine.authenticate_input(self.api.document)

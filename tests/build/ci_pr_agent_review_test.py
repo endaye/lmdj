@@ -2195,8 +2195,13 @@ class RealHandlerIntegrationTests(unittest.TestCase):
                 self.assertIn(adapter.repair_prompt_block(request), prompt)
             self.assertIn("repair_rechecks, a YAML list", prompt)
             self.assertIsNone(os.environ.get("GITHUB_TOKEN"))
+            numbered = json.loads(prompt.split("BEGIN LMDJ REPAIR CURRENT SOURCE\n", 1)[1].split("\nEND LMDJ REPAIR CURRENT SOURCE", 1)[0])
+            quoted = next(row for row in numbered["lines"] if row["text"] == "    return 2")
+            native = api.native()
+            for verdict in native["review"]["repair_rechecks"]:
+                verdict.update(current_quote=quoted["text"], start_line=quoted["line"], end_line=quoted["line"])
             return FakeCompletion({"model": "fixture-deepseek-served",
-                "choices": [{"message": {"content": yaml.safe_dump(api.native(), default_style='"')}, "finish_reason": "stop"}],
+                "choices": [{"message": {"content": yaml.safe_dump(native, default_style='"')}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}})
 
         result, _, ledger = self.run_with_fake(completion)
