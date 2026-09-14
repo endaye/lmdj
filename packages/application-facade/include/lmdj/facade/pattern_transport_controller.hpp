@@ -13,6 +13,10 @@
 
 namespace lmdj::facade {
 
+namespace detail {
+class PatternTransportControllerInternalFactory;
+}
+
 // Host-facing audio port for the Pattern transport coordinator (#1230). The
 // Host implements it over its own engine; every method names only Audio
 // Runtime, Foundation and std types, so a Host never spells a Project I/O
@@ -121,6 +125,7 @@ class PatternTransportController {
   friend std::unique_ptr<PatternTransportController>
   make_pattern_transport_controller(PatternTransportAudioPort&,
                                     PatternTransportControllerConfig);
+  friend class detail::PatternTransportControllerInternalFactory;
 };
 
 // `audio` must outlive the returned controller. The controller owns its

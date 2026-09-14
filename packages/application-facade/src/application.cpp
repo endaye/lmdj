@@ -1,5 +1,6 @@
 #include <lmdj/facade/application.hpp>
 #include <lmdj/facade/candidate_store.hpp>
+#include <lmdj/facade/pattern_transport_controller_factory.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -9108,6 +9109,13 @@ Application::acquire_project_writer(
             "unexpected Application Facade Host API failure",
         });
   }
+}
+
+std::unique_ptr<PatternTransportController>
+Application::make_pattern_transport_controller(
+    PatternTransportAudioPort& audio, PatternTransportControllerConfig config) {
+  return detail::PatternTransportControllerInternalFactory::make(
+      audio, std::move(config), impl_->storage_platform);
 }
 
 foundation::Result<domain::ProjectState>
