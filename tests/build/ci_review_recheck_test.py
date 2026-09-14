@@ -120,6 +120,17 @@ class RecheckTests(unittest.TestCase):
         self.assertEqual(self.api.publish(), result)
         self.assertEqual(self.api.writes, ["reply", "resolveReviewThread"])
 
+    def test_historical_run_accepts_live_pr_association_head_after_fix(self):
+        # GitHub refreshes this associated PR object after a synchronize event;
+        # the run's own head_sha and retained artifact still identify the review.
+        self.api.history.source.run["pull_requests"][0]["head"]["sha"] = "c" * 40
+        request = self.api.collect()
+        self.assertEqual(request["original_head"], history.A)
+        self.assertEqual(self.api.history.source.run["head_sha"], history.A)
+        self.assertTrue(self.api.publish()["resolved"])
+        self.assertTrue(self.api.resolved)
+        self.assertEqual(self.api.writes, ["reply", "resolveReviewThread"])
+
     def test_nonresolved_verdict_explains_and_keeps_thread_open(self):
         self.api.collect()
         for value in ("unresolved", "insufficient_evidence"):
