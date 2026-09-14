@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <lmdj/domain/project.hpp>
+#include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
 
 namespace lmdj::facade::detail {
@@ -47,6 +48,7 @@ class PatternAdmissionOwner {
       const project_io::SequenceAdmissionFence& fence);
   foundation::Result<void> retain_switch(
       const project_io::SequencePublicationAuthority& authority);
+  foundation::Result<void> reconcile_switch(project_io::ProjectStore& store);
   foundation::Result<PatternAdmissionAdmit> admit(
       const project_io::SequenceAdmissionCandidate& candidate);
   foundation::Result<void> close(

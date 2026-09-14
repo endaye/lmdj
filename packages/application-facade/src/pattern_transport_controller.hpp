@@ -7,6 +7,7 @@
 
 #include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/facade/pattern_transport_ports.hpp>
+#include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
 
 #include "pattern_admission_controller.hpp"
@@ -30,9 +31,9 @@ class PatternTransportCoordinator {
  public:
   PatternTransportCoordinator(
       PatternTransportAudioPort& audio, project_io::SequenceJournal& journals,
-      std::filesystem::path bundle, foundation::SequenceSessionId session,
-      foundation::ProjectId project, foundation::PatternId pattern,
-      std::uint64_t runtime_generation);
+      project_io::ProjectStore& store, std::filesystem::path bundle,
+      foundation::SequenceSessionId session, foundation::ProjectId project,
+      foundation::PatternId pattern, std::uint64_t runtime_generation);
 
   PatternTransportSubmit request(const PatternTransportRequest& request);
   PatternTransportStatus inspect() const;
@@ -52,6 +53,7 @@ class PatternTransportCoordinator {
 
   PatternTransportAudioPort& audio_;
   PatternAdmissionOwner owner_;
+  project_io::ProjectStore& store_;
   foundation::SequenceSessionId session_;
   foundation::ProjectId project_;
   foundation::PatternId pattern_;

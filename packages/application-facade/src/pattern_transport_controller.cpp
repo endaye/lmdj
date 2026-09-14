@@ -24,10 +24,10 @@ project_io::SequenceSwitchOutcome switch_outcome(
 
 PatternTransportCoordinator::PatternTransportCoordinator(
     PatternTransportAudioPort& audio, project_io::SequenceJournal& journals,
-    std::filesystem::path bundle, foundation::SequenceSessionId session,
-    foundation::ProjectId project, foundation::PatternId pattern,
-    std::uint64_t runtime_generation)
-    : audio_(audio), owner_(journals, std::move(bundle), session),
+    project_io::ProjectStore& store, std::filesystem::path bundle,
+    foundation::SequenceSessionId session, foundation::ProjectId project,
+    foundation::PatternId pattern, std::uint64_t runtime_generation)
+    : audio_(audio), owner_(journals, std::move(bundle), session), store_(store),
       session_(session), project_(std::move(project)),
       pattern_(std::move(pattern)), runtime_generation_(runtime_generation),
       last_pattern_generation_(audio.pattern_generation()) {}
@@ -171,6 +171,8 @@ foundation::Result<void> PatternTransportCoordinator::finish_close() {
   const auto closed = owner_.close(
       {std::nullopt, project_io::SequenceAdmissionCloseReason::requested});
   if (!closed.has_value()) return closed;
+  const auto reconciled = owner_.reconcile_switch(store_);
+  if (!reconciled.has_value()) return reconciled;
   recording_ = false;
   close_pending_ = false;
   return foundation::Result<void>::success();

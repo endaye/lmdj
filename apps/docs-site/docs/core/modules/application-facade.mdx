@@ -56,9 +56,9 @@ admission；播放中 Record 用 fence 且 origin 不变；录音中 Record 关�
 close 在 ack 之后失败时保持已应用的音频状态，并以 flushing 重试同一 close，
 不把 Record-off 报成成功。Record-off 把 pending 或已应用的 Pattern switch 交给 cutoff fence：S ≥ F 取消，
 延迟读过 S 也不应用被取消的 Pattern；S < F 先 `retain_admission_switch` 再 cutoff，
-journal 保留 `applied_before_cutoff` 与实际 S。
-它仍不是公开 Host API、Creator
-opt-in、settings/rebase、switch 段或未知 cutoff 恢复。测试用生产
+journal 保留 `applied_before_cutoff` 与实际 S，close 后 `switch_pattern` 推进
+`segment_generation`。它仍不是公开 Host API、Creator
+opt-in、settings/rebase、候选 drain 或未知 cutoff 恢复。测试用生产
 `RealtimeEngine` 收据，不是 Creator 或听感验收。
 同一生产转换函数已有 native 进程终止及 Chromium/独立 WebKit OPFS 回应丢失后
 重开、精确重试、原 Pattern/实际存在的另一 Pattern 恢复旅程；这些旅程从已知 cutoff
