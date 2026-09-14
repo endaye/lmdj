@@ -46,8 +46,8 @@ struct RecordingProtocol {
 
 constexpr RecordingProtocol kSequenceProtocol{
     "Sequence",
-    "lmdj.sequence.journal.v2",
-    "lmdj.sequence.recovery.v2",
+    "lmdj.sequence.journal.v3",
+    "lmdj.sequence.recovery.v3",
     "sequence.jsonl",
     "",
     "sequence_journal_torn_tail",
@@ -1617,6 +1617,13 @@ foundation::Result<void> SequenceJournal::close_admission(
   return append_admission_record(platform_, bundle, session, identity,
                                  "admission-close", admission_codec::encode(closure));
 }
+foundation::Result<void> SequenceJournal::retain_admission_timing_profile(
+    const std::filesystem::path& bundle, foundation::SequenceSessionId session,
+    const SequenceAdmissionIdentity& identity,
+    const SequenceAdmissionTimingProfile& profile) {
+  return append_admission_record(platform_, bundle, session, identity,
+                                 "admission-profile", admission_codec::encode(profile));
+}
 foundation::Result<void> SequenceJournal::transfer_admission_prefix(
     const std::filesystem::path& bundle, foundation::SequenceSessionId session,
     const SequenceAdmissionIdentity& identity, const SequenceAdmissionTransfer& transfer) {
@@ -1627,6 +1634,21 @@ foundation::Result<void> SequenceJournal::complete_admission(
     const std::filesystem::path& bundle, foundation::SequenceSessionId session,
     const SequenceAdmissionIdentity& identity) {
   return append_admission_record(platform_, bundle, session, identity, "admission-complete", nullptr);
+}
+
+SequenceCandidateReceipt sequence_admission_candidate_receipt(
+    const SequenceAdmissionCandidate& candidate) {
+  return {candidate.watermark,
+          sha256(foundation::canonical_json(admission_codec::encode(candidate)))};
+}
+
+std::string sequence_admission_candidates_sha256(
+    std::span<const SequenceAdmissionCandidate> candidates) {
+  auto encoded = nlohmann::json::array();
+  for (const auto& candidate : candidates) {
+    encoded.push_back(admission_codec::encode(candidate));
+  }
+  return sha256(foundation::canonical_json(encoded));
 }
 
 std::string sequence_pattern_fingerprint(const domain::Pattern& pattern) {

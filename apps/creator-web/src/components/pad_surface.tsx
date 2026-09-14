@@ -41,6 +41,8 @@ export function PadSurface({state, controller, armedCaptureSlot = null}: PadSurf
           <button
             type="button"
             className="pad"
+            data-identity={String(pad.slot % 5)}
+            data-assigned={assigned ? "true" : "false"}
             data-outcome={outcome ?? "idle"}
             disabled={(!assigned && !capturing) || !canTrigger}
             aria-label={`Pad ${address} — ${capturing ? "capturing" : assigned ? "assigned" : "empty"} — Key ${keyboardKey}`}

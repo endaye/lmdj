@@ -86,7 +86,8 @@ jobs:
       (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_run' ||
        github.event_name == 'workflow_dispatch')
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
-    timeout-minutes: 10
+    # Covers one bounded GitHub REST primary reset wait, not product work.
+    timeout-minutes: 25
     concurrency:
       group: self-test-report
       cancel-in-progress: false
@@ -423,7 +424,7 @@ jobs:
                      '--summary', os.environ['GITHUB_STEP_SUMMARY']]
           raise SystemExit(subprocess.run(command, check=False).returncode)
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: ${{ always() && !(github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') && !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' && inputs.batch_operation != 'cancel-probe' }}
         with:
           name: batch-controller-${{ github.run_id }}-${{ github.run_attempt }}

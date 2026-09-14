@@ -31,7 +31,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
-          node-version: '22.16.0'
+          node-version: '26'
       - name: Install trusted tools without deployment credentials
         run: |
           npx --yes npm@10.9.3 --prefix apps/docs-site ci
@@ -47,7 +47,7 @@ jobs:
         run: python3 scripts/ci/cloudflare_preview_publish.py
       - name: Retain sanitized publication observations
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: cloudflare-preview-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/cloudflare-preview-${{ github.run_id }}.json

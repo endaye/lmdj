@@ -33,8 +33,37 @@ transport 的输入转换、历史 Quantize/Swing 权威信息和恢复 UI 已�
 240-tick 收尾继续复用 Domain 规则。它只是受调用方串行保护的同步 overlay
 视图，不拥有 journal、writer lease 或音频时钟；持久化失败的回滚仍由
 Sequence owner 负责。可选 press correlation 为后续 admission 转换提供匹配
-能力，现有 Sequence 仍按 Pad 匹配 release。这里没有新增公共 API、存储格式
-或模块依赖，prepared admission、durable transfer 与全局 transport 接入仍待实现。
+能力，现有 Sequence 仍按 Pad 匹配 release。该 reducer 提取本身没有新增公共 API、
+存储格式或模块依赖。
+
+后续内部 `build_admission_transfer` 从已耐久的候选、fence、timing profile 与
+owned-press checkpoint 计算同一 canonical tail；`commit_admission_transfer` 经
+Project I/O 写出绑定逐候选 SHA-256 的不可变 receipt，只有 append 已知耐久才返回成功。
+回应丢失后精确重试同一 transfer，不重放 live input、不追加第二份事件。
+原始 admission origin 保持 tick zero；历史 BPM/Quantize/Swing 按 watermark 选择，
+后续 Pattern segment 缺少时间锚点时拒绝转换。cutoff 后 release 不伪造收尾时间，
+terminal 沿用普通 240-tick 默认完成。
+
+内部 `PatternAdmissionOwner` 消费上述转换函数：closed prepare/activate、
+admission fence 之后才保留 post-enqueue 候选，fence 前、closure 后与 owner-loss
+输入保持 live-only。容量耗尽由 journal 在最后一槽原子关闭；fence-wait deadline
+在处理下一候选前于 watermark B 关闭；存储失败保留已知前缀并报告不确定后缀。
+关闭后的延迟 cutoff 仍可 drain 该前缀一次。drain 走 `commit_admission_transfer`，
+并可经 T0 执行端口提交。内部 `PatternTransportCoordinator` 按六格表解析
+Play/Stop 与 Record：只播放不建 journal；停止态 Record 用 start 收据激活
+admission；播放中 Record 用 fence 且 origin 不变；录音中 Record 关闭准入并保持
+播放；录音中 Play/Stop 先停调度再关闭准入。请求校验 session/project；关闭录音时先耐久 cutoff 再 acknowledge 收据。
+close 在 ack 之后失败时保持已应用的音频状态，并以 flushing 重试同一 close，
+不把 Record-off 报成成功。Record-off 把 pending 或已应用的 Pattern switch 交给 cutoff fence：S ≥ F 取消，
+延迟读过 S 也不应用被取消的 Pattern；S < F 先 `retain_admission_switch` 再 cutoff，
+journal 保留 `applied_before_cutoff` 与实际 S，close 后先把 S 之前的候选 drain
+进源 Pattern 并 flush，再 `switch_pattern` 推进 `segment_generation`。它仍不是公开 Host API、Creator
+opt-in、settings/rebase、目标段候选 drain 或未知 cutoff 恢复。测试用生产
+`RealtimeEngine` 收据，不是 Creator 或听感验收。
+同一生产转换函数已有 native 进程终止及 Chromium/独立 WebKit OPFS 回应丢失后
+重开、精确重试、原 Pattern/实际存在的另一 Pattern 恢复旅程；这些旅程从已知 cutoff
+开始，不能替代未知 cutoff 的恢复验收，也不是 Creator、听感或设备验收。
+新增时间历史属于 Project I/O 的私有 Sequence v3 journal 元数据，不写 Project Truth。
 
 `pattern_transport_ports.hpp` 提供 staged 的单单元异步执行端口：ticket 绑定
 Runtime generation、transport epoch、Command ID 和单调 step；请求与结果 metadata

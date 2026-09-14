@@ -102,8 +102,8 @@ activate_toolchain() {
       exit 2
     fi
   done
-  if [[ "$(node -p 'process.versions.node.split(".")[0]')" != "22" ]]; then
-    echo "Web Runtime Host error: Node 22 is required, got $(node --version)" >&2
+  if [[ "$(node -p 'process.versions.node.split(".")[0]')" != "26" ]]; then
+    echo "Web Runtime Host error: Node 26 is required, got $(node --version)" >&2
     exit 2
   fi
 }

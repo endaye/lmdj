@@ -43,6 +43,16 @@ review waiver or manual acceptance, or alter protection to continue.
 
 ## Command mapping
 
+The single sequential entry is `scripts/release.sh run --authority REF [--tag TAG]
+[--base-revision SHA]`, with read-only progress `scripts/release.sh status
+[REQUEST_ID]` and continuation `scripts/release.sh resume REQUEST_ID`. `run`
+freezes one request from the authenticated canonical control and drives it
+through the one ordered driver; `resume` continues that same request ID and
+re-verifies each far side without replaying an unresolved intent. Both refuse
+before creating a request while any step still lacks an enrolled carrier, and
+they list those steps instead of starting a partial run. A journal record is a
+progress record, not external proof.
+
 Use `scripts/release.sh prepare TAG`, `scripts/release.sh push-tag TAG`, and
 `scripts/release.sh create-draft TAG` in order when covered and admissible.
 Use `scripts/release.sh verify-draft TAG RELEASE_ID PLAN_SHA256` only for

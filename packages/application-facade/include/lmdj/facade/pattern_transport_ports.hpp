@@ -79,4 +79,33 @@ class PatternTransportExecutor final {
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
+
+enum class PatternTransportIntent : std::uint8_t { play_stop, record };
+enum class PatternTransportPhase : std::uint8_t {
+  idle, preparing, awaiting_audio, flushing, reconciling, error
+};
+enum class PatternTransportSubmit : std::uint8_t {
+  accepted, replayed, busy, invalid, stale, refused
+};
+struct PatternTransportRequest {
+  foundation::SequenceSessionId session;
+  foundation::ProjectId project_id;
+  foundation::CommandId command_id;
+  std::uint64_t runtime_generation{};
+  std::uint64_t expected_epoch{};
+  PatternTransportIntent intent{};
+  std::optional<std::uint64_t> expected_revision;
+  bool operator==(const PatternTransportRequest&) const = default;
+};
+struct PatternTransportStatus {
+  bool playing{};
+  bool recording{};
+  PatternTransportPhase phase{PatternTransportPhase::idle};
+  std::uint64_t runtime_generation{};
+  std::uint64_t transport_epoch{};
+  std::uint64_t origin_frame{};
+  std::optional<foundation::CommandId> command_id;
+  std::optional<foundation::Error> error;
+};
+
 }  // namespace lmdj::facade

@@ -22,6 +22,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+import urllib.error
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / ".github/scripts"))
@@ -57,6 +59,17 @@ def pull(*, state="open", draft=False, head_repo="endaye/lmdj", head_sha=HEAD, l
 
 class StandaloneEntryWorkflowTest(unittest.TestCase):
     """Pins the PR-Agent production route: collect-t2 -> engine -> capture -> finalize -> publish."""
+
+    def test_repair_recheck_push_and_dispatch_keep_write_authority_in_publisher(self):
+        self.assertIn("recheck_comment_id:", self.source)
+        self.assertNotIn("pull_request_review_comment:", self.source)
+        for job in ("review", "publish"):
+            self.assertIn("RECHECK_COMMENT_ID: ${{ inputs.recheck_comment_id }}", self.jobs[job])
+            self.assertIn("AUTO_RECHECK: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}", self.jobs[job])
+            self.assertIn("PR_EVENT_ACTION: ${{ github.event.action }}", self.jobs[job])
+        self.assertIn("actions: read", self.jobs["review"])
+        self.assertNotIn("pull-requests: write", self.jobs["review"])
+        self.assertIn("pull-requests: write", self.jobs["publish"])
 
     @classmethod
     def setUpClass(cls):
@@ -181,26 +194,48 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
             self.assertIn(f"${{{{ env.REVIEW_DIR }}}}/{name}", upload,
                           f"why: publish/wait/failure readers open {name} from the artifact; remedy: upload it")
 
+    def test_artifact_retains_the_refusal_fence_receipt(self):
+        """A refused collection writes only collection-failure.json; without it in the
+        upload list the always() artifact step errors with if-no-files-found and hides
+        the refusal behind a secondary failure (#1310)."""
+        upload = self.jobs["review"].split("      - uses: actions/upload-artifact", 1)[1].split("      - name:", 1)[0]
+        self.assertIn("${{ env.REVIEW_DIR }}/collection-failure.json", upload,
+                      "why: a refused collection leaves only collection-failure.json, so the artifact step "
+                      "fails with if-no-files-found and the refusal receipt is lost; remedy: upload it")
+
     def test_publisher_is_a_short_trusted_data_consumer(self):
         job = self.jobs["publish"]
         self.assertIn("pull-requests: write", job)
-        self.assertIn("timeout-minutes: 5", job)
-        self.assertNotIn("contents: write", job)
+        self.assertIn("timeout-minutes: 25", job)
+        self.assertIn("contents: write", job,
+                      "why: GitHub requires contents write for resolveReviewThread; remedy: grant it only to the trusted publisher")
+        for reader in ("target", "review"):
+            self.assertNotIn("contents: write", self.jobs[reader])
         self.assertNotIn("issues: write", job)
         self.assertIn('HEAD_SHA: ${{ needs.target.outputs.head_sha }}', job)
         self.assertIn("review_pipeline.py publish", job)
-        self.assertIn("actions/download-artifact@v4", job)
+        self.assertIn("actions/download-artifact@v7", job)
         self.assertIn("github.run_attempt", job)
         self.assertIn("Report the review state", job)
         self.assertIn("review the current head manually", job)
         self.assertNotIn("PR_AGENT_DEEPSEEK_API_KEY", job)
         self.assertNotIn("run-engine.sh", job)
 
+    def test_target_and_publish_timeouts_cover_the_primary_reset_wait(self):
+        """remaining=0 is transient; the job must outlive one bounded reset wait."""
+        self.assertEqual(target.PRIMARY_WAIT_CAP_SECONDS, 20 * 60)
+        self.assertGreaterEqual(25 * 60, target.PRIMARY_WAIT_CAP_SECONDS + 5 * 60)
+        for name in ("target", "publish"):
+            self.assertIn("timeout-minutes: 25", self.jobs[name],
+                          f"why: {name} must wait until X-RateLimit-Reset instead of failing the required check; "
+                          "remedy: keep timeout-minutes at 25 to cover PRIMARY_WAIT_CAP_SECONDS plus work")
+
     def test_review_has_no_heavy_dependency_and_no_merge_authority(self):
         jobs = self.source.split("\njobs:\n", 1)[1]
         for forbidden in ("queue_ticket", "phase_gate", "pr" + "_gate",
-                          "lmdj-native-heavy", "needs: [change-scope", "contents: write"):
+                          "lmdj-native-heavy", "needs: [change-scope", "gh pr merge"):
             self.assertNotIn(forbidden, jobs)
+        self.assertNotIn("contents: write", self.jobs["review"])
         self.assertIn("required_conversation_resolution", self.source)
         self.assertIn("#707", self.source)
         self.assertIn("not a new gate", self.source)
@@ -306,6 +341,90 @@ class TargetScriptTest(unittest.TestCase):
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn("subprocess", source)
         self.assertIn("urllib.request", source)
+
+
+class PrimaryRateLimitRetryTest(unittest.TestCase):
+    """remaining=0 is a quota window, not a missing token or dead review."""
+
+    def quota_error(self, *, remaining, reset, code=403, url="https://api.github.com/repos/endaye/lmdj/pulls/7"):
+        return urllib.error.HTTPError(
+            url, code, "rate limited",
+            {"X-RateLimit-Remaining": str(remaining), "X-RateLimit-Reset": str(reset)},
+            io.BytesIO(b'{"message":"API rate limit exceeded"}'),
+        )
+
+    def ok_response(self, payload=b'{"ok":true}'):
+        response = mock.MagicMock()
+        response.read.return_value = payload
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        return response
+
+    def test_get_waits_until_reset_then_authenticates(self) -> None:
+        clock = [100.0]
+        sleeps = []
+        calls = [0]
+
+        def urlopen(request, timeout=60):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise self.quota_error(remaining=0, reset=105)
+            return self.ok_response(b'{"number":7}')
+
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "fixture-token"}), \
+                mock.patch.object(target, "_now", side_effect=lambda: clock[0]), \
+                mock.patch.object(target, "_sleep", side_effect=lambda seconds: sleeps.append(seconds) or clock.__setitem__(0, clock[0] + seconds)), \
+                mock.patch.object(target.urllib.request, "urlopen", side_effect=urlopen):
+            payload = target._api("/repos/endaye/lmdj/pulls/7")
+        self.assertEqual(payload, {"number": 7})
+        self.assertEqual(sleeps, [5])
+        self.assertEqual(calls[0], 2)
+
+    def test_reset_beyond_the_job_bound_stays_fail_closed(self) -> None:
+        sleeps = []
+        error = self.quota_error(remaining=0, reset=100 + target.PRIMARY_WAIT_CAP_SECONDS + 1)
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "fixture-token"}), \
+                mock.patch.object(target, "_now", return_value=100.0), \
+                mock.patch.object(target, "_sleep", side_effect=sleeps.append), \
+                mock.patch.object(target.urllib.request, "urlopen", side_effect=error):
+            with self.assertRaises(target.TargetUnavailable) as caught:
+                target._api("/repos/endaye/lmdj/pulls/7")
+        self.assertEqual(sleeps, [])
+        self.assertIs(caught.exception.__cause__, error)
+
+    def test_permission_refusal_is_not_retried(self) -> None:
+        sleeps = []
+        error = self.quota_error(remaining=10, reset=105)
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "fixture-token"}), \
+                mock.patch.object(target, "_now", return_value=100.0), \
+                mock.patch.object(target, "_sleep", side_effect=sleeps.append), \
+                mock.patch.object(target.urllib.request, "urlopen", side_effect=error):
+            with self.assertRaises(target.TargetUnavailable):
+                target._api("/repos/endaye/lmdj/pulls/7")
+        self.assertEqual(sleeps, [])
+
+    def test_rejected_write_waits_then_posts_once(self) -> None:
+        clock = [100.0]
+        sleeps = []
+        calls = [0]
+
+        def urlopen(request, timeout=60):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise self.quota_error(
+                    remaining=0, reset=108, code=403,
+                    url="https://api.github.com/repos/endaye/lmdj/issues/7/labels")
+            return self.ok_response(b'[{"name":"test:full"}]')
+
+        with mock.patch.object(target, "_now", side_effect=lambda: clock[0]), \
+                mock.patch.object(target, "_sleep", side_effect=lambda seconds: sleeps.append(seconds) or clock.__setitem__(0, clock[0] + seconds)), \
+                mock.patch.object(target.urllib.request, "urlopen", side_effect=urlopen):
+            payload = target.github_request(
+                "POST", "https://api.github.com/repos/endaye/lmdj/issues/7/labels",
+                "fixture-token", {"labels": ["test:full"]})
+        self.assertEqual(payload, [{"name": "test:full"}])
+        self.assertEqual(sleeps, [8])
+        self.assertEqual(calls[0], 2)
 
 
 class TrustedPublisherTest(unittest.TestCase):

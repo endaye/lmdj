@@ -43,6 +43,18 @@ Sequence Journal 在同一 writer lease 和 checksummed record 流中保存 prep
 以及带逐候选 SHA-256 receipt 的 transfer。它们属于恢复元数据，不进入 Project Truth；
 存储不判断声音是否播放，不重放 live enqueue，也不改变成功、失败、未知的输入结果。
 
+当前 staged source 的 Sequence active journal 与 recovery snapshot 均使用私有 v3 格式；
+它们不是跨语言注册 Contract。
+preparation 保存初始 Quantize/Swing；不可变 timing profile 保存 Command ID、下一个
+control watermark、Pattern/publication、revision 以及 frame/精确 tick numerator/BPM
+锚点。调用方必须在后续候选前持久化实际历史设置；相同 Command ID 的不同 payload、
+改写已保留输入或早于已转换 checkpoint 的新锚点均拒绝。active 重读和 sealed snapshot
+保留完整 profile history，并重验锚点不早于 watermark 边界之前仍保留的候选或
+transfer checkpoint；后续 transfer 与 terminal cutoff 不反向限制历史设置。
+append 回应未知时精确重试仍须完成真实 sync。
+v1/v2/未知 Sequence discriminator 拒绝读取并保留原字节，不自动迁移或删除；
+Performance journal 与 Project Truth Contract 不因这些字段改变。
+
 未解决候选上限为 1024 条及 1 MiB canonical candidate bytes；每次 transfer 独立预留
 1 MiB，两个 fence 加 closure/completion 预留 64 KiB control space。最后一个 count/byte
 slot 的候选与 capacity closure 属于同一 durable record transition。5000 ms deadline
@@ -116,6 +128,13 @@ scripts/web-toolchain-conformance.sh proof
 每项测试附带实际 executable 路径和持久化目录；覆盖浏览器可执行文件后，
 不能把锁定客户端报告的版本当作该浏览器的构建身份。测试目录保留供排查。
 完整 proof 结果需单独记录，不能用分开运行的通过结果拼成一次完整 proof 通过。
+
+Facade 转换 fixture 进一步链接实际 Application Facade：由保留的输入/历史设置计算
+transfer，耐久后在回应前终止 Worker，再重开、精确重试、terminal、seal，并经公共
+`apply_sequence_recovery` 恢复到原 Pattern 或已存在的另一 Pattern。断言完整事件、
+revision、transfer receipt 与再次 Apply 后 Truth 不变。它没有模拟 Facade 恢复，
+但输入和已知 fence 仍由 fixture 提供，不证明 prepared owner、真实设置锚点获取、
+未知 cutoff 恢复或 Creator 全局录放已经接入。
 Facade 对 sealed admission 的消费及 runtime/Creator 接入仍是后续工作；这些存储测试
 不证明 UI Apply、安全恢复已接入、声音接受或自动恢复 playback。
 

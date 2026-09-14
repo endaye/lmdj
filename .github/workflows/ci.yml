@@ -296,7 +296,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "26"
       - name: Run every CI-control contract
         run: python3 -m unittest discover -s tests/build -p 'ci_*_test.py'
       - uses: actions/setup-python@v6
@@ -330,7 +330,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "26"
       # Allocated release intents may target pre-squash commits that no
       # branch or tag reaches, so a fresh full clone lacks their objects and
       # the repository-local audit reports them unverifiable. Long-lived
@@ -381,7 +381,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "26"
       - run: scripts/chameleon-lab.sh test
 
   package:
@@ -426,7 +426,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "26"
       - name: Configure bounded build acceleration
         uses: ./.github/actions/configure-build-acceleration
         with:
@@ -442,7 +442,7 @@ jobs:
       # lets an operator confirm they describe the same package CI proved
       # packageable. Detached Manifest and checksum only -- a few KB.
       - name: Retain the packaging comparison evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: package-evidence-${{ (needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target) || github.sha }}
           path: |
@@ -583,7 +583,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "26"
       - run: scripts/web-runtime-lab.sh test
 
   core-ubuntu:
@@ -629,7 +629,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "26"
       - name: Configure bounded build acceleration
         uses: ./.github/actions/configure-build-acceleration
         with:
@@ -837,7 +837,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "26"
       - name: Run macOS Core gates
         id: gates
         uses: ./.github/actions/macos-core-gates
@@ -876,7 +876,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "26"
       - name: Rerun macOS Core gates after infrastructure failure
         id: gates
         uses: ./.github/actions/macos-core-gates
@@ -957,7 +957,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "26"
       - name: Configure bounded build acceleration
         uses: ./.github/actions/configure-build-acceleration
         with:
@@ -1014,7 +1014,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "26"
       - name: Configure bounded build acceleration
         uses: ./.github/actions/configure-build-acceleration
         with:
@@ -1047,7 +1047,7 @@ jobs:
           || true
       - name: Upload failed coverage evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: core-coverage-failure
           path: |
@@ -1158,7 +1158,7 @@ jobs:
           PYEOF
       - name: Retain scoped verdict and raw needs
         if: ${{ always() && steps.judge.outputs.artifact != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.judge.outputs.artifact }}
           path: ${{ runner.temp }}/batch-verdict-${{ github.run_id }}-${{ github.run_attempt }}/

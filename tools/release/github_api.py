@@ -836,6 +836,13 @@ class GitHubClient:
             tuple(branch_policies),
         )
 
+    def get_authenticated_actor(self) -> int:
+        """Return the numeric identity behind the configured credential, not its login."""
+        document = _json_response(self._request("GET", "/user"), {200})
+        if not isinstance(document, dict) or type(document.get("id")) is not int or document["id"] <= 0:
+            raise GitHubApiError("GitHub authenticated actor identity is unavailable")
+        return document["id"]
+
     def list_releases(self, repository: str) -> list[GitHubRelease]:
         """Return the complete typed Release inventory through strict pagination."""
         _require_repository(repository)

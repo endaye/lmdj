@@ -97,7 +97,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "26"
 
       # `package` bypasses the persistent cache in the formal lane, so
       # lane-default keeps it off there and on for the other three.
@@ -198,7 +198,7 @@ jobs:
 
       - name: Retain failed Core evidence
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: self-hosted-core-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

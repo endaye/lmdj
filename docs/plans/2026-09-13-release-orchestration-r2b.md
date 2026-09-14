@@ -1,5 +1,9 @@
 # R2b: sequential release transition driver
 
+后续开发（2026-09-14）：统一按 [一键发布收敛计划](2026-09-14-release-convergence.md)
+交付完整入口、环境就绪和真实验收。下文保留本 Task 的历史范围与验证结果，
+不再作为继续逐层增加 controller 的任务清单。
+
 Status: locally verified protocol driver, stacked on durable journal `bd7d523d`.
 
 ## Scope

@@ -19,6 +19,7 @@ nlohmann::json encode(const SequenceOwnedPress& value);
 nlohmann::json encode(const SequenceAdmissionCheckpoint& value);
 nlohmann::json encode(const SequenceCandidateReceipt& value);
 nlohmann::json encode(const SequenceAdmissionTransfer& value);
+nlohmann::json encode(const SequenceAdmissionTimingProfile& value);
 nlohmann::json encode(const SequenceAdmissionState& value);
 
 // Throws on malformed or conflicting transitions. Only mutates the caller's copy.

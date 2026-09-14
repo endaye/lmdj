@@ -221,7 +221,7 @@ void test_v3_project_uses_current_sequence_journal_format() {
           .has_value());
   const nlohmann::json payload{
       {"armed_capture_slot", nullptr}, {"bars", 1},
-      {"contract", "lmdj.sequence.journal.v2"}, {"expected_revision", 0},
+      {"contract", "lmdj.sequence.journal.v3"}, {"expected_revision", 0},
       {"kind", "begin"}, {"pattern_fingerprint", std::string(64, '0')},
       {"pattern_id", kPatternId}, {"session_id", kSequenceSessionId}};
   const auto checksum = picosha2::hash256_hex_string(

@@ -111,6 +111,10 @@ class EntryTests(unittest.TestCase):
                             (OSError('https://SECRET'), 'os-error')):
             self.assertEqual(entry.diagnostic('reports', 'report', error)['error_kind'], kind)
             self.assertNotIn('SECRET', json.dumps(entry.diagnostic('reports', 'report', error)))
+        quota = entry.GitHubApiError(403, 'SECRET', remaining=0, reset=9)
+        self.assertEqual(entry.diagnostic('relay', 'authenticate', quota)['operation'], 'relay')
+        self.assertEqual(entry.diagnostic('relay', 'authenticate', quota)['http'],
+                         {'status': 403, 'remaining': 0, 'reset': 9})
 
     def test_cli_authentication_failure_diagnostics_for_both_operations(self):
         for operation in ('control', 'reports'):

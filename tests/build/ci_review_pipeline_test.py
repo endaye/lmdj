@@ -166,8 +166,9 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("artifact identity differs from publisher context", stderr)
         self.assertNotIn("review pipeline operation failed", stderr)
 
-    def test_only_publish_gets_the_specific_message(self):
-        """Other commands retain generic diagnostics while provider text is in scope."""
+    def test_commands_with_provider_text_in_scope_keep_the_generic_message(self):
+        """finalize/capture retain generic diagnostics while provider text is in scope;
+        publish and pre-model collect-t2 print their authored refusals instead."""
         code, stderr = self.cli("finalize")
         self.assertEqual(code, 1)
         self.assertIn("review pipeline operation failed", stderr)
@@ -643,9 +644,9 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("issues: write", source)
         self.assertNotIn("actions: write", source)
 
-    def publish_with_doubles(self, *, stale=False, unavailable=False):
+    def publish_with_doubles(self, *, stale=False, unavailable=False, prior_reviews=None):
         calls = []
-        def auth(identity):
+        def auth(identity, store=None, reuse=False):
             calls.append("authenticate")
             if stale:
                 raise review_scope.ReviewScopeError("why: stale head; remedy: retry")
@@ -655,7 +656,10 @@ class PipelineTests(unittest.TestCase):
         with mock.patch.dict(os.environ, environment), \
                 mock.patch.object(pipeline, "git", return_value=("c" * 40 + "\n").encode()), \
                 mock.patch.object(pipeline, "fetch"), mock.patch.object(pipeline, "authenticate", side_effect=auth), \
-                mock.patch.object(pipeline, "previous_records", return_value=([], unavailable)), \
+                (mock.patch.object(pipeline, "previous_records", return_value=([], unavailable))
+                 if prior_reviews is None else contextlib.nullcontext()), \
+                mock.patch.object(pipeline, "api", return_value={"id": 5}), \
+                mock.patch.object(pipeline, "pages", return_value=prior_reviews or []), \
                 mock.patch.object(pipeline.change_scope, "read_git_inventory", return_value=[pipeline.change_scope.ChangedFile("M", ("docs/notes/a.md",))]), \
                 mock.patch.object(pipeline, "publish_model", side_effect=lambda identity, record, model, **kwargs: calls.append(("review", {"summary": model["summary"] + model["test_scope"]["reason"] + pipeline.codec.encode(record)}))), \
                 mock.patch.object(pipeline.pr_review_target, "github_request", side_effect=lambda *a: calls.append(("labels", a))):
@@ -721,6 +725,47 @@ class PipelineTests(unittest.TestCase):
         self.assertIn(self.model["summary"], writes[0]["body"])
         self.assertEqual(pipeline.codec.unavailable_identities(writes[0]["body"]), [identity])
 
+    def test_api_store_reuses_identical_paths_and_uncached_calls_refetch(self):
+        calls = []
+
+        def fake_api(path):
+            calls.append(path)
+            return {"id": 7, "path": path}
+
+        store = {}
+        with mock.patch.object(pipeline.pr_review_target, "_api", side_effect=fake_api):
+            first = pipeline.api("/repos/endaye/lmdj", store)
+            second = pipeline.api("/repos/endaye/lmdj", store)
+            third = pipeline.api("/repos/endaye/lmdj")
+        self.assertEqual(first, second)
+        self.assertEqual(calls, ["/repos/endaye/lmdj", "/repos/endaye/lmdj"])
+        self.assertEqual(third["path"], "/repos/endaye/lmdj")
+
+    def test_previous_records_authenticate_duplicate_priors_once(self):
+        identity = {**self.identity, "backend": "glm"}
+        prior = test_scope.build_record(test_scope.load_policy(ROOT),
+            changed_paths=["docs/notes/a.md"], ai_labels=["test:full"], **identity)
+        posted = {"commit_id": identity["head_sha"], "user": {"id": 5},
+                  "body": pipeline.codec.encode(prior)}
+        auths = []
+
+        def fake_auth(ident, store=None, reuse=False):
+            token = ("identity", ident["repository"], ident["run_id"], ident["run_attempt"])
+            if reuse and store is not None and token in store:
+                return store[token]
+            auths.append(ident["run_id"])
+            if reuse and store is not None:
+                store[token] = ident
+            return ident
+
+        with mock.patch.object(pipeline, "api", return_value={"id": 5}), \
+                mock.patch.object(pipeline, "pages", return_value=[posted, posted]), \
+                mock.patch.object(pipeline, "authenticate", side_effect=fake_auth):
+            records, unavailable = pipeline.previous_records(identity, test_scope.load_policy(ROOT), {})
+        self.assertEqual(auths, [identity["run_id"]])
+        self.assertEqual(len(records), 2)
+        self.assertFalse(unavailable)
+
     def test_same_head_unavailable_receipt_is_not_silently_ignored(self):
         identity = {**self.identity, "backend": "glm"}
         posted = {"commit_id": identity["head_sha"], "user": {"id": 5}, "body": pipeline.codec.unavailable(identity)}
@@ -729,6 +774,22 @@ class PipelineTests(unittest.TestCase):
             records, unavailable = pipeline.previous_records(identity, test_scope.load_policy(ROOT))
         self.assertEqual(records, [])
         self.assertTrue(unavailable)
+
+    def test_same_head_review_after_control_update_publishes_with_full_scope(self):
+        self.capture("glm")
+        pipeline.finalize(self.directory)
+        prior_identity = {**self.identity, "backend": "glm", "control_sha": "d" * 40, "run_id": 98}
+        prior = test_scope.build_record(test_scope.load_policy(ROOT),
+            changed_paths=["docs/notes/a.md"], ai_labels=["test:full"], **prior_identity)
+        posted = {"commit_id": self.identity["head_sha"], "user": {"id": 5}, "body": pipeline.codec.encode(prior)}
+        calls = self.publish_with_doubles(prior_reviews=[posted])
+        record = pipeline.read(self.directory / "scope.json")
+        self.assertEqual(record["control_sha"], self.identity["control_sha"])
+        self.assertFalse(record["complete"])
+        self.assertEqual(record["effective"]["kind"], "full")
+        self.assertEqual([c[0] for c in calls if isinstance(c, tuple)], ["review", "labels"])
+        self.assertEqual(next(c[1][-1] for c in calls if isinstance(c, tuple) and c[0] == "labels"),
+                         {"labels": ["test:full"]})
 
     def test_later_same_head_review_keeps_unavailable_scope_full(self):
         self.capture("glm")
@@ -968,6 +1029,52 @@ class PipelineTests(unittest.TestCase):
                     ],
                 }, sort_keys=True))
 
+    def test_synchronize_collection_publishes_authenticated_batch_in_same_input(self):
+        from ci_review_recheck_test import BatchPlatform
+        import review_recheck
+        api = BatchPlatform()
+        self.addCleanup(api.history.source.tearDown)
+        api.document["identity"]["run_id"] = "99"
+        review_recheck.reseal(api.document)
+        output = self.directory / "push-input"
+        head = api.document["identity"]["head_sha"]
+        base = api.document["identity"]["base_sha"]
+        target = {"review": "true", "head_sha": head, "base_sha": base, "body": "fix"}
+        environment = {"GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "7", "HEAD_SHA": head,
+            "GITHUB_RUN_ID": api.document["identity"]["run_id"], "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_EVENT_NAME": "pull_request", "PR_EVENT_ACTION": "synchronize", "AUTO_RECHECK": "true",
+            "RECHECK_COMMENT_ID": "", "GITHUB_OUTPUT": "", "GITHUB_STEP_SUMMARY": str(self.directory / "summary")}
+        def git(*args):
+            if args[0] == "rev-parse": return (api.document["identity"]["control_sha"] + "\n").encode()
+            if args[0] == "merge-base" and args[1] == base: return (base + "\n").encode()
+            return api.git(*args)
+        with mock.patch.dict(os.environ, environment), mock.patch.object(pipeline, "git", side_effect=git), \
+                mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(pipeline.input_producer, "build_input", return_value=copy.deepcopy(api.document)), \
+                mock.patch.object(review_recheck, "client", return_value=api), \
+                mock.patch.object(pipeline.pr_review_target, "resolve_target", return_value=target):
+            # Source transport is supplied; actual auth and atomic publication run.
+            witness = pipeline.collect_t2(output)
+        document = pipeline.read(output / "t2-input.json")
+        self.assertEqual([r["comment_id"] for r in t2.authenticate_input(document)["repair_requests"]], [70, 71])
+        collector = pipeline.trusted_collector_t2(output, witness)
+        self.assertEqual(collector["input_sha256"], document["input_sha256"])
+        self.assertIn("collected", (self.directory / "summary").read_text())
+
+    def test_repair_trigger_binding_refuses_unsolicited_or_wrong_mode_artifacts(self):
+        for event, action, automatic, requested, document in (
+            ("workflow_dispatch", "", "true", "", {"repair_requests": []}),
+            ("pull_request", "opened", "true", "", {"repair_requests": []}),
+            ("pull_request", "synchronize", "true", "70", {"repair_requests": []}),
+            ("pull_request", "synchronize", "false", "", {"repair_requests": []}),
+            ("pull_request", "synchronize", "true", "", {}),
+        ):
+            with self.subTest(event=event, action=action, automatic=automatic, requested=requested), \
+                    mock.patch.dict(os.environ, {"GITHUB_EVENT_NAME": event, "PR_EVENT_ACTION": action,
+                        "AUTO_RECHECK": automatic, "RECHECK_COMMENT_ID": requested}):
+                with self.assertRaises(review_scope.ReviewScopeError):
+                    pipeline.repair_mode(document)
+
     def test_collect_t2_cli_dispatch_publishes_input_and_real_t3_witness(self):
         repository, base, head = self.make_real_t2_repo()
         output = self.directory / "t2-output"
@@ -1057,7 +1164,8 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(bounded_witness_output.exists(), "failed CLI collection must emit no success witness")
         with self.assertRaisesRegex(review_scope.ReviewScopeError, "successful-producer witness"):
             pipeline.trusted_collector_t2(bounded_output)
-        self.assertIn("review pipeline operation failed", errors.getvalue())
+        self.assertIn(str(raised.exception), errors.getvalue())
+        self.assertNotIn("review pipeline operation failed", errors.getvalue())
         print(json.dumps({
             "cli_returncode": 1,
             "failure_receipt": failure,

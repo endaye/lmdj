@@ -74,7 +74,7 @@ generates a canary Build Manifest. `scripts/core.sh clean` removes only
 `build/core`.
 
 `scripts/web-runtime-host.sh proof` requires the pinned Emscripten `6.0.5`,
-Node 22, and the locked Playwright browsers. It performs clean reproducible Web
+Node 26, and the locked Playwright browsers. It performs clean reproducible Web
 builds, isolated packaging, Chromium full-journey automation, and WebKit
 capability smoke; it does not substitute for the five deferred physical rows.
 

@@ -126,11 +126,12 @@ class RequestJournal(AbstractContextManager):
     malicious process running as the same trusted account.
     """
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, writable: bool = True):
         self.root = Path(root).absolute()
         self.directory = None
         self.lock = None
         self.owner = None
+        self.writable = writable
 
     def __enter__(self):
         if self.directory is not None:
@@ -138,6 +139,18 @@ class RequestJournal(AbstractContextManager):
         if self.root.resolve() != self.root:
             _fail("journal directory or ancestor is a symlink")
         self.owner = (os.getpid(), threading.get_ident())
+        if not self.writable:
+            # A reader creates nothing: no directory, no writer lock, no fsync.
+            # It also never joins the single-writer lock, so a run in progress
+            # stays observable. State updates are atomic renames, so a reader
+            # sees a complete earlier or later record, never a partial one.
+            try:
+                self.directory = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                self._private(self.directory, directory=True)
+            except (OSError, JournalError):
+                self.__exit__(None, None, None)
+                _fail("journal is missing, unsafe or unavailable for reading")
+            return self
         try:
             try:
                 self.root.mkdir(mode=0o700)
@@ -185,9 +198,15 @@ class RequestJournal(AbstractContextManager):
     def _active(self):
         if self.owner != (os.getpid(), threading.get_ident()):
             _fail("journal requires its owning process and thread in a live exclusive context")
-        if self.directory is None or self.lock is None:
+        if self.directory is None:
             _fail("journal requires a live exclusive context")
         self._private(self.directory, directory=True)
+        if not self.writable:
+            if self.lock is not None:
+                _fail("journal reader context must not hold the writer lock")
+            return
+        if self.lock is None:
+            _fail("journal requires a live exclusive context")
         self._private(self.lock)
         # Detect replacement of the lock/path before every operation. Holding an
         # unlinked old inode must never authorize a second writer's state updates.
@@ -236,6 +255,8 @@ class RequestJournal(AbstractContextManager):
 
     def _save(self, state):
         self._active()
+        if not self.writable:
+            _fail("journal is open for reading only")
         _validate_state(state)
         encoded = self._encode(state)
         self._write(state["request"]["id"] + ".json", encoded)

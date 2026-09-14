@@ -1,6 +1,6 @@
 import {readFileSync} from "node:fs";
 
-import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
+import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {afterAll, beforeAll, expect, test, vi} from "vitest";
 
@@ -139,6 +139,9 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
   // action is disabled instead of offering a gesture that cannot run.
   expect(screen.getByRole("button", {name: "Activate audio"})
     .hasAttribute("disabled")).toBe(true);
+  const hardwareLayout = screen.getByRole("button", {name: "Hardware layout"});
+  await user.tab();
+  expect(document.activeElement).toBe(hardwareLayout);
   await user.tab();
   expect(document.activeElement).toBe(projectMode);
   await user.tab();
@@ -2112,4 +2115,76 @@ test("recovers from DUPLICATE_ID to the local Projects list without a reload", a
   expect(fixture.calls.filter((call) => call === "listLocalProjects").length)
     .toBeGreaterThan(listingsBefore);
   expect(importAttempts).toBe(1);
+});
+
+test("opts into the hardware shell with a read-only overview and returns to the workspace", async () => {
+  const user = userEvent.setup();
+  render(<App initialState={ready} />);
+
+  expect(screen.queryByTestId("hardware-console")).toBeNull();
+  expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
+  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
+
+  expect(screen.getByRole("complementary", {name: "Physical controls"})).toBeTruthy();
+  const display = screen.getByRole("region", {name: "Overview display"});
+  expect(within(display).queryAllByRole("button")).toHaveLength(0);
+  expect(within(display).queryAllByRole("link")).toHaveLength(0);
+  expect(within(display).queryAllByRole("textbox")).toHaveLength(0);
+  expect(screen.getByTestId("hardware-console")).toBeTruthy();
+  expect(screen.getByRole("region", {name: "Pad matrix"})).toBeTruthy();
+  const touch = screen.getByRole("region", {name: "Touch workspace"});
+  expect(within(touch).getByRole("button", {name: "Existing workspace"})).toBeTruthy();
+  expect(within(touch).getByRole("button", {name: "Activate audio"})).toBeTruthy();
+  expect(within(screen.getByRole("region", {name: "Pad matrix"}))
+    .getByRole("button", {name: "Pad A1 — empty — Key Q"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Project"}).getAttribute("aria-current"))
+    .toBe("page");
+  expect(screen.getByText("Project 11111111")).toBeTruthy();
+  await user.click(screen.getByRole("button", {name: "Sample"}));
+  expect(screen.getByRole("heading", {name: "Sample editor"})).toBeTruthy();
+  expect(screen.getByTestId("hardware-console")).toBeTruthy();
+  await user.click(screen.getByRole("button", {name: "Project"}));
+
+  await user.click(screen.getByRole("button", {name: "Existing workspace"}));
+  expect(screen.queryByTestId("hardware-console")).toBeNull();
+  expect(screen.getByRole("button", {name: "Hardware layout"})).toBeTruthy();
+  expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
+});
+
+test("keeps pad identity and mounts Project Sample Sequence in the hardware touch screen", async () => {
+  const user = userEvent.setup();
+  render(<App initialState={ready} />);
+  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
+
+  const padMatrix = () => screen.getByRole("region", {name: "Pad matrix"});
+  const touch = () => screen.getByRole("region", {name: "Touch workspace"});
+  const padA1 = () => within(padMatrix()).getByRole("button", {
+    name: "Pad A1 — empty — Key Q",
+  });
+  expect(padA1()).toBeTruthy();
+  expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
+  expect(within(touch()).getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
+
+  await user.click(screen.getByRole("button", {name: "Sample"}));
+  expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SAMPLE");
+  expect(padA1()).toBeTruthy();
+  expect(within(touch()).getAllByRole("heading", {name: "Sample editor"})).toHaveLength(1);
+
+  await user.click(screen.getByRole("button", {name: "Sequence"}));
+  expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SEQUENCE");
+  expect(padA1()).toBeTruthy();
+  expect(within(touch()).getByRole("heading", {name: "Sequence"})).toBeTruthy();
+  expect(within(touch()).getByLabelText("Pattern")).toBeTruthy();
+  expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
+
+  await user.click(screen.getByRole("button", {name: "Perform"}));
+  expect(screen.getByTestId("overview-display").textContent ?? "").toContain("PERFORM");
+  expect(padA1()).toBeTruthy();
+  expect(within(touch()).getByRole("heading", {name: "Perform"})).toBeTruthy();
+  expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
+  expect(within(touch()).queryByText(/Launch and FX wait/i)).toBeTruthy();
+  expect(screen.getByTestId("hardware-console")).toBeTruthy();
+
+  await user.click(screen.getByRole("button", {name: "Project"}));
+  expect(padA1()).toBeTruthy();
 });

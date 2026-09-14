@@ -221,8 +221,8 @@ for (const viewport of [
     await expect(page.getByRole("button", {name: /^Perform/})).toBeEnabled();
     await page.getByRole("button", {name: "Activate audio"}).focus();
     const expectedFocusOrder = [
-      "Enable MIDI", "Export report", "Project", "Sequence", "Sample",
-      "Slice", "Sound Sets", "Perform",
+      "Enable MIDI", "Export report", "Hardware layout", "Project", "Sequence",
+      "Sample", "Slice", "Sound Sets", "Perform",
     ];
     const focusOrder = [];
     for (let index = 0; index < expectedFocusOrder.length; index += 1) {

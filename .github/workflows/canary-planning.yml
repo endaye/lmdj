@@ -63,7 +63,7 @@ jobs:
           PLANNING_REQUEST: ${{ inputs.request }}
         run: python3 -m tools.canary.planning_entry --directory "$RUNNER_TEMP/canary-planning-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
       - name: Retain complete planning observation
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: canary-planning-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/canary-planning-${{ github.run_id }}-${{ github.run_attempt }}/planning.json

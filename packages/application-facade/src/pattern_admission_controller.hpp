@@ -1,13 +1,79 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <vector>
 
 #include <lmdj/domain/project.hpp>
+#include <lmdj/project_io/project_store.hpp>
+#include <lmdj/project_io/sequence_journal.hpp>
 
 namespace lmdj::facade::detail {
+
+// Builds one immutable receipt from durable input only. Does not enqueue live
+// input, consult Project settings, or mutate a journal. The worker owner writes
+// the returned receipt and reconciles that same identity on an unknown response.
+foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transfer(
+    const project_io::ActiveSequenceJournal& journal,
+    foundation::CommandId transfer_id, std::uint64_t last_watermark, bool terminal);
+foundation::Result<project_io::SequenceAdmissionTransfer> commit_admission_transfer(
+    project_io::SequenceJournal& journals, const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session,
+    const project_io::SequenceAdmissionIdentity& identity,
+    foundation::CommandId transfer_id, std::uint64_t last_watermark, bool terminal);
+
+enum class PatternAdmissionAdmit : std::uint8_t { retained, live_only };
+
+// Prepared admission owner: closed prepare/activate, post-enqueue candidates,
+// deadline/capacity closure at watermark B, and conversion through
+// commit_admission_transfer. Live input before the admission fence, after
+// closure, or after owner loss stays live-only. A delayed cutoff may still
+// drain the retained prefix once.
+class PatternAdmissionOwner {
+ public:
+  using Clock = std::function<std::chrono::steady_clock::time_point()>;
+
+  PatternAdmissionOwner(
+      project_io::SequenceJournal& journals, std::filesystem::path bundle,
+      foundation::SequenceSessionId session, Clock clock = {});
+
+  foundation::Result<void> prepare(
+      const project_io::SequenceAdmissionPreparation& preparation);
+  foundation::Result<void> activate(
+      const project_io::SequenceAdmissionFence& fence);
+  foundation::Result<void> cutoff(
+      const project_io::SequenceAdmissionFence& fence);
+  foundation::Result<void> retain_switch(
+      const project_io::SequencePublicationAuthority& authority);
+  foundation::Result<void> reconcile_switch(project_io::ProjectStore& store);
+  foundation::Result<void> drain_source_prefix(
+      project_io::ProjectStore& store, foundation::CommandId transfer_id,
+      foundation::CommandId flush_id);
+  foundation::Result<PatternAdmissionAdmit> admit(
+      const project_io::SequenceAdmissionCandidate& candidate);
+  foundation::Result<void> close(
+      const project_io::SequenceAdmissionClosure& closure);
+  foundation::Result<void> close_requested();
+  foundation::Result<project_io::SequenceAdmissionTransfer> drain(
+      foundation::CommandId transfer_id, std::uint64_t last_watermark,
+      bool terminal);
+
+ private:
+  foundation::Result<void> close_at(
+      project_io::SequenceAdmissionCloseReason reason);
+  bool deadline_elapsed(
+      const project_io::SequenceAdmissionPreparation& preparation) const;
+
+  project_io::SequenceJournal& journals_;
+  std::filesystem::path bundle_;
+  foundation::SequenceSessionId session_;
+  Clock clock_;
+  std::optional<std::chrono::steady_clock::time_point> prepared_at_;
+  std::optional<project_io::SequenceAdmissionIdentity> identity_;
+};
 
 struct PatternOwnedPress {
   std::uint64_t raw_attack_tick{};

@@ -332,7 +332,9 @@ class AdmissionTests(unittest.TestCase):
         selected = {}
         for pattern in patterns:
             matches = {name: data for name, data in self.source.documents.items() if fnmatch.fnmatchcase(name, pattern)}
-            self.assertTrue(matches or pattern == "failure.json",
+            # failure.json and collection-failure.json exist only on failure
+            # paths; this archive models a reviewable producer output.
+            self.assertTrue(matches or pattern in ("failure.json", "collection-failure.json"),
                             "why: producer upload path has no source-shaped fixture: " + pattern
                             + "; remedy: model its actual file before claiming reader compatibility")
             selected.update(matches)

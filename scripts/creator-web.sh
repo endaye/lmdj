@@ -99,8 +99,8 @@ activate_toolchain() {
       exit 2
     }
   done
-  if [[ "$(node -p 'process.versions.node.split(".")[0]')" != "22" ]]; then
-    echo "Creator Web error: Node 22 is required, got $(node --version)" >&2
+  if [[ "$(node -p 'process.versions.node.split(".")[0]')" != "26" ]]; then
+    echo "Creator Web error: Node 26 is required, got $(node --version)" >&2
     exit 2
   fi
 }

@@ -235,8 +235,13 @@ def fetch(*refs):
     git("-c", "http.extraheader=AUTHORIZATION: basic " + credential, "fetch", "--no-tags", "origin", *refs)
 
 
-def api(path):
-    return pr_review_target._api(path)
+def api(path, store=None):
+    if store is not None and path in store:
+        return store[path]
+    result = pr_review_target._api(path)
+    if store is not None:
+        store[path] = result
+    return result
 
 
 def pages(path, key=None):
@@ -312,6 +317,33 @@ def collect(directory):
         output.write("review_schema=" + schema + "\n")
 
 
+def repair_mode(document=None):
+    """Only the trusted synchronize entry or explicit dispatch may request repair."""
+    requested = os.environ.get("RECHECK_COMMENT_ID", "")
+    automatic = os.environ.get("AUTO_RECHECK", "")
+    event = os.environ.get("GITHUB_EVENT_NAME", "")
+    review_scope.require(automatic in ("", "false", "true"), "invalid automatic recheck mode")
+    if automatic == "true":
+        review_scope.require(not requested and event == "pull_request"
+                             and os.environ.get("PR_EVENT_ACTION") == "synchronize",
+                             "automatic repair recheck requires the synchronize entry")
+        mode = "batch"
+    elif requested:
+        review_scope.require(event == "workflow_dispatch" and re.fullmatch(r"[1-9][0-9]*", requested),
+                             "repair recheck requires an explicit dispatch comment ID")
+        mode = "single"
+    else:
+        mode = "none"
+    if document is not None:
+        review_scope.require(("repair_request" in document) == (mode == "single")
+                             and ("repair_requests" in document) == (mode == "batch"),
+                             "repair artifact differs from trusted trigger mode")
+        if mode == "single":
+            review_scope.require(document["repair_request"].get("comment_id") == int(requested),
+                                 "repair artifact differs from explicit dispatch request")
+    return mode
+
+
 def collect_t2(directory):
     """Opt-in complete-input collection; legacy ``collect`` remains unchanged."""
     input_producer._ensure_fresh_directory(Path(directory))
@@ -345,6 +377,22 @@ def collect_t2(directory):
         and latest["base_sha"] == target["base_sha"],
         "PR target moved before complete-input publication",
     )
+    mode = repair_mode()
+    if mode != "none":
+        import review_recheck
+        api = review_recheck.client(repo)
+        if mode == "single":
+            request = review_recheck.collect(api, document, int(os.environ["RECHECK_COMMENT_ID"]), git=git, fetch=fetch)
+            review_recheck.attach(document, request)
+        else:
+            requests, report = review_recheck.collect_batch(api, document, git=git, fetch=fetch)
+            review_recheck.attach_batch(document, requests)
+            # Operational selection evidence, not model or resolution authority.
+            rendered = json.dumps(report, sort_keys=True, ensure_ascii=True)
+            print("Automatic repair recheck selection: " + rendered)
+            if os.environ.get("GITHUB_STEP_SUMMARY"):
+                with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
+                    summary.write("\nAutomatic repair recheck selection:\n\n<pre>" + html.escape(rendered) + "</pre>\n")
     changed_paths = review_scope.changed_path_inventory(document["files"])
     context_identity = {
         "repository": repo,
@@ -535,11 +583,14 @@ def finalize(directory):
     return result["status"]
 
 
-def authenticate(identity):
+def authenticate(identity, store=None, reuse=False):
+    token = ("identity", identity["repository"], identity["run_id"], identity["run_attempt"])
+    if reuse and store is not None and token in store:
+        return store[token]
     repo = identity["repository"]
     run = api(f"/repos/{repo}/actions/runs/{identity['run_id']}/attempts/{identity['run_attempt']}")
-    workflow = api(f"/repos/{repo}/actions/workflows/pr-review.yml")
-    repository = api(f"/repos/{repo}")
+    workflow = api(f"/repos/{repo}/actions/workflows/pr-review.yml", store)
+    repository = api(f"/repos/{repo}", store)
     pull = api(f"/repos/{repo}/pulls/{identity['pr_number']}")
     jobs = pages(f"/repos/{repo}/actions/runs/{identity['run_id']}/attempts/{identity['run_attempt']}/jobs", "jobs")
     producers = [j for j in jobs if j.get("name") == "Review fallback"]
@@ -547,30 +598,42 @@ def authenticate(identity):
     fetch("main", run["head_sha"], identity["control_sha"])
     ancestor = subprocess.run(["git", "-C", str(ROOT), "merge-base", "--is-ancestor", identity["control_sha"], "origin/main"],
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE).returncode == 0
-    return review_scope.authenticate_context(identity, run=run, workflow=workflow, producer_job=producers[0], pull=pull,
+    result = review_scope.authenticate_context(identity, run=run, workflow=workflow, producer_job=producers[0], pull=pull,
         repository_id=repository["id"], workflow_id=workflow["id"], producer_job_name="Review fallback",
         control_is_main_history=ancestor,
         run_workflow_bytes=git("show", run["head_sha"] + ":.github/workflows/pr-review.yml"),
         control_workflow_bytes=git("show", identity["control_sha"] + ":.github/workflows/pr-review.yml"))
+    if reuse and store is not None:
+        store[token] = result
+    return result
 
 
-def previous_records(identity, policy):
+def previous_records(identity, policy, store=None):
     """Read immutable same-head records; mutable labels never enter selection."""
     repo, number = identity["repository"], identity["pr_number"]
-    bot = api("/users/github-actions%5Bbot%5D")
+    bot = api("/users/github-actions%5Bbot%5D", store)
     records, unavailable = [], False
     for posted in pages(f"/repos/{repo}/pulls/{number}/reviews"):
         if posted.get("commit_id") != identity["head_sha"] or posted.get("user", {}).get("id") != bot.get("id"):
             continue
         for receipt in codec.unavailable_identities(posted.get("body", "")):
             if all(receipt[key] == identity[key] for key in ("repository", "pr_number", "head_sha")):
-                authenticate(receipt)
+                authenticate(receipt, store, reuse=True)
                 unavailable = True
         prior = codec.decode(posted.get("body", ""))
         if prior is None:
             continue
         prior_identity = {key: prior[key] for key in test_scope.IDENTITY_KEYS}
-        authenticate(prior_identity)
+        authenticate(prior_identity, store, reuse=True)
+        review_scope.require(all(prior_identity[key] == identity[key]
+                                 for key in ("repository", "pr_number", "head_sha", "base_sha")),
+                             "prior scope belongs to a different review target")
+        if prior_identity["control_sha"] != identity["control_sha"]:
+            # Advice under another control/policy cannot be merged as current
+            # evidence. Retain it historically and use the existing full-scope
+            # fallback instead of suppressing a valid new review publication.
+            unavailable = True
+            continue
         test_scope.validate_record(prior, policy, prior_identity)
         records.append(prior)
     return records, unavailable
@@ -626,7 +689,8 @@ def publish(directory):
         and identity["run_id"] == int(os.environ["GITHUB_RUN_ID"])
         and identity["run_attempt"] == int(os.environ["GITHUB_RUN_ATTEMPT"])
         and identity["control_sha"] == git("rev-parse", "HEAD").decode().strip(), "artifact identity differs from publisher context")
-    authenticate(identity)
+    store = {}
+    authenticate(identity, store)
     policy = test_scope.load_policy(ROOT)
     fetch(identity["base_sha"], identity["head_sha"])
     actual = change_scope.read_git_inventory(ROOT, identity["base_sha"], identity["head_sha"])
@@ -651,7 +715,7 @@ def publish(directory):
                                            coverages=coverages if is_v2_history(history) else None,
                                            collector=collector, trusted_config=trusted)
     review_scope.require(result == expected, "producer result is inconsistent with actual input and validated history")
-    prior, scope_unavailable = previous_records(identity, policy)
+    prior, scope_unavailable = previous_records(identity, policy, store)
     result = review_scope.prepare_result(policy, identity, changed_paths=paths,
                                         history=history, previous_records=prior,
                                         coverages=coverages if is_v2_history(history) else None,
@@ -674,6 +738,18 @@ def publish(directory):
     coverage = coverages.get(attempts[-1]["coverage_sha256"]) if is_v2_history(history) else None
     review_scope.validate_review(policy, original, coverage=coverage, collector=collector, trusted_config=trusted)
     review_scope.require(original == attempts[-1]["review"], "original review artifact mismatch")
+    repair_document = read(directory / "t2-input.json") if is_v2_history(history) else {}
+    mode = repair_mode(repair_document)
+    repair_native = None
+    if mode != "none":
+        raw_result = read(directory / "t2-result.json")
+        raw_history, _ = adapt_t2_result(raw_result, identity=identity, changed_paths=paths,
+                                        collector=collector, trusted_config=trusted)
+        review_scope.require(raw_history == history, "repair native result differs from authenticated review history")
+        selected = raw_result["attempts"][raw_result["selected_attempt"]]
+        repair_native = selected["native_review"]
+        mapped = t2._validate_native_mapping(repair_native, t2.authenticate_input(repair_document))
+        review_scope.require(mapped == selected["review"], "repair native verdict differs from captured review")
     token = os.environ["GITHUB_TOKEN"]
     # Immutable COMMENT review stores the complete scope record beyond artifact
     # retention. The marker is outside untrusted model text and base64 encoded.
@@ -682,12 +758,21 @@ def publish(directory):
     if not duplicate:
         publish_model(identity, record, original, scope_unavailable=scope_unavailable,
                       coverage=coverage, history=history)
-    authenticate(identity)  # Head check immediately before label mutation.
+    authenticate(identity, store)  # Head check immediately before label mutation.
     labels_url = f"https://api.github.com/repos/{identity['repository']}/issues/{identity['pr_number']}/labels"
     # Additive labels cannot remove another session's label. Structured records,
     # not mutable accumulated labels, are authoritative for actual selection.
     pr_review_target.github_request("POST", labels_url, token, {"labels": result["publication"]["labels"]})
-    authenticate(identity)  # A race remains historical evidence, never current.
+    authenticate(identity, store)  # A race remains historical evidence, never current.
+    if repair_native is not None:
+        import review_recheck
+        api = review_recheck.client(identity["repository"])
+        if mode == "batch":
+            receipt = review_recheck.publish_batch(api, repair_document, repair_native, git=git, fetch=fetch,
+                        record=lambda value: save(directory / "repair-recheck.json", value))
+        else:
+            receipt = review_recheck.publish(api, repair_document, repair_native, git=git, fetch=fetch)
+        save(directory / "repair-recheck.json", receipt)
 
 
 def http_refusal_evidence(error):
@@ -824,6 +909,17 @@ def main():
             # model is gone -- it reads its own artifacts and the GitHub API --
             # so its refusals are authored literals about identity and
             # inventory, with no provider text in scope to leak.
+            print(str(error), file=sys.stderr)
+            return 1
+        if args.command == "collect-t2" and isinstance(
+                error, (review_scope.ReviewScopeError, input_producer.InputCollectionError,
+                        pr_review_target.TargetUnavailable)):
+            # collect-t2 runs before the engine exists: no provider text can be
+            # in scope, and its refusals are authored literals -- "PR target
+            # moved or is not reviewable", "changed Git inventory exceeds the
+            # file limit". The generic line below destroyed them, so a refused
+            # collection surfaced as an unrelated artifact-upload error with no
+            # recorded cause (#1310: 2787-file change refused over MAX_FILES).
             print(str(error), file=sys.stderr)
             return 1
         if args.command == "publish":

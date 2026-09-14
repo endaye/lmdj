@@ -36,7 +36,7 @@ class ConsumerTests(unittest.TestCase):
                         event="pull_request", head_sha=A, pull_requests=[])
         self.jobs = [dict(id=1, name="Review fallback", run_id=51, run_attempt=1, status="completed", conclusion="success",
             steps=[dict(name=name, conclusion="success") for name in (
-                "Collect complete fixed input without executing PR files", "Save honest final result", "Run actions/upload-artifact@v4")])]
+                "Collect complete fixed input without executing PR files", "Save honest final result", "Run actions/upload-artifact@v6")])]
         self.api.list_jobs = lambda run_id, attempt: deepcopy(self.jobs)
         self.artifacts = [dict(id=9, name=f"pr-review-result-{A}-51-1", expired=False, workflow_run={"id": 51})]
         self.source = b"trusted workflow"
@@ -121,7 +121,7 @@ class ConsumerTests(unittest.TestCase):
 
     def test_failed_producer_preserves_input_finalizer_and_upload_requirements(self):
         for name in ('Collect complete fixed input without executing PR files',
-                     'Save honest final result', 'Run actions/upload-artifact@v4'):
+                     'Save honest final result', 'Run actions/upload-artifact@v6'):
             for status in ('skipped', 'cancelled', None):
                 with self.subTest(name=name, status=status):
                     self.setUp()
@@ -225,7 +225,7 @@ class ConsumerTests(unittest.TestCase):
         self.test_closed_mapping_is_explicitly_not_applicable()
         self.run['conclusion'] = 'success'
         self.jobs[-1]['steps'] += [dict(name='Publish exact-head review and scope', conclusion='skipped'),
-            dict(name='Run actions/upload-artifact@v4', conclusion='success')]
+            dict(name='Run actions/upload-artifact@v6', conclusion='success')]
         self.map = mapping.build_map(repository='endaye/lmdj', repository_id=5, workflow_id=42,
             pr_number=7, head_sha=A, merge_sha=B, control_sha=B, run_id=51, run_attempt=1,
             changed_paths=['docs/notes/a.md'], scope_records=[], complete=False, gaps=['review unavailable; retain full'])

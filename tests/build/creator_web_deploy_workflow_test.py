@@ -32,8 +32,8 @@ EXPECTED_ACTION_PINS = {
         "v6.4.0",
     ),
     "actions/upload-artifact": (
-        "ea165f8d65b6e75b540449e92b4886f43607fa02",
-        "v4.6.2",
+        "b7c566a772e6b6bfb58ed0dc250532a479d7789f",
+        "v6.0.0",
     ),
 }
 NETLIFY_CREDENTIALS = {
@@ -412,7 +412,7 @@ class CreatorWebDeployWorkflowTest(unittest.TestCase):
     def test_workflow_installs_only_deployment_dependencies(self) -> None:
         source = self.workflow_source()
         self.assertIn("python-version: \"3.11\"", source)
-        self.assertIn("node-version: \"22\"", source)
+        self.assertIn("node-version: \"26\"", source)
         self.assertIn("working-directory: tests/platform/web", source)
         self.assertIn("run: npm ci", source)
         self.assertIn("playwright install --with-deps chromium", source)
