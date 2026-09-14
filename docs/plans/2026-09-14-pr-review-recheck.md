@@ -78,3 +78,21 @@ budget, credential or host inventory expansion. Before activation verify the
 candidate as the runner account and the exact installed adapter identity.
 Do not claim live rechecks from local tests or activate by copying unverified
 files over `current`.
+
+## Live acceptance follow-up: historical run identity
+
+Real recheck run 34826375573 exposed mutable GitHub run association metadata:
+after a fix push, `pull_requests[].head.sha` on the original run becomes the
+current PR head. Authenticate the original revision using the run's own
+`head_sha` and retained artifact, while still binding the associated PR number.
+Current-head checks and all artifact/workflow provenance remain required.
+
+Declared files for this follow-up Task: `scripts/ci/review_failure_report.py`,
+`tests/build/ci_review_recheck_test.py`, and this plan. Add one regression that
+changes only the associated head and carries historical collection through
+resolved far-side publication. Run recheck, failure-report and review-wait
+suites; retain rejection tests for wrong run head and wrong PR association.
+
+Version impact: none. Internal CI authentication only.
+Documentation impact: none. This restores the already documented behavior;
+no Architecture Portal route or documented contract changes.

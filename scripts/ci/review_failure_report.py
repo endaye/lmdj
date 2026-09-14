@@ -264,8 +264,11 @@ def collect(api, repository, run_id, attempt):
         require(run.get("head_branch") == "main" and run["head_sha"] == control, "manual review source is not trusted main control")
     else:
         associated = run.get("pull_requests")
+        # The associated PR head is live metadata: GitHub updates it after a
+        # push even on historical runs. Bind the reviewed revision to the run's
+        # own head_sha and retained artifact; this connection binds PR identity.
         require(run["head_sha"] == head and isinstance(associated, list) and (not associated or any(
-            p.get("number") == identity["pr_number"] and p.get("head", {}).get("sha") == head for p in associated)),
+            p.get("number") == identity["pr_number"] for p in associated)),
             "review PR event does not bind actual head")
     policy = test_scope.parse_policy(*[json.loads(_source(api, repository, control, "scripts/ci/" + name),
                                                object_pairs_hook=change_scope.reject_duplicates)
