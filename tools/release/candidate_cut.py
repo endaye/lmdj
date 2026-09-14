@@ -46,22 +46,31 @@ class CandidateCutWorkspace:
         require(untracked <= tree_paths, "unrelated untracked files are present")
 
     @staticmethod
-    def _verify(verify, root, phase, binding):
+    def _verify(verify, verify_locked, root, phase, binding, guard):
+        guard()
         try:
-            verify(root, phase, deepcopy(binding))
+            if verify_locked is None:
+                verify(root, phase, deepcopy(binding))
+            else:
+                verify_locked(root, phase, deepcopy(binding), guard=guard)
         except Exception:
             raise CandidateCutError("why: candidate cut Task verification failed; remedy: inspect the retained staged or committed candidate and resume the same cut without bypassing checks") from None
+        guard()
 
-    def prepare(self, *, request, source, snapshot_sha256, author_name, author_email, timestamp, verify):
+    def prepare(self, *, request, source, snapshot_sha256, author_name, author_email, timestamp,
+                verify=None, verify_locked=None):
         try:
             return self._prepare(request=request, source=source, snapshot_sha256=snapshot_sha256,
-                author_name=author_name, author_email=author_email, timestamp=timestamp, verify=verify)
+                author_name=author_name, author_email=author_email, timestamp=timestamp,
+                verify=verify, verify_locked=verify_locked)
         except CandidateCutError:
             raise
         except Exception:
             raise CandidateCutError("why: candidate cut source, state or verification is unavailable; remedy: restore its original private evidence and worktree; do not regenerate the snapshot or rewrite the candidate") from None
 
-    def _prepare(self, *, request, source, snapshot_sha256, author_name, author_email, timestamp, verify):
+    def _prepare(self, *, request, source, snapshot_sha256, author_name, author_email, timestamp, verify, verify_locked):
+        require((callable(verify) and verify_locked is None) or (verify is None and callable(verify_locked)),
+                "requires exactly one trusted Task verifier")
         require(type(timestamp) is int and 1 <= timestamp <= 253402300799, "timestamp is invalid")
         require(type(author_name) is str and re.fullmatch(r"[A-Za-z0-9 ._-]{1,80}", author_name)
                 and type(author_email) is str and re.fullmatch(r"[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+", author_email), "author is invalid")
@@ -128,13 +137,27 @@ class CandidateCutWorkspace:
                     journal._write("cut-binding.json", canonical_json(binding))
                 else:
                     require(previous == binding, "durable cut binding changed")
+
+                def guard(phase):
+                    journal._active()
+                    self.snapshot._authorize(state["scope"])
+                    require(read(journal, "binding.json") == source
+                            and read(journal, "cut-binding.json") == binding
+                            and canonical_sha256(self.snapshot._state(journal, state["scope"]))
+                                == binding["snapshot_state_sha256"],
+                            "source, snapshot or cut history changed during verification")
+                    self._check(source, tree, commit, staged=True)
+                    require(local.revision("HEAD") == (source["commit"] if phase == "staged" else commit),
+                            "verification phase HEAD changed")
+                    retained = local.git("for-each-ref", "--format=%(refname) %(objectname)", retention).decode().strip()
+                    allowed = ("", retention + " " + source["commit"]) if phase == "staged" else (retention + " " + source["commit"],)
+                    require(retained in allowed, "source retention ref changed during verification")
+
                 if local.revision("HEAD") == source["commit"]:
                     if local.revision_from_index() != tree:
                         local.git("read-tree", tree)
                     self._check(source, tree, commit, staged=True)
-                    self._verify(verify, local.root, "staged", binding)
-                    self.snapshot._authorize(state["scope"])
-                    self._check(source, tree, commit, staged=True)
+                    self._verify(verify, verify_locked, local.root, "staged", binding, lambda: guard("staged"))
                     retained = local.git("for-each-ref", "--format=%(refname) %(objectname)", retention).decode().strip()
                     require(retained in ("", retention + " " + source["commit"]), "source retention ref changed")
                     if not retained:
@@ -142,9 +165,7 @@ class CandidateCutWorkspace:
                     local.git("update-ref", "refs/heads/" + source["branch"], commit, source["commit"])
                 self._check(source, tree, commit, staged=True)
                 require(local.revision(retention) == source["commit"], "source retention proof is missing")
-                self._verify(verify, local.root, "committed", binding)
-                self.snapshot._authorize(state["scope"])
-                self._check(source, tree, commit, staged=True)
+                self._verify(verify, verify_locked, local.root, "committed", binding, lambda: guard("committed"))
                 require(local.revision("HEAD") == commit, "final commit identity changed")
                 require(local.revision(retention) == source["commit"], "source retention ref changed during verification")
                 return dict(binding, product_build=build, status="cut-committed", files=sorted(changed))

@@ -24,6 +24,7 @@ from tools.release.candidate_material import CandidateBuildMaterial
 from tools.release.candidate_workspace import CandidateSourceWorkspace
 from tools.release.candidate_snapshot import CandidateSnapshotRun
 from tools.release.candidate_cut import CandidateCutWorkspace
+from tools.release.candidate_checks import CandidateTaskChecks
 from tools.release.candidate_source import CandidateSourceVerifier
 from tools.release.candidate_witness import CandidateWitnessRun
 from tools.release.candidate_witness_task import CandidateWitnessTask
@@ -87,6 +88,7 @@ def main():
     record({"control_revision":base, "harness_sha256":sha256(Path(__file__).read_bytes()).hexdigest()})
     record({"controller_sha256": {name: sha256((ROOT / name).read_bytes()).hexdigest()
             for name in ("tools/release/candidate_snapshot.py", "tools/release/candidate_cut.py",
+                         "tools/release/candidate_checks.py",
                          "tools/release/candidate_source.py", "tools/release/candidate_witness.py",
                          "tools/release/task_verification.py", "tools/release/candidate_witness_task.py",
                          "tools/release/witness_checks.py",
@@ -137,19 +139,37 @@ def main():
     with patch("tools.release.task_verification.tempfile.TemporaryFile", retained_output):
         snapshot = runner.run(request, source)
         record({"stage":"snapshot", "receipt":snapshot})
-        def verify_cut(root, phase, binding):
-            verify_source(root)
-            for vector in (("bash", "scripts/docs-site.sh", "check"),
-                           ("python3", "tests/build/ci_change_scope_test.py"),
-                           ("git", "diff", "--cached", "--check", base)):
-                result = runner.executor._execute(local._journal, vector, 900)
-                record({"stage":"cut-" + phase, "command":list(vector), "result":list(result)})
-                assert result[0] == 0, "real candidate Task gate failed; inspect retained executed logs"
         cut_workspace = CandidateCutWorkspace(runner)
-        cut = cut_workspace.prepare(request=request, source=source,
+        def authorize_cut_checks(scope):
+            assert scope["source"]["request_sha256"] == canonical_sha256(request), "fixture cut request drift"
+            assert scope["control_revision"] == base and scope["path"] == args.tool_path
+            material.inputs.verify(frozen, base)
+        def new_cut_checks():
+            return CandidateTaskChecks(cut_workspace, control_revision=base,
+                authorize=authorize_cut_checks, path=args.tool_path)
+        cut_arguments = dict(request=request, source=source,
             snapshot_sha256=snapshot["sha256"], author_name="Candidate Rehearsal",
-            author_email="fixture@example.invalid", timestamp=int(time.time()), verify=verify_cut)
+            author_email="fixture@example.invalid", timestamp=int(time.time()))
+        checked_cut = new_cut_checks().prepare(**cut_arguments)
+        cut = checked_cut["cut"]
         record({"stage":"cut", "receipt":cut})
+        cut_journal = Path(local.git("rev-parse", "--absolute-git-dir").decode().strip()) / local.JOURNAL_NAME
+        cut_checks_raw = (cut_journal / CandidateTaskChecks.STATE).read_bytes()
+        cut_checks_state = json.loads(cut_checks_raw)
+        assert canonical_json(cut_checks_state) == cut_checks_raw
+        assert [row["phase"] for row in cut_checks_state["commands"]] == ["staged"] * 3 + ["committed"] * 3
+        assert all(row["status"] == "verified" and row["result"][0] == 0 for row in cut_checks_state["commands"])
+        assert checked_cut["checks"]["sha256"] == sha256(cut_checks_raw).hexdigest()
+        for row in cut_checks_state["commands"]:
+            record({"stage":"cut-" + row["phase"], "command":row["arguments"], "result":row["result"]})
+        record({"stage":"cut-task-checks", "receipt":checked_cut["checks"], "state":cut_checks_state})
+        output_count = sum("executed_output" in event for event in events)
+        cut_workspace = CandidateCutWorkspace(CandidateSnapshotRun(local, authorize=authorize, path=args.tool_path))
+        cold_cut = new_cut_checks().prepare(**cut_arguments)
+        assert cold_cut == checked_cut, "cold cut changed commit or command evidence"
+        assert sum("executed_output" in event for event in events) == output_count, "cold cut replayed checks"
+        assert (cut_journal / CandidateTaskChecks.STATE).read_bytes() == cut_checks_raw, "cold cut rewrote command history"
+        record({"stage":"cut-cold-resume", "receipt":cold_cut["cut"], "checks":cold_cut["checks"]})
 
     # --no-local forbids alternates/hardlink shortcuts: this clone must genuinely
     # lack the non-ancestor internal source object and its private retention ref.

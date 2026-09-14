@@ -350,6 +350,28 @@ lmdj_add_test(
   TIMEOUT 30
 )
 
+foreach(candidate_check_case IN ITEMS
+    ChecksLifecycleTest.test_six_actual_results_and_cold_resume_without_replay
+    ChecksFailureTest.test_failed_command_retains_result_without_replay
+    ChecksFailureTest.test_controller_death_after_command_is_unknown
+    ChecksFailureTest.test_final_authority_loss_keeps_zero_exit_unconfirmed
+    ChecksFailureTest.test_snapshot_history_loss_after_command_is_not_verified
+    ChecksFailureTest.test_tracked_drift_after_command_is_not_verified
+    ChecksReaderTest.test_missing_enrolled_history_cannot_reset_budget
+    ChecksReaderTest.test_committed_cut_cannot_invent_staged_checks
+    ChecksReaderTest.test_pr_digest_and_cut_identity_must_match
+    ChecksReaderTest.test_rebound_command_or_control_is_refused
+    ChecksReaderTest.test_reader_authority_cannot_remove_history
+    ChecksResumeTest.test_death_after_cut_commit_continues_unstarted_committed_phase)
+  lmdj_add_test(
+    NAME "build.release_candidate_checks_${candidate_check_case}"
+    TIER contract
+    COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_checks_test.py "${candidate_check_case}" -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 60
+  )
+endforeach()
+
 lmdj_add_test(
   NAME build.release_candidate_cut_recovery
   TIER contract
