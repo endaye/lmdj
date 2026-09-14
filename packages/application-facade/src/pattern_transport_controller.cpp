@@ -20,6 +20,16 @@ project_io::SequenceSwitchOutcome switch_outcome(
   }
 }
 
+foundation::CommandId flush_command(const foundation::CommandId& command) {
+  auto value = command.value();
+  const auto dash = value.rfind('-');
+  if (dash != std::string::npos && dash + 1 < value.size()) {
+    auto& digit = value[dash + 1];
+    digit = digit == 'f' ? 'e' : 'f';
+  }
+  return foundation::CommandId{value};
+}
+
 }  // namespace
 
 PatternTransportCoordinator::PatternTransportCoordinator(
@@ -168,14 +178,28 @@ foundation::Result<void> PatternTransportCoordinator::apply_receipt(
 }
 
 foundation::Result<void> PatternTransportCoordinator::finish_close() {
-  const auto closed = owner_.close(
-      {std::nullopt, project_io::SequenceAdmissionCloseReason::requested});
+  const auto closed = owner_.close_requested();
   if (!closed.has_value()) return closed;
+  if (pending_) {
+    const auto drained = owner_.drain_source_prefix(
+        store_, pending_->command_id, flush_command(pending_->command_id));
+    if (!drained.has_value()) return drained;
+  }
   const auto reconciled = owner_.reconcile_switch(store_);
   if (!reconciled.has_value()) return reconciled;
   recording_ = false;
   close_pending_ = false;
   return foundation::Result<void>::success();
+}
+
+foundation::Result<PatternAdmissionAdmit> PatternTransportCoordinator::admit(
+    const project_io::SequenceAdmissionCandidate& candidate) {
+  if (!recording_) {
+    return foundation::Result<PatternAdmissionAdmit>::failure(
+        {foundation::ErrorCode::invalid_argument,
+         "Pattern transport admission requires recording"});
+  }
+  return owner_.admit(candidate);
 }
 
 foundation::Result<void> PatternTransportCoordinator::continue_operation() {
