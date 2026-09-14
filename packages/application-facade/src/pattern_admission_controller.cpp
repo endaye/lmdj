@@ -164,12 +164,15 @@ foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transf
       if (item.first_watermark <= candidate.watermark &&
           item.publication_generation == segment.generation) profile = &item;
     }
-    if (!profile && segment.generation != admission.preparation.publication_generation) {
-      return conversion_error("segment_timing_profile_missing");
+    audio::TransportAnchor anchor{fence.origin_frame, 0, fence.bpm};
+    if (profile) {
+      anchor = {profile->runtime_frame, profile->tick_numerator, profile->bpm};
+    } else if (segment.generation != admission.preparation.publication_generation) {
+      if (!admission.cutoff_fence) {
+        return conversion_error("segment_timing_profile_missing");
+      }
+      anchor = {segment.frame, 0, admission.cutoff_fence->bpm};
     }
-    const audio::TransportAnchor anchor = profile
-        ? audio::TransportAnchor{profile->runtime_frame, profile->tick_numerator, profile->bpm}
-        : audio::TransportAnchor{fence.origin_frame, 0, fence.bpm};
     const auto ticks = audio::raw_tick_at(anchor, candidate.runtime_frame);
     if (!ticks.has_value()) return TransferResult::failure(ticks.error());
     PatternEventReducer reducer{journal.bars,
@@ -325,6 +328,69 @@ foundation::Result<void> PatternAdmissionOwner::drain_source_prefix(
   }
   if (!last_watermark) return foundation::Result<void>::success();
   const auto transfer = drain(transfer_id, *last_watermark, false);
+  if (!transfer.has_value()) {
+    return foundation::Result<void>::failure(transfer.error());
+  }
+  if (!transfer.value().journal_input_sequence) {
+    return foundation::Result<void>::success();
+  }
+  journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) {
+    return foundation::Result<void>::failure(journal.error());
+  }
+  const auto flush = journals_.append_flush(
+      bundle_, session_, flush_id, journal.value().pattern_id,
+      journal.value().expected_revision, transfer.value().recoverable_tail);
+  if (!flush.has_value()) {
+    return foundation::Result<void>::failure(flush.error());
+  }
+  const auto executed = store.execute_sequence_flush(
+      bundle_, {session_, flush.value().flush_seq, flush_id,
+                journal.value().pattern_id});
+  if (!executed.has_value()) {
+    return foundation::Result<void>::failure(executed.error());
+  }
+  return foundation::Result<void>::success();
+}
+
+foundation::Result<void> PatternAdmissionOwner::drain_target_segment(
+    project_io::ProjectStore& store, foundation::CommandId transfer_id,
+    foundation::CommandId flush_id, foundation::CommandId profile_id) {
+  if (!identity_) return owner_error("admission_identity_missing");
+  auto journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) {
+    return foundation::Result<void>::failure(journal.error());
+  }
+  if (journal.value().session_id != session_ || !journal.value().admission) {
+    return owner_error("admission_identity_mismatch");
+  }
+  if (pending_applied_switch(*journal.value().admission)) {
+    return owner_error("switch_prefix_requires_reconciliation");
+  }
+  if (journal.value().pattern_id ==
+      journal.value().admission->preparation.pattern_id) {
+    return foundation::Result<void>::success();
+  }
+  for (const auto& flush : journal.value().flushes) {
+    if (flush.completed || flush.pattern_id != journal.value().pattern_id) continue;
+    const auto executed = store.execute_sequence_flush(
+        bundle_, {session_, flush.flush_seq, flush.command_id, flush.pattern_id});
+    if (!executed.has_value()) {
+      return foundation::Result<void>::failure(executed.error());
+    }
+  }
+  journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) {
+    return foundation::Result<void>::failure(journal.error());
+  }
+  if (journal.value().session_id != session_ || !journal.value().admission) {
+    return owner_error("admission_identity_mismatch");
+  }
+  const auto& admission = *journal.value().admission;
+  if (admission.candidates.empty()) return foundation::Result<void>::success();
+  (void)profile_id;
+  const auto last_watermark = admission.candidates.back().watermark;
+  const auto transfer = drain(transfer_id, last_watermark, false);
   if (!transfer.has_value()) {
     return foundation::Result<void>::failure(transfer.error());
   }
