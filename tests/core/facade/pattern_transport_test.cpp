@@ -262,12 +262,13 @@ struct Fixture {
     state.patterns.emplace(PatternId{kPatternC},
                            lmdj::domain::Pattern{PatternId{kPatternC}, 1, {}});
     LMDJ_CHECK(store.create(bundle, state).has_value());
-    LMDJ_CHECK(journals
-                   .begin(bundle, session, pattern, 1,
-                          lmdj::project_io::sequence_pattern_fingerprint(
-                              state.patterns.at(pattern)),
-                          0)
-                   .has_value());
+  }
+
+  bool journal_exists() {
+    const auto journal = journals.read_active(bundle);
+    if (journal.has_value()) return true;
+    LMDJ_CHECK(journal.error().code == lmdj::foundation::ErrorCode::not_found);
+    return false;
   }
 
   PatternTransportRequest make(unsigned command, std::uint64_t epoch,
@@ -290,9 +291,7 @@ void stopped_play_starts_without_a_journal() {
   LMDJ_CHECK(status.playing);
   LMDJ_CHECK(!status.recording);
   LMDJ_CHECK(status.phase == PatternTransportPhase::idle);
-  const auto journal = f.journals.read_active(f.bundle);
-  LMDJ_CHECK(journal.has_value());
-  LMDJ_CHECK(!journal.value().admission);
+  LMDJ_CHECK(!f.journal_exists());
 }
 
 void stopped_record_starts_playing_and_opens_admission() {
@@ -315,8 +314,7 @@ void playing_play_stops_without_a_journal() {
   const auto status = f.coordinator.inspect();
   LMDJ_CHECK(!status.playing);
   LMDJ_CHECK(!status.recording);
-  const auto journal = f.journals.read_active(f.bundle);
-  LMDJ_CHECK(!journal.value().admission);
+  LMDJ_CHECK(!f.journal_exists());
 }
 
 void playing_record_keeps_origin_and_opens_admission() {
@@ -337,9 +335,8 @@ void recording_play_stops_scheduling_and_closes_admission() {
   const auto status = f.coordinator.inspect();
   LMDJ_CHECK(!status.playing);
   LMDJ_CHECK(!status.recording);
-  const auto journal = f.journals.read_active(f.bundle);
-  LMDJ_CHECK(journal.value().admission->closure.has_value());
-  LMDJ_CHECK(journal.value().admission->cutoff_fence.has_value());
+  // A fully settled close completes the admission and removes the journal.
+  LMDJ_CHECK(!f.journal_exists());
 }
 
 void recording_play_stop_reload_retains_committed_events() {
@@ -365,12 +362,9 @@ void recording_play_stop_reload_retains_committed_events() {
   LMDJ_CHECK(!status.playing);
   LMDJ_CHECK(!status.recording);
   LMDJ_CHECK(status.phase == PatternTransportPhase::idle);
-  const auto journal = f.journals.read_active(f.bundle);
-  LMDJ_CHECK(journal.has_value());
-  LMDJ_CHECK(journal.value().admission &&
-             journal.value().admission->candidates.empty());
-  LMDJ_CHECK(!journal.value().admission->transfers.empty());
-  LMDJ_CHECK(journal.value().admission->transfers.back().terminal);
+  // Journal removal is only possible after the terminal transfer, completion
+  // and a committed flush: absence proves full settlement.
+  LMDJ_CHECK(!f.journal_exists());
   const auto project = f.store.load(f.bundle);
   LMDJ_CHECK(project.has_value());
   const auto& events = project.value().patterns.at(PatternId{kPattern}).events;
@@ -419,10 +413,7 @@ void admission_after_cutoff_receipt_stays_live_only() {
   LMDJ_CHECK(!recovered.recording);
   LMDJ_CHECK(recovered.phase == PatternTransportPhase::idle);
   const auto journal = f.journals.read_active(f.bundle);
-  LMDJ_CHECK(journal.has_value());
-  LMDJ_CHECK(journal.value().admission &&
-             journal.value().admission->candidates.empty());
-  LMDJ_CHECK(journal.value().admission->transfers.back().terminal);
+  LMDJ_CHECK(!f.journal_exists());
   const auto project = f.store.load(f.bundle);
   LMDJ_CHECK(project.has_value());
   const auto& events = project.value().patterns.at(PatternId{kPattern}).events;
@@ -483,8 +474,93 @@ void recording_record_commits_and_keeps_playing() {
   LMDJ_CHECK(status.playing);
   LMDJ_CHECK(!status.recording);
   LMDJ_CHECK(status.origin_frame == origin);
+  // Record-off settles the admission completely; the journal is removed.
+  LMDJ_CHECK(!f.journal_exists());
+}
+
+void record_after_a_settled_close_begins_a_fresh_journal() {
+  Fixture f;
+  LMDJ_CHECK(!f.journal_exists());
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const auto opened = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(opened.has_value() && opened.value().admission &&
+             opened.value().admission->admission_fence);
+  const auto first_frame =
+      opened.value().admission->admission_fence->effective_frame;
+  LMDJ_CHECK(f.coordinator
+                 .admit({10, first_frame, {0, 1}, SequenceCandidateKind::press,
+                         90, 1})
+                 .value() == PatternAdmissionAdmit::retained);
+  LMDJ_CHECK(f.coordinator
+                 .admit({11, first_frame, {0, 1}, SequenceCandidateKind::release,
+                         0, 1})
+                 .value() == PatternAdmissionAdmit::retained);
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  LMDJ_CHECK(f.coordinator.inspect().playing);
+  LMDJ_CHECK(!f.coordinator.inspect().recording);
+  LMDJ_CHECK(!f.journal_exists());
+  const auto after_first = f.store.load(f.bundle);
+  LMDJ_CHECK(after_first.has_value());
+  LMDJ_CHECK(
+      after_first.value().patterns.at(PatternId{kPattern}).events.size() == 1);
+  const auto first_revision = after_first.value().revision;
+  // A new Record on the settled session lazily begins a fresh journal.
+  f.settle(f.make(8, 3, PatternTransportIntent::record));
+  const auto reopened = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value().admission &&
+             reopened.value().admission->admission_fence.has_value());
+  const auto second_frame =
+      reopened.value().admission->admission_fence->effective_frame;
+  LMDJ_CHECK(f.coordinator
+                 .admit({12, second_frame, {0, 2}, SequenceCandidateKind::press,
+                         95, 1})
+                 .value() == PatternAdmissionAdmit::retained);
+  LMDJ_CHECK(f.coordinator
+                 .admit({13, second_frame, {0, 2}, SequenceCandidateKind::release,
+                         0, 1})
+                 .value() == PatternAdmissionAdmit::retained);
+  f.settle(f.make(9, 4, PatternTransportIntent::play_stop));
+  LMDJ_CHECK(!f.coordinator.inspect().playing);
+  LMDJ_CHECK(!f.journal_exists());
+  const auto after_second = f.store.load(f.bundle);
+  LMDJ_CHECK(after_second.has_value());
+  const auto& events =
+      after_second.value().patterns.at(PatternId{kPattern}).events;
+  LMDJ_CHECK(events.size() == 2);
+  LMDJ_CHECK(events.back().slot == (PadSlotId{0, 2}));
+  LMDJ_CHECK(events.back().velocity == 95);
+  LMDJ_CHECK(after_second.value().revision == first_revision + 1);
+}
+
+void record_with_a_stale_expected_revision_is_refused_without_a_journal() {
+  Fixture f;
+  auto stale = f.make(6, 1, PatternTransportIntent::record);
+  stale.expected_revision = 999;
+  LMDJ_CHECK(f.coordinator.request(stale) == PatternTransportSubmit::refused);
+  LMDJ_CHECK(!f.coordinator.inspect().playing);
+  LMDJ_CHECK(!f.coordinator.inspect().recording);
+  LMDJ_CHECK(!f.journal_exists());
+}
+
+void record_rides_on_an_explicitly_begun_journal() {
+  Fixture f;
+  const auto project = f.store.load(f.bundle);
+  LMDJ_CHECK(project.has_value());
+  LMDJ_CHECK(f.journals
+                 .begin(f.bundle, f.session, f.pattern, 1,
+                        lmdj::project_io::sequence_pattern_fingerprint(
+                            project.value().patterns.at(f.pattern)),
+                        project.value().revision)
+                 .has_value());
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const auto status = f.coordinator.inspect();
+  LMDJ_CHECK(status.playing);
+  LMDJ_CHECK(status.recording);
   const auto journal = f.journals.read_active(f.bundle);
-  LMDJ_CHECK(journal.value().admission->closure.has_value());
+  LMDJ_CHECK(journal.has_value());
+  LMDJ_CHECK(journal.value().admission &&
+             journal.value().admission->admission_fence.has_value());
 }
 
 void duplicate_command_does_not_toggle_twice() {
@@ -571,15 +647,26 @@ void switch_at_or_after_cutoff_is_canceled() {
     f.settle(f.make(6, 1, PatternTransportIntent::record));
     f.audio.queue_switch(activation);
     LMDJ_CHECK(f.audio.pending_switch().has_value());
+    // The canceled-switch close settles like a plain close and removes the
+    // journal, so capture the durable cutoff fence at acknowledgment time.
+    std::optional<lmdj::project_io::SequenceAdmissionFence> cutoff;
+    f.audio.before_ack = [&] {
+      const auto journal = f.journals.read_active(f.bundle);
+      if (journal.has_value() && journal.value().admission &&
+          journal.value().admission->cutoff_fence) {
+        cutoff = *journal.value().admission->cutoff_fence;
+      }
+    };
     f.settle(f.make(7, 2, PatternTransportIntent::record));
     f.audio.render(300);
-    const auto cutoff = cutoff_of(f);
-    LMDJ_CHECK(cutoff.switch_outcome == SequenceSwitchOutcome::canceled_at_cutoff);
-    LMDJ_CHECK(!cutoff.switch_applied_frame);
-    LMDJ_CHECK(cutoff.switch_authority &&
-               cutoff.switch_authority->pattern_id == PatternId{kPatternB});
+    LMDJ_CHECK(cutoff.has_value());
+    LMDJ_CHECK(cutoff->switch_outcome == SequenceSwitchOutcome::canceled_at_cutoff);
+    LMDJ_CHECK(!cutoff->switch_applied_frame);
+    LMDJ_CHECK(cutoff->switch_authority &&
+               cutoff->switch_authority->pattern_id == PatternId{kPatternB});
     LMDJ_CHECK(f.audio.engine.current_pattern_id() == PatternId{kPattern});
     LMDJ_CHECK(f.coordinator.inspect().playing);
+    LMDJ_CHECK(!f.journal_exists());
   }
 }
 
@@ -740,6 +827,9 @@ int main() {
     recording_play_stop_commit_failure_retries_exactly_once();
     admission_after_cutoff_receipt_stays_live_only();
     recording_record_commits_and_keeps_playing();
+    record_after_a_settled_close_begins_a_fresh_journal();
+    record_with_a_stale_expected_revision_is_refused_without_a_journal();
+    record_rides_on_an_explicitly_begun_journal();
     duplicate_command_does_not_toggle_twice();
     earlier_command_does_not_toggle_after_a_later_one();
     wrong_session_or_project_is_invalid();
@@ -750,7 +840,7 @@ int main() {
     switch_applied_before_cutoff_drains_source_prefix();
     switch_applied_before_cutoff_drains_target_segment();
     refused_switch_publication_retries_without_a_ghost_applied();
-    std::cout << "pattern transport tests: PASS (19 scenarios)\n";
+    std::cout << "pattern transport tests: PASS (22 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

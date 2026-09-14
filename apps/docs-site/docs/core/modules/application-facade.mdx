@@ -50,8 +50,10 @@ admission fence 之后才保留 post-enqueue 候选，fence 前、closure 后与
 在处理下一候选前于 watermark B 关闭；存储失败保留已知前缀并报告不确定后缀。
 关闭后的延迟 cutoff 仍可 drain 该前缀一次。drain 走 `commit_admission_transfer`，
 并可经 T0 执行端口提交。内部 `PatternTransportCoordinator` 按六格表解析
-Play/Stop 与 Record：只播放不建 journal；停止态 Record 用 start 收据激活
-admission；播放中 Record 用 fence 且 origin 不变；录音中 Record 关闭准入并保持
+Play/Stop 与 Record：journal 由 Facade 拥有，只播放从不创建；Record 在无 active
+journal 时由 coordinator 懒创建（load Project 取 bars/fingerprint/当前 revision，请求
+携带的 expected_revision 不符则拒绝且不建），并兼容骑在显式已开 journal 上的形态；
+停止态 Record 用 start 收据激活 admission；播放中 Record 用 fence 且 origin 不变；录音中 Record 关闭准入并保持
 播放；录音中 Play/Stop 先停调度再关闭准入。请求校验 session/project；关闭录音时先耐久 cutoff 再 acknowledge 收据。
 close 在 ack 之后失败时保持已应用的音频状态，并以 flushing 重试同一 close，
 不把 Record-off 报成成功。Record-off 把 pending 或已应用的 Pattern switch 交给 cutoff fence：S ≥ F 取消，
@@ -63,6 +65,9 @@ close 内把当前 Pattern 段的剩余候选经同一 canonical-tail transfer d
 Project Truth、推进 committed revision，并在 closure 耐久后保留 terminal transfer 作为
 admission 输入已全部解析的结算收据；cutoff 收据应用后、close 未决期间到达的输入保持
 live-only，不再进入候选集。close 中途存储失败保持 flushing 重试且不重复提交。
+结算完整（terminal receipt、tail flush 恰好提交一次、complete）后移除已结算 journal，
+与 legacy stop 的 remove_active_if_complete 一致；再次 Record 走同一懒创建路径开新
+journal。
 cutoff 前已应用 switch 的 close 保持原语义，尚无 terminal transfer。它仍不是 Creator
 opt-in、settings/rebase 或未知 cutoff 恢复。测试用生产
 `RealtimeEngine` 收据，不是 Creator 或听感验收。

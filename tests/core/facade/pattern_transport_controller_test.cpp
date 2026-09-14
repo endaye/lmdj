@@ -156,20 +156,19 @@ struct Fixture {
     state.patterns.emplace(pattern, lmdj::domain::Pattern{pattern, 1, {}});
     lmdj::project_io::ProjectStore store;
     LMDJ_CHECK(store.create(bundle, state).has_value());
-    // The journal lifecycle stays with the existing Sequence surface; the
-    // controller rides on the already-open journal, as in the coordinator.
-    lmdj::project_io::SequenceJournal journals;
-    LMDJ_CHECK(journals
-                   .begin(bundle, session, pattern, 1,
-                          lmdj::project_io::sequence_pattern_fingerprint(
-                              state.patterns.at(pattern)),
-                          0)
-                   .has_value());
     controller = lmdj::facade::make_pattern_transport_controller(
         audio,
         PatternTransportControllerConfig{
             bundle, session, ProjectId{kProject}, pattern, 7});
     LMDJ_CHECK(controller != nullptr);
+  }
+
+  bool journal_exists() const {
+    lmdj::project_io::SequenceJournal reader;
+    const auto journal = reader.read_active(bundle);
+    if (journal.has_value()) return true;
+    LMDJ_CHECK(journal.error().code == lmdj::foundation::ErrorCode::not_found);
+    return false;
   }
 
   PatternTransportRequest make(unsigned command, std::uint64_t epoch,
@@ -215,8 +214,8 @@ void recording_record_off_closes_and_keeps_playing() {
   LMDJ_CHECK(status.playing);
   LMDJ_CHECK(!status.recording);
   LMDJ_CHECK(status.origin_frame == origin);
-  const auto journal = f.read_journal();
-  LMDJ_CHECK(journal.admission->closure.has_value());
+  // Record-off settles the admission completely; the journal is removed.
+  LMDJ_CHECK(!f.journal_exists());
 }
 
 void playing_play_stops_without_a_journal() {
@@ -227,8 +226,7 @@ void playing_play_stops_without_a_journal() {
   const auto status = f.controller->inspect();
   LMDJ_CHECK(!status.playing);
   LMDJ_CHECK(!status.recording);
-  const auto journal = f.read_journal();
-  LMDJ_CHECK(!journal.admission);
+  LMDJ_CHECK(!f.journal_exists());
 }
 
 void pending_operation_reports_busy_then_replays() {
@@ -300,14 +298,17 @@ void recording_press_and_release_are_retained() {
              lmdj::project_io::SequenceCandidateKind::release);
   LMDJ_CHECK(stored_release.press_sequence == 10);
   f.settle(f.make(7, 2, PatternTransportIntent::record));
-  const auto closed = f.read_journal();
-  LMDJ_CHECK(closed.admission->closure.has_value());
-  // A plain Record-off closes admission without draining candidates; their
-  // conversion belongs to the terminal transfer path, covered by the T1/T2
-  // suites. The retained prefix must survive closure intact.
-  LMDJ_CHECK(closed.admission->candidates.size() == 2);
-  LMDJ_CHECK(closed.admission->candidates.front().press_sequence == 10);
-  LMDJ_CHECK(closed.admission->candidates.back().press_sequence == 10);
+  // Record-off settles: the retained prefix is drained and committed to Project
+  // Truth exactly once, the admission completes, and the settled journal is
+  // removed.
+  lmdj::project_io::ProjectStore store;
+  const auto project = store.load(f.bundle);
+  LMDJ_CHECK(project.has_value());
+  const auto& events = project.value().patterns.at(f.pattern).events;
+  LMDJ_CHECK(events.size() == 1);
+  LMDJ_CHECK((events.front().slot == lmdj::domain::PadSlotId{0, 1}));
+  LMDJ_CHECK(events.front().velocity == 90);
+  LMDJ_CHECK(!f.journal_exists());
 }
 
 void pre_fence_candidate_is_live_only() {
@@ -332,8 +333,7 @@ void admission_before_recording_fails() {
   Fixture f;
   const lmdj::facade::PatternTransportCandidate press{10, 0, {0, 1}, true, 90, 10};
   LMDJ_CHECK(!f.controller->admit(press).has_value());
-  const auto journal = f.read_journal();
-  LMDJ_CHECK(!journal.admission || journal.admission->candidates.empty());
+  LMDJ_CHECK(!f.journal_exists());
 }
 
 void release_with_unknown_correlation_fabricates_no_press() {
@@ -354,15 +354,18 @@ void release_with_unknown_correlation_fabricates_no_press() {
   const auto journal = f.read_journal();
   LMDJ_CHECK(journal.admission->candidates.size() == 2);
   LMDJ_CHECK(journal.admission->candidates.back().press_sequence == 77);
-  // Closing keeps both candidates with their exact identities; whether the
-  // orphan release matches an owned press is decided by conversion, never by
-  // admission, and conversion's correlation matching is pinned by the T1
-  // suite. Nothing is dropped or rewritten at this seam.
+  // Closing drains and converts the frozen prefix: the orphan release matches
+  // no owned press, so exactly the press is committed to Project Truth, and the
+  // settled journal is removed. Correlation matching is pinned by the T1 suite.
   f.settle(f.make(7, 2, PatternTransportIntent::record));
-  const auto closed = f.read_journal();
-  LMDJ_CHECK(closed.admission->closure.has_value());
-  LMDJ_CHECK(closed.admission->candidates.size() == 2);
-  LMDJ_CHECK(closed.admission->candidates.back().press_sequence == 77);
+  lmdj::project_io::ProjectStore store;
+  const auto project = store.load(f.bundle);
+  LMDJ_CHECK(project.has_value());
+  const auto& events = project.value().patterns.at(f.pattern).events;
+  LMDJ_CHECK(events.size() == 1);
+  LMDJ_CHECK((events.front().slot == lmdj::domain::PadSlotId{0, 1}));
+  LMDJ_CHECK(events.front().velocity == 90);
+  LMDJ_CHECK(!f.journal_exists());
 }
 
 // The real Host shape: one Application, one storage platform instance, and a
@@ -404,13 +407,6 @@ struct ApplicationFixture {
     state.patterns.emplace(pattern, lmdj::domain::Pattern{pattern, 1, {}});
     lmdj::project_io::ProjectStore store(platform);
     LMDJ_CHECK(store.create(bundle, state).has_value());
-    lmdj::project_io::SequenceJournal journals(platform);
-    LMDJ_CHECK(journals
-                   .begin(bundle, session, pattern, 1,
-                          lmdj::project_io::sequence_pattern_fingerprint(
-                              state.patterns.at(pattern)),
-                          0)
-                   .has_value());
   }
 
   PatternTransportRequest make(unsigned command, std::uint64_t epoch,
@@ -449,11 +445,18 @@ void application_built_controller_runs_under_the_held_writer_lease() {
   f.audio.render(1);
   LMDJ_CHECK(controller->continue_operation().has_value());
   LMDJ_CHECK(!controller->inspect().recording);
+  // The lazy begin, admission, settlement flush and journal removal all ran
+  // under the Host-held lease through the shared platform instance.
+  lmdj::project_io::ProjectStore store(f.platform);
+  const auto project = store.load(f.bundle);
+  LMDJ_CHECK(project.has_value());
+  const auto& events = project.value().patterns.at(f.pattern).events;
+  LMDJ_CHECK(events.size() == 1);
+  LMDJ_CHECK(events.front().velocity == 90);
   lmdj::project_io::SequenceJournal reader;
   const auto journal = reader.read_active(f.bundle);
-  LMDJ_CHECK(journal.has_value());
-  LMDJ_CHECK(journal.value().admission && journal.value().admission->closure.has_value());
-  LMDJ_CHECK(journal.value().admission->candidates.size() == 1);
+  LMDJ_CHECK(!journal.has_value());
+  LMDJ_CHECK(journal.error().code == lmdj::foundation::ErrorCode::not_found);
 }
 
 void controller_on_a_fresh_platform_reports_busy_then_recovers() {
