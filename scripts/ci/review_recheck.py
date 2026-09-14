@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit source repair verification and guarded bot-thread publication.
+"""Source repair verification and guarded bot-thread publication.
 
 No credentials enter the model. GitHub thread resolution has no head CAS;
 fresh boundary checks and compensation detect, but cannot eliminate, races.
@@ -66,7 +66,7 @@ def connection(api, query, variables, select):
 THREADS = """query($owner:String!,$name:String!,$number:Int!,$cursor:String){
 repository(owner:$owner,name:$name){pullRequest(number:$number){
 reviewThreads(first:100,after:$cursor){totalCount pageInfo{hasNextPage endCursor}
-nodes{id comments(first:1){nodes{databaseId}}}}}}} """
+nodes{id isResolved comments(first:1){nodes{databaseId path author{... on Bot{databaseId} ... on User{databaseId}}}}}}}}} """
 
 COMMENTS = """query($thread:ID!,$cursor:String){node(id:$thread){
 ... on PullRequestReviewThread {id comments(first:100,after:$cursor){
@@ -77,10 +77,14 @@ STATE = """query($thread:ID!){node(id:$thread){... on PullRequestReviewThread{
 id isResolved pullRequest{number repository{nameWithOwner}}}}} """
 
 
-def thread_for(api, repository, number, comment_id):
+def thread_inventory(api, repository, number):
     owner, name = repository.split("/")
-    threads = connection(api, THREADS, {"owner": owner, "name": name, "number": number},
+    return connection(api, THREADS, {"owner": owner, "name": name, "number": number},
                          lambda d: d.get("repository", {}).get("pullRequest", {}).get("reviewThreads"))
+
+
+def thread_for(api, repository, number, comment_id, threads=None):
+    threads = thread_inventory(api, repository, number) if threads is None else threads
     matching = [t for t in threads if t.get("comments", {}).get("nodes", [{}])
                 and t["comments"]["nodes"][0].get("databaseId") == comment_id]
     require(len(matching) == 1, "selected ID is not one original review-thread comment")
@@ -118,14 +122,14 @@ def current_head(api, repository, number, head):
             "PR is closed, draft, retargeted or has a different head")
 
 
-def collect(api, document, comment_id, *, git, fetch, allow_resolved=False):
+def collect(api, document, comment_id, *, git, fetch, allow_resolved=False, reader=None, threads=None):
     """Original review auth is the existing retained-artifact reader, not a bot name."""
     import review_wait
     identity = document["identity"]
     repository, number, head = identity["repository"], identity["pull_request"], identity["head_sha"]
     require(type(comment_id) is int and comment_id > 0, "comment ID must be a positive integer")
     current_head(api, repository, number, head)
-    reader = review_wait.Reader(api, repository)
+    reader = reader or review_wait.Reader(api, repository)
     repo = reader.get(f"/repos/{repository}")
     bot = reader.get("/users/github-actions%5Bbot%5D")
     comment = reader.get(f"/repos/{repository}/pulls/comments/{comment_id}")
@@ -142,7 +146,7 @@ def collect(api, document, comment_id, *, git, fetch, allow_resolved=False):
     # that authenticated inventory, rather than merely to a supplied review ID.
     roots = reader.pages(f"/repos/{repository}/pulls/{number}/reviews/{review_id}/comments")
     require(any(c.get("id") == comment_id for c in roots), "selected comment is absent from authentic findings")
-    thread = thread_for(api, repository, number, comment_id)
+    thread = thread_for(api, repository, number, comment_id, threads)
     resolved, conversation = snapshot(api, repository, number, thread)
     require(allow_resolved or not resolved, "selected thread is already resolved")
     require(conversation and conversation[0]["id"] == comment_id
@@ -156,6 +160,7 @@ def collect(api, document, comment_id, *, git, fetch, allow_resolved=False):
     require(git("merge-base", original, head).decode().strip() == original, "original reviewed head is not an ancestor")
     original_content = git("show", original + ":" + path).decode("utf-8")
     fix_diff = git("diff", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", original, head, "--", path).decode("utf-8")
+    require(bool(fix_diff.strip()), "finding source is unchanged since the original review")
     request = {"comment_id": comment_id, "thread_id": thread, "original_head": original,
                "path": path, "original_line": comment["original_line"], "body": comment["body"], "original_content": original_content,
                "fix_diff": fix_diff, "conversation": conversation}
@@ -165,11 +170,61 @@ def collect(api, document, comment_id, *, git, fetch, allow_resolved=False):
     return request
 
 
-def attach(document, request):
-    document["repair_request"] = request
+def collect_batch(api, document, *, git, fetch):
+    """Bound costly authentication; absent evidence never turns into resolution."""
+    import review_wait
+    identity = document["identity"]
+    repository, number, head = identity["repository"], identity["pull_request"], identity["head_sha"]
+    current_head(api, repository, number, head)
+    threads = thread_inventory(api, repository, number)
+    reader = review_wait.Reader(api, repository)
+    bot = reader.get("/users/github-actions%5Bbot%5D")
+    require(type(bot.get("id")) is int and bot.get("type") == "Bot", "bot identity is unavailable")
+    report, candidates, requests = [], [], []
+    files = {f["path"] for f in engine.authenticate_input(document)["files"] if f["head_encoding"] == "utf-8"}
+    for thread in threads:
+        require(type(thread.get("isResolved")) is bool, "thread resolution state is unavailable")
+        roots = thread.get("comments", {}).get("nodes", [])
+        require(len(roots) == 1 and type(roots[0].get("databaseId")) is int, "thread original comment is unavailable")
+        root = roots[0]
+        if thread["isResolved"] or (root.get("author") or {}).get("databaseId") != bot["id"]:
+            continue
+        row = {"comment_id": root["databaseId"], "thread_id": thread["id"]}
+        if root.get("path") not in files:
+            report.append({**row, "status": "not_rechecked", "reason": "finding path has no current text source in the complete PR input"})
+        else:
+            candidates.append(row)
+    for index, row in enumerate(sorted(candidates, key=lambda r: r["comment_id"])):
+        if index >= engine.MAX_REPAIR_REQUESTS:
+            report.append({**row, "status": "deferred", "reason": "per-run candidate bound; use manual recheck"})
+            continue
+        try:
+            request = collect(api, document, row["comment_id"], git=git, fetch=fetch, reader=reader, threads=threads)
+            require(len(engine._canonical([*requests, request])) <= engine.MAX_REPAIR_BYTES,
+                    "combined repair context exceeds its byte bound")
+        except (ReviewScopeError, review_wait.Refused, engine.EngineError) as error:
+            report.append({**row, "status": "not_rechecked", "reason": str(error)})
+        else:
+            requests.append(request)
+            report.append({**row, "status": "collected"})
+    current_head(api, repository, number, head)
+    return requests, {"head_sha": head, "threads_observed": len(threads), "candidates": report}
+
+
+def attach_batch(document, requests):
+    document["repair_requests"] = requests
+    reseal(document)
+
+
+def reseal(document):
     document.pop("input_sha256", None)
     document["input_sha256"] = digest(document)
     engine.authenticate_input(document)
+
+
+def attach(document, request):
+    document["repair_request"] = request
+    reseal(document)
 
 
 def set_resolved(api, thread, resolved):
@@ -179,11 +234,14 @@ def set_resolved(api, thread, resolved):
     require(data.get("id") == thread and data.get("isResolved") is resolved, "thread mutation was not confirmed")
 
 
-def publish(api, document, native, *, git, fetch):
-    identity, request = document["identity"], document["repair_request"]
+def publish(api, document, native, *, git, fetch, request=None, reader=None, threads=None):
+    identity = document["identity"]
+    request = document["repair_request"] if request is None else request
     repository, number, head = identity["repository"], identity["pull_request"], identity["head_sha"]
     auth = engine.authenticate_input(document)
-    verdict = engine.validate_repair_verdict(native, auth)
+    verdicts = engine.validate_repair_verdicts(native, auth)
+    require(request in engine.repair_requests(auth), "selected request differs from authenticated input")
+    verdict = next(v for v in verdicts if v["comment_id"] == request["comment_id"])
     bot = api._request("GET", "/users/github-actions%5Bbot%5D")
     marker = "<!-- lmdj-repair-recheck-v1 " + head + " " + digest(request) + " -->"
     body = (f"PR-Agent repair recheck: **{verdict['verdict']}** at `{head}`.\n\n"
@@ -200,7 +258,7 @@ def publish(api, document, native, *, git, fetch):
         return [c for c in comments if c not in receipts], receipts
 
     # Reconstruct source/provenance independently of the downloaded request.
-    fresh = collect(api, document, request["comment_id"], git=git, fetch=fetch, allow_resolved=True)
+    fresh = collect(api, document, request["comment_id"], git=git, fetch=fetch, allow_resolved=True, reader=reader, threads=threads)
     fresh["conversation"], receipts = without_receipt(fresh["conversation"])
     require(fresh == request, "source finding, fix diff or conversation changed since model input")
 
@@ -242,3 +300,21 @@ def publish(api, document, native, *, git, fetch):
         require(not snapshot(api, repository, number, request["thread_id"])[0], "race compensation could not be observed")
         raise
     return {"verdict": "resolved", "resolved": True, "request_sha256": digest(request)}
+
+
+def publish_batch(api, document, native, *, git, fetch, record=None):
+    """Persist each far-side receipt; a later refusal cannot erase earlier effects."""
+    import review_wait
+    auth = engine.authenticate_input(document)
+    engine.validate_repair_verdicts(native, auth)
+    identity = document["identity"]
+    reader = review_wait.Reader(api, identity["repository"])
+    threads = thread_inventory(api, identity["repository"], identity["pull_request"])
+    receipts = []
+    for request in auth["repair_requests"]:
+        receipt = publish(api, document, native, git=git, fetch=fetch, request=request,
+                          reader=reader, threads=threads)
+        receipts.append({"comment_id": request["comment_id"], **receipt})
+        if record:
+            record({"receipts": receipts})
+    return {"receipts": receipts}

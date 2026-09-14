@@ -62,7 +62,13 @@ attempt 失败。YAML block scalar 的末尾换行仅在能匹配精确路径时
 
 安装支持 Issue #1305 的 adapter 后，可在 main 上手动运行 PR Review，填写
 `pr_number` 和可选的 `recheck_comment_id`（原始 LMDJ bot inline 评论的数字 ID）。
-默认评审不变；push 或回复“fixed”不会自动关闭线程。
+安装支持 Issue #1322 的批量 adapter 后，push（`pull_request.synchronize`）会在
+同一次普通审查中自动复核未解决的 bot 问题，无候选时不增加模型调用。
+每次按原始评论 ID 顺序最多尝试认证 4 条候选，复核上下文合计不超过 1 MiB；
+超额、源码未变、缺少历史证据或当前输入不含该文本路径的线程保持打开，
+收集步骤日志及摘要会列出未复核原因，可使用上述手动入口补充。
+普通“fixed”回复不触发复核。连续 push 沿用每 PR 并发取消，发布前仍须核对最新 head。
+批量结果必须逐条对应请求；漏答、重复或混用评论 ID 均不能关闭线程。
 复核输入包括已认证的原 finding、完整对话、原始文件和修复 diff。
 模型必须明确返回 `resolved`、`unresolved` 或 `insufficient_evidence`；只有可以
 从源码证明、附有原始/当前精确代码引用和因果说明的修复，才能关闭选中的 bot 线程。
