@@ -1079,6 +1079,279 @@ void test_a_corrupted_published_set_reports_the_corruption() {
   LMDJ_CHECK(store.list().value().empty());
 }
 
+// Forwards every storage operation to a native platform until one named step
+// is armed to fail with a quota-shaped refusal, the way a full volume reports
+// it. Exists to pin what each refusal names once it crosses the Facade
+// boundary as a bare code (#942).
+class StepFailingPlatform final : public ProjectStoragePlatform {
+ public:
+  enum class Step {
+    none,
+    lease,
+    ensure_directory,
+    create_immutable,
+    publish,
+    list_directories,
+    directory_exists,
+    read_artifact_bytes,
+  };
+
+  explicit StepFailingPlatform(std::shared_ptr<ProjectStoragePlatform> inner)
+      : inner_(std::move(inner)) {}
+
+  void fail(Step step) { step_ = step; }
+
+  lmdj::foundation::Result<
+      std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path& path) override {
+    using Result = lmdj::foundation::Result<
+        std::unique_ptr<lmdj::project_io::ProjectWriterLease>>;
+    if (step_ == Step::lease) {
+      return Result::failure(refusal());
+    }
+    return inner_->acquire_writer(path);
+  }
+
+  lmdj::foundation::Result<void> ensure_directory(
+      const std::filesystem::path& path) override {
+    if (step_ == Step::ensure_directory) {
+      return lmdj::foundation::Result<void>::failure(refusal());
+    }
+    return inner_->ensure_directory(path);
+  }
+
+  lmdj::foundation::Result<bool> exists(
+      const std::filesystem::path& path) const override {
+    return inner_->exists(path);
+  }
+
+  lmdj::foundation::Result<std::uint64_t> byte_length(
+      const std::filesystem::path& path) const override {
+    return inner_->byte_length(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(
+      const std::filesystem::path& path) const override {
+    using Result = lmdj::foundation::Result<std::vector<std::byte>>;
+    // The manifest read stays healthy so read_artifact reaches its own blob
+    // read; only Artifact bytes carry the armed failure.
+    if (step_ == Step::read_artifact_bytes &&
+        path.filename() != "manifest.json") {
+      return Result::failure(refusal());
+    }
+    return inner_->read_complete(path);
+  }
+
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    if (step_ == Step::create_immutable) {
+      return lmdj::foundation::Result<void>::failure(refusal());
+    }
+    return inner_->create_immutable(path, bytes);
+  }
+
+  lmdj::foundation::Result<void> replace_complete(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return inner_->replace_complete(path, bytes);
+  }
+
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& path,
+      std::uint64_t valid_prefix_length,
+      std::span<const std::byte> bytes) override {
+    return inner_->append_durable(path, valid_prefix_length, bytes);
+  }
+
+  lmdj::foundation::Result<void> remove(
+      const std::filesystem::path& path) override {
+    return inner_->remove(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::string>> list_names(
+      const std::filesystem::path& path) const override {
+    return inner_->list_names(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::string>> list_directories(
+      const std::filesystem::path& path) const override {
+    using Result = lmdj::foundation::Result<std::vector<std::string>>;
+    if (step_ == Step::list_directories) {
+      return Result::failure(refusal());
+    }
+    return inner_->list_directories(path);
+  }
+
+  lmdj::foundation::Result<void> remove_tree(
+      const std::filesystem::path& path) override {
+    return inner_->remove_tree(path);
+  }
+
+  lmdj::foundation::Result<void> publish_directory_if_absent(
+      const std::filesystem::path& staging,
+      const std::filesystem::path& destination) override {
+    if (step_ == Step::publish) {
+      return lmdj::foundation::Result<void>::failure(refusal());
+    }
+    return inner_->publish_directory_if_absent(staging, destination);
+  }
+
+  lmdj::foundation::Result<bool> directory_exists(
+      const std::filesystem::path& path) const override {
+    if (step_ == Step::directory_exists) {
+      return lmdj::foundation::Result<bool>::failure(refusal());
+    }
+    return inner_->directory_exists(path);
+  }
+
+  lmdj::foundation::Result<void> validate_managed_tree(
+      const std::filesystem::path& root) const override {
+    return inner_->validate_managed_tree(root);
+  }
+
+ private:
+  // The shape a real platform produces for a full volume.
+  static Error refusal() {
+    return Error{
+        ErrorCode::io_error,
+        "injected storage failure",
+        {{"storage_condition",
+          std::string{lmdj::project_io::kStorageConditionQuotaExceeded}}},
+    };
+  }
+
+  std::shared_ptr<ProjectStoragePlatform> inner_;
+  Step step_ = Step::none;
+};
+
+// A refused storage step keeps its code and its storage_condition, names the
+// step in message, and mints no Contract-locked reason.
+void expect_named_storage_refusal(
+    const Error& error,
+    std::string_view expected_message) {
+  LMDJ_CHECK(error.code == ErrorCode::io_error);
+  LMDJ_CHECK(error.message == expected_message);
+  LMDJ_CHECK(reason_of(error).empty());
+  LMDJ_CHECK(
+      error.details.is_object() &&
+      error.details.value("storage_condition", std::string{}) ==
+          std::string{lmdj::project_io::kStorageConditionQuotaExceeded});
+}
+
+void test_a_refused_destination_lease_names_the_step() {
+  TempDirectory workspace;
+  FakeCatalogTransport transport;
+  const std::string kick(64, 'k');
+  const auto manifest = manifest_bytes({{0, "kick", kick}});
+  transport.publish(manifest);
+  transport.publish(kick);
+  auto platform =
+      std::make_shared<StepFailingPlatform>(platform_for(workspace.path()));
+  platform->fail(StepFailingPlatform::Step::lease);
+
+  SoundSetStore store(workspace.path(), generous_limits(), platform);
+  const auto acquired = store.acquire(
+      transport, entry_for(manifest, declared_total(manifest, {kick})));
+  LMDJ_CHECK(!acquired.has_value());
+  expect_named_storage_refusal(
+      acquired.error(), "Sound Set destination could not be leased");
+  expect_invisible(store, workspace.path(), manifest);
+}
+
+void test_a_refused_staging_write_names_the_step() {
+  TempDirectory workspace;
+  FakeCatalogTransport transport;
+  const std::string kick(64, 'k');
+  const auto manifest = manifest_bytes({{0, "kick", kick}});
+  transport.publish(manifest);
+  transport.publish(kick);
+  auto platform =
+      std::make_shared<StepFailingPlatform>(platform_for(workspace.path()));
+  platform->fail(StepFailingPlatform::Step::create_immutable);
+
+  SoundSetStore store(workspace.path(), generous_limits(), platform);
+  const auto acquired = store.acquire(
+      transport, entry_for(manifest, declared_total(manifest, {kick})));
+  LMDJ_CHECK(!acquired.has_value());
+  expect_named_storage_refusal(
+      acquired.error(), "Sound Set manifest could not be staged");
+  expect_invisible(store, workspace.path(), manifest);
+}
+
+void test_a_refused_publication_names_the_step() {
+  TempDirectory workspace;
+  FakeCatalogTransport transport;
+  const std::string kick(64, 'k');
+  const auto manifest = manifest_bytes({{0, "kick", kick}});
+  transport.publish(manifest);
+  transport.publish(kick);
+  auto platform =
+      std::make_shared<StepFailingPlatform>(platform_for(workspace.path()));
+  platform->fail(StepFailingPlatform::Step::publish);
+
+  SoundSetStore store(workspace.path(), generous_limits(), platform);
+  const auto acquired = store.acquire(
+      transport, entry_for(manifest, declared_total(manifest, {kick})));
+  LMDJ_CHECK(!acquired.has_value());
+  expect_named_storage_refusal(
+      acquired.error(), "Sound Set could not be published");
+  expect_invisible(store, workspace.path(), manifest);
+}
+
+void test_a_refused_store_listing_names_the_step() {
+  TempDirectory workspace;
+  std::filesystem::create_directories(
+      workspace.path() / ".lmdj-host" / "soundsets");
+  auto platform =
+      std::make_shared<StepFailingPlatform>(platform_for(workspace.path()));
+  platform->fail(StepFailingPlatform::Step::list_directories);
+
+  SoundSetStore store(workspace.path(), generous_limits(), platform);
+  const auto sets = store.list();
+  LMDJ_CHECK(!sets.has_value());
+  expect_named_storage_refusal(
+      sets.error(), "Sound Set store could not be listed");
+}
+
+void test_a_failed_read_reports_storage_not_absence() {
+  TempDirectory workspace;
+  auto platform =
+      std::make_shared<StepFailingPlatform>(platform_for(workspace.path()));
+  platform->fail(StepFailingPlatform::Step::directory_exists);
+
+  SoundSetStore store(workspace.path(), generous_limits(), platform);
+  const auto stored = store.read(kSetId, kVersion, sha256_hex("x"));
+  LMDJ_CHECK(!stored.has_value());
+  expect_named_storage_refusal(
+      stored.error(), "Sound Set directory could not be inspected");
+}
+
+void test_a_refused_artifact_read_names_the_step() {
+  TempDirectory workspace;
+  FakeCatalogTransport transport;
+  const std::string kick(64, 'k');
+  const auto manifest = manifest_bytes({{0, "kick", kick}});
+  transport.publish(manifest);
+  transport.publish(kick);
+  auto platform =
+      std::make_shared<StepFailingPlatform>(platform_for(workspace.path()));
+
+  SoundSetStore store(workspace.path(), generous_limits(), platform);
+  LMDJ_CHECK(
+      store
+          .acquire(
+              transport, entry_for(manifest, declared_total(manifest, {kick})))
+          .has_value());
+
+  platform->fail(StepFailingPlatform::Step::read_artifact_bytes);
+  const auto bytes =
+      store.read_artifact(sha256_hex(manifest), sha256_hex(kick));
+  LMDJ_CHECK(!bytes.has_value());
+  expect_named_storage_refusal(
+      bytes.error(), "Sound Set Artifact could not be read");
+}
+
 }  // namespace
 
 int main() {
@@ -1096,6 +1369,12 @@ int main() {
     test_one_hash_with_two_descriptions_is_refused();
     test_set_level_demo_is_verified_and_counted_once();
     test_a_corrupted_published_set_reports_the_corruption();
+    test_a_refused_destination_lease_names_the_step();
+    test_a_refused_staging_write_names_the_step();
+    test_a_refused_publication_names_the_step();
+    test_a_refused_store_listing_names_the_step();
+    test_a_failed_read_reports_storage_not_absence();
+    test_a_refused_artifact_read_names_the_step();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
