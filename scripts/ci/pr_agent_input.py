@@ -43,6 +43,7 @@ _RAW_HEADER_RE = re.compile(
 COLLECTION_RECEIPT_SCHEMA = "lmdj.pr-agent-input-collection.v1"
 COLLECTION_FAILURE_SCHEMA = "lmdj.pr-agent-input-collection-failure.v1"
 PUBLICATION_WITNESS_SCHEMA = "lmdj.pr-agent-input-publication-witness.v1"
+GENERATED_ONLY_RECEIPT_SCHEMA = "lmdj.pr-agent-input-generated-only.v1"
 COLLECTION_ARTIFACTS = (
     "context.json", "pr.diff", "pr-body.md", "history.json", "t2-input.json",
     "collection-receipt.json",
@@ -84,9 +85,25 @@ GENERATED_PATHSPEC_EXCLUSIONS = tuple(
     f":(exclude){path}" for path in GENERATED_DIRECTORY_PREFIXES + GENERATED_FILES
 )
 
+# The generated-only receipt path is deliberately narrower than the exclusion
+# set: only the immutable Portal snapshot/provenance classes are verified by a
+# deterministic gate (`scripts/docs-site.sh check`, including release-docs
+# provenance of the committed witness) that a downstream admission check can
+# re-authenticate on the same head.  Rendered assembly and the web-runtime
+# identity keep the plain refusal.
+PORTAL_GENERATED_DIRECTORY_PREFIXES = tuple(
+    prefix for prefix in GENERATED_DIRECTORY_PREFIXES
+    if prefix.startswith("apps/architecture-portal/")
+)
+
 
 def _generated_path(path: str) -> bool:
     return path.startswith(GENERATED_DIRECTORY_PREFIXES) or path in GENERATED_FILES
+
+
+def _portal_generated_change(paths: Sequence[str]) -> bool:
+    """True when every path of a change record is a Portal-class artifact."""
+    return all(path.startswith(PORTAL_GENERATED_DIRECTORY_PREFIXES) for path in paths)
 
 
 def _generated_change(paths: Sequence[str]) -> bool:
@@ -147,6 +164,20 @@ class InputCollectionError(Exception):
 
 class PublicationError(InputCollectionError):
     """A bounded artifact write failed without admitting a complete input."""
+
+
+class GeneratedOnlyInput(Exception):
+    """The complete inventory is Portal-class generated artifacts; carry the receipt.
+
+    This is deliberately not an ``InputCollectionError``: a generated-only
+    change is not a refused collection, and the failure-fence semantics of the
+    refusal path must not attach to it.  The receipt document is produced from
+    fixed Git objects only, exactly like the complete input.
+    """
+
+    def __init__(self, message: str, *, receipt: dict[str, Any]):
+        super().__init__(message)
+        self.receipt = receipt
 
 
 FAILURE_SUMMARY_SCHEMA = "lmdj.pr-agent-input-collection-failure-summary.v1"
@@ -326,6 +357,41 @@ def _refuse(message: str, identity: Any,
         message,
         result=_failure(identity, inventory, reasons, global_reason or message, raw_evidence=raw_evidence),
     )
+
+
+def _generated_only_receipt(identity: Mapping[str, Any],
+                            excluded_inventory: Sequence[change_scope.ChangedFile],
+                            excluded_raw: Sequence[Mapping[str, Any]],
+                            repository: Path) -> dict[str, Any]:
+    """Bind the excluded Portal-class inventory to its exact head blob bytes.
+
+    The receipt names every withheld path and the head-side blob digest the
+    deterministic Portal gate verified; a deletion has no head blob and keeps
+    an explicit null instead of silently dropping the record.
+    """
+    excluded_paths = sorted({path for item in excluded_inventory for path in item.paths})
+    entries = []
+    for item in sorted(excluded_raw, key=lambda record: record["paths"][-1]):
+        path = item["paths"][-1]
+        oid = item["new_oid"]
+        if oid == "0" * 40:
+            entries.append({"path": path, "object_id": None, "sha256": None})
+        else:
+            data = _git(repository, "cat-file", "blob", oid, max_output=MAX_INVENTORY_BYTES)
+            entries.append({"path": path, "object_id": oid, "sha256": _sha256(data)})
+    document: dict[str, Any] = {
+        "schema": GENERATED_ONLY_RECEIPT_SCHEMA,
+        "status": "generated-only",
+        "identity": {key: identity[key] for key in IDENTITY_KEYS},
+        "head_sha": identity["head_sha"],
+        "excluded_generated": {
+            "count": len(excluded_paths),
+            "paths": excluded_paths,
+            "entries": entries,
+        },
+    }
+    document["receipt_sha256"] = _sha256(_canonical(document))
+    return document
 
 
 def _git_environment() -> dict[str, str]:
@@ -902,10 +968,23 @@ def build_input(repository: str | Path, identity: Mapping[str, Any]) -> dict[str
                 value, crossing, reasons,
                 global_reason="rename/change crosses the generated-artifact boundary")
         excluded_inventory = [item for item in inventory if _generated_change(item.paths)]
+        excluded_raw = [item for item in raw if _generated_change(item["paths"])]
         inventory = [item for item in inventory if not _generated_change(item.paths)]
         raw = [item for item in raw if not _generated_change(item["paths"])]
         if not inventory:
             if excluded_inventory:
+                if all(_portal_generated_change(item.paths) for item in excluded_inventory):
+                    # Rename boundary checks already ran above.  Only the
+                    # Portal snapshot/provenance classes carry a deterministic
+                    # same-head gate, so only they graduate from refusal to a
+                    # control-plane receipt; every other generated-only
+                    # combination keeps the refusal below byte-for-byte.
+                    raise GeneratedOnlyInput(
+                        "why: changed Git inventory contains only excluded generated artifacts of the "
+                        "Architecture Portal snapshot/provenance classes; remedy: the deterministic "
+                        "portal gate verifies this exact head and the generated-only receipt carries "
+                        "the review evidence",
+                        receipt=_generated_only_receipt(value, excluded_inventory, excluded_raw, root))
                 raise _refuse(
                     "why: changed Git inventory contains only excluded generated artifacts; "
                     "remedy: rely on the deterministic gates that verify tool-generated artifacts, "
@@ -1264,6 +1343,23 @@ def publish_failure(directory: str | Path, result: Mapping[str, Any]) -> None:
             raise PublicationError("bounded collection failure summary exceeds its output limit")
     _ensure_fresh_directory(Path(directory))
     _write_no_clobber(Path(directory), "collection-failure.json", payload)
+
+
+def publish_generated_only(directory: str | Path, receipt: Mapping[str, Any]) -> str:
+    """Publish the generated-only receipt as the directory's only marker.
+
+    The receipt is neither a complete-input success marker nor a failure
+    fence: ``collection-receipt.json`` would impersonate a complete input and
+    ``collection-failure.json`` would fence the directory as an uncertain
+    publication, so this file set is exactly one new member under the same
+    no-clobber, fsynced posture.  Returns the published payload digest.
+    """
+    if not isinstance(receipt, Mapping) or receipt.get("schema") != GENERATED_ONLY_RECEIPT_SCHEMA:
+        raise PublicationError("generated-only receipt is invalid")
+    payload = _canonical(receipt)
+    _ensure_fresh_directory(Path(directory))
+    _write_no_clobber(Path(directory), "generated-only-receipt.json", payload)
+    return _sha256(payload)
 
 
 # Clear aliases make the producer callable under the terminology used by the

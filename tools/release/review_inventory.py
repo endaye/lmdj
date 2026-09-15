@@ -239,8 +239,9 @@ def bind_eligibility(collected, eligibility):
             objects[key] = row
     linked, seen = [], set()
     for evidence in eligibility["evidence"]:
-        require(type(evidence) is dict and evidence.get("kind") in ("automated", "takeover", "waiver"), "eligible evidence kind is invalid")
-        kind, field = ("reviews", "review_id") if evidence["kind"] == "automated" else ("comments", "comment_id")
+        require(type(evidence) is dict and evidence.get("kind") in ("automated", "generated", "takeover", "waiver"),
+                "eligible evidence kind is invalid")
+        kind, field = ("reviews", "review_id") if evidence["kind"] in ("automated", "generated") else ("comments", "comment_id")
         require(positive(evidence.get(field)), "eligible evidence database identity is invalid")
         key = (kind, evidence[field])
         require(key in objects and key not in seen, "eligible evidence is missing or ambiguous in the complete inventory")
@@ -250,10 +251,11 @@ def bind_eligibility(collected, eligibility):
                 and type(observation["byte_length"]) is int and observation["byte_length"] >= 0,
                 "eligible evidence lacks a complete body observation")
         # REST renders authenticated Bot logins with [bot], GraphQL without it.
-        # Only the eligibility verifier's authenticated automated evidence gets
-        # that representation alternative; numeric identity remains mandatory.
+        # Only the eligibility verifier's authenticated bot-published evidence
+        # (automated model review or generated-only receipt) gets that
+        # representation alternative; numeric identity remains mandatory.
         logins = {observation["author_login"]}
-        if evidence["kind"] == "automated" and observation["author_login"].endswith("[bot]"):
+        if evidence["kind"] in ("automated", "generated") and observation["author_login"].endswith("[bot]"):
             logins.add(observation["author_login"][:-5])
         require(type(row.get("body")) is str and type(row.get("author")) is dict
                 and row["author"].get("login") in logins

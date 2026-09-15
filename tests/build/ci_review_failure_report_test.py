@@ -1,6 +1,7 @@
 """Real review protocol and issue adapter, with strict read-only API fixtures."""
 import base64
 from copy import deepcopy
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -174,6 +175,58 @@ class ConsumerTests(unittest.TestCase):
                               status='completed', conclusion='failure', steps=[]))
         self.assertIsNone(self.collect())
         self.assertFalse(self.api.issues)
+
+    def generated_only_shape(self):
+        """Reshape the fixture to an authentic generated-only producer run.
+
+        The finalizer was gated off by the generated-only collection outcome,
+        and the retained archive holds exactly the control-plane receipt.
+        """
+        next(step for step in self.jobs[0]["steps"]
+             if step["name"] == "Save honest final result")["conclusion"] = "skipped"
+        self.run["conclusion"] = "success"
+        identity = {"repository": "endaye/lmdj", "pull_request": 7, "base_sha": B, "head_sha": A,
+                    "control_sha": B, "run_id": "51", "run_attempt": 1}
+        receipt = {"schema": consumer.pipeline.input_producer.GENERATED_ONLY_RECEIPT_SCHEMA,
+                   "status": "generated-only", "identity": identity, "head_sha": A,
+                   "excluded_generated": {
+                       "count": 1,
+                       "paths": ["apps/architecture-portal/versioned_provenance/version-1.0.57.0.json"],
+                       "entries": [{"path": "apps/architecture-portal/versioned_provenance/version-1.0.57.0.json",
+                                    "object_id": "1" * 40, "sha256": "2" * 64}]}}
+        receipt["receipt_sha256"] = hashlib.sha256(
+            consumer.pipeline.input_producer.json_bytes(receipt)).hexdigest()
+        self.documents = {"generated-only-receipt.json": receipt}
+        return receipt
+
+    def test_generated_only_archive_bucket_is_authenticated_not_a_backend_failure(self):
+        self.generated_only_shape()
+        self.assertIsNone(self.collect())
+        self.assertFalse(self.api.issues)
+
+    def test_generated_only_bucket_refuses_every_deviation(self):
+        for failure in ("extra-member", "missing-receipt", "schema", "self-digest",
+                        "non-portal-path", "identity", "finalizer-ran"):
+            with self.subTest(failure=failure):
+                self.setUp()
+                self.generated_only_shape()
+                if failure == "extra-member":
+                    self.documents["context.json"] = {}
+                elif failure == "missing-receipt":
+                    self.documents = {}
+                elif failure == "schema":
+                    self.documents["generated-only-receipt.json"]["schema"] = "forged"
+                elif failure == "self-digest":
+                    self.documents["generated-only-receipt.json"]["receipt_sha256"] = "0" * 64
+                elif failure == "non-portal-path":
+                    self.documents["generated-only-receipt.json"]["excluded_generated"]["paths"] = [
+                        "products/lmdj/generated/web-runtime-identity.mjs"]
+                elif failure == "identity":
+                    self.documents["generated-only-receipt.json"]["identity"]["run_id"] = "52"
+                else:
+                    next(step for step in self.jobs[0]["steps"]
+                         if step["name"] == "Save honest final result")["conclusion"] = "success"
+                self.rejected()
 
     def rejected(self):
         with self.assertRaises((consumer.reporting.ReportingError, review_scope.ReviewScopeError, test_scope.ScopeError, ValueError)):

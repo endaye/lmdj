@@ -275,7 +275,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         change_scope = self.pr_contract_job("change-scope")
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", change_scope)
         self.assertIn("github.event.pull_request.draft == false", change_scope)
-        for job_name in ("ci-contract", "docs-static", "documentation-impact"):
+        for job_name in ("ci-contract", "docs-static", "documentation-impact", "portal-provenance"):
             with self.subTest(job=job_name):
                 self.assertIn("needs.change-scope.outputs.trusted-head == 'true'", self.pr_contract_job(job_name))
 
@@ -291,10 +291,13 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static", self.pr_contract_job("docs-static"))
         impact = self.pr_contract_job("documentation-impact")
         self.assertNotIn("lanes.portal", impact)
+        provenance = self.pr_contract_job("portal-provenance")
+        self.assertIn("fromJSON(needs.change-scope.outputs.manifest).lanes.portal", provenance)
         self.assertNotIn("uses: ./.github/workflows/ci.yml", self.pr_contract_source)
 
     def test_pr_contract_checks_every_selected_job_at_the_exact_head(self) -> None:
-        for job_name in ("change-scope", "ci-contract", "docs-static", "documentation-impact"):
+        for job_name in ("change-scope", "ci-contract", "docs-static", "documentation-impact",
+                         "portal-provenance"):
             with self.subTest(job=job_name):
                 job = self.pr_contract_job(job_name)
                 self.assertIn("uses: actions/checkout@v6", job)
@@ -302,6 +305,24 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 self.assertIn("ref: ${{", job)
                 self.assertIn('test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"', job)
         self.assertIn('git diff --check "$BASE_SHA...$HEAD_SHA"', self.pr_contract_job("docs-static"))
+
+    def test_pr_contract_portal_provenance_runs_the_exact_lane_commands(self) -> None:
+        """The PR gate and scripts/local-ci.sh must run the same portal lane."""
+        lanes = json.loads((REPO_ROOT / "scripts/ci/local_lanes.json").read_text(encoding="utf-8"))
+        commands = lanes["lanes"]["portal"]["commands"]
+        self.assertEqual(commands, ["scripts/docs-site.sh install", "scripts/docs-site.sh check"])
+        provenance = self.pr_contract_job("portal-provenance")
+        self.assertIn("name: Architecture Portal provenance", provenance,
+                      "why: review_wait admits generated-only evidence by this literal check-run name; "
+                      "remedy: keep the job name stable")
+        setup = provenance.index("- uses: actions/setup-node@v6")
+        self.assertIn('node-version: "26"', provenance)
+        install = provenance.index("run: scripts/docs-site.sh install")
+        check = provenance.index("run: scripts/docs-site.sh check")
+        self.assertLess(setup, install,
+                        "why: the portal checker needs Node 26 before install; remedy: keep setup-node first")
+        self.assertLess(install, check,
+                        "why: docs-site check needs the locked dependencies; remedy: install before check")
 
     def test_pr_contract_runs_complete_ci_contract_and_exact_impact_checker(self) -> None:
         ci = self.pr_contract_job("ci-contract")

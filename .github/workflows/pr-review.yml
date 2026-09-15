@@ -71,6 +71,11 @@ jobs:
     name: Review fallback
     needs: [target]
     if: ${{ needs.target.outputs.review == 'true' }}
+    outputs:
+      # Empty on the complete-input route; 'true' only when collection
+      # produced a Portal-class generated-only receipt and every model step
+      # below was gated off.
+      generated_only: ${{ steps.input.outputs.generated_only }}
     # The PR-Agent engine is installed only on the Netcup host
     # (scripts/ci/pr-agent/install.sh); every netcup runner shares it.
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, netcup, ci-general]
@@ -103,7 +108,7 @@ jobs:
         # Witness and model execution share the installation slot lock, so a
         # release switch cannot mix their identities. The ledger caps spend.
         id: deepseek
-        if: ${{ !cancelled() && steps.input.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.input.outcome == 'success' && steps.input.outputs.generated_only != 'true' }}
         timeout-minutes: 25
         continue-on-error: true
         env:
@@ -115,13 +120,13 @@ jobs:
           REVIEW
       - name: Validate PR-Agent result
         id: capture-deepseek
-        if: ${{ !cancelled() && steps.input.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.input.outcome == 'success' && steps.input.outputs.generated_only != 'true' }}
         env:
           BACKEND_OUTCOME: ${{ steps.deepseek.outcome }}
           T2_RESULT_JSON: ${{ env.REVIEW_DIR }}/t2-result.json
         run: python3 scripts/ci/review_pipeline.py capture --backend deepseek --directory "$REVIEW_DIR"
       - name: Save honest final result
-        if: ${{ !cancelled() && steps.input.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.input.outcome == 'success' && steps.input.outputs.generated_only != 'true' }}
         run: python3 scripts/ci/review_pipeline.py finalize --directory "$REVIEW_DIR"
       - uses: actions/upload-artifact@v6
         if: ${{ always() }}
@@ -136,6 +141,7 @@ jobs:
             ${{ env.REVIEW_DIR }}/t2-input.json
             ${{ env.REVIEW_DIR }}/collection-receipt.json
             ${{ env.REVIEW_DIR }}/collection-failure.json
+            ${{ env.REVIEW_DIR }}/generated-only-receipt.json
             ${{ env.REVIEW_DIR }}/t2-config-witness.json
             ${{ env.REVIEW_DIR }}/t2-result.json
             ${{ env.REVIEW_DIR }}/collector.json
@@ -174,7 +180,7 @@ jobs:
           name: pr-review-result-${{ needs.target.outputs.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/review-publish
       - name: Publish exact-head review and scope
-        if: ${{ github.event.action != 'closed' }}
+        if: ${{ github.event.action != 'closed' && needs.review.outputs.generated_only != 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.target.outputs.number }}
@@ -183,8 +189,18 @@ jobs:
           AUTO_RECHECK: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
           PR_EVENT_ACTION: ${{ github.event.action }}
         run: python3 scripts/ci/review_pipeline.py publish --directory "$RUNNER_TEMP/review-publish"
+      - name: Publish generated-only receipt review
+        # A Portal-class generated-only collection produced a receipt instead of
+        # a complete input; publish its marker COMMENT through the same trusted
+        # write boundary. Model artifact validation stays on the route above.
+        if: ${{ github.event.action != 'closed' && needs.review.outputs.generated_only == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.target.outputs.number }}
+          HEAD_SHA: ${{ needs.target.outputs.head_sha }}
+        run: python3 scripts/ci/review_pipeline.py publish-generated --directory "$RUNNER_TEMP/review-publish"
       - uses: actions/upload-artifact@v6
-        if: ${{ always() && github.event.action != 'closed' }}
+        if: ${{ always() && github.event.action != 'closed' && needs.review.outputs.generated_only != 'true' }}
         with:
           name: pr-test-scope-${{ needs.target.outputs.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

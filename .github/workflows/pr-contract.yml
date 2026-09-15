@@ -165,3 +165,40 @@ jobs:
           PORTAL_BASE_SHA: ${{ needs.change-scope.outputs.base-sha }}
           PORTAL_HEAD_SHA: ${{ needs.change-scope.outputs.head-sha }}
         run: node apps/docs-site/scripts/check-doc-impact.mjs
+
+  portal-provenance:
+    # The deterministic gate a Portal-class generated-only change (a frozen
+    # snapshot or squash-witness PR) binds its review evidence to: exactly the
+    # portal lane commands from scripts/ci/local_lanes.json
+    # (scripts/docs-site.sh install + check, including release-docs snapshot
+    # provenance of a newly committed witness) on the exact PR head. A
+    # generated-only PR cannot smuggle checker changes -- any non-generated
+    # edit makes it a normal reviewable PR -- and the verification is
+    # self-authenticating from Git objects, so the trusted head checkout is
+    # sound. The literal job name is part of the authenticated check-run
+    # surface that scripts/ci/review_wait.py reads.
+    name: Architecture Portal provenance
+    needs: change-scope
+    if: >-
+      !cancelled() &&
+      needs.change-scope.outputs.trusted-head == 'true' &&
+      fromJSON(needs.change-scope.outputs.manifest).lanes.portal
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.change-scope.outputs.head-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the exact tested PR head
+        env:
+          EXPECTED_HEAD: ${{ needs.change-scope.outputs.head-sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "26"
+      - name: Install locked portal dependencies
+        run: scripts/docs-site.sh install
+      - name: Verify architecture portal
+        run: scripts/docs-site.sh check

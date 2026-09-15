@@ -190,9 +190,30 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         upload = self.jobs["review"].split("      - uses: actions/upload-artifact", 1)[1].split("      - name:", 1)[0]
         for name in ("context.json", "history.json", "review.json", "result.json", "failure.json",
                      "t2-input.json", "collection-receipt.json", "t2-config-witness.json", "t2-result.json",
-                     "collector.json", "coverage-*.json"):
+                     "collector.json", "coverage-*.json", "generated-only-receipt.json"):
             self.assertIn(f"${{{{ env.REVIEW_DIR }}}}/{name}", upload,
                           f"why: publish/wait/failure readers open {name} from the artifact; remedy: upload it")
+
+    def test_generated_only_route_gates_model_steps_and_reaches_its_publisher(self):
+        job = self.jobs["review"]
+        self.assertIn("generated_only: ${{ steps.input.outputs.generated_only }}", job,
+                      "why: the publish job routes on the collection outcome; remedy: expose the step output")
+        for step in ("deepseek review", "Validate PR-Agent result", "Save honest final result"):
+            with self.subTest(step=step):
+                block = job.split("      - name: " + step + "\n", 1)[1].split("      - ", 1)[0]
+                self.assertIn("steps.input.outcome == 'success'", block)
+                self.assertIn("steps.input.outputs.generated_only != 'true'", block,
+                              "why: a generated-only collection has no complete input; remedy: keep model steps gated off")
+        publish = self.jobs["publish"]
+        publish_block = publish.split("      - name: Publish exact-head review and scope", 1)[1]
+        self.assertIn("needs.review.outputs.generated_only != 'true'", publish_block.split("      - ", 1)[0],
+                      "why: the model publisher must not consume a receipt-only directory; remedy: gate it off")
+        generated = publish.split("      - name: Publish generated-only receipt review\n", 1)[1].split("      - ", 1)[0]
+        self.assertIn("needs.review.outputs.generated_only == 'true'", generated)
+        self.assertIn('review_pipeline.py publish-generated --directory "$RUNNER_TEMP/review-publish"', generated)
+        scope_upload = publish.split("      - uses: actions/upload-artifact@v6", 1)[1].split("      - name:", 1)[0]
+        self.assertIn("needs.review.outputs.generated_only != 'true'", scope_upload,
+                      "why: a generated-only route writes no scope.json; remedy: do not require the scope artifact")
 
     def test_artifact_retains_the_refusal_fence_receipt(self):
         """A refused collection writes only collection-failure.json; without it in the
