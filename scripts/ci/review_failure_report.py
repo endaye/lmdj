@@ -210,12 +210,7 @@ def collect(api, repository, run_id, attempt):
         _step(producer, name)
     finalizers = [s for s in producer.get("steps", []) if s.get("name") == "Save honest final result"]
     require(len(finalizers) == 1, "required review step is missing or incomplete")
-    # A generated-only collection exits 0 with every model step gated off, so
-    # its finalizer is skipped; the explicit third archive bucket below closes
-    # that shape.  Every other run keeps the exact existing step contract.
-    generated_only = finalizers[0].get("conclusion") == "skipped"
-    if not generated_only:
-        require(finalizers[0].get("conclusion") == conclusion, "required review step is missing or incomplete")
+    finalizer = finalizers[0].get("conclusion")
     if conclusion == "failure":
         # The current finalizer saves complete failure receipts before exiting 1.
         # A cancelled/otherwise broken producer is not an all-backend verdict.
@@ -239,17 +234,21 @@ def collect(api, repository, run_id, attempt):
         names = archive.namelist()
         require(sum(i.file_size for i in archive.infolist()) <= LIMIT, "expanded review archive exceeds budget")
         generated_document = None
-        if generated_only:
-            # The third closed bucket: a generated-only producer retains
-            # exactly the control-plane receipt and nothing else.  Any
-            # deviation still refuses; the complete-input buckets are
-            # untouched.
-            require(conclusion == "success", "generated-only review producer did not succeed")
-            require(names == ["generated-only-receipt.json"], "generated-only review archive schema is not closed")
+        if names == ["generated-only-receipt.json"]:
+            # The third closed bucket is archive-driven: the receipt-only shape
+            # selects it, then the producer facts must corroborate -- a
+            # generated-only collection exits 0 with every model step gated
+            # off, so the producer succeeded and its finalizer was skipped.
+            require(conclusion == "success" and finalizer == "skipped",
+                    "generated-only review archive contradicts its producer receipt")
             generated_document = json.loads(archive.read("generated-only-receipt.json"),
                                             object_pairs_hook=change_scope.reject_duplicates)
             documents = {}
         else:
+            # Any other archive shape keeps the exact existing step contract: a
+            # skipped finalizer with a normal archive refuses here with the
+            # step message, before any schema reading.
+            require(finalizer == conclusion, "required review step is missing or incomplete")
             history_document = (json.loads(archive.read("history.json"), object_pairs_hook=change_scope.reject_duplicates)
                                 if "history.json" in names else None)
             v2_archive = isinstance(history_document, dict) and history_document.get("schema") == review_scope.HISTORY_SCHEMA_V2
@@ -290,13 +289,8 @@ def collect(api, repository, run_id, attempt):
                     pipeline.input_producer.json_bytes(unsigned)).hexdigest(),
                 "generated-only receipt self-describing digest differs")
         excluded = receipt["excluded_generated"]
-        require(isinstance(excluded, dict) and set(excluded) == {"count", "paths", "entries"}
-                and isinstance(excluded["paths"], list) and bool(excluded["paths"])
-                and excluded["count"] == len(excluded["paths"])
-                and all(type(name) is str and name.startswith(
-                        pipeline.input_producer.PORTAL_GENERATED_DIRECTORY_PREFIXES)
-                        for name in excluded["paths"]),
-                "generated-only receipt names paths outside the Portal classes")
+        require(pipeline.input_producer.generated_only_excluded_valid(excluded),
+                "generated-only receipt excluded-path entries are not closed")
         control = identity["control_sha"]
         comparison = api.compare(control, main)
         require(comparison.get("status") in {"ahead", "identical"} and comparison.get("merge_base_commit", {}).get("sha") == control,

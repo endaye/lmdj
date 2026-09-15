@@ -921,13 +921,8 @@ def publish_generated(directory):
                              input_producer.json_bytes(unsigned)).hexdigest(),
                          "generated-only receipt self-describing digest differs")
     excluded = receipt["excluded_generated"]
-    review_scope.require(isinstance(excluded, dict) and set(excluded) == {"count", "paths", "entries"}
-                         and isinstance(excluded["paths"], list) and excluded["paths"]
-                         and excluded["count"] == len(excluded["paths"])
-                         and all(isinstance(name, str) and name.startswith(
-                                 input_producer.PORTAL_GENERATED_DIRECTORY_PREFIXES)
-                                 for name in excluded["paths"]),
-                         "generated-only receipt names paths outside the Portal classes")
+    review_scope.require(input_producer.generated_only_excluded_valid(excluded),
+                         "generated-only receipt excluded-path entries are not closed")
     review_scope.require(identity["repository"] == os.environ["GITHUB_REPOSITORY"]
         and identity["pull_request"] == int(os.environ["PR_NUMBER"])
         and identity["head_sha"] == receipt["head_sha"] == os.environ["HEAD_SHA"]

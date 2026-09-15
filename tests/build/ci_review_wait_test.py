@@ -556,6 +556,35 @@ class AdmissionTests(unittest.TestCase):
         self.assertFalse(result["eligible"], result)
         self.assertEqual(result["status"], "invalid")
 
+    def test_generated_receipt_with_unclosed_entries_is_invalid(self):
+        for failure in ("duplicate", "tampered", "missing", "extra-field", "null-mismatch"):
+            with self.subTest(failure=failure):
+                self.render_generated()
+                document = self.source.documents["generated-only-receipt.json"]
+                entries = document["excluded_generated"]["entries"]
+                if failure == "duplicate":
+                    entries.append(deepcopy(entries[0]))
+                elif failure == "tampered":
+                    entries[0]["sha256"] = "not-a-digest"
+                elif failure == "missing":
+                    entries.clear()
+                elif failure == "extra-field":
+                    entries[0]["note"] = "x"
+                else:
+                    entries[0]["sha256"] = None
+                # Keep every other authentication layer intact so only the
+                # entries closure can refuse: reseal the self-describing
+                # digest and republish the marker over the new retained bytes.
+                document.pop("receipt_sha256")
+                document["receipt_sha256"] = hashlib.sha256(
+                    wait.pipeline.input_producer.json_bytes(document)).hexdigest()
+                digest = hashlib.sha256(json.dumps(document).encode()).hexdigest()
+                self.reviews[0]["body"] = wait.pipeline.pr_review_target.generated_body(
+                    REPO, 7, A, "51", "1", digest)
+                result = self.check()
+                self.assertFalse(result["eligible"], result)
+                self.assertEqual(result["status"], "invalid")
+
     def test_generated_receipt_without_portal_lane_stays_pending(self):
         self.render_generated()
         self.check_runs = []

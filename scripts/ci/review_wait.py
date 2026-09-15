@@ -297,6 +297,8 @@ def generated(reader, posted, repo, number, head, bot):
             and receipt["receipt_sha256"] == hashlib.sha256(
                 pipeline.input_producer.json_bytes(unsigned)).hexdigest(),
             "generated-only receipt self-describing digest differs")
+    require(pipeline.input_producer.generated_only_excluded_valid(receipt["excluded_generated"]),
+            "generated-only receipt excluded-path entries are not closed")
     expected = pipeline.pr_review_target.generated_body(repository, number, head, str(run), str(attempt),
                                                         receipt_digest)
     require(posted["body"].startswith(expected),

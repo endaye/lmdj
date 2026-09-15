@@ -206,7 +206,8 @@ class ConsumerTests(unittest.TestCase):
 
     def test_generated_only_bucket_refuses_every_deviation(self):
         for failure in ("extra-member", "missing-receipt", "schema", "self-digest",
-                        "non-portal-path", "identity", "finalizer-ran"):
+                        "non-portal-path", "identity", "entries-duplicate", "entries-tampered",
+                        "finalizer-ran"):
             with self.subTest(failure=failure):
                 self.setUp()
                 self.generated_only_shape()
@@ -219,14 +220,52 @@ class ConsumerTests(unittest.TestCase):
                 elif failure == "self-digest":
                     self.documents["generated-only-receipt.json"]["receipt_sha256"] = "0" * 64
                 elif failure == "non-portal-path":
-                    self.documents["generated-only-receipt.json"]["excluded_generated"]["paths"] = [
+                    document = self.documents["generated-only-receipt.json"]
+                    document["excluded_generated"]["paths"] = [
                         "products/lmdj/generated/web-runtime-identity.mjs"]
+                    document.pop("receipt_sha256")
+                    document["receipt_sha256"] = hashlib.sha256(
+                        consumer.pipeline.input_producer.json_bytes(document)).hexdigest()
                 elif failure == "identity":
                     self.documents["generated-only-receipt.json"]["identity"]["run_id"] = "52"
+                elif failure == "entries-duplicate":
+                    document = self.documents["generated-only-receipt.json"]
+                    document["excluded_generated"]["entries"].append(
+                        deepcopy(document["excluded_generated"]["entries"][0]))
+                    document.pop("receipt_sha256")
+                    document["receipt_sha256"] = hashlib.sha256(
+                        consumer.pipeline.input_producer.json_bytes(document)).hexdigest()
+                elif failure == "entries-tampered":
+                    document = self.documents["generated-only-receipt.json"]
+                    document["excluded_generated"]["entries"][0]["sha256"] = "not-a-digest"
+                    document.pop("receipt_sha256")
+                    document["receipt_sha256"] = hashlib.sha256(
+                        consumer.pipeline.input_producer.json_bytes(document)).hexdigest()
                 else:
                     next(step for step in self.jobs[0]["steps"]
                          if step["name"] == "Save honest final result")["conclusion"] = "success"
                 self.rejected()
+
+    def test_skipped_finalizer_with_a_normal_archive_is_the_step_refusal(self):
+        # The third bucket is archive-driven: only the receipt-only shape
+        # selects it, so a skipped finalizer with a normal archive refuses with
+        # the existing authored step contract, not a bucket message.
+        self.run["conclusion"] = "success"
+        next(step for step in self.jobs[0]["steps"]
+             if step["name"] == "Save honest final result")["conclusion"] = "skipped"
+        with self.assertRaisesRegex(consumer.reporting.ReportingError,
+                                    "required review step is missing or incomplete"):
+            self.collect()
+        self.assertFalse(self.api.issues)
+
+    def test_receipt_archive_with_a_completed_finalizer_is_not_the_generated_only_shape(self):
+        self.generated_only_shape()
+        next(step for step in self.jobs[0]["steps"]
+             if step["name"] == "Save honest final result")["conclusion"] = "success"
+        with self.assertRaisesRegex(consumer.reporting.ReportingError,
+                                    "contradicts its producer receipt"):
+            self.collect()
+        self.assertFalse(self.api.issues)
 
     def rejected(self):
         with self.assertRaises((consumer.reporting.ReportingError, review_scope.ReviewScopeError, test_scope.ScopeError, ValueError)):

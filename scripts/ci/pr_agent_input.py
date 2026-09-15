@@ -409,6 +409,40 @@ def _generated_only_receipt(identity: Mapping[str, Any],
     return document
 
 
+def generated_only_excluded_valid(excluded: Any) -> bool:
+    """Structural closure of a generated-only receipt's excluded inventory.
+
+    Every withheld path carries exactly one entry; an entry either binds the
+    head blob (lowercase object id plus content digest) or records a deletion
+    (both null).  Paths are the sorted unique set the producer emitted; no
+    duplicate paths, no extra fields, no path outside the Portal classes.
+    """
+    if not isinstance(excluded, Mapping) or set(excluded) != {"count", "paths", "entries"}:
+        return False
+    paths, entries = excluded["paths"], excluded["entries"]
+    if (not isinstance(paths, list) or not paths or not isinstance(entries, list)
+            or excluded["count"] != len(paths) or len(entries) != len(paths)):
+        return False
+    if (any(not isinstance(path, str) or not path.startswith(PORTAL_GENERATED_DIRECTORY_PREFIXES)
+            for path in paths)
+            or paths != sorted(paths) or len(set(paths)) != len(paths)):
+        return False
+    entry_paths = []
+    for entry in entries:
+        if not isinstance(entry, Mapping) or set(entry) != {"path", "object_id", "sha256"}:
+            return False
+        path, oid, digest = entry["path"], entry["object_id"], entry["sha256"]
+        if not isinstance(path, str):
+            return False
+        entry_paths.append(path)
+        if oid is None and digest is None:
+            continue
+        if not (isinstance(oid, str) and _OID_RE.fullmatch(oid)
+                and isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest)):
+            return False
+    return sorted(entry_paths) == paths
+
+
 def _git_environment() -> dict[str, str]:
     """Return a Git environment with ambient configuration and fetching removed."""
     dangerous = {

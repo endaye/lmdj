@@ -1600,8 +1600,12 @@ class PipelineTests(unittest.TestCase):
         digest = hashlib.sha256(receipt_bytes).hexdigest()
         self.assertIn("generated_receipt_sha256=" + digest, lines)
 
-    def publish_generated_with_doubles(self, *, prior=None):
-        """Run publish_generated with API doubles; `prior` is 'same' or 'conflict'."""
+    def publish_generated_with_doubles(self, *, prior=None, mutate=None):
+        """Run publish_generated with API doubles; `prior` is 'same' or 'conflict'.
+
+        `mutate` may rewrite the receipt before sealing so a test can isolate
+        one authentication layer.
+        """
         repository, base, head = self.make_real_generated_only_repo()
         output = Path(tempfile.mkdtemp(prefix="publish-generated-output-", dir=self.directory))
         identity = {
@@ -1620,6 +1624,8 @@ class PipelineTests(unittest.TestCase):
                              "object_id": "1" * 40, "sha256": "2" * 64}],
             },
         }
+        if mutate is not None:
+            mutate(receipt)
         receipt["receipt_sha256"] = hashlib.sha256(pipeline.input_producer.json_bytes(receipt)).hexdigest()
         pipeline.save(output / "generated-only-receipt.json", receipt)
         digest = hashlib.sha256((output / "generated-only-receipt.json").read_bytes()).hexdigest()
@@ -1656,6 +1662,18 @@ class PipelineTests(unittest.TestCase):
     def test_publish_generated_refuses_a_conflicting_duplicate(self):
         with self.assertRaisesRegex(review_scope.ReviewScopeError, "different content"):
             self.publish_generated_with_doubles(prior="conflict")
+
+    def test_publish_generated_refuses_unclosed_entries(self):
+        for failure in ("duplicate", "tampered"):
+            with self.subTest(failure=failure):
+                def mutate(receipt, failure=failure):
+                    entries = receipt["excluded_generated"]["entries"]
+                    if failure == "duplicate":
+                        entries.append(dict(entries[0]))
+                    else:
+                        entries[0]["sha256"] = "not-a-digest"
+                with self.assertRaisesRegex(review_scope.ReviewScopeError, "entries are not closed"):
+                    self.publish_generated_with_doubles(mutate=mutate)
 
     def test_collect_t2_target_change_before_publication_fails_closed(self):
         repository, base, head = self.make_real_t2_repo()

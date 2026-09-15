@@ -636,6 +636,37 @@ class ProducerTests(unittest.TestCase):
         unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
         self.assertEqual(receipt["receipt_sha256"],
                          hashlib.sha256(producer.json_bytes(unsigned)).hexdigest())
+        self.assertTrue(producer.generated_only_excluded_valid(receipt["excluded_generated"]))
+
+    def test_generated_only_excluded_validation_is_closed(self):
+        base = self.commit_files({"base.txt": b"base\n"}, "base")
+        self.commit_files(self.portal_generated_changes(), "snapshot only")
+        head = self.git.text("rev-parse", "HEAD")
+        with self.assertRaises(producer.GeneratedOnlyInput) as raised:
+            self.build(base, head)
+        excluded = raised.exception.receipt["excluded_generated"]
+        mutations = []
+        tampered = copy.deepcopy(excluded)
+        tampered["entries"][0]["sha256"] = "not-a-digest"
+        mutations.append(tampered)
+        duplicated = copy.deepcopy(excluded)
+        duplicated["entries"].append(copy.deepcopy(duplicated["entries"][0]))
+        mutations.append(duplicated)
+        missing = copy.deepcopy(excluded)
+        missing["entries"] = missing["entries"][:-1]
+        mutations.append(missing)
+        extra_field = copy.deepcopy(excluded)
+        extra_field["entries"][0]["note"] = "x"
+        mutations.append(extra_field)
+        null_mismatch = copy.deepcopy(excluded)
+        null_mismatch["entries"][0]["sha256"] = None
+        mutations.append(null_mismatch)
+        non_portal = copy.deepcopy(excluded)
+        non_portal["paths"] = ["products/lmdj/generated/web-runtime-identity.mjs"]
+        mutations.append(non_portal)
+        for value in mutations:
+            with self.subTest(value=value["entries"]):
+                self.assertFalse(producer.generated_only_excluded_valid(value))
 
     def test_non_portal_generated_only_inventory_is_the_typed_terminal_disposition(self):
         base = self.commit_files({"base.txt": b"base\n"}, "base")
