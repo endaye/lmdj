@@ -1059,6 +1059,64 @@ test("retries replay neutral reset until Core reports a terminal state", async (
   expect(fixture.controller.getState().replayNeutral).toBe(true);
 });
 
+test("a replay poll reply that outlives Stop Replay cannot overwrite the terminal state", async () => {
+  const fixture = controllerFixture();
+  const session = fixture.runtime.session;
+  (session.beginPerformanceReplay as ReturnType<typeof vi.fn>)
+    .mockResolvedValue({replayId: "replay-1", state: "playing",
+      resolvedRevision: 7, eventCursor: 0, eventCount: 4,
+      projectRevision: null});
+  (session.stopPerformanceReplay as ReturnType<typeof vi.fn>)
+    .mockResolvedValue({replayId: "replay-1", requestId: "stop-replay",
+      state: "stopped", resolvedRevision: 7, eventCursor: 0, eventCount: 4,
+      replayed: false, projectRevision: null});
+  // The poll answers only when the test says so: this reply carries the
+  // pre-stop state and lands after the terminal transition (#746).
+  const pendingPolls: ((status: unknown) => void)[] = [];
+  (session.queryPerformanceReplayStatus as ReturnType<typeof vi.fn>)
+    .mockImplementation(() => new Promise((resolve) => {
+      pendingPolls.push(resolve);
+    }));
+
+  await fixture.controller.beginReplay(ids.performance);
+  void fixture.controller.refreshReplay();
+  expect(pendingPolls.length).toBe(1);
+  await fixture.controller.stopReplay();
+  expect(fixture.controller.getState().replay?.state).toBe("stopped");
+  expect(fixture.controller.getState().replayNeutral).toBe(true);
+
+  for (const answer of pendingPolls) {
+    answer({replayId: "replay-1", state: "playing", resolvedRevision: 7,
+      eventCursor: 0, eventCount: 4, projectRevision: null});
+  }
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(fixture.controller.getState().replay?.state).toBe("stopped");
+  expect(fixture.controller.getState().replayNeutral).toBe(true);
+});
+
+test("a current replay poll reply still refreshes the playing state", async () => {
+  const fixture = controllerFixture();
+  const session = fixture.runtime.session;
+  (session.beginPerformanceReplay as ReturnType<typeof vi.fn>)
+    .mockResolvedValue({replayId: "replay-1", state: "playing",
+      resolvedRevision: 7, eventCursor: 0, eventCount: 4,
+      projectRevision: null});
+  const pendingPolls: ((status: unknown) => void)[] = [];
+  (session.queryPerformanceReplayStatus as ReturnType<typeof vi.fn>)
+    .mockImplementation(() => new Promise((resolve) => {
+      pendingPolls.push(resolve);
+    }));
+
+  await fixture.controller.beginReplay(ids.performance);
+  const poll = fixture.controller.refreshReplay();
+  for (const answer of pendingPolls) {
+    answer({replayId: "replay-1", state: "playing", resolvedRevision: 8,
+      eventCursor: 1, eventCount: 4, projectRevision: null});
+  }
+  await poll;
+  expect(fixture.controller.getState().replay?.resolvedRevision).toBe(8);
+});
+
 test("refuses to leave while replay neutral reset remains pending", async () => {
   const fixture = controllerFixture({maximumStatusQueries: 2,
     waitForStatusQuery: async () => {}});
