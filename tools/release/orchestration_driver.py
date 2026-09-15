@@ -162,6 +162,18 @@ class ReleaseDriver:
             return Observation("unknown")
         return self._observe(journal.read(state["request"]["id"]), operation)
 
+    def _backend_carrier(self, operation):
+        """The enrolled backend carrier for this step, when it owns one."""
+        carriers = getattr(self.backend, "carriers", None)
+        if not isinstance(carriers, dict):
+            return None
+        return carriers.get(operation["step"])
+
+    def _backend_advance(self, operation):
+        """A backend carrier that drives its own effect under the write guard."""
+        carrier = self._backend_carrier(operation)
+        return carrier if callable(getattr(carrier, "advance", None)) else None
+
     def _advance(self, journal, state):
         verified = []
         request_id = state["request"]["id"]
@@ -195,11 +207,30 @@ class ReleaseDriver:
                 "status": "intent", "evidence": None}
             observed = self._observe(state, operation)
             managed = self._managed(operation)
-            if observed.status not in (("absent", "verified", "pending") if managed else ("absent", "verified")):
+            advanced = self._backend_advance(operation)
+            if observed.status not in (("absent", "verified", "pending")
+                                       if managed or advanced else ("absent", "verified")):
                 return result(observed.status, step)
             journal.begin(request_id, step)
             if managed and observed.status != "verified":
                 observed = self._advance_managed(journal, journal.read(request_id), operation)
+                if observed.status != "verified":
+                    return result("unknown" if observed.status == "absent" else observed.status, step)
+            elif advanced is not None and observed.status != "verified":
+                self._authenticate(state["request"])
+                state = journal.read(request_id)
+
+                def guard():
+                    self._authenticate(state["request"])
+                    journal._active()
+
+                try:
+                    advanced.advance(deepcopy(state), deepcopy(operation), before_write=guard)
+                except Exception:
+                    # External errors may embed credentials; never persist or
+                    # expose their strings as the request's public status.
+                    return result("unknown", step)
+                observed = self._observe(journal.read(request_id), operation)
                 if observed.status != "verified":
                     return result("unknown" if observed.status == "absent" else observed.status, step)
             elif observed.status == "absent":

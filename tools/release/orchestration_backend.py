@@ -41,6 +41,10 @@ class ReleaseBackend:
     def observe(self, state, operation):
         return self._carrier(operation).observe(state, operation)
 
+    def advance(self, state, operation, before_write) -> None:
+        """Drive an unattempted effect under the driver's durable write guard."""
+        self._carrier(operation).advance(state, operation, before_write=before_write)
+
     def execute(self, state, operation) -> None:
         self._carrier(operation).execute(state, operation)
 

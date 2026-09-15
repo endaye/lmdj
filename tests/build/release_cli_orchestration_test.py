@@ -252,12 +252,32 @@ class ReleaseEntryPointTest(unittest.TestCase):
         self.assertEqual(self.request_ids(), [])
         self.assertFalse(self.journal().exists())
 
-    def test_second_scope_is_refused_while_the_first_request_is_unfinished(self):
+    def test_same_scope_run_adopts_the_unfinished_request(self):
         self.carriers["publication"].fail_after_write = True
         self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 2)
-        output = io.StringIO()
-        self.assertEqual(self.run_cli(["run", "--authority", "issue:1302"], capture=output), 2)
-        self.assertIn("unfinished", output.getvalue())
+        # A second run with different authority but the same frozen scope
+        # adopts the active request and drives it to completion; the incoming
+        # authority never replaces the original grant.
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1302"]), 0)
+        self.assertEqual(len(self.request_ids()), 1)
+
+    def test_other_scope_is_refused_while_a_request_is_unfinished(self):
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 2)
+        # A different frozen scope (different control revision) is a different
+        # release and is refused while the first request is unfinished.
+        main = self.context.git.main_revision
+        other = "d" * 40
+        self.context.git.is_main_ancestor = lambda target: target in (CONTROL, other)
+        try:
+            self.context.git.main_revision = lambda: other
+            output = io.StringIO()
+            self.assertEqual(
+                self.run_cli(["run", "--authority", "issue:1302"], capture=output), 2)
+            self.assertIn("unfinished", output.getvalue())
+        finally:
+            self.context.git.main_revision = main
+            self.context.git.is_main_ancestor = lambda target: target == CONTROL
         self.assertEqual(len(self.request_ids()), 1)
 
     def test_resume_of_an_unknown_request_fails_closed(self):
