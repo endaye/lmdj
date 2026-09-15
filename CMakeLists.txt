@@ -1398,34 +1398,71 @@ if(LMDJ_ENABLE_COVERAGE)
     OUTPUT "${CMAKE_BINARY_DIR}/coverage-objects.txt"
     CONTENT "${lmdj_coverage_objects}"
   )
+  # The coverage test preset's own exclusion is the only reason a registered
+  # native test binary may be absent from lmdj_coverage_targets above.
   file(READ "${CMAKE_SOURCE_DIR}/CMakePresets.json" lmdj_preset_document)
   string(JSON lmdj_test_preset_count LENGTH "${lmdj_preset_document}" testPresets)
-  set(lmdj_coverage_test_exclusion "")
   math(EXPR lmdj_last_test_preset_index "${lmdj_test_preset_count} - 1")
+  set(lmdj_coverage_test_preset_found FALSE)
+  set(lmdj_coverage_test_exclusion "")
   foreach(lmdj_test_preset_index RANGE 0 ${lmdj_last_test_preset_index})
     string(
       JSON
       lmdj_test_preset_name
       GET "${lmdj_preset_document}" testPresets ${lmdj_test_preset_index} name
     )
-    if(lmdj_test_preset_name STREQUAL "coverage")
-      string(
-        JSON
-        lmdj_coverage_test_exclusion
-        ERROR_VARIABLE lmdj_coverage_test_exclusion_error
-        GET "${lmdj_preset_document}" testPresets
-        ${lmdj_test_preset_index} filter exclude name
+    if(NOT lmdj_test_preset_name STREQUAL "coverage")
+      continue()
+    endif()
+    set(lmdj_coverage_test_preset_found TRUE)
+    # An indexed read fails when the exclusion is one regex and succeeds when it
+    # is a list; matching a list's JSON text as if it were its regex would
+    # instead demand coverage objects for tests the lane never runs.
+    string(
+      JSON
+      lmdj_coverage_test_exclusion_first
+      ERROR_VARIABLE lmdj_coverage_test_exclusion_index_error
+      GET "${lmdj_preset_document}" testPresets ${lmdj_test_preset_index}
+      filter exclude name 0
+    )
+    if(lmdj_coverage_test_exclusion_index_error STREQUAL "NOTFOUND")
+      message(
+        FATAL_ERROR
+        "why: the coverage test preset declares filter.exclude.name as a JSON "
+        "list, which this gate cannot read as the one regex the coverage lane "
+        "applies; treating the list's text as that regex would demand coverage "
+        "objects for tests the lane deliberately excludes. remedy: express the "
+        "coverage exclusion as a single regex in CMakePresets.json, or extend "
+        "this gate to iterate the list, then rerun scripts/core.sh coverage "
+        "check."
+      )
+    endif()
+    string(
+      JSON
+      lmdj_coverage_test_exclusion
+      ERROR_VARIABLE lmdj_coverage_test_exclusion_error
+      GET "${lmdj_preset_document}" testPresets
+      ${lmdj_test_preset_index} filter exclude name
+    )
+    if(NOT lmdj_coverage_test_exclusion_error STREQUAL "NOTFOUND")
+      message(
+        FATAL_ERROR
+        "why: the coverage test preset declares no readable "
+        "filter.exclude.name (${lmdj_coverage_test_exclusion_error}), so this "
+        "gate cannot tell which registered native test targets the coverage "
+        "lane executes. remedy: restore the coverage test preset's "
+        "filter.exclude.name in CMakePresets.json, then rerun "
+        "scripts/core.sh coverage check."
       )
     endif()
   endforeach()
-  if(NOT lmdj_coverage_test_exclusion)
+  if(NOT lmdj_coverage_test_preset_found)
     message(
       FATAL_ERROR
-      "why: the coverage test preset in CMakePresets.json declares no test "
-      "name exclusion, so this gate cannot tell which registered native test "
-      "binaries the coverage run executes: "
-      "${lmdj_coverage_test_exclusion_error}. remedy: restore the coverage "
-      "test preset's filter.exclude.name, then rerun "
+      "why: CMakePresets.json declares no `coverage` test preset, so this gate "
+      "cannot tell which registered native test targets the coverage lane "
+      "executes. remedy: restore the coverage test preset, or point this gate "
+      "at the preset the coverage lane runs, then rerun "
       "scripts/core.sh coverage check."
     )
   endif()

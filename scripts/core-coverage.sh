@@ -180,6 +180,24 @@ if [[ "$signature_count" -ne "${#objects[@]}" ]]; then
     "coverage module signature count does not match object count: " \
     "$signature_count != ${#objects[@]}" \
     >&2
+  if [[ "$signature_count" -gt "${#objects[@]}" ]]; then
+    echo \
+      "why: an instrumented binary ran in this coverage run and is not named " \
+      "by the root lmdj_coverage_targets list, so its module signature has no " \
+      "object to attribute. remedy: add its target to lmdj_coverage_targets in " \
+      "the root CMakeLists.txt, in the same order as its own registration -- " \
+      "the coverage configure names every selected native test target that " \
+      "list has not learned." \
+      >&2
+  else
+    echo \
+      "why: a listed coverage object did not run, so its module signature is " \
+      "absent from this run. remedy: check whether the coverage test preset " \
+      "now excludes every test that runs it (CMakePresets.json, " \
+      "filter.exclude.name), and whether another coverage run deleted " \
+      "${profiles_root} mid-flight." \
+      >&2
+  fi
   exit 1
 fi
 

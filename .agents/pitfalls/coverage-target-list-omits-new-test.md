@@ -61,8 +61,8 @@ properties kept that drift invisible rather than merely unlucky:
   list exists to maintain: when a new stress test joins the preset's exclusion
   ([`stress-tier-in-coverage-preset`](stress-tier-in-coverage-preset.md)), the
   gate follows the preset.
-- Read the count's *direction* before editing anything. The lane's message is
-  the only symptom the gate cannot pre-empt, and it fires both ways: one module
+- Read the count's *direction* before editing anything. The lane's message now
+  names the direction and its remedy, and it fires both ways: one module
   more than the list means a target the list has not learned, which is the case
   above. Far **fewer** signatures than objects -- `7 != 64` -- is not a list
   problem at all, and editing `lmdj_coverage_targets` is then the one repair
