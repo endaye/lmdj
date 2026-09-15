@@ -224,7 +224,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 86> operations{
+  static constexpr std::array<std::string_view, 88> operations{
       "host.status",
       "project.create",
       "project.open",
@@ -255,6 +255,8 @@ bool supported_operation(std::string_view operation) {
       "audio.activate",
       "audio.suspend",
       "trigger",
+      "pattern.transport.request",
+      "pattern.transport.inspect",
       "sequence.record.begin",
       "sequence.capture.disarm",
       "sequence.record.event",
@@ -656,6 +658,11 @@ struct ControlBridge::Impl {
       // serialized control cadence even when the Host sends no request. A
       // durable service error remains retryable and is not render-fatal.
       static_cast<void>(runtime.service_performance());
+      // A pending global Pattern transport operation advances one bounded,
+      // epoch-checked continuation step per service tick, so the request
+      // dispatch can release its tail instead of awaiting the audio receipt
+      // or the journal settlement (#1230).
+      runtime.service_pattern_transport();
       outcome_message = reserve_realtime_message();
       if (outcome_message == nullptr) {
         return;

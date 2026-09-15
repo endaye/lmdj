@@ -842,6 +842,116 @@ void test_owner_loss_never_materializes_an_unacknowledged_launch() {
   LMDJ_CHECK(after_draft_discard.at("candidates").empty());
 }
 
+struct TransportQuiescenceSeam final {
+  static lmdj::foundation::Result<void> await_quiescent(
+      void*, std::uint32_t) noexcept {
+    return lmdj::foundation::Result<void>::success();
+  }
+  static lmdj::foundation::Result<void> begin_rendering(void* context) noexcept {
+    auto& self = *static_cast<TransportQuiescenceSeam*>(context);
+    self.acknowledged = self.engine->bank_telemetry().current_generation;
+    return lmdj::foundation::Result<void>::success();
+  }
+  static bool ready(void*) noexcept { return true; }
+  static std::uint64_t acknowledged_generation(void* context) noexcept {
+    return static_cast<TransportQuiescenceSeam*>(context)->acknowledged;
+  }
+  lmdj::web_runtime::detail::AudioQuiescenceCoordinator seam() noexcept {
+    return {this, &await_quiescent, &begin_rendering, &ready,
+            &acknowledged_generation};
+  }
+  lmdj::audio::RealtimeEngine* engine = nullptr;
+  std::uint64_t acknowledged = 0;
+};
+
+void test_bridge_service_cadence_settles_pattern_transport() {
+  TempDirectory temporary;
+  auto created = ControlRuntime::create(
+      temporary.path(), config(temporary.path()), kLimits);
+  LMDJ_CHECK(created.has_value());
+  auto runtime = std::move(created.value());
+
+  require_success(runtime->dispatch(
+      "project.create",
+      {
+          {"project_id", kProjectId},
+          {"bpm", 120},
+          {"initial_pattern",
+           {{"pattern_id", kPatternId}, {"bars", 1}, {"events", Json::array()}}},
+          {"pattern_transport", true},
+      },
+      {}));
+  require_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  TransportQuiescenceSeam seam;
+  seam.engine = &runtime->engine();
+  LMDJ_CHECK(
+      lmdj::web_runtime::detail::ControlRuntimeAudioAccess::install(
+          *runtime, seam.seam())
+          .has_value());
+  require_success(runtime->dispatch("audio.activate", Json::object(), {}));
+
+  ControlBridge bridge(
+      *runtime,
+      BridgeHooks{
+          nullptr,
+          &ImmediateControl::schedule,
+          &ImmediateControl::on_control,
+          nullptr,
+          nullptr,
+          nullptr});
+  const auto transport_request = [](std::uint32_t suffix, std::uint64_t epoch,
+                                    std::string_view intent) {
+    return Json{
+        {"session_id", kSessionId},
+        {"project_id", kProjectId},
+        {"command_id", uuid(suffix)},
+        {"expected_epoch", epoch},
+        {"intent", intent},
+        {"expected_revision", nullptr},
+    };
+  };
+
+  const auto ticket = bridge_request(
+      bridge, "pattern.transport.request", transport_request(60, 1, "record"),
+      90);
+  LMDJ_CHECK(ticket.value("ok", false));
+  // The request tail released with a pending ticket; no audio receipt or IO
+  // settlement was awaited inside the dispatch.
+  LMDJ_CHECK(ticket.at("result").at("submit") == "accepted");
+  LMDJ_CHECK(ticket.at("result").at("status").at("phase") == "awaiting_audio");
+
+  // No continuation dispatch at all: the bridge service cadence reenters the
+  // controller for short epoch-checked steps until the operation settles.
+  for (unsigned turn = 0; turn < 8; ++turn) {
+    render_frames(*runtime, 128);
+    service_periodic(bridge);
+  }
+  const auto recording = bridge_request(
+      bridge, "pattern.transport.inspect", {{"session_id", kSessionId}}, 91);
+  LMDJ_CHECK(recording.value("ok", false));
+  LMDJ_CHECK(recording.at("result").at("engaged") == true);
+  LMDJ_CHECK(recording.at("result").at("playing") == true);
+  LMDJ_CHECK(recording.at("result").at("recording") == true);
+  LMDJ_CHECK(recording.at("result").at("phase") == "idle");
+
+  const auto off = bridge_request(
+      bridge, "pattern.transport.request", transport_request(61, 2, "record"),
+      92);
+  LMDJ_CHECK(off.value("ok", false));
+  for (unsigned turn = 0; turn < 8; ++turn) {
+    render_frames(*runtime, 128);
+    service_periodic(bridge);
+  }
+  const auto settled = bridge_request(
+      bridge, "pattern.transport.inspect", {{"session_id", kSessionId}}, 93);
+  LMDJ_CHECK(settled.at("result").at("recording") == false);
+  LMDJ_CHECK(settled.at("result").at("playing") == true);
+  LMDJ_CHECK(settled.at("result").at("phase") == "idle");
+  LMDJ_CHECK(settled.at("result").at("publication_pending") == false);
+  runtime->engine().stop();
+}
+
 }  // namespace
 
 int main() {
@@ -851,6 +961,7 @@ int main() {
     test_bridge_admits_every_stage10_performance_operation();
     test_rejects_invalid_values_at_the_cpp_host_boundary();
     test_owner_loss_never_materializes_an_unacknowledged_launch();
+    test_bridge_service_cadence_settles_pattern_transport();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
