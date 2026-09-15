@@ -57,7 +57,12 @@ Before editing:
 
 1. fetch and prune remote refs;
 2. confirm the current worktree has no task-related uncommitted changes;
-3. create the task branch from the latest `origin/main`;
+3. create the task branch from the latest `origin/main` **without tracking
+   it** — `git worktree add --no-track .worktrees/<task> -b <prefix>/<task>
+   origin/main`. A branch created with `-b <task> origin/main` alone inherits
+   `origin/main` as its upstream, and an IDE "sync" then pushes the Task
+   straight to `main`; see
+   [`task-branch-upstream-tracks-main`](../../.agents/pitfalls/task-branch-upstream-tracks-main.md);
 4. create or enter its isolated worktree;
 5. run the smallest relevant baseline verification.
 

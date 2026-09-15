@@ -152,6 +152,57 @@ function authority(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// Gate for the fake-tool-stub-strictness escalation (#726): the Perform
+// controller reaches these session methods without any test opting in —
+// connect() subscribes the capture status and refreshes the performance and
+// recovery lists, and perform_surface.tsx polls refreshReplay every 250 ms.
+// A bare vi.fn() resolves undefined where the real session returns a value,
+// and the gap only fires when a test outlives one poll tick (#713). Keep the
+// list in step with the controller's connect() and interval paths.
+test("wall-clock-reachable session double methods keep faithful defaults", () => {
+  const reachable = [
+    "subscribePerformanceMasterCaptureStatus",
+    "listPerformances",
+    "listPerformanceRecovery",
+    "queryPerformanceReplayStatus",
+  ] as const;
+  const {session} = sessionFixture();
+  for (const method of reachable) {
+    const double = session[method];
+    const implemented = typeof double === "function" &&
+      (!vi.isMockFunction(double) || double.getMockImplementation() !== undefined);
+    expect(
+      implemented,
+      `session double "${method}" is reached by wall-clock (connect() or the ` +
+      "250 ms replay poll) but has no default implementation: give it a " +
+      "faithful neutral default in sessionFixture, or remove it from the " +
+      "controller's wall-clock path",
+    ).toBe(true);
+  }
+});
+
+test("the replay poll default stays neutral and never settles", async () => {
+  // Presence is not enough for the 250 ms poll: a production-shaped default
+  // that resolves a concrete status can land after a test staged its own
+  // state and overwrite it — the second load-sensitive failure #713 traded
+  // for the first. The neutral default models a poll the Core has not
+  // answered yet, so it must not settle even after microtasks drain.
+  const {session} = sessionFixture();
+  let settled = false;
+  void session.queryPerformanceReplayStatus("replay-1").then(
+    () => { settled = true; },
+    () => { settled = true; },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(
+    settled,
+    "session double \"queryPerformanceReplayStatus\" resolves on its own: " +
+    "a poll the test never answered can overwrite staged state when it " +
+    "settles late — keep the neutral never-settling default, or let each " +
+    "test stage the answer itself",
+  ).toBe(false);
+});
+
 function controllerFixture(options: {
   captureState?: "unconfigured" | "configured" | "ready" | "unavailable";
   state?: CreatorState;
@@ -1006,6 +1057,64 @@ test("retries replay neutral reset until Core reports a terminal state", async (
   expect(session.stopPerformanceReplay).toHaveBeenCalledTimes(3);
   expect(fixture.controller.getState().replay?.state).toBe("stopped");
   expect(fixture.controller.getState().replayNeutral).toBe(true);
+});
+
+test("a replay poll reply that outlives Stop Replay cannot overwrite the terminal state", async () => {
+  const fixture = controllerFixture();
+  const session = fixture.runtime.session;
+  (session.beginPerformanceReplay as ReturnType<typeof vi.fn>)
+    .mockResolvedValue({replayId: "replay-1", state: "playing",
+      resolvedRevision: 7, eventCursor: 0, eventCount: 4,
+      projectRevision: null});
+  (session.stopPerformanceReplay as ReturnType<typeof vi.fn>)
+    .mockResolvedValue({replayId: "replay-1", requestId: "stop-replay",
+      state: "stopped", resolvedRevision: 7, eventCursor: 0, eventCount: 4,
+      replayed: false, projectRevision: null});
+  // The poll answers only when the test says so: this reply carries the
+  // pre-stop state and lands after the terminal transition (#746).
+  const pendingPolls: ((status: unknown) => void)[] = [];
+  (session.queryPerformanceReplayStatus as ReturnType<typeof vi.fn>)
+    .mockImplementation(() => new Promise((resolve) => {
+      pendingPolls.push(resolve);
+    }));
+
+  await fixture.controller.beginReplay(ids.performance);
+  void fixture.controller.refreshReplay();
+  expect(pendingPolls.length).toBe(1);
+  await fixture.controller.stopReplay();
+  expect(fixture.controller.getState().replay?.state).toBe("stopped");
+  expect(fixture.controller.getState().replayNeutral).toBe(true);
+
+  for (const answer of pendingPolls) {
+    answer({replayId: "replay-1", state: "playing", resolvedRevision: 7,
+      eventCursor: 0, eventCount: 4, projectRevision: null});
+  }
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(fixture.controller.getState().replay?.state).toBe("stopped");
+  expect(fixture.controller.getState().replayNeutral).toBe(true);
+});
+
+test("a current replay poll reply still refreshes the playing state", async () => {
+  const fixture = controllerFixture();
+  const session = fixture.runtime.session;
+  (session.beginPerformanceReplay as ReturnType<typeof vi.fn>)
+    .mockResolvedValue({replayId: "replay-1", state: "playing",
+      resolvedRevision: 7, eventCursor: 0, eventCount: 4,
+      projectRevision: null});
+  const pendingPolls: ((status: unknown) => void)[] = [];
+  (session.queryPerformanceReplayStatus as ReturnType<typeof vi.fn>)
+    .mockImplementation(() => new Promise((resolve) => {
+      pendingPolls.push(resolve);
+    }));
+
+  await fixture.controller.beginReplay(ids.performance);
+  const poll = fixture.controller.refreshReplay();
+  for (const answer of pendingPolls) {
+    answer({replayId: "replay-1", state: "playing", resolvedRevision: 8,
+      eventCursor: 1, eventCount: 4, projectRevision: null});
+  }
+  await poll;
+  expect(fixture.controller.getState().replay?.resolvedRevision).toBe(8);
 });
 
 test("refuses to leave while replay neutral reset remains pending", async () => {

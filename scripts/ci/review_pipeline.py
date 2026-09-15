@@ -17,6 +17,7 @@ import urllib.parse
 import change_scope
 import review_scope
 import review_scope_codec as codec
+import self_test_report as reporting
 import test_scope
 import pr_agent_review as t2
 import pr_agent_input as input_producer
@@ -674,6 +675,48 @@ def publish_model(identity, record, model, *, write=None, scope_unavailable=Fals
         history_marker=history_marker)
 
 
+REPAIR_REFUSAL_SCHEMA = "lmdj.pr-agent-recheck-refusal.v1"
+MAX_REPAIR_REFUSAL_REASON_BYTES = 1024
+REPAIR_REFUSAL_REMEDY = "recheck the current head manually, or recollect the repair context on the next entry"
+AUTHORED_REMEDY = "; remedy: "
+
+
+def bounded_clause(text):
+    """One artifact-safe clause: single line, no wrap, bounded in UTF-8 bytes."""
+    return " ".join(text.split()).encode("utf-8")[:MAX_REPAIR_REFUSAL_REASON_BYTES].decode("utf-8", "ignore")
+
+
+def repair_refusal_receipt(error, *, receipts=None):
+    """Bounded receipt for an authored repair-recheck refusal.
+
+    The validated review and its labels are already published when the
+    rechecks run, so a refused repair-verdict section costs only the rechecks.
+    Only authored refusal text is recorded: the recheck protocol keeps model
+    output, response bodies, credentials and traces out of those messages, and
+    a reporter failure is projected to a literal because its message can embed
+    an external error or response body.
+    """
+    if isinstance(error, reporting.ReportingError):
+        text = "the reporting client refused the repair recheck"
+    elif isinstance(error, t2.EngineError):
+        text = error.safe_message
+    else:
+        text = str(error)
+    # Authored refusals carry their remedy in the same message (`why: ...;
+    # remedy: ...`). Bound the clauses separately: bounding the message as one
+    # string would let a long `why` truncate the remedy away, leaving only the
+    # generic literal for a refusal that named its own next step.
+    why, separator, remedy = text.partition(AUTHORED_REMEDY)
+    receipt = {"schema": REPAIR_REFUSAL_SCHEMA, "status": "refused",
+               "why": bounded_clause(why),
+               "remedy": bounded_clause(remedy) if separator and remedy.strip() else REPAIR_REFUSAL_REMEDY}
+    if receipts:
+        # review_recheck.publish_batch persists each far-side receipt as it
+        # lands; recording the refusal must not erase published effects.
+        receipt["receipts"] = receipts
+    return receipt
+
+
 def publish(directory):
     context, result = read(directory / "context.json"), read(directory / "result.json")
     history = read(directory / "history.json")
@@ -766,13 +809,38 @@ def publish(directory):
     authenticate(identity, store)  # A race remains historical evidence, never current.
     if repair_native is not None:
         import review_recheck
+        import review_wait
         api = review_recheck.client(identity["repository"])
-        if mode == "batch":
-            receipt = review_recheck.publish_batch(api, repair_document, repair_native, git=git, fetch=fetch,
-                        record=lambda value: save(directory / "repair-recheck.json", value))
+        try:
+            if mode == "batch":
+                receipt = review_recheck.publish_batch(api, repair_document, repair_native, git=git, fetch=fetch,
+                            record=lambda value: save(directory / "repair-recheck.json", value))
+            else:
+                receipt = review_recheck.publish(api, repair_document, repair_native, git=git, fetch=fetch)
+        except (review_scope.ReviewScopeError, t2.EngineError, reporting.ReportingError,
+                review_wait.Refused) as error:
+            # The review and its labels are already published, and
+            # review_recheck revalidates every verdict before it touches a
+            # thread, so an authored refusal here ends the rechecks only --
+            # never the head's review, and never a resolution. `Refused` is the
+            # recheck protocol's own authored refusal (a bare ValueError), which
+            # collect_batch already reports per candidate. Transport and
+            # unresolved-write failures (GitHubApiError, OSError, urllib
+            # errors) stay fatal: they need reconciliation, not a receipt.
+            persisted = {}
+            try:
+                persisted = read(directory / "repair-recheck.json")
+            except (OSError, ValueError, TypeError, RecursionError):
+                persisted = {}
+            receipts = persisted.get("receipts") if isinstance(persisted, dict) else None
+            refusal = repair_refusal_receipt(
+                error, receipts=receipts if isinstance(receipts, list) else None)
+            save(directory / "repair-recheck.json", refusal)
+            # Exactly one bounded line; the receipt carries the same evidence.
+            print(f"Repair recheck refused; the validated review and labels stand. "
+                  f"why: {refusal['why']}; remedy: {refusal['remedy']}")
         else:
-            receipt = review_recheck.publish(api, repair_document, repair_native, git=git, fetch=fetch)
-        save(directory / "repair-recheck.json", receipt)
+            save(directory / "repair-recheck.json", receipt)
 
 
 def http_refusal_evidence(error):

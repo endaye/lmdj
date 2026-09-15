@@ -20,6 +20,8 @@
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/project_store.hpp>
 
+#include "storage_error.hpp"
+
 namespace lmdj::project_io {
 namespace {
 
@@ -54,14 +56,7 @@ Error session_not_found() {
   return Error{ErrorCode::not_found, "Project Bundle import session was not found"};
 }
 
-Error sanitized_storage_error(const Error& source, std::string message) {
-  auto details = nlohmann::json::object();
-  if (source.details.is_object() &&
-      source.details.contains("storage_condition")) {
-    details["storage_condition"] = source.details.at("storage_condition");
-  }
-  return Error{source.code, std::move(message), std::move(details)};
-}
+using detail::sanitized_storage_error;
 
 bool lowercase_sha256(std::string_view value) {
   return value.size() == 64U &&

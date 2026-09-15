@@ -39,6 +39,32 @@ Before starting the shipping pipeline:
    original failing check; do not copy snapshot trees or relax path assertions.
    See [`worktree-checkout-flattens-symlinks`](../../pitfalls/worktree-checkout-flattens-symlinks.md).
 
+   When `scripts/docs-site.sh check` stops producing output after site load
+   while the owned `docusaurus` process shows ~0% CPU, suspect a stalled Rspack
+   cache left by an earlier failed or interrupted build. Stop only that
+   verified owned process, move this worktree's ignored
+   `apps/docs-site/node_modules/.cache/rspack` aside — preserve it and the
+   logs for inspection — and rerun a complete cold build with its far-side
+   route, test and link checks. A killed process is not a pass, even when its
+   signal handler exits zero. Do not clean another session's cache or weaken
+   minification, snapshots, routes, tests or link checks. See
+   [`rspack-cache-stalls-corrected-mdx-build`](../../pitfalls/rspack-cache-stalls-corrected-mdx-build.md).
+
+   A perturbation or revert proof is only as good as the artifact it runs.
+   Restore files with `git checkout -- <path>` or `git stash`, which stamp the
+   current mtime; a timestamp-preserving restore (`cp -p`, `tar x` without
+   `m`, a backup copy) can leave the restored source older than the build
+   products or `__pycache__` bytecode made from the broken version, so the
+   "fixed" run still fails — or worse, the "broken" run passes against stale
+   artifacts and a proof that proves nothing enters the report. If a
+   snapshot restore is unavoidable, follow it with `touch` on the restored
+   files and clear the matching `__pycache__`. Never send a proof rebuild to
+   `/dev/null`: capture its exit status and read it. Confirm the observed
+   failure line sits inside the test under proof; a failure at a line the
+   current `main()` no longer calls means a stale artifact, not a second
+   defect. See
+   [`revert-proof-rebuild-skipped`](../../pitfalls/revert-proof-rebuild-skipped.md).
+
    Run the Task's declared, relevant verification; do not substitute an automatic
    full lane set or an unrelated portal build. For example:
    ```bash
@@ -310,11 +336,22 @@ is absent.` This is a read-only skill inspection, not a new required CI check,
 and it does not infer intent from fuzzy prose or authorize closing unrelated
 Issues. Retain the postmerge live Issue-state audit below.
 
-1. **Push branch to origin**:
+1. **Check the upstream, then push the branch to origin**:
    ```bash
    BRANCH=$(git branch --show-current)
+   UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null || true)
+   if [ "$UPSTREAM" = "origin/main" ] || [ "$UPSTREAM" = "main" ]; then
+     echo "Error: task branch tracks main as upstream. Run: git branch --unset-upstream" >&2
+     exit 1
+   fi
    git push -u origin "$BRANCH"
    ```
+   If the upstream resolves to `origin/main`, run `git branch --unset-upstream`
+   first. A branch created tracking `origin/main` pushes the Task to `main`
+   whenever a tool syncs to upstream without a Pull Request — which is how
+   `eb09b2c2` landed. `git push -u origin "$BRANCH"` sets the same-named
+   upstream on first push. See
+   [`task-branch-upstream-tracks-main`](../../pitfalls/task-branch-upstream-tracks-main.md).
 
 2. **Write and validate the Pull Request body before opening it**:
    Use the repository template and a unique temporary file outside the worktree.

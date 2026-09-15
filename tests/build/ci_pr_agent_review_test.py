@@ -1152,6 +1152,55 @@ class InputAndPolicyTests(unittest.TestCase):
                 "general_comments": "clean", "key_issues_to_review": [], "ignored": "x",
             }}, self.authenticated)
 
+    def test_refused_repair_verdict_keeps_the_validated_review(self):
+        """One unusable recheck verdict must not void the head's review."""
+        request = {"comment_id": 70, "thread_id": "T70", "original_head": "a" * 40,
+                   "path": "src/example.py", "original_line": 2, "body": "Return value must be two.",
+                   "original_content": "def value():\n    return 1\n",
+                   "fix_diff": "@@ -1,2 +1,2 @@\n def value():\n-    return 1\n+    return 2\n",
+                   "conversation": [{"id": 70, "author_id": 20, "body": "Return value must be two.",
+                                     "updated_at": "2026-09-14T00:00:00Z"}]}
+        authenticated = adapter.authenticate_input(
+            signed_input(lambda document: document.update(repair_request=request)))
+        verdict = {"comment_id": 70, "verdict": "resolved",
+                   "reason": "The return literal is now two, as the original finding required.",
+                   # The exact observed defect: the quote is a substring of the
+                   # original content, but it does not cover the finding anchor.
+                   "original_quote": "def value():", "current_quote": "    return 2",
+                   "start_line": 2, "end_line": 2}
+        native = {"review": {"general_comments": "Reviewed.", "key_issues_to_review": [],
+                             "repair_recheck": verdict}}
+        # The verdict validator itself stays strict for the publication paths.
+        with self.assertRaisesRegex(adapter.EngineError,
+                                    "original source quote does not cover the finding anchor"):
+            adapter.validate_repair_verdicts(native, authenticated)
+        self.assertEqual(adapter._validate_native_mapping(native, authenticated),
+                         {"summary": "Reviewed.", "findings": []})
+        # Ordinary review rules are not relaxed by that tolerance.
+        with self.assertRaisesRegex(adapter.EngineError, "model-supplied summary"):
+            adapter._validate_native_mapping({"review": {"key_issues_to_review": [], "repair_recheck": verdict}},
+                                             authenticated)
+
+    def test_malformed_authenticated_repair_context_still_fails_closed(self):
+        """The verdict tolerance must not swallow an input-invalid refusal."""
+        request = {"comment_id": 70, "thread_id": "T70", "original_head": "a" * 40,
+                   "path": "src/example.py", "original_line": 2, "body": "Return value must be two.",
+                   "original_content": "def value():\n    return 1\n",
+                   # The authenticated context, not the model: no hunk header parses.
+                   "fix_diff": "@@ malformed @@\n def value():\n",
+                   "conversation": [{"id": 70, "author_id": 20, "body": "Return value must be two.",
+                                     "updated_at": "2026-09-14T00:00:00Z"}]}
+        authenticated = adapter.authenticate_input(
+            signed_input(lambda document: document.update(repair_request=request)))
+        verdict = {"comment_id": 70, "verdict": "resolved",
+                   "reason": "The return literal is now two, as the original finding required.",
+                   "original_quote": "    return 1", "current_quote": "    return 2",
+                   "start_line": 2, "end_line": 2}
+        native = {"review": {"general_comments": "Reviewed.", "key_issues_to_review": [],
+                             "repair_recheck": verdict}}
+        with self.assertRaisesRegex(adapter.EngineError, "malformed hunk header"):
+            adapter._validate_native_mapping(native, authenticated)
+
     def test_actual_repository_config_is_valid_and_inactive_before_engine_import(self):
         source_bytes = (ROOT / "scripts/ci/pr-agent/config.toml").read_bytes()
         # The real loader consumes protected installation bytes, never a
