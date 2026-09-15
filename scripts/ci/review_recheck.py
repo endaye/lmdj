@@ -12,6 +12,7 @@ import os
 import re
 
 import pr_agent_review as engine
+import self_test_report as reporting
 from review_scope import ReviewScopeError
 
 
@@ -172,7 +173,19 @@ def collect(api, document, comment_id, *, git, fetch, allow_resolved=False, read
 
 def collect_batch(api, document, *, git, fetch):
     """Bound costly authentication; absent evidence never turns into resolution."""
+    import review_failure_report
     import review_wait
+    # Authenticating one candidate downloads and validates its retained producer
+    # archive, which carries bounded download and expansion budgets
+    # (review_failure_report). That refusal is evidence about this finding, not a
+    # defect of the head under review: when it escaped, collect-t2 wrote no
+    # complete input at all, no model reviewed the head, and every synchronize
+    # push failed the whole lane with one opaque line -- a reviewer that looks
+    # dead instead of a finding that was not rechecked. Each owner's class is
+    # read from that owner: review_failure_report raises through its own
+    # `reporting` alias while the API client raises the class it imports.
+    refusals = (ReviewScopeError, review_wait.Refused, engine.EngineError,
+                reporting.ReportingError, review_failure_report.reporting.ReportingError)
     identity = document["identity"]
     repository, number, head = identity["repository"], identity["pull_request"], identity["head_sha"]
     current_head(api, repository, number, head)
@@ -200,7 +213,7 @@ def collect_batch(api, document, *, git, fetch):
             continue
         try:
             request = collect(api, document, row["comment_id"], git=git, fetch=fetch, reader=reader, threads=threads)
-        except (ReviewScopeError, review_wait.Refused, engine.EngineError) as error:
+        except refusals as error:
             report.append({**row, "status": "not_rechecked", "reason": str(error)})
         else:
             if len(engine._canonical([*requests, request])) > engine.MAX_REPAIR_BYTES:

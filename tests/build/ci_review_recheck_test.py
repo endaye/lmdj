@@ -1,16 +1,19 @@
 """Far-side recheck journey with authentic review artifacts and strict API shapes."""
 from copy import deepcopy
+import io
 import json
 from pathlib import Path
 import sys
 import subprocess
 import tempfile
 import unittest
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "scripts/ci"), str(ROOT / "tests/build")]
 import ci_review_wait_test as history
 import pr_agent_review as engine
+import review_failure_report as failure_report
 import review_recheck as recheck
 
 
@@ -224,6 +227,39 @@ class BatchRecheckTests(unittest.TestCase):
         requests, report = self.api.collect_batch()
         self.assertEqual(requests, [])
         self.assertTrue(all("unchanged" in r["reason"] for r in report["candidates"]))
+
+    def test_over_budget_original_archive_reports_candidates_instead_of_aborting_collection(self):
+        """One finding's unbounded evidence cannot cancel the whole head's review.
+
+        Each candidate authenticates its original review from the retained
+        producer archive, and that archive carries an expanded-size budget. The
+        refusal must stay a per-candidate ``not_rechecked`` report: when it
+        escaped, ``collect-t2`` wrote no complete input, no model reviewed the
+        head, and every synchronize push failed the lane with one opaque line.
+        """
+        source = self.api.history.source
+        original = source.download
+
+        def oversized(artifact):
+            with zipfile.ZipFile(io.BytesIO(original(artifact))) as archive:
+                documents = {name: archive.read(name) for name in archive.namelist()}
+            documents["t2-input.json"] = json.dumps(
+                {"schema": "lmdj.pr-agent-input.v1", "padding": "x" * failure_report.LIMIT}).encode()
+            output = io.BytesIO()
+            # upload-artifact deflates, so the retained payload stays inside the
+            # download bound while its expansion is what exceeds the budget.
+            with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for name, value in documents.items():
+                    archive.writestr(name, value)
+            return output.getvalue()
+
+        source.download = oversized
+        requests, report = self.api.collect_batch()
+        self.assertEqual(requests, [])
+        self.assertEqual([r["status"] for r in report["candidates"]], ["not_rechecked", "not_rechecked"])
+        self.assertTrue(all("expanded review archive exceeds budget" in r["reason"]
+                            for r in report["candidates"]), report["candidates"])
+        self.assertEqual(self.api.writes, [])
 
     def test_candidate_bound_reports_overflow_instead_of_silently_truncating(self):
         self.api.extra_threads = [{"id": "T" + str(i), "isResolved": False,
