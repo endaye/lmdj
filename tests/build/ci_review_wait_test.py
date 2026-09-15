@@ -501,6 +501,36 @@ class AdmissionTests(unittest.TestCase):
         self.assertFalse(result["eligible"], result)
         self.assertEqual(result["status"], "invalid")
 
+    def test_model_review_quoting_the_generated_marker_in_prose_is_admitted(self):
+        # #1381: the authentic deepseek review described the new marker family
+        # in prose; routing must key on anchored markers, never substrings.
+        self.render_v2()
+        self.reviews[0]["body"] += ("\n\nThis change introduces the "
+                                    "lmdj-review-generated-v1 receipt marker for Portal witness PRs.")
+        result = self.check()
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["evidence"][0]["kind"], "automated")
+        self.assertEqual(result["evidence"][0]["backend"], "deepseek")
+
+    def test_generated_receipt_quoting_a_model_marker_in_prose_is_admitted(self):
+        body, digest = self.render_generated()
+        self.reviews[0]["body"] = body + "\n\nSupersedes the lmdj-review-v2 model path for this shape."
+        result = self.check()
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["evidence"][0]["kind"], "generated")
+        self.assertEqual(result["evidence"][0]["receipt_sha256"], digest)
+
+    def test_substring_mention_without_an_anchored_marker_is_invalid_evidence(self):
+        self.render_v2()
+        self.reviews[0] = {"id": 61, "user": self.bot, "state": "COMMENTED", "commit_id": A,
+                           "submitted_at": "2026-09-10T03:00:00Z",
+                           "body": "Notes on lmdj-review-generated-v1 and lmdj-review-v2 marker formats."}
+        result = self.check()
+        self.assertFalse(result["eligible"], result)
+        self.assertEqual(result["status"], "invalid")
+        self.assertEqual(result["diagnostics"][0]["review_id"], 61)
+        self.assertIn("ambiguous publisher identity", result["diagnostics"][0]["why"])
+
     def test_generated_non_bot_author_is_invalid(self):
         self.render_generated()
         self.reviews[0]["user"] = {"id": 999, "login": "github-actions[bot]"}
@@ -508,12 +538,16 @@ class AdmissionTests(unittest.TestCase):
         self.assertFalse(result["eligible"], result)
         self.assertEqual(result["status"], "invalid")
 
-    def test_generated_edited_body_is_invalid(self):
+    def test_generated_edited_body_is_caught_by_byte_binding_not_admission(self):
+        # Appended prose does not touch the anchored marker, so check() admits
+        # the review (same prefix posture as automated()); the byte-exact
+        # body_observation binding is what rejects a later edit at shipping time.
         body, _digest = self.render_generated()
+        eligibility = self.check()
+        self.assertTrue(eligibility["eligible"], eligibility)
         self.reviews[0]["body"] = body + "\nEdited after publication."
-        result = self.check()
-        self.assertFalse(result["eligible"], result)
-        self.assertEqual(result["status"], "invalid")
+        with self.assertRaisesRegex(ReviewInventoryError, "body bytes differ"):
+            bind_eligibility(self.body_inventory(), eligibility)
 
     def test_generated_receipt_digest_mismatch_is_invalid(self):
         body, digest = self.render_generated()

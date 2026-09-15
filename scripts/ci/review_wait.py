@@ -299,7 +299,8 @@ def generated(reader, posted, repo, number, head, bot):
             "generated-only receipt self-describing digest differs")
     expected = pipeline.pr_review_target.generated_body(repository, number, head, str(run), str(attempt),
                                                         receipt_digest)
-    require(posted["body"] == expected, "published generated-only body differs from the authentic receipt marker")
+    require(posted["body"].startswith(expected),
+            "published generated-only body differs from the authentic receipt marker")
     portal_gate(reader, repository, head)
     return {"kind": "generated", "review_id": posted["id"], "run_id": run, "run_attempt": attempt,
             "receipt_sha256": receipt_digest,
@@ -329,22 +330,30 @@ def check(reader, repository, number, head):
         comments = reader.pages(prefix + f"/issues/{number}/comments")
         for posted in reviews:
             body = posted.get("body", "")
-            # Route all protocol generations to the strict closed-marker
-            # parsers below.  A malformed or duplicate candidate must reach
-            # automated()/generated() and become invalid evidence, never be
-            # mistaken for an absent review; unrelated reviews remain out of
-            # scope.  The generated marker family shares no substring with the
-            # model marker families, so the routing is exact.
-            generated_candidate = isinstance(body, str) and "lmdj-review-generated-v1" in body
-            model_candidate = isinstance(body, str) and ("lmdj-review-v1" in body or "lmdj-review-v2" in body)
-            if posted.get("commit_id") != head or not (generated_candidate or model_candidate):
+            # The substring pre-filter is only the cheap unrelated-review skip
+            # and the malformed-candidate funnel: a review mentioning any
+            # marker family must never be mistaken for absent evidence.  Family
+            # disambiguation uses ANCHORED matches instead -- the scan covers
+            # model prose, which can quote any marker string (#1381's authentic
+            # v2 review quoted lmdj-review-generated-v1 while describing it).
+            substring_candidate = isinstance(body, str) and (
+                "lmdj-review-v1" in body or "lmdj-review-v2" in body
+                or "lmdj-review-generated-v1" in body)
+            if posted.get("commit_id") != head or not substring_candidate:
                 continue
+            generated_anchors = len(MARKER_GENERATED.findall(body))
+            model_anchors = len(MARKER.findall(body)) + len(MARKER_V2.findall(body))
             try:
-                if generated_candidate and not model_candidate:
+                if generated_anchors and model_anchors:
+                    raise Refused("missing or ambiguous publisher identity")
+                if generated_anchors:
                     result["evidence"].append(generated(reader, posted, repo, number, head, bot))
-                elif model_candidate and not generated_candidate:
+                elif model_anchors:
                     result["evidence"].append(automated(reader, posted, repo, number, head, bot))
                 else:
+                    # A substring candidate with no anchored marker of either
+                    # family is a malformed candidate: invalid evidence, never
+                    # silently skipped.
                     raise Refused("missing or ambiguous publisher identity")
             except PortalGatePending as error:
                 # An authentic receipt whose Portal gate is not green on this
