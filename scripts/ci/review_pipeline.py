@@ -984,8 +984,9 @@ def main():
                         pr_review_target.TargetUnavailable)):
             # collect-t2 runs before the engine exists: no provider text can be
             # in scope, and its refusals are authored literals -- "PR target
-            # moved or is not reviewable", "changed Git inventory exceeds the
-            # file limit". The generic line below destroyed them, so a refused
+            # moved or is not reviewable", "why: changed Git inventory exceeds
+            # the file limit after generated artifacts are excluded; remedy:
+            # ...". The generic line below destroyed them, so a refused
             # collection surfaced as an unrelated artifact-upload error with no
             # recorded cause (#1310: 2787-file change refused over MAX_FILES).
             print(str(error), file=sys.stderr)
