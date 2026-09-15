@@ -6676,6 +6676,110 @@ void test_pattern_transport_unknown_closure_blocks_clean_suspend() {
   LMDJ_CHECK(journal.value().admission->candidates.size() == 2);
 }
 
+void test_transport_recording_rejects_sample_commit_and_keeps_journal() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(
+      runtime->dispatch("project.create", create_opted_in_project(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 790, 791, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  OneShotAudioDriver audio(runtime->engine());
+  check_success(runtime->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 792, 1, "record"),
+      {}));
+  const auto recording =
+      settle_pattern_transport(*runtime, audio, kSequenceSessionId);
+  LMDJ_CHECK(recording.at("recording") == true);
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  audio.render_one();
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+
+  // The capture-style Sample commit keeps its legacy busy guard: honestly
+  // rejected while the transport journal is open, and the journal — owned by
+  // the Facade-vended controller — must not be sealed as owner loss.
+  const auto capture_wav = mono_pcm16_wav(480);
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(
+          793, 794, 2, "00000000-0000-4000-8000-000000000099",
+          capture_wav.size(), 1),
+      {}));
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(793, 0, true, capture_wav),
+      capture_wav));
+  check_error(
+      runtime->dispatch(
+          "sample.import.commit", {{"import_token", uuid(793)}}, {}),
+      "INVALID_ARGUMENT");
+
+  const auto bundle =
+      temp.path() / "projects" / (std::string(kProjectId) + ".lmdj");
+  const auto journal = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(journal.has_value());
+  LMDJ_CHECK(journal.value().admission.has_value());
+  LMDJ_CHECK(journal.value().admission->candidates.size() == 2);
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  audio.render_one();
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+
+  // Once the recording settles (journal completed and removed), the same
+  // Sample commit is admitted again.
+  {
+    const auto pending_journal =
+        lmdj::project_io::SequenceJournal{}.read_active(bundle);
+    LMDJ_CHECK(pending_journal.has_value());
+    LMDJ_CHECK(pending_journal.value().admission->candidates.size() == 4);
+  }
+  check_success(runtime->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 795, 2, "record"),
+      {}));
+  const auto settled =
+      settle_pattern_transport(*runtime, audio, kSequenceSessionId);
+  LMDJ_CHECK(settled.at("recording") == false);
+  LMDJ_CHECK(
+      !lmdj::project_io::SequenceJournal{}.read_active(bundle).has_value());
+  const auto after_settle = check_exact_success(
+      runtime->dispatch("project.inspect", Json::object(), {}),
+      {"project", "project_revision"});
+  // The record-off committed both retained gestures as Project Truth.
+  LMDJ_CHECK(
+      after_settle.at("project_revision").get<std::uint64_t>() > 2);
+  LMDJ_CHECK(
+      after_settle.at("project")
+          .at("patterns")
+          .at(kPatternId)
+          .at("events")
+          .size() == 2);
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(
+          796, 797,
+          after_settle.at("project_revision").get<std::uint64_t>(),
+          "00000000-0000-4000-8000-000000000098",
+          capture_wav.size(), 1),
+      {}));
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(796, 0, true, capture_wav),
+      capture_wav));
+  check_success(runtime->dispatch(
+      "sample.import.commit", {{"import_token", uuid(796)}}, {}));
+}
+
 }  // namespace
 
 int main() {
@@ -6760,6 +6864,7 @@ int main() {
     test_pattern_transport_records_live_input_and_rejects_legacy_writes();
     test_pattern_transport_suspend_barrier_settles_recording();
     test_pattern_transport_unknown_closure_blocks_clean_suspend();
+    test_transport_recording_rejects_sample_commit_and_keeps_journal();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
