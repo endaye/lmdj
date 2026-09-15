@@ -59,6 +59,17 @@ function protocolMismatch(message: string): Error & {code: string} {
   return Object.assign(new Error(message), {code: "HOST_PROTOCOL_MISMATCH"});
 }
 
+// The Project Contract levels this acceptance path can interpret, grouped by
+// the shape family each is read with. These are the Creator-side copy of the
+// level enumeration (#915): never retype them at a call site, because a level
+// move must turn a test red before it ships. project_actions_contract.test.ts
+// binds both families to the Bundle Contract's declared levels and to the
+// level this Build's writer produces.
+export const PATTERN_FREE_PROJECT_CONTRACTS: readonly string[] =
+  Object.freeze(["lmdj.project.v3"]);
+export const PATTERN_SLOT_PROJECT_CONTRACTS: readonly string[] =
+  Object.freeze(["lmdj.project.v4", "lmdj.project.v5"]);
+
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -70,14 +81,14 @@ function integer(value: unknown, minimum = 0): value is number {
 function patternSlotsFor(
   project: Record<string, unknown>,
 ): readonly (string | null)[] {
-  if (project.contract === "lmdj.project.v3") {
+  if (PATTERN_FREE_PROJECT_CONTRACTS.includes(project.contract as string)) {
     if ("pattern_slots" in project || "performances" in project) {
       throw protocolMismatch("Project v3 contains v4 fields");
     }
     return Object.freeze(Array<string | null>(16).fill(null));
   }
   const patterns = project.patterns;
-  if (!["lmdj.project.v4", "lmdj.project.v5"].includes(project.contract as string) ||
+  if (!PATTERN_SLOT_PROJECT_CONTRACTS.includes(project.contract as string) ||
       !Array.isArray(project.pattern_slots) ||
       project.pattern_slots.length !== 16 ||
       !record(patterns)) {
