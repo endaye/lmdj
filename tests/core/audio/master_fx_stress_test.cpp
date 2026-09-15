@@ -63,7 +63,6 @@ struct HostAccounting {
 struct HostAccountingSample {
   int cpu = -1;
   HostAccounting per_cpu;
-  HostAccounting aggregate;
 };
 
 [[maybe_unused]] HostAccounting parse_stat_counters(
@@ -96,10 +95,11 @@ HostAccountingSample host_accounting_sample() {
   std::ifstream stat("/proc/stat");
   std::string line;
   while (std::getline(stat, line)) {
-    if (line.rfind("cpu ", 0) == 0) {
-      sample.aggregate = parse_stat_counters(line, 4);
-    } else if (!wanted.empty() && line.rfind(wanted + " ", 0) == 0) {
+    // The trailing space in the prefix makes "cpu1 " unable to match the
+    // "cpu10 "/"cpu1x" lines of higher-numbered CPUs.
+    if (!wanted.empty() && line.rfind(wanted + " ", 0) == 0) {
       sample.per_cpu = parse_stat_counters(line, wanted.size() + 1);
+      break;
     }
   }
 #endif
@@ -108,20 +108,19 @@ HostAccountingSample host_accounting_sample() {
 
 HostAccounting host_accounting_delta(
     const HostAccountingSample& before, const HostAccountingSample& after) {
-  // The render thread normally stays on one vCPU across a ~36 us window, so
-  // the per-CPU counters of that vCPU are the precise attribution. When it
-  // migrated mid-window the event could have landed on either vCPU, so fall
-  // back to the aggregate: slightly wider, still reported.
-  const HostAccounting& left =
-      (before.cpu >= 0 && before.cpu == after.cpu) ? before.per_cpu
-                                                   : before.aggregate;
-  const HostAccounting& right =
-      (before.cpu >= 0 && before.cpu == after.cpu) ? after.per_cpu
-                                                   : after.aggregate;
+  // Attribution is per-vCPU or nothing: it is precise only when the render
+  // thread stayed on one vCPU across the ~36 us window. A mid-window
+  // migration (or an unreadable CPU) cannot say which vCPU took the event,
+  // so the overrun is counted, fail-closed — never excused by accounting
+  // activity on a CPU the thread may not have touched.
+  if (before.cpu < 0 || before.cpu != after.cpu) {
+    return {};
+  }
   HostAccounting delta;
-  delta.steal_ticks = right.steal_ticks - left.steal_ticks;
-  delta.irq_ticks = right.irq_ticks - left.irq_ticks;
-  delta.softirq_ticks = right.softirq_ticks - left.softirq_ticks;
+  delta.steal_ticks = after.per_cpu.steal_ticks - before.per_cpu.steal_ticks;
+  delta.irq_ticks = after.per_cpu.irq_ticks - before.per_cpu.irq_ticks;
+  delta.softirq_ticks =
+      after.per_cpu.softirq_ticks - before.per_cpu.softirq_ticks;
   return delta;
 }
 
