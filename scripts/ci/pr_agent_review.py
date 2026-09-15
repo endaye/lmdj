@@ -1617,7 +1617,18 @@ def _validate_native_mapping(native: dict[str, Any], authenticated: dict[str, An
     summary = summary.strip()
     if len(summary.encode("utf-8")) > MAX_SUMMARY_BYTES:
         raise EngineError("invalid_output", "native review summary is oversized")
-    validate_repair_verdicts(native, authenticated)
+    try:
+        validate_repair_verdicts(native, authenticated)
+    except EngineError:
+        # The ordinary review above is complete on its own, so a refused
+        # repair-recheck verdict section must not void the whole head review:
+        # one unusable quote otherwise costs a fully validated review (#1344).
+        # Nothing here is relaxed. The publication paths revalidate the same
+        # verdicts (review_recheck.publish and ::publish_batch) before any
+        # reply or thread resolution, so a refused section can only cost the
+        # rechecks; review_pipeline.publish records that refusal instead of
+        # failing the step.
+        pass
     return {"summary": summary, "findings": findings}
 
 

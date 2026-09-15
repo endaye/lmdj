@@ -1061,6 +1061,147 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(collector["input_sha256"], document["input_sha256"])
         self.assertIn("collected", (self.directory / "summary").read_text())
 
+    def refused_recheck_publication(self, *, failure=None, name="refused-recheck"):
+        """Publish a repair-mode review whose recheck publication is refused.
+
+        Returns (refusal receipt, captured stdout, recheck platform). By default
+        the strict verdict contract refuses the corrupted quotes; `failure`
+        raises a specific authored refusal instead.
+        """
+        from ci_review_recheck_test import BatchPlatform
+        import review_recheck
+        api = BatchPlatform()
+        self.addCleanup(api.history.source.tearDown)
+        # Production identities carry the numeric GitHub run id.
+        api.document["identity"]["run_id"] = "99"
+        review_recheck.reseal(api.document)
+        api.collect_batch()
+        document = api.document
+        authenticated = t2.authenticate_input(document)
+        collector = pipeline.collector_witness(document)
+        identity = {"repository": authenticated["identity"]["repository"],
+                    "pr_number": authenticated["identity"]["pull_request"],
+                    "base_sha": authenticated["identity"]["base_sha"],
+                    "head_sha": authenticated["identity"]["head_sha"],
+                    "control_sha": authenticated["identity"]["control_sha"],
+                    "backend": "deterministic", "run_id": 99,
+                    "run_attempt": authenticated["identity"]["run_attempt"]}
+        engine = {"name": "pr-agent", "source_commit": "1" * 40, "version": "0.45.0",
+                  "bundle": {"archive_sha256": "2" * 64, "archive_byte_length": 7,
+                             "manifest_sha256": "3" * 64, "adapter_sha256": "4" * 64,
+                             "default_config_sha256": "5" * 64, "requirements_lock_sha256": "6" * 64,
+                             "stock_tokenizer_asset_sha256": "7" * 64},
+                  "runtime_config": {"sha256": "8" * 64, "byte_length": 7}}
+        trusted = {"schema": review_scope.TRUSTED_CONFIG_SCHEMA, "provider_order": ["deepseek"],
+                   "providers": {"deepseek": {"enabled": True, "model": "fixture-model"},
+                                 "glm": {"enabled": False}, "xai": {"enabled": False}, "kimi": {"enabled": False}},
+                   "engine": engine}
+        coverage = t2._validate_coverage_receipt(t2._make_coverage(
+            authenticated, provider="deepseek",
+            model={"requested": "fixture-model", "actual": "fixture-served",
+                   "response_version": "fixture-v1", "pricing_revision": "fixture-v1"},
+            prompt=t2.render_prompt_input(authenticated), usage=None, engine=engine))
+        self.assertTrue(coverage["complete"])
+        native = api.native()
+        for verdict in native["review"]["repair_rechecks"]:
+            # The exact observed defect: the quote does not cover the anchor.
+            verdict["original_quote"] = "def value():"
+        review = {"summary": native["review"]["general_comments"], "findings": []}
+        attempt = {"status": "reviewed", "error_class": None, "error": None, "provider": "deepseek",
+                   "model": coverage["model"], "engine": engine, "review": review,
+                   "native_review": native, "coverage": coverage, "usage": coverage["usage"],
+                   "duration_ms": 1}
+        result = {"schema": "lmdj.pr-agent-result.v1", "status": "reviewed", "error_class": None,
+                  "identity": authenticated["identity"], "input_sha256": authenticated["input_sha256"],
+                  "engine": engine, "selected_attempt": 0, "attempts": [attempt],
+                  "skipped_providers": [], "elapsed_ms": 1}
+        output = self.directory / name
+        pipeline.save(output / "context.json", {"identity": identity, "changed_paths":
+                      sorted({hunk["path"] for hunk in collector["expected_hunks"]})})
+        pipeline.save(output / "history.json", [])
+        pipeline.save(output / "t2-input.json", document)
+        pipeline.save(output / "t2-result.json", result)
+        pipeline.save(output / "t2-config-witness.json", trusted)
+        environment = {"GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "7", "HEAD_SHA": identity["head_sha"],
+                       "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_TOKEN": "fixture-secret",
+                       "GITHUB_OUTPUT": str(output / "capture-output"), "GITHUB_EVENT_NAME": "pull_request",
+                       "PR_EVENT_ACTION": "synchronize", "AUTO_RECHECK": "true", "RECHECK_COMMENT_ID": ""}
+        refusal_patch = (mock.patch.object(review_recheck, "publish_batch", side_effect=failure)
+                         if failure is not None
+                         else mock.patch.object(review_recheck, "client", return_value=api))
+        with mock.patch.dict(os.environ, environment, clear=False), \
+                mock.patch.object(pipeline, "git", return_value=(identity["control_sha"] + "\n").encode()), \
+                mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(pipeline, "authenticate", side_effect=lambda *args, **kwargs: identity), \
+                mock.patch.object(pipeline, "previous_records", return_value=([], False)), \
+                mock.patch.object(pipeline, "publish_model"), \
+                mock.patch.object(pipeline.pr_review_target, "github_request"), \
+                mock.patch.object(pipeline.change_scope, "read_git_inventory", return_value=[
+                    pipeline.change_scope.ChangedFile("M", ("src/example.py",)),
+                    pipeline.change_scope.ChangedFile("D", ("obsolete.txt",))]), \
+                mock.patch.object(review_recheck, "client", return_value=api), \
+                refusal_patch:
+            pipeline.capture(output, "deepseek")
+            pipeline.finalize(output)
+            with contextlib.redirect_stdout(io.StringIO()) as printed, \
+                    mock.patch.object(sys, "argv", ["review_pipeline.py", "publish",
+                                                    "--directory", str(output)]):
+                self.assertEqual(pipeline.main(), 0)
+        # The validated review is published; only the rechecks were refused.
+        self.assertEqual(pipeline.read(output / "review.json")["summary"], review["summary"])
+        return pipeline.read(output / "repair-recheck.json"), printed.getvalue(), api
+
+    def common_refusal_is_bounded_and_recorded(self, refusal, printed, api):
+        self.assertEqual(refusal["schema"], pipeline.REPAIR_REFUSAL_SCHEMA)
+        self.assertEqual(refusal["status"], "refused")
+        self.assertEqual(refusal["remedy"], pipeline.REPAIR_REFUSAL_REMEDY)
+        self.assertNotIn("fixture-secret", json.dumps(refusal))
+        lines = [line for line in printed.splitlines() if line.startswith("Repair recheck refused")]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("why: ", lines[0])
+        self.assertIn("remedy: ", lines[0])
+        # No verdict may reach a thread: nothing was written and all stay open.
+        self.assertEqual(api.writes, [])
+        self.assertEqual(api.states, {"T70": False, "T71": False})
+
+    def test_refused_repair_verdict_publishes_the_review_and_records_a_refusal(self):
+        """An unusable recheck section must not fail the publish step.
+
+        #1344: one refused repair verdict made `publish` non-zero, so a head
+        whose review was completely validated was published without its review.
+        """
+        refusal, printed, api = self.refused_recheck_publication()
+        self.common_refusal_is_bounded_and_recorded(refusal, printed, api)
+        self.assertIn("why: original source quote does not cover the finding anchor", refusal["why"])
+
+    def test_refused_original_review_authenticity_publishes_the_review_and_records_a_refusal(self):
+        """A refused re-authentication of the recheck source is the same refusal.
+
+        `review_wait.Refused` is the protocol's own authored refusal and is not
+        a ReviewScopeError; it must not cost a review that is already published
+        and validated either.
+        """
+        import review_wait
+        refusal, printed, api = self.refused_recheck_publication(
+            failure=review_wait.Refused("why: the original review could not be re-authenticated; "
+                                        "remedy: take over the recheck manually"),
+            name="refused-authenticity")
+        self.common_refusal_is_bounded_and_recorded(refusal, printed, api)
+        self.assertIn("why: the original review could not be re-authenticated", refusal["why"])
+
+    def test_repair_refusal_receipt_is_bounded_and_carries_no_external_text(self):
+        oversized = pipeline.repair_refusal_receipt(
+            review_scope.ReviewScopeError("why: " + "x" * 5000 + "; remedy: reuse the receipt"))
+        self.assertEqual(set(oversized), {"schema", "status", "why", "remedy"})
+        self.assertEqual(oversized["status"], "refused")
+        self.assertEqual(oversized["schema"], pipeline.REPAIR_REFUSAL_SCHEMA)
+        self.assertLessEqual(len(oversized["why"].encode("utf-8")), pipeline.MAX_REPAIR_REFUSAL_REASON_BYTES)
+        self.assertNotIn("\n", oversized["why"])
+        # A reporter message can embed an external error or response body.
+        projected = pipeline.repair_refusal_receipt(
+            pipeline.reporting.ReportingError("why: response body: private provider text; remedy: inspect"))
+        self.assertNotIn("private provider text", projected["why"])
+
     def test_repair_trigger_binding_refuses_unsolicited_or_wrong_mode_artifacts(self):
         for event, action, automatic, requested, document in (
             ("workflow_dispatch", "", "true", "", {"repair_requests": []}),
