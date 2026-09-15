@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <map>
 #include <optional>
@@ -851,10 +852,10 @@ bool runtime_resource_rejection(const Json& error) {
          code == "PROJECT_QUOTA_EXHAUSTED";
 }
 
-Json normalized_error(
+Json normalized_error_redacted(
     std::string code,
     const Json& details,
-    std::string_view source_message = {}) {
+    std::string_view source_message) {
   const auto storage_condition =
       details.is_object() ? details.find("storage_condition") : details.end();
   const auto transfer_condition =
@@ -933,6 +934,75 @@ Json normalized_error(
     return host_error("HOST_TIMEOUT", "capture barrier timed out");
   }
   return host_error(code, safe_message(code), sanitize_details(details));
+}
+
+constexpr std::size_t kRefusalDiagnosticLineCap = 2048;
+constexpr std::size_t kRefusalDiagnosticMessageCap = 512;
+
+std::size_t utf8_prefix_length(std::string_view text, std::size_t cap) {
+  const auto length = std::min(cap, text.size());
+  auto boundary = length;
+  while (boundary > 0 &&
+         (static_cast<unsigned char>(text[boundary]) & 0xC0) == 0x80) {
+    --boundary;
+  }
+  return boundary;
+}
+
+std::string refusal_diagnostic_message(std::string_view source_message) {
+  if (source_message.size() <= kRefusalDiagnosticMessageCap) {
+    return std::string(source_message);
+  }
+  return std::string(source_message.substr(
+      0, utf8_prefix_length(source_message, kRefusalDiagnosticMessageCap))) +
+      "...";
+}
+
+Json refusal_diagnostic_details(const Json& details) {
+  auto copy = Json::object();
+  if (details.is_object()) {
+    for (const auto& [key, value] : details.items()) {
+      if (value.is_string() || value.is_number() || value.is_boolean()) {
+        copy[key] = value;
+      }
+    }
+  }
+  return copy;
+}
+
+// Records the pre-sanitization reason of every normalized refusal on stderr
+// (Emscripten printErr in the packaged build, so the line reaches the page
+// console and the proof harness). The wire payload is untouched: this is the
+// only channel that carries the Facade-authored code, message and scalar
+// details. One fputs per refusal so one complete console line is forwarded.
+void emit_refusal_diagnostic(
+    std::string_view source_code,
+    const Json& source_details,
+    std::string_view source_message,
+    const Json& normalized) {
+  static constexpr std::string_view kPrefix = "lmdj-refusal-diagnostic ";
+  auto diagnostic = Json{
+      {"normalized", normalized.at("error").at("code")},
+      {"source_code", source_code},
+      {"source_message", refusal_diagnostic_message(source_message)},
+      {"details", refusal_diagnostic_details(source_details)},
+  };
+  auto line = std::string(kPrefix) + diagnostic.dump();
+  if (line.size() > kRefusalDiagnosticLineCap) {
+    diagnostic["details"] = Json{{"truncated", true}};
+    line = std::string(kPrefix) + diagnostic.dump();
+  }
+  line.push_back('\n');
+  std::fputs(line.c_str(), stderr);
+}
+
+Json normalized_error(
+    std::string code,
+    const Json& details,
+    std::string_view source_message = {}) {
+  auto error = normalized_error_redacted(code, details, source_message);
+  emit_refusal_diagnostic(code, details, source_message, error);
+  return error;
 }
 
 Json normalized_error(const Error& error) {
