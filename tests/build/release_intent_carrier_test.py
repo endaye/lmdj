@@ -146,6 +146,25 @@ class IntentCommitTest(unittest.TestCase):
         resumed_head, resumed_tree = self.new_commit().commit(before_write=lambda: None)
         self.assertEqual((head, tree), (resumed_head, resumed_tree))
 
+    def test_recovery_refuses_a_commit_that_lacks_the_ledger_row(self):
+        commit = self.new_commit()
+        commit.commit(before_write=lambda: None)
+        # Replace the committed ledger with one that has no row for this tag;
+        # the worktree stays clean, so only the committed tree can refuse it.
+        ledger = self.worktree / "docs/release-evidence/release-intents.json"
+        document = json.loads(ledger.read_text())
+        document["entries"] = [row for row in document["entries"]
+                               if row["tag"] != "lmdj-v1.0.57.0"]
+        ledger.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
+        subprocess.run(["git", "-C", str(self.worktree), "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.invalid", "commit", "-q",
+                        "-am", "drop the intent row"], check=True, capture_output=True)
+        with self.assertRaises(IntentError):
+            self.new_commit().completed_head()
+
+    def test_completed_head_is_none_before_the_commit_exists(self):
+        self.assertIsNone(self.new_commit().completed_head())
+
     def test_worktree_at_another_revision_is_refused(self):
         subprocess.run(["git", "-C", str(self.repository), "-c", "user.name=Fixture",
                         "-c", "user.email=fixture@example.invalid", "commit",

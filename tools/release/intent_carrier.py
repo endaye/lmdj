@@ -8,6 +8,7 @@ and the sequence behind the driver's observe/advance contract.
 """
 
 from copy import deepcopy
+import re
 
 from .candidate_pr_sequence import CandidatePrSequence
 from .evidence_branch import PublicationBranch
@@ -59,20 +60,33 @@ class IntentCarrier:
         return dict(spec, head_sha=head_sha, tree_sha=tree_sha)
 
     def _recovered_spec(self):
-        """Rebuild the PR spec from the durable commit after a restart."""
-        try:
-            head = self.commit.completed_head()
-        except Exception:
-            head = None
-            _fail("existing intent worktree cannot be reconciled")
+        """Rebuild the PR spec from the durable commit, on every observation.
+
+        A commit that moved (repaired or recreated worktree) must be picked up
+        rather than driven against a stale head; a worktree that fails content
+        verification raises and the driver reports it as unknown.
+        """
+        if not self.commit.root.exists():
+            return None
+        head = self.commit.completed_head()
         if head is None:
             return None
         tree = self.commit._git("rev-parse", "HEAD^{tree}").decode().strip()
         return self._spec_for(head, tree)
 
+    def _verified_evidence(self, merge):
+        """A verified merge must expose a real digest; never fabricate one."""
+        evidence = merge.get("evidence")
+        digest = evidence.get("sha256") if isinstance(evidence, dict) else None
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            _fail("verified merge exposes no evidence digest")
+        number = merge.get("merge", {}).get("number", "?")
+        return {"sha256": digest, "reference": "intent-pr:" + str(number)}
+
     def observe(self, state, operation):
-        if self._spec is None:
-            self._spec = self._recovered_spec()
+        recovered = self._recovered_spec()
+        if recovered is not None:
+            self._spec = recovered
         if self._spec is None:
             return Observation("pending")
         result = self.sequence.observe(self._spec, initialize=False)
@@ -80,10 +94,7 @@ class IntentCarrier:
             merge = self.sequence.pr.observe_merge(self._spec)
             if merge.get("status") != "verified":
                 return Observation("unknown")
-            evidence = {"sha256": merge["evidence"]["sha256"]
-                        if isinstance(merge.get("evidence"), dict) else "0" * 64,
-                        "reference": "intent-pr:" + str(merge.get("merge", {}).get("number", "?"))}
-            return Observation("verified", evidence)
+            return Observation("verified", self._verified_evidence(merge))
         if result["status"] in ("absent", "pending"):
             return Observation("pending")
         return Observation("unknown" if result["status"] == "unknown" else "conflict")
@@ -98,10 +109,7 @@ class IntentCarrier:
             merge = self.sequence.pr.observe_merge(self._spec)
             if merge.get("status") != "verified":
                 return Observation("unknown")
-            evidence = {"sha256": merge["evidence"]["sha256"]
-                        if isinstance(merge.get("evidence"), dict) else "0" * 64,
-                        "reference": "intent-pr:" + str(merge.get("merge", {}).get("number", "?"))}
-            return Observation("verified", evidence)
+            return Observation("verified", self._verified_evidence(merge))
         if result["status"] in ("absent", "pending"):
             return Observation("pending")
         return Observation("unknown" if result["status"] == "unknown" else "conflict")

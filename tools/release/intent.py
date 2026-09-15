@@ -151,6 +151,18 @@ def _read_json(path, why):
         _fail(why)
 
 
+def _committed_json(git, relative):
+    """Read one tracked file's committed bytes; the commit is the authority."""
+    try:
+        raw = git("show", "HEAD:" + relative)
+    except Exception:
+        _fail("committed " + relative + " is unreadable")
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        _fail("committed " + relative + " is malformed")
+
+
 class IntentCommit:
     """Create the intent docs commit on an owned worktree at the candidate target.
 
@@ -194,8 +206,10 @@ class IntentCommit:
         """The already-created intent commit for this operation, or None.
 
         Recovery is verification of the original commit's content, never
-        regeneration: a clean worktree whose ledger row equals the frozen row
-        and whose intent document exists is the completed state.
+        regeneration: a clean worktree whose *committed* ledger row equals the
+        frozen row and whose committed tree carries the intent document is the
+        completed state. Bytes are read from the commit, so a worktree file
+        that merely matches on disk cannot stand in for the commit.
         """
         head = self._git("rev-parse", "HEAD").decode().strip()
         if head == self.spec["target_revision"]:
@@ -203,15 +217,14 @@ class IntentCommit:
         self._git("merge-base", "--is-ancestor", self.spec["target_revision"], head)
         if self._git("status", "--porcelain").strip():
             _fail("existing worktree has uncommitted changes")
-        document = _read_json(self.root / _LEDGER_RELATIVE, "release-intents.json is unreadable")
+        document = _committed_json(self._git, str(_LEDGER_RELATIVE))
         rows = document.get("entries") if isinstance(document, dict) else None
         if not isinstance(rows, list):
-            _fail("release-intents.json is malformed")
+            _fail("committed release-intents.json is malformed")
         matches = [row for row in rows if row.get("tag") == self.spec["tag"]]
         if len(matches) != 1 or matches[0] != ledger_row(self.spec):
             _fail("existing intent commit does not carry this operation's ledger row")
-        if not (self.root / intent_document_relative(self.spec)).is_file():
-            _fail("existing intent commit is missing its evidence document")
+        self._git("cat-file", "-e", "HEAD:" + intent_document_relative(self.spec))
         return head
 
     def completed_head(self):
@@ -228,6 +241,10 @@ class IntentCommit:
         if self.root.exists():
             return self._completed()
         before_write()
+        if self.root.exists():
+            # A concurrent creator between the guard and the Git call is a
+            # resume of the same operation, never a second worktree attempt.
+            return self._completed()
         self._repository_git("worktree", "add", "--detach", str(self.root),
                              self.spec["target_revision"])
         head = self._git("rev-parse", "HEAD").decode().strip()

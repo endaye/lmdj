@@ -93,6 +93,7 @@ class CarrierProtocolTest(CarrierFixture):
 
     def test_restarted_carrier_recovers_the_spec_from_the_durable_commit(self):
         commit = self.new_commit()
+        commit.root.mkdir(parents=True)
         commit.completed_head = lambda: HEAD
         commit._git = lambda *args: (HEAD + "\n").encode() if "^{tree}" not in args[-1] \
             else (TREE + "\n").encode()
@@ -112,6 +113,38 @@ class CarrierProtocolTest(CarrierFixture):
         self.assertEqual(observed.status, "verified")
         self.assertEqual(seen["spec"]["head_sha"], HEAD)
         self.assertEqual(seen["spec"]["tree_sha"], TREE)
+
+    def test_verified_merge_without_an_evidence_digest_is_refused(self):
+        sequence = self.new_sequence()
+        sequence.observe = lambda spec, initialize=False: {"status": "merged", "phase": "pr",
+                                                          "evidence": None}
+        sequence.pr.observe_merge = lambda spec: {"status": "verified", "merge": {"number": 7}}
+        carrier = self.new_carrier(self.new_commit(), sequence)
+        carrier._spec = self.spec
+        with self.assertRaises(Exception) as caught:
+            carrier.observe({}, {"step": "intent"})
+        self.assertNotIn("0" * 64, str(caught.exception))
+
+    def test_a_moved_commit_refreshes_the_cached_spec(self):
+        commit = self.new_commit()
+        commit.root.mkdir(parents=True)
+        heads = [("1" * 40, "2" * 40), ("3" * 40, "4" * 40)]
+        commit.completed_head = lambda: heads[0][0]
+        commit._git = lambda *args: (heads[0][1] + "\n").encode()
+
+        def git_tree(*args):
+            return (heads.pop(0)[1] + "\n").encode()
+
+        sequence = self.new_sequence()
+        seen = []
+        sequence.observe = lambda spec, initialize=False: (seen.append(spec["head_sha"]),
+                                                          {"status": "pending", "phase": "pr"})[1]
+        carrier = self.new_carrier(commit, sequence)
+        carrier.observe({}, {"step": "intent"})
+        commit._git = git_tree
+        commit.completed_head = lambda: "3" * 40
+        carrier.observe({}, {"step": "intent"})
+        self.assertEqual(seen, ["1" * 40, "3" * 40])
 
     def test_advance_requires_the_durable_write_guard(self):
         carrier = self.new_carrier(self.new_commit(), self.new_sequence())
