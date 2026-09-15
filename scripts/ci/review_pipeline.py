@@ -345,6 +345,29 @@ def repair_mode(document=None):
     return mode
 
 
+def _record_nothing_reviewable(reason: str) -> None:
+    """Publish the honest terminal state of a head with no reviewable bytes.
+
+    `reviewable=false` is the workflow's only signal to skip the model and the
+    publisher. It is written before the caller returns, so a failed write ends
+    the lane red rather than letting the engine run without an input.
+    """
+    print(reason, file=sys.stderr)
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if output_path:
+        with Path(output_path).open("a", encoding="utf-8") as output:
+            output.write("reviewable=false\n")
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with Path(summary_path).open("a", encoding="utf-8") as summary:
+            summary.write(
+                "\n### No reviewable change at this head\n\n"
+                "Every changed path is a tool-generated artifact excluded from the review"
+                " input, so no model reviewed this head and no review was published.\n\n"
+                "Current-head review eligibility is unchanged: this run supplies no review"
+                " evidence.\n\n<pre>" + html.escape(reason) + "</pre>\n")
+
+
 def collect_t2(directory):
     """Opt-in complete-input collection; legacy ``collect`` remains unchanged."""
     input_producer._ensure_fresh_directory(Path(directory))
@@ -367,6 +390,17 @@ def collect_t2(directory):
     }
     try:
         document = input_producer.build_input(ROOT, identity)
+    except input_producer.GeneratedOnlyInventory as error:
+        # Nothing at this head is reviewable: every changed path is a
+        # deterministic rendering excluded from the bounded input (#1365). That
+        # is a terminal state of the lane, not a failed review, and no rerun can
+        # change it. Failing here made every squash-witness PR permanently red
+        # on a condition the PR could not satisfy (#1371), so the run records
+        # why, publishes no review, and leaves eligibility exactly where it was:
+        # `review_wait` still sees no review evidence and stays pending.
+        input_producer.publish_failure(directory, error.result)
+        _record_nothing_reviewable(str(error))
+        return None
     except input_producer.InputCollectionError as error:
         if error.result is not None:
             input_producer.publish_failure(directory, error.result)

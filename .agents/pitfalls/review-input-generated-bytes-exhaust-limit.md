@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-15
     occurrence: https://github.com/endaye/lmdj/pull/1364
     observed_by: Kimi (agent)
+  - date: 2026-09-15
+    occurrence: https://github.com/endaye/lmdj/issues/1371
+    observed_by: Claude Opus 5
 exit: gate:tests/build/ci_pr_agent_input_test.py
 ---
 
@@ -43,3 +46,16 @@ gate-verified class or split the reviewable change set. The regression tests in
 `MAX_FILES` refusal test) enforce both directions: generated paths never reach
 the diff or the file budget, and the refusal semantics for genuinely
 oversized reviewable inventories are unchanged.
+
+Excluding a path class also changes what an *entirely* generated PR means. A
+squash witness or a snapshot repair can carry nothing else, so after exclusion
+its reviewable inventory is empty. That head has no reviewable bytes to send a
+model, which is a terminal state of the review lane, not a failed review and
+not a defect of the head: no rerun can change it. The collector therefore
+raises `GeneratedOnlyInventory`, and `collect-t2` ends the lane with the
+refusal evidence retained and `reviewable=false`, which gates the engine, the
+receipt and the publisher in `.github/workflows/pr-review.yml`. Do not restore
+a non-zero exit for this case: it made every witness PR permanently red on a
+condition the PR could not satisfy (#1371). Equally, do not let it grant
+anything — the run publishes no review, so `scripts/ci/review_wait.py` still
+sees no current-head evidence and stays pending until an owner attests.

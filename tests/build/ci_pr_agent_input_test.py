@@ -615,6 +615,23 @@ class ProducerTests(unittest.TestCase):
             set(self.GENERATED_CHANGES),
         )
 
+    def test_generated_only_refusal_is_typed_and_no_other_refusal_is(self):
+        # The lane ends a wholly generated head honestly instead of failing it,
+        # and it selects that disposition on the exception type rather than on
+        # the reason prose, which is explanatory text and may be reworded. Only
+        # a wholly generated inventory earns it: a refusal that still has
+        # reviewable bytes must stay an ordinary failure (#1371).
+        base = self.commit_files({"base.txt": b"base\n"}, "base")
+        self.commit_files(self.GENERATED_CHANGES, "snapshot only")
+        with self.assertRaises(producer.GeneratedOnlyInventory):
+            self.build(base, self.git.text("rev-parse", "HEAD"))
+        self.commit_files(
+            {f"file-{index:02d}.txt": f"{index}\n".encode() for index in range(adapter.MAX_FILES + 1)},
+            "many reviewable files")
+        with self.assertRaises(producer.InputCollectionError) as raised:
+            self.build(base, self.git.text("rev-parse", "HEAD"))
+        self.assertNotIsInstance(raised.exception, producer.GeneratedOnlyInventory)
+
     def test_generated_prefix_lookalike_paths_stay_reviewable(self):
         # Every generated directory prefix ends in "/", so prefix matching is
         # boundary-safe; pin that lookalike paths are never excluded.
