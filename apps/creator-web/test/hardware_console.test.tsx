@@ -1,6 +1,7 @@
 import {render, screen, within} from "@testing-library/react";
+import {fireEvent} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import {expect, test} from "vitest";
+import {expect, test, vi} from "vitest";
 
 import {HardwareConsole} from "../src/components/hardware_console";
 import {PhysicalControls} from "../src/components/physical_controls";
@@ -53,10 +54,39 @@ test("names Figma 15 physical keys on the control panel", () => {
   }
   expect(screen.getByRole("button", {name: "Record"}).textContent).toBe("●");
   expect(screen.getByRole("button", {
-    name: "Play — Pattern Play requires global Pattern transport",
+    name: "Play/Stop — needs a playable Project and running audio",
   }).textContent).toBe("▶");
   expect(screen.getByRole("group", {name: "Encoders"})).toBeTruthy();
   expect(screen.getAllByRole("button", {
     name: /Encoder \d — unassigned until hardware mapping is approved/,
   })).toHaveLength(4);
+});
+
+test("physical Play/Stop and Record drive the global Pattern transport", () => {
+  const onRecord = vi.fn();
+  const onPlayStop = vi.fn();
+  render(<PhysicalControls
+    activeMode="sequence"
+    activeBank={0}
+    sequenceEnabled
+    performEnabled
+    onSelectMode={() => {}}
+    onSelectBank={() => {}}
+    onRecord={onRecord}
+    recordEnabled
+    recording
+    onPlayStop={onPlayStop}
+    playEnabled
+    playing
+  />);
+  // Record stays enabled while recording: the same key is Record-off, never a
+  // Sample capture or master recording control.
+  fireEvent.click(screen.getByRole("button", {
+    name: "Record — stop recording Pad events into the current Pattern",
+  }));
+  expect(onRecord).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", {
+    name: "Play/Stop — Pattern is playing",
+  }));
+  expect(onPlayStop).toHaveBeenCalledTimes(1);
 });
