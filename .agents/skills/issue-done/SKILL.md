@@ -50,6 +50,21 @@ Before starting the shipping pipeline:
    minification, snapshots, routes, tests or link checks. See
    [`rspack-cache-stalls-corrected-mdx-build`](../../pitfalls/rspack-cache-stalls-corrected-mdx-build.md).
 
+   A perturbation or revert proof is only as good as the artifact it runs.
+   Restore files with `git checkout -- <path>` or `git stash`, which stamp the
+   current mtime; a timestamp-preserving restore (`cp -p`, `tar x` without
+   `m`, a backup copy) can leave the restored source older than the build
+   products or `__pycache__` bytecode made from the broken version, so the
+   "fixed" run still fails — or worse, the "broken" run passes against stale
+   artifacts and a proof that proves nothing enters the report. If a
+   snapshot restore is unavoidable, follow it with `touch` on the restored
+   files and clear the matching `__pycache__`. Never send a proof rebuild to
+   `/dev/null`: capture its exit status and read it. Confirm the observed
+   failure line sits inside the test under proof; a failure at a line the
+   current `main()` no longer calls means a stale artifact, not a second
+   defect. See
+   [`revert-proof-rebuild-skipped`](../../pitfalls/revert-proof-rebuild-skipped.md).
+
    Run the Task's declared, relevant verification; do not substitute an automatic
    full lane set or an unrelated portal build. For example:
    ```bash
