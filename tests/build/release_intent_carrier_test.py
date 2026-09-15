@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""Intent documents, the owned docs commit, and the ledger append are exact."""
+from copy import deepcopy
+from pathlib import Path
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from tools.release.intent import (  # noqa: E402
+    IntentCommit,
+    IntentError,
+    intent_markdown,
+    intent_operation_id,
+    ledger_append,
+    ledger_row,
+    pr_document,
+    validate_spec,
+)
+
+REQUEST_SHA = "a" * 64
+TARGET = "b" * 40
+
+
+def spec(**changes):
+    base = {"operation_id": intent_operation_id(REQUEST_SHA), "request_sha256": REQUEST_SHA,
+            "repository_id": 12, "actor_id": 34, "target_revision": TARGET,
+            "product_build": "1.0.57.0", "tag": "lmdj-v1.0.57.0",
+            "snapshot_sha256": "c" * 64, "batch_reference": "batch-verdict-v1:zlib-base64:AAA",
+            "batch_run_id": 4242}
+    base.update(changes)
+    return base
+
+
+def seed_repository(root, *, build="1.0.56.0"):
+    def git(*args):
+        return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-C", str(root), *args],
+                              check=True, capture_output=True)
+    (root / "products/lmdj").mkdir(parents=True)
+    (root / "apps/architecture-portal").mkdir(parents=True)
+    (root / "docs/release-evidence").mkdir(parents=True)
+    (root / "apps/architecture-portal/versions.json").write_text(
+        json.dumps(["1.0.52.0", build]) + "\n")
+    (root / "docs/release-evidence/release-intents.json").write_text(json.dumps(
+        {"schema": "lmdj.release-intents.v1",
+         "entries": [{"tag": "lmdj-v1.0.40.0", "kind": "product", "identity": "1.0.40.0",
+                      "target_revision": "c" * 40, "channel": "canary",
+                      "disposition": "superseded-unreleased", "profile": "web-hosts"}],
+         "historical_exceptions": []}) + "\n")
+    (root / "README.md").write_text("seed\n")
+    git("init", "-q", "-b", "main")
+    git("config", "user.name", "Seeder")
+    git("config", "user.email", "seed@example.invalid")
+    git("add", "-A")
+    git("commit", "-q", "-m", "seed")
+    return git("rev-parse", "HEAD").stdout.decode().strip()
+
+
+class IntentDocumentsTest(unittest.TestCase):
+    def test_spec_document_row_and_markdown_are_bound_and_exact(self):
+        document = pr_document(spec())
+        self.assertEqual(document["head"], "docs/release-witness-" + intent_operation_id(REQUEST_SHA))
+        self.assertEqual(document["base"], "main")
+        self.assertIn("docs(release): record 1.0.57.0 canary release intent", document["title"])
+        row = ledger_row(spec())
+        self.assertEqual(row["target_revision"], TARGET)
+        self.assertEqual(row["disposition"], "releasable")
+        self.assertEqual(row["merged_main_run_id"], 4242)
+        self.assertEqual(row["batch_test_evidence"], "batch-verdict-v1:zlib-base64:AAA")
+        markdown = intent_markdown(spec())
+        self.assertIn("lmdj-v1.0.57.0", markdown)
+        self.assertIn("`b" * 1, markdown)
+
+    def test_mismatched_tag_or_operation_is_refused(self):
+        with self.assertRaises(IntentError):
+            validate_spec(spec(tag="lmdj-v1.0.58.0"))
+        with self.assertRaises(IntentError):
+            validate_spec(spec(operation_id="d" * 64))
+        with self.assertRaises(IntentError):
+            validate_spec(spec(product_build="1.0.57"))
+
+    def test_ledger_append_refuses_duplicates_and_keeps_history(self):
+        rows = [{"tag": "lmdj-v1.0.57.0"}]
+        with self.assertRaises(IntentError):
+            ledger_append(rows, ledger_row(spec()))
+        fresh = ledger_append([{"tag": "lmdj-v1.0.40.0"}], ledger_row(spec()))
+        self.assertEqual([row["tag"] for row in fresh], ["lmdj-v1.0.40.0", "lmdj-v1.0.57.0"])
+        self.assertEqual(fresh[0], {"tag": "lmdj-v1.0.40.0"})
+
+
+class IntentCommitTest(unittest.TestCase):
+    def setUp(self):
+        self.container = tempfile.TemporaryDirectory()
+        self.addCleanup(self.container.cleanup)
+        base = Path(self.container.name).resolve()
+        self.repository = base / "repo"
+        self.repository.mkdir()
+        self.head = seed_repository(self.repository)
+        self.worktree = base / "intent-worktree"
+        self.freeze_calls = []
+
+    def freeze(self, root):
+        self.freeze_calls.append(Path(root))
+        marker = Path(root) / "apps/architecture-portal/versioned_metadata"
+        marker.mkdir(exist_ok=True)
+        (marker / "version-1.0.57.0.json").write_text("{}\n")
+
+    def new_commit(self, **changes):
+        arguments = dict(root=self.worktree, repository_root=self.repository,
+                         spec=spec(target_revision=self.head),
+                         freeze=self.freeze, author_name="Fixture",
+                         author_email="fixture@example.invalid")
+        arguments.update(changes)
+        return IntentCommit(**arguments)
+
+    def writes(self):
+        return [(name, (self.worktree / name).exists())
+                for name in ("apps/architecture-portal/versions.json",
+                             "apps/architecture-portal/versioned_metadata/version-1.0.57.0.json",
+                             "docs/release-evidence/release-intents.json",
+                             "docs/release-evidence/lmdj-v1.0.57.0-canary-release-intent.md")]
+
+    def test_commit_appends_versions_snapshot_ledger_and_document(self):
+        commit = self.new_commit()
+        calls = []
+        head, tree = commit.commit(before_write=lambda: calls.append(True))
+        self.assertTrue(all(calls), "write guard must be invoked at every boundary")
+        self.assertEqual(len(self.freeze_calls), 1)
+        for name, exists in self.writes():
+            self.assertTrue(exists, name)
+        versions = json.loads((self.worktree / "apps/architecture-portal/versions.json").read_text())
+        self.assertEqual(versions, ["1.0.52.0", "1.0.56.0", "1.0.57.0"])
+        ledger = json.loads(
+            (self.worktree / "docs/release-evidence/release-intents.json").read_text())
+        self.assertEqual([row["tag"] for row in ledger["entries"]],
+                         ["lmdj-v1.0.40.0", "lmdj-v1.0.57.0"])
+        self.assertEqual(ledger["entries"][-1]["target_revision"], self.head)
+        subject = subprocess.run(
+            ["git", "-C", str(self.worktree), "log", "-1", "--format=%s"],
+            capture_output=True).stdout.decode()
+        self.assertIn("canary release intent", subject)
+        self.assertNotEqual(head, self.head)
+        resumed_head, resumed_tree = self.new_commit().commit(before_write=lambda: None)
+        self.assertEqual((head, tree), (resumed_head, resumed_tree))
+
+    def test_worktree_at_another_revision_is_refused(self):
+        subprocess.run(["git", "-C", str(self.repository), "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.invalid", "commit",
+                        "-q", "--allow-empty", "-m", "advance main"], check=True,
+                       capture_output=True)
+        advanced = subprocess.run(["git", "-C", str(self.repository), "rev-parse", "HEAD"],
+                                  capture_output=True).stdout.decode().strip()
+        other = tempfile.TemporaryDirectory()
+        self.addCleanup(other.cleanup)
+        other_root = Path(other.name).resolve() / "elsewhere"
+        other_root.mkdir(parents=True)
+        subprocess.run(["git", "-C", str(self.repository), "worktree", "add",
+                        "--detach", str(other_root), advanced], check=True,
+                       capture_output=True)
+        commit = self.new_commit(root=other_root)
+        with self.assertRaises(IntentError):
+            commit.commit(before_write=lambda: None)
+
+
+if __name__ == "__main__":
+    unittest.main()
