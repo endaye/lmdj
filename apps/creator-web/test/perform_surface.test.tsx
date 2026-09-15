@@ -152,6 +152,35 @@ function authority(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// Gate for the fake-tool-stub-strictness escalation (#726): the Perform
+// controller reaches these session methods without any test opting in —
+// connect() subscribes the capture status and refreshes the performance and
+// recovery lists, and perform_surface.tsx polls refreshReplay every 250 ms.
+// A bare vi.fn() resolves undefined where the real session returns a value,
+// and the gap only fires when a test outlives one poll tick (#713). Keep the
+// list in step with the controller's connect() and interval paths.
+test("wall-clock-reachable session double methods keep faithful defaults", () => {
+  const reachable = [
+    "subscribePerformanceMasterCaptureStatus",
+    "listPerformances",
+    "listPerformanceRecovery",
+    "queryPerformanceReplayStatus",
+  ] as const;
+  const {session} = sessionFixture();
+  for (const method of reachable) {
+    const double = session[method];
+    const implemented = typeof double === "function" &&
+      (!vi.isMockFunction(double) || double.getMockImplementation() !== undefined);
+    expect(
+      implemented,
+      `session double "${method}" is reached by wall-clock (connect() or the ` +
+      "250 ms replay poll) but has no default implementation: give it a " +
+      "faithful neutral default in sessionFixture, or remove it from the " +
+      "controller's wall-clock path",
+    ).toBe(true);
+  }
+});
+
 function controllerFixture(options: {
   captureState?: "unconfigured" | "configured" | "ready" | "unavailable";
   state?: CreatorState;
