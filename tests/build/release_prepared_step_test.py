@@ -125,12 +125,21 @@ class CarrierTest(unittest.TestCase):
         def guard():
             self.guards += 1
         advanced = carrier.advance({}, {"step": "prepared"}, before_write=guard)
-        self.assertEqual(advanced["status"], "verified")
+        self.assertEqual(advanced.status, "verified")
+        self.assertEqual(advanced.evidence["reference"], "prepared:lmdj-v1.0.57.0")
         self.assertEqual(self.prepared, 1)
         again = carrier.advance({}, {"step": "prepared"}, before_write=guard)
-        self.assertEqual(again["status"], "verified")
+        self.assertEqual(again.status, "verified")
         self.assertEqual(self.prepared, 1, "verified state never re-runs prepare")
         self.assertEqual(self.guards, 1, "the write guard fired exactly once")
+
+    def test_unreadable_present_output_fails_closed_without_rerunning_prepare(self):
+        self.output.mkdir(parents=True)
+        (self.output / "release-plan.json").mkdir()  # a directory at the document path
+        carrier = self.carrier()
+        with self.assertRaises(PreparedStepError):
+            carrier.observe({}, {"step": "prepared"})
+        self.assertEqual(self.prepared, 0, "unreadable state must not trigger prepare")
 
     def test_prepare_failure_is_unknown_not_absent(self):
         def failing(tag):

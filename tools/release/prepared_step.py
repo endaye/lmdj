@@ -72,15 +72,19 @@ def read_back(root, spec, *, tag_state, signer_fingerprint):
     """Far-side read-back of the durable local prepared state, or a status str.
 
     Returns the verified evidence dict, or "absent"/"pending" when the output
-    does not exist yet. Any present-but-divergent state fails closed.
+    does not exist yet. Any present-but-divergent or unreadable state fails
+    closed: only a missing plan document is absent.
     """
     validate_spec(spec)
     output = Path(root) / output_relative(spec["tag"])
     try:
         document = (output / _PLAN_DOCUMENT).read_bytes()
         recorded = (output / _PLAN_DIGEST).read_text(encoding="ascii").strip()
-    except OSError:
+    except FileNotFoundError:
         return "absent"
+    except OSError:
+        _fail("the prepared output exists but is unreadable")
+        raise  # unreachable; _fail always raises
     if recorded != spec["plan_sha256"]:
         _fail("the recorded plan digest differs from the spec")
     import hashlib
@@ -127,7 +131,7 @@ class PreparedCarrier:
             _fail("requires the driver's durable write guard")
         observed = self._read_back()
         if isinstance(observed, dict):
-            return observed
+            return Observation("verified", observed["evidence"])
         if observed not in ("absent", "pending"):
             return Observation(observed)
         before_write()
@@ -137,7 +141,9 @@ class PreparedCarrier:
             # prepare() owns its own durable recovery; never half-report.
             return Observation("unknown")
         verified = self._read_back()
-        return verified if isinstance(verified, dict) else Observation(verified)
+        if isinstance(verified, dict):
+            return Observation("verified", verified["evidence"])
+        return Observation(verified)
 
     def _read_back(self):
         return read_back(self.root, self.spec, tag_state=self.tag_state(),
