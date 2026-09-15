@@ -45,7 +45,7 @@ class SourcePathTests(unittest.TestCase):
                 self.assertFalse(self.m.source_path(f'contracts/project/{name}'), name)
 
     def test_schema_json_admission_is_preserved(self):
-        for path in ('contracts/project/lmdj.project.v1.schema.json',
+        for path in ('contracts/project/lmdj.project.v5.schema.json',
                      'contracts/example.schema.json',
                      'contracts/project/nested/example.schema.json'):
             with self.subTest(path=path):

@@ -498,9 +498,9 @@ FacadeBundleFixture facade_bundle_fixture(
   nlohmann::json index{
       {"compression", "none"},
       {"contract", "lmdj.project-bundle.v1"},
-      {"contract_version", "1.0.0"},
+      {"contract_version", "2.0.0"},
       {"entries", std::move(encoded_entries)},
-      {"project_contract", "lmdj.project.v1"},
+      {"project_contract", "lmdj.project.v5"},
       {"project_id", std::move(declared_project_id)},
       {"uncompressed_bytes", offset},
   };

@@ -94,7 +94,7 @@ Web 那一半此前是打不开的：驱动它会让 Host 在一秒内终止（`
 **已注册不等于产品内可达。** Task 7 的验收在真实浏览器中对打包后的 Creator 实测出三个
 缺陷，各自阻断链路上的一段；三个都已修复。[#900](https://github.com/endaye/lmdj/issues/900)
 曾使本 Build 产出的任何 Project 都无法导入浏览器——浏览器侧 Bundle reader 的枚举停在
-`1.1.0` / `lmdj.project.v3`，而导入 Bundle 是浏览器获得 Project 的唯一途径；修复见
+`1.1.0` / v3，而导入 Bundle 是浏览器获得 Project 的唯一途径；修复见
 `f1293997`。六腿浏览器 journey 自
 [#978](https://github.com/endaye/lmdj/pull/978)（`b5d8ca93`）起无援转绿。[#901](https://github.com/endaye/lmdj/issues/901) 的
 `connect-src 'self'` 曾拦截一切跨源 Catalog，而真实 Catalog 必然跨源：现在 Creator 通过

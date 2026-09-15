@@ -16,7 +16,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 ## 权威内容
 
-当前 Bundle Contract 是 portable Project transfer envelope：canonical index 固定 Project ID、Project Contract、entry path/offset/bytes/SHA-256、总字节数和整个 Bundle digest；当前版本只允许无压缩 payload。`project_contract` 枚举覆盖仓库定义的 Project Contract（v1 至 v5）。writer 发出 Project Truth **head checkpoint** 的 Contract 级别而不是初始 checkpoint 的；reader 继续接收旧 envelope。导入侧从载入的 Project 重算期望 digest，loader 把 v1 与 v2 归并为 v3，因此声明 v1 或 v2 的容器仍有既存导入限制，不能把枚举可接受性当作完整旧版本迁移证据。
+当前 Bundle Contract 是 portable Project transfer envelope：canonical index 固定 Project ID、Project Contract、entry path/offset/bytes/SHA-256、总字节数和整个 Bundle digest；当前版本只允许无压缩 payload。开发期 Bundle 只命名 writer 当前 Project Contract 级别（现为 `lmdj.project.v5`），容器版本与 Contract 版本同步（现 `2.0.0`）；旧容器版本与旧 Project 级别一律拒绝，不做旧版本兼容。writer 发出 Project Truth **head checkpoint** 的 Contract 级别而不是初始 checkpoint 的；导入侧从载入的 Project 重算期望 digest。v1–v4 的 Project schema 定义已退役：旧 checkpoint 仍可由 Host 直接载入（loader 手写结构校验并完成确定性迁移），但不能打包或导入为 Bundle。决策见 `docs/prd/decisions/2026-09-15-project-bundle-current-level-only.md`。
 ## 与 Project Truth 的关系
 
 Bundle 只负责传输，不是新的创作真相。成功导入后，已验证的 Project 是权威 Project Truth；Runtime Snapshot、Provider/Attempt、Workspace/Host setting 与设备状态不进入 Bundle。
@@ -27,13 +27,15 @@ Bundle 只负责传输，不是新的创作真相。成功导入后，已验证�
 
 ## 使用方与证据
 
-Application Facade 暴露 streaming import/export；Creator Host 只传递字节和展示 typed result。Schema、parser、round trip、故障注入、取消与 OPFS publication tests 固定该边界。`conformance.project_bundle` 另把 Bundle 枚举与仓库内定义的 Project Contract 清单绑定，`e2e.project_bundle_writer_level` 则打包真实 CLI Host 创建的 Project，因此下一次 Project Contract 级别移动会先让套件变红。
+Application Facade 暴露 streaming import/export；Creator Host 只传递字节和展示 typed result。Schema、parser、round trip、故障注入、取消与 OPFS publication tests 固定该边界。`conformance.project_bundle` 另把 Bundle 枚举钉在 writer 当前级别上，`e2e.project_bundle_writer_level` 则打包真实 CLI Host 创建的 Project，因此下一次 Project Contract 级别移动会先让套件变红。
 
 ## Slice lineage Project transport
 
-The envelope now admits the successor Project Contract alongside v1-v4.
-Native, Python and browser readers retain prior envelope versions and accept
-the current writer's v5 Project bytes, including closed Slice lineage. Import
-validates Project Truth and retains the original lineage; it does not resolve
-Workspace CandidateSets or execute Provider attempts. The envelope version and
-current Contract identities remain generated from the active manifests.
+The envelope names only the writer's current Project Contract level — v5 —
+and every reader (native, Python, browser) accepts only the matching 2.0.0
+envelope; prior envelope versions and retired Project levels are refused at
+the boundary rather than migrated there. Import validates Project Truth and
+retains the original lineage, including closed Slice lineage; it does not
+resolve Workspace CandidateSets or execute Provider attempts. The envelope
+version and current Contract identities remain generated from the active
+manifests.

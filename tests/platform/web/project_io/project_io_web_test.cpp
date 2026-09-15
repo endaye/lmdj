@@ -974,7 +974,7 @@ nlohmann::json project_bundle_import(
         {"bundle_digest", std::string(64, '0')},
         {"compression", "none"},
         {"contract", "lmdj.project-bundle.v1"},
-        {"contract_version", "1.2.0"},
+        {"contract_version", "2.0.0"},
         {"entries", std::move(encoded_entries)},
         {"project_contract", head.at("contract").get<std::string>()},
         {"project_id", project_id},

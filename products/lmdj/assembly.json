@@ -2,7 +2,7 @@
   "contract": "lmdj.assembly.v2",
   "product": {
     "id": "lmdj",
-    "version": "1.0.56.0"
+    "version": "1.0.57.0"
   },
   "provider_policy": {
     "allowed_regions": [
@@ -112,20 +112,12 @@
   ],
   "contracts": [
     {
-      "id": "lmdj.project.v3",
-      "version": "3.0.0"
-    },
-    {
-      "id": "lmdj.project.v4",
-      "version": "4.1.0"
-    },
-    {
       "id": "lmdj.project.v5",
       "version": "5.0.0"
     },
     {
       "id": "lmdj.project-bundle.v1",
-      "version": "1.3.0"
+      "version": "2.0.0"
     },
     {
       "id": "lmdj.soundset.v1",

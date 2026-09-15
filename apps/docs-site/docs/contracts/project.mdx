@@ -3,8 +3,8 @@ title: Project Contract
 area: contracts
 status: implemented
 owners: [core, product]
-contracts: [lmdj.project.v3, lmdj.project.v4, lmdj.project.v5]
-source_paths: [contracts/project/lmdj.project.v1.schema.json, contracts/project/lmdj.project.v2.schema.json, contracts/project/lmdj.project.v3.schema.json, contracts/project/lmdj.project.v4.schema.json, contracts/project/lmdj.project.v5.schema.json, packages/authoring-domain]
+contracts: [lmdj.project.v5]
+source_paths: [contracts/project/lmdj.project.v5.schema.json, packages/authoring-domain]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -12,9 +12,10 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 <BuildIdentity kind="contracts" id="lmdj.project.v5" />
 
 ## 权威内容
-当前 Project Contract 是唯一写入真相：在素材引用、Pad Slot、完整 per-Pad playback、BPM、`quantize_enabled`、`swing_percent` 与 tick-native PPQ 960 Pattern events 之上，新增 `pattern_slots`、`performances` 两个顶层必填键与 Asset Lineage。`pattern_slots` 是长度恰好 16 的定长数组，每项要么是一个 Pattern UUID、要么是 `null`，构成唯一可 launch 的 Pattern 地址空间。Asset Lineage 是同一个载体上的两组封闭并集，`source` 与 `derivation` 各自由常量 `kind` 判别且都拒绝多余键：`source.kind` 为 `asset_artifact` 时记录来源 Artifact 摘要与来源 Project revision，为 `soundset` 时记录 `set_id`、`set_version`、`manifest_sha256`、`slot_index`（0..15）与 `artifact_sha256`；`derivation.kind` 为 `resample` 时记录帧区间与来源 Performance，为 `soundset_install` 时不带任何负载。`4.1.0` 是向后兼容的追加：`4.0.0` reader 按设计拒绝 `soundset` Lineage。Project I/O 拒绝在早于 `lmdj.project.v4` 的 Project Truth 上写入 Lineage。
+当前 Project Contract 是唯一写入真相：在素材引用、Pad Slot、完整 per-Pad playback、BPM、`quantize_enabled`、`swing_percent` 与 tick-native PPQ 960 Pattern events 之上，新增 `pattern_slots`、`performances` 两个顶层必填键与 Asset Lineage。`pattern_slots` 是长度恰好 16 的定长数组，每项要么是一个 Pattern UUID、要么是 `null`，构成唯一可 launch 的 Pattern 地址空间。Asset Lineage 是同一个载体上的两组封闭并集，`source` 与 `derivation` 各自由常量 `kind` 判别且都拒绝多余键：`source.kind` 为 `asset_artifact` 时记录来源 Artifact 摘要与来源 Project revision，为 `soundset` 时记录 `set_id`、`set_version`、`manifest_sha256`、`slot_index`（0..15）与 `artifact_sha256`；`derivation.kind` 为 `resample` 时记录帧区间与来源 Performance，为 `soundset_install` 时不带任何负载。`4.1.0` 是向后兼容的追加：`4.0.0` reader 按设计拒绝 `soundset` Lineage。Project I/O 拒绝在早于 v4 的 Project Truth 上写入 Lineage。
 `performances` 是成员唯一的 Performance 数组。每个 Performance 必填 `performance_id`（uuid）、`name`（1..64 字符）、`created_bpm`（40..240）、`recording_revision`（>= 0）、`recording_artifact`（artifact 引用或 `null`）与 `events`。`performance_event` 是恰好七种 kind 的封闭并集：`pad_hit`（`slot` 0..63、`onset_tick`、`duration_tick` >= 1、`velocity` 1..127）、`pattern_launch`（`pattern_slot` 0..15、`effective_tick`）、`fx_engage` 与 `fx_move`（`fx` 0..7、`value` 0..1000、`tick`）、`fx_release`（`fx`、`tick`）、`hold_on` 与 `hold_off`（`tick`）。事件时间与 Pattern 一致，仍是 PPQ 960 tick-native。
 Project I/O 可读取 v1/v2/v3/v4，并在第一次成功 mutation 持久化时完成确定性迁移；writer 永远只发出 v5。v4→v5 保留全部旧字段与 lineage，只改变 Contract 身份；单纯打开不回写旧文件。v3→v4 迁移要求来源精确声明 v3、不得携带 v4 字段、Asset 必须是精确的旧形状；迁移把每个 Asset 的 `lineage` 置为 `null`、写入 16 个 `null` 的 `pattern_slots` 并给出空 `performances`。
+Project Contract v1–v4 的 schema 定义已随 2026-09-15 的 Bundle 当前级别决策退役（`docs/prd/decisions/2026-09-15-project-bundle-current-level-only.md`）：它们不再是独立可分发的 Contract，只剩 loader 手写结构校验下的迁移读取入口，也不能再被命名或打包进 Project Bundle。
 
 ## Slice 采纳 Lineage
 

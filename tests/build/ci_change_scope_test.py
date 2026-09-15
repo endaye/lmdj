@@ -1163,7 +1163,7 @@ class ChangeScopeTest(unittest.TestCase):
     def test_unsafe_main_pushes_stay_full(self):
         cases = {
             "product assembly": ["products/lmdj/assembly.json"],
-            "contract": ["contracts/project/lmdj.project.v1.schema.json"],
+            "contract": ["contracts/project/lmdj.project.v5.schema.json"],
             "ci control": [".github/workflows/ci.yml"],
             "ci script": ["scripts/ci/change_scope.py"],
             "unknown path": ["invented-top-level/file.txt"],
