@@ -938,24 +938,27 @@ Json normalized_error_redacted(
 
 constexpr std::size_t kRefusalDiagnosticLineCap = 2048;
 constexpr std::size_t kRefusalDiagnosticMessageCap = 512;
+constexpr std::size_t kRefusalDiagnosticCodeCap = 128;
 
 std::size_t utf8_prefix_length(std::string_view text, std::size_t cap) {
-  const auto length = std::min(cap, text.size());
-  auto boundary = length;
-  while (boundary > 0 &&
+  auto boundary = std::min(cap, text.size());
+  while (boundary > 0 && boundary < text.size() &&
          (static_cast<unsigned char>(text[boundary]) & 0xC0) == 0x80) {
     --boundary;
   }
   return boundary;
 }
 
-std::string refusal_diagnostic_message(std::string_view source_message) {
-  if (source_message.size() <= kRefusalDiagnosticMessageCap) {
-    return std::string(source_message);
+std::string refusal_diagnostic_token(std::string_view value, std::size_t cap) {
+  if (value.size() <= cap) {
+    return std::string(value);
   }
-  return std::string(source_message.substr(
-      0, utf8_prefix_length(source_message, kRefusalDiagnosticMessageCap))) +
-      "...";
+  return std::string(value.substr(0, utf8_prefix_length(value, cap))) + "...";
+}
+
+std::string refusal_diagnostic_message(std::string_view source_message) {
+  return refusal_diagnostic_token(
+      source_message, kRefusalDiagnosticMessageCap);
 }
 
 Json refusal_diagnostic_details(const Json& details) {
@@ -983,7 +986,8 @@ void emit_refusal_diagnostic(
   static constexpr std::string_view kPrefix = "lmdj-refusal-diagnostic ";
   auto diagnostic = Json{
       {"normalized", normalized.at("error").at("code")},
-      {"source_code", source_code},
+      {"source_code",
+       refusal_diagnostic_token(source_code, kRefusalDiagnosticCodeCap)},
       {"source_message", refusal_diagnostic_message(source_message)},
       {"details", refusal_diagnostic_details(source_details)},
   };

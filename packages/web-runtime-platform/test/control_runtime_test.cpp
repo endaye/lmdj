@@ -1207,17 +1207,20 @@ void test_refusal_diagnostic_reports_the_pre_sanitization_reason() {
         lmdj::web_runtime::detail::normalize_error_for_testing(
         lmdj::foundation::Error{
             lmdj::foundation::ErrorCode::invalid_project,
-            "payload too large to repeat",
+            std::string(600, 'm'),
             {{"blob", std::string(4096, 'x')}},
         });
     check_error(normalized, "INVALID_PROJECT");
     const auto lines = refusal_diagnostic_lines(capture.str());
     LMDJ_CHECK(lines.size() == 1);
+    // The cap replaces the details copy rather than cutting serialized JSON,
+    // and still holds when the source message also needed shortening.
     LMDJ_CHECK(lines.front().size() <= 2048);
-    // The cap replaces the details copy rather than cutting serialized JSON.
     const auto diagnostic =
         Json::parse(lines.front().substr(kPrefix.size()));
     LMDJ_CHECK((diagnostic.at("details") == Json{{"truncated", true}}));
+    LMDJ_CHECK(
+        diagnostic.at("source_message").get<std::string>().size() <= 515);
   }
 }
 
