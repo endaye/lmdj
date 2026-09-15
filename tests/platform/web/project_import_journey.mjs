@@ -1,7 +1,17 @@
 import {createHash, randomUUID} from "node:crypto";
+import {readFileSync} from "node:fs";
 import {expect, test} from "@playwright/test";
 
 const digest = bytes => createHash("sha256").update(bytes).digest("hex");
+
+// The Bundle container version the importer accepts. Read from the versioned
+// schema for the same reason project_contract is read from the persisted head
+// checkpoint: a hardcoded level silently stops describing the Contract when
+// the writer moves (#1364 retired container 1.x and the journey went red
+// without a single Host code change).
+const bundleContractVersion = JSON.parse(readFileSync(
+  new URL("../../../contracts/project/lmdj.project-bundle.v1.schema.json",
+    import.meta.url), "utf8")).properties.contract_version.const;
 
 async function start(page) {
   await page.goto("/index.html");
@@ -112,7 +122,7 @@ function buildBundle(files, projectId) {
     bundle_digest: "0".repeat(64),
     compression: "none",
     contract: "lmdj.project-bundle.v1",
-    contract_version: "1.3.0",
+    contract_version: bundleContractVersion,
     entries,
     project_contract: head.contract,
     project_id: projectId,
