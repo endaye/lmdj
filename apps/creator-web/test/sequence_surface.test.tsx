@@ -3,6 +3,7 @@ import {expect, test, vi} from "vitest";
 
 import {SequenceSurface} from "../src/components/sequence_surface";
 import {initialSequenceState} from "../src/state/sequence_state";
+import {initialPatternTransportState} from "../src/state/pattern_transport_state";
 
 const project = {
   projectId: "11111111-1111-4111-8111-111111111111",
@@ -20,16 +21,18 @@ const project = {
 
 function renderSurface(recovery = false) {
   const callbacks = {
-    onRecord: vi.fn(), onStop: vi.fn(), onRefresh: vi.fn(), onSwitch: vi.fn(),
+    onRecord: vi.fn(), onPlayStop: vi.fn(), onRefresh: vi.fn(), onSwitch: vi.fn(),
     onCreatePattern: vi.fn(), onSettingsChange: vi.fn(),
     onRecover: vi.fn(), onDiscard: vi.fn(),
   };
-  render(<SequenceSurface project={project} ready state={{
-    ...initialSequenceState,
-    recovery: recovery ? [{sessionId: "session-1", patternId: project.patternId,
-      bars: 1, reason: "interrupted", eventCount: 3}] : [],
-    phase: recovery ? "recovery" : "stopped",
-  }} {...callbacks} />);
+  render(<SequenceSurface project={project} ready
+    transport={initialPatternTransportState}
+    state={{
+      ...initialSequenceState,
+      recovery: recovery ? [{sessionId: "session-1", patternId: project.patternId,
+        bars: 1, reason: "interrupted", eventCount: 3}] : [],
+      phase: recovery ? "recovery" : "stopped",
+    }} {...callbacks} />);
   return callbacks;
 }
 

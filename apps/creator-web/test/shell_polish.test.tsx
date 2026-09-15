@@ -20,6 +20,7 @@ import {
   type CreatorState,
 } from "../src/state/creator_state";
 import {initialSequenceState} from "../src/state/sequence_state";
+import {initialPatternTransportState} from "../src/state/pattern_transport_state";
 
 const BUILD: CreatorBuildIdentity = {
   productBuild: "9.8.7.6",
@@ -207,13 +208,13 @@ test("error panel renders Dismiss only when a handler is offered", () => {
 
 test("sequence transport explains why Record is unavailable", () => {
   const {rerender} = render(
-    <SequenceTransport state={initialSequenceState} ready={false}
-      onRecord={() => {}} onStop={() => {}} onRefresh={() => {}} />,
+    <SequenceTransport transport={initialPatternTransportState} ready={false}
+      onPlayStop={() => {}} onRecord={() => {}} onRefresh={() => {}} />,
   );
   expect(screen.getByText("Activate audio to record")).toBeTruthy();
   rerender(
-    <SequenceTransport state={initialSequenceState} ready
-      onRecord={() => {}} onStop={() => {}} onRefresh={() => {}} />,
+    <SequenceTransport transport={initialPatternTransportState} ready
+      onPlayStop={() => {}} onRecord={() => {}} onRefresh={() => {}} />,
   );
   expect(screen.queryByText("Activate audio to record")).toBeNull();
 });
@@ -222,8 +223,9 @@ test("sequence settings follow committed Project values and pluralise bars", () 
   const noop = () => {};
   const props = {
     state: initialSequenceState,
+    transport: initialPatternTransportState,
     ready: true,
-    onRecord: noop, onStop: noop, onRefresh: noop, onSwitch: noop,
+    onPlayStop: noop, onRecord: noop, onRefresh: noop, onSwitch: noop,
     onCreatePattern: noop, onSettingsChange: noop, onRecover: noop, onDiscard: noop,
   };
   const {rerender} = render(<SequenceSurface project={project} {...props} />);

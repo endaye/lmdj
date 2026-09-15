@@ -12,6 +12,9 @@ interface PhysicalControlsProps {
   onRecord?: () => void;
   recordEnabled?: boolean;
   recording?: boolean;
+  onPlayStop?: () => void;
+  playEnabled?: boolean;
+  playing?: boolean;
 }
 
 interface PhysicalKeyProps {
@@ -53,6 +56,9 @@ export function PhysicalControls({
   onRecord,
   recordEnabled = false,
   recording = false,
+  onPlayStop,
+  playEnabled = false,
+  playing = false,
 }: PhysicalControlsProps) {
   return (
     <div className="physical-controls">
@@ -113,15 +119,18 @@ export function PhysicalControls({
         <PhysicalKey
           label="●"
           ariaLabel={recording
-            ? "Record — recording Pad events into the current Pattern"
+            ? "Record — stop recording Pad events into the current Pattern"
             : "Record"}
-          disabled={!recordEnabled || recording || onRecord === undefined}
+          disabled={!recordEnabled || onRecord === undefined}
           {...(onRecord === undefined ? {} : {onClick: onRecord})}
         />
         <PhysicalKey
           label="▶"
-          ariaLabel="Play — Pattern Play requires global Pattern transport"
-          disabled
+          ariaLabel={playEnabled
+            ? (playing ? "Play/Stop — Pattern is playing" : "Play/Stop")
+            : "Play/Stop — needs a playable Project and running audio"}
+          disabled={!playEnabled || onPlayStop === undefined}
+          {...(onPlayStop === undefined ? {} : {onClick: onPlayStop})}
         />
       </div>
     </div>

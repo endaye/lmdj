@@ -4,6 +4,10 @@ import type {createCreatorInputController} from "../runtime/input_controller";
 import type {ProjectView} from "../runtime/runtime_types";
 import type {Bank, CreatorState} from "../state/creator_state";
 import {
+  type PatternTransportState,
+} from "../state/pattern_transport_state";
+import {transportStatusLabel} from "./sequence_transport";
+import {
   PERFORMANCE_FX_ORDER,
   type PerformController,
   type PerformState,
@@ -19,6 +23,9 @@ export interface PerformSurfaceProps {
   readonly padController?: ReturnType<typeof createCreatorInputController>;
   readonly bank: Bank;
   readonly onBankChange: (bank: Bank) => void;
+  // The Perform surface renders the same global Pattern transport projection
+  // every other mode consumes; it never drives it.
+  readonly transport?: PatternTransportState;
 }
 
 function RecordingPanel(props: {
@@ -247,6 +254,14 @@ export function PerformSurface(props: PerformSurfaceProps) {
           void controller.discardRecovery(sessionId);
         }} />
       {captureMessage !== null ? <p role="status">{captureMessage}</p> : null}
+      {props.transport !== undefined ? (
+        <output role="status" aria-label="Pattern transport status">
+          Pattern transport: {transportStatusLabel(props.transport)}
+          {props.transport.status?.publicationPending === true
+            ? " · committed, publication pending"
+            : ""}
+        </output>
+      ) : null}
       {state.error !== null ? <p role="alert">{state.error}</p> : null}
     </main>
   );

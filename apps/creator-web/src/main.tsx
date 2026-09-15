@@ -101,6 +101,9 @@ function createCreatorRuntimeSession(): CreatorRuntimeSession {
       expectedAssets: host.expected_assets,
     },
     inputOwnership: "host",
+    // The Creator's single session owner opts in to the global Pattern
+    // transport; Project open/create then carry the negotiation marker.
+    patternTransport: true,
     soundsetCatalog: createSoundSetCatalog(),
     seams: {
       createPerformanceMasterTap,
