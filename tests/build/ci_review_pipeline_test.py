@@ -1061,6 +1061,53 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(collector["input_sha256"], document["input_sha256"])
         self.assertIn("collected", (self.directory / "summary").read_text())
 
+    def test_generated_only_head_ends_the_lane_without_a_review(self):
+        # Every changed path is an excluded tool-generated artifact, so there
+        # are no reviewable bytes to send a model. The lane must end honestly
+        # rather than fail: before #1371 this exit code made every squash
+        # witness PR permanently red on a condition no rerun could satisfy.
+        output = self.directory / "generated-only"
+        head, base, control = "d" * 40, "e" * 40, "f" * 40
+        producer = pipeline.input_producer
+        refusal = producer._refuse(
+            "why: changed Git inventory contains only excluded generated artifacts; "
+            "remedy: rely on the deterministic gates that verify tool-generated artifacts, "
+            "or land a reviewable change",
+            {"repository": "endaye/lmdj", "pull_request": 7, "base_sha": base, "head_sha": head,
+             "control_sha": control, "run_id": "99", "run_attempt": 1},
+            [pipeline.change_scope.ChangedFile(
+                "A", ("apps/architecture-portal/versioned_provenance/version-1.0.57.0-squash-witness.json",))],
+            global_reason="changed Git inventory contains only excluded generated artifacts",
+            error_class=producer.GeneratedOnlyInventory)
+        step_output, summary = self.directory / "go-output", self.directory / "go-summary"
+        environment = {"GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "7", "HEAD_SHA": head,
+                       "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1",
+                       "GITHUB_EVENT_NAME": "pull_request", "PR_EVENT_ACTION": "opened",
+                       "AUTO_RECHECK": "false", "RECHECK_COMMENT_ID": "",
+                       "GITHUB_OUTPUT": str(step_output), "GITHUB_STEP_SUMMARY": str(summary)}
+        target = {"review": "true", "head_sha": head, "base_sha": base, "body": "witness"}
+
+        def git(*args):
+            if args[0] == "rev-parse":
+                return (control + "\n").encode()
+            if args[0] == "merge-base":
+                return (base + "\n").encode()
+            raise AssertionError(f"unexpected git call {args}")
+
+        with mock.patch.dict(os.environ, environment), \
+                mock.patch.object(pipeline, "git", side_effect=git), \
+                mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(producer, "build_input", side_effect=refusal), \
+                mock.patch.object(pipeline.pr_review_target, "resolve_target", return_value=target):
+            self.assertIsNone(pipeline.collect_t2(output))
+        # The refusal evidence is retained and no complete input was admitted.
+        self.assertEqual(pipeline.read(output / "collection-failure.json")["status"], "failed")
+        self.assertFalse((output / "t2-input.json").exists())
+        self.assertFalse((output / "collection-receipt.json").exists())
+        # The engine and the publisher are told to stand down, and the run says why.
+        self.assertIn("reviewable=false", step_output.read_text())
+        self.assertIn("No reviewable change at this head", summary.read_text())
+
     def refused_recheck_publication(self, *, failure=None, name="refused-recheck"):
         """Publish a repair-mode review whose recheck publication is refused.
 

@@ -166,19 +166,33 @@ class PublicationError(InputCollectionError):
     """A bounded artifact write failed without admitting a complete input."""
 
 
-class GeneratedOnlyInput(Exception):
+class GeneratedOnlyInventory(InputCollectionError):
+    """Every changed path is a tool-generated artifact, so nothing is reviewable.
+
+    Carries the same complete failure result as any other refusal, so retained
+    evidence is unchanged; only the caller's disposition differs. This is not a
+    defect of the head under review and no rerun can change it: there are no
+    reviewable bytes to send a model, by the same exclusion rule that keeps
+    deterministic renderings out of the bounded input (#1365). Callers that can
+    end the lane honestly select on this type rather than matching the reason
+    text, which is prose and may be reworded.
+    """
+
+
+class GeneratedOnlyInput(GeneratedOnlyInventory):
     """The complete inventory is Portal-class generated artifacts; carry the receipt.
 
-    This is deliberately not an ``InputCollectionError``: a generated-only
-    change is not a refused collection, and the failure-fence semantics of the
-    refusal path must not attach to it.  The receipt document is produced from
-    fixed Git objects only, exactly like the complete input.
+    The sibling disposition of the plain terminal state above: the Portal
+    snapshot/provenance classes are verified by a deterministic same-head gate,
+    so instead of retained refusal evidence the collector emits a control-plane
+    receipt produced from fixed Git objects only, exactly like the complete
+    input.  It carries no failure ``result``: the failure-fence semantics of
+    the refusal path must not attach to it.
     """
 
     def __init__(self, message: str, *, receipt: dict[str, Any]):
         super().__init__(message)
         self.receipt = receipt
-
 
 FAILURE_SUMMARY_SCHEMA = "lmdj.pr-agent-input-collection-failure-summary.v1"
 
@@ -352,8 +366,9 @@ def _bounded_failure_summary(result: Mapping[str, Any], original_payload: bytes)
 def _refuse(message: str, identity: Any,
             inventory: Sequence[change_scope.ChangedFile | Mapping[str, Any]] = (),
             reasons: Mapping[str, str] | None = None, global_reason: str | None = None,
-            *, raw_evidence: Mapping[str, Any] | None = None) -> InputCollectionError:
-    return InputCollectionError(
+            *, raw_evidence: Mapping[str, Any] | None = None,
+            error_class: type[InputCollectionError] = InputCollectionError) -> InputCollectionError:
+    return error_class(
         message,
         result=_failure(identity, inventory, reasons, global_reason or message, raw_evidence=raw_evidence),
     )
@@ -976,9 +991,9 @@ def build_input(repository: str | Path, identity: Mapping[str, Any]) -> dict[str
                 if all(_portal_generated_change(item.paths) for item in excluded_inventory):
                     # Rename boundary checks already ran above.  Only the
                     # Portal snapshot/provenance classes carry a deterministic
-                    # same-head gate, so only they graduate from refusal to a
-                    # control-plane receipt; every other generated-only
-                    # combination keeps the refusal below byte-for-byte.
+                    # same-head gate, so only they graduate to a control-plane
+                    # receipt; every other generated-only combination takes the
+                    # terminal no-reviewable-bytes disposition below (#1378).
                     raise GeneratedOnlyInput(
                         "why: changed Git inventory contains only excluded generated artifacts of the "
                         "Architecture Portal snapshot/provenance classes; remedy: the deterministic "
@@ -990,7 +1005,8 @@ def build_input(repository: str | Path, identity: Mapping[str, Any]) -> dict[str
                     "remedy: rely on the deterministic gates that verify tool-generated artifacts, "
                     "or land a reviewable change",
                     value, excluded_inventory,
-                    global_reason="changed Git inventory contains only excluded generated artifacts")
+                    global_reason="changed Git inventory contains only excluded generated artifacts",
+                    error_class=GeneratedOnlyInventory)
             raise _refuse("changed Git inventory is empty", value, global_reason="changed Git inventory is empty")
         if len(inventory) > t2.MAX_FILES:
             raise _refuse(
@@ -1086,6 +1102,10 @@ def build_input(repository: str | Path, identity: Mapping[str, Any]) -> dict[str
                           global_reason="final T2 input failed the complete adapter authentication contract") from error
         return document
     except (InputCollectionError, ValueError, UnicodeDecodeError) as error:
+        if isinstance(error, GeneratedOnlyInput):
+            # The receipt disposition has no failure result; never wrap it into
+            # a generic refusal.
+            raise
         if isinstance(error, InputCollectionError) and error.result is not None:
             raise
         raise _refuse(str(error), value, inventory if "inventory" in locals() else (),

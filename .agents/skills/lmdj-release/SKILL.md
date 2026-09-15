@@ -152,7 +152,10 @@ contract is [`docs/governance/pitfall-ledger.md`](../../../docs/governance/pitfa
 - Before treating a Product Build as allocated —
   [`squash-witness-provenance`](../../pitfalls/squash-witness-provenance.md).
   A squash rewrites the introducing commit, so a snapshot frozen from a branch
-  SHA loses its provenance. Generate the witness for the exact post-squash
+  SHA loses its provenance. Avoid needing the witness at all: freeze the
+  snapshot as the first and only commit on a branch cut from the current `main`
+  and merge it before `main` moves, so the squash parent is the recorded source
+  revision. Generate the witness for the exact post-squash
   `main` SHA with `scripts/docs-site.sh witness PRODUCT_BUILD
   INTRODUCING_REVISION` and verify it; never hand-edit an immutable snapshot to
   make provenance agree.

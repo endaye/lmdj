@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-15
     occurrence: https://github.com/endaye/lmdj/pull/1364
     observed_by: Kimi (agent)
+  - date: 2026-09-15
+    occurrence: https://github.com/endaye/lmdj/issues/1371
+    observed_by: Claude Opus 5
 exit: gate:tests/build/ci_pr_agent_input_test.py
 ---
 
@@ -42,12 +45,27 @@ Portal-class (`apps/architecture-portal/versioned_*` and
 `apps/architecture-portal/static/versions/`): `build_input` then raises
 `GeneratedOnlyInput` carrying a `lmdj.pr-agent-input-generated-only.v1`
 receipt, the publisher posts a `lmdj-review-generated-v1` marker, and
-`scripts/ci/review_wait.py` admits it only when the Architecture Portal lane
-is green on the same head — any other generated-only combination keeps the
-explicit refusal. The regression tests in
+`scripts/ci/review_wait.py` admits it only when the PR-gate
+`Architecture Portal provenance` check run is green on the same head — any
+other generated-only combination takes the terminal `GeneratedOnlyInventory`
+disposition below. The regression tests in
 `tests/build/ci_pr_agent_input_test.py`
 (`test_generated_artifacts_are_excluded_from_limits_but_recorded`,
 `test_all_generated_portal_inventory_yields_a_receipt`, and the
 `MAX_FILES` refusal test) enforce both directions: generated paths never reach
 the diff or the file budget, and the refusal semantics for genuinely
 oversized reviewable inventories are unchanged.
+
+Excluding a path class also changes what an *entirely* generated PR means. A
+squash witness or a snapshot repair can carry nothing else, so after exclusion
+its reviewable inventory is empty. That head has no reviewable bytes to send a
+model, which is a terminal state of the review lane, not a failed review and
+not a defect of the head: no rerun can change it. The collector therefore
+raises `GeneratedOnlyInventory`, and — outside the Portal classes above, which
+carry a receipt instead — `collect-t2` ends the lane with the
+refusal evidence retained and `reviewable=false`, which gates the engine, the
+receipt and the publisher in `.github/workflows/pr-review.yml`. Do not restore
+a non-zero exit for this case: it made every witness PR permanently red on a
+condition the PR could not satisfy (#1371). Equally, do not let it grant
+anything — the run publishes no review, so `scripts/ci/review_wait.py` still
+sees no current-head evidence and stays pending until an owner attests.

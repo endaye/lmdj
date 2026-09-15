@@ -148,6 +148,25 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         self.assertIn('"--no-ext-diff", "--no-textconv"', adapter)
         self.assertNotIn('git("checkout"', adapter)
 
+    def test_a_head_with_nothing_reviewable_cannot_reach_the_model_or_publisher(self):
+        # A head whose entire inventory is excluded generated artifacts ends the
+        # lane honestly instead of failing it (#1371). Pin that the collector's
+        # verdict actually gates every step that would otherwise run a model,
+        # write a receipt, or publish a review for a head nothing reviewed.
+        review = self.jobs["review"]
+        self.assertIn("reviewable: ${{ steps.input.outputs.reviewable }}", review,
+                      "why: the publisher job reads this output; remedy: keep it on the review job")
+        gate = "steps.input.outputs.reviewable != 'false'"
+        for step in ("deepseek review", "Validate PR-Agent result", "Save honest final result"):
+            with self.subTest(step=step):
+                block = review.split(f"      - name: {step}", 1)[1].split("\n      - ", 1)[0]
+                self.assertIn(gate, block,
+                              "why: a head with no reviewable bytes must not reach this step; "
+                              "remedy: keep the collector's reviewable verdict on its condition")
+        self.assertIn("needs.review.outputs.reviewable != 'false'", self.jobs["publish"],
+                      "why: there is no review to publish for such a head; "
+                      "remedy: keep the publisher gated on the same verdict")
+
     def test_engine_runs_on_the_netcup_host_with_only_the_provider_key(self):
         job = self.jobs["review"]
         self.assertIn("pull-requests: read", job)

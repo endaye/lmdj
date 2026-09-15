@@ -637,23 +637,34 @@ class ProducerTests(unittest.TestCase):
         self.assertEqual(receipt["receipt_sha256"],
                          hashlib.sha256(producer.json_bytes(unsigned)).hexdigest())
 
-    def test_non_portal_generated_only_inventory_keeps_the_explicit_refusal(self):
+    def test_non_portal_generated_only_inventory_is_the_typed_terminal_disposition(self):
         base = self.commit_files({"base.txt": b"base\n"}, "base")
         changes = {name: content for name, content in self.GENERATED_CHANGES.items()
                    if not name.startswith("apps/architecture-portal/")}
         self.commit_files(changes, "rendered only")
         head = self.git.text("rev-parse", "HEAD")
-        failure = self.assert_failure(base, head, "only excluded generated artifacts")
+        with self.assertRaises(producer.GeneratedOnlyInventory) as raised:
+            self.build(base, head)
+        failure = raised.exception.result
+        self.assertEqual(failure["status"], "failed")
+        self.assertTrue(all("only excluded generated artifacts" in reason["reason"]
+                            for reason in failure["reasons"]))
         self.assertEqual(
             {path for item in failure["inventory"] for path in item["paths"]},
             set(changes),
         )
 
-    def test_mixed_portal_and_other_generated_only_inventory_keeps_the_refusal(self):
+    def test_mixed_portal_and_other_generated_only_inventory_is_terminal_not_receipt(self):
         base = self.commit_files({"base.txt": b"base\n"}, "base")
         self.commit_files(self.GENERATED_CHANGES, "snapshot and rendered")
         head = self.git.text("rev-parse", "HEAD")
-        failure = self.assert_failure(base, head, "only excluded generated artifacts")
+        with self.assertRaises(producer.GeneratedOnlyInventory) as raised:
+            self.build(base, head)
+        self.assertNotIsInstance(raised.exception, producer.GeneratedOnlyInput)
+        failure = raised.exception.result
+        self.assertEqual(failure["status"], "failed")
+        self.assertTrue(all("only excluded generated artifacts" in reason["reason"]
+                            for reason in failure["reasons"]))
         self.assertEqual(
             {path for item in failure["inventory"] for path in item["paths"]},
             set(self.GENERATED_CHANGES),
@@ -672,6 +683,23 @@ class ProducerTests(unittest.TestCase):
             {path for item in failure["inventory"] for path in item["paths"]},
             {"apps/architecture-portal/versioned_provenance/version-1.0.57.0.json", "docs/witness.json"},
         )
+
+    def test_generated_only_refusal_is_typed_and_no_other_refusal_is(self):
+        # The lane ends a wholly generated head honestly instead of failing it,
+        # and it selects that disposition on the exception type rather than on
+        # the reason prose, which is explanatory text and may be reworded. Only
+        # a wholly generated inventory earns it: a refusal that still has
+        # reviewable bytes must stay an ordinary failure (#1371).
+        base = self.commit_files({"base.txt": b"base\n"}, "base")
+        self.commit_files(self.GENERATED_CHANGES, "snapshot only")
+        with self.assertRaises(producer.GeneratedOnlyInventory):
+            self.build(base, self.git.text("rev-parse", "HEAD"))
+        self.commit_files(
+            {f"file-{index:02d}.txt": f"{index}\n".encode() for index in range(adapter.MAX_FILES + 1)},
+            "many reviewable files")
+        with self.assertRaises(producer.InputCollectionError) as raised:
+            self.build(base, self.git.text("rev-parse", "HEAD"))
+        self.assertNotIsInstance(raised.exception, producer.GeneratedOnlyInventory)
 
     def test_generated_prefix_lookalike_paths_stay_reviewable(self):
         # Every generated directory prefix ends in "/", so prefix matching is

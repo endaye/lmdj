@@ -221,6 +221,17 @@ Squash ancestry alone is insufficient: verify the complete local patch and
 worktree cleanliness, locks and active sessions before any authorized removal.
 Never switch/reset another session's checkout to make cleanup convenient.
 
+Prevent the witness rather than repairing it. Provenance resolves with no
+witness when the commit introducing a snapshot's metadata has the recorded
+source revision as its parent. A squash merge makes that parent whichever
+commit was `main`'s tip at merge time, and the freeze records the HEAD it ran
+against, so the two agree only when the freeze is the first and only commit on
+a branch cut from the current `main` and the merge happens before `main` moves.
+Do not bundle a snapshot freeze into a branch that already carries commits: the
+freeze then records a branch commit the squash discards, and direct-parent
+provenance can never resolve. Every snapshot frozen so far recorded such a
+branch commit, and five of the six then needed a witness.
+
 For a Task allocating a Product Build or introducing a snapshot, verify
 provenance against the actual merged introducing SHA. If a squash witness is
 missing, use the official `architecture-portal.sh witness` generator and ship
