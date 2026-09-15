@@ -149,6 +149,19 @@ class PublicationError(InputCollectionError):
     """A bounded artifact write failed without admitting a complete input."""
 
 
+class GeneratedOnlyInventory(InputCollectionError):
+    """Every changed path is a tool-generated artifact, so nothing is reviewable.
+
+    Carries the same complete failure result as any other refusal, so retained
+    evidence is unchanged; only the caller's disposition differs. This is not a
+    defect of the head under review and no rerun can change it: there are no
+    reviewable bytes to send a model, by the same exclusion rule that keeps
+    deterministic renderings out of the bounded input (#1365). Callers that can
+    end the lane honestly select on this type rather than matching the reason
+    text, which is prose and may be reworded.
+    """
+
+
 FAILURE_SUMMARY_SCHEMA = "lmdj.pr-agent-input-collection-failure-summary.v1"
 
 
@@ -321,8 +334,9 @@ def _bounded_failure_summary(result: Mapping[str, Any], original_payload: bytes)
 def _refuse(message: str, identity: Any,
             inventory: Sequence[change_scope.ChangedFile | Mapping[str, Any]] = (),
             reasons: Mapping[str, str] | None = None, global_reason: str | None = None,
-            *, raw_evidence: Mapping[str, Any] | None = None) -> InputCollectionError:
-    return InputCollectionError(
+            *, raw_evidence: Mapping[str, Any] | None = None,
+            error_class: type[InputCollectionError] = InputCollectionError) -> InputCollectionError:
+    return error_class(
         message,
         result=_failure(identity, inventory, reasons, global_reason or message, raw_evidence=raw_evidence),
     )
@@ -911,7 +925,8 @@ def build_input(repository: str | Path, identity: Mapping[str, Any]) -> dict[str
                     "remedy: rely on the deterministic gates that verify tool-generated artifacts, "
                     "or land a reviewable change",
                     value, excluded_inventory,
-                    global_reason="changed Git inventory contains only excluded generated artifacts")
+                    global_reason="changed Git inventory contains only excluded generated artifacts",
+                    error_class=GeneratedOnlyInventory)
             raise _refuse("changed Git inventory is empty", value, global_reason="changed Git inventory is empty")
         if len(inventory) > t2.MAX_FILES:
             raise _refuse(
