@@ -95,13 +95,18 @@ class BatchVerification:
             return Observation("pending")
         try:
             document = _decode(reference)
-            origin = document["request"]["origin_run"]["run_id"]
+            request = document["request"]
+            if request.get("target") != witness:
+                _fail("decoded reference does not bind the candidate target")
+            origin = request["origin_run"]["run_id"]
             if type(origin) is not int or origin <= 0:
                 _fail("durable reference has no exact origin run")
         except VerificationError:
             return Observation("conflict")
         except Exception:
-            return Observation("unknown")
+            # Undecodable reference payloads fail closed with the journal
+            # result they came from: conflict, never an outage.
+            return Observation("conflict")
         try:
             self.consumer.verify_run(document, run_id=origin, target_revision=witness)
         except BatchEvidenceError:

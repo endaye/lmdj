@@ -4,7 +4,6 @@ from copy import deepcopy
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -112,7 +111,17 @@ class BatchVerificationTest(unittest.TestCase):
         self.assertEqual(self.carrier.observe({}, {}).status, "conflict")
         self.setUp()
         self.journal.append(self.result_event(reference="batch-verdict-v1:zlib-base64:bogus"))
-        self.assertEqual(self.carrier.observe({}, {}).status, "unknown")
+        # A malformed durable reference fails closed as a conflict, never as
+        # an outage: the journal result is authenticated, only its payload is bad.
+        self.assertEqual(self.carrier.observe({}, {}).status, "conflict")
+
+    def test_reference_bound_to_another_target_conflicts(self):
+        from scripts.ci.batch_runtime import encode_reference
+        other = encode_reference(batch_reference_document(4242, "f" * 40))
+        self.journal.append(self.result_event(reference=other))
+        # The journal result was selected for WITNESS, so a document naming a
+        # different target must fail closed even though decode succeeds.
+        self.assertEqual(self.carrier.observe({}, {}).status, "conflict")
 
     def test_receipts_without_a_witness_revision_conflict(self):
         self.receipts[0] = {}
