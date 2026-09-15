@@ -81,6 +81,14 @@ it. Every snapshot frozen so far (1.0.52.0 through 1.0.57.0) recorded such a
 branch commit, and five of the six then needed a witness: this entry's
 recurrences are that bundling, not bad luck at merge time.
 
+The detection also moved earlier. The full Architecture Portal lane in `ci.yml`
+is conditioned on the main incremental-batch fixed-target mode, so no Pull
+Request ever ran it and a broken snapshot surfaced only on the next main run:
+that is how Build 1.0.57.0 was found, already merged. The `Architecture Portal
+provenance` job in `pr-contract.yml` now runs the same portal lane commands
+against the Pull Request head whenever the change selects the portal lane, so
+the repair is decided before merge instead of after.
+
 When a Product Build snapshot and post-freeze current-page edits land in the
 same squash, generate the witness with
 `scripts/architecture-portal.sh witness PRODUCT_BUILD INTRODUCING_REVISION`
