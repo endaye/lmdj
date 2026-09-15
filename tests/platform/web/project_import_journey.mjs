@@ -138,7 +138,13 @@ function buildBundle(files, projectId) {
 // into its own fresh origin partition.
 let authored = null;
 function authorBundle(browser) {
-  authored ??= authorBundleOnce(browser);
+  // A rejected authoring attempt must not be cached: one transient boot
+  // failure would otherwise fail every later journey in this worker with the
+  // original error and hide its own cause.
+  authored ??= authorBundleOnce(browser).catch(error => {
+    authored = null;
+    throw error;
+  });
   return authored;
 }
 async function authorBundleOnce(browser) {
@@ -246,8 +252,15 @@ export function registerProjectImportJourneys(host) {
     expect(success(await send(page, "project.import.abort",
       {import_token: importToken}), "project.import.abort")).toEqual({aborted: true});
     const inventory = await opfsInventory(page);
+    // Scoped to the library and the staging token: `.lmdj-host/` lease and
+    // intent metadata may legitimately mention the staged Project ID (the
+    // same carve-out the collision journey makes), so an abort is proven by
+    // the absence of the published tree and the staging area, not by a
+    // global name search.
     expect(inventory.some(entry =>
-      entry.includes(importToken) || entry.includes(projectId))).toBe(false);
+      entry.startsWith("file:projects/") ||
+      entry.startsWith("directory:projects/"))).toBe(false);
+    expect(inventory.some(entry => entry.includes(importToken))).toBe(false);
     expect(success(await send(page, "project.list", {})), "project.list after abort")
       .toEqual({projects: []});
     // The aborted token is retired: a late commit must not resurrect it.
