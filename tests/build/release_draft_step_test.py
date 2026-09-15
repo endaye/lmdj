@@ -119,6 +119,15 @@ class CarrierTest(unittest.TestCase):
         self.assertEqual(advanced.status, "verified")
         self.assertEqual(self.creations, 0, "recovery never re-creates")
 
+    def test_deterministic_transition_error_surfaces(self):
+        from tools.release.transitions import TransitionError
+        def refusing(tag):
+            raise TransitionError("published release intent cannot authorize a new Draft")
+        carrier = DraftCarrier(spec=spec(), create_draft=refusing,
+                               release_by_tag=lambda: None)
+        with self.assertRaises(TransitionError):
+            carrier.advance({}, {"step": "draft"}, before_write=lambda: None)
+
     def test_carrier_refuses_an_untrusted_composition(self):
         with self.assertRaises(DraftStepError):
             DraftCarrier(spec=spec(), create_draft=None,

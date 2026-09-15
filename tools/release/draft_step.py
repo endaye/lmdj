@@ -14,6 +14,7 @@ import re
 
 from .model import canonical_sha256
 from .orchestration_driver import Observation
+from .transitions import TransitionError
 
 
 class DraftStepError(ValueError):
@@ -59,9 +60,10 @@ def read_back(release, spec):
     `release` is a projection with `id`, `draft`, `tag`, `plan_sha256`
     attributes, or None while no Release exists. Returns the verified evidence
     dict for a draft bound to the prepared plan, "pending" while absent, and
-    fails closed on any present-but-divergent state; an already-published
-    Release is `published`, which this step's driver mapping reports as an
-    Observation the same way.
+    fails closed on any present-but-divergent state. An already-published
+    Release is reported as `published` — the driver's later publication steps
+    own its asset verification; this step never treats it as its own verified
+    work.
     """
     validate_spec(spec)
     if release is None:
@@ -100,15 +102,22 @@ class DraftCarrier:
             _fail("requires the driver's durable write guard")
         observed = self._read_back()
         if isinstance(observed, dict):
+            # A published Release is not this step's verified work: report the
+            # status so the driver surfaces it instead of marking draft done.
             return Observation(observed["status"], observed["evidence"])
         if observed != "pending":
             return Observation(observed)
         before_write()
         try:
             self.create_draft(self.spec["tag"])
+        except TransitionError:
+            # create_draft raises TransitionError only after its own
+            # reconciliation: a deterministic pre-write or unrecoverable
+            # creation failure that must surface, not hide as unknown.
+            raise
         except Exception:
-            # create_draft owns its own uncertain-POST reconciliation; never
-            # half-report a creation it could not confirm.
+            # A raw transport failure during the POST is an unresolved write;
+            # the next advance reconciles far-side state.
             return Observation("unknown")
         verified = self._read_back()
         if isinstance(verified, dict):
