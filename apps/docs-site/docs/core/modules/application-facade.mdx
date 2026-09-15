@@ -75,7 +75,13 @@ controller 不阻塞）；controller 销毁即注销登记。owner 消失的未�
 正常释放；存活 owner 的 journal 永不被列出操作密封。
 结算完整（terminal receipt、tail flush 恰好提交一次、complete）后移除已结算 journal，
 与 legacy stop 的 remove_active_if_complete 一致；再次 Record 走同一懒创建路径开新
-journal。
+journal。submit 被 Engine 拒绝（如未命名的 pending publication）发生在任何音频效果之前，
+但 admission preparation 已 durable：同身份重试在 generation 未变时幂等复用，
+generation 已变则冲突拒绝，未决 journal 留给 owner-loss 恢复面；Host 侧以前置守卫保证
+pending publication 应用前不写 journal。收据应用失败若是确定性的
+authority/identity 不符（如 engagement 背后的 Pattern 已换），重读同一保留收据永不解决，
+coordinator 停驻 error phase：continuation 变 no-op、新命令被诚实拒绝（不为 busy），
+恢复路径是 Project 重开 + owner-loss recovery listing。
 cutoff 前已应用 switch 的 close 保持原语义，尚无 terminal transfer。它仍不是 Creator
 opt-in、settings/rebase 或未知 cutoff 恢复。测试用生产
 `RealtimeEngine` 收据，不是 Creator 或听感验收。

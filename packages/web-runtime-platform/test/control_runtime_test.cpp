@@ -6676,6 +6676,153 @@ void test_pattern_transport_unknown_closure_blocks_clean_suspend() {
   LMDJ_CHECK(journal.value().admission->candidates.size() == 2);
 }
 
+void test_transport_reload_rebinds_engagement_without_bricking() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(
+      runtime->dispatch("project.create", create_opted_in_project(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 810, 811, 0);
+  constexpr std::string_view kPatternB =
+      "00000000-0000-4000-8000-0000000000b0";
+  check_success(runtime->dispatch(
+      "pattern.create",
+      {{"command_id", uuid(812)},
+       {"expected_revision", 2},
+       {"pattern_id", kPatternB},
+       {"bars", 1}},
+      {}));
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  coordinator.engine = &runtime->engine();
+  coordinator.observe_engine_generation = true;
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  ContinuousAudioDriver driver(runtime->engine());
+
+  std::uint64_t epoch = 1;
+  const auto request = [&](std::uint32_t command, std::string_view intent) {
+    return runtime->dispatch(
+        "pattern.transport.request",
+        pattern_transport_request_payload(
+            kSequenceSessionId, command, epoch++, intent),
+        {});
+  };
+  const auto settled = [&](auto predicate) {
+    wait_until([&] {
+      return predicate(pattern_transport_inspect(*runtime, kSequenceSessionId));
+    });
+  };
+  const auto idle_recording = [](const auto& s) {
+    return s.at("recording") == true && s.at("phase") == "idle";
+  };
+  const auto idle_settled = [](const auto& s) {
+    return s.at("recording") == false && s.at("phase") == "idle" &&
+           s.at("publication_pending") == false;
+  };
+
+  // Record on A, settle, stop.
+  check_success(request(813, "record"));
+  settled(idle_recording);
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  check_success(request(814, "record"));
+  settled(idle_settled);
+  check_success(request(815, "play_stop"));
+  settled([](const auto& s) {
+    return s.at("playing") == false && s.at("phase") == "idle";
+  });
+
+  // Running but not playing: a cross-identity reload retires and rebinds the
+  // engagement; the accepted publication applies at the Bar boundary and must
+  // not disappear.
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternB}}, {}));
+  LMDJ_CHECK(
+      runtime->engine().pattern_telemetry().pending_generation != 0);
+  // A Record before the pending publication applies is refused transiently;
+  // retrying the exact same command identity must succeed once it applies —
+  // the refusal must not poison the retry. The pending assertion above makes
+  // the first refusal deterministic.
+  bool refused_once = false;
+  wait_until([&] {
+    const auto attempt = runtime->dispatch(
+        "pattern.transport.request",
+        pattern_transport_request_payload(
+            kSequenceSessionId, 816, epoch, "record"),
+        {});
+    if (attempt.value("ok", false)) {
+      return true;
+    }
+    check_error(attempt, "HOST_STATE_INVALID");
+    refused_once = true;
+    return false;
+  });
+  LMDJ_CHECK(refused_once);
+  ++epoch;
+  settled(idle_recording);
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  check_success(request(817, "record"));
+  settled(idle_settled);
+  {
+    const auto truth = inspect_project(temp.path(), kProjectId);
+    LMDJ_CHECK(
+        truth.at("result")
+            .at("project")
+            .at("patterns")
+            .at(kPatternB)
+            .at("events")
+            .size() == 1);
+  }
+
+  // Playing: a cross-identity reload is refused honestly and the engagement
+  // stays intact.
+  check_error(
+      runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}),
+      "HOST_STATE_INVALID");
+  check_success(request(818, "play_stop"));
+  settled([](const auto& s) {
+    return s.at("playing") == false && s.at("phase") == "idle";
+  });
+  check_success(request(819, "record"));
+  settled(idle_recording);
+  check_success(request(820, "record"));
+  settled(idle_settled);
+
+  // Suspended: the reload retires the engagement; re-activation re-arms the
+  // Engine port and the next request re-engages on the fresh generation.
+  check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  epoch = 1;  // A re-armed generation restarts the epoch sequence.
+  check_success(request(821, "record"));
+  settled(idle_recording);
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  check_success(request(822, "record"));
+  settled(idle_settled);
+  const auto truth = inspect_project(temp.path(), kProjectId);
+  LMDJ_CHECK(
+      truth.at("result")
+          .at("project")
+          .at("patterns")
+          .at(kPatternId)
+          .at("events")
+          .size() == 2);
+  driver.stop();
+}
+
 void test_transport_recording_rejects_sample_commit_and_keeps_journal() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -6963,6 +7110,7 @@ int main() {
     test_pattern_transport_records_live_input_and_rejects_legacy_writes();
     test_pattern_transport_suspend_barrier_settles_recording();
     test_pattern_transport_unknown_closure_blocks_clean_suspend();
+    test_transport_reload_rebinds_engagement_without_bricking();
     test_transport_recording_rejects_sample_commit_and_keeps_journal();
     test_pattern_transport_owner_loss_lists_recovery_on_reopen();
   } catch (const std::exception& error) {
