@@ -147,7 +147,7 @@ std::string digest_of(const std::vector<std::byte>& bytes) {
 }
 
 lmdj::domain::ProjectState new_v4_project() {
-  // create_project already declares lmdj.project.v4; the assertion keeps this
+  // create_project already declares lmdj.project.v5; the assertion keeps this
   // fixture honest if that ever stops being true.
   auto project =
       lmdj::domain::create_project(ProjectId{test_uuid("project")}, 120);
