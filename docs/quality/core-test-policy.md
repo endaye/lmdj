@@ -587,8 +587,15 @@ TSan lane would only measure a different kernel and drift.
 The same run also settled a related question in the other direction.
 `core-stress` failed uncontended on that run, so the suggestion that recent
 nightly stress failures were sibling contention is not supported: the capacity
-queue was in force and the suite still failed. That is a separate matter from CI
-routing and needs its own investigation.
+queue was in force and the suite still failed. #666 traced that failure to its
+mechanism: both self-hosted hosts are KVM guests whose kernels lack
+`CONFIG_PARAVIRT_TIME_ACCOUNTING` and `CONFIG_IRQ_TIME_ACCOUNTING`, so the
+`CLOCK_THREAD_CPUTIME_ID` gate in `master_fx_stress` was billed hypervisor
+steal and hardirq time it cannot consume. The gate now samples the host
+accounting counters around every render window and attributes such overruns
+instead of counting them; the deadline and the zero-unattributed-overruns
+bound are unchanged
+([decision](../prd/decisions/2026-09-16-master-fx-stress-attribute-guest-stolen-time.md)).
 
 Both native Nightly jobs join the repository-wide `lmdj-native-heavy` queue.
 Naming the `ci-core` role is not enough to serialise them: the role spans
