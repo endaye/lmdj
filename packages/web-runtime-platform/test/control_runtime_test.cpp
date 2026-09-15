@@ -532,6 +532,7 @@ struct FakeRuntimeClock final {
   static std::chrono::steady_clock::time_point now(void* context) noexcept {
     auto& self = *static_cast<FakeRuntimeClock*>(context);
     ++self.reads;
+    self.current += self.advance_per_read;
     if (self.cross_deadline_on_read.has_value() &&
         self.reads == *self.cross_deadline_on_read) {
       self.current += std::chrono::seconds(31);
@@ -545,6 +546,7 @@ struct FakeRuntimeClock final {
 
   std::chrono::steady_clock::time_point current{
       std::chrono::seconds(100)};
+  std::chrono::steady_clock::duration advance_per_read{0};
   std::uint64_t reads = 0;
   std::optional<std::uint64_t> cross_deadline_on_read;
 };
@@ -3661,21 +3663,24 @@ void test_audio_activation_rollback_rechecks_the_original_deadline() {
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
   coordinator.begin_succeed = false;
-  // Leave enough of the original request budget for ASan-instrumented master
-  // FX preparation to reach rollback, then cross that same deadline while
-  // the coordinator is quiescing audio.
-  coordinator.await_delay_ms = 300;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
+  // The fake clock keeps 250ms of the original 1000ms request budget through
+  // instrumented master FX preparation, so rollback always reaches
+  // quiescence; the fifth clock read is the post-rollback recheck of the
+  // original deadline, which then crosses it deterministically.
+  FakeRuntimeClock clock;
+  clock.cross_deadline_on_read = 5;
+  LMDJ_CHECK(
+      ControlRuntimeClockAccess::install(*runtime, clock.seam()).has_value());
 
   check_error(
       runtime->dispatch(
           "audio.activate",
           Json::object(),
           {},
-          std::chrono::steady_clock::now() -
-              std::chrono::milliseconds(750)),
+          clock.current - std::chrono::milliseconds(750)),
       "HOST_TIMEOUT");
   LMDJ_CHECK(coordinator.called);
   LMDJ_CHECK(coordinator.timeout_ms >= 1);
@@ -5884,6 +5889,10 @@ void test_bridge_passes_the_absolute_caller_deadline_into_audio_activation() {
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
+  FakeRuntimeClock clock;
+  clock.advance_per_read = std::chrono::milliseconds(10);
+  LMDJ_CHECK(
+      ControlRuntimeClockAccess::install(*runtime, clock.seam()).has_value());
 
   FakeProxy proxy;
   auto bridge = make_bridge(*runtime, proxy);
@@ -5891,6 +5900,7 @@ void test_bridge_passes_the_absolute_caller_deadline_into_audio_activation() {
   const auto activation = encode(request(
       request_id, "audio.activate", Json::object()));
   const auto started_at = std::chrono::steady_clock::now();
+  clock.current = started_at;
   LMDJ_CHECK(
       bridge->submit(
           activation,
@@ -5898,19 +5908,18 @@ void test_bridge_passes_the_absolute_caller_deadline_into_audio_activation() {
           started_at + std::chrono::milliseconds(100)) ==
       BridgeSubmitStatus::accepted);
   proxy.pump_one();
-  const auto elapsed = std::chrono::steady_clock::now() - started_at;
 
   const auto response = poll_message(*bridge);
   LMDJ_CHECK(response.at("request_id") == request_id);
   LMDJ_CHECK(response.at("ok") == false);
   LMDJ_CHECK(response.at("error").at("code") == "HOST_TIMEOUT");
-  LMDJ_CHECK(elapsed >= std::chrono::milliseconds(80));
-  LMDJ_CHECK(elapsed < std::chrono::milliseconds(400));
-  // The elapsed deadline is authoritative. Sanitizer scheduling may reduce
-  // the number of 10 ms polling sleeps that fit in that interval, so require
-  // proof that acknowledgement was observed without coupling the contract to
-  // a wall-clock polling count.
+  // Runtime-side deadline accounting runs on the fake clock anchored at the
+  // caller deadline, so acknowledgement polling is bounded by the 100ms
+  // caller budget instead of wall-clock scheduling: six 10ms advances reach
+  // the deadline, while falling through to the 1s operation default would
+  // poll an order of magnitude longer.
   LMDJ_CHECK(coordinator.acknowledgement_calls != 0);
+  LMDJ_CHECK(coordinator.acknowledgement_calls <= 10);
   LMDJ_CHECK(runtime->failed());
   LMDJ_CHECK(bridge->failed());
   const auto terminal_acknowledgement_calls =
@@ -6556,6 +6565,14 @@ void test_pattern_transport_suspend_barrier_settles_recording() {
 
   // Explicit Suspend enters the shutdown barrier: acknowledged Pattern Stop,
   // admission closure and journal settlement complete before audio stops.
+  // That settlement is real render-thread work whose duration sanitizer
+  // instrumentation stretches past the 1s request budget even though every
+  // settlement leg completes; pin the runtime clock so expiry cannot
+  // interrupt the barrier this test verifies.
+  FakeRuntimeClock clock;
+  clock.current = std::chrono::steady_clock::now();
+  LMDJ_CHECK(
+      ControlRuntimeClockAccess::install(*runtime, clock.seam()).has_value());
   const auto& suspended = check_exact_success(
       runtime->dispatch("audio.suspend", Json::object(), {}),
       {"state", "changed", "stopped_sequence_id"});
