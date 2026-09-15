@@ -407,8 +407,12 @@ unknown 且由其自身恢复路径续跑。
 
 tag 步骤的执行载体已接入：观察比对本地签名 tag（object/target 对 prepared spec）
 与远端拉回的 tag 身份，漂移 fail-closed；执行在持久写护栏下只运行一次受信
-push_tag（其自身含远端冲突拒绝与已推送 reconcile），已验证状态不重推。Draft、
-publication、晋级与终审仍未接通。
+push_tag（其自身含远端冲突拒绝与已推送 reconcile），已验证状态不重推。
+
+draft 步骤的执行载体已接入：观察读取远端 Release 投影并与 prepared plan 摘要
+比对，漂移 fail-closed，已发布 Release 报为独立 published 状态而非 verified；
+执行在持久写护栏下只运行一次受信 create_draft，不确定的创建报 unknown，下一次
+advance 走 reconcile 而不是重复创建。publication、晋级与终审仍未接通。
 
 带 `changelog` 的 reviewed intent 现已接通 prepare / Draft / published 验证：正文
 进入 plan 摘要，prepare 重验真实 Git 范围，恢复时检查本地 notes，Draft 与公开
