@@ -24,7 +24,7 @@ class CandidateTest(unittest.TestCase):
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.invalid")
         self.version = {"contract":"lmdj.product-version.v1", "product":"lmdj",
-                        "milestone":1, "minor":0, "build":56, "patch":0}
+                        "milestone":1, "minor":0, "build":57, "patch":0}
         self.write(VERSION, canonical_json(self.version))
         for filename in ("products/lmdj/assembly.lock.json", "packages/core/src/a.cpp",
                          "apps/creator-web/src/a.ts", "docs/guide.md"):
@@ -60,7 +60,7 @@ class CandidateTest(unittest.TestCase):
         before = (self.git("status", "--porcelain"), self.git("show-ref"))
         result = self.reader.verify(self.frozen, main)
         self.assertEqual((result["base_revision"], result["observed_main"]), (self.base, main))
-        self.assertEqual(result["product_build"], "1.0.56.0")
+        self.assertEqual(result["product_build"], "1.0.57.0")
         self.assertEqual(before, (self.git("status", "--porcelain"), self.git("show-ref")))
         self.assertEqual(self.reader.freeze(self.base), self.frozen)
 
@@ -83,7 +83,7 @@ class CandidateTest(unittest.TestCase):
                      "third_party/library.c", "unknown-input"):
             with self.subTest(name=name):
                 self.git("checkout", "-b", "case-" + str(len(self.git("branch").splitlines())), self.base)
-                raw = canonical_json({**self.version, "build":57}) if name == VERSION else b"new input\n"
+                raw = canonical_json({**self.version, "build":58}) if name == VERSION else b"new input\n"
                 self.write(name, raw)
                 main = self.commit()
                 with self.assertRaisesRegex(CandidateInputError, "changed since"):

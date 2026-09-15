@@ -74,7 +74,7 @@ test('facts match the current locked product composition', async () => {
     {id: 'web-runtime-host', version: '4.3.0'},
   ]);
   assert.equal(facts.providers.length, 3);
-  assert.equal(facts.contracts.length, 14);
+  assert.equal(facts.contracts.length, 12);
 });
 
 test('facts name each Product Build consumer that mismatches authority', async (t) => {

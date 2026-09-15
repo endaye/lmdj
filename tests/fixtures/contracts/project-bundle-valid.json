@@ -2,7 +2,7 @@
   "bundle_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "compression": "none",
   "contract": "lmdj.project-bundle.v1",
-  "contract_version": "1.3.0",
+  "contract_version": "2.0.0",
   "entries": [
     {
       "bytes": 1,
@@ -11,7 +11,7 @@
       "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
   ],
-  "project_contract": "lmdj.project.v3",
+  "project_contract": "lmdj.project.v5",
   "project_id": "12345678-1234-4123-8123-123456789abc",
   "uncompressed_bytes": 1
 }

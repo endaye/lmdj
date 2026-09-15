@@ -19,9 +19,6 @@ TOOL_PATH = REPO_ROOT / "tools" / "project-bundle" / "project_bundle.py"
 SCHEMA_PATH = (
     REPO_ROOT / "contracts" / "project" / "lmdj.project-bundle.v1.schema.json"
 )
-PROJECT_V3_SCHEMA_PATH = (
-    REPO_ROOT / "contracts" / "project" / "lmdj.project.v3.schema.json"
-)
 PROJECT_SCHEMA_ROOT = REPO_ROOT / "contracts" / "project"
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "contracts"
 PROJECT_ID = "12345678-1234-4123-8123-123456789abc"
@@ -132,9 +129,10 @@ def test_schema_and_fixtures() -> None:
 
 
 def test_v3_project_truth_fixture_is_canonical_and_tick_native() -> None:
-    schema = load_json(PROJECT_V3_SCHEMA_PATH)
+    # The v1-v4 Project schemas are retired (Bundles name only the writer's
+    # level), so this fixture is legacy checkpoint data the loader and
+    # migration suites read, not a Contract-validated document.
     project = load_json(FIXTURE_ROOT / "project-v3-valid.json")
-    json_schema.check(project, schema, "project-v3-valid")
     assert project["contract"] == "lmdj.project.v3"
     assert "takes" not in project
     assert isinstance(project["assets"], list)
@@ -228,37 +226,29 @@ def test_index_and_payload_rejections(root: Path) -> None:
     valid_entries = [entry("a", b"a", 0), entry("b", b"b", 1)]
     valid_index = make_index(valid_entries, len(payload))
 
-    for contract in (
-        "lmdj.project.v1", "lmdj.project.v2", "lmdj.project.v3"
-    ):
-        legacy = copy.deepcopy(valid_index)
-        legacy["project_contract"] = contract
-        legacy["bundle_digest"] = project_bundle.bundle_digest(legacy)
-        path = root / f"valid-{contract}.lmdj"
-        write_bundle(path, legacy, payload)
-        assert project_bundle.read_bundle(path)[0]["project_contract"] == contract
-
-    for version in sorted(project_bundle.READABLE_CONTRACT_VERSIONS):
-        older = copy.deepcopy(valid_index)
-        older["contract_version"] = version
-        older["bundle_digest"] = project_bundle.bundle_digest(older)
-        path = root / f"valid-container-{version}.lmdj"
-        write_bundle(path, older, payload)
-        assert project_bundle.read_bundle(path)[0]["contract_version"] == version
-
     cases: list[tuple[str, dict, bytes, str]] = []
-    unsupported = copy.deepcopy(valid_index)
-    unsupported["project_contract"] = "lmdj.project.v6"
-    unsupported["bundle_digest"] = project_bundle.bundle_digest(unsupported)
-    cases.append(("project-contract", unsupported, payload, "unsupported"))
-    unsupported_container = copy.deepcopy(valid_index)
-    unsupported_container["contract_version"] = "2.0.0"
-    unsupported_container["bundle_digest"] = project_bundle.bundle_digest(
-        unsupported_container
-    )
-    cases.append(
-        ("contract-version", unsupported_container, payload, "unsupported")
-    )
+    # Legacy levels and legacy containers are refused outright: Bundles carry
+    # no backward compatibility during active development.
+    for contract in (
+        "lmdj.project.v1",
+        "lmdj.project.v2",
+        "lmdj.project.v3",
+        "lmdj.project.v4",
+        "lmdj.project.v6",
+    ):
+        unsupported = copy.deepcopy(valid_index)
+        unsupported["project_contract"] = contract
+        unsupported["bundle_digest"] = project_bundle.bundle_digest(unsupported)
+        cases.append((f"project-contract-{contract}", unsupported, payload, "unsupported"))
+    for version in ("1.0.0", "1.1.0", "1.2.0", "1.3.0"):
+        unsupported_container = copy.deepcopy(valid_index)
+        unsupported_container["contract_version"] = version
+        unsupported_container["bundle_digest"] = project_bundle.bundle_digest(
+            unsupported_container
+        )
+        cases.append(
+            (f"contract-version-{version}", unsupported_container, payload, "unsupported")
+        )
     invalid_paths = {
         "absolute": "/manifest.json",
         "dotdot": "history/../manifest.json",
@@ -436,6 +426,9 @@ def test_contract_enumerates_every_project_contract_level() -> None:
     Project Contracts the repository defines: `lmdj.project.v4` was added, the
     writer moved to it, and the Bundle enum was never widened, so no Project
     the product created could be packed. This binds the two inventories.
+    During active development Bundles name only the writer's level
+    (docs/prd/decisions/2026-09-15-project-bundle-current-level-only.md), so
+    both inventories are exactly that one level.
     """
     schema = load_json(SCHEMA_PATH)
     declared = set(schema["properties"]["project_contract"]["enum"])
@@ -448,12 +441,12 @@ def test_contract_enumerates_every_project_contract_level() -> None:
         "why: contracts/project/lmdj.project-bundle.v1.schema.json names "
         f"{sorted(declared)} but the repository defines {sorted(on_disk)}, so "
         "a Project at an unnamed level cannot be packed as a Bundle. "
-        "Remedy: widen the Bundle enum as an additive Contract MINOR in the "
-        "same cut that adds the Project Contract, and move "
-        "project_bundle.PROJECT_CONTRACTS and Project I/O's parse_index "
-        "allowlist with it."
+        "Remedy: under the current-level-only policy, move the Bundle enum to "
+        "the writer's level as a Contract MAJOR in the same cut that adds the "
+        "Project Contract, and move project_bundle.PROJECT_CONTRACTS and "
+        "Project I/O's parse_index allowlist with it."
     )
-    assert WRITER_PROJECT_CONTRACT in declared
+    assert declared == {WRITER_PROJECT_CONTRACT}
     assert set(project_bundle.PROJECT_CONTRACTS) == declared
 
 
