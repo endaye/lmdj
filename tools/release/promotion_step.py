@@ -196,6 +196,14 @@ class PromotionCommit:
         self._git("merge-base", "--is-ancestor", self.spec["base_revision"], head)
         if self._git("status", "--porcelain").strip():
             _fail("existing worktree has uncommitted changes")
+        # The carrier owns exactly one commit on top of the recorded base;
+        # any descendant deeper than that is a different commit, not this
+        # operation's promotion.
+        parents = self._git("rev-list", "--parents", "-n", "1",
+                            head).decode().split()
+        if len(parents) != 2 or parents[1] != self.spec["base_revision"]:
+            _fail("the worktree head is not this operation's single promotion "
+                  "commit")
         raw = self._git("show", "HEAD:" + str(_LEDGER_RELATIVE)).decode("utf-8")
         import json
         rows = json.loads(raw).get("entries")
