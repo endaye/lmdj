@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -23,6 +24,8 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include <unistd.h>
 
 #include <nlohmann/json.hpp>
 #include <picosha2.h>
@@ -1072,6 +1075,153 @@ void test_facade_error_details_follow_an_explicit_safe_schema() {
               {{"storage_condition", "already_exists"}},
           }),
       "DUPLICATE_ID");
+}
+
+class StderrCapture {
+ public:
+  StderrCapture() : sink_(std::tmpfile()) {
+    LMDJ_CHECK(sink_ != nullptr);
+    std::fflush(stderr);
+    saved_ = dup(fileno(stderr));
+    LMDJ_CHECK(saved_ >= 0);
+    LMDJ_CHECK(dup2(fileno(sink_), fileno(stderr)) >= 0);
+  }
+  StderrCapture(const StderrCapture&) = delete;
+  StderrCapture& operator=(const StderrCapture&) = delete;
+  ~StderrCapture() {
+    std::fflush(stderr);
+    dup2(saved_, fileno(stderr));
+    close(saved_);
+    std::fclose(sink_);
+  }
+  std::string str() {
+    std::fflush(stderr);
+    std::rewind(sink_);
+    std::string out;
+    char buffer[4096];
+    std::size_t count = 0;
+    while ((count = std::fread(buffer, 1, sizeof buffer, sink_)) > 0) {
+      out.append(buffer, count);
+    }
+    return out;
+  }
+
+ private:
+  std::FILE* sink_ = nullptr;
+  int saved_ = -1;
+};
+
+std::vector<std::string> refusal_diagnostic_lines(const std::string& captured) {
+  static constexpr std::string_view kPrefix = "lmdj-refusal-diagnostic ";
+  std::vector<std::string> lines;
+  std::size_t offset = 0;
+  while (offset <= captured.size()) {
+    const auto end = captured.find('\n', offset);
+    const auto line = captured.substr(
+        offset, end == std::string::npos ? std::string::npos : end - offset);
+    if (line.starts_with(kPrefix)) {
+      lines.push_back(line);
+    }
+    if (end == std::string::npos) {
+      break;
+    }
+    offset = end + 1;
+  }
+  return lines;
+}
+
+void test_refusal_diagnostic_reports_the_pre_sanitization_reason() {
+  static constexpr std::string_view kPrefix = "lmdj-refusal-diagnostic ";
+  {
+    StderrCapture capture;
+    const auto normalized =
+        lmdj::web_runtime::detail::normalize_error_for_testing(
+        lmdj::foundation::Error{
+            lmdj::foundation::ErrorCode::invalid_project,
+            "entry assets/kick.wav exceeds the staged budget near /private/store",
+            {
+                {"transfer_condition", "resource_limit"},
+                {"entry", "assets/kick.wav"},
+                {"observed", std::uint64_t{70}},
+                {"nested", {{"secret", "objects are not copied"}}},
+                {"history", Json::array({"arrays are not copied"})},
+            },
+        });
+    // The wire payload keeps its exact pre-change sanitized shape.
+    const auto& error = check_error(normalized, "WEB_RUNTIME_RESOURCE_LIMIT");
+    LMDJ_CHECK(
+        error.at("message") ==
+        "Project Bundle exceeds the Web Runtime transfer limit");
+    LMDJ_CHECK(error.at("details") == Json::object());
+    const auto lines = refusal_diagnostic_lines(capture.str());
+    LMDJ_CHECK(lines.size() == 1);
+    LMDJ_CHECK(lines.front().size() <= 2048);
+    const auto diagnostic =
+        Json::parse(lines.front().substr(kPrefix.size()));
+    LMDJ_CHECK(diagnostic.at("normalized") == "WEB_RUNTIME_RESOURCE_LIMIT");
+    LMDJ_CHECK(diagnostic.at("source_code") == "INVALID_PROJECT");
+    LMDJ_CHECK(
+        diagnostic.at("source_message") ==
+        "entry assets/kick.wav exceeds the staged budget near /private/store");
+    LMDJ_CHECK((
+        diagnostic.at("details") ==
+        Json{
+            {"transfer_condition", "resource_limit"},
+            {"entry", "assets/kick.wav"},
+            {"observed", 70},
+        }));
+  }
+  {
+    StderrCapture capture;
+    const auto normalized =
+        lmdj::web_runtime::detail::normalize_error_for_testing(
+        lmdj::foundation::Error{
+            lmdj::foundation::ErrorCode::revision_conflict,
+            "expected revision 8, observed 9 under /private/project-storage",
+            {
+                {"actual_revision", std::uint64_t{9}},
+                {"expected_revision", std::uint64_t{8}},
+            },
+        });
+    const auto& error = check_error(normalized, "REVISION_CONFLICT");
+    LMDJ_CHECK(error.at("message") == "project revision conflict");
+    LMDJ_CHECK((
+        error.at("details") ==
+        Json{{"actual_revision", 9}, {"expected_revision", 8}}));
+    const auto lines = refusal_diagnostic_lines(capture.str());
+    LMDJ_CHECK(lines.size() == 1);
+    const auto diagnostic =
+        Json::parse(lines.front().substr(kPrefix.size()));
+    LMDJ_CHECK(diagnostic.at("normalized") == "REVISION_CONFLICT");
+    LMDJ_CHECK(diagnostic.at("source_code") == "REVISION_CONFLICT");
+    LMDJ_CHECK(
+        diagnostic.at("source_message") ==
+        "expected revision 8, observed 9 under /private/project-storage");
+    LMDJ_CHECK((
+        diagnostic.at("details") ==
+        Json{{"actual_revision", 9}, {"expected_revision", 8}}));
+  }
+  {
+    StderrCapture capture;
+    const auto normalized =
+        lmdj::web_runtime::detail::normalize_error_for_testing(
+        lmdj::foundation::Error{
+            lmdj::foundation::ErrorCode::invalid_project,
+            std::string(600, 'm'),
+            {{"blob", std::string(4096, 'x')}},
+        });
+    check_error(normalized, "INVALID_PROJECT");
+    const auto lines = refusal_diagnostic_lines(capture.str());
+    LMDJ_CHECK(lines.size() == 1);
+    // The cap replaces the details copy rather than cutting serialized JSON,
+    // and still holds when the source message also needed shortening.
+    LMDJ_CHECK(lines.front().size() <= 2048);
+    const auto diagnostic =
+        Json::parse(lines.front().substr(kPrefix.size()));
+    LMDJ_CHECK((diagnostic.at("details") == Json{{"truncated", true}}));
+    LMDJ_CHECK(
+        diagnostic.at("source_message").get<std::string>().size() <= 515);
+  }
 }
 
 void test_project_bundle_stream_delegates_to_facade_and_lists_summary() {
@@ -7037,6 +7187,7 @@ int main() {
     test_one_shot_bank_transition_renders_until_target_is_applied();
     test_one_shot_bank_transition_rejects_overlap_until_completion();
     test_facade_error_details_follow_an_explicit_safe_schema();
+    test_refusal_diagnostic_reports_the_pre_sanitization_reason();
     test_project_bundle_stream_delegates_to_facade_and_lists_summary();
     test_host_close_aborts_active_project_bundle_import();
     test_runtime_cancellation_precedes_project_mutation();
