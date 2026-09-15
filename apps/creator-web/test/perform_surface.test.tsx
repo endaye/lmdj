@@ -181,6 +181,28 @@ test("wall-clock-reachable session double methods keep faithful defaults", () =>
   }
 });
 
+test("the replay poll default stays neutral and never settles", async () => {
+  // Presence is not enough for the 250 ms poll: a production-shaped default
+  // that resolves a concrete status can land after a test staged its own
+  // state and overwrite it — the second load-sensitive failure #713 traded
+  // for the first. The neutral default models a poll the Core has not
+  // answered yet, so it must not settle even after microtasks drain.
+  const {session} = sessionFixture();
+  let settled = false;
+  void session.queryPerformanceReplayStatus("replay-1").then(
+    () => { settled = true; },
+    () => { settled = true; },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(
+    settled,
+    "session double \"queryPerformanceReplayStatus\" resolves on its own: " +
+    "a poll the test never answered can overwrite staged state when it " +
+    "settles late — keep the neutral never-settling default, or let each " +
+    "test stage the answer itself",
+  ).toBe(false);
+});
+
 function controllerFixture(options: {
   captureState?: "unconfigured" | "configured" | "ready" | "unavailable";
   state?: CreatorState;
