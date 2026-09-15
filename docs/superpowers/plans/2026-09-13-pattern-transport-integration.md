@@ -95,12 +95,12 @@ Use the existing journal and `SequenceRuntime` reducer; do not implement a secon
 
 Candidate identity is the original accepted input sequence/correlation, not the journal sequence. Retain candidates only at the existing post-enqueue point; known refusal creates none. A release can close only a matching journal-owned press. Preserve the existing per-slot retrigger behavior and sixteenth-tick finalization. Candidate transfer computes a complete canonical tail and checkpoint, binds exact source digests/receipts, and advances the journal sequence only after durable success. Reconcile an ambiguous append before draining further; never enqueue live input from recovery.
 
-- [ ] First red assertion: an admitted mid-loop press/release produces the correct nonzero Pattern tick without resetting origin.
-- [ ] Prove pre-admission press/post-admission release is live-only; owned press/post-cutoff release uses ordinary terminal completion rather than a fabricated cutoff release.
-- [ ] Crash/reopen after candidate append, fence retention, transfer append and receipt response loss. Compare complete Pattern/Pad Slot events, revision and transfer identity, not just event count.
-- [ ] Reach last reserved capacity and deadline deterministically: close at watermark B, persist reason/prefix, keep subsequent input live-only, and drain that prefix once after delayed receipt. Storage failure reports the uncertain suffix explicitly.
-- [ ] Keep unresolved fence state unresolved after owner loss; verify original/alternate existing Pattern recovery and user-requested discard without deleting unrelated data.
-- [ ] Native and real OPFS assertions must cover the same far-side state. Reuse storage fault injection and writer leases, not a filesystem-only mock as browser proof.
+- [x] First red assertion: an admitted mid-loop press/release produces the correct nonzero Pattern tick without resetting origin. (facade.pattern_admission reducer scenarios, PR #1291/#1298)
+- [x] Prove pre-admission press/post-admission release is live-only; owned press/post-cutoff release uses ordinary terminal completion rather than a fabricated cutoff release. (pattern_admission_test.cpp `prepared_owner_keeps_post_close_input_live_only` et al.)
+- [x] Crash/reopen after candidate append, fence retention, transfer append and receipt response loss. Compare complete Pattern/Pad Slot events, revision and transfer identity, not just event count. (T1b native recovery journey + Chromium/isolated WebKit OPFS journeys, PR #1295)
+- [x] Reach last reserved capacity and deadline deterministically: close at watermark B, persist reason/prefix, keep subsequent input live-only, and drain that prefix once after delayed receipt. Storage failure reports the uncertain suffix explicitly. (facade.pattern_admission capacity/deadline scenarios; `prepared_owner_reports_an_uncertain_suffix_on_storage_failure`)
+- [x] Keep unresolved fence state unresolved after owner loss; verify original/alternate existing Pattern recovery and user-requested discard without deleting unrelated data. (T1b recovery journeys; Host-facing listing shipped later in PR #1367)
+- [x] Native and real OPFS assertions must cover the same far-side state. Reuse storage fault injection and writer leases, not a filesystem-only mock as browser proof. (PR #1265 isolated WebKit + T1b OPFS journeys)
 
 ### T2 — Facade transport coordinator and historical effect reconciliation
 
@@ -117,12 +117,12 @@ Expose typed request/inspect/continue operations. Bind session/project identity,
 
 The coordinator selects effects, the execution port performs preparation/storage off the control lane, and the audio port submits and inspects the real engine command. Request and continuation never wait for a future receipt. Status separates applied audio state, pending target, operation phase, journal/admission state, exact publication/switch authority, committed revision and structured recovery error. No recording-only successful steady state.
 
-- [ ] Verify all six transitions using the production engine adapter plus journal storage. Playing-only starts no journal. Stopped starts at acknowledged origin; playing Record uses a fence with unchanged origin.
-- [ ] End recording by acknowledged cutoff, drain/reconcile switch first, then terminal commit. Record-off leaves scheduling running; Play/Stop stops scheduling before slow/failed flush. Known audio state remains visible on IO failure.
-- [ ] For S < F / S = F / S > F, delay inspection past S and assert the historical receipt selects retain/cancel/cancel. Journal segments never extend past F; cancellation failure alone selects nothing.
-- [ ] Retain a recording fence durably before acknowledging/releasing the audio receipt. Unknown/lost receipt blocks contradictory closure; it does not authorize guessing from telemetry.
-- [ ] After durable commit, phase-preserving replacement may remain pending/refused when slots are full. Keep committed revision separate and retry the same replacement without restarting, reopening the journal or committing twice.
-- [ ] Inject each failure before/after effect and completion delivery. Stale/duplicate completion cannot overwrite newer state, consume a receipt twice or synthesize success.
+- [x] Verify all six transitions using the production engine adapter plus journal storage. Playing-only starts no journal. Stopped starts at acknowledged origin; playing Record uses a fence with unchanged origin. (pattern_transport_test.cpp six scenarios; play-only asserts no journal on disk after the T2.8 lazy creation, PR #1342)
+- [x] End recording by acknowledged cutoff, drain/reconcile switch first, then terminal commit. Record-off leaves scheduling running; Play/Stop stops scheduling before slow/failed flush. Known audio state remains visible on IO failure. (PR #1338/#1342 terminal settle_close; `recording_record_commits_and_keeps_playing`; `close_failure_after_ack_keeps_audio_and_retries`; `recording_play_stop_reload_retains_committed_events`)
+- [x] For S < F / S = F / S > F, delay inspection past S and assert the historical receipt selects retain/cancel/cancel. Journal segments never extend past F; cancellation failure alone selects nothing. (PR #1330/#1332/#1333/#1334/#1336; `switch_at_or_after_cutoff_is_canceled`, `switch_applied_before_cutoff_is_retained`, drain source prefix/target segment)
+- [x] Retain a recording fence durably before acknowledging/releasing the audio receipt. Unknown/lost receipt blocks contradictory closure; it does not authorize guessing from telemetry. (PR #1320)
+- [x] After durable commit, phase-preserving replacement may remain pending/refused when slots are full. Keep committed revision separate and retry the same replacement without restarting, reopening the journal or committing twice. (PR #1337 `refused_switch_publication_retries_without_a_ghost_applied`)
+- [x] Inject each failure before/after effect and completion delivery. Stale/duplicate completion cannot overwrite newer state, consume a receipt twice or synthesize success. (PR #1329 flush retry; `admission_after_cutoff_receipt_stays_live_only` PR #1338; deterministic fence failure parks the engagement in error, PR #1370)
 
 ### T3 — Public runtime/bridge integration and lifecycle barrier
 
@@ -137,11 +137,11 @@ The coordinator selects effects, the execution port performs preparation/storage
 
 Add capability-negotiated `pattern.transport.request` and `pattern.transport.inspect`, with internal continuation scheduling. Return the pending ticket through the existing serializer, release its tail, then reenter for short epoch-checked steps. Do not await audio acknowledgment or a long IO job inside that tail. Native/other Host consumers remain explicit legacy users until they opt in; legacy `stopSequence` keeps its journal meaning. Global-enabled sessions reject conflicting direct legacy writes.
 
-- [ ] Wire the actual post-enqueue sequence/release correlation into T1 without altering returned successful/failed/unknown input outcomes. Unknown input is never automatically retriggered.
-- [ ] Hold each preparation, audio, storage and publication completion separately; prove applicable live input and releases remain serviceable, and verify journaling responses are not reported before durability.
-- [ ] Explicit Suspend, Project replacement and disposal enter a shutdown barrier: acknowledged Pattern Stop, admission closure, journal settlement/recoverable refusal, required input release, then lifecycle effect. Unknown closure prevents a clean replacement claim.
-- [ ] Sample capture, performance audio recording/replay and audition keep existing busy/ownership guards. Test live Pad and non-Pattern replay survival across Pattern Stop.
-- [ ] Run native control/bridge tests, runtime-session tests and full standard Web proof with fresh Mac toolchain dependencies. Browser tests exercise actual Wasm/OPFS and completion ordering.
+- [x] Wire the actual post-enqueue sequence/release correlation into T1 without altering returned successful/failed/unknown input outcomes. Unknown input is never automatically retriggered. (PR #1345; `test_pattern_transport_records_live_input_and_rejects_legacy_writes`; facade admit seam PR #1340)
+- [x] Hold each preparation, audio, storage and publication completion separately; prove applicable live input and releases remain serviceable, and verify journaling responses are not reported before durability. (PR #1345 ticket/continuation semantics; `publication_pending` separation; durable-candidate readback)
+- [x] Explicit Suspend, Project replacement and disposal enter a shutdown barrier: acknowledged Pattern Stop, admission closure, journal settlement/recoverable refusal, required input release, then lifecycle effect. Unknown closure prevents a clean replacement claim. (PR #1345 `test_pattern_transport_suspend_barrier_settles_recording` / `test_pattern_transport_unknown_closure_blocks_clean_suspend`)
+- [x] Sample capture, performance audio recording/replay and audition keep existing busy/ownership guards. Test live Pad and non-Pattern replay survival across Pattern Stop. (PR #1345 live-Pad survival assertions; capture/transport journal conflict repaired in PR #1363)
+- [x] Run native control/bridge tests, runtime-session tests and full standard Web proof with fresh Mac toolchain dependencies. Browser tests exercise actual Wasm/OPFS and completion ordering. (PR #1345: host suites, runtime_session 103/103, Chromium audio 25/25 incl. 2 new journeys, isolated WebKit OPFS 1/1)
 
 ### T4 — Creator global owner, six transitions and U2 handoff
 
@@ -157,11 +157,45 @@ Add capability-negotiated `pattern.transport.request` and `pattern.transport.ins
 
 Only the app's single session owner opts in. Physical Play/Stop and Record always mean global Pattern transport, never Sample capture or master recording. Every mode consumes the same projection and command identity. Remove ordinary mode-leave journal Stop only after T3 is proven; retain separately owned sample/audition cleanup. Show busy, refused, committed-but-not-published and recoverable states honestly.
 
-- [ ] Reducer/action tests reject stale responses, retain failed operation identity and preserve revision when absent/null. Retry inspects/reconciles, never sends a new inverse toggle.
-- [ ] Real packaged journey: opened material → Play → Record → live Pad events → Record-off → page changes → continued playback → Stop → reopen; verify precise events/revision, runtime scheduling and one session/input subscription.
-- [ ] Separate journey: stopped Record → overdub → Pattern switch → Play/Stop → reopen; include failed flush retry, failed publication retry, owner loss/recovery and discard.
-- [ ] Preserve real acoustic/device acceptance gaps. Synthetic samples and WebKit automation are software evidence, not hearing, touch, MIDI hardware or physical Safari acceptance.
-- [ ] Run full Creator proof, new journeys and portal checks. #1230 remains open until every acceptance item has applicable evidence/disposition. U2 still needs the migration layout work; U3–U8 and U7/U8 human acceptance/observation conditions remain intact.
+- [x] Reducer/action tests reject stale responses, retain failed operation identity and preserve revision when absent/null. Retry inspects/reconciles, never sends a new inverse toggle. (PR #1386: pattern_transport_state.test.ts 7 cases, pattern_transport_actions.test.ts 4 cases; `reconcilePatternTransportJourney` resends the retained command verbatim)
+- [x] Real packaged journey: opened material → Play → Record → live Pad events → Record-off → page changes → continued playback → Stop → reopen; verify precise events/revision, runtime scheduling and one session/input subscription. (PR #1386 journey ① "global Pattern transport plays, overdubs, survives navigation, stops, and reopens with exact truth")
+- [x] Separate journey: stopped Record → overdub → Pattern switch → Play/Stop → reopen; include failed flush retry, failed publication retry, owner loss/recovery and discard. (PR #1386 journey ② ticket-loss reconcile with replayed identity + journey ③ "owner loss surfaces the interrupted recording for honest refusal and discard" over the PR #1367 recovery surface; publication refusal/retry covered natively in PR #1337 and by the reload coordination in PR #1370)
+- [x] Preserve real acoustic/device acceptance gaps. Synthetic samples and WebKit automation are software evidence, not hearing, touch, MIDI hardware or physical Safari acceptance. (Retained: issue #1230 acceptance item, `docs/quality/2026-08-17-manual-verification-todo.md` W1/W2/W5, U7 #1221)
+- [x] Run full Creator proof, new journeys and portal checks. #1230 remains open until every acceptance item has applicable evidence/disposition. U2 still needs the migration layout work; U3–U8 and U7/U8 human acceptance/observation conditions remain intact. (PR #1386: vitest 580/581 with the sole failure being the pre-existing main red tracked as issue #1387; Creator browser journeys pass; portal check 47 routes)
+
+## Delivery addendum (2026-09-16)
+
+All Tasks T0–T4 are merged. During T3/T4 integration, five bounded repair Tasks
+shipped against the same design, each one Conventional Commit with current-head
+review:
+
+- PR #1337 test(facade): refused switch publication retries without a ghost applied.
+- PR #1338 fix(facade): commit retained Pattern events on plain transport close —
+  the T2 `finish_close` path never performed the terminal commit without an
+  applied switch, so recorded events never reached Project Truth.
+- PR #1339 feat(facade): public pattern transport controller factory; PR #1340
+  admit seam; PR #1341 storage-platform lease sharing (the factory's fresh
+  platform instance conflicted with the Host writer lease, PROJECT_BUSY);
+  PR #1342 lazy journal creation and settle_close (the coordinator never
+  created the admission journal outside test fixtures).
+- PR #1363 fix(facade): register vended transport controllers as known Sequence
+  owners — a Sample capture commit during transport recording destroyed the
+  active journal.
+- PR #1367 fix(facade): seal owner-lost transport admissions into the recovery
+  listing — SIGKILL/reload mid-recording previously listed no recovery.
+- PR #1370 fix(web-runtime): coordinate stopped cross-identity reload with
+  armed Pattern transport — an accepted publication could vanish and a
+  deterministic fence failure looped forever in awaiting_audio (engagement
+  bricking); receipt-apply failures now classify deterministic errors into a
+  parked error phase.
+
+Explicitly retained follow-ups, not silently settled here:
+
+- Playing-state applied switch leaves the coordinator's bound Pattern stale;
+  Record-after-switch can hit the same fence mismatch (flagged in PR #1370).
+- issue #1387: creator-web Project-contract families still accept retired
+  v3/v4 levels (pre-existing main red from #1364, found while shipping T4).
+- Real acoustic/device acceptance remains open per T4's retained gap clause.
 
 ## Verification commands and delivery
 
