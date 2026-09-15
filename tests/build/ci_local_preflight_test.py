@@ -575,6 +575,30 @@ class ManifestReuseTest(unittest.TestCase):
         plan = self.plan()
         self.assertEqual(set(plan["selected"]), {"docs_static", "portal", "chameleon_lab"})
 
+    def test_untracked_unclassified_path_is_named_as_the_cause(self) -> None:
+        """A stale untracked leftover must not read like an unrouted tracked path."""
+        self.repository.write(".superpowers/cache.bin", "left behind\n")
+        plan = self.plan()
+        self.assertEqual(plan["mode"], "full")
+        self.assertTrue(
+            any(
+                reason.startswith(
+                    "unclassified untracked path: .superpowers/cache.bin"
+                )
+                for reason in plan["reasons"]
+            ),
+            plan["reasons"],
+        )
+        self.assertNotIn(
+            "unclassified path: .superpowers/cache.bin", plan["reasons"]
+        )
+
+        self.repository.commit("track the leftover")
+        tracked_plan = self.plan()
+        self.assertIn(
+            "unclassified path: .superpowers/cache.bin", tracked_plan["reasons"]
+        )
+
     def test_control_plane_change_upgrades_to_full_mode(self) -> None:
         self.repository.write(".github/workflows/ci.yml", "name: CI\n")
         self.repository.commit("workflow")
