@@ -623,6 +623,186 @@ test("owner loss mid-recording seals the transport admission for the recovery su
   );
 });
 
+test("cross-identity snapshot reload under an armed transport rebinds instead of bricking", async ({page}) => {
+  test.setTimeout(120_000);
+  await waitForFormalHost(page);
+  expect((await activateFromClick(page, 48_000)).ok).toBe(true);
+
+  const setup = await page.evaluate(async () => {
+    const send = (operation, payload, sidecar) =>
+      window.lmdjWebRuntimeHost.transport.send(
+        {
+          protocol_version: 1,
+          request_id: crypto.randomUUID(),
+          operation,
+          payload,
+        },
+        sidecar === undefined ? {} : {sidecar},
+      );
+    const frames = 480;
+    const wav = new Uint8Array(44 + frames * 2);
+    const view = new DataView(wav.buffer);
+    const ascii = (offset, value) => {
+      for (let index = 0; index < value.length; ++index) {
+        wav[offset + index] = value.charCodeAt(index);
+      }
+    };
+    ascii(0, "RIFF");
+    view.setUint32(4, 36 + frames * 2, true);
+    ascii(8, "WAVE");
+    ascii(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, 48_000, true);
+    view.setUint32(28, 96_000, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    ascii(36, "data");
+    view.setUint32(40, frames * 2, true);
+    for (let frame = 0; frame < frames; ++frame) {
+      view.setInt16(44 + frame * 2, 2_000, true);
+    }
+    const wavSha256 = [...new Uint8Array(
+      await crypto.subtle.digest("SHA-256", wav),
+    )].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const projectId = crypto.randomUUID();
+    const patternA = crypto.randomUUID();
+    const patternB = crypto.randomUUID();
+    const sessionId = crypto.randomUUID();
+    const created = await send("project.create", {
+      project_id: projectId,
+      bpm: 120,
+      initial_pattern: {pattern_id: patternA, bars: 1, events: []},
+      pattern_transport: true,
+    });
+    const importToken = crypto.randomUUID();
+    await send("sample.import.begin", {
+      import_token: importToken,
+      command_id: crypto.randomUUID(),
+      expected_revision: 0,
+      slot: {bank: 0, pad: 0},
+      asset_id: crypto.randomUUID(),
+      byte_length: wav.byteLength,
+    });
+    await send("sample.import.chunk", {
+      import_token: importToken,
+      offset: 0,
+      final: true,
+      sidecar: {sidecar_bytes: wav.byteLength, sidecar_sha256: wavSha256},
+    }, wav);
+    await send("sample.import.commit", {import_token: importToken});
+    const madeB = await send("pattern.create", {
+      command_id: crypto.randomUUID(),
+      expected_revision: 1,
+      pattern_id: patternB,
+      bars: 1,
+    });
+    const snapshot = await send("snapshot.reload", {pattern_id: patternA});
+    const activated = await send("audio.activate", {});
+    const ticket = await send("pattern.transport.request", {
+      session_id: sessionId,
+      project_id: projectId,
+      command_id: crypto.randomUUID(),
+      expected_epoch: 1,
+      intent: "record",
+      expected_revision: null,
+    });
+    return {
+      projectId, patternA, patternB, sessionId,
+      created, madeB, snapshot, activated, ticket,
+    };
+  });
+  expect(setup.created.ok).toBe(true);
+  expect(setup.madeB.ok).toBe(true);
+  expect(setup.activated.ok).toBe(true);
+  expect(setup.ticket).toMatchObject({ok: true, result: {submit: "accepted"}});
+
+  const sendTransport = (operation, payload) =>
+    page.evaluate(({operation, payload}) =>
+      window.lmdjWebRuntimeHost.transport.send({
+        protocol_version: 1,
+        request_id: crypto.randomUUID(),
+        operation,
+        payload,
+      }), {operation, payload});
+  const inspectTransport = (sessionId) =>
+    sendTransport("pattern.transport.inspect", {session_id: sessionId});
+  const pollUntil = (predicate) => expect.poll(async () => {
+    const status = await inspectTransport(setup.sessionId);
+    return status.ok && predicate(status.result);
+  }, {timeout: 30_000}).toBe(true);
+
+  await pollUntil((s) => s.recording === true && s.phase === "idle");
+  await sendTransport("trigger", {slot: 0, velocity: 100});
+  await sendTransport("trigger", {slot: 0, kind: "release"});
+  expect((await sendTransport("pattern.transport.request", {
+    session_id: setup.sessionId,
+    project_id: setup.projectId,
+    command_id: crypto.randomUUID(),
+    expected_epoch: 2,
+    intent: "record",
+    expected_revision: null,
+  }))).toMatchObject({ok: true, result: {submit: "accepted"}});
+  await pollUntil((s) =>
+    s.recording === false && s.phase === "idle" &&
+    s.publication_pending === false);
+  expect((await sendTransport("pattern.transport.request", {
+    session_id: setup.sessionId,
+    project_id: setup.projectId,
+    command_id: crypto.randomUUID(),
+    expected_epoch: 3,
+    intent: "play_stop",
+    expected_revision: null,
+  }))).toMatchObject({ok: true, result: {submit: "accepted"}});
+  await pollUntil((s) => s.playing === false && s.phase === "idle");
+
+  // Stopped-state cross-identity reload: the engagement rebinds and the next
+  // Record works on the new Pattern instead of bricking. The reload's pending
+  // publication applies at the Bar boundary; a Record before that is a
+  // transient refusal, so poll it.
+  expect(await sendTransport("snapshot.reload", {pattern_id: setup.patternB}))
+    .toMatchObject({ok: true});
+  let lastTicket = null;
+  try {
+    await expect.poll(async () => {
+      lastTicket = await sendTransport("pattern.transport.request", {
+        session_id: setup.sessionId,
+        project_id: setup.projectId,
+        command_id: crypto.randomUUID(),
+        expected_epoch: 4,
+        intent: "record",
+        expected_revision: null,
+      });
+      return lastTicket.ok;
+    }, {timeout: 30_000}).toBe(true);
+  } catch (error) {
+    throw new Error(
+      `record after cross-identity reload never accepted: ${JSON.stringify(lastTicket)}`,
+      {cause: error},
+    );
+  }
+  await pollUntil((s) => s.recording === true && s.phase === "idle");
+  await sendTransport("trigger", {slot: 0, velocity: 100});
+  await sendTransport("trigger", {slot: 0, kind: "release"});
+  expect((await sendTransport("pattern.transport.request", {
+    session_id: setup.sessionId,
+    project_id: setup.projectId,
+    command_id: crypto.randomUUID(),
+    expected_epoch: 5,
+    intent: "record",
+    expected_revision: null,
+  }))).toMatchObject({ok: true, result: {submit: "accepted"}});
+  await pollUntil((s) =>
+    s.recording === false && s.phase === "idle" &&
+    s.publication_pending === false);
+  const truth = await sendTransport("project.inspect", {});
+  expect(truth.ok).toBe(true);
+  expect(
+    truth.result.project.patterns[setup.patternB].events,
+  ).toHaveLength(1);
+});
+
 test("compatibility press renders the published Bank through the Wasm AudioWorklet", async ({page}) => {
   test.setTimeout(120_000);
   const module = await waitForFormalHost(page);

@@ -54,11 +54,11 @@ std::string uuid(unsigned suffix) {
   return "00000000-0000-4000-8000-" + std::string(12 - tail.size(), '0') + tail;
 }
 
-RuntimeSnapshot pattern_snapshot() {
+RuntimeSnapshot pattern_snapshot(const char* pattern_id = kPattern) {
   auto sample = std::make_shared<const lmdj::cooker::PcmSample>(
       lmdj::cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(128, 1)});
   return RuntimeSnapshot{
-      ProjectId{kProject}, PatternId{kPattern}, 1, 120, 1,
+      ProjectId{kProject}, PatternId{pattern_id}, 1, 120, 1,
       lmdj::domain::kPpq, lmdj::domain::kBarTicks4x4,
       {ResolvedPad{
           PadSlotId{0, 0},
@@ -263,6 +263,55 @@ void pending_operation_reports_busy_then_replays() {
   LMDJ_CHECK(f.controller->inspect().phase == PatternTransportPhase::idle);
   LMDJ_CHECK(f.controller->inspect().playing);
   LMDJ_CHECK(f.controller->request(first) == PatternTransportSubmit::replayed);
+}
+
+void deterministic_fence_mismatch_parks_the_engagement_in_error() {
+  constexpr auto kPatternB = "00000000-0000-4000-8000-00000000000b";
+  Fixture f;
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  f.settle(f.make(8, 3, PatternTransportIntent::play_stop));
+  LMDJ_CHECK(!f.controller->inspect().playing);
+
+  // A cross-identity republication behind the coordinator: the Engine applies
+  // pattern B while the coordinator stays bound to pattern A.
+  auto view = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB));
+  LMDJ_CHECK(view.has_value());
+  const auto published =
+      f.audio.engine.publish_pattern_view(std::move(view.value()));
+  LMDJ_CHECK(published.result == PatternPublishResult::accepted);
+  for (unsigned step = 0;
+       step < 100 &&
+       f.audio.engine.pattern_telemetry().pending_generation != 0;
+       ++step) {
+    f.audio.render(9'600);
+  }
+  LMDJ_CHECK(f.audio.engine.pattern_telemetry().pending_generation == 0);
+
+  // The Engine accepts the start against the generation that is current, but
+  // the receipt names pattern B while the admission preparation named A: the
+  // fence authority validation fails deterministically.
+  LMDJ_CHECK(f.controller->request(f.make(9, 4, PatternTransportIntent::record)) ==
+             PatternTransportSubmit::accepted);
+  f.audio.render(1);
+  const auto applied = f.controller->continue_operation();
+  LMDJ_CHECK(!applied.has_value());
+  const auto failed = f.controller->inspect();
+  LMDJ_CHECK(failed.phase == PatternTransportPhase::error);
+  LMDJ_CHECK(failed.error.has_value());
+
+  // The same retained receipt is never retried: continuations are no-ops, the
+  // parked error is stable, and new commands are refused, never busy.
+  LMDJ_CHECK(f.controller->continue_operation().has_value());
+  const auto parked = f.controller->inspect();
+  LMDJ_CHECK(parked.phase == PatternTransportPhase::error);
+  LMDJ_CHECK(parked.error.has_value());
+  LMDJ_CHECK(parked.error->message == failed.error->message);
+  LMDJ_CHECK(f.controller->request(f.make(10, 5, PatternTransportIntent::record)) ==
+             PatternTransportSubmit::refused);
+  LMDJ_CHECK(
+      f.controller->request(f.make(11, 5, PatternTransportIntent::play_stop)) ==
+      PatternTransportSubmit::refused);
 }
 
 void stale_generation_is_rejected() {
@@ -663,6 +712,7 @@ int main() {
     playing_play_stops_without_a_journal();
     pending_operation_reports_busy_then_replays();
     stale_generation_is_rejected();
+    deterministic_fence_mismatch_parks_the_engagement_in_error();
     recording_press_and_release_are_retained();
     pre_fence_candidate_is_live_only();
     admission_before_recording_fails();
@@ -672,7 +722,7 @@ int main() {
     known_owner_registration_protects_only_the_open_transport_journal();
     controller_destroyed_after_application_is_safe();
     owner_lost_transport_admission_is_sealed_and_listed();
-    std::cout << "pattern transport controller tests: PASS (14 scenarios)\n";
+    std::cout << "pattern transport controller tests: PASS (15 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
