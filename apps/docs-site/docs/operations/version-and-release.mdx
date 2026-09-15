@@ -371,8 +371,14 @@ GitHub 没有 expected-head dispatch CAS，末次读取后的 main 漂移仍可�
 
 顺序驱动器现已连接该状态层与受信 adapter 协议：恢复逐项重新核验证据，按原操作 ID
 认领已完成结果；未知写结果不重发，doc-site 待发布阻止后续部署，Creator 失败阻止晋级。
-当前仅用隔离文件系统模拟外部 API 做故障验收；真实 candidate / GitHub / 部署 adapter、
+当前仅用隔离文件系统模拟外部 API 做故障验收；真实 GitHub / 部署 adapter、
 `run / status / resume` 命令与服务安装仍待接入，不能据此声称已能无人值守发版。
+
+candidate 步骤的执行载体已组合：候选准备（请求 → 专属安装 → 官方快照 → 切版检查）
+先行完成，受管候选转换（切版 PR → 见证 → 见证 PR）消费其真实回执；只读观察不分配、
+不执行，执行只登记一次并按各子级持久历史续跑。无具体受管 adapter 但载体支持 advance
+的步骤（tag、Draft、晋级等待接入）统一走 backend advance，由驱动器施加同一持久写入
+护栏；具体 dispatch / publication / candidate adapter 不变。
 
 Product release changelog 的冻结模块已实现：固定同 profile 已发布祖先 tag / target，
 从完整 Git 历史枚举候选范围，要求每个 commit 有变更条目或经审查的排除理由；
