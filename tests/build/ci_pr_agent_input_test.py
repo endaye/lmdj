@@ -615,6 +615,47 @@ class ProducerTests(unittest.TestCase):
             set(self.GENERATED_CHANGES),
         )
 
+    def test_generated_prefix_lookalike_paths_stay_reviewable(self):
+        # Every generated directory prefix ends in "/", so prefix matching is
+        # boundary-safe; pin that lookalike paths are never excluded.
+        base = self.commit_files({"base.txt": b"base\n"}, "base")
+        lookalikes = {
+            "apps/architecture-portal/versioned_docs-notes.md": b"notes\n",
+            "products/lmdj/generated-notes.md": b"notes\n",
+            "products/lmdj/src/compiled_assembly.cpp.bak": b"backup\n",
+        }
+        generated = {"products/lmdj/generated/web-runtime-identity.mjs": b"export {};\n"}
+        self.commit_files({**lookalikes, **generated}, "lookalikes")
+        head = self.git.text("rev-parse", "HEAD")
+        document = self.build(base, head)
+        self.assertEqual({file["path"] for file in document["files"]}, set(lookalikes))
+        for path in lookalikes:
+            self.assertIn(path, document["diff"]["text"])
+        self.assertEqual(document["excluded_generated"]["paths"], sorted(generated))
+
+    def test_generated_boundary_crossing_rename_is_named_and_refused(self):
+        base = self.commit_files({"products/lmdj/generated/old-identity.mjs": b"export {};\n"}, "base")
+        (self.repo / "products/lmdj/identity.mjs").write_bytes(b"export {};\n")
+        (self.repo / "products/lmdj/generated/old-identity.mjs").unlink()
+        self.git.run("add", "-A")
+        head = self.git.commit("crossing rename")
+        failure = self.assert_failure(base, head, "crosses the generated-artifact boundary")
+        self.assertEqual(
+            {path for item in failure["inventory"] for path in item["paths"]},
+            {"products/lmdj/generated/old-identity.mjs", "products/lmdj/identity.mjs"},
+        )
+
+    def test_reviewable_rename_is_not_a_boundary_crossing(self):
+        base = self.commit_files({"old-name.txt": b"same\n"}, "base")
+        (self.repo / "new-name.txt").write_bytes(b"same\n")
+        (self.repo / "old-name.txt").unlink()
+        self.git.run("add", "-A")
+        head = self.git.commit("plain rename")
+        document = self.build(base, head)
+        self.assertEqual(document["files"][0]["change_kind"], "renamed")
+        self.assertEqual(document["files"][0]["path"], "new-name.txt")
+        self.assertNotIn("excluded_generated", document)
+
     def test_object_type_and_size_are_checked_before_blob_read(self):
         base = self.commit_files({"blob.txt": b"blob\n"}, "base")
         (self.repo / "blob.txt").write_bytes(b"changed\n")

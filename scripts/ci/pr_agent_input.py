@@ -61,6 +61,8 @@ MAX_STDERR_BYTES = 64 * 1024
 #
 # Immutable frozen Portal snapshots; `scripts/docs-site.sh check`
 # (check:build / check:release-docs) and the witness chain verify them.
+# Every prefix ends in "/", so prefix matching is boundary-safe: a lookalike
+# path such as `products/lmdj/generated-notes.md` never matches.
 GENERATED_DIRECTORY_PREFIXES = (
     "apps/architecture-portal/versioned_docs/",
     "apps/architecture-portal/versioned_metadata/",
@@ -83,14 +85,18 @@ GENERATED_PATHSPEC_EXCLUSIONS = tuple(
 )
 
 
+def _generated_path(path: str) -> bool:
+    return path.startswith(GENERATED_DIRECTORY_PREFIXES) or path in GENERATED_FILES
+
+
 def _generated_change(paths: Sequence[str]) -> bool:
     """True when every path of a change record is a tool-generated artifact.
 
-    A rename crossing the generated boundary keeps its reviewable endpoint in
-    the inventory; the diff pathspec then cannot represent it and the
-    section/inventory agreement checks fail closed.
+    A rename crossing the generated boundary (one side generated, one side
+    reviewable) is refused explicitly before this filter applies; the diff
+    pathspec cannot represent it.
     """
-    return all(path.startswith(GENERATED_DIRECTORY_PREFIXES) or path in GENERATED_FILES for path in paths)
+    return all(_generated_path(path) for path in paths)
 
 
 def _canonical(value: Any) -> bytes:
@@ -874,6 +880,27 @@ def build_input(repository: str | Path, identity: Mapping[str, Any]) -> dict[str
                 {"status": item["status"], "paths": item["paths"]} for item in raw
             ]
             raise _refuse(str(error), value, diagnostic_inventory, global_reason=str(error)) from error
+        crossing = [
+            item for item in inventory
+            if any(_generated_path(path) for path in item.paths) and not _generated_change(item.paths)
+        ]
+        if crossing:
+            # A rename/copy with one generated and one reviewable side cannot be
+            # represented once the diff excludes the generated side; name the
+            # records instead of surfacing a generic section/inventory mismatch.
+            names = ", ".join(" -> ".join(item.paths) for item in crossing)
+            reasons = {
+                path: "why: rename/change crosses the generated-artifact boundary; "
+                      "remedy: land the generated side and the reviewable side as separate "
+                      "commits (delete+add instead of rename), or move the file in its own PR"
+                for item in crossing for path in item.paths
+            }
+            raise _refuse(
+                f"why: rename/change crosses the generated-artifact boundary: {names}; "
+                "remedy: land the generated side and the reviewable side as separate commits "
+                "(delete+add instead of rename), or move the file in its own PR",
+                value, crossing, reasons,
+                global_reason="rename/change crosses the generated-artifact boundary")
         excluded_inventory = [item for item in inventory if _generated_change(item.paths)]
         inventory = [item for item in inventory if not _generated_change(item.paths)]
         raw = [item for item in raw if not _generated_change(item["paths"])]
