@@ -79,6 +79,11 @@ jobs:
       contents: read
       pull-requests: read
       actions: read
+    outputs:
+      # `false` only when the collector proved every changed path is an excluded
+      # tool-generated artifact. Absent or empty means reviewable, so a lost
+      # output runs the model and fails loudly instead of silently skipping it.
+      reviewable: ${{ steps.input.outputs.reviewable }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -103,7 +108,7 @@ jobs:
         # Witness and model execution share the installation slot lock, so a
         # release switch cannot mix their identities. The ledger caps spend.
         id: deepseek
-        if: ${{ !cancelled() && steps.input.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.input.outcome == 'success' && steps.input.outputs.reviewable != 'false' }}
         timeout-minutes: 25
         continue-on-error: true
         env:
@@ -115,13 +120,13 @@ jobs:
           REVIEW
       - name: Validate PR-Agent result
         id: capture-deepseek
-        if: ${{ !cancelled() && steps.input.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.input.outcome == 'success' && steps.input.outputs.reviewable != 'false' }}
         env:
           BACKEND_OUTCOME: ${{ steps.deepseek.outcome }}
           T2_RESULT_JSON: ${{ env.REVIEW_DIR }}/t2-result.json
         run: python3 scripts/ci/review_pipeline.py capture --backend deepseek --directory "$REVIEW_DIR"
       - name: Save honest final result
-        if: ${{ !cancelled() && steps.input.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.input.outcome == 'success' && steps.input.outputs.reviewable != 'false' }}
         run: python3 scripts/ci/review_pipeline.py finalize --directory "$REVIEW_DIR"
       - uses: actions/upload-artifact@v6
         if: ${{ always() }}
@@ -152,7 +157,8 @@ jobs:
     if: >-
       !cancelled() &&
       ((github.event.action == 'closed' && github.event.pull_request.merged == true) ||
-       (needs.target.outputs.review == 'true' && needs.review.result == 'success'))
+       (needs.target.outputs.review == 'true' && needs.review.result == 'success'
+        && needs.review.outputs.reviewable != 'false'))
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     # Covers one bounded GitHub REST primary reset wait, not model time.
     timeout-minutes: 25
