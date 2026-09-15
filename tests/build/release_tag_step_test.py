@@ -24,7 +24,8 @@ SIGNER = "2B5EE362F058800036AD4FB5116ECE156F954D29"
 def spec(**changes):
     document = {"operation_id": tag_operation_id(REQUEST), "request_sha256": REQUEST,
                 "repository_id": 12, "actor_id": 34, "tag": "lmdj-v1.0.57.0",
-                "target_revision": TARGET, "plan_sha256": PLAN, "tag_object_id": TAG_OBJECT}
+                "target_revision": TARGET, "plan_sha256": PLAN, "tag_object_id": TAG_OBJECT,
+                "signer_fingerprint": SIGNER}
     document.update(changes)
     return document
 
@@ -57,6 +58,15 @@ class ReadBackTest(unittest.TestCase):
             read_back(LOCAL, FakeTag("f" * 40, TARGET, SIGNER), spec())
         with self.assertRaises(TagStepError):
             read_back(LOCAL, FakeTag(TAG_OBJECT, "f" * 40, SIGNER), spec())
+
+    def test_signer_must_match_the_prepared_spec_not_just_each_other(self):
+        other = "0" * 40
+        mutual = FakeTag(TAG_OBJECT, TARGET, other)
+        # Local and remote agreeing on an untrusted signer is still refused.
+        with self.assertRaises(TagStepError):
+            read_back(mutual, FakeTag(TAG_OBJECT, TARGET, other), spec())
+        with self.assertRaises(TagStepError):
+            read_back(mutual, None, spec())
 
     def test_spec_is_closed(self):
         validate_spec(spec())
@@ -111,6 +121,24 @@ class CarrierTest(unittest.TestCase):
         self.remote = FakeTag(TAG_OBJECT, TARGET, SIGNER)
         self.assertEqual(carrier.advance({}, {"step": "tag"},
                                          before_write=lambda: None).status, "verified")
+
+    def test_post_push_lag_is_unknown_never_pending(self):
+        # push_tag "succeeds" but the remote is not yet observable: the
+        # completed write must be reported unknown so the next advance
+        # reconciles instead of re-pushing over an unknown.
+        def lagging_push(tag):
+            self.pushes += 1  # server accepted; local reader still sees None
+        carrier = TagCarrier(spec=spec(), push_tag=lagging_push,
+                             local_tag_state=lambda: self.local,
+                             remote_tag_state=lambda: self.remote)
+        observed = carrier.advance({}, {"step": "tag"}, before_write=lambda: None)
+        self.assertEqual(observed.status, "unknown")
+        self.assertEqual(self.pushes, 1)
+        # Eventual consistency resolves; reconciliation verifies without a push.
+        self.remote = FakeTag(TAG_OBJECT, TARGET, SIGNER)
+        self.assertEqual(carrier.advance({}, {"step": "tag"},
+                                         before_write=lambda: None).status, "verified")
+        self.assertEqual(self.pushes, 1, "reconciliation never re-pushes")
 
     def test_carrier_refuses_an_untrusted_composition(self):
         with self.assertRaises(TagStepError):
