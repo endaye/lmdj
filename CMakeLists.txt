@@ -1471,7 +1471,8 @@ if(LMDJ_ENABLE_COVERAGE)
     GLOBAL
     PROPERTY lmdj_native_test_registrations
   )
-  set(lmdj_unlisted_coverage_targets)
+  set(lmdj_selected_native_test_targets)
+  set(lmdj_excluded_native_test_targets)
   foreach(lmdj_native_test_registration IN LISTS lmdj_native_test_registrations)
     string(REPLACE "|" ";" lmdj_native_test_registration_parts
       "${lmdj_native_test_registration}"
@@ -1479,8 +1480,13 @@ if(LMDJ_ENABLE_COVERAGE)
     list(GET lmdj_native_test_registration_parts 0 lmdj_native_test_name)
     list(GET lmdj_native_test_registration_parts 1 lmdj_native_test_target)
     if(lmdj_native_test_name MATCHES "${lmdj_coverage_test_exclusion}")
-      continue()
+      list(APPEND lmdj_excluded_native_test_targets "${lmdj_native_test_target}")
+    else()
+      list(APPEND lmdj_selected_native_test_targets "${lmdj_native_test_target}")
     endif()
+  endforeach()
+  set(lmdj_unlisted_coverage_targets)
+  foreach(lmdj_native_test_target IN LISTS lmdj_selected_native_test_targets)
     if(NOT lmdj_native_test_target IN_LIST lmdj_coverage_targets)
       list(APPEND lmdj_unlisted_coverage_targets "${lmdj_native_test_target}")
     endif()
@@ -1497,6 +1503,31 @@ if(LMDJ_ENABLE_COVERAGE)
       "remedy: append each target to lmdj_coverage_targets in the root "
       "CMakeLists.txt, in the same order as its own registration, then rerun "
       "scripts/core.sh coverage check."
+    )
+  endif()
+  # The other direction, for the entries that are decidable here: a listed
+  # target whose every registration the preset excludes never runs, so its
+  # object can produce no module signature. Entries no test registration names
+  # at all are outside this check -- the lane's own object probe decides them.
+  set(lmdj_stale_coverage_targets)
+  foreach(lmdj_coverage_target IN LISTS lmdj_coverage_targets)
+    if(lmdj_coverage_target IN_LIST lmdj_excluded_native_test_targets
+       AND NOT lmdj_coverage_target IN_LIST lmdj_selected_native_test_targets)
+      list(APPEND lmdj_stale_coverage_targets "${lmdj_coverage_target}")
+    endif()
+  endforeach()
+  if(lmdj_stale_coverage_targets)
+    list(REMOVE_DUPLICATES lmdj_stale_coverage_targets)
+    list(SORT lmdj_stale_coverage_targets)
+    message(
+      FATAL_ERROR
+      "why: every test that runs these lmdj_coverage_targets entries is "
+      "excluded by the coverage test preset, so their instrumented binaries "
+      "never run and the coverage run's module signature count cannot equal "
+      "its coverage object count: ${lmdj_stale_coverage_targets}. remedy: "
+      "remove each target from lmdj_coverage_targets in the root CMakeLists.txt "
+      "when the coverage lane no longer runs it, or drop the exclusion in "
+      "CMakePresets.json, then rerun scripts/core.sh coverage check."
     )
   endif()
 endif()
