@@ -70,6 +70,17 @@ genuinely non-divergent squash costs one file.
 
 ## How to apply
 
+Prevent it first. Direct-parent provenance resolves with no witness when the
+commit introducing the metadata has the recorded source revision as its parent.
+The freeze records the HEAD it ran against, and a squash merge makes that parent
+`main`'s tip at merge time, so the two agree only when the freeze is the first
+and only commit on a branch cut from the current `main`, merged before `main`
+moves. A freeze bundled into a branch that already carries commits records a
+branch commit the squash discards, and no arrangement of the merge can recover
+it. Every snapshot frozen so far (1.0.52.0 through 1.0.57.0) recorded such a
+branch commit, and five of the six then needed a witness: this entry's
+recurrences are that bundling, not bad luck at merge time.
+
 When a Product Build snapshot and post-freeze current-page edits land in the
 same squash, generate the witness with
 `scripts/architecture-portal.sh witness PRODUCT_BUILD INTRODUCING_REVISION`

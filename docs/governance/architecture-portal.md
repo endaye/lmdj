@@ -107,6 +107,12 @@ Product Build 条目必须唯一。仓库只保留最近 5 个 Product Build 快
 中，可按 revision 检出审计，不随 HEAD 携带。既有 schema-1 快照保持只读
 兼容，不回写。
 
+冻结方应先让 direct-parent 成立，而不是依赖 witness 补救。squash 使 introducing
+commit 的 parent 等于合并时的 `main` tip，而冻结记录的是它运行时的 HEAD，两者只有
+在「冻结是从当前 `main` 切出的分支上首个且唯一的提交，并在 `main` 前进之前合并」时
+才相等。把冻结混入已有提交的分支，记录的就是被 squash 丢弃的那个分支提交，
+direct-parent 从此无法成立，只能退到 projection 比对或 witness。
+
 若 squash introducing tree 合法包含冻结之后的 mutable current/non-projection
 更新，因而不能逐字等同 source projection，必须另行提交由
 `scripts/docs-site.sh witness PRODUCT_BUILD [INTRODUCING_REVISION]`
