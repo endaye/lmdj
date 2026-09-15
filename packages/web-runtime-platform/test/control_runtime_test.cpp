@@ -6780,6 +6780,105 @@ void test_transport_recording_rejects_sample_commit_and_keeps_journal() {
       "sample.import.commit", {{"import_token", uuid(796)}}, {}));
 }
 
+void test_pattern_transport_owner_loss_lists_recovery_on_reopen() {
+  TempDirectory temp;
+  {
+    auto runtime = make_runtime(temp.path());
+    check_success(
+        runtime->dispatch("project.create", create_opted_in_project(), {}));
+    const auto wav = mono_pcm16_wav(2'400);
+    import_and_assign(*runtime, wav, kAssetId, 800, 801, 0);
+    check_success(runtime->dispatch(
+        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+    FakeCoordinator coordinator;
+    LMDJ_CHECK(
+        ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+            .has_value());
+    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+    OneShotAudioDriver audio(runtime->engine());
+    check_success(runtime->dispatch(
+        "pattern.transport.request",
+        pattern_transport_request_payload(kSequenceSessionId, 802, 1, "record"),
+        {}));
+    const auto recording =
+        settle_pattern_transport(*runtime, audio, kSequenceSessionId);
+    LMDJ_CHECK(recording.at("recording") == true);
+    check_success(
+        runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+    audio.render_one();
+    check_success(
+        runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+
+    // Listing while the owner is live never seals its journal.
+    const auto& live = check_exact_success(
+        runtime->dispatch(
+            "sequence.recovery.list", {{"project_id", kProjectId}}, {}),
+        {"candidates", "project_revision"});
+    LMDJ_CHECK(live.at("candidates").empty());
+    check_success(
+        runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+
+    // Owner loss without a Close: destruction settles nothing transport-owned.
+  }
+
+  // The destroyed runtime leaves the active journal on disk with its admission
+  // open and every durable candidate intact; nothing is removed or settled.
+  const auto bundle =
+      temp.path() / "projects" / (std::string(kProjectId) + ".lmdj");
+  const auto orphaned =
+      lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(orphaned.has_value());
+  LMDJ_CHECK(orphaned.value().admission.has_value());
+  LMDJ_CHECK(!orphaned.value().admission->closure.has_value());
+  LMDJ_CHECK(orphaned.value().admission->candidates.size() == 3);
+
+  auto reopened = make_runtime(temp.path());
+  check_success(reopened->dispatch(
+      "project.open",
+      {{"project_id", kProjectId},
+       {"pattern_id", kPatternId},
+       {"pattern_transport", true}},
+      {}));
+  const auto& recovery = check_exact_success(
+      reopened->dispatch(
+          "sequence.recovery.list", {{"project_id", kProjectId}}, {}),
+      {"candidates", "project_revision"});
+  LMDJ_CHECK(recovery.at("candidates").size() == 1);
+  LMDJ_CHECK(
+      recovery.at("candidates").at(0).at("session_id") == kSequenceSessionId);
+  LMDJ_CHECK(
+      recovery.at("candidates").at(0).at("reason") == "owner_lost");
+
+  // The unresolved admission is a recoverable refusal, never a guess; discard
+  // releases it and a fresh transport recording can open a new journal.
+  const auto applied = reopened->dispatch(
+      "sequence.recovery.apply",
+      {{"session_id", kSequenceSessionId}, {"destination_pattern_id", nullptr}},
+      {});
+  LMDJ_CHECK(!applied.value("ok", true));
+  check_success(reopened->dispatch(
+      "sequence.recovery.discard", {{"session_id", kSequenceSessionId}}, {}));
+  const auto& cleared = check_exact_success(
+      reopened->dispatch(
+          "sequence.recovery.list", {{"project_id", kProjectId}}, {}),
+      {"candidates", "project_revision"});
+  LMDJ_CHECK(cleared.at("candidates").empty());
+
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*reopened, coordinator.seam())
+          .has_value());
+  check_success(reopened->dispatch("audio.activate", Json::object(), {}));
+  OneShotAudioDriver audio(reopened->engine());
+  check_success(reopened->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 803, 1, "record"),
+      {}));
+  const auto recording =
+      settle_pattern_transport(*reopened, audio, kSequenceSessionId);
+  LMDJ_CHECK(recording.at("recording") == true);
+}
+
 }  // namespace
 
 int main() {
@@ -6865,6 +6964,7 @@ int main() {
     test_pattern_transport_suspend_barrier_settles_recording();
     test_pattern_transport_unknown_closure_blocks_clean_suspend();
     test_transport_recording_rejects_sample_commit_and_keeps_journal();
+    test_pattern_transport_owner_loss_lists_recovery_on_reopen();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

@@ -431,6 +431,14 @@ struct ApplicationFixture {
     return {session, ProjectId{kProject}, CommandId{uuid(command)}, 7, epoch,
             intent, {}};
   }
+
+  bool journal_exists() const {
+    lmdj::project_io::SequenceJournal reader;
+    const auto journal = reader.read_active(bundle);
+    if (journal.has_value()) return true;
+    LMDJ_CHECK(journal.error().code == lmdj::foundation::ErrorCode::not_found);
+    return false;
+  }
 };
 
 void application_built_controller_runs_under_the_held_writer_lease() {
@@ -568,6 +576,53 @@ void known_owner_registration_protects_only_the_open_transport_journal() {
                  .has_value());
 }
 
+void owner_lost_transport_admission_is_sealed_and_listed() {
+  ApplicationFixture f;
+  auto lease = f.application.acquire_project_writer(f.bundle);
+  LMDJ_CHECK(lease.has_value());
+  auto controller = f.application.make_pattern_transport_controller(
+      f.audio,
+      PatternTransportControllerConfig{
+          f.bundle, f.session, ProjectId{kProject}, f.pattern, 7});
+  LMDJ_CHECK(controller->request(f.make(6, 1, PatternTransportIntent::record)) ==
+             PatternTransportSubmit::accepted);
+  f.audio.render(1);
+  LMDJ_CHECK(controller->continue_operation().has_value());
+  LMDJ_CHECK(controller->inspect().recording);
+  const auto frame = admission_frame(f.bundle);
+  LMDJ_CHECK(controller->admit(
+      lmdj::facade::PatternTransportCandidate{10, frame, {0, 1}, true, 90, 10})
+                 .has_value());
+
+  // A listing while the owner is live never seals its journal.
+  const auto live = f.application.list_sequence_recovery({f.bundle});
+  LMDJ_CHECK(live.has_value());
+  LMDJ_CHECK(live.value().empty());
+  LMDJ_CHECK(f.journal_exists());
+
+  controller.reset();
+  const auto listed = f.application.list_sequence_recovery({f.bundle});
+  LMDJ_CHECK(listed.has_value());
+  LMDJ_CHECK(listed.value().size() == 1);
+  LMDJ_CHECK(listed.value().front().session_id == f.session);
+  LMDJ_CHECK(listed.value().front().reason == "owner_lost");
+  // The retained candidate survives the seal; the unresolved admission is a
+  // recoverable refusal, not a guess.
+  const auto applied = f.application.apply_sequence_recovery(
+      {f.bundle, f.session, std::nullopt});
+  LMDJ_CHECK(!applied.has_value());
+  LMDJ_CHECK(applied.error().details.at("reason") ==
+             "sequence_admission_unresolved");
+  const auto listed_again = f.application.list_sequence_recovery({f.bundle});
+  LMDJ_CHECK(listed_again.has_value());
+  LMDJ_CHECK(listed_again.value().size() == 1);
+  LMDJ_CHECK(f.application.discard_sequence_recovery({f.bundle, f.session, std::nullopt})
+                 .has_value());
+  const auto empty = f.application.list_sequence_recovery({f.bundle});
+  LMDJ_CHECK(empty.has_value());
+  LMDJ_CHECK(empty.value().empty());
+}
+
 void controller_destroyed_after_application_is_safe() {
   const auto directory =
       std::filesystem::temp_directory_path() /
@@ -616,7 +671,8 @@ int main() {
     controller_on_a_fresh_platform_reports_busy_then_recovers();
     known_owner_registration_protects_only_the_open_transport_journal();
     controller_destroyed_after_application_is_safe();
-    std::cout << "pattern transport controller tests: PASS (13 scenarios)\n";
+    owner_lost_transport_admission_is_sealed_and_listed();
+    std::cout << "pattern transport controller tests: PASS (14 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
