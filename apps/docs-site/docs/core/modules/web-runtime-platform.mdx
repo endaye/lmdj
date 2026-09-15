@@ -41,8 +41,32 @@ immutable write 在写入后、flush 前暂停时，同一 Control lane 仍完�
 准备、live press/voice receipt、release 与状态查询；释放后检查完整落盘字节，
 原线程销毁 writer lease，再由新执行线程重新获取并读取。测试暂停钩子和导出仅存在于
 `LMDJ_WEB_AUDIO_CONFORMANCE` 构建。生产 ControlBridge 的串行 dispatch 和 OPFS
-Asyncify 重入拒绝保持不变；此基础验证不代表生产 Sequence 已迁移到异步线程，
-也不代表全局播放/录制六态、session teardown barrier 或 Creator 默认入口已验收。
+Asyncify 重入拒绝保持不变。
+
+T3 起 Platform 向 opted-in session 提供公开的全局 Pattern transport 面：
+`pattern.transport.request` 与 `pattern.transport.inspect` 两个操作经既有 serializer
+与 bridge allowlist 进出，session 在 `createRuntimeSession` 以 `patternTransport: true`
+显式 opt-in，并在 `project.open`/`project.create` 的 quiescent 点用 `pattern_transport: true`
+标记完成协商；未协商的 session 请求一律 `HOST_STATE_INVALID`，legacy
+`sequence.record.begin` 语义不变。request 绑定 session/project/command/epoch/intent，
+返回 pending ticket（`submit` 为 `accepted`/`replayed`，附完整 status），dispatch tail
+立即释放；continuation 由 bridge 的 service cadence 以短的 epoch-checked 步骤重入，
+不在 tail 内等待 audio receipt 或长 IO。engine 的 Pattern 事件调度只在协商启用后
+由 transport 门控，legacy 路径逐位不变。已 engaged 的 session 拒绝冲突的 legacy 直接写入
+（`sequence.record.begin`、录音中的 `sequence.settings.update`），保证单一 journal owner。
+live Pad press/release 在 enqueue 接受后的既有位置注入 admission 候选：watermark 从
+coordinator 打开的窗口下界单调分配，release 复用其归属 press 的 watermark 作为
+correlation；journaling 响应不早于 durable append，unknown enqueue 绝不自动重试。
+录音的 preparation、audio receipt、journal settlement 与 committed Pattern publication
+是四个分别持有的 completion（`publication_pending` 单独可见）。显式 Suspend、Project
+替换与 Close 进入同一 shutdown barrier：acknowledged Pattern Stop → admission closure →
+journal settlement 或 recoverable refusal → input release → 生命周期 effect；receipt 不到达的
+unknown closure 使 Suspend fail closed，且未决 admission 原样保留，不允许 clean
+replacement 声明。
+
+Creator 默认入口（T4）、六态的完整产品旅程验收、以及物理 MIDI/触控/声学听感验收仍未交付；
+本页的绿色只覆盖原生 Host/bridge 套件、Node Runtime Session 回归与真实 Chromium
+Wasm/OPFS 浏览器旅程。
 
 自动化不替代物理 MIDI、Safari/iPad Touch、声学延迟或主观听感验收；Perform 录制与 master tap 的自动化绿色只证明消息形状、状态机与分发身份，物理验收仍为 deferred。分发门禁通过也不代表已经产生不可变快照、标签、Release、部署或 Channel 提升，这些是各自独立的后续授权边界。
 ## 10. 版本身份

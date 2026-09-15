@@ -67,6 +67,8 @@ const API = [
   "requestMidi",
   "requestPerformancePatternLaunch",
   "requestPatternSwitch",
+  "requestPatternTransport",
+  "inspectPatternTransport",
   "resetPad",
   "retryPrepare",
   "setSamplePreview",
@@ -175,6 +177,7 @@ function fixture({
   capabilities,
   capabilityProbeTimeoutMs,
   inputConfiguration = {},
+  patternTransport,
   runtimeTransport,
   publishRuntime = false,
   runtimeTerminator,
@@ -249,6 +252,7 @@ function fixture({
     },
     inputConfiguration,
     inputOwnership,
+    ...(patternTransport === undefined ? {} : {patternTransport}),
     soundsetCatalog,
     seams: {
       ...(capabilities === undefined ? {} : {capabilities}),
@@ -5412,4 +5416,234 @@ test("Provider permission readback rejects absent or duplicate grants and preser
     else await assert.rejects(session.listProviders(), {code: "HOST_PROTOCOL_MISMATCH"});
     await session.close();
   }
+});
+
+const TRANSPORT_SESSION_ID = "00000000-0000-4000-8000-0000000000aa";
+const TRANSPORT_PROJECT_ID = "00000000-0000-4000-8000-0000000000bb";
+const TRANSPORT_PATTERN_ID = "00000000-0000-4000-8000-0000000000cc";
+const TRANSPORT_COMMAND_ID = "00000000-0000-4000-8000-0000000000dd";
+
+function transportStatus(overrides = {}) {
+  return {
+    engaged: true,
+    playing: false,
+    recording: false,
+    phase: "awaiting_audio",
+    runtime_generation: 1,
+    transport_epoch: 1,
+    origin_frame: 0,
+    command_id: TRANSPORT_COMMAND_ID,
+    publication_pending: false,
+    error: null,
+    ...overrides,
+  };
+}
+
+test("Pattern transport requires opt-in and negotiates the marker at Project open", async () => {
+  const opens = [];
+  const {session} = fixture({
+    patternTransport: true,
+    send: async (envelope) => {
+      if (envelope.operation === "project.open") opens.push(envelope.payload);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.openProject(TRANSPORT_PROJECT_ID, TRANSPORT_PATTERN_ID);
+  assert.deepEqual(opens, [{
+    project_id: TRANSPORT_PROJECT_ID,
+    pattern_id: TRANSPORT_PATTERN_ID,
+    pattern_transport: true,
+  }]);
+  await session.close();
+
+  const legacy = fixture({
+    send: async (envelope) => {
+      if (envelope.operation === "project.open") opens.push(envelope.payload);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await legacy.session.start();
+  assert.throws(
+    () => legacy.session.requestPatternTransport({
+      sessionId: TRANSPORT_SESSION_ID,
+      projectId: TRANSPORT_PROJECT_ID,
+      commandId: TRANSPORT_COMMAND_ID,
+      expectedEpoch: 1,
+      intent: "record",
+      expectedRevision: null,
+    }),
+    /requires session opt-in/,
+  );
+  assert.throws(
+    () => legacy.session.inspectPatternTransport(TRANSPORT_SESSION_ID),
+    /requires session opt-in/,
+  );
+  await legacy.session.openProject(TRANSPORT_PROJECT_ID, TRANSPORT_PATTERN_ID);
+  assert.deepEqual(opens.at(-1), {
+    project_id: TRANSPORT_PROJECT_ID,
+    pattern_id: TRANSPORT_PATTERN_ID,
+  });
+  await legacy.session.close();
+});
+
+test("Pattern transport request returns the pending ticket without awaiting settlement", async () => {
+  const sent = [];
+  const {session} = fixture({
+    patternTransport: true,
+    send: async (envelope) => {
+      sent.push(envelope);
+      if (envelope.operation === "pattern.transport.request") {
+        return success(envelope, {
+          session_id: envelope.payload.session_id,
+          command_id: envelope.payload.command_id,
+          submit: "accepted",
+          status: transportStatus(),
+        });
+      }
+      if (envelope.operation === "pattern.transport.inspect") {
+        return success(envelope, transportStatus({
+          phase: "idle",
+          playing: true,
+          recording: true,
+        }));
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  const ticket = await session.requestPatternTransport({
+    sessionId: TRANSPORT_SESSION_ID,
+    projectId: TRANSPORT_PROJECT_ID,
+    commandId: TRANSPORT_COMMAND_ID,
+    expectedEpoch: 1,
+    intent: "record",
+    expectedRevision: null,
+  });
+  // The Promise tail resolves with the pending ticket; the audio receipt and
+  // journal settlement are observed, never awaited inline.
+  assert.equal(ticket.submit, "accepted");
+  assert.equal(ticket.sessionId, TRANSPORT_SESSION_ID);
+  assert.equal(ticket.commandId, TRANSPORT_COMMAND_ID);
+  assert.equal(ticket.status.phase, "awaiting_audio");
+  assert.equal(ticket.status.recording, false);
+  const request = sent.find((entry) =>
+    entry.operation === "pattern.transport.request");
+  assert.deepEqual(request.payload, {
+    session_id: TRANSPORT_SESSION_ID,
+    project_id: TRANSPORT_PROJECT_ID,
+    command_id: TRANSPORT_COMMAND_ID,
+    expected_epoch: 1,
+    intent: "record",
+    expected_revision: null,
+  });
+
+  const observed = await session.inspectPatternTransport(TRANSPORT_SESSION_ID);
+  assert.deepEqual(observed, {
+    engaged: true,
+    playing: true,
+    recording: true,
+    phase: "idle",
+    runtimeGeneration: 1,
+    transportEpoch: 1,
+    originFrame: 0,
+    commandId: TRANSPORT_COMMAND_ID,
+    publicationPending: false,
+    error: null,
+  });
+  const inspection = sent.find((entry) =>
+    entry.operation === "pattern.transport.inspect");
+  assert.deepEqual(inspection.payload, {session_id: TRANSPORT_SESSION_ID});
+  await session.close();
+});
+
+test("Pattern transport rejects invalid intents and malformed statuses", async () => {
+  const {session} = fixture({
+    patternTransport: true,
+    send: async (envelope) => {
+      if (envelope.operation === "pattern.transport.request") {
+        return success(envelope, {
+          session_id: envelope.payload.session_id,
+          command_id: envelope.payload.command_id,
+          submit: "accepted",
+          status: transportStatus({phase: "not-a-phase"}),
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  // Client-side envelope validation refuses an unknown intent before send.
+  assert.throws(
+    () => session.requestPatternTransport({
+      sessionId: TRANSPORT_SESSION_ID,
+      projectId: TRANSPORT_PROJECT_ID,
+      commandId: TRANSPORT_COMMAND_ID,
+      expectedEpoch: 1,
+      intent: "toggle",
+      expectedRevision: null,
+    }),
+    /Pattern transport request is invalid/,
+  );
+  // A malformed Host status fails closed as a protocol mismatch.
+  await assert.rejects(
+    session.requestPatternTransport({
+      sessionId: TRANSPORT_SESSION_ID,
+      projectId: TRANSPORT_PROJECT_ID,
+      commandId: TRANSPORT_COMMAND_ID,
+      expectedEpoch: 1,
+      intent: "record",
+      expectedRevision: null,
+    }),
+    {code: "HOST_PROTOCOL_MISMATCH"},
+  );
+  await session.close();
+});
+
+test("Pattern transport busy and retained-error surfaces propagate typed", async () => {
+  const {session} = fixture({
+    patternTransport: true,
+    send: async (envelope) => {
+      if (envelope.operation === "pattern.transport.request") {
+        return {
+          protocol_version: 1,
+          request_id: envelope.request_id,
+          ok: false,
+          error: {
+            code: "HOST_STATE_INVALID",
+            message: "a Pattern transport operation is pending",
+            details: {},
+          },
+        };
+      }
+      if (envelope.operation === "pattern.transport.inspect") {
+        return success(envelope, transportStatus({
+          phase: "error",
+          error: {
+            code: "IO_ERROR",
+            message: "journal settlement failed",
+            details: {reason: "storage_failure"},
+          },
+        }));
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await assert.rejects(
+    session.requestPatternTransport({
+      sessionId: TRANSPORT_SESSION_ID,
+      projectId: TRANSPORT_PROJECT_ID,
+      commandId: TRANSPORT_COMMAND_ID,
+      expectedEpoch: 1,
+      intent: "play_stop",
+      expectedRevision: null,
+    }),
+    {code: "HOST_STATE_INVALID"},
+  );
+  const observed = await session.inspectPatternTransport(TRANSPORT_SESSION_ID);
+  assert.equal(observed.phase, "error");
+  assert.equal(observed.error.code, "IO_ERROR");
+  assert.deepEqual(observed.error.details, {reason: "storage_failure"});
+  await session.close();
 });

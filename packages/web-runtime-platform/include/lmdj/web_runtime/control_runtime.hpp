@@ -65,6 +65,11 @@ class ControlRuntime final {
   foundation::Result<void> drain_capture();
   foundation::Result<void> service_performance();
   std::optional<SequenceBarBoundaryEvent> drain_sequence_bar_boundary();
+  // One bounded, epoch-checked Pattern transport continuation step; never
+  // waits for an audio receipt or a long IO job. The bridge service cadence
+  // calls this so a pending operation settles off the dispatch tail.
+  void service_pattern_transport() noexcept;
+  bool pattern_transport_pending() const noexcept;
   bool validate_realtime_health() noexcept;
   void fail_and_seal(std::string_view cause) noexcept;
   bool failed() const noexcept;

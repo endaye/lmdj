@@ -27,7 +27,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 目标事件
 
-Pointer、Keyboard、MIDI 汇入共享 Runtime Session 的 Sample inspect→`trigger(flatSlot, velocity, source)` admission，并保留归一化来源和 release/cancel identity。Project `{bank, pad}` 只在输入边界按 `bank * 16 + pad` 展平一次；adapter 不操作 Asset、Project Truth、Provider 或音频字节。
+Pointer、Keyboard、MIDI 汇入共享 Runtime Session 的 Sample inspect→`trigger(flatSlot, velocity, source)` admission，并保留归一化来源和 release/cancel identity。Project `{bank, pad}` 只在输入边界按 `bank * 16 + pad` 展平一次；adapter 不操作 Asset、Project Truth、Provider 或音频字节。在全局 Pattern transport 已 engaged 且录音中的 session，同一 trigger 路径在 enqueue 接受后把 press/release 注入 transport coordinator 的 admission 候选：watermark 单调分配、release 携带其归属 press 的 correlation；这一注入不改变返回给输入侧的 successful/failed/unknown 结果，unknown 输入绝不自动重 trigger。
 
 Creator 默认键盘 mapping 使用 `KeyboardEvent.code`，按实体键盘与视觉 Pad 的共同上下顺序分配：`Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，`A S D F G H J K` 对应 Pad 9–16。Pad 上的 `kbd` 提示与 accessible name 均从同一个导出 mapping 派生，不维护第二份 Creator 键表；切换 Bank 只改变稳定的 16-Slot offset。
 

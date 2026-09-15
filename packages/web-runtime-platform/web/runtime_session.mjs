@@ -2861,6 +2861,9 @@ function createRuntimeSessionController(options = {}) {
     return serializeProjectAction(() => boundedRequest("project.open", {
       project_id: projectId,
       pattern_id: patternId,
+      // An opted-in session negotiates the global Pattern transport at this
+      // quiescent point; a legacy session never sets the marker.
+      ...(options.patternTransport === true ? {pattern_transport: true} : {}),
     }, requestOptions));
   }
 
@@ -3111,6 +3114,144 @@ function createRuntimeSessionController(options = {}) {
       sequenceBoundaryFlush = null;
       return result;
     });
+  }
+
+  const PATTERN_TRANSPORT_PHASES = new Set([
+    "idle",
+    "preparing",
+    "awaiting_audio",
+    "flushing",
+    "reconciling",
+    "error",
+  ]);
+
+  function normalizePatternTransportStatus(value) {
+    if (
+      value === null ||
+      typeof value !== "object" ||
+      !exactKeys(value, [
+        "engaged",
+        "playing",
+        "recording",
+        "phase",
+        "runtime_generation",
+        "transport_epoch",
+        "origin_frame",
+        "command_id",
+        "publication_pending",
+        "error",
+      ]) ||
+      typeof value.engaged !== "boolean" ||
+      typeof value.playing !== "boolean" ||
+      typeof value.recording !== "boolean" ||
+      !PATTERN_TRANSPORT_PHASES.has(value.phase) ||
+      !isUnsignedInteger(value.runtime_generation) ||
+      !isUnsignedInteger(value.transport_epoch) ||
+      !isUnsignedInteger(value.origin_frame) ||
+      (value.command_id !== null && !UUID_PATTERN.test(value.command_id)) ||
+      typeof value.publication_pending !== "boolean" ||
+      (value.error !== null &&
+        (typeof value.error !== "object" ||
+          !exactKeys(value.error, ["code", "message", "details"]) ||
+          typeof value.error.code !== "string" ||
+          typeof value.error.message !== "string" ||
+          value.error.details === null ||
+          typeof value.error.details !== "object" ||
+          Array.isArray(value.error.details)))
+    ) {
+      throw protocolMismatch("Pattern transport status is invalid");
+    }
+    return Object.freeze({
+      engaged: value.engaged,
+      playing: value.playing,
+      recording: value.recording,
+      phase: value.phase,
+      runtimeGeneration: value.runtime_generation,
+      transportEpoch: value.transport_epoch,
+      originFrame: value.origin_frame,
+      commandId: value.command_id,
+      publicationPending: value.publication_pending,
+      error: value.error === null
+        ? null
+        : Object.freeze({
+            code: value.error.code,
+            message: value.error.message,
+            details: Object.freeze({...value.error.details}),
+          }),
+    });
+  }
+
+  function requirePatternTransportOptIn() {
+    if (options.patternTransport !== true) {
+      throw new TypeError(
+        "Pattern transport requires session opt-in and a negotiated Project open",
+      );
+    }
+  }
+
+  /** @param {import("./runtime_types.d.ts").PatternTransportRequest} request */
+  function requestPatternTransport(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, [
+        "sessionId",
+        "projectId",
+        "commandId",
+        "expectedEpoch",
+        "intent",
+        "expectedRevision",
+      ]) ||
+      (request.intent !== "play_stop" && request.intent !== "record") ||
+      !isUnsignedInteger(request.expectedEpoch) ||
+      request.expectedEpoch === 0 ||
+      !(
+        request.expectedRevision === null ||
+        isUnsignedInteger(request.expectedRevision)
+      )
+    ) {
+      throw new TypeError("Pattern transport request is invalid");
+    }
+    requirePatternTransportOptIn();
+    const sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
+    const projectId = requireSequenceIdentity(request.projectId, "projectId");
+    const commandId = requireSequenceIdentity(request.commandId, "commandId");
+    // The pending ticket resolves with this response; the whole operation
+    // never occupies this Promise tail. Settlement is driven by the Host's
+    // own continuation cadence and observed through inspectPatternTransport.
+    return serializeRuntimeAction(async () => {
+      const value = await boundedRequest("pattern.transport.request", {
+        session_id: sessionId,
+        project_id: projectId,
+        command_id: commandId,
+        expected_epoch: request.expectedEpoch,
+        intent: request.intent,
+        expected_revision: request.expectedRevision,
+      });
+      if (
+        !exactKeys(value, ["session_id", "command_id", "submit", "status"]) ||
+        value.session_id !== sessionId ||
+        value.command_id !== commandId ||
+        (value.submit !== "accepted" && value.submit !== "replayed")
+      ) {
+        throw protocolMismatch("Pattern transport ticket is invalid");
+      }
+      return Object.freeze({
+        sessionId,
+        commandId,
+        submit: value.submit,
+        status: normalizePatternTransportStatus(value.status),
+      });
+    });
+  }
+
+  function inspectPatternTransport(sessionId) {
+    requirePatternTransportOptIn();
+    const id = requireSequenceIdentity(sessionId, "sessionId");
+    return serializeRuntimeAction(async () =>
+      normalizePatternTransportStatus(
+        await boundedRequest("pattern.transport.inspect", {session_id: id}),
+      ));
   }
 
   function createPattern(request) {
@@ -4962,6 +5103,8 @@ function createRuntimeSessionController(options = {}) {
     flushSequence,
     stopSequence,
     requestPatternSwitch,
+    requestPatternTransport,
+    inspectPatternTransport,
     createPattern,
     updateSequenceSettings,
     querySequenceStatus,
@@ -5028,6 +5171,7 @@ export function createRuntimeSession({
   assemblyIdentity,
   inputConfiguration = {},
   inputOwnership = "session",
+  patternTransport = false,
   soundsetCatalog =
     /** @type {import("./soundset_catalog.mjs").CatalogClient | null} */ (null),
   seams = {},
@@ -5040,6 +5184,7 @@ export function createRuntimeSession({
     manifestSource,
     assemblyIdentity,
     inputOwnership,
+    patternTransport,
     soundsetCatalog,
     ...inputConfiguration,
     ...seams,
