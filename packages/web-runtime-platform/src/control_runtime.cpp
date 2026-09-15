@@ -995,6 +995,18 @@ void emit_refusal_diagnostic(
   if (line.size() > kRefusalDiagnosticLineCap) {
     diagnostic["details"] = Json{{"truncated", true}};
     line = std::string(kPrefix) + diagnostic.dump();
+    // Every remaining field is bounded by kRefusalDiagnosticCodeCap or a
+    // fixed literal, so shortening the message re-establishes the cap in
+    // one pass; each raw character costs at least one serialized byte.
+    while (line.size() > kRefusalDiagnosticLineCap &&
+           !diagnostic.at("source_message").get<std::string>().empty()) {
+      const auto excess = line.size() - kRefusalDiagnosticLineCap;
+      const auto& message =
+          diagnostic.at("source_message").get_ref<const std::string&>();
+      diagnostic["source_message"] = message.substr(
+          0, message.size() - std::min(excess, message.size()));
+      line = std::string(kPrefix) + diagnostic.dump();
+    }
   }
   line.push_back('\n');
   std::fputs(line.c_str(), stderr);
