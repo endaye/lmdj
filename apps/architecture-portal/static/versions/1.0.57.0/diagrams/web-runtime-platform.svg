@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="44fbd1909554516fa4ec243d9e4194117060f8de44241d57948ac6c16bd36c80">
+  <title id="title">Web Runtime Platform Module</title><desc id="description">Creator 与诊断 Host 共用一个受 Product Assembly 约束的浏览器 Runtime</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
+  <style>
+    :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    @media(prefers-color-scheme:dark){:root{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}}
+    [data-theme=dark]{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}
+    [data-theme=light]{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
+    .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
+  </style>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Web Runtime Platform Module</text><text class="page-summary" x="40" y="68">Creator 与诊断 Host 共用一个受 Product Assembly 约束的浏览器 Runtime</text>
+
+    <g class="boundary"><rect x="300" y="100" width="910" height="470" rx="22"/><text x="320" y="130">packages/web-runtime-platform · product-neutral</text></g>
+  <g class="connection"><path class="edge-mask" d="M 250 196 H 295 V 196 H 340"/><path class="edge" d="M 250 196 H 295 V 196 H 340" marker-end="url(#arrow)"/><text x="295" y="187">creator identity</text></g>
+<g class="connection"><path class="edge-mask" d="M 250 406 H 295 V 196 H 340"/><path class="edge" d="M 250 406 H 295 V 196 H 340" marker-end="url(#arrow)"/><text x="295" y="292">diagnostic identity</text></g>
+<g class="connection"><path class="edge-mask" d="M 560 196 H 605 V 301 H 650"/><path class="edge" d="M 560 196 H 605 V 301 H 650" marker-end="url(#arrow)"/><text x="605" y="240">admit</text></g>
+<g class="connection"><path class="edge-mask" d="M 880 301 H 915 V 196 H 950"/><path class="edge" d="M 880 301 H 915 V 196 H 950" marker-end="url(#arrow)"/><text x="915" y="240">immutable view</text></g>
+<g class="connection"><path class="edge-mask" d="M 880 301 H 1090 V 301 H 1300"/><path class="edge" d="M 880 301 H 1090 V 301 H 1300" marker-end="url(#arrow)"/><text x="1090" y="292">typed overlay API</text></g>
+<g class="connection"><path class="edge-mask" d="M 1170 456 H 1235 V 301 H 1300"/><path class="edge" d="M 1170 456 H 1235 V 301 H 1300" marker-end="url(#arrow)"/><text x="1235" y="370">import/export</text></g>
+<g class="connection"><path class="edge-mask" d="M 1170 196 H 1204 V 510 H 616 V 456 H 650"/><path class="edge" d="M 1170 196 H 1204 V 510 H 616 V 456 H 650" marker-end="url(#arrow)"/><text x="910" y="317">master bus</text></g>
+<g class="connection"><path class="edge-mask" d="M 880 456 H 915 V 301 H 950"/><path class="edge" d="M 880 456 H 915 V 301 H 950" marker-end="url(#arrow)"/><text x="915" y="370">batch · stopped · failed</text></g>
+<g class="connection"><path class="edge-mask" d="M 880 301 H 915 V 301 H 950"/><path class="edge" d="M 880 301 H 915 V 301 H 950" marker-end="url(#arrow)"/><text x="915" y="292">capture status</text></g>
+
+    <g class="component kind-host">
+      <rect class="node-mask" x="36" y="146" width="218" height="100" rx="18"/>
+      <rect class="node" x="40" y="150" width="210" height="92" rx="14"/>
+      <text class="node-title" x="56" y="182">Creator Web</text>
+      <text class="node-detail" x="56" y="208">Sample · Sequence · Perform UI</text>
+    </g>
+    <g class="component kind-host">
+      <rect class="node-mask" x="36" y="356" width="218" height="100" rx="18"/>
+      <rect class="node" x="40" y="360" width="210" height="92" rx="14"/>
+      <text class="node-title" x="56" y="392">Diagnostic Host</text>
+      <text class="node-detail" x="56" y="418">proof · diagnostics</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="336" y="146" width="228" height="100" rx="18"/>
+      <rect class="node" x="340" y="150" width="220" height="92" rx="14"/>
+      <text class="node-title" x="356" y="182">Manifest Gate</text>
+      <text class="node-detail" x="356" y="208">exact Host allowlist</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="646" y="251" width="238" height="100" rx="18"/>
+      <rect class="node" x="650" y="255" width="230" height="92" rx="14"/>
+      <text class="node-title" x="666" y="287">Runtime Session</text>
+      <text class="node-detail" x="666" y="313">frame input · boundary action lane</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="946" y="146" width="228" height="100" rx="18"/>
+      <rect class="node" x="950" y="150" width="220" height="92" rx="14"/>
+      <text class="node-title" x="966" y="182">Web Audio</text>
+      <text class="node-detail" x="966" y="208">claimed Bar publication</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="1296" y="251" width="228" height="100" rx="18"/>
+      <rect class="node" x="1300" y="255" width="220" height="92" rx="14"/>
+      <text class="node-title" x="1316" y="287">Application Facade</text>
+      <text class="node-detail" x="1316" y="313">only Core entry</text>
+    </g>
+    <g class="component kind-host">
+      <rect class="node-mask" x="946" y="406" width="228" height="100" rx="18"/>
+      <rect class="node" x="950" y="410" width="220" height="92" rx="14"/>
+      <text class="node-title" x="966" y="442">Project Bundle</text>
+      <text class="node-detail" x="966" y="468">transfer-only bytes</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="646" y="406" width="238" height="100" rx="18"/>
+      <rect class="node" x="650" y="410" width="230" height="92" rx="14"/>
+      <text class="node-title" x="666" y="442">Master Tap Worklet</text>
+      <text class="node-detail" x="666" y="468">platform-owned processor</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="946" y="251" width="228" height="100" rx="18"/>
+      <rect class="node" x="950" y="255" width="220" height="92" rx="14"/>
+      <text class="node-title" x="966" y="287">Master Capture</text>
+      <text class="node-detail" x="966" y="313">bounded batch queue</text>
+    </g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Product identity</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Product CMake 注入 Product Build、Platform version 与精确 Host triple。</div></foreignObject></g>
+<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Shared runtime</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">两个 Host 共用 frame-stamped input、BPM-safe overlay、exact boundary flush、bounded Stop replay 与 fail-closed owner-loss cleanup。 Strict retained-Project routing, explicit permission readback and target plan. Facade prepares transient PCM; Host audition pool reports actual admission and consumes stop. Serialize adoption once; unknown response requires inspection. No Host bundle parsing or automatic retry.</div></foreignObject></g>
+<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Master tap</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Platform 自有 master tap worklet；capture 状态沿 unconfigured → configured → ready 前进，失败为 unavailable，capture 只能从 ready 启动，每条消息逐键校验。</div></foreignObject></g>
+<g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Forbidden boundary</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Project Bundle 只进入 Facade，不连接 Creator internals，也不替代 Project Truth。Transport T0 conformance: executor owns paused OPFS while Control admits live press/release. Resume, verify bytes, consume once, release on owner thread and reacquire on a new worker. T3: opted-in sessions reach the Facade-owned transport coordinator through pattern.transport.request/inspect; the pending ticket releases the dispatch tail and the service cadence settles short epoch-checked steps. Legacy stays default.</div></foreignObject></g>
+</svg>

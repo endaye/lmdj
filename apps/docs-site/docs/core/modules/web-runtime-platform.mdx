@@ -62,7 +62,15 @@ correlation；journaling 响应不早于 durable append，unknown enqueue 绝不
 替换与 Close 进入同一 shutdown barrier：acknowledged Pattern Stop → admission closure →
 journal settlement 或 recoverable refusal → input release → 生命周期 effect；receipt 不到达的
 unknown closure 使 Suspend fail closed，且未决 admission 原样保留，不允许 clean
-replacement 声明。
+replacement 声明。跨身份 `snapshot.reload`（或停止态 Pattern 切换）与 engagement 协调：
+播放中拒绝（transport session 拥有 Pattern 选择）；其余情况先按需进 shutdown barrier
+再注销 engagement，下一次 request 以当前 Pattern 重新 engaged；Engine stop 会抹除
+transport generation 与未决 reservation，因此 Suspend 结算后 engagement 注销、每次
+activation 在 quiescent 点重新武装端口，同 generation 内 epoch 单调递增、重新武装后从
+1 重启（status 携带 runtime_generation 供页面识别）。同身份重发布保留 engagement；
+其产生的 pending publication 应用前（Bar 边界）的 Record 得到可重试的
+HOST_STATE_INVALID 拒绝，在 facade 写任何 journal 之前返回，绝不留下不可复用的
+preparation。
 
 Creator 默认入口（T4）、六态的完整产品旅程验收、以及物理 MIDI/触控/声学听感验收仍未交付；
 本页的绿色只覆盖原生 Host/bridge 套件、Node Runtime Session 回归与真实 Chromium

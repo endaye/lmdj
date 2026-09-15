@@ -19,7 +19,7 @@ class ReceiptTest(unittest.TestCase):
     def setUp(self):
         self.workflow = "publish-release.yml"
         self.event = {"ref": "refs/heads/main", "repository": {"id": 10, "full_name": "endaye/lmdj"},
-            "sender": {"id": 20}, "inputs": {"request_id": "a" * 64, "tag": "lmdj-v1.0.56.0",
+            "sender": {"id": 20}, "inputs": {"request_id": "a" * 64, "tag": "lmdj-v1.0.57.0",
             "release_id": "30", "plan_sha256": "b" * 64}}
         self.env = {"GITHUB_REPOSITORY_ID": "10", "GITHUB_ACTOR_ID": "20", "GITHUB_RUN_ID": "40",
             "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/main",

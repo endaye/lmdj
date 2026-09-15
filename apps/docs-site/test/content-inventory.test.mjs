@@ -109,7 +109,7 @@ test('current truth tracks the formal Web Host, candidate lifecycle, and evidenc
 
   const proof = await readFile(path.join(docsRoot, 'operations/testing-and-proof.mdx'), 'utf8');
   assert.ok(proof.includes('<BuildIdentity />'), 'Proof page must render current Product identity; remedy: bind BuildIdentity to active facts');
-  assert.match(proof, /lmdj\.project\.v3/);
+  assert.match(proof, /lmdj\.project\.v5/);
   assert.match(proof, /record→overdub→switch→trim→reload→recover/);
   assert.match(proof, /docs\/quality\/2026-08-11-web-runtime-hardening-acceptance\.md/);
   assert.match(proof, /docs\/quality\/2026-08-12-opfs-publication-recovery-acceptance\.md/);

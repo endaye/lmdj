@@ -259,7 +259,7 @@ class ReleaseDriverTest(unittest.TestCase):
         for key, value in {"actor_id":456, "control_revision":"d" * 40,
                            "policy_digest":"e" * 64, "mode":"tag"}.items():
             incoming = dict(original, id="release-2", **{key:value})
-            if key == "mode": incoming["requested_tag"] = "lmdj-v1.0.56.0"
+            if key == "mode": incoming["requested_tag"] = "lmdj-v1.0.57.0"
             self.admit_requests(original, incoming)
             with self.subTest(key=key), self.assertRaises(JournalError):
                 self.driver.run(incoming)
@@ -298,8 +298,8 @@ class ReleaseDriverTest(unittest.TestCase):
         self.assertEqual(self.state(), frozen)
 
     def test_exact_tag_request_cannot_adopt_another_tag(self):
-        original = dict(request(), mode="tag", requested_tag="lmdj-v1.0.56.0")
-        incoming = dict(original, id="release-2", requested_tag="lmdj-v1.0.57.0")
+        original = dict(request(), mode="tag", requested_tag="lmdj-v1.0.57.0")
+        incoming = dict(original, id="release-2", requested_tag="lmdj-v1.0.58.0")
         self.admit_requests(original, incoming)
         self.backend.post_pending = "changelog_site"
         self.driver.run(original)

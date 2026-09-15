@@ -65,9 +65,23 @@ close 内把当前 Pattern 段的剩余候选经同一 canonical-tail transfer d
 Project Truth、推进 committed revision，并在 closure 耐久后保留 terminal transfer 作为
 admission 输入已全部解析的结算收据；cutoff 收据应用后、close 未决期间到达的输入保持
 live-only，不再进入候选集。close 中途存储失败保持 flushing 重试且不重复提交。
+`Application::make_pattern_transport_controller` 把每个存活 controller 的 session 登记为
+该 Project 的已知 Sequence owner：transport journal 打开期间，Sample 类提交保持 legacy
+busy 守卫（`sequence_session_active` 类型化拒绝），owner-loss 和解不再误封存活 journal；
+直接 legacy `begin_sequence` 只在 transport journal 打开时被拒绝（闲置或已结算的
+controller 不阻塞）；controller 销毁即注销登记。owner 消失的未决 transport admission
+（controller 未结算即销毁、Host 崩溃）在 recovery 列出时被密封为 owner_lost 并列入
+`sequence.recovery.list`；其 apply 以 `sequence_admission_unresolved` 诚实拒绝，discard
+正常释放；存活 owner 的 journal 永不被列出操作密封。
 结算完整（terminal receipt、tail flush 恰好提交一次、complete）后移除已结算 journal，
 与 legacy stop 的 remove_active_if_complete 一致；再次 Record 走同一懒创建路径开新
-journal。
+journal。submit 被 Engine 拒绝（如未命名的 pending publication）发生在任何音频效果之前，
+但 admission preparation 已 durable：同身份重试在 generation 未变时幂等复用，
+generation 已变则冲突拒绝，未决 journal 留给 owner-loss 恢复面；Host 侧以前置守卫保证
+pending publication 应用前不写 journal。收据应用失败若是确定性的
+authority/identity 不符（如 engagement 背后的 Pattern 已换），重读同一保留收据永不解决，
+coordinator 停驻 error phase：continuation 变 no-op、新命令被诚实拒绝（不为 busy），
+恢复路径是 Project 重开 + owner-loss recovery listing。
 cutoff 前已应用 switch 的 close 保持原语义，尚无 terminal transfer。它仍不是 Creator
 opt-in、settings/rebase 或未知 cutoff 恢复。测试用生产
 `RealtimeEngine` 收据，不是 Creator 或听感验收。

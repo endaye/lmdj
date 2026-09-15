@@ -1101,6 +1101,9 @@ struct TransportEngagement {
   EnginePatternTransportPort port;
   std::unique_ptr<facade::PatternTransportController> controller;
   std::optional<foundation::SequenceSessionId> session;
+  // The Pattern identity the Facade controller is bound to; a cross-identity
+  // republication outside the coordinator must retire the engagement first.
+  std::optional<foundation::PatternId> pattern;
   std::uint64_t generation = 0;
   // The coordinator's admission preparation opens its candidate window at
   // watermark 10; the Host allocates post-enqueue watermarks from that floor,
@@ -1522,6 +1525,7 @@ struct ControlRuntime::Impl {
     auto engagement = std::make_unique<TransportEngagement>(engine);
     engagement->session = session_id;
     engagement->generation = enabled_transport_generation;
+    engagement->pattern = foundation::PatternId{*pattern_id};
     engagement->controller = application.make_pattern_transport_controller(
         engagement->port,
         facade::PatternTransportControllerConfig{
@@ -3667,6 +3671,29 @@ Json ControlRuntime::dispatch(
         return state_error();
       }
       const auto selected_pattern = uuid_field(payload, "pattern_id");
+      // A cross-identity republication outside the coordinator would strand
+      // the engagement's Pattern binding (its next receipt would fail the
+      // journal's fence authority deterministically). Coordinate instead:
+      // refuse while playing, settle+retire otherwise, then proceed.
+      if (impl_->transport != nullptr &&
+          foundation::PatternId{selected_pattern} !=
+              *impl_->transport->pattern) {
+        const auto engaged = impl_->transport->controller->inspect();
+        if (engaged.playing) {
+          return state_error(
+              "the playing Pattern transport session owns Pattern selection; "
+              "stop playback before reloading another Pattern");
+        }
+        if (engaged.recording ||
+            engaged.phase != facade::PatternTransportPhase::idle ||
+            impl_->transport->publish_pending) {
+          const auto barrier = impl_->transport_shutdown_barrier();
+          if (!barrier.has_value()) {
+            return normalized_error(barrier.error());
+          }
+        }
+        impl_->transport.reset();
+      }
       if (impl_->cancel_if_expired()) {
         return timeout_error();
       }
@@ -3745,6 +3772,17 @@ Json ControlRuntime::dispatch(
       };
       if (impl_->cancel_if_expired()) {
         return timeout_error();
+      }
+      // An Engine stop wipes the transport generation and any wedged
+      // reservation; an opted-in session re-arms the port on every activation
+      // while the Engine is quiescent. A surviving engagement from before the
+      // stop is stale and retires here.
+      if (impl_->transport_opted_in) {
+        impl_->enable_pattern_transport_quiescent();
+      }
+      if (impl_->transport != nullptr &&
+          impl_->transport->generation != impl_->enabled_transport_generation) {
+        impl_->transport.reset();
       }
       const auto prepared_fx =
           impl_->engine.prepare_master_fx(*impl_->project_bpm);
@@ -3932,6 +3970,16 @@ Json ControlRuntime::dispatch(
               foundation::SequenceSessionId{session_id});
       if (engagement == nullptr) {
         return state_error("Pattern transport session is unavailable");
+      }
+      // A pending Pattern publication that no playing engagement fences is not
+      // yet current; a transport command submitted against it is refused by
+      // the Engine only after the Facade would have durably prepared the
+      // admission, which no retry can reuse once the publication applies.
+      // Refuse retriably until it applies; a playing engagement names the
+      // pending switch in its fence and keeps the designed path.
+      if (impl_->engine.pattern_telemetry().pending_generation != 0 &&
+          !engagement->controller->inspect().playing) {
+        return state_error("a Pattern publication is pending");
       }
       const facade::PatternTransportRequest request{
           *engagement->session,
@@ -4474,6 +4522,11 @@ Json ControlRuntime::dispatch(
         const auto barrier = impl_->transport_shutdown_barrier();
         if (!barrier.has_value()) {
           sequence_failure = barrier.error();
+        } else {
+          // Suspend stops the Engine, which wipes the transport generation
+          // the engagement is bound to; the settled engagement retires here
+          // and re-engages lazily after re-activation.
+          impl_->transport.reset();
         }
       }
       if (impl_->cancel_if_expired()) {

@@ -32,6 +32,13 @@ foundation::CommandId derive_command(
   return foundation::CommandId{value};
 }
 
+// Admission authority/identity validation failures are deterministic: the same
+// retained receipt can never apply on a retry. Anything else (journal IO,
+// internal errors) may be transient and keeps its bounded retry phase.
+bool terminal(const foundation::Error& error) {
+  return error.code == foundation::ErrorCode::invalid_argument;
+}
+
 }  // namespace
 
 PatternTransportCoordinator::PatternTransportCoordinator(
@@ -80,6 +87,12 @@ PatternTransportSubmit PatternTransportCoordinator::request(
   }
   if (request.session != session_ || request.project_id != project_) {
     return PatternTransportSubmit::invalid;
+  }
+  // A deterministic receipt failure poisons the engagement: the unacknowledged
+  // receipt stays retained audio-side, so no later command can succeed. Refuse
+  // honestly (the Host surfaces error_) instead of reporting a transient busy.
+  if (phase_ == PatternTransportPhase::error) {
+    return PatternTransportSubmit::refused;
   }
   if (pending_) {
     return *pending_ == request ? PatternTransportSubmit::replayed
@@ -276,7 +289,8 @@ foundation::Result<void> PatternTransportCoordinator::continue_operation() {
     const auto closed = finish_close();
     if (!closed.has_value()) {
       error_ = closed.error();
-      phase_ = PatternTransportPhase::flushing;
+      phase_ = terminal(closed.error()) ? PatternTransportPhase::error
+                                        : PatternTransportPhase::flushing;
       return closed;
     }
     error_.reset();
@@ -295,8 +309,15 @@ foundation::Result<void> PatternTransportCoordinator::continue_operation() {
   const auto applied = apply_receipt(*receipt, *pending_);
   if (!applied.has_value()) {
     error_ = applied.error();
-    phase_ = close_pending_ ? PatternTransportPhase::flushing
-                            : PatternTransportPhase::awaiting_audio;
+    // A deterministic authority/identity failure (for example a Pattern that
+    // changed behind the engagement) never resolves by re-reading the same
+    // retained receipt; park the engagement in the error phase instead of
+    // looping awaiting_audio forever. Recovery is a Project reopen, where the
+    // owner-loss recovery surface lists the unresolved journal.
+    phase_ = terminal(applied.error())
+                 ? PatternTransportPhase::error
+                 : (close_pending_ ? PatternTransportPhase::flushing
+                                   : PatternTransportPhase::awaiting_audio);
     return applied;
   }
   retained_.insert_or_assign(pending_->command_id, *pending_);

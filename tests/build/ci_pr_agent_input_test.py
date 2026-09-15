@@ -42,6 +42,18 @@ class RealGit:
 
 
 class ProducerTests(unittest.TestCase):
+    GENERATED_CHANGES = {
+        "apps/architecture-portal/versioned_docs/version-1.0.57.0/intro.md": b"snapshot page\n",
+        "apps/architecture-portal/versioned_metadata/version-1.0.57.0.json": b"{}\n",
+        "apps/architecture-portal/versioned_sidebars/version-1.0.57.0-sidebars.json": b"{}\n",
+        "apps/architecture-portal/versioned_provenance/version-1.0.57.0.json": b"{}\n",
+        "apps/architecture-portal/static/versions/1.0.57.0/manifest.json": b"{}\n",
+        "products/lmdj/generated/web-runtime-identity.mjs": b"export {};\n",
+        "products/lmdj/src/compiled_assembly.cpp": b"// rendered assembly\n",
+        "products/lmdj/src/cardputer_assembly.cpp": b"// rendered assembly\n",
+        "products/lmdj/assembly.lock.json": b"{}\n",
+    }
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="lmdj-pr-agent-input-test-")
         self.addCleanup(self.temp.cleanup)
@@ -146,7 +158,18 @@ class ProducerTests(unittest.TestCase):
             self.assertIn("--diff-algorithm=myers", command)
             self.assertIn("--src-prefix=a/", command)
             self.assertIn("--dst-prefix=b/", command)
-            self.assertEqual(command[-1], "--")
+            if "--name-status" in command or "--raw" in command:
+                self.assertEqual(command[-1], "--")
+            else:
+                # The complete diff excludes tool-generated artifacts by
+                # pathspec so their bytes never enter the review input.
+                separator = command.index("--")
+                self.assertEqual(command[separator + 1], ".")
+                self.assertEqual(
+                    command[separator + 2:],
+                    [f":(exclude){path}" for path in
+                     producer.GENERATED_DIRECTORY_PREFIXES + producer.GENERATED_FILES],
+                )
 
         expected = self.git.run(
             "--no-pager", "-c", "core.quotePath=false", "diff", "--find-renames=50%", "--no-ext-diff",
@@ -554,6 +577,84 @@ class ProducerTests(unittest.TestCase):
         failure = self.assert_failure(base, head, "MAX_FILES")
         self.assertEqual(len(failure["inventory"]), adapter.MAX_FILES + 1)
         self.assertEqual({path for item in failure["inventory"] for path in item["paths"]}, set(files))
+        self.assertTrue(all("generated" in reason["reason"] for reason in failure["reasons"]))
+
+    def test_generated_artifacts_are_excluded_from_limits_but_recorded(self):
+        base = self.commit_files({"base.txt": b"base\n"}, "base")
+        reviewable = {
+            f"file-{index:02d}.txt": f"{index}\n".encode() for index in range(adapter.MAX_FILES - 1)
+        }
+        # A one-line append to versions.json stays reviewable; only the frozen
+        # snapshot directories under it are generated artifacts.  Together the
+        # reviewable set sits exactly at MAX_FILES.
+        reviewable["apps/architecture-portal/versions.json"] = b'["1.0.57.0"]\n'
+        self.commit_files({**reviewable, **self.GENERATED_CHANGES}, "build allocation")
+        head = self.git.text("rev-parse", "HEAD")
+        document = self.build(base, head)
+        self.assertEqual(len(document["files"]), adapter.MAX_FILES)
+        self.assertEqual(
+            {file["path"] for file in document["files"]},
+            set(reviewable),
+        )
+        excluded = document["excluded_generated"]
+        self.assertEqual(excluded["count"], len(self.GENERATED_CHANGES))
+        self.assertEqual(excluded["paths"], sorted(self.GENERATED_CHANGES))
+        for path in self.GENERATED_CHANGES:
+            self.assertNotIn(path, document["diff"]["text"])
+        self.assertNotIn("rendered assembly", document["diff"]["text"])
+        authenticated = adapter.authenticate_input(document)
+        self.assertEqual(len(authenticated["files"]), adapter.MAX_FILES)
+
+    def test_all_generated_inventory_is_refused_with_explicit_reason(self):
+        base = self.commit_files({"base.txt": b"base\n"}, "base")
+        self.commit_files(self.GENERATED_CHANGES, "snapshot only")
+        head = self.git.text("rev-parse", "HEAD")
+        failure = self.assert_failure(base, head, "only excluded generated artifacts")
+        self.assertEqual(
+            {path for item in failure["inventory"] for path in item["paths"]},
+            set(self.GENERATED_CHANGES),
+        )
+
+    def test_generated_prefix_lookalike_paths_stay_reviewable(self):
+        # Every generated directory prefix ends in "/", so prefix matching is
+        # boundary-safe; pin that lookalike paths are never excluded.
+        base = self.commit_files({"base.txt": b"base\n"}, "base")
+        lookalikes = {
+            "apps/architecture-portal/versioned_docs-notes.md": b"notes\n",
+            "products/lmdj/generated-notes.md": b"notes\n",
+            "products/lmdj/src/compiled_assembly.cpp.bak": b"backup\n",
+        }
+        generated = {"products/lmdj/generated/web-runtime-identity.mjs": b"export {};\n"}
+        self.commit_files({**lookalikes, **generated}, "lookalikes")
+        head = self.git.text("rev-parse", "HEAD")
+        document = self.build(base, head)
+        self.assertEqual({file["path"] for file in document["files"]}, set(lookalikes))
+        for path in lookalikes:
+            self.assertIn(path, document["diff"]["text"])
+        self.assertEqual(document["excluded_generated"]["paths"], sorted(generated))
+
+    def test_generated_boundary_crossing_rename_is_named_and_refused(self):
+        base = self.commit_files({"products/lmdj/generated/old-identity.mjs": b"export {};\n"}, "base")
+        (self.repo / "products/lmdj/identity.mjs").write_bytes(b"export {};\n")
+        (self.repo / "products/lmdj/generated/old-identity.mjs").unlink()
+        self.git.run("add", "-A")
+        head = self.git.commit("crossing rename")
+        failure = self.assert_failure(base, head, "crosses the generated-artifact boundary")
+        self.assertEqual(
+            {path for item in failure["inventory"] for path in item["paths"]},
+            {"products/lmdj/generated/old-identity.mjs", "products/lmdj/identity.mjs"},
+        )
+
+    def test_reviewable_rename_is_not_a_boundary_crossing(self):
+        base = self.commit_files({"old-name.txt": b"same\n"}, "base")
+        (self.repo / "new-name.txt").write_bytes(b"same\n")
+        (self.repo / "old-name.txt").unlink()
+        self.git.run("add", "-A")
+        head = self.git.commit("plain rename")
+        document = self.build(base, head)
+        self.assertEqual(document["files"][0]["change_kind"], "renamed")
+        self.assertEqual(document["files"][0]["path"], "new-name.txt")
+        self.assertNotIn("excluded_generated", document)
 
     def test_object_type_and_size_are_checked_before_blob_read(self):
         base = self.commit_files({"blob.txt": b"blob\n"}, "base")

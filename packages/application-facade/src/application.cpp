@@ -2434,6 +2434,43 @@ struct Application::Impl {
                {"session_id", found->second.session_id.value()},
                {"remedy", "stop the active Sequence session before retrying"}}));
     }
+    // A Facade-vended transport controller's journal is Facade-owned and
+    // live; without this registration the reconciliation below would
+    // misclassify it as owner loss and seal it out from under the recording.
+    // Sample-class mutations keep their legacy busy guard instead: rejected
+    // while the transport journal is open, admitted once it settles.
+    // Lock order is sequence_mutex before the registry mutex; the registry
+    // lock never spans journal IO, and the controller-destruction callback
+    // takes only the registry mutex.
+    std::set<foundation::SequenceSessionId> transport_owners;
+    {
+      std::lock_guard registry_lock(transport_sessions->mutex);
+      const auto registered =
+          transport_sessions->sessions.find(sequence_key(path));
+      if (registered != transport_sessions->sessions.end()) {
+        transport_owners = registered->second;
+      }
+    }
+    if (!transport_owners.empty()) {
+      auto active = sequence_journals.read_active(path);
+      if (!active.has_value() &&
+          active.error().code != ErrorCode::not_found) {
+        return foundation::Result<SequenceAuthoringAdmission>::failure(
+            active.error());
+      }
+      if (active.has_value() &&
+          transport_owners.contains(active.value().session_id)) {
+        return foundation::Result<SequenceAuthoringAdmission>::failure(
+            sequence_error(
+                ErrorCode::invalid_argument,
+                "Project mutation is blocked by the active Pattern transport "
+                "session",
+                {{"reason", "sequence_session_active"},
+                 {"session_id", active.value().session_id.value()},
+                 {"remedy",
+                  "stop the Pattern transport recording before retrying"}}));
+      }
+    }
     const auto performance = performance_sessions.find(sequence_key(path));
     if (performance != performance_sessions.end()) {
       return foundation::Result<SequenceAuthoringAdmission>::failure(
@@ -2564,6 +2601,39 @@ struct Application::Impl {
               "a Sequence session is already active for this Project",
               {{"reason", "sequence_session_active"},
                {"session_id", existing->second.session_id.value()}}));
+    }
+    // A Facade-vended transport engagement with an open journal owns Sequence
+    // authoring for the Project; a direct legacy begin would create a second
+    // journal owner. Registration alone (an idle or settled controller) does
+    // not block: with no open transport journal there is one owner at a time.
+    std::set<foundation::SequenceSessionId> transport_owners;
+    {
+      std::lock_guard registry_lock(transport_sessions->mutex);
+      const auto registered = transport_sessions->sessions.find(key);
+      if (registered != transport_sessions->sessions.end()) {
+        transport_owners = registered->second;
+      }
+    }
+    if (!transport_owners.empty()) {
+      auto active = sequence_journals.read_active(request.project_path);
+      if (!active.has_value() &&
+          active.error().code != ErrorCode::not_found) {
+        return foundation::Result<SequenceMutationResult>::failure(
+            active.error());
+      }
+      if (active.has_value() &&
+          transport_owners.contains(active.value().session_id)) {
+        return foundation::Result<SequenceMutationResult>::failure(
+            sequence_error(
+                ErrorCode::invalid_argument,
+                "Pattern transport session owns Sequence authoring for this "
+                "Project",
+                {{"reason", "sequence_session_active"},
+                 {"session_id", active.value().session_id.value()},
+                 {"remedy",
+                  "destroy the transport controller (Project replacement or "
+                  "Host close) before legacy Sequence authoring"}}));
+      }
     }
     auto lease = acquire_project_writer(request.project_path);
     if (!lease.has_value()) {
@@ -3236,11 +3306,45 @@ struct Application::Impl {
   }
 
   foundation::Result<std::vector<SequenceRecoveryInfo>>
-  list_sequence_recovery(const SequenceStatusRequest& request) const {
+  list_sequence_recovery(const SequenceStatusRequest& request) {
     if (!valid_host_project_path(request.project_path)) {
       return foundation::Result<std::vector<SequenceRecoveryInfo>>::failure(
           sequence_error(ErrorCode::invalid_argument,
                          "Sequence recovery path is invalid"));
+    }
+    std::lock_guard lock(sequence_mutex);
+    // Reopen surface: an unresolved transport admission whose owner is gone
+    // (controller destroyed without settlement, Host crash) is sealed as
+    // owner loss here so the recovery listing can offer it. A journal with a
+    // live legacy session or live vended controller is never sealed by a
+    // listing. Legacy journals carry no admission and keep their existing
+    // reconcile timing. A completed-but-not-removed admission journal (owner
+    // died between completion and removal) is reconciled to removal the same
+    // way. Sealing requires the bundle writer lease, so a journal owned by a
+    // live other process fails the seal with project_busy instead of being
+    // misclassified.
+    const auto active = sequence_journals.read_active(request.project_path);
+    if (!active.has_value() && active.error().code != ErrorCode::not_found) {
+      return foundation::Result<std::vector<SequenceRecoveryInfo>>::failure(
+          active.error());
+    }
+    if (active.has_value() && active.value().admission.has_value()) {
+      const auto key = sequence_key(request.project_path);
+      bool live = sequence_sessions.contains(key);
+      if (!live) {
+        std::lock_guard registry_lock(transport_sessions->mutex);
+        const auto registered = transport_sessions->sessions.find(key);
+        live = registered != transport_sessions->sessions.end() &&
+               registered->second.contains(active.value().session_id);
+      }
+      if (!live) {
+        // A reconcile failure (for example the bundle writer lease is held by
+        // a live external owner) means only "not sealable now": the listing
+        // still returns the sealed candidates it already had, and the next
+        // listing retries the seal.
+        static_cast<void>(
+            projects.reconcile_sequence_recovery(request.project_path));
+      }
     }
     const auto listed = sequence_journals.list_recoverable(
         request.project_path);
@@ -3688,7 +3792,7 @@ struct Application::Impl {
   }
 
   nlohmann::json sequence_recovery_list(
-      const nlohmann::json& request) const {
+      const nlohmann::json& request) {
     require(exact_keys(request, {"operation", "project_path"}),
             "sequence.recovery.list request shape is invalid");
     const auto result = list_sequence_recovery(SequenceStatusRequest{
@@ -8930,6 +9034,19 @@ struct Application::Impl {
   mutable std::mutex replay_mutex;
   mutable std::mutex sequence_mutex;
   std::map<std::string, SequenceRuntime> sequence_sessions;
+  // Live Facade-vended Pattern transport controllers by Project path. The
+  // registration makes their Facade-owned journals known owners for authoring
+  // admission and owner-loss reconciliation; an entry retires only at its
+  // controller's destruction, never at journal closure. Shared ownership lets
+  // a controller destroyed after its Application stop cleanly, and the
+  // per-Project set keeps a second vended controller's registration intact
+  // when the first is destroyed.
+  struct TransportSessionRegistry {
+    std::mutex mutex;
+    std::map<std::string, std::set<foundation::SequenceSessionId>> sessions;
+  };
+  std::shared_ptr<TransportSessionRegistry> transport_sessions =
+      std::make_shared<TransportSessionRegistry>();
   std::map<std::string, PerformanceRuntime> performance_sessions;
   std::map<std::string, ReplayIdentity> replay_identities;
   std::map<std::string, ReplayStopReceipt> replay_stop_receipts;
@@ -9114,8 +9231,36 @@ Application::acquire_project_writer(
 std::unique_ptr<PatternTransportController>
 Application::make_pattern_transport_controller(
     PatternTransportAudioPort& audio, PatternTransportControllerConfig config) {
-  return detail::PatternTransportControllerInternalFactory::make(
-      audio, std::move(config), impl_->storage_platform);
+  const auto key = config.bundle.generic_string();
+  const auto session = config.session;
+  const auto registry = impl_->transport_sessions;
+  // Register only after successful construction: a throwing factory leaves no
+  // stale owner registration behind.
+  auto controller = detail::PatternTransportControllerInternalFactory::make(
+      audio,
+      std::move(config),
+      impl_->storage_platform,
+      // The registry is shared state, so a controller destroyed after its
+      // Application observes an expired weak reference and stops cleanly
+      // instead of dereferencing a freed Impl.
+      [weak = std::weak_ptr<Impl::TransportSessionRegistry>(registry),
+       key, session]() {
+        const auto locked = weak.lock();
+        if (!locked) {
+          return;
+        }
+        std::lock_guard guard(locked->mutex);
+        const auto found = locked->sessions.find(key);
+        if (found != locked->sessions.end() && found->second.erase(session) != 0 &&
+            found->second.empty()) {
+          locked->sessions.erase(found);
+        }
+      });
+  {
+    std::lock_guard lock(registry->mutex);
+    registry->sessions[key].insert(session);
+  }
+  return controller;
 }
 
 foundation::Result<domain::ProjectState>

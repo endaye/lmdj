@@ -47,23 +47,16 @@ const SUMMARY_KEYS = [
 // `project_bundle_reader.test.mjs` can bind them to the Contract document
 // rather than to a list a test author retyped.
 export const BUNDLE_CONTRACT = "lmdj.project-bundle.v1";
-// Widening the Project Contract enum is an additive Contract MINOR, so a
-// `1.2.0` reader accepts every `1.0.0` and `1.1.0` index unchanged. This
+// Bundles carry no backward compatibility during active development: readers
+// accept exactly the current envelope
+// (docs/prd/decisions/2026-09-15-project-bundle-current-level-only.md). This
 // mirrors `project_bundle.READABLE_CONTRACT_VERSIONS`.
 export const READABLE_CONTRACT_VERSIONS = Object.freeze([
-  "1.0.0",
-  "1.1.0",
-  "1.2.0",
-  "1.3.0",
+  "2.0.0",
 ]);
-// Every Project Contract level a Bundle may name. This must stay equal to the
-// Contract's `project_contract` enum; the Build writes the current Project Contract and
-// the older levels remain readable migration inputs.
+// The single Project Contract level a Bundle may name: the level the writer
+// produces. This must stay equal to the Contract's `project_contract` enum.
 export const READABLE_PROJECT_CONTRACTS = Object.freeze([
-  "lmdj.project.v1",
-  "lmdj.project.v2",
-  "lmdj.project.v3",
-  "lmdj.project.v4",
   "lmdj.project.v5",
 ]);
 

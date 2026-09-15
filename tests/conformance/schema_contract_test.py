@@ -11,11 +11,7 @@ contract_root = repo_root / "contracts"
 
 schema_paths = {
     "slice_points": contract_root / "slice-points" / "lmdj.slice-points.v1.schema.json",
-    "project": contract_root / "project" / "lmdj.project.v1.schema.json",
-    "project_v2": contract_root / "project" / "lmdj.project.v2.schema.json",
-    "project_v3": contract_root / "project" / "lmdj.project.v3.schema.json",
     "project_v5": contract_root / "project" / "lmdj.project.v5.schema.json",
-    "project_v4": contract_root / "project" / "lmdj.project.v4.schema.json",
     "project_bundle": (
         contract_root / "project" / "lmdj.project-bundle.v1.schema.json"
     ),
@@ -69,24 +65,10 @@ schemas = {name: load_json(path) for name, path in schema_paths.items()}
 contract_versions = {
     name: (
         "5.0.0" if name == "project_v5" else
-        "1.3.0"
-        if name == "project_bundle"
+        "2.0.0"
+        if name in {"project_bundle", "assembly", "capability_v2"}
         else (
-        "1.1.0"
-        if name in {"error", "soundset"}
-        else (
-            "4.1.0"
-            if name == "project_v4"
-            else (
-                "3.0.0"
-                if name == "project_v3"
-                else (
-                    "2.0.0"
-                    if name in {"assembly", "capability_v2", "project_v2"}
-                    else "1.0.0"
-                )
-            )
-        )
+            "1.1.0" if name in {"error", "soundset"} else "1.0.0"
         )
     )
     for name in schemas
@@ -98,94 +80,10 @@ for name, schema in schemas.items():
     assert schema["additionalProperties"] is False
     assert schema["$id"].endswith(schema_paths[name].name)
 
-project = schemas["project"]
-assert set(project["required"]) == {
-    "contract",
-    "project_id",
-    "revision",
-    "bpm",
-    "banks",
-    "assets",
-    "takes",
-    "patterns",
-}
-assert project["properties"]["contract"]["const"] == "lmdj.project.v1"
-assert project["properties"]["revision"]["minimum"] == 0
-assert project["properties"]["bpm"] == {
-    "type": "integer",
-    "minimum": 40,
-    "maximum": 240,
-}
-
-banks = project["properties"]["banks"]
-assert banks["minItems"] == 4
-assert banks["maxItems"] == 4
-assert contained_constants(banks["allOf"], "bank") == set(range(4))
-
-bank = project["$defs"]["bank"]
-pads = bank["properties"]["pads"]
-assert pads["minItems"] == 16
-assert pads["maxItems"] == 16
-assert contained_constants(pads["allOf"], "pad") == set(range(16))
-
-for collection in ("assets", "takes", "patterns"):
-    collection_schema = project["properties"][collection]
-    assert collection_schema["type"] == "object"
-    assert collection_schema["propertyNames"]["$ref"] == "#/$defs/uuid"
-
-event = project["$defs"]["pattern_event"]
-assert set(event["required"]) == {"slot", "step", "velocity"}
-assert event["additionalProperties"] is False
-assert "asset_id" not in event["properties"]
-slot = project["$defs"]["slot"]
-assert set(slot["required"]) == {"bank", "pad"}
-assert slot["additionalProperties"] is False
-assert slot["properties"]["bank"]["minimum"] == 0
-assert slot["properties"]["bank"]["maximum"] == 3
-assert slot["properties"]["pad"]["minimum"] == 0
-assert slot["properties"]["pad"]["maximum"] == 15
-
-project_v2 = schemas["project_v2"]
-assert set(project_v2["required"]) == set(project["required"])
-assert project_v2["properties"]["contract"]["const"] == "lmdj.project.v2"
-assert project_v2["properties"]["bpm"] == project["properties"]["bpm"]
-
-pad_v2 = project_v2["$defs"]["pad"]
-assert set(pad_v2["required"]) == {"pad", "asset_id", "playback"}
-assert set(pad_v2["properties"]) == {"pad", "asset_id", "playback"}
-assert pad_v2["additionalProperties"] is False
-assert pad_v2["properties"]["playback"]["$ref"] == "#/$defs/playback"
-
-playback = project_v2["$defs"]["playback"]
-assert set(playback["required"]) == {
-    "trim_start_frame",
-    "trim_end_frame",
-    "trigger_mode",
-    "gain_millidb",
-    "muted",
-}
-assert set(playback["properties"]) == set(playback["required"])
-assert playback["additionalProperties"] is False
-assert playback["properties"]["trim_start_frame"] == {
-    "type": "integer",
-    "minimum": 0,
-}
-assert playback["properties"]["trim_end_frame"] == {
-    "type": ["integer", "null"],
-    "minimum": 1,
-}
-assert playback["properties"]["trigger_mode"] == {
-    "enum": ["one_shot", "gate", "loop_gate", "loop_toggle"]
-}
-assert playback["properties"]["gain_millidb"] == {
-    "type": "integer",
-    "minimum": -60000,
-    "maximum": 6000,
-}
-assert playback["properties"]["muted"] == {"type": "boolean"}
-
-project_v3 = schemas["project_v3"]
-assert set(project_v3["required"]) == {
+# The retired v1-v4 Project schemas pinned these shared rules through
+# cross-level chains; with only v5 shipped, pin them on v5 directly.
+project_v5 = schemas["project_v5"]
+assert set(project_v5["required"]) == {
     "contract",
     "project_id",
     "revision",
@@ -194,35 +92,67 @@ assert set(project_v3["required"]) == {
     "banks",
     "assets",
     "patterns",
+    "pattern_slots",
+    "performances",
 }
-assert project_v3["properties"]["contract"]["const"] == "lmdj.project.v3"
-assert project_v3["properties"]["bpm"] == project["properties"]["bpm"]
-assert project_v3["properties"]["assets"]["type"] == "array"
-assert project_v3["properties"]["patterns"]["type"] == "array"
-assert "takes" not in project_v3["properties"]
-settings_v3 = project_v3["$defs"]["sequence_settings"]
-assert settings_v3["properties"]["quantize_enabled"] == {"type": "boolean"}
-assert settings_v3["properties"]["swing_percent"] == {
+assert project_v5["properties"]["contract"]["const"] == "lmdj.project.v5"
+assert project_v5["properties"]["revision"]["minimum"] == 0
+assert project_v5["properties"]["bpm"] == {
+    "type": "integer",
+    "minimum": 40,
+    "maximum": 240,
+}
+
+banks = project_v5["properties"]["banks"]
+assert banks["minItems"] == 4
+assert banks["maxItems"] == 4
+assert contained_constants(banks["allOf"], "bank") == set(range(4))
+
+bank = project_v5["$defs"]["bank"]
+pads = bank["properties"]["pads"]
+assert pads["minItems"] == 16
+assert pads["maxItems"] == 16
+assert pads["uniqueItems"] is True
+pad_v5 = project_v5["$defs"]["pad"]
+assert pad_v5["properties"]["pad"] == {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 15,
+}
+assert pad_v5["properties"]["playback"]["$ref"] == "#/$defs/playback"
+assert pad_v5["additionalProperties"] is False
+
+settings_v5 = project_v5["$defs"]["sequence_settings"]
+assert settings_v5["properties"]["quantize_enabled"] == {"type": "boolean"}
+assert settings_v5["properties"]["swing_percent"] == {
     "type": "integer",
     "minimum": 50,
     "maximum": 75,
 }
-event_v3 = project_v3["$defs"]["pattern_event"]
-assert set(event_v3["required"]) == {
+event_v5 = project_v5["$defs"]["pattern_event"]
+assert set(event_v5["required"]) == {
     "slot",
     "onset_tick",
     "duration_tick",
     "velocity",
 }
-assert "step" not in event_v3["properties"]
-assert event_v3["properties"]["duration_tick"]["minimum"] == 1
-assert event_v3["properties"]["velocity"] == {
+assert "step" not in event_v5["properties"]
+assert "asset_id" not in event_v5["properties"]
+assert event_v5["properties"]["duration_tick"]["minimum"] == 1
+assert event_v5["properties"]["velocity"] == {
     "type": "integer",
     "minimum": 1,
     "maximum": 127,
 }
+slot = project_v5["$defs"]["slot"]
+assert set(slot["required"]) == {"bank", "pad"}
+assert slot["additionalProperties"] is False
+assert slot["properties"]["bank"]["minimum"] == 0
+assert slot["properties"]["bank"]["maximum"] == 3
+assert slot["properties"]["pad"]["minimum"] == 0
+assert slot["properties"]["pad"]["maximum"] == 15
 tick_limits = {}
-for rule in project_v3["$defs"]["pattern"]["allOf"]:
+for rule in project_v5["$defs"]["pattern"]["allOf"]:
     bars = rule["if"]["properties"]["bars"]["const"]
     event_rules = rule["then"]["properties"]["events"]["items"]["properties"]
     tick_limits[bars] = (
@@ -236,19 +166,7 @@ assert tick_limits == {
     8: (30719, 30720),
 }
 
-project_v4 = schemas["project_v4"]
-assert set(project_v4["required"]) == set(project_v3["required"]) | {
-    "pattern_slots",
-    "performances",
-}, (
-    "why: Project v4 must add the required Pattern slots and Performances; "
-    "remedy: derive the root fields from v3 and add both fields"
-)
-assert project_v4["properties"]["contract"]["const"] == "lmdj.project.v4", (
-    "why: a v4 document must self-identify as lmdj.project.v4; "
-    "remedy: set the v4 contract const"
-)
-assert project_v4["properties"]["performances"] == {
+assert project_v5["properties"]["performances"] == {
     "type": "array",
     "items": {"$ref": "#/$defs/performance"},
     "uniqueItems": True,
@@ -256,7 +174,7 @@ assert project_v4["properties"]["performances"] == {
     "why: Project Truth stores Performances as an identity-bearing collection; "
     "remedy: restore the array of performance definitions"
 )
-assert project_v4["properties"]["pattern_slots"] == {
+assert project_v5["properties"]["pattern_slots"] == {
     "type": "array",
     "minItems": 16,
     "maxItems": 16,
@@ -270,8 +188,8 @@ assert project_v4["properties"]["pattern_slots"] == {
     "why: Project Truth owns exactly 16 ordered nullable Pattern IDs; "
     "remedy: restore the fixed-length nullable UUID array"
 )
-performance_v4 = project_v4["$defs"]["performance"]
-assert set(performance_v4["required"]) == {
+performance_v5 = project_v5["$defs"]["performance"]
+assert set(performance_v5["required"]) == {
     "performance_id",
     "name",
     "created_bpm",
@@ -282,86 +200,33 @@ assert set(performance_v4["required"]) == {
     "why: a Performance must carry stable identity, name, BPM anchor, optional "
     "recording reference, and events; remedy: restore every required field"
 )
-performance_name_v4 = performance_v4["properties"]["name"]
-assert performance_name_v4["type"] == "string"
-assert performance_name_v4["minLength"] == 1
-assert "pattern" in performance_name_v4, (
+performance_name_v5 = performance_v5["properties"]["name"]
+assert performance_name_v5["type"] == "string"
+assert performance_name_v5["minLength"] == 1
+assert "pattern" in performance_name_v5, (
     "why: the repository validator needs an executable Unicode-aware upper "
     "bound for Performance names; remedy: restore the strict one-to-64-code-"
     "point constraint and its boundary behavior below"
 )
-asset_v4 = project_v4["$defs"]["asset"]
-assert set(asset_v4["required"]) == {"asset_id", "artifact", "lineage"}, (
-    "why: every v4 Asset must explicitly declare its optional Lineage; "
-    "remedy: require lineage and encode ordinary assets as null"
-)
-assert asset_v4["properties"]["lineage"] == {
-    "oneOf": [
-        {"$ref": "#/$defs/asset_lineage"},
-        {"type": "null"},
-    ]
-}
-asset_lineage_v4 = project_v4["$defs"]["asset_lineage"]
-assert set(asset_lineage_v4["required"]) == {"source", "derivation"}
-assert asset_lineage_v4["additionalProperties"] is False
-assert asset_lineage_v4["properties"]["source"] == {
-    "oneOf": [
-        {"$ref": "#/$defs/asset_artifact_lineage_source"},
-        {"$ref": "#/$defs/soundset_lineage_source"},
-    ]
+pad_hit_v5 = project_v5["$defs"]["performance_pad_hit_event"]
+assert pad_hit_v5["properties"]["slot"] == {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 63,
 }, (
-    "why: Contract 4.1.0 adds the S11-D9 soundset Lineage source beside the "
-    "existing asset_artifact source on the same Lineage carrier; remedy: keep "
-    "both variants in one closed oneOf and never add a second Lineage field"
+    "why: pad_hit references one of the 64 Pad Slots; "
+    "remedy: restore the global slot range 0 through 63"
 )
-assert asset_lineage_v4["properties"]["derivation"] == {
-    "oneOf": [
-        {"$ref": "#/$defs/resample_lineage_derivation"},
-        {"$ref": "#/$defs/soundset_install_lineage_derivation"},
-    ]
+pattern_launch_v5 = project_v5["$defs"]["performance_pattern_launch_event"]
+assert pattern_launch_v5["properties"]["pattern_slot"] == {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 15,
 }, (
-    "why: an installed Sound Set slot derives through soundset_install, not "
-    "resample; remedy: keep both derivation variants in one closed oneOf"
+    "why: PATTERN_SLOT_MIN/MAX are 0 and 15; "
+    "remedy: restore the Pattern Slot index bounds"
 )
-for lineage_variant in (
-    "asset_artifact_lineage_source",
-    "soundset_lineage_source",
-    "resample_lineage_derivation",
-    "soundset_install_lineage_derivation",
-):
-    variant_schema = project_v4["$defs"][lineage_variant]
-    assert variant_schema["additionalProperties"] is False, (
-        f"why: {lineage_variant} must stay closed so an unknown key fails; "
-        "remedy: restore additionalProperties false"
-    )
-    assert "const" in variant_schema["properties"]["kind"], (
-        f"why: {lineage_variant} is discriminated by a constant kind; "
-        "remedy: restore the const discriminator"
-    )
-    assert "kind" in variant_schema["required"]
-assert project_v4["$defs"]["soundset_lineage_source"]["properties"]["kind"][
-    "const"
-] == "soundset"
-assert set(
-    project_v4["$defs"]["soundset_lineage_source"]["required"]
-) == {
-    "kind",
-    "set_id",
-    "set_version",
-    "manifest_sha256",
-    "slot_index",
-    "artifact_sha256",
-}, (
-    "why: S11-D9 requires every typed soundset source field, not only kind; "
-    "remedy: require all six keys"
-)
-assert project_v4["$defs"]["soundset_install_lineage_derivation"][
-    "properties"
-]["kind"]["const"] == "soundset_install"
-assert set(
-    project_v4["$defs"]["soundset_install_lineage_derivation"]["required"]
-) == {"kind"}
-event_definitions_v4 = [
+event_definitions_v5 = [
     "performance_pad_hit_event",
     "performance_pattern_launch_event",
     "performance_fx_engage_event",
@@ -370,15 +235,15 @@ event_definitions_v4 = [
     "performance_hold_on_event",
     "performance_hold_off_event",
 ]
-assert project_v4["$defs"]["performance_event"]["oneOf"] == [
-    {"$ref": f"#/$defs/{name}"} for name in event_definitions_v4
+assert project_v5["$defs"]["performance_event"]["oneOf"] == [
+    {"$ref": f"#/$defs/{name}"} for name in event_definitions_v5
 ], (
-    "why: the v4 event union and kind ordinals follow the locked vocabulary; "
+    "why: the event union and kind ordinals follow the locked vocabulary; "
     "remedy: restore the seven per-kind references in ordinal order"
 )
 assert [
-    project_v4["$defs"][name]["properties"]["kind"]["const"]
-    for name in event_definitions_v4
+    project_v5["$defs"][name]["properties"]["kind"]["const"]
+    for name in event_definitions_v5
 ] == [
     "pad_hit",
     "pattern_launch",
@@ -391,29 +256,11 @@ assert [
     "why: the Performance kind vocabulary is a cross-language Contract; "
     "remedy: use the approved seven kind strings in ordinal order"
 )
-pad_hit_v4 = project_v4["$defs"]["performance_pad_hit_event"]
-assert pad_hit_v4["properties"]["slot"] == {
-    "type": "integer",
-    "minimum": 0,
-    "maximum": 63,
-}, (
-    "why: pad_hit references one of the 64 Pad Slots; "
-    "remedy: restore the global slot range 0 through 63"
-)
-pattern_launch_v4 = project_v4["$defs"]["performance_pattern_launch_event"]
-assert pattern_launch_v4["properties"]["pattern_slot"] == {
-    "type": "integer",
-    "minimum": 0,
-    "maximum": 15,
-}, (
-    "why: PATTERN_SLOT_MIN/MAX are 0 and 15; "
-    "remedy: restore the Pattern Slot index bounds"
-)
 for fx_event_name in (
     "performance_fx_engage_event",
     "performance_fx_move_event",
 ):
-    assert project_v4["$defs"][fx_event_name]["properties"]["value"] == {
+    assert project_v5["$defs"][fx_event_name]["properties"]["value"] == {
         "type": "integer",
         "minimum": 0,
         "maximum": 1000,
@@ -421,8 +268,8 @@ for fx_event_name in (
         "why: FX_VALUE_MIN/MAX are 0 and 1000; "
         f"remedy: restore the integer value bounds on {fx_event_name}"
     )
-for event_name in event_definitions_v4:
-    event_schema = project_v4["$defs"][event_name]
+for event_name in event_definitions_v5:
+    event_schema = project_v5["$defs"][event_name]
     assert event_schema["additionalProperties"] is False, (
         "why: Performance events must not smuggle Asset, pattern_id, or Bank "
         f"references; remedy: keep additionalProperties false on {event_name}"
@@ -502,47 +349,11 @@ assert candidate_v2["properties"]["outputs"]["items"]["$ref"] == (
 assert candidate_v2["properties"]["outputs"]["uniqueItems"] is True
 
 fixture_root = repo_root / "tests" / "fixtures" / "contracts"
-valid_project_v2 = load_json(fixture_root / "project-v2-valid.json")
-invalid_project_v2 = load_json(
-    fixture_root / "project-v2-invalid-playback.json"
-)
-valid_project_v3 = load_json(fixture_root / "project-v3-valid.json")
-invalid_project_v3 = load_json(
-    fixture_root / "project-v3-invalid-event.json"
-)
-valid_project_v4 = load_json(fixture_root / "project-v4-valid.json")
-invalid_project_v4 = load_json(
-    fixture_root / "project-v4-invalid-event.json"
-)
-invalid_project_v4["pattern_slots"] = valid_project_v4["pattern_slots"]
-invalid_pattern_slots_v4 = load_json(
-    fixture_root / "project-v4-invalid-pattern-slots.json"
-)
-migration_project_v4 = load_json(
-    fixture_root / "project-v3-to-v4-migration.json"
-)
+# Retired-level fixtures survive only as loader checkpoint data; the v4
+# soundset Lineage fixture still feeds the legacy-Lineage v5 checks below.
 valid_soundset_lineage_project_v4 = load_json(
     fixture_root / "project-v4-soundset-lineage-valid.json"
 )
-invalid_soundset_lineage_project_v4 = load_json(
-    fixture_root / "project-v4-soundset-lineage-invalid.json"
-)
-assert valid_project_v2["banks"][0]["pads"][0]["asset_id"] == (
-    valid_project_v2["banks"][0]["pads"][1]["asset_id"]
-)
-assert {
-    pad["playback"]["trigger_mode"]
-    for pad in valid_project_v2["banks"][0]["pads"][:4]
-} == {"one_shot", "gate", "loop_gate", "loop_toggle"}
-assert valid_project_v2["banks"][0]["pads"][0]["playback"][
-    "gain_millidb"
-] == -60000
-assert valid_project_v2["banks"][0]["pads"][1]["playback"][
-    "gain_millidb"
-] == 6000
-assert valid_project_v2["banks"][0]["pads"][0]["playback"][
-    "trim_end_frame"
-] is None
 
 valid_capability_v2 = load_json(
     fixture_root / "capability-v2-valid.json"
@@ -625,14 +436,6 @@ assert set(capability["$defs"]["error_code"]["enum"]) == public_error_codes - {
     "PROJECT_QUOTA_EXHAUSTED",
 }
 
-pattern = project["$defs"]["pattern"]
-step_limits = {}
-for rule in pattern["allOf"]:
-    bars = rule["if"]["properties"]["bars"]["const"]
-    step = rule["then"]["properties"]["events"]["items"]["properties"]["step"]
-    step_limits[bars] = step["maximum"]
-assert step_limits == {1: 15, 2: 31, 4: 63, 8: 127}
-
 project_bundle = schemas["project_bundle"]
 assert set(project_bundle["required"]) == {
     "bundle_digest",
@@ -647,15 +450,12 @@ assert set(project_bundle["required"]) == {
 assert project_bundle["properties"]["contract"]["const"] == (
     "lmdj.project-bundle.v1"
 )
-assert project_bundle["properties"]["contract_version"]["const"] == "1.3.0"
+assert project_bundle["properties"]["contract_version"]["const"] == "2.0.0"
 assert project_bundle["properties"]["compression"]["const"] == "none"
-# S11/#784: every Project Contract level the repository defines must be
-# nameable, or a Project the writer produces cannot be packed at all.
+# During development the Bundle names only the writer's current Project
+# Contract level; older containers and levels are rejected outright.
+# docs/prd/decisions/2026-09-15-project-bundle-current-level-only.md
 assert project_bundle["properties"]["project_contract"]["enum"] == [
-    "lmdj.project.v1",
-    "lmdj.project.v2",
-    "lmdj.project.v3",
-    "lmdj.project.v4",
     "lmdj.project.v5",
 ]
 assert project_bundle["properties"]["entries"]["maxItems"] == 4096
@@ -848,9 +648,6 @@ json_schema.check(
     project_bundle,
     "project-bundle-valid",
 )
-json_schema.check(valid_project_v2, project_v2, "project-v2-valid")
-json_schema.check(valid_project_v3, project_v3, "project-v3-valid")
-json_schema.check(valid_project_v4, project_v4, "project-v4-valid")
 
 valid_soundset = load_json(fixture_root / "soundset-v1-valid.json")
 json_schema.check(valid_soundset, soundset, "soundset-v1-valid")
@@ -953,51 +750,8 @@ json_schema.check(
     soundset,
     "empty CC-BY attribution is eligibility, not Schema",
 )
-json_schema.check(
-    migration_project_v4,
-    project_v4,
-    "project-v3-to-v4-migration output",
-)
-migration_project_v3 = json.loads(json.dumps(migration_project_v4))
-migration_project_v3["contract"] = "lmdj.project.v3"
-del migration_project_v3["performances"]
-del migration_project_v3["pattern_slots"]
-for asset in migration_project_v3["assets"]:
-    del asset["lineage"]
-json_schema.check(
-    migration_project_v3,
-    project_v3,
-    "project-v3-to-v4-migration input",
-)
-for key, value in migration_project_v3.items():
-    if key == "contract":
-        continue
-    if key == "assets":
-        assert len(migration_project_v4[key]) == len(value)
-        for asset_v4, asset_v3 in zip(migration_project_v4[key], value):
-            assert asset_v4 == {**asset_v3, "lineage": None}, (
-                "why: v3-to-v4 migration adds only explicit null Lineage to "
-                "each Asset; remedy: preserve every legacy Asset field"
-            )
-        continue
-    assert migration_project_v4[key] == value, (
-        "why: v3-to-v4 migration must preserve every non-contract field; "
-        f"remedy: restore the byte-identical {key} value in the golden vector"
-    )
-assert migration_project_v4["performances"] == [], (
-    "why: every migrated v3 Project starts with no Performances; "
-    "remedy: restore an empty performances array in the golden vector"
-)
-assert migration_project_v4["pattern_slots"] == [None] * 16, (
-    "why: every migrated v3 Project starts with 16 empty Pattern slots; "
-    "remedy: restore the all-null Pattern slot migration vector"
-)
-v3_with_lineage = json.loads(json.dumps(migration_project_v3))
-v3_with_lineage["assets"][0]["lineage"] = None
-assert json_schema.validate(v3_with_lineage, project_v3), (
-    "why: a v3-declared Asset must not carry v4 Lineage; "
-    "remedy: keep the legacy Asset shape closed"
-)
+# Legacy (retired v4) Lineage shapes stay loadable: the current v5 schema
+# still admits them, exercised by the L3 checks at the end of this file.
 valid_lineage = {
     "source": {
         "kind": "asset_artifact",
@@ -1010,60 +764,6 @@ valid_lineage = {
         "performance_id": "40000000-0000-4000-8000-000000000001",
     },
 }
-json_schema.check(
-    mutated(valid_project_v4, ["assets", 0, "lineage"], valid_lineage),
-    project_v4,
-    "project-v4-valid resample Lineage",
-)
-missing_asset_lineage = json.loads(json.dumps(valid_project_v4))
-del missing_asset_lineage["assets"][0]["lineage"]
-assert json_schema.validate(missing_asset_lineage, project_v4), (
-    "why: every v4 Asset must explicitly encode Lineage or null; "
-    "remedy: keep lineage required"
-)
-for case_name, path, value in (
-    ("missing source", ["source"], None),
-    ("uppercase SHA-256", ["source", "artifact_sha256"], "B" * 64),
-    ("short SHA-256", ["source", "artifact_sha256"], "b" * 63),
-    ("malformed Performance UUID", ["derivation", "performance_id"], "bad"),
-):
-    malformed_lineage = json.loads(json.dumps(valid_lineage))
-    if value is None:
-        del malformed_lineage[path[0]]
-    else:
-        target = malformed_lineage
-        for segment in path[:-1]:
-            target = target[segment]
-        target[path[-1]] = value
-    project_with_lineage = mutated(
-        valid_project_v4,
-        ["assets", 0, "lineage"],
-        malformed_lineage,
-    )
-    assert json_schema.validate(project_with_lineage, project_v4), (
-        f"why: Project v4 must reject {case_name} Lineage; "
-        "remedy: preserve the exact closed Lineage shape"
-    )
-for extra_path in (["source"], ["derivation"], []):
-    extra_lineage = json.loads(json.dumps(valid_lineage))
-    target = extra_lineage
-    for segment in extra_path:
-        target = target[segment]
-    target["unexpected"] = True
-    project_with_lineage = mutated(
-        valid_project_v4,
-        ["assets", 0, "lineage"],
-        extra_lineage,
-    )
-    assert json_schema.validate(project_with_lineage, project_v4), (
-        "why: Lineage objects must reject extra keys; "
-        "remedy: keep every nested object closed"
-    )
-json_schema.check(
-    valid_soundset_lineage_project_v4,
-    project_v4,
-    "project-v4-soundset-lineage-valid",
-)
 assert (
     valid_soundset_lineage_project_v4["assets"][0]["lineage"]["source"]["kind"]
     == "soundset"
@@ -1072,203 +772,6 @@ assert (
     valid_soundset_lineage_project_v4["assets"][0]["lineage"]["derivation"]
     == {"kind": "soundset_install"}
 )
-assert json_schema.validate(
-    invalid_soundset_lineage_project_v4, project_v4
-), (
-    "why: a soundset Lineage source missing manifest_sha256 must fail; "
-    "remedy: keep every typed soundset source field required"
-)
-soundset_lineage = valid_soundset_lineage_project_v4["assets"][0]["lineage"]
-for case_name, path, value in (
-    ("malformed set UUID", ["source", "set_id"], "bad"),
-    ("non-SemVer set version", ["source", "set_version"], "1.2"),
-    ("uppercase manifest SHA-256", ["source", "manifest_sha256"], "C" * 64),
-    ("uppercase artifact SHA-256", ["source", "artifact_sha256"], "A" * 64),
-    ("out-of-range slot index", ["source", "slot_index"], 16),
-    ("negative slot index", ["source", "slot_index"], -1),
-    ("unknown source kind", ["source", "kind"], "soundset_v2"),
-    ("unknown derivation kind", ["derivation", "kind"], "soundset_apply"),
-):
-    malformed_soundset = json.loads(json.dumps(soundset_lineage))
-    target = malformed_soundset
-    for segment in path[:-1]:
-        target = target[segment]
-    target[path[-1]] = value
-    assert json_schema.validate(
-        mutated(
-            valid_project_v4, ["assets", 0, "lineage"], malformed_soundset
-        ),
-        project_v4,
-    ), (
-        f"why: Project v4 must reject {case_name} soundset Lineage; "
-        "remedy: preserve the exact closed soundset Lineage shape"
-    )
-for mixed_name, mixed in (
-    (
-        "soundset source with a resample derivation",
-        {
-            "source": soundset_lineage["source"],
-            "derivation": valid_lineage["derivation"],
-        },
-    ),
-    (
-        "asset_artifact source with a soundset_install derivation",
-        {
-            "source": valid_lineage["source"],
-            "derivation": soundset_lineage["derivation"],
-        },
-    ),
-):
-    json_schema.check(
-        mutated(valid_project_v4, ["assets", 0, "lineage"], mixed),
-        project_v4,
-        f"project-v4-valid {mixed_name}",
-    )
-for case_name, mutator in (
-    (
-        "missing recording revision",
-        lambda project: project["performances"][0].pop("recording_revision"),
-    ),
-    (
-        "negative recording revision",
-        lambda project: project["performances"][0].__setitem__(
-            "recording_revision", -1
-        ),
-    ),
-):
-    malformed_performance = json.loads(json.dumps(valid_project_v4))
-    mutator(malformed_performance)
-    assert json_schema.validate(malformed_performance, project_v4), (
-        f"why: Project v4 must reject {case_name}; "
-        "remedy: require a non-negative recording revision"
-    )
-v3_with_pattern_slots = json.loads(json.dumps(migration_project_v3))
-v3_with_pattern_slots["pattern_slots"] = [None] * 16
-assert json_schema.validate(v3_with_pattern_slots, project_v3), (
-    "why: a v3-declared Project must not carry pre-existing Pattern slots; "
-    "remedy: keep v3 additionalProperties closed"
-)
-for case_name in ("wrong_length", "invalid_pattern_id"):
-    malformed_slots = mutated(
-        valid_project_v4,
-        ["pattern_slots"],
-        invalid_pattern_slots_v4[case_name],
-    )
-    assert json_schema.validate(malformed_slots, project_v4), (
-        f"why: Project v4 must reject {case_name} Pattern slots; "
-        "remedy: restore the exact 16-item nullable UUID schema"
-    )
-invalid_project_v4_violations = json_schema.validate(
-    invalid_project_v4, project_v4
-)
-assert any(
-    "expected exactly one oneOf branch to match, matched 0" in violation
-    for violation in invalid_project_v4_violations
-), (
-    "why: Performance pattern_launch events reference slots, never pattern_id; "
-    "remedy: retain per-event additionalProperties false"
-)
-overlong_performance_name = mutated(
-    valid_project_v4,
-    ["performances", 0, "name"],
-    "x" * 65,
-)
-assert any(
-    "does not match pattern" in violation
-    for violation in json_schema.validate(overlong_performance_name, project_v4)
-), (
-    "why: Performance names beyond PERFORMANCE_NAME_MAX must be rejected; "
-    "remedy: restore the 64-code-point name pattern"
-)
-for case_name, accepted_name, rejected_name in (
-    ("LF boundary", "x" * 63 + "\n", "x" * 64 + "\n"),
-    ("CRLF boundary", "x" * 62 + "\r\n", "x" * 63 + "\r\n"),
-):
-    assert len(accepted_name) == 64
-    assert len(rejected_name) == 65
-    json_schema.check(
-        mutated(
-            valid_project_v4,
-            ["performances", 0, "name"],
-            accepted_name,
-        ),
-        project_v4,
-        f"project-v4 64-code-point {case_name} Performance name",
-    )
-    violations = json_schema.validate(
-        mutated(
-            valid_project_v4,
-            ["performances", 0, "name"],
-            rejected_name,
-        ),
-        project_v4,
-    )
-    assert violations, (
-        f"why: 65-code-point {case_name} exceeds PERFORMANCE_NAME_MAX even "
-        "when it ends in line terminators; remedy: use a strict end-of-input "
-        "1-to-64-code-point constraint"
-    )
-
-non_bmp_code_point = "\U0001F39B"
-non_bmp_name_64 = non_bmp_code_point * 64
-non_bmp_name_65 = non_bmp_code_point * 65
-assert len(non_bmp_name_64) == 64
-assert len(non_bmp_name_65) == 65
-json_schema.check(
-    mutated(
-        valid_project_v4,
-        ["performances", 0, "name"],
-        non_bmp_name_64,
-    ),
-    project_v4,
-    "project-v4 64-code-point non-BMP Performance name",
-)
-assert json_schema.validate(
-    mutated(
-        valid_project_v4,
-        ["performances", 0, "name"],
-        non_bmp_name_65,
-    ),
-    project_v4,
-), (
-    "why: PERFORMANCE_NAME_MAX counts Unicode code points, not UTF-8 bytes; "
-    "remedy: reject a 65-code-point non-BMP name while accepting 64"
-)
-invalid_project_v3_violations = json_schema.validate(
-    invalid_project_v3, project_v3
-)
-assert any(
-    "duration_tick: above maximum 3840" in violation
-    for violation in invalid_project_v3_violations
-), invalid_project_v3_violations
-assert any(
-    "velocity: above maximum 127" in violation
-    for violation in invalid_project_v3_violations
-), invalid_project_v3_violations
-invalid_event_v3 = invalid_project_v3["patterns"][0]["events"][0]
-assert invalid_event_v3["duration_tick"] > (
-    invalid_project_v3["patterns"][0]["bars"] * 3840
-    - invalid_event_v3["onset_tick"]
-)
-invalid_project_v2_violations = json_schema.validate(
-    invalid_project_v2, project_v2
-)
-assert any(
-    "#/banks/0/pads/0/playback/gain_millidb: above maximum 6000" in violation
-    for violation in invalid_project_v2_violations
-), invalid_project_v2_violations
-for unknown_target in (
-    mutated(valid_project_v2, ["banks", 0, "pads", 0, "compat"], True),
-    mutated(
-        valid_project_v2,
-        ["banks", 0, "pads", 0, "playback", "compat"],
-        True,
-    ),
-):
-    violations = json_schema.validate(unknown_target, project_v2)
-    assert any(
-        "'compat' is not allowed" in violation for violation in violations
-    ), violations
 assert json_schema.validate(
     load_json(fixture_root / "project-bundle-invalid-traversal.json"),
     project_bundle,
@@ -1538,7 +1041,6 @@ print(
 )
 
 # L3: the successor schema admits only the approved closed Slice evidence.
-project_v5 = schemas["project_v5"]
 valid_project_v5 = load_json(repo_root / "tests/fixtures/contracts/project-v5-valid.json")
 json_schema.check(valid_project_v5, project_v5, "project-v5-valid")
 lineage_v5 = valid_project_v5["assets"][0]["lineage"]
@@ -1577,7 +1079,10 @@ for path, bad in [
     changed = mutated(valid_project_v5, ["assets", 0, "lineage"] + path, bad)
     assert json_schema.validate(changed, project_v5), path
 old = dict(valid_project_v5, contract="lmdj.project.v4")
-assert json_schema.validate(old, project_v4)
+assert json_schema.validate(old, project_v5), (
+    "why: a Project labeled with a retired level is not a current document; "
+    "remedy: keep the v5 contract const exact"
+)
 for old_lineage in (valid_lineage, valid_soundset_lineage_project_v4["assets"][0]["lineage"]):
     migrated = mutated(valid_project_v5, ["assets", 0, "lineage"], old_lineage)
     json_schema.check(migrated, project_v5, "legacy-lineage-v5")
@@ -1587,3 +1092,114 @@ json_schema.check(modeled, project_v5, "model-lineage-v5")
 opaque_attempt = mutated(valid_project_v5,
     ["assets", 0, "lineage", "derivation", "attempt_id"], "slice-job.attempt_1")
 json_schema.check(opaque_attempt, project_v5, "sdk-attempt-id-lineage-v5")
+
+# Executable boundaries the retired v4 sections pinned, re-based on v5.
+for case_name, mutator in (
+    (
+        "missing recording revision",
+        lambda project: project["performances"][0].pop("recording_revision"),
+    ),
+    (
+        "negative recording revision",
+        lambda project: project["performances"][0].__setitem__(
+            "recording_revision", -1
+        ),
+    ),
+):
+    malformed_performance = json.loads(json.dumps(valid_project_v5))
+    mutator(malformed_performance)
+    assert json_schema.validate(malformed_performance, project_v5), (
+        f"why: Project v5 must reject {case_name}; "
+        "remedy: require a non-negative recording revision"
+    )
+for case_name, bad_slots in (
+    ("wrong_length", [None] * 15),
+    ("invalid_pattern_id", ["not-a-pattern-id"] + [None] * 15),
+):
+    assert json_schema.validate(
+        mutated(valid_project_v5, ["pattern_slots"], bad_slots),
+        project_v5,
+    ), (
+        f"why: Project v5 must reject {case_name} Pattern slots; "
+        "remedy: restore the exact 16-item nullable UUID schema"
+    )
+smuggled_launch = json.loads(json.dumps(valid_project_v5))
+launch_event = next(
+    event
+    for event in smuggled_launch["performances"][0]["events"]
+    if event["kind"] == "pattern_launch"
+)
+launch_event["pattern_id"] = "30000000-0000-4000-8000-000000000001"
+assert any(
+    "expected exactly one oneOf branch to match, matched 0" in violation
+    for violation in json_schema.validate(smuggled_launch, project_v5)
+), (
+    "why: Performance pattern_launch events reference slots, never pattern_id; "
+    "remedy: retain per-event additionalProperties false"
+)
+overlong_performance_name = mutated(
+    valid_project_v5,
+    ["performances", 0, "name"],
+    "x" * 65,
+)
+assert any(
+    "does not match pattern" in violation
+    for violation in json_schema.validate(overlong_performance_name, project_v5)
+), (
+    "why: Performance names beyond PERFORMANCE_NAME_MAX must be rejected; "
+    "remedy: restore the 64-code-point name pattern"
+)
+for case_name, accepted_name, rejected_name in (
+    ("LF boundary", "x" * 63 + "\n", "x" * 64 + "\n"),
+    ("CRLF boundary", "x" * 62 + "\r\n", "x" * 63 + "\r\n"),
+):
+    assert len(accepted_name) == 64
+    assert len(rejected_name) == 65
+    json_schema.check(
+        mutated(
+            valid_project_v5,
+            ["performances", 0, "name"],
+            accepted_name,
+        ),
+        project_v5,
+        f"project-v5 64-code-point {case_name} Performance name",
+    )
+    violations = json_schema.validate(
+        mutated(
+            valid_project_v5,
+            ["performances", 0, "name"],
+            rejected_name,
+        ),
+        project_v5,
+    )
+    assert violations, (
+        f"why: 65-code-point {case_name} exceeds PERFORMANCE_NAME_MAX even "
+        "when it ends in line terminators; remedy: use a strict end-of-input "
+        "1-to-64-code-point constraint"
+    )
+
+non_bmp_code_point = "\U0001F39B"
+non_bmp_name_64 = non_bmp_code_point * 64
+non_bmp_name_65 = non_bmp_code_point * 65
+assert len(non_bmp_name_64) == 64
+assert len(non_bmp_name_65) == 65
+json_schema.check(
+    mutated(
+        valid_project_v5,
+        ["performances", 0, "name"],
+        non_bmp_name_64,
+    ),
+    project_v5,
+    "project-v5 64-code-point non-BMP Performance name",
+)
+assert json_schema.validate(
+    mutated(
+        valid_project_v5,
+        ["performances", 0, "name"],
+        non_bmp_name_65,
+    ),
+    project_v5,
+), (
+    "why: PERFORMANCE_NAME_MAX counts Unicode code points, not UTF-8 bytes; "
+    "remedy: reject a 65-code-point non-BMP name while accepting 64"
+)

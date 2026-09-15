@@ -76,6 +76,26 @@ class CoreCoverageRunnerTest(unittest.TestCase):
             coverage_targets,
         )
 
+    def test_object_count_mismatch_names_the_direction_and_its_remedy(self) -> None:
+        runner = runner_path.read_text(encoding="utf-8")
+        mismatch_start = runner.index('signature_count="$(wc -l')
+        mismatch_end = runner.index('probe_root="$run_root/probes"',
+                                    mismatch_start)
+        mismatch_block = runner[mismatch_start:mismatch_end]
+
+        self.assertIn(
+            "coverage module signature count does not match object count: ",
+            mismatch_block,
+        )
+        for direction in (
+            "an instrumented binary ran in this coverage run",
+            "a listed coverage object did not run",
+        ):
+            self.assertIn(direction, mismatch_block)
+        self.assertEqual(mismatch_block.count("remedy:"), 2)
+        self.assertIn("lmdj_coverage_targets", mismatch_block)
+        self.assertIn("filter.exclude.name", mismatch_block)
+
     def test_object_probe_keeps_native_audio_device_free(self) -> None:
         runner = runner_path.read_text(encoding="utf-8")
         probe_start = runner.index('probe_root="$run_root/probes"')

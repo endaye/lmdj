@@ -12,7 +12,7 @@ using namespace lmdj::cardputer::observation_wire;
 
 Identity identity() {
   return {
-      "1.0.56.0",
+      "1.0.57.0",
       "1.0.0",
       "0123456789abcdef0123456789abcdef01234567",
       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -97,10 +97,10 @@ void valid_status_vector() {
   LMDJ_CHECK(read_u64(bytes, 136) == status.observation_generation);
   LMDJ_CHECK(read_u16(bytes, 144) == 279);
   LMDJ_CHECK(text(bytes, 146, 279) ==
-            R"({"product_build":"1.0.56.0","host_version":"1.0.0","revision":"0123456789abcdef0123456789abcdef01234567","assembly_lock_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","profile_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"})");
+            R"({"product_build":"1.0.57.0","host_version":"1.0.0","revision":"0123456789abcdef0123456789abcdef01234567","assembly_lock_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","profile_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"})");
   LMDJ_CHECK(validate_extended_status(bytes, status.identity));
   LMDJ_CHECK(!validate_extended_status(bytes, Identity{
-      "1.0.56.1", status.identity.host_version, status.identity.revision,
+      "1.0.57.1", status.identity.host_version, status.identity.revision,
       status.identity.assembly_lock_sha256, status.identity.profile_sha256}));
 
   std::string maximum_build(241, 'x');
@@ -214,7 +214,7 @@ void valid_diagnostics_vector() {
   LMDJ_CHECK(text(bytes, 338, 279).find(R"("profile_sha256":"bbbb)" ) != std::string::npos);
   LMDJ_CHECK(validate_diagnostics(bytes, diagnostics.identity));
   LMDJ_CHECK(!validate_diagnostics(bytes, Identity{
-      "1.0.56.1", diagnostics.identity.host_version, diagnostics.identity.revision,
+      "1.0.57.1", diagnostics.identity.host_version, diagnostics.identity.revision,
       diagnostics.identity.assembly_lock_sha256, diagnostics.identity.profile_sha256}));
 }
 
