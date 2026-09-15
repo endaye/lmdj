@@ -398,8 +398,12 @@ GitHub 与 doc-site 将共享其 Markdown 内容及摘要。它拒绝浅历史�
 changelog 步骤的执行载体已接入：在 intent 合并后的 canonical main 之上，把审查过的
 冻结 changelog 绑入该 release 的 `release-intents.json` 行并追加渲染后的 notes 证据
 文档，暂存仅限这两个声明路径，提交树与两个摘要都按 spec 复核后才恢复；经既有
-witness 传输开一个受审文档 PR。观察不执行、不冻结、不写账本。tag、prepared、Draft、
-publication、晋级与终审仍未接通。
+witness 传输开一个受审文档 PR。观察不执行、不冻结、不写账本。
+
+prepared 步骤的执行载体已接入：观察即对本地持久状态（plan 文档字节与记录摘要、
+本地签名 tag 的 object/target/签名者身份）的读回校验；执行在驱动器持久写护栏下
+只运行一次受信 prepare，已验证状态不重跑，漂移 fail-closed，prepare 失败报
+unknown 且由其自身恢复路径续跑。tag、Draft、publication、晋级与终审仍未接通。
 
 带 `changelog` 的 reviewed intent 现已接通 prepare / Draft / published 验证：正文
 进入 plan 摘要，prepare 重验真实 Git 范围，恢复时检查本地 notes，Draft 与公开
