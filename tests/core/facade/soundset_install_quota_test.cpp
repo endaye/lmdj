@@ -190,7 +190,7 @@ std::string uuid(std::uint32_t ordinal) {
   return value;
 }
 
-// A Facade-created Project is `lmdj.project.v4` from its first persist, so a
+// A Facade-created Project is `lmdj.project.v5` from its first persist, so a
 // Sound Set installs into it with no intervening command. This is the path a
 // first-run user takes.
 std::filesystem::path create_project(
