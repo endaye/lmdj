@@ -46,6 +46,28 @@ erase far-side effects. Transport and unresolved-write failures
 (`GitHubApiError`, `OSError`, urllib errors) stay fatal: they need
 reconciliation, not a receipt.
 
+## Review findings resolved
+
+The current-head review of this Task raised two findings; both were fixed in
+this same Task rather than argued away.
+
+1. *Over-broad `EngineError` swallow*: the tolerance originally caught every
+   `EngineError` from the verdict section, but `validate_repair_verdicts` also
+   raises `input_invalid` from `_parse_patch_right_lines(request["fix_diff"])`
+   when the authenticated repair context carries a malformed hunk header. The
+   tolerance is now limited to the model's own verdict refusals: any other
+   error class is re-raised, and `test_malformed_authenticated_repair_context_still_fails_closed`
+   proves a malformed authenticated hunk header still fails closed at engine
+   time.
+2. *Truncation could drop the authored remedy*: authored refusals carry
+   `why: ...; remedy: ...` in one message, and bounding that message as a single
+   string could cut the remedy away, leaving only the generic literal. The
+   receipt now bounds the two clauses separately (`bounded_clause`), keeping the
+   remedy the refusal actually named and falling back to the literal only when
+   the refusal names none; both publish regressions assert the authored remedy
+   survives, and the bounded-receipt test covers the no-remedy and
+   reporter-projection cases.
+
 ## Verification
 
 Baseline before the change: `python3 tests/build/ci_review_pipeline_test.py`
@@ -64,10 +86,14 @@ Each new regression fails before the change and passes after:
 - publisher: the same degradation for `review_wait.Refused` raised while
   re-authenticating the recheck source, which is the recheck protocol's own
   authored refusal and not a `ReviewScopeError`.
-- receipt: capped at 1024 bytes on one line, with a fixed schema, status and
-  remedy, and no credential content.
+- receipt: capped at 1024 bytes per clause on one line, with a fixed schema,
+  status and remedy, the authored remedy preserved when the refusal names one,
+  and no credential content.
+- engine: a malformed hunk header in the authenticated repair context still
+  fails closed (`input_invalid` is not the model's verdict), added with the
+  review resolution above.
 
-Final: `ci_pr_agent_review_test.py` 59 tests / 9 skipped, `ci_review_pipeline_test.py`
+Final: `ci_pr_agent_review_test.py` 60 tests / 9 skipped, `ci_review_pipeline_test.py`
 62 / 1, `ci_review_recheck_test.py` 41, `ci_review_wait_test.py` 67,
 `ci_review_failure_report_test.py` 46, `ci_change_scope_test.py` 74 - all exit
 0 with no new skips, plus the staged ownership suite.

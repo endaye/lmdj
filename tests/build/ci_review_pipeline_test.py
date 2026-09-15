@@ -1154,7 +1154,10 @@ class PipelineTests(unittest.TestCase):
     def common_refusal_is_bounded_and_recorded(self, refusal, printed, api):
         self.assertEqual(refusal["schema"], pipeline.REPAIR_REFUSAL_SCHEMA)
         self.assertEqual(refusal["status"], "refused")
-        self.assertEqual(refusal["remedy"], pipeline.REPAIR_REFUSAL_REMEDY)
+        # The receipt keeps the remedy the refusal named, bounded like the why.
+        self.assertTrue(refusal["remedy"].strip())
+        self.assertNotIn("\n", refusal["remedy"])
+        self.assertLessEqual(len(refusal["remedy"].encode("utf-8")), pipeline.MAX_REPAIR_REFUSAL_REASON_BYTES)
         self.assertNotIn("fixture-secret", json.dumps(refusal))
         lines = [line for line in printed.splitlines() if line.startswith("Repair recheck refused")]
         self.assertEqual(len(lines), 1)
@@ -1173,6 +1176,7 @@ class PipelineTests(unittest.TestCase):
         refusal, printed, api = self.refused_recheck_publication()
         self.common_refusal_is_bounded_and_recorded(refusal, printed, api)
         self.assertIn("why: original source quote does not cover the finding anchor", refusal["why"])
+        self.assertEqual(refusal["remedy"], "return explicit repair evidence or insufficient_evidence")
 
     def test_refused_original_review_authenticity_publishes_the_review_and_records_a_refusal(self):
         """A refused re-authentication of the recheck source is the same refusal.
@@ -1188,6 +1192,7 @@ class PipelineTests(unittest.TestCase):
             name="refused-authenticity")
         self.common_refusal_is_bounded_and_recorded(refusal, printed, api)
         self.assertIn("why: the original review could not be re-authenticated", refusal["why"])
+        self.assertEqual(refusal["remedy"], "take over the recheck manually")
 
     def test_repair_refusal_receipt_is_bounded_and_carries_no_external_text(self):
         oversized = pipeline.repair_refusal_receipt(
@@ -1196,11 +1201,19 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(oversized["status"], "refused")
         self.assertEqual(oversized["schema"], pipeline.REPAIR_REFUSAL_SCHEMA)
         self.assertLessEqual(len(oversized["why"].encode("utf-8")), pipeline.MAX_REPAIR_REFUSAL_REASON_BYTES)
+        self.assertTrue(oversized["why"].startswith("why: xxx"))
         self.assertNotIn("\n", oversized["why"])
+        # The bounded clause may not swallow the remedy the refusal named.
+        self.assertEqual(oversized["remedy"], "reuse the receipt")
+        # A refusal that names no remedy keeps the bounded literal.
+        unnamed = pipeline.repair_refusal_receipt(review_scope.ReviewScopeError("all review backends failed"))
+        self.assertEqual(unnamed["remedy"], pipeline.REPAIR_REFUSAL_REMEDY)
+        self.assertEqual(unnamed["why"], "all review backends failed")
         # A reporter message can embed an external error or response body.
         projected = pipeline.repair_refusal_receipt(
             pipeline.reporting.ReportingError("why: response body: private provider text; remedy: inspect"))
         self.assertNotIn("private provider text", projected["why"])
+        self.assertEqual(projected["remedy"], pipeline.REPAIR_REFUSAL_REMEDY)
 
     def test_repair_trigger_binding_refuses_unsolicited_or_wrong_mode_artifacts(self):
         for event, action, automatic, requested, document in (

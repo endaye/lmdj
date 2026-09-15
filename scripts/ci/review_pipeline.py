@@ -678,6 +678,12 @@ def publish_model(identity, record, model, *, write=None, scope_unavailable=Fals
 REPAIR_REFUSAL_SCHEMA = "lmdj.pr-agent-recheck-refusal.v1"
 MAX_REPAIR_REFUSAL_REASON_BYTES = 1024
 REPAIR_REFUSAL_REMEDY = "recheck the current head manually, or recollect the repair context on the next entry"
+AUTHORED_REMEDY = "; remedy: "
+
+
+def bounded_clause(text):
+    """One artifact-safe clause: single line, no wrap, bounded in UTF-8 bytes."""
+    return " ".join(text.split()).encode("utf-8")[:MAX_REPAIR_REFUSAL_REASON_BYTES].decode("utf-8", "ignore")
 
 
 def repair_refusal_receipt(error, *, receipts=None):
@@ -696,11 +702,14 @@ def repair_refusal_receipt(error, *, receipts=None):
         text = error.safe_message
     else:
         text = str(error)
-    # The receipt is an artifact and its log line is the only human-visible
-    # signal, so neither may grow with the refusal or wrap.
-    reason = " ".join(text.split()).encode("utf-8")[:MAX_REPAIR_REFUSAL_REASON_BYTES]
+    # Authored refusals carry their remedy in the same message (`why: ...;
+    # remedy: ...`). Bound the clauses separately: bounding the message as one
+    # string would let a long `why` truncate the remedy away, leaving only the
+    # generic literal for a refusal that named its own next step.
+    why, separator, remedy = text.partition(AUTHORED_REMEDY)
     receipt = {"schema": REPAIR_REFUSAL_SCHEMA, "status": "refused",
-               "why": reason.decode("utf-8", "ignore"), "remedy": REPAIR_REFUSAL_REMEDY}
+               "why": bounded_clause(why),
+               "remedy": bounded_clause(remedy) if separator and remedy.strip() else REPAIR_REFUSAL_REMEDY}
     if receipts:
         # review_recheck.publish_batch persists each far-side receipt as it
         # lands; recording the refusal must not erase published effects.

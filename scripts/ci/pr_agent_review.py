@@ -1619,7 +1619,7 @@ def _validate_native_mapping(native: dict[str, Any], authenticated: dict[str, An
         raise EngineError("invalid_output", "native review summary is oversized")
     try:
         validate_repair_verdicts(native, authenticated)
-    except EngineError:
+    except EngineError as error:
         # The ordinary review above is complete on its own, so a refused
         # repair-recheck verdict section must not void the whole head review:
         # one unusable quote otherwise costs a fully validated review (#1344).
@@ -1628,7 +1628,12 @@ def _validate_native_mapping(native: dict[str, Any], authenticated: dict[str, An
         # reply or thread resolution, so a refused section can only cost the
         # rechecks; review_pipeline.publish records that refusal instead of
         # failing the step.
-        pass
+        if error.error_class != "invalid_output":
+            # The model's own verdict is the only thing this tolerance covers. A
+            # refusal with another class describes the authenticated context
+            # instead -- a hunk header that no longer parses, for example -- and
+            # that must still fail closed here rather than resurface later.
+            raise
     return {"summary": summary, "findings": findings}
 
 
