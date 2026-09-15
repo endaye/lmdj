@@ -202,6 +202,40 @@ class IntentCommit:
         except PublicationWorkspaceError as error:
             raise IntentError(f"repository Git is unavailable: {error}") from None
 
+    def _declared_path(self, path):
+        """True only for this operation's frozen-snapshot, ledger or evidence paths."""
+        if path in (str(_LEDGER_RELATIVE), intent_document_relative(self.spec),
+                    str(_VERSIONS_RELATIVE)):
+            return True
+        parts = Path(path).parts
+        if len(parts) <= 3 or "/".join(parts[:2]) != "apps/architecture-portal":
+            return False
+        build = self.spec["product_build"]
+        return any(build in part for part in parts[2:])
+
+    def _stage_declared(self):
+        """Stage exactly the declared paths; anything else in the worktree fails."""
+        raw = self._git("ls-files", "-m", "-o", "--exclude-standard", "-z")
+        changed = [name for name in raw.decode(errors="replace").split("\0") if name]
+        unexpected = [name for name in changed if not self._declared_path(name)]
+        if unexpected:
+            _fail("worktree carries files outside the declared intent paths: "
+                  + unexpected[0])
+        for name in changed:
+            if not (self.root / name).exists():
+                _fail("declared intent path was deleted from the worktree: " + name)
+            self._git("add", "--", name)
+
+    def _verify_committed_paths(self, base, head):
+        """The commits since `base` may only add or rewrite declared paths."""
+        raw = self._git("diff-tree", "--no-commit-id", "--name-status", "-r",
+                        base, head).decode(errors="replace")
+        for row in raw.splitlines():
+            status, _, path = row.partition("\t")
+            if status.startswith("D") or not self._declared_path(path):
+                _fail("intent commit carries paths beyond the declared snapshot, "
+                      "ledger and evidence: " + path)
+
     def _completed(self):
         """The already-created intent commit for this operation, or None.
 
@@ -209,7 +243,9 @@ class IntentCommit:
         regeneration: a clean worktree whose *committed* ledger row equals the
         frozen row and whose committed tree carries the intent document is the
         completed state. Bytes are read from the commit, so a worktree file
-        that merely matches on disk cannot stand in for the commit.
+        that merely matches on disk cannot stand in for the commit. The whole
+        committed tree must equal the candidate target plus only declared
+        additions, so an amended commit with unrelated paths is refused.
         """
         head = self._git("rev-parse", "HEAD").decode().strip()
         if head == self.spec["target_revision"]:
@@ -225,6 +261,10 @@ class IntentCommit:
         if len(matches) != 1 or matches[0] != ledger_row(self.spec):
             _fail("existing intent commit does not carry this operation's ledger row")
         self._git("cat-file", "-e", "HEAD:" + intent_document_relative(self.spec))
+        versions = _committed_json(self._git, str(_VERSIONS_RELATIVE))
+        if not isinstance(versions, list) or self.spec["product_build"] not in versions:
+            _fail("committed portal versions.json lacks this Product Build")
+        self._verify_committed_paths(self.spec["target_revision"], head)
         return head
 
     def completed_head(self):
@@ -287,11 +327,11 @@ class IntentCommit:
         before_write()
         # The official freeze runs against the committed tree at the target.
         self.freeze(self.root)
-        self._git("add", "-A")
+        self._stage_declared()
         self._append_ledger()
         (self.root / intent_document_relative(self.spec)).write_text(
             intent_markdown(self.spec), encoding="utf-8")
-        self._git("add", "-A")
+        self._stage_declared()
         before_write()
         self._git("-c", "user.name=" + self.author["author_name"],
                   "-c", "user.email=" + self.author["author_email"],

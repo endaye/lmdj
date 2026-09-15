@@ -162,6 +162,63 @@ class IntentCommitTest(unittest.TestCase):
         with self.assertRaises(IntentError):
             self.new_commit().completed_head()
 
+    def test_commit_refuses_files_outside_the_declared_intent_paths(self):
+        # A freeze (or a concurrent process) leaves an unrelated worktree file:
+        # staging must fail closed instead of committing it into the PR.
+        subprocess.run(["git", "-C", str(self.repository), "worktree", "add",
+                        "--detach", str(self.worktree), self.head], check=True,
+                       capture_output=True)
+        stray = self.worktree / "products/lmdj/unrelated.txt"
+        stray.parent.mkdir(parents=True, exist_ok=True)
+        stray.write_text("stray\n")
+        commit = self.new_commit()
+        with self.assertRaises(IntentError):
+            commit.commit(before_write=lambda: None)
+        staged = subprocess.run(
+            ["git", "-C", str(self.worktree), "ls-files", "--error-unmatch",
+             "products/lmdj/unrelated.txt"], capture_output=True)
+        self.assertNotEqual(staged.returncode, 0, "the stray file must never be staged")
+        status = subprocess.run(
+            ["git", "-C", str(self.worktree), "status", "--porcelain",
+             "--untracked-files=all"], capture_output=True).stdout.decode()
+        self.assertIn("?? products/lmdj/unrelated.txt", status,
+                      "the refusal must leave the stray file untracked")
+
+    def test_recovery_refuses_a_commit_that_amends_unrelated_paths(self):
+        commit = self.new_commit()
+        head, _ = commit.commit(before_write=lambda: None)
+        # Amend the verified commit with an unrelated file while keeping the
+        # ledger row and document intact; only the committed tree can refuse it.
+        (self.worktree / "stray-after.txt").write_text("smuggled\n")
+        subprocess.run(["git", "-C", str(self.worktree), "add", "stray-after.txt"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(self.worktree), "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.invalid", "commit", "-q",
+                        "--amend", "-m", "docs(release): record 1.0.57.0 canary release intent"],
+                       check=True, capture_output=True)
+        amended = subprocess.run(["git", "-C", str(self.worktree), "rev-parse", "HEAD"],
+                                 capture_output=True).stdout.decode().strip()
+        self.assertNotEqual(amended, head)
+        with self.assertRaises(IntentError):
+            self.new_commit().completed_head()
+
+    def test_declared_paths_cover_the_real_freeze_layout(self):
+        commit = self.new_commit()
+        declared = commit._declared_path
+        self.assertTrue(declared("apps/architecture-portal/versions.json"))
+        self.assertTrue(declared("apps/architecture-portal/versioned_metadata/version-1.0.57.0.json"))
+        self.assertTrue(declared("apps/architecture-portal/versioned_docs/version-1.0.57.0/contracts/project.mdx"))
+        self.assertTrue(declared("apps/architecture-portal/versioned_sidebars/version-1.0.57.0-sidebars.json"))
+        self.assertTrue(declared("apps/architecture-portal/static/versions/1.0.57.0/diagrams/assembly.svg"))
+        self.assertTrue(declared("apps/architecture-portal/versioned_provenance/version-1.0.57.0-squash-witness.json"))
+        self.assertTrue(declared("docs/release-evidence/release-intents.json"))
+        self.assertTrue(declared("docs/release-evidence/lmdj-v1.0.57.0-canary-release-intent.md"))
+        self.assertFalse(declared("apps/docs-site/docs/operations/version-and-release.mdx"))
+        self.assertFalse(declared("products/lmdj/version.json"))
+        self.assertFalse(declared("apps/architecture-portal/versioned_metadata/version-1.0.56.0.json"))
+        self.assertFalse(declared("README.md"))
+        self.assertFalse(declared("../escape.txt"))
+
     def test_completed_head_is_none_before_the_commit_exists(self):
         self.assertIsNone(self.new_commit().completed_head())
 
