@@ -1,7 +1,7 @@
 ---
 id: rspack-cache-stalls-corrected-mdx-build
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/commit/c5cbf6161320d2ddec1d8e3f76d051e591590726
@@ -9,7 +9,7 @@ recurrences:
   - date: 2026-09-14
     occurrence: https://github.com/endaye/lmdj/pull/1298
     observed_by: Grok 4.6
-exit: none
+exit: skill:.agents/skills/issue-done/SKILL.md
 escalation: https://github.com/endaye/lmdj/issues/1299
 ---
 
@@ -43,6 +43,9 @@ Do not clean another session's worktree or weaken minification, snapshots,
 routes, tests or link checks. A killed process is not a successful build, even
 if its signal handler exits zero: require complete build and far-side checks.
 
-`exit: none`: cache-associated stalling is not deterministically inferable
-from product source. No automatic cache deletion, retry loop or new global
-gate is justified. Recurrence 2 is escalated as [#1299](https://github.com/endaye/lmdj/issues/1299).
+Cache-associated stalling is not deterministically inferable from product
+source, so no automatic cache deletion, retry loop or new global gate is
+justified; the recurrence-2 escalation [#1299](https://github.com/endaye/lmdj/issues/1299)
+exits to a skill rule instead: `issue-done` §1 now prescribes the stop,
+preserve and cold-rebuild handling above for a stalled owned `docusaurus`
+process during `scripts/docs-site.sh check`.

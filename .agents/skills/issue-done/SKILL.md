@@ -39,6 +39,17 @@ Before starting the shipping pipeline:
    original failing check; do not copy snapshot trees or relax path assertions.
    See [`worktree-checkout-flattens-symlinks`](../../pitfalls/worktree-checkout-flattens-symlinks.md).
 
+   When `scripts/docs-site.sh check` stops producing output after site load
+   while the owned `docusaurus` process shows ~0% CPU, suspect a stalled Rspack
+   cache left by an earlier failed or interrupted build. Stop only that
+   verified owned process, move this worktree's ignored
+   `apps/docs-site/node_modules/.cache/rspack` aside — preserve it and the
+   logs for inspection — and rerun a complete cold build with its far-side
+   route, test and link checks. A killed process is not a pass, even when its
+   signal handler exits zero. Do not clean another session's cache or weaken
+   minification, snapshots, routes, tests or link checks. See
+   [`rspack-cache-stalls-corrected-mdx-build`](../../pitfalls/rspack-cache-stalls-corrected-mdx-build.md).
+
    Run the Task's declared, relevant verification; do not substitute an automatic
    full lane set or an unrelated portal build. For example:
    ```bash
