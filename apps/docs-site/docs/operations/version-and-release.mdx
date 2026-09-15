@@ -380,6 +380,15 @@ candidate 步骤的执行载体已组合：候选准备（请求 → 专属安�
 的步骤（tag、Draft、晋级等待接入）统一走 backend advance，由驱动器施加同一持久写入
 护栏；具体 dispatch / publication / candidate adapter 不变。
 
+verification 与 intent 步骤的执行载体已接入：前者回放认证过的批处理 journal，取绑定
+候选见证 revision 的唯一 terminal `full` 结果并经现有证据消费器重新核验（Git provenance、
+资产摘要、期限与完整套件覆盖），完整读取后无结果记为 pending 而不是缺失；后者在候选
+target 之上提交冻结的门户快照（versions.json 追加加官方 version freeze）、`releasable`
+intent 账本行与意图证据文档，经既有 witness 传输开一个受审文档 PR，合并后的 release
+target 仍是携带 squash witness 的候选 target。两者的观察都不执行套件、不冻结快照、不写
+账本；重启后按既有提交内容恢复而不是重新生成。tag、Draft、publication、晋级与终审
+仍未接通。
+
 Product release changelog 的冻结模块已实现：固定同 profile 已发布祖先 tag / target，
 从完整 Git 历史枚举候选范围，要求每个 commit 有变更条目或经审查的排除理由；
 GitHub 与 doc-site 将共享其 Markdown 内容及摘要。它拒绝浅历史、范围外来源、重复或
