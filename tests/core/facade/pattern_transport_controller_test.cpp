@@ -82,13 +82,27 @@ class TempDirectory {
                                 .count()));
     std::filesystem::create_directories(path_);
   }
+  // An explicit root reuses an existing directory and leaves it in place, so
+  // a second fixture can reopen the same workspace after the first is gone.
+  explicit TempDirectory(std::filesystem::path existing)
+      : path_(std::move(existing)), reusable_(true) {
+    std::filesystem::create_directories(path_);
+  }
   ~TempDirectory() {
+    if (reusable_) {
+      return;
+    }
     std::error_code ignored;
     std::filesystem::remove_all(path_, ignored);
   }
   const std::filesystem::path& path() const { return path_; }
+  TempDirectory(TempDirectory&&) = default;
+  TempDirectory& operator=(TempDirectory&&) = default;
+  TempDirectory(const TempDirectory&) = delete;
+  TempDirectory& operator=(const TempDirectory&) = delete;
  private:
   std::filesystem::path path_;
+  bool reusable_ = false;
 };
 
 // The Host-side port a Runtime Host implements over its own engine; this test
@@ -371,6 +385,20 @@ void release_with_unknown_correlation_fabricates_no_press() {
 // The real Host shape: one Application, one storage platform instance, and a
 // Host-held Project writer lease beside the transport controller.
 struct ApplicationFixture {
+  explicit ApplicationFixture(
+      std::filesystem::path root = std::filesystem::path{})
+      : directory(root.empty() ? TempDirectory()
+                               : TempDirectory(std::move(root))),
+        bundle(directory.path() / "project.lmdj"),
+        application(app_config(directory.path(), platform)) {
+    auto created = lmdj::domain::create_project(ProjectId{kProject}, 120);
+    LMDJ_CHECK(created.has_value());
+    auto state = std::move(created.value());
+    state.patterns.emplace(pattern, lmdj::domain::Pattern{pattern, 1, {}});
+    lmdj::project_io::ProjectStore store(platform);
+    LMDJ_CHECK(store.create(bundle, state).has_value());
+  }
+
   TempDirectory directory;
   std::filesystem::path bundle;
   std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> platform{
@@ -396,17 +424,6 @@ struct ApplicationFixture {
         nullptr,
         lmdj::facade::make_unavailable_performance_replay_controller(),
     };
-  }
-
-  ApplicationFixture()
-      : bundle(directory.path() / "project.lmdj"),
-        application(app_config(directory.path(), platform)) {
-    auto created = lmdj::domain::create_project(ProjectId{kProject}, 120);
-    LMDJ_CHECK(created.has_value());
-    auto state = std::move(created.value());
-    state.patterns.emplace(pattern, lmdj::domain::Pattern{pattern, 1, {}});
-    lmdj::project_io::ProjectStore store(platform);
-    LMDJ_CHECK(store.create(bundle, state).has_value());
   }
 
   PatternTransportRequest make(unsigned command, std::uint64_t epoch,
@@ -483,6 +500,105 @@ void controller_on_a_fresh_platform_reports_busy_then_recovers() {
   LMDJ_CHECK(status.recording);
 }
 
+void known_owner_registration_protects_only_the_open_transport_journal() {
+  ApplicationFixture f;
+  auto lease = f.application.acquire_project_writer(f.bundle);
+  LMDJ_CHECK(lease.has_value());
+  const SequenceSessionId second_session{uuid(9)};
+  auto first = f.application.make_pattern_transport_controller(
+      f.audio,
+      PatternTransportControllerConfig{
+          f.bundle, f.session, ProjectId{kProject}, f.pattern, 7});
+  auto second = f.application.make_pattern_transport_controller(
+      f.audio,
+      PatternTransportControllerConfig{
+          f.bundle, second_session, ProjectId{kProject}, f.pattern, 8});
+  const lmdj::facade::SequenceBeginRequest legacy_begin{
+      f.bundle, SequenceSessionId{uuid(10)}, f.pattern, 0, 0};
+  const auto assign = [&f] {
+    return f.application.command({
+        {"operation", "pad.assign"},
+        {"project_path", f.bundle.generic_string()},
+        {"command_id", uuid(30)},
+        {"expected_revision", 0},
+        {"slot", {{"bank", 0}, {"pad", 1}}},
+        {"asset_id", nullptr},
+    });
+  };
+  // Registration alone does not block authoring: no transport journal is open.
+  LMDJ_CHECK(assign().at("ok").get<bool>());
+
+  LMDJ_CHECK(first->request(f.make(6, 1, PatternTransportIntent::record)) ==
+             PatternTransportSubmit::accepted);
+  f.audio.render(1);
+  LMDJ_CHECK(first->continue_operation().has_value());
+  LMDJ_CHECK(first->inspect().recording);
+  // With the transport journal open, legacy begin and Sample-class authoring
+  // keep their busy guard and the journal is never sealed as owner loss.
+  const auto blocked_begin = f.application.begin_sequence(legacy_begin);
+  LMDJ_CHECK(!blocked_begin.has_value());
+  LMDJ_CHECK(blocked_begin.error().details.at("reason") ==
+             "sequence_session_active");
+  // Destroying the second registration keeps the first journal protected.
+  second.reset();
+  const auto blocked_assign = f.application.command({
+      {"operation", "pad.assign"},
+      {"project_path", f.bundle.generic_string()},
+      {"command_id", uuid(31)},
+      {"expected_revision", 1},
+      {"slot", {{"bank", 0}, {"pad", 1}}},
+      {"asset_id", nullptr},
+  });
+  LMDJ_CHECK(!blocked_assign.at("ok").get<bool>());
+  LMDJ_CHECK(blocked_assign.at("error").at("details").at("reason") ==
+             "sequence_session_active");
+  LMDJ_CHECK(first->request(f.make(7, 2, PatternTransportIntent::record)) ==
+             PatternTransportSubmit::accepted);
+  f.audio.render(1);
+  LMDJ_CHECK(first->continue_operation().has_value());
+  LMDJ_CHECK(!first->inspect().recording);
+  // After settlement removes the journal, authoring is admitted again even
+  // while the controller is still vended.
+  lmdj::project_io::ProjectStore store(f.platform);
+  const auto current = store.load(f.bundle);
+  LMDJ_CHECK(current.has_value());
+  LMDJ_CHECK(f.application
+                 .begin_sequence({f.bundle, SequenceSessionId{uuid(10)},
+                                  f.pattern, current.value().revision, 0})
+                 .has_value());
+}
+
+void controller_destroyed_after_application_is_safe() {
+  const auto directory =
+      std::filesystem::temp_directory_path() /
+      ("lmdj-transport-lifetime-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directories(directory);
+  std::unique_ptr<lmdj::facade::PatternTransportController> controller;
+  {
+    ApplicationFixture f;
+    controller = f.application.make_pattern_transport_controller(
+        f.audio,
+        PatternTransportControllerConfig{
+            f.bundle, f.session, ProjectId{kProject}, f.pattern, 7});
+    LMDJ_CHECK(controller != nullptr);
+  }
+  // Far side: the retired owner leaves no registration behind, so a fresh
+  // Application over the same workspace admits legacy authoring; the later
+  // controller destruction observes the expired owner and stops cleanly.
+  {
+    ApplicationFixture reopened(directory);
+    LMDJ_CHECK(reopened.application
+                   .begin_sequence({reopened.bundle,
+                                    SequenceSessionId{uuid(11)}, reopened.pattern,
+                                    0, 0})
+                   .has_value());
+  }
+  controller.reset();
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
 }  // namespace
 
 int main() {
@@ -498,7 +614,9 @@ int main() {
     release_with_unknown_correlation_fabricates_no_press();
     application_built_controller_runs_under_the_held_writer_lease();
     controller_on_a_fresh_platform_reports_busy_then_recovers();
-    std::cout << "pattern transport controller tests: PASS (11 scenarios)\n";
+    known_owner_registration_protects_only_the_open_transport_journal();
+    controller_destroyed_after_application_is_safe();
+    std::cout << "pattern transport controller tests: PASS (13 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

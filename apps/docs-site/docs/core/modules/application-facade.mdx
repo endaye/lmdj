@@ -65,6 +65,10 @@ close 内把当前 Pattern 段的剩余候选经同一 canonical-tail transfer d
 Project Truth、推进 committed revision，并在 closure 耐久后保留 terminal transfer 作为
 admission 输入已全部解析的结算收据；cutoff 收据应用后、close 未决期间到达的输入保持
 live-only，不再进入候选集。close 中途存储失败保持 flushing 重试且不重复提交。
+`Application::make_pattern_transport_controller` 把每个存活 controller 的 session 登记为
+该 Project 的已知 Sequence owner：transport journal 打开期间，Sample 类提交保持 legacy
+busy 守卫（`sequence_session_active` 类型化拒绝），owner-loss 和解不再误封存活 journal；
+直接 legacy `begin_sequence` 在 engagement 存活期间被拒绝；controller 销毁即注销登记。
 结算完整（terminal receipt、tail flush 恰好提交一次、complete）后移除已结算 journal，
 与 legacy stop 的 remove_active_if_complete 一致；再次 Record 走同一懒创建路径开新
 journal。

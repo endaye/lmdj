@@ -46,7 +46,8 @@ class AudioPortBridge final : public detail::PatternTransportAudioPort {
 
 struct PatternTransportController::Impl {
   Impl(PatternTransportAudioPort& audio, PatternTransportControllerConfig config,
-       std::shared_ptr<project_io::ProjectStoragePlatform> platform)
+       std::shared_ptr<project_io::ProjectStoragePlatform> platform,
+       std::function<void()> on_destroy)
       : bridge(audio),
         // A null platform default-constructs inside both collaborators, which
         // is exactly the free-function behavior; a caller-owned instance makes
@@ -55,7 +56,18 @@ struct PatternTransportController::Impl {
         store(std::move(platform)),
         coordinator(bridge, journals, store, std::move(config.bundle),
                     config.session, std::move(config.project),
-                    std::move(config.pattern), config.runtime_generation) {}
+                    std::move(config.pattern), config.runtime_generation),
+        on_destroy(std::move(on_destroy)) {}
+  ~Impl() {
+    // The callback contract is infallible (mutex + map erase); an exception
+    // here must still never escape a destructor.
+    try {
+      if (on_destroy) {
+        on_destroy();
+      }
+    } catch (...) {
+    }
+  }
 
   // Declaration order is ownership order: the coordinator references the
   // bridge, journals and store, so all three outlive it within the Impl.
@@ -63,6 +75,7 @@ struct PatternTransportController::Impl {
   project_io::SequenceJournal journals;
   project_io::ProjectStore store;
   detail::PatternTransportCoordinator coordinator;
+  std::function<void()> on_destroy;
 };
 
 PatternTransportController::PatternTransportController(
@@ -109,12 +122,14 @@ std::unique_ptr<PatternTransportController>
 detail::PatternTransportControllerInternalFactory::make(
     lmdj::facade::PatternTransportAudioPort& audio,
     PatternTransportControllerConfig config,
-    std::shared_ptr<project_io::ProjectStoragePlatform> platform) {
+    std::shared_ptr<project_io::ProjectStoragePlatform> platform,
+    std::function<void()> on_destroy) {
   return std::unique_ptr<PatternTransportController>(
       new PatternTransportController(
           std::unique_ptr<PatternTransportController::Impl>(
               new PatternTransportController::Impl(
-                  audio, std::move(config), std::move(platform)))));
+                  audio, std::move(config), std::move(platform),
+                  std::move(on_destroy)))));
 }
 
 std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
