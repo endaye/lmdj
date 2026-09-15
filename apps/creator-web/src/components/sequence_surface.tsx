@@ -2,14 +2,21 @@ import {useEffect, useState} from "react";
 
 import type {ProjectView, SequenceRecoveryCandidate} from "../runtime/runtime_types";
 import type {SequenceState} from "../state/sequence_state";
+import {
+  selectTransportBusy,
+  selectTransportPlaying,
+  selectTransportRecording,
+  type PatternTransportState,
+} from "../state/pattern_transport_state";
 import {SequenceTransport} from "./sequence_transport";
 
 interface SequenceSurfaceProps {
   project: ProjectView;
   state: SequenceState;
+  transport: PatternTransportState;
   ready: boolean;
+  onPlayStop(): void;
   onRecord(): void;
-  onStop(): void;
   onRefresh(): void;
   onSwitch(patternId: string): void;
   onCreatePattern(bars: 1 | 2 | 4 | 8): void;
@@ -23,12 +30,15 @@ interface SequenceSurfaceProps {
 }
 
 export function SequenceSurface(props: SequenceSurfaceProps) {
-  const {project, state} = props;
+  const {project, state, transport} = props;
   const [bars, setBars] = useState<1 | 2 | 4 | 8>(1);
   const [bpm, setBpm] = useState(project.bpm);
   const [swing, setSwing] = useState(project.sequenceSettings.swingPercent);
   const [recoveryTargets, setRecoveryTargets] = useState<Readonly<Record<string, string>>>({});
-  const disabled = state.phase === "flushing";
+  // Settings forms lock while a transport operation is in flight and while the
+  // runtime rejects them (recording); a committed Pattern publication is not a
+  // reason to reopen them early.
+  const disabled = selectTransportBusy(transport) || selectTransportRecording(transport);
   // Committed settings can change outside these forms (another form, a
   // recovered Sequence, a reopened Project); the editable copies follow them
   // so a stale draft is never applied by accident.
@@ -45,8 +55,8 @@ export function SequenceSurface(props: SequenceSurfaceProps) {
           {project.patterns.length === 1 ? "Pattern" : "Patterns"}
         </p>
       </header>
-      <SequenceTransport state={state} ready={props.ready}
-        onRecord={props.onRecord} onStop={props.onStop} onRefresh={props.onRefresh} />
+      <SequenceTransport transport={transport} ready={props.ready}
+        onPlayStop={props.onPlayStop} onRecord={props.onRecord} onRefresh={props.onRefresh} />
       <section aria-label="Sequence settings" className="sequence-settings">
         <label>Pattern
           <select value={state.selectedPatternId ?? project.patternId}
@@ -98,7 +108,7 @@ export function SequenceSurface(props: SequenceSurfaceProps) {
               {[1, 2, 4, 8].map((count) => <option key={count} value={count}>{count}</option>)}
             </select>
           </label>
-          <button type="submit" disabled={disabled || state.phase !== "stopped"}>
+          <button type="submit" disabled={disabled || selectTransportPlaying(transport)}>
             Create Pattern
           </button>
         </form>

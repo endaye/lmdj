@@ -48,7 +48,7 @@ export function reduceSequence(
   switch (action.type) {
     case "selected":
       return state.phase === "stopped"
-        ? {...state, selectedPatternId: action.patternId}
+        ? {...state, selectedPatternId: action.patternId, errorCode: null}
         : state;
     case "authority":
       return {

@@ -85,7 +85,7 @@ test("opts into the 880×592 hardware shell, keeps overview read-only, and retur
   await expect(keys.getByRole("button", {name: /^Perform/})).toBeVisible();
   await expect(keys.getByRole("button", {name: "Record", exact: true})).toHaveText("●");
   await expect(keys.getByRole("button", {
-    name: "Play — Pattern Play requires global Pattern transport",
+    name: "Play/Stop — needs a playable Project and running audio",
     exact: true,
   })).toHaveText("▶");
   const shot = process.env.LMDJ_HARDWARE_CONSOLE_SHOT;
