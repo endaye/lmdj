@@ -227,9 +227,11 @@ class PromotionCommit:
         head = self._git("rev-parse", "HEAD").decode().strip()
         if head != self.spec["base_revision"]:
             _fail("worktree is not at the recorded canonical main tip")
+        # Single guard before the effect: the worktree mutation (apply +
+        # stage) and the commit run as one guard-protected unit, so a guard
+        # failure can never leave a half-mutated worktree without a commit.
         self._apply_plan()
         self._stage_declared()
-        before_write()
         self._git("-c", "user.name=" + self.author["author_name"],
                   "-c", "user.email=" + self.author["author_email"],
                   "commit", "-m",
