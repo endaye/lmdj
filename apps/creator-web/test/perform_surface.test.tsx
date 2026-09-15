@@ -152,6 +152,57 @@ function authority(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// Gate for the fake-tool-stub-strictness escalation (#726): the Perform
+// controller reaches these session methods without any test opting in —
+// connect() subscribes the capture status and refreshes the performance and
+// recovery lists, and perform_surface.tsx polls refreshReplay every 250 ms.
+// A bare vi.fn() resolves undefined where the real session returns a value,
+// and the gap only fires when a test outlives one poll tick (#713). Keep the
+// list in step with the controller's connect() and interval paths.
+test("wall-clock-reachable session double methods keep faithful defaults", () => {
+  const reachable = [
+    "subscribePerformanceMasterCaptureStatus",
+    "listPerformances",
+    "listPerformanceRecovery",
+    "queryPerformanceReplayStatus",
+  ] as const;
+  const {session} = sessionFixture();
+  for (const method of reachable) {
+    const double = session[method];
+    const implemented = typeof double === "function" &&
+      (!vi.isMockFunction(double) || double.getMockImplementation() !== undefined);
+    expect(
+      implemented,
+      `session double "${method}" is reached by wall-clock (connect() or the ` +
+      "250 ms replay poll) but has no default implementation: give it a " +
+      "faithful neutral default in sessionFixture, or remove it from the " +
+      "controller's wall-clock path",
+    ).toBe(true);
+  }
+});
+
+test("the replay poll default stays neutral and never settles", async () => {
+  // Presence is not enough for the 250 ms poll: a production-shaped default
+  // that resolves a concrete status can land after a test staged its own
+  // state and overwrite it — the second load-sensitive failure #713 traded
+  // for the first. The neutral default models a poll the Core has not
+  // answered yet, so it must not settle even after microtasks drain.
+  const {session} = sessionFixture();
+  let settled = false;
+  void session.queryPerformanceReplayStatus("replay-1").then(
+    () => { settled = true; },
+    () => { settled = true; },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(
+    settled,
+    "session double \"queryPerformanceReplayStatus\" resolves on its own: " +
+    "a poll the test never answered can overwrite staged state when it " +
+    "settles late — keep the neutral never-settling default, or let each " +
+    "test stage the answer itself",
+  ).toBe(false);
+});
+
 function controllerFixture(options: {
   captureState?: "unconfigured" | "configured" | "ready" | "unavailable";
   state?: CreatorState;

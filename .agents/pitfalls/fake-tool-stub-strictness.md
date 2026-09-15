@@ -1,7 +1,7 @@
 ---
 id: fake-tool-stub-strictness
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-08-27
     occurrence: https://github.com/endaye/lmdj/issues/349
@@ -30,7 +30,7 @@ recurrences:
   - date: 2026-09-11
     occurrence: https://github.com/endaye/lmdj/actions/runs/34633148497/attempts/2
     observed_by: Codex
-exit: gate:apps/web-runtime-host/test/deploy_command_test.py
+exit: gate:apps/creator-web/test/perform_surface.test.tsx
 escalation: https://github.com/endaye/lmdj/issues/726
 ---
 
@@ -94,7 +94,7 @@ was a fixture/consumer finding, not a claim that the unreleased reporter had
 already dropped a production report. `tests/build/ci_self_test_report_test.py`
 now uses dynamic display names and proves that only the independently checked
 workflow ID/path and run provenance determine admission. The broader existing
-escalation #726 remains open; this narrow regression does not absorb its
+escalation #726 remained open at the time; this narrow regression did not absorb its
 unresolved typed-polling scope.
 
 For an external API double, verify representative response fields against the
@@ -110,7 +110,7 @@ that shape while retaining exact-attempt head, live merged PR bot COMMENT,
 trusted source/control/jobs, historical policy and actual same-run artifact
 equality. Wrong head, wrong nonempty association and another PR's otherwise
 valid artifact remain rejected. This narrow external API regression does not
-close the broader escalation #726 or claim successful platform O1 acceptance.
+close the broader escalation #726, since discharged, or claim successful platform O1 acceptance.
 
 When a test fakes an external tool, every faked subcommand must reject the
 invocations the real tool rejects (arity, required flags, mode conflicts) —
@@ -128,8 +128,8 @@ full fallback had concealed the defect. The reader now derives the actual
 per-commit path union and its regression runs real Git collection through the
 reader and final selection, retaining valid extra AI advice. HTTP receipts in
 that regression remain fixtures; this was an independent code/fixture finding,
-not proof of a historical remote lost-advice incident. Escalation #726 remains
-open for the broader polling-double scope.
+not proof of a historical remote lost-advice incident. Escalation #726 remained
+open at the time for the broader polling-double scope.
 
 A later read-only Actions inventory audit found that the exact-attempt API's
 `created_at` need not equal the run-list timestamp: run 34124875948 attempt 2
@@ -141,7 +141,7 @@ that origin, without weakening exact run/attempt/repository/workflow/head or
 the real collector's source/receipt authentication. The regression keeps both
 attempts, queue-only persistence and fresh-process deduplication. This was a
 shared Actions API finding using actual Core CI runs, not a claim of an observed
-lost PR Review callback. The broader escalation #726 remains open.
+lost PR Review callback. The broader escalation #726 remained open at the time.
 
 When a test doubles an internal typed interface, the defect to avoid is the
 same — the double resolving something the real implementation never resolves,
@@ -165,15 +165,21 @@ production-shaped one is an unsafe stub; the neutral one is the fix. Give these
 methods particular attention, because no test opts into them, so no test will
 notice what they return.
 
-That half of the invariant has no gate. The deploy suite's hardened fake git
-covers one Python suite's fake external tool and cannot see a TypeScript
-double; a blanket "every stubbed method needs an implementation" test over the
-Perform double would require settling a default return shape for about ten
-methods that tests deliberately leave unmocked, which is not an invariant that
-already holds. Escalation Issue
-[#726](https://github.com/endaye/lmdj/issues/726) tracks the narrower
-mechanism — gate only the wall-clock-reachable methods — and records that
-analysis so no later Task ships the blanket version.
+That half of the invariant is now gated. Escalation
+[#726](https://github.com/endaye/lmdj/issues/726) asked for the narrower
+mechanism — gate only the wall-clock-reachable methods, since a blanket
+"every stubbed method needs an implementation" test would require settling a
+default return shape for about ten methods tests deliberately leave
+unmocked — and
+`perform_surface.test.tsx` lands it: `wall-clock-reachable session double
+methods keep faithful defaults` asserts the methods the Perform controller
+reaches from `connect()` and the 250 ms replay poll
+(`subscribePerformanceMasterCaptureStatus`, `listPerformances`,
+`listPerformanceRecovery`, `queryPerformanceReplayStatus`) each carry a
+default implementation, and fails naming the violated invariant and its
+remedy. The fake-git half keeps its own gate in
+`apps/web-runtime-host/test/deploy_command_test.py`; `exit` is
+single-valued and names the gate this escalation landed.
 
 
 The Cloudflare pilot exposed a further real Actions shape: after a PR push,
@@ -185,7 +191,7 @@ ahead of the mutable association-head assertion, while retaining repository,
 workflow, event, pilot branch and PR-number checks first and exact association
 head checks for publishable runs. Its regression asserts no download, Cloudflare
 call, upload or status write for a real-shaped superseded run. The broader
-escalation #726 remains open.
+escalation #726 remained open at the time.
 
 The PR-Agent cutover's producer retained three diagnostic JSON members, while
 the reader fixture still manufactured only canonical receipts. A real run
@@ -196,7 +202,7 @@ controls for missing/tampered canonical receipts, unknown paths, duplicate
 members/keys, and malformed diagnostics. The only newly admitted members are
 the three explicitly named optional v2 diagnostics; none supplies review
 authority. Earlier invalid observations remain historical evidence. The broader
-escalation #726 remains open; this repair does not settle typed polling doubles.
+escalation #726 remained open at the time; this repair did not settle typed polling doubles.
 
 PR #1243 then exposed a different projection mismatch: the per-review comments
 endpoint returns legacy `position` fields but omits modern `original_line` and
@@ -207,4 +213,4 @@ the complete review inventory, and compares its exact original RIGHT-side line
 and body to the authenticated model artifact. The regression keeps list/detail
 responses separate and rejects missing, forged, duplicate and mismatched
 identities/locations. No line is inferred from legacy position and no finding
-is omitted. The broader escalation #726 remains open.
+is omitted. The broader escalation #726 remained open at the time.
