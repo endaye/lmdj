@@ -68,7 +68,11 @@ live-only，不再进入候选集。close 中途存储失败保持 flushing 重�
 `Application::make_pattern_transport_controller` 把每个存活 controller 的 session 登记为
 该 Project 的已知 Sequence owner：transport journal 打开期间，Sample 类提交保持 legacy
 busy 守卫（`sequence_session_active` 类型化拒绝），owner-loss 和解不再误封存活 journal；
-直接 legacy `begin_sequence` 在 engagement 存活期间被拒绝；controller 销毁即注销登记。
+直接 legacy `begin_sequence` 只在 transport journal 打开时被拒绝（闲置或已结算的
+controller 不阻塞）；controller 销毁即注销登记。owner 消失的未决 transport admission
+（controller 未结算即销毁、Host 崩溃）在 recovery 列出时被密封为 owner_lost 并列入
+`sequence.recovery.list`；其 apply 以 `sequence_admission_unresolved` 诚实拒绝，discard
+正常释放；存活 owner 的 journal 永不被列出操作密封。
 结算完整（terminal receipt、tail flush 恰好提交一次、complete）后移除已结算 journal，
 与 legacy stop 的 remove_active_if_complete 一致；再次 Record 走同一懒创建路径开新
 journal。

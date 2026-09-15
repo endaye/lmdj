@@ -3306,11 +3306,45 @@ struct Application::Impl {
   }
 
   foundation::Result<std::vector<SequenceRecoveryInfo>>
-  list_sequence_recovery(const SequenceStatusRequest& request) const {
+  list_sequence_recovery(const SequenceStatusRequest& request) {
     if (!valid_host_project_path(request.project_path)) {
       return foundation::Result<std::vector<SequenceRecoveryInfo>>::failure(
           sequence_error(ErrorCode::invalid_argument,
                          "Sequence recovery path is invalid"));
+    }
+    std::lock_guard lock(sequence_mutex);
+    // Reopen surface: an unresolved transport admission whose owner is gone
+    // (controller destroyed without settlement, Host crash) is sealed as
+    // owner loss here so the recovery listing can offer it. A journal with a
+    // live legacy session or live vended controller is never sealed by a
+    // listing. Legacy journals carry no admission and keep their existing
+    // reconcile timing. A completed-but-not-removed admission journal (owner
+    // died between completion and removal) is reconciled to removal the same
+    // way. Sealing requires the bundle writer lease, so a journal owned by a
+    // live other process fails the seal with project_busy instead of being
+    // misclassified.
+    const auto active = sequence_journals.read_active(request.project_path);
+    if (!active.has_value() && active.error().code != ErrorCode::not_found) {
+      return foundation::Result<std::vector<SequenceRecoveryInfo>>::failure(
+          active.error());
+    }
+    if (active.has_value() && active.value().admission.has_value()) {
+      const auto key = sequence_key(request.project_path);
+      bool live = sequence_sessions.contains(key);
+      if (!live) {
+        std::lock_guard registry_lock(transport_sessions->mutex);
+        const auto registered = transport_sessions->sessions.find(key);
+        live = registered != transport_sessions->sessions.end() &&
+               registered->second.contains(active.value().session_id);
+      }
+      if (!live) {
+        // A reconcile failure (for example the bundle writer lease is held by
+        // a live external owner) means only "not sealable now": the listing
+        // still returns the sealed candidates it already had, and the next
+        // listing retries the seal.
+        static_cast<void>(
+            projects.reconcile_sequence_recovery(request.project_path));
+      }
     }
     const auto listed = sequence_journals.list_recoverable(
         request.project_path);
@@ -3758,7 +3792,7 @@ struct Application::Impl {
   }
 
   nlohmann::json sequence_recovery_list(
-      const nlohmann::json& request) const {
+      const nlohmann::json& request) {
     require(exact_keys(request, {"operation", "project_path"}),
             "sequence.recovery.list request shape is invalid");
     const auto result = list_sequence_recovery(SequenceStatusRequest{
