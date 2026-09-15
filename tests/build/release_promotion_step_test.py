@@ -9,6 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+from tools.release.model import canonical_sha256  # noqa: E402
 from tools.release.promotion_step import (  # noqa: E402
     PromotionCommit,
     PromotionStepError,
@@ -27,7 +28,10 @@ def spec(**changes):
                 "repository_id": 12, "actor_id": 34, "base_revision": BASE,
                 "head_sha": "7" * 40, "tree_sha": "8" * 40, "tag": "lmdj-v1.0.57.0",
                 "target_revision": TARGET, "to_channel": "dev", "from_channel": "canary",
-                "deployment_runs_sha256": "a" * 64, "attestation_sha256": "b" * 64}
+                "deployment_runs_sha256": canonical_sha256({"runs": [
+                    {"host": "runtime", "run_id": 111, "evidence_sha256": "a" * 64},
+                    {"host": "creator", "run_id": 222, "evidence_sha256": "b" * 64}]}),
+                "attestation_sha256": canonical_sha256({"attestation": "verified"})}
     document.update(changes)
     return document
 
@@ -56,23 +60,18 @@ class CommitTest(unittest.TestCase):
         self.repository.mkdir()
         (root := self.repository / "docs/release-evidence").mkdir(parents=True)
         (self.repository / "tools/release").mkdir(parents=True)
-        (self.repository / "tools/release/policy.json").write_text(json.dumps({
-            "schema": "lmdj.release-policy.v1", "repository": "endaye/lmdj",
-            "branch": "main", "blocking_workflow": "Core CI",
-            "fingerprints": {"product": "2B5EE362F058800036AD4FB5116ECE156F954D29",
-                             "checksum": "CB928A6E89DE498851688EF1AAC3E7019FC1478B"},
-            "tag_patterns": {"product": "lmdj-v"},
-            "profiles": ["web-hosts"], "channels": {}, "environments": {},
-            "historical_cutoff": "2026-08-13T00:00:00Z",
-            "promotion": {"max_channel": "dev", "required_hosts": ["runtime", "creator"]},
-            "prospective_ci_protocol": "self-test-v1"}, indent=2) + "\n")
-        (root / "release-intents.json").write_text(json.dumps({
-            "schema": "lmdj.release-intents.v1",
-            "entries": [{"tag": "lmdj-v1.0.57.0", "kind": "product",
-                         "identity": "1.0.57.0", "target_revision": TARGET,
-                         "channel": "canary", "disposition": "published",
-                         "profile": "web-hosts", "evidence_paths": []}],
-            "historical_exceptions": []}, indent=2) + "\n")
+        import shutil
+        shutil.copy2(ROOT / "tools/release/policy.json",
+                     self.repository / "tools/release/policy.json")
+        entries_line = ('    {"tag":"lmdj-v1.0.57.0","kind":"product",'
+                        '"identity":"1.0.57.0","target_revision":"' + TARGET +
+                        '","channel":"canary","disposition":"published",'
+                        '"profile":"web-hosts","evidence_paths":'
+                        '["docs/release-evidence/intent.md"]}')
+        (root / "release-intents.json").write_text(
+            '{\n  "schema": "lmdj.release-intents.v1",\n  "entries": [\n'
+            + entries_line +
+            '\n  ],\n  "historical_exceptions": []\n}\n')
         git = lambda *a: subprocess.run(["git", "-c", "core.hooksPath=/dev/null",
                                          "-C", str(self.repository), *a],
                                         check=True, capture_output=True)
@@ -85,24 +84,66 @@ class CommitTest(unittest.TestCase):
         self.worktree = base / "promotion-worktree"
 
     def test_commit_records_the_promotion_and_is_idempotent(self):
-        plan = type("P", (), {"evidence_document":
+        plan = type("P", (), {"tag": "lmdj-v1.0.57.0", "identity": "1.0.57.0",
+                              "target_revision": TARGET, "profile": "web-hosts",
+                              "from_channel": "canary", "to_channel": "dev",
+                              "promoted_at": "2026-09-15T00:00:00Z",
+                              "attestation": "verified", "deployment_runs": (
+            type("R", (), {"host": "runtime", "run_id": 111,
+                           "evidence_sha256": "a" * 64})(),
+            type("R", (), {"host": "creator", "run_id": 222,
+                           "evidence_sha256": "b" * 64})()),
+                              "evidence_paths": ("docs/release-evidence/"
+                                                 "lmdj-v1.0.57.0-dev-promotion.md",),
+                              "evidence_document":
                               "docs/release-evidence/lmdj-v1.0.57.0-dev-promotion.md"})()
-        commit = PromotionCommit(self.worktree, self.repository, spec=spec(base_revision=self.base),
-                                 plan=plan, author_name="Fixture",
+        commit = PromotionCommit(self.worktree, self.repository,
+                                 spec=spec(base_revision=self.base),
+                                 plan=plan, main_tip=lambda: self.base,
+                                 author_name="Fixture",
                                  author_email="fixture@example.invalid")
-        # apply_promotion runs inside commit; it needs the full policy ledger
-        # contract, which the minimal fixture policy does not satisfy. The
-        # commit path is exercised end to end by the promotion CLI suite; here
-        # the declared-path staging and recovery refusal are pinned directly.
-        with self.assertRaises(Exception):
-            commit.commit(before_write=lambda: None)
-        status = subprocess.run(["git", "-C", str(self.worktree), "status",
-                                 "--porcelain", "--untracked-files=all"],
-                                capture_output=True).stdout.decode()
-        self.assertNotIn("?.", status[:2])
-        head = subprocess.run(["git", "-C", str(self.worktree), "rev-parse", "HEAD"],
-                              capture_output=True).stdout.decode().strip()
-        self.assertEqual(head, self.base, "a failed apply must not commit")
+        head, tree = commit.commit(before_write=lambda: None)
+        self.assertNotEqual(head, self.base)
+        ledger = json.loads(subprocess.run(
+            ["git", "-C", str(self.worktree), "show", f"{head}:docs/release-evidence/release-intents.json"],
+            capture_output=True).stdout.decode())
+        row = next(row for row in ledger["entries"] if row["tag"] == "lmdj-v1.0.57.0")
+        self.assertEqual(row["promotions"][0]["channel"], "dev")
+        self.assertTrue((self.worktree / "docs/release-evidence/"
+                         "lmdj-v1.0.57.0-dev-promotion.md").exists())
+        # Idempotent resume returns the same commit without re-applying.
+        resumed = PromotionCommit(self.worktree, self.repository,
+                                  spec=spec(base_revision=self.base),
+                                  plan=plan, main_tip=lambda: self.base,
+                                  author_name="Fixture",
+                                  author_email="fixture@example.invalid")
+        self.assertEqual(resumed.completed_head(), head)
+        resumed_head, resumed_tree = resumed.commit(before_write=lambda: None)
+        self.assertEqual((head, tree), (resumed_head, resumed_tree))
+
+
+    def test_stale_base_revision_is_refused_before_any_write(self):
+        plan = type("P", (), {"tag": "lmdj-v1.0.57.0", "identity": "1.0.57.0",
+                              "target_revision": TARGET, "profile": "web-hosts",
+                              "from_channel": "canary", "to_channel": "dev",
+                              "promoted_at": "2026-09-15T00:00:00Z",
+                              "attestation": "verified", "deployment_runs": (
+            type("R", (), {"host": "runtime", "run_id": 111,
+                           "evidence_sha256": "a" * 64})(),
+            type("R", (), {"host": "creator", "run_id": 222,
+                           "evidence_sha256": "b" * 64})()),
+                              "evidence_paths": ("docs/release-evidence/"
+                                                 "lmdj-v1.0.57.0-dev-promotion.md",),
+                              "evidence_document":
+                              "docs/release-evidence/lmdj-v1.0.57.0-dev-promotion.md"})()
+        stale = PromotionCommit(self.worktree, self.repository,
+                                spec=spec(base_revision=self.base),
+                                plan=plan, main_tip=lambda: "f" * 40,
+                                author_name="Fixture",
+                                author_email="fixture@example.invalid")
+        with self.assertRaises(PromotionStepError):
+            stale.commit(before_write=lambda: None)
+        self.assertFalse(self.worktree.exists(), "no worktree may be created")
 
 
 if __name__ == "__main__":

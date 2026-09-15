@@ -98,6 +98,14 @@ def pr_document(spec):
     return document
 
 
+def _promotion_matches_spec(record, spec):
+    """The recorded promotion must be exactly the reviewed frozen one."""
+    return (record.get("channel") == spec["to_channel"]
+            and record.get("attestation") == "verified"
+            and canonical_sha256({"runs": record.get("deployment_runs")})
+            == spec["deployment_runs_sha256"])
+
+
 def _promotion_recorded(rows, spec):
     """True when exactly one row for this tag records this exact promotion."""
     matches = [row for row in rows if row.get("tag") == spec["tag"]]
@@ -106,24 +114,30 @@ def _promotion_recorded(rows, spec):
     promotions = matches[0].get("promotions")
     if not isinstance(promotions, list):
         return False
-    recorded = [p for p in promotions
-                if isinstance(p, dict) and p.get("channel") == spec["to_channel"]]
-    return bool(recorded)
+    return any(isinstance(p, dict) and _promotion_matches_spec(p, spec)
+               for p in promotions)
 
 
 class PromotionCommit:
     """Create the promotion docs commit on an owned worktree at canonical main."""
 
-    def __init__(self, root, repository_root, *, spec, plan, author_name,
-                 author_email):
-        """plan: the trusted PromotionPlan from plan_promotion (frozen input)."""
+    def __init__(self, root, repository_root, *, spec, plan, main_tip,
+                 author_name, author_email):
+        """plan: the trusted PromotionPlan from plan_promotion (frozen input).
+
+        main_tip: zero-argument callable returning the canonical repository's
+        current main tip; trusted composition binds the real repository.
+        """
         validate_spec(spec)
+        if not callable(main_tip):
+            _fail("requires the trusted canonical main reader")
         self.root = Path(root).absolute()
         if self.root.resolve() != self.root:
             _fail("worktree root contains a symlink")
         self.repository_root = Path(repository_root).absolute()
         self.spec = deepcopy(spec)
         self.plan = plan
+        self.main_tip = main_tip
         self.author = dict(author_name=author_name, author_email=author_email)
         self._workspace = None
 
@@ -189,9 +203,18 @@ class PromotionCommit:
         return self._completed()
 
     def commit(self, *, before_write):
-        """Create the single promotion docs commit; returns (head_sha, tree_sha)."""
-        if not callable(before_write):
-            _fail("requires the driver's durable write guard")
+        """Create the single promotion docs commit; returns (head_sha, tree_sha).
+
+        `main_tip()` is a zero-argument callable bound by trusted composition
+        to the canonical repository's current main tip; the worktree base must
+        equal it before any write.
+        """
+        if not callable(before_write) or not callable(self.main_tip):
+            _fail("requires the driver's durable write guard and the main reader")
+        main_tip = self.main_tip()
+        if main_tip != self.spec["base_revision"]:
+            _fail("base revision is not the current canonical main tip; "
+                  "re-spec the operation against the merged main")
         if self.root.exists():
             completed = self._completed()
             if completed is not None:
