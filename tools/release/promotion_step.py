@@ -99,11 +99,19 @@ def pr_document(spec):
 
 
 def _promotion_matches_spec(record, spec):
-    """The recorded promotion must be exactly the reviewed frozen one."""
+    """The recorded promotion must be exactly the reviewed frozen one.
+
+    Binds channel, attestation, the deployment-runs digest and the evidence
+    document path (the promotion's first evidence path is its own document,
+    derived from tag and channel). The ledger row's target_revision is bound
+    separately by the row-level spec check.
+    """
+    paths = record.get("evidence_paths") or []
     return (record.get("channel") == spec["to_channel"]
             and record.get("attestation") == "verified"
             and canonical_sha256({"runs": record.get("deployment_runs")})
-            == spec["deployment_runs_sha256"])
+            == spec["deployment_runs_sha256"]
+            and bool(paths) and paths[0] == evidence_document_relative(spec))
 
 
 def _promotion_recorded(rows, spec):
