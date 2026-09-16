@@ -732,6 +732,8 @@ test("blur and hidden stop recording only while recording, then the listeners ar
   fireEvent(window, new Event("blur"));
   await waitFor(() => expect(controller.stop).toHaveBeenCalledTimes(1));
   expect(await screen.findByText("Recording stopped: the window lost focus.")).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Commit"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Discard"})).toBeTruthy();
 
   // Now out of the recording phase: another blur must be a no-op (listener removed).
   fireEvent(window, new Event("blur"));
