@@ -32,13 +32,22 @@ const contractLevel = (contract: string) =>
 const WRITER_PROJECT_CONTRACT = CONTRACT_LEVELS.reduce((highest, level) =>
   contractLevel(level) > contractLevel(highest) ? level : highest);
 
-test("both accepted families name only levels the Contract declares", () => {
-  for (const level of [
+// The Bundle envelope declares only the writer's current level (#1364), but
+// legacy v3/v4 Project Truth remains loadable through structural parsing and
+// keeps its level identity until promoted on persist
+// (docs/prd/decisions/2026-09-15-project-bundle-current-level-only.md), so a
+// reader must still accept exactly those legacy levels. Pinning the set makes
+// any future legacy-loading change an explicit, test-visible decision.
+const LEGACY_LOADABLE_LEVELS: readonly string[] =
+  Object.freeze(["lmdj.project.v3", "lmdj.project.v4"]);
+
+test("the families name exactly the writer level plus the legacy loadable levels", () => {
+  const accepted = [
     ...PATTERN_FREE_PROJECT_CONTRACTS,
     ...PATTERN_SLOT_PROJECT_CONTRACTS,
-  ]) {
-    expect(CONTRACT_LEVELS).toContain(level);
-  }
+  ].sort();
+  const expected = [WRITER_PROJECT_CONTRACT, ...LEGACY_LOADABLE_LEVELS].sort();
+  expect(accepted).toEqual(expected);
 });
 
 test("the families claim disjoint levels", () => {
