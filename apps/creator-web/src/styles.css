@@ -91,7 +91,8 @@ button:disabled { color: #737b87; }
 }
 .sequence-overview,
 .project-overview,
-.sample-overview {
+.sample-overview,
+.perform-overview {
   display: grid;
   gap: 8px;
   pointer-events: none;

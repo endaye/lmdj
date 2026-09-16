@@ -7,6 +7,7 @@ import {shortProjectId} from "../state/view_model";
 import type {SequenceState} from "../state/sequence_state";
 import type {PatternTransportState} from "../state/pattern_transport_state";
 import {ProjectOverview} from "./project_overview";
+import {PerformOverview} from "./perform_overview";
 import {SampleOverview} from "./sample_overview";
 import {SequenceOverview} from "./sequence_overview";
 import {transportStatusLabel} from "./sequence_transport";
@@ -113,6 +114,8 @@ export function OverviewDisplay({
             ? "Slice preview does not write Project Truth until Adopt."
             : "Sound Set install writes only after an explicit Keep or Replace."}
         </p>
+      ) : activeMode === "perform" ? (
+        <PerformOverview />
       ) : (
         <p className="overview-grid-caption">
           Event grid is a live projection target; this overview does not edit it.
