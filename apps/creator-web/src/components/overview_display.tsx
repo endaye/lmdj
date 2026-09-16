@@ -5,11 +5,14 @@ import type {CreatorBuildIdentity} from "../runtime/build_identity";
 import {describeBuildIdentity, shortBuildLabel} from "../runtime/build_identity";
 import {shortProjectId} from "../state/view_model";
 import type {SequenceState} from "../state/sequence_state";
+import type {PatternTransportState} from "../state/pattern_transport_state";
+import {transportStatusLabel} from "./sequence_transport";
 
 interface OverviewDisplayProps {
   state: CreatorState;
   activeMode: CreatorMode;
   sequence: SequenceState;
+  transport?: PatternTransportState;
   midi?: MidiStatus | null;
   buildIdentity?: CreatorBuildIdentity;
 }
@@ -29,6 +32,7 @@ export function OverviewDisplay({
   state,
   activeMode,
   sequence,
+  transport,
   midi = null,
   buildIdentity,
 }: OverviewDisplayProps) {
@@ -54,7 +58,11 @@ export function OverviewDisplay({
           <span data-testid="creator-phase">{selectCreatorPhase(state)}</span>
           {" / "}
           <span data-testid="audio-state">Audio {state.audio.phase}</span>
-          {activeMode === "sequence" ? ` / ${sequence.phase}` : ""}
+          {activeMode === "sequence"
+            ? ` / ${transport === undefined
+                ? sequence.phase
+                : transportStatusLabel(transport)}`
+            : ""}
         </output>
       </div>
       <dl className="overview-facts">

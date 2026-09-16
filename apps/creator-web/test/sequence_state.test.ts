@@ -65,6 +65,18 @@ describe("Sequence state machine", () => {
       .toBe(initialSequenceState);
   });
 
+  test("a fresh selection while stopped supersedes a stale failure display", () => {
+    const failed = reduceSequence(initialSequenceState, {
+      type: "failed", errorCode: "HOST_STATE_INVALID",
+    });
+    expect(failed.errorCode).toBe("HOST_STATE_INVALID");
+    const selected = reduceSequence(failed, {
+      type: "selected", patternId: "pattern-2",
+    });
+    expect(selected.selectedPatternId).toBe("pattern-2");
+    expect(selected.errorCode).toBeNull();
+  });
+
   test("keeps an active Sequence session beneath the armed-Pad trim overlay", () => {
     const recording = reduceSequence(initialSequenceState, {
       type: "recording", status: status("active"), sessionId: "session-1",
