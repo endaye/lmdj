@@ -6,6 +6,7 @@ import {describeBuildIdentity, shortBuildLabel} from "../runtime/build_identity"
 import {shortProjectId} from "../state/view_model";
 import type {SequenceState} from "../state/sequence_state";
 import type {PatternTransportState} from "../state/pattern_transport_state";
+import {SequenceOverview} from "./sequence_overview";
 import {transportStatusLabel} from "./sequence_transport";
 
 interface OverviewDisplayProps {
@@ -94,9 +95,17 @@ export function OverviewDisplay({
           {shortBuildLabel(buildIdentity)}
         </p>
       ) : null}
-      <p className="overview-grid-caption">
-        Event grid is a live projection target; this overview does not edit it.
-      </p>
+      {activeMode === "sequence" ? (
+        <SequenceOverview
+          project={project}
+          state={sequence}
+          {...(transport === undefined ? {} : {transport})}
+        />
+      ) : (
+        <p className="overview-grid-caption">
+          Event grid is a live projection target; this overview does not edit it.
+        </p>
+      )}
     </div>
   );
 }

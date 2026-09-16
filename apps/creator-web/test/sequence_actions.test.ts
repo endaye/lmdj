@@ -55,6 +55,9 @@ test("Sequence capability detection includes settings and Pattern authoring", ()
   expect(isSequenceSession(value)).toBe(true);
   expect(isSequenceSession({...value, flushSequence: undefined})).toBe(false);
   expect(isSequenceSession({...value, updateSequenceSettings: undefined})).toBe(false);
+  expect(isSequenceSession({...value, createPattern: undefined})).toBe(false);
+  expect(isSequenceSession({...value, applySequenceRecovery: undefined})).toBe(false);
+  expect(isSequenceSession({...value, discardSequenceRecovery: undefined})).toBe(false);
 });
 
 test("a stale journal refresh cannot lower the committed authoring revision", () => {
