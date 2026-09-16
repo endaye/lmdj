@@ -459,7 +459,13 @@ tag 模式请求由准备层与转换层自身拒绝（checked-cut 分配只存�
 `batch_test_evidence`，字符串会让写入的行在下次读取时被拒绝），以及 PR 序列校验器不接受
 载体自身加挂 head_sha/tree_sha 的 spec（真实序列路径因此永远无法通过）。promotion 步此前只有
 提交侧，其驱动器侧载体与 PR 序列（复用既有 witness 传输，promotion-pr 序列状态机）在本次登记
-中补齐。`prepared` / `tag` / `verification` 与 publication、runtime、creator、published_record
+中补齐。`publication` 步已按受管 dispatch 模式登记：`RecoveredDispatch` 包装在 spec 输入
+（intent 行的 tag/target、`prepared` 输出的计划摘要、draft 步创建的远端 Draft 数字身份、行内
+冻结 changelog 的 binding 摘要）齐备前报 `pending`，其 `bind` 在派发边界重新推导全部外部输入
+并要求与已登记 spec 一致，漂移即 fail-closed；effect 验证复用 `PublicationEffect`（发布记录的
+target/changelog/notes 逐项比对）。entry_gates 另补 `dispatch_authority` 门：durable dispatch 传入的
+是 spec 而非请求，故重钉 spec 的请求绑定、actor 与控制 revision 并复核实时权限。
+`prepared` / `tag` / `verification` 与 runtime、creator、published_record
 受管 adapter 的登记录入仍未完成，`release_carriers` 因此继续拒绝执行。
 
 带 `changelog` 的 reviewed intent 现已接通 prepare / Draft / published 验证：正文

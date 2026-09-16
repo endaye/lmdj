@@ -1294,5 +1294,251 @@ class CandidateEnrollmentTest(unittest.TestCase):
             enrolled_candidate_timestamp(root)
 
 
+class RecoveredDispatchTest(unittest.TestCase):
+    """The managed dispatch wrapper: pending until derivable, never self-driving."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+
+    def operation(self):
+        return {"step": "publication", "operation_id": DIGEST,
+                "status": "intent", "evidence": None}
+
+    def test_pending_until_derivable_and_no_write_while_waiting(self):
+        from tools.release.carriers import RecoveredDispatch
+
+        step = RecoveredDispatch("publication", lambda _s, _o: None)
+        observed = step.observe(state(), self.operation())
+        self.assertEqual(observed.status, "pending")
+        self.assertIsNone(observed.evidence)
+        written = []
+        # The driver drives a managed pending step through advance; with the
+        # inputs still underivable, nothing may be posted or guarded.
+        step.advance(state(), self.operation(),
+                     before_post=lambda: written.append(True))
+        self.assertEqual(written, [])
+        with self.assertRaises(JournalError):
+            step.advance(state(), {"step": "publication", "operation_id": "e" * 64},
+                         before_post=lambda: written.append(True))
+        self.assertEqual(written, [])
+
+    def test_delegation_and_refusals(self):
+        from tools.release.carriers import RecoveredDispatch
+
+        calls = []
+
+        class Adapter:
+            def observe(self, state, operation):
+                calls.append("observe")
+                return Observation("absent")
+
+            def advance(self, state, operation, *, before_post):
+                calls.append("advance")
+                before_post()
+
+        step = RecoveredDispatch("publication", lambda _s, _o: Adapter())
+        self.assertEqual(step.observe(state(), self.operation()).status, "absent")
+        posted = []
+        step.advance(state(), self.operation(),
+                     before_post=lambda: posted.append(True))
+        self.assertEqual(posted, [True])
+        self.assertEqual(calls, ["observe", "advance"])
+        with self.assertRaises(JournalError):
+            step.observe(state(), {"step": "runtime", "operation_id": DIGEST})
+        with self.assertRaises(JournalError):
+            RecoveredDispatch("draft", lambda _s, _o: None)
+        with self.assertRaises(JournalError):
+            RecoveredDispatch("publication", None)
+
+
+CHANGELOG_DOCUMENT = {"schema": "lmdj.release-changelog.v1",
+                      "repository": "endaye/lmdj", "tag": "lmdj-v" + BUILD,
+                      "product_build": BUILD, "profile": "web-hosts",
+                      "target_revision": TARGET, "baseline": None,
+                      "commits": [TARGET],
+                      "changes": [{"category": "fix", "area": "core",
+                                   "text": "Fixture repair", "commits": [TARGET]}],
+                      "exclusions": []}
+
+
+class PublicationEnrollmentTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.release = None
+        self.built = []
+        self.binds = []
+        self.effect_calls = []
+        self.api_reads = []
+
+    def write_plan(self):
+        import hashlib
+
+        from tools.release import prepared_step
+
+        output = self.root / prepared_step.output_relative("lmdj-v" + BUILD)
+        output.mkdir(parents=True, exist_ok=True)
+        body = b'{"fixture": "plan"}'
+        (output / prepared_step._PLAN_DOCUMENT).write_bytes(body)
+        (output / prepared_step._PLAN_DIGEST).write_text(
+            hashlib.sha256(body).hexdigest() + "\n")
+        return hashlib.sha256(body).hexdigest()
+
+    def ledger(self, with_changelog=False):
+        intent = Intent()
+        if with_changelog:
+            intent.changelog = deepcopy(CHANGELOG_DOCUMENT)
+        return Ledger(rows={"lmdj-v" + BUILD: intent})
+
+    def verify_effect(self, state, operation, binding):
+        self.effect_calls.append(binding)
+        return Observation("pending")
+
+    def transition_for(self, spec, expected, bind):
+        self.binds.append(bind)
+        from tools.release.dispatch_evidence import DispatchEvidenceConsumer
+        from tools.release.dispatch_transition import DispatchTransition
+        from tools.release.durable_dispatch import DurableDispatch
+        from tools.release.github_api import GitHubClient
+
+        def transport(method, url, headers, body):
+            self.api_reads.append((method, url))
+            raise AssertionError("the absent path must not touch the API")
+
+        consumer = DispatchEvidenceConsumer(
+            api_get=lambda *a, **k: None, git_root=self.root, repository_id=12,
+            workflow="publish-release.yml", workflow_id=50,
+            producer_revision=spec["producer_revision"])
+        controller = DurableDispatch(
+            self.root / "dispatch",
+            client=GitHubClient(token="FIXTURE-NOT-A-SECRET",
+                                http_transport=transport),
+            consumer=consumer, authorize=lambda _spec: None,
+            ready=lambda _spec: None)
+        self.built.append((deepcopy(spec), deepcopy(expected)))
+        return DispatchTransition(controller, spec, bind=bind,
+                                  verify_effect=self.verify_effect)
+
+    def step(self, **overrides):
+        from tools.release.carriers import enroll_publication
+
+        arguments = dict(root=self.root, candidate_root=self.root,
+                         repository_id=12, ledger=self.ledger(),
+                         workflow_id=50, producer_revision="0" * 40,
+                         release_by_tag=lambda _tag: self.release,
+                         transition_for=self.transition_for)
+        arguments.update(overrides)
+        return enroll_publication(**arguments)
+
+    def publication_state(self):
+        # The real DispatchTransition validates the journal state's request
+        # binding, so the fixture digest must be the true canonical one.
+        from tools.release.model import canonical_sha256
+
+        document = request()
+        return state(request=document,
+                     request_digest=canonical_sha256(document))
+
+    def operation(self):
+        from tools.release.model import canonical_sha256
+
+        digest = canonical_sha256(request())
+        return {"step": "publication",
+                "operation_id": canonical_sha256({"request": digest,
+                                                  "step": "publication"}),
+                "status": "intent", "evidence": None}
+
+    def test_pending_at_each_underivable_stage(self):
+        step = self.step()
+        # New mode before any allocation: no Build to publish.
+        new_mode = state(request=request(mode="new", requested_tag=None))
+        self.assertEqual(step.observe(new_mode, self.operation()).status, "pending")
+        # Tag mode with the row but no prepared plan.
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        # Plan prepared but the draft step has not created the Release.
+        self.write_plan()
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        # Draft exists but the changelog step has not bound its record.
+        self.release = {"draft": True, "id": 4096}
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        self.assertEqual(self.built, [])
+
+    def test_an_unreadable_or_idless_release_fails_closed(self):
+        self.write_plan()
+        step = self.step()
+        for release in ("not-a-projection", {"draft": True},
+                        {"draft": True, "id": "4096"}):
+            self.release = release
+            with self.assertRaises(JournalError):
+                step.observe(state(), self.operation())
+        self.assertEqual(self.built, [])
+
+    def test_non_callable_readers_are_refused_at_enrollment(self):
+        from tools.release.carriers import enroll_publication
+
+        with self.assertRaises(JournalError):
+            self.step(release_by_tag=None)
+        with self.assertRaises(JournalError):
+            self.step(transition_for=None)
+
+    def test_delegation_builds_the_real_managed_adapter(self):
+        from tools.release.model import canonical_sha256
+
+        plan = self.write_plan()
+        self.release = {"draft": True, "id": 4096}
+        step = self.step(ledger=self.ledger(with_changelog=True))
+        # The real DispatchTransition + DurableDispatch: the durable child is
+        # enrolled, nothing is posted, and the honest not-yet-dispatched state
+        # is absent (not pending — the inputs exist, the effect does not).
+        observed = step.observe(self.publication_state(), self.operation())
+        self.assertEqual(observed.status, "absent")
+        self.assertEqual(self.api_reads, [])
+        self.assertEqual(self.effect_calls, [])
+        self.assertEqual(len(self.built), 1)
+        spec, expected = self.built[0]
+        digest = canonical_sha256(request())
+        operation_id = canonical_sha256({"request": digest,
+                                         "step": "publication"})
+        self.assertEqual(spec["operation_id"], operation_id)
+        self.assertEqual(spec["workflow"], "publish-release.yml")
+        self.assertEqual(spec["workflow_id"], 50)
+        self.assertEqual(spec["inputs"], {"tag": "lmdj-v" + BUILD,
+                                          "release_id": "4096",
+                                          "plan_sha256": plan,
+                                          "request_id": operation_id})
+        from tools.release.changelog import binding
+
+        digests = binding(deepcopy(CHANGELOG_DOCUMENT))
+        self.assertEqual(expected, {"target_revision": TARGET,
+                                    "changelog_sha256": digests["sha256"],
+                                    "notes_sha256": digests["notes_sha256"]})
+        # The durable dispatch child enrolled its own state, read-only.
+        enrolled = json.loads((self.root / "dispatch" / "dispatch.json").read_text())
+        self.assertEqual(enrolled["post_intent"], False)
+        self.assertEqual(enrolled["spec"]["operation_id"], operation_id)
+
+    def test_a_drifting_record_fails_closed_at_the_dispatch_boundary(self):
+        self.write_plan()
+        self.release = {"draft": True, "id": 4096}
+        step = self.step(ledger=self.ledger(with_changelog=True))
+        self.assertEqual(step.observe(self.publication_state(), self.operation()).status,
+                         "absent")
+        # The bind cross-check itself: the records must still agree with the
+        # enrolled spec at the dispatch boundary.
+        self.release = {"draft": True, "id": 8192}
+        with self.assertRaises(JournalError):
+            self.binds[0](self.publication_state(), self.operation(),
+                          self.built[0][0])
+        # And one layer down, the durable child refuses the rebound spec that
+        # a fresh recovery derives from the drifted record.
+        from tools.release.durable_dispatch import DurableDispatchError
+
+        with self.assertRaises(DurableDispatchError):
+            step.observe(self.publication_state(), self.operation())
+
+
 if __name__ == "__main__":
     unittest.main()

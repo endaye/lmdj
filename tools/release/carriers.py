@@ -781,3 +781,146 @@ def assemble_candidate_transition(*, request, checks, source, checked_cut,
         observe_main=observe_main, review=review, verify_merged=verify_merged,
         witness_root=witness_root, author_name=author_name,
         author_email=author_email, timestamp=timestamp)
+
+
+_DISPATCH_STEPS = ("publication", "runtime", "creator")
+
+
+class RecoveredDispatch:
+    """One managed dispatch step: recover the spec, then delegate.
+
+    The dispatch counterpart of `RecoveredStep`: the driver drives managed
+    dispatch adapters through `advance(..., before_post=...)`, so this wrapper
+    exposes exactly that managed signature — never the self-driving
+    `before_write` one. A step whose dispatch inputs are not yet derivable
+    from prior steps' records is `pending`, never `absent`.
+    """
+
+    def __init__(self, step, recover):
+        if step not in _DISPATCH_STEPS:
+            _fail(f"unknown dispatch step {step!r}")
+        if not callable(recover):
+            _fail("requires a callable spec recovery")
+        self.step = step
+        self._recover = recover
+        self._waiting = None
+
+    def adapter(self, state, operation):
+        """The concrete DispatchTransition for this operation, or None."""
+        if operation.get("step") != self.step:
+            _fail("operation does not belong to this step")
+        return self._recover(state, operation)
+
+    def observe(self, state, operation):
+        adapter = self.adapter(state, operation)
+        if adapter is None:
+            # The inputs this step dispatches on do not exist yet; the run
+            # waits rather than claiming absence.
+            self._waiting = operation.get("operation_id")
+            return Observation("pending")
+        self._waiting = None
+        return adapter.observe(state, operation)
+
+    def advance(self, state, operation, *, before_post):
+        adapter = self.adapter(state, operation)
+        if adapter is None:
+            if self._waiting == operation.get("operation_id"):
+                # The driver asks the managed step to act precisely when the
+                # inputs are not derivable; it re-observes after the call, so
+                # writing nothing keeps the step honestly pending.
+                return
+            _fail("the step's dispatch inputs are not derivable but it was "
+                  "asked to act")
+        adapter.advance(state, operation, before_post=before_post)
+
+
+def enroll_publication(*, root, candidate_root, repository_id, ledger,
+                       workflow_id, producer_revision, release_by_tag,
+                       transition_for):
+    """The `publication` step: dispatch publish-release.yml for the reviewed Draft.
+
+    Managed adapter: the returned `RecoveredDispatch` follows the driver's
+    managed dispatch path. The spec's inputs come from prior steps' records —
+    the tag and target revision from the intent row (authoritative per the
+    reconciled identity), the plan digest from the `prepared` output, the
+    numeric Release identity from the far-side Draft the `draft` step created,
+    and the changelog digests from the row's frozen changelog binding. Until
+    all four exist the step is `pending`; a Release that disappeared or
+    carries no numeric identity, or a record that drifts between recovery and
+    the dispatch boundary, fails closed. `workflow_id`/`producer_revision` are
+    the trusted composition's pins for the publish workflow.
+    `transition_for(spec, expected, bind)` is the trusted composition's
+    factory for the concrete `DispatchTransition` (controller and the
+    `PublicationEffect` verifier); the enrollment owns `bind`, which
+    re-derives every external input from the current records and requires
+    they still match the spec at the dispatch boundary.
+    """
+    from .batch_reference import thaw
+    from .changelog import binding as changelog_binding
+    from .durable_dispatch import validate_spec as validate_dispatch_spec
+    from .model import canonical_sha256
+
+    if not callable(release_by_tag) or not callable(transition_for):
+        _fail("requires the trusted far-side reader and transition factory")
+
+    def operation_id(digest):
+        return canonical_sha256({"request": digest, "step": "publication"})
+
+    def recover_inputs(state):
+        """The dispatch inputs from current records, or None while underivable."""
+        fields = spec_identity(state, candidate_root=candidate_root,
+                               repository_id=repository_id, ledger=ledger,
+                               operation_id=operation_id, fields=_DRAFT_FIELDS)
+        if fields is None:
+            return None
+        tag = fields["tag"]
+        plan = read_prepared_plan(root, tag)
+        if plan is None:
+            return None
+        release = release_by_tag(tag)
+        if release is None:
+            # The draft step has not created the Release yet.
+            return None
+        if not hasattr(release, "get"):
+            _fail("the far-side Release projection is not readable")
+        release_id = release.get("id")
+        if type(release_id) is not int or release_id <= 0:
+            _fail("the far-side Release carries no valid numeric identity")
+        intent = ledger.intent_for_tag(tag)
+        changelog = getattr(intent, "changelog", None) if intent is not None else None
+        if changelog is None:
+            # The changelog step has not bound its frozen record yet.
+            return None
+        digests = changelog_binding(thaw(changelog))
+        op_id = fields["operation_id"]
+        spec = {"request_sha256": fields["request_sha256"],
+                "operation_id": op_id,
+                "repository_id": fields["repository_id"],
+                "actor_id": fields["actor_id"],
+                "workflow": "publish-release.yml",
+                "workflow_id": workflow_id,
+                "control_revision": state["request"]["control_revision"],
+                "producer_revision": producer_revision,
+                "inputs": {"tag": tag, "release_id": str(release_id),
+                           "plan_sha256": plan, "request_id": op_id}}
+        expected = {"target_revision": fields["target_revision"],
+                    "changelog_sha256": digests["sha256"],
+                    "notes_sha256": digests["notes_sha256"]}
+        return spec, expected
+
+    def recover(state, operation):
+        recovered = recover_inputs(state)
+        if recovered is None:
+            return None
+        spec, expected = recovered
+        validate_dispatch_spec(spec)
+
+        def bind(state, operation, bound=spec):
+            """Re-derive every external input; the records must still agree."""
+            current = recover_inputs(state)
+            if current is None or current[0] != bound:
+                _fail("the dispatch inputs drifted from the enrolled spec")
+
+        return transition_for(spec, expected, bind)
+
+    return RecoveredDispatch("publication", recover)

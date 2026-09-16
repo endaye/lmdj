@@ -94,6 +94,46 @@ class AuthorityGateTest(unittest.TestCase):
             self.gate(mode="tag")
 
 
+class DispatchAuthorityTest(unittest.TestCase):
+    def spec(self, **changes):
+        from tools.release.model import canonical_sha256
+
+        document = {"request_sha256": canonical_sha256(request()), "actor_id": 34,
+                    "control_revision": CONTROL}
+        document.update(changes)
+        return document
+
+    def gate(self, **overrides):
+        from tools.release.entry_gates import dispatch_authority
+
+        arguments = dict(github=GitHubStub(), git=GitStub(),
+                         policy=PolicyStub(), request=request())
+        arguments.update(overrides)
+        return dispatch_authority(**arguments)
+
+    def test_the_bound_spec_passes_and_drift_fails_closed(self):
+        authorize = self.gate()
+        authorize(self.spec())  # no raise
+        with self.assertRaises(EntryGateError):
+            authorize(self.spec(request_sha256="0" * 64))
+        with self.assertRaises(EntryGateError):
+            authorize(self.spec(actor_id=35))
+        with self.assertRaises(EntryGateError):
+            authorize(self.spec(control_revision="9" * 40))
+        with self.assertRaises(EntryGateError):
+            authorize("not-a-spec")
+
+    def test_live_authority_loss_fails_closed(self):
+        with self.assertRaises(EntryGateError):
+            self.gate(github=GitHubStub(actor=35))(self.spec())
+        with self.assertRaises(EntryGateError):
+            self.gate(git=GitStub(ancestors=()))(self.spec())
+        drifted = PolicyStub()
+        drifted.digest = "f" * 64
+        with self.assertRaises(EntryGateError):
+            self.gate(policy=drifted)(self.spec())
+
+
 class MainObservationTest(unittest.TestCase):
     def test_the_fetched_canonical_revision_is_returned(self):
         self.assertEqual(main_observation(git=GitStub())(), MAIN)
