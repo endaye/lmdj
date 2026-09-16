@@ -172,6 +172,8 @@ test("exposes Pad and time labels on focusable handles and numeric inputs", () =
   expect(screen.getByRole("slider", {name: "Pad A1 End — 0.000 s"})).toBeTruthy();
   expect(screen.getByRole("spinbutton", {name: "Pad A1 Start time (seconds)"})).toBeTruthy();
   expect(screen.getByRole("spinbutton", {name: "Pad A1 End time (seconds)"})).toBeTruthy();
+  expect(screen.getByText("START / TAP TO EDIT")).toBeTruthy();
+  expect(screen.getByText("END / TAP TO EDIT")).toBeTruthy();
 });
 
 test("previews a pointer drag without mutation and commits once on release", () => {
@@ -241,19 +243,19 @@ test("unmount cancels an active draft without committing", () => {
   expect(onCommit).not.toHaveBeenCalled();
 });
 
-test("grab zones span 12 px each side of the handle line, bounded by the midpoint", () => {
+test("grab zones span 20 px each side of the handle line, bounded by the midpoint", () => {
   const {container} = renderEditor();
   // trimStartFrame 1 → 12.5%, trimEndFrame 7 → 87.5%, midpoint 50%.
   // jsdom re-serializes min()/max(), so assert the geometry by its parts.
   const start = gripZone(container, "start");
   const end = gripZone(container, "end");
   expect(start.style.left).toContain("max(0px");
-  expect(start.style.left).toContain("12.5% - 12px");
+  expect(start.style.left).toContain("12.5% - 20px");
   expect(start.style.right).toContain("min(50%");
-  expect(start.style.right).toContain("12.5% + 12px");
+  expect(start.style.right).toContain("12.5% + 20px");
   expect(end.style.left).toContain("max(50%");
-  expect(end.style.left).toContain("87.5% - 12px");
-  expect(end.style.right).toContain("100% - 87.5% - 12px");
+  expect(end.style.left).toContain("87.5% - 20px");
+  expect(end.style.right).toContain("100% - 87.5% - 20px");
 });
 
 test("a press near a handle line grabs that handle, whatever the pointer's height", () => {
@@ -317,9 +319,9 @@ test("adjacent handles partition at the midpoint and stay independently grabbabl
   const start = gripZone(container, "start");
   const end = gripZone(container, "end");
   expect(start.style.right).toContain("min(43.75%");
-  expect(start.style.right).toContain("37.5% + 12px");
+  expect(start.style.right).toContain("37.5% + 20px");
   expect(end.style.left).toContain("max(43.75%");
-  expect(end.style.left).toContain("50% - 12px");
+  expect(end.style.left).toContain("50% - 20px");
 
   fireEvent.pointerDown(start, {pointerId: 26, clientX: 155, button: 0});
   fireEvent.pointerMove(start, {pointerId: 26, clientX: 105});
