@@ -6,6 +6,7 @@ import {describeBuildIdentity, shortBuildLabel} from "../runtime/build_identity"
 import {shortProjectId} from "../state/view_model";
 import type {SequenceState} from "../state/sequence_state";
 import type {PatternTransportState} from "../state/pattern_transport_state";
+import {ProjectOverview} from "./project_overview";
 import {SequenceOverview} from "./sequence_overview";
 import {transportStatusLabel} from "./sequence_transport";
 
@@ -101,6 +102,8 @@ export function OverviewDisplay({
           state={sequence}
           {...(transport === undefined ? {} : {transport})}
         />
+      ) : activeMode === "project" ? (
+        <ProjectOverview state={state} />
       ) : (
         <p className="overview-grid-caption">
           Event grid is a live projection target; this overview does not edit it.

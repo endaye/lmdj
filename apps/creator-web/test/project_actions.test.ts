@@ -1,5 +1,6 @@
 import {describe, expect, test} from "vitest";
 
+import * as projectActions from "../src/runtime/project_actions";
 import {
   createProjectActionLane,
   importProjectJourney,
@@ -276,4 +277,10 @@ describe("Project journeys", () => {
       () => {},
     )).rejects.toBe(primary);
   });
+});
+
+test("Project action module has no New, Save As, or Project export journey", () => {
+  expect(projectActions).not.toHaveProperty("createEmptyProject");
+  expect(projectActions).not.toHaveProperty("saveAsProject");
+  expect(projectActions).not.toHaveProperty("exportProject");
 });

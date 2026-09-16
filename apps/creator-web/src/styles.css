@@ -89,7 +89,8 @@ button:disabled { color: #737b87; }
 .sequence-touch-workspace [aria-label="Sequence recovery"] article {
   display: flex; flex-wrap: wrap; align-items: end; gap: .65rem;
 }
-.sequence-overview {
+.sequence-overview,
+.project-overview {
   display: grid;
   gap: 8px;
   pointer-events: none;

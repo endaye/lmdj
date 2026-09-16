@@ -11,6 +11,7 @@ interface ProjectSurfaceProps {
   canOpen?: boolean;
   canImport?: boolean;
   showLocalProjects?: boolean;
+  hideSummary?: boolean;
   onShowLocal?: () => void;
   onHideLocal?: () => void;
   onOpen?: (project: LocalProjectSummary) => void;
@@ -29,6 +30,7 @@ export function ProjectSurface({
   canOpen = false,
   canImport = false,
   showLocalProjects = false,
+  hideSummary = false,
   onShowLocal,
   onHideLocal,
   onOpen,
@@ -94,7 +96,7 @@ export function ProjectSurface({
           />
         </section>
       ) : null}
-      {!showChooser && project ? (
+      {!showChooser && project && !hideSummary ? (
         <dl className="project-summary">
           <div><dt>Project ID</dt><dd>{project.projectId}</dd></div>
           <div><dt>Revision</dt><dd>{project.revision}</dd></div>
