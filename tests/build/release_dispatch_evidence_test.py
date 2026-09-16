@@ -229,8 +229,12 @@ class EvidenceTest(unittest.TestCase):
 
     def test_receipt_wrong_request_tag_plan_or_numeric_release_is_refused(self):
         old=deepcopy(self.document)
-        for key,value in {"request_id":"f"*64,"tag":"lmdj-v1.0.57.0","release_id":"31","plan_sha256":"f"*64}.items():
+        for key,value in {"request_id":"f"*64,"tag":"lmdj-v9.9.99.0","release_id":"31","plan_sha256":"f"*64}.items():
             with self.subTest(key=key):
+                # A mutation that equals the fixture's own value is vacuous:
+                # the negative case must actually change the input (#1364
+                # drifted the shared fixture tag into this value once).
+                self.assertNotEqual(old["inputs"][key],value)
                 self.document=deepcopy(old);self.document["inputs"][key]=value;self.pack()
                 with self.assertRaisesRegex(DispatchEvidenceError,"exact request"):self.verify()
 

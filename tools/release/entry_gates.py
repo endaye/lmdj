@@ -127,6 +127,33 @@ def production_review_reader(*, token):
     return reader_for
 
 
+def dispatch_authority(*, github, git, policy, request):
+    """The dispatch controller's `authorize`: the spec under live authority.
+
+    The durable dispatch passes its own spec (not the request), so re-pin the
+    spec's request binding, actor and control revision against the original
+    request, and revalidate the live authority exactly as `authority_gate`
+    does. An unavailable check raises; unavailable is never approval.
+    """
+    validate_request(request)
+    digest = canonical_sha256(request)
+
+    def authorize(spec):
+        if type(spec) is not dict or spec.get("request_sha256") != digest:
+            _fail("the dispatch spec does not bind the original request")
+        if spec.get("actor_id") != request["actor_id"] \
+                or spec.get("control_revision") != request["control_revision"]:
+            _fail("the dispatch spec drifted from the original request")
+        if github.get_authenticated_actor() != request["actor_id"]:
+            _fail("the authenticated actor no longer matches the request")
+        if not git.is_main_ancestor(request["control_revision"]):
+            _fail("the pinned control revision is no longer canonical history")
+        if policy.digest != request["policy_digest"]:
+            _fail("the pinned policy no longer matches the request")
+
+    return authorize
+
+
 def merged_gate(*, git):
     """The `verify_merged` callback: the squash is real, canonical and reviewed.
 
