@@ -420,10 +420,12 @@ promotion 步骤的执行载体已接入：把 plan_promotion/apply_promotion �
 恢复前复核提交内容；PR 经既有 witness 传输。
 
 changelog_site 与 final 是两个只读载体：前者抓取已部署 doc-site 的版本与
-release 路由（404 报 absent，站点不可达报 unknown，绝不算通过）；后者回读全部
-已记录的远端身份——promoted channel 下的 published 账本行、非 draft Release、
-存活路由——并绑定为一份证据摘要。至此每一步都有执行载体或受管 adapter；
-run/resume 的全量登记仍未接通。
+release 路由，且要求页面确实标明本 Product Build——仅 200 不算证据，故
+catch-all 或陈旧部署会被判为冲突（404 为 absent、站点不可达为 unknown，均
+绝不算通过）；后者回读 promoted channel 下的 published 账本行（含 tag 比对）、
+非 draft 且 ID 一致的 Release 与同样的路由证据，路由正文摘要一并绑入证据
+摘要。14 个步骤至此各有执行载体或受管 adapter；`release_carriers` 的全量登记
+仍未接通。
 
 带 `changelog` 的 reviewed intent 现已接通 prepare / Draft / published 验证：正文
 进入 plan 摘要，prepare 重验真实 Git 范围，恢复时检查本地 notes，Draft 与公开

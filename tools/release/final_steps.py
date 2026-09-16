@@ -5,7 +5,9 @@ produce; neither performs a write. `ChangelogSiteCarrier` fetches the
 deployed doc-site routes for this Build and refuses divergence from the
 prepared identities; `FinalCarrier` re-reads every far-side identity the
 sequence recorded (published Release projection, ledger row channel and
-disposition, snapshot presence) and verifies the whole chain at once. The
+disposition, snapshot presence) and verifies the whole chain at once. A
+route must serve a page that names this Build — a 200 alone is not proof —
+and the served body digests are bound into the evidence. The
 driver treats a carrier without `advance` as observe-only: the step passes
 when the far side is already true and reports `absent` before it is.
 """
@@ -13,7 +15,7 @@ when the far side is already true and reports `absent` before it is.
 from copy import deepcopy
 import re
 
-from .model import canonical_sha256
+from .model import CHANNEL_ORDER, STABLE_PROMOTION_QUESTION, canonical_sha256
 from .orchestration_driver import Observation
 
 
@@ -87,8 +89,11 @@ def validate_final_spec(spec):
         _fail("site base URL is invalid")
     if type(spec["release_id"]) is not int or spec["release_id"] <= 0:
         _fail("release id is invalid")
-    if spec["channel"] not in ("canary", "dev", "beta", "stable"):
-        _fail("channel is invalid")
+    # `stable` is unreachable: promotion refuses it because D8 forbids flipping
+    # the prerelease flag on a published Release.
+    if spec["channel"] not in CHANNEL_ORDER or spec["channel"] == "stable":
+        _fail(f"channel is invalid: stable promotion is not implemented; see "
+              f"{STABLE_PROMOTION_QUESTION}")
 
 
 def site_routes(spec):
@@ -108,28 +113,45 @@ def site_routes(spec):
             "release": f"{base}/releases/{build}"}
 
 
-def _fetch_status(fetch, url):
-    """fetch(url) -> a real HTTP status int; unreachable is 0, defects raise.
+def _fetch_route(fetch, url):
+    """fetch(url) -> (status, body); transport failure is (0, None).
 
     Only transport failure is swallowed (the site is unreachable → the caller
     reports `unknown`, never a pass). A defect in the trusted fetch callable —
-    a wrong signature or a non-HTTP return — must surface instead of being
-    silently coerced.
-
-    ponytail: only the status is bound into evidence. When a route must prove
-    it serves THIS Build's content (not just any 200), upgrade the fetch
-    contract to return (status, body_digest) and bind the digests in
-    ChangelogSiteCarrier.observe / FinalCarrier.observe evidence.
+    a wrong signature, a non-HTTP status or a non-text body — must surface
+    instead of being silently coerced.
     """
     try:
-        status = fetch(url)
+        answer = fetch(url)
     except OSError:  # URLError, timeouts, connection resets
-        return 0
+        return 0, None
+    if type(answer) is not tuple or len(answer) != 2:
+        raise SiteStepError(
+            f"why: the site fetch returned {answer!r}, not a (status, body) "
+            "pair; remedy: fix the trusted fetch callable")
+    status, body = answer
     if type(status) is not int or status <= 0:
         raise SiteStepError(
             f"why: the site fetch returned {status!r}, not an HTTP status; "
             "remedy: fix the trusted fetch callable")
-    return status
+    if status == 200 and type(body) is not str:
+        raise SiteStepError(
+            f"why: the site fetch returned a {type(body).__name__} body for "
+            "HTTP 200; remedy: fix the trusted fetch callable")
+    return status, body
+
+
+def _body_digest(body):
+    return canonical_sha256({"body": body})
+
+
+def _proves_build(body, product_build):
+    """The deployed page must name this Build, as the site smoke lane asserts.
+
+    A 200 alone proves nothing: a catch-all route or a stale deployment also
+    answers 200 on a Build's URL.
+    """
+    return type(body) is str and f"Product Build {product_build}" in body
 
 
 class ChangelogSiteCarrier:
@@ -144,8 +166,9 @@ class ChangelogSiteCarrier:
 
     def observe(self, state, operation):
         routes = site_routes(self.spec)
-        statuses = {name: _fetch_status(self.fetch, url)
-                    for name, url in routes.items()}
+        fetched = {name: _fetch_route(self.fetch, url)
+                   for name, url in routes.items()}
+        statuses = {name: status for name, (status, _) in fetched.items()}
         # A fully absent site is "not yet deployed"; a partial one (one route
         # live, one 404) is an inconsistency the driver must see, not wait on.
         if all(status == 404 for status in statuses.values()):
@@ -155,9 +178,14 @@ class ChangelogSiteCarrier:
         if any(status != 200 for status in statuses.values()):
             # Unreachable or erroring site is not proof of absence.
             return Observation("unknown")
+        if any(not _proves_build(body, self.spec["product_build"])
+               for _, body in fetched.values()):
+            # A 200 that does not name this Build is another Build's page.
+            return Observation("conflict")
         evidence = {"sha256": canonical_sha256({
-            "tag": self.spec["tag"], "routes": routes,
-            "statuses": statuses}),
+            "tag": self.spec["tag"], "routes": routes, "statuses": statuses,
+            "bodies": {name: _body_digest(body)
+                       for name, (_, body) in fetched.items()}}),
             "reference": "site:" + routes["version"]}
         return Observation("verified", evidence)
 
@@ -193,6 +221,11 @@ class FinalCarrier:
 
         def field(row, name):
             return row.get(name) if hasattr(row, "get") else getattr(row, name, None)
+        missing = sorted(name for name in ("tag", "target_revision", "channel",
+                                           "disposition")
+                         if field(row, name) is None)
+        if missing:
+            _fail(f"the ledger row omits {', '.join(missing)}")
         if field(row, "tag") != self.spec["tag"] \
                 or field(row, "target_revision") != self.spec["target_revision"] \
                 or field(row, "channel") != self.spec["channel"] \
@@ -204,14 +237,19 @@ class FinalCarrier:
         if release.get("id") != self.spec["release_id"]:
             _fail("the far-side Release id differs from the recorded one")
         routes = site_routes(self.spec)
-        statuses = {name: _fetch_status(self.fetch, url)
-                    for name, url in routes.items()}
+        fetched = {name: _fetch_route(self.fetch, url)
+                   for name, url in routes.items()}
+        statuses = {name: status for name, (status, _) in fetched.items()}
         # The ledger row already proved this release is published here, so a
         # missing route is an inconsistency, never "not deployed yet".
         if any(status == 404 for status in statuses.values()):
             return Observation("conflict")
         if any(status != 200 for status in statuses.values()):
             return Observation("unknown")
+        if any(not _proves_build(body, self.spec["product_build"])
+               for _, body in fetched.values()):
+            # A 200 that does not name this Build is another Build's page.
+            return Observation("conflict")
         evidence = {"sha256": canonical_sha256({
             "tag": self.spec["tag"], "release_id": self.spec["release_id"],
             "channel": self.spec["channel"],
@@ -220,6 +258,8 @@ class FinalCarrier:
                     "target_revision": field(row, "target_revision"),
                     "channel": field(row, "channel"),
                     "disposition": field(row, "disposition")},
-            "routes": routes, "statuses": statuses}),
+            "routes": routes, "statuses": statuses,
+            "bodies": {name: _body_digest(body)
+                       for name, (_, body) in fetched.items()}}),
             "reference": "final:" + self.spec["tag"]}
         return Observation("verified", evidence)
