@@ -1,4 +1,4 @@
-import {expect, test} from "@playwright/test";
+import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
