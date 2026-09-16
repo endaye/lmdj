@@ -14,6 +14,7 @@ from tools.release.carriers import (  # noqa: E402
     enroll_draft,
     read_candidate_identity,
     read_prepared_plan,
+    read_verified_batch,
     release_identity,
     spec_identity,
 )
@@ -288,6 +289,74 @@ class IdentityRecoveryTest(unittest.TestCase):
 
     def test_read_candidate_identity_reports_absence_before_the_step_ran(self):
         self.assertIsNone(read_candidate_identity(self.root, DIGEST))
+
+
+WITNESS = "7" * 40
+ORIGIN_RUN = 3401234567
+
+
+def verified_state(reference=f"batch-result:{ORIGIN_RUN}:{WITNESS}",
+                   status="verified"):
+    return state(transitions=[{
+        "step": "verification", "operation_id": DIGEST, "status": status,
+        "evidence": {"sha256": DIGEST, "reference": reference}}])
+
+
+def batch_document(origin_run=ORIGIN_RUN):
+    return {"request": {"origin_run": {"run_id": origin_run, "attempt": 1}},
+            "schema": "lmdj.batch-reference.v1"}
+
+
+class VerifiedBatchRecoveryTest(unittest.TestCase):
+    def read(self, document=None, state_document=None, reader=None):
+        return read_verified_batch(
+            state_document or verified_state(),
+            batch_reference_for=reader or (
+                lambda _witness: document if document is not None else batch_document()))
+
+    def test_no_verified_verification_step_means_not_yet(self):
+        self.assertIsNone(read_verified_batch(state(), batch_reference_for=lambda _w: None))
+        self.assertIsNone(read_verified_batch(
+            verified_state(status="intent"), batch_reference_for=lambda _w: None))
+
+    def test_the_reference_and_its_origin_run_are_recovered(self):
+        recovered = self.read()
+        self.assertEqual(recovered["batch_run_id"], ORIGIN_RUN)
+        self.assertEqual(recovered["witness_revision"], WITNESS)
+        self.assertEqual(recovered["batch_reference"]["request"]["origin_run"]["run_id"],
+                         ORIGIN_RUN)
+
+    def test_an_encoded_journal_reference_is_decoded(self):
+        import scripts.ci.batch_runtime as runtime
+
+        encoded = runtime.encode_reference(batch_document())
+        recovered = read_verified_batch(
+            verified_state(),
+            batch_reference_for=lambda _witness: (encoded.decode()
+                                                  if isinstance(encoded, bytes) else encoded))
+        self.assertEqual(recovered["batch_run_id"], ORIGIN_RUN)
+
+    def test_a_reference_that_does_not_bind_the_verified_run_fails_closed(self):
+        with self.assertRaises(JournalError):
+            self.read(document=batch_document(origin_run=ORIGIN_RUN + 1))
+
+    def test_a_malformed_or_missing_reference_fails_closed(self):
+        for reference in ("batch-result:0:" + WITNESS,
+                          "batch-result:" + str(ORIGIN_RUN) + ":short",
+                          "not-a-batch-result"):
+            with self.assertRaises(JournalError):
+                self.read(state_document=verified_state(reference=reference))
+        with self.assertRaises(JournalError):
+            read_verified_batch(
+                state(transitions=[{"step": "verification", "status": "verified",
+                                    "operation_id": DIGEST, "evidence": None}]),
+                batch_reference_for=lambda _w: batch_document())
+
+    def test_an_unreadable_document_fails_closed(self):
+        with self.assertRaises(JournalError):
+            self.read(document="not-a-document")
+        with self.assertRaises(JournalError):
+            read_verified_batch(verified_state(), batch_reference_for="no")
 
 
 class ChangelogSiteEnrollmentTest(unittest.TestCase):

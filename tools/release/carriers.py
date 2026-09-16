@@ -297,6 +297,56 @@ def enroll_draft(*, root, candidate_root, repository_id, ledger, create_draft,
     return RecoveredStep("draft", recover, drives=True)
 
 
+_BATCH_EVIDENCE = re.compile(r"batch-result:([1-9][0-9]*):([0-9a-f]{40})\Z")
+
+
+def read_verified_batch(state, *, batch_reference_for):
+    """The verification step's frozen batch reference, or None before it ran.
+
+    The driver's journal records the verification step as a digest plus the
+    compact reference `batch-result:<run_id>:<witness>` the verification carrier
+    produced, where the run id is the origin run it verified. The reference
+    document itself comes from the same authenticated batch journal through
+    `batch_reference_for(witness)`, which the composition supplies, so the
+    enrollment never parses evidence text into an identity: the document's own
+    origin run must equal the recorded run id or this fails closed.
+    """
+    if type(state) is not dict or type(state.get("transitions")) is not list:
+        _fail("requires the running request state")
+    verified = [entry for entry in state["transitions"]
+                if type(entry) is dict and entry.get("step") == "verification"
+                and entry.get("status") == "verified"]
+    if not verified:
+        return None
+    evidence = verified[-1].get("evidence")
+    reference = evidence.get("reference") if type(evidence) is dict else None
+    if type(reference) is not str:
+        _fail("the verified verification step exposes no reference")
+    matched = _BATCH_EVIDENCE.fullmatch(reference)
+    if matched is None:
+        _fail("the verification reference is not a batch result")
+    run_id, witness = int(matched.group(1)), matched.group(2)
+    if not callable(batch_reference_for):
+        _fail("requires the trusted batch reference reader")
+    document = batch_reference_for(witness)
+    if isinstance(document, str):
+        # The journal stores the encoded reference; decode it through the same
+        # entry point the verification carrier uses, and report an undecodable
+        # payload as this module's own refusal rather than leaking its error.
+        from scripts.ci.batch_runtime import decode_reference
+
+        try:
+            document = decode_reference(document)
+        except Exception:
+            _fail("the batch reference is undecodable")
+    if type(document) is not dict:
+        _fail("the batch reference is not a document")
+    if document.get("request", {}).get("origin_run", {}).get("run_id") != run_id:
+        _fail("the batch reference does not bind the verified origin run")
+    return {"batch_reference": deepcopy(document), "batch_run_id": run_id,
+            "witness_revision": witness}
+
+
 def enroll_changelog_site(*, candidate_root, repository_id, ledger, fetch,
                           site_base_url):
     """The `changelog_site` step: the deployed doc-site must serve this Build.
