@@ -17,6 +17,8 @@ const SVG_WIDTH = 400;
 const SVG_HEIGHT = 160;
 const ZERO_LINE = SVG_HEIGHT / 2;
 const PEAK_HEIGHT = 64;
+const GRIP_HIT_PX = 20;
+const GRIP_BAR_PX = 20;
 
 interface WaveformEditorProps {
   padLabel: string;
@@ -376,11 +378,11 @@ export function WaveformEditor({
   const midPct = (startPct + endPct) / 2;
   const gripZone = (handlePct: number, boundaryPct: number, isStart: boolean) => ({
     left: isStart
-      ? `max(0px, calc(${handlePct}% - 12px))`
-      : `max(${boundaryPct}%, calc(${handlePct}% - 12px))`,
+      ? `max(0px, calc(${handlePct}% - ${GRIP_HIT_PX}px))`
+      : `max(${boundaryPct}%, calc(${handlePct}% - ${GRIP_HIT_PX}px))`,
     right: isStart
-      ? `calc(100% - min(${boundaryPct}%, calc(${handlePct}% + 12px)))`
-      : `max(0px, calc(100% - ${handlePct}% - 12px))`,
+      ? `calc(100% - min(${boundaryPct}%, calc(${handlePct}% + ${GRIP_HIT_PX}px)))`
+      : `max(0px, calc(100% - ${handlePct}% - ${GRIP_HIT_PX}px))`,
   });
 
   return (
@@ -446,7 +448,7 @@ export function WaveformEditor({
               className="waveform-grip-bar"
               data-grip="start"
               aria-hidden="true"
-              style={{left: `calc(${startPct}% - 7px)`}}
+              style={{left: `calc(${startPct}% - ${GRIP_BAR_PX / 2}px)`}}
             />
             {gripsInteractive ? (
               <div
@@ -464,7 +466,7 @@ export function WaveformEditor({
               className="waveform-grip-bar"
               data-grip="end"
               aria-hidden="true"
-              style={{left: `calc(${endPct}% - 7px)`}}
+              style={{left: `calc(${endPct}% - ${GRIP_BAR_PX / 2}px)`}}
             />
           </>
         ) : null}
@@ -502,8 +504,8 @@ export function WaveformEditor({
         />
       </div>
       <div className="waveform-values">
-        <label>
-          <span>Start</span>
+        <label className="waveform-value-card">
+          <span>START / TAP TO EDIT</span>
           <input
             className="sample-value-input"
             type="number"
@@ -524,10 +526,10 @@ export function WaveformEditor({
               if (event.key === "ArrowLeft" || event.key === "ArrowRight") commitGesture();
             }}
           />
-          <small>seconds</small>
+          <small>s</small>
         </label>
-        <label>
-          <span>End</span>
+        <label className="waveform-value-card">
+          <span>END / TAP TO EDIT</span>
           <input
             className="sample-value-input"
             type="number"
@@ -548,7 +550,7 @@ export function WaveformEditor({
               if (event.key === "ArrowLeft" || event.key === "ArrowRight") commitGesture();
             }}
           />
-          <small>seconds</small>
+          <small>s</small>
         </label>
       </div>
       <div className="waveform-viewport-actions" aria-label="Waveform viewport">

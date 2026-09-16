@@ -201,15 +201,15 @@ button:disabled { color: #737b87; }
   position: relative;
   min-height: 12rem;
   overflow: hidden;
-  border-radius: .65rem;
-  background: #0b0d10;
+  border-radius: 8px;
+  background: #2a2433;
 }
 .waveform-canvas svg { display: block; width: 100%; height: 12rem; }
-.waveform-canvas path[data-waveform] { fill: #80a9ff; stroke: #a9c3ff; stroke-width: 1; }
-.waveform-canvas line[data-zero-line] { stroke: #737b87; stroke-width: 1; }
-.waveform-canvas line[data-handle] { stroke: #b7ffc5; stroke-width: 3; }
+.waveform-canvas path[data-waveform] { fill: #c5a5f4; stroke: #d4c0f8; stroke-width: 1; }
+.waveform-canvas line[data-zero-line] { stroke: #5c5368; stroke-width: 1; }
+.waveform-canvas line[data-handle] { stroke: #c5a5f4; stroke-width: 2; }
 .waveform-canvas line[data-playhead] { stroke: #ffb36b; stroke-width: 2; }
-.waveform-canvas rect[data-selection-mask] { fill: rgb(3 5 8 / 62%); }
+.waveform-canvas rect[data-selection-mask] { fill: rgb(20 16 26 / 72%); }
 .waveform-unavailable { display: grid; min-height: 12rem; margin: 0; place-items: center; color: #9da6b4; }
 .waveform-grip-zone {
   position: absolute;
@@ -221,27 +221,27 @@ button:disabled { color: #737b87; }
 }
 .waveform-grip-bar {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 14px;
-  border: 1px solid #b7ffc5;
-  border-radius: 4px;
-  background: rgb(183 255 197 / 26%);
+  top: 8px;
+  bottom: 8px;
+  width: 20px;
+  border: 0;
+  border-radius: 10px;
+  background: #c5a5f4;
   pointer-events: none;
 }
 .waveform-grip-bar::before, .waveform-grip-bar::after {
   content: "";
   position: absolute;
   left: 50%;
-  width: 6px;
-  height: 6px;
-  translate: -50% 0;
-  border-radius: 50%;
-  background: #b7ffc5;
+  width: 2px;
+  height: 10px;
+  translate: -50% -50%;
+  border-radius: 1px;
+  background: #443750;
 }
-.waveform-grip-bar::before { top: 6px; }
-.waveform-grip-bar::after { bottom: 6px; }
-.waveform-grip-zone:hover + .waveform-grip-bar { background: rgb(183 255 197 / 46%); }
+.waveform-grip-bar::before { top: 42%; }
+.waveform-grip-bar::after { top: 58%; }
+.waveform-grip-zone:hover + .waveform-grip-bar { filter: brightness(1.08); }
 .waveform-handle {
   position: absolute;
   top: 0;
@@ -260,11 +260,39 @@ button:disabled { color: #737b87; }
   gap: .65rem;
   align-items: center;
 }
-.waveform-values label { display: grid; grid-template-columns: auto minmax(8rem, 1fr) auto; gap: .5rem; align-items: center; flex: 1 1 14rem; }
+.waveform-values {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.waveform-value-card {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: #202321;
+  flex: 1 1 10rem;
+}
+.waveform-value-card span {
+  color: #adb6aa;
+  font-size: 8px;
+  letter-spacing: .06em;
+}
+.waveform-value-card .sample-value-input {
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #c5a5f4;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.waveform-value-card small { color: #adb6aa; }
 .sample-value-input, .sample-controls input[type="range"] {
   min-height: 44px;
   color: inherit;
-  accent-color: #b7ffc5;
+  accent-color: #c5a5f4;
 }
 .sample-value-input {
   width: 100%;
@@ -863,6 +891,16 @@ button:disabled { color: #737b87; }
 .hardware-workspace .project-surface h1,
 .hardware-workspace .sample-surface h1,
 .hardware-workspace .perform-surface h1 { font-size: 1.25rem; }
+.hardware-workspace .sample-surface .eyebrow { display: none; }
+.hardware-workspace .sample-surface h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 400;
+  letter-spacing: .04em;
+}
+.hardware-workspace .waveform-canvas,
+.hardware-workspace .waveform-unavailable { min-height: 128px; }
+.hardware-workspace .waveform-canvas svg { height: 128px; }
 .hardware-workspace .project-surface .eyebrow { display: none; }
 .hardware-workspace .project-surface h1 {
   margin: 0;
