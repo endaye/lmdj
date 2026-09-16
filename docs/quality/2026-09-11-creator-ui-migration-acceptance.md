@@ -31,7 +31,7 @@ never stands in for it.
 | Project | `ModeRail` → `ProjectSurface` | `Project` physical key → `ProjectTouchWorkspace` | reachable; `Open local`, `Import .lmdj`, per-Project `Open` all present |
 | Sample | `ModeRail` → `SampleSurface` | `Sample` physical key → `SampleSurface` (same component) | reachable; identical inventory |
 | Sequence | `ModeRail` → `SequenceSurface` | `Sequence` physical key → `SequenceTouchWorkspace` | reachable; see §4 for the gating defect this comparison found |
-| Perform | `ModeRail` → `PerformSurface` | `Perform` physical key → `PerformSurface` (same component) | reachable; see §3.4 for the deliberate gating difference |
+| Perform | `ModeRail` → `PerformSurface` | `Perform` physical key → `PerformSurface` (same component) | reachable; see §3.5 for the deliberate gating difference |
 | Slice | `ModeRail` → `CandidateSurface` | `Slice` touch button → `CandidateSurface` | reachable; both gate on the same `sliceEnabled` |
 | Sound Sets | `ModeRail` → `SoundSetSurface` | `Sound Sets` touch button → `SoundSetSurface` | reachable; both gate on the same `soundSetEnabled` |
 
@@ -148,15 +148,95 @@ it degrades to a stated reason instead of to silent no-ops.
   against the current hardware layout. They stay open; none of them is closed
   by this ledger.
 
-## 6. Why the default is not switched
+## 6. Physical and manual rows
+
+These are the rows U7's exit condition turns on. Every one is `deferred /
+unverified`: no physical acceptance of the four-region layout has been
+performed.
+
+| Platform | Journey | Reused tracking | Status |
+| --- | --- | --- | --- |
+| iPadOS Safari | Four-region touch ergonomics: 80 × 80 Pad aiming, 32 × 32 physical keys under a real finger, the 368 × 368 touch workspace's faders and segments | [#248](https://github.com/endaye/lmdj/issues/248), [#365](https://github.com/endaye/lmdj/issues/365) | `deferred / unverified` |
+| macOS Safari | Hardware layout pointer journey and subjective hearing across the six workspaces | [#362](https://github.com/endaye/lmdj/issues/362) | `deferred / unverified` |
+| macOS Chrome | Hardware layout pointer journey and subjective hearing across the six workspaces | [#366](https://github.com/endaye/lmdj/issues/366) | `deferred / unverified` |
+| iPadOS Safari | Assistive technology over the four-region shell: the read-only upper screen's announcement, physical-key navigation, focus after a mode switch | — | `deferred / unverified` |
+| macOS + iPadOS | 200 % browser zoom, and the small-viewport path beyond the 768 × 600 the packaged journey already asserts | — | `deferred / unverified` |
+| macOS Safari, iPadOS Safari | Device lifecycle in the hardware layout: background, lock screen, interruption, continuous OPFS recording | [#249](https://github.com/endaye/lmdj/issues/249), [#717](https://github.com/endaye/lmdj/issues/717), [#718](https://github.com/endaye/lmdj/issues/718), [#720](https://github.com/endaye/lmdj/issues/720) | `deferred / unverified` |
+| macOS, iPadOS | Physical MIDI Pad and control input in the hardware layout | [#243](https://github.com/endaye/lmdj/issues/243) | `deferred / unverified` |
+| iPadOS Safari | Same-origin fallback during an armed Pad capture or a playing/recording transport — the legs §5's drill deliberately does not cover | — | `deferred / unverified` |
+| any | No-guidance usability: a non-developer reaches the four regions without being told how | [#251](https://github.com/endaye/lmdj/issues/251) | `deferred / unverified` |
+
+Automation does not convert any row above into a pass. Neither does a Product
+Build allocation, an immutable snapshot, a Release, a deployment, or a green
+`scripts/creator-web.sh proof`. Listing a tracking Issue is reuse of its
+evidence boundary, not a claim about its state; none of them is closed by this
+ledger.
+
+### What a row must record
+
+A row moves off `deferred / unverified` only with the per-leg observable
+results U7 asks for, not a screenshot and not an impression. For each journey
+leg, record what was observable after the transition in all five shapes:
+
+1. the normal result;
+2. the refusal, where the product declines;
+3. the failure, where something breaks;
+4. cancel or back;
+5. what is there after reopening.
+
+A leg that was not exercised stays an explicit gap inside the row. A row with
+any unexercised leg is not a pass.
+
+### Retained evidence per row
+
+| Field | Where it comes from |
+| --- | --- |
+| Product Build | the report's identity block, `product_build` |
+| Host id and version, platform version, protocol version | the same identity block |
+| Export report revision, admitted / outcomes / rejected counts, SHA-256 | Creator's `Export report`, which calls `createAcceptanceReport` |
+| Device model, OS version, browser version | recorded by the operator |
+| Operator and date | recorded by the operator |
+| Origin the Build was served from | recorded by the operator |
+
+The completed precedent is [#245](https://github.com/endaye/lmdj/issues/245):
+*"passed on deployed Product Build 1.0.41.0. The retained refreshed report is
+revision 83 with 2 admitted / 2 outcomes / 0 rejected and SHA-256 fb87f54f…"*.
+
+Whether a locally served Build can stand in for a deployed one is not settled
+here. This ledger records the origin a row was observed from and leaves that
+judgement to the release and product owners; it does not quietly widen the
+precedent above.
+
+### Exploratory observations, which upgrade no row
+
+| Date | Device | Origin | Observation |
+| --- | --- | --- | --- |
+| 2026-09-17 | iPad Air 6, iPadOS Safari | `https://endaye-mbp-m1.tail2c9ce3.ts.net/` — a tailnet-only HTTPS proxy in front of a locally served distribution | The four-region layout was exercised by hand and reported as no problems found, including the 32 × 32 physical keys. |
+
+That session established the path works: a real browser on that origin reports
+`isSecureContext`, `crossOriginIsolated`, `sharedArrayBuffer`, `webAssembly`,
+`audioWorklet` and `opfs` all true, so the Runtime's fail-closed preflight
+passes and the Host boots. Plain HTTP to a LAN address does not: the server
+already sends `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`, but a non-loopback HTTP origin is
+not a secure context, so `SharedArrayBuffer` is absent and preflight refuses
+with `UNSUPPORTED_WEB_RUNTIME`.
+
+It upgrades no row. It ran against a locally served distribution rather than a
+deployed Product Build, no per-leg observable results were recorded in the
+five shapes above, and no Export report was retained. It is recorded because a
+real device was used and the result was positive, and because the next
+operator should not have to rediscover the secure-context constraint.
+
+## 7. Why the default is not switched
 
 U7's exit condition requires the full Creator proof and its new journeys to
 pass, applicable real-device candidate evidence to exist, and no unreachable
-key function, unrecoverable edit loss or false success. §5 lists six classes of
-evidence that do not exist yet, all of them about real devices and real
-hearing. Under the plan's own instruction — stop at the evidence gap, do not
-switch the default, do not lower a test to make a run green — the layout stays
-opt-in and U8 stays blocked.
+key function, unrecoverable edit loss or false success. The proof passes and
+the false success it named is fixed and gated. Every row in §6 is still
+`deferred / unverified`, and all of them are about real devices, real hearing
+and real assistive technology. Under the plan's own instruction — stop at the
+evidence gap, do not switch the default, do not lower a test to make a run
+green — the layout stays opt-in and U8 stays blocked.
 
-The one false success this comparison did find is fixed and gated. That
-discharges a named U7 risk; it does not discharge U7.
+Discharging a named U7 risk is not discharging U7.
