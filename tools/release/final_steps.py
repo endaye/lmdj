@@ -13,6 +13,7 @@ when the far side is already true and reports `absent` before it is.
 """
 
 from copy import deepcopy
+import http.client
 import re
 
 from .model import CHANNEL_ORDER, STABLE_PROMOTION_QUESTION, canonical_sha256
@@ -123,7 +124,9 @@ def _fetch_route(fetch, url):
     """
     try:
         answer = fetch(url)
-    except OSError:  # URLError, timeouts, connection resets
+    except (OSError, http.client.HTTPException):
+        # URLError, timeouts, connection resets, protocol errors: the site is
+        # unreachable, which the callers report as `unknown`, never a pass.
         return 0, None
     if type(answer) is not tuple or len(answer) != 2:
         raise SiteStepError(
@@ -218,6 +221,8 @@ class FinalCarrier:
             return Observation("conflict")
         if not hasattr(release, "get"):
             _fail("the far-side Release projection is not readable")
+        if not (hasattr(row, "get") or hasattr(row, "tag")):
+            _fail("the ledger row projection is not readable")
 
         def field(row, name):
             return row.get(name) if hasattr(row, "get") else getattr(row, name, None)

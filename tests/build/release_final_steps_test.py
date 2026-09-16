@@ -175,6 +175,25 @@ class FinalCarrierTest(unittest.TestCase):
                               "target_revision": TARGET}).observe({}, {})
         self.assertIn("omits", str(raised.exception))
 
+    def test_an_unreadable_row_is_not_reported_as_missing_fields(self):
+        for row in ("not-a-row", 17, None):
+            carrier = self.carrier(row=row)
+            if row is None:
+                carrier.release_by_tag = lambda _tag: None
+                self.assertEqual(carrier.observe({}, {}).status, "absent")
+                continue
+            with self.assertRaises(SiteStepError) as raised:
+                carrier.observe({}, {})
+            self.assertIn("not readable", str(raised.exception))
+
+    def test_a_protocol_failure_is_unknown_not_an_exception(self):
+        import http.client
+
+        carrier = self.carrier(
+            fetch=lambda url: (_ for _ in ()).throw(
+                http.client.BadStatusLine("")))
+        self.assertEqual(carrier.observe({}, {}).status, "unknown")
+
     def test_missing_or_foreign_routes_are_a_conflict_not_absent(self):
         self.assertEqual(self.carrier(fetch=served(answer=(404, "")))
                          .observe({}, {}).status, "conflict")
