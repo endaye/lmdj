@@ -1,7 +1,7 @@
 import {createHash} from "node:crypto";
 import {readFile} from "node:fs/promises";
 
-import {expect, test} from "@playwright/test";
+import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 
 import {WEB_RUNTIME_IDENTITY} from
   "../../../../products/lmdj/generated/web-runtime-identity.mjs";

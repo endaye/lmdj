@@ -1,6 +1,6 @@
 import {readFile} from "node:fs/promises";
 
-import {expect, test} from "@playwright/test";
+import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 
 
 const sampleBundle = process.env.LMDJ_CREATOR_WEB_SAMPLE_BUNDLE;
@@ -304,7 +304,7 @@ function assertMirroredWaveform(path) {
   }
 }
 
-test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({page, browserName}) => {
+test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({page, browserName, refusalDiagnostics}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(600_000);
   const expectNoPageErrors = recordPageErrors(page);
@@ -461,6 +461,17 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     }),
   }));
   await expectProjectRevision(page, 55);
+  // Fail-closed collection proof: if diagnostic emission, worker console
+  // forwarding, or collection regresses, this assertion turns the lane red
+  // instead of silently losing the pre-sanitization reason again.
+  const conflictDiagnostic = refusalDiagnostics
+    .map((entry) => entry.parsed)
+    .find((parsed) => parsed && parsed.normalized === "REVISION_CONFLICT");
+  expect(conflictDiagnostic, "expected a collected lmdj-refusal-diagnostic line for the manufactured REVISION_CONFLICT")
+    .toEqual(expect.objectContaining({
+      normalized: "REVISION_CONFLICT",
+      details: expect.objectContaining({actual_revision: 55, expected_revision: 54}),
+    }));
 
   await selectPadWithoutPress(page, "Pad A2 — assigned");
   await expect(page.getByText(/^Asset /)).toBeVisible({timeout: 30_000});

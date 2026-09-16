@@ -1,6 +1,6 @@
 import {readFile} from "node:fs/promises";
 
-import {expect, test} from "@playwright/test";
+import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 
 import {CAPTURE_FIXTURE_SECONDS} from "./fixtures/make_capture_fixture.mjs";
 
