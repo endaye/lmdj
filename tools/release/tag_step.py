@@ -113,7 +113,12 @@ class TagCarrier:
         self.remote_tag_state = remote_tag_state
 
     def observe(self, state, operation):
-        return Observation(self._read_back())
+        observed = self._read_back()
+        if isinstance(observed, dict):
+            # read_back reports the verified status and its evidence together;
+            # a verified observation without evidence is not a valid one.
+            return Observation("verified", observed["evidence"])
+        return Observation(observed)
 
     def advance(self, state, operation, *, before_write):
         if not callable(before_write):

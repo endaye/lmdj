@@ -89,6 +89,15 @@ class CarrierTest(unittest.TestCase):
         return DraftCarrier(spec=spec(), create_draft=self.create_draft,
                             release_by_tag=self.release_by_tag)
 
+    def test_observe_reports_the_verified_status_with_its_evidence(self):
+        # read_back returns a status with its evidence; observe must unpack it
+        # rather than hand the driver a malformed observation or a bare status.
+        self.release = DRAFT
+        observed = self.carrier().observe({}, {"step": "draft"})
+        self.assertEqual(observed.status, "verified")
+        self.assertEqual(observed.evidence["reference"], f"draft:{RELEASE_ID}")
+        observed.validate()
+
     def test_advance_creates_once_under_the_guard_and_never_repeats(self):
         carrier = self.carrier()
         self.assertEqual(carrier.observe({}, {"step": "draft"}).status, "pending")

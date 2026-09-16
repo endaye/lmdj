@@ -189,32 +189,86 @@ def release_identity(state, *, candidate_root, repository_id, ledger):
     return identity
 
 
-# The fields every step spec validates, in the shape the validators require.
-_BASE_FIELDS = ("operation_id", "request_sha256", "repository_id", "actor_id",
-                "tag", "product_build", "target_revision")
+# The identity fields each step's closed spec binds, named per step.
+_SITE_FIELDS = ("tag", "product_build", "target_revision", "repository_id",
+                "actor_id", "request_sha256")
+_DRAFT_FIELDS = ("tag", "target_revision", "repository_id", "actor_id",
+                 "request_sha256")
 
 
-def spec_identity(state, *, candidate_root, repository_id, ledger, operation_id):
-    """The fields every step spec shares, or None while they are not frozen.
+def spec_identity(state, *, candidate_root, repository_id, ledger, operation_id,
+                  fields):
+    """The spec fields this step shares, or None while they are not frozen.
 
-    `operation_id` is the step's own derivation (each carrier module exposes
-    one) so a spec built here is judged by the validator that owns it. Only the
-    shared fields are returned: each step's spec is closed, so a step that needs
-    more adds exactly its own.
+    Each step's spec is closed, and the steps disagree on which identity fields
+    they bind (a site spec carries the Product Build, a draft spec carries the
+    prepared plan instead), so the caller names exactly the fields it wants and
+    the step's own validator remains the judge. `operation_id` is the step's own
+    derivation, which each carrier module exposes.
     """
     identity = release_identity(state, candidate_root=candidate_root,
                                repository_id=repository_id, ledger=ledger)
     if identity is None or identity.get("target_revision") is None:
         # The Build is allocated but its target is not frozen yet.
         return None
-    absent = sorted(key for key in _BASE_FIELDS
-                    if key != "operation_id" and identity.get(key) is None)
+    absent = sorted(key for key in fields if identity.get(key) is None)
     if absent:
         _fail(f"the frozen identity omits {', '.join(absent)}")
-    fields = {key: deepcopy(identity[key]) for key in _BASE_FIELDS
-              if key != "operation_id"}
-    fields["operation_id"] = operation_id(identity["request_sha256"])
-    return fields
+    spec = {key: deepcopy(identity[key]) for key in fields}
+    spec["operation_id"] = operation_id(identity["request_sha256"])
+    return spec
+
+
+def read_prepared_plan(root, tag):
+    """The plan digest `prepare` wrote for this tag, or None before it ran.
+
+    The path is the one `prepared_step` reads back from, so the enrollment and
+    the step agree on where the plan lives. A present-but-unreadable or
+    malformed digest fails closed: only an absent file means "not prepared yet".
+    """
+    from . import prepared_step
+
+    output = Path(root) / prepared_step.output_relative(tag)
+    path = output / prepared_step._PLAN_DIGEST
+    if not path.is_file():
+        return None
+    try:
+        digest = path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        _fail("the prepared plan digest is unreadable")
+    if _DIGEST.fullmatch(digest) is None:
+        _fail("the prepared plan digest is malformed")
+    return digest
+
+
+def enroll_draft(*, root, candidate_root, repository_id, ledger, create_draft,
+                 release_by_tag):
+    """The `draft` step: it creates the Draft and re-reads it to verify.
+
+    A `draft` spec binds the prepared plan, so the step stays `pending` until
+    `prepare` has written one.
+    """
+    from .draft_step import DraftCarrier, draft_operation_id, validate_spec
+
+    def recover(state, operation):
+        fields = spec_identity(state, candidate_root=candidate_root,
+                               repository_id=repository_id, ledger=ledger,
+                               operation_id=draft_operation_id,
+                               fields=_DRAFT_FIELDS)
+        if fields is None:
+            return None
+        plan = read_prepared_plan(root, fields["tag"])
+        if plan is None:
+            return None
+        spec = dict(fields, plan_sha256=plan)
+        validate_spec(spec)
+        tag = spec["tag"]
+        # draft_step takes a zero-argument far-side reader; the enrollment owns
+        # the identity, so it binds it rather than letting the reader guess.
+        return DraftCarrier(spec=spec, create_draft=create_draft,
+                            release_by_tag=lambda: release_by_tag(tag))
+
+    return RecoveredStep("draft", recover, drives=True)
 
 
 def enroll_changelog_site(*, candidate_root, repository_id, ledger, fetch,
@@ -229,7 +283,8 @@ def enroll_changelog_site(*, candidate_root, repository_id, ledger, fetch,
     def recover(state, operation):
         fields = spec_identity(state, candidate_root=candidate_root,
                                repository_id=repository_id, ledger=ledger,
-                               operation_id=site_operation_id)
+                               operation_id=site_operation_id,
+                               fields=_SITE_FIELDS)
         if fields is None:
             return None
         spec = dict(fields, site_base_url=site_base_url)

@@ -11,7 +11,9 @@ sys.path.insert(0, str(ROOT))
 from tools.release.carriers import (  # noqa: E402
     RecoveredStep,
     enroll_changelog_site,
+    enroll_draft,
     read_candidate_identity,
+    read_prepared_plan,
     release_identity,
     spec_identity,
 )
@@ -250,7 +252,10 @@ class IdentityRecoveryTest(unittest.TestCase):
 
         fields = spec_identity(state(), candidate_root=self.root,
                                repository_id=12, ledger=Ledger(),
-                               operation_id=site_operation_id)
+                               operation_id=site_operation_id,
+                               fields=("tag", "product_build", "target_revision",
+                                       "repository_id", "actor_id",
+                                       "request_sha256"))
         self.assertEqual(fields["operation_id"], site_operation_id(DIGEST))
         self.assertEqual(fields["tag"], "lmdj-v" + BUILD)
         # A step's spec is closed, so the shared fields must be exactly the
@@ -265,7 +270,9 @@ class IdentityRecoveryTest(unittest.TestCase):
         with self.assertRaises(JournalError):
             spec_identity(document, candidate_root=self.root, repository_id=12,
                           ledger=Ledger(),
-                          operation_id=lambda _digest: DIGEST)
+                          operation_id=lambda _digest: DIGEST,
+                          fields=("tag", "target_revision", "repository_id",
+                                  "actor_id", "request_sha256"))
 
     def test_spec_identity_waits_until_the_allocation_is_frozen(self):
         # The candidate step has allocated the Build but its cut is not merged,
@@ -275,7 +282,9 @@ class IdentityRecoveryTest(unittest.TestCase):
         self.assertIsNone(spec_identity(
             state(request=request(mode="new", requested_tag=None)),
             candidate_root=self.root, repository_id=12, ledger=Ledger(),
-            operation_id=lambda _digest: DIGEST))
+            operation_id=lambda _digest: DIGEST,
+            fields=("tag", "target_revision", "repository_id", "actor_id",
+                    "request_sha256")))
 
     def test_read_candidate_identity_reports_absence_before_the_step_ran(self):
         self.assertIsNone(read_candidate_identity(self.root, DIGEST))
@@ -332,6 +341,101 @@ class ChangelogSiteEnrollmentTest(unittest.TestCase):
         self.assertEqual(step.observe(state(), self.operation()).status, "conflict")
         foreign = self.step(fetch=lambda url: (200, "<html>Product Build 1.0.59.0</html>"))
         self.assertEqual(foreign.observe(state(), self.operation()).status, "conflict")
+
+
+PLAN = "a" * 64
+
+
+class PreparedPlanRecoveryTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        from tools.release import prepared_step
+
+        self.prepared = prepared_step
+        self.output = (self.root / prepared_step.output_relative("lmdj-v" + BUILD))
+
+    def write_plan(self, digest=PLAN):
+        self.output.mkdir(parents=True, exist_ok=True)
+        (self.output / self.prepared._PLAN_DIGEST).write_text(digest + "\n")
+
+    def test_the_enrollment_reads_the_plan_where_the_step_does(self):
+        self.assertIsNone(read_prepared_plan(self.root, "lmdj-v" + BUILD))
+        self.write_plan()
+        self.assertEqual(read_prepared_plan(self.root, "lmdj-v" + BUILD), PLAN)
+
+    def test_a_malformed_or_unreadable_digest_fails_closed(self):
+        self.write_plan("not-a-digest")
+        with self.assertRaises(JournalError):
+            read_prepared_plan(self.root, "lmdj-v" + BUILD)
+
+
+class Projection:
+    """The far-side Release projection draft_step reads."""
+
+    def __init__(self, *, plan_sha256, draft=True, release_id=4096):
+        self.id, self.draft = release_id, draft
+        self.tag, self.plan_sha256 = "lmdj-v" + BUILD, plan_sha256
+
+
+class DraftEnrollmentTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.created = []
+        self.release = None
+
+    def write_plan(self):
+        from tools.release import prepared_step
+
+        output = self.root / prepared_step.output_relative("lmdj-v" + BUILD)
+        output.mkdir(parents=True, exist_ok=True)
+        (output / prepared_step._PLAN_DIGEST).write_text(PLAN + "\n")
+
+    def create_draft(self, tag):
+        self.created.append(tag)
+        self.release = Projection(plan_sha256=PLAN)
+
+    def step(self):
+        return enroll_draft(
+            root=self.root, candidate_root=self.root, repository_id=12,
+            ledger=Ledger(),
+            create_draft=self.create_draft,
+            release_by_tag=lambda _tag: self.release)
+
+    def operation(self):
+        return {"step": "draft", "operation_id": DIGEST, "status": "intent",
+                "evidence": None}
+
+    def test_the_step_drives_its_own_write(self):
+        step = self.step()
+        self.assertTrue(callable(getattr(step, "advance", None)))
+
+    def test_the_step_waits_until_a_plan_is_prepared(self):
+        step = self.step()
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        step.advance(state(), self.operation(), before_write=lambda: None)
+        self.assertEqual(self.created, [])
+
+    def test_the_step_creates_the_draft_and_verifies_it(self):
+        self.write_plan()
+        step = self.step()
+        # No Release yet: the carrier reports pending so the driver drives it.
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        step.advance(state(), self.operation(), before_write=lambda: None)
+        self.assertEqual(self.created, ["lmdj-v" + BUILD])
+        self.assertEqual(step.observe(state(), self.operation()).status, "verified")
+
+    def test_a_draft_bound_to_another_plan_fails_closed(self):
+        self.write_plan()
+        self.release = Projection(plan_sha256="9" * 64)
+        from tools.release.draft_step import DraftStepError
+
+        step = self.step()
+        with self.assertRaises(DraftStepError):
+            step.observe(state(), self.operation())
 
 
 if __name__ == "__main__":
