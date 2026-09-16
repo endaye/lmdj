@@ -19,14 +19,14 @@ from .intent import (
     _fail,
     intent_operation_id,
     pr_document,
-    validate_spec,
+    validate_pr_spec,
 )
 from .orchestration_driver import Observation
 from .witness_pr import WitnessPullRequest
 
 
 class IntentBranch(PublicationBranch):
-    _validate_spec = staticmethod(validate_spec)
+    _validate_spec = staticmethod(validate_pr_spec)
     _document = staticmethod(pr_document)
 
     def __init__(self, root, repository, *, token, authorize):
@@ -35,12 +35,12 @@ class IntentBranch(PublicationBranch):
 
 
 class IntentPullRequest(WitnessPullRequest):
-    _validate_spec = staticmethod(validate_spec)
+    _validate_spec = staticmethod(validate_pr_spec)
     _document = staticmethod(pr_document)
 
 
 class IntentPrSequence(CandidatePrSequence):
-    _validate_spec = staticmethod(validate_spec)
+    _validate_spec = staticmethod(validate_pr_spec)
     _document = staticmethod(pr_document)
     _branch_type, _pr_type = IntentBranch, IntentPullRequest
     _state_file = "intent-pr-sequence.json"

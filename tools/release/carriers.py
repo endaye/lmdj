@@ -102,9 +102,12 @@ class RecoveredStep:
 def read_candidate_identity(candidate_root, request_digest):
     """The identity the managed candidate step allocated for this request.
 
-    Returns `{product_build, target_revision, snapshot_sha256}` or None before
-    that step has run. A state file that belongs to another request, or that is
-    unreadable, fails closed rather than reporting the step absent.
+    Returns `{product_build, target_revision, snapshot_sha256,
+    witness_revision}` or None before that step has run; `witness_revision` is
+    None until the witness PR merge is verified, and is the revision the full
+    batch certifies — the release target the `intent` step must bind. A state
+    file that belongs to another request, or that is unreadable, fails closed
+    rather than reporting the step absent.
     """
     path = Path(candidate_root) / CANDIDATE_STATE
     if not path.is_file():
@@ -135,8 +138,15 @@ def read_candidate_identity(candidate_root, request_digest):
     if type(revision) is not str or _SHA.fullmatch(revision) is None:
         # The cut is not merged yet: the identity exists but is not frozen.
         return None
+    witness_merge = document.get("witness_merge")
+    witness = witness_merge.get("merge", {}).get("merge_sha") \
+        if type(witness_merge) is dict and type(witness_merge.get("merge")) is dict \
+        else None
+    if witness_merge is not None \
+            and (type(witness) is not str or _SHA.fullmatch(witness) is None):
+        _fail("the candidate transition records no valid witness merge")
     return {"product_build": build, "target_revision": revision,
-            "snapshot_sha256": snapshot}
+            "snapshot_sha256": snapshot, "witness_revision": witness}
 
 
 def release_identity(state, *, candidate_root, repository_id, ledger):
@@ -429,3 +439,71 @@ def enroll_final(*, candidate_root, repository_id, ledger, fetch,
                             ledger_row=ledger_row)
 
     return RecoveredStep("final", recover)
+
+
+def enroll_intent(*, candidate_root, repository_id, batch_reference_for,
+                  commit_for, sequence_for):
+    """The `intent` step: record the reviewed intent docs PR for this request.
+
+    This step drives its own write (the owned docs commit plus the reviewed PR
+    sequence), so it is enrolled with `drives=True`. Its identity cannot come
+    from `release_identity`: the intent ledger row is this step's own output
+    and does not exist yet. Instead the spec binds what the earlier steps
+    already froze — the allocation and snapshot from the candidate state, and
+    the batch-certified revision from the verified `verification` transition.
+    The ledger model requires the row's target to equal the batch reference's
+    target, and the verification step binds the batch to the candidate's
+    witness merge, so the spec's `target_revision` is that witness revision,
+    cross-checked against the candidate state's own witness record.
+
+    A `tag`-mode request has no candidate state (the managed candidate
+    transition only runs in `new` mode), so the identity is not derivable and
+    the step waits rather than re-recording an intent that already exists.
+    `commit_for(spec)` / `sequence_for(spec)` are the trusted composition's
+    factories for the concrete `IntentCommit` / `IntentPrSequence`; the
+    carrier's own type checks refuse anything else.
+    """
+    from .intent import intent_operation_id, validate_spec
+    from .intent_carrier import IntentCarrier
+
+    for name, factory in (("batch_reference_for", batch_reference_for),
+                          ("commit_for", commit_for),
+                          ("sequence_for", sequence_for)):
+        if not callable(factory):
+            _fail(f"requires a callable {name}")
+
+    def recover(state, operation):
+        if type(state) is not dict or type(state.get("request")) is not dict:
+            _fail("requires the running request state")
+        request, digest = state["request"], state.get("request_digest")
+        if type(digest) is not str or _DIGEST.fullmatch(digest) is None:
+            _fail("the running request carries no valid digest")
+        if type(repository_id) is not int or repository_id <= 0:
+            _fail("requires the resolved numeric repository identity")
+        actor_id = request.get("actor_id")
+        if type(actor_id) is not int or actor_id <= 0:
+            _fail("the request carries no valid actor identity")
+        allocated = read_candidate_identity(candidate_root, digest)
+        if allocated is None or allocated["witness_revision"] is None:
+            # No allocation, or the cut merged but its witness merge is not
+            # verified yet: nothing the batch could have certified.
+            return None
+        batch = read_verified_batch(state, batch_reference_for=batch_reference_for)
+        if batch is None:
+            return None
+        if batch["witness_revision"] != allocated["witness_revision"]:
+            _fail("the candidate witness merge and the verified batch disagree "
+                  "on the certified revision")
+        spec = {"operation_id": intent_operation_id(digest),
+                "request_sha256": digest,
+                "repository_id": repository_id, "actor_id": actor_id,
+                "target_revision": batch["witness_revision"],
+                "product_build": allocated["product_build"],
+                "tag": "lmdj-v" + allocated["product_build"],
+                "snapshot_sha256": allocated["snapshot_sha256"],
+                "batch_reference": batch["batch_reference"],
+                "batch_run_id": batch["batch_run_id"]}
+        validate_spec(spec)
+        return IntentCarrier(commit=commit_for(spec), sequence=sequence_for(spec))
+
+    return RecoveredStep("intent", recover, drives=True)

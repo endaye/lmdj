@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Enrolled step carriers recover their identity lazily and delegate."""
+from copy import deepcopy
 from pathlib import Path
 import json
 import sys
@@ -13,6 +14,7 @@ from tools.release.carriers import (  # noqa: E402
     enroll_changelog_site,
     enroll_draft,
     enroll_final,
+    enroll_intent,
     read_candidate_identity,
     read_prepared_plan,
     read_verified_batch,
@@ -290,6 +292,18 @@ class IdentityRecoveryTest(unittest.TestCase):
 
     def test_read_candidate_identity_reports_absence_before_the_step_ran(self):
         self.assertIsNone(read_candidate_identity(self.root, DIGEST))
+
+    def test_the_witness_revision_waits_for_the_witness_merge(self):
+        # The witness merge is the batch-certified revision the intent step
+        # binds; it exists only after the witness PR is verified merged.
+        self.write_candidate()
+        self.assertIsNone(read_candidate_identity(self.root, DIGEST)["witness_revision"])
+        self.write_candidate(witness_merge={"merge": {"merge_sha": "9" * 40}})
+        self.assertEqual(read_candidate_identity(self.root, DIGEST)["witness_revision"],
+                         "9" * 40)
+        self.write_candidate(witness_merge={"merge": {"merge_sha": "short"}})
+        with self.assertRaises(JournalError):
+            read_candidate_identity(self.root, DIGEST)
 
 
 WITNESS = "7" * 40
@@ -673,6 +687,189 @@ class FinalEnrollmentTest(unittest.TestCase):
 
         with self.assertRaises(SiteStepError):
             self.step().observe(state(), self.operation())
+
+
+WITNESS_MERGE = "2" * 40
+INTENT_RUN = 3401234568
+
+
+def closed_batch_document(target=WITNESS_MERGE, run_id=INTENT_RUN):
+    """A closed verified batch reference document, as the verification step binds."""
+    return {"schema": "lmdj.ci-batch-release-reference.v1",
+            "executor_control_revision": "3" * 40, "executor_event": "push",
+            "run_attempt": 1, "origin_record_digest": "5" * 64,
+            "admission_record_digest": "6" * 64, "evidence_digest": "7" * 64,
+            "request": {"id": "batch-intent", "kind": "auto", "base": "8" * 40,
+                        "target": target, "control": "3" * 40,
+                        "policy": "9" * 64,
+                        "selection": {"kind": "full", "suites": ["unit"],
+                                      "reasons": ["candidate"]},
+                        "origin_run": {"run_id": run_id, "attempt": 1}}}
+
+
+class IntentEnrollmentTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.commit_specs = []
+        self.sequence_specs = []
+
+    def write_candidate(self, **changes):
+        (self.root / "candidate-transition.json").write_text(
+            json.dumps(candidate_document(**changes)))
+
+    def write_witness(self):
+        self.write_candidate(witness_merge={"merge": {"merge_sha": WITNESS_MERGE}})
+
+    def commit_for(self, spec):
+        from tools.release.intent import IntentCommit
+
+        self.commit_specs.append(deepcopy(spec))
+        return IntentCommit(root=self.root / "intent-worktree",
+                            repository_root=self.root / "repo", spec=spec,
+                            freeze=lambda root: None, author_name="Fixture",
+                            author_email="fixture@example.invalid")
+
+    def sequence_for(self, spec):
+        from tools.release.intent_carrier import (
+            IntentBranch,
+            IntentPrSequence,
+            IntentPullRequest,
+        )
+
+        self.sequence_specs.append(deepcopy(spec))
+        root = self.root / "intent-sequence"
+        branch = IntentBranch(root / "branch", root / "repo",
+                              token="FIXTURE-NOT-A-SECRET",
+                              authorize=lambda _spec: None)
+        pr = IntentPullRequest(root / "pr", api=lambda *a, **k: None,
+                               authorize=lambda _spec: None,
+                               review=lambda *a: None, verify_merged=lambda *a: None)
+        return IntentPrSequence(root, branch=branch, pr=pr)
+
+    def step(self, **overrides):
+        arguments = dict(candidate_root=self.root, repository_id=12,
+                         batch_reference_for=lambda _witness: closed_batch_document(),
+                         commit_for=self.commit_for, sequence_for=self.sequence_for)
+        arguments.update(overrides)
+        return enroll_intent(**arguments)
+
+    def operation(self):
+        return {"step": "intent", "operation_id": DIGEST, "status": "intent",
+                "evidence": None}
+
+    def new_mode(self, **changes):
+        document = state(request=request(mode="new", requested_tag=None), **changes)
+        return document
+
+    def verified(self):
+        return self.new_mode(transitions=[{
+            "step": "verification", "operation_id": DIGEST, "status": "verified",
+            "evidence": {"sha256": DIGEST,
+                         "reference": f"batch-result:{INTENT_RUN}:{WITNESS_MERGE}"}}])
+
+    def test_the_step_drives_its_own_write(self):
+        # The intent step records the reviewed intent: it commits the docs
+        # change and drives the PR sequence under the driver's guard.
+        self.assertTrue(callable(getattr(self.step(), "advance", None)))
+
+    def test_non_callable_factories_are_refused_at_enrollment(self):
+        with self.assertRaises(JournalError):
+            self.step(commit_for=None)
+
+    def test_the_step_is_pending_until_the_candidate_is_allocated(self):
+        step = self.step()
+        self.assertEqual(step.observe(self.new_mode(), self.operation()).status,
+                         "pending")
+        # A tag-mode request has no candidate state to derive from; its intent
+        # row already exists on main, so the step waits rather than rewriting it.
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        self.assertEqual(self.commit_specs, [])
+
+    def test_the_step_is_pending_until_the_witness_merge_and_batch_are_frozen(self):
+        step = self.step()
+        # The cut is merged but the witness merge is not verified yet.
+        self.write_candidate()
+        self.assertEqual(step.observe(self.verified(), self.operation()).status,
+                         "pending")
+        # The witness merge exists but the verification step is not verified.
+        self.write_witness()
+        self.assertEqual(step.observe(self.new_mode(), self.operation()).status,
+                         "pending")
+        self.assertEqual(self.commit_specs, [])
+
+    def test_a_pending_step_writes_nothing_when_asked_to_advance(self):
+        written = []
+        step = self.step()
+        self.assertEqual(step.observe(self.new_mode(), self.operation()).status,
+                         "pending")
+        step.advance(self.new_mode(), self.operation(),
+                     before_write=lambda: written.append(True))
+        self.assertEqual(written, [])
+        self.assertEqual(self.commit_specs, [])
+
+    def test_a_witness_disagreement_fails_closed(self):
+        self.write_witness()
+        # The journal's verified reference names a witness the candidate state
+        # never recorded: two durable records disagree, so the step refuses.
+        document = self.new_mode(transitions=[{
+            "step": "verification", "operation_id": DIGEST, "status": "verified",
+            "evidence": {"sha256": DIGEST,
+                         "reference": f"batch-result:{INTENT_RUN}:{'4' * 40}"}}])
+        with self.assertRaises(JournalError):
+            self.step().observe(document, self.operation())
+
+    def test_a_reference_document_binding_another_target_fails_closed(self):
+        self.write_witness()
+        # The document decodes and binds the recorded run, but certifies a
+        # different revision than the witness merge both records name.
+        step = self.step(batch_reference_for=lambda _w: closed_batch_document(
+            target="4" * 40))
+        from tools.release.intent import IntentError
+
+        with self.assertRaises(IntentError):
+            step.observe(self.verified(), self.operation())
+
+    def test_a_batch_reference_binding_another_run_fails_closed(self):
+        self.write_witness()
+        step = self.step(batch_reference_for=lambda _w: closed_batch_document(
+            run_id=INTENT_RUN + 1))
+        with self.assertRaises(JournalError):
+            step.observe(self.verified(), self.operation())
+
+    def test_the_step_delegates_to_the_real_intent_carrier(self):
+        self.write_witness()
+        step = self.step()
+        # The real carrier observes pending before its durable commit exists
+        # and must not touch the PR sequence yet.
+        observed = step.observe(self.verified(), self.operation())
+        self.assertEqual(observed.status, "pending")
+        self.assertEqual(len(self.commit_specs), 1)
+        self.assertEqual(len(self.sequence_specs), 1)
+        spec = self.commit_specs[0]
+        self.assertEqual(set(spec), {"operation_id", "request_sha256",
+                                     "repository_id", "actor_id", "target_revision",
+                                     "product_build", "tag", "snapshot_sha256",
+                                     "batch_reference", "batch_run_id"})
+        from tools.release.intent import intent_operation_id
+
+        self.assertEqual(spec["operation_id"], intent_operation_id(DIGEST))
+        # The intent target is the batch-certified witness merge, never the
+        # cut squash the allocation names separately.
+        self.assertEqual(spec["target_revision"], WITNESS_MERGE)
+        self.assertEqual(spec["tag"], "lmdj-v" + BUILD)
+        self.assertEqual(spec["snapshot_sha256"], SNAPSHOT)
+        self.assertEqual(spec["batch_reference"], closed_batch_document())
+        self.assertEqual(spec["batch_run_id"], INTENT_RUN)
+        self.assertEqual(spec, self.sequence_specs[0])
+
+    def test_a_request_without_a_valid_digest_is_refused(self):
+        self.write_witness()
+        step = self.step()
+        with self.assertRaises(JournalError):
+            step.observe(self.new_mode(request_digest="short"), self.operation())
+        self.assertEqual(self.commit_specs, [])
 
 
 if __name__ == "__main__":

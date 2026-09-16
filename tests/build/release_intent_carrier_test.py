@@ -23,15 +23,36 @@ from tools.release.intent import (  # noqa: E402
 
 REQUEST_SHA = "a" * 64
 TARGET = "b" * 40
+RUN_ID = 4242
+
+
+def batch_reference(target=TARGET, run_id=RUN_ID):
+    """A closed verified batch reference document, as the verification step binds."""
+    return {"schema": "lmdj.ci-batch-release-reference.v1",
+            "executor_control_revision": "d" * 40, "executor_event": "push",
+            "run_attempt": 1, "origin_record_digest": "e" * 64,
+            "admission_record_digest": "f" * 64, "evidence_digest": "0" * 64,
+            "request": {"id": "batch-4242", "kind": "auto", "base": "1" * 40,
+                        "target": target, "control": "d" * 40,
+                        "policy": "2" * 64,
+                        "selection": {"kind": "full", "suites": ["unit"],
+                                      "reasons": ["candidate"]},
+                        "origin_run": {"run_id": run_id, "attempt": 1}}}
 
 
 def spec(**changes):
     base = {"operation_id": intent_operation_id(REQUEST_SHA), "request_sha256": REQUEST_SHA,
             "repository_id": 12, "actor_id": 34, "target_revision": TARGET,
             "product_build": "1.0.57.0", "tag": "lmdj-v1.0.57.0",
-            "snapshot_sha256": "c" * 64, "batch_reference": "batch-verdict-v1:zlib-base64:AAA",
-            "batch_run_id": 4242}
+            "snapshot_sha256": "c" * 64, "batch_reference": batch_reference(),
+            "batch_run_id": RUN_ID}
     base.update(changes)
+    if ("target_revision" in changes or "batch_run_id" in changes) \
+            and "batch_reference" not in changes:
+        # The reference document binds the target and the run; an override of
+        # either must rebind the document or the spec is inconsistent.
+        base["batch_reference"] = batch_reference(target=base["target_revision"],
+                                                  run_id=base["batch_run_id"])
     return base
 
 
@@ -60,8 +81,13 @@ def seed_repository(root, *, build="1.0.56.0"):
 
 
 class IntentDocumentsTest(unittest.TestCase):
+    def pr_spec(self, **changes):
+        base = {"head_sha": "3" * 40, "tree_sha": "4" * 40}
+        base.update(changes)
+        return spec(**base)
+
     def test_spec_document_row_and_markdown_are_bound_and_exact(self):
-        document = pr_document(spec())
+        document = pr_document(self.pr_spec())
         self.assertEqual(document["head"], "docs/release-witness-" + intent_operation_id(REQUEST_SHA))
         self.assertEqual(document["base"], "main")
         self.assertIn("docs(release): record 1.0.57.0 canary release intent", document["title"])
@@ -69,7 +95,7 @@ class IntentDocumentsTest(unittest.TestCase):
         self.assertEqual(row["target_revision"], TARGET)
         self.assertEqual(row["disposition"], "releasable")
         self.assertEqual(row["merged_main_run_id"], 4242)
-        self.assertEqual(row["batch_test_evidence"], "batch-verdict-v1:zlib-base64:AAA")
+        self.assertEqual(row["batch_test_evidence"], batch_reference())
         markdown = intent_markdown(spec())
         self.assertIn("lmdj-v1.0.57.0", markdown)
         self.assertIn("`b" * 1, markdown)
@@ -81,6 +107,56 @@ class IntentDocumentsTest(unittest.TestCase):
             validate_spec(spec(operation_id="d" * 64))
         with self.assertRaises(IntentError):
             validate_spec(spec(product_build="1.0.57"))
+
+    def test_a_string_or_unclosed_batch_reference_is_refused(self):
+        # The ledger row freezes `batch_test_evidence`, which the ledger model
+        # parses as a closed reference document; the encoded text form would
+        # corrupt the ledger on its next load.
+        for bad in ("batch-verdict-v1:zlib-base64:AAA", {"schema": "other"},
+                    dict(batch_reference(), schema="other")):
+            with self.assertRaises(IntentError):
+                validate_spec(spec(batch_reference=bad))
+
+    def test_a_batch_reference_binding_another_target_or_run_is_refused(self):
+        with self.assertRaises(IntentError):
+            validate_spec(spec(batch_reference=batch_reference(target="9" * 40)))
+        with self.assertRaises(IntentError):
+            validate_spec(spec(batch_reference=batch_reference(run_id=RUN_ID + 1)))
+
+    def test_the_ledger_row_survives_the_ledger_model(self):
+        # The row this carrier appends must load under the active policy; a
+        # row the model rejects would corrupt the ledger for every later read.
+        from tools.release.model import load_ledger_document, load_policy
+
+        policy = load_policy(ROOT / "tools/release/policy.json")
+        ledger = load_ledger_document(
+            {"schema": "lmdj.release-intents.v1", "entries": [ledger_row(spec())],
+             "historical_exceptions": []}, policy)
+        self.assertEqual(ledger.entries[0].tag, "lmdj-v1.0.57.0")
+        self.assertEqual(ledger.entries[0].batch_test_evidence["request"]["target"],
+                         TARGET)
+
+    def test_the_pr_spec_carries_the_commit_identity(self):
+        # The carrier drives the PR sequence with the spec its durable commit
+        # produced, which adds head_sha/tree_sha; the sequence, branch and PR
+        # validators must accept exactly that shape.
+        from tools.release.intent import validate_pr_spec
+        from tools.release.intent_carrier import (
+            IntentBranch,
+            IntentPrSequence,
+            IntentPullRequest,
+        )
+
+        pr = self.pr_spec()
+        validate_pr_spec(pr)
+        for validator in (IntentBranch._validate_spec, IntentPullRequest._validate_spec,
+                          IntentPrSequence._validate_spec):
+            validator(dict(pr))
+        self.assertEqual(pr_document(pr)["base"], "main")
+        with self.assertRaises(IntentError):
+            validate_pr_spec(spec())  # the base spec is not a PR spec
+        with self.assertRaises(IntentError):
+            validate_pr_spec(self.pr_spec(head_sha="not-a-sha"))
 
     def test_ledger_append_refuses_duplicates_and_keeps_history(self):
         rows = [{"tag": "lmdj-v1.0.57.0"}]
