@@ -941,3 +941,96 @@ def enroll_publication(*, root, candidate_root, repository_id, ledger,
         return transition_for(spec, expected, bind)
 
     return RecoveredDispatch("publication", recover)
+
+
+_DEPLOY_WORKFLOWS = {"runtime": "deploy-web-runtime-host.yml",
+                     "creator": "deploy-creator-web.yml"}
+
+
+def enroll_deployment(step, *, candidate_root, repository_id, ledger,
+                      workflow_id, producer_revision, projection_for,
+                      transition_for):
+    """The `runtime`/`creator` step: dispatch the Host deploy for this release.
+
+    Managed adapter, one per step; both share this recovery. The identity
+    (tag, target revision, Product Build) comes from the intent row through
+    `spec_identity`. The frozen deployment projection — release asset digests,
+    host version, site identity and the pre-dispatch Site prior — is injected
+    by the trusted composition as `projection_for(tag)`: it must answer the
+    same frozen projection for the request's whole drive, including resume
+    after the dispatch, and returns None while it is not assembled yet (the
+    step waits `pending`). The projection must bind this release's target and
+    Build; the step's own effect verifier revalidates the full projection
+    against the run's retained evidence. `bind` re-derives both the spec and
+    the expectation at the dispatch boundary and fails closed on drift; one
+    layer down, the durable child refuses a rebound spec. `workflow_id` /
+    `producer_revision` are the trusted composition's pins for the deploy
+    workflow. `transition_for(spec, expected, bind)` builds the concrete
+    `DispatchTransition` with the `DeploymentEffect` verifier.
+    """
+    from .durable_dispatch import validate_spec as validate_dispatch_spec
+    from .model import canonical_sha256
+
+    if step not in _DEPLOY_WORKFLOWS:
+        _fail(f"unknown deployment step {step!r}")
+    if not callable(projection_for) or not callable(transition_for):
+        _fail("requires the trusted projection reader and transition factory")
+    workflow = _DEPLOY_WORKFLOWS[step]
+
+    def operation_id(digest):
+        return canonical_sha256({"request": digest, "step": step})
+
+    def recover_inputs(state):
+        """The dispatch spec and frozen expectation, or None while underivable."""
+        fields = spec_identity(state, candidate_root=candidate_root,
+                               repository_id=repository_id, ledger=ledger,
+                               operation_id=operation_id, fields=_SITE_FIELDS)
+        if fields is None:
+            return None
+        projection = projection_for(fields["tag"])
+        if projection is None:
+            # The composition has not assembled the frozen projection yet.
+            return None
+        if type(projection) is not dict:
+            _fail("the frozen deployment projection is not readable")
+        expected = deepcopy(projection)
+        missing = sorted(key for key in ("target_revision", "product_build",
+                                         "prior_site_sha256")
+                         if key not in expected)
+        if missing:
+            _fail(f"the frozen deployment projection omits {', '.join(missing)}")
+        if expected["target_revision"] != fields["target_revision"] \
+                or expected["product_build"] != fields["product_build"]:
+            _fail("the frozen deployment projection does not bind this release")
+        prior_digest = expected["prior_site_sha256"]
+        if type(prior_digest) is not str or _DIGEST.fullmatch(prior_digest) is None:
+            _fail("the frozen deployment projection has no valid prior digest")
+        op_id = fields["operation_id"]
+        spec = {"request_sha256": fields["request_sha256"],
+                "operation_id": op_id,
+                "repository_id": fields["repository_id"],
+                "actor_id": fields["actor_id"],
+                "workflow": workflow,
+                "workflow_id": workflow_id,
+                "control_revision": state["request"]["control_revision"],
+                "producer_revision": producer_revision,
+                "inputs": {"tag": fields["tag"], "request_id": op_id,
+                           "prior_site_sha256": prior_digest}}
+        return spec, expected
+
+    def recover(state, operation):
+        recovered = recover_inputs(state)
+        if recovered is None:
+            return None
+        spec, expected = recovered
+        validate_dispatch_spec(spec)
+
+        def bind(state, operation, bound=spec, expected=expected):
+            """Re-derive both halves; the records must still agree."""
+            current = recover_inputs(state)
+            if current is None or current != (bound, expected):
+                _fail("the deployment dispatch drifted from the enrolled spec")
+
+        return transition_for(spec, expected, bind)
+
+    return RecoveredDispatch(step, recover)

@@ -465,7 +465,11 @@ tag 模式请求由准备层与转换层自身拒绝（checked-cut 分配只存�
 并要求与已登记 spec 一致，漂移即 fail-closed；effect 验证复用 `PublicationEffect`（发布记录的
 target/changelog/notes 逐项比对）。entry_gates 另补 `dispatch_authority` 门：durable dispatch 传入的
 是 spec 而非请求，故重钉 spec 的请求绑定、actor 与控制 revision 并复核实时权限。
-`prepared` / `tag` / `verification` 与 runtime、creator、published_record
+`runtime` 与 `creator` 两个 Host 部署步共用一个受管 dispatch 登记：身份取自 intent 行，
+冻结部署投影（Release 资产摘要、Host 版本、站点身份与派发前 Site prior）由受信组合按 tag
+注入并在整次驱动（含派发后恢复）期间保持可回答；投影不绑定本 release 的 target/Build 即
+fail-closed，effect 验证复用 `DeploymentEffect`（对 run 留存证据逐项复核投影）。
+`prepared` / `tag` / `verification` 与 published_record
 受管 adapter 的登记录入仍未完成，`release_carriers` 因此继续拒绝执行。
 
 带 `changelog` 的 reviewed intent 现已接通 prepare / Draft / published 验证：正文
