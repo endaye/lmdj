@@ -1024,31 +1024,12 @@ void create_golden_project(
 // construction failure, so the only way to observe it is to fail the storage
 // calls it makes.
 
-void test_module_versions_and_dependencies_are_exact() {
-  const auto application = nlohmann::json::parse(
-      read_bytes("packages/application-facade/module.json"));
-  const auto project_io = nlohmann::json::parse(
-      read_bytes("packages/project-io/module.json"));
-  LMDJ_CHECK(
-      (application ==
-       nlohmann::json{
-           {"contract", "lmdj.module.v1"},
-           {"module", "application-facade"},
-           {"version", "6.1.0"},
-           {"api_version", 3},
-           {"dependencies",
-            {
-                {"foundation", "0.4.0"},
-                {"authoring-domain", "4.1.0"},
-                {"project-io", "4.1.0"},
-                {"project-cooker", "1.2.0"},
-                {"audio-runtime", "5.0.0"},
-                {"provider-sdk", "2.2.0"},
-            }},
-       }));
-  LMDJ_CHECK(project_io.at("module") == "project-io");
-  LMDJ_CHECK(project_io.at("version") == "4.1.0");
-}
+// Module identity and dependency pins are asserted once, by the
+// `expected_modules` table in `tests/build/version_test.py` (tier `contract`).
+// The copy that stood here compared the same two manifests to the same
+// literals, so it could only ever go red second: a bump updated the
+// contract-tier pin and not this one, taking the `package` lane red for a
+// version fact that lane does not own.
 
 void test_all_operations_share_one_facade_and_revision_contract() {
   TempDirectory temp;
@@ -2148,7 +2129,6 @@ void test_project_inspect_projects_v4_lineage_and_recording_revision() {
 
 int main() {
   try {
-    test_module_versions_and_dependencies_are_exact();
     test_all_operations_share_one_facade_and_revision_contract();
     test_project_bundle_discovery_and_import_are_typed_facade_apis();
     test_application_startup_cleans_incomplete_bundle_staging();

@@ -1,7 +1,11 @@
+// LMDJ_CHECK, not assert: the Release preset builds this target with NDEBUG,
+// where assert() vanishes, its arguments read as unused variables under
+// -Werror, and every scenario would verify nothing.
 #include "apps/cardputer-host/main/transfer_session.hpp"
+#include "tests/core/support/test.hpp"
 
 #include <array>
-#include <cassert>
+#include <cstdio>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -47,43 +51,49 @@ void lifecycle() {
   Sink sink;
   TransferSession session(64, Sink::commit, &sink, nonce_source, nullptr);
   std::array<std::byte, 16> zero{};
-  assert(session.hello(1, zero) == TransferSessionResult::accepted);
+  LMDJ_CHECK(session.hello(1, zero) == TransferSessionResult::accepted);
   const auto nonce = session.nonce();
   std::array<std::byte, 16> transfer_id{};
   transfer_id[0] = std::byte{7};
   const std::array<std::byte, 4> content{std::byte{'o'}, std::byte{'k'},
                                          std::byte{'!'}, std::byte{'\n'}};
   TransferContentIdentity identity{transfer_id, hash(content), content.size()};
-  assert(session.begin(2, nonce, transfer_id, identity, 100) ==
-         TransferSessionResult::accepted);
-  assert(session.data(3, nonce, transfer_id, 0, content, 200) ==
-         TransferSessionResult::accepted);
-  assert(session.commit(4, nonce, transfer_id, 300) ==
-         TransferSessionResult::committed);
-  assert(sink.published == std::vector<std::byte>(content.begin(), content.end()));
+  LMDJ_CHECK(session.begin(2, nonce, transfer_id, identity, 100) ==
+             TransferSessionResult::accepted);
+  LMDJ_CHECK(session.data(3, nonce, transfer_id, 0, content, 200) ==
+             TransferSessionResult::accepted);
+  LMDJ_CHECK(session.commit(4, nonce, transfer_id, 300) ==
+             TransferSessionResult::committed);
+  LMDJ_CHECK(sink.published == std::vector<std::byte>(content.begin(), content.end()));
 }
 
 void stale() {
   Sink sink;
   TransferSession session(64, Sink::commit, &sink, nonce_source, nullptr);
   std::array<std::byte, 16> zero{};
-  assert(session.hello(1, zero) == TransferSessionResult::accepted);
+  LMDJ_CHECK(session.hello(1, zero) == TransferSessionResult::accepted);
   const auto nonce = session.nonce();
   std::array<std::byte, 16> wrong = nonce;
   wrong[0] ^= std::byte{1};
-  assert(session.begin(2, wrong, {}, {}, 0) == TransferSessionResult::stale_session);
-  assert(session.next_request_id() == 2);
-  assert(session.begin(4, nonce, {}, {}, 0) == TransferSessionResult::bad_request_id);
-  assert(session.next_request_id() == 2);
-  assert(session.hello(1, zero) == TransferSessionResult::accepted);
-  assert(session.nonce() == nonce);
+  LMDJ_CHECK(session.begin(2, wrong, {}, {}, 0) == TransferSessionResult::stale_session);
+  LMDJ_CHECK(session.next_request_id() == 2);
+  LMDJ_CHECK(session.begin(4, nonce, {}, {}, 0) == TransferSessionResult::bad_request_id);
+  LMDJ_CHECK(session.next_request_id() == 2);
+  LMDJ_CHECK(session.hello(1, zero) == TransferSessionResult::accepted);
+  LMDJ_CHECK(session.nonce() == nonce);
 }
 }  // namespace
 
 int main(int argc, char** argv) {
   if (argc != 2) return 2;
-  if (std::string(argv[1]) == "lifecycle") lifecycle();
-  else if (std::string(argv[1]) == "stale") stale();
-  else return 2;
+  try {
+    const std::string scenario = argv[1];
+    if (scenario == "lifecycle") lifecycle();
+    else if (scenario == "stale") stale();
+    else return 2;
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "%s\n", error.what());
+    return 1;
+  }
   return 0;
 }
