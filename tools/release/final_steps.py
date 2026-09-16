@@ -48,7 +48,7 @@ def final_operation_id(request_sha256):
 
 
 def _validate_common(spec, operation_id):
-    if not all(isinstance(spec[k], str) and _DIGEST.fullmatch(spec[k])
+    if not all(type(spec[k]) is str and _DIGEST.fullmatch(spec[k])
                for k in ("operation_id", "request_sha256")):
         _fail("scope digests are invalid")
     if spec["operation_id"] != operation_id(spec["request_sha256"]):
@@ -58,7 +58,8 @@ def _validate_common(spec, operation_id):
     if type(spec["product_build"]) is not str or _BUILD.fullmatch(spec["product_build"]) is None \
             or spec["tag"] != "lmdj-v" + spec["product_build"]:
         _fail("tag does not match the product build")
-    if not isinstance(spec["target_revision"], str) or _SHA.fullmatch(spec["target_revision"]) is None:
+    if type(spec["target_revision"]) is not str \
+            or _SHA.fullmatch(spec["target_revision"]) is None:
         _fail("target revision is invalid")
     if type(spec["repository_id"]) is not int or spec["repository_id"] <= 0 \
             or type(spec["actor_id"]) is not int or spec["actor_id"] <= 0:
@@ -181,8 +182,12 @@ class FinalCarrier:
     def observe(self, state, operation):
         release = self.release_by_tag(self.spec["tag"])
         row = self.ledger_row(self.spec["tag"])
-        if release is None or row is None:
+        if release is None and row is None:
             return Observation("absent")
+        if release is None or row is None:
+            # A Release without its ledger row (or the reverse) is a
+            # partially applied promotion, never one still to do.
+            return Observation("conflict")
         if not hasattr(release, "get"):
             _fail("the far-side Release projection is not readable")
 

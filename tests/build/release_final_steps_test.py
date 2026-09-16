@@ -108,14 +108,11 @@ class FinalCarrierTest(unittest.TestCase):
         self.assertEqual(observed.status, "verified")
         self.assertEqual(observed.evidence["reference"], "final:lmdj-v1.0.57.0")
 
-    def test_absent_before_release_or_row_exists(self):
+    def test_absent_only_before_the_whole_far_side_exists(self):
         carrier = FinalCarrier(spec=final_spec(), fetch=lambda url: 200,
-                               release_by_tag=lambda _tag: None, ledger_row=lambda _tag: Row())
+                               release_by_tag=lambda _tag: None,
+                               ledger_row=lambda _tag: None)
         self.assertEqual(carrier.observe({}, {}).status, "absent")
-        carrier2 = FinalCarrier(spec=final_spec(), fetch=lambda url: 200,
-                                release_by_tag=lambda _tag: {"draft": False},
-                                ledger_row=lambda _tag: None)
-        self.assertEqual(carrier2.observe({}, {}).status, "absent")
 
     def test_drift_fails_closed(self):
         carrier = FinalCarrier(spec=final_spec(), fetch=lambda url: 200,
@@ -165,6 +162,30 @@ class FinalCarrierTest(unittest.TestCase):
         carrier.observe({}, {})
         self.assertEqual(seen, [("release", "lmdj-v1.0.57.0"),
                                 ("row", "lmdj-v1.0.57.0")])
+
+    def test_partially_applied_promotion_is_a_conflict(self):
+        release_only = FinalCarrier(
+            spec=final_spec(), fetch=lambda url: 200,
+            release_by_tag=lambda _tag: {"draft": False, "id": 4096},
+            ledger_row=lambda _tag: None)
+        self.assertEqual(release_only.observe({}, {}).status, "conflict")
+        row_only = FinalCarrier(
+            spec=final_spec(), fetch=lambda url: 200,
+            release_by_tag=lambda _tag: None, ledger_row=lambda _tag: Row())
+        self.assertEqual(row_only.observe({}, {}).status, "conflict")
+        neither = FinalCarrier(
+            spec=final_spec(), fetch=lambda url: 200,
+            release_by_tag=lambda _tag: None, ledger_row=lambda _tag: None)
+        self.assertEqual(neither.observe({}, {}).status, "absent")
+
+    def test_a_str_subclass_cannot_smuggle_the_target_revision(self):
+        class Sneaky(str):
+            pass
+
+        spec = final_spec()
+        spec["target_revision"] = Sneaky(spec["target_revision"])
+        with self.assertRaises(SiteStepError):
+            validate_final_spec(spec)
 
     def test_site_failure_is_unknown_never_a_pass(self):
         carrier = FinalCarrier(spec=final_spec(), fetch=lambda url: 503,
