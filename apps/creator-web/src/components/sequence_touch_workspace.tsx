@@ -50,14 +50,16 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
         ? null
         : <p role="status">committed, publication pending</p>}
       {props.showRefresh === false ? null : (
-        <button type="button" onClick={props.onRefresh}>Refresh authority</button>
+        <>
+          <button type="button" onClick={props.onRefresh}>Refresh authority</button>
+          {transport.lastFailed !== null ? (
+            <p className="transport-hint">
+              Last {transport.lastFailed.intent === "record" ? "Record" : "Play/Stop"}
+              {" "}command failed; retry reconciles the same command.
+            </p>
+          ) : null}
+        </>
       )}
-      {transport.lastFailed !== null ? (
-        <p className="transport-hint">
-          Last {transport.lastFailed.intent === "record" ? "Record" : "Play/Stop"}
-          {" "}command failed; retry reconciles the same command.
-        </p>
-      ) : null}
       <section aria-label="Sequence settings" className="sequence-settings">
         <label>Pattern
           <select value={state.selectedPatternId ?? project.patternId}
@@ -152,9 +154,9 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
       {state.errorCode !== null ? (
         <p role="alert" className="sequence-error">{state.errorCode}</p>
       ) : null}
-      {transport.errorCode !== null ? (
+      {props.showRefresh === false || transport.errorCode === null ? null : (
         <p role="alert" className="sequence-error">{transport.errorCode}</p>
-      ) : null}
+      )}
     </section>
   );
 }
