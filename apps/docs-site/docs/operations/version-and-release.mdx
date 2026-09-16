@@ -427,7 +427,9 @@ catch-all 或陈旧部署会被判为冲突（404 为 absent、站点不可达�
 摘要。14 个步骤至此各有执行载体或受管 adapter；真实入口的登记已按
 `docs/plans/2026-09-16-release-entry-enrollment.md` 开始接线：惰性身份恢复层与统一的
 `RecoveredStep` 包装已就位（身份不可推导时报 `pending` 而非 `absent`，只有自身驱动写操作的
-步骤才暴露 `advance`），逐个步骤的登记录入仍未完成，`release_carriers` 因此继续拒绝执行。
+步骤才暴露 `advance`），身份以 candidate 步的分配或 intent 账本行为准，未获授权的 tag
+直接拒绝；`changelog_site` 已按此模式登记。其余步骤与受管 adapter 的登记录入仍未完成，
+`release_carriers` 因此继续拒绝执行。
 
 带 `changelog` 的 reviewed intent 现已接通 prepare / Draft / published 验证：正文
 进入 plan 摘要，prepare 重验真实 Git 范围，恢复时检查本地 notes，Draft 与公开

@@ -139,14 +139,15 @@ def read_candidate_identity(candidate_root, request_digest):
             "snapshot_sha256": snapshot}
 
 
-def release_identity(state, *, candidate_root, repository_id):
+def release_identity(state, *, candidate_root, repository_id, ledger):
     """The Build this request is releasing, or None while it is not allocated.
 
     A `tag`-mode request names the tag itself; a `new`-mode request learns it
-    from the managed candidate step. The ledger is not consulted here, so an
-    unauthorized tag is still refused by the step that needs the authorization.
-    `repository_id` is the numeric identity the frozen request does not carry
-    (it records only `owner/name`), resolved once per drive from GitHub.
+    from the managed candidate step. An allocation is the authoritative target
+    revision; a tag already recorded in the ledger takes it from the intent row,
+    and a tag that ledger does not authorize fails closed. `repository_id` is the
+    numeric identity the frozen request does not carry (it records only
+    `owner/name`), resolved once per drive from GitHub.
     """
     if type(state) is not dict or type(state.get("request")) is not dict:
         _fail("requires the running request state")
@@ -168,27 +169,71 @@ def release_identity(state, *, candidate_root, repository_id):
         _fail("the request names no valid product build")
     if allocated is not None and allocated["product_build"] != build:
         _fail("the candidate transition and the request disagree on the build")
+    intent = ledger.intent_for_tag(tag)
+    if intent is None:
+        _fail(f"the intent ledger does not authorize {tag}")
     identity = {"tag": tag, "product_build": build,
                 "request_sha256": digest,
                 "repository_id": repository_id,
-                "actor_id": request.get("actor_id")}
+                "actor_id": request.get("actor_id"),
+                "channel": intent.current_channel,
+                "disposition": str(intent.disposition)}
     if allocated is not None:
         identity["target_revision"] = allocated["target_revision"]
         identity["snapshot_sha256"] = allocated["snapshot_sha256"]
+    else:
+        revision = intent.target_revision
+        if type(revision) is not str or _SHA.fullmatch(revision) is None:
+            _fail(f"the intent ledger records no valid target revision for {tag}")
+        identity["target_revision"] = revision
     return identity
 
 
-def spec_identity(state, *, candidate_root, repository_id, operation_id):
-    """The fields every step spec shares, or None while the Build is unknown.
+# The fields every step spec validates, in the shape the validators require.
+_BASE_FIELDS = ("operation_id", "request_sha256", "repository_id", "actor_id",
+                "tag", "product_build", "target_revision")
+
+
+def spec_identity(state, *, candidate_root, repository_id, ledger, operation_id):
+    """The fields every step spec shares, or None while they are not frozen.
 
     `operation_id` is the step's own derivation (each carrier module exposes
-    one) so a spec built here is judged by the validator that owns it.
+    one) so a spec built here is judged by the validator that owns it. Only the
+    shared fields are returned: each step's spec is closed, so a step that needs
+    more adds exactly its own.
     """
     identity = release_identity(state, candidate_root=candidate_root,
-                               repository_id=repository_id)
-    if identity is None:
+                               repository_id=repository_id, ledger=ledger)
+    if identity is None or identity.get("target_revision") is None:
+        # The Build is allocated but its target is not frozen yet.
         return None
-    fields = {key: deepcopy(value) for key, value in identity.items()
-              if value is not None}
+    absent = sorted(key for key in _BASE_FIELDS
+                    if key != "operation_id" and identity.get(key) is None)
+    if absent:
+        _fail(f"the frozen identity omits {', '.join(absent)}")
+    fields = {key: deepcopy(identity[key]) for key in _BASE_FIELDS
+              if key != "operation_id"}
     fields["operation_id"] = operation_id(identity["request_sha256"])
     return fields
+
+
+def enroll_changelog_site(*, candidate_root, repository_id, ledger, fetch,
+                          site_base_url):
+    """The `changelog_site` step: the deployed doc-site must serve this Build.
+
+    Observe-only — no write can make a deployment appear, so the step is
+    `pending` until the Build exists and the far side is read honestly.
+    """
+    from .final_steps import ChangelogSiteCarrier, site_operation_id, validate_site_spec
+
+    def recover(state, operation):
+        fields = spec_identity(state, candidate_root=candidate_root,
+                               repository_id=repository_id, ledger=ledger,
+                               operation_id=site_operation_id)
+        if fields is None:
+            return None
+        spec = dict(fields, site_base_url=site_base_url)
+        validate_site_spec(spec)
+        return ChangelogSiteCarrier(spec=spec, fetch=fetch)
+
+    return RecoveredStep("changelog_site", recover)

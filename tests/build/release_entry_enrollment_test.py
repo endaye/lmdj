@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from tools.release.carriers import (  # noqa: E402
     RecoveredStep,
+    enroll_changelog_site,
     read_candidate_identity,
     release_identity,
     spec_identity,
@@ -49,6 +50,23 @@ def candidate_document(**changes):
                 "cut_merge": {"merge": {"merge_sha": CUT_MERGE}}}
     document.update(changes)
     return document
+
+
+class Intent:
+    """The ledger row that authorizes a tag."""
+
+    def __init__(self, *, target_revision=TARGET, channel="dev",
+                 disposition="published"):
+        self.target_revision, self.current_channel = target_revision, channel
+        self.disposition = disposition
+
+
+class Ledger:
+    def __init__(self, rows=None):
+        self.rows = {"lmdj-v" + BUILD: Intent()} if rows is None else rows
+
+    def intent_for_tag(self, tag):
+        return self.rows.get(tag)
 
 
 class Carrier:
@@ -154,15 +172,30 @@ class IdentityRecoveryTest(unittest.TestCase):
         (self.root / "candidate-transition.json").write_text(
             json.dumps(candidate_document(**changes)))
 
-    def identity(self, document=None, repository_id=12):
+    def identity(self, document=None, repository_id=12, ledger=None):
         return release_identity(document or state(), candidate_root=self.root,
-                                repository_id=repository_id)
+                                repository_id=repository_id,
+                                ledger=Ledger() if ledger is None else ledger)
 
-    def test_a_tag_request_names_its_own_build(self):
-        self.assertEqual(self.identity()["tag"], "lmdj-v" + BUILD)
-        self.assertEqual(self.identity()["product_build"], BUILD)
-        # Nothing has been cut, so no target revision is claimed yet.
-        self.assertNotIn("target_revision", self.identity())
+    def test_a_tag_request_takes_its_frozen_identity_from_the_ledger(self):
+        identity = self.identity()
+        self.assertEqual(identity["tag"], "lmdj-v" + BUILD)
+        self.assertEqual(identity["product_build"], BUILD)
+        # Nothing has been cut here, so the intent row is authoritative.
+        self.assertEqual(identity["target_revision"], TARGET)
+        self.assertEqual(identity["channel"], "dev")
+
+    def test_a_malformed_ledger_target_revision_fails_closed(self):
+        for revision in (None, "not-a-revision", 1234):
+            ledger = Ledger(rows={"lmdj-v" + BUILD: Intent(target_revision=revision)})
+            with self.assertRaises(JournalError):
+                self.identity(ledger=ledger)
+
+    def test_a_tag_the_ledger_does_not_authorize_fails_closed(self):
+        for ledger in (Ledger(rows={}),
+                       Ledger(rows={"lmdj-v1.0.59.0": Intent()})):
+            with self.assertRaises(JournalError):
+                self.identity(ledger=ledger)
 
     def test_a_new_request_learns_the_allocated_build(self):
         self.write_candidate()
@@ -216,17 +249,89 @@ class IdentityRecoveryTest(unittest.TestCase):
         from tools.release.final_steps import site_operation_id
 
         fields = spec_identity(state(), candidate_root=self.root,
-                               repository_id=12,
+                               repository_id=12, ledger=Ledger(),
                                operation_id=site_operation_id)
         self.assertEqual(fields["operation_id"], site_operation_id(DIGEST))
         self.assertEqual(fields["tag"], "lmdj-v" + BUILD)
-        # The shared fields are what every step spec validates.
-        self.assertEqual(set(fields),
-                         {"operation_id", "tag", "product_build",
-                          "request_sha256", "repository_id", "actor_id"})
+        # A step's spec is closed, so the shared fields must be exactly the
+        # ones every validator requires and nothing more.
+        from tools.release.final_steps import validate_site_spec
+
+        validate_site_spec(dict(fields, site_base_url="https://docs.example.invalid"))
+
+    def test_spec_identity_reports_a_missing_base_field_instead_of_crashing(self):
+        document = state()
+        del document["request"]["actor_id"]
+        with self.assertRaises(JournalError):
+            spec_identity(document, candidate_root=self.root, repository_id=12,
+                          ledger=Ledger(),
+                          operation_id=lambda _digest: DIGEST)
+
+    def test_spec_identity_waits_until_the_allocation_is_frozen(self):
+        # The candidate step has allocated the Build but its cut is not merged,
+        # so no step spec can bind a target revision yet.
+        (self.root / "candidate-transition.json").write_text(
+            json.dumps(candidate_document(cut_merge=None)))
+        self.assertIsNone(spec_identity(
+            state(request=request(mode="new", requested_tag=None)),
+            candidate_root=self.root, repository_id=12, ledger=Ledger(),
+            operation_id=lambda _digest: DIGEST))
 
     def test_read_candidate_identity_reports_absence_before_the_step_ran(self):
         self.assertIsNone(read_candidate_identity(self.root, DIGEST))
+
+
+class ChangelogSiteEnrollmentTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.fetched = []
+
+    def fetch(self, url):
+        self.fetched.append(url)
+        return 200, f"<html>Product Build {BUILD}</html>"
+
+    def step(self, fetch=None):
+        return enroll_changelog_site(
+            candidate_root=self.root, repository_id=12, ledger=Ledger(),
+            fetch=fetch or self.fetch,
+            site_base_url="https://docs.example.invalid")
+
+    def operation(self):
+        return {"step": "changelog_site", "operation_id": DIGEST,
+                "status": "intent", "evidence": None}
+
+    def test_the_step_is_pending_until_the_build_is_allocated(self):
+        # A new-mode request whose candidate step has not run yet: there is no
+        # Build to verify, so the step waits rather than claiming absence.
+        step = self.step()
+        new_mode = state(request=request(mode="new", requested_tag=None))
+        self.assertEqual(step.observe(new_mode, self.operation()).status, "pending")
+        self.assertEqual(self.fetched, [])
+
+    def test_an_unauthorized_tag_fails_closed_rather_than_waiting(self):
+        step = enroll_changelog_site(
+            candidate_root=self.root, repository_id=12, ledger=Ledger(rows={}),
+            fetch=self.fetch, site_base_url="https://docs.example.invalid")
+        with self.assertRaises(JournalError):
+            step.observe(state(), self.operation())
+        self.assertEqual(self.fetched, [])
+
+    def test_the_step_reads_the_deployed_build_and_binds_its_evidence(self):
+        step = self.step()
+        observed = step.observe(state(), self.operation())
+        self.assertEqual(observed.status, "verified")
+        self.assertEqual(set(self.fetched),
+                         {"https://docs.example.invalid/versions/" + BUILD + "/",
+                          "https://docs.example.invalid/releases/" + BUILD})
+        self.assertTrue(observed.evidence["reference"].startswith("site:"))
+
+    def test_a_missing_page_is_absent_and_a_wrong_page_is_a_conflict(self):
+        step = self.step(fetch=lambda url: (404, "") if "versions" in url else (200, f"<html>Product Build {BUILD}</html>"))
+        self.assertEqual(step.observe(state(), self.operation()).status, "conflict")
+        foreign = self.step(fetch=lambda url: (200, "<html>Product Build 1.0.59.0</html>"))
+        self.assertEqual(foreign.observe(state(), self.operation()).status, "conflict")
 
 
 if __name__ == "__main__":
