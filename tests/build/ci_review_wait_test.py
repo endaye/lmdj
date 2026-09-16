@@ -40,6 +40,8 @@ class AdmissionTests(unittest.TestCase):
         self.pull = {"number": 7, "state": "open", "draft": False, "merged": False, "user": self.owner,
                      "head": {"sha": A, "repo": self.repo}, "base": {"ref": "main", "repo": self.repo}}
         self.bot = {"id": 20, "type": "Bot", "login": "github-actions[bot]"}
+        self.check_runs = [{"id": 500, "name": wait.PORTAL_CHECK_RUN, "head_sha": A,
+                            "status": "completed", "conclusion": "success"}]
         self.comments, self.reviews, self.inline, self.inline_details = [], [], [], {}
         self.detail_reads = []
         self.pull_reads = 0
@@ -154,6 +156,7 @@ class AdmissionTests(unittest.TestCase):
         inventories = {prefix + "/pulls/7/reviews": (self.reviews, None),
             prefix + "/issues/7/comments": (self.comments, None),
             prefix + "/pulls/7/reviews/60/comments": (self.inline, None),
+            prefix + "/commits/" + A + "/check-runs": (self.check_runs, "check_runs"),
             prefix + "/actions/runs/51/attempts/1/jobs": (self.source.jobs, "jobs"),
             prefix + "/actions/runs/51/artifacts": (self.source.artifacts, "artifacts"),
             prefix + "/actions/workflows/pr-review.yml/runs": ([self.source.run], "workflow_runs")}
@@ -200,6 +203,30 @@ class AdmissionTests(unittest.TestCase):
             inventory[kind] = [{"id": f"{kind}-{row['id']}", "databaseId": row["id"],
                 "body": row["body"], "author": {"login": row["user"]["login"], "databaseId":row["user"]["id"]}} for row in rows]
         return {"inventory": inventory, "sha256": canonical_sha256(inventory)}
+
+    def test_qualified_generated_body_binds_through_release_inventory(self):
+        self.render_generated()
+        eligibility, collected = self.check(), self.body_inventory()
+        self.assertTrue(eligibility["eligible"], eligibility)
+        binding = bind_eligibility(collected, eligibility)
+        expected = self.reviews[0]["body"].encode("utf-8")
+        observed = eligibility["evidence"][0]["body_observation"]
+        self.assertEqual(observed["sha256"], hashlib.sha256(expected).hexdigest())
+        self.assertEqual(observed["byte_length"], len(expected))
+        self.assertEqual(observed["author_id"], self.bot["id"])
+        self.assertEqual(binding["linked"][0]["database_id"], 60)
+        self.assertEqual(binding["linked"][0]["kind"], "reviews")
+
+    def test_generated_bot_suffix_projection_binds_with_exact_numeric_identity(self):
+        self.render_generated()
+        eligibility = self.check()
+        binding = bind_eligibility(self.bot_graphql_inventory(), eligibility)
+        self.assertEqual(binding["linked"][0]["database_id"], 60)
+        collected = self.bot_graphql_inventory()
+        collected["inventory"]["reviews"][0]["author"]["databaseId"] += 1
+        collected["sha256"] = canonical_sha256(collected["inventory"])
+        with self.assertRaisesRegex(ReviewInventoryError, "body author differs"):
+            bind_eligibility(collected, eligibility)
 
     def test_qualified_automated_body_binds_without_granting_merge_authority(self):
         self.render_v2()
@@ -333,8 +360,10 @@ class AdmissionTests(unittest.TestCase):
         for pattern in patterns:
             matches = {name: data for name, data in self.source.documents.items() if fnmatch.fnmatchcase(name, pattern)}
             # failure.json and collection-failure.json exist only on failure
-            # paths; this archive models a reviewable producer output.
-            self.assertTrue(matches or pattern in ("failure.json", "collection-failure.json"),
+            # paths, and generated-only-receipt.json only on the generated-only
+            # path; this archive models a reviewable producer output.
+            self.assertTrue(matches or pattern in ("failure.json", "collection-failure.json",
+                                                   "generated-only-receipt.json"),
                             "why: producer upload path has no source-shaped fixture: " + pattern
                             + "; remedy: model its actual file before claiming reader compatibility")
             selected.update(matches)
@@ -407,6 +436,170 @@ class AdmissionTests(unittest.TestCase):
                 self.source.download = download
                 self.assertFalse(self.check()["eligible"])
         self.source.download = original
+
+    def render_generated(self):
+        """A control-plane generated-only receipt: producer with the finalizer
+        gated off, an archive holding exactly the receipt, and the marker
+        COMMENT the trusted publisher posts for it."""
+        identity = {"repository": REPO, "pull_request": 7, "base_sha": B, "head_sha": A,
+                    "control_sha": B, "run_id": "51", "run_attempt": 1}
+        receipt = {"schema": wait.pipeline.input_producer.GENERATED_ONLY_RECEIPT_SCHEMA,
+                   "status": "generated-only", "identity": identity, "head_sha": A,
+                   "excluded_generated": {
+                       "count": 1,
+                       "paths": ["apps/architecture-portal/versioned_provenance/version-1.0.57.0.json"],
+                       "entries": [{"path": "apps/architecture-portal/versioned_provenance/version-1.0.57.0.json",
+                                    "object_id": "1" * 40, "sha256": "2" * 64}]}}
+        receipt["receipt_sha256"] = hashlib.sha256(
+            wait.pipeline.input_producer.json_bytes(receipt)).hexdigest()
+        self.source.documents = {"generated-only-receipt.json": receipt}
+        next(step for step in self.source.jobs[0]["steps"]
+             if step["name"] == "Save honest final result")["conclusion"] = "skipped"
+        # The publisher hashes the exact retained bytes; the fixture archive
+        # serializes with json.dumps, so the marker digest binds those bytes.
+        digest = hashlib.sha256(json.dumps(receipt).encode()).hexdigest()
+        body = wait.pipeline.pr_review_target.generated_body(REPO, 7, A, "51", "1", digest)
+        self.reviews = [{"id": 60, "user": self.bot, "state": "COMMENTED", "commit_id": A,
+                         "submitted_at": "2026-09-10T01:00:00Z", "body": body}]
+        return body, digest
+
+    def test_authentic_generated_receipt_with_green_portal_lane_is_eligible(self):
+        _body, digest = self.render_generated()
+        result = self.check()
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["evidence"][0]["kind"], "generated")
+        self.assertEqual(result["evidence"][0]["receipt_sha256"], digest)
+        self.assertFalse(result["merge_authorized"])
+
+    def test_generated_marker_on_a_wrong_head_is_not_current_head_evidence(self):
+        self.render_generated()
+        self.reviews[0]["commit_id"] = B
+        result = self.check()
+        self.assertFalse(result["eligible"], result)
+        self.assertEqual(result["status"], "pending")
+
+    def test_generated_foreign_malformed_and_duplicate_markers_are_invalid(self):
+        body, _digest = self.render_generated()
+        marker = body.splitlines()[0]
+        for name, mutate in (
+            ("foreign", lambda b: b.replace("endaye/lmdj", "other/repo", 1)),
+            ("malformed", lambda b: b.replace("sha256=", "sha256=not-a-digest", 1)),
+            ("duplicate", lambda b: b + "\n" + marker),
+        ):
+            with self.subTest(name=name):
+                self.reviews[0]["body"] = mutate(body)
+                result = self.check()
+                self.assertFalse(result["eligible"], result)
+                self.assertEqual(result["status"], "invalid")
+                self.reviews[0]["body"] = body
+
+    def test_generated_marker_mixed_with_the_model_marker_family_is_invalid(self):
+        body, _digest = self.render_generated()
+        self.reviews[0]["body"] = body + ("\n<!-- lmdj-review-v2 endaye/lmdj 7 " + A +
+                                          " 51 1 deepseek sha256=" + "0" * 64 + " -->")
+        result = self.check()
+        self.assertFalse(result["eligible"], result)
+        self.assertEqual(result["status"], "invalid")
+
+    def test_model_review_quoting_the_generated_marker_in_prose_is_admitted(self):
+        # #1381: the authentic deepseek review described the new marker family
+        # in prose; routing must key on anchored markers, never substrings.
+        self.render_v2()
+        self.reviews[0]["body"] += ("\n\nThis change introduces the "
+                                    "lmdj-review-generated-v1 receipt marker for Portal witness PRs.")
+        result = self.check()
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["evidence"][0]["kind"], "automated")
+        self.assertEqual(result["evidence"][0]["backend"], "deepseek")
+
+    def test_generated_receipt_quoting_a_model_marker_in_prose_is_admitted(self):
+        body, digest = self.render_generated()
+        self.reviews[0]["body"] = body + "\n\nSupersedes the lmdj-review-v2 model path for this shape."
+        result = self.check()
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["evidence"][0]["kind"], "generated")
+        self.assertEqual(result["evidence"][0]["receipt_sha256"], digest)
+
+    def test_substring_mention_without_an_anchored_marker_is_invalid_evidence(self):
+        self.render_v2()
+        self.reviews[0] = {"id": 61, "user": self.bot, "state": "COMMENTED", "commit_id": A,
+                           "submitted_at": "2026-09-10T03:00:00Z",
+                           "body": "Notes on lmdj-review-generated-v1 and lmdj-review-v2 marker formats."}
+        result = self.check()
+        self.assertFalse(result["eligible"], result)
+        self.assertEqual(result["status"], "invalid")
+        self.assertEqual(result["diagnostics"][0]["review_id"], 61)
+        self.assertIn("ambiguous publisher identity", result["diagnostics"][0]["why"])
+
+    def test_generated_non_bot_author_is_invalid(self):
+        self.render_generated()
+        self.reviews[0]["user"] = {"id": 999, "login": "github-actions[bot]"}
+        result = self.check()
+        self.assertFalse(result["eligible"], result)
+        self.assertEqual(result["status"], "invalid")
+
+    def test_generated_edited_body_is_caught_by_byte_binding_not_admission(self):
+        # Appended prose does not touch the anchored marker, so check() admits
+        # the review (same prefix posture as automated()); the byte-exact
+        # body_observation binding is what rejects a later edit at shipping time.
+        body, _digest = self.render_generated()
+        eligibility = self.check()
+        self.assertTrue(eligibility["eligible"], eligibility)
+        self.reviews[0]["body"] = body + "\nEdited after publication."
+        with self.assertRaisesRegex(ReviewInventoryError, "body bytes differ"):
+            bind_eligibility(self.body_inventory(), eligibility)
+
+    def test_generated_receipt_digest_mismatch_is_invalid(self):
+        body, digest = self.render_generated()
+        self.reviews[0]["body"] = body.replace("sha256=" + digest, "sha256=" + "0" * 64)
+        result = self.check()
+        self.assertFalse(result["eligible"], result)
+        self.assertEqual(result["status"], "invalid")
+
+    def test_generated_receipt_with_unclosed_entries_is_invalid(self):
+        for failure in ("duplicate", "tampered", "missing", "extra-field", "null-mismatch"):
+            with self.subTest(failure=failure):
+                self.render_generated()
+                document = self.source.documents["generated-only-receipt.json"]
+                entries = document["excluded_generated"]["entries"]
+                if failure == "duplicate":
+                    entries.append(deepcopy(entries[0]))
+                elif failure == "tampered":
+                    entries[0]["sha256"] = "not-a-digest"
+                elif failure == "missing":
+                    entries.clear()
+                elif failure == "extra-field":
+                    entries[0]["note"] = "x"
+                else:
+                    entries[0]["sha256"] = None
+                # Keep every other authentication layer intact so only the
+                # entries closure can refuse: reseal the self-describing
+                # digest and republish the marker over the new retained bytes.
+                document.pop("receipt_sha256")
+                document["receipt_sha256"] = hashlib.sha256(
+                    wait.pipeline.input_producer.json_bytes(document)).hexdigest()
+                digest = hashlib.sha256(json.dumps(document).encode()).hexdigest()
+                self.reviews[0]["body"] = wait.pipeline.pr_review_target.generated_body(
+                    REPO, 7, A, "51", "1", digest)
+                result = self.check()
+                self.assertFalse(result["eligible"], result)
+                self.assertEqual(result["status"], "invalid")
+
+    def test_generated_receipt_without_portal_lane_stays_pending(self):
+        self.render_generated()
+        self.check_runs = []
+        result = self.check()
+        self.assertFalse(result["eligible"], result)
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(result["diagnostics"][0]["status"], "portal_gate_pending")
+
+    def test_generated_receipt_with_failed_portal_lane_stays_pending(self):
+        self.render_generated()
+        self.check_runs[0]["conclusion"] = "failure"
+        result = self.check()
+        self.assertFalse(result["eligible"], result)
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(result["diagnostics"][0]["status"], "portal_gate_pending")
 
     def test_v2_foreign_malformed_and_duplicate_markers_are_invalid(self):
         self.render_v2()

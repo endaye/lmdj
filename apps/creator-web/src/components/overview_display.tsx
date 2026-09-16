@@ -6,6 +6,10 @@ import {describeBuildIdentity, shortBuildLabel} from "../runtime/build_identity"
 import {shortProjectId} from "../state/view_model";
 import type {SequenceState} from "../state/sequence_state";
 import type {PatternTransportState} from "../state/pattern_transport_state";
+import {ProjectOverview} from "./project_overview";
+import {PerformOverview} from "./perform_overview";
+import {SampleOverview} from "./sample_overview";
+import {SequenceOverview} from "./sequence_overview";
 import {transportStatusLabel} from "./sequence_transport";
 
 interface OverviewDisplayProps {
@@ -94,9 +98,29 @@ export function OverviewDisplay({
           {shortBuildLabel(buildIdentity)}
         </p>
       ) : null}
-      <p className="overview-grid-caption">
-        Event grid is a live projection target; this overview does not edit it.
-      </p>
+      {activeMode === "sequence" ? (
+        <SequenceOverview
+          project={project}
+          state={sequence}
+          {...(transport === undefined ? {} : {transport})}
+        />
+      ) : activeMode === "project" ? (
+        <ProjectOverview state={state} />
+      ) : activeMode === "sample" ? (
+        <SampleOverview state={state} />
+      ) : activeMode === "slice" || activeMode === "soundset" ? (
+        <p className="overview-grid-caption">
+          {activeMode === "slice"
+            ? "Slice preview does not write Project Truth until Adopt."
+            : "Sound Set install writes only after an explicit Keep or Replace."}
+        </p>
+      ) : activeMode === "perform" ? (
+        <PerformOverview />
+      ) : (
+        <p className="overview-grid-caption">
+          Event grid is a live projection target; this overview does not edit it.
+        </p>
+      )}
     </div>
   );
 }

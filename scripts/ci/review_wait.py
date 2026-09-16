@@ -20,11 +20,25 @@ SCHEMA = "lmdj.current-head-review.v1"
 ATTESTATION = "lmdj.owner-review-attestation.v1"
 MARKER = re.compile(r"^<!-- lmdj-review-v1 ([\w.-]+/[\w.-]+) ([1-9][0-9]*) ([0-9a-f]{40}) ([1-9][0-9]*) ([1-9][0-9]*) (glm|kimi|grok) -->$", re.M)
 MARKER_V2 = re.compile(r"^<!-- lmdj-review-v2 ([\w.-]+/[\w.-]+) ([1-9][0-9]*) ([0-9a-f]{40}) ([1-9][0-9]*) ([1-9][0-9]*) (deepseek|glm|kimi|grok) sha256=([0-9a-f]{64}) -->$", re.M)
+MARKER_GENERATED = re.compile(r"^<!-- lmdj-review-generated-v1 ([\w.-]+/[\w.-]+) ([1-9][0-9]*) ([0-9a-f]{40}) ([1-9][0-9]*) ([1-9][0-9]*) sha256=([0-9a-f]{64}) -->$", re.M)
 HISTORY_DIGEST_V2 = re.compile(r"^<!-- lmdj-review-history-digest-v2 sha256=([0-9a-f]{64}) -->$", re.M)
+# The PR Contract lane job (`portal-provenance` in pr-contract.yml) appears as
+# a check run under its literal job name; the reusable-workflow form
+# "Architecture Portal / portal" exists only on authenticated main batches.
+PORTAL_CHECK_RUN = "Architecture Portal provenance"
 
 
 class Refused(ValueError):
     """Authored invariant diagnostics, never raw provider or API error text."""
+
+
+class PortalGatePending(Refused):
+    """The receipt is authentic but the Portal gate is not green on this head.
+
+    Distinct from invalid evidence: the marker, run and receipt authenticated,
+    only the deterministic gate observation is missing or unsuccessful, so the
+    head stays pending instead of being reported as invalid evidence.
+    """
 
 
 def require(value, reason):
@@ -219,6 +233,82 @@ def automated(reader, posted, repo, number, head, bot):
             "body_observation": body_observation(posted)}
 
 
+def portal_gate(reader, repository, head):
+    """The deterministic Portal lane must be green on the exact same head.
+
+    The check-runs inventory is complete and paginated; a missing, running or
+    failed Portal lane means the gate has not yet proven this head, which is a
+    pending condition, never an invalid marker.
+    """
+    checks = reader.pages(f"/repos/{repository}/commits/{head}/check-runs", "check_runs")
+    selected = [c for c in checks if c.get("name") == PORTAL_CHECK_RUN]
+    if not (len(selected) == 1 and selected[0].get("head_sha") == head
+            and selected[0].get("status") == "completed"
+            and selected[0].get("conclusion") == "success"):
+        raise PortalGatePending(
+            "why: the Architecture Portal lane has no successful check run on this exact head; "
+            "remedy: wait for the portal gate to complete green on this head, or obtain "
+            "owner-attested independent takeover")
+
+
+def generated(reader, posted, repo, number, head, bot):
+    """Admit a control-plane generated-only receipt; every invariant replicated."""
+    matches = MARKER_GENERATED.findall(posted.get("body", ""))
+    require(len(matches) == 1, "missing or ambiguous publisher identity")
+    repository, pr, sha, run, attempt, receipt_digest = matches[0]
+    run, attempt = int(run), int(attempt)
+    require((repository, int(pr), sha) == (repo["full_name"], number, head), "publisher identity is stale or mismatched")
+    require(posted.get("user", {}).get("id") == bot["id"] and bot.get("type") == "Bot"
+            and posted.get("state") == "COMMENTED" and posted.get("commit_id") == head
+            and nonempty(posted.get("submitted_at")), "review is not authentic submitted bot COMMENT")
+    require(failure.collect(reader, repository, run, attempt) is None,
+            "generated-only review run could not be authenticated")
+    run_data = reader.get(f"/repos/{repository}/actions/runs/{run}/attempts/{attempt}")
+    require(run_data.get("conclusion") == "success", "review run failed or is unpublished")
+    jobs = reader.list_jobs(run, attempt)
+    for name in ("Review fallback", "Publish review and scope"):
+        selected = [j for j in jobs if j.get("name") == name]
+        require(len(selected) == 1 and selected[0].get("run_id") == run and selected[0].get("run_attempt") == attempt
+                and selected[0].get("status") == "completed" and selected[0].get("conclusion") == "success",
+                "producer or publisher not successful")
+    artifacts = reader.pages(f"/repos/{repository}/actions/runs/{run}/artifacts", "artifacts")
+    selected = [a for a in artifacts if a.get("name") == f"pr-review-result-{head}-{run}-{attempt}"]
+    require(len(selected) == 1, "review artifact head mismatch")
+    with zipfile.ZipFile(io.BytesIO(reader.download_artifact(selected[0]["id"]))) as archive:
+        require(archive.namelist() == ["generated-only-receipt.json"],
+                "generated-only archive schema is not closed")
+        raw = archive.read("generated-only-receipt.json")
+        receipt = json.loads(raw, object_pairs_hook=change_scope.reject_duplicates)
+    require(hashlib.sha256(raw).hexdigest() == receipt_digest,
+            "generated-only receipt digest differs from the publisher marker")
+    require(isinstance(receipt, dict) and set(receipt) == {
+        "schema", "status", "identity", "head_sha", "excluded_generated", "receipt_sha256"},
+        "generated-only receipt schema is not closed")
+    require(receipt["schema"] == pipeline.input_producer.GENERATED_ONLY_RECEIPT_SCHEMA
+            and receipt["status"] == "generated-only", "unsupported generated-only receipt")
+    identity = receipt["identity"]
+    require(isinstance(identity, dict) and set(identity) == set(pipeline.input_producer.IDENTITY_KEYS)
+            and identity["repository"] == repository and identity["pull_request"] == number
+            and identity["head_sha"] == receipt["head_sha"] == head
+            and identity["run_id"] == str(run) and identity["run_attempt"] == attempt,
+            "generated-only receipt identity differs from the marker and run")
+    unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    require(type(receipt["receipt_sha256"]) is str
+            and receipt["receipt_sha256"] == hashlib.sha256(
+                pipeline.input_producer.json_bytes(unsigned)).hexdigest(),
+            "generated-only receipt self-describing digest differs")
+    require(pipeline.input_producer.generated_only_excluded_valid(receipt["excluded_generated"]),
+            "generated-only receipt excluded-path entries are not closed")
+    expected = pipeline.pr_review_target.generated_body(repository, number, head, str(run), str(attempt),
+                                                        receipt_digest)
+    require(posted["body"].startswith(expected),
+            "published generated-only body differs from the authentic receipt marker")
+    portal_gate(reader, repository, head)
+    return {"kind": "generated", "review_id": posted["id"], "run_id": run, "run_attempt": attempt,
+            "receipt_sha256": receipt_digest,
+            "body_observation": body_observation(posted)}
+
+
 def check(reader, repository, number, head):
     result = {"schema": SCHEMA, "repository": repository, "pr_number": number, "head_sha": head,
               "status": "pending", "eligible": False, "evidence": [], "diagnostics": [],
@@ -242,15 +332,37 @@ def check(reader, repository, number, head):
         comments = reader.pages(prefix + f"/issues/{number}/comments")
         for posted in reviews:
             body = posted.get("body", "")
-            # Route both protocol generations to the strict closed-marker
-            # parser below.  A malformed or duplicate candidate must reach
-            # automated() and become invalid evidence, never be mistaken for
-            # an absent review; unrelated reviews remain out of scope.
-            if posted.get("commit_id") != head or not isinstance(body, str) \
-                    or ("lmdj-review-v1" not in body and "lmdj-review-v2" not in body):
+            # The substring pre-filter is only the cheap unrelated-review skip
+            # and the malformed-candidate funnel: a review mentioning any
+            # marker family must never be mistaken for absent evidence.  Family
+            # disambiguation uses ANCHORED matches instead -- the scan covers
+            # model prose, which can quote any marker string (#1381's authentic
+            # v2 review quoted lmdj-review-generated-v1 while describing it).
+            substring_candidate = isinstance(body, str) and (
+                "lmdj-review-v1" in body or "lmdj-review-v2" in body
+                or "lmdj-review-generated-v1" in body)
+            if posted.get("commit_id") != head or not substring_candidate:
                 continue
+            generated_anchors = len(MARKER_GENERATED.findall(body))
+            model_anchors = len(MARKER.findall(body)) + len(MARKER_V2.findall(body))
             try:
-                result["evidence"].append(automated(reader, posted, repo, number, head, bot))
+                if generated_anchors and model_anchors:
+                    raise Refused("missing or ambiguous publisher identity")
+                if generated_anchors:
+                    result["evidence"].append(generated(reader, posted, repo, number, head, bot))
+                elif model_anchors:
+                    result["evidence"].append(automated(reader, posted, repo, number, head, bot))
+                else:
+                    # A substring candidate with no anchored marker of either
+                    # family is a malformed candidate: invalid evidence, never
+                    # silently skipped.
+                    raise Refused("missing or ambiguous publisher identity")
+            except PortalGatePending as error:
+                # An authentic receipt whose Portal gate is not green on this
+                # head is no eligible evidence yet: pending, never invalid.
+                result["diagnostics"].append({"review_id": posted["id"], "status": "portal_gate_pending",
+                    "why": str(error),
+                    "remedy": "wait for the Architecture Portal lane to succeed on this exact head, or obtain owner-attested independent takeover"})
             except Exception as error:
                 result["diagnostics"].append({"review_id": posted["id"], "status": "invalid_or_unavailable",
                     "why": str(error) if isinstance(error, Refused) else "retained review source could not be authenticated",
@@ -276,7 +388,7 @@ def check(reader, repository, number, head):
             result["status"] = "invalid"
         elif result["evidence"]:
             result.update(status="eligible", eligible=True)
-        elif result["diagnostics"]:
+        elif any(item.get("status") != "portal_gate_pending" for item in result["diagnostics"]):
             result["status"] = "invalid"
     except Exception as error:
         result.update(status="invalid" if isinstance(error, Refused) else "unavailable", eligible=False)

@@ -351,6 +351,62 @@ def publish_review(repository: str, number: int, head: str, run: str, attempt: s
     return identity
 
 
+def generated_identity(repository: str, number: int, head: str, run: str,
+                       attempt: str, receipt_sha256: str) -> str:
+    """The closed marker identity of a control-plane generated-only receipt."""
+    if (not re.fullmatch(r"[0-9a-f]{40}", head) or not run.isdigit()
+            or not attempt.isdigit() or number < 1
+            or not re.fullmatch(r"[\w.-]+/[\w.-]+", repository)
+            or not re.fullmatch(r"[0-9a-f]{64}", receipt_sha256)):
+        raise TargetUnavailable("why: invalid generated-only review identity; remedy: use trusted resolver outputs")
+    return (f"<!-- lmdj-review-generated-v1 {repository} {number} {head} {run} {attempt} "
+            f"sha256={receipt_sha256} -->")
+
+
+def generated_body(repository: str, number: int, head: str, run: str, attempt: str,
+                   receipt_sha256: str) -> str:
+    """The exact COMMENT body a generated-only publication writes; readers recompute it."""
+    identity = generated_identity(repository, number, head, run, attempt, receipt_sha256)
+    return (identity + "\n## generated-only change receipt\n\n"
+            "Every changed path on this head is a tool-generated Architecture Portal "
+            "snapshot/provenance artifact whose bytes a deterministic gate verifies. "
+            "This COMMENT review records the control-plane receipt; it does not approve, "
+            "reject or merge the PR.")
+
+
+def publish_generated(repository: str, number: int, head: str, run: str, attempt: str,
+                      receipt_sha256: str, *, api: Request | None = None,
+                      write: Callable[[str, dict], object] | None = None) -> str:
+    """COMMENT review carrying the generated-only receipt marker; advisory only.
+
+    Same posture as ``publish_review``: only the trusted publisher holds PR
+    write permission, the target is re-resolved and the head re-checked before
+    and after the single mutation, and the COMMENT event never approves,
+    rejects or merges the PR.
+    """
+    identity = generated_identity(repository, number, head, run, attempt, receipt_sha256)
+    data = {"commit_id": head, "event": "COMMENT",
+            "body": generated_body(repository, number, head, run, attempt, receipt_sha256)}
+    target = resolve_target(repository, number, api=api)
+    if target["review"] != "true" or target["base_ref"] != "main":
+        raise TargetUnavailable("why: target is no longer reviewable; remedy: inspect the PR and take over manually")
+    diagnostic = stale_head_diagnostic(head, target["head_sha"], number)
+    if diagnostic:
+        raise TargetUnavailable(diagnostic)
+    if write is None:
+        write = lambda path, data: github_request("POST", f"{API_ROOT}{path}",
+                                                   os.environ["GITHUB_TOKEN"], data)
+    write(f"/repos/{repository}/pulls/{number}/reviews",
+          data)
+    # An unavoidable API race may leave a correctly attached historical review.
+    # Never describe it as current; the job fails and the new head needs its own run.
+    live = resolve_target(repository, number, api=api)
+    diagnostic = stale_head_diagnostic(head, live["head_sha"], number)
+    if diagnostic:
+        raise TargetUnavailable(diagnostic)
+    return identity
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repository", default="")

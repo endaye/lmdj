@@ -43,6 +43,13 @@ function renderControls(overrides: Partial<React.ComponentProps<typeof SampleCon
   return {onPreview, onCommit, onReset, ...view};
 }
 
+test("Sample controls stay an editor, not an overview projection", () => {
+  renderControls();
+  expect(screen.getByRole("button", {name: "One Shot"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Loop"})).toBeTruthy();
+  expect(screen.getByRole("slider", {name: "Pad A1 Volume"})).toBeTruthy();
+});
+
 test("Loop switches the trigger label from One Shot to Hold without overlapping state", async () => {
   const user = userEvent.setup();
   const first = renderControls();

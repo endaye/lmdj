@@ -2153,6 +2153,29 @@ test("opts into the hardware shell with a read-only overview and returns to the 
   expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
 });
 
+test("hardware Project keeps list/import/open in touch and omits New/Save As", async () => {
+  const user = userEvent.setup();
+  render(<App initialState={ready} />);
+  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
+
+  const display = screen.getByRole("region", {name: "Overview display"});
+  expect(within(display).queryAllByRole("button")).toHaveLength(0);
+  expect(within(display).queryByRole("button", {name: "New"})).toBeNull();
+  expect(within(display).getByTestId("project-overview").textContent ?? "")
+    .toMatch(/Save As/);
+
+  const touch = screen.getByRole("region", {name: "Touch workspace"});
+  expect(within(touch).getByRole("button", {name: "Open local"})).toBeTruthy();
+  expect(within(touch).getByRole("button", {name: "Import .lmdj"})).toBeTruthy();
+  expect(within(touch).getByRole("button", {name: "Activate audio"})).toBeTruthy();
+  expect(within(touch).getByRole("button", {name: "Enable MIDI"})).toBeTruthy();
+  expect(within(touch).getByRole("button", {name: "Export report"})).toBeTruthy();
+  expect(within(touch).queryByRole("button", {name: "New"})).toBeNull();
+  expect(within(touch).queryByRole("button", {name: "Save As"})).toBeNull();
+  expect(within(touch).queryByRole("button", {name: "Export project"})).toBeNull();
+  expect(within(touch).queryByRole("button", {name: /^Open$/})).toBeNull();
+});
+
 test("keeps pad identity and mounts Project Sample Sequence in the hardware touch screen", async () => {
   const user = userEvent.setup();
   render(<App initialState={ready} />);
@@ -2169,6 +2192,10 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
 
   await user.click(screen.getByRole("button", {name: "Sample"}));
   expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SAMPLE");
+  expect(screen.getByTestId("sample-overview").textContent ?? "")
+    .toMatch(/Overview waveform is not an editor/);
+  expect(within(screen.getByRole("region", {name: "Overview display"}))
+    .queryByRole("button", {name: "Zoom In"})).toBeNull();
   expect(padA1()).toBeTruthy();
   expect(within(touch()).getAllByRole("heading", {name: "Sample editor"})).toHaveLength(1);
 
@@ -2181,6 +2208,10 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
 
   await user.click(screen.getByRole("button", {name: "Perform"}));
   expect(screen.getByTestId("overview-display").textContent ?? "").toContain("PERFORM");
+  expect(screen.getByTestId("perform-overview").textContent ?? "")
+    .toMatch(/Pictured LP\/HP\/BP are not Host controls/);
+  expect(within(screen.getByRole("region", {name: "Overview display"}))
+    .queryByRole("slider")).toBeNull();
   expect(padA1()).toBeTruthy();
   expect(within(touch()).getByRole("heading", {name: "Perform"})).toBeTruthy();
   expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
@@ -2189,6 +2220,19 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
 
   await user.click(screen.getByRole("button", {name: "Project"}));
   expect(padA1()).toBeTruthy();
+});
+
+test("hardware Slice and Sound Sets stay in the touch workspace without extra physical keys", async () => {
+  const user = userEvent.setup();
+  render(<App initialState={ready} />);
+  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
+  const physical = screen.getByRole("complementary", {name: "Physical controls"});
+  const touch = screen.getByRole("region", {name: "Touch workspace"});
+  expect(within(physical).queryByRole("button", {name: /^Slice/})).toBeNull();
+  expect(within(physical).queryByRole("button", {name: /^Sound Sets/})).toBeNull();
+  expect(within(touch).getByRole("button", {name: /Slice/})).toBeTruthy();
+  expect(within(touch).getByRole("button", {name: /Sound Sets/})).toBeTruthy();
+  expect(screen.getByTestId("hardware-console")).toBeTruthy();
 });
 
 const engagedTransportStatus = (

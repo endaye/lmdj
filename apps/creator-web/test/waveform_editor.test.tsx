@@ -335,6 +335,11 @@ test("adjacent handles partition at the midpoint and stay independently grabbabl
 test("disabled or invalid envelope removes the grip pointer path", () => {
   const disabledView = renderEditor({disabled: true});
   expect(disabledView.container.querySelector("[data-grip-zone]")).toBeNull();
+  expect(screen.getByRole("button", {name: "Zoom In"})).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", {name: "Zoom Out"})).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", {name: "Fit waveform"})).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", {name: "Pan Left"})).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", {name: "Pan Right"})).toHaveProperty("disabled", true);
   disabledView.unmount();
 
   const malformed = {

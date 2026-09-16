@@ -488,6 +488,9 @@ Issues. Retain the postmerge live Issue-state audit below.
    adoption or reviewer independence. A takeover with unresolved findings is
    incomplete; a waiver excuses only independent review, never findings,
    conversations, Task verification, conflicts or live protection.
+   Generated-only receipt evidence, when the helper authenticates a
+   `lmdj-review-generated-v1` marker for the exact head, takes precedence over
+   an owner waiver for that head.
    Rerun the helper after a new record. A push invalidates all old-head evidence.
 4. **Merge without the former queue/full-CI loop**. A non-conflicting PR need
    not update just because main advanced. Incremental or explicit full self-test failures,

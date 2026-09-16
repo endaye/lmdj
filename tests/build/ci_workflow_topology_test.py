@@ -313,7 +313,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertEqual(commands, ["scripts/docs-site.sh install", "scripts/docs-site.sh check"])
         provenance = self.pr_contract_job("portal-provenance")
         self.assertIn("name: Architecture Portal provenance", provenance,
-                      "why: the job name is the published check-run surface readers bind to; "
+                      "why: review_wait admits generated-only evidence by this literal check-run name; "
                       "remedy: keep the job name stable")
         setup = provenance.index("- uses: actions/setup-node@v6")
         self.assertIn('node-version: "26"', provenance)
