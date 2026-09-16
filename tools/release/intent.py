@@ -13,11 +13,11 @@ publishes, deploys or promotes.
 """
 
 from copy import deepcopy
-import hashlib
 from pathlib import Path
 import json
 import re
 
+from .batch_reference import BatchEvidenceError, parse_reference
 from .model import canonical_sha256
 from .orchestration_driver import Observation
 
@@ -39,6 +39,9 @@ _BUILD = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.0
 _SPEC_KEYS = {"operation_id", "request_sha256", "repository_id", "actor_id",
               "target_revision", "product_build", "tag", "snapshot_sha256",
               "batch_reference", "batch_run_id"}
+# The carrier's PR sequence drives the spec its durable commit produced, which
+# adds the commit's own head/tree identities.
+_PR_SPEC_KEYS = _SPEC_KEYS | {"head_sha", "tree_sha"}
 _INTENT_OP_STEP = "intent"
 _LEDGER_RELATIVE = Path("docs/release-evidence/release-intents.json")
 _VERSIONS_RELATIVE = Path("apps/architecture-portal/versions.json")
@@ -67,8 +70,27 @@ def validate_spec(spec):
         _fail("product build is invalid")
     if spec["tag"] != "lmdj-v" + spec["product_build"] or _TAG.fullmatch(spec["tag"]) is None:
         _fail("tag does not match the product build")
-    if type(spec["batch_reference"]) is not str or not 0 < len(spec["batch_reference"]) <= 65536:
-        _fail("batch reference is invalid")
+    # The spec binds the verified reference document, not its encoded text: the
+    # ledger row freezes it as `batch_test_evidence`, which the ledger model
+    # parses as a closed reference, so a bare string would corrupt the ledger.
+    try:
+        reference = parse_reference(spec["batch_reference"])
+    except BatchEvidenceError:
+        _fail("batch reference is not a closed verified reference")
+    if reference["request"]["target"] != spec["target_revision"]:
+        _fail("batch reference does not bind the intent target revision")
+    if reference["request"]["origin_run"]["run_id"] != spec["batch_run_id"]:
+        _fail("batch reference does not bind the intent batch run")
+
+
+def validate_pr_spec(spec):
+    """The spec the PR sequence drives: the base spec plus the commit identity."""
+    if type(spec) is not dict or set(spec) != _PR_SPEC_KEYS:
+        _fail("scope fields are invalid")
+    if not all(isinstance(spec[k], str) and re.fullmatch(r"[0-9a-f]{40}", spec[k])
+               for k in ("head_sha", "tree_sha")):
+        _fail("commit identities are invalid")
+    validate_spec({key: spec[key] for key in _SPEC_KEYS})
 
 
 def intent_document_relative(spec):
@@ -104,12 +126,12 @@ def intent_markdown(spec):
         f"| Snapshot | `{spec['product_build']}` |\n"
         f"| Full batch run | [{spec['batch_run_id']}](https://github.com/endaye/lmdj"
         f"/actions/runs/{spec['batch_run_id']}) |\n\n"
-        f"Batch reference digest: `{hashlib.sha256(spec['batch_reference'].encode()).hexdigest()}`\n"
+        f"Batch reference digest: `{canonical_sha256(spec['batch_reference'])}`\n"
     )
 
 
 def pr_document(spec):
-    validate_spec(spec)
+    validate_pr_spec(spec)
     document = {"title": f"docs(release): record {spec['product_build']} canary release intent",
                 "body": ("## Canary release intent\n\n"
                          f"Product Build: `{spec['product_build']}`\n\n"

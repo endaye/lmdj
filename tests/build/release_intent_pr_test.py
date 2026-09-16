@@ -20,14 +20,29 @@ HEAD = "1" * 40
 TREE = "2" * 40
 TARGET = "3" * 40
 REQUEST = "4" * 64
+RUN_ID = 4242
+
+
+def batch_reference(target=TARGET, run_id=RUN_ID):
+    """A closed verified batch reference document, as the verification step binds."""
+    return {"schema": "lmdj.ci-batch-release-reference.v1",
+            "executor_control_revision": "7" * 40, "executor_event": "push",
+            "run_attempt": 1, "origin_record_digest": "8" * 64,
+            "admission_record_digest": "9" * 64, "evidence_digest": "0" * 64,
+            "request": {"id": "batch-4242", "kind": "auto", "base": "6" * 40,
+                        "target": target, "control": "7" * 40,
+                        "policy": "a" * 64,
+                        "selection": {"kind": "full", "suites": ["unit"],
+                                      "reasons": ["candidate"]},
+                        "origin_run": {"run_id": run_id, "attempt": 1}}}
 
 
 def spec_for_test(**changes):
     document = {"operation_id": intent_operation_id(REQUEST), "request_sha256": REQUEST,
                 "repository_id": 12, "actor_id": 34, "target_revision": TARGET,
                 "product_build": "1.0.57.0", "tag": "lmdj-v1.0.57.0",
-                "snapshot_sha256": "5" * 64, "batch_reference": "batch-verdict-v1:zlib-base64:AAA",
-                "batch_run_id": 4242}
+                "snapshot_sha256": "5" * 64, "batch_reference": batch_reference(),
+                "batch_run_id": RUN_ID}
     document.update(changes)
     return document
 
@@ -150,6 +165,14 @@ class CarrierProtocolTest(CarrierFixture):
         carrier = self.new_carrier(self.new_commit(), self.new_sequence())
         with self.assertRaises(Exception):
             carrier.advance({}, {"step": "intent"}, before_write=None)
+
+    def test_the_driven_spec_passes_the_real_sequence_validator(self):
+        # The carrier adds the durable commit's head/tree identities before
+        # driving the sequence; the real sequence validator must accept that
+        # exact shape, or the step could never leave `unknown`.
+        carrier = self.new_carrier(self.new_commit(), self.new_sequence())
+        driven = carrier._spec_for(HEAD, TREE)
+        self.new_sequence()._validate_spec(driven)
 
 
 if __name__ == "__main__":
