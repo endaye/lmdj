@@ -66,7 +66,9 @@ export function OverviewDisplay({
             ? ` / ${transport === undefined
                 ? sequence.phase
                 : transportStatusLabel(transport)}`
-            : ""}
+            : activeMode === "perform" && transport !== undefined
+              ? ` / ${transportStatusLabel(transport)}`
+              : ""}
         </output>
       </div>
       <dl className="overview-facts">
@@ -115,7 +117,10 @@ export function OverviewDisplay({
             : "Sound Set install writes only after an explicit Keep or Replace."}
         </p>
       ) : activeMode === "perform" ? (
-        <PerformOverview />
+        <PerformOverview
+          state={state}
+          {...(transport === undefined ? {} : {transport})}
+        />
       ) : (
         <p className="overview-grid-caption">
           Event grid is a live projection target; this overview does not edit it.
