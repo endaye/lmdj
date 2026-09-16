@@ -554,6 +554,7 @@ export function WaveformEditor({
       <div className="waveform-viewport-actions" aria-label="Waveform viewport">
         <button
           type="button"
+          disabled={disabled}
           onClick={() => applyViewport(zoomSampleViewport(
             viewport,
             2,
@@ -564,6 +565,7 @@ export function WaveformEditor({
         </button>
         <button
           type="button"
+          disabled={disabled}
           onClick={() => applyViewport(zoomSampleViewport(
             viewport,
             .5,
@@ -574,6 +576,7 @@ export function WaveformEditor({
         </button>
         <button
           type="button"
+          disabled={disabled}
           aria-label="Fit waveform"
           onClick={() => applyViewport(fitSampleViewport(sourceFrames))}
         >
@@ -581,6 +584,7 @@ export function WaveformEditor({
         </button>
         <button
           type="button"
+          disabled={disabled}
           onClick={() => applyViewport(panSampleViewport(
             viewport,
             -Math.max(1, Math.round((viewport.endFrame - viewport.startFrame) / 4)),
@@ -590,6 +594,7 @@ export function WaveformEditor({
         </button>
         <button
           type="button"
+          disabled={disabled}
           onClick={() => applyViewport(panSampleViewport(
             viewport,
             Math.max(1, Math.round((viewport.endFrame - viewport.startFrame) / 4)),

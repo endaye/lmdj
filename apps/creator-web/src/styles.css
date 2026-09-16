@@ -90,7 +90,8 @@ button:disabled { color: #737b87; }
   display: flex; flex-wrap: wrap; align-items: end; gap: .65rem;
 }
 .sequence-overview,
-.project-overview {
+.project-overview,
+.sample-overview {
   display: grid;
   gap: 8px;
   pointer-events: none;
