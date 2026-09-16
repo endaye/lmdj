@@ -170,12 +170,13 @@ class FinalCarrier:
                   "in the promoted channel")
         if release.get("draft"):
             _fail("the far-side Release is still a draft")
-        if release.get("id") is not None \
-                and release.get("id") != self.spec["release_id"]:
+        if release.get("id") != self.spec["release_id"]:
             _fail("the far-side Release id differs from the recorded one")
         routes = site_routes(self.spec)
         statuses = {name: _fetch_status(self.fetch, url)
                     for name, url in routes.items()}
+        if all(status == 404 for status in statuses.values()):
+            return Observation("absent")
         if any(status != 200 for status in statuses.values()):
             return Observation("unknown")
         evidence = {"sha256": canonical_sha256({

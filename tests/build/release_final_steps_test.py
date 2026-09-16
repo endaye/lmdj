@@ -89,7 +89,7 @@ class ChangelogSiteCarrierTest(unittest.TestCase):
 class FinalCarrierTest(unittest.TestCase):
     def test_verified_binds_every_recorded_identity(self):
         carrier = FinalCarrier(spec=final_spec(), fetch=lambda url: 200,
-                               release_by_tag=lambda: {"draft": False},
+                               release_by_tag=lambda: {"draft": False, "id": 4096},
                                ledger_row=lambda: Row())
         observed = carrier.observe({}, {"step": "final"})
         self.assertEqual(observed.status, "verified")
@@ -128,10 +128,23 @@ class FinalCarrierTest(unittest.TestCase):
             ledger_row=lambda: Row())
         with self.assertRaises(SiteStepError):
             wrong_id.observe({}, {})
+        missing_id = FinalCarrier(
+            spec=final_spec(), fetch=lambda url: 200,
+            release_by_tag=lambda: {"draft": False},
+            ledger_row=lambda: Row())
+        with self.assertRaises(SiteStepError):
+            missing_id.observe({}, {})
+
+    def test_all_404_routes_are_absent_not_unknown(self):
+        carrier = FinalCarrier(spec=final_spec(),
+                               fetch=lambda url: 404,
+                               release_by_tag=lambda: {"draft": False, "id": 4096},
+                               ledger_row=lambda: Row())
+        self.assertEqual(carrier.observe({}, {}).status, "absent")
 
     def test_site_failure_is_unknown_never_a_pass(self):
         carrier = FinalCarrier(spec=final_spec(), fetch=lambda url: 503,
-                               release_by_tag=lambda: {"draft": False},
+                               release_by_tag=lambda: {"draft": False, "id": 4096},
                                ledger_row=lambda: Row())
         self.assertEqual(carrier.observe({}, {}).status, "unknown")
 
