@@ -94,6 +94,15 @@ class CarrierTest(unittest.TestCase):
                           local_tag_state=lambda: self.local,
                           remote_tag_state=lambda: self.remote)
 
+    def test_observe_reports_the_verified_status_with_its_evidence(self):
+        # read_back returns a status with its evidence; observe must unpack it
+        # rather than hand the driver a malformed observation or a bare status.
+        self.remote = FakeTag(TAG_OBJECT, TARGET, SIGNER)
+        observed = self.carrier().observe({}, {"step": "tag"})
+        self.assertEqual(observed.status, "verified")
+        self.assertEqual(observed.evidence["reference"], "tag:" + spec()["tag"])
+        observed.validate()
+
     def test_advance_pushes_once_under_the_guard_and_never_repeats(self):
         carrier = self.carrier()
         self.assertEqual(carrier.observe({}, {"step": "tag"}).status, "pending")

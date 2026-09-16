@@ -118,6 +118,15 @@ class CarrierTest(unittest.TestCase):
         return PreparedCarrier(root=self.root, spec=spec(), prepare=self.prepare,
                                tag_state=self.tag_state, signer_fingerprint=SIGNER)
 
+    def test_observe_reports_the_verified_status_with_its_evidence(self):
+        # read_back returns a status with its evidence; observe must unpack both
+        # rather than hand the driver a bare status or a malformed observation.
+        self.prepare("lmdj-v1.0.57.0")
+        observed = self.carrier().observe({}, {"step": "prepared"})
+        self.assertEqual(observed.status, "verified")
+        self.assertTrue(observed.evidence["reference"].startswith("prepared:"))
+        observed.validate()
+
     def test_advance_runs_prepare_once_under_the_guard_and_recovers(self):
         carrier = self.carrier()
         self.assertEqual(carrier.observe({}, {"step": "prepared"}).status, "absent")
