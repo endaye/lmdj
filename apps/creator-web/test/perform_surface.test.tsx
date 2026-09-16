@@ -314,6 +314,10 @@ test("renders Pattern, fixed FX chain, one global HOLD, then the existing Pad su
   expect(within(surface).getAllByRole("button", {name: "HOLD"})).toHaveLength(1);
   expect(within(fx).getAllByRole("slider").map((slider) => slider.getAttribute("aria-label")))
     .toEqual(["Filter", "Delay", "Reverb", "Stutter", "Gate", "Reverse", "Crush", "Cutter"]);
+  for (const pictured of ["LP", "HP", "BP"]) {
+    expect(within(surface).queryByRole("slider", {name: pictured})).toBeNull();
+    expect(within(surface).queryByRole("button", {name: pictured})).toBeNull();
+  }
 });
 
 test("switches Bank synchronously without any Core request", async () => {
