@@ -21,7 +21,7 @@ import json
 from pathlib import Path
 import re
 
-from .orchestration import JournalError, STEPS
+from .orchestration import JournalError, RequestJournal, STEPS
 from .orchestration_driver import Observation
 
 _BUILD = re.compile(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}\.0\Z")
@@ -677,3 +677,103 @@ def enroll_promotion(*, candidate_root, repository_id, ledger, main_revision,
                                 sequence=sequence_for(spec))
 
     return RecoveredStep("promotion", recover, drives=True)
+
+
+def enrolled_candidate_timestamp(transition_root):
+    """The Task author timestamp the enrolled candidate scope froze, or None.
+
+    The managed transition's enrolled scope binds the author identity
+    (including the timestamp) at first enrollment, and every later
+    reconstruction must reproduce it exactly. A missing transition journal
+    means nothing was enrolled; a present-but-misshapen record is corrupt
+    state and fails closed.
+    """
+    from .candidate_snapshot import read
+    from .candidate_transition import CandidateTransition
+
+    root = Path(transition_root).absolute()
+    if not root.is_dir():
+        return None
+    with RequestJournal(root, writable=False) as journal:
+        enrolled = read(journal, CandidateTransition.MARKER, optional=True)
+    if enrolled is None:
+        return None
+    author = enrolled.get("author") if type(enrolled) is dict else None
+    timestamp = author.get("timestamp") if type(author) is dict else None
+    if type(timestamp) is not int or not 1 <= timestamp <= 253402300799:
+        _fail("the enrolled candidate scope records no valid Task timestamp")
+    return timestamp
+
+
+def enroll_candidate(*, request, preparation_root, repository_root, source_root,
+                     reservation_root, transition_root, witness_root,
+                     repository_id, client, token, authorize, observe_main,
+                     review, verify_merged, clock, path, author_name,
+                     author_email, source_timestamp):
+    """The managed `candidate` adapter for this exact frozen request.
+
+    Managed, not self-driving: the returned `CandidateTransition` goes to the
+    driver's `candidate=` slot and follows the managed path, so nothing here
+    exposes a carrier `advance`. The assembly drives the trusted preparation
+    layer (source setup, official snapshot and the six cut checks) to its
+    verified receipts — resumable, re-executing nothing — then binds the
+    transition to those receipts. A `tag`-mode request is refused by the
+    preparation and transition layers themselves: a checked-cut allocation
+    only exists for `new` mode. Any leg that cannot reach verified fails
+    closed — the entry never receives a half-prepared adapter.
+    """
+    from .candidate_preparation import CandidatePreparation
+
+    for name, callback in (("authorize", authorize), ("observe_main", observe_main),
+                           ("review", review), ("verify_merged", verify_merged),
+                           ("clock", clock)):
+        if not callable(callback):
+            _fail(f"requires a callable {name}")
+    preparation = CandidatePreparation(
+        preparation_root, repository_root=repository_root,
+        source_root=source_root, reservation_root=reservation_root,
+        request=request, authorize=authorize, observe_main=observe_main,
+        path=path, author_name=author_name, author_email=author_email,
+        source_timestamp=source_timestamp, clock=clock)
+    observed = preparation.observe(initialize=True)
+    if observed["status"] != "verified":
+        driven = preparation.prepare(
+            before_write=lambda: authorize(deepcopy(request)))
+        if driven["status"] != "verified":
+            _fail("candidate preparation did not reach its verified receipts")
+    else:
+        driven = observed
+    return assemble_candidate_transition(
+        request=request, checks=preparation.checks, source=driven["source"],
+        checked_cut=driven["checked_cut"], frozen=driven["frozen"],
+        transition_root=transition_root, witness_root=witness_root,
+        repository_id=repository_id, client=client, token=token,
+        authorize=authorize, observe_main=observe_main, review=review,
+        verify_merged=verify_merged, clock=clock, author_name=author_name,
+        author_email=author_email)
+
+
+def assemble_candidate_transition(*, request, checks, source, checked_cut,
+                                  frozen, transition_root, witness_root,
+                                  repository_id, client, token, authorize,
+                                  observe_main, review, verify_merged, clock,
+                                  author_name, author_email):
+    """Bind the managed candidate transition to verified preparation receipts.
+
+    The Task author timestamp comes from the enrolled transition scope when
+    one exists, so a resumed drive in a new process reproduces the identical
+    adapter rather than failing the scope binding; otherwise it is read from
+    the trusted clock.
+    """
+    from .candidate_transition import CandidateTransition
+
+    timestamp = enrolled_candidate_timestamp(transition_root)
+    if timestamp is None:
+        timestamp = clock()
+    return CandidateTransition(
+        transition_root, checks=checks, request=request, source=source,
+        checked_cut=checked_cut, frozen=frozen, repository_id=repository_id,
+        client=client, token=token, authorize=authorize,
+        observe_main=observe_main, review=review, verify_merged=verify_merged,
+        witness_root=witness_root, author_name=author_name,
+        author_email=author_email, timestamp=timestamp)

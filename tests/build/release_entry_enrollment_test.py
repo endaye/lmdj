@@ -17,6 +17,7 @@ from tools.release.carriers import (  # noqa: E402
     enroll_final,
     enroll_intent,
     enroll_promotion,
+    enrolled_candidate_timestamp,
     read_candidate_identity,
     read_prepared_plan,
     read_verified_batch,
@@ -1207,6 +1208,90 @@ class PromotionEnrollmentTest(unittest.TestCase):
         self.assertNotEqual(spec["head_sha"], MAIN_TIP)
         self.assertNotEqual(spec["head_sha"], spec["tree_sha"])
         self.assertEqual(spec, self.sequence_specs[0])
+
+
+class CandidateEnrollmentTest(unittest.TestCase):
+    """The managed candidate adapter's assembly contract.
+
+    The full new-mode assembly drives the real preparation layer (owned
+    install, official snapshot, six cut checks); that journey is covered by
+    tests/build/release_candidate_portal_journey.py, which composes the
+    transition through the same production assembly. Here: the refusal and
+    recovery boundaries that need no preparation run.
+    """
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+
+    def test_a_tag_mode_request_is_refused_before_any_preparation(self):
+        # A checked-cut allocation exists only for `new` mode; the preparation
+        # layer itself refuses an existing-tag request.
+        from tools.release.carriers import enroll_candidate
+        from tools.release.candidate_preparation import CandidatePreparationError
+
+        with self.assertRaises(CandidatePreparationError):
+            enroll_candidate(
+                request=request(), preparation_root=self.root / "preparation",
+                repository_root=self.root / "repo", source_root=self.root / "src",
+                reservation_root=self.root / "reservations",
+                transition_root=self.root / "transition",
+                witness_root=self.root / "witness", repository_id=12,
+                client=None, token="FIXTURE-NOT-A-SECRET",
+                authorize=lambda _request: None, observe_main=lambda: TARGET,
+                review=lambda *a: None, verify_merged=lambda *a: None,
+                clock=lambda: 1789550000, path="/usr/bin:/bin",
+                author_name="Fixture", author_email="fixture@example.invalid",
+                source_timestamp=1789550000)
+        self.assertFalse((self.root / "preparation").exists())
+
+    def test_non_callable_gates_are_refused_at_enrollment(self):
+        from tools.release.carriers import enroll_candidate
+
+        with self.assertRaises(JournalError):
+            enroll_candidate(
+                request=request(mode="new", requested_tag=None),
+                preparation_root=self.root / "preparation",
+                repository_root=self.root / "repo", source_root=self.root / "src",
+                reservation_root=self.root / "reservations",
+                transition_root=self.root / "transition",
+                witness_root=self.root / "witness", repository_id=12,
+                client=None, token="FIXTURE-NOT-A-SECRET",
+                authorize=None, observe_main=lambda: TARGET,
+                review=lambda *a: None, verify_merged=lambda *a: None,
+                clock=lambda: 1789550000, path="/usr/bin:/bin",
+                author_name="Fixture", author_email="fixture@example.invalid",
+                source_timestamp=1789550000)
+
+    def test_the_author_timestamp_is_recovered_from_the_enrolled_scope(self):
+        from tools.release.candidate_transition import CandidateTransition
+        from tools.release.model import canonical_json
+        from tools.release.orchestration import RequestJournal
+
+        root = self.root / "transition"
+        self.assertIsNone(enrolled_candidate_timestamp(root))
+        root.mkdir(mode=0o700)
+        self.assertIsNone(enrolled_candidate_timestamp(root))
+        scope = {"author": {"author_name": "Fixture",
+                            "author_email": "fixture@example.invalid",
+                            "timestamp": 1789550000}}
+        with RequestJournal(root) as journal:
+            journal._write(CandidateTransition.MARKER, canonical_json(scope))
+        self.assertEqual(enrolled_candidate_timestamp(root), 1789550000)
+
+    def test_a_corrupt_enrolled_scope_fails_closed(self):
+        from tools.release.candidate_transition import CandidateTransition
+        from tools.release.model import canonical_json
+        from tools.release.orchestration import RequestJournal
+
+        root = self.root / "transition"
+        root.mkdir(mode=0o700)
+        with RequestJournal(root) as journal:
+            journal._write(CandidateTransition.MARKER,
+                           canonical_json({"author": {"timestamp": "soon"}}))
+        with self.assertRaises(JournalError):
+            enrolled_candidate_timestamp(root)
 
 
 if __name__ == "__main__":
