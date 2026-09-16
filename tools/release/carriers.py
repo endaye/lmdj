@@ -223,21 +223,41 @@ def read_prepared_plan(root, tag):
     """The plan digest `prepare` wrote for this tag, or None before it ran.
 
     The path is the one `prepared_step` reads back from, so the enrollment and
-    the step agree on where the plan lives. A present-but-unreadable or
-    malformed digest fails closed: only an absent file means "not prepared yet".
+    the step agree on where the plan lives. `None` means the prepared output is
+    not there yet, which is the same condition `prepared_step.read_back` reports
+    as "absent"; the step that needs it decides what that means for itself, and
+    this enrollment reports it as `pending` because it cannot drive `prepare`
+    (see #1404). Only an absent pair means that: the digest is checked against
+    the plan document bytes it names, so a swapped digest file cannot silently
+    redefine what a later step binds, and half of the pair is drift. Which
+    *reviewed* digest authorizes the plan is still open (#1404): no ledger row
+    records it yet.
     """
     from . import prepared_step
 
     output = Path(root) / prepared_step.output_relative(tag)
     path = output / prepared_step._PLAN_DIGEST
-    if not path.is_file():
-        return None
     try:
         digest = path.read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        # prepare writes the document and its digest together, so a document
+        # without its digest is a partial or tampered output, not an absent one.
+        if (output / prepared_step._PLAN_DOCUMENT).exists():
+            _fail("the prepared plan document has no recorded digest")
+        return None
     except (OSError, UnicodeDecodeError):
         _fail("the prepared plan digest is unreadable")
     if _DIGEST.fullmatch(digest) is None:
         _fail("the prepared plan digest is malformed")
+    try:
+        document = (output / prepared_step._PLAN_DOCUMENT).read_bytes()
+    except FileNotFoundError:
+        _fail("the prepared output records a digest without its plan document")
+    except OSError:
+        _fail("the prepared plan document is unreadable")
+    import hashlib
+    if hashlib.sha256(document).hexdigest() != digest:
+        _fail("the prepared plan digest does not match its document")
     return digest
 
 
@@ -263,8 +283,14 @@ def enroll_draft(*, root, candidate_root, repository_id, ledger, create_draft,
         spec = dict(fields, plan_sha256=plan)
         validate_spec(spec)
         tag = spec["tag"]
-        # draft_step takes a zero-argument far-side reader; the enrollment owns
-        # the identity, so it binds it rather than letting the reader guess.
+        # draft_step takes a zero-argument far-side reader, and the enrollment
+        # owns the identity the carrier verifies: the tag comes from the spec
+        # that was just validated, and DraftCarrier deep-copies that spec, so
+        # the identity the reader queries cannot drift from the one read_back
+        # compares against. The carrier is built per recovery and lives for one
+        # operation, so it is tag-stable for its lifetime by construction; a
+        # far-side Release under another tag is caught by read_back's own tag
+        # comparison, never silently read as this step's work.
         return DraftCarrier(spec=spec, create_draft=create_draft,
                             release_by_tag=lambda: release_by_tag(tag))
 

@@ -35,7 +35,9 @@
    （恢复不到报 `pending`，不伪造 `absent`/`verified`），复用 `ChangelogCarrier._recovered_spec()`
    的既有模式。
 2. **只读步骤**：`changelog_site`、`final` 接线（复用 #1392 的载体与既有 site fetch）。
-3. **可驱动步骤**：`intent`、`changelog`、`prepared`、`tag`、`draft`、`promotion`。
+3. **可驱动步骤**：`intent`、`changelog`、`draft`、`promotion`（`prepared` 与 `tag` 的 spec 绑定其
+   自身产出，写入前不可冻结，已在 [#1404](https://github.com/endaye/lmdj/issues/1404) 提出待裁决，
+   见 [`docs/prd/questions/prepared-step-spec-freezing.md`](../prd/questions/prepared-step-spec-freezing.md)）。
 4. **受管 adapter**：`candidate`（`CandidateTransition`）、`publication` / `runtime` / `creator`
    （每步一个 `DispatchTransition`）、`published_record`（`EvidencePrTransition`）。
 5. **verification**：接入既有 `BatchVerification`。

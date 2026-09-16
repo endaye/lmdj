@@ -356,14 +356,36 @@ class PreparedPlanRecoveryTest(unittest.TestCase):
         self.prepared = prepared_step
         self.output = (self.root / prepared_step.output_relative("lmdj-v" + BUILD))
 
-    def write_plan(self, digest=PLAN):
+    def write_plan(self, digest=PLAN, body=b"{}"):
         self.output.mkdir(parents=True, exist_ok=True)
-        (self.output / self.prepared._PLAN_DIGEST).write_text(digest + "\n")
+        (self.output / self.prepared._PLAN_DOCUMENT).write_bytes(body)
+        recorded = digest if digest is not None else __import__("hashlib").sha256(body).hexdigest()
+        (self.output / self.prepared._PLAN_DIGEST).write_text(recorded + "\n")
 
     def test_the_enrollment_reads_the_plan_where_the_step_does(self):
         self.assertIsNone(read_prepared_plan(self.root, "lmdj-v" + BUILD))
-        self.write_plan()
-        self.assertEqual(read_prepared_plan(self.root, "lmdj-v" + BUILD), PLAN)
+        self.write_plan(digest=None)
+        self.assertEqual(read_prepared_plan(self.root, "lmdj-v" + BUILD),
+                         __import__("hashlib").sha256(b"{}").hexdigest())
+
+    def test_a_swapped_digest_that_names_other_bytes_fails_closed(self):
+        # A digest file alone must not redefine the plan a later step binds.
+        self.write_plan(digest=PLAN, body=b"{}")
+        with self.assertRaises(JournalError):
+            read_prepared_plan(self.root, "lmdj-v" + BUILD)
+
+    def test_a_document_without_its_digest_fails_closed(self):
+        # prepare writes both together, so half the pair is drift, not absence.
+        self.output.mkdir(parents=True, exist_ok=True)
+        (self.output / self.prepared._PLAN_DOCUMENT).write_bytes(b"{}")
+        with self.assertRaises(JournalError):
+            read_prepared_plan(self.root, "lmdj-v" + BUILD)
+
+    def test_a_digest_without_its_document_fails_closed(self):
+        self.output.mkdir(parents=True, exist_ok=True)
+        (self.output / self.prepared._PLAN_DIGEST).write_text(PLAN + "\n")
+        with self.assertRaises(JournalError):
+            read_prepared_plan(self.root, "lmdj-v" + BUILD)
 
     def test_a_malformed_or_unreadable_digest_fails_closed(self):
         self.write_plan("not-a-digest")
@@ -388,15 +410,25 @@ class DraftEnrollmentTest(unittest.TestCase):
         self.release = None
 
     def write_plan(self):
+        import hashlib
+
         from tools.release import prepared_step
 
         output = self.root / prepared_step.output_relative("lmdj-v" + BUILD)
         output.mkdir(parents=True, exist_ok=True)
-        (output / prepared_step._PLAN_DIGEST).write_text(PLAN + "\n")
+        # prepare writes the document and its digest together; the enrollment
+        # now checks they agree.
+        body = b'{"fixture": "plan"}'
+        (output / prepared_step._PLAN_DOCUMENT).write_bytes(body)
+        (output / prepared_step._PLAN_DIGEST).write_text(
+            hashlib.sha256(body).hexdigest() + "\n")
 
     def create_draft(self, tag):
+        import hashlib
+
         self.created.append(tag)
-        self.release = Projection(plan_sha256=PLAN)
+        self.release = Projection(
+            plan_sha256=hashlib.sha256(b'{"fixture": "plan"}').hexdigest())
 
     def step(self):
         return enroll_draft(
