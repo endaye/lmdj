@@ -357,7 +357,15 @@ function Workspace({
   // between modes never touches it.
   useEffect(() => {
     const project = state.project.current;
-    if (!isPatternTransportSession(session) || runtimePhase !== "ready") return;
+    if (!isPatternTransportSession(session)) return;
+    if (runtimePhase !== "ready") {
+      // A replaced/restarting Runtime has no engagement; never keep showing
+      // the retired projection.
+      if (transportRef.current.sessionId !== null) {
+        dispatchTransport({type: "disengaged"});
+      }
+      return;
+    }
     if (project === null) {
       if (transportRef.current.sessionId !== null) {
         dispatchTransport({type: "disengaged"});
@@ -745,6 +753,11 @@ function Workspace({
     if (!token) return false;
     dispatch({type: "project-opening"});
     resetInputForAdverseLifecycle();
+    // Project replacement retires the Runtime engagement even when the
+    // incoming Project has the same id; the projection must not keep showing
+    // the retired engagement's state. The engagement effect re-engages once
+    // the replacement is ready.
+    dispatchTransport({type: "disengaged"});
     try {
       const project = await openProjectJourney(token.session, summary);
       if (!ownsProjectAction(token)) return false;
@@ -767,6 +780,9 @@ function Workspace({
     const controller = new AbortController();
     importController.current = controller;
     resetInputForAdverseLifecycle();
+    // Same as open: an import replaces the Project session, so the transport
+    // projection is disengaged until the replacement is ready.
+    dispatchTransport({type: "disengaged"});
     dispatch({type: "transfer-started", totalBytes: file.size});
     try {
       const project = await importProjectJourney(
@@ -1019,58 +1035,60 @@ function Workspace({
         current.sessionId,
       );
       dispatchTransport({type: "observed", status});
+      // The ref only advances at the next render; the retry decision below
+      // needs the post-observation state, so apply the reducer locally.
+      const after = reducePatternTransport(current, {type: "observed", status});
+      const retained = after.lastFailed;
+      const project = stateRef.current.project.current;
+      const retry = transportRetriedCommandRef.current;
+      // A refused command that never landed may be retried with its identical
+      // identity — the Runtime sanctions this for transient pre-effect refusals
+      // (a pending Pattern publication after a stopped-state switch) and for
+      // lost-request classes where nothing executed. Terminal refusals (a
+      // revision conflict, an invalid argument) are never resent: the error
+      // stays visible and a fresh user intent gets fresh authority. Bound the
+      // attempts either way.
+      const RETRIABLE = after.errorCode === "HOST_STATE_INVALID" ||
+        after.errorCode === "HOST_TIMEOUT" || after.errorCode === "ABORTED";
+      if (retained === null || project === null || after.sessionId === null ||
+          selectTransportBusy(after) || !RETRIABLE ||
+          (after.status !== null && after.status.transportEpoch >= retained.epoch) ||
+          (retry !== null && retry.commandId === retained.commandId &&
+            retry.attempts >= 12)) {
+        return;
+      }
+      transportRetriedCommandRef.current = {
+        commandId: retained.commandId,
+        attempts: retry !== null && retry.commandId === retained.commandId
+          ? retry.attempts + 1
+          : 1,
+      };
+      dispatchTransport({type: "requested", command: retained});
+      try {
+        const reconciled = await reconcilePatternTransportJourney(session, {
+          sessionId: after.sessionId,
+          projectId: project.projectId,
+          commandId: retained.commandId,
+          expectedEpoch: retained.epoch,
+          intent: retained.intent,
+          expectedRevision: retained.expectedRevision,
+        });
+        dispatchTransport({
+          type: "submitted",
+          commandId: retained.commandId,
+          status: reconciled.ticket.status,
+        });
+        dispatchTransport({type: "observed", status: reconciled.status});
+      } catch (error) {
+        dispatchTransport({
+          type: "failed",
+          command: retained,
+          errorCode: errorCode(error),
+        });
+      }
     } catch (error) {
       dispatchTransport({type: "observe-failed", errorCode: errorCode(error)});
       return;
-    }
-    const after = transportRef.current;
-    const retained = after.lastFailed;
-    const project = stateRef.current.project.current;
-    const retry = transportRetriedCommandRef.current;
-    // A refused command that never landed may be retried with its identical
-    // identity — the Runtime sanctions this for transient pre-effect refusals
-    // (a pending Pattern publication after a stopped-state switch) and for
-    // lost-request classes where nothing executed. Terminal refusals (a
-    // revision conflict, an invalid argument) are never resent: the error
-    // stays visible and a fresh user intent gets fresh authority. Bound the
-    // attempts either way.
-    const RETRIABLE = after.errorCode === "HOST_STATE_INVALID" ||
-      after.errorCode === "HOST_TIMEOUT" || after.errorCode === "ABORTED";
-    if (retained === null || project === null || after.sessionId === null ||
-        selectTransportBusy(after) || !RETRIABLE ||
-        (after.status !== null && after.status.transportEpoch >= retained.epoch) ||
-        (retry !== null && retry.commandId === retained.commandId &&
-          retry.attempts >= 12)) {
-      return;
-    }
-    transportRetriedCommandRef.current = {
-      commandId: retained.commandId,
-      attempts: retry !== null && retry.commandId === retained.commandId
-        ? retry.attempts + 1
-        : 1,
-    };
-    dispatchTransport({type: "requested", command: retained});
-    try {
-      const reconciled = await reconcilePatternTransportJourney(session, {
-        sessionId: after.sessionId,
-        projectId: project.projectId,
-        commandId: retained.commandId,
-        expectedEpoch: retained.epoch,
-        intent: retained.intent,
-        expectedRevision: retained.expectedRevision,
-      });
-      dispatchTransport({
-        type: "submitted",
-        commandId: retained.commandId,
-        status: reconciled.ticket.status,
-      });
-      dispatchTransport({type: "observed", status: reconciled.status});
-    } catch (error) {
-      dispatchTransport({
-        type: "failed",
-        command: retained,
-        errorCode: errorCode(error),
-      });
     }
   };
 
