@@ -442,14 +442,25 @@ intent 驱动自身写操作，其 spec target 绑定 verification 步记录所�
 并拒绝漂移，其 spec 中的 head_sha/tree_sha 占位身份在驱动 PR 传输前由持久化提交的真实身份替换；
 promotion 驱动自身写操作，`from_channel` 必须与账本行当前 Channel 一致，晋级只许严格向前且
 拒绝 `stable`，部署 run 与 attestation 摘要由受信组合注入，证据未就位时报 `pending`）。
+`candidate` 是受管 adapter 而非自驱动载体：登记组装先驱动受信准备层（专属安装 → 官方快照 →
+六项切版检查，可恢复且不重复执行）取得 source/frozen/checked-cut 回执，再绑定
+`CandidateTransition`；Task 作者时间戳在恢复时从已登记 scope 认回，不重新取钟。
+其 authorize / observe_main / review / verify_merged 四个回调此前只有测试提供，现由
+`tools/release/entry_gates.py` 以生产构件装配：权限门重钉认证 actor、冻结 policy 摘要与可达
+canonical 控制；main 观察只读取信 fetch 钉住的 `refs/lmdj-release/origin-main`；review 门经
+`review_inventory` 收集完整评审清单、经 `scripts/ci/review_wait` 的 current-head 验证器判定合格性，
+再由 `bind_eligibility` 交叉绑定两侧读取，只有合格且绑定的结果才算 verified（pending 等待、
+stale/invalid 判 conflict、API 不可用判 unknown，绝不放行）；merged 门核验 squash 已合入、
+属 canonical 历史、head 与评审时一致，并绑定合并边界留存的 review 回执。
+tag 模式请求由准备层与转换层自身拒绝（checked-cut 分配只存在于 new 模式）。
 登记过程同时暴露并修复了 draft / tag / prepared 三个载体 `observe` 未解包 `read_back`
 结果（draft、tag 把状态字典当成状态，prepared 丢掉证据）的真实缺陷，以及 intent 载体的
 两处缺陷：spec 把 batch 引用当作编码字符串（账本模型按闭合引用文档解析
 `batch_test_evidence`，字符串会让写入的行在下次读取时被拒绝），以及 PR 序列校验器不接受
 载体自身加挂 head_sha/tree_sha 的 spec（真实序列路径因此永远无法通过）。promotion 步此前只有
 提交侧，其驱动器侧载体与 PR 序列（复用既有 witness 传输，promotion-pr 序列状态机）在本次登记
-中补齐。其余步骤与受管
-adapter 的登记录入仍未完成，`release_carriers` 因此继续拒绝执行。
+中补齐。`prepared` / `tag` / `verification` 与 publication、runtime、creator、published_record
+受管 adapter 的登记录入仍未完成，`release_carriers` 因此继续拒绝执行。
 
 带 `changelog` 的 reviewed intent 现已接通 prepare / Draft / published 验证：正文
 进入 plan 摘要，prepare 重验真实 Git 范围，恢复时检查本地 notes，Draft 与公开

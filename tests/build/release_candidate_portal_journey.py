@@ -34,6 +34,7 @@ from tools.release.candidate_witness_task import CandidateWitnessTask
 from tools.release.witness_checks import WitnessTaskChecks
 from tools.release.model import canonical_json, canonical_sha256, load_policy
 from tools.release import evidence_branch
+from tools.release.carriers import assemble_candidate_transition
 from tools.release.candidate_transition import CandidateTransition
 from tools.release.github_api import GitHubClient, HttpResponse
 from tools.release.orchestration import RequestJournal
@@ -176,7 +177,6 @@ def managed_journey(*, evidence, repository, local, source, checked_cut, frozen,
     main_revision = request["base_revision"]
     witness_root = evidence / "witness-task"
     parent_root, candidate_root = evidence / "driver", evidence / "candidate-transition"
-    timestamp = int(time.time())
 
     def save_api():
         # Model actual platform-side effects separately from controller state.
@@ -269,11 +269,15 @@ def managed_journey(*, evidence, repository, local, source, checked_cut, frozen,
 
     client = GitHubClient(token="fixture-only-no-credential", http_transport=http)
     def new_driver():
-        candidate = CandidateTransition(candidate_root, checks=checks, request=request, source=source,
-            checked_cut=checked_cut, frozen=frozen, repository_id=12, client=client,
-            token="fixture-only-no-credential", authorize=authorize, observe_main=lambda: main_revision,
-            review=review, verify_merged=reviewed_merge, witness_root=witness_root,
-            author_name="Candidate Rehearsal", author_email="fixture@example.invalid", timestamp=timestamp)
+        # The same production assembly the real entry's enrollment uses; only
+        # the GitHub/review far side is a fixture.
+        candidate = assemble_candidate_transition(request=request, checks=checks,
+            source=source, checked_cut=checked_cut, frozen=frozen,
+            transition_root=candidate_root, witness_root=witness_root,
+            repository_id=12, client=client, token="fixture-only-no-credential",
+            authorize=authorize, observe_main=lambda: main_revision,
+            review=review, verify_merged=reviewed_merge, clock=lambda: int(time.time()),
+            author_name="Candidate Rehearsal", author_email="fixture@example.invalid")
         return ReleaseDriver(parent_root, policy, StopBeforeCompleteTests(), candidate=candidate), candidate
 
     real_run = subprocess.run
