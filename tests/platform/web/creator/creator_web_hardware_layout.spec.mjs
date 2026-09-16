@@ -146,6 +146,10 @@ async function reopenLocalProject(page) {
   if (!await open.isVisible()) {
     await page.getByRole("button", {name: "Open local"})
       .click({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+    // That read was a point in time. Wait for the row by name, so a list that
+    // never renders it fails as a missing Project row rather than as a click
+    // timing out somewhere inside the reload leg.
+    await expect(open).toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   }
   await open.click({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await expect(projectHeading(page))
@@ -156,12 +160,19 @@ async function reopenLocalProject(page) {
 // whichever one is mounted so a single drill can compare across the boundary.
 async function committedBpm(page) {
   const overview = page.locator(".overview-bpm");
-  if (await overview.count() > 0) {
-    return Number((await overview.innerText()).replace(/[^0-9]/g, ""));
-  }
-  const fact = page.locator(".status-facts div").filter({hasText: "BPM"})
-    .getByRole("definition").first();
-  return Number((await fact.innerText()).replace(/[^0-9]/g, ""));
+  const text = await overview.count() > 0
+    ? await overview.innerText()
+    : await page.locator(".status-facts div").filter({hasText: "BPM"})
+      .getByRole("definition").first().innerText();
+  const bpm = Number.parseFloat(text.replace(/[^0-9]/g, ""));
+  // An unreadable tempo has to fail right here. `toBe` compares with
+  // Object.is, under which two NaNs agree, so a drill that never managed to
+  // read the published tempo would otherwise report every leg as unchanged.
+  expect(
+    Number.isFinite(bpm),
+    `published tempo must be readable, got ${JSON.stringify(text)}`,
+  ).toBe(true);
+  return bpm;
 }
 
 test("carries Project Truth and running audio across a layout fallback drill", async ({page}) => {
@@ -219,5 +230,10 @@ test("carries Project Truth and running audio across a layout fallback drill", a
   });
   await expect(page.getByTestId("audio-state")).not.toHaveText("Audio running");
   await reopenLocalProject(page);
+  // Audio being stopped is not the same fact as the Runtime being healthy. A
+  // reload that left it failed, closed or still booting would keep answering
+  // with a stale tempo, so the phase is asserted rather than inferred.
+  await expect(page.getByTestId("creator-phase"))
+    .toHaveText("ready", {timeout: 30_000});
   expect(await committedBpm(page)).toBe(committed);
 });
