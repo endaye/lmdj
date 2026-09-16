@@ -431,12 +431,15 @@ catch-all 或陈旧部署会被判为冲突（404 为 absent、站点不可达�
 `target_revision` / `channel` / `disposition` 统一以 intent 账本行为准——行绑定的是批处理认证的
 见证合并 revision，不是切版 squash；new 模式下账本行与 candidate 状态的 witness_merge
 交叉核对，行未落账（本运行的 intent 步尚未完成）时报 `pending`，两者分歧即 fail-closed；
-tag 模式下行不存在则直接拒绝。`changelog_site`、`draft`、`final` 与 `intent` 已按此模式登记（draft 绑定 prepare
+tag 模式下行不存在则直接拒绝。`changelog_site`、`draft`、`final`、`intent` 与 `changelog`
+已按此模式登记（draft 绑定 prepare
 写出的计划摘要；final 的数字 Release 身份由发布记录与远端 Release 两侧交叉确认，
 记录尚未点名该 tag 时报 `pending`，单侧主张、仍是 draft 或编号分歧即 fail-closed；
 intent 驱动自身写操作，其 spec target 绑定 verification 步记录所认证的见证合并 revision，
 并与 candidate 状态的 witness_merge 交叉核对，batch 引用与 run id 由该步记录确定性恢复，
-解码走同一入口，origin run 或见证 revision 不一致即 fail-closed）。
+解码走同一入口，origin run 或见证 revision 不一致即 fail-closed；changelog 同样驱动自身写操作，
+绑定 canonical main tip 与经评审文档的 binding 摘要（sha256/notes_sha256），写入边界重新冻结
+并拒绝漂移，其 spec 中的 head_sha/tree_sha 占位身份在驱动 PR 传输前由持久化提交的真实身份替换）。
 登记过程同时暴露并修复了 draft / tag / prepared 三个载体 `observe` 未解包 `read_back`
 结果（draft、tag 把状态字典当成状态，prepared 丢掉证据）的真实缺陷，以及 intent 载体的
 两处缺陷：spec 把 batch 引用当作编码字符串（账本模型按闭合引用文档解析
