@@ -1,6 +1,6 @@
-import {midiLabel, type MidiStatus} from "./status_bar";
+import {midiLabel, type MidiStatus} from "./midi_status";
 import {selectCreatorPhase, type CreatorState} from "../state/creator_state";
-import type {CreatorMode} from "./mode_rail";
+import type {CreatorMode} from "./creator_mode";
 import type {CreatorBuildIdentity} from "../runtime/build_identity";
 import {describeBuildIdentity, shortBuildLabel} from "../runtime/build_identity";
 import {shortProjectId} from "../state/view_model";
@@ -10,7 +10,7 @@ import {ProjectOverview} from "./project_overview";
 import {PerformOverview} from "./perform_overview";
 import {SampleOverview} from "./sample_overview";
 import {SequenceOverview} from "./sequence_overview";
-import {transportStatusLabel} from "./sequence_transport";
+import {transportStatusLabel} from "./transport_status";
 
 interface OverviewDisplayProps {
   state: CreatorState;

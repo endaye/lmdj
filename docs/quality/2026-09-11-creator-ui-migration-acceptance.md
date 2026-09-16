@@ -4,8 +4,7 @@ Date: 2026-09-16. Task: U7 ([#1221](https://github.com/endaye/lmdj/issues/1221))
 
 **Status: U7's physical rows are not accepted. The default layout is switched
 anyway, by owner decision** (§7). The hardware four-region layout is the
-default; the existing workspace stays reachable through `Existing workspace`
-and `?layout=workspace` until U8 removes it. This ledger records what was
+only layout: U8 removed the workspace shell the same day, by the same decision. This ledger records what was
 actually established and what was not; it is not a release record and
 allocates no Product Build.
 
@@ -254,3 +253,19 @@ Project truth than the summary it replaced.
 
 Discharging a named U7 risk is not discharging U7, and switching the default
 by decision is not discharging it either.
+
+### U8, same decision
+
+The owner also directed that the workspace shell be removed rather than kept
+as a fallback through an observation period. U8's plan text asked for that
+period; this records that it was waived. What U8 removed: the `layout` state,
+the `Existing workspace` and `Hardware layout` controls, `?layout=`, the
+`lmdj.creator.layout` preference (the stale key is removed once on boot so no
+browser resolves a shell that no longer exists), `SequenceSurface`,
+`SequenceTransport`, `StatusBar`, `ModeRail`, the `.workspace` grid and the
+styles only it used, and the tests and journey legs whose premise was a
+fallback. `CreatorMode`, `midiLabel` and `transportStatusLabel` moved to
+`creator_mode.ts`, `midi_status.ts` and `transport_status.ts`; the four-region
+shell still consumes all three. `BankSelector`, `ProjectSurface` and every mode
+surface are shared and stay. The mode rail's `aria-current` exposure retired
+with the rail; the active mode is exposed by the upper screen's context label.

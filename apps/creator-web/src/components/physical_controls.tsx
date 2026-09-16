@@ -1,4 +1,4 @@
-import type {CreatorMode} from "./mode_rail";
+import type {CreatorMode} from "./creator_mode";
 import type {Bank} from "../state/creator_state";
 import {BANK_NAMES} from "../state/view_model";
 import encoder1Url from "../assets/hardware/encoder-1.svg";

@@ -9,7 +9,6 @@ import type {PatternTransportStatus} from "@lmdj/web-runtime-platform/runtime_ty
 import {App} from "../src/app";
 import {encodePcm16Wav} from "../src/capture/wav_encoder";
 import {SampleSurface} from "../src/components/sample_surface";
-import {StatusBar} from "../src/components/status_bar";
 import {initialCreatorState, type CreatorState} from "../src/state/creator_state";
 import type {
   CreatorRuntimeSession,
@@ -100,12 +99,6 @@ const ready: CreatorState = {
 const revisionCell = () => screen.getByText("Rev").nextElementSibling;
 const transportPhase = () =>
   document.querySelector(".overview-phase")?.textContent?.split("/").pop()?.trim();
-
-test("keeps Activate audio disabled when Host readiness is unknown", () => {
-  render(<StatusBar state={ready} onActivateAudio={() => {}} />);
-  expect(screen.getByRole("button", {name: "Activate audio"})
-    .hasAttribute("disabled")).toBe(true);
-});
 
 test("enables keyboard-reachable Sample while preserving the other mode states", async () => {
   const user = userEvent.setup();
@@ -2214,7 +2207,7 @@ test("recovers from DUPLICATE_ID to the local Projects list without a reload", a
   expect(importAttempts).toBe(1);
 });
 
-test("starts in the hardware shell with a read-only overview and can fall back to the workspace", async () => {
+test("renders the hardware shell with a read-only overview and no fallback to a workspace", async () => {
   const user = userEvent.setup();
   render(<App initialState={ready} />);
 
@@ -2226,7 +2219,9 @@ test("starts in the hardware shell with a read-only overview and can fall back t
   expect(screen.getByTestId("hardware-console")).toBeTruthy();
   expect(screen.getByRole("region", {name: "Pad matrix"})).toBeTruthy();
   const touch = screen.getByRole("region", {name: "Touch workspace"});
-  expect(within(touch).getByRole("button", {name: "Existing workspace"})).toBeTruthy();
+  // The workspace shell is gone: there is no fallback control to find.
+  expect(within(touch).queryByRole("button", {name: "Existing workspace"})).toBeNull();
+  expect(screen.queryByRole("button", {name: "Hardware layout"})).toBeNull();
   expect(within(touch).getByRole("button", {name: "Activate audio"})).toBeTruthy();
   expect(within(screen.getByRole("region", {name: "Pad matrix"}))
     .getByRole("button", {name: "Pad A1 — empty — Key Q"})).toBeTruthy();
@@ -2238,11 +2233,6 @@ test("starts in the hardware shell with a read-only overview and can fall back t
   expect(screen.getByTestId("hardware-console")).toBeTruthy();
   await user.click(screen.getByRole("button", {name: "Project"}));
 
-  // The old workspace is still one press away, and one press back.
-  await user.click(screen.getByRole("button", {name: "Existing workspace"}));
-  expect(screen.queryByTestId("hardware-console")).toBeNull();
-  expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
-  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
   expect(screen.getByTestId("hardware-console")).toBeTruthy();
 });
 

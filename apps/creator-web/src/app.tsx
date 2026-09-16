@@ -8,15 +8,12 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 
-import {BankSelector} from "./components/bank_selector";
 import {ErrorPanel} from "./components/error_panel";
 import {
   HardwareConsole,
-  readCreatorLayout,
-  writeCreatorLayout,
-  type CreatorLayout,
+  retireCreatorLayoutPreference,
 } from "./components/hardware_console";
-import {ModeRail, type CreatorMode} from "./components/mode_rail";
+import type {CreatorMode} from "./components/creator_mode";
 import {OverviewDisplay} from "./components/overview_display";
 import {PadSurface} from "./components/pad_surface";
 import {PhysicalControls} from "./components/physical_controls";
@@ -24,13 +21,12 @@ import {PerformSurface} from "./components/perform_surface";
 import {ProjectSurface} from "./components/project_surface";
 import {ProjectTouchWorkspace} from "./components/project_touch_workspace";
 import {SampleSurface} from "./components/sample_surface";
-import {SequenceSurface} from "./components/sequence_surface";
 import {SequenceTouchWorkspace} from "./components/sequence_touch_workspace";
 import {
   isSoundSetSession,
   SoundSetSurface,
 } from "./components/soundset_surface";
-import {StatusBar, type MidiStatus} from "./components/status_bar";
+import type {MidiStatus} from "./components/midi_status";
 import {
   createAcceptanceReport,
   serializeAcceptanceReport,
@@ -262,7 +258,6 @@ function Workspace({
   const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
   const [showLocalProjects, setShowLocalProjects] = useState(false);
   const [activeMode, setActiveMode] = useState<CreatorMode>("project");
-  const [layout, setLayout] = useState<CreatorLayout>(readCreatorLayout);
   const [inputControllerEpoch, setInputControllerEpoch] = useState(0);
   const [inputControllerRevision, setInputControllerRevision] = useState(0);
   const [armedCaptureSlot, setArmedCaptureSlot] = useState<number | null>(null);
@@ -286,7 +281,6 @@ function Workspace({
   const inputController = useRef<ReturnType<typeof createCreatorInputController> | null>(null);
   const inputAdverseState = useRef<string | null>(null);
   const activeModeRef = useRef(activeMode);
-  const hardwareSessionRef = useRef(layout === "hardware");
   const performControllerRef = useRef<PerformController | null>(null);
   const projectProjectionRefreshRef = useRef<Readonly<{
     id: string;
@@ -321,6 +315,10 @@ function Workspace({
       sequence.status?.expectedRevision ?? 0,
     );
   }
+
+  // The workspace shell and its stored layout preference are gone; clear the
+  // stale key once so no browser keeps a value nothing reads.
+  useEffect(() => { retireCreatorLayoutPreference(); }, []);
 
   useEffect(() => {
     const project = state.project.current;
@@ -1381,9 +1379,6 @@ function Workspace({
   const trimOverlayOpen = sequence.phase === "trim-overlay" ||
     captureTransportOverlay;
   const applyMode = (mode: CreatorMode) => {
-    if (hardwareSessionRef.current) {
-      setLayout("hardware");
-    }
     setActiveMode(mode);
   };
   const selectMode = (mode: CreatorMode) => {
@@ -1403,16 +1398,6 @@ function Workspace({
   const selectBank = (bank: typeof state.activeBank) => {
     inputController.current?.clearPressed();
     dispatch({type: "bank-selected", bank});
-  };
-  const enterHardwareLayout = () => {
-    writeCreatorLayout("hardware");
-    hardwareSessionRef.current = true;
-    setLayout("hardware");
-  };
-  const enterWorkspaceLayout = () => {
-    writeCreatorLayout("workspace");
-    hardwareSessionRef.current = false;
-    setLayout("workspace");
   };
   const runtimeActions = session && inputController.current
     ? {
@@ -1434,8 +1419,7 @@ function Workspace({
   );
 
   return (
-    <div className={layout === "hardware" ? "hardware-workspace" : "workspace"}>
-      {layout === "hardware" ? (
+    <div className="hardware-workspace">
         <HardwareConsole
           physicalControls={
             <PhysicalControls
@@ -1507,9 +1491,6 @@ function Workspace({
                   onClick={runtimeActions.onExportReport}
                 >
                   Export report
-                </button>
-                <button type="button" onClick={enterWorkspaceLayout}>
-                  Existing workspace
                 </button>
                 <button
                   type="button"
@@ -1716,212 +1697,6 @@ function Workspace({
             </>
           }
         />
-      ) : (
-        <>
-          <header className="status-bar-host">
-            <StatusBar
-              state={state}
-              midi={midi}
-              {...(buildIdentity ? {buildIdentity} : {})}
-              {...runtimeActions}
-            />
-            <button type="button" className="layout-opt-in" onClick={enterHardwareLayout}>
-              Hardware layout
-            </button>
-          </header>
-          <ModeRail
-            activeMode={activeMode}
-            soundSetEnabled={soundSetEnabled}
-            sliceEnabled={sliceEnabled}
-            sequenceEnabled={sequenceEnabled}
-            performEnabled={performEnabled}
-            onSelect={selectMode}
-          />
-          {candidateAudio !== null && candidateAudio.projectId === state.project.current?.projectId &&
-            (candidateAudio.preparing || state.sample.savedRevision !== state.sample.runtimeRevision) ? (
-            <section className="sample-runtime-stale" aria-label="Project audio status">
-              <p role="status">{candidateAudio.preparing
-                ? `Preparing audio at revision ${candidateAudio.revision}…`
-                : `Saved at revision ${candidateAudio.revision}; audio is not ready.`}</p>
-              <button type="button" disabled={candidateAudio.preparing || projectActions.busy || runtimePhase !== "ready"}
-                onClick={() => { void refreshCandidateProject(candidateAudio.projectId).catch(() => {}); }}>
-                Retry audio preparation
-              </button>
-            </section>
-          ) : null}
-          {activeMode === "project" ? (
-            <>
-              <ProjectSurface
-                state={state}
-                canOpen={canOpenProject}
-                canImport={canImportProject}
-                showLocalProjects={showLocalProjects}
-                onShowLocal={() => setShowLocalProjects(true)}
-                onHideLocal={() => setShowLocalProjects(false)}
-                onOpen={(summary) => { void openProject(summary); }}
-                onImport={(file) => { void importProject(file); }}
-              />
-              <section className="pads" aria-label="Instrument">
-                <BankSelector
-                  activeBank={state.activeBank}
-                  onSelect={selectBank}
-                />
-                {padSurface}
-              </section>
-            </>
-          ) : activeMode === "sample" ? (
-            <>
-              {state.sample.lastError?.code === "UNSUPPORTED_AUDIO" ? (
-                <p className="sample-error" role="status">
-                  Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz
-                </p>
-              ) : null}
-              {staleSampleRuntime ? (
-                <section className="sample-runtime-stale" aria-label="Sample Runtime status">
-                  <p role="status">
-                    Saved at revision {state.sample.savedRevision}; Runtime is still revision{
-                      " "}{state.sample.runtimeRevision === null
-                      ? "unavailable"
-                      : state.sample.runtimeRevision}
-                  </p>
-                  <button
-                    type="button"
-                    disabled={sampleRetryAction.current !== null ||
-                      state.sample.pendingAction !== null}
-                    onClick={() => { void retryPrepare(); }}
-                  >
-                    Retry Prepare
-                  </button>
-                </section>
-              ) : null}
-            </>
-          ) : activeMode === "sequence" && state.project.current !== null ? (
-            <>
-              <SequenceSurface
-                project={state.project.current}
-                state={sequence}
-                transport={transport}
-                ready={isPatternTransportSession(session) &&
-                  state.audio.phase === "running"}
-                onPlayStop={() => { void submitTransportIntent("play_stop"); }}
-                onRecord={() => { void submitTransportIntent("record"); }}
-                onRefresh={() => {
-                  void refreshSequence();
-                  void reconcileTransport();
-                }}
-                onSwitch={(patternId) => { void selectSequencePattern(patternId); }}
-                onCreatePattern={(bars) => { void createPattern(bars); }}
-                onSettingsChange={(changes) => { void updateSequenceSettings(changes); }}
-                onRecover={(candidate, destinationPatternId) => {
-                  if (!isSequenceSession(session)) return;
-                  void session.applySequenceRecovery({
-                    sessionId: candidate.sessionId,
-                    destinationPatternId,
-                  }).then((status) => {
-                    if (status.committedRevision !== null) {
-                      dispatch({type: "project-revision-updated", revision: status.committedRevision});
-                    }
-                    return refreshSequence();
-                  }, sequenceFailure);
-                }}
-                onDiscard={(candidate) => {
-                  if (!isSequenceSession(session)) return;
-                  void session.discardSequenceRecovery(candidate.sessionId)
-                    .then(() => refreshSequence(), sequenceFailure);
-                }}
-              />
-              <section className="pads" aria-label="Sequence instrument">
-                <BankSelector activeBank={state.activeBank} onSelect={selectBank} />
-                {padSurface}
-              </section>
-            </>
-          ) : activeMode === "slice" && isCandidateSession(session) && state.project.current !== null ? (
-            <CandidateSurface key={state.project.current.projectId}
-              session={session} projectId={state.project.current.projectId}
-              projectRevision={state.project.current.revision}
-              onRefreshProject={(revision) => refreshCandidateProject(state.project.current!.projectId, revision)} />
-          ) : activeMode === "soundset" && isSoundSetSession(session) ? (
-            <SoundSetSurface
-              session={session}
-              projectRevision={state.project.current?.revision ?? null}
-              activeBank={state.activeBank}
-              onBankChange={selectBank}
-              onInstalled={(revision) => {
-                dispatch({type: "project-revision-updated", revision});
-                void refreshPerformProject().catch(() => {});
-              }}
-            />
-          ) : activeMode === "perform" && state.project.current !== null &&
-            performController !== null ? (
-            <PerformSurface
-              controller={performController}
-              project={state.project.current}
-              bank={state.activeBank}
-              onBankChange={selectBank}
-              transport={transport}
-            />
-          ) : null}
-          <ErrorPanel
-            code={state.runtime.errorCode}
-            details={state.runtime.errorDetails}
-            {...(session && state.runtime.errorCode === "DUPLICATE_ID"
-              ? {onOpenLocalProject: () => {
-                  setShowLocalProjects(true);
-                  setListAttempt((attempt) => attempt + 1);
-                }}
-              : {})}
-            {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry
-              ? {onRetryProject: () => {
-                  if (busyRetry.kind === "list") {
-                    setListAttempt((attempt) => attempt + 1);
-                  } else {
-                    void openProject(busyRetry.project);
-                  }
-                }}
-              : {})}
-            {...(state.runtime.errorCode === "HOST_RESTART_REQUIRED" ||
-              state.runtime.errorCode === "HOST_TIMEOUT") && onRetryRuntime
-              ? {onRetryRuntime}
-              : {}}
-            {...(state.runtime.phase === "ready"
-              ? {onDismiss: () => dispatch({type: "runtime-error-dismissed"})}
-              : {})}
-          />
-        </>
-      )}
-      {layout === "workspace" && (activeMode === "sample" ||
-        armedCaptureSlot !== null ||
-        trimOverlayOpen ||
-        (activeMode === "sequence" && state.sampleProjectionRefresh !== null)) ? (
-        <div className={trimOverlayOpen ? "sample-overlay-host" : ""}
-          hidden={activeMode !== "sample" && !trimOverlayOpen}>
-          <SampleSurface
-            state={state}
-            dispatch={dispatch}
-            filePickIntent={sampleFilePickIntent}
-            captureStopRequest={captureStopRequest}
-            captureBackgrounded={activeMode !== "sample" &&
-              !trimOverlayOpen}
-            closeCaptureAfterResolution={activeMode !== "sample"}
-            {...(sequence.sessionId !== null && sequence.phase === "trim-overlay" &&
-              sequence.status !== null
-              ? {sequenceCapture: {
-                  sessionId: sequence.sessionId,
-                  expectedRevision: sequence.status.expectedRevision,
-                }}
-              : {})}
-            onCaptureSlotChange={setArmedCaptureSlot}
-            onCapturePhaseChange={capturePhaseChanged}
-            onContinueCaptureInSequence={() => {
-              if (isSequenceSession(session) && state.project.current !== null) {
-                setActiveMode("sequence");
-              }
-            }}
-            {...(isSampleSession(session) ? {session} : {})}
-            {...(inputController.current ? {controller: inputController.current} : {})}
-          />
-        </div>
-      ) : null}
     </div>
   );
 }
