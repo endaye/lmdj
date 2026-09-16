@@ -242,6 +242,11 @@ button:disabled { color: #737b87; }
 .waveform-grip-bar::before { top: 42%; }
 .waveform-grip-bar::after { top: 58%; }
 .waveform-grip-zone:hover + .waveform-grip-bar { filter: brightness(1.08); }
+/* D03 widened the Sample editor's grip to 20px and recentred it on
+   GRIP_BAR_PX / 2. The Pad Capture panel shares this class but still centres
+   its grips with a hardcoded 7px, so it keeps the 14px bar that offset is
+   half of; otherwise both Capture grips sit 3px off the boundary they mark. */
+.waveform-grip-bar[data-capture-grip] { width: 14px; }
 .waveform-handle {
   position: absolute;
   top: 0;
