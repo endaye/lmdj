@@ -290,13 +290,13 @@ function renderSurface(fixture = controllerFixture()) {
   let state = creatorState();
   const onBankChange = vi.fn((bank) => { state = {...state, activeBank: bank}; });
   const rendered = render(
-    <PerformSurface controller={fixture.controller} creatorState={state}
+    <PerformSurface controller={fixture.controller}
       project={project} bank={state.activeBank} onBankChange={onBankChange} />,
   );
   return {fixture, onBankChange, rerender(bank = state.activeBank) {
     state = {...state, activeBank: bank};
     rendered.rerender(<PerformSurface controller={fixture.controller}
-      creatorState={state} project={project} bank={bank}
+      project={project} bank={bank}
       onBankChange={onBankChange} />);
   }, unmount: rendered.unmount};
 }
@@ -307,10 +307,11 @@ test("renders Pattern, fixed FX chain, one global HOLD, then the existing Pad su
   const pattern = within(surface).getByRole("region", {name: "Pattern Launch"});
   const fx = within(surface).getByRole("region", {name: "Performance FX"});
   const hold = within(surface).getByRole("button", {name: "HOLD"});
-  const pads = within(surface).getByRole("region", {name: "Perform instrument"});
+  // The console's Pad matrix is the one Pad surface; Perform mounts none of
+  // its own, so a second identical grid never competes for the same names.
+  expect(within(surface).queryByRole("region", {name: "Perform instrument"})).toBeNull();
   expect(pattern.compareDocumentPosition(fx) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   expect(fx.compareDocumentPosition(hold) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
-  expect(hold.compareDocumentPosition(pads) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   expect(within(surface).getAllByRole("button", {name: "HOLD"})).toHaveLength(1);
   expect(within(fx).getAllByRole("slider").map((slider) => slider.getAttribute("aria-label")))
     .toEqual(["Filter", "Delay"]);
@@ -347,7 +348,6 @@ test("switches Bank synchronously without any Core request", async () => {
   rendered.rerender(1);
   expect(screen.getByRole("button", {name: "Bank B"}).getAttribute("aria-pressed"))
     .toBe("true");
-  expect(screen.getAllByRole("button", {name: /^Pad B/})).toHaveLength(16);
 });
 
 test.each([

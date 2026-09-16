@@ -1,8 +1,7 @@
 import {useEffect, useState, useSyncExternalStore} from "react";
 
-import type {createCreatorInputController} from "../runtime/input_controller";
 import type {ProjectView} from "../runtime/runtime_types";
-import type {Bank, CreatorState} from "../state/creator_state";
+import type {Bank} from "../state/creator_state";
 import {
   type PatternTransportState,
 } from "../state/pattern_transport_state";
@@ -13,14 +12,11 @@ import {
   type PerformState,
 } from "../state/perform_state";
 import {FxSliderBank} from "./fx_slider_bank";
-import {PadSurface} from "./pad_surface";
 import {PatternLaunchStrip} from "./pattern_launch_strip";
 
 export interface PerformSurfaceProps {
   readonly controller: PerformController;
-  readonly creatorState: CreatorState;
   readonly project: ProjectView;
-  readonly padController?: ReturnType<typeof createCreatorInputController>;
   readonly bank: Bank;
   readonly onBankChange: (bank: Bank) => void;
   // The Perform surface renders the same global Pattern transport projection
@@ -188,9 +184,6 @@ export function PerformSurface(props: PerformSurfaceProps) {
     const timer = window.setInterval(() => { void controller.refreshReplay(); }, 250);
     return () => window.clearInterval(timer);
   }, [controller, state.replay?.state]);
-  const padState = props.creatorState.activeBank === props.bank
-    ? props.creatorState
-    : {...props.creatorState, activeBank: props.bank};
   const captureMessage = state.captureStatus.state === "configured"
     ? "Preparing recording…"
     : state.captureStatus.state === "unavailable"
@@ -242,11 +235,6 @@ export function PerformSurface(props: PerformSurfaceProps) {
       <button className="perform-hold" type="button" aria-pressed={state.hold}
         disabled={!performing}
         onClick={() => controller.toggleHold()}>HOLD</button>
-      <section aria-label="Perform instrument">
-        {props.padController === undefined
-          ? <PadSurface state={padState} />
-          : <PadSurface state={padState} controller={props.padController} />}
-      </section>
       <RecordingPanel state={state} canRecord={controller.canRecord()}
         onRecord={() => { void controller.record(); }}
         onFlush={() => { void controller.flush(); }}

@@ -87,7 +87,7 @@ test("MIDI label covers every permission state", () => {
   expect(midiLabel({permission: "granted", connectedInputCount: 1})).toBe("1 input");
 });
 
-test("App threads the build identity into the status bar", () => {
+test("App threads the build identity into the shell", () => {
   render(<App initialState={ready} buildIdentity={BUILD} />);
   expect(screen.getByTestId("build-identity").textContent)
     .toBe("v9.8.7.6 · creator-web 1.5.0");

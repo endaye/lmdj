@@ -116,11 +116,13 @@ test("keyboard-only Project and Bank journey preserves native activation", async
   }
   await expect(heading).toBeVisible();
 
-  const bankB = page.getByRole("button", {name: "Bank B"});
+  // The physical Bank keys are the keyboard's Bank control now; they mark
+  // the active Bank with aria-current rather than aria-pressed.
+  const bankB = page.getByTestId("physical-controls").getByRole("button", {name: "Bank B", exact: true});
   await bankB.focus();
   await expect(bankB).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(bankB).toHaveAttribute("aria-pressed", "true");
+  await expect(bankB).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("button", {name: /^Pad B\d+ — assigned — Key [QWERTYUIASDFGHJK]$/}))
     .toHaveCount(16);
 });
@@ -212,36 +214,38 @@ for (const viewport of [
     await expect(page.getByRole("button", {name: "Sample"})).toBeEnabled();
     await expect(page.getByRole("button", {name: "Sequence"})).toBeEnabled();
     await expect(page.getByRole("button", {name: "Slice", exact: true})).toBeEnabled();
-    // The walk below depends on Sound Sets being tabbable, and `mode_rail.tsx`
-    // gives it `disabled={!soundSetEnabled}`. Without this line a regression
-    // that disables it would surface as an off-by-one tab-order diff -- the
-    // very shape that made #977 read as a Creator defect. Assert the
-    // precondition so that failure names itself instead.
+    // Slice and Sound Sets live in the touch workspace's System group, not on
+    // the physical column, so they are asserted enabled here and walked
+    // separately from the rail below. Without this line a regression that
+    // disables one would surface as an off-by-one tab-order diff -- the very
+    // shape that made #977 read as a Creator defect.
     await expect(page.getByRole("button", {name: "Sound Sets"})).toBeEnabled();
     await expect(page.getByRole("button", {name: /^Perform/})).toBeEnabled();
-    await page.getByRole("button", {name: "Activate audio"}).focus();
+    // The physical column is the rail now. Its keys are icons, so the walk
+    // reads each stop's accessible name. Audio is not running in this case,
+    // so Record and Play/Stop are disabled and must be skipped along with the
+    // unassigned encoder and direction keys, and Pads are played from the
+    // letter keys rather than tabbed to; landing on the touch workspace's
+    // first System action right after Bank D is what proves all of that.
+    await page.getByTestId("physical-controls")
+      .getByRole("button", {name: "Project", exact: true}).focus();
     const expectedFocusOrder = [
-      "Enable MIDI", "Export report", "Hardware layout", "Project", "Sequence",
-      "Sample", "Slice", "Sound Sets", "Perform",
+      "Sample", "Sequence", "Perform", "Bank A", "Bank B", "Bank C", "Bank D",
+      "Activate audio",
     ];
     const focusOrder = [];
     for (let index = 0; index < expectedFocusOrder.length; index += 1) {
       await page.keyboard.press("Tab");
-      // Mode buttons carry a decorative glyph before their label; read the
-      // label so the order does not depend on the glyph set.
       focusOrder.push(await page.evaluate(() => {
         const active = document.activeElement;
-        return (active?.querySelector(".mode-label") ?? active)?.textContent?.trim();
+        return active?.getAttribute("aria-label") ?? active?.textContent?.trim();
       }));
     }
-    // The window is the whole rail, not a prefix of it. Product Build
-    // 1.0.42.0 activated Perform, which joined the tab order after Sample;
-    // Stage 11 Task 5 (#846) then inserted Sound Sets between them, and the
-    // six-stop window read at Stage 10 by #664 (`0ffa77c0`) silently dropped
-    // Perform off the end -- so the case failed reporting `Sound Sets` where
-    // it expected `Perform`, and read as a Creator defect when the rail was
-    // right. Asserting the full rail means the next insertion changes the
-    // expected list rather than shifting what the loop can see (#977).
+    // The window is the whole rail plus its far side, not a prefix of it.
+    // Under the old shell a six-stop window silently dropped Perform off the
+    // end and read as a Creator defect when the rail was right (#664, #977);
+    // asserting through to the first Pad means the next inserted or enabled
+    // key changes this list rather than shifting what the loop can see.
     expect(focusOrder).toEqual(expectedFocusOrder);
     await page.getByRole("button", {name: "Sample"}).click();
     await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();

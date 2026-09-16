@@ -622,7 +622,7 @@ async function launchCrashableCreatorContext(userDataDir) {
 }
 
 function projectRevisionLocator(page) {
-  return page.locator(".status-facts div").filter({
+  return page.locator(".overview-facts div").filter({
     has: page.getByText("Rev", {exact: true}),
   }).getByRole("definition");
 }
@@ -887,8 +887,8 @@ async function opfsWavFiles(page) {
 async function installPerformWitnessSample(page) {
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
-  await page.getByRole("button", {name: "Bank A"}).click();
-  const pad = page.getByRole("button", {name: /^Pad A1 — assigned/});
+  await page.getByTestId("touch-workspace").getByRole("button", {name: "Bank A", exact: true}).click();
+  const pad = page.getByRole("button", {name: /^Pad A1 — assigned$/});
   await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await pad.evaluate((element) => element.click());
   const chooser = page.waitForEvent("filechooser");
@@ -910,8 +910,8 @@ async function installPerformWitnessSample(page) {
 async function replacePadSample(page) {
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
-  await page.getByRole("button", {name: "Bank A"}).click();
-  const pad = page.getByRole("button", {name: /^Pad A1 — assigned/});
+  await page.getByTestId("touch-workspace").getByRole("button", {name: "Bank A", exact: true}).click();
+  const pad = page.getByRole("button", {name: /^Pad A1 — assigned$/});
   await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await pad.evaluate((element) => element.click());
   const chooser = page.waitForEvent("filechooser");
@@ -1052,8 +1052,11 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await expect(recordingStatus).toContainText(/hold\s*[:·]\s*off/i);
 
   const bankRevision = await projectRevision(page);
-  await page.getByRole("button", {name: "Bank B"}).click();
-  await expect(page.getByRole("button", {name: "Bank B"}))
+  // The Perform strip's own Bank keys, not the physical column's: this leg
+  // is about the strip reflecting the switch it made.
+  const performBanks = page.getByRole("group", {name: "Perform Bank"});
+  await performBanks.getByRole("button", {name: "Bank B", exact: true}).click();
+  await expect(performBanks.getByRole("button", {name: "Bank B", exact: true}))
     .toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", {name: /^Pad B/})).toHaveCount(16);
   expect(await projectRevision(page)).toBe(bankRevision);

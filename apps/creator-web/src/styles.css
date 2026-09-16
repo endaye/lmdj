@@ -473,8 +473,7 @@ button:disabled { color: #737b87; }
 .perform-patterns,
 .perform-fx,
 .perform-recording,
-.perform-replay,
-.perform-surface > [aria-label="Perform instrument"] {
+.perform-replay {
   border: 1px solid #353b45;
   border-radius: .85rem;
   background: rgb(23 27 33 / 92%);
@@ -570,7 +569,6 @@ button:disabled { color: #737b87; }
   border-color: #b7ffc5;
   background: #b7ffc5;
 }
-.perform-surface > [aria-label="Perform instrument"] { padding: .85rem; }
 .perform-recording,
 .perform-replay { padding: 1rem; }
 .perform-recording output,
@@ -1076,8 +1074,7 @@ button:disabled { color: #737b87; }
 .hardware-workspace .perform-patterns,
 .hardware-workspace .perform-fx,
 .hardware-workspace .perform-recording,
-.hardware-workspace .perform-replay,
-.hardware-workspace .perform-surface > [aria-label="Perform instrument"] {
+.hardware-workspace .perform-replay {
   border: 0;
   border-radius: 10px;
   background: #202321;

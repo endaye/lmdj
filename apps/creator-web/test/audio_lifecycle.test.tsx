@@ -324,7 +324,7 @@ test("Runtime replacement cannot leave an aborted import permanently visible", a
   await screen.findByRole("button", {name: "Open Project 11111111"});
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
   await userEvent.upload(input!, new File(["bundle"], "stage7.lmdj"));
-  await screen.findByText("importing");
+  await waitFor(() => expect(screen.getByTestId("creator-phase").textContent).toBe("importing"));
 
   first.emit({
     state: "restart-required",
@@ -573,7 +573,6 @@ test("hardware layout keeps Activate audio in the touch workspace", async () => 
     name: "Open Project 11111111",
   }));
   await screen.findByRole("heading", {name: "Project 11111111"});
-  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
   const touch = screen.getByRole("region", {name: "Touch workspace"});
   expect(within(touch).getByRole("button", {name: "Activate audio"})).toBeTruthy();
   expect(within(screen.getByRole("region", {name: "Overview display"}))

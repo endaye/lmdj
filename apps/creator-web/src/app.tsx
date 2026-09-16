@@ -1580,21 +1580,6 @@ function Workspace({
                       </button>
                     </section>
                   ) : null}
-                  <SampleSurface
-                    state={state}
-                    dispatch={dispatch}
-                    filePickIntent={sampleFilePickIntent}
-                    captureStopRequest={captureStopRequest}
-                    onCaptureSlotChange={setArmedCaptureSlot}
-                    onCapturePhaseChange={capturePhaseChanged}
-                    onContinueCaptureInSequence={() => {
-                      if (isSequenceSession(session) && state.project.current !== null) {
-                        setActiveMode("sequence");
-                      }
-                    }}
-                    {...(isSampleSession(session) ? {session} : {})}
-                    {...(inputController.current ? {controller: inputController.current} : {})}
-                  />
                 </>
               ) : activeMode === "sequence" && state.project.current !== null ? (
               <SequenceTouchWorkspace
@@ -1630,12 +1615,10 @@ function Workspace({
                 performController !== null ? (
                   <PerformSurface
                     controller={performController}
-                    creatorState={state}
                     project={state.project.current}
                     bank={state.activeBank}
                     onBankChange={selectBank}
                     transport={transport}
-                    {...(inputController.current ? {padController: inputController.current} : {})}
                   />
                 ) : (
                   <main className="perform-surface" aria-label="Perform">
@@ -1667,6 +1650,43 @@ function Workspace({
                   Open a Project with candidate or Sound Set support.
                 </p>
               )}
+              {/* One Sample surface, on the same terms the retired workspace
+                  shell used: shown in Sample mode, carried hidden while an
+                  armed capture, an open trim overlay or a Sequence-side
+                  projection refresh must survive a mode switch, and unmounted
+                  otherwise so a return to Sample resumes on a fresh mount. */}
+              {(activeMode === "sample" ||
+                armedCaptureSlot !== null ||
+                trimOverlayOpen ||
+                (activeMode === "sequence" && state.sampleProjectionRefresh !== null)) ? (
+              <div className={trimOverlayOpen ? "sample-overlay-host" : ""}
+                hidden={activeMode !== "sample" && !trimOverlayOpen}>
+                <SampleSurface
+                  state={state}
+                  dispatch={dispatch}
+                  filePickIntent={sampleFilePickIntent}
+                  captureStopRequest={captureStopRequest}
+                  captureBackgrounded={activeMode !== "sample" && !trimOverlayOpen}
+                  closeCaptureAfterResolution={activeMode !== "sample"}
+                  {...(sequence.sessionId !== null && sequence.phase === "trim-overlay" &&
+                    sequence.status !== null
+                    ? {sequenceCapture: {
+                        sessionId: sequence.sessionId,
+                        expectedRevision: sequence.status.expectedRevision,
+                      }}
+                    : {})}
+                  onCaptureSlotChange={setArmedCaptureSlot}
+                  onCapturePhaseChange={capturePhaseChanged}
+                  onContinueCaptureInSequence={() => {
+                    if (isSequenceSession(session) && state.project.current !== null) {
+                      setActiveMode("sequence");
+                    }
+                  }}
+                  {...(isSampleSession(session) ? {session} : {})}
+                  {...(inputController.current ? {controller: inputController.current} : {})}
+                />
+              </div>
+              ) : null}
               <ErrorPanel
                 code={state.runtime.errorCode}
                 details={state.runtime.errorDetails}
@@ -1835,12 +1855,10 @@ function Workspace({
             performController !== null ? (
             <PerformSurface
               controller={performController}
-              creatorState={state}
               project={state.project.current}
               bank={state.activeBank}
               onBankChange={selectBank}
               transport={transport}
-              {...(inputController.current ? {padController: inputController.current} : {})}
             />
           ) : null}
           <ErrorPanel
@@ -1871,11 +1889,10 @@ function Workspace({
           />
         </>
       )}
-      {(layout === "workspace" && activeMode === "sample") ||
-      ((armedCaptureSlot !== null ||
+      {layout === "workspace" && (activeMode === "sample" ||
+        armedCaptureSlot !== null ||
         trimOverlayOpen ||
-        (activeMode === "sequence" && state.sampleProjectionRefresh !== null)) &&
-        !(layout === "hardware" && activeMode === "sample")) ? (
+        (activeMode === "sequence" && state.sampleProjectionRefresh !== null)) ? (
         <div className={trimOverlayOpen ? "sample-overlay-host" : ""}
           hidden={activeMode !== "sample" && !trimOverlayOpen}>
           <SampleSurface
