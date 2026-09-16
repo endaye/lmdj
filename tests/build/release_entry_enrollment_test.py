@@ -1352,6 +1352,32 @@ class RecoveredDispatchTest(unittest.TestCase):
         with self.assertRaises(JournalError):
             RecoveredDispatch("publication", None)
 
+    def test_advance_drives_the_adapter_the_observation_produced(self):
+        from tools.release.carriers import RecoveredDispatch
+
+        made = []
+
+        class Adapter:
+            def __init__(self):
+                self.calls = []
+                made.append(self)
+
+            def observe(self, state, operation):
+                self.calls.append("observe")
+                return Observation("absent")
+
+            def advance(self, state, operation, *, before_post):
+                self.calls.append("advance")
+
+        step = RecoveredDispatch("publication", lambda _s, _o: Adapter())
+        self.assertEqual(step.observe(state(), self.operation()).status, "absent")
+        step.advance(state(), self.operation(), before_post=lambda: None)
+        # The driver holds one writer lock across observe → advance: the
+        # adapter the observation produced is the one the advance drives,
+        # not a fresh recovery.
+        self.assertEqual(len(made), 1)
+        self.assertEqual(made[0].calls, ["observe", "advance"])
+
 
 CHANGELOG_DOCUMENT = {"schema": "lmdj.release-changelog.v1",
                       "repository": "endaye/lmdj", "tag": "lmdj-v" + BUILD,
@@ -1388,10 +1414,10 @@ class PublicationEnrollmentTest(unittest.TestCase):
         return hashlib.sha256(body).hexdigest()
 
     def ledger(self, with_changelog=False):
-        intent = Intent()
+        self.intent = Intent()
         if with_changelog:
-            intent.changelog = deepcopy(CHANGELOG_DOCUMENT)
-        return Ledger(rows={"lmdj-v" + BUILD: intent})
+            self.intent.changelog = deepcopy(CHANGELOG_DOCUMENT)
+        return Ledger(rows={"lmdj-v" + BUILD: self.intent})
 
     def verify_effect(self, state, operation, binding):
         self.effect_calls.append(binding)
@@ -1426,11 +1452,13 @@ class PublicationEnrollmentTest(unittest.TestCase):
         from tools.release.carriers import enroll_publication
 
         arguments = dict(root=self.root, candidate_root=self.root,
-                         repository_id=12, ledger=self.ledger(),
+                         repository_id=12,
                          workflow_id=50, producer_revision="0" * 40,
                          release_by_tag=lambda _tag: self.release,
                          transition_for=self.transition_for)
         arguments.update(overrides)
+        if "ledger" not in arguments:
+            arguments["ledger"] = self.ledger()
         return enroll_publication(**arguments)
 
     def publication_state(self):
@@ -1538,6 +1566,20 @@ class PublicationEnrollmentTest(unittest.TestCase):
 
         with self.assertRaises(DurableDispatchError):
             step.observe(self.publication_state(), self.operation())
+
+    def test_bind_also_guards_the_frozen_effect_expectation(self):
+        self.write_plan()
+        self.release = {"draft": True, "id": 4096}
+        step = self.step(ledger=self.ledger(with_changelog=True))
+        self.assertEqual(step.observe(self.publication_state(), self.operation()).status,
+                         "absent")
+        # The spec inputs still match, but the frozen expectation drifted: the
+        # row's changelog binding changed under the enrolled adapter.
+        self.intent.changelog = deepcopy(CHANGELOG_DOCUMENT)
+        self.intent.changelog["changes"][0]["text"] = "Rewritten after review"
+        with self.assertRaises(JournalError):
+            self.binds[0](self.publication_state(), self.operation(),
+                          self.built[0][0])
 
 
 if __name__ == "__main__":

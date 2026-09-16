@@ -804,6 +804,7 @@ class RecoveredDispatch:
         self.step = step
         self._recover = recover
         self._waiting = None
+        self._observed = None
 
     def adapter(self, state, operation):
         """The concrete DispatchTransition for this operation, or None."""
@@ -817,12 +818,22 @@ class RecoveredDispatch:
             # The inputs this step dispatches on do not exist yet; the run
             # waits rather than claiming absence.
             self._waiting = operation.get("operation_id")
+            self._observed = None
             return Observation("pending")
         self._waiting = None
+        self._observed = (operation.get("operation_id"), adapter)
         return adapter.observe(state, operation)
 
     def advance(self, state, operation, *, before_post):
-        adapter = self.adapter(state, operation)
+        # The driver holds one writer lock across observe → advance, so the
+        # adapter the observation just produced is the one to drive; only
+        # without it is a fresh recovery needed.
+        if self._observed is not None \
+                and self._observed[0] == operation.get("operation_id") \
+                and operation.get("step") == self.step:
+            adapter = self._observed[1]
+        else:
+            adapter = self.adapter(state, operation)
         if adapter is None:
             if self._waiting == operation.get("operation_id"):
                 # The driver asks the managed step to act precisely when the
@@ -915,10 +926,16 @@ def enroll_publication(*, root, candidate_root, repository_id, ledger,
         spec, expected = recovered
         validate_dispatch_spec(spec)
 
-        def bind(state, operation, bound=spec):
-            """Re-derive every external input; the records must still agree."""
+        def bind(state, operation, bound=spec, expected=expected):
+            """Re-derive every external input; the records must still agree.
+
+            Both halves are re-derived: the spec inputs and the frozen effect
+            expectation (target revision and changelog digests), so a ledger
+            or changelog drift between recovery and the dispatch boundary
+            fails closed instead of dispatching against a stale expectation.
+            """
             current = recover_inputs(state)
-            if current is None or current[0] != bound:
+            if current is None or current != (bound, expected):
                 _fail("the dispatch inputs drifted from the enrolled spec")
 
         return transition_for(spec, expected, bind)
