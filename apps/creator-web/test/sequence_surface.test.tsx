@@ -45,6 +45,25 @@ test("workspace Sequence surface keeps Refresh authority on the transport strip"
   expect(screen.getAllByRole("button", {name: "Refresh authority"})).toHaveLength(1);
 });
 
+test("workspace Sequence surface announces publication pending once", () => {
+  const callbacks = {
+    onRecord: vi.fn(), onPlayStop: vi.fn(), onRefresh: vi.fn(), onSwitch: vi.fn(),
+    onCreatePattern: vi.fn(), onSettingsChange: vi.fn(),
+    onRecover: vi.fn(), onDiscard: vi.fn(),
+  };
+  render(<SequenceSurface project={project} ready
+    transport={{
+      ...initialPatternTransportState,
+      status: {
+        engaged: true, playing: false, recording: false, phase: "idle",
+        runtimeGeneration: 1, transportEpoch: 1, originFrame: 0,
+        commandId: null, publicationPending: true, error: null,
+      },
+    }}
+    state={initialSequenceState} {...callbacks} />);
+  expect(screen.getAllByText(/committed, publication pending/i)).toHaveLength(1);
+});
+
 test("issues authoritative settings and Pattern creation operations", () => {
   const callbacks = renderSurface();
   fireEvent.click(screen.getByRole("checkbox", {name: "Quantize"}));

@@ -46,9 +46,9 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
           {project.patterns.length === 1 ? "Pattern" : "Patterns"}
         </p>
       </header>
-      {transport.status?.publicationPending === true ? (
-        <p role="status">committed, publication pending</p>
-      ) : null}
+      {props.showRefresh === false || transport.status?.publicationPending !== true
+        ? null
+        : <p role="status">committed, publication pending</p>}
       {props.showRefresh === false ? null : (
         <button type="button" onClick={props.onRefresh}>Refresh authority</button>
       )}
