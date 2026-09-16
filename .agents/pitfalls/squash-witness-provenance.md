@@ -30,6 +30,9 @@ recurrences:
   - date: 2026-09-07
     occurrence: https://github.com/endaye/lmdj/pull/761
     observed_by: Codex
+  - date: 2026-09-16
+    occurrence: https://github.com/endaye/lmdj/pull/1417
+    observed_by: Kimi Code CLI
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
