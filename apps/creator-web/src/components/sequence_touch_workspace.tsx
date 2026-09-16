@@ -9,6 +9,8 @@ import {
   type PatternTransportState,
 } from "../state/pattern_transport_state";
 
+const BAR_COUNTS = [1, 2, 4, 8] as const;
+
 interface SequenceTouchWorkspaceProps {
   project: ProjectView;
   state: SequenceState;
@@ -33,18 +35,17 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   const [swing, setSwing] = useState(project.sequenceSettings.swingPercent);
   const [recoveryTargets, setRecoveryTargets] = useState<Readonly<Record<string, string>>>({});
   const disabled = selectTransportBusy(transport) || selectTransportRecording(transport);
+  const selectedPatternId = state.selectedPatternId ?? project.patternId;
+  const patternIndex = project.patterns.findIndex((item) => item.patternId === selectedPatternId) + 1;
   useEffect(() => { setBpm(project.bpm); }, [project.bpm]);
   useEffect(() => {
     setSwing(project.sequenceSettings.swingPercent);
   }, [project.sequenceSettings.swingPercent]);
   return (
     <section className="sequence-touch-workspace" aria-label="Sequence editor">
-      <header>
-        <h1>Sequence</h1>
-        <p>
-          Project revision {project.revision} · {project.patterns.length}{" "}
-          {project.patterns.length === 1 ? "Pattern" : "Patterns"}
-        </p>
+      <header className="sequence-editor-header">
+        <h1>GROOVE / {String(Math.max(patternIndex, 1)).padStart(2, "0")}</h1>
+        <p className="sequence-editor-mode">SEQUENCE</p>
       </header>
       {props.showRefresh === false || transport.status?.publicationPending !== true
         ? null
@@ -61,58 +62,71 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
         </>
       )}
       <section aria-label="Sequence settings" className="sequence-settings">
-        <label>Pattern
-          <select value={state.selectedPatternId ?? project.patternId}
+        <label className="sequence-pattern-select">Pattern
+          <select value={selectedPatternId}
             disabled={disabled}
             onChange={(event) => props.onSwitch(event.currentTarget.value)}>
-            {project.patterns.map((pattern) => (
+            {project.patterns.map((pattern, index) => (
               <option value={pattern.patternId} key={pattern.patternId}>
-                {pattern.patternId.slice(0, 8)} · {pattern.bars}{" "}
+                {String(index + 1).padStart(2, "0")} · {pattern.bars}{" "}
                 {pattern.bars === 1 ? "bar" : "bars"}
               </option>
             ))}
           </select>
         </label>
-        <label>Quantize
-          <input type="checkbox" checked={project.sequenceSettings.quantizeEnabled}
-            disabled={disabled} onChange={(event) => props.onSettingsChange({
-              quantizeEnabled: event.currentTarget.checked,
-            })} />
-        </label>
-        <form onSubmit={(event) => {
-          event.preventDefault();
-          props.onSettingsChange({swingPercent: swing});
-        }}>
-          <label><span>Swing</span> <output>{project.sequenceSettings.swingPercent}%</output>
-            <input type="range" min={50} max={75} step={1} aria-label="Swing"
+        <div className="sequence-param-row">
+          <form className="sequence-param-card sequence-param-tempo" onSubmit={(event) => {
+            event.preventDefault();
+            props.onSettingsChange({bpm});
+          }}>
+            <p>TEMPO</p>
+            <output htmlFor="sequence-tempo">{bpm} BPM</output>
+            <input id="sequence-tempo" type="range" min={40} max={240} step={1}
+              aria-label="BPM" value={bpm} disabled={disabled}
+              onChange={(event) => setBpm(event.currentTarget.valueAsNumber)} />
+            <button type="submit" disabled={disabled || !Number.isInteger(bpm) ||
+              bpm < 40 || bpm > 240}>Apply BPM</button>
+          </form>
+          <form className="sequence-param-card sequence-param-swing" onSubmit={(event) => {
+            event.preventDefault();
+            props.onSettingsChange({swingPercent: swing});
+          }}>
+            <p>SWING</p>
+            <output htmlFor="sequence-swing">{swing}%</output>
+            <input id="sequence-swing" type="range" min={50} max={75} step={1} aria-label="Swing"
               value={swing} disabled={disabled}
               onChange={(event) => setSwing(event.currentTarget.valueAsNumber)} />
-          </label>
-          <button type="submit" disabled={disabled}>Apply Swing</button>
-        </form>
-        <form onSubmit={(event) => {
-          event.preventDefault();
-          props.onSettingsChange({bpm});
-        }}>
-          <label>BPM
-            <input type="number" min={40} max={240} value={bpm} disabled={disabled}
-              onChange={(event) => setBpm(event.currentTarget.valueAsNumber)} />
-          </label>
-          <button type="submit" disabled={disabled || !Number.isInteger(bpm) ||
-            bpm < 40 || bpm > 240}>Apply BPM</button>
-        </form>
-        <form onSubmit={(event) => {
+            <button type="submit" disabled={disabled}>Apply Swing</button>
+          </form>
+        </div>
+        <form className="sequence-bars-form" onSubmit={(event) => {
           event.preventDefault();
           props.onCreatePattern(bars);
         }}>
-          <label>Bars
-            <select value={bars} disabled={disabled}
-              onChange={(event) => setBars(Number(event.currentTarget.value) as 1 | 2 | 4 | 8)}>
-              {[1, 2, 4, 8].map((count) => <option key={count} value={count}>{count}</option>)}
-            </select>
+          <div className="sequence-segment" role="group" aria-label="Bars">
+            <span>BARS</span>
+            {BAR_COUNTS.map((count) => (
+              <button
+                key={count}
+                type="button"
+                aria-pressed={bars === count}
+                aria-label={`${count} bars`}
+                disabled={disabled}
+                onClick={() => setBars(count)}
+              >
+                {count}
+              </button>
+            ))}
+          </div>
+          <label className="sequence-quantize">Quantize
+            <input type="checkbox" checked={project.sequenceSettings.quantizeEnabled}
+              disabled={disabled} onChange={(event) => props.onSettingsChange({
+                quantizeEnabled: event.currentTarget.checked,
+              })} />
           </label>
-          <button type="submit" disabled={disabled || selectTransportPlaying(transport)}>
-            Create Pattern
+          <button type="submit" aria-label="Create Pattern"
+            disabled={disabled || selectTransportPlaying(transport)}>
+            + NEW
           </button>
         </form>
       </section>

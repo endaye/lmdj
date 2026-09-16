@@ -84,7 +84,7 @@ test("issues authoritative settings and Pattern creation operations", () => {
   fireEvent.change(screen.getByRole("slider", {name: /Swing/}), {target: {value: "62"}});
   fireEvent.click(screen.getByRole("button", {name: "Apply Swing"}));
   expect(callbacks.onSettingsChange).toHaveBeenCalledWith({swingPercent: 62});
-  fireEvent.change(screen.getByRole("combobox", {name: "Bars"}), {target: {value: "4"}});
+  fireEvent.click(screen.getByRole("button", {name: "4 bars"}));
   fireEvent.click(screen.getByRole("button", {name: "Create Pattern"}));
   expect(callbacks.onCreatePattern).toHaveBeenCalledWith(4);
 });
@@ -140,6 +140,8 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
   expect(display.textContent ?? "").not.toMatch(/Copy/);
 
   const touch = screen.getByRole("region", {name: "Touch workspace"});
+  expect(within(touch).queryByRole("button", {name: "COPY"})).toBeNull();
+  expect(within(touch).queryByRole("button", {name: "1/16"})).toBeNull();
   expect(within(touch).queryByRole("button", {name: "Play"})).toBeNull();
   expect(within(touch).queryByRole("button", {name: "Stop"})).toBeNull();
   expect(within(touch).queryByRole("button", {name: "Record"})).toBeNull();
@@ -151,9 +153,7 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
   });
   fireEvent.click(within(touch).getByRole("button", {name: "Apply Swing"}));
   expect(onSettingsChange).toHaveBeenCalledWith({swingPercent: 62});
-  fireEvent.change(within(touch).getByRole("combobox", {name: "Bars"}), {
-    target: {value: "4"},
-  });
+  fireEvent.click(within(touch).getByRole("button", {name: "4 bars"}));
   fireEvent.click(within(touch).getByRole("button", {name: "Create Pattern"}));
   expect(onCreatePattern).toHaveBeenCalledWith(4);
   fireEvent.click(within(touch).getByRole("button", {
