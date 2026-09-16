@@ -107,6 +107,12 @@ export function OverviewDisplay({
         <ProjectOverview state={state} />
       ) : activeMode === "sample" ? (
         <SampleOverview state={state} />
+      ) : activeMode === "slice" || activeMode === "soundset" ? (
+        <p className="overview-grid-caption">
+          {activeMode === "slice"
+            ? "Slice preview does not write Project Truth until Adopt."
+            : "Sound Set install writes only after an explicit Keep or Replace."}
+        </p>
       ) : (
         <p className="overview-grid-caption">
           Event grid is a live projection target; this overview does not edit it.

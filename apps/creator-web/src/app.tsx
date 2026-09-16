@@ -1381,10 +1381,7 @@ function Workspace({
   const trimOverlayOpen = sequence.phase === "trim-overlay" ||
     captureTransportOverlay;
   const applyMode = (mode: CreatorMode) => {
-    const unmigrated = mode === "slice" || mode === "soundset";
-    if (unmigrated) {
-      setLayout("workspace");
-    } else if (hardwareSessionRef.current) {
+    if (hardwareSessionRef.current) {
       setLayout("hardware");
     }
     setActiveMode(mode);
@@ -1410,10 +1407,6 @@ function Workspace({
   const enterHardwareLayout = () => {
     writeCreatorLayout("hardware");
     hardwareSessionRef.current = true;
-    if (activeMode === "slice" || activeMode === "soundset") {
-      selectMode("project");
-      return;
-    }
     setLayout("hardware");
   };
   const enterWorkspaceLayout = () => {
@@ -1646,9 +1639,28 @@ function Workspace({
                     <p>Launch and FX wait for running audio and capture storage.</p>
                   </main>
                 )
+              ) : activeMode === "slice" && isCandidateSession(session) &&
+                state.project.current !== null ? (
+                <CandidateSurface key={state.project.current.projectId}
+                  session={session} projectId={state.project.current.projectId}
+                  projectRevision={state.project.current.revision}
+                  onRefreshProject={(revision) => refreshCandidateProject(
+                    state.project.current!.projectId, revision,
+                  )} />
+              ) : activeMode === "soundset" && isSoundSetSession(session) ? (
+                <SoundSetSurface
+                  session={session}
+                  projectRevision={state.project.current?.revision ?? null}
+                  activeBank={state.activeBank}
+                  onBankChange={selectBank}
+                  onInstalled={(revision) => {
+                    dispatch({type: "project-revision-updated", revision});
+                    void refreshPerformProject().catch(() => {});
+                  }}
+                />
               ) : (
                 <p className="touch-fallback-note">
-                  Slice and Sound Sets stay on the existing workspace.
+                  Open a Project with candidate or Sound Set support.
                 </p>
               )}
               <ErrorPanel
