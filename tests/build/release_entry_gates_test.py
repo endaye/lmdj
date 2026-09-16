@@ -104,49 +104,105 @@ class MainObservationTest(unittest.TestCase):
 
 
 class MergedGateTest(unittest.TestCase):
+    """The merged gate against a real Git repository and the real GitRepository."""
+
+    def setUp(self):
+        import subprocess
+        import tempfile
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.repo = Path(temporary.name).resolve() / "repo"
+        self.repo.mkdir()
+
+        def git(*args):
+            subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-C",
+                            str(self.repo), *args], check=True, capture_output=True)
+
+        self.git = git
+        git("init", "-q", "-b", "main")
+        git("config", "user.name", "Seeder")
+        git("config", "user.email", "seed@example.invalid")
+        git("commit", "-q", "--allow-empty", "-m", "base")
+        self.base = self.rev("HEAD")
+        # The reviewed head, then its single-parent squash on main.
+        git("checkout", "-q", "-b", "reviewed")
+        (self.repo / "reviewed.txt").write_text("reviewed content\n")
+        git("add", "reviewed.txt")
+        git("commit", "-q", "-m", "reviewed head")
+        self.head = self.rev("HEAD")
+        git("checkout", "-q", "main")
+        git("merge", "--squash", "reviewed")
+        git("commit", "-q", "-m", "squash of reviewed head")
+        self.squash = self.rev("HEAD")
+        # A two-parent merge commit, also on main: reachable but not a squash.
+        git("merge", "--no-ff", "-m", "not a squash", "reviewed")
+        self.merge_commit = self.rev("HEAD")
+        git("update-ref", "refs/lmdj-release/origin-main", "main")
+        # A commit that never lands on main.
+        git("checkout", "-q", "-b", "stray", self.base)
+        git("commit", "-q", "--allow-empty", "-m", "stray")
+        self.stray = self.rev("HEAD")
+        git("checkout", "-q", "main")
+        from tools.release.git_repository import GitRepository
+
+        self.repository = GitRepository(self.repo)
+
+    def rev(self, ref):
+        import subprocess
+
+        return subprocess.run(["git", "-C", str(self.repo), "rev-parse", ref],
+                              check=True, capture_output=True).stdout.decode().strip()
+
     def row(self, **changes):
-        document = {"merged": True, "merge_commit_sha": MERGE, "number": 7,
-                    "head": {"sha": HEAD}}
+        document = {"merged": True, "merge_commit_sha": self.squash,
+                    "number": 7, "head": {"sha": self.head}}
         document.update(changes)
         return document
 
     def receipt(self, kind="candidate"):
         return {"sha256": DIGEST, "reference": f"review:{kind}:pr-7"}
 
-    def gate(self, **git_arguments):
-        return merged_gate(git=GitStub(**git_arguments))
+    def gate(self):
+        return merged_gate(git=self.repository)
 
     def test_the_merged_squash_binds_merge_and_review(self):
-        observed = self.gate()("candidate", {"head_sha": HEAD}, self.row(),
+        observed = self.gate()("candidate", {"head_sha": self.head}, self.row(),
                                self.receipt())
         self.assertIsInstance(observed, Observation)
         self.assertEqual(observed.status, "verified")
-        self.assertEqual(observed.evidence["reference"], "merged:candidate:" + MERGE)
+        self.assertEqual(observed.evidence["reference"],
+                         "merged:candidate:" + self.squash)
         self.assertEqual(observed.evidence["sha256"],
-                         canonical_sha256({"kind": "candidate", "merge": MERGE,
+                         canonical_sha256({"kind": "candidate",
+                                           "merge": self.squash,
                                            "review": DIGEST}))
 
     def test_every_unproven_leg_fails_closed(self):
         gate = self.gate()
         with self.assertRaises(EntryGateError):
-            gate("candidate", {"head_sha": HEAD}, self.row(merged=False),
+            gate("candidate", {"head_sha": self.head}, self.row(merged=False),
                  self.receipt())
         with self.assertRaises(EntryGateError):
-            gate("candidate", {"head_sha": HEAD}, self.row(merge_commit_sha="short"),
-                 self.receipt())
+            gate("candidate", {"head_sha": self.head},
+                 self.row(merge_commit_sha="short"), self.receipt())
         with self.assertRaises(EntryGateError):
-            gate("candidate", {"head_sha": HEAD}, self.row(head={"sha": "9" * 40}),
-                 self.receipt())
+            gate("candidate", {"head_sha": self.head},
+                 self.row(head={"sha": "9" * 40}), self.receipt())
         with self.assertRaises(EntryGateError):
-            self.gate(ancestors=(CONTROL,))(
-                "candidate", {"head_sha": HEAD}, self.row(), self.receipt())
+            gate("candidate", {"head_sha": self.head},
+                 self.row(merge_commit_sha=self.stray), self.receipt())
         with self.assertRaises(EntryGateError):
-            gate("candidate", {"head_sha": HEAD}, self.row(), self.receipt("witness"))
+            gate("candidate", {"head_sha": self.head},
+                 self.row(merge_commit_sha=self.merge_commit), self.receipt())
         with self.assertRaises(EntryGateError):
-            gate("candidate", {"head_sha": HEAD}, self.row(),
+            gate("candidate", {"head_sha": self.head}, self.row(),
+                 self.receipt("witness"))
+        with self.assertRaises(EntryGateError):
+            gate("candidate", {"head_sha": self.head}, self.row(),
                  {"sha256": "short", "reference": "review:candidate:pr-7"})
         with self.assertRaises(EntryGateError):
-            gate("other", {"head_sha": HEAD}, self.row(), self.receipt())
+            gate("other", {"head_sha": self.head}, self.row(), self.receipt())
 
 
 class ReviewGateTest(unittest.TestCase):

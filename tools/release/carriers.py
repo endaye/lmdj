@@ -736,13 +736,17 @@ def enroll_candidate(*, request, preparation_root, repository_root, source_root,
         path=path, author_name=author_name, author_email=author_email,
         source_timestamp=source_timestamp, clock=clock)
     observed = preparation.observe(initialize=True)
-    if observed["status"] != "verified":
+    if observed["status"] == "verified":
+        driven = observed
+    elif observed["status"] == "pending":
+        # Only a positively incomplete preparation is drivable; drift or an
+        # unreadable state is never prepared over.
         driven = preparation.prepare(
             before_write=lambda: authorize(deepcopy(request)))
         if driven["status"] != "verified":
             _fail("candidate preparation did not reach its verified receipts")
     else:
-        driven = observed
+        _fail("candidate preparation is not in a derivable state")
     return assemble_candidate_transition(
         request=request, checks=preparation.checks, source=driven["source"],
         checked_cut=driven["checked_cut"], frozen=driven["frozen"],

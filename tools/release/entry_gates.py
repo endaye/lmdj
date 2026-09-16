@@ -149,6 +149,14 @@ def merged_gate(*, git):
             _fail("the merged PR head differs from the reviewed head")
         if not git.is_main_ancestor(merge_sha):
             _fail("the squash is not reachable canonical history")
+        # The controller only ever issues squash merges, but an external merge
+        # could have landed another shape: the release target must be the
+        # single-parent squash of the reviewed head.
+        parents = git.runner.run(
+            ("git", "-C", str(git.root), "rev-list", "--parents", "-n", "1",
+             merge_sha)).stdout.split()
+        if len(parents) != 2:
+            _fail("the merged commit is not a single-parent squash")
         digest = receipt.get("sha256") if isinstance(receipt, dict) else None
         reference = receipt.get("reference") if isinstance(receipt, dict) else None
         if type(digest) is not str or _DIGEST.fullmatch(digest) is None \
