@@ -24,6 +24,7 @@ import {PerformSurface} from "./components/perform_surface";
 import {ProjectSurface} from "./components/project_surface";
 import {SampleSurface} from "./components/sample_surface";
 import {SequenceSurface} from "./components/sequence_surface";
+import {SequenceTouchWorkspace} from "./components/sequence_touch_workspace";
 import {
   isSoundSetSession,
   SoundSetSurface,
@@ -1580,14 +1581,10 @@ function Workspace({
                   />
                 </>
               ) : activeMode === "sequence" && state.project.current !== null ? (
-              <SequenceSurface
+              <SequenceTouchWorkspace
                 project={state.project.current}
                 state={sequence}
                 transport={transport}
-                ready={isPatternTransportSession(session) &&
-                  state.audio.phase === "running"}
-                onPlayStop={() => { void submitTransportIntent("play_stop"); }}
-                onRecord={() => { void submitTransportIntent("record"); }}
                 onRefresh={() => {
                   void refreshSequence();
                   void reconcileTransport();

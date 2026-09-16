@@ -1,7 +1,11 @@
-import {fireEvent, render, screen} from "@testing-library/react";
+import {fireEvent, render, screen, within} from "@testing-library/react";
 import {expect, test, vi} from "vitest";
 
+import {HardwareConsole} from "../src/components/hardware_console";
+import {PhysicalControls} from "../src/components/physical_controls";
+import {SequenceOverview} from "../src/components/sequence_overview";
 import {SequenceSurface} from "../src/components/sequence_surface";
+import {SequenceTouchWorkspace} from "../src/components/sequence_touch_workspace";
 import {initialSequenceState} from "../src/state/sequence_state";
 import {initialPatternTransportState} from "../src/state/pattern_transport_state";
 
@@ -46,6 +50,88 @@ test("issues authoritative settings and Pattern creation operations", () => {
   fireEvent.change(screen.getByRole("combobox", {name: "Bars"}), {target: {value: "4"}});
   fireEvent.click(screen.getByRole("button", {name: "Create Pattern"}));
   expect(callbacks.onCreatePattern).toHaveBeenCalledWith(4);
+});
+
+test("hardware Sequence overview is read-only and the touch workspace owns editing", () => {
+  const onRecord = vi.fn();
+  const onPlayStop = vi.fn();
+  const onSettingsChange = vi.fn();
+  const onCreatePattern = vi.fn();
+  const onSwitch = vi.fn();
+  const onRecover = vi.fn();
+  const onDiscard = vi.fn();
+  const onRefresh = vi.fn();
+  const sequenceState = {
+    ...initialSequenceState,
+    recovery: [{
+      sessionId: "session-1",
+      patternId: project.patternId,
+      bars: 1 as const,
+      reason: "interrupted",
+      eventCount: 3,
+    }],
+    phase: "recovery" as const,
+  };
+  render(<HardwareConsole
+    physicalControls={<PhysicalControls
+      activeMode="sequence" activeBank={0} sequenceEnabled performEnabled
+      onSelectMode={() => {}} onSelectBank={() => {}}
+      onRecord={onRecord} recordEnabled
+      onPlayStop={onPlayStop} playEnabled
+    />}
+    overview={<SequenceOverview
+      project={project} state={sequenceState}
+      transport={initialPatternTransportState}
+    />}
+    pads={<span>pads</span>}
+    touchWorkspace={<SequenceTouchWorkspace
+      project={project} state={sequenceState}
+      transport={initialPatternTransportState}
+      onRefresh={onRefresh} onSwitch={onSwitch}
+      onCreatePattern={onCreatePattern} onSettingsChange={onSettingsChange}
+      onRecover={onRecover} onDiscard={onDiscard}
+    />}
+  />);
+
+  const display = screen.getByRole("region", {name: "Overview display"});
+  expect(within(display).queryAllByRole("button")).toHaveLength(0);
+  expect(within(display).queryAllByRole("checkbox")).toHaveLength(0);
+  expect(within(display).queryAllByRole("textbox")).toHaveLength(0);
+  expect(within(display).queryAllByRole("slider")).toHaveLength(0);
+  expect(display.textContent ?? "").toMatch(/Quantize/);
+  expect(display.textContent ?? "").toMatch(/Swing/);
+  expect(display.textContent ?? "").not.toMatch(/Copy/);
+
+  const touch = screen.getByRole("region", {name: "Touch workspace"});
+  expect(within(touch).queryByRole("button", {name: "Play"})).toBeNull();
+  expect(within(touch).queryByRole("button", {name: "Stop"})).toBeNull();
+  expect(within(touch).queryByRole("button", {name: "Record"})).toBeNull();
+  expect(within(touch).queryByRole("button", {name: "Record off"})).toBeNull();
+  fireEvent.click(within(touch).getByRole("checkbox", {name: "Quantize"}));
+  expect(onSettingsChange).toHaveBeenCalledWith({quantizeEnabled: false});
+  fireEvent.change(within(touch).getByRole("slider", {name: /Swing/}), {
+    target: {value: "62"},
+  });
+  fireEvent.click(within(touch).getByRole("button", {name: "Apply Swing"}));
+  expect(onSettingsChange).toHaveBeenCalledWith({swingPercent: 62});
+  fireEvent.change(within(touch).getByRole("combobox", {name: "Bars"}), {
+    target: {value: "4"},
+  });
+  fireEvent.click(within(touch).getByRole("button", {name: "Create Pattern"}));
+  expect(onCreatePattern).toHaveBeenCalledWith(4);
+  fireEvent.click(within(touch).getByRole("button", {
+    name: "Recover original Pattern",
+  }));
+  expect(onRecover).toHaveBeenCalledWith(expect.anything(), null);
+  fireEvent.click(within(touch).getByRole("button", {name: "Discard"}));
+  expect(onDiscard).toHaveBeenCalledTimes(1);
+  fireEvent.click(within(touch).getByRole("button", {name: "Refresh authority"}));
+  expect(onRefresh).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(screen.getByRole("button", {name: "Record"}));
+  expect(onRecord).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", {name: "Play/Stop"}));
+  expect(onPlayStop).toHaveBeenCalledTimes(1);
 });
 
 test("requires an explicit destination and preserves original recovery semantics", () => {
