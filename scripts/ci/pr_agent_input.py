@@ -116,6 +116,17 @@ def _generated_change(paths: Sequence[str]) -> bool:
     return all(_generated_path(path) for path in paths)
 
 
+def reviewable_inventory(changes: Sequence[change_scope.ChangedFile]) -> list[change_scope.ChangedFile]:
+    """Return the reviewable entries of a changed-file inventory.
+
+    This is the one canonical basis for the reviewable changed-path inventory:
+    tool-generated artifacts are excluded from model review input, so every
+    writer of that inventory (the T2 producer and the fallback collector) and
+    the publisher's re-derivation from Git must apply this same filter.
+    """
+    return [item for item in changes if not _generated_change(item.paths)]
+
+
 def _canonical(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 

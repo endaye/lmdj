@@ -644,7 +644,7 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("issues: write", source)
         self.assertNotIn("actions: write", source)
 
-    def publish_with_doubles(self, *, stale=False, unavailable=False, prior_reviews=None):
+    def publish_with_doubles(self, *, stale=False, unavailable=False, prior_reviews=None, inventory=None):
         calls = []
         def auth(identity, store=None, reuse=False):
             calls.append("authenticate")
@@ -653,6 +653,7 @@ class PipelineTests(unittest.TestCase):
             return identity
         environment = {"GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "7", "HEAD_SHA": "a" * 40,
                        "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_TOKEN": "secret"}
+        actual = inventory if inventory is not None else [pipeline.change_scope.ChangedFile("M", ("docs/notes/a.md",))]
         with mock.patch.dict(os.environ, environment), \
                 mock.patch.object(pipeline, "git", return_value=("c" * 40 + "\n").encode()), \
                 mock.patch.object(pipeline, "fetch"), mock.patch.object(pipeline, "authenticate", side_effect=auth), \
@@ -660,7 +661,7 @@ class PipelineTests(unittest.TestCase):
                  if prior_reviews is None else contextlib.nullcontext()), \
                 mock.patch.object(pipeline, "api", return_value={"id": 5}), \
                 mock.patch.object(pipeline, "pages", return_value=prior_reviews or []), \
-                mock.patch.object(pipeline.change_scope, "read_git_inventory", return_value=[pipeline.change_scope.ChangedFile("M", ("docs/notes/a.md",))]), \
+                mock.patch.object(pipeline.change_scope, "read_git_inventory", return_value=actual), \
                 mock.patch.object(pipeline, "publish_model", side_effect=lambda identity, record, model, **kwargs: calls.append(("review", {"summary": model["summary"] + model["test_scope"]["reason"] + pipeline.codec.encode(record)}))), \
                 mock.patch.object(pipeline.pr_review_target, "github_request", side_effect=lambda *a: calls.append(("labels", a))):
             pipeline.publish(self.directory)
@@ -700,6 +701,56 @@ class PipelineTests(unittest.TestCase):
         pipeline.save(self.directory / "result.json", result)
         with self.assertRaisesRegex(review_scope.ReviewScopeError, "inconsistent"):
             self.publish_with_doubles()
+
+    def test_publish_derives_the_same_reviewable_inventory_from_git(self):
+        # #1423: collectors exclude tool-generated artifacts from the review
+        # input, so the publisher must re-derive the identical reviewable
+        # basis from Git instead of comparing against the full inventory.
+        self.capture("glm")
+        pipeline.finalize(self.directory)
+        generated = [
+            pipeline.change_scope.ChangedFile("M", ("products/lmdj/assembly.lock.json",)),
+            pipeline.change_scope.ChangedFile("M", ("products/lmdj/generated/runtime-identity.json",)),
+            pipeline.change_scope.ChangedFile("A", ("apps/architecture-portal/versioned_docs/guide.md",)),
+        ]
+        inventory = [pipeline.change_scope.ChangedFile("M", ("docs/notes/a.md",))] + generated
+        calls = self.publish_with_doubles(inventory=inventory)
+        self.assertEqual([c if isinstance(c, str) else c[0] for c in calls],
+                         ["authenticate", "review", "authenticate", "labels", "authenticate"])
+        self.assertEqual(pipeline.read(self.directory / "scope.json")["changed_paths"], ["docs/notes/a.md"])
+
+    def test_publish_still_rejects_a_genuinely_divergent_inventory(self):
+        self.capture("glm")
+        pipeline.finalize(self.directory)
+        cases = {
+            "reviewable path only in Git": [pipeline.change_scope.ChangedFile("M", ("docs/notes/a.md",)),
+                                            pipeline.change_scope.ChangedFile("M", ("packages/foundation/src/unexpected.cpp",))],
+            "context path absent from Git": [],
+        }
+        for label, inventory in cases.items():
+            with self.subTest(case=label):
+                with self.assertRaisesRegex(review_scope.ReviewScopeError, "artifact changed inventory mismatch"):
+                    self.publish_with_doubles(inventory=inventory)
+
+    def test_legacy_collect_excludes_generated_artifacts_from_the_context_inventory(self):
+        target = {"review": "true", "head_sha": "a" * 40, "base_sha": "b" * 40, "body": "fallback"}
+        expected = {
+            ("rev-parse", "HEAD"): b"c" * 40,
+            ("merge-base", "b" * 40, "a" * 40): b"b" * 40,
+            ("diff", "--no-ext-diff", "--no-textconv", "b" * 40, "a" * 40, "--"): b"diff",
+            ("diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "--find-renames",
+             "b" * 40, "a" * 40, "--"): b"M\0docs/notes/a.md\0M\0products/lmdj/assembly.lock.json\0"
+                                         b"A\0apps/architecture-portal/versioned_docs/guide.md\0",
+        }
+        env = {**self.env, "GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "7", "HEAD_SHA": "a" * 40,
+               "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1"}
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(pipeline.pr_review_target, "resolve_target", return_value=target), \
+                mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(pipeline, "git", side_effect=lambda *args: expected[args]):
+            pipeline.collect(self.directory)
+        context = pipeline.read(self.directory / "context.json")
+        self.assertEqual(context["changed_paths"], ["docs/notes/a.md"])
 
     def test_many_paths_do_not_spend_model_summary_budget(self):
         policy = test_scope.load_policy(ROOT)

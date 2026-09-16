@@ -304,8 +304,9 @@ def collect(directory):
     diff = git("diff", "--no-ext-diff", "--no-textconv", base, target["head_sha"], "--")
     review_scope.require(0 < len(diff) <= 400000, "review diff is empty or exceeds complete-input budget",
                          "split this PR or record explicit human/agent review; never review a truncated diff")
-    changed = change_scope.parse_name_status_z(git("diff", "--no-ext-diff", "--no-textconv", "--name-status",
-                                                  "-z", "--find-renames", base, target["head_sha"], "--"))
+    changed = input_producer.reviewable_inventory(
+        change_scope.parse_name_status_z(git("diff", "--no-ext-diff", "--no-textconv", "--name-status",
+                                             "-z", "--find-renames", base, target["head_sha"], "--")))
     identity = dict(repository=repo, pr_number=number, head_sha=target["head_sha"], base_sha=base,
                     control_sha=control, backend="deterministic", run_id=int(os.environ["GITHUB_RUN_ID"]),
                     run_attempt=int(os.environ["GITHUB_RUN_ATTEMPT"]))
@@ -784,7 +785,8 @@ def publish(directory):
     authenticate(identity, store)
     policy = test_scope.load_policy(ROOT)
     fetch(identity["base_sha"], identity["head_sha"])
-    actual = change_scope.read_git_inventory(ROOT, identity["base_sha"], identity["head_sha"])
+    actual = input_producer.reviewable_inventory(
+        change_scope.read_git_inventory(ROOT, identity["base_sha"], identity["head_sha"]))
     paths = review_scope.changed_path_inventory([
         {"path": changed.paths[-1],
          "old_path": changed.paths[0] if len(changed.paths) == 2 else None}
