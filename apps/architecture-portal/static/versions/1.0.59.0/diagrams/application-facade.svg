@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="abc030da4e756b30adb4438284f964b69ae00553453d1fc68bf2b9deb4206ea7">
+  <title id="title">Application Facade Module</title><desc id="description">Native Host 与共享 Web Runtime Platform 的唯一 Core 入口</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
+  <style>
+    :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    @media(prefers-color-scheme:dark){:root{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}}
+    [data-theme=dark]{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}
+    [data-theme=light]{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
+    .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
+  </style>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Application Facade Module</text><text class="page-summary" x="40" y="68">Native Host 与共享 Web Runtime Platform 的唯一 Core 入口</text>
+
+  <g class="connection"><path class="edge-mask" d="M 260 188 H 470 V 298 H 680"/><path class="edge" d="M 260 188 H 470 V 298 H 680" marker-end="url(#arrow)"/><text x="470" y="234">Facade API</text></g>
+<g class="connection"><path class="edge-mask" d="M 260 428 H 300 V 428 H 340"/><path class="edge" d="M 260 428 H 300 V 428 H 340" marker-end="url(#arrow)"/><text x="300" y="419">Platform API</text></g>
+<g class="connection"><path class="edge-mask" d="M 590 428 H 635 V 298 H 680"/><path class="edge" d="M 590 428 H 635 V 298 H 680" marker-end="url(#arrow)"/><text x="635" y="354">Facade API</text></g>
+<g class="connection"><path class="edge-mask" d="M 930 298 H 970 V 298 H 1010"/><path class="edge" d="M 930 298 H 970 V 298 H 1010" marker-end="url(#arrow)"/><text x="970" y="289">orchestrate</text></g>
+<g class="connection"><path class="edge-mask" d="M 1230 298 H 1270 V 298 H 1310"/><path class="edge" d="M 1230 298 H 1270 V 298 H 1310" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 930 298 H 970 V 478 H 1010"/><path class="edge" d="M 930 298 H 970 V 478 H 1010" marker-end="url(#arrow)"/><text x="970" y="379">20 operations</text></g>
+<g class="connection"><path class="edge-mask" d="M 1260 478 H 1285 V 478 H 1310"/><path class="edge" d="M 1260 478 H 1285 V 478 H 1310" marker-end="url(#arrow)"/><text x="1285" y="469">one-way link</text></g>
+<g class="connection"><path class="edge-mask" d="M 260 188 H 470 V 148 H 680"/><path class="edge" d="M 260 188 H 470 V 148 H 680" marker-end="url(#arrow)"/><text x="470" y="159">narrow source API</text></g>
+<g class="connection"><path class="edge-mask" d="M 960 148 H 985 V 298 H 1010"/><path class="edge" d="M 960 148 H 985 V 298 H 1010" marker-end="url(#arrow)"/><text x="985" y="214">Cooker + Audio only</text></g>
+
+    <g class="component kind-host">
+      <rect class="node-mask" x="36" y="136" width="228" height="104" rx="18"/>
+      <rect class="node" x="40" y="140" width="220" height="96" rx="14"/>
+      <text class="node-title" x="56" y="172">Native Hosts</text>
+      <text class="node-detail" x="56" y="198">desktop · Cardputer source</text>
+    </g>
+    <g class="component kind-host">
+      <rect class="node-mask" x="36" y="376" width="228" height="104" rx="18"/>
+      <rect class="node" x="40" y="380" width="220" height="96" rx="14"/>
+      <text class="node-title" x="56" y="412">Web Hosts</text>
+      <text class="node-detail" x="56" y="438">Creator · Diagnostic</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="336" y="376" width="258" height="104" rx="18"/>
+      <rect class="node" x="340" y="380" width="250" height="96" rx="14"/>
+      <text class="node-title" x="356" y="412">Web Runtime Platform</text>
+      <text class="node-detail" x="356" y="438">shared browser adapter</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="676" y="246" width="258" height="104" rx="18"/>
+      <rect class="node" x="680" y="250" width="250" height="96" rx="14"/>
+      <text class="node-title" x="696" y="282">Application Facade</text>
+      <text class="node-detail" x="696" y="308">Project · Sample · Sequence · Performance</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="1006" y="246" width="228" height="104" rx="18"/>
+      <rect class="node" x="1010" y="250" width="220" height="96" rx="14"/>
+      <text class="node-title" x="1026" y="282">Core Modules</text>
+      <text class="node-detail" x="1026" y="308">domain · I/O · cook · audio</text>
+    </g>
+    <g class="component kind-host">
+      <rect class="node-mask" x="1306" y="246" width="218" height="104" rx="18"/>
+      <rect class="node" x="1310" y="250" width="210" height="96" rx="14"/>
+      <text class="node-title" x="1326" y="282">Typed Response</text>
+      <text class="node-detail" x="1326" y="308">receipt · opaque export + identity</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="1006" y="426" width="258" height="104" rx="18"/>
+      <rect class="node" x="1010" y="430" width="250" height="96" rx="14"/>
+      <text class="node-title" x="1026" y="462">Performance Ops</text>
+      <text class="node-detail" x="1026" y="488">record · replay · recovery · resample</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="1306" y="426" width="258" height="104" rx="18"/>
+      <rect class="node" x="1310" y="430" width="250" height="96" rx="14"/>
+      <text class="node-title" x="1326" y="462">Performance Runtime</text>
+      <text class="node-detail" x="1326" y="488">ports · bridge · replay · engine adapter</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="676" y="96" width="288" height="104" rx="18"/>
+      <rect class="node" x="680" y="100" width="280" height="96" rx="14"/>
+      <text class="node-title" x="696" y="132">Runtime-only Facade</text>
+      <text class="node-detail" x="696" y="158">content · Pad summary · epoch</text>
+    </g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Dependencies</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Full Facade links Performance Runtime and Runtime-only Facade, two independent narrow targets in the same Module. Runtime-only links Cooker/Audio, never Project IO or Provider SDK. Host owner selector → Facade → SDK policy/binding/budget gates → Project IO verified Asset read under one writer lease → owned source/sink. Session grants reset on restart; durable Attempts never contain Project paths or alter Truth. Persist intent before execute. One live Attempt per Job; short owner lease publishes stable Set, ordered history, active pointer and supersession atomically. Recover only recorded Attempts; verify terminal bytes on each read. Project Truth remains unchanged.</div></foreignObject></g>
+<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Candidate adoption / runtime export</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">One active set, explicit sorted Pad targets. Hold Workspace eligibility through bounded interval materialization, final-binding Bank/generation quota and one Project commit. Recheck Project/source identity under the writer. Retain source and terminal lineage; no Index adopted write and no public receipt replay. Cancel exact pending Attempt; discard active Set with durable tombstone. Share mutation ownership with adoption; late cancelled success never publishes. Keep immutable history/blobs, no GC or TTL. Runtime export: Expected Project ID/revision + one Pattern + extra live Pads. Load verified Truth, narrow a detached value, Cook and encode; return opaque bytes plus complete identity. No Project write or runtime publication. Candidate audition holds active eligibility through verified bounded PCM selection and final source/revision checks; transient prepared PCM only, no files or Truth writes. CLI/MCP return metadata; Native/Web own actual voice admission and stop.</div></foreignObject></g>
+<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Performance authority</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Twenty Performance operations plus three Pattern Slot commands; open gestures, HOLD and the last acknowledged launch come from record status, never from Host prediction. Staged transport executor: one bounded retained ticket binds generation/epoch/command/step. Worker owns work and lease destruction; Control submit/inspect never waits for IO. Consume after reconciliation; unknown never authorizes retry. Global integration pending.</div></foreignObject></g>
+<g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Runtime boundary</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Budget Engine plus 2176-state receipt-bounded storage. Acquire consumption, drain states, retire receipts. OPEN/BUSY drain before reclaim. Control-only Pad summary is an owned, allocation-free canonical 64-slot value; Host profile does not narrow Core capacity. Cardputer serial control owns load and receipts; its audio task alone renders. Device join and physical silence remain separate from Core stopped. No physical-device proof.</div></foreignObject></g>
+</svg>
