@@ -18,6 +18,9 @@ Embedded：H1 启动/停止静音、R2 真正设备测量及 A1 #1111 完整旅�
 B1 #1110 的构建结果不能替代这些验收。
 Web Creator：W1 未决交互确认、W2 真实触摸原型验证、W5 固定候选听感/恢复/
 非开发者可用性验收；#1207 与 #522 各自保留完成范围。
+全局 Pattern transport(#1230 验收项 7)的真机行见
+[2026-09-16-pattern-transport-physical-acceptance.md](2026-09-16-pattern-transport-physical-acceptance.md)(T1–T3,
+全部 unverified);通过后才可关闭 #1230。
 历史 Safari/iPadOS/MIDI/Sequence/Perform 验收继续保留，不随本次重排结案。
 
 CI 第四主线：#1089 保留实际 report/discovery、后端及负载等运行缺口；
