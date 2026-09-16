@@ -902,6 +902,19 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(manifest["mode"], "focused")
         self.assertEqual(self.true_lanes(manifest), {"ci_contract"})
 
+    def test_a_portal_witness_inventory_selects_the_portal_lane(self):
+        # The generated-only receipt evidence path binds to the PR-gate
+        # portal-provenance check run; if a witness-shaped head did not select
+        # the portal lane, every such receipt would stay pending forever.
+        manifest = self.classify([
+            "apps/architecture-portal/versioned_provenance/version-1.0.57.0.json",
+            "apps/architecture-portal/versioned_metadata/version-1.0.57.0.json",
+            "apps/architecture-portal/versioned_sidebars/version-1.0.57.0-sidebars.json",
+            "apps/architecture-portal/static/versions/1.0.57.0/manifest.json",
+        ])
+        self.assertEqual(manifest["mode"], "focused")
+        self.assertEqual(self.true_lanes(manifest), {"portal"})
+
     def test_a_scheduled_sweep_of_main_is_full_and_trusted(self):
         """#543: the daily sweep runs the complete manifest-selected set.
 

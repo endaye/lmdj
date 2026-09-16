@@ -605,14 +605,114 @@ class ProducerTests(unittest.TestCase):
         authenticated = adapter.authenticate_input(document)
         self.assertEqual(len(authenticated["files"]), adapter.MAX_FILES)
 
-    def test_all_generated_inventory_is_refused_with_explicit_reason(self):
+    def portal_generated_changes(self) -> dict[str, bytes]:
+        return {name: content for name, content in self.GENERATED_CHANGES.items()
+                if name.startswith("apps/architecture-portal/")}
+
+    def test_all_generated_portal_inventory_yields_a_receipt(self):
         base = self.commit_files({"base.txt": b"base\n"}, "base")
-        self.commit_files(self.GENERATED_CHANGES, "snapshot only")
+        changes = self.portal_generated_changes()
+        self.commit_files(changes, "snapshot only")
         head = self.git.text("rev-parse", "HEAD")
-        failure = self.assert_failure(base, head, "only excluded generated artifacts")
+        with self.assertRaises(producer.GeneratedOnlyInput) as raised:
+            self.build(base, head)
+        receipt = raised.exception.receipt
+        self.assertEqual(receipt["schema"], producer.GENERATED_ONLY_RECEIPT_SCHEMA)
+        self.assertEqual(receipt["status"], "generated-only")
+        self.assertEqual(set(receipt), {"schema", "status", "identity", "head_sha",
+                                        "excluded_generated", "receipt_sha256"})
+        self.assertEqual(set(receipt["identity"]), set(producer.IDENTITY_KEYS))
+        self.assertEqual(receipt["identity"]["head_sha"], head)
+        self.assertEqual(receipt["head_sha"], head)
+        excluded = receipt["excluded_generated"]
+        self.assertEqual(excluded["count"], len(changes))
+        self.assertEqual(excluded["paths"], sorted(changes))
+        self.assertEqual([entry["path"] for entry in excluded["entries"]], sorted(changes))
+        for entry in excluded["entries"]:
+            oid = self.git.text("rev-parse", f"{head}:{entry['path']}")
+            data = self.git.run("cat-file", "blob", oid)
+            self.assertEqual(entry["object_id"], oid)
+            self.assertEqual(entry["sha256"], hashlib.sha256(data).hexdigest())
+        unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+        self.assertEqual(receipt["receipt_sha256"],
+                         hashlib.sha256(producer.json_bytes(unsigned)).hexdigest())
+        self.assertTrue(producer.generated_only_excluded_valid(receipt["excluded_generated"]))
+
+    def test_generated_only_excluded_validation_is_closed(self):
+        base = self.commit_files({"base.txt": b"base\n"}, "base")
+        self.commit_files(self.portal_generated_changes(), "snapshot only")
+        head = self.git.text("rev-parse", "HEAD")
+        with self.assertRaises(producer.GeneratedOnlyInput) as raised:
+            self.build(base, head)
+        excluded = raised.exception.receipt["excluded_generated"]
+        mutations = []
+        tampered = copy.deepcopy(excluded)
+        tampered["entries"][0]["sha256"] = "not-a-digest"
+        mutations.append(tampered)
+        duplicated = copy.deepcopy(excluded)
+        duplicated["entries"].append(copy.deepcopy(duplicated["entries"][0]))
+        mutations.append(duplicated)
+        missing = copy.deepcopy(excluded)
+        missing["entries"] = missing["entries"][:-1]
+        mutations.append(missing)
+        extra_field = copy.deepcopy(excluded)
+        extra_field["entries"][0]["note"] = "x"
+        mutations.append(extra_field)
+        null_mismatch = copy.deepcopy(excluded)
+        null_mismatch["entries"][0]["sha256"] = None
+        mutations.append(null_mismatch)
+        non_portal = copy.deepcopy(excluded)
+        non_portal["paths"] = ["products/lmdj/generated/web-runtime-identity.mjs"]
+        mutations.append(non_portal)
+        for value in mutations:
+            with self.subTest(value=value["entries"]):
+                self.assertFalse(producer.generated_only_excluded_valid(value))
+
+    def test_non_portal_generated_only_inventory_is_the_typed_terminal_disposition(self):
+        base = self.commit_files({"base.txt": b"base\n"}, "base")
+        changes = {name: content for name, content in self.GENERATED_CHANGES.items()
+                   if not name.startswith("apps/architecture-portal/")}
+        self.commit_files(changes, "rendered only")
+        head = self.git.text("rev-parse", "HEAD")
+        with self.assertRaises(producer.GeneratedOnlyInventory) as raised:
+            self.build(base, head)
+        failure = raised.exception.result
+        self.assertEqual(failure["status"], "failed")
+        self.assertTrue(all("only excluded generated artifacts" in reason["reason"]
+                            for reason in failure["reasons"]))
+        self.assertEqual(
+            {path for item in failure["inventory"] for path in item["paths"]},
+            set(changes),
+        )
+
+    def test_mixed_portal_and_other_generated_only_inventory_is_terminal_not_receipt(self):
+        base = self.commit_files({"base.txt": b"base\n"}, "base")
+        self.commit_files(self.GENERATED_CHANGES, "snapshot and rendered")
+        head = self.git.text("rev-parse", "HEAD")
+        with self.assertRaises(producer.GeneratedOnlyInventory) as raised:
+            self.build(base, head)
+        self.assertNotIsInstance(raised.exception, producer.GeneratedOnlyInput)
+        failure = raised.exception.result
+        self.assertEqual(failure["status"], "failed")
+        self.assertTrue(all("only excluded generated artifacts" in reason["reason"]
+                            for reason in failure["reasons"]))
         self.assertEqual(
             {path for item in failure["inventory"] for path in item["paths"]},
             set(self.GENERATED_CHANGES),
+        )
+
+    def test_portal_boundary_crossing_rename_is_refused_before_any_receipt(self):
+        base = self.commit_files(
+            {"apps/architecture-portal/versioned_provenance/version-1.0.57.0.json": b"{}\n"}, "base")
+        (self.repo / "docs").mkdir()
+        (self.repo / "docs/witness.json").write_bytes(b"{}\n")
+        (self.repo / "apps/architecture-portal/versioned_provenance/version-1.0.57.0.json").unlink()
+        self.git.run("add", "-A")
+        head = self.git.commit("crossing rename")
+        failure = self.assert_failure(base, head, "crosses the generated-artifact boundary")
+        self.assertEqual(
+            {path for item in failure["inventory"] for path in item["paths"]},
+            {"apps/architecture-portal/versioned_provenance/version-1.0.57.0.json", "docs/witness.json"},
         )
 
     def test_generated_only_refusal_is_typed_and_no_other_refusal_is(self):

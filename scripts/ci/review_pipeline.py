@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import html
 import os
@@ -390,6 +391,19 @@ def collect_t2(directory):
     }
     try:
         document = input_producer.build_input(ROOT, identity)
+    except input_producer.GeneratedOnlyInput as error:
+        # Every excluded path is a Portal snapshot/provenance artifact: publish
+        # the control-plane receipt instead of a complete input, emit the
+        # generated-only outcome, and let the model steps stay gated off.  No
+        # collection-receipt.json (would impersonate a complete input) and no
+        # collection-failure.json (fence semantics) are written.
+        digest = input_producer.publish_generated_only(directory, error.receipt)
+        output_path = os.environ.get("GITHUB_OUTPUT")
+        if output_path:
+            with Path(output_path).open("a", encoding="utf-8") as output:
+                output.write("generated_only=true\n")
+                output.write("generated_receipt_sha256=" + digest + "\n")
+        return None
     except input_producer.GeneratedOnlyInventory as error:
         # Nothing at this head is reviewable: every changed path is a
         # deterministic rendering excluded from the bounded input (#1365). That
@@ -877,6 +891,68 @@ def publish(directory):
             save(directory / "repair-recheck.json", receipt)
 
 
+GENERATED_MARKER = re.compile(
+    r"^<!-- lmdj-review-generated-v1 ([\w.-]+/[\w.-]+) ([1-9][0-9]*) ([0-9a-f]{40}) "
+    r"([1-9][0-9]*) ([1-9][0-9]*) sha256=([0-9a-f]{64}) -->$", re.M)
+
+
+def publish_generated(directory):
+    """Publish the generated-only receipt COMMENT for a receipt-only REVIEW_DIR.
+
+    The receipt artifact and the workflow environment, not model output, fix
+    this publication; the same duplicate-rejection rule as ``publish()``
+    applies because concurrency cancellation can rerun the same head.
+    """
+    path = directory / "generated-only-receipt.json"
+    review_scope.require(path.is_file() and not path.is_symlink(),
+                         "generated-only receipt artifact is missing")
+    receipt = read(path)
+    review_scope.require(isinstance(receipt, dict) and set(receipt) == {
+        "schema", "status", "identity", "head_sha", "excluded_generated", "receipt_sha256"},
+        "generated-only receipt schema is not closed")
+    review_scope.require(receipt["schema"] == input_producer.GENERATED_ONLY_RECEIPT_SCHEMA
+                         and receipt["status"] == "generated-only", "unsupported generated-only receipt")
+    identity = receipt["identity"]
+    review_scope.require(isinstance(identity, dict) and set(identity) == set(input_producer.IDENTITY_KEYS),
+                         "generated-only receipt identity is not closed")
+    unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    review_scope.require(type(receipt["receipt_sha256"]) is str
+                         and receipt["receipt_sha256"] == hashlib.sha256(
+                             input_producer.json_bytes(unsigned)).hexdigest(),
+                         "generated-only receipt self-describing digest differs")
+    excluded = receipt["excluded_generated"]
+    review_scope.require(input_producer.generated_only_excluded_valid(excluded),
+                         "generated-only receipt excluded-path entries are not closed")
+    review_scope.require(identity["repository"] == os.environ["GITHUB_REPOSITORY"]
+        and identity["pull_request"] == int(os.environ["PR_NUMBER"])
+        and identity["head_sha"] == receipt["head_sha"] == os.environ["HEAD_SHA"]
+        and identity["run_id"] == str(int(os.environ["GITHUB_RUN_ID"]))
+        and identity["run_attempt"] == int(os.environ["GITHUB_RUN_ATTEMPT"])
+        and identity["control_sha"] == git("rev-parse", "HEAD").decode().strip(),
+        "artifact identity differs from publisher context")
+    repository, number, head = identity["repository"], identity["pull_request"], identity["head_sha"]
+    run, attempt = identity["run_id"], str(identity["run_attempt"])
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    authenticate({"repository": repository, "pr_number": number, "head_sha": head,
+                  "base_sha": identity["base_sha"], "control_sha": identity["control_sha"],
+                  "backend": "deterministic", "run_id": int(run), "run_attempt": identity["run_attempt"]})
+    marker = pr_review_target.generated_identity(repository, number, head, run, attempt, digest)
+    bot = api("/users/github-actions%5Bbot%5D")
+    duplicates = []
+    for posted in pages(f"/repos/{repository}/pulls/{number}/reviews"):
+        if posted.get("commit_id") != head or posted.get("user", {}).get("id") != bot.get("id"):
+            continue
+        for found in GENERATED_MARKER.findall(posted.get("body", "")):
+            if (found[0], int(found[1]), found[2]) == (repository, number, head) \
+                    and found[3] == run and found[4] == attempt:
+                duplicates.append(found)
+    review_scope.require(all(found[5] == digest for found in duplicates),
+                         "existing publication identity has different content")
+    if not duplicates:
+        pr_review_target.publish_generated(repository, number, head, run, attempt, digest)
+    return marker
+
+
 def http_refusal_evidence(error):
     """Bounded diagnostic hints, never a retry decision or raw response log."""
     endpoint = "unknown"
@@ -964,7 +1040,8 @@ def publisher_error_category(error):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["collect", "collect-t2", "capture", "finalize", "publish"])
+    parser.add_argument("command", choices=["collect", "collect-t2", "capture", "finalize", "publish",
+                                            "publish-generated"])
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--backend", choices=review_scope.V2_BACKENDS)
     args = parser.parse_args()
@@ -973,6 +1050,8 @@ def main():
             capture(args.directory, args.backend)
         elif args.command == "collect-t2":
             collect_t2(args.directory)
+        elif args.command == "publish-generated":
+            publish_generated(args.directory)
         elif args.command == "finalize":
             status = finalize(args.directory)
             if status != "reviewed":
@@ -994,7 +1073,7 @@ def main():
         else:
             globals()[args.command](args.directory)
     except Exception as error:
-        if args.command == "publish" and isinstance(error, review_scope.ReviewScopeError):
+        if args.command in ("publish", "publish-generated") and isinstance(error, review_scope.ReviewScopeError):
             # `publish` only, and its refusals are the ones nobody can
             # diagnose. Every `review_scope.require` in `publish()` carries an
             # authored message -- "artifact identity differs from publisher
@@ -1010,7 +1089,9 @@ def main():
             # exceptions can describe provider output. `publish` runs after the
             # model is gone -- it reads its own artifacts and the GitHub API --
             # so its refusals are authored literals about identity and
-            # inventory, with no provider text in scope to leak.
+            # inventory, with no provider text in scope to leak. The same holds
+            # for `publish-generated`, whose inputs are the receipt artifact
+            # and the GitHub API.
             print(str(error), file=sys.stderr)
             return 1
         if args.command == "collect-t2" and isinstance(
@@ -1025,7 +1106,7 @@ def main():
             # recorded cause (#1310: 2787-file change refused over MAX_FILES).
             print(str(error), file=sys.stderr)
             return 1
-        if args.command == "publish":
+        if args.command in ("publish", "publish-generated"):
             print("why: review pipeline operation failed "
                   f"(category={publisher_error_category(error)}); "
                   "remedy: inspect the failure category and reconcile the exact "

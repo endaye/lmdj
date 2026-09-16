@@ -1542,6 +1542,139 @@ class PipelineTests(unittest.TestCase):
             "strict_consumer_refusal": str(refused.exception),
         }, sort_keys=True))
 
+    def make_real_generated_only_repo(self):
+        """A real Git base/head whose complete inventory is Portal-class generated."""
+        temporary = tempfile.TemporaryDirectory(prefix="lmdj-pipeline-generated-only-")
+        self.addCleanup(temporary.cleanup)
+        repository = Path(temporary.name) / "repo"
+        repository.mkdir()
+
+        def git(*args):
+            result = subprocess.run(["git", *args], cwd=repository, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+            return result.stdout.decode().strip()
+
+        git("init", "-q")
+        (repository / "source.txt").write_text("old\n", encoding="utf-8")
+        git("add", ".")
+        git("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base")
+        base = git("rev-parse", "HEAD")
+        provenance = repository / "apps/architecture-portal/versioned_provenance"
+        provenance.mkdir(parents=True)
+        (provenance / "version-1.0.57.0.json").write_text("{}\n", encoding="utf-8")
+        git("add", ".")
+        git("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "head")
+        head = git("rev-parse", "HEAD")
+        return repository, base, head
+
+    def test_collect_t2_generated_only_publishes_receipt_and_exits_zero(self):
+        repository, base, head = self.make_real_generated_only_repo()
+        output = self.directory / "generated-only-output"
+        witness_output = self.directory / "generated-only-github-output"
+        target = {"review": "true", "head_sha": head, "base_sha": base, "body": "body"}
+        environment = {
+            "GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "1151", "HEAD_SHA": head,
+            "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_OUTPUT": str(witness_output),
+        }
+        with mock.patch.dict(os.environ, environment, clear=False), \
+                mock.patch.object(pipeline, "ROOT", repository), \
+                mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(pipeline.pr_review_target, "resolve_target", return_value=target), \
+                mock.patch.object(sys, "argv", ["review_pipeline.py", "collect-t2", "--directory", str(output)]):
+            self.assertEqual(pipeline.main(), 0)
+        self.assertEqual(sorted(item.name for item in output.iterdir()), ["generated-only-receipt.json"])
+        self.assertFalse((output / "collection-receipt.json").exists())
+        self.assertFalse((output / "collection-failure.json").exists())
+        receipt_bytes = (output / "generated-only-receipt.json").read_bytes()
+        receipt = pipeline.read(output / "generated-only-receipt.json")
+        self.assertEqual(receipt["schema"], pipeline.input_producer.GENERATED_ONLY_RECEIPT_SCHEMA)
+        self.assertEqual(receipt["status"], "generated-only")
+        self.assertEqual(receipt["identity"]["head_sha"], head)
+        self.assertEqual(receipt["excluded_generated"]["paths"],
+                         ["apps/architecture-portal/versioned_provenance/version-1.0.57.0.json"])
+        unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+        self.assertEqual(receipt["receipt_sha256"], hashlib.sha256(
+            pipeline.input_producer.json_bytes(unsigned)).hexdigest())
+        lines = witness_output.read_text().splitlines()
+        self.assertIn("generated_only=true", lines)
+        digest = hashlib.sha256(receipt_bytes).hexdigest()
+        self.assertIn("generated_receipt_sha256=" + digest, lines)
+
+    def publish_generated_with_doubles(self, *, prior=None, mutate=None):
+        """Run publish_generated with API doubles; `prior` is 'same' or 'conflict'.
+
+        `mutate` may rewrite the receipt before sealing so a test can isolate
+        one authentication layer.
+        """
+        repository, base, head = self.make_real_generated_only_repo()
+        output = Path(tempfile.mkdtemp(prefix="publish-generated-output-", dir=self.directory))
+        identity = {
+            "repository": "endaye/lmdj", "pull_request": 1151, "base_sha": base,
+            "head_sha": head, "control_sha": head, "run_id": "99", "run_attempt": 1,
+        }
+        receipt = {
+            "schema": pipeline.input_producer.GENERATED_ONLY_RECEIPT_SCHEMA,
+            "status": "generated-only",
+            "identity": identity,
+            "head_sha": head,
+            "excluded_generated": {
+                "count": 1,
+                "paths": ["apps/architecture-portal/versioned_provenance/version-1.0.57.0.json"],
+                "entries": [{"path": "apps/architecture-portal/versioned_provenance/version-1.0.57.0.json",
+                             "object_id": "1" * 40, "sha256": "2" * 64}],
+            },
+        }
+        if mutate is not None:
+            mutate(receipt)
+        receipt["receipt_sha256"] = hashlib.sha256(pipeline.input_producer.json_bytes(receipt)).hexdigest()
+        pipeline.save(output / "generated-only-receipt.json", receipt)
+        digest = hashlib.sha256((output / "generated-only-receipt.json").read_bytes()).hexdigest()
+        prior_digests = {"same": digest, "conflict": "0" * 64}
+        bodies = [] if prior is None else [pipeline.pr_review_target.generated_body(
+            "endaye/lmdj", 1151, head, "99", "1", prior_digests[prior])]
+        calls = []
+        environment = {"GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "1151", "HEAD_SHA": head,
+                       "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_TOKEN": "secret"}
+        bot = {"id": 20, "type": "Bot", "login": "github-actions[bot]"}
+        priors = [{"commit_id": head, "user": bot, "body": body} for body in bodies]
+        with mock.patch.dict(os.environ, environment), \
+                mock.patch.object(pipeline, "git", return_value=(head + "\n").encode()), \
+                mock.patch.object(pipeline, "authenticate", side_effect=lambda *a, **k: calls.append("authenticate")), \
+                mock.patch.object(pipeline, "api", return_value=bot), \
+                mock.patch.object(pipeline, "pages", return_value=priors), \
+                mock.patch.object(pipeline.pr_review_target, "publish_generated",
+                                  side_effect=lambda *args: calls.append(("publish", args))):
+            marker = pipeline.publish_generated(output)
+        return marker, calls, head, digest
+
+    def test_publish_generated_posts_the_marker_once(self):
+        marker, calls, head, digest = self.publish_generated_with_doubles()
+        self.assertEqual(marker, pipeline.pr_review_target.generated_identity(
+            "endaye/lmdj", 1151, head, "99", "1", digest))
+        self.assertEqual([c if isinstance(c, str) else c[0] for c in calls], ["authenticate", "publish"])
+
+    def test_publish_generated_skips_an_identical_duplicate(self):
+        marker, calls, head, digest = self.publish_generated_with_doubles(prior="same")
+        self.assertEqual(marker, pipeline.pr_review_target.generated_identity(
+            "endaye/lmdj", 1151, head, "99", "1", digest))
+        self.assertNotIn("publish", [c if isinstance(c, str) else c[0] for c in calls])
+
+    def test_publish_generated_refuses_a_conflicting_duplicate(self):
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "different content"):
+            self.publish_generated_with_doubles(prior="conflict")
+
+    def test_publish_generated_refuses_unclosed_entries(self):
+        for failure in ("duplicate", "tampered"):
+            with self.subTest(failure=failure):
+                def mutate(receipt, failure=failure):
+                    entries = receipt["excluded_generated"]["entries"]
+                    if failure == "duplicate":
+                        entries.append(dict(entries[0]))
+                    else:
+                        entries[0]["sha256"] = "not-a-digest"
+                with self.assertRaisesRegex(review_scope.ReviewScopeError, "entries are not closed"):
+                    self.publish_generated_with_doubles(mutate=mutate)
+
     def test_collect_t2_target_change_before_publication_fails_closed(self):
         repository, base, head = self.make_real_t2_repo()
         output = self.directory / "changed-target-output"
