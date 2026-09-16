@@ -1441,8 +1441,12 @@ function Workspace({
             <PhysicalControls
               activeMode={activeMode}
               activeBank={state.activeBank}
-              sequenceEnabled={state.project.phase === "ready" &&
-                state.project.current !== null}
+              // The physical keys gate on the same reachability the mode rail
+              // uses. A weaker condition mounted an operable-looking Sequence
+              // editor whose every action silently returned without a Sequence
+              // capability. Perform keeps the looser gate on purpose: its
+              // touch workspace has a placeholder that names what is missing.
+              sequenceEnabled={sequenceEnabled}
               performEnabled={state.project.phase === "ready" &&
                 state.project.current !== null}
               onSelectMode={selectMode}

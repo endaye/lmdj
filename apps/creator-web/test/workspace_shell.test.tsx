@@ -2270,15 +2270,50 @@ test("hardware Project keeps list/import/open in touch and omits New/Save As", a
   expect(within(touch).queryByRole("button", {name: /^Open$/})).toBeNull();
 });
 
-test("keeps pad identity and mounts Project Sample Sequence in the hardware touch screen", async () => {
+test("gates the hardware Sequence key on the same reachability as the mode rail", async () => {
   const user = userEvent.setup();
   render(<App initialState={ready} />);
+
+  // Same state, same question, in both layouts: is Sequence reachable? The
+  // workspace rail answers no and says why, because this Project has no
+  // Sequence capability behind it.
+  const rail = screen.getByRole("button", {name: /^Sequence/});
+  expect(rail.getAttribute("aria-label"))
+    .toBe("Sequence — open a playable Project first");
+  expect(rail.hasAttribute("disabled")).toBe(true);
+
+  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
+  const key = screen.getByRole("button", {name: /^Sequence/});
+  expect(key.getAttribute("aria-label")).toBe(rail.getAttribute("aria-label"));
+  expect(key.hasAttribute("disabled")).toBe(true);
+
+  // The defect this gate catches: an enabled key mounted the full editor, so
+  // Apply BPM, Apply Swing and Create Pattern looked operable while every one
+  // of them hit `if (!isSequenceSession(session)) return` and reported
+  // nothing at all.
+  const touch = screen.getByRole("region", {name: "Touch workspace"});
+  expect(within(touch).queryByRole("region", {name: "Sequence settings"}))
+    .toBeNull();
+  expect(within(touch).queryByRole("button", {name: "Apply BPM"})).toBeNull();
+});
+
+test("keeps pad identity and mounts Project Sample Sequence in the hardware touch screen", async () => {
+  const user = userEvent.setup();
+  // Sequence is only reachable behind a Sequence capability, in this layout
+  // exactly as in the mode rail, so this journey has to supply one to reach
+  // the Sequence leg at all.
+  const fixture = mutableSampleRuntimeFixture();
+  const session = Object.assign(fixture.session, sequenceSessionStubs());
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await user.click(screen.getByRole("button", {name: "Hardware layout"}));
 
   const padMatrix = () => screen.getByRole("region", {name: "Pad matrix"});
   const touch = () => screen.getByRole("region", {name: "Touch workspace"});
+  // This fixture's snapshot assigns A1, so the identity carried across every
+  // mode switch below is slot, assignment and key hint together.
   const padA1 = () => within(padMatrix()).getByRole("button", {
-    name: "Pad A1 — empty — Key Q",
+    name: "Pad A1 — assigned — Key Q",
   });
   expect(padA1()).toBeTruthy();
   expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
