@@ -17,6 +17,7 @@ from tools.release.carriers import (  # noqa: E402
     enroll_final,
     enroll_intent,
     enroll_promotion,
+    enroll_verification,
     enrolled_candidate_timestamp,
     read_candidate_identity,
     read_prepared_plan,
@@ -1911,6 +1912,94 @@ class PublishedRecordEnrollmentTest(unittest.TestCase):
         enrolled = json.loads(
             (self.root / "evidence-pr" / "pr-state.json").read_text())
         self.assertEqual(enrolled["spec"]["tag"], "lmdj-v" + BUILD)
+
+
+class VerificationEnrollmentTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        # The verification carrier's own fixture environment: real batch
+        # journal module, recording consumer of the production type.
+        import release_verification_carrier_test as verification_fixture
+
+        self.fixture = verification_fixture.BatchVerificationTest()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.witness = verification_fixture.WITNESS
+
+    def write_witness(self):
+        (self.root / "candidate-transition.json").write_text(json.dumps(
+            candidate_document(
+                witness_merge={"merge": {"merge_sha": self.witness}})))
+
+    def step(self, **overrides):
+        arguments = dict(candidate_root=self.root,
+                         journal_load=self.fixture.journal.load,
+                         consumer=self.fixture.consumer,
+                         fresh_receipts=lambda _state: dict(
+                             witness_revision=self.witness))
+        arguments.update(overrides)
+        return enroll_verification(**arguments)
+
+    def operation(self):
+        return {"step": "verification", "operation_id": DIGEST,
+                "status": "intent", "evidence": None}
+
+    def test_the_step_is_observe_only(self):
+        # The batch is produced by main's own CI when the witness merge lands,
+        # never by this step; nothing here may look self-driving.
+        self.assertFalse(callable(getattr(self.step(), "advance", None)))
+
+    def test_pending_until_the_witness_merge_is_verified(self):
+        step = self.step()
+        new_mode = state(request=request(mode="new", requested_tag=None))
+        self.assertEqual(step.observe(new_mode, self.operation()).status, "pending")
+        # The cut is merged but its witness merge is not verified yet.
+        (self.root / "candidate-transition.json").write_text(
+            json.dumps(candidate_document()))
+        self.assertEqual(step.observe(new_mode, self.operation()).status, "pending")
+        # A tag-mode request has no candidate state; the step waits, matching
+        # the managed candidate transition's own tag-mode refusal.
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+
+    def test_an_invalid_request_digest_fails_closed(self):
+        self.write_witness()
+        with self.assertRaises(JournalError):
+            self.step().observe(state(request_digest="short"), self.operation())
+
+    def test_non_callable_or_wrong_type_dependencies_are_refused(self):
+        from tools.release.verification import VerificationError
+
+        with self.assertRaises(JournalError):
+            self.step(journal_load=None)
+        with self.assertRaises(JournalError):
+            self.step(fresh_receipts=None)
+        self.write_witness()
+        with self.assertRaises(VerificationError):
+            self.step(consumer=object()).observe(state(), self.operation())
+
+    def test_delegation_to_the_real_batch_verification(self):
+        self.write_witness()
+        step = self.step()
+        # No batch result yet: the real carrier's honest pending.
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        self.assertIsNone(self.fixture.consumer.verified)
+        # The terminal full-batch result for the exact witness verifies, and
+        # the evidence is the reference the intent step later recovers.
+        self.fixture.journal.append(self.fixture.result_event())
+        observed = step.observe(state(), self.operation())
+        self.assertEqual(observed.status, "verified")
+        self.assertEqual(observed.evidence["reference"],
+                         f"batch-result:4242:{self.witness}")
+        self.assertEqual(self.fixture.consumer.verified, (4242, self.witness))
+        # The candidate state read is request-bound: another request's
+        # allocation cannot stand in for this one.
+        (self.root / "candidate-transition.json").write_text(json.dumps(
+            candidate_document(digest="9" * 64,
+                               witness_merge={"merge": {"merge_sha": self.witness}})))
+        with self.assertRaises(JournalError):
+            step.observe(state(), self.operation())
 
 
 if __name__ == "__main__":

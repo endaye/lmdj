@@ -474,7 +474,13 @@ fail-closed，effect 验证复用 `DeploymentEffect`（对 run 留存证据逐�
 持久证据提交与 Task 验证后构建具体 `EvidencePrTransition`，类型不符即拒绝。driver 的
 `publication_pr` 槽位只接受该具体类型，故惰性包装走 backend carrier 路径，其 `before_write`
 护栏签名与受管槽位一致；Release 投影校验（`checked_release_id`）由 final 与该步共享。
-`prepared` / `tag` 与 `verification` 的登记录入仍未完成，`release_carriers` 因此继续拒绝执行。
+`verification` 步已登记为只读观察：批处理由 main 自身 CI 在见证合并落main后产生，该步不触发也不
+写任何东西，故不暴露 `advance`；candidate 分配未就绪或见证合并未核验时报 `pending`，随后委托真实
+`BatchVerification`（认证批处理 journal + policy 钉住的证据消费器 + 受信候选回执），证据即
+`batch-result:<run_id>:<witness>` 引用。candidate 状态读取按请求绑定，他人分配不可顶替。
+entry_gates 另补 `batch_evidence_consumer` 组装：repository/workflow 身份与 producer pin 只取自
+钉住 policy 的 `batch_evidence_source`。
+`prepared` 与 `tag` 的登记录入仍未完成（#1404 待裁决），`release_carriers` 因此继续拒绝执行。
 
 带 `changelog` 的 reviewed intent 现已接通 prepare / Draft / published 验证：正文
 进入 plan 摘要，prepare 重验真实 Git 范围，恢复时检查本地 notes，Draft 与公开

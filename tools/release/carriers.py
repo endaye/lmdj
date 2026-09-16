@@ -1113,3 +1113,42 @@ def enroll_published_record(*, root, candidate_root, repository_id, ledger,
         return adapter
 
     return RecoveredStep("published_record", recover, drives=True)
+
+
+def enroll_verification(*, candidate_root, journal_load, consumer,
+                        fresh_receipts):
+    """The `verification` step: the exact-target full batch must certify it.
+
+    Observe-only: the batch is produced by main's own CI when the witness
+    merge lands, never by this step, so the wrapper exposes no `advance`.
+    `BatchVerification` carries no spec — its inputs are the authenticated
+    batch journal (`journal_load`), the policy-pinned evidence consumer, and
+    the trusted candidate receipts (`fresh_receipts`) — so the wrapper's
+    recovery only decides whether anything exists to verify: no allocation,
+    or a cut merged without its verified witness merge, is `pending` (never
+    `absent`), and the delegate then reports its own honest `pending` until
+    the batch result lands. A `tag`-mode request has no candidate state, so
+    the step waits, matching the managed candidate transition's own refusal.
+    """
+    from .verification import BatchVerification
+
+    for name, factory in (("journal_load", journal_load),
+                          ("fresh_receipts", fresh_receipts)):
+        if not callable(factory):
+            _fail(f"requires a callable {name}")
+
+    def recover(state, operation):
+        if type(state) is not dict or type(state.get("request")) is not dict:
+            _fail("requires the running request state")
+        digest = state.get("request_digest")
+        if type(digest) is not str or _DIGEST.fullmatch(digest) is None:
+            _fail("the running request carries no valid digest")
+        allocated = read_candidate_identity(candidate_root, digest)
+        if allocated is None or allocated["witness_revision"] is None:
+            # Nothing certified exists to verify a batch against yet.
+            return None
+        # BatchVerification itself enforces the concrete consumer type.
+        return BatchVerification(journal_load=journal_load, consumer=consumer,
+                                 fresh_receipts=fresh_receipts)
+
+    return RecoveredStep("verification", recover)
