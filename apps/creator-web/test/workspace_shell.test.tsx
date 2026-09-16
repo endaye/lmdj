@@ -2210,8 +2210,16 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
   expect(screen.getByTestId("overview-display").textContent ?? "").toContain("PERFORM");
   expect(screen.getByTestId("perform-overview").textContent ?? "")
     .toMatch(/Pictured LP\/HP\/BP are not Host controls/);
+  // D04's upper screen is read-only: real Bank/Quantize facts, never the
+  // pictured output meters, bar/beat counter or a control of any kind.
+  expect(screen.getByTestId("perform-overview").textContent ?? "")
+    .toMatch(/Bank.*A.*Quantize/s);
+  expect(screen.getByTestId("perform-overview").textContent ?? "")
+    .not.toMatch(/PEAK|NO CLIP|BEAT/);
   expect(within(screen.getByRole("region", {name: "Overview display"}))
     .queryByRole("slider")).toBeNull();
+  expect(within(screen.getByRole("region", {name: "Overview display"}))
+    .queryByRole("button")).toBeNull();
   expect(padA1()).toBeTruthy();
   expect(within(touch()).getByRole("heading", {name: "Perform"})).toBeTruthy();
   expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();

@@ -197,8 +197,20 @@ export function PerformSurface(props: PerformSurfaceProps) {
       ? state.captureStatus.error.message
       : null;
   const performing = ["recording", "flushing"].includes(state.recording.phase);
+  // D04 heads the touch workspace with the switch cue. NEXT BAR is pictured
+  // text; the Host only knows whether a launch is queued or acknowledged.
+  const cue = state.pendingLaunch !== null
+    ? `Slot ${state.pendingLaunch.patternSlot + 1} queued`
+    : state.lastLaunchAck !== null
+      ? `Slot ${state.lastLaunchAck.patternSlot + 1} live`
+      : "No Pattern queued";
   return (
     <main className="perform-surface" aria-label="Perform">
+      <header className="perform-live-header">
+        <p className="perform-live-title">LIVE CONTROLS</p>
+        <output className="perform-live-cue"
+          aria-label="Pattern launch cue">{cue}</output>
+      </header>
       <PatternLaunchStrip slots={props.project.patternSlots}
         patterns={props.project.patterns}
         pending={state.pendingLaunch} lastAck={state.lastLaunchAck} bank={props.bank}

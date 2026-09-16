@@ -313,11 +313,27 @@ test("renders Pattern, fixed FX chain, one global HOLD, then the existing Pad su
   expect(hold.compareDocumentPosition(pads) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   expect(within(surface).getAllByRole("button", {name: "HOLD"})).toHaveLength(1);
   expect(within(fx).getAllByRole("slider").map((slider) => slider.getAttribute("aria-label")))
-    .toEqual(["Filter", "Delay", "Reverb", "Stutter", "Gate", "Reverse", "Crush", "Cutter"]);
-  for (const pictured of ["LP", "HP", "BP"]) {
+    .toEqual(["Filter", "Delay"]);
+  for (const pictured of ["LP", "HP", "BP", "MASTER", "MUTE", "SOLO"]) {
     expect(within(surface).queryByRole("slider", {name: pictured})).toBeNull();
     expect(within(surface).queryByRole("button", {name: pictured})).toBeNull();
   }
+});
+
+test("keeps the other six confirmed FX behind FX / MORE", async () => {
+  renderSurface();
+  const fx = screen.getByRole("region", {name: "Performance FX"});
+  const more = within(fx).getByRole("button", {name: "FX / MORE"});
+  expect(more.getAttribute("aria-expanded")).toBe("false");
+  expect(within(fx).queryByRole("slider", {name: "Reverb"})).toBeNull();
+
+  await userEvent.click(more);
+  expect(more.getAttribute("aria-expanded")).toBe("true");
+  expect(within(fx).getAllByRole("slider").map((slider) => slider.getAttribute("aria-label")))
+    .toEqual(["Filter", "Delay", "Reverb", "Stutter", "Gate", "Reverse", "Crush", "Cutter"]);
+
+  await userEvent.click(more);
+  expect(within(fx).queryByRole("slider", {name: "Cutter"})).toBeNull();
 });
 
 test("switches Bank synchronously without any Core request", async () => {
@@ -542,6 +558,26 @@ test("forwards every FX raw value with exact Core keys and no Host clock or sour
   }
 });
 
+test("releases an open FX gesture when FX / MORE collapses it away", async () => {
+  const {fixture} = renderSurface();
+  await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
+  const more = screen.getByRole("button", {name: "FX / MORE"});
+  await userEvent.click(more);
+  const reverb = screen.getByRole("slider", {name: "Reverb"});
+  fireEvent.pointerDown(reverb, {pointerId: 5});
+  fireEvent.change(reverb, {target: {value: "700"}});
+  await waitFor(() => expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(2));
+
+  // Collapsing unmounts the input, so the gesture cannot be closed by a later
+  // pointerup on it; the bank has to close it or Core keeps it open forever.
+  await userEvent.click(more);
+  await waitFor(() => expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(3));
+  const requests = fixture.runtime.calls.raw.mock.calls.map(([request]) => request);
+  expect(requests.map(({event}) => event.kind))
+    .toEqual(["fx_engage", "fx_move", "fx_release"]);
+  expect(requests[2]?.event).toMatchObject({fx: "reverb"});
+});
+
 test("closes active gestures on stop and rejects their releases in the next recording", async () => {
   const fixture = controllerFixture();
   renderSurface(fixture);
@@ -638,6 +674,31 @@ test("keeps Pattern launch pending until query reports the actual acknowledgemen
     lastLaunchAck: {requestId: "event-1", patternSlot: 0, effectiveTick: 1920}}));
   await waitFor(() => expect(screen.getByRole("button", {name: "Launch Pattern 1"})
     .getAttribute("aria-busy")).toBe("false"));
+});
+
+test("says queued and playing in words, not only through the launch attribute", async () => {
+  const fixture = controllerFixture();
+  const query = fixture.runtime.session.queryPerformanceRecordingStatus as ReturnType<typeof vi.fn>;
+  query.mockResolvedValueOnce(authority({
+    pendingLaunch: {requestId: "event-1", patternSlot: 0, targetTick: 1920, claimed: false},
+  }));
+  renderSurface(fixture);
+  const slot = () => screen.getByRole("button", {name: "Launch Pattern 1"});
+  const cue = () => screen.getByLabelText("Pattern launch cue").textContent;
+  expect(slot().textContent).not.toMatch(/Queued|Playing/);
+  expect(cue()).toBe("No Pattern queued");
+
+  await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
+  await userEvent.click(slot());
+  await waitFor(() => expect(slot().textContent).toMatch(/Queued/));
+  expect(slot().getAttribute("data-launch")).toBe("pending");
+  expect(cue()).toBe("Slot 1 queued");
+
+  query.mockResolvedValueOnce(authority({journalRevision: 2,
+    lastLaunchAck: {requestId: "event-1", patternSlot: 0, effectiveTick: 1920}}));
+  await waitFor(() => expect(slot().textContent).toMatch(/Playing/));
+  expect(slot().getAttribute("data-launch")).toBe("acknowledged");
+  expect(cue()).toBe("Slot 1 live");
 });
 
 test("does not invent pending UI when the first authority query already has the ack", async () => {

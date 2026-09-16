@@ -513,11 +513,40 @@ button:disabled { color: #737b87; }
 }
 .perform-project-summary { margin: 0; }
 .perform-project-summary div { max-width: 12rem; }
+.perform-live-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.perform-live-title { margin: 0; letter-spacing: .08em; }
+.perform-live-cue {
+  color: #b7ffc5;
+  font-variant-numeric: tabular-nums;
+}
+.perform-pattern-slots button {
+  display: grid;
+  gap: .15rem;
+  align-content: center;
+  justify-items: start;
+  text-align: left;
+}
+.perform-slot-index { font-variant-numeric: tabular-nums; }
+.perform-slot-state { color: #9da6b4; }
 .perform-fx {
   display: grid;
-  grid-template-columns: repeat(8, minmax(3.5rem, 1fr));
-  min-height: 15rem;
+  gap: .75rem;
   padding: 1rem;
+}
+.perform-live-faders {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(3.5rem, 1fr));
+  gap: .75rem;
+}
+.perform-fx-more-bank {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(3.5rem, 1fr));
+  gap: .75rem;
 }
 .perform-fx label { display: grid; justify-items: center; gap: .5rem; }
 .perform-fx input[type="range"] {
@@ -1021,3 +1050,151 @@ button:disabled { color: #737b87; }
   letter-spacing: .04em;
 }
 .hardware-workspace .sequence-touch-workspace h1 { font-size: 16px; }
+
+/* D04 Perform. The pictured MASTER fader, LP/HP/BP filter type, MUTE/SOLO and
+   the output meters have no Host action, so the skin covers only Launch, the
+   two named live faders, FX / MORE, HOLD and the existing panels. */
+.hardware-workspace .perform-live-header {
+  align-items: baseline;
+}
+.hardware-workspace .perform-live-title {
+  font-size: 16px;
+  letter-spacing: .08em;
+  color: #f1f2e9;
+}
+.hardware-workspace .perform-live-cue {
+  color: #ddf478;
+  font-size: 10px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.hardware-workspace .perform-patterns,
+.hardware-workspace .perform-fx,
+.hardware-workspace .perform-recording,
+.hardware-workspace .perform-replay,
+.hardware-workspace .perform-surface > [aria-label="Perform instrument"] {
+  border: 0;
+  border-radius: 10px;
+  background: #202321;
+}
+.hardware-workspace .perform-patterns,
+.hardware-workspace .perform-fx { padding: 12px; gap: 12px; }
+.hardware-workspace .perform-bank button {
+  min-height: 32px;
+  min-width: 40px;
+  border: 0;
+  border-radius: 8px;
+  background: #343a34;
+  color: #f1f2e9;
+}
+.hardware-workspace .perform-bank button[aria-pressed="true"] {
+  background: #ddf478;
+  color: #202321;
+}
+/* Section blocks: the acknowledged slot is filled, the queued slot outlined.
+   .perform-slot-state repeats both in words so colour is never the only cue. */
+.hardware-workspace .perform-pattern-slots {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.hardware-workspace .perform-pattern-slots button {
+  min-height: 56px;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: #343a34;
+  color: #f1f2e9;
+  box-shadow: none;
+}
+.hardware-workspace .perform-pattern-slots button[data-launch="pending"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px #ddf478;
+}
+.hardware-workspace .perform-pattern-slots button[data-launch="acknowledged"] {
+  background: #ddf478;
+  color: #202321;
+  box-shadow: none;
+}
+.hardware-workspace .perform-slot-index {
+  color: #adb6aa;
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+.hardware-workspace .perform-slot-id { font-size: 12px; }
+.hardware-workspace .perform-slot-state {
+  font-size: 9px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: #adb6aa;
+}
+.hardware-workspace .perform-pattern-slots
+  button[data-launch="pending"] .perform-slot-state { color: #ddf478; }
+.hardware-workspace .perform-pattern-slots
+  button[data-launch="acknowledged"] .perform-slot-index,
+.hardware-workspace .perform-pattern-slots
+  button[data-launch="acknowledged"] .perform-slot-state { color: #202321; }
+.hardware-workspace .perform-fader {
+  gap: 4px;
+  padding: 12px 8px;
+  border-radius: 10px;
+  background: #343a34;
+}
+.hardware-workspace .perform-fader-name {
+  color: #adb6aa;
+  font-size: 10px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.hardware-workspace .perform-fader-value {
+  color: #ddf478;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.hardware-workspace .perform-fader input[type="range"] {
+  block-size: 120px;
+  accent-color: #ddf478;
+}
+.hardware-workspace .perform-fx-more {
+  min-height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: #343a34;
+  color: #f1f2e9;
+  letter-spacing: .06em;
+}
+.hardware-workspace .perform-fx-more[aria-expanded="true"] {
+  background: #9ec9f5;
+  color: #202321;
+}
+.hardware-workspace .perform-fx-more-bank {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #343a34;
+}
+.hardware-workspace .perform-fx-more-bank span {
+  color: #adb6aa;
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+.hardware-workspace .perform-fx-more-bank input[type="range"] {
+  block-size: 80px;
+  accent-color: #9ec9f5;
+}
+.hardware-workspace .perform-hold {
+  min-height: 40px;
+  border: 0;
+  border-radius: 8px;
+  background: #343a34;
+  color: #f1f2e9;
+}
+.hardware-workspace .perform-hold[aria-pressed="true"] {
+  background: #ddf478;
+  color: #202321;
+}
+.hardware-workspace .perform-recording button,
+.hardware-workspace .perform-replay button {
+  min-height: 40px;
+  border-radius: 8px;
+}
