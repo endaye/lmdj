@@ -196,3 +196,21 @@ def merged_gate(*, git):
             "reference": f"merged:{kind}:{merge_sha}"})
 
     return verify_merged
+
+
+def batch_evidence_consumer(*, api_get, git_root, policy):
+    """The batch evidence consumer bound to the reviewed policy source.
+
+    Repository/workflow identities and the producer pin come only from the
+    pinned policy's `batch_evidence_source` — never from a candidate
+    reference. A policy without one fails closed.
+    """
+    from .batch_evidence import BatchEvidenceConsumer
+
+    source = policy.batch_evidence_source
+    if source is None:
+        _fail("the pinned policy has no batch evidence source")
+    return BatchEvidenceConsumer(
+        api_get=api_get, git_root=git_root, repository="endaye/lmdj",
+        repository_id=source["repository_id"], workflow_id=source["workflow_id"],
+        producer_revision=source["producer_revision"])

@@ -352,5 +352,30 @@ class ReviewGateTest(unittest.TestCase):
             gate("candidate", {"head_sha": self.head}, {"number": -1})
 
 
+class BatchEvidenceConsumerTest(unittest.TestCase):
+    def test_the_consumer_binds_only_the_reviewed_policy_source(self):
+        from tools.release.entry_gates import batch_evidence_consumer
+        from tools.release.model import load_policy
+
+        policy = load_policy(ROOT / "tools/release/policy.json")
+        source = policy.batch_evidence_source
+        consumer = batch_evidence_consumer(api_get=lambda *a, **k: None,
+                                           git_root=ROOT, policy=policy)
+        self.assertEqual((consumer.repository_id, consumer.workflow_id,
+                          consumer.producer_revision),
+                         (source["repository_id"], source["workflow_id"],
+                          source["producer_revision"]))
+
+    def test_a_policy_without_a_batch_source_fails_closed(self):
+        from tools.release.entry_gates import batch_evidence_consumer
+
+        class NoSource:
+            batch_evidence_source = None
+
+        with self.assertRaises(EntryGateError):
+            batch_evidence_consumer(api_get=lambda *a, **k: None,
+                                    git_root=ROOT, policy=NoSource())
+
+
 if __name__ == "__main__":
     unittest.main()
