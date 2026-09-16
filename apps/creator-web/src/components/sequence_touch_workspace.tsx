@@ -38,7 +38,7 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
     setSwing(project.sequenceSettings.swingPercent);
   }, [project.sequenceSettings.swingPercent]);
   return (
-    <section className="sequence-touch-workspace" aria-label="Sequence">
+    <section className="sequence-touch-workspace" aria-label="Sequence editor">
       <header>
         <h1>Sequence</h1>
         <p>
