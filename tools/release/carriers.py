@@ -223,21 +223,33 @@ def read_prepared_plan(root, tag):
     """The plan digest `prepare` wrote for this tag, or None before it ran.
 
     The path is the one `prepared_step` reads back from, so the enrollment and
-    the step agree on where the plan lives. A present-but-unreadable or
-    malformed digest fails closed: only an absent file means "not prepared yet".
+    the step agree on where the plan lives. Only an absent file means "not
+    prepared yet"; the digest is also checked against the plan document bytes it
+    names, so a swapped digest file cannot silently redefine what a later step
+    binds. Which *reviewed* digest authorizes the plan is still open (#1404):
+    no ledger row records it yet.
     """
     from . import prepared_step
 
     output = Path(root) / prepared_step.output_relative(tag)
     path = output / prepared_step._PLAN_DIGEST
-    if not path.is_file():
-        return None
     try:
         digest = path.read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        return None
     except (OSError, UnicodeDecodeError):
         _fail("the prepared plan digest is unreadable")
     if _DIGEST.fullmatch(digest) is None:
         _fail("the prepared plan digest is malformed")
+    try:
+        document = (output / prepared_step._PLAN_DOCUMENT).read_bytes()
+    except FileNotFoundError:
+        _fail("the prepared output records a digest without its plan document")
+    except OSError:
+        _fail("the prepared plan document is unreadable")
+    import hashlib
+    if hashlib.sha256(document).hexdigest() != digest:
+        _fail("the prepared plan digest does not match its document")
     return digest
 
 
