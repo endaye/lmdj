@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-15
     occurrence: https://github.com/endaye/lmdj/issues/1371
     observed_by: Claude Opus 5
+  - date: 2026-09-16
+    occurrence: https://github.com/endaye/lmdj/issues/1423
+    observed_by: Kimi (agent)
 exit: gate:tests/build/ci_pr_agent_input_test.py
 ---
 
@@ -69,3 +72,17 @@ a non-zero exit for this case: it made every witness PR permanently red on a
 condition the PR could not satisfy (#1371). Equally, do not let it grant
 anything — the run publishes no review, so `scripts/ci/review_wait.py` still
 sees no current-head evidence and stays pending until an owner attests.
+
+The exclusion has to be one canonical basis across the whole lane, not only
+inside the collector. When #1365 made the T2 producer's `context.json` exclude
+generated paths, the publisher still re-derived the changed-path inventory
+from the full three-dot Git inventory, so every mixed reviewable+generated PR
+failed publication with "artifact changed inventory mismatch" (#1423). Every
+writer of the reviewable inventory (T2 producer and fallback `collect()`) and
+the publisher's re-derivation must apply the same filter —
+`pr_agent_input.reviewable_inventory` — and
+`tests/build/ci_review_pipeline_test.py`
+(`test_publish_derives_the_same_reviewable_inventory_from_git`,
+`test_publish_still_rejects_a_genuinely_divergent_inventory`,
+`test_legacy_collect_excludes_generated_artifacts_from_the_context_inventory`)
+gates both directions.
