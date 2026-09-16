@@ -316,6 +316,10 @@ function Workspace({
     );
   }
 
+  // The workspace shell and its stored layout preference are gone; clear the
+  // stale key once so no browser keeps a value nothing reads.
+  useEffect(() => { retireCreatorLayoutPreference(); }, []);
+
   useEffect(() => {
     const project = state.project.current;
     if (project === null || sequence.selectedPatternId !== null) return;
@@ -1374,7 +1378,6 @@ function Workspace({
   // recording is a legacy Sequence session or the global Pattern transport.
   const trimOverlayOpen = sequence.phase === "trim-overlay" ||
     captureTransportOverlay;
-  useEffect(() => { retireCreatorLayoutPreference(); }, []);
   const applyMode = (mode: CreatorMode) => {
     setActiveMode(mode);
   };
