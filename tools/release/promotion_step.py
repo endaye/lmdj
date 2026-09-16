@@ -10,10 +10,15 @@ Observation allocates and executes nothing.
 
 from copy import deepcopy
 from pathlib import Path
+import re
 
+from .candidate_pr_sequence import CandidatePrSequence
+from .evidence_branch import PublicationBranch
+from .github_api import GitHubClient
 from .intent import _LEDGER_RELATIVE
 from .model import canonical_sha256
 from .orchestration_driver import Observation
+from .witness_pr import WitnessPullRequest
 
 
 class PromotionStepError(ValueError):
@@ -255,3 +260,97 @@ class PromotionCommit:
         head = self._git("rev-parse", "HEAD").decode().strip()
         tree = self._git("rev-parse", "HEAD^{tree}").decode().strip()
         return head, tree
+
+
+class PromotionBranch(PublicationBranch):
+    _validate_spec = staticmethod(validate_spec)
+    _document = staticmethod(pr_document)
+
+    def __init__(self, root, repository, *, token, authorize):
+        super().__init__(root, repository, token=token, authorize=authorize)
+        self.api = GitHubClient(token=token).witness_pr_request
+
+
+class PromotionPullRequest(WitnessPullRequest):
+    _validate_spec = staticmethod(validate_spec)
+    _document = staticmethod(pr_document)
+
+
+class PromotionPrSequence(CandidatePrSequence):
+    _validate_spec = staticmethod(validate_spec)
+    _document = staticmethod(pr_document)
+    _branch_type, _pr_type = PromotionBranch, PromotionPullRequest
+    _state_file = "promotion-pr-sequence.json"
+    _schema = "lmdj.promotion-pr-sequence.v1"
+
+
+class PromotionCarrier:
+    """Driver-facing carrier: the owned commit plus the reviewed PR sequence.
+
+    Same contract as the intent and changelog carriers: the PR spec is
+    rebuilt from the durable commit on every observation, a verified merge
+    must expose a real evidence digest, and observation allocates and
+    executes nothing.
+    """
+
+    def __init__(self, *, commit, sequence):
+        if type(commit) is not PromotionCommit \
+                or type(sequence) is not PromotionPrSequence:
+            _fail("requires the concrete promotion commit and promotion PR "
+                  "sequence")
+        self.commit, self.sequence = commit, sequence
+        self._spec = None
+
+    def _spec_for(self, head_sha, tree_sha):
+        return dict(deepcopy(self.commit.spec), head_sha=head_sha,
+                    tree_sha=tree_sha)
+
+    def _recovered_spec(self):
+        """Rebuild the PR spec from the durable commit, on every observation."""
+        if not self.commit.root.exists():
+            return None
+        head = self.commit.completed_head()
+        if head is None:
+            return None
+        tree = self.commit._git("rev-parse", "HEAD^{tree}").decode().strip()
+        return self._spec_for(head, tree)
+
+    def _verified_evidence(self, merge):
+        """A verified merge must expose a real digest; never fabricate one."""
+        evidence = merge.get("evidence")
+        digest = evidence.get("sha256") if isinstance(evidence, dict) else None
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            _fail("verified merge exposes no evidence digest")
+        number = merge.get("merge", {}).get("number", "?")
+        return {"sha256": digest, "reference": "promotion-pr:" + str(number)}
+
+    def observe(self, state, operation):
+        recovered = self._recovered_spec()
+        if recovered is not None:
+            self._spec = recovered
+        if self._spec is None:
+            return Observation("pending")
+        result = self.sequence.observe(self._spec, initialize=False)
+        if result["status"] == "merged":
+            merge = self.sequence.pr.observe_merge(self._spec)
+            if merge.get("status") != "verified":
+                return Observation("unknown")
+            return Observation("verified", self._verified_evidence(merge))
+        if result["status"] in ("absent", "pending"):
+            return Observation("pending")
+        return Observation("unknown" if result["status"] == "unknown" else "conflict")
+
+    def advance(self, state, operation, *, before_write):
+        if not callable(before_write):
+            _fail("requires the driver's durable write guard")
+        head, tree = self.commit.commit(before_write=before_write)
+        self._spec = self._spec_for(head, tree)
+        result = self.sequence.advance(self._spec, before_write=before_write)
+        if result["status"] == "merged":
+            merge = self.sequence.pr.observe_merge(self._spec)
+            if merge.get("status") != "verified":
+                return Observation("unknown")
+            return Observation("verified", self._verified_evidence(merge))
+        if result["status"] in ("absent", "pending"):
+            return Observation("pending")
+        return Observation("unknown" if result["status"] == "unknown" else "conflict")
