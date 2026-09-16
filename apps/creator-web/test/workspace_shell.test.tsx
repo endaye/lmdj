@@ -2218,6 +2218,19 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
   expect(padA1()).toBeTruthy();
 });
 
+test("hardware Slice and Sound Sets stay in the touch workspace without extra physical keys", async () => {
+  const user = userEvent.setup();
+  render(<App initialState={ready} />);
+  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
+  const physical = screen.getByRole("complementary", {name: "Physical controls"});
+  const touch = screen.getByRole("region", {name: "Touch workspace"});
+  expect(within(physical).queryByRole("button", {name: /^Slice/})).toBeNull();
+  expect(within(physical).queryByRole("button", {name: /^Sound Sets/})).toBeNull();
+  expect(within(touch).getByRole("button", {name: /Slice/})).toBeTruthy();
+  expect(within(touch).getByRole("button", {name: /Sound Sets/})).toBeTruthy();
+  expect(screen.getByTestId("hardware-console")).toBeTruthy();
+});
+
 const engagedTransportStatus = (
   overrides: Partial<PatternTransportStatus> = {},
 ): PatternTransportStatus => ({
