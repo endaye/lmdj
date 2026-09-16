@@ -236,6 +236,10 @@ def read_prepared_plan(root, tag):
     try:
         digest = path.read_text(encoding="ascii").strip()
     except FileNotFoundError:
+        # prepare writes the document and its digest together, so a document
+        # without its digest is a partial or tampered output, not an absent one.
+        if (output / prepared_step._PLAN_DOCUMENT).exists():
+            _fail("the prepared plan document has no recorded digest")
         return None
     except (OSError, UnicodeDecodeError):
         _fail("the prepared plan digest is unreadable")
@@ -275,8 +279,12 @@ def enroll_draft(*, root, candidate_root, repository_id, ledger, create_draft,
         spec = dict(fields, plan_sha256=plan)
         validate_spec(spec)
         tag = spec["tag"]
-        # draft_step takes a zero-argument far-side reader; the enrollment owns
-        # the identity, so it binds it rather than letting the reader guess.
+        # draft_step takes a zero-argument far-side reader, and the enrollment
+        # owns the identity the carrier verifies. The carrier is built per
+        # recovery from this frozen spec and lives for one operation, so the
+        # reader is tag-stable for its lifetime by construction: a far-side
+        # Release under another tag is caught by read_back's tag comparison,
+        # never silently read as this step's work.
         return DraftCarrier(spec=spec, create_draft=create_draft,
                             release_by_tag=lambda: release_by_tag(tag))
 

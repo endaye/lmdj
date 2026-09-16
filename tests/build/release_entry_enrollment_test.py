@@ -374,6 +374,13 @@ class PreparedPlanRecoveryTest(unittest.TestCase):
         with self.assertRaises(JournalError):
             read_prepared_plan(self.root, "lmdj-v" + BUILD)
 
+    def test_a_document_without_its_digest_fails_closed(self):
+        # prepare writes both together, so half the pair is drift, not absence.
+        self.output.mkdir(parents=True, exist_ok=True)
+        (self.output / self.prepared._PLAN_DOCUMENT).write_bytes(b"{}")
+        with self.assertRaises(JournalError):
+            read_prepared_plan(self.root, "lmdj-v" + BUILD)
+
     def test_a_digest_without_its_document_fails_closed(self):
         self.output.mkdir(parents=True, exist_ok=True)
         (self.output / self.prepared._PLAN_DIGEST).write_text(PLAN + "\n")
