@@ -705,7 +705,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
       .getByRole("listitem"),
   ).toHaveCount(16);
 
-  await page.getByRole("button", {name: "Bank B"}).click();
+  await page.getByTestId("touch-workspace").getByRole("button", {name: "Bank B", exact: true}).click();
   await page.getByRole("button", {name: "Preview mapping into Bank B"})
     .click();
   await expect(preview).toBeVisible({timeout: REQUEST_TIMEOUT_MS});

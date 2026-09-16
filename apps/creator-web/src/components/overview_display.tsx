@@ -81,6 +81,14 @@ export function OverviewDisplay({
           <dd>{project?.revision ?? "—"}</dd>
         </div>
         <div>
+          <dt>Pads</dt>
+          <dd>{project ? `${project.assignedPadCount} / 64` : "—"}</dd>
+        </div>
+        <div>
+          <dt>Assets</dt>
+          <dd>{project?.assetCount ?? "—"}</dd>
+        </div>
+        <div>
           <dt>Key</dt>
           <dd>{project?.key ?? "—"}</dd>
         </div>
@@ -96,7 +104,8 @@ export function OverviewDisplay({
         ) : null}
       </dl>
       {buildIdentity ? (
-        <p className="overview-build" title={describeBuildIdentity(buildIdentity)}>
+        <p className="overview-build" data-testid="build-identity"
+          title={describeBuildIdentity(buildIdentity)}>
           {shortBuildLabel(buildIdentity)}
         </p>
       ) : null}

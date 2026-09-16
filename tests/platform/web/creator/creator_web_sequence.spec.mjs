@@ -107,6 +107,15 @@ async function reopenProject(page) {
     .toBeVisible({timeout: 120_000});
 }
 
+// Play/Stop and Record are the console's physical keys. Their accessible
+// names carry their state ("Play/Stop — Pattern is playing", "Record — stop
+// recording …"), so they are addressed by prefix inside the physical column,
+// which also keeps "Record Sample" and "Record Performance" out of reach.
+const physicalKey = (page, name) =>
+  page.getByTestId("physical-controls").getByRole("button", {name});
+const playStopKey = (page) => physicalKey(page, /^Play\/Stop/);
+const recordKey = (page) => physicalKey(page, /^Record\b/);
+
 async function inspectTruth(page) {
   const response = await page.evaluate(() =>
     window.lmdjWebRuntimeHost.transport.send({
@@ -148,10 +157,10 @@ async function awaitAdmittedPresses(page, count) {
 
 async function enterSequenceAndPlay(page) {
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
-  // U2 dropped the Sequence surface's <h1>; the surface is still the
-  // named landmark it always was. Same destination, same intent, bound
-  // to the element that actually carries the name now.
-  await expect(page.getByRole("main", {name: "Sequence"})).toBeVisible();
+  // The Sequence editor is one component in both layouts and names itself
+  // "Sequence editor"; that region is the destination, whichever shell
+  // mounts it.
+  await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state"))
     .toHaveText("Audio running", {timeout: 30_000});
@@ -174,13 +183,13 @@ test("global Pattern transport plays, overdubs, survives navigation, stops, and 
   expect(baseline.patterns[patternId].events).toHaveLength(0);
 
   // stopped → Play: playback only, no journal.
-  await page.getByRole("button", {name: "Play", exact: true}).click();
+  await playStopKey(page).click();
   await transportStatus(page, "playing");
   expect((await inspectTruth(page)).patterns[patternId].events).toHaveLength(0);
   expect((await inspectTruth(page)).revision).toBe(baseline.revision);
 
   // playing → Record: overdub admission of live Pad input.
-  await page.getByRole("button", {name: "Record", exact: true}).click();
+  await recordKey(page).click();
   await transportStatus(page, "recording");
   await page.keyboard.press("KeyQ");
   await page.keyboard.press("KeyW");
@@ -189,7 +198,7 @@ test("global Pattern transport plays, overdubs, survives navigation, stops, and 
   expect((await inspectTruth(page)).patterns[patternId].events).toHaveLength(0);
 
   // Record-off: durable commit, playback continues without restart.
-  await page.getByRole("button", {name: "Record off", exact: true}).click();
+  await recordKey(page).click();
   await transportStatus(page, "playing");
   const committed = await inspectTruth(page);
   expect(committed.revision).toBe(baseline.revision + 1);
@@ -211,7 +220,7 @@ test("global Pattern transport plays, overdubs, survives navigation, stops, and 
   await transportStatus(page, "playing");
 
   // Play/Stop stops scheduling; the committed truth is untouched.
-  await page.getByRole("button", {name: "Stop", exact: true}).click();
+  await playStopKey(page).click();
   await transportStatus(page, "stopped");
   const stopped = await inspectTruth(page);
   expect(stopped.revision).toBe(baseline.revision + 1);
@@ -243,7 +252,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   await importProject(page);
   const imported = await inspectTruth(page);
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
-  await expect(page.getByRole("main", {name: "Sequence"})).toBeVisible();
+  await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
   const pattern = page.getByRole("combobox", {name: "Pattern"});
   const patternId = await pattern.inputValue();
 
@@ -272,7 +281,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
     .toHaveText("Audio running", {timeout: 30_000});
 
   // stopped → Record: start at the Pattern beginning, playing and recording.
-  await page.getByRole("button", {name: "Record", exact: true}).click();
+  await recordKey(page).click();
   await transportStatus(page, "recording");
   await page.keyboard.press("KeyQ");
   await awaitAdmittedPresses(page, 1);
@@ -284,7 +293,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   await page.evaluate(() => {
     window.__dropNextTransportTicket = true;
   });
-  await page.getByRole("button", {name: "Record off", exact: true}).click();
+  await recordKey(page).click();
   await transportStatus(page, "playing");
   const afterReconcile = await transportRequests(page);
   const droppedIndex = afterReconcile.findIndex((entry) => entry.dropped);
@@ -327,7 +336,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
 
   // Stop first; the stopped engagement is retired by the reload, so the
   // switch now lands and the next command re-engages against the new Pattern.
-  await page.getByRole("button", {name: "Stop", exact: true}).click();
+  await playStopKey(page).click();
   await transportStatus(page, "stopped");
   await page.evaluate(() => {
     window.__snapshotReloadProof = [];
@@ -340,7 +349,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
 
   // Record into the switched Pattern: stopped Record starts it from its
   // beginning, and the overdub lands in the new Pattern.
-  await page.getByRole("button", {name: "Record", exact: true}).click();
+  await recordKey(page).click();
   try {
     await transportStatus(page, "recording");
   } catch (error) {
@@ -350,7 +359,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   }
   await page.keyboard.press("KeyW");
   await awaitAdmittedPresses(page, 2);
-  await page.getByRole("button", {name: "Record off", exact: true}).click();
+  await recordKey(page).click();
   await transportStatus(page, "playing");
   const overdubbed = await inspectTruth(page);
   expect(overdubbed.revision).toBe(authored.revision + 2);
@@ -359,7 +368,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   expect(overdubbed.patterns[alternatePattern].events[0])
     .toMatchObject({slot: {bank: 0, pad: 1}, velocity: 100});
 
-  await page.getByRole("button", {name: "Stop", exact: true}).click();
+  await playStopKey(page).click();
   await transportStatus(page, "stopped");
   const stopped = await inspectTruth(page);
   expect(stopped.revision).toBe(authored.revision + 2);
@@ -425,7 +434,7 @@ test("owner loss surfaces the interrupted recording for honest refusal and disca
   const pattern = page.getByRole("combobox", {name: "Pattern"});
   const patternId = await pattern.inputValue();
 
-  await page.getByRole("button", {name: "Record", exact: true}).click();
+  await recordKey(page).click();
   await transportStatus(page, "recording");
   await page.keyboard.press("KeyQ");
   // The admission must be durable before the reload, or the recovery
@@ -439,7 +448,7 @@ test("owner loss surfaces the interrupted recording for honest refusal and disca
   expect(lostTruth.patterns[patternId].events).toHaveLength(0);
 
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
-  await expect(page.getByRole("main", {name: "Sequence"})).toBeVisible();
+  await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
   const recoveryRegion = page.getByRole("region", {name: "Sequence recovery"});
   await expect(recoveryRegion).toBeVisible({timeout: 60_000});
   // The one-shot Pad press is an admitted candidate but not a complete event
@@ -466,11 +475,11 @@ test("owner loss surfaces the interrupted recording for honest refusal and disca
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state"))
     .toHaveText("Audio running", {timeout: 30_000});
-  await page.getByRole("button", {name: "Record", exact: true}).click();
+  await recordKey(page).click();
   await transportStatus(page, "recording");
   await page.keyboard.press("KeyW");
   await awaitAdmittedPresses(page, 1);
-  await page.getByRole("button", {name: "Record off", exact: true}).click();
+  await recordKey(page).click();
   await transportStatus(page, "playing");
   const recovered = await inspectTruth(page);
   expect(recovered.revision).toBe(imported.revision + 1);

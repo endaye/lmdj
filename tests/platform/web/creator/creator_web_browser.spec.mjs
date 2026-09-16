@@ -168,8 +168,8 @@ test("ready active Runtime survives portrait and landscape resize", async ({page
   }, {timeout: 30_000}).toEqual([1, 1]);
 
   const heading = page.getByRole("heading", {name: "Project 00000000"});
-  const revision = page.locator(".project-summary div").filter({
-    has: page.getByText("Revision", {exact: true}),
+  const revision = page.locator(".overview-facts div").filter({
+    has: page.getByText("Rev", {exact: true}),
   }).getByRole("definition");
   const before = await downloadReport(page);
   const expectedRevision = await revision.textContent();

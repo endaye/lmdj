@@ -169,7 +169,7 @@ async function importV1SampleProject(page) {
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
   await expect(page.getByText("44 / 64")).toBeVisible();
-  await expect(page.locator(".project-summary")).toContainText("Revision46");
+  await expect(page.locator(".overview-display > .overview-facts")).toContainText("Rev46");
   await expectProjectRevision(page, 46);
 }
 
@@ -217,7 +217,9 @@ async function commitLongSourceSelection(page) {
 }
 
 async function selectPadWithoutPress(page, label) {
-  await page.getByRole("button", {name: label}).evaluate((element) => element.click());
+  // The Sample picker pad; the console matrix pad shares the prefix and adds
+  // its key hint, so the name is matched exactly.
+  await page.getByRole("button", {name: label, exact: true}).evaluate((element) => element.click());
 }
 
 async function expectDefaultPlaybackUi(page) {
@@ -314,7 +316,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await activateAudio(page);
   await enterSampleEditor(page);
 
-  await expect(page.getByRole("button", {name: "Pad A1 — empty"})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Pad A1 — empty", exact: true})).toBeVisible();
   await chooseSampleFile(
     page,
     "Add Sample to Pad A1",
@@ -322,7 +324,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     pcm16Wav({}),
   );
   await commitLongSourceSelection(page);
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true}))
     .toBeVisible({timeout: 120_000});
   await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
@@ -360,7 +362,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
       },
     );
   });
-  const padA1 = page.getByRole("button", {name: "Pad A1 — assigned"});
+  const padA1 = page.getByRole("button", {name: "Pad A1 — assigned", exact: true});
   await page.emulateMedia({reducedMotion: "reduce"});
   const playheadOffset = await page.evaluate(() =>
     (window.__sampleVoiceStates ?? []).length);
@@ -506,7 +508,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await expect(page.getByText(/^Asset /)).toBeVisible({timeout: 30_000});
   const a2Loop = page.getByRole("button", {name: "Loop"});
   await waitForControlMutation(page, a2Loop, () => a2Loop.click(), 56);
-  const padA2 = page.getByRole("button", {name: "Pad A2 — assigned"});
+  const padA2 = page.getByRole("button", {name: "Pad A2 — assigned", exact: true});
   await heldPadGesture(page, padA2, ["started"]);
 
   await selectPadWithoutPress(page, "Pad A1 — assigned");
@@ -518,7 +520,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await waitForControlMutation(page, a3Loop, () => a3Loop.click(), 58);
   await heldPadGesture(
     page,
-    page.getByRole("button", {name: "Pad A3 — assigned"}),
+    page.getByRole("button", {name: "Pad A3 — assigned", exact: true}),
     ["started"],
   );
 
@@ -527,7 +529,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await waitForControlMutation(page, a4Loop, () => a4Loop.click(), 59);
   await heldPadGesture(
     page,
-    page.getByRole("button", {name: "Pad A4 — assigned"}),
+    page.getByRole("button", {name: "Pad A4 — assigned", exact: true}),
     ["started"],
   );
 
@@ -588,10 +590,10 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await page.getByRole("button", {name: "Open Project 00000000"}).click();
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.locator(".project-summary")).toContainText("Revision60");
+  await expect(page.locator(".overview-display > .overview-facts")).toContainText("Rev60");
   await expect(page.getByText("45 / 64")).toBeVisible();
   await enterSampleEditor(page);
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned"})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true})).toBeVisible();
   await expectProjectRevision(page, 60);
   const postReloadOperations = await page.evaluate(() => window.__sampleProofOperations ?? []);
   expect(postReloadOperations.filter((operation) => operation === "sample.import.commit"))
@@ -608,6 +610,9 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await expect(trimStart).toHaveValue("0");
   await expect(trimEnd).toHaveValue("2");
   const dragGrip = async (grip, deltaX) => {
+    // The touch workspace is a fixed 368 × 368 region that scrolls; the mouse
+    // must be aimed at where the grip actually is, not where it was laid out.
+    await grip.scrollIntoViewIfNeeded();
     const box = await grip.boundingBox();
     expect(box).not.toBeNull();
     const pressX = box.x + box.width / 2;
@@ -656,7 +661,7 @@ test("packaged Sample Editor clamps a plus-one-frame source and admits the quota
   expect(44 + quotaBoundFrames * 2).toBeGreaterThan(1_048_576);
   await commitLongSourceSelection(page);
 
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true}))
     .toBeVisible({timeout: 120_000});
   await expect(page.getByText(
     `48 kHz · Mono · ${quotaBoundFrames.toLocaleString("en-US")} frames`,
@@ -699,7 +704,7 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
 
   // F3: diverge the local Project from the imported bundle. Committing a
   // Sample to Pad A1 advances the local Project to revision 47.
-  await expect(page.getByRole("button", {name: "Pad A1 — empty"})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Pad A1 — empty", exact: true})).toBeVisible();
   await chooseSampleFile(
     page,
     "Add Sample to Pad A1",
@@ -707,7 +712,7 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
     pcm16Wav({}),
   );
   await commitLongSourceSelection(page);
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true}))
     .toBeVisible({timeout: 120_000});
   await expectProjectRevision(page, 47);
 
@@ -742,5 +747,5 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
   await diverged.getByRole("button", {name: "Open Project 00000000"}).click();
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.locator(".project-summary")).toContainText("Revision47");
+  await expect(page.locator(".overview-display > .overview-facts")).toContainText("Rev47");
 });

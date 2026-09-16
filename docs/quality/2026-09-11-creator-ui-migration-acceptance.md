@@ -2,11 +2,12 @@
 
 Date: 2026-09-16. Task: U7 ([#1221](https://github.com/endaye/lmdj/issues/1221)).
 
-**Status: U7 is not complete. The default layout is not switched.** The
-hardware four-region layout stays opt-in behind `?layout=hardware` and the
-`Hardware layout` button, and the existing workspace stays reachable through
-`Existing workspace`. This ledger records what was actually established and
-what was not; it is not a release record and allocates no Product Build.
+**Status: U7's physical rows are not accepted. The default layout is switched
+anyway, by owner decision** (§7). The hardware four-region layout is the
+default; the existing workspace stays reachable through `Existing workspace`
+and `?layout=workspace` until U8 removes it. This ledger records what was
+actually established and what was not; it is not a release record and
+allocates no Product Build.
 
 ## 1. What this ledger covers
 
@@ -228,15 +229,28 @@ five shapes above, and no Export report was retained. It is recorded because a
 real device was used and the result was positive, and because the next
 operator should not have to rediscover the secure-context constraint.
 
-## 7. Why the default is not switched
+## 7. Why the default is switched — owner decision, 2026-09-17
 
 U7's exit condition requires the full Creator proof and its new journeys to
 pass, applicable real-device candidate evidence to exist, and no unreachable
 key function, unrecoverable edit loss or false success. The proof passes and
 the false success it named is fixed and gated. Every row in §6 is still
-`deferred / unverified`, and all of them are about real devices, real hearing
-and real assistive technology. Under the plan's own instruction — stop at the
-evidence gap, do not switch the default, do not lower a test to make a run
-green — the layout stays opt-in and U8 stays blocked.
+`deferred / unverified`.
 
-Discharging a named U7 risk is not discharging U7.
+On 2026-09-17 the repository owner directed that the hardware layout become
+the default and that the workspace layout then be removed (U8), on the
+strength of the exploratory iPad session recorded in §6 and the automated
+evidence in §5, without waiting for the §6 rows. This section records that as
+what it is: an owner decision to proceed ahead of acceptance. It is not
+acceptance. No §6 row is upgraded by it, and none may be upgraded by citing
+it. The rows stay open for the operator who eventually runs them, against
+whatever Build is then deployed.
+
+What the switch did: `readCreatorLayout` and `readStoredCreatorLayout` default
+to `hardware`; a stored `workspace` preference and `?layout=workspace` are
+still honoured; `Existing workspace` still returns to the old shell. The upper
+screen gained `Pads` and `Assets` facts so the shell no longer shows less
+Project truth than the summary it replaced.
+
+Discharging a named U7 risk is not discharging U7, and switching the default
+by decision is not discharging it either.

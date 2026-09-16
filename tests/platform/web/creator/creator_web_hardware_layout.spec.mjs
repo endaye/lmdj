@@ -12,7 +12,7 @@ function rounded(box) {
   };
 }
 
-test("opts into the 880×592 hardware shell, keeps overview read-only, and returns", async ({page}) => {
+test("starts in the 880×592 hardware shell, keeps overview read-only, and can fall back", async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});
   await page.goto("/");
   await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
@@ -20,7 +20,6 @@ test("opts into the 880×592 hardware shell, keeps overview read-only, and retur
   });
   await expect(page.getByRole("button", {name: "Activate audio"})).toBeVisible();
 
-  await page.getByRole("button", {name: "Hardware layout"}).click();
   const consoleBox = rounded(await page.getByTestId("hardware-console").boundingBox());
   const physical = rounded(await page.getByTestId("physical-controls").boundingBox());
   const overview = rounded(await page.getByTestId("overview-display").boundingBox());
@@ -190,8 +189,8 @@ test("carries Project Truth and running audio across a layout fallback drill", a
   const committed = await committedBpm(page);
   expect(committed).toBeGreaterThan(0);
 
-  // Leg 1 — opt in. The Runtime and Project Truth cross the boundary.
-  await page.getByRole("button", {name: "Hardware layout"}).click();
+  // Leg 1 — the hardware shell is the default, so the Project was imported
+  // and audio activated inside it; confirm that is where the drill stands.
   await expect(page.getByTestId("hardware-console")).toBeVisible();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
   expect(await committedBpm(page)).toBe(committed);

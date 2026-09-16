@@ -95,6 +95,12 @@ const ready: CreatorState = {
   runtime: {phase: "ready", errorCode: null},
 };
 
+// The hardware layout is the default, so Project truth is read off the upper
+// screen's facts rather than the old workspace summary.
+const revisionCell = () => screen.getByText("Rev").nextElementSibling;
+const transportPhase = () =>
+  document.querySelector(".overview-phase")?.textContent?.split("/").pop()?.trim();
+
 test("keeps Activate audio disabled when Host readiness is unknown", () => {
   render(<StatusBar state={ready} onActivateAudio={() => {}} />);
   expect(screen.getByRole("button", {name: "Activate audio"})
@@ -116,11 +122,10 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
     name: "Sequence — open a playable Project first",
   });
   expect(sequenceMode.hasAttribute("disabled")).toBe(true);
-  const performMode = screen.getByRole("button", {
-    name: "Perform — requires a playable Project, running audio, and capture storage",
-  });
-  expect(performMode.hasAttribute("disabled")).toBe(true);
-  expect(performMode.tabIndex).toBe(-1);
+  // The Perform key keeps the looser hardware gate: a ready Project reaches
+  // a touch workspace that names what is missing, rather than a disabled key.
+  const performMode = screen.getByRole("button", {name: "Perform"});
+  expect(performMode.hasAttribute("disabled")).toBe(false);
 
   expect(screen.getByText("Key").nextElementSibling?.textContent).toBe("—");
   expect(screen.queryByText(/untitled/i)).toBeNull();
@@ -141,9 +146,6 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
   // action is disabled instead of offering a gesture that cannot run.
   expect(screen.getByRole("button", {name: "Activate audio"})
     .hasAttribute("disabled")).toBe(true);
-  const hardwareLayout = screen.getByRole("button", {name: "Hardware layout"});
-  await user.tab();
-  expect(document.activeElement).toBe(hardwareLayout);
   await user.tab();
   expect(document.activeElement).toBe(projectMode);
   await user.tab();
@@ -155,7 +157,8 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
   expect(screen.getAllByRole("button", {
     name: /^Pad A(?:[1-9]|1[0-6]) — empty$/,
   })).toHaveLength(16);
-  expect(screen.getByRole("button", {name: "Bank A"})).toBeTruthy();
+  expect(within(screen.getByRole("complementary", {name: "Physical controls"}))
+    .getByRole("button", {name: "Bank A"})).toBeTruthy();
 
   await user.click(projectMode);
   expect(projectMode.getAttribute("aria-current")).toBe("page");
@@ -233,7 +236,7 @@ test("orders assigned Pad metadata, waveform, controls, Bank, and all Pads", asy
   });
   expect(visiblePads).toHaveLength(16);
   for (const pad of visiblePads) {
-    expect(getComputedStyle(pad).minHeight).toBe("84px");
+    expect(getComputedStyle(pad).minHeight).toBe("80px");
   }
 });
 
@@ -377,7 +380,7 @@ test("bounds and escapes Replace display names, warns, cancels, and restores foc
   expect(screen.queryByRole("dialog", {name: "Replace Pad A1?"})).toBeNull();
   expect(document.activeElement).toBe(pad);
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
-  expect(screen.getByText("4", {selector: ".project-summary dd"})).toBeTruthy();
+  expect(revisionCell()?.textContent).toBe("4");
 });
 
 test("Record on an assigned Pad confirms the replacement before the panel opens", async () => {
@@ -1090,7 +1093,7 @@ test.each(["update", "reset"] as const)(
         .hasAttribute("disabled"),
     ).toBe(false));
     await userEvent.click(screen.getByRole("button", {name: "Project"}));
-    expect(screen.getByText("4", {selector: ".project-summary dd"})).toBeTruthy();
+    expect(revisionCell()?.textContent).toBe("4");
   },
 );
 
@@ -1115,8 +1118,8 @@ test("atomically refreshes full Project truth on a real mutation conflict", asyn
   expect(updateCount).toBe(1);
   expect(screen.getByRole("button", {name: "Pad A2 — assigned"})).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
-  expect(screen.getByText("4", {selector: ".project-summary dd"})).toBeTruthy();
-  expect(screen.getByText("2 / 64")).toBeTruthy();
+  expect(revisionCell()?.textContent).toBe("4");
+  expect(screen.getByText("Pads").nextElementSibling?.textContent).toBe("2 / 64");
 });
 
 test("converges committed Sample and Project truth across interleaved revisions", async () => {
@@ -1181,8 +1184,8 @@ test("converges committed Sample and Project truth across interleaved revisions"
   expect(screen.getByRole("button", {name: "Pad A5 — assigned"})).toBeTruthy();
   expect(screen.getByText("Audio running")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
-  expect(screen.getByText("6", {selector: ".project-summary dd"})).toBeTruthy();
-  expect(screen.getByText("4 / 64")).toBeTruthy();
+  expect(revisionCell()?.textContent).toBe("6");
+  expect(screen.getByText("Pads").nextElementSibling?.textContent).toBe("4 / 64");
   expect(fixture.calls.filter((call) => call === "openProject")).toHaveLength(1);
   expect(fixture.calls.filter((call) => call === "reloadSnapshot")).toHaveLength(1);
 });
@@ -1276,9 +1279,7 @@ test.each([
     expect(fixture.busyCount).toBe(busyFailures);
     expect(screen.queryByRole("alert")).toBeNull();
     await userEvent.click(screen.getByRole("button", {name: "Project"}));
-    expect(screen.getByText(source === "sample" ? "5" : "4", {
-      selector: ".project-summary dd",
-    })).toBeTruthy();
+    expect(revisionCell()?.textContent).toBe(source === "sample" ? "5" : "4");
   },
 );
 
@@ -1384,7 +1385,7 @@ test.each(["update", "reset"] as const)(
       expect(screen.getByRole("button", {name: "Reset Pad to Defaults"})
         .hasAttribute("disabled")).toBe(false);
       fireEvent.click(screen.getByRole("button", {name: "Project"}));
-      expect(screen.getByText("4", {selector: ".project-summary dd"})).toBeTruthy();
+      expect(revisionCell()?.textContent).toBe("4");
     } finally {
       vi.useRealTimers();
     }
@@ -1652,7 +1653,7 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
   const {container} = render(
     <App initialState={initialState} runtimeFactory={() => fixture.session} />,
   );
-  await screen.findByText("3", {selector: ".project-summary dd"});
+  await waitFor(() => expect(revisionCell()?.textContent).toBe("3"));
   await act(async () => hostListener?.({
     state: "running",
     errorCode: null,
@@ -1684,9 +1685,9 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
   expect(screen.getByText("Audio running")).toBeTruthy();
 
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
-  expect(screen.getByText("5", {selector: ".project-summary dd"})).toBeTruthy();
-  expect(screen.getByText("3 / 64")).toBeTruthy();
-  expect(screen.getByText("3", {selector: ".project-summary dd"})).toBeTruthy();
+  expect(revisionCell()?.textContent).toBe("5");
+  expect(screen.getByText("Pads").nextElementSibling?.textContent).toBe("3 / 64");
+  expect(screen.getByText("Assets").nextElementSibling?.textContent).toBe("3");
   expect(projectionCalls).toEqual([
     "list:3",
     "inspect:3",
@@ -1740,7 +1741,7 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
   expect(screen.getByText(/the source container is not supported/)).toBeTruthy();
   expect(screen.queryByText("second-private.wav")).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
-  expect(screen.getByText("3", {selector: ".project-summary dd"})).toBeTruthy();
+  expect(revisionCell()?.textContent).toBe("3");
 });
 
 test.each(["mute", "reset", "replace"] as const)(
@@ -2000,7 +2001,8 @@ test("Open local switches Projects through one serialized visible selection", as
   fireEvent.click(openSecond);
 
   expect(secondOpenCount).toBe(1);
-  expect(screen.getByText("11111111")).toBeTruthy();
+  expect(screen.getByText("Project", {selector: "dt"}).nextElementSibling?.textContent)
+    .toBe("11111111");
   finishSecondOpen?.();
   await screen.findByRole("heading", {name: "Project 22222222"});
 });
@@ -2016,7 +2018,7 @@ test("disables Project actions while an import owns the action slot", async () =
 
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
   await userEvent.upload(input!, new File(["bundle"], "pending.lmdj"));
-  await screen.findByText("importing");
+  await waitFor(() => expect(screen.getByTestId("creator-phase").textContent).toBe("importing"));
   expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
     .toBe(true);
   expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
@@ -2044,8 +2046,7 @@ test("lists, opens, and imports through the injected Runtime Session", async () 
   await user.click(screen.getByRole("button", {name: "Project"}));
   await user.click(screen.getByRole("button", {name: "Open Project 11111111"}));
   await screen.findByRole("heading", {name: "Project 11111111"});
-  expect(screen.getAllByText("BPM").at(-1)?.nextElementSibling?.textContent)
-    .toBe("120");
+  expect(document.querySelector(".overview-bpm")?.textContent).toBe("120 BPM");
   expect(fixture.calls).toEqual([
     "start",
     "listLocalProjects",
@@ -2213,13 +2214,9 @@ test("recovers from DUPLICATE_ID to the local Projects list without a reload", a
   expect(importAttempts).toBe(1);
 });
 
-test("opts into the hardware shell with a read-only overview and returns to the workspace", async () => {
+test("starts in the hardware shell with a read-only overview and can fall back to the workspace", async () => {
   const user = userEvent.setup();
   render(<App initialState={ready} />);
-
-  expect(screen.queryByTestId("hardware-console")).toBeNull();
-  expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
-  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
 
   expect(screen.getByRole("complementary", {name: "Physical controls"})).toBeTruthy();
   const display = screen.getByRole("region", {name: "Overview display"});
@@ -2241,16 +2238,17 @@ test("opts into the hardware shell with a read-only overview and returns to the 
   expect(screen.getByTestId("hardware-console")).toBeTruthy();
   await user.click(screen.getByRole("button", {name: "Project"}));
 
+  // The old workspace is still one press away, and one press back.
   await user.click(screen.getByRole("button", {name: "Existing workspace"}));
   expect(screen.queryByTestId("hardware-console")).toBeNull();
-  expect(screen.getByRole("button", {name: "Hardware layout"})).toBeTruthy();
   expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
+  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
+  expect(screen.getByTestId("hardware-console")).toBeTruthy();
 });
 
 test("hardware Project keeps list/import/open in touch and omits New/Save As", async () => {
   const user = userEvent.setup();
   render(<App initialState={ready} />);
-  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
 
   const display = screen.getByRole("region", {name: "Overview display"});
   expect(within(display).queryAllByRole("button")).toHaveLength(0);
@@ -2282,7 +2280,6 @@ test("gates the hardware Sequence key on the same reachability as the mode rail"
     .toBe("Sequence — open a playable Project first");
   expect(rail.hasAttribute("disabled")).toBe(true);
 
-  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
   const key = screen.getByRole("button", {name: /^Sequence/});
   expect(key.getAttribute("aria-label")).toBe(rail.getAttribute("aria-label"));
   expect(key.hasAttribute("disabled")).toBe(true);
@@ -2306,7 +2303,6 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
   const session = Object.assign(fixture.session, sequenceSessionStubs());
   render(<App initialState={ready} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
-  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
 
   const padMatrix = () => screen.getByRole("region", {name: "Pad matrix"});
   const touch = () => screen.getByRole("region", {name: "Touch workspace"});
@@ -2362,7 +2358,6 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
 test("hardware Slice and Sound Sets stay in the touch workspace without extra physical keys", async () => {
   const user = userEvent.setup();
   render(<App initialState={ready} />);
-  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
   const physical = screen.getByRole("complementary", {name: "Physical controls"});
   const touch = screen.getByRole("region", {name: "Touch workspace"});
   expect(within(physical).queryByRole("button", {name: /^Slice/})).toBeNull();
@@ -2433,9 +2428,7 @@ test("disengages the Pattern transport projection when the Runtime leaves ready"
   render(<App initialState={ready} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
-  const region = await screen.findByRole("region", {name: "Sequence transport"});
-  await waitFor(() =>
-    expect(within(region).getByRole("status").textContent).toBe("playing"));
+  await waitFor(() => expect(transportPhase()).toBe("playing"));
 
   // A failed Runtime has no engagement; the projection must not keep showing
   // the retired engagement's last state.
@@ -2443,8 +2436,7 @@ test("disengages the Pattern transport projection when the Runtime leaves ready"
     state: "failed", errorCode: "INTERNAL_ERROR", errorDetails: {},
   }));
 
-  await waitFor(() =>
-    expect(within(region).getByRole("status").textContent).toBe("stopped"));
+  await waitFor(() => expect(transportPhase()).toBe("stopped"));
 });
 
 test("re-engages the Pattern transport with a fresh identity when an open replaces the Project with the same id", async () => {
@@ -2478,7 +2470,5 @@ test("re-engages the Pattern transport with a fresh identity when an open replac
   await waitFor(() => expect(inspectedSessionIds).toHaveLength(2));
   expect(inspectedSessionIds[1]).not.toBe(inspectedSessionIds[0]);
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
-  const region = await screen.findByRole("region", {name: "Sequence transport"});
-  await waitFor(() =>
-    expect(within(region).getByRole("status").textContent).toBe("recording"));
+  await waitFor(() => expect(transportPhase()).toBe("recording"));
 });
