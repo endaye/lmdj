@@ -182,7 +182,10 @@ def release_identity(state, *, candidate_root, repository_id, ledger):
         identity["target_revision"] = allocated["target_revision"]
         identity["snapshot_sha256"] = allocated["snapshot_sha256"]
     else:
-        identity["target_revision"] = intent.target_revision
+        revision = intent.target_revision
+        if type(revision) is not str or _SHA.fullmatch(revision) is None:
+            _fail(f"the intent ledger records no valid target revision for {tag}")
+        identity["target_revision"] = revision
     return identity
 
 
@@ -204,6 +207,10 @@ def spec_identity(state, *, candidate_root, repository_id, ledger, operation_id)
     if identity is None or identity.get("target_revision") is None:
         # The Build is allocated but its target is not frozen yet.
         return None
+    absent = sorted(key for key in _BASE_FIELDS
+                    if key != "operation_id" and identity.get(key) is None)
+    if absent:
+        _fail(f"the frozen identity omits {', '.join(absent)}")
     fields = {key: deepcopy(identity[key]) for key in _BASE_FIELDS
               if key != "operation_id"}
     fields["operation_id"] = operation_id(identity["request_sha256"])

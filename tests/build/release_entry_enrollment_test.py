@@ -185,6 +185,12 @@ class IdentityRecoveryTest(unittest.TestCase):
         self.assertEqual(identity["target_revision"], TARGET)
         self.assertEqual(identity["channel"], "dev")
 
+    def test_a_malformed_ledger_target_revision_fails_closed(self):
+        for revision in (None, "not-a-revision", 1234):
+            ledger = Ledger(rows={"lmdj-v" + BUILD: Intent(target_revision=revision)})
+            with self.assertRaises(JournalError):
+                self.identity(ledger=ledger)
+
     def test_a_tag_the_ledger_does_not_authorize_fails_closed(self):
         for ledger in (Ledger(rows={}),
                        Ledger(rows={"lmdj-v1.0.59.0": Intent()})):
@@ -253,10 +259,22 @@ class IdentityRecoveryTest(unittest.TestCase):
 
         validate_site_spec(dict(fields, site_base_url="https://docs.example.invalid"))
 
-    def test_spec_identity_waits_until_the_target_is_frozen(self):
-        ledger = Ledger(rows={"lmdj-v" + BUILD: Intent(target_revision=None)})
+    def test_spec_identity_reports_a_missing_base_field_instead_of_crashing(self):
+        document = state()
+        del document["request"]["actor_id"]
+        with self.assertRaises(JournalError):
+            spec_identity(document, candidate_root=self.root, repository_id=12,
+                          ledger=Ledger(),
+                          operation_id=lambda _digest: DIGEST)
+
+    def test_spec_identity_waits_until_the_allocation_is_frozen(self):
+        # The candidate step has allocated the Build but its cut is not merged,
+        # so no step spec can bind a target revision yet.
+        (self.root / "candidate-transition.json").write_text(
+            json.dumps(candidate_document(cut_merge=None)))
         self.assertIsNone(spec_identity(
-            state(), candidate_root=self.root, repository_id=12, ledger=ledger,
+            state(request=request(mode="new", requested_tag=None)),
+            candidate_root=self.root, repository_id=12, ledger=Ledger(),
             operation_id=lambda _digest: DIGEST))
 
     def test_read_candidate_identity_reports_absence_before_the_step_ran(self):
