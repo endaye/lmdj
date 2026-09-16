@@ -3041,6 +3041,67 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         self.assertEqual({record["status"] for record in records}, {"reserved", "uncertain"})
 
 
+CHILD_PROGRESS_TIMEOUT_SECONDS = 120
+CHILD_TOTAL_CEILING_SECONDS = 1200
+
+
+def run_child_with_watchdog(command, *, cwd, env):
+    """Run the integration child, killing it on no test progress, not on slowness.
+
+    The child's unittest transcript is streamed line by line (-u keeps the
+    pipe flushed); every received line is test activity and resets the
+    progress timer.  Returns (completed_process, stalled, hit_ceiling).
+    """
+    import threading
+
+    process = subprocess.Popen(
+        command, cwd=cwd, env=env, text=True, bufsize=1,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    activity = threading.Event()
+
+    def drain(stream, sink):
+        for line in stream:
+            sink.append(line)
+            activity.set()
+
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+    readers = [
+        threading.Thread(target=drain, args=(process.stdout, stdout_lines), daemon=True),
+        threading.Thread(target=drain, args=(process.stderr, stderr_lines), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    stalled = False
+    hit_ceiling = False
+    deadline = time.monotonic() + CHILD_PROGRESS_TIMEOUT_SECONDS
+    ceiling = time.monotonic() + CHILD_TOTAL_CEILING_SECONDS
+    while process.poll() is None:
+        now = time.monotonic()
+        if now >= ceiling:
+            hit_ceiling = True
+            break
+        if now >= deadline:
+            stalled = True
+            break
+        # One-second quantum so a silently finished child is reaped promptly;
+        # any transcript line re-arms the progress timer.
+        activity.wait(timeout=1.0)
+        if activity.is_set():
+            activity.clear()
+            deadline = time.monotonic() + CHILD_PROGRESS_TIMEOUT_SECONDS
+    if stalled or hit_ceiling:
+        process.kill()
+    process.wait()
+    for reader in readers:
+        reader.join(timeout=5)
+    completed = subprocess.CompletedProcess(
+        command, process.returncode, "".join(stdout_lines), "".join(stderr_lines),
+    )
+    return completed, stalled, hit_ceiling
+
+
 class IntegrationProxyTests(unittest.TestCase):
     def test_litellm_import_uses_bundled_cost_map_without_metadata_http(self):
         """The pinned engine import must not fetch mutable LiteLLM metadata."""
@@ -3117,6 +3178,63 @@ print(json.dumps({"calls": calls, "source": info, "model_cost_entries": len(lite
             f"the first LiteLLM import\nstdout={completed.stdout}\nstderr={completed.stderr}",
         )
 
+    def test_watchdog_allows_a_slow_but_progressing_child(self):
+        child = (
+            "import sys, time\n"
+            "for tick in range(10):\n"
+            "    print(f'test_tick_{tick} ... ok', file=sys.stderr, flush=True)\n"
+            "    time.sleep(0.2)\n"
+        )
+        with mock.patch.multiple(
+            __name__, CHILD_PROGRESS_TIMEOUT_SECONDS=1.0, CHILD_TOTAL_CEILING_SECONDS=30.0,
+        ):
+            completed, stalled, hit_ceiling = run_child_with_watchdog(
+                [sys.executable, "-u", "-c", child], cwd=ROOT, env=dict(os.environ),
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertFalse(stalled, "a progressing child must never be stalled")
+        self.assertFalse(hit_ceiling)
+        self.assertIn("test_tick_9 ... ok", completed.stderr)
+
+    def test_watchdog_kills_a_hung_child_and_names_the_test_in_flight(self):
+        child = (
+            "import sys, time\n"
+            "print('test_started ... ', file=sys.stderr, flush=True)\n"
+            "time.sleep(30)\n"
+        )
+        with mock.patch.multiple(
+            __name__, CHILD_PROGRESS_TIMEOUT_SECONDS=0.5, CHILD_TOTAL_CEILING_SECONDS=30.0,
+        ):
+            started = time.monotonic()
+            completed, stalled, hit_ceiling = run_child_with_watchdog(
+                [sys.executable, "-u", "-c", child], cwd=ROOT, env=dict(os.environ),
+            )
+            elapsed = time.monotonic() - started
+        self.assertTrue(stalled)
+        self.assertFalse(hit_ceiling)
+        self.assertLess(elapsed, 10, "the hung child must be killed near the progress timeout")
+        self.assertIn("test_started", completed.stderr)
+        self.assertNotEqual(completed.returncode, 0)
+
+    def test_watchdog_total_ceiling_stops_a_forever_progressing_child(self):
+        child = (
+            "import sys, time\n"
+            "while True:\n"
+            "    print('progress', file=sys.stderr, flush=True)\n"
+            "    time.sleep(0.1)\n"
+        )
+        with mock.patch.multiple(
+            __name__, CHILD_PROGRESS_TIMEOUT_SECONDS=30.0, CHILD_TOTAL_CEILING_SECONDS=1.0,
+        ):
+            started = time.monotonic()
+            completed, stalled, hit_ceiling = run_child_with_watchdog(
+                [sys.executable, "-u", "-c", child], cwd=ROOT, env=dict(os.environ),
+            )
+            elapsed = time.monotonic() - started
+        self.assertFalse(stalled, "progress means never stalled")
+        self.assertTrue(hit_ceiling)
+        self.assertLess(elapsed, 10, "the ceiling kill must land near the ceiling")
+
     def test_real_handler_suite_runs_in_pinned_python_environment(self):
         if os.environ.get("PR_AGENT_RUN_INTEGRATION") != "1":
             self.skipTest(
@@ -3146,24 +3264,34 @@ print(json.dumps({"calls": calls, "source": info, "model_cost_entries": len(lite
         environment = dict(os.environ)
         environment["PR_AGENT_RUN_INTEGRATION"] = "1"
         environment["PR_AGENT_TEST_SOURCE_ROOT"] = str(source_root)
-        command = [str(runtime), str(Path(__file__)), "--integration-child"]
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=ROOT, env=environment, text=True, capture_output=True, timeout=120,
-            )
-        except subprocess.TimeoutExpired as expired:
-            partial = "\n".join(
-                stream.decode("utf-8", errors="replace") if isinstance(stream, bytes) else stream or ""
-                for stream in (expired.stdout, expired.stderr)
-            )
+        # The defect this run guards is a HUNG child (e.g. a network-guard
+        # violation looping), not a slow one: the suite's work is legitimate
+        # and host contention scales it (measured 38.5s idle on an M-series
+        # Mac, >120s on a contended shared runner, #1389).  A total wall cap
+        # cannot tell the two apart, so the instrument is a no-progress
+        # watchdog on the child's streamed test transcript (-u keeps the pipe
+        # line-flushed): 120s without any test activity kills the child and
+        # the transcript names the test in flight.  A generous total ceiling
+        # stays as the guard against a child that emits progress forever.
+        command = [str(runtime), "-u", str(Path(__file__)), "--integration-child"]
+        completed, stalled, ceiling = run_child_with_watchdog(command, cwd=ROOT, env=environment)
+        if stalled:
             self.fail(
-                "why: the integration child exceeded its 120-second budget; the partial "
-                "transcript below names the test in flight when the cap hit, and the "
+                "why: the integration child made no test progress for "
+                f"{CHILD_PROGRESS_TIMEOUT_SECONDS} seconds and was killed as hung; the partial "
+                "transcript below names the test in flight when the watchdog fired, and the "
                 "child's timing trace attributes import versus suite time; remedy: "
-                "attribute the overrun to a phase before changing the budget, the "
-                "work, or the host\n"
-                f"{partial}"
+                "investigate the named test for a hang — a slow but progressing "
+                "run is not a failure and must not change this watchdog\n"
+                f"{completed.stdout}\n{completed.stderr}"
+            )
+        if ceiling:
+            self.fail(
+                "why: the integration child emitted progress past the "
+                f"{CHILD_TOTAL_CEILING_SECONDS}-second total ceiling and was killed; the partial "
+                "transcript below shows the unbounded phase; remedy: attribute the "
+                "overrun to a phase before changing the ceiling, the work, or the host\n"
+                f"{completed.stdout}\n{completed.stderr}"
             )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 

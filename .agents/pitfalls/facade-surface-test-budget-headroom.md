@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-05
     occurrence: https://github.com/endaye/lmdj/issues/566
     observed_by: Claude Code (Opus 5)
+  - date: 2026-09-16
+    occurrence: https://github.com/endaye/lmdj/issues/1389
+    observed_by: Kimi (agent)
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/657
 ---
@@ -51,7 +54,16 @@ Derive a test budget from the work it covers rather than writing one wall-clock
 literal: a named per-unit allowance multiplied by a declared unit count, so the
 number moves when the work does. Make the timeout message name the elapsed time,
 the budget and its derivation, and the resource that never arrived, so a
-recurrence is diagnosable from the run log without reading the harness. Prefer a
+recurrence is diagnosable from the run log without reading the harness. For a spawned child whose per-unit progress is observable, prefer a
+no-progress watchdog over any wall-clock total: stream the child's transcript
+and kill only after a bounded silence, so a contended host's slow-but-healthy
+run passes while a genuine hang still dies with the in-flight unit named. The
+PR-Agent integration child in `tests/build/ci_pr_agent_review_test.py`
+(`run_child_with_watchdog`, #1389) is the reference shape: 120s of no test
+progress kills the child; a total ceiling remains only against a child that
+emits progress forever.
+
+Prefer a
 budget that is generous to one that is tight: an over-long budget only delays a
 genuine hang, while a tight one fails a healthy run deterministically on a
 contended host.
