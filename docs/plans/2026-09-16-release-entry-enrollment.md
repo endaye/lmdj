@@ -46,6 +46,25 @@
 `tests/build/release_entry_enrollment_test.py`（新增）、必要时为上述测试补 `CMakeLists.txt` 注册；
 实现完成时同 Task 更新 `apps/docs-site/docs/operations/version-and-release.mdx`。
 
+### 组装载体之外还缺受信组装层（实现时核实）
+
+登记工作开始时假定只需把已有载体接到入口，核实后发现入口还缺一层从未写过的**受信组装**：
+`candidate_transition.py` 是生产代码里唯一构造 PR 对象的地方，而 `authorize` / `review` /
+`verify_merged` / `observe_main` 都由外部传入，当前只有测试提供过它们；`rehearsal.py` 是
+tag/draft 演练，不提供这组回调。构件本身在生产路径上存在，应当复用而不是重写：
+
+- 完整评审输入：`review_inventory.py` 已由 `github_api.py` 在生产路径收集，并提供
+  `bind_eligibility` 绑定合格性；
+- batch 证据与引用：`batch_evidence.py` 的 `BatchEvidenceConsumer`、`batch_reference.parse_reference`
+  与 `scripts.ci.batch_runtime.decode_reference`（唯一解码入口）；
+- PR/见证机制：`witness_pr.py`、`evidence_pr.py`、`candidate_pr_sequence.py` 及其 `review` /
+  `verify_merged` 挂钩；
+- 身份与签名：`prepare.py` 的 `create_local_tag`、`tag_signer_fingerprint`。
+
+因此第 4/5 组的范围包含「实现并测试这层组装」，而不只是「把载体接上」；它的每一部分都必须是
+可判定的、fail-closed 的，且不得放宽既有 verifier 的校验。此层与 `prepared` / `tag` 的 spec
+冻结问题（[#1404](https://github.com/endaye/lmdj/issues/1404)）相互独立。
+
 不做的：不改驱动语义、journal 格式、policy、保护规则；不新增 required gate；不预先创建 M2 凭据、
 workflow 或保护配置；不合并或重写既有 verifier。
 
