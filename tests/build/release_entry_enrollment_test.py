@@ -1582,5 +1582,179 @@ class PublicationEnrollmentTest(unittest.TestCase):
                           self.built[0][0])
 
 
+def deployment_projection(**changes):
+    """A frozen deployment projection with the shape DeploymentEffect binds."""
+    document = {"target_revision": TARGET, "product_build": BUILD,
+                "host_version": "4.2.0", "site_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "archive": {"filename": "lmdj-web-runtime-host-4.2.0.tar.gz",
+                            "sha256": "5" * 64},
+                "release_files": {"index_sha256": "6" * 64,
+                                  "manifest_sha256": "7" * 64},
+                "prior": None, "prior_site_sha256": "8" * 64}
+    document.update(changes)
+    return document
+
+
+class DeploymentEnrollmentTest(unittest.TestCase):
+    """Both Host deploy steps share the enrollment; each case runs twice."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.projection = None
+        self.built = []
+        self.binds = []
+        self.effect_calls = []
+        self.api_reads = []
+
+    def transition_for(self, spec, expected, bind):
+        from tools.release.deployment_effect import DeploymentEffect
+        from tools.release.dispatch_evidence import DispatchEvidenceConsumer
+        from tools.release.dispatch_transition import DispatchTransition
+        from tools.release.durable_dispatch import DurableDispatch
+        from tools.release.github_api import GitHubClient
+
+        def transport(method, url, headers, body):
+            self.api_reads.append((method, url))
+            raise AssertionError("the absent path must not touch the API")
+
+        consumer = DispatchEvidenceConsumer(
+            api_get=lambda *a, **k: None, git_root=self.root, repository_id=12,
+            workflow=spec["workflow"], workflow_id=50,
+            producer_revision=spec["producer_revision"])
+        controller = DurableDispatch(
+            self.root / ("dispatch-" + spec["workflow"]),
+            client=GitHubClient(token="FIXTURE-NOT-A-SECRET",
+                                http_transport=transport),
+            consumer=consumer, authorize=lambda _spec: None,
+            ready=lambda _spec: None)
+        # The real effect verifier validates the frozen projection's full
+        # shape at construction.
+        effect = DeploymentEffect(consumer=consumer, spec=spec,
+                                  expected=expected)
+        self.built.append((deepcopy(spec), deepcopy(expected)))
+        self.binds.append(bind)
+        return DispatchTransition(controller, spec, bind=bind,
+                                  verify_effect=effect)
+
+    def step(self, step, **overrides):
+        from tools.release.carriers import enroll_deployment
+
+        arguments = dict(candidate_root=self.root, repository_id=12,
+                         ledger=Ledger(), workflow_id=50,
+                         producer_revision="0" * 40,
+                         projection_for=lambda _tag: self.projection,
+                         transition_for=self.transition_for)
+        arguments.update(overrides)
+        return enroll_deployment(step, **arguments)
+
+    def operation(self, step):
+        from tools.release.model import canonical_sha256
+
+        digest = canonical_sha256(request())
+        return {"step": step,
+                "operation_id": canonical_sha256({"request": digest,
+                                                  "step": step}),
+                "status": "intent", "evidence": None}
+
+    def deploy_state(self):
+        from tools.release.model import canonical_sha256
+
+        document = request()
+        return state(request=document,
+                     request_digest=canonical_sha256(document))
+
+    def test_pending_until_the_identity_and_projection_exist(self):
+        for step_name in ("runtime", "creator"):
+            with self.subTest(step=step_name):
+                step = self.step(step_name)
+                new_mode = state(request=request(mode="new",
+                                                 requested_tag=None))
+                self.assertEqual(step.observe(new_mode, self.operation(step_name)).status,
+                                 "pending")
+                # Identity derivable (tag-mode row) but the composition has
+                # not assembled the frozen projection yet.
+                self.assertEqual(step.observe(self.deploy_state(),
+                                              self.operation(step_name)).status,
+                                 "pending")
+        self.assertEqual(self.built, [])
+
+    def test_a_projection_that_does_not_bind_this_release_fails_closed(self):
+        for bad in ("not-a-projection",
+                    deployment_projection(target_revision="9" * 40),
+                    deployment_projection(product_build="1.0.59.0"),
+                    deployment_projection(prior_site_sha256="short"),
+                    {"target_revision": TARGET}):
+            for step_name in ("runtime", "creator"):
+                with self.subTest(step=step_name):
+                    self.projection = bad
+                    with self.assertRaises(JournalError):
+                        self.step(step_name).observe(self.deploy_state(),
+                                                     self.operation(step_name))
+        self.assertEqual(self.built, [])
+
+    def test_non_callable_readers_and_unknown_steps_are_refused(self):
+        from tools.release.carriers import enroll_deployment
+
+        with self.assertRaises(JournalError):
+            self.step("runtime", projection_for=None)
+        with self.assertRaises(JournalError):
+            enroll_deployment("publication", candidate_root=self.root,
+                              repository_id=12, ledger=Ledger(),
+                              workflow_id=50, producer_revision="0" * 40,
+                              projection_for=lambda _tag: None,
+                              transition_for=self.transition_for)
+
+    def test_delegation_builds_the_real_managed_adapter_per_step(self):
+        from tools.release.model import canonical_sha256
+
+        self.projection = deployment_projection()
+        for step_name, workflow in (("runtime", "deploy-web-runtime-host.yml"),
+                                    ("creator", "deploy-creator-web.yml")):
+            with self.subTest(step=step_name):
+                step = self.step(step_name)
+                observed = step.observe(self.deploy_state(),
+                                        self.operation(step_name))
+                # Real DispatchTransition + DurableDispatch + DeploymentEffect:
+                # durable child enrolled read-only, nothing posted, honest
+                # absent (inputs exist, the effect does not).
+                self.assertEqual(observed.status, "absent")
+        self.assertEqual(self.api_reads, [])
+        self.assertEqual(self.effect_calls, [])
+        self.assertEqual(len(self.built), 2)
+        digest = canonical_sha256(request())
+        for (spec, expected), (step_name, workflow) in zip(
+                self.built, (("runtime", "deploy-web-runtime-host.yml"),
+                             ("creator", "deploy-creator-web.yml"))):
+            operation_id = canonical_sha256({"request": digest, "step": step_name})
+            self.assertEqual(spec["operation_id"], operation_id)
+            self.assertEqual(spec["workflow"], workflow)
+            self.assertEqual(spec["inputs"],
+                             {"tag": "lmdj-v" + BUILD, "request_id": operation_id,
+                              "prior_site_sha256": "8" * 64})
+            self.assertEqual(expected, deployment_projection())
+        for step_name, workflow in (("runtime", "deploy-web-runtime-host.yml"),
+                                    ("creator", "deploy-creator-web.yml")):
+            enrolled = json.loads(
+                (self.root / ("dispatch-" + workflow) / "dispatch.json").read_text())
+            self.assertEqual(enrolled["post_intent"], False)
+
+    def test_bind_rejects_projection_drift(self):
+        self.projection = deployment_projection()
+        step = self.step("runtime")
+        self.assertEqual(step.observe(self.deploy_state(),
+                                      self.operation("runtime")).status, "absent")
+        self.projection = deployment_projection(prior_site_sha256="9" * 64)
+        with self.assertRaises(JournalError):
+            self.binds[0](self.deploy_state(), self.operation("runtime"),
+                          self.built[0][0])
+        # And one layer down, the durable child refuses the rebound spec.
+        from tools.release.durable_dispatch import DurableDispatchError
+
+        with self.assertRaises(DurableDispatchError):
+            step.observe(self.deploy_state(), self.operation("runtime"))
+
+
 if __name__ == "__main__":
     unittest.main()
