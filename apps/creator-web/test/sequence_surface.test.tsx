@@ -40,6 +40,11 @@ function renderSurface(recovery = false) {
   return callbacks;
 }
 
+test("workspace Sequence surface keeps Refresh authority on the transport strip", () => {
+  renderSurface();
+  expect(screen.getAllByRole("button", {name: "Refresh authority"})).toHaveLength(1);
+});
+
 test("issues authoritative settings and Pattern creation operations", () => {
   const callbacks = renderSurface();
   fireEvent.click(screen.getByRole("checkbox", {name: "Quantize"}));
