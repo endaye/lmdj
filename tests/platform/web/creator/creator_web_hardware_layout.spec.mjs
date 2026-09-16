@@ -116,3 +116,124 @@ test("opts into the 880×592 hardware shell, keeps overview read-only, and retur
   await expect(page.getByRole("button", {name: "Hardware layout"})).toBeVisible();
   await expect(page.getByTestId("creator-phase")).toHaveText("empty");
 });
+
+const PROJECT_TRANSITION_TIMEOUT_MS = 125_000;
+const AUDIO_TRANSITION_TIMEOUT_MS = 35_000;
+
+const projectHeading = (page) =>
+  page.getByRole("heading", {name: "Project 00000000"});
+
+async function importAndOpenProject(page) {
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", {name: "Import .lmdj"}).click();
+  await (await chooser).setFiles(bundle);
+  const open = page.getByRole("button", {name: "Open Project 00000000"});
+  await expect.poll(async () =>
+    await projectHeading(page).isVisible() ? "ready"
+      : await open.isVisible() ? "open" : "",
+  {timeout: PROJECT_TRANSITION_TIMEOUT_MS}).not.toBe("");
+  if (!await projectHeading(page).isVisible()) await open.click();
+  await expect(projectHeading(page))
+    .toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+}
+
+// After a reload the Bundle is already in OPFS, so this reopens it from the
+// local list. Importing it a second time would be a DUPLICATE_ID, which is a
+// different journey than the one this drill is asserting.
+async function reopenLocalProject(page) {
+  if (await projectHeading(page).isVisible()) return;
+  const open = page.getByRole("button", {name: "Open Project 00000000"});
+  if (!await open.isVisible()) {
+    await page.getByRole("button", {name: "Open local"})
+      .click({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+    // That read was a point in time. Wait for the row by name, so a list that
+    // never renders it fails as a missing Project row rather than as a click
+    // timing out somewhere inside the reload leg.
+    await expect(open).toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  }
+  await open.click({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await expect(projectHeading(page))
+    .toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+}
+
+// Both layouts publish the committed tempo, in their own element. This reads
+// whichever one is mounted so a single drill can compare across the boundary.
+async function committedBpm(page) {
+  const overview = page.locator(".overview-bpm");
+  const text = await overview.count() > 0
+    ? await overview.innerText()
+    : await page.locator(".status-facts div").filter({hasText: "BPM"})
+      .getByRole("definition").first().innerText();
+  const bpm = Number.parseFloat(text.replace(/[^0-9]/g, ""));
+  // An unreadable tempo has to fail right here. `toBe` compares with
+  // Object.is, under which two NaNs agree, so a drill that never managed to
+  // read the published tempo would otherwise report every leg as unchanged.
+  expect(
+    Number.isFinite(bpm),
+    `published tempo must be readable, got ${JSON.stringify(text)}`,
+  ).toBe(true);
+  return bpm;
+}
+
+test("carries Project Truth and running audio across a layout fallback drill", async ({page}) => {
+  await page.setViewportSize({width: 1440, height: 900});
+  await page.goto("/");
+  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
+    timeout: 30_000,
+  });
+
+  await importAndOpenProject(page);
+  await page.getByRole("button", {name: "Activate audio"}).click();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+  });
+  const committed = await committedBpm(page);
+  expect(committed).toBeGreaterThan(0);
+
+  // Leg 1 — opt in. The Runtime and Project Truth cross the boundary.
+  await page.getByRole("button", {name: "Hardware layout"}).click();
+  await expect(page.getByTestId("hardware-console")).toBeVisible();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  expect(await committedBpm(page)).toBe(committed);
+
+  // Leg 2 — an unapplied Tempo draft. Moving the fader is not a commit, so
+  // the published tempo must not move with it. Whether the draft itself
+  // survives a layout switch is D03 and is deliberately not asserted here.
+  await page.getByRole("button", {name: "Sequence"}).click();
+  const bpmFader = page.getByRole("slider", {name: "BPM"});
+  await expect(bpmFader).toBeVisible();
+  await bpmFader.fill(String(committed + 12));
+  await expect(page.getByRole("button", {name: "Apply BPM"})).toBeVisible();
+  expect(await committedBpm(page)).toBe(committed);
+
+  // Leg 3 — fall back with that draft outstanding. The old shell must come
+  // back with the same Project Truth and the same Runtime, and the abandoned
+  // draft must not have been committed on the way out.
+  await page.getByRole("button", {name: "Existing workspace"}).click();
+  await expect(page.getByTestId("hardware-console")).toHaveCount(0);
+  await expect(page.getByRole("button", {name: "Hardware layout"})).toBeVisible();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  expect(await committedBpm(page)).toBe(committed);
+
+  // Leg 4 — return. Same Project, same Runtime, still nothing committed.
+  await page.getByRole("button", {name: "Hardware layout"}).click();
+  await expect(page.getByTestId("hardware-console")).toBeVisible();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  expect(await committedBpm(page)).toBe(committed);
+
+  // Leg 5 — same-origin reload. The layout preference is Host settings, so it
+  // survives; audio does not, because resuming it needs a fresh gesture, and
+  // the Project the reload reopens still carries the uncommitted tempo.
+  await page.reload();
+  await expect(page.getByTestId("hardware-console")).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("audio-state")).not.toHaveText("Audio running");
+  await reopenLocalProject(page);
+  // Audio being stopped is not the same fact as the Runtime being healthy. A
+  // reload that left it failed, closed or still booting would keep answering
+  // with a stale tempo, so the phase is asserted rather than inferred.
+  await expect(page.getByTestId("creator-phase"))
+    .toHaveText("ready", {timeout: 30_000});
+  expect(await committedBpm(page)).toBe(committed);
+});
