@@ -4,6 +4,8 @@ import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import {afterAll, beforeAll, expect, test, vi} from "vitest";
 
+import type {PatternTransportStatus} from "@lmdj/web-runtime-platform/runtime_types";
+
 import {App} from "../src/app";
 import {encodePcm16Wav} from "../src/capture/wav_encoder";
 import {SampleSurface} from "../src/components/sample_surface";
@@ -2187,4 +2189,115 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
 
   await user.click(screen.getByRole("button", {name: "Project"}));
   expect(padA1()).toBeTruthy();
+});
+
+const engagedTransportStatus = (
+  overrides: Partial<PatternTransportStatus> = {},
+): PatternTransportStatus => ({
+  engaged: true,
+  playing: true,
+  recording: false,
+  phase: "idle",
+  runtimeGeneration: 1,
+  transportEpoch: 1,
+  originFrame: 0,
+  commandId: null,
+  publicationPending: false,
+  error: null,
+  ...overrides,
+});
+
+// Minimal Sequence capability stubs: only querySequenceStatus and
+// listSequenceRecovery are ever awaited (by refreshSequence); the rest exist
+// so isSequenceSession admits the fixture and the Sequence mode unlocks.
+const sequenceSessionStubs = () => ({
+  beginSequence: async () => sequenceStatusStub(),
+  flushSequence: async () => sequenceStatusStub(),
+  createPattern: async () => sequenceStatusStub(),
+  updateSequenceSettings: async () => sequenceStatusStub(),
+  disarmSequenceCapture: async () => sequenceStatusStub(),
+  stopSequence: async () => sequenceStatusStub(),
+  requestPatternSwitch: async () => sequenceStatusStub(),
+  querySequenceStatus: async () => sequenceStatusStub(),
+  listSequenceRecovery: async () => [],
+  applySequenceRecovery: async () => sequenceStatusStub(),
+  discardSequenceRecovery: async () => ({}),
+  subscribeSequenceBarBoundary: () => () => {},
+});
+
+const sequenceStatusStub = () => ({
+  state: "inactive" as const,
+  sessionId: null,
+  patternId: null,
+  pendingPatternId: null,
+  expectedRevision: 3,
+  nextFlushSequence: 0,
+  pendingEventCount: 0,
+  effectiveRuntimeFrame: null,
+});
+
+test("disengages the Pattern transport projection when the Runtime leaves ready", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  let hostListener: ((state: RuntimeHostState) => void) | undefined;
+  fixture.session.subscribeHostState = (listener) => {
+    hostListener = listener;
+    return () => {};
+  };
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    requestPatternTransport: async () => {
+      throw new Error("no transport command is submitted in this test");
+    },
+    inspectPatternTransport: async () => engagedTransportStatus(),
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  const region = await screen.findByRole("region", {name: "Sequence transport"});
+  await waitFor(() =>
+    expect(within(region).getByRole("status").textContent).toBe("playing"));
+
+  // A failed Runtime has no engagement; the projection must not keep showing
+  // the retired engagement's last state.
+  await act(async () => hostListener?.({
+    state: "failed", errorCode: "INTERNAL_ERROR", errorDetails: {},
+  }));
+
+  await waitFor(() =>
+    expect(within(region).getByRole("status").textContent).toBe("stopped"));
+});
+
+test("re-engages the Pattern transport with a fresh identity when an open replaces the Project with the same id", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const inspectedSessionIds: string[] = [];
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    requestPatternTransport: async () => {
+      throw new Error("no transport command is submitted in this test");
+    },
+    inspectPatternTransport: async (sessionId: string) => {
+      inspectedSessionIds.push(sessionId);
+      return engagedTransportStatus({
+        recording: inspectedSessionIds.length > 1,
+        playing: inspectedSessionIds.length === 1,
+      });
+    },
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await waitFor(() => expect(inspectedSessionIds).toHaveLength(1));
+
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  await userEvent.click(screen.getByRole("button", {name: "Open local"}));
+  await userEvent.click(await screen.findByRole("button", {
+    name: "Open Project 11111111",
+  }));
+
+  // The replacement retires the runtime engagement even though the Project id
+  // is unchanged, so the projection re-engages under a fresh identity instead
+  // of keeping the retired one's state.
+  await waitFor(() => expect(inspectedSessionIds).toHaveLength(2));
+  expect(inspectedSessionIds[1]).not.toBe(inspectedSessionIds[0]);
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  const region = await screen.findByRole("region", {name: "Sequence transport"});
+  await waitFor(() =>
+    expect(within(region).getByRole("status").textContent).toBe("recording"));
 });
