@@ -11,7 +11,6 @@ when the far side is already true and reports `absent` before it is.
 """
 
 from copy import deepcopy
-from pathlib import Path
 import re
 
 from .model import canonical_sha256
@@ -109,7 +108,13 @@ def site_routes(spec):
 
 
 def _fetch_status(fetch, url):
-    """fetch(url) -> HTTP status int; failures return 0 (site unreachable)."""
+    """fetch(url) -> HTTP status int; failures return 0 (site unreachable).
+
+    ponytail: only the status is bound into evidence. When a route must prove
+    it serves THIS Build's content (not just any 200), upgrade the fetch
+    contract to return (status, body_digest) and bind the digests in
+    ChangelogSiteCarrier.observe / FinalCarrier.observe evidence.
+    """
     try:
         return int(fetch(url))
     except Exception:
@@ -159,6 +164,8 @@ class FinalCarrier:
         row = self.ledger_row()
         if release is None or row is None:
             return Observation("absent")
+        if not hasattr(release, "get"):
+            _fail("the far-side Release projection is not readable")
 
         def field(row, name):
             return row.get(name) if hasattr(row, "get") else getattr(row, name, None)
