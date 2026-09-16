@@ -94,9 +94,11 @@ class RecoveredStepTest(unittest.TestCase):
         observed = step.observe(state(), self.operation())
         self.assertEqual(observed.status, "pending")
         self.assertIsNone(observed.evidence)
-        # Nothing can be driven while the identity is unknown.
-        step.execute(state(), self.operation())
         self.assertFalse(hasattr(step, "advance"))
+        # Executing a step whose identity is gone would report it done with no
+        # write; that is an anomaly, not a wait.
+        with self.assertRaises(JournalError):
+            step.execute(state(), self.operation())
 
     def test_a_recoverable_step_delegates_observe_and_execute(self):
         carrier = Carrier()
@@ -115,6 +117,20 @@ class RecoveredStepTest(unittest.TestCase):
         driving = self.step(carrier, drives=True)
         driving.advance(state(), self.operation(), before_write=lambda: None)
         self.assertEqual(carrier.seen, [("advance", DIGEST)])
+
+    def test_a_driving_step_writes_nothing_while_it_is_pending(self):
+        written = []
+        step = RecoveredStep("tag", lambda _s, _o: None, drives=True)
+        self.assertEqual(step.observe(state(), {"step": "tag", "operation_id": DIGEST}).status,
+                         "pending")
+        step.advance(state(), {"step": "tag", "operation_id": DIGEST},
+                     before_write=lambda: written.append(True))
+        self.assertEqual(written, [])
+        # Asked to act without that observation, it must not pass silently.
+        with self.assertRaises(JournalError):
+            step.advance(state(), {"step": "tag", "operation_id": "e" * 64},
+                         before_write=lambda: written.append(True))
+        self.assertEqual(written, [])
 
     def test_an_unknown_step_or_recovery_is_refused(self):
         for arguments in (("not-a-step", lambda _s, _o: None),
@@ -160,6 +176,14 @@ class IdentityRecoveryTest(unittest.TestCase):
         self.write_candidate(cut_merge=None)
         document = state(request=request(mode="new", requested_tag=None))
         self.assertIsNone(self.identity(document))
+
+    def test_a_candidate_state_without_a_frozen_snapshot_fails_closed(self):
+        for snapshot in (None, "not-a-digest", 0):
+            document = candidate_document()
+            document["scope"]["cut_spec"]["snapshot_sha256"] = snapshot
+            (self.root / "candidate-transition.json").write_text(json.dumps(document))
+            with self.assertRaises(JournalError):
+                self.identity(state(request=request(mode="new", requested_tag=None)))
 
     def test_a_candidate_state_from_another_request_fails_closed(self):
         self.write_candidate(digest="9" * 64)

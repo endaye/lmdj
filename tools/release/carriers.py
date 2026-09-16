@@ -55,6 +55,7 @@ class RecoveredStep:
             _fail("requires a callable spec recovery")
         self.step = step
         self._recover = recover
+        self._waiting = None
         if drives:
             # Instance attribute on purpose: only a self-driving step may look
             # like one to the driver.
@@ -70,13 +71,18 @@ class RecoveredStep:
         carrier = self.carrier(state, operation)
         if carrier is None:
             # The identity this step verifies does not exist yet; the run waits.
+            self._waiting = operation.get("operation_id")
             return Observation("pending")
+        self._waiting = None
         return carrier.observe(state, operation)
 
     def execute(self, state, operation):
         carrier = self.carrier(state, operation)
         if carrier is None:
-            return
+            # The driver executes only a step it just observed absent or
+            # verified, so an identity that is gone now is an anomaly, not a
+            # wait: never report the step done with no write and no error.
+            _fail("the step's identity disappeared before it could be executed")
         execute = getattr(carrier, "execute", None)
         if callable(execute):
             execute(state, operation)
@@ -84,7 +90,12 @@ class RecoveredStep:
     def _advance(self, state, operation, *, before_write):
         carrier = self.carrier(state, operation)
         if carrier is None:
-            return
+            if self._waiting == operation.get("operation_id"):
+                # The driver asks a self-driving step to act precisely when the
+                # identity is not yet derivable; it re-observes after the call,
+                # so writing nothing keeps the step honestly pending.
+                return
+            _fail("the step's identity is not derivable but it was asked to act")
         carrier.advance(state, operation, before_write=before_write)
 
 
@@ -113,13 +124,17 @@ def read_candidate_identity(candidate_root, request_digest):
     build = cut.get("product_build")
     if type(build) is not str or _BUILD.fullmatch(build) is None:
         _fail("the candidate transition records no valid product build")
+    snapshot = cut.get("snapshot_sha256")
+    if type(snapshot) is not str or _DIGEST.fullmatch(snapshot) is None:
+        # The cut froze its snapshot before anything else could run, so a
+        # missing or malformed one is corrupt state, not an absent fact.
+        _fail("the candidate transition records no valid frozen snapshot")
     merge = document.get("cut_merge")
     revision = merge.get("merge", {}).get("merge_sha") \
         if type(merge) is dict and type(merge.get("merge")) is dict else None
     if type(revision) is not str or _SHA.fullmatch(revision) is None:
         # The cut is not merged yet: the identity exists but is not frozen.
         return None
-    snapshot = cut.get("snapshot_sha256")
     return {"product_build": build, "target_revision": revision,
             "snapshot_sha256": snapshot}
 
