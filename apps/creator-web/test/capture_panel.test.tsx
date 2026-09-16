@@ -508,6 +508,26 @@ test("Capture trim styles anchor visible grips and keep range inputs out of the 
   expect(getComputedStyle(waveform).overflow).toBe("visible");
   expect(getComputedStyle(mask).position).toBe("absolute");
   expect(getComputedStyle(grip).width).toBe("14px");
+  // The number above is only half the story: the panel centres each grip by
+  // subtracting a fixed offset from the boundary percentage, so the bar is
+  // only on its boundary while that offset stays half the rendered width.
+  // D03 widened this shared class for the Sample editor and left both Capture
+  // grips 3px adrift; this ties the two numbers together so it cannot recur.
+  for (const edge of ["start", "end"] as const) {
+    const bar = container.querySelector<HTMLElement>(
+      `[data-capture-grip="${edge}"]`,
+    )!;
+    // The bar centres itself with a plain calc(<boundary>% - <half-width>px).
+    // Its sibling zone is the one carrying min()/max() clamps, so matching
+    // this exact shape both extracts the offset and states what the invariant
+    // is expressed in; a positioning rewrite fails here by name rather than
+    // silently through NaN.
+    const centring = /^calc\([\d.]+% - ([\d.]+)px\)$/.exec(bar.style.left);
+    expect(centring, `grip ${edge} must centre on its boundary with a single `
+      + `pixel offset, got left: ${bar.style.left}`).not.toBeNull();
+    const rendered = Number.parseFloat(getComputedStyle(bar).width);
+    expect(Number(centring![1]) * 2).toBe(rendered);
+  }
   expect(getComputedStyle(captureGrip(container, "start")).cursor).toBe("ew-resize");
   expect(getComputedStyle(slider).pointerEvents).toBe("none");
 });
