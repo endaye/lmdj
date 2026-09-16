@@ -366,7 +366,10 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
   const panel = await recordAtLeast(page, "Pad A1", 1);
 
   await panel.getByRole("button", {name: "Continue in Sequence"}).click();
-  await expect(page.getByRole("heading", {name: "Sequence"})).toBeVisible();
+  // U2 dropped the Sequence surface's <h1>; the surface is still the
+  // named landmark it always was. Same destination, same intent, bound
+  // to the element that actually carries the name now.
+  await expect(page.getByRole("main", {name: "Sequence"})).toBeVisible();
   await page.getByRole("button", {name: "Record"}).click();
   await expect(page.getByRole("status").filter({hasText: "recording"}))
     .toBeVisible();
@@ -448,7 +451,7 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
   // The transport still plays; back in Sequence mode, a fresh Record makes
   // the committed Pad ordinary recordable input for the same Pattern.
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
-  await expect(page.getByRole("heading", {name: "Sequence"})).toBeVisible();
+  await expect(page.getByRole("main", {name: "Sequence"})).toBeVisible();
   await page.getByRole("button", {name: "Record", exact: true}).click();
   await expect(page.getByRole("status").filter({hasText: "recording"}))
     .toBeVisible({timeout: 30_000});

@@ -83,11 +83,20 @@ test("opts into the 880×592 hardware shell, keeps overview read-only, and retur
   await expect(keys.getByRole("button", {name: "Sequence — open a playable Project first"}))
     .toBeVisible();
   await expect(keys.getByRole("button", {name: /^Perform/})).toBeVisible();
-  await expect(keys.getByRole("button", {name: "Record", exact: true})).toHaveText("●");
-  await expect(keys.getByRole("button", {
+  // V1 replaced the transport glyphs with the Desktop Final icon exports, so
+  // these keys carry no text at all now; the accessible name is what V1
+  // promised to keep, and the icon is what it promised to change.
+  const record = keys.getByRole("button", {name: "Record", exact: true});
+  await expect(record).toHaveClass(/\bhas-icon\b/);
+  await expect(record.locator("img")).toHaveCount(1);
+  await expect(record).toHaveText("");
+  const playStop = keys.getByRole("button", {
     name: "Play/Stop — needs a playable Project and running audio",
     exact: true,
-  })).toHaveText("▶");
+  });
+  await expect(playStop).toHaveClass(/\bhas-icon\b/);
+  await expect(playStop.locator("img")).toHaveCount(1);
+  await expect(playStop).toHaveText("");
   const shot = process.env.LMDJ_HARDWARE_CONSOLE_SHOT;
   if (shot) {
     await page.getByTestId("hardware-console").screenshot({path: shot});
