@@ -109,6 +109,10 @@ it degrades to a stated reason instead of to silent no-ops.
 - Mechanical six-mode reachability comparison of both layouts, §2 and §3.
 - `npm --prefix apps/creator-web test -- --run test/workspace_shell.test.tsx test/hardware_console.test.tsx test/shell_polish.test.tsx test/perform_surface.test.tsx test/sequence_surface.test.tsx` — 5 files, 144 tests passed.
 - Perturbation proof of the new gate, §4.
+- `scripts/creator-web.sh proof` — exit 0 end to end, chromium lane 55 passed,
+  including the layout fallback drill added for this ledger entry. The proof
+  entry itself was unusable until the reds in #1433, #1436 and #1427 were
+  cleared; those are fixed and merged.
 
 ### Not established — these block the default switch
 
@@ -122,11 +126,23 @@ it degrades to a stated reason instead of to silent no-ops.
   asserted in jsdom and in
   `tests/platform/web/creator/creator_web_accessibility.spec.mjs`; no screen
   reader or switch-access pass was made against the four-region shell.
-- **Scale and viewport acceptance.** The 200 % zoom and small-viewport paths
-  U1 declared have no recorded observation against the current shell.
-- **Same-origin fallback drill under load.** The opt-in and return path is
-  covered by `creator_web_hardware_layout.spec.mjs`; a drill that switches
-  layouts with unsaved edits, an active capture or a live transport is not.
+- **200 % zoom acceptance.** No recorded observation. Playwright exposes no
+  browser zoom, and emulating it with a viewport change or CSS `zoom` would be
+  a different thing wearing its name, so this stays an explicit gap rather
+  than a proxy. The small-viewport half is covered: `opts into the 880×592
+  hardware shell, keeps overview read-only, and returns` drops the viewport to
+  768×600 and asserts the fallback control stays reachable and the upper
+  screen still carries no button. An earlier revision of this ledger listed
+  both halves as unobserved; that was wrong about the small-viewport one.
+- **Same-origin fallback drill under an active capture or a live transport.**
+  `carries Project Truth and running audio across a layout fallback drill`
+  now walks the boundary with an open Project, running audio and an unapplied
+  Tempo draft: into the hardware shell, back to the existing workspace, in
+  again, then a reload, asserting after every transition that the published
+  tempo never moved and that the Runtime survived — and, after the reload,
+  that audio honestly did not. What that drill does not cover is a switch
+  during an armed Pad capture or a playing/recording transport; those legs
+  remain unobserved.
 - **Device-lifecycle legs.** The existing device tasks (#248, #249, #251,
   #243, #250, #360, #721, #1167, #961) have no candidate evidence recorded
   against the current hardware layout. They stay open; none of them is closed
