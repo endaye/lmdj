@@ -1756,5 +1756,162 @@ class DeploymentEnrollmentTest(unittest.TestCase):
             step.observe(self.deploy_state(), self.operation("runtime"))
 
 
+class PublishedRecordEnrollmentTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.release = None
+        self.factory_inputs = []
+        self.api_reads = []
+
+    def write_plan(self):
+        import hashlib
+
+        from tools.release import prepared_step
+
+        output = self.root / prepared_step.output_relative("lmdj-v" + BUILD)
+        output.mkdir(parents=True, exist_ok=True)
+        body = b'{"fixture": "plan"}'
+        (output / prepared_step._PLAN_DOCUMENT).write_bytes(body)
+        (output / prepared_step._PLAN_DIGEST).write_text(
+            hashlib.sha256(body).hexdigest() + "\n")
+        return hashlib.sha256(body).hexdigest()
+
+    def api(self, method, path, document=None):
+        # The absent path is GET-only: repo/actor/branch authority reads plus
+        # the PR inventory lookup.
+        self.assertEqual(method, "GET")
+        self.api_reads.append(path)
+        if path == "":
+            return {"id": 12, "full_name": "endaye/lmdj"}
+        if path == "/user":
+            return {"id": 34}
+        if path == "/branches/main":
+            return {"name": "main", "protected": True, "commit": {"sha": TARGET}}
+        if path.startswith("/pulls?"):
+            return []
+        raise AssertionError(path)
+
+    def transition_for(self, **inputs):
+        from tools.release.evidence_pr import EvidencePullRequest
+        from tools.release.evidence_pr_transition import EvidencePrTransition
+
+        self.factory_inputs.append(deepcopy(inputs))
+        spec = {"operation_id": inputs["operation_id"],
+                "request_sha256": inputs["request_sha256"],
+                "repository_id": 12, "actor_id": 34, "base_revision": TARGET,
+                "head_sha": "7" * 40, "tree_sha": "8" * 40,
+                "tag": inputs["tag"],
+                "target_revision": inputs["target_revision"],
+                "task_evidence_sha256": "9" * 64}
+        controller = EvidencePullRequest(self.root / "evidence-pr", api=self.api,
+                                         authorize=lambda _spec: None,
+                                         review=lambda *a: None,
+                                         verify_merged=lambda *a: None)
+        return EvidencePrTransition(controller, spec)
+
+    def step(self, **overrides):
+        from tools.release.carriers import enroll_published_record
+
+        arguments = dict(root=self.root, candidate_root=self.root,
+                         repository_id=12, ledger=Ledger(),
+                         release_by_tag=lambda _tag: self.release,
+                         transition_for=self.transition_for)
+        arguments.update(overrides)
+        return enroll_published_record(**arguments)
+
+    def operation(self):
+        from tools.release.model import canonical_sha256
+
+        digest = canonical_sha256(request())
+        return {"step": "published_record",
+                "operation_id": canonical_sha256({"request": digest,
+                                                  "step": "published_record"}),
+                "status": "intent", "evidence": None}
+
+    def record_state(self):
+        from tools.release.model import canonical_sha256
+
+        document = request()
+        return state(request=document,
+                     request_digest=canonical_sha256(document))
+
+    def test_the_step_drives_its_own_write(self):
+        # The evidence commit and the reviewed PR leg are this step's write;
+        # the wrapper exposes the driver-guarded advance for it.
+        self.assertTrue(callable(getattr(self.step(), "advance", None)))
+
+    def test_pending_at_each_underivable_stage(self):
+        step = self.step()
+        # New mode before any allocation: no Build to record.
+        new_mode = state(request=request(mode="new", requested_tag=None))
+        self.assertEqual(step.observe(new_mode, self.operation()).status, "pending")
+        # Tag mode with the row but no prepared plan.
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        # Plan prepared but nothing is published under the tag.
+        self.write_plan()
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        # Published run not complete: the Release is still a draft.
+        self.release = {"draft": True, "id": 4096}
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        self.assertEqual(self.factory_inputs, [])
+
+    def test_an_unreadable_or_idless_release_fails_closed(self):
+        self.write_plan()
+        step = self.step()
+        for release in ("not-a-projection", {"draft": False},
+                        {"draft": False, "id": "4096"}):
+            self.release = release
+            with self.assertRaises(JournalError):
+                step.observe(state(), self.operation())
+        self.assertEqual(self.factory_inputs, [])
+
+    def test_a_pending_step_writes_nothing_when_asked_to_advance(self):
+        written = []
+        step = self.step()
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        step.advance(state(), self.operation(),
+                     before_write=lambda: written.append(True))
+        self.assertEqual(written, [])
+        self.assertEqual(self.factory_inputs, [])
+
+    def test_non_callable_readers_are_refused_at_enrollment(self):
+        with self.assertRaises(JournalError):
+            self.step(release_by_tag=None)
+        with self.assertRaises(JournalError):
+            self.step(transition_for=None)
+
+    def test_a_wrong_adapter_type_is_refused(self):
+        self.write_plan()
+        self.release = {"draft": False, "id": 4096}
+        step = self.step(transition_for=lambda **inputs: object())
+        with self.assertRaises(JournalError):
+            step.observe(state(), self.operation())
+
+    def test_delegation_builds_the_real_evidence_transition(self):
+        from tools.release.model import canonical_sha256
+
+        plan = self.write_plan()
+        self.release = {"draft": False, "id": 4096}
+        step = self.step()
+        # The real EvidencePrTransition over the real EvidencePullRequest:
+        # the durable child enrolls read-only and the far side shows no PR.
+        observed = step.observe(self.record_state(), self.operation())
+        self.assertEqual(observed.status, "absent")
+        self.assertEqual(len(self.factory_inputs), 1)
+        inputs = self.factory_inputs[0]
+        digest = canonical_sha256(request())
+        self.assertEqual(inputs, {
+            "tag": "lmdj-v" + BUILD, "target_revision": TARGET,
+            "repository_id": 12, "actor_id": 34, "request_sha256": digest,
+            "operation_id": canonical_sha256({"request": digest,
+                                              "step": "published_record"}),
+            "release_id": 4096, "plan_sha256": plan})
+        enrolled = json.loads(
+            (self.root / "evidence-pr" / "pr-state.json").read_text())
+        self.assertEqual(enrolled["spec"]["tag"], "lmdj-v" + BUILD)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -429,8 +429,7 @@ def enroll_final(*, candidate_root, repository_id, ledger, fetch,
         tag = fields["tag"]
         release = release_by_tag(tag)
         recorded = release_id_for(tag)
-        if release is not None and not hasattr(release, "get"):
-            _fail("the far-side Release projection is not readable")
+        far_id = checked_release_id(release)
         if recorded is None:
             # The publication record does not name this tag yet, so there is
             # no confirmed Release identity to bind, whatever the far side
@@ -439,13 +438,13 @@ def enroll_final(*, candidate_root, repository_id, ledger, fetch,
         if type(recorded) is not int or recorded <= 0:
             _fail("the publication record carries no valid numeric Release "
                   "identity")
-        if release is None:
+        if far_id is None:
             _fail("the publication record names a Release the far side does "
                   "not have")
         if release.get("draft"):
             _fail("the publication record names a Release that is still a "
                   "draft")
-        if release.get("id") != recorded:
+        if far_id != recorded:
             _fail("the publication record and the far-side Release disagree "
                   "on the Release identity")
         spec = dict(fields, site_base_url=site_base_url, release_id=recorded)
@@ -456,6 +455,23 @@ def enroll_final(*, candidate_root, repository_id, ledger, fetch,
                             ledger_row=ledger_row)
 
     return RecoveredStep("final", recover)
+
+
+def checked_release_id(release):
+    """The numeric identity of a far-side Release projection, or None if absent.
+
+    An unreadable projection, or a present Release without a valid numeric
+    identity, fails closed. A draft is a Release and returns its id — each
+    caller decides what draft means for its own step.
+    """
+    if release is None:
+        return None
+    if not hasattr(release, "get"):
+        _fail("the far-side Release projection is not readable")
+    release_id = release.get("id")
+    if type(release_id) is not int or release_id <= 0:
+        _fail("the far-side Release carries no valid numeric identity")
+    return release_id
 
 
 def enroll_intent(*, candidate_root, repository_id, batch_reference_for,
@@ -1034,3 +1050,66 @@ def enroll_deployment(step, *, candidate_root, repository_id, ledger,
         return transition_for(spec, expected, bind)
 
     return RecoveredDispatch(step, recover)
+
+
+def enroll_published_record(*, root, candidate_root, repository_id, ledger,
+                            release_by_tag, transition_for):
+    """The `published_record` step: land the publication record via a reviewed PR.
+
+    The step drives its own write (the evidence commit plus the reviewed
+    `EvidencePrTransition` PR leg), so the wrapper is a `drives=True`
+    `RecoveredStep`: the driver's `publication_pr` slot accepts only the
+    concrete transition, so this lazy wrapper rides the backend carrier path,
+    whose guard signature (`before_write`) is exactly the managed slot's.
+
+    Recovery: the identity comes from the intent row via `spec_identity`; the
+    plan digest from the `prepared` output; the numeric Release identity from
+    the far side — published and non-draft, since this step runs after
+    `publication`. Nothing published, a still-draft Release, or a missing plan
+    is `pending`; an unreadable or id-less Release fails closed. The
+    publication record file itself is this step's output, so no record read
+    participates here. `transition_for(...)` is the trusted composition's
+    factory: it drives the durable evidence commit (`PublicationWorkspace`)
+    and Task verification, then builds the concrete `EvidencePrTransition`;
+    the enrollment refuses anything else.
+    """
+    from .evidence_pr_transition import EvidencePrTransition
+    from .model import canonical_sha256
+
+    if not callable(release_by_tag) or not callable(transition_for):
+        _fail("requires the trusted far-side reader and transition factory")
+
+    def operation_id(digest):
+        return canonical_sha256({"request": digest, "step": "published_record"})
+
+    def recover(state, operation):
+        fields = spec_identity(state, candidate_root=candidate_root,
+                               repository_id=repository_id, ledger=ledger,
+                               operation_id=operation_id, fields=_DRAFT_FIELDS)
+        if fields is None:
+            return None
+        tag = fields["tag"]
+        plan = read_prepared_plan(root, tag)
+        if plan is None:
+            return None
+        release = release_by_tag(tag)
+        release_id = checked_release_id(release)
+        if release_id is None:
+            # Nothing published under this tag yet.
+            return None
+        if release.get("draft"):
+            # A draft means the publication step has not completed.
+            return None
+        adapter = transition_for(tag=tag,
+                                 target_revision=fields["target_revision"],
+                                 repository_id=fields["repository_id"],
+                                 actor_id=fields["actor_id"],
+                                 request_sha256=fields["request_sha256"],
+                                 operation_id=fields["operation_id"],
+                                 release_id=release_id, plan_sha256=plan)
+        if type(adapter) is not EvidencePrTransition:
+            _fail("the composition did not build the concrete publication "
+                  "evidence transition")
+        return adapter
+
+    return RecoveredStep("published_record", recover, drives=True)

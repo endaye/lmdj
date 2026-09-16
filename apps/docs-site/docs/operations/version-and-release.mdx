@@ -469,8 +469,12 @@ target/changelog/notes 逐项比对）。entry_gates 另补 `dispatch_authority`
 冻结部署投影（Release 资产摘要、Host 版本、站点身份与派发前 Site prior）由受信组合按 tag
 注入并在整次驱动（含派发后恢复）期间保持可回答；投影不绑定本 release 的 target/Build 即
 fail-closed，effect 验证复用 `DeploymentEffect`（对 run 留存证据逐项复核投影）。
-`prepared` / `tag` / `verification` 与 published_record
-受管 adapter 的登记录入仍未完成，`release_carriers` 因此继续拒绝执行。
+`published_record` 步亦已登记：发布记录文件是该步自身产出，故恢复只读远端——Release 必须已发布
+且非 draft（不存在或仍 draft 即 `pending`），计划摘要取自 `prepared` 输出；受信组合的工厂驱动
+持久证据提交与 Task 验证后构建具体 `EvidencePrTransition`，类型不符即拒绝。driver 的
+`publication_pr` 槽位只接受该具体类型，故惰性包装走 backend carrier 路径，其 `before_write`
+护栏签名与受管槽位一致；Release 投影校验（`checked_release_id`）由 final 与该步共享。
+`prepared` / `tag` 与 `verification` 的登记录入仍未完成，`release_carriers` 因此继续拒绝执行。
 
 带 `changelog` 的 reviewed intent 现已接通 prepare / Draft / published 验证：正文
 进入 plan 摘要，prepare 重验真实 Git 范围，恢复时检查本地 notes，Draft 与公开
