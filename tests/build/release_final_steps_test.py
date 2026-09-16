@@ -76,6 +76,9 @@ class ChangelogSiteCarrierTest(unittest.TestCase):
     def test_404_is_absent_and_unreachable_is_unknown(self):
         self.assertEqual(ChangelogSiteCarrier(
             spec=site_spec(), fetch=lambda url: 404 if "versions" in url else 200
+        ).observe({}, {}).status, "conflict")
+        self.assertEqual(ChangelogSiteCarrier(
+            spec=site_spec(), fetch=lambda url: 404
         ).observe({}, {}).status, "absent")
         self.assertEqual(ChangelogSiteCarrier(
             spec=site_spec(), fetch=lambda url: (_ for _ in ()).throw(OSError("down"))

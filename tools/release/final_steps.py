@@ -135,8 +135,12 @@ class ChangelogSiteCarrier:
         routes = site_routes(self.spec)
         statuses = {name: _fetch_status(self.fetch, url)
                     for name, url in routes.items()}
-        if any(status == 404 for status in statuses.values()):
+        # A fully absent site is "not yet deployed"; a partial one (one route
+        # live, one 404) is an inconsistency the driver must see, not wait on.
+        if all(status == 404 for status in statuses.values()):
             return Observation("absent")
+        if any(status == 404 for status in statuses.values()):
+            return Observation("conflict")
         if any(status != 200 for status in statuses.values()):
             # Unreachable or erroring site is not proof of absence.
             return Observation("unknown")
@@ -190,6 +194,9 @@ class FinalCarrier:
             "tag": self.spec["tag"], "release_id": self.spec["release_id"],
             "channel": self.spec["channel"],
             "target_revision": self.spec["target_revision"],
+            "row": {"target_revision": field(row, "target_revision"),
+                    "channel": field(row, "channel"),
+                    "disposition": field(row, "disposition")},
             "routes": routes, "statuses": statuses}),
             "reference": "final:" + self.spec["tag"]}
         return Observation("verified", evidence)
