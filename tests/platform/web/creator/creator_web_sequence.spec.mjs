@@ -148,7 +148,10 @@ async function awaitAdmittedPresses(page, count) {
 
 async function enterSequenceAndPlay(page) {
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
-  await expect(page.getByRole("heading", {name: "Sequence"})).toBeVisible();
+  // U2 dropped the Sequence surface's <h1>; the surface is still the
+  // named landmark it always was. Same destination, same intent, bound
+  // to the element that actually carries the name now.
+  await expect(page.getByRole("main", {name: "Sequence"})).toBeVisible();
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state"))
     .toHaveText("Audio running", {timeout: 30_000});
@@ -240,14 +243,20 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   await importProject(page);
   const imported = await inspectTruth(page);
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
-  await expect(page.getByRole("heading", {name: "Sequence"})).toBeVisible();
+  await expect(page.getByRole("main", {name: "Sequence"})).toBeVisible();
   const pattern = page.getByRole("combobox", {name: "Pattern"});
   const patternId = await pattern.inputValue();
 
   // Author a second Pattern and reselect the first BEFORE audio starts: a
   // quiescent Engine applies each publication immediately, so the later
   // transport commands never race a scheduled publication.
-  await page.getByRole("combobox", {name: "Bars"}).selectOption("2");
+  // U2 turned Bars into a segmented control shared by both layouts, so the
+  // bar count is chosen by pressing its segment rather than selecting an
+  // option. The pressed state is the same committed choice selectOption made.
+  const bars = page.getByRole("group", {name: "Bars"})
+    .getByRole("button", {name: "2 bars"});
+  await bars.click();
+  await expect(bars).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", {name: "Create Pattern"}).click();
   await expect(pattern.locator("option")).toHaveCount(2, {timeout: 30_000});
   const alternatePattern = await pattern.locator("option").nth(1)
@@ -430,7 +439,7 @@ test("owner loss surfaces the interrupted recording for honest refusal and disca
   expect(lostTruth.patterns[patternId].events).toHaveLength(0);
 
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
-  await expect(page.getByRole("heading", {name: "Sequence"})).toBeVisible();
+  await expect(page.getByRole("main", {name: "Sequence"})).toBeVisible();
   const recoveryRegion = page.getByRole("region", {name: "Sequence recovery"});
   await expect(recoveryRegion).toBeVisible({timeout: 60_000});
   // The one-shot Pad press is an admitted candidate but not a complete event
