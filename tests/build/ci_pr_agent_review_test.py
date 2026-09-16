@@ -29,9 +29,13 @@ from unittest import mock
 import shutil
 
 
+_MODULE_IMPORT_T0 = time.monotonic()
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
 import pr_agent_review as adapter
+
+_MODULE_IMPORT_SECONDS = time.monotonic() - _MODULE_IMPORT_T0
 
 
 FIXTURES = ROOT / "tests/fixtures/ci/pr-agent"
@@ -3142,10 +3146,25 @@ print(json.dumps({"calls": calls, "source": info, "model_cost_entries": len(lite
         environment = dict(os.environ)
         environment["PR_AGENT_RUN_INTEGRATION"] = "1"
         environment["PR_AGENT_TEST_SOURCE_ROOT"] = str(source_root)
-        completed = subprocess.run(
-            [str(runtime), str(Path(__file__)), "--integration-child"],
-            cwd=ROOT, env=environment, text=True, capture_output=True, timeout=120,
-        )
+        command = [str(runtime), str(Path(__file__)), "--integration-child"]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=ROOT, env=environment, text=True, capture_output=True, timeout=120,
+            )
+        except subprocess.TimeoutExpired as expired:
+            partial = "\n".join(
+                stream.decode("utf-8", errors="replace") if isinstance(stream, bytes) else stream or ""
+                for stream in (expired.stdout, expired.stderr)
+            )
+            self.fail(
+                "why: the integration child exceeded its 120-second budget; the partial "
+                "transcript below names the test in flight when the cap hit, and the "
+                "child's timing trace attributes import versus suite time; remedy: "
+                "attribute the overrun to a phase before changing the budget, the "
+                "work, or the host\n"
+                f"{partial}"
+            )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
 
@@ -3159,5 +3178,14 @@ def run_suite(integration_child=False):
 
 
 if __name__ == "__main__":
-    failed = not run_suite("--integration-child" in sys.argv).wasSuccessful()
+    integration_child = "--integration-child" in sys.argv
+    suite_t0 = time.monotonic()
+    failed = not run_suite(integration_child).wasSuccessful()
+    print(
+        f"timing schema=lmdj.ci-pr-agent-phase-timing.v1 "
+        f"role={'integration-child' if integration_child else 'parent'} "
+        f"module_import_seconds={_MODULE_IMPORT_SECONDS:.3f} "
+        f"suite_seconds={time.monotonic() - suite_t0:.3f}",
+        file=sys.stderr,
+    )
     raise SystemExit(1 if failed else 0)
