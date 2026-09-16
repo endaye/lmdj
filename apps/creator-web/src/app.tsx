@@ -22,6 +22,7 @@ import {PadSurface} from "./components/pad_surface";
 import {PhysicalControls} from "./components/physical_controls";
 import {PerformSurface} from "./components/perform_surface";
 import {ProjectSurface} from "./components/project_surface";
+import {ProjectTouchWorkspace} from "./components/project_touch_workspace";
 import {SampleSurface} from "./components/sample_surface";
 import {SequenceSurface} from "./components/sequence_surface";
 import {SequenceTouchWorkspace} from "./components/sequence_touch_workspace";
@@ -1547,7 +1548,7 @@ function Workspace({
                 </section>
               ) : null}
               {activeMode === "project" ? (
-                <ProjectSurface
+                <ProjectTouchWorkspace
                   state={state}
                   canOpen={canOpenProject}
                   canImport={canImportProject}

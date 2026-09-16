@@ -2153,6 +2153,29 @@ test("opts into the hardware shell with a read-only overview and returns to the 
   expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
 });
 
+test("hardware Project keeps list/import/open in touch and omits New/Save As", async () => {
+  const user = userEvent.setup();
+  render(<App initialState={ready} />);
+  await user.click(screen.getByRole("button", {name: "Hardware layout"}));
+
+  const display = screen.getByRole("region", {name: "Overview display"});
+  expect(within(display).queryAllByRole("button")).toHaveLength(0);
+  expect(within(display).queryByRole("button", {name: "New"})).toBeNull();
+  expect(within(display).getByTestId("project-overview").textContent ?? "")
+    .toMatch(/Save As/);
+
+  const touch = screen.getByRole("region", {name: "Touch workspace"});
+  expect(within(touch).getByRole("button", {name: "Open local"})).toBeTruthy();
+  expect(within(touch).getByRole("button", {name: "Import .lmdj"})).toBeTruthy();
+  expect(within(touch).getByRole("button", {name: "Activate audio"})).toBeTruthy();
+  expect(within(touch).getByRole("button", {name: "Enable MIDI"})).toBeTruthy();
+  expect(within(touch).getByRole("button", {name: "Export report"})).toBeTruthy();
+  expect(within(touch).queryByRole("button", {name: "New"})).toBeNull();
+  expect(within(touch).queryByRole("button", {name: "Save As"})).toBeNull();
+  expect(within(touch).queryByRole("button", {name: "Export project"})).toBeNull();
+  expect(within(touch).queryByRole("button", {name: /^Open$/})).toBeNull();
+});
+
 test("keeps pad identity and mounts Project Sample Sequence in the hardware touch screen", async () => {
   const user = userEvent.setup();
   render(<App initialState={ready} />);
