@@ -223,11 +223,15 @@ def read_prepared_plan(root, tag):
     """The plan digest `prepare` wrote for this tag, or None before it ran.
 
     The path is the one `prepared_step` reads back from, so the enrollment and
-    the step agree on where the plan lives. Only an absent file means "not
-    prepared yet"; the digest is also checked against the plan document bytes it
-    names, so a swapped digest file cannot silently redefine what a later step
-    binds. Which *reviewed* digest authorizes the plan is still open (#1404):
-    no ledger row records it yet.
+    the step agree on where the plan lives. `None` means the prepared output is
+    not there yet, which is the same condition `prepared_step.read_back` reports
+    as "absent"; the step that needs it decides what that means for itself, and
+    this enrollment reports it as `pending` because it cannot drive `prepare`
+    (see #1404). Only an absent pair means that: the digest is checked against
+    the plan document bytes it names, so a swapped digest file cannot silently
+    redefine what a later step binds, and half of the pair is drift. Which
+    *reviewed* digest authorizes the plan is still open (#1404): no ledger row
+    records it yet.
     """
     from . import prepared_step
 
@@ -280,11 +284,13 @@ def enroll_draft(*, root, candidate_root, repository_id, ledger, create_draft,
         validate_spec(spec)
         tag = spec["tag"]
         # draft_step takes a zero-argument far-side reader, and the enrollment
-        # owns the identity the carrier verifies. The carrier is built per
-        # recovery from this frozen spec and lives for one operation, so the
-        # reader is tag-stable for its lifetime by construction: a far-side
-        # Release under another tag is caught by read_back's tag comparison,
-        # never silently read as this step's work.
+        # owns the identity the carrier verifies: the tag comes from the spec
+        # that was just validated, and DraftCarrier deep-copies that spec, so
+        # the identity the reader queries cannot drift from the one read_back
+        # compares against. The carrier is built per recovery and lives for one
+        # operation, so it is tag-stable for its lifetime by construction; a
+        # far-side Release under another tag is caught by read_back's own tag
+        # comparison, never silently read as this step's work.
         return DraftCarrier(spec=spec, create_draft=create_draft,
                             release_by_tag=lambda: release_by_tag(tag))
 
