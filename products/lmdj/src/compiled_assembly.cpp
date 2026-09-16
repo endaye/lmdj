@@ -13,7 +13,7 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
   using lmdj::facade::CompiledProvider;
   return lmdj::facade::CompiledAssemblyCatalog{
       "lmdj",
-      "1.0.58.0",
+      "1.0.59.0",
       "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
       {
           CompiledComponent{"foundation", "0.4.0"},
@@ -22,16 +22,16 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
           CompiledComponent{"project-cooker", "1.2.0"},
           CompiledComponent{"audio-runtime", "5.0.0"},
           CompiledComponent{"provider-sdk", "2.2.0"},
-          CompiledComponent{"application-facade", "6.0.0"},
-          CompiledComponent{"web-runtime-platform", "5.3.0"},
+          CompiledComponent{"application-facade", "6.1.0"},
+          CompiledComponent{"web-runtime-platform", "5.3.1"},
       },
       {
-          CompiledComponent{"core-cli", "3.3.5"},
-          CompiledComponent{"core-mcp", "3.4.0"},
-          CompiledComponent{"native-host", "3.4.0"},
-          CompiledComponent{"cardputer-host", "1.0.0"},
-          CompiledComponent{"web-runtime-host", "4.3.0"},
-          CompiledComponent{"creator-web", "4.3.1"},
+          CompiledComponent{"core-cli", "3.3.6"},
+          CompiledComponent{"core-mcp", "3.4.1"},
+          CompiledComponent{"native-host", "3.4.1"},
+          CompiledComponent{"cardputer-host", "1.0.1"},
+          CompiledComponent{"web-runtime-host", "4.3.1"},
+          CompiledComponent{"creator-web", "4.3.2"},
       },
       {
           CompiledComponent{"lmdj.project.v5", "5.0.0"},
