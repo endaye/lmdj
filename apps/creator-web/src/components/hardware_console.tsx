@@ -1,35 +1,13 @@
 import {type ReactNode} from "react";
 
-export const LAYOUT_STORAGE_KEY = "lmdj.creator.layout";
-export type CreatorLayout = "workspace" | "hardware";
-
-export function readStoredCreatorLayout(): CreatorLayout {
-  if (typeof window === "undefined") return "hardware";
+// The layout preference and `?layout=` query were retired with the workspace
+// shell. A browser that stored `workspace` while the toggle existed would
+// otherwise carry a dead value forever, so the key is removed once on boot.
+export function retireCreatorLayoutPreference(): void {
   try {
-    const stored = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
-    if (stored === "hardware" || stored === "workspace") return stored;
+    window.localStorage.removeItem("lmdj.creator.layout");
   } catch {
-    // Host presentation preference is best-effort and never Project Truth.
-  }
-  return "hardware";
-}
-
-export function readCreatorLayout(): CreatorLayout {
-  if (typeof window === "undefined") return "hardware";
-  try {
-    const query = new URLSearchParams(window.location.search).get("layout");
-    if (query === "hardware" || query === "workspace") return query;
-  } catch {
-    // Host presentation preference is best-effort and never Project Truth.
-  }
-  return readStoredCreatorLayout();
-}
-
-export function writeCreatorLayout(layout: CreatorLayout): void {
-  try {
-    window.localStorage.setItem(LAYOUT_STORAGE_KEY, layout);
-  } catch {
-    // A blocked store must not prevent in-memory layout switching.
+    // A blocked store has nothing to retire.
   }
 }
 

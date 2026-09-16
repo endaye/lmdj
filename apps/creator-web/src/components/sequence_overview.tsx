@@ -1,7 +1,7 @@
 import type {ProjectView} from "../runtime/runtime_types";
 import type {SequenceState} from "../state/sequence_state";
 import type {PatternTransportState} from "../state/pattern_transport_state";
-import {transportStatusLabel} from "./sequence_transport";
+import {transportStatusLabel} from "./transport_status";
 
 interface SequenceOverviewProps {
   project: ProjectView | null;

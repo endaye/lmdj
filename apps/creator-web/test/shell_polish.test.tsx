@@ -6,11 +6,8 @@ import {expect, test, vi} from "vitest";
 
 import {App} from "../src/app";
 import {ErrorPanel} from "../src/components/error_panel";
-import {ModeRail} from "../src/components/mode_rail";
 import {ProjectSurface, formatBytes} from "../src/components/project_surface";
-import {SequenceSurface} from "../src/components/sequence_surface";
-import {SequenceTransport} from "../src/components/sequence_transport";
-import {StatusBar, midiLabel} from "../src/components/status_bar";
+import {midiLabel} from "../src/components/midi_status";
 import type {CreatorBuildIdentity} from "../src/runtime/build_identity";
 import type {ProjectView} from "../src/runtime/runtime_types";
 import {
@@ -54,31 +51,6 @@ const ready: CreatorState = {
   runtime: {phase: "ready", errorCode: null, errorDetails: {}},
 };
 
-test("status bar shows the build identity, the Project revision and the MIDI state", () => {
-  render(
-    <StatusBar
-      state={ready}
-      buildIdentity={BUILD}
-      midi={{permission: "granted", connectedInputCount: 2}}
-    />,
-  );
-  const identity = screen.getByTestId("build-identity");
-  expect(identity.textContent).toBe("v9.8.7.6 · creator-web 1.5.0");
-  expect(identity.getAttribute("title")).toBe(
-    "Product Build 9.8.7.6 · creator-web 1.5.0 · web-runtime-platform 0.3.6 · protocol 1",
-  );
-  expect(screen.getByText("Rev").nextElementSibling?.textContent).toBe("7");
-  expect(screen.getByTestId("midi-state").textContent).toBe("2 inputs");
-  expect(screen.getByRole("button", {name: "Enable MIDI"}).hasAttribute("disabled"))
-    .toBe(true);
-});
-
-test("status bar omits the build identity when none is supplied", () => {
-  render(<StatusBar state={ready} />);
-  expect(screen.queryByTestId("build-identity")).toBeNull();
-  expect(screen.getByTestId("midi-state").textContent).toBe("—");
-});
-
 test("MIDI label covers every permission state", () => {
   expect(midiLabel(null)).toBe("—");
   expect(midiLabel({permission: "prompt", connectedInputCount: 0})).toBe("off");
@@ -91,16 +63,6 @@ test("App threads the build identity into the shell", () => {
   render(<App initialState={ready} buildIdentity={BUILD} />);
   expect(screen.getByTestId("build-identity").textContent)
     .toBe("v9.8.7.6 · creator-web 1.5.0");
-});
-
-test("mode rail glyphs never reuse Pad keyboard letters", () => {
-  render(<ModeRail activeMode="project" onSelect={() => {}} />);
-  const glyphs = Array.from(
-    document.querySelectorAll(".mode-glyph"),
-    (glyph) => glyph.textContent ?? "",
-  );
-  expect(glyphs).toHaveLength(6);
-  for (const glyph of glyphs) expect(glyph).not.toMatch(/^[A-Za-z]$/);
 });
 
 test("Project summary lists Pattern and Sequence settings and drops the stale stage note", () => {
@@ -231,51 +193,4 @@ test("error panel renders Dismiss only when a handler is offered", () => {
   expect(screen.queryByRole("button", {name: "Dismiss"})).toBeNull();
   rerender(<ErrorPanel code="INVALID_PROJECT" onDismiss={() => {}} />);
   expect(screen.getByRole("button", {name: "Dismiss"})).toBeTruthy();
-});
-
-test("sequence transport explains why Record is unavailable", () => {
-  const {rerender} = render(
-    <SequenceTransport transport={initialPatternTransportState} ready={false}
-      onPlayStop={() => {}} onRecord={() => {}} onRefresh={() => {}} />,
-  );
-  expect(screen.getByText("Activate audio to record")).toBeTruthy();
-  rerender(
-    <SequenceTransport transport={initialPatternTransportState} ready
-      onPlayStop={() => {}} onRecord={() => {}} onRefresh={() => {}} />,
-  );
-  expect(screen.queryByText("Activate audio to record")).toBeNull();
-});
-
-test("sequence settings follow committed Project values and pluralise bars", () => {
-  const noop = () => {};
-  const props = {
-    state: initialSequenceState,
-    transport: initialPatternTransportState,
-    ready: true,
-    onPlayStop: noop, onRecord: noop, onRefresh: noop, onSwitch: noop,
-    onCreatePattern: noop, onSettingsChange: noop, onRecover: noop, onDiscard: noop,
-  };
-  const {rerender} = render(<SequenceSurface project={project} {...props} />);
-  expect(screen.getByRole("heading", {name: /GROOVE \//})).toBeTruthy();
-  expect(screen.getByRole("option", {name: "01 · 1 bar"})).toBeTruthy();
-  expect(screen.getByRole("option", {name: "02 · 4 bars"})).toBeTruthy();
-  const bpm = screen.getByLabelText("BPM") as HTMLInputElement;
-  expect(bpm.value).toBe("96");
-  fireEvent.change(bpm, {target: {value: "120"}});
-  expect(bpm.value).toBe("120");
-  rerender(<SequenceSurface project={{...project, revision: 8, bpm: 104}} {...props} />);
-  expect(bpm.value).toBe("104");
-});
-
-
-test("Slice mode exposes its active state only when candidate support is available", async () => {
-  function Rail() {
-    const [active, setActive] = useState<"project" | "slice">("project");
-    return <ModeRail activeMode={active} sliceEnabled onSelect={mode => {
-      if (mode === "slice" || mode === "project") setActive(mode);
-    }} />;
-  }
-  render(<Rail />);
-  await userEvent.click(screen.getByRole("button", {name: "Slice"}));
-  expect(screen.getByRole("button", {name: "Slice"}).getAttribute("aria-current")).toBe("page");
 });

@@ -4,7 +4,6 @@ import {expect, test, vi} from "vitest";
 import {HardwareConsole} from "../src/components/hardware_console";
 import {PhysicalControls} from "../src/components/physical_controls";
 import {SequenceOverview} from "../src/components/sequence_overview";
-import {SequenceSurface} from "../src/components/sequence_surface";
 import {SequenceTouchWorkspace} from "../src/components/sequence_touch_workspace";
 import {initialSequenceState} from "../src/state/sequence_state";
 import {initialPatternTransportState} from "../src/state/pattern_transport_state";
@@ -23,13 +22,16 @@ const project = {
   sequenceSettings: {quantizeEnabled: true, swingPercent: 50},
 };
 
+// The Sequence editor is the same component in the hardware touch workspace
+// that the retired workspace shell used to wrap; its recovery semantics are
+// asserted on it directly.
 function renderSurface(recovery = false) {
   const callbacks = {
-    onRecord: vi.fn(), onPlayStop: vi.fn(), onRefresh: vi.fn(), onSwitch: vi.fn(),
+    onRefresh: vi.fn(), onSwitch: vi.fn(),
     onCreatePattern: vi.fn(), onSettingsChange: vi.fn(),
     onRecover: vi.fn(), onDiscard: vi.fn(),
   };
-  render(<SequenceSurface project={project} ready
+  render(<SequenceTouchWorkspace project={project}
     transport={initialPatternTransportState}
     state={{
       ...initialSequenceState,
@@ -39,55 +41,6 @@ function renderSurface(recovery = false) {
     }} {...callbacks} />);
   return callbacks;
 }
-
-test("workspace Sequence surface keeps Refresh authority on the transport strip", () => {
-  renderSurface();
-  expect(screen.getAllByRole("button", {name: "Refresh authority"})).toHaveLength(1);
-});
-
-test("workspace Sequence surface announces publication pending once", () => {
-  const callbacks = {
-    onRecord: vi.fn(), onPlayStop: vi.fn(), onRefresh: vi.fn(), onSwitch: vi.fn(),
-    onCreatePattern: vi.fn(), onSettingsChange: vi.fn(),
-    onRecover: vi.fn(), onDiscard: vi.fn(),
-  };
-  render(<SequenceSurface project={project} ready
-    transport={{
-      ...initialPatternTransportState,
-      status: {
-        engaged: true, playing: false, recording: false, phase: "idle",
-        runtimeGeneration: 1, transportEpoch: 1, originFrame: 0,
-        commandId: null, publicationPending: true, error: null,
-      },
-    }}
-    state={initialSequenceState} {...callbacks} />);
-  expect(screen.getAllByText(/committed, publication pending/i)).toHaveLength(1);
-});
-
-test("workspace Sequence surface reports a transport error once", () => {
-  const callbacks = {
-    onRecord: vi.fn(), onPlayStop: vi.fn(), onRefresh: vi.fn(), onSwitch: vi.fn(),
-    onCreatePattern: vi.fn(), onSettingsChange: vi.fn(),
-    onRecover: vi.fn(), onDiscard: vi.fn(),
-  };
-  render(<SequenceSurface project={project} ready
-    transport={{...initialPatternTransportState, errorCode: "HOST_TIMEOUT"}}
-    state={initialSequenceState} {...callbacks} />);
-  expect(screen.getAllByRole("alert").map((node) => node.textContent))
-    .toEqual(["HOST_TIMEOUT"]);
-});
-
-test("issues authoritative settings and Pattern creation operations", () => {
-  const callbacks = renderSurface();
-  fireEvent.click(screen.getByRole("checkbox", {name: "Quantize"}));
-  expect(callbacks.onSettingsChange).toHaveBeenCalledWith({quantizeEnabled: false});
-  fireEvent.change(screen.getByRole("slider", {name: /Swing/}), {target: {value: "62"}});
-  fireEvent.click(screen.getByRole("button", {name: "Apply Swing"}));
-  expect(callbacks.onSettingsChange).toHaveBeenCalledWith({swingPercent: 62});
-  fireEvent.click(screen.getByRole("button", {name: "4 bars"}));
-  fireEvent.click(screen.getByRole("button", {name: "Create Pattern"}));
-  expect(callbacks.onCreatePattern).toHaveBeenCalledWith(4);
-});
 
 test("hardware Sequence overview is read-only and the touch workspace owns editing", () => {
   const onRecord = vi.fn();

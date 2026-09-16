@@ -5,7 +5,7 @@ import type {Bank} from "../state/creator_state";
 import {
   type PatternTransportState,
 } from "../state/pattern_transport_state";
-import {transportStatusLabel} from "./sequence_transport";
+import {transportStatusLabel} from "./transport_status";
 import {
   PERFORMANCE_FX_ORDER,
   type PerformController,

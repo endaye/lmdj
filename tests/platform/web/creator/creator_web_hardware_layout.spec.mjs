@@ -12,7 +12,7 @@ function rounded(box) {
   };
 }
 
-test("starts in the 880×592 hardware shell, keeps overview read-only, and can fall back", async ({page}) => {
+test("renders the 880×592 hardware shell and keeps the overview read-only", async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});
   await page.goto("/");
   await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
@@ -102,17 +102,13 @@ test("starts in the 880×592 hardware shell, keeps overview read-only, and can f
   }
 
   await expect(page.getByTestId("overview-display").locator("button")).toHaveCount(0);
-  await expect(page.getByRole("button", {name: "Existing workspace"})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Existing workspace"})).toHaveCount(0);
   await expect(page.getByRole("button", {name: "Activate audio"})).toBeVisible();
 
   await page.setViewportSize({width: 768, height: 600});
-  await page.getByRole("button", {name: "Existing workspace"}).scrollIntoViewIfNeeded();
-  await expect(page.getByRole("button", {name: "Existing workspace"})).toBeVisible();
+  await page.getByRole("button", {name: "Activate audio"}).scrollIntoViewIfNeeded();
+  await expect(page.getByRole("button", {name: "Activate audio"})).toBeVisible();
   await expect(page.getByTestId("overview-display").locator("button")).toHaveCount(0);
-
-  await page.getByRole("button", {name: "Existing workspace"}).click();
-  await expect(page.getByTestId("hardware-console")).toHaveCount(0);
-  await expect(page.getByRole("button", {name: "Hardware layout"})).toBeVisible();
   await expect(page.getByTestId("creator-phase")).toHaveText("empty");
 });
 
@@ -155,14 +151,9 @@ async function reopenLocalProject(page) {
     .toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
 }
 
-// Both layouts publish the committed tempo, in their own element. This reads
-// whichever one is mounted so a single drill can compare across the boundary.
+// The upper screen publishes the committed tempo.
 async function committedBpm(page) {
-  const overview = page.locator(".overview-bpm");
-  const text = await overview.count() > 0
-    ? await overview.innerText()
-    : await page.locator(".status-facts div").filter({hasText: "BPM"})
-      .getByRole("definition").first().innerText();
+  const text = await page.locator(".overview-bpm").innerText();
   const bpm = Number.parseFloat(text.replace(/[^0-9]/g, ""));
   // An unreadable tempo has to fail right here. `toBe` compares with
   // Object.is, under which two NaNs agree, so a drill that never managed to
@@ -174,7 +165,7 @@ async function committedBpm(page) {
   return bpm;
 }
 
-test("carries Project Truth and running audio across a layout fallback drill", async ({page}) => {
+test("keeps Project Truth across an unapplied draft and a reload", async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});
   await page.goto("/");
   await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
@@ -189,15 +180,9 @@ test("carries Project Truth and running audio across a layout fallback drill", a
   const committed = await committedBpm(page);
   expect(committed).toBeGreaterThan(0);
 
-  // Leg 1 — the hardware shell is the default, so the Project was imported
-  // and audio activated inside it; confirm that is where the drill stands.
-  await expect(page.getByTestId("hardware-console")).toBeVisible();
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
-  expect(await committedBpm(page)).toBe(committed);
-
-  // Leg 2 — an unapplied Tempo draft. Moving the fader is not a commit, so
+  // Leg 1 — an unapplied Tempo draft. Moving the fader is not a commit, so
   // the published tempo must not move with it. Whether the draft itself
-  // survives a layout switch is D03 and is deliberately not asserted here.
+  // survives navigation is D03 and is deliberately not asserted here.
   await page.getByRole("button", {name: "Sequence"}).click();
   const bpmFader = page.getByRole("slider", {name: "BPM"});
   await expect(bpmFader).toBeVisible();
@@ -205,24 +190,9 @@ test("carries Project Truth and running audio across a layout fallback drill", a
   await expect(page.getByRole("button", {name: "Apply BPM"})).toBeVisible();
   expect(await committedBpm(page)).toBe(committed);
 
-  // Leg 3 — fall back with that draft outstanding. The old shell must come
-  // back with the same Project Truth and the same Runtime, and the abandoned
-  // draft must not have been committed on the way out.
-  await page.getByRole("button", {name: "Existing workspace"}).click();
-  await expect(page.getByTestId("hardware-console")).toHaveCount(0);
-  await expect(page.getByRole("button", {name: "Hardware layout"})).toBeVisible();
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
-  expect(await committedBpm(page)).toBe(committed);
-
-  // Leg 4 — return. Same Project, same Runtime, still nothing committed.
-  await page.getByRole("button", {name: "Hardware layout"}).click();
-  await expect(page.getByTestId("hardware-console")).toBeVisible();
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
-  expect(await committedBpm(page)).toBe(committed);
-
-  // Leg 5 — same-origin reload. The layout preference is Host settings, so it
-  // survives; audio does not, because resuming it needs a fresh gesture, and
-  // the Project the reload reopens still carries the uncommitted tempo.
+  // Leg 2 — same-origin reload with that draft outstanding. Audio does not
+  // survive, because resuming it needs a fresh gesture; the Project the reload
+  // reopens must still carry the committed tempo, not the abandoned draft.
   await page.reload();
   await expect(page.getByTestId("hardware-console")).toBeVisible({
     timeout: 30_000,

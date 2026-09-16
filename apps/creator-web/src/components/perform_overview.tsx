@@ -1,6 +1,6 @@
 import type {CreatorState} from "../state/creator_state";
 import type {PatternTransportState} from "../state/pattern_transport_state";
-import {transportStatusLabel} from "./sequence_transport";
+import {transportStatusLabel} from "./transport_status";
 
 const BANK_LABELS = ["A", "B", "C", "D"] as const;
 

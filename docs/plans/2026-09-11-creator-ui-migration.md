@@ -381,9 +381,17 @@ export function HardwareConsole(props: HardwareConsoleProps) {
 
 - `apps/creator-web/src/app.tsx`
 - `apps/creator-web/src/styles.css`
-- `apps/creator-web/test/workspace_shell.test.tsx`
+- `apps/creator-web/src/components/hardware_console.tsx`
+- `apps/creator-web/src/components/creator_mode.ts`、`midi_status.ts`、`transport_status.ts`（从删除的 `mode_rail.tsx`、`status_bar.tsx`、`sequence_transport.tsx` 迁出的共享符号）
+- 删除 `apps/creator-web/src/components/mode_rail.tsx`、`status_bar.tsx`、`sequence_surface.tsx`、`sequence_transport.tsx`
+- `apps/creator-web/src/components/overview_display.tsx`、`physical_controls.tsx`、`perform_surface.tsx`、`perform_overview.tsx`、`sequence_overview.tsx`（仅改 import）
+- `apps/creator-web/test/workspace_shell.test.tsx`、`shell_polish.test.tsx`、`sequence_surface.test.tsx`
+- `tests/platform/web/creator/creator_web_hardware_layout.spec.mjs`（回退演练腿随回退入口退役）
+- `apps/creator-web/module.json`、`package.json` 与正式版本流程要求的 `products/lmdj/` 清单、`apps/architecture-portal/` 快照
 - `docs/quality/2026-09-11-creator-ui-migration-acceptance.md`
 - `apps/docs-site/docs/hosts/creator-web.mdx`
+
+实施时的实际清单（2026-09-17）：原声明漏了回退演练旅程与共享符号的迁出目标，这里按实际改动补齐。
 
 **输入 / 输出：** 消费已交付四区容器、U0映射及当前组件回调；产出本阶段经过保留性验证的新UI单一路径，不新增领域Contract。
 
