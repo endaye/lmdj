@@ -4633,14 +4633,19 @@ async function oneEntryBundle() {
   const digestSource = {
     compression: "none",
     contract: "lmdj.project-bundle.v1",
-    contract_version: "1.0.0",
+    // Readers accept exactly the current envelope and the single Project
+    // Contract level the writer produces; see
+    // docs/prd/decisions/2026-09-15-project-bundle-current-level-only.md.
+    // A fixture on an older level is refused before the typed surface is
+    // exercised at all, which tests the refusal rather than this journey.
+    contract_version: "2.0.0",
     entries: [{
       bytes: payload.byteLength,
       offset: 0,
       path: "manifest.json",
       sha256: await hash(payload),
     }],
-    project_contract: "lmdj.project.v1",
+    project_contract: "lmdj.project.v5",
     project_id: "11111111-1111-4111-8111-111111111111",
     uncompressed_bytes: payload.byteLength,
   };
