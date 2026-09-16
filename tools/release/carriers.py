@@ -153,11 +153,16 @@ def release_identity(state, *, candidate_root, repository_id, ledger):
     """The Build this request is releasing, or None while it is not allocated.
 
     A `tag`-mode request names the tag itself; a `new`-mode request learns it
-    from the managed candidate step. An allocation is the authoritative target
-    revision; a tag already recorded in the ledger takes it from the intent row,
-    and a tag that ledger does not authorize fails closed. `repository_id` is the
-    numeric identity the frozen request does not carry (it records only
-    `owner/name`), resolved once per drive from GitHub.
+    from the managed candidate step. The intent row is authoritative for
+    `target_revision`/`channel`/`disposition` in both modes: it binds the
+    batch-certified witness merge, while the allocation only proves the Build
+    and its frozen snapshot. A `new`-mode request whose intent step has not
+    landed yet has no authoritative row, so the identity is not derivable and
+    the caller waits; a `tag`-mode request whose tag the ledger does not
+    authorize fails closed. When both records exist they must agree on the
+    witness merge. `repository_id` is the numeric identity the frozen request
+    does not carry (it records only `owner/name`), resolved once per drive
+    from GitHub.
     """
     if type(state) is not dict or type(state.get("request")) is not dict:
         _fail("requires the running request state")
@@ -181,6 +186,11 @@ def release_identity(state, *, candidate_root, repository_id, ledger):
         _fail("the candidate transition and the request disagree on the build")
     intent = ledger.intent_for_tag(tag)
     if intent is None:
+        if request.get("requested_tag") is None:
+            # The intent row is this run's own intent step output; every
+            # enrolled step that uses this identity runs after that step, so a
+            # missing row means it has not landed, not that the tag is foreign.
+            return None
         _fail(f"the intent ledger does not authorize {tag}")
     identity = {"tag": tag, "product_build": build,
                 "request_sha256": digest,
@@ -188,14 +198,21 @@ def release_identity(state, *, candidate_root, repository_id, ledger):
                 "actor_id": request.get("actor_id"),
                 "channel": intent.current_channel,
                 "disposition": str(intent.disposition)}
+    revision = intent.target_revision
+    if type(revision) is not str or _SHA.fullmatch(revision) is None:
+        _fail(f"the intent ledger records no valid target revision for {tag}")
+    identity["target_revision"] = revision
     if allocated is not None:
-        identity["target_revision"] = allocated["target_revision"]
+        witness = allocated["witness_revision"]
+        if witness is None:
+            # The row exists, so the intent step completed, so the witness
+            # merge was verified; a candidate state without it is drift.
+            _fail("the intent row exists but the candidate state records no "
+                  "witness merge")
+        if revision != witness:
+            _fail("the intent row and the candidate witness merge disagree on "
+                  "the release target")
         identity["snapshot_sha256"] = allocated["snapshot_sha256"]
-    else:
-        revision = intent.target_revision
-        if type(revision) is not str or _SHA.fullmatch(revision) is None:
-            _fail(f"the intent ledger records no valid target revision for {tag}")
-        identity["target_revision"] = revision
     return identity
 
 
