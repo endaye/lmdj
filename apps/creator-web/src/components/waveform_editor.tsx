@@ -422,6 +422,7 @@ export function WaveformEditor({
             {playheadFrame === null ? null : (
               <line
                 data-playhead
+                aria-hidden="true"
                 x1={frameToX(playheadFrame)}
                 x2={frameToX(playheadFrame)}
                 y1="0"

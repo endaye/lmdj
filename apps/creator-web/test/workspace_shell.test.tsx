@@ -237,6 +237,100 @@ test("orders assigned Pad metadata, waveform, controls, Bank, and all Pads", asy
   }
 });
 
+test("advances the selected Sample playhead on the render clock and cancels it at a terminal edge", () => {
+  let animationFrame: FrameRequestCallback | undefined;
+  const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+    .mockImplementation((callback) => {
+      animationFrame = callback;
+      return 71;
+    });
+  const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+    .mockImplementation(() => {});
+  const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+  const inspect = {
+    projectRevision: 4,
+    slot: 0,
+    assetId: "33333333-3333-4333-8333-333333333333",
+    playback: {
+      trimStartFrame: 0,
+      trimEndFrame: 48_000,
+      triggerMode: "one_shot" as const,
+      gainMillidb: 0,
+      muted: false,
+    },
+    metadata: {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 48_000},
+    waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/94`,
+  };
+  const playing: CreatorState = {
+    ...ready,
+    audio: {phase: "running"},
+    sample: {
+      ...ready.sample,
+      selectedSlot: 0,
+      inspect,
+      waveform: {
+        metadata: inspect.metadata,
+        algorithmVersion: 1,
+        buckets: [{startFrame: 0, endFrame: 48_000, peakMagnitude: 16_384}],
+        projectRevision: 4,
+      },
+      viewport: {sourceFrames: 48_000, startFrame: 0, endFrame: 48_000},
+      voices: [{
+        sequence: 1,
+        slot: 0,
+        state: "started",
+        runtimeFrame: 128,
+        sourceFrame: 0,
+        sampleRate: 48_000,
+        trimStartFrame: 0,
+        trimEndFrame: 48_000,
+      }],
+      playhead: {
+        sequence: 1,
+        slot: 0,
+        runtimeFrame: 128,
+        observedAtMilliseconds: 1_000,
+        sourceFrame: 0,
+        sampleRate: 48_000,
+        trimStartFrame: 0,
+        trimEndFrame: 48_000,
+        triggerMode: "one_shot",
+      },
+      savedRevision: 4,
+      runtimeRevision: 4,
+    },
+  };
+
+  try {
+    const view = render(
+      <SampleSurface
+        state={playing}
+        filePickIntent={{current: () => {}}}
+        dispatch={vi.fn()}
+      />,
+    );
+    expect(view.container.querySelector("line[data-playhead]")?.getAttribute("x1"))
+      .toBe("0");
+    act(() => animationFrame?.(1_500));
+    expect(view.container.querySelector("line[data-playhead]")?.getAttribute("x1"))
+      .toBe("200");
+
+    view.rerender(
+      <SampleSurface
+        state={{...playing, sample: {...playing.sample, voices: [], playhead: null}}}
+        filePickIntent={{current: () => {}}}
+        dispatch={vi.fn()}
+      />,
+    );
+    expect(view.container.querySelector("line[data-playhead]")).toBeNull();
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(71);
+  } finally {
+    requestAnimationFrame.mockRestore();
+    cancelAnimationFrame.mockRestore();
+    now.mockRestore();
+  }
+});
+
 test("bounds and escapes Replace display names, warns, cancels, and restores focus", async () => {
   const assigned: CreatorState = {
     ...ready,

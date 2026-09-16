@@ -524,3 +524,65 @@ def enroll_intent(*, candidate_root, repository_id, batch_reference_for,
         return IntentCarrier(commit=commit_for(spec), sequence=sequence_for(spec))
 
     return RecoveredStep("intent", recover, drives=True)
+
+
+def enroll_changelog(*, candidate_root, repository_id, ledger, main_revision,
+                     changelog_binding, commit_for, sequence_for):
+    """The `changelog` step: bind the reviewed frozen changelog via a docs PR.
+
+    This step drives its own write — the owned docs commit on canonical main
+    plus the reviewed PR sequence — so it is enrolled with `drives=True`. The
+    shared identity comes from `spec_identity`, which under the reconciled
+    rules waits until the intent row exists (it is authoritative for the
+    target revision) and cross-checks it against the candidate witness merge.
+    `main_revision()` resolves the canonical main tip the commit lands on, and
+    `changelog_binding()` returns the reviewed document's binding digests
+    (`changelog.binding`: `sha256`/`notes_sha256`); the commit recomputes the
+    freeze at the write boundary and refuses any divergence, so a drifted
+    binding cannot pass. The closed spec carries the commit's own
+    `head_sha`/`tree_sha`, which exist only after the commit lands: the
+    enrollment binds deterministic placeholders the carrier replaces with the
+    durable commit's real identities before the PR transport reads them
+    (`evidence_branch` pushes and merges on `head_sha`), so the placeholders
+    never persist anywhere. `commit_for(spec)` / `sequence_for(spec)` are the
+    trusted composition's factories; the carrier's own type checks refuse
+    anything else.
+    """
+    from .changelog_step import ChangelogCarrier, changelog_operation_id, validate_spec
+    from .model import canonical_sha256
+
+    for name, factory in (("main_revision", main_revision),
+                          ("changelog_binding", changelog_binding),
+                          ("commit_for", commit_for),
+                          ("sequence_for", sequence_for)):
+        if not callable(factory):
+            _fail(f"requires a callable {name}")
+
+    def recover(state, operation):
+        fields = spec_identity(state, candidate_root=candidate_root,
+                               repository_id=repository_id, ledger=ledger,
+                               operation_id=changelog_operation_id,
+                               fields=_SITE_FIELDS)
+        if fields is None:
+            return None
+        base = main_revision()
+        if type(base) is not str or _SHA.fullmatch(base) is None:
+            _fail("the canonical main revision is unavailable")
+        bound = changelog_binding()
+        digests = {key: bound.get(key) if type(bound) is dict else None
+                   for key in ("sha256", "notes_sha256")}
+        if any(type(value) is not str or _DIGEST.fullmatch(value) is None
+               for value in digests.values()):
+            _fail("the reviewed changelog binding is unavailable")
+        placeholder = canonical_sha256({"request": fields["request_sha256"],
+                                        "step": "changelog", "placeholder": "head"})
+        placeholder_tree = canonical_sha256({"request": fields["request_sha256"],
+                                             "step": "changelog", "placeholder": "tree"})
+        spec = dict(fields, base_revision=base,
+                    head_sha=placeholder[:40], tree_sha=placeholder_tree[:40],
+                    changelog_sha256=digests["sha256"],
+                    notes_sha256=digests["notes_sha256"])
+        validate_spec(spec)
+        return ChangelogCarrier(commit=commit_for(spec), sequence=sequence_for(spec))
+
+    return RecoveredStep("changelog", recover, drives=True)

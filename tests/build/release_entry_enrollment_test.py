@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from tools.release.carriers import (  # noqa: E402
     RecoveredStep,
+    enroll_changelog,
     enroll_changelog_site,
     enroll_draft,
     enroll_final,
@@ -910,6 +911,141 @@ class IntentEnrollmentTest(unittest.TestCase):
         with self.assertRaises(JournalError):
             step.observe(self.new_mode(request_digest="short"), self.operation())
         self.assertEqual(self.commit_specs, [])
+
+
+MAIN_TIP = "1" * 40
+CHANGELOG_DIGEST = "5" * 64
+NOTES_DIGEST = "6" * 64
+
+
+class ChangelogEnrollmentTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.commit_specs = []
+        self.sequence_specs = []
+
+    def commit_for(self, spec):
+        from tools.release.changelog_step import ChangelogCommit
+
+        self.commit_specs.append(deepcopy(spec))
+        return ChangelogCommit(root=self.root / "changelog-worktree",
+                               repository_root=self.root / "repo", spec=spec,
+                               editorial=lambda: ([], []), author_name="Fixture",
+                               author_email="fixture@example.invalid")
+
+    def sequence_for(self, spec):
+        from tools.release.changelog_step import (
+            ChangelogBranch,
+            ChangelogPrSequence,
+            ChangelogPullRequest,
+        )
+
+        self.sequence_specs.append(deepcopy(spec))
+        root = self.root / "changelog-sequence"
+        branch = ChangelogBranch(root / "branch", root / "repo",
+                                 token="FIXTURE-NOT-A-SECRET",
+                                 authorize=lambda _spec: None)
+        pr = ChangelogPullRequest(root / "pr", api=lambda *a, **k: None,
+                                  authorize=lambda _spec: None,
+                                  review=lambda *a: None, verify_merged=lambda *a: None)
+        return ChangelogPrSequence(root, branch=branch, pr=pr)
+
+    def step(self, **overrides):
+        arguments = dict(
+            candidate_root=self.root, repository_id=12, ledger=Ledger(),
+            main_revision=lambda: MAIN_TIP,
+            changelog_binding=lambda: {"schema": "lmdj.release-changelog.v1",
+                                       "sha256": CHANGELOG_DIGEST,
+                                       "notes_sha256": NOTES_DIGEST},
+            commit_for=self.commit_for, sequence_for=self.sequence_for)
+        arguments.update(overrides)
+        return enroll_changelog(**arguments)
+
+    def operation(self):
+        return {"step": "changelog", "operation_id": DIGEST, "status": "intent",
+                "evidence": None}
+
+    def test_the_step_drives_its_own_write(self):
+        # The changelog step lands the frozen document: it commits the ledger
+        # row edit and drives the reviewed PR sequence under the driver's guard.
+        self.assertTrue(callable(getattr(self.step(), "advance", None)))
+
+    def test_non_callable_factories_are_refused_at_enrollment(self):
+        with self.assertRaises(JournalError):
+            self.step(changelog_binding=None)
+
+    def test_the_step_is_pending_until_the_intent_row_exists(self):
+        step = self.step()
+        # New mode without any candidate state: no Build to bind.
+        new_mode = state(request=request(mode="new", requested_tag=None))
+        self.assertEqual(step.observe(new_mode, self.operation()).status, "pending")
+        # Allocated and witness-merged, but the row is this run's own intent
+        # output: until it lands there is no authoritative target revision.
+        (self.root / "candidate-transition.json").write_text(json.dumps(
+            candidate_document(witness_merge={"merge": {"merge_sha": TARGET}})))
+        waiting = self.step(ledger=Ledger(rows={}))
+        self.assertEqual(waiting.observe(new_mode, self.operation()).status, "pending")
+        self.assertEqual(self.commit_specs, [])
+
+    def test_an_unauthorized_tag_fails_closed_rather_than_waiting(self):
+        step = self.step(ledger=Ledger(rows={}))
+        with self.assertRaises(JournalError):
+            step.observe(state(), self.operation())
+        self.assertEqual(self.commit_specs, [])
+
+    def test_an_unavailable_base_or_binding_fails_closed(self):
+        with self.assertRaises(JournalError):
+            self.step(main_revision=lambda: "not-a-sha").observe(state(), self.operation())
+        for bound in (None, {"sha256": CHANGELOG_DIGEST},
+                      {"sha256": "short", "notes_sha256": NOTES_DIGEST}):
+            with self.assertRaises(JournalError):
+                self.step(changelog_binding=lambda: bound).observe(state(),
+                                                                   self.operation())
+        self.assertEqual(self.commit_specs, [])
+
+    def test_a_pending_step_writes_nothing_when_asked_to_advance(self):
+        written = []
+        step = self.step()
+        new_mode = state(request=request(mode="new", requested_tag=None))
+        self.assertEqual(step.observe(new_mode, self.operation()).status, "pending")
+        step.advance(new_mode, self.operation(),
+                     before_write=lambda: written.append(True))
+        self.assertEqual(written, [])
+        self.assertEqual(self.commit_specs, [])
+
+    def test_the_step_delegates_to_the_real_changelog_carrier(self):
+        step = self.step()
+        # The real carrier observes pending before its durable commit exists
+        # and must not touch the PR sequence yet.
+        observed = step.observe(state(), self.operation())
+        self.assertEqual(observed.status, "pending")
+        self.assertEqual(len(self.commit_specs), 1)
+        self.assertEqual(len(self.sequence_specs), 1)
+        spec = self.commit_specs[0]
+        self.assertEqual(set(spec), {"operation_id", "request_sha256",
+                                     "repository_id", "actor_id", "base_revision",
+                                     "head_sha", "tree_sha", "target_revision",
+                                     "product_build", "tag", "changelog_sha256",
+                                     "notes_sha256"})
+        from tools.release.changelog_step import changelog_operation_id
+
+        self.assertEqual(spec["operation_id"], changelog_operation_id(DIGEST))
+        # The target revision is the intent row's (the batch-certified witness
+        # merge), the base is the resolved canonical main tip, and the digests
+        # are the reviewed document's binding.
+        self.assertEqual(spec["target_revision"], TARGET)
+        self.assertEqual(spec["base_revision"], MAIN_TIP)
+        self.assertEqual(spec["changelog_sha256"], CHANGELOG_DIGEST)
+        self.assertEqual(spec["notes_sha256"], NOTES_DIGEST)
+        self.assertEqual(spec["tag"], "lmdj-v" + BUILD)
+        # The commit's own head/tree do not exist yet; the placeholders are
+        # deterministic, distinct from base and target, and replaced by the
+        # durable commit's identities before the transport reads them.
+        self.assertNotIn(spec["head_sha"], (MAIN_TIP, TARGET))
+        self.assertNotEqual(spec["head_sha"], spec["tree_sha"])
+        self.assertEqual(spec, self.sequence_specs[0])
 
 
 if __name__ == "__main__":
