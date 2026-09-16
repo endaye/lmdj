@@ -204,12 +204,34 @@ class IdentityRecoveryTest(unittest.TestCase):
                 self.identity(ledger=ledger)
 
     def test_a_new_request_learns_the_allocated_build(self):
-        self.write_candidate()
+        # The allocation proves the Build and the frozen snapshot; the target
+        # revision is the batch-certified witness merge the intent row binds
+        # (TARGET here), never the cut squash (CUT_MERGE) the transition names
+        # separately.
+        self.write_candidate(witness_merge={"merge": {"merge_sha": TARGET}})
         document = state(request=request(mode="new", requested_tag=None))
         identity = self.identity(document)
         self.assertEqual(identity["tag"], "lmdj-v" + BUILD)
-        self.assertEqual(identity["target_revision"], CUT_MERGE)
+        self.assertEqual(identity["target_revision"], TARGET)
         self.assertEqual(identity["snapshot_sha256"], SNAPSHOT)
+
+    def test_a_new_request_waits_for_the_intent_row(self):
+        # The intent row is this run's own intent-step output; before it lands
+        # there is no authoritative target revision to bind.
+        self.write_candidate(witness_merge={"merge": {"merge_sha": TARGET}})
+        document = state(request=request(mode="new", requested_tag=None))
+        self.assertIsNone(self.identity(document, ledger=Ledger(rows={})))
+
+    def test_a_row_disagreeing_with_the_witness_merge_fails_closed(self):
+        self.write_candidate(witness_merge={"merge": {"merge_sha": "9" * 40}})
+        document = state(request=request(mode="new", requested_tag=None))
+        with self.assertRaises(JournalError):
+            self.identity(document)
+        # The row exists, so the intent step completed; a candidate state that
+        # never recorded the witness merge is drift, not an early state.
+        self.write_candidate()
+        with self.assertRaises(JournalError):
+            self.identity(document)
 
     def test_a_new_request_waits_until_the_cut_is_merged(self):
         self.write_candidate(cut_merge=None)
@@ -402,6 +424,24 @@ class ChangelogSiteEnrollmentTest(unittest.TestCase):
         new_mode = state(request=request(mode="new", requested_tag=None))
         self.assertEqual(step.observe(new_mode, self.operation()).status, "pending")
         self.assertEqual(self.fetched, [])
+
+    def test_a_new_mode_step_waits_for_the_intent_row(self):
+        # The allocation and witness merge exist, but the intent row is this
+        # run's own intent-step output: until it lands there is no
+        # authoritative target revision, and the step must not bind the cut
+        # squash the candidate transition names separately.
+        (self.root / "candidate-transition.json").write_text(json.dumps(
+            candidate_document(witness_merge={"merge": {"merge_sha": TARGET}})))
+        step = enroll_changelog_site(
+            candidate_root=self.root, repository_id=12, ledger=Ledger(rows={}),
+            fetch=self.fetch, site_base_url="https://docs.example.invalid")
+        new_mode = state(request=request(mode="new", requested_tag=None))
+        self.assertEqual(step.observe(new_mode, self.operation()).status, "pending")
+        self.assertEqual(self.fetched, [])
+        # Once the row has landed and agrees with the witness merge, the same
+        # step verifies against the row's target.
+        observed = self.step().observe(new_mode, self.operation())
+        self.assertEqual(observed.status, "verified")
 
     def test_an_unauthorized_tag_fails_closed_rather_than_waiting(self):
         step = enroll_changelog_site(
