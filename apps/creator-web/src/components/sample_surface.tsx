@@ -33,6 +33,7 @@ import type {
 import {
   beginSampleDraft,
   fitSampleViewport,
+  samplePlayheadFrameAt,
   updateSampleDraft,
   waveformWindowForViewport,
   type SamplePendingAction,
@@ -237,6 +238,39 @@ export function SampleSurface({
   const previousAudioSuspended = useRef(audioSuspended);
   const inspect = sample.inspect;
   const selectedSlot = sample.selectedSlot;
+  const [animatedPlayhead, setAnimatedPlayhead] = useState<Readonly<{
+    sequence: number;
+    sourceFrame: number;
+  }> | null>(null);
+  const playheadFrame = sample.playhead === null
+    ? null
+    : animatedPlayhead?.sequence === sample.playhead.sequence
+      ? animatedPlayhead.sourceFrame
+      : samplePlayheadFrameAt(sample.playhead, sample.playhead.runtimeFrame);
+
+  useEffect(() => {
+    const playhead = sample.playhead;
+    if (playhead === null) {
+      setAnimatedPlayhead(null);
+      return;
+    }
+    setAnimatedPlayhead({
+      sequence: playhead.sequence,
+      sourceFrame: samplePlayheadFrameAt(playhead, playhead.runtimeFrame),
+    });
+    let animationFrame = window.requestAnimationFrame(function advance(now) {
+      const elapsedMilliseconds = Math.max(0, now - playhead.observedAtMilliseconds);
+      const runtimeFrame = playhead.runtimeFrame + Math.floor(
+        elapsedMilliseconds * 48_000 / 1_000,
+      );
+      setAnimatedPlayhead({
+        sequence: playhead.sequence,
+        sourceFrame: samplePlayheadFrameAt(playhead, runtimeFrame),
+      });
+      animationFrame = window.requestAnimationFrame(advance);
+    });
+    return () => { window.cancelAnimationFrame(animationFrame); };
+  }, [sample.playhead]);
 
   useEffect(() => {
     onCaptureSlotChange?.(captureTarget?.slot ?? null);
@@ -850,7 +884,7 @@ export function SampleSurface({
             metadata={inspect.metadata}
             projectRevision={inspect.projectRevision}
             playback={editablePlayback}
-            playheadFrame={sample.playhead?.sourceFrame ?? null}
+            playheadFrame={playheadFrame}
             disabled={actionsDisabled}
             onPreview={preview}
             onCommit={(playback) => { void performUpdate(playback); }}

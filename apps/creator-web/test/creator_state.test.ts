@@ -136,6 +136,64 @@ describe("Creator state", () => {
     expect(released.pressed.has(32)).toBe(false);
   });
 
+  test.each([
+    ["audio suspension", {type: "audio-changed", phase: "suspended"}],
+    ["Runtime replacement", {
+      type: "runtime-changed",
+      phase: "restart-required",
+      errorCode: "HOST_RESTART_REQUIRED",
+    }],
+  ] as const)("clears active Sample render state on %s", (_name, terminalAction) => {
+    let state: CreatorState = {
+      ...readyState(),
+      audio: {phase: "running"},
+    };
+    state = creatorReducer(state, {
+      type: "sample-action",
+      action: {type: "slot-selected", slot: 0},
+    });
+    state = creatorReducer(state, {
+      type: "sample-action",
+      action: {
+        type: "inspect-stored",
+        inspect: {
+          projectRevision: 4,
+          slot: 0,
+          assetId: "33333333-3333-4333-8333-333333333333",
+          playback: {
+            trimStartFrame: 0,
+            trimEndFrame: 48_000,
+            triggerMode: "one_shot",
+            gainMillidb: 0,
+            muted: false,
+          },
+          metadata: {sampleRate: 48_000, channels: 1, sourceFrames: 48_000},
+          waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/94`,
+        },
+      },
+    });
+    state = creatorReducer(state, {
+      type: "sample-action",
+      action: {
+        type: "voice-changed",
+        observedAtMilliseconds: 1_000,
+        event: {
+          sequence: 1,
+          slot: 0,
+          state: "started",
+          runtimeFrame: 128,
+          sourceFrame: 0,
+        },
+      },
+    });
+    expect(state.sample.playhead?.sequence).toBe(1);
+    expect(state.sample.voices).toHaveLength(1);
+
+    const terminal = creatorReducer(state, terminalAction as CreatorAction);
+    expect(terminal.sample.playhead).toBeNull();
+    expect(terminal.sample.voices).toEqual([]);
+  });
+
   test("gates activation and Trigger from authoritative substate", () => {
     const ready = readyState();
     expect(selectCanActivateAudio(ready)).toBe(true);

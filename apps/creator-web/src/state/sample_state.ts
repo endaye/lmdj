@@ -65,10 +65,12 @@ export interface SamplePlayheadRender {
   readonly sequence: number;
   readonly slot: number;
   readonly runtimeFrame: number;
+  readonly observedAtMilliseconds: number;
   readonly sourceFrame: number;
   readonly sampleRate: number | null;
   readonly trimStartFrame: number | null;
   readonly trimEndFrame: number | null;
+  readonly triggerMode: SampleTriggerMode | null;
 }
 
 export interface SampleState {
@@ -108,7 +110,11 @@ export type SampleStateAction =
     }>
   | Readonly<{type: "mutation-conflicted"; pending: unknown; inspect: unknown}>
   | Readonly<{type: "retry-published"; pending: unknown; publication: unknown}>
-  | Readonly<{type: "voice-changed"; event: unknown}>
+  | Readonly<{
+      type: "voice-changed";
+      event: unknown;
+      observedAtMilliseconds: number;
+    }>
   | Readonly<{type: "preview-failed"}>
   | Readonly<{type: "operation-failed"; pending: unknown; error: unknown}>
   | Readonly<{type: "operation-cancelled"; pending: unknown}>
@@ -696,6 +702,15 @@ export function cancelSampleDraft(state: SampleState): SampleState {
   return Object.freeze({...state, draft: null, auditionPlayback: null});
 }
 
+export function clearSampleVoiceRenderState(state: SampleState): SampleState {
+  if (state.voices.length === 0 && state.playhead === null) return state;
+  return Object.freeze({
+    ...state,
+    voices: Object.freeze([]),
+    playhead: null,
+  });
+}
+
 export function selectSampleSlot(state: SampleState, slot: number): SampleState {
   if (!slotNumber(slot)) throw new RangeError("Sample slot must be in 0..63");
   if (state.selectedSlot === slot) return state;
@@ -1094,7 +1109,11 @@ function validateVoiceState(value: unknown): RuntimeVoiceState {
 export function applyRuntimeVoiceState(
   state: SampleState,
   value: unknown,
+  observedAtMilliseconds = 0,
 ): SampleState {
+  if (!Number.isFinite(observedAtMilliseconds) || observedAtMilliseconds < 0) {
+    throw new TypeError("Runtime Voice observation time is invalid");
+  }
   const event = validateVoiceState(value);
   let voices = state.voices.filter(({sequence}) => sequence !== event.sequence);
   let playhead = state.playhead;
@@ -1118,15 +1137,17 @@ export function applyRuntimeVoiceState(
     voices = [...voices, voice].slice(-SAMPLE_VOICE_RENDER_LIMIT);
     if (selected) {
       const lower = trimStartFrame ?? 0;
-      const sourceFrame = trimEndFrame === null
+      const sourceFrame = trimStartFrame ?? (trimEndFrame === null
         ? Math.max(lower, event.sourceFrame)
-        : Math.min(Math.max(lower, event.sourceFrame), trimEndFrame - 1);
+        : Math.min(Math.max(lower, event.sourceFrame), trimEndFrame - 1));
       playhead = Object.freeze({
         sequence: event.sequence,
         slot: event.slot,
         runtimeFrame: event.runtimeFrame,
+        observedAtMilliseconds,
         sourceFrame,
         ...renderBounds,
+        triggerMode: playback?.triggerMode ?? null,
       });
     }
   } else if (playhead?.sequence === event.sequence) {
@@ -1137,6 +1158,29 @@ export function applyRuntimeVoiceState(
     voices: Object.freeze(voices),
     playhead,
   });
+}
+
+export function samplePlayheadFrameAt(
+  playhead: Readonly<SamplePlayheadRender>,
+  runtimeFrame: number,
+): number {
+  const lower = playhead.trimStartFrame;
+  const upper = playhead.trimEndFrame;
+  const sampleRate = playhead.sampleRate;
+  if (lower === null || upper === null || sampleRate === null ||
+    upper <= lower || !Number.isSafeInteger(runtimeFrame) ||
+    runtimeFrame <= playhead.runtimeFrame) {
+    return playhead.sourceFrame;
+  }
+  const initial = Math.min(Math.max(lower, playhead.sourceFrame), upper - 1);
+  const advanced = initial + Math.floor(
+    (runtimeFrame - playhead.runtimeFrame) * sampleRate / 48_000,
+  );
+  if (playhead.triggerMode === "loop_gate" ||
+    playhead.triggerMode === "loop_toggle") {
+    return lower + (advanced - lower) % (upper - lower);
+  }
+  return Math.min(advanced, upper - 1);
 }
 
 export function applySampleOperationFailure(
@@ -1259,8 +1303,12 @@ export function reduceSampleState(
         action.publication,
       );
     case "voice-changed":
-      requireSampleActionKeys(action, ["type", "event"]);
-      return applyRuntimeVoiceState(state, action.event);
+      requireSampleActionKeys(action, ["type", "event", "observedAtMilliseconds"]);
+      return applyRuntimeVoiceState(
+        state,
+        action.event,
+        action.observedAtMilliseconds,
+      );
     case "preview-failed":
       requireSampleActionKeys(action, ["type"]);
       return Object.freeze({

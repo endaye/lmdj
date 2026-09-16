@@ -69,7 +69,7 @@ test('facts match the current locked product composition', async () => {
     {id: 'cardputer-host', version: '1.0.0'},
     {id: 'core-cli', version: '3.3.5'},
     {id: 'core-mcp', version: '3.4.0'},
-    {id: 'creator-web', version: '4.3.0'},
+    {id: 'creator-web', version: '4.3.1'},
     {id: 'native-host', version: '3.4.0'},
     {id: 'web-runtime-host', version: '4.3.0'},
   ]);
