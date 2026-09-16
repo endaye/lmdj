@@ -12,6 +12,7 @@ from tools.release.carriers import (  # noqa: E402
     RecoveredStep,
     enroll_changelog_site,
     enroll_draft,
+    enroll_final,
     read_candidate_identity,
     read_prepared_plan,
     read_verified_batch,
@@ -537,6 +538,141 @@ class DraftEnrollmentTest(unittest.TestCase):
         step = self.step()
         with self.assertRaises(DraftStepError):
             step.observe(state(), self.operation())
+
+
+class FinalEnrollmentTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.fetched = []
+        self.read = []
+        self.release = None
+        self.recorded = None
+        self.row = None
+
+    def fetch(self, url):
+        self.fetched.append(url)
+        return 200, f"<html>Product Build {BUILD}</html>"
+
+    def release_by_tag(self, tag):
+        self.read.append(("release", tag))
+        return self.release
+
+    def ledger_row(self, tag):
+        self.read.append(("row", tag))
+        return self.row
+
+    def release_id_for(self, tag):
+        self.read.append(("record", tag))
+        return self.recorded
+
+    def step(self, ledger=None):
+        return enroll_final(
+            candidate_root=self.root, repository_id=12,
+            ledger=Ledger() if ledger is None else ledger, fetch=self.fetch,
+            release_by_tag=self.release_by_tag, ledger_row=self.ledger_row,
+            release_id_for=self.release_id_for,
+            site_base_url="https://docs.example.invalid")
+
+    def operation(self):
+        return {"step": "final", "operation_id": DIGEST, "status": "intent",
+                "evidence": None}
+
+    def publish(self, release_id=4096):
+        self.release = {"draft": False, "id": release_id}
+        self.recorded = release_id
+        self.row = {"tag": "lmdj-v" + BUILD, "target_revision": TARGET,
+                    "channel": "dev", "disposition": "published"}
+
+    def test_the_step_exposes_no_advance(self):
+        # The final step only verifies; the driver must never take the
+        # self-driving path for it.
+        self.assertFalse(callable(getattr(self.step(), "advance", None)))
+
+    def test_non_callable_readers_are_refused_at_enrollment(self):
+        with self.assertRaises(JournalError):
+            enroll_final(candidate_root=self.root, repository_id=12,
+                         ledger=Ledger(), fetch=self.fetch,
+                         release_by_tag=self.release_by_tag,
+                         ledger_row=self.ledger_row, release_id_for=None,
+                         site_base_url="https://docs.example.invalid")
+
+    def test_the_step_is_pending_until_the_build_is_allocated(self):
+        step = self.step()
+        new_mode = state(request=request(mode="new", requested_tag=None))
+        self.assertEqual(step.observe(new_mode, self.operation()).status, "pending")
+        self.assertEqual(self.read, [])
+        self.assertEqual(self.fetched, [])
+
+    def test_the_step_is_pending_until_the_record_names_the_release(self):
+        step = self.step()
+        # Neither the record nor the far side names a Release yet.
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        # A Draft still being assembled is not a confirmed identity.
+        self.release = {"draft": True, "id": 4096}
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        # Even a published Release cannot be bound before the record names it.
+        self.release = {"draft": False, "id": 4096}
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        self.assertEqual(self.fetched, [])
+
+    def test_an_unauthorized_tag_fails_closed_rather_than_waiting(self):
+        step = self.step(ledger=Ledger(rows={}))
+        with self.assertRaises(JournalError):
+            step.observe(state(), self.operation())
+        self.assertEqual(self.read, [])
+        self.assertEqual(self.fetched, [])
+
+    def test_a_one_sided_or_disagreeing_release_identity_fails_closed(self):
+        step = self.step()
+        # The record names a Release the far side does not have.
+        self.recorded = 4096
+        with self.assertRaises(JournalError):
+            step.observe(state(), self.operation())
+        # The record names a Release that is still a draft.
+        self.release = {"draft": True, "id": 4096}
+        with self.assertRaises(JournalError):
+            step.observe(state(), self.operation())
+        # The two sides disagree on the numeric identity.
+        self.release = {"draft": False, "id": 8192}
+        with self.assertRaises(JournalError):
+            step.observe(state(), self.operation())
+        # A record without a valid numeric identity is drift.
+        self.release = {"draft": False, "id": 4096}
+        for recorded in ("4096", 0, -1):
+            self.recorded = recorded
+            with self.assertRaises(JournalError):
+                step.observe(state(), self.operation())
+        # An unreadable far-side projection cannot be cross-confirmed.
+        self.recorded = 4096
+        self.release = "not-a-projection"
+        with self.assertRaises(JournalError):
+            step.observe(state(), self.operation())
+        self.assertEqual(self.fetched, [])
+
+    def test_the_step_delegates_to_the_final_carrier(self):
+        self.publish()
+        step = self.step()
+        observed = step.observe(state(), self.operation())
+        self.assertEqual(observed.status, "verified")
+        self.assertEqual(observed.evidence["reference"], "final:lmdj-v" + BUILD)
+        # Recovery cross-confirms both sides, then the carrier re-reads them
+        # under the tag its spec froze.
+        tag = "lmdj-v" + BUILD
+        self.assertEqual(self.read, [("release", tag), ("record", tag),
+                                     ("release", tag), ("row", tag)])
+        self.assertEqual(set(self.fetched),
+                         {"https://docs.example.invalid/versions/" + BUILD + "/",
+                          "https://docs.example.invalid/releases/" + BUILD})
+
+    def test_a_ledger_row_that_disagrees_fails_closed(self):
+        self.publish()
+        self.row = dict(self.row, disposition="releasable")
+        from tools.release.final_steps import SiteStepError
+
+        with self.assertRaises(SiteStepError):
+            self.step().observe(state(), self.operation())
 
 
 if __name__ == "__main__":

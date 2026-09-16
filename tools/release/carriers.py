@@ -192,6 +192,7 @@ def release_identity(state, *, candidate_root, repository_id, ledger):
 # The identity fields each step's closed spec binds, named per step.
 _SITE_FIELDS = ("tag", "product_build", "target_revision", "repository_id",
                 "actor_id", "request_sha256")
+_FINAL_FIELDS = _SITE_FIELDS + ("channel",)
 _DRAFT_FIELDS = ("tag", "target_revision", "repository_id", "actor_id",
                  "request_sha256")
 
@@ -368,3 +369,63 @@ def enroll_changelog_site(*, candidate_root, repository_id, ledger, fetch,
         return ChangelogSiteCarrier(spec=spec, fetch=fetch)
 
     return RecoveredStep("changelog_site", recover)
+
+
+def enroll_final(*, candidate_root, repository_id, ledger, fetch,
+                 release_by_tag, ledger_row, release_id_for, site_base_url):
+    """The `final` step: every recorded far-side identity must agree at once.
+
+    Observe-only like `changelog_site` — no write can make the far side true.
+    Its spec additionally binds the numeric Release identity, which the
+    enrollment cross-confirms from the publication record and the far-side
+    Release: while the record does not name this tag (nothing published, the
+    Release still a draft, or the record step has not landed) the identity is
+    not derivable and the step waits; a record that names a Release the far
+    side lacks, still holds as a draft, or numbers differently is drift and
+    fails closed.
+    """
+    from .final_steps import FinalCarrier, final_operation_id, validate_final_spec
+
+    for name, reader in (("fetch", fetch), ("release_by_tag", release_by_tag),
+                         ("ledger_row", ledger_row),
+                         ("release_id_for", release_id_for)):
+        if not callable(reader):
+            _fail(f"requires a callable {name}")
+
+    def recover(state, operation):
+        fields = spec_identity(state, candidate_root=candidate_root,
+                               repository_id=repository_id, ledger=ledger,
+                               operation_id=final_operation_id,
+                               fields=_FINAL_FIELDS)
+        if fields is None:
+            return None
+        tag = fields["tag"]
+        release = release_by_tag(tag)
+        recorded = release_id_for(tag)
+        if release is not None and not hasattr(release, "get"):
+            _fail("the far-side Release projection is not readable")
+        if recorded is None:
+            # The publication record does not name this tag yet, so there is
+            # no confirmed Release identity to bind, whatever the far side
+            # shows; the step waits rather than guessing one.
+            return None
+        if type(recorded) is not int or recorded <= 0:
+            _fail("the publication record carries no valid numeric Release "
+                  "identity")
+        if release is None:
+            _fail("the publication record names a Release the far side does "
+                  "not have")
+        if release.get("draft"):
+            _fail("the publication record names a Release that is still a "
+                  "draft")
+        if release.get("id") != recorded:
+            _fail("the publication record and the far-side Release disagree "
+                  "on the Release identity")
+        spec = dict(fields, site_base_url=site_base_url, release_id=recorded)
+        validate_final_spec(spec)
+        # The carrier passes the frozen tag to both readers itself, so the
+        # identity they answer for cannot drift from the one it verifies.
+        return FinalCarrier(spec=spec, fetch=fetch, release_by_tag=release_by_tag,
+                            ledger_row=ledger_row)
+
+    return RecoveredStep("final", recover)
