@@ -165,6 +165,11 @@ class FinalCarrier:
     """Observe-only aggregate: verify every recorded far-side identity."""
 
     def __init__(self, *, spec, fetch, release_by_tag, ledger_row):
+        """The readers take the identity: release_by_tag(tag), ledger_row(tag).
+
+        The carrier owns the identity it verifies, so a reader cannot read a
+        different release than the one the spec froze.
+        """
         validate_final_spec(spec)
         if not all(callable(it) for it in (fetch, release_by_tag, ledger_row)):
             _fail("requires the trusted far-side readers")
@@ -174,8 +179,8 @@ class FinalCarrier:
         self.ledger_row = ledger_row
 
     def observe(self, state, operation):
-        release = self.release_by_tag()
-        row = self.ledger_row()
+        release = self.release_by_tag(self.spec["tag"])
+        row = self.ledger_row(self.spec["tag"])
         if release is None or row is None:
             return Observation("absent")
         if not hasattr(release, "get"):
@@ -206,7 +211,8 @@ class FinalCarrier:
             "tag": self.spec["tag"], "release_id": self.spec["release_id"],
             "channel": self.spec["channel"],
             "target_revision": self.spec["target_revision"],
-            "row": {"target_revision": field(row, "target_revision"),
+            "row": {"tag": field(row, "tag"),
+                    "target_revision": field(row, "target_revision"),
                     "channel": field(row, "channel"),
                     "disposition": field(row, "disposition")},
             "routes": routes, "statuses": statuses}),

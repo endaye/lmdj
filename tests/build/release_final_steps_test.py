@@ -102,69 +102,80 @@ class ChangelogSiteCarrierTest(unittest.TestCase):
 class FinalCarrierTest(unittest.TestCase):
     def test_verified_binds_every_recorded_identity(self):
         carrier = FinalCarrier(spec=final_spec(), fetch=lambda url: 200,
-                               release_by_tag=lambda: {"draft": False, "id": 4096},
-                               ledger_row=lambda: Row())
+                               release_by_tag=lambda _tag: {"draft": False, "id": 4096},
+                               ledger_row=lambda _tag: Row())
         observed = carrier.observe({}, {"step": "final"})
         self.assertEqual(observed.status, "verified")
         self.assertEqual(observed.evidence["reference"], "final:lmdj-v1.0.57.0")
 
     def test_absent_before_release_or_row_exists(self):
         carrier = FinalCarrier(spec=final_spec(), fetch=lambda url: 200,
-                               release_by_tag=lambda: None, ledger_row=lambda: Row())
+                               release_by_tag=lambda _tag: None, ledger_row=lambda _tag: Row())
         self.assertEqual(carrier.observe({}, {}).status, "absent")
         carrier2 = FinalCarrier(spec=final_spec(), fetch=lambda url: 200,
-                                release_by_tag=lambda: {"draft": False},
-                                ledger_row=lambda: None)
+                                release_by_tag=lambda _tag: {"draft": False},
+                                ledger_row=lambda _tag: None)
         self.assertEqual(carrier2.observe({}, {}).status, "absent")
 
     def test_drift_fails_closed(self):
         carrier = FinalCarrier(spec=final_spec(), fetch=lambda url: 200,
-                               release_by_tag=lambda: {"draft": True},
-                               ledger_row=lambda: Row())
+                               release_by_tag=lambda _tag: {"draft": True},
+                               ledger_row=lambda _tag: Row())
         with self.assertRaises(SiteStepError):
             carrier.observe({}, {})
         still_draft = FinalCarrier(
             spec=final_spec(), fetch=lambda url: 200,
-            release_by_tag=lambda: {"draft": False},
-            ledger_row=lambda: Row(disposition="releasable"))
+            release_by_tag=lambda _tag: {"draft": False},
+            ledger_row=lambda _tag: Row(disposition="releasable"))
         with self.assertRaises(SiteStepError):
             still_draft.observe({}, {})
         wrong_tag = FinalCarrier(
             spec=final_spec(), fetch=lambda url: 200,
-            release_by_tag=lambda: {"draft": False, "id": 4096},
-            ledger_row=lambda: Row(tag="lmdj-v1.0.58.0"))
+            release_by_tag=lambda _tag: {"draft": False, "id": 4096},
+            ledger_row=lambda _tag: Row(tag="lmdj-v1.0.58.0"))
         with self.assertRaises(SiteStepError):
             wrong_tag.observe({}, {})
         wrong_id = FinalCarrier(
             spec=final_spec(), fetch=lambda url: 200,
-            release_by_tag=lambda: {"draft": False, "id": 1234},
-            ledger_row=lambda: Row())
+            release_by_tag=lambda _tag: {"draft": False, "id": 1234},
+            ledger_row=lambda _tag: Row())
         with self.assertRaises(SiteStepError):
             wrong_id.observe({}, {})
         missing_id = FinalCarrier(
             spec=final_spec(), fetch=lambda url: 200,
-            release_by_tag=lambda: {"draft": False},
-            ledger_row=lambda: Row())
+            release_by_tag=lambda _tag: {"draft": False},
+            ledger_row=lambda _tag: Row())
         with self.assertRaises(SiteStepError):
             missing_id.observe({}, {})
 
     def test_missing_routes_after_publish_are_a_conflict_not_absent(self):
         carrier = FinalCarrier(spec=final_spec(),
                                fetch=lambda url: 404,
-                               release_by_tag=lambda: {"draft": False, "id": 4096},
-                               ledger_row=lambda: Row())
+                               release_by_tag=lambda _tag: {"draft": False, "id": 4096},
+                               ledger_row=lambda _tag: Row())
         self.assertEqual(carrier.observe({}, {}).status, "conflict")
+
+    def test_readers_receive_the_frozen_spec_identity(self):
+        seen = []
+        carrier = FinalCarrier(
+            spec=final_spec(), fetch=lambda url: 200,
+            release_by_tag=lambda tag: (seen.append(("release", tag))
+                                        or {"draft": False, "id": 4096}),
+            ledger_row=lambda tag: (seen.append(("row", tag)) or Row()))
+        carrier.observe({}, {})
+        self.assertEqual(seen, [("release", "lmdj-v1.0.57.0"),
+                                ("row", "lmdj-v1.0.57.0")])
 
     def test_site_failure_is_unknown_never_a_pass(self):
         carrier = FinalCarrier(spec=final_spec(), fetch=lambda url: 503,
-                               release_by_tag=lambda: {"draft": False, "id": 4096},
-                               ledger_row=lambda: Row())
+                               release_by_tag=lambda _tag: {"draft": False, "id": 4096},
+                               ledger_row=lambda _tag: Row())
         self.assertEqual(carrier.observe({}, {}).status, "unknown")
 
     def test_carrier_refuses_an_untrusted_composition(self):
         with self.assertRaises(SiteStepError):
             FinalCarrier(spec=final_spec(), fetch=None,
-                         release_by_tag=lambda: None, ledger_row=lambda: None)
+                         release_by_tag=lambda _tag: None, ledger_row=lambda _tag: None)
 
 
 if __name__ == "__main__":
