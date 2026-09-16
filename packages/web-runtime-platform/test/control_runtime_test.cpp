@@ -6834,12 +6834,18 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
       runtime->dispatch("project.create", create_opted_in_project(), {}));
   const auto wav = mono_pcm16_wav(2'400);
   import_and_assign(*runtime, wav, kAssetId, 810, 811, 0);
+  // The final leg records a second Pad: the domain merge keys Pattern events
+  // by (bank, pad, onset_tick) and replaces duplicates, so re-recording the
+  // same Pad could legitimately land on the first event's onset and replace
+  // it. A distinct Pad keeps the two recordings on disjoint merge keys.
+  check_success(runtime->dispatch(
+      "pad.assign", assign_payload(823, 2, kAssetId, 1), {}));
   constexpr std::string_view kPatternB =
       "00000000-0000-4000-8000-0000000000b0";
   check_success(runtime->dispatch(
       "pattern.create",
       {{"command_id", uuid(812)},
-       {"expected_revision", 2},
+       {"expected_revision", 3},
        {"pattern_id", kPatternB},
        {"bars", 1}},
       {}));
@@ -6958,9 +6964,9 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
   check_success(request(821, "record"));
   settled(idle_recording);
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+      runtime->dispatch("trigger", {{"slot", 1}, {"velocity", 100}}, {}));
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+      runtime->dispatch("trigger", {{"slot", 1}, {"kind", "release"}}, {}));
   check_success(request(822, "record"));
   settled(idle_settled);
   const auto truth = inspect_project(temp.path(), kProjectId);
