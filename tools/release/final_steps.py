@@ -162,13 +162,17 @@ class FinalCarrier:
 
         def field(row, name):
             return row.get(name) if hasattr(row, "get") else getattr(row, name, None)
-        if field(row, "target_revision") != self.spec["target_revision"] \
+        if field(row, "tag") != self.spec["tag"] \
+                or field(row, "target_revision") != self.spec["target_revision"] \
                 or field(row, "channel") != self.spec["channel"] \
                 or field(row, "disposition") != "published":
             _fail("the ledger row does not record this release as published "
                   "in the promoted channel")
         if release.get("draft"):
             _fail("the far-side Release is still a draft")
+        if release.get("id") is not None \
+                and release.get("id") != self.spec["release_id"]:
+            _fail("the far-side Release id differs from the recorded one")
         routes = site_routes(self.spec)
         statuses = {name: _fetch_status(self.fetch, url)
                     for name, url in routes.items()}

@@ -116,6 +116,18 @@ class FinalCarrierTest(unittest.TestCase):
             ledger_row=lambda: Row(disposition="releasable"))
         with self.assertRaises(SiteStepError):
             still_draft.observe({}, {})
+        wrong_tag = FinalCarrier(
+            spec=final_spec(), fetch=lambda url: 200,
+            release_by_tag=lambda: {"draft": False, "id": 4096},
+            ledger_row=lambda: Row(tag="lmdj-v1.0.58.0"))
+        with self.assertRaises(SiteStepError):
+            wrong_tag.observe({}, {})
+        wrong_id = FinalCarrier(
+            spec=final_spec(), fetch=lambda url: 200,
+            release_by_tag=lambda: {"draft": False, "id": 1234},
+            ledger_row=lambda: Row())
+        with self.assertRaises(SiteStepError):
+            wrong_id.observe({}, {})
 
     def test_site_failure_is_unknown_never_a_pass(self):
         carrier = FinalCarrier(spec=final_spec(), fetch=lambda url: 503,
