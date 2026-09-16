@@ -16,6 +16,7 @@ import {
   panSampleViewport,
   projectSamplePlayback,
   reduceSampleState,
+  samplePlayheadFrameAt,
   selectSampleSlot,
   storeSampleInspect,
   storeSampleWaveform,
@@ -452,6 +453,7 @@ describe("Creator Sample state", () => {
     } as never);
     state = reduceSampleState(state, {
       type: "voice-changed",
+      observedAtMilliseconds: 0,
       event: {
         sequence: 1,
         slot: 17,
@@ -839,10 +841,12 @@ describe("Creator Sample state", () => {
       sequence: SAMPLE_VOICE_RENDER_LIMIT + 1,
       slot: 17,
       runtimeFrame: (SAMPLE_VOICE_RENDER_LIMIT + 1) * 128,
-      sourceFrame: 100 + SAMPLE_VOICE_RENDER_LIMIT + 1,
+      observedAtMilliseconds: 0,
+      sourceFrame: 10,
       sampleRate: 48_000,
       trimStartFrame: 10,
       trimEndFrame: 480,
+      triggerMode: "gate",
     });
 
     state = applyRuntimeVoiceState(state, {
@@ -915,6 +919,90 @@ describe("Creator Sample state", () => {
       trimStartFrame: 120,
       trimEndFrame: 300,
     });
+  });
+
+  test("anchors a resampled Voice at the effective source Trim Start", () => {
+    const inspected = storeSampleInspect(selectSampleSlot(initialSampleState, 17), {
+      ...inspect,
+      metadata: {sampleRate: 44_100, channels: 1, sourceFrames: 44_100},
+      playback: {
+        trimStartFrame: 4_410,
+        trimEndFrame: 22_050,
+        triggerMode: "one_shot",
+        gainMillidb: 0,
+        muted: false,
+      },
+      waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/87`,
+    });
+    const state = applyRuntimeVoiceState(inspected, {
+      sequence: 9,
+      slot: 17,
+      state: "started",
+      runtimeFrame: 128,
+      sourceFrame: 4_800,
+    });
+    expect(state.playhead?.sourceFrame).toBe(4_410);
+  });
+
+  test("derives playhead progress from elapsed session time and wraps loops", () => {
+    const oneShot = {
+      sequence: 9,
+      slot: 17,
+      runtimeFrame: 128,
+      observedAtMilliseconds: 1_000,
+      sourceFrame: 4_800,
+      sampleRate: 48_000,
+      trimStartFrame: 4_800,
+      trimEndFrame: 28_800,
+      triggerMode: "one_shot",
+    } as const;
+    expect(samplePlayheadFrameAt(oneShot, 12_128)).toBe(16_800);
+    expect(samplePlayheadFrameAt(oneShot, 48_128)).toBe(28_799);
+    expect(samplePlayheadFrameAt(
+      {...oneShot, triggerMode: "loop_gate"},
+      30_128,
+    )).toBe(10_800);
+    expect(samplePlayheadFrameAt({
+      ...oneShot,
+      sourceFrame: 4_410,
+      sampleRate: 44_100,
+      trimStartFrame: 4_410,
+      trimEndFrame: 44_100,
+    }, 24_128)).toBe(26_460);
+  });
+
+  test("keeps the newest selected-Pad Voice as deterministic playhead owner", () => {
+    let state = applyRuntimeVoiceState(inspectedState(), {
+      sequence: 1,
+      slot: 17,
+      state: "started",
+      runtimeFrame: 128,
+      sourceFrame: 10,
+    });
+    state = applyRuntimeVoiceState(state, {
+      sequence: 2,
+      slot: 17,
+      state: "started",
+      runtimeFrame: 256,
+      sourceFrame: 10,
+    });
+    state = applyRuntimeVoiceState(state, {
+      sequence: 1,
+      slot: 17,
+      state: "completed",
+      runtimeFrame: 608,
+      sourceFrame: 480,
+    });
+    expect(state.playhead?.sequence).toBe(2);
+
+    state = applyRuntimeVoiceState(state, {
+      sequence: 2,
+      slot: 17,
+      state: "stopped",
+      runtimeFrame: 736,
+      sourceFrame: 300,
+    });
+    expect(state.playhead).toBeNull();
   });
 
   test("rejects unsafe, noncanonical, extra-key, and private state inputs", () => {

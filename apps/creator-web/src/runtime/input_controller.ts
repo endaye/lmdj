@@ -465,7 +465,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     }
     dispatch({
       type: "sample-action",
-      action: {type: "voice-changed", event},
+      action: {type: "voice-changed", event, observedAtMilliseconds: now()},
     });
     const admission = admissions.get(event.sequence);
     const admissionCurrent = admission?.sampleToken === undefined ||

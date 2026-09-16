@@ -361,7 +361,36 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     );
   });
   const padA1 = page.getByRole("button", {name: "Pad A1 — assigned"});
-  await heldPadGesture(page, padA1, ["started", "completed"]);
+  await page.emulateMedia({reducedMotion: "reduce"});
+  const playheadOffset = await page.evaluate(() =>
+    (window.__sampleVoiceStates ?? []).length);
+  const playheadPointer = ++pointerSequence;
+  await padA1.dispatchEvent("pointerdown", {
+    pointerId: playheadPointer,
+    isPrimary: true,
+    button: 0,
+    clientX: 10,
+    clientY: 10,
+  });
+  await expect.poll(() => page.evaluate((start) =>
+    (window.__sampleVoiceStates ?? []).slice(start).some(({state}) => state === "started"),
+  playheadOffset), {timeout: 30_000}).toBe(true);
+  const playhead = page.locator("line[data-playhead]");
+  await expect(playhead).toHaveCount(1);
+  await expect(playhead).toHaveAttribute("aria-hidden", "true");
+  const initialPlayheadX = Number(await playhead.getAttribute("x1"));
+  await expect.poll(async () => Number(await playhead.getAttribute("x1")), {
+    timeout: 5_000,
+  }).toBeGreaterThan(initialPlayheadX + 4);
+  await padA1.dispatchEvent("pointerup", {
+    pointerId: playheadPointer,
+    isPrimary: true,
+    button: 0,
+    clientX: 10,
+    clientY: 10,
+  });
+  await waitForVoiceStates(page, playheadOffset, ["started", "completed"]);
+  await expect(playhead).toHaveCount(0);
 
   const loop = page.getByRole("button", {name: "Loop"});
   const oneShot = page.getByRole("button", {name: "One Shot"});
