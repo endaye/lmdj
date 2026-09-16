@@ -2,7 +2,7 @@ import {useState} from "react";
 
 import {fireEvent, render, screen} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import {expect, test} from "vitest";
+import {expect, test, vi} from "vitest";
 
 import {App} from "../src/app";
 import {ErrorPanel} from "../src/components/error_panel";
@@ -132,6 +132,33 @@ test("formatBytes renders human units", () => {
   expect(formatBytes(-1)).toBe("0 B");
 });
 
+test("D01 Project cards keep Open and omit Save and New", () => {
+  const onOpen = vi.fn();
+  const withList: CreatorState = {
+    ...ready,
+    project: {
+      ...ready.project,
+      projects: [{
+        projectId: project.projectId,
+        patternId: project.patternId,
+        revision: 7,
+        bpm: 96,
+        assetCount: 3,
+        assignedPadCount: 5,
+        bundleDigest: "digest",
+      }],
+    },
+  };
+  render(<ProjectSurface state={withList} canOpen hideSummary onOpen={onOpen} />);
+  expect(screen.getByText("01 LOCAL")).toBeTruthy();
+  expect(screen.getByText("01", {selector: ".project-card-index"})).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", {name: "Open Project 01234567"}));
+  expect(onOpen).toHaveBeenCalledWith(withList.project.projects[0]);
+  expect(screen.queryByRole("button", {name: /^SAVE$/i})).toBeNull();
+  expect(screen.queryByRole("button", {name: /NEW PROJECT/i})).toBeNull();
+  expect(screen.queryByRole("button", {name: /SAVE AS/i})).toBeNull();
+});
+
 test("the local Project chooser can return to the open Project", async () => {
   const user = userEvent.setup();
   const withList: CreatorState = {
@@ -229,9 +256,9 @@ test("sequence settings follow committed Project values and pluralise bars", () 
     onCreatePattern: noop, onSettingsChange: noop, onRecover: noop, onDiscard: noop,
   };
   const {rerender} = render(<SequenceSurface project={project} {...props} />);
-  expect(screen.getByText("Project revision 7 · 2 Patterns")).toBeTruthy();
-  expect(screen.getByRole("option", {name: "pattern- · 1 bar"})).toBeTruthy();
-  expect(screen.getByRole("option", {name: "pattern- · 4 bars"})).toBeTruthy();
+  expect(screen.getByRole("heading", {name: /GROOVE \//})).toBeTruthy();
+  expect(screen.getByRole("option", {name: "01 · 1 bar"})).toBeTruthy();
+  expect(screen.getByRole("option", {name: "02 · 4 bars"})).toBeTruthy();
   const bpm = screen.getByLabelText("BPM") as HTMLInputElement;
   expect(bpm.value).toBe("96");
   fireEvent.change(bpm, {target: {value: "120"}});

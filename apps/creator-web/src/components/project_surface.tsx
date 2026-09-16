@@ -48,9 +48,14 @@ export function ProjectSurface({
   return (
     <main className="project-surface">
       <div className="surface-heading">
-        <div>
+        <div className="project-chooser-header">
           <p className="eyebrow">Project surface</p>
           <h1>{showChooser ? "Local Projects" : `Project ${shortProjectId(project.projectId)}`}</h1>
+          {hideSummary ? (
+            <p className="project-local-count">
+              {String(state.project.projects.length).padStart(2, "0")} LOCAL
+            </p>
+          ) : null}
         </div>
         <div className="project-actions">
           {project !== null && showLocalProjects && onHideLocal ? (
@@ -123,11 +128,18 @@ export function ProjectSurface({
         </p>
       ) : (
         <ul className="local-projects" id="local-projects">
-          {state.project.projects.map((summary) => {
+          {state.project.projects.map((summary, index) => {
             const id = shortProjectId(summary.projectId);
             const isCurrent = project?.projectId === summary.projectId;
             return (
-              <li key={summary.projectId} aria-current={isCurrent ? "true" : undefined}>
+              <li
+                key={summary.projectId}
+                className={isCurrent ? "is-current" : ""}
+                aria-current={isCurrent ? "true" : undefined}
+              >
+                <span className="project-card-index" aria-hidden="true">
+                  {String(index + 1).padStart(2, "0")}
+                </span>
                 <div>
                   <strong>Project {id}</strong>
                   {isCurrent ? <span>Open now</span> : null}
