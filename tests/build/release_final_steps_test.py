@@ -73,7 +73,7 @@ class ChangelogSiteCarrierTest(unittest.TestCase):
         self.assertIsInstance(observed, Observation)
         self.assertEqual(observed.status, "verified")
 
-    def test_404_is_absent_and_unreachable_is_unknown(self):
+    def test_404_is_absent_partial_404_is_conflict_unreachable_is_unknown(self):
         self.assertEqual(ChangelogSiteCarrier(
             spec=site_spec(), fetch=lambda url: 404 if "versions" in url else 200
         ).observe({}, {}).status, "conflict")
@@ -81,8 +81,18 @@ class ChangelogSiteCarrierTest(unittest.TestCase):
             spec=site_spec(), fetch=lambda url: 404
         ).observe({}, {}).status, "absent")
         self.assertEqual(ChangelogSiteCarrier(
-            spec=site_spec(), fetch=lambda url: (_ for _ in ()).throw(OSError("down"))
+            spec=site_spec(), fetch=lambda url: 503
         ).observe({}, {}).status, "unknown")
+        # An unreachable site is unknown, never a pass and never absence.
+        self.assertEqual(ChangelogSiteCarrier(
+            spec=site_spec(),
+            fetch=lambda url: (_ for _ in ()).throw(OSError("down"))
+        ).observe({}, {}).status, "unknown")
+        # A defect in the fetch callable surfaces instead of being coerced.
+        with self.assertRaises(SiteStepError):
+            ChangelogSiteCarrier(
+                spec=site_spec(), fetch=lambda url: "200"
+            ).observe({}, {})
 
     def test_carrier_refuses_an_untrusted_fetch(self):
         with self.assertRaises(SiteStepError):
@@ -138,12 +148,12 @@ class FinalCarrierTest(unittest.TestCase):
         with self.assertRaises(SiteStepError):
             missing_id.observe({}, {})
 
-    def test_all_404_routes_are_absent_not_unknown(self):
+    def test_missing_routes_after_publish_are_a_conflict_not_absent(self):
         carrier = FinalCarrier(spec=final_spec(),
                                fetch=lambda url: 404,
                                release_by_tag=lambda: {"draft": False, "id": 4096},
                                ledger_row=lambda: Row())
-        self.assertEqual(carrier.observe({}, {}).status, "absent")
+        self.assertEqual(carrier.observe({}, {}).status, "conflict")
 
     def test_site_failure_is_unknown_never_a_pass(self):
         carrier = FinalCarrier(spec=final_spec(), fetch=lambda url: 503,

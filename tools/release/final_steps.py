@@ -108,7 +108,12 @@ def site_routes(spec):
 
 
 def _fetch_status(fetch, url):
-    """fetch(url) -> HTTP status int; failures return 0 (site unreachable).
+    """fetch(url) -> a real HTTP status int; unreachable is 0, defects raise.
+
+    Only transport failure is swallowed (the site is unreachable → the caller
+    reports `unknown`, never a pass). A defect in the trusted fetch callable —
+    a wrong signature or a non-HTTP return — must surface instead of being
+    silently coerced.
 
     ponytail: only the status is bound into evidence. When a route must prove
     it serves THIS Build's content (not just any 200), upgrade the fetch
@@ -116,9 +121,14 @@ def _fetch_status(fetch, url):
     ChangelogSiteCarrier.observe / FinalCarrier.observe evidence.
     """
     try:
-        return int(fetch(url))
-    except Exception:
+        status = fetch(url)
+    except OSError:  # URLError, timeouts, connection resets
         return 0
+    if type(status) is not int or status <= 0:
+        raise SiteStepError(
+            f"why: the site fetch returned {status!r}, not an HTTP status; "
+            "remedy: fix the trusted fetch callable")
+    return status
 
 
 class ChangelogSiteCarrier:
@@ -186,8 +196,10 @@ class FinalCarrier:
         routes = site_routes(self.spec)
         statuses = {name: _fetch_status(self.fetch, url)
                     for name, url in routes.items()}
-        if all(status == 404 for status in statuses.values()):
-            return Observation("absent")
+        # The ledger row already proved this release is published here, so a
+        # missing route is an inconsistency, never "not deployed yet".
+        if any(status == 404 for status in statuses.values()):
+            return Observation("conflict")
         if any(status != 200 for status in statuses.values()):
             return Observation("unknown")
         evidence = {"sha256": canonical_sha256({
