@@ -586,3 +586,94 @@ def enroll_changelog(*, candidate_root, repository_id, ledger, main_revision,
         return ChangelogCarrier(commit=commit_for(spec), sequence=sequence_for(spec))
 
     return RecoveredStep("changelog", recover, drives=True)
+
+
+def enroll_promotion(*, candidate_root, repository_id, ledger, main_revision,
+                     promotion_binding, commit_for, sequence_for):
+    """The `promotion` step: record the reviewed dev promotion via a docs PR.
+
+    This step drives its own write — the owned docs commit on canonical main
+    plus the reviewed PR sequence — so it is enrolled with `drives=True`. The
+    shared identity comes from `spec_identity` (the intent row is
+    authoritative for the target revision, cross-checked against the
+    candidate witness merge in `new` mode); the row's current channel is the
+    promotion's `from_channel`. The reviewed promotion itself is injected by
+    the trusted composition: `promotion_binding()` returns None while the
+    runtime/creator deployment evidence does not exist yet (the step waits),
+    otherwise the plan's binding — `from_channel`, `to_channel` and the
+    `deployment_runs_sha256`/`attestation_sha256` digests the committed ledger
+    record is verified against. The promotion must move strictly forward and
+    `stable` is refused here as `plan_promotion` refuses it. As with the
+    changelog step, the closed spec's `head_sha`/`tree_sha` are deterministic
+    placeholders the carrier replaces with the durable commit's real
+    identities before the PR transport reads them.
+    """
+    from .model import canonical_sha256, channel_rank
+    from .promotion_step import (
+        PromotionCarrier,
+        promotion_operation_id,
+        validate_spec,
+    )
+
+    for name, factory in (("main_revision", main_revision),
+                          ("promotion_binding", promotion_binding),
+                          ("commit_for", commit_for),
+                          ("sequence_for", sequence_for)):
+        if not callable(factory):
+            _fail(f"requires a callable {name}")
+
+    def recover(state, operation):
+        fields = spec_identity(state, candidate_root=candidate_root,
+                               repository_id=repository_id, ledger=ledger,
+                               operation_id=promotion_operation_id,
+                               fields=_DRAFT_FIELDS + ("channel",))
+        if fields is None:
+            return None
+        base = main_revision()
+        if type(base) is not str or _SHA.fullmatch(base) is None:
+            _fail("the canonical main revision is unavailable")
+        bound = promotion_binding()
+        if bound is None:
+            # The deployment evidence this promotion attests does not exist
+            # yet; the step waits rather than inventing a record.
+            return None
+        if type(bound) is not dict:
+            _fail("the reviewed promotion binding is not readable")
+        keys = ("from_channel", "to_channel", "deployment_runs_sha256",
+                "attestation_sha256")
+        if any(key not in bound for key in keys):
+            _fail("the reviewed promotion binding omits a required field")
+        from_channel, to_channel = bound["from_channel"], bound["to_channel"]
+        if from_channel != fields["channel"]:
+            _fail("the reviewed promotion starts from a channel the intent row "
+                  "is not on")
+        try:
+            forward = channel_rank(to_channel) > channel_rank(from_channel)
+        except Exception:
+            _fail("the reviewed promotion names an unknown channel")
+        if not forward or to_channel == "stable":
+            _fail("the reviewed promotion does not move strictly forward to an "
+                  "implemented channel")
+        for key in ("deployment_runs_sha256", "attestation_sha256"):
+            if type(bound[key]) is not str or _DIGEST.fullmatch(bound[key]) is None:
+                _fail("the reviewed promotion binding carries no valid digests")
+        placeholder = canonical_sha256({"request": fields["request_sha256"],
+                                        "step": "promotion", "placeholder": "head"})
+        placeholder_tree = canonical_sha256({"request": fields["request_sha256"],
+                                             "step": "promotion",
+                                             "placeholder": "tree"})
+        spec = {"operation_id": fields["operation_id"],
+                "request_sha256": fields["request_sha256"],
+                "repository_id": fields["repository_id"],
+                "actor_id": fields["actor_id"],
+                "base_revision": base,
+                "head_sha": placeholder[:40], "tree_sha": placeholder_tree[:40],
+                "tag": fields["tag"], "target_revision": fields["target_revision"],
+                "to_channel": to_channel, "from_channel": from_channel,
+                "deployment_runs_sha256": bound["deployment_runs_sha256"],
+                "attestation_sha256": bound["attestation_sha256"]}
+        validate_spec(spec)
+        return PromotionCarrier(commit=commit_for(spec),
+                                sequence=sequence_for(spec))
+
+    return RecoveredStep("promotion", recover, drives=True)

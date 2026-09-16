@@ -10,8 +10,13 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from tools.release.model import canonical_sha256  # noqa: E402
+from tools.release.orchestration_driver import Observation  # noqa: E402
 from tools.release.promotion_step import (  # noqa: E402
+    PromotionBranch,
+    PromotionCarrier,
     PromotionCommit,
+    PromotionPrSequence,
+    PromotionPullRequest,
     PromotionStepError,
     pr_document,
     promotion_operation_id,
@@ -144,6 +149,91 @@ class CommitTest(unittest.TestCase):
         with self.assertRaises(PromotionStepError):
             stale.commit(before_write=lambda: None)
         self.assertFalse(self.worktree.exists(), "no worktree may be created")
+
+
+class CarrierFixture(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+
+    def new_commit(self, **changes):
+        arguments = dict(root=self.root / "worktree",
+                         repository_root=self.root / "repo", spec=spec(),
+                         plan=None, main_tip=lambda: BASE,
+                         author_name="Fixture",
+                         author_email="fixture@example.invalid")
+        arguments.update(changes)
+        return PromotionCommit(**arguments)
+
+    def new_sequence(self):
+        root = self.root / "sequence"
+        branch = PromotionBranch(root / "branch", root / "repo",
+                                 token="FIXTURE-NOT-A-SECRET",
+                                 authorize=lambda _spec: None)
+        pr = PromotionPullRequest(root / "pr", api=lambda *a, **k: None,
+                                  authorize=lambda _spec: None,
+                                  review=lambda *a: None,
+                                  verify_merged=lambda *a: None)
+        return PromotionPrSequence(root, branch=branch, pr=pr)
+
+
+class PromotionCarrierTest(CarrierFixture):
+    def test_sequence_states_map_to_honest_observations(self):
+        cases = [(("merged",), "verified"), (("absent",), "pending"),
+                 (("pending",), "pending"), (("unknown",), "unknown"),
+                 (("conflict",), "conflict")]
+        for (status,), expected in cases:
+            sequence = self.new_sequence()
+            sequence.observe = lambda spec, initialize=False, status=status: {
+                "status": status, "phase": "pr", "evidence": None}
+            sequence.pr.observe_merge = lambda spec: {
+                "status": "verified", "merge": {"number": 7},
+                "evidence": {"sha256": "5" * 64, "reference": "fixture"}}
+            carrier = PromotionCarrier(commit=self.new_commit(), sequence=sequence)
+            carrier._spec = spec()
+            observed = carrier.observe({}, {"step": "promotion"})
+            self.assertIsInstance(observed, Observation)
+            self.assertEqual(observed.status, expected, status)
+            if expected == "verified":
+                self.assertEqual(observed.evidence["reference"], "promotion-pr:7")
+
+    def test_merged_sequence_without_verified_merge_is_unknown(self):
+        sequence = self.new_sequence()
+        sequence.observe = lambda spec, initialize=False: {
+            "status": "merged", "phase": "pr", "evidence": None}
+        sequence.pr.observe_merge = lambda spec: {"status": "pending",
+                                                  "merge": None}
+        carrier = PromotionCarrier(commit=self.new_commit(), sequence=sequence)
+        carrier._spec = spec()
+        self.assertEqual(carrier.observe({}, {}).status, "unknown")
+
+    def test_observation_before_any_commit_is_pending_and_calls_nothing(self):
+        sequence = self.new_sequence()
+        sequence.observe = lambda *a, **k: self.fail("must not drive the sequence yet")
+        carrier = PromotionCarrier(commit=self.new_commit(), sequence=sequence)
+        self.assertEqual(carrier.observe({}, {"step": "promotion"}).status, "pending")
+
+    def test_verified_merge_without_an_evidence_digest_is_refused(self):
+        sequence = self.new_sequence()
+        sequence.observe = lambda spec, initialize=False: {
+            "status": "merged", "phase": "pr", "evidence": None}
+        sequence.pr.observe_merge = lambda spec: {"status": "verified",
+                                                  "merge": {"number": 7}}
+        carrier = PromotionCarrier(commit=self.new_commit(), sequence=sequence)
+        carrier._spec = spec()
+        with self.assertRaises(PromotionStepError):
+            carrier.observe({}, {})
+
+    def test_foreign_children_are_refused(self):
+        with self.assertRaises(PromotionStepError):
+            PromotionCarrier(commit=object(), sequence=object())
+
+    def test_advance_requires_the_durable_write_guard(self):
+        carrier = PromotionCarrier(commit=self.new_commit(),
+                                   sequence=self.new_sequence())
+        with self.assertRaises(PromotionStepError):
+            carrier.advance({}, {"step": "promotion"}, before_write=None)
 
 
 if __name__ == "__main__":

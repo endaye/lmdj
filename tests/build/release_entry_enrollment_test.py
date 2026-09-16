@@ -16,6 +16,7 @@ from tools.release.carriers import (  # noqa: E402
     enroll_draft,
     enroll_final,
     enroll_intent,
+    enroll_promotion,
     read_candidate_identity,
     read_prepared_plan,
     read_verified_batch,
@@ -1044,6 +1045,166 @@ class ChangelogEnrollmentTest(unittest.TestCase):
         # deterministic, distinct from base and target, and replaced by the
         # durable commit's identities before the transport reads them.
         self.assertNotIn(spec["head_sha"], (MAIN_TIP, TARGET))
+        self.assertNotEqual(spec["head_sha"], spec["tree_sha"])
+        self.assertEqual(spec, self.sequence_specs[0])
+
+
+def _deployment_binding(from_channel="canary", to_channel="dev"):
+    from tools.release.model import canonical_sha256
+
+    return {"from_channel": from_channel, "to_channel": to_channel,
+            "deployment_runs_sha256": canonical_sha256({"runs": [
+                {"host": "runtime", "run_id": 111, "evidence_sha256": "a" * 64},
+                {"host": "creator", "run_id": 222, "evidence_sha256": "b" * 64}]}),
+            "attestation_sha256": canonical_sha256({"attestation": "verified"})}
+
+
+class PromotionEnrollmentTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.commit_specs = []
+        self.sequence_specs = []
+        self.bound = None
+
+    def canary_ledger(self):
+        # The promotion starts from the publication channel: the row exists
+        # (published) but has no promotions yet.
+        return Ledger(rows={"lmdj-v" + BUILD: Intent(channel="canary")})
+
+    def commit_for(self, spec):
+        from tools.release.promotion_step import PromotionCommit
+
+        self.commit_specs.append(deepcopy(spec))
+        return PromotionCommit(root=self.root / "promotion-worktree",
+                               repository_root=self.root / "repo", spec=spec,
+                               plan=None, main_tip=lambda: MAIN_TIP,
+                               author_name="Fixture",
+                               author_email="fixture@example.invalid")
+
+    def sequence_for(self, spec):
+        from tools.release.promotion_step import (
+            PromotionBranch,
+            PromotionPrSequence,
+            PromotionPullRequest,
+        )
+
+        self.sequence_specs.append(deepcopy(spec))
+        root = self.root / "promotion-sequence"
+        branch = PromotionBranch(root / "branch", root / "repo",
+                                 token="FIXTURE-NOT-A-SECRET",
+                                 authorize=lambda _spec: None)
+        pr = PromotionPullRequest(root / "pr", api=lambda *a, **k: None,
+                                  authorize=lambda _spec: None,
+                                  review=lambda *a: None,
+                                  verify_merged=lambda *a: None)
+        return PromotionPrSequence(root, branch=branch, pr=pr)
+
+    def step(self, **overrides):
+        arguments = dict(
+            candidate_root=self.root, repository_id=12, ledger=self.canary_ledger(),
+            main_revision=lambda: MAIN_TIP,
+            promotion_binding=lambda: self.bound,
+            commit_for=self.commit_for, sequence_for=self.sequence_for)
+        arguments.update(overrides)
+        return enroll_promotion(**arguments)
+
+    def operation(self):
+        return {"step": "promotion", "operation_id": DIGEST, "status": "intent",
+                "evidence": None}
+
+    def test_the_step_drives_its_own_write(self):
+        # The promotion step lands the reviewed ledger record and evidence
+        # document, then drives the reviewed PR sequence under the guard.
+        self.assertTrue(callable(getattr(self.step(), "advance", None)))
+
+    def test_non_callable_factories_are_refused_at_enrollment(self):
+        with self.assertRaises(JournalError):
+            self.step(promotion_binding=None)
+
+    def test_the_step_is_pending_until_the_identity_and_binding_exist(self):
+        step = self.step()
+        # New mode without any candidate state: no Build to bind.
+        new_mode = state(request=request(mode="new", requested_tag=None))
+        self.assertEqual(step.observe(new_mode, self.operation()).status, "pending")
+        # Identity derivable (tag-mode row) but the deployment evidence the
+        # promotion attests does not exist yet: the step waits.
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        self.assertEqual(self.commit_specs, [])
+
+    def test_an_unauthorized_tag_fails_closed_rather_than_waiting(self):
+        step = self.step(ledger=Ledger(rows={}))
+        with self.assertRaises(JournalError):
+            step.observe(state(), self.operation())
+        self.assertEqual(self.commit_specs, [])
+
+    def test_a_binding_disagreeing_with_the_row_fails_closed(self):
+        step = self.step()
+        # The reviewed promotion must start from the channel the row is on.
+        with self.assertRaises(JournalError):
+            self.step(promotion_binding=lambda: _deployment_binding(
+                from_channel="dev", to_channel="beta")).observe(state(), self.operation())
+        # Backwards, same-channel, stable and unknown targets are all refused.
+        for to_channel in ("canary", "stable", "nowhere"):
+            with self.assertRaises(JournalError):
+                self.step(promotion_binding=lambda: _deployment_binding(
+                    to_channel=to_channel)).observe(state(), self.operation())
+        self.assertEqual(self.commit_specs, [])
+
+    def test_a_malformed_binding_fails_closed(self):
+        for bound in ("not-a-binding", {"from_channel": "canary"},
+                      _deployment_binding()):
+            broken = bound
+            if isinstance(bound, dict) and "deployment_runs_sha256" in bound:
+                broken = dict(bound, deployment_runs_sha256="short")
+            with self.assertRaises(JournalError):
+                self.step(promotion_binding=lambda: broken).observe(state(),
+                                                                    self.operation())
+        self.assertEqual(self.commit_specs, [])
+
+    def test_a_pending_step_writes_nothing_when_asked_to_advance(self):
+        written = []
+        step = self.step()
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        step.advance(state(), self.operation(),
+                     before_write=lambda: written.append(True))
+        self.assertEqual(written, [])
+        self.assertEqual(self.commit_specs, [])
+
+    def test_the_step_delegates_to_the_real_promotion_carrier(self):
+        self.bound = _deployment_binding()
+        step = self.step()
+        # The real carrier observes pending before its durable commit exists
+        # and must not touch the PR sequence yet.
+        observed = step.observe(state(), self.operation())
+        self.assertEqual(observed.status, "pending")
+        self.assertEqual(len(self.commit_specs), 1)
+        self.assertEqual(len(self.sequence_specs), 1)
+        spec = self.commit_specs[0]
+        self.assertEqual(set(spec), {"operation_id", "request_sha256",
+                                     "repository_id", "actor_id", "base_revision",
+                                     "head_sha", "tree_sha", "tag",
+                                     "target_revision", "to_channel",
+                                     "from_channel", "deployment_runs_sha256",
+                                     "attestation_sha256"})
+        from tools.release.promotion_step import promotion_operation_id
+
+        self.assertEqual(spec["operation_id"], promotion_operation_id(DIGEST))
+        # The target revision is the intent row's, the base is the resolved
+        # canonical main tip, and the promotion binds the row's channel.
+        self.assertEqual(spec["target_revision"], TARGET)
+        self.assertEqual(spec["base_revision"], MAIN_TIP)
+        self.assertEqual(spec["tag"], "lmdj-v" + BUILD)
+        self.assertEqual((spec["from_channel"], spec["to_channel"]),
+                         ("canary", "dev"))
+        self.assertEqual(spec["deployment_runs_sha256"],
+                         self.bound["deployment_runs_sha256"])
+        self.assertEqual(spec["attestation_sha256"],
+                         self.bound["attestation_sha256"])
+        # Inert placeholders: distinct from base, replaced from the durable
+        # commit before the transport reads them.
+        self.assertNotEqual(spec["head_sha"], MAIN_TIP)
         self.assertNotEqual(spec["head_sha"], spec["tree_sha"])
         self.assertEqual(spec, self.sequence_specs[0])
 
