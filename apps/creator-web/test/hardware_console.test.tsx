@@ -33,7 +33,7 @@ test("names the four hardware regions for the console shell", () => {
   expect(screen.getByRole("region", {name: "Touch workspace"})).toBeTruthy();
 });
 
-test("names Figma 15 physical keys on the control panel", () => {
+test("names D01–D04 physical keys by accessible name and exported icons", () => {
   render(<PhysicalControls
     activeMode="project"
     activeBank={0}
@@ -48,14 +48,18 @@ test("names Figma 15 physical keys on the control panel", () => {
     "Project", "Sample", "Sequence", "Perform",
     "Bank A", "Bank B", "Bank C", "Bank D",
   ]) {
-    expect(screen.getByRole("button", {name}).textContent).toBe(
-      name.startsWith("Bank ") ? name.slice(-1) : name,
-    );
+    const key = screen.getByRole("button", {name});
+    if (name.startsWith("Bank ")) {
+      expect(key.textContent).toBe(name.slice(-1));
+    } else {
+      expect(key.querySelector("img")).toBeTruthy();
+      expect(key.textContent).toBe("");
+    }
   }
-  expect(screen.getByRole("button", {name: "Record"}).textContent).toBe("●");
+  expect(screen.getByRole("button", {name: "Record"}).querySelector("img")).toBeTruthy();
   expect(screen.getByRole("button", {
     name: "Play/Stop — needs a playable Project and running audio",
-  }).textContent).toBe("▶");
+  }).querySelector("img")).toBeTruthy();
   expect(screen.getByRole("group", {name: "Encoders"})).toBeTruthy();
   expect(screen.getAllByRole("button", {
     name: /Encoder \d — unassigned until hardware mapping is approved/,
