@@ -37,6 +37,14 @@ class PatternTransportAudioPort {
   virtual std::uint64_t pattern_generation() const = 0;
   virtual std::optional<audio::PatternReplacementAuthority> pending_switch()
       const = 0;
+  // The engine's current Pattern identity on the same control lane.
+  // `std::nullopt` means no retarget information: the engine has no current
+  // Pattern or the port does not know it, and the coordinator keeps its
+  // vendored binding. A concrete id lets the coordinator re-anchor its
+  // binding when it opens a new journal after an applied switch (#1403).
+  virtual std::optional<foundation::PatternId> current_pattern() const {
+    return std::nullopt;
+  }
 };
 
 struct PatternTransportControllerConfig {

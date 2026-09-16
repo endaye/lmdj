@@ -70,7 +70,11 @@ activation 在 quiescent 点重新武装端口，同 generation 内 epoch 单调
 1 重启（status 携带 runtime_generation 供页面识别）。同身份重发布保留 engagement；
 其产生的 pending publication 应用前（Bar 边界）的 Record 得到可重试的
 HOST_STATE_INVALID 拒绝，在 facade 写任何 journal 之前返回，绝不留下不可复用的
-preparation。
+preparation。Host 端口还向 Facade 报告引擎当前 Pattern（`current_pattern()` 直通
+Engine 的 `current_pattern_id()`）：playing 状态下已在 Bar 边界应用的 switch 使
+engagement 的 vendored 绑定变陈旧时，下一次 Record 由 Facade 协调器先重锚绑定再开
+journal（#1403），事件直接提交到引擎当前 Pattern，不再以确定性 fence 错配停驻
+error phase；录制中（journal 活跃）永不重锚，跨 switch 结清仍由 close 机制拥有。
 
 Creator 默认入口（T4）、六态的完整产品旅程验收、以及物理 MIDI/触控/声学听感验收仍未交付；
 本页的绿色只覆盖原生 Host/bridge 套件、Node Runtime Session 回归与真实 Chromium

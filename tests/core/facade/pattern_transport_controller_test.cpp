@@ -6,6 +6,7 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <initializer_list>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -137,11 +138,41 @@ struct EnginePort final : PatternTransportAudioPort {
   std::optional<lmdj::audio::PatternReplacementAuthority> pending_switch()
       const override {
     const auto pending = engine.pending_pattern_id();
-    if (!pending) return std::nullopt;
+    if (!pending) {
+      // Once the queued switch is current the engine no longer reports it as
+      // pending; re-report it so a fence crossing the application still names
+      // the switch (same fallback as the internal-tier port).
+      if (queued_switch_ &&
+          engine.current_pattern_id() == queued_switch_->pattern_id &&
+          engine.pattern_telemetry().current_generation ==
+              queued_switch_->generation) {
+        return queued_switch_;
+      }
+      return std::nullopt;
+    }
     const auto telemetry = engine.pattern_telemetry();
     return lmdj::audio::PatternReplacementAuthority{
         telemetry.pending_generation, *pending,
         telemetry.pending_activation_frame};
+  }
+  // Retarget information for #1403: when false the port reports no current
+  // Pattern (the defaulted-port semantics) and the coordinator keeps its
+  // vendored binding.
+  bool report_current_pattern = true;
+  std::optional<PatternId> current_pattern() const override {
+    if (!report_current_pattern) return std::nullopt;
+    return engine.current_pattern_id();
+  }
+  std::optional<lmdj::audio::PatternReplacementAuthority> queued_switch_;
+  void queue_switch(const char* pattern_id, std::uint64_t activation_frame) {
+    auto view = PreparedPatternView::from_snapshot(pattern_snapshot(pattern_id));
+    LMDJ_CHECK(view.has_value());
+    const auto publication = engine.publish_pattern_view(
+        std::move(view.value()), activation_frame);
+    LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+    queued_switch_ = lmdj::audio::PatternReplacementAuthority{
+        publication.generation, PatternId{pattern_id},
+        publication.activation_frame};
   }
   void render(std::uint64_t frames) {
     std::array<float, 256> left{};
@@ -163,11 +194,15 @@ struct Fixture {
   EnginePort audio;
   std::unique_ptr<PatternTransportController> controller;
 
-  Fixture() : bundle(directory.path() / "project.lmdj") {
+  Fixture(std::initializer_list<PatternId> extra_patterns = {})
+      : bundle(directory.path() / "project.lmdj") {
     auto created = lmdj::domain::create_project(ProjectId{kProject}, 120);
     LMDJ_CHECK(created.has_value());
     auto state = std::move(created.value());
     state.patterns.emplace(pattern, lmdj::domain::Pattern{pattern, 1, {}});
+    for (const auto& extra : extra_patterns) {
+      state.patterns.emplace(extra, lmdj::domain::Pattern{extra, 1, {}});
+    }
     lmdj::project_io::ProjectStore store;
     LMDJ_CHECK(store.create(bundle, state).has_value());
     controller = lmdj::facade::make_pattern_transport_controller(
@@ -268,6 +303,10 @@ void pending_operation_reports_busy_then_replays() {
 void deterministic_fence_mismatch_parks_the_engagement_in_error() {
   constexpr auto kPatternB = "00000000-0000-4000-8000-00000000000b";
   Fixture f;
+  // A port without retarget information (the defaulted `current_pattern`)
+  // keeps the pre-#1403 behavior: the coordinator cannot re-anchor, so the
+  // deterministic fence mismatch still parks the engagement honestly.
+  f.audio.report_current_pattern = false;
   f.settle(f.make(6, 1, PatternTransportIntent::record));
   f.settle(f.make(7, 2, PatternTransportIntent::record));
   f.settle(f.make(8, 3, PatternTransportIntent::play_stop));
@@ -328,6 +367,123 @@ std::uint64_t admission_frame(const std::filesystem::path& bundle) {
   LMDJ_CHECK(journal.has_value());
   LMDJ_CHECK(journal.value().admission && journal.value().admission->admission_fence);
   return journal.value().admission->admission_fence->effective_frame;
+}
+
+// #1403: after a playing-state applied switch the engine's current Pattern is
+// B while the coordinator's vendored binding is still A. The next Record
+// retargets the binding before any journal or admission work, so the journal,
+// the admission fence and the committed events all name B.
+void record_after_an_applied_switch_retargets_the_bound_pattern() {
+  constexpr auto kPatternB = "00000000-0000-4000-8000-00000000000b";
+  Fixture f({PatternId{kPatternB}});
+  // Record on A and settle the close; the transport keeps playing.
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  LMDJ_CHECK(f.controller->inspect().playing);
+  LMDJ_CHECK(!f.controller->inspect().recording);
+
+  // The switch publication applies at the Bar boundary while playing.
+  auto view = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB));
+  LMDJ_CHECK(view.has_value());
+  const auto published =
+      f.audio.engine.publish_pattern_view(std::move(view.value()));
+  LMDJ_CHECK(published.result == PatternPublishResult::accepted);
+  for (unsigned step = 0;
+       step < 100 &&
+       f.audio.engine.pattern_telemetry().pending_generation != 0;
+       ++step) {
+    f.audio.render(9'600);
+  }
+  LMDJ_CHECK(f.audio.engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(f.audio.engine.current_pattern_id() == PatternId{kPatternB});
+
+  // Record retargets: the journal begins for B and the admission activates
+  // against B instead of failing the fence authority deterministically.
+  f.settle(f.make(8, 3, PatternTransportIntent::record));
+  const auto recording = f.controller->inspect();
+  LMDJ_CHECK(recording.playing);
+  LMDJ_CHECK(recording.recording);
+  LMDJ_CHECK(recording.phase == PatternTransportPhase::idle);
+  LMDJ_CHECK(!recording.error.has_value());
+  const auto journal = f.read_journal();
+  LMDJ_CHECK(journal.pattern_id == PatternId{kPatternB});
+  LMDJ_CHECK(journal.admission.has_value() &&
+             journal.admission->admission_fence.has_value());
+  LMDJ_CHECK(journal.admission->admission_fence->pattern_id ==
+             PatternId{kPatternB});
+  const auto frame = journal.admission->admission_fence->effective_frame;
+  LMDJ_CHECK(f.controller
+                 ->admit(lmdj::facade::PatternTransportCandidate{
+                     10, frame, {0, 1}, true, 90, 10})
+                 .value() == lmdj::facade::PatternAdmissionAdmit::retained);
+  LMDJ_CHECK(f.controller
+                 ->admit(lmdj::facade::PatternTransportCandidate{
+                     11, frame, {0, 1}, false, 0, 10})
+                 .value() == lmdj::facade::PatternAdmissionAdmit::retained);
+
+  // Record-off commits the events to B in Project Truth; the engagement never
+  // enters the error phase.
+  f.settle(f.make(9, 4, PatternTransportIntent::record));
+  const auto settled = f.controller->inspect();
+  LMDJ_CHECK(settled.playing);
+  LMDJ_CHECK(!settled.recording);
+  LMDJ_CHECK(!settled.error.has_value());
+  lmdj::project_io::ProjectStore store;
+  const auto project = store.load(f.bundle);
+  LMDJ_CHECK(project.has_value());
+  const auto& events = project.value().patterns.at(PatternId{kPatternB}).events;
+  LMDJ_CHECK(events.size() == 1);
+  LMDJ_CHECK((events.front().slot == lmdj::domain::PadSlotId{0, 1}));
+  LMDJ_CHECK(events.front().velocity == 90);
+  LMDJ_CHECK(project.value().patterns.at(f.pattern).events.empty());
+  LMDJ_CHECK(!f.journal_exists());
+}
+
+// The negative half of #1403: a switch that applies while a journal is active
+// never retargets the binding mid-recording — the switch-spanning close
+// machinery (retain_switch, reconcile, drains) settles it, exactly as the
+// internal-tier switch scenarios pin.
+void applied_switch_mid_recording_settles_through_the_close_path() {
+  constexpr auto kPatternB = "00000000-0000-4000-8000-00000000000b";
+  Fixture f({PatternId{kPatternB}});
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const auto frame = admission_frame(f.bundle);
+  LMDJ_CHECK(frame < 2);
+  LMDJ_CHECK(f.controller
+                 ->admit(lmdj::facade::PatternTransportCandidate{
+                     10, frame, {0, 1}, true, 90, 10})
+                 .value() == lmdj::facade::PatternAdmissionAdmit::retained);
+  LMDJ_CHECK(f.controller
+                 ->admit(lmdj::facade::PatternTransportCandidate{
+                     11, frame, {0, 1}, false, 0, 10})
+                 .value() == lmdj::facade::PatternAdmissionAdmit::retained);
+
+  // The switch applies while the journal is active; Record-off then fences
+  // with the switch named and settles through the close path.
+  f.audio.queue_switch(kPatternB, 2);
+  f.audio.render(10);
+  LMDJ_CHECK(f.audio.engine.current_pattern_id() == PatternId{kPatternB});
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  const auto settled = f.controller->inspect();
+  LMDJ_CHECK(settled.playing);
+  LMDJ_CHECK(!settled.recording);
+  LMDJ_CHECK(settled.phase == PatternTransportPhase::idle);
+  LMDJ_CHECK(!settled.error.has_value());
+  // The retained journal is reconciled to the applied switch's Pattern; the
+  // pre-switch prefix drained to A and no target-segment input existed.
+  const auto journal = f.read_journal();
+  LMDJ_CHECK(journal.pattern_id == PatternId{kPatternB});
+  LMDJ_CHECK(journal.admission.has_value() &&
+             journal.admission->applied_switches.size() == 1);
+  LMDJ_CHECK(journal.admission->applied_switches.front().pattern_id ==
+             PatternId{kPatternB});
+  lmdj::project_io::ProjectStore store;
+  const auto project = store.load(f.bundle);
+  LMDJ_CHECK(project.has_value());
+  const auto& source_events = project.value().patterns.at(f.pattern).events;
+  LMDJ_CHECK(source_events.size() == 1);
+  LMDJ_CHECK(source_events.front().velocity == 90);
+  LMDJ_CHECK(project.value().patterns.at(PatternId{kPatternB}).events.empty());
 }
 
 void recording_press_and_release_are_retained() {
@@ -713,6 +869,8 @@ int main() {
     pending_operation_reports_busy_then_replays();
     stale_generation_is_rejected();
     deterministic_fence_mismatch_parks_the_engagement_in_error();
+    record_after_an_applied_switch_retargets_the_bound_pattern();
+    applied_switch_mid_recording_settles_through_the_close_path();
     recording_press_and_release_are_retained();
     pre_fence_candidate_is_live_only();
     admission_before_recording_fails();
@@ -722,7 +880,7 @@ int main() {
     known_owner_registration_protects_only_the_open_transport_journal();
     controller_destroyed_after_application_is_safe();
     owner_lost_transport_admission_is_sealed_and_listed();
-    std::cout << "pattern transport controller tests: PASS (15 scenarios)\n";
+    std::cout << "pattern transport controller tests: PASS (17 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

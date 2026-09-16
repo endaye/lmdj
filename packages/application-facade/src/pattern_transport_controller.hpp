@@ -25,6 +25,10 @@ class PatternTransportAudioPort {
   virtual std::uint64_t pattern_generation() const = 0;
   virtual std::optional<audio::PatternReplacementAuthority> pending_switch()
       const = 0;
+  // Mirrors the public port: nullopt keeps the vendored Pattern binding.
+  virtual std::optional<foundation::PatternId> current_pattern() const {
+    return std::nullopt;
+  }
 };
 
 class PatternTransportCoordinator {

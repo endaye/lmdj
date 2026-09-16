@@ -1170,6 +1170,9 @@ class EnginePatternTransportPort final : public facade::PatternTransportAudioPor
         telemetry.pending_activation_frame,
     };
   }
+  std::optional<foundation::PatternId> current_pattern() const override {
+    return engine_.current_pattern_id();
+  }
 
  private:
   audio::RealtimeEngine& engine_;

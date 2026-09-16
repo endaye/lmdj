@@ -37,6 +37,9 @@ class AudioPortBridge final : public detail::PatternTransportAudioPort {
       const override {
     return port_.pending_switch();
   }
+  std::optional<foundation::PatternId> current_pattern() const override {
+    return port_.current_pattern();
+  }
 
  private:
   lmdj::facade::PatternTransportAudioPort& port_;

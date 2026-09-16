@@ -1,7 +1,7 @@
 {
   "contract": "lmdj.module.v1",
   "module": "application-facade",
-  "version": "6.0.0",
+  "version": "6.1.0",
   "api_version": 3,
   "dependencies": {
     "foundation": "0.4.0",

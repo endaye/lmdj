@@ -108,6 +108,19 @@ PatternTransportSubmit PatternTransportCoordinator::request(
   const auto opens_journal =
       request.intent == PatternTransportIntent::record && !recording_;
   if (opens_journal) {
+    // The binding is vendored at construction, but the engine's current
+    // Pattern can move behind the coordinator: a switch publication applying
+    // at the Bar boundary while the transport keeps playing. Re-anchor the
+    // binding on the engine's current identity before the journal and the
+    // admission preparation name the stale one, or the admission fence (which
+    // names the receipt's Pattern) fails authority validation deterministically
+    // (#1403). A port reporting no current Pattern keeps the vendored binding,
+    // and an active journal never retargets: the switch-spanning close
+    // machinery (retain_switch/reconcile_switch/drain) owns that settlement.
+    if (const auto current = audio_.current_pattern();
+        current.has_value() && *current != pattern_) {
+      pattern_ = *current;
+    }
     // The journal is Facade-owned: a Record request lazily begins it when no
     // active journal exists, while playback alone never creates one.
     const auto active = journals_.read_active(bundle_);

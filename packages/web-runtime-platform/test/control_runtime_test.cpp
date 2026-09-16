@@ -30,6 +30,7 @@
 #include <nlohmann/json.hpp>
 #include <picosha2.h>
 
+#include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/audio/runtime_preparation_limits.hpp>
 #include <lmdj/facade/application.hpp>
@@ -6973,6 +6974,147 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
   driver.stop();
 }
 
+void test_transport_record_after_applied_switch_retargets() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(
+      runtime->dispatch("project.create", create_opted_in_project(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 840, 841, 0);
+  constexpr std::string_view kPatternB =
+      "00000000-0000-4000-8000-0000000000b2";
+  check_success(runtime->dispatch(
+      "pattern.create",
+      {{"command_id", uuid(842)},
+       {"expected_revision", 2},
+       {"pattern_id", kPatternB},
+       {"bars", 1}},
+      {}));
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  ContinuousAudioDriver driver(runtime->engine());
+
+  std::uint64_t epoch = 1;
+  const auto request = [&](std::uint32_t command, std::string_view intent) {
+    return runtime->dispatch(
+        "pattern.transport.request",
+        pattern_transport_request_payload(
+            kSequenceSessionId, command, epoch++, intent),
+        {});
+  };
+  const auto settled = [&](auto predicate) {
+    wait_until([&] {
+      return predicate(pattern_transport_inspect(*runtime, kSequenceSessionId));
+    });
+  };
+  const auto idle_recording = [](const auto& s) {
+    return s.at("recording") == true && s.at("phase") == "idle";
+  };
+  const auto idle_settled = [](const auto& s) {
+    return s.at("recording") == false && s.at("phase") == "idle" &&
+           s.at("publication_pending") == false;
+  };
+
+  // Record on A and settle the close; the transport keeps playing with the
+  // engagement bound to A.
+  check_success(request(843, "record"));
+  settled(idle_recording);
+  check_success(request(844, "record"));
+  settled(idle_settled);
+
+  // The #1370 coordination still holds: a playing-state cross-identity reload
+  // is refused honestly and leaves the engagement intact.
+  check_error(
+      runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternB}}, {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(!runtime->failed());
+
+  // The Record-off completion republished the committed A; let it finish
+  // applying so the switch publication below is not refused as a
+  // supersession of a still-pending publication.
+  wait_until([&] {
+    return runtime->engine().pattern_telemetry().pending_generation == 0;
+  });
+
+  // A switch publication the coordinator never fenced applies at the Bar
+  // boundary while the transport keeps playing. No dispatch surface drives a
+  // cross-identity switch under a playing engagement (the reload above is
+  // refused and the legacy switch-request needs a legacy session), so the
+  // test publishes through the Engine directly — the shape any future
+  // playing-state switch surface takes.
+  auto sample = std::make_shared<const lmdj::cooker::PcmSample>(
+      lmdj::cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(128, 1)});
+  const lmdj::cooker::RuntimeSnapshot switch_snapshot{
+      lmdj::foundation::ProjectId{std::string(kProjectId)},
+      lmdj::foundation::PatternId{std::string(kPatternB)},
+      1,
+      120,
+      1,
+      lmdj::domain::kPpq,
+      lmdj::domain::kBarTicks4x4,
+      {lmdj::cooker::ResolvedPad{
+          lmdj::domain::PadSlotId{0, 0},
+          lmdj::foundation::ArtifactRef{std::string(64, 'a'), "audio/wav", 256},
+          sample,
+          lmdj::cooker::ResolvedPlayback{
+              0, 128, lmdj::domain::TriggerMode::loop_gate, 1.0F, false},
+      }},
+      {lmdj::cooker::ResolvedEvent{
+          lmdj::domain::PadSlotId{0, 0}, 0, lmdj::domain::kBarTicks4x4, 127,
+          sample,
+      }},
+  };
+  auto view = lmdj::audio::PreparedPatternView::from_snapshot(switch_snapshot);
+  LMDJ_CHECK(view.has_value());
+  const auto switch_publication =
+      runtime->engine().publish_pattern_view(std::move(view.value()));
+  LMDJ_CHECK(switch_publication.result ==
+             lmdj::audio::PatternPublishResult::accepted);
+  wait_until([&] {
+    return runtime->engine().current_pattern_id() ==
+           lmdj::foundation::PatternId{std::string(kPatternB)};
+  });
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().pending_generation == 0);
+
+  // #1403: the next Record retargets the engagement's Pattern binding to the
+  // engine's current Pattern — the journal and the admission name B instead
+  // of parking the engagement in the error phase on the fence mismatch.
+  check_success(request(845, "record"));
+  settled(idle_recording);
+  const auto bundle =
+      temp.path() / "projects" / (std::string(kProjectId) + ".lmdj");
+  const auto journal = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(journal.has_value());
+  LMDJ_CHECK(journal.value().pattern_id ==
+             lmdj::foundation::PatternId{std::string(kPatternB)});
+  LMDJ_CHECK(journal.value().admission.has_value() &&
+             journal.value().admission->admission_fence.has_value());
+  LMDJ_CHECK(journal.value().admission->admission_fence->pattern_id ==
+             lmdj::foundation::PatternId{std::string(kPatternB)});
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  check_success(request(846, "record"));
+  settled(idle_settled);
+  const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(status.at("error").is_null());
+
+  // Record-off committed the events to the retargeted Pattern in Project
+  // Truth; A stays empty.
+  const auto truth = inspect_project(temp.path(), kProjectId);
+  const auto& patterns = truth.at("result").at("project").at("patterns");
+  LMDJ_CHECK(patterns.at(kPatternB).at("events").size() == 1);
+  LMDJ_CHECK(patterns.at(kPatternB).at("events").at(0).at("velocity") == 100);
+  LMDJ_CHECK(patterns.at(kPatternId).at("events").empty());
+  driver.stop();
+}
+
 void test_transport_recording_rejects_sample_commit_and_keeps_journal() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -7262,6 +7404,7 @@ int main() {
     test_pattern_transport_suspend_barrier_settles_recording();
     test_pattern_transport_unknown_closure_blocks_clean_suspend();
     test_transport_reload_rebinds_engagement_without_bricking();
+    test_transport_record_after_applied_switch_retargets();
     test_transport_recording_rejects_sample_commit_and_keeps_journal();
     test_pattern_transport_owner_loss_lists_recovery_on_reopen();
   } catch (const std::exception& error) {
