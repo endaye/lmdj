@@ -2,7 +2,27 @@
 
 日期：2026-09-17
 
-状态：待实现。本计划只声明范围与验证，不改动产品代码。
+状态：编码范围已交付，**部署未验收**。T1–T4 与实现期新增的两个 Task 均已落地；
+T5 是凭据与保护操作，属于 owner，见 [#1474](https://github.com/endaye/lmdj/issues/1474)。
+在 T5 完成前本计划只交付到「源码与 workflow 就绪且本地契约测试全绿」。
+
+| Task | 交付 |
+| --- | --- |
+| T1 Cloudflare 部署证据写入器 | [#1470](https://github.com/endaye/lmdj/issues/1470) |
+| T2 Runtime workflow 切换 | [#1471](https://github.com/endaye/lmdj/issues/1471) |
+| T3 Creator workflow 切换 | [#1472](https://github.com/endaye/lmdj/issues/1472) |
+| T4 退役生产路径上的 Netlify | [#1473](https://github.com/endaye/lmdj/issues/1473) |
+| T5 Environment 凭据（owner） | [#1474](https://github.com/endaye/lmdj/issues/1474) —— **未完成** |
+| T6 冻结部署投影 | [#1477](https://github.com/endaye/lmdj/issues/1477) |
+
+实现期新增，均不在原范围内但为同一缺陷所必需：
+
+- [#1499](https://github.com/endaye/lmdj/issues/1499)：`deployment_effect.HOSTS` 仍期望
+  Netlify 契约，而 workflow 已写出 Cloudflare 契约。该不一致在投影建成前不可达，因此必须
+  先于 T6 落地。同一 Task 退役了在 Cloudflare 下无法构造的 `tools/release/live_host.py`。
+- [#1503](https://github.com/endaye/lmdj/issues/1503)：在 Cloudflare 源上重建上述那份
+  「新鲜只读 Host 核验」能力。
+
 
 跟踪缺陷：[#1467](https://github.com/endaye/lmdj/issues/1467)。
 相关：[#925](https://github.com/endaye/lmdj/issues/925)、
