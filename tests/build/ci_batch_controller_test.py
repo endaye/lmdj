@@ -467,6 +467,13 @@ class BoundedReasonsTests(unittest.TestCase):
         self.assertEqual(controller.bounded_reasons(bounded, budget=2000), bounded,
                          "why: bound is not idempotent; remedy: a stored request must rebuild to itself")
 
+    def test_budget_below_one_omission_notice_is_refused_not_exceeded(self):
+        reasons = [f"reason {i:03d} " + "x" * 50 for i in range(40)]
+        with self.assertRaisesRegex(batch.BatchError, "smaller than one omission reason"):
+            controller.bounded_reasons(reasons, budget=100)
+        self.assertEqual(controller.bounded_reasons(reasons[:1], budget=100), reasons[:1],
+                         "why: a fitting explanation was refused; remedy: check the budget only when bounding")
+
 
 class RealGitTests(unittest.TestCase):
     def setUp(self):

@@ -44,6 +44,9 @@ def bounded_reasons(reasons, budget=REASON_BUDGET):
     ordered = sorted(set(reasons))
     if _encoded_size(ordered) <= budget:
         return ordered
+    batch.require(_encoded_size([OMISSION.format(count=len(ordered))]) <= budget,
+                  "reason budget is smaller than one omission reason",
+                  "raise the budget; a bounded explanation must at least hold its own omission notice")
     kept = []
     for reason in ordered:
         candidate = sorted([*kept, reason, OMISSION.format(count=len(ordered) - len(kept) - 1)])
