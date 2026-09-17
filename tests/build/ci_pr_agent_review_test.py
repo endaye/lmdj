@@ -2691,7 +2691,15 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         self.assertEqual([record["status"] for record in records], ["reserved", "uncertain"])
 
     def test_overall_deadline_bounds_the_actual_request_timeout(self):
-        self.config_path.write_text(self.config_path.read_text().replace("engine_deadline_seconds = 600", "engine_deadline_seconds = 1"))
+        # The fact under test is `request_timeout = min(request_timeout_seconds,
+        # remaining)`: with a deadline below the configured request timeout, the
+        # deadline is what bounds the call. A one-second deadline proved that
+        # too, but only if the whole review finished inside one real second, so
+        # a loaded runner turned it into `not-reviewed` and the assertion never
+        # ran. Ten still sits far below the configured sixty.
+        deadline, configured_request_timeout = 10, 60
+        self.config_path.write_text(self.config_path.read_text().replace(
+            "engine_deadline_seconds = 600", f"engine_deadline_seconds = {deadline}"))
         calls = []
         response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
 
@@ -2706,7 +2714,10 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         result, _upstream, _ledger = self.run_with_fake(fake_acompletion)
         self.assertEqual(result["status"], "reviewed")
         self.assertGreater(calls[0]["timeout"], 0)
-        self.assertLessEqual(calls[0]["timeout"], 1)
+        self.assertLessEqual(calls[0]["timeout"], deadline)
+        # Strictly below the configured request timeout, so the bound is
+        # demonstrably the deadline rather than the request timeout itself.
+        self.assertLess(calls[0]["timeout"], configured_request_timeout)
 
     def test_total_deadline_rejects_success_after_synchronous_parse_or_cleanup(self):
         self.config_path.write_text(
