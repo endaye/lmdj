@@ -1697,8 +1697,7 @@ class CandidateEnrollmentTest(unittest.TestCase):
                  "source_timestamp": 1789550000, "request": request(mode="new", requested_tag=None)}
         with RequestJournal(root) as journal:
             journal._write(CandidateSourceSetup.MARKER, canonical_json(scope))
-        self.assertEqual(enrolled_candidate_scope_env(self.root / "preparation"),
-                         ("/usr/bin:/bin", 1789550000))
+        self.assertEqual(enrolled_candidate_scope_env(self.root / "preparation"), "/usr/bin:/bin")
 
     def test_a_corrupt_scope_env_fails_closed(self):
         from tools.release.carriers import enrolled_candidate_scope_env
@@ -1710,7 +1709,7 @@ class CandidateEnrollmentTest(unittest.TestCase):
         root.mkdir(parents=True, mode=0o700)
         with RequestJournal(root) as journal:
             journal._write(CandidateSourceSetup.MARKER,
-                           canonical_json({"path": "/usr/bin:/bin", "source_timestamp": "soon"}))
+                           canonical_json({"path": 7, "source_timestamp": "soon"}))
         with self.assertRaises(JournalError):
             enrolled_candidate_scope_env(self.root / "preparation")
 

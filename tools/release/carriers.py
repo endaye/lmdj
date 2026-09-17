@@ -809,14 +809,14 @@ def enrolled_candidate_timestamp(transition_root):
 
 
 def enrolled_candidate_scope_env(preparation_root):
-    """The (path, source_timestamp) the enrolled source-setup scope froze, or None.
+    """The PATH the enrolled source-setup scope froze, or None.
 
-    `compose_candidate` binds the process PATH and a Task timestamp into the
-    preparation scope at first enrollment. Both change across shells and
-    processes, so a resumed run can only adopt its own enrollment by reading
-    the recorded values back instead of recomputing them. A missing journal
-    means nothing was enrolled; a present-but-misshapen record is corrupt
-    state and fails closed.
+    `compose_candidate` binds the process PATH into the preparation scope at
+    first enrollment (the timestamp recovery rides the transition journal).
+    The PATH changes across shells and processes, so a resumed run can only
+    adopt its own enrollment by reading the recorded value back instead of
+    recomputing it. A missing journal means nothing was enrolled; a
+    present-but-misshapen record is corrupt state and fails closed.
     """
     from .candidate_snapshot import read
     from .orchestration import RequestJournal
@@ -830,11 +830,10 @@ def enrolled_candidate_scope_env(preparation_root):
         return None
     if type(marker) is not dict:
         _fail("the enrolled source-setup scope is corrupt")
-    path, timestamp = marker.get("path"), marker.get("source_timestamp")
-    if type(path) is not str or not path or type(timestamp) is not int \
-            or not 1 <= timestamp <= 253402300799:
-        _fail("the enrolled source-setup scope records no valid PATH or Task timestamp")
-    return path, timestamp
+    path = marker.get("path")
+    if type(path) is not str or not path:
+        _fail("the enrolled source-setup scope records no valid PATH")
+    return path
 
 
 def enroll_candidate(*, request, preparation_root, repository_root, source_root,
@@ -876,13 +875,13 @@ def enroll_candidate(*, request, preparation_root, repository_root, source_root,
         # Adopt the recorded values so the scope binding survives the process
         # boundary instead of drifting into a permanent "rebound" refusal.
         recorded = enrolled_candidate_scope_env(preparation_root)
-        if recorded is not None and recorded != (path, source_timestamp):
+        if recorded is not None and recorded != path:
             preparation = CandidatePreparation(
                 preparation_root, repository_root=repository_root,
                 source_root=source_root, reservation_root=reservation_root,
                 request=request, authorize=authorize, observe_main=observe_main,
-                path=recorded[0], author_name=author_name,
-                author_email=author_email, source_timestamp=recorded[1],
+                path=recorded, author_name=author_name,
+                author_email=author_email, source_timestamp=source_timestamp,
                 clock=clock)
             observed = preparation.observe(initialize=True)
     if observed["status"] == "verified":
