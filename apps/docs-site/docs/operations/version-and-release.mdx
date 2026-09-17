@@ -749,7 +749,12 @@ preview 与 stable 两侧校验 → 浏览器校验生产 URL → 写出 Runtime
 并绑定到所部署的身份，任一腿未通过就不写证据。被替换部署的身份取自**变更前**对生产的一次
 观测，promote 所需的 prior signed tag 由同一观测的 Product Build 派生，再由 adapter 对着
 真实字节校验。upload 要求钉住的 Node 22.16.0 与 Wrangler 4.129.1，与浏览器腿的 Node 26
-并存。Creator 尚未切换（#1472）；生产路径上的 Netlify 退役见 #1473。
+并存。
+
+Creator Host 的部署 job 同构切换，目标 `https://creator.lmdj.workers.dev/`，写出 Creator
+Host 部署证据文档的第 2 版；两个 Host 共用同一个受管 adapter 与同一条序列，只在 target、
+Worker 与浏览器 spec 上不同。生产路径上不再有任何 Netlify API 调用或 `*.netlify.app` URL，
+两个 workflow 的契约测试各自钉住这一点；Netlify 源码作为历史工具的退役见 #1473。
 Core Release 的资产集自 2026-08-24 起为四资产（#286）：除 ZIP、checksum 和受信
 signature 外，`build-manifest.json` 不再打进归档，而是作为并列 detached 资产
 `<archive-stem>.build-manifest.json` 发布（决策
