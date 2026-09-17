@@ -887,7 +887,7 @@ def enroll_candidate(*, request, preparation_root, repository_root, source_root,
     only exists for `new` mode. Any leg that cannot reach verified fails
     closed — the entry never receives a half-prepared adapter.
     """
-    from .candidate_preparation import CandidatePreparation
+    from .candidate_preparation import CandidatePreparation, CandidatePreparationError
 
     for name, callback in (("authorize", authorize), ("observe_main", observe_main),
                            ("review", review), ("verify_merged", verify_merged),
@@ -900,22 +900,24 @@ def enroll_candidate(*, request, preparation_root, repository_root, source_root,
         request=request, authorize=authorize, observe_main=observe_main,
         path=path, author_name=author_name, author_email=author_email,
         source_timestamp=source_timestamp, clock=clock)
-    observed = preparation.observe(initialize=True)
-    if observed["status"] == "pending" and drive:
-        # A prior process enrolled this request under its own PATH and Task
-        # timestamp; both are bound into the scope and change across shells.
-        # Adopt the recorded values so the scope binding survives the process
-        # boundary instead of drifting into a permanent "rebound" refusal.
+    try:
+        observed = preparation.observe(initialize=True)
+    except CandidatePreparationError as first:
+        # A scope mismatch raises ("rebound") rather than reporting pending:
+        # a prior process under a different PATH/timestamp enrolled this
+        # request. Adopt its recorded values and observe again; an unrelated
+        # failure is re-raised unchanged.
         recorded = enrolled_candidate_scope_env(preparation_root)
-        if recorded is not None and recorded != (path, source_timestamp):
-            preparation = CandidatePreparation(
-                preparation_root, repository_root=repository_root,
-                source_root=source_root, reservation_root=reservation_root,
-                request=request, authorize=authorize, observe_main=observe_main,
-                path=recorded[0], author_name=author_name,
-                author_email=author_email, source_timestamp=recorded[1],
-                clock=clock)
-            observed = preparation.observe(initialize=True)
+        if recorded is None or recorded == (path, source_timestamp):
+            raise
+        preparation = CandidatePreparation(
+            preparation_root, repository_root=repository_root,
+            source_root=source_root, reservation_root=reservation_root,
+            request=request, authorize=authorize, observe_main=observe_main,
+            path=recorded[0], author_name=author_name,
+            author_email=author_email, source_timestamp=recorded[1],
+            clock=clock)
+        observed = preparation.observe(initialize=True)
     if observed["status"] == "verified":
         driven = observed
     elif not drive:
