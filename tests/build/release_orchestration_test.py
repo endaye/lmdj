@@ -36,14 +36,34 @@ class RequestJournalTest(unittest.TestCase):
     def test_a_deep_missing_parent_chain_is_created_private(self):
         # The entry composes request journals under
         # <gitdir>/lmdj-release-requests/operations/<id>/<step> — parents that
-        # exist only after this creation. A symlinked ancestor still fails
-        # closed; only absent plain directories are created.
+        # exist only after this creation, each at 0700 (mkdir's mode applies
+        # per level). A symlinked ancestor still fails closed; only absent
+        # plain directories are created.
         deep = self.root / "operations" / "request-id" / "candidate-preparation" / "source-setup"
         with RequestJournal(deep) as journal:
             journal.create(request())
         import os
-        mode = oct(deep.stat().st_mode & 0o777)
-        self.assertEqual(mode, "0o700")
+        for level in (self.root, *deep.parents)[:4]:
+            mode = oct(os.lstat(level).st_mode & 0o777)
+            self.assertEqual(mode, "0o700")
+
+    def test_a_symlinked_ancestor_is_refused(self):
+        import os
+        real = self.root / "real"
+        real.mkdir(parents=True, mode=0o700)
+        link = self.root / "link"
+        os.symlink(real, link)
+        with self.assertRaisesRegex(JournalError, "symlink"):
+            with RequestJournal(link / "journal"):
+                pass
+
+    def test_a_non_directory_ancestor_is_refused(self):
+        import os
+        (self.root / "file").parent.mkdir(parents=True, exist_ok=True)
+        (self.root / "file").write_text("x")
+        with self.assertRaisesRegex(JournalError, "unsafe"):
+            with RequestJournal(self.root / "file" / "journal"):
+                pass
 
     def test_same_request_is_idempotent_and_returns_unshared_data(self):
         with RequestJournal(self.root) as journal:
