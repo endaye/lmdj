@@ -1318,11 +1318,11 @@ class RecoveredDispatchTest(unittest.TestCase):
         # The driver drives a managed pending step through advance; with the
         # inputs still underivable, nothing may be posted or guarded.
         step.advance(state(), self.operation(),
-                     before_post=lambda: written.append(True))
+                     before_write=lambda: written.append(True))
         self.assertEqual(written, [])
         with self.assertRaises(JournalError):
             step.advance(state(), {"step": "publication", "operation_id": "e" * 64},
-                         before_post=lambda: written.append(True))
+                         before_write=lambda: written.append(True))
         self.assertEqual(written, [])
 
     def test_delegation_and_refusals(self):
@@ -1343,7 +1343,7 @@ class RecoveredDispatchTest(unittest.TestCase):
         self.assertEqual(step.observe(state(), self.operation()).status, "absent")
         posted = []
         step.advance(state(), self.operation(),
-                     before_post=lambda: posted.append(True))
+                     before_write=lambda: posted.append(True))
         self.assertEqual(posted, [True])
         self.assertEqual(calls, ["observe", "advance"])
         with self.assertRaises(JournalError):
@@ -1372,7 +1372,7 @@ class RecoveredDispatchTest(unittest.TestCase):
 
         step = RecoveredDispatch("publication", lambda _s, _o: Adapter())
         self.assertEqual(step.observe(state(), self.operation()).status, "absent")
-        step.advance(state(), self.operation(), before_post=lambda: None)
+        step.advance(state(), self.operation(), before_write=lambda: None)
         # The driver holds one writer lock across observe → advance: the
         # adapter the observation produced is the one the advance drives,
         # not a fresh recovery.

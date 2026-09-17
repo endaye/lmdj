@@ -725,16 +725,18 @@ def enroll_candidate(*, request, preparation_root, repository_root, source_root,
                      reservation_root, transition_root, witness_root,
                      repository_id, client, token, authorize, observe_main,
                      review, verify_merged, clock, path, author_name,
-                     author_email, source_timestamp):
+                     author_email, source_timestamp, drive=True):
     """The managed `candidate` adapter for this exact frozen request.
 
     Managed, not self-driving: the returned `CandidateTransition` goes to the
     driver's `candidate=` slot and follows the managed path, so nothing here
-    exposes a carrier `advance`. The assembly drives the trusted preparation
-    layer (source setup, official snapshot and the six cut checks) to its
-    verified receipts — resumable, re-executing nothing — then binds the
-    transition to those receipts. A `tag`-mode request is refused by the
-    preparation and transition layers themselves: a checked-cut allocation
+    exposes a carrier `advance`. With `drive=True` the assembly drives the
+    trusted preparation layer (source setup, official snapshot and the six cut
+    checks) to its verified receipts — resumable, re-executing nothing — then
+    binds the transition to those receipts. With `drive=False` the assembly is
+    read-only: it returns None while the preparation is not verified, so an
+    observation never executes anything. A `tag`-mode request is refused by
+    the preparation and transition layers themselves: a checked-cut allocation
     only exists for `new` mode. Any leg that cannot reach verified fails
     closed — the entry never receives a half-prepared adapter.
     """
@@ -754,6 +756,8 @@ def enroll_candidate(*, request, preparation_root, repository_root, source_root,
     observed = preparation.observe(initialize=True)
     if observed["status"] == "verified":
         driven = observed
+    elif not drive:
+        return None
     elif observed["status"] == "pending":
         # Only a positively incomplete preparation is drivable; drift or an
         # unreadable state is never prepared over.
@@ -805,11 +809,13 @@ _DISPATCH_STEPS = ("publication", "runtime", "creator")
 class RecoveredDispatch:
     """One managed dispatch step: recover the spec, then delegate.
 
-    The dispatch counterpart of `RecoveredStep`: the driver drives managed
-    dispatch adapters through `advance(..., before_post=...)`, so this wrapper
-    exposes exactly that managed signature — never the self-driving
-    `before_write` one. A step whose dispatch inputs are not yet derivable
-    from prior steps' records is `pending`, never `absent`.
+    The dispatch counterpart of `RecoveredStep`. The dispatch slots on the
+    driver accept only the concrete `DispatchTransition`, and a dispatch spec
+    exists only after prior steps land, so this lazy wrapper rides the backend
+    carrier path: its `advance` takes the driver's `before_write` guard and
+    forwards it as the delegate's `before_post`. A step whose dispatch inputs
+    are not yet derivable from prior steps' records is `pending`, never
+    `absent`.
     """
 
     def __init__(self, step, recover):
@@ -840,7 +846,7 @@ class RecoveredDispatch:
         self._observed = (operation.get("operation_id"), adapter)
         return adapter.observe(state, operation)
 
-    def advance(self, state, operation, *, before_post):
+    def advance(self, state, operation, *, before_write):
         # The driver holds one writer lock across observe → advance, so the
         # adapter the observation just produced is the one to drive; only
         # without it is a fresh recovery needed.
@@ -858,7 +864,7 @@ class RecoveredDispatch:
                 return
             _fail("the step's dispatch inputs are not derivable but it was "
                   "asked to act")
-        adapter.advance(state, operation, before_post=before_post)
+        adapter.advance(state, operation, before_post=before_write)
 
 
 def enroll_publication(*, root, candidate_root, repository_id, ledger,
@@ -1152,3 +1158,45 @@ def enroll_verification(*, candidate_root, journal_load, consumer,
                                  fresh_receipts=fresh_receipts)
 
     return RecoveredStep("verification", recover)
+
+
+class DeferredCandidate:
+    """The `candidate` step at the real entry: deferred, request-free assembly.
+
+    The driver's `candidate=` slot accepts only the concrete
+    `CandidateTransition`, whose receipts exist only after the trusted
+    preparation layer runs — so at carrier-list time there is nothing concrete
+    to build. This adapter rides the backend carrier path: `observe` is
+    read-only (`pending` until the preparation is verified), and `advance`
+    drives the preparation and then the transition under the driver's guard.
+    The composition passes `enroll(request, drive)`; a `tag`-mode request is
+    refused by the preparation layer itself.
+    """
+
+    step = "candidate"
+
+    def __init__(self, enroll):
+        if not callable(enroll):
+            _fail("requires the callable candidate assembly")
+        self._enroll = enroll
+
+    def _operation(self, operation):
+        if operation.get("step") != "candidate":
+            _fail("operation does not belong to this step")
+
+    def observe(self, state, operation):
+        self._operation(operation)
+        adapter = self._enroll(state["request"], drive=False)
+        if adapter is None:
+            return Observation("pending")
+        return adapter.observe(state, operation)
+
+    def advance(self, state, operation, *, before_write):
+        self._operation(operation)
+        adapter = self._enroll(state["request"], drive=True)
+        adapter.advance(state, operation, before_write=before_write)
+
+    def execute(self, state, operation):
+        # The backend execute path is for steps whose far side is created by a
+        # bare execute; the candidate step only ever advances.
+        _fail("the candidate step cannot be driven through a bare execute")

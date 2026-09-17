@@ -51,6 +51,11 @@ class MemoryTransport:
         return {"comments": deepcopy(self.comments[start:end]),
                 "next": str(end) if end < len(self.comments) else None}
 
+    def last(self, issue_id):
+        if not self.comments:
+            return None
+        return deepcopy(self.comments[-1])
+
 
 class RecordingConsumer(BatchEvidenceConsumer):
     """Same type the real composition uses; records the verified run."""

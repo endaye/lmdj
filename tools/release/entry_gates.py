@@ -31,7 +31,8 @@ def _fail(reason):
 
 _SHA = re.compile(r"[0-9a-f]{40}\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
-_GATE_KINDS = ("candidate", "witness")
+_GATE_KINDS = ("candidate", "witness", "intent", "changelog", "promotion",
+               "published_record")
 
 
 def authority_gate(*, github, git, policy, request):
@@ -109,6 +110,17 @@ def review_gate(*, client, reader_for, repository_id, repository="endaye/lmdj"):
                                                  "unknown")
             return Observation(mapped)
         linked = bind_eligibility(collected, eligibility)
+        # Eligibility alone does not evaluate conversations: an unresolved,
+        # non-outdated review thread or a closing relation on an
+        # operation-generated PR (whose body never carries one) blocks the
+        # gate — release merges never bypass live conversation protection.
+        inventory = collected["inventory"]
+        threads = inventory["reviewThreads"]
+        if any(thread.get("isResolved") is not True
+               and thread.get("isOutdated") is not True for thread in threads):
+            return Observation("conflict")
+        if inventory["closingIssuesReferences"]:
+            return Observation("conflict")
         return Observation("verified", {
             "sha256": canonical_sha256({"kind": kind, "binding": linked}),
             "reference": f"review:{kind}:pr-{number}"})
@@ -141,8 +153,12 @@ def dispatch_authority(*, github, git, policy, request):
     def authorize(spec):
         if type(spec) is not dict or spec.get("request_sha256") != digest:
             _fail("the dispatch spec does not bind the original request")
-        if spec.get("actor_id") != request["actor_id"] \
-                or spec.get("control_revision") != request["control_revision"]:
+        if spec.get("actor_id") != request["actor_id"]:
+            _fail("the dispatch spec drifted from the original request")
+        # Not every step's spec carries the control revision; the binding
+        # above is mandatory either way, and a spec that carries it must match.
+        if "control_revision" in spec \
+                and spec["control_revision"] != request["control_revision"]:
             _fail("the dispatch spec drifted from the original request")
         if github.get_authenticated_actor() != request["actor_id"]:
             _fail("the authenticated actor no longer matches the request")
