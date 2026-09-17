@@ -653,10 +653,10 @@ button:disabled { color: #737b87; }
   display: grid;
   place-items: center;
 }
-.physical-brand img {
+.physical-brand svg {
+  display: block;
   width: 80px;
   height: 80px;
-  object-fit: contain;
 }
 .physical-encoders,
 .physical-keys {
@@ -690,15 +690,14 @@ button:disabled { color: #737b87; }
   border-radius: 50%;
   background: transparent;
 }
-.physical-encoder img,
-.physical-key img {
+.physical-encoder svg,
+.physical-key svg {
   display: block;
   width: 24px;
   height: 24px;
-  object-fit: contain;
   pointer-events: none;
 }
-.physical-encoder img {
+.physical-encoder svg {
   width: 32px;
   height: 32px;
 }
@@ -707,10 +706,10 @@ button:disabled { color: #737b87; }
   background: #f1f2e9;
   border: 2px solid #ddf478;
 }
-.physical-key.is-active.has-icon[aria-label="Project"] img,
-.physical-key.is-active.has-icon[aria-label="Sample"] img,
-.physical-key.is-active.has-icon[aria-label="Perform"] img,
-.physical-key.is-active.has-icon[aria-label^="Perform —"] img {
+.physical-key.is-active.has-icon[aria-label="Project"] svg,
+.physical-key.is-active.has-icon[aria-label="Sample"] svg,
+.physical-key.is-active.has-icon[aria-label="Perform"] svg,
+.physical-key.is-active.has-icon[aria-label^="Perform —"] svg {
   filter: brightness(0);
 }
 .physical-key.has-icon {

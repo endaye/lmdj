@@ -1,20 +1,21 @@
+import type {ReactNode} from "react";
+
 import type {CreatorMode} from "./creator_mode";
 import type {Bank} from "../state/creator_state";
 import {BANK_NAMES} from "../state/view_model";
-import encoder1Url from "../assets/hardware/encoder-1.svg";
-import encoder2Url from "../assets/hardware/encoder-2.svg";
-import encoder3Url from "../assets/hardware/encoder-3.svg";
-import encoder4Url from "../assets/hardware/encoder-4.svg";
-import logoUrl from "../assets/hardware/logo.svg";
-import performUrl from "../assets/hardware/perform.svg";
-import playUrl from "../assets/hardware/play.svg";
-import projectUrl from "../assets/hardware/project.svg";
-import recordUrl from "../assets/hardware/record.svg";
-import sampleUrl from "../assets/hardware/sample.svg";
-import sequenceOnUrl from "../assets/hardware/sequence-on.svg";
-import sequenceUrl from "../assets/hardware/sequence.svg";
+import {
+  EncoderIcon,
+  LogoIcon,
+  PerformIcon,
+  PlayIcon,
+  ProjectIcon,
+  RecordIcon,
+  SampleIcon,
+  SequenceIcon,
+} from "./hardware_icons";
+import type {EncoderPosition} from "./hardware_icons";
 
-const ENCODER_URLS = [encoder1Url, encoder2Url, encoder3Url, encoder4Url] as const;
+const ENCODER_POSITIONS: readonly EncoderPosition[] = [1, 2, 3, 4];
 
 interface PhysicalControlsProps {
   activeMode: CreatorMode;
@@ -36,7 +37,7 @@ interface PhysicalKeyProps {
   ariaLabel?: string;
   current?: boolean;
   disabled?: boolean;
-  icon?: string;
+  icon?: ReactNode;
   onClick?: () => void;
 }
 
@@ -57,19 +58,17 @@ function PhysicalKey({
       disabled={disabled}
       {...(onClick === undefined ? {} : {onClick})}
     >
-      {icon === undefined ? label : (
-        <img src={icon} alt="" width={24} height={24} draggable={false} />
-      )}
+      {icon === undefined ? label : icon}
     </button>
   );
 }
 
-function modeIcon(mode: "project" | "sample" | "sequence" | "perform", current: boolean): string {
+function modeIcon(mode: "project" | "sample" | "sequence" | "perform", current: boolean): ReactNode {
   switch (mode) {
-    case "project": return projectUrl;
-    case "sample": return sampleUrl;
-    case "sequence": return current ? sequenceOnUrl : sequenceUrl;
-    case "perform": return performUrl;
+    case "project": return <ProjectIcon />;
+    case "sample": return <SampleIcon />;
+    case "sequence": return <SequenceIcon active={current} />;
+    case "perform": return <PerformIcon />;
   }
 }
 
@@ -90,18 +89,18 @@ export function PhysicalControls({
   return (
     <div className="physical-controls">
       <div className="physical-brand" aria-hidden="true">
-        <img src={logoUrl} alt="" width={80} height={80} draggable={false} />
+        <LogoIcon />
       </div>
       <div className="physical-encoders" role="group" aria-label="Encoders" data-testid="physical-encoders">
-        {ENCODER_URLS.map((src, index) => (
+        {ENCODER_POSITIONS.map((position) => (
           <button
-            key={index + 1}
+            key={position}
             type="button"
             className="physical-encoder"
             disabled
-            aria-label={`Encoder ${index + 1} — unassigned until hardware mapping is approved`}
+            aria-label={`Encoder ${position} — unassigned until hardware mapping is approved`}
           >
-            <img src={src} alt="" width={32} height={32} draggable={false} />
+            <EncoderIcon position={position} />
           </button>
         ))}
       </div>
@@ -153,7 +152,7 @@ export function PhysicalControls({
         <PhysicalKey label="→" ariaLabel="Right — unassigned until direction mapping is approved" disabled />
         <PhysicalKey
           label="●"
-          icon={recordUrl}
+          icon={<RecordIcon />}
           ariaLabel={recording
             ? "Record — stop recording Pad events into the current Pattern"
             : "Record"}
@@ -163,7 +162,7 @@ export function PhysicalControls({
         />
         <PhysicalKey
           label="▶"
-          icon={playUrl}
+          icon={<PlayIcon />}
           ariaLabel={playEnabled
             ? (playing ? "Play/Stop — Pattern is playing" : "Play/Stop")
             : "Play/Stop — needs a playable Project and running audio"}
