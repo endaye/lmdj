@@ -563,6 +563,34 @@ def build_plan(
     }
 
 
+def job_conditions(source: str) -> list[str]:
+    """Every `if:` expression in a workflow, folded continuations included.
+
+    A lane name is a gate only where a job's condition names it. Anywhere else
+    in the file — a comment, a step name, a `run:` script — it is prose, and
+    reading it as a gate would report an unverified lane as verified, which is
+    the false assurance this whole partition exists to remove.
+    """
+    lines = source.splitlines()
+    conditions: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        if not line.strip().startswith("if:"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        block = [line.strip()[len("if:"):]]
+        while index < len(lines):
+            following = lines[index]
+            if following.strip() and len(following) - len(following.lstrip()) <= indent:
+                break
+            block.append(following.strip())
+            index += 1
+        conditions.append(" ".join(block))
+    return conditions
+
+
 def pull_request_lanes(root: Path) -> frozenset[str]:
     """The lanes a Pull Request can actually run, read from its own workflow.
 
@@ -574,7 +602,8 @@ def pull_request_lanes(root: Path) -> frozenset[str]:
         source = (root / PR_WORKFLOW).read_text(encoding="utf-8")
     except OSError:
         return frozenset()
-    return frozenset(_LANE_GATE.findall(source))
+    return frozenset(lane for condition in job_conditions(source)
+                     for lane in _LANE_GATE.findall(condition))
 
 
 def execute(

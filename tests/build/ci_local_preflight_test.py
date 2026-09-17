@@ -134,13 +134,16 @@ class PullRequestLaneVisibilityTest(unittest.TestCase):
         # and start lying in the same way the output used to.
         lanes = self.preflight.pull_request_lanes(ROOT)
         source = (ROOT / self.preflight.PR_WORKFLOW).read_text(encoding="utf-8")
+        conditions = self.preflight.job_conditions(source)
         self.assertEqual(
-            lanes, frozenset(self.preflight._LANE_GATE.findall(source)),
-            "why: the Pull Request lane set no longer comes from "
-            f"{self.preflight.PR_WORKFLOW}, so it can disagree with what a "
-            "Pull Request actually gates on; "
-            "remedy: derive it from that workflow instead of listing lanes",
+            lanes, frozenset(lane for condition in conditions
+                             for lane in self.preflight._LANE_GATE.findall(condition)),
+            "why: the Pull Request lane set no longer comes from the job "
+            f"conditions in {self.preflight.PR_WORKFLOW}, so it can disagree "
+            "with what a Pull Request actually gates on; "
+            "remedy: derive it from those conditions instead of listing lanes",
         )
+        self.assertTrue(conditions, "the Pull Request workflow gates on nothing")
         self.assertTrue(
             lanes,
             "why: no lane was recovered from "
@@ -220,8 +223,9 @@ class PullRequestLaneVisibilityTest(unittest.TestCase):
             "if: needs.change-scope.outputs.manifest.lanes.docs_static",
         ):
             with self.subTest(spelling=spelling):
-                repository.write(self.preflight.PR_WORKFLOW,
-                                 f"jobs:\n  docs-static:\n    {spelling}\n")
+                repository.write(
+                    self.preflight.PR_WORKFLOW,
+                    f"jobs:\n  docs-static:\n    {spelling}\n    steps: []\n")
                 self.assertEqual(
                     self.preflight.pull_request_lanes(repository.path),
                     frozenset({"docs_static"}),
@@ -231,6 +235,32 @@ class PullRequestLaneVisibilityTest(unittest.TestCase):
                     "remedy: match the lane name, not one spelling of the "
                     "expression around it",
                 )
+
+    def test_a_lane_named_outside_a_job_condition_is_not_a_gate(self) -> None:
+        # A lane name in a comment, a step name, an `env:` value or a `run:`
+        # script is prose. Reading it as a gate would report an unverified lane
+        # as verified, which is the false assurance this partition removes.
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        repository.write(self.preflight.PR_WORKFLOW, "\n".join([
+            "# fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan",
+            "jobs:",
+            "  docs-static:",
+            "    if: fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static",
+            "    env:",
+            "      NOTE: fromJSON(x).lanes.deploy_contract",
+            "    steps:",
+            "      - name: mention .lanes.package in a step name",
+            "        run: echo 'fromJSON(x).lanes.web_runtime_host'",
+            "",
+        ]))
+        self.assertEqual(
+            self.preflight.pull_request_lanes(repository.path),
+            frozenset({"docs_static"}),
+            "why: a lane named outside a job condition was read as a Pull "
+            "Request gate, so a lane no job runs would be reported verified; "
+            "remedy: read only the workflow's `if:` expressions",
+        )
 
     def test_an_unreadable_workflow_reports_no_pr_lanes(self) -> None:
         # Fail closed: if the workflow cannot be read, every lane is treated as
