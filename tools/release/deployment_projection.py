@@ -38,9 +38,13 @@ ARCHIVE_PREFIXES = {spec.host_id: spec.archive_prefix
 ENTRY = "dist/index.html"
 MANIFEST = "dist/host-manifest.json"
 # A Web Host release archive, not a retained evidence archive: this bounds how
-# much of a staged asset the projection will hash and decompress, so a corrupt
-# or hostile archive cannot make a read-only step consume the machine.
+# much of a staged asset the projection will hash, so a corrupt or hostile
+# archive cannot make a read-only step consume the machine.
 LIMIT = 256 * 1024 * 1024
+# The two entry files are an HTML page and a JSON manifest. Bounding them by
+# the archive's size would let the two of them together decompress to twice it;
+# this is what an entry point can plausibly be, applied to each.
+ENTRY_LIMIT = 8 * 1024 * 1024
 _FIELDS = ("target_revision", "product_build", "host_version", "site_id",
            "archive", "release_files", "prior", "prior_site_sha256")
 
@@ -125,7 +129,9 @@ def freeze(root, tag, step, projection):
     if existing is not None:
         if canonical_json(existing) != payload:
             _fail("was already frozen with different contents")
-        return existing
+        # A copy on both paths: a caller that mutates what it got back must not
+        # be able to reach through to anything this module read or wrote.
+        return deepcopy(existing)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -252,12 +258,12 @@ def _archive_contents(path, expected_sha256):
                 # a tampered archive; this refuses a build that produced one.
                 if info.is_dir() or (info.external_attr >> 16) & 0o170000 == 0o120000:
                     _fail("reads an entry file that is not a regular file")
-                if info.file_size > LIMIT:
-                    _fail("reads an entry file beyond the release bound")
+                if info.file_size > ENTRY_LIMIT:
+                    _fail("reads an entry file beyond the entry bound")
                 with archive.open(info) as stream:
-                    body = stream.read(LIMIT + 1)
-                if len(body) > LIMIT:
-                    _fail("reads an entry file beyond the release bound")
+                    body = stream.read(ENTRY_LIMIT + 1)
+                if len(body) > ENTRY_LIMIT:
+                    _fail("reads an entry file beyond the entry bound")
                 bodies[member] = body
                 digests[key] = hashlib.sha256(body).hexdigest()
     except (OSError, zipfile.BadZipFile):
@@ -298,7 +304,10 @@ def assemble(root, tag, step, *, reader):
       when it cannot be read (no token, no answer): the caller's credentials
       are not this module's business, and an unread Worker stays `pending`;
     - `reader.observe(host)` — what the public origin serves right now, or
-      `None` when it serves nothing.
+      `None`. That `None` does not separate "serves nothing" from "could not be
+      read": both mean this drive does not know what production serves, and both
+      have the same remedy — read the origin and the Worker directly. The step
+      waits either way rather than freezing a prior nobody observed.
 
     Injecting them keeps this a pure derivation over evidence the caller
     obtained, which is also what lets the tests pin each branch.

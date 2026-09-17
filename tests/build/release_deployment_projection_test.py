@@ -371,6 +371,28 @@ class CompositionSeamTest(unittest.TestCase):
             self.assertIsNone(reader.replaced_version("web-runtime-host"))
         return tool.call_args[0][1]
 
+    def test_each_tag_inspects_in_its_own_workspace(self):
+        # Two concurrent drives must not share one adapter run store, and the
+        # workspace belongs beside the projection that tag freezes.
+        from tools.release.prepared_step import output_relative
+
+        seen = {}
+        environment = dict(os.environ, CLOUDFLARE_API_TOKEN="token")
+        for tag in (TAG, "lmdj-v1.0.61.0"):
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(self.composition, "_CloudflareReader") as built, \
+                    mock.patch("tools.release.deployment_projection.projection",
+                               return_value=None):
+                self.composition.deployment_projection(self.root, tag, "runtime")
+            seen[tag] = Path(built.call_args[0][1])
+        self.assertNotEqual(seen[TAG], seen["lmdj-v1.0.61.0"])
+        for tag, workspace in seen.items():
+            self.assertEqual(workspace.parent,
+                             self.root / output_relative(tag),
+                             "why: the inspection workspace is not beside the "
+                             "projection its tag freezes; "
+                             "remedy: derive it from the prepared output path")
+
     def test_the_inspection_workspace_is_one_the_adapter_accepts(self):
         # The adapter's run store creates its own journal root at 0700 and
         # refuses one whose group or other bits are set. Pre-creating it here

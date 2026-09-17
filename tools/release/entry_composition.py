@@ -247,7 +247,7 @@ class _CloudflareReader:
         return _read_only_tool(_SITE_OBSERVATION, (origins["production"],))
 
 
-_INSPECT_STATE = "build/release/cloudflare-inspection"
+_INSPECT_STATE = "cloudflare-inspection"
 
 
 def deployment_projection(root, tag, step):
@@ -265,8 +265,14 @@ def deployment_projection(root, tag, step):
     token = os.environ.get("CLOUDFLARE_API_TOKEN")
     if not token:
         return None
+    # Per tag, beside that tag's own frozen projection: a shared root would put
+    # two concurrent drives in one adapter run store, and `build/release/` is
+    # already ignored, so nothing untracked appears elsewhere in the tree.
+    from .prepared_step import output_relative
+
+    workspace = Path(root) / output_relative(tag) / _INSPECT_STATE
     return projection(root, tag, step,
-                      reader=_CloudflareReader(token, Path(root) / _INSPECT_STATE))
+                      reader=_CloudflareReader(token, workspace))
 
 
 def _release_author(git):

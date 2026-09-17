@@ -304,6 +304,10 @@ def main(argv=None):
     parser.add_argument("--version", help="urls only: also report this version's immutable origin")
     arguments = parser.parse_args(argv)
     hosts = {contract: host for host, contract in CONTRACTS.items()}
+    if arguments.command != "urls" and arguments.version is not None:
+        # Silently dropping it would let a mistyped subcommand validate a
+        # document while appearing to ask about a version.
+        parser.error("--version is only meaningful for urls")
     try:
         if arguments.command == "urls":
             # One statement of the two URL shapes, for every caller that needs
