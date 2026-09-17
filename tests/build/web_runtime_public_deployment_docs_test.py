@@ -10,6 +10,7 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNBOOK = REPO_ROOT / "docs/deploy/web-runtime-host.md"
+WORKFLOW = REPO_ROOT / ".github/workflows/deploy-web-runtime-host.yml"
 ACCEPTANCE = REPO_ROOT / "docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md"
 DESIGN = REPO_ROOT / "docs/design/2026-08-08-web-runtime-public-deployment-design.md"
 PLAN = REPO_ROOT / "docs/plans/2026-08-08-web-runtime-public-deployment.md"
@@ -100,6 +101,31 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
         ):
             self.assertIn(expected, runbook)
         self.assertIn("不是当前远端控制面的动态真相", compact_runbook)
+
+    def test_the_runbook_names_the_deployment_path_it_actually_uses(self) -> None:
+        # The retired Netlify facts elsewhere are retained as history. These are
+        # the ones an operator acts on today, and the runbook named none of them
+        # until the Creator suite's stale assertion exposed the same gap here.
+        source = RUNBOOK.read_text(encoding="utf-8")
+        for expected in (
+            "https://lab.lmdj.workers.dev/",
+            "scripts/cloudflare-host-deploy.sh",
+            "CLOUDFLARE_API_TOKEN",
+            "lmdj.web-runtime-host.deployment-evidence.v3",
+        ):
+            with self.subTest(current=expected):
+                self.assertIn(expected, source)
+
+    def test_the_workflow_deploys_to_the_target_it_was_cut_over_to(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", source)
+        self.assertIn("runtime-canary", source)
+        self.assertIn("CLOUDFLARE_API_TOKEN", source)
+        self.assertIn("scripts/cloudflare-host-deploy.sh", source)
+        self.assertIn("--target web-runtime-host", source)
+        self.assertNotIn("NETLIFY", source)
+        self.assertNotIn("deploy-creator-web", source)
+        self.assertNotIn("publish-release", source)
 
     def test_release_authority_and_header_boundary_are_explicit(self) -> None:
         source = self.read(RUNBOOK)

@@ -36,13 +36,25 @@ class CreatorWebPublicDeploymentDocsTest(unittest.TestCase):
             "NETLIFY_AUTH_TOKEN",
             "deploy-creator-web.yml",
             "scripts/creator-web-deploy.sh",
-            "lmdj.creator-web.deployment-evidence.v1",
+            # The success contract moved to v2 with the Cloudflare cutover and
+            # is asserted below with the other current facts; the recovery one
+            # the runbook still describes is unchanged.
             "lmdj.creator-web.deployment-recovery-evidence.v1",
             "manual-only",
             "workflow_dispatch",
             "exact prior",
         ):
             self.assertIn(expected, source)
+        # The retired facts above are retained as history; these are the ones an
+        # operator acts on today, and the runbook named none of them.
+        for expected in (
+            "https://creator.lmdj.workers.dev/",
+            "scripts/cloudflare-host-deploy.sh",
+            "CLOUDFLARE_API_TOKEN",
+            "lmdj.creator-web.deployment-evidence.v2",
+        ):
+            with self.subTest(current=expected):
+                self.assertIn(expected, source)
         self.assertIn("站点创建完成前", source)
         self.assertIn("不能", source)
 
@@ -106,7 +118,14 @@ class CreatorWebPublicDeploymentDocsTest(unittest.TestCase):
         self.assertNotIn("release:", source)
         self.assertNotIn("release.published", source)
         self.assertIn("creator-canary", source)
-        self.assertIn("NETLIFY_CREATOR_SITE_ID", source)
+        # The target it deploys to, not the one it was cut over from. Asserting
+        # the retired secret made this test fail for the very cutover it should
+        # have been updated by, and it stayed hidden while earlier failures in
+        # this lane stopped the run before it.
+        self.assertIn("CLOUDFLARE_API_TOKEN", source)
+        self.assertIn("scripts/cloudflare-host-deploy.sh", source)
+        self.assertIn("--target creator-web", source)
+        self.assertNotIn("NETLIFY", source)
         self.assertNotIn("deploy-web-runtime-host", source)
         self.assertNotIn("publish-release", source)
 

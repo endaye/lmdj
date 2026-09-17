@@ -26,6 +26,22 @@ Cloudflare 响应头；`cloudflare_smoke.py VERIFIED_DIST URL [--preview]` 验�
 [Creator 迁移运行手册](creator-web.md)。浏览器仍运行原有 Runtime deployment suite。
 这些配置与迁移观察不改写下述 Netlify 事务，也不创建新的 Product Release 或 Channel。
 
+## 当前部署路径（Cloudflare）
+
+下面这张表是今天实际执行的路径；本节之后描述 Netlify 事务的内容仅为历史审计保留。
+
+| 事实 | 值 |
+| --- | --- |
+| 生产 URL | `https://lab.lmdj.workers.dev/` |
+| Worker / account | `lab` / `0b62b8881c07f48f7935f5380a1f55db` |
+| 部署入口 | `scripts/cloudflare-host-deploy.sh TAG --target web-runtime-host` |
+| GitHub Environment | `runtime-canary` |
+| Environment secret | `CLOUDFLARE_API_TOKEN`（仅此一项；NETLIFY_* 已不再读取） |
+| 成功证据契约 | `lmdj.web-runtime-host.deployment-evidence.v3` |
+
+Environment secret 的配置本身是单独的授权边界，见
+[#1474](https://github.com/endaye/lmdj/issues/1474)；在它完成前该 workflow 无法完成一次真实部署。
+
 本运行手册描述正式 Web Runtime Host 的受控发布路径。它是操作说明，**不是**
 执行记录，也不授权创建远端资源、写入 secret、发布 Release、运行 workflow 或部署。
 最初的 pre-deploy 证据快照见

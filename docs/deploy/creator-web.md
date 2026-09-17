@@ -64,7 +64,25 @@ Creator deployment、Runtime deployment 或 Channel promotion。
 - 历史 Product Build `1.0.40.0` 的 tag、Release 与 Runtime deployment 保持不可变；六资产
   `web-hosts` profile 只适用于后续明确分配、合并并获授权的 Product Build。
 
-## 一次性外部 Site 配置
+## 当前部署路径（Cloudflare）
+
+下面这一节是今天实际执行的路径；本节之后的 Netlify 内容仅为历史审计保留。
+
+| 事实 | 值 |
+| --- | --- |
+| 生产 URL | `https://creator.lmdj.workers.dev/` |
+| Worker / account | `creator` / `0b62b8881c07f48f7935f5380a1f55db` |
+| 部署入口 | `scripts/cloudflare-host-deploy.sh TAG --target creator-web` |
+| GitHub Environment | `creator-canary` |
+| Environment secret | `CLOUDFLARE_API_TOKEN`（仅此一项；NETLIFY_* 已不再读取） |
+| 成功证据契约 | `lmdj.creator-web.deployment-evidence.v2` |
+
+Environment secret 的配置本身是单独的授权边界，见
+[#1474](https://github.com/endaye/lmdj/issues/1474)；在它完成前该 workflow 无法完成一次真实部署。
+
+## 一次性外部 Site 配置（历史，Netlify）
+
+> 本节描述已退役的 Netlify 路径，站点已于 2026-09-08 按用户授权删除，保留仅供审计。
 
 获得单独的 Site provisioning 授权后，在 Netlify 创建未连接 Git provider 的空站点
 `lmdj-creator`，关闭 automatic publishing、branch deploy 与 Deploy Preview。确认唯一生产 URL
@@ -90,9 +108,8 @@ scripts/creator-web-deploy.sh verify lmdj-vPRODUCT_BUILD
 gh workflow run deploy-creator-web.yml --ref main -f tag=lmdj-vPRODUCT_BUILD
 ```
 
-`verify` 不读取 Netlify credential。workflow 的 preflight job 也不进入 Environment；只有其通过
-后，deploy job 才进入 `creator-canary`，重新验证同一 Release，再读取
-`NETLIFY_CREATOR_SITE_ID` 与 `NETLIFY_AUTH_TOKEN`。
+`verify` 不读取任何部署 credential。workflow 的 preflight job 也不进入 Environment；只有其通过
+后，deploy job 才进入 `creator-canary`，重新验证同一 Release，再读取 `CLOUDFLARE_API_TOKEN`。
 
 ## 部署事务与证据
 
@@ -104,9 +121,9 @@ production URL 上通过 Creator HTTP/Chromium smoke；零文件占位 Deploy �
 2. Chromium import/open Project、audio activation、Pad admission/outcome、Sample replacement、
    Sequence commit 与 reload/reopen durable truth；
 3. 将同一个 Deploy ID 发布为生产 alias；
-4. 在 `https://lmdj-creator.netlify.app/` 重跑两类 smoke。
+4. 在 `https://creator.lmdj.workers.dev/` 重跑两类 smoke。
 
-成功 artifact 使用 `lmdj.creator-web.deployment-evidence.v1`，只保留已验证的 Product/Host、
+成功 artifact 使用 `lmdj.creator-web.deployment-evidence.v2`，只保留已验证的 Product/Host、
 tag/revision、archive digest、Release URL、GitHub run、Site/Deploy identity、prior、immutable、
 publication、production、时间与状态 allowlist。失败恢复使用
 `lmdj.creator-web.deployment-recovery-evidence.v1`；publish 后即使 API 返回 error，也先 reconcile
