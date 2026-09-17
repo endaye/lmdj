@@ -359,13 +359,17 @@ SECRET_TEXT = (
 def _redacted(text):
     """Remove credentials tools echo on failure, by value and by shape.
 
-    Every credential-looking environment value is replaced regardless of
-    length: a short token is still a token, and the costs are not symmetric —
-    over-redacting makes a diagnostic noisier, under-redacting leaves a
-    credential on disk. Value replacement alone is not enough, because it can
-    only remove what this process held; an adapter that minted its own token,
-    or read one from a config file, still echoes it. So known credential-
-    carrying shapes are redacted too.
+    Value replacement covers what this process held, and is deliberately not
+    length-limited beyond a floor: below four characters a value is not
+    plausibly a credential but is very likely a substring of unrelated output,
+    and a diagnostic mangled into uselessness protects nobody. Above it,
+    replacement stands however short the value is.
+
+    Value replacement alone is not enough either, because it can only remove
+    what this process held; an adapter that minted its own token, or read one
+    from a config file, still echoes it. So credential-carrying shapes are
+    redacted too, at any length, which is what covers a genuinely short token
+    appearing as `token=abc` or behind an `Authorization` header.
     """
     # Values first, so a credential this process held is named in the marker
     # and an operator can tell which one leaked. The shape patterns then skip
