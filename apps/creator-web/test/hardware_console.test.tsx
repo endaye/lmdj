@@ -52,18 +52,45 @@ test("names D01–D04 physical keys by accessible name and exported icons", () =
     if (name.startsWith("Bank ")) {
       expect(key.textContent).toBe(name.slice(-1));
     } else {
-      expect(key.querySelector("img")).toBeTruthy();
+      expect(key.querySelector("svg")).toBeTruthy();
       expect(key.textContent).toBe("");
     }
   }
-  expect(screen.getByRole("button", {name: "Record"}).querySelector("img")).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Record"}).querySelector("svg")).toBeTruthy();
   expect(screen.getByRole("button", {
     name: "Play/Stop — needs a playable Project and running audio",
-  }).querySelector("img")).toBeTruthy();
+  }).querySelector("svg")).toBeTruthy();
   expect(screen.getByRole("group", {name: "Encoders"})).toBeTruthy();
   expect(screen.getAllByRole("button", {
     name: /Encoder \d — unassigned until hardware mapping is approved/,
   })).toHaveLength(4);
+});
+
+test("physical icons are inline SVG so the img-src 'self' CSP cannot blank them", () => {
+  // The packaged Host ships under `img-src 'self'`; an `<img>` fed a Vite
+  // `data:` URL renders as a broken image there, which is how the D01–D04
+  // icons vanished on device without a journey noticing.
+  const {container} = render(<PhysicalControls
+    activeMode="sequence"
+    activeBank={0}
+    sequenceEnabled
+    performEnabled
+    onSelectMode={() => {}}
+    onSelectBank={() => {}}
+    onRecord={() => {}}
+    recordEnabled
+    onPlayStop={() => {}}
+    playEnabled
+  />);
+  expect(container.querySelectorAll("img")).toHaveLength(0);
+  expect(container.querySelectorAll("[src]")).toHaveLength(0);
+  const svgs = container.querySelectorAll("svg");
+  // Brand mark, four encoders, four mode keys, Record, Play/Stop.
+  expect(svgs).toHaveLength(11);
+  for (const svg of svgs) {
+    expect(svg.getAttribute("aria-hidden")).toBe("true");
+    expect(svg.querySelector("path")).toBeTruthy();
+  }
 });
 
 test("physical Play/Stop and Record drive the global Pattern transport", () => {
