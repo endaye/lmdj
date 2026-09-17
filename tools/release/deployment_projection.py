@@ -246,6 +246,12 @@ def _archive_contents(path, expected_sha256):
             for member, key in ((ENTRY, "index_sha256"),
                                 (MANIFEST, "manifest_sha256")):
                 info = archive.getinfo(member)
+                # A directory or link entry under an entry file's name opens as
+                # an empty stream, so it would digest to the empty string
+                # instead of failing. The plan's archive digest already refuses
+                # a tampered archive; this refuses a build that produced one.
+                if info.is_dir() or (info.external_attr >> 16) & 0o170000 == 0o120000:
+                    _fail("reads an entry file that is not a regular file")
                 if info.file_size > LIMIT:
                     _fail("reads an entry file beyond the release bound")
                 with archive.open(info) as stream:

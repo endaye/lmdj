@@ -293,6 +293,32 @@ class ProjectionTest(unittest.TestCase):
             projection.projection(self.root, TAG, "runtime", reader=Reader())
         self.assertIn("differ from the plan", str(raised.exception))
 
+    def test_an_entry_that_is_not_a_regular_file_is_refused(self):
+        # A link member under an entry file's name would digest its target path
+        # rather than served bytes. Two other layers already close this — the
+        # plan's archive digest refuses a tampered archive, and `create_dist_zip`
+        # refuses a symlink at build time — so this is the third, stated where
+        # the bytes are actually read.
+        prepared = self.prepared()
+        archive = self.root / "build/release" / TAG / "assets" / prepared.archive_name
+        link = zipfile.ZipInfo("dist/index.html")
+        link.create_system = 3
+        link.external_attr = (0o120777 << 16)
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr(link, b"../elsewhere/index.html")
+            bundle.writestr("dist/host-manifest.json", MANIFEST)
+        document = json.loads((self.root / "build/release" / TAG
+                               / "release-plan.json").read_bytes())
+        document["assets"][0]["sha256"] = hashlib.sha256(
+            archive.read_bytes()).hexdigest()
+        payload = canonical_json(document)
+        (self.root / "build/release" / TAG / "release-plan.json").write_bytes(payload)
+        (self.root / "build/release" / TAG / "release-plan.sha256").write_text(
+            hashlib.sha256(payload).hexdigest() + "\n", encoding="ascii")
+        with self.assertRaises(JournalError) as raised:
+            projection.projection(self.root, TAG, "runtime", reader=Reader())
+        self.assertIn("not a regular file", str(raised.exception))
+
     def test_an_unknown_step_is_refused(self):
         with self.assertRaises(JournalError):
             projection.output_relative(TAG, "portal")
