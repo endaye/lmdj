@@ -209,10 +209,10 @@ def release_journal_root(root: Path, git) -> Path:
 def release_carriers(context: PrepareContext, policy, request) -> tuple:
     """Step carriers enrolled for this scope, from the trusted composition.
 
-    The thirteen enrolled steps assemble as lazy request-bound wrappers; the
-    `tag` step stays unenrolled until its own Task lands, and `run`/`resume`
-    refuse a scope with an unowned step rather than half-driving it. Assembly
-    performs no drives and no batch or site reads.
+    All fourteen steps assemble as lazy request-bound wrappers, so
+    `backend.missing(STEPS)` no longer refuses a scope; a step whose identity
+    does not exist yet still reports `pending` rather than being half-driven.
+    Assembly performs no drives and no batch or site reads.
     """
     from tools.release.entry_composition import compose_carriers
 

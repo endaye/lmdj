@@ -295,6 +295,9 @@ def read_prepared_plan(root, tag):
 _PREPARED_FIELDS = ("tag", "target_revision", "repository_id", "actor_id",
                     "request_sha256")
 
+_TAG_FIELDS = ("tag", "target_revision", "repository_id", "actor_id",
+               "request_sha256")
+
 
 def enroll_prepared(*, root, candidate_root, repository_id, ledger, prepare,
                     local_tag_state, signer_fingerprint):
@@ -326,6 +329,51 @@ def enroll_prepared(*, root, candidate_root, repository_id, ledger, prepare,
             signer_fingerprint=signer_fingerprint)
 
     return RecoveredStep("prepared", recover, drives=True)
+
+
+def enroll_tag(*, root, candidate_root, repository_id, ledger, push_tag,
+               local_tag_state, remote_tag_state, signer_fingerprint):
+    """The `tag` step: it pushes the exact local signed tag `prepare` created.
+
+    Every field of a `tag` spec exists by the time this step runs, so unlike
+    `prepared` there is nothing to freeze in two phases: the prepared output
+    supplies `plan_sha256` and the local signed tag supplies `tag_object_id`.
+    The step waits while either is missing rather than pushing a tag it cannot
+    name. `signer_fingerprint` comes from the pinned policy, never from the tag
+    being verified, so the trusted-signer comparison in `read_back` stays a
+    real check on both the local and the remote side.
+    """
+    from .tag_step import TagCarrier, tag_operation_id, validate_spec
+
+    def recover(state, operation):
+        fields = spec_identity(state, candidate_root=candidate_root,
+                               repository_id=repository_id, ledger=ledger,
+                               operation_id=tag_operation_id,
+                               fields=_TAG_FIELDS)
+        if fields is None:
+            return None
+        plan = read_prepared_plan(root, fields["tag"])
+        if plan is None:
+            # `prepared` has not written its output yet; this step has nothing
+            # to bind and must not push.
+            return None
+        tag = fields["tag"]
+        local = local_tag_state(tag)
+        if local is None:
+            # The prepared output exists but its signed tag does not. Waiting
+            # is the only honest answer: `read_back` would fail closed on it,
+            # and this step never creates the tag it pushes.
+            return None
+        spec = dict(fields, plan_sha256=plan, tag_object_id=local.object_id,
+                    signer_fingerprint=signer_fingerprint)
+        validate_spec(spec)
+        # The carrier is built per recovery and lives for one operation, so the
+        # tag its readers query is the one the spec just named.
+        return TagCarrier(spec=spec, push_tag=push_tag,
+                          local_tag_state=lambda: local_tag_state(tag),
+                          remote_tag_state=lambda: remote_tag_state(tag))
+
+    return RecoveredStep("tag", recover, drives=True)
 
 
 def enroll_draft(*, root, candidate_root, repository_id, ledger, create_draft,

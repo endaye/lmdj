@@ -350,7 +350,7 @@ class RealCompositionTest(unittest.TestCase):
                       return_value=reader):
             return cli.release_carriers(self.context, self.policy, request)
 
-    def test_the_entry_exposes_the_thirteen_enrolled_carriers_in_order(self):
+    def test_the_entry_exposes_the_fourteen_enrolled_carriers_in_order(self):
         from tools.release.carriers import (
             DeferredCandidate,
             RecoveredDispatch,
@@ -361,23 +361,29 @@ class RealCompositionTest(unittest.TestCase):
         carriers = self.carriers(self.request())
         self.assertEqual(tuple(carrier.step for carrier in carriers),
                          ENROLLED_STEPS)
-        self.assertEqual(len(carriers), 13)
+        self.assertEqual(len(carriers), 14)
         self.assertIs(type(carriers[0]), DeferredCandidate)
         for carrier in carriers[1:]:
             self.assertIn(type(carrier), (RecoveredStep, RecoveredDispatch))
         for step in ("publication", "runtime", "creator"):
             selected = carriers[ENROLLED_STEPS.index(step)]
             self.assertIs(type(selected), RecoveredDispatch)
-        for step in ("verification", "intent", "changelog", "prepared", "draft",
-                     "published_record", "changelog_site", "promotion",
+        for step in ("verification", "intent", "changelog", "prepared", "tag",
+                     "draft", "published_record", "changelog_site", "promotion",
                      "final"):
             self.assertIs(type(carriers[ENROLLED_STEPS.index(step)]),
                           RecoveredStep)
         backend = ReleaseBackend(self.context.git, self.context.github,
                                  carriers=carriers)
-        self.assertEqual(backend.missing(STEPS), ("tag",))
+        # Every driver step is owned now, so the scope refusal no longer fires.
+        self.assertEqual(backend.missing(STEPS), ())
+        # The refusal itself is intact; it simply has nothing to report. Drop
+        # one carrier and the same check names exactly the step that is gone.
+        dropped = ReleaseBackend(self.context.git, self.context.github,
+                                 carriers=carriers[:-1])
+        self.assertEqual(dropped.missing(STEPS), ("final",))
 
-    def test_run_refuses_the_unenrolled_steps_before_any_request(self):
+    def test_run_no_longer_refuses_the_scope_and_opens_one_request(self):
         request_ids = []
         journal = self.gitdir / "lmdj-release-requests"
         output = io.StringIO()
@@ -391,12 +397,18 @@ class RealCompositionTest(unittest.TestCase):
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             code = cli.main(["--repo-root", str(self.root), "run",
                              "--authority", "issue:1301"])
+        # The scope check no longer refuses: the run reaches the driver, opens
+        # exactly one request and stops at the first step with no work yet.
+        report = output.getvalue()
         self.assertEqual(code, 2)
-        self.assertIn("tag", output.getvalue())
-        # `prepared` is enrolled now, so it must not be named as unowned; the
-        # refusal still has to fire on the one step that is.
-        self.assertNotIn("prepared", output.getvalue())
-        self.assertFalse(journal.exists())
+        self.assertNotIn("release scope has steps without an enrolled carrier",
+                         report)
+        self.assertIn("verified steps: 0/14", report)
+        self.assertIn("step: candidate", report)
+        self.assertTrue(journal.is_dir())
+        opened = sorted(path.name[:-5] for path in journal.iterdir()
+                        if path.name.endswith(".json"))
+        self.assertEqual(len(opened), 1)
         self.assertEqual(request_ids, [])
 
 
