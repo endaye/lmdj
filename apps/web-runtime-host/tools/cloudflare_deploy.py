@@ -346,13 +346,13 @@ BROWSER_ENVIRONMENT = ("CI", "HOME", "LANG", "LC_ALL", "PATH",
 SECRET_NAME = re.compile(r"TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|APIKEY",
                          re.IGNORECASE)
 # Credentials this process never held still appear in the text tools echo.
-# Each skips text already replaced, so a named marker survives the shape pass.
+# Each captures its prefix and the value separately; `_mask` decides per match,
+# so one already-redacted value on a line cannot shield a second real one.
 SECRET_TEXT = (
     # To end of line: a header value is not one token ("Bearer <secret>").
-    re.compile(r"(?i)(authorization\s*:\s*)(?![^\n]*\[REDACTED).+"),
-    re.compile(r"(?i)(\bbearer\s+)(?![^\n]*\[REDACTED)\S+"),
-    re.compile(r"(?i)((?:token|secret|password|api[_-]?key)\s*[=:]\s*)"
-               r"(?![^\n]*\[REDACTED)\S+"),
+    re.compile(r"(?i)(authorization\s*:\s*)(.+)"),
+    re.compile(r"(?i)(\bbearer\s+)(\S+)"),
+    re.compile(r"(?i)((?:token|secret|password|api[_-]?key)\s*[=:]\s*)(\S+)"),
 )
 
 
@@ -381,8 +381,18 @@ def _redacted(text):
         if value and len(value) >= 4 and SECRET_NAME.search(name):
             text = text.replace(value, f"[REDACTED {name}]")
     for pattern in SECRET_TEXT:
-        text = pattern.sub(r"\1[REDACTED]", text)
+        text = pattern.sub(_mask, text)
     return text
+
+
+def _mask(match):
+    """Redact this match unless its value is already a marker.
+
+    Per match, not per line: a line carrying one redacted value must not shield
+    a second, still-real secret beside it.
+    """
+    prefix, value = match.group(1), match.group(2)
+    return prefix + (value if "[REDACTED" in value else "[REDACTED]")
 
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
@@ -404,6 +414,10 @@ def _diagnostic(directory, name, result):
     if directory.is_symlink():
         raise CloudflareDeployError("diagnostic directory is unsafe")
     directory.mkdir(parents=True, exist_ok=True)
+    # Containment after creation catches an ancestor that pointed elsewhere; it
+    # does not close the swap-between-check-and-open race, which #1487 owns.
+    if directory.resolve().parent != directory.parent.resolve():
+        raise CloudflareDeployError("diagnostic directory resolves outside its root")
     path = directory / name
     body = _redacted((result.stdout or "") + (result.stderr or ""))
     # O_NOFOLLOW: the directory is an operator-supplied path that other local

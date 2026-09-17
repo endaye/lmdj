@@ -587,6 +587,31 @@ class EntryPointTest(unittest.TestCase):
         self.assertNotIn("held-by-this-process", body)
         self.assertIn("[REDACTED CLOUDFLARE_API_TOKEN]", body)
 
+    def test_a_redacted_value_does_not_shield_a_second_secret(self):
+        # Per match, not per line: one already-masked value on a line must not
+        # let a real secret beside it survive.
+        result = type("R", (), {
+            "returncode": 1,
+            "stdout": "token=held-value other_token=never-held-value\n",
+            "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"SOME_TOKEN": "held-value"}, clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        body = path.read_text(encoding="utf-8")
+        self.assertNotIn("held-value", body)
+        self.assertNotIn("never-held-value", body)
+        self.assertIn("[REDACTED SOME_TOKEN]", body)
+
+    def test_a_linked_diagnostic_directory_is_refused(self):
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        (self.root / "diagnostics").symlink_to(elsewhere)
+        result = type("R", (), {"returncode": 1, "stdout": "x", "stderr": ""})()
+        with self.assertRaises(CloudflareDeployError):
+            cloudflare_deploy._diagnostic(self.root / "diagnostics",
+                                          "adapter.log", result)
+        self.assertEqual(list(elsewhere.iterdir()), [])
+
     def test_a_hung_or_unlaunchable_command_is_our_error_not_a_traceback(self):
         # main only catches CloudflareDeployError, so anything else escaping
         # here becomes a traceback and a non-2 exit.
