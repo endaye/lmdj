@@ -24,6 +24,13 @@ class Transport(Protocol):
     def page(self, issue_id: int, cursor: str | None) -> dict:
         """Return {comments: [...], next: cursor|None}; fetch ALL pages."""
 
+    def last(self, issue_id: int) -> dict | None:
+        """Newest comment row, or None on an empty journal.
+
+        A cheap tail peek for the stranded-pending guard only. Writer
+        provenance is NOT verified here; a matching peek never skips the
+        complete authenticated replay, and a mismatch can only block."""
+
     def append(self, issue_id: int, envelope: dict) -> None:
         """One POST only. A thrown error may mean the POST persisted."""
 
@@ -109,12 +116,30 @@ class Journal:
             envelopes.append(envelope)
         return envelopes, previous
 
+    def _peek_pending(self, anchor):
+        """Fail fast on a proven-absent stranded pending before any full replay.
+
+        A blocked journal must not burn the writer's request budget on every
+        health tick; that exhaustion is what strands appends in the first
+        place. The peek can only block: a matching tail still faces the
+        complete authenticated replay below, so no trust moves to it."""
+        pending = anchor["pending"]
+        require(isinstance(pending, dict), "anchor pending intent is malformed",
+                "reconcile the exact pending event; do not issue a second POST")
+        tail = self.transport.last(self.issue_id)
+        require(isinstance(tail, dict) and tail.get("edited") is False
+                and tail.get("envelope") == pending and pending.get("previous") == anchor["head"],
+                "pending append is not yet visible or its outcome is uncertain",
+                "reconcile the exact pending event; do not issue a second POST")
+
     def load(self):
         """Recover a known pending append; missing/ambiguous write remains blocked."""
         try:
             self._guard()
             anchor = self.anchor.read()
             require(isinstance(anchor, dict) and set(anchor) == {"head", "pending"}, "anchor is missing or malformed")
+            if anchor["pending"] is not None:
+                self._peek_pending(anchor)
             envelopes, head = self._read()
             if anchor["pending"] is not None:
                 pending = anchor["pending"]
@@ -131,6 +156,39 @@ class Journal:
             if isinstance(error, JournalBlocked):
                 raise
             raise JournalBlocked(f"why: journal state unavailable: {error}; remedy: reconcile storage; do not advance cursor") from error
+
+    def reconcile_pending(self, expected_digest):
+        """Clear a stranded pending intent after an exact operator audit.
+
+        The only safe drain for a pending append whose POST never persisted:
+        the operator names the exact audited digest, the complete authenticated
+        replay proves the event absent from the journal, and the anchor returns
+        to {head, None}. The dropped event is re-derived by the next ordinary
+        reconcile from actual run state; no POST is ever replayed here."""
+        try:
+            self._guard()
+            require(isinstance(expected_digest, str) and bool(expected_digest),
+                    "pending reconcile needs the audited digest of the exact stranded intent")
+            anchor = self.anchor.read()
+            require(isinstance(anchor, dict) and set(anchor) == {"head", "pending"}, "anchor is missing or malformed")
+            pending = anchor["pending"]
+            require(isinstance(pending, dict),
+                    "no stranded pending append to reconcile; remedy: ordinary load recovery, never a manual clear")
+            require(pending.get("digest") == expected_digest,
+                    "operator audit names a different intent; remedy: re-audit the exact stranded pending before clearing")
+            require(pending.get("previous") == anchor["head"],
+                    "stranded intent is not the chain successor; remedy: reconcile forked history first, never clear by hand")
+            envelopes, head = self._read()
+            require(all(envelope != pending for envelope in envelopes),
+                    "pending append persisted; remedy: ordinary load recovery adopts it, never clear a committed event")
+            require(head == anchor["head"], "journal suffix is missing or unanchored",
+                    "stop admission; restore the independent anchor and journal or audit old runs before bootstrap")
+            self.anchor.replace(anchor, {"head": anchor["head"], "pending": None})
+            return [deepcopy(envelope["event"]) for envelope in envelopes]
+        except Exception as error:
+            if isinstance(error, JournalBlocked):
+                raise
+            raise JournalBlocked(f"why: pending reconcile unavailable: {error}; remedy: reconcile storage; do not advance cursor") from error
 
     def append(self, event):
         """Intent in independent anchor precedes POST; state commits only at load.

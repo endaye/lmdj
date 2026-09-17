@@ -27,14 +27,14 @@ on:
       batch_operation:
         description: Durable manual controls; exact full uses reconcile with an explicit node/candidate request.
         type: choice
-        options: [report-legacy, init, reconcile, settle, resume, report-init-outbox, report-review, report-batches, report-drain, report-discovery, recovery-probe, claim-probe, cancel-probe]
+        options: [report-legacy, init, reconcile, settle, resume, reconcile-pending, report-init-outbox, report-review, report-batches, report-drain, report-discovery, recovery-probe, claim-probe, cancel-probe]
         default: reconcile
       journal_config:
         description: Optional isolated journal JSON; empty uses the committed production scheduler. Init requires explicit config.
         type: string
         required: false
       batch_request:
-        description: Explicit node/candidate JSON for reconcile, or required closed id/suites/reason JSON for resume.
+        description: Explicit node/candidate JSON for reconcile, closed id/suites/reason JSON for resume, or the audited pending digest JSON for reconcile-pending.
         type: string
         required: false
       report_config:
@@ -159,8 +159,8 @@ jobs:
               command = ['python3', 'scripts/ci/batch_runtime.py', operation,
                      '--config', str(config), '--output', str(output)]
           if os.environ.get('BATCH_REQUEST'):
-              if operation not in ('reconcile', 'resume'):
-                  raise SystemExit('why: explicit request outside reconcile/resume; remedy: select its command or omit the request')
+              if operation not in ('reconcile', 'resume', 'reconcile-pending'):
+                  raise SystemExit('why: explicit request outside reconcile/resume/reconcile-pending; remedy: select its command or omit the request')
               request = directory / 'request.json'
               request.write_text(os.environ['BATCH_REQUEST'])
               command += ['--request', str(request)]

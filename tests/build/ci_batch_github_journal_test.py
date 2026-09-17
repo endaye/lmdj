@@ -69,6 +69,9 @@ class FakeApi:
                 issue["comments"] = {"totalCount": len(self.comments) + int(self.truncated), "nodes": nodes,
                                      "pageInfo": {"hasNextPage": more,
                                                   "endCursor": None if self.missing_cursor else str(next_index)}}
+            if body["query"] == github.LAST_QUERY:
+                issue["comments"] = {"totalCount": len(self.comments) + int(self.truncated),
+                                     "nodes": deepcopy(self.comments[-1:])}
             return {"data": {"repository": {"nameWithOwner": "endaye/lmdj", "issue": issue}}}
         prefix = "/repos/endaye/lmdj"
         if method == "GET" and path in (prefix + "/actions/runs/17", prefix + "/actions/runs/17/attempts/1"):
@@ -694,6 +697,63 @@ class GitHubJournalTest(unittest.TestCase):
         self.api.issue["updatedAt"] = "later-than-body"
         self.assertEqual(self.transport.read_body(782)["checkpoint"], {"head": None, "pending": None},
                          "why: Issue activity mistaken for body edit; remedy: editor/lastEditedAt only")
+
+    def test_tail_peek_returns_newest_comment_without_writer_trust(self):
+        self.journal.append({"id": "one"})
+        self.journal.append({"id": "two"})
+        prior = len(self.api.calls)
+        row = self.transport.last(782)
+        self.assertEqual(row["envelope"]["event"], {"id": "two"},
+                         "why: tail peek lost the newest event; remedy: read comments(last:1)")
+        self.assertFalse(any(method == "GET" for method, _, _ in self.api.calls[prior:]),
+                         "why: tail peek spent writer trust; remedy: leave authentication to the full replay")
+
+    def test_tail_peek_empty_journal_returns_none(self):
+        self.assertIsNone(self.transport.last(782),
+                          "why: empty journal invented a tail; remedy: no comments means no peek row")
+
+    def test_tail_peek_rejects_edited_comment(self):
+        self.journal.append({"id": "one"})
+        self.api.comments[0]["editor"] = {"__typename": "User", "id": "human"}
+        with self.assertRaisesRegex(JournalBlocked, "comment was edited"):
+            self.transport.last(782)
+
+    def test_stranded_pending_peek_blocks_fast_and_reconcile_pending_drains(self):
+        self.journal.append({"id": "one"})
+        self.api.lose_post = True
+        with self.assertRaises(JournalBlocked):
+            self.journal.append({"id": "two"})
+        # The POST outcome was unknown; on this path it never persisted.
+        self.api.comments.pop()
+        digest = self.anchor.read()["pending"]["digest"]
+        prior = len(self.api.calls)
+        with self.assertRaisesRegex(JournalBlocked, "uncertain"):
+            self.journal.load()
+        queries = [body["query"] for _, path, body in self.api.calls[prior:] if path == "/graphql"]
+        self.assertNotIn(github.COMMENTS_QUERY, queries,
+                         "why: blocked journal full-replays every health tick; remedy: fail fast on the tail peek")
+        events = self.journal.reconcile_pending(digest)
+        self.assertEqual(events, [{"id": "one"}],
+                         "why: drain lost committed history; remedy: clear only the stranded intent")
+        self.assertIsNone(self.anchor.read()["pending"],
+                          "why: stranded intent survived the drain; remedy: restore the anchor after the absence proof")
+        self.api.lose_post = False
+        self.journal.append({"id": "two"})
+        self.assertEqual(self.journal.load(), [{"id": "one"}, {"id": "two"}],
+                         "why: drained journal cannot continue; remedy: append from the retained head")
+
+    def test_reconcile_pending_through_transport_never_clears_a_persisted_event(self):
+        self.api.lose_post = True
+        with self.assertRaises(JournalBlocked):
+            self.journal.append({"id": "one"})
+        digest = self.anchor.read()["pending"]["digest"]
+        with self.assertRaisesRegex(JournalBlocked, "persisted"):
+            self.journal.reconcile_pending(digest)
+        self.assertIsNotNone(self.anchor.read()["pending"],
+                             "why: committed event cleared by hand; remedy: ordinary load recovery adopts it")
+        self.api.lose_post = False
+        self.assertEqual(self.journal.load(), [{"id": "one"}],
+                         "why: ordinary recovery did not adopt the persisted event; remedy: inspect pending")
 
     def test_body_trusted_editor_allowed_even_original_author_is_human(self):
         self.api.issue.update(author={"__typename": "User"}, editor=deepcopy(BOT), lastEditedAt="2026-09-08T00:00:00Z")
