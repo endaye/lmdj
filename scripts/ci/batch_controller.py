@@ -17,6 +17,41 @@ import change_scope
 import incremental_batch as batch
 import test_scope
 
+# A journal object (writer, envelope and event) must stay under the
+# batch_github_journal.LIMIT of 60,000 bytes, and a checkpoint carries the whole
+# pending admit. The interval explanation is the only request field that grows
+# with the unprocessed backlog (one reason per changed path: 2,355 reasons and
+# 261 KB after 261 commits), so it is bounded here. Suites are the decision and
+# are never touched; reasons only explain it.
+REASON_BUDGET = 16000
+OMISSION = ("why: {count} further selection reasons were omitted so the admit record stays within the journal "
+            "object limit; remedy: recompute the interval selection from Git history and policy for the "
+            "complete explanation")
+
+
+def _encoded_size(reasons):
+    return len(json.dumps(reasons, separators=(",", ":")).encode("utf-8"))
+
+
+def bounded_reasons(reasons, budget=REASON_BUDGET):
+    """Canonical (sorted, unique) reasons whose encoding fits the budget.
+
+    Reasons are kept in canonical order until the next one would no longer fit
+    beside a single counted omission reason; that omission then stands for the
+    rest. Applying the bound to its own output changes nothing, so a stored
+    request rebuilds to itself and the journal replay stays exact.
+    """
+    ordered = sorted(set(reasons))
+    if _encoded_size(ordered) <= budget:
+        return ordered
+    kept = []
+    for reason in ordered:
+        candidate = sorted([*kept, reason, OMISSION.format(count=len(ordered) - len(kept) - 1)])
+        if _encoded_size(candidate) > budget:
+            break
+        kept.append(reason)
+    return sorted([*kept, OMISSION.format(count=len(ordered) - len(kept))])
+
 
 class GitInputs:
     """Read immutable Git data, not historical Python code.
@@ -95,7 +130,7 @@ is incomplete. Complete paths and trusted policies still define the floor.
             selection["reasons"].append(
                 "why: review scope records are incomplete; remedy: restore authenticated review evidence; "
                 "complete Git and historical-policy rules define the fallback scope")
-        return test_scope._selection(policy, selection["suites"], selection["reasons"])
+        return test_scope._selection(policy, selection["suites"], bounded_reasons(selection["reasons"]))
 
 
 class Controller:

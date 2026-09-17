@@ -43,6 +43,10 @@ def require(condition, why):
         raise JournalBlocked(f"why: {why}; remedy: stop admission and reconcile authenticated fixed-Issue state")
 
 
+class JournalRecordOversized(JournalBlocked):
+    """A journal object exceeds LIMIT. Raised before any anchor or comment mutation."""
+
+
 def positive(value):
     return type(value) is int and value > 0
 
@@ -58,7 +62,9 @@ def _pairs(pairs):
 def decode(body):
     require(isinstance(body, str), "journal body missing")
     try:
-        require(len(body.encode("utf-8")) <= LIMIT, "journal body oversized")
+        if len(body.encode("utf-8")) > LIMIT:
+            raise JournalRecordOversized("why: journal body oversized; remedy: bound the event explanation before "
+                                         "appending; no anchor or comment write was attempted for this record")
         value = json.loads(body, object_pairs_hook=_pairs,
                            parse_constant=lambda _: require(False, "nonfinite journal JSON"))
     except JournalBlocked:

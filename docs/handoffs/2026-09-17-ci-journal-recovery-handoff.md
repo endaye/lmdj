@@ -92,6 +92,29 @@ Living document。本文件记录 2026-09-16 至 2026-09-17 一次连续诊断�
   jobs 分页总数在两页之间变化（`jobs changed during pagination`）。
 - 解开它的**前置**是让阻断可观测（见下）。
 
+#### 2026-09-18 更新：第 3 层根因已定位并修复
+
+- 根因**不是**读后写可见性，而是**记录体积**：下一批 auto 请求覆盖 `561a8ce8..main` 共 261 个
+  first-parent commit，`interval_selection` 为每个变更路径生成一条 reason（`broad foundational or
+  concurrency impact: <path>` 等），`selection.reasons` 共 **2,355 条**；`admit` 事件连同 pending
+  checkpoint 序列化后 **260,100 字节**，超过 `batch_github_journal.LIMIT = 60,000`（该上限守住
+  GitHub 评论 65,536 字符）。`_write` 在 PATCH 锚点**之前**的 `decode(body)` 本地 `require` 失败 →
+  `JournalBlocked`、无 HTTP 状态、不留 pending、journal 保持健康——与第 3 层全部观测吻合
+  （每 tick 先成功 append 一条小的 `observe`，跑完 `advice()` 后在 `admit` 处死亡）。
+- 正反馈：被阻越久，区间越长，记录越大，永不自愈。09-10 的 gen 276 admit 只有 36 条 reason、3,767 字节。
+- 复现（只读）：`git fetch origin main` 后用生产 `GitInputs.interval_selection(base=561a8ce8, target=origin/main)`
+  构造 admit 信封并按 `_write` 同样方式序列化，直接量字节数。
+- 修复（本次 PR）：`batch_controller.bounded_reasons` 以 **16,000 字节**预算截断 canonical 排序后的
+  reasons，用一条带计数的 `why/remedy` 说明代替被省略部分，幂等（存储的 request 重建仍等于自身）；
+  **suites 不变**，只缩解释不缩覆盖。同时新增闭合诊断种类 `journal-record-oversized`
+  （`JournalRecordOversized(JournalBlocked)`），使此类本地拒绝在 CI 诊断里可见且不泄漏异常文本。
+- 闸门：`tests/build/ci_batch_controller_test.py`（600 路径区间：选择保持 full、pending-admit
+  checkpoint ≤ LIMIT）、`tests/build/ci_batch_github_journal_test.py`（超大记录在任何 PATCH/POST 前
+  以闭合种类拒绝）、`tests/build/ci_incremental_entry_test.py`（诊断种类映射）。
+- 坑位：`.agents/pitfalls/journal-record-grows-with-backlog.md`（absorbed）。
+- 合入后需观察的远端腿：首个 tick 在 `admit → claim` 后返回 `execute` 并启动
+  `Execute incremental batch`（16 套 full）；随后 outbox #817 出现交付。
+
 ## live 状态（写入时，2026-09-17 ~23:00 +08:00）
 
 - **调度器 journal #807**：298 条评论（generation 297）;链完整、锚点 head
@@ -108,7 +131,7 @@ Living document。本文件记录 2026-09-16 至 2026-09-17 一次连续诊断�
 
 ## 未完成（建议顺序与授权边界）
 
-1. **让 reconcile 阻断可观测**（小改动，未立 Task）：失败时输出**固定词表**的 reason，
+1. **让 reconcile 阻断可观测**（2026-09-18 部分完成：`journal-record-oversized` 闭合种类已加；其余 `require` 仍只显示 `journal-blocked`）：失败时输出**固定词表**的 reason，
    和/或**始终**上传 result artifact。这是解开第 3 层的前置。注意：现诊断"不外泄异常文本"
    是**有意**的安全设计，放宽属治理决定，必须显式授权，并保持不泄漏响应体/凭证。
 2. **收敛 `advice()` 成本**（未立 Task）：实测 25-commit 区间一次 `advice()` =
