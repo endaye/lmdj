@@ -36,7 +36,11 @@ CLASSIFIER_PATH = ROOT / "scripts/ci/change_scope.py"
 LANE_COMMANDS_PATH = ROOT / "scripts/ci/local_lanes.json"
 DOC_IMPACT_CHECKER = ROOT / "apps/docs-site/scripts/check-doc-impact.mjs"
 PR_WORKFLOW = ".github/workflows/pr-contract.yml"
-_LANE_GATE = re.compile(r"manifest\)\.lanes\.([a-z_]+)")
+# Deliberately narrower than the expression and wider than one spelling: the
+# lane name is what matters, and a job condition reformatted around it (a moved
+# paren, an added space, a different `needs` path) must not quietly empty the
+# set and report every lane unverified.
+_LANE_GATE = re.compile(r"\.lanes\.([a-z_]+)")
 
 LANE_COMMANDS_SCHEMA = "lmdj.ci-local-lanes.v1"
 _LANE_KEYS = {"requires", "commands", "ci_only"}

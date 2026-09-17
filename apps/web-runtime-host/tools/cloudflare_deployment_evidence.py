@@ -310,7 +310,11 @@ def main(argv=None):
     except CloudflareEvidenceError as error:
         print(str(error), file=sys.stderr)
         return 2
-    except ValueError:
+    except (ValueError, OSError):
+        # A decode failure, a truncated pipe and a document that is not JSON
+        # are the same answer to the caller: this input cannot be validated.
+        # Refusing them the same way keeps the operator's message a reason
+        # rather than a traceback.
         print(str(CloudflareEvidenceError("is not a readable document")), file=sys.stderr)
         return 2
     print(json.dumps(document, ensure_ascii=False, sort_keys=True,

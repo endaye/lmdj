@@ -209,6 +209,29 @@ class PullRequestLaneVisibilityTest(unittest.TestCase):
             "remedy: derive both from `selected` alone",
         )
 
+    def test_a_reformatted_job_condition_still_names_its_lane(self) -> None:
+        # The recovered set must survive an edit to the condition around the
+        # lane name; an empty set would silently report every lane unverified.
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        for spelling in (
+            "if: fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static",
+            "if: ${{ fromJSON( needs.change-scope.outputs.manifest ).lanes.docs_static }}",
+            "if: needs.change-scope.outputs.manifest.lanes.docs_static",
+        ):
+            with self.subTest(spelling=spelling):
+                repository.write(self.preflight.PR_WORKFLOW,
+                                 f"jobs:\n  docs-static:\n    {spelling}\n")
+                self.assertEqual(
+                    self.preflight.pull_request_lanes(repository.path),
+                    frozenset({"docs_static"}),
+                    "why: a reformatted job condition stopped naming its lane, "
+                    "so the pre-flight would report a verified lane as "
+                    "batch-only; "
+                    "remedy: match the lane name, not one spelling of the "
+                    "expression around it",
+                )
+
     def test_an_unreadable_workflow_reports_no_pr_lanes(self) -> None:
         # Fail closed: if the workflow cannot be read, every lane is treated as
         # unverified rather than silently assumed covered.
