@@ -534,7 +534,9 @@ def main(argv=None):
     parser.add_argument("--wrangler", required=True)
     parser.add_argument("--prior-tag")
     arguments = parser.parse_args(argv)
-    diagnostics = arguments.output.parent
+    # Beside this run's own state, not beside the evidence: a failed run must
+    # not create anything at or around the output path a caller checks for.
+    diagnostics = arguments.state_root / "diagnostics"
     try:
         if not arguments.state_root.is_absolute():
             raise CloudflareDeployError(

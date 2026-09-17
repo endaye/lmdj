@@ -406,6 +406,23 @@ class EntryPointTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("state root", errors.getvalue())
 
+    def test_a_failed_run_leaves_the_output_path_untouched(self):
+        # Diagnostics belong beside the run's own state; a caller checking for
+        # the evidence path must not find its directory conjured by a failure.
+        output = self.root / "evidence" / "evidence.json"
+        errors = io.StringIO()
+        with patch.object(cloudflare_deploy, "deploy",
+                          side_effect=CloudflareDeployError("candidate failed")), \
+                contextlib.redirect_stderr(errors):
+            code = cloudflare_deploy.main(
+                [TAG, "--target", "web-runtime-host",
+                 "--state-root", str(self.root / "state"),
+                 "--output", str(output), "--run-id", str(RUN_ID),
+                 "--node", NODE, "--wrangler", WRANGLER])
+        self.assertEqual(code, 2)
+        self.assertFalse(output.exists())
+        self.assertFalse(output.parent.exists())
+
     def test_a_failed_deployment_exits_two_without_a_traceback(self):
         errors = io.StringIO()
         with patch.object(cloudflare_deploy, "deploy",
