@@ -136,6 +136,11 @@ class ShapeTest(unittest.TestCase):
     def test_the_run_must_name_itself(self):
         for actions in ({"run_id": "1", "run_url": document("creator-web")["github_actions"]["run_url"]},
                         {"run_id": RUN_ID, "run_url": "https://github.com/endaye/lmdj/actions/runs/1"},
+                        # A bare prefix must not pass: the comparison is the
+                        # whole URL, not "starts with github.com".
+                        {"run_id": RUN_ID, "run_url": "https://github.com/"},
+                        {"run_id": RUN_ID, "run_url":
+                         f"https://github.com/other/repo/actions/runs/{RUN_ID}"},
                         {"run_id": RUN_ID}):
             with self.subTest(actions=actions), self.assertRaises(CloudflareEvidenceError):
                 validate_document(document("creator-web", github_actions=actions),

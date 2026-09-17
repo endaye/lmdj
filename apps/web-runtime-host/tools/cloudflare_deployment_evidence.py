@@ -166,9 +166,14 @@ def validate_document(document, *, host):
     actions = document["github_actions"]
     if (not isinstance(actions, dict) or set(actions) != {"run_id", "run_url"}
             or not isinstance(actions["run_id"], str)
-            or not actions["run_id"].isdigit()
-            or actions["run_url"] != "https://github.com/"
-            f"{CANONICAL_GITHUB_REPOSITORY}/actions/runs/{actions['run_id']}"):
+            or not actions["run_id"].isdigit()):
+        raise CloudflareEvidenceError("does not name its own run")
+    # Bound to a name on purpose: written inline, the adjacent string literals
+    # would concatenate across the `or`, and any reformatting that separated
+    # them would silently weaken the comparison to a bare prefix.
+    expected_run = (f"https://github.com/{CANONICAL_GITHUB_REPOSITORY}"
+                    f"/actions/runs/{actions['run_id']}")
+    if actions["run_url"] != expected_run:
         raise CloudflareEvidenceError("does not name its own run")
 
     publication = document["publication"]
@@ -248,6 +253,22 @@ def write_document(path, document, *, host):
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, target)
+        # The rename is what publishes the document, so persist the directory
+        # entry too: the promotion it describes has already happened remotely,
+        # and evidence lost after that leaves a real deployment unverifiable.
+        # Not every platform allows fsync on a directory; failing to harden is
+        # not a reason to fail a written document.
+        try:
+            handle = os.open(target.parent, os.O_RDONLY)
+        except OSError:
+            pass
+        else:
+            try:
+                os.fsync(handle)
+            except OSError:
+                pass
+            finally:
+                os.close(handle)
     finally:
         try:
             os.unlink(temporary)
