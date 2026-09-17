@@ -1360,6 +1360,35 @@ class InputAndPolicyTests(unittest.TestCase):
                 per_pr_usd=0.0002, monthly_usd=20.0, pilot_usd=20.0, price_revision="fixture-price-v1")
             self.assertEqual(admitted["reserved_amount_usd"], 0.00015)
 
+    def test_envelope_breach_uncertain_reservation_stays_committed(self):
+        # An uncertain finalization with envelope_breach observed real over-cap
+        # provider usage, so it keeps its reservation committed; only outcomes
+        # that were never observed over cap refund. The envelope hold fences
+        # the same provider/model/price envelope, so the denial here must come
+        # from the still-committed reservation on a different envelope.
+        config = test_config(per_pr=0.0002)["budget"]
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = adapter.Ledger(Path(directory) / "ledger.jsonl", config)
+            reservation = ledger.admit(
+                approval_id="fixture-approval", attempt_id="run:breach", request_id="run:breach:deepseek:1",
+                provider="deepseek", model="fixture-model", priced_response_model="fixture-served-model",
+                input_price=0.000001, output_price=0.000001,
+                context_token_limit=100, output_token_cap=50, fixed_request_charge=0.0,
+                billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
+                max_requests=8, max_provider_requests=2,
+                per_pr_usd=0.0002, monthly_usd=20.0, pilot_usd=20.0, price_revision="fixture-price-v1")
+            ledger.reconcile(reservation, status="uncertain", actual_amount=None, usage=None,
+                             envelope_breach=True)
+            with self.assertRaisesRegex(adapter.AdmissionDenied, "request cost budget exhausted"):
+                ledger.admit(
+                    approval_id="fixture-approval", attempt_id="run:breach", request_id="run:breach:glm:1",
+                    provider="glm", model="fixture-model", priced_response_model="fixture-served-model",
+                    input_price=0.000001, output_price=0.000001,
+                    context_token_limit=100, output_token_cap=50, fixed_request_charge=0.0,
+                    billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
+                    max_requests=8, max_provider_requests=2,
+                    per_pr_usd=0.0002, monthly_usd=20.0, pilot_usd=20.0, price_revision="fixture-price-v1")
+
     def test_mixed_settled_and_failed_attempt_commits_only_metered_actual(self):
         config = test_config(per_pr=0.0004)["budget"]
         with tempfile.TemporaryDirectory() as directory:

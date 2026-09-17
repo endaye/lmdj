@@ -41,10 +41,12 @@ reservation exactly as they are, and make the *accounting* converge:
 
 - `_record_amount` counts `reserved` records at their reservation (in-flight
   liability only), `reconciled` records at their actual amount (unchanged),
-  and `uncertain` records at zero: the provider's consumption for an
-  unobserved or unpriceable outcome is unknown, committed budget must
-  converge to metered spend, and the durable `reserved_amount_usd` on the
-  record is unchanged for audit.
+  and `uncertain` records at zero **unless `envelope_breach` is set**: an
+  uncertain finalization with an envelope breach observed real over-cap
+  provider usage, so it keeps its reservation committed (and stays fenced by
+  the envelope hold); only outcomes that were never observed over cap
+  (timeout, transport failure, unpriceable identity) refund. The durable
+  `reserved_amount_usd` on the record is unchanged for audit.
 - The worst-case reservation at admission time is untouched: it remains the
   conservative gate that bounds a runaway request before dispatch. Only the
   accounting after the outcome is known changes.
@@ -86,6 +88,21 @@ New acceptance paths from the issue:
   per-PR cap and deny further admission; reconciling them at their small
   actuals restores admission without changing any cap, and the denial leg
   still holds before reconciliation.
+- breach carve-out: an uncertain finalization with `envelope_breach=True`
+  keeps its reservation committed, so a different envelope cannot admit
+  against over-cap usage that really happened.
+
+## Review findings resolved
+
+The current-head review of the first commit raised one finding: the
+unconditional uncertain refund also released reservations of outcomes whose
+over-cap usage was observed (`envelope_breach=True`), letting a different
+provider/model envelope admit against spend that really happened. Fixed in
+this Task: the refund is now conditional on no observed breach, and
+`test_envelope_breach_uncertain_reservation_stays_committed` proves a
+breached uncertain reservation still denies a following admission on another
+envelope. That test is red under the unconditional rule (the denied
+admission wrongly succeeds) and green with the carve-out.
 
 ## Verification
 
