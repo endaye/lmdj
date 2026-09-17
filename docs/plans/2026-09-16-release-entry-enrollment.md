@@ -36,8 +36,9 @@
    的既有模式。
 2. **只读步骤**：`changelog_site`、`final` 接线（复用 #1392 的载体与既有 site fetch）。
 3. **可驱动步骤**：`intent`、`changelog`、`draft`、`promotion`（`prepared` 与 `tag` 的 spec 绑定其
-   自身产出，写入前不可冻结，已在 [#1404](https://github.com/endaye/lmdj/issues/1404) 提出待裁决，
-   见 [`docs/prd/questions/prepared-step-spec-freezing.md`](../prd/questions/prepared-step-spec-freezing.md)）。
+   自身产出，写入前不可冻结，曾在 [#1404](https://github.com/endaye/lmdj/issues/1404) 待裁决；
+   已由 [`2026-09-17-prepared-tag-spec-freezing.md`](../prd/decisions/2026-09-17-prepared-tag-spec-freezing.md)
+   裁决为结果绑定、在 advance 内两阶段冻结，两步各自作为独立实现 Task 登记）。
 4. **受管 adapter**：`candidate`（`CandidateTransition`）、`publication` / `runtime` / `creator`
    （每步一个 `DispatchTransition`）、`published_record`（`EvidencePrTransition`）。
 5. **verification**：接入既有 `BatchVerification`。
