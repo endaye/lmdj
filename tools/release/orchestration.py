@@ -152,12 +152,24 @@ class RequestJournal(AbstractContextManager):
                 _fail("journal is missing, unsafe or unavailable for reading")
             return self
         try:
-            try:
-                self.root.mkdir(mode=0o700, parents=True)
-            except FileExistsError:
-                pass
-            else:
-                parent = os.open(self.root.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            missing = []
+            walk = self.root
+            while not walk.exists():
+                missing.append(walk)
+                if walk.parent == walk:
+                    break
+                walk = walk.parent
+            # Each level is created private: mkdir's mode applies to that
+            # directory alone, and parents=True would leave the intermediate
+            # levels at the process umask (commonly 0755), which the privacy
+            # check below — and every later open — fails closed on. A level
+            # that appears meanwhile already existed; keep its mode as-is.
+            for level in reversed(missing):
+                try:
+                    level.mkdir(mode=0o700)
+                except FileExistsError:
+                    pass
+                parent = os.open(level.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
                 try:
                     os.fsync(parent)
                 finally:
