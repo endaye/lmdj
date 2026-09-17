@@ -1,6 +1,6 @@
 """Trusted composition wiring the enrolled carriers at the real release entry.
 
-`cli.release_carriers` delegates here. One request's twelve enrolled carriers
+`cli.release_carriers` delegates here. One request's thirteen enrolled carriers
 are assembled from production modules only: the entry gates from
 `entry_gates`, the `carriers.enroll_*` recovery wrappers, and the durable
 machinery (`candidate_preparation`, `durable_dispatch`, `publication_workspace`,
@@ -43,6 +43,7 @@ from .carriers import (
     enroll_draft,
     enroll_final,
     enroll_intent,
+    enroll_prepared,
     enroll_promotion,
     enroll_publication,
     enroll_published_record,
@@ -69,10 +70,10 @@ def _fail(reason):
         "fixture on the real path")
 
 
-# The enrolled step carriers in driver order; `prepared` and `tag` stay
-# unenrolled until the open spec-freezing question (#1404) is decided.
-ENROLLED_STEPS = ("candidate", "verification", "intent", "changelog", "draft",
-                  "publication", "published_record", "changelog_site",
+# The enrolled step carriers in driver order; `tag` stays unenrolled until its
+# own Task lands, so `run` still refuses a scope rather than half-driving it.
+ENROLLED_STEPS = ("candidate", "verification", "intent", "changelog", "prepared",
+                  "draft", "publication", "published_record", "changelog_site",
                   "runtime", "creator", "promotion", "final")
 
 _SITE_BASE_URL = "https://docs.lmdj.workers.dev"
@@ -261,6 +262,18 @@ def _create_draft(context):
     return lambda tag: create_draft(tag, context)
 
 
+def _prepare_release(context):
+    """The trusted `prepare` controller: the real command, bound to this run.
+
+    `prepare` builds, signs the local annotated tag and writes the atomic plan
+    output; it owns its own reconcile path, so the carrier calls it once and
+    never retries an unknown result.
+    """
+    from .prepare import prepare
+
+    return lambda tag: prepare(tag, context)
+
+
 def _dispatch_transition(context, root, operations, step, workflow, spec,
                          expected, bind, github, token, repository_id,
                          dispatch_authorize, release_by_tag):
@@ -423,7 +436,7 @@ def compose_candidate(context, policy, request):
 
 
 def compose_carriers(context, policy, request):
-    """The twelve enrolled step carriers for this exact request (lazy).
+    """The thirteen enrolled step carriers for this exact request (lazy).
 
     Assembly performs no drives and no batch/site reads: the wrappers recover
     per observation from the records prior steps land. One repository identity
@@ -606,6 +619,11 @@ def compose_carriers(context, policy, request):
                          changelog_binding=lambda: reviewed_changelog_editorial(),
                          commit_for=changelog_commit_for,
                          sequence_for=changelog_sequence_for),
+        enroll_prepared(root=root, candidate_root=candidate_root,
+                        repository_id=repository_id, ledger=ledger,
+                        prepare=_prepare_release(context),
+                        local_tag_state=lambda tag: git.local_tag_state(tag),
+                        signer_fingerprint=context.tag_signer_fingerprint),
         enroll_draft(root=root, candidate_root=candidate_root,
                      repository_id=repository_id, ledger=ledger,
                      create_draft=_create_draft(context),

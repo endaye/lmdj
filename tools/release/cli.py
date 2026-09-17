@@ -209,11 +209,10 @@ def release_journal_root(root: Path, git) -> Path:
 def release_carriers(context: PrepareContext, policy, request) -> tuple:
     """Step carriers enrolled for this scope, from the trusted composition.
 
-    The twelve enrolled steps assemble as lazy request-bound wrappers; the
-    `prepared` and `tag` steps stay unenrolled while their spec freezing is
-    unsettled (#1404), and `run`/`resume` refuse a scope with an unowned step
-    rather than half-driving it. Assembly performs no drives and no batch or
-    site reads.
+    The thirteen enrolled steps assemble as lazy request-bound wrappers; the
+    `tag` step stays unenrolled until its own Task lands, and `run`/`resume`
+    refuse a scope with an unowned step rather than half-driving it. Assembly
+    performs no drives and no batch or site reads.
     """
     from tools.release.entry_composition import compose_carriers
 

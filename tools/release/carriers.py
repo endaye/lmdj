@@ -254,12 +254,16 @@ def read_prepared_plan(root, tag):
     the step agree on where the plan lives. `None` means the prepared output is
     not there yet, which is the same condition `prepared_step.read_back` reports
     as "absent"; the step that needs it decides what that means for itself, and
-    this enrollment reports it as `pending` because it cannot drive `prepare`
-    (see #1404). Only an absent pair means that: the digest is checked against
-    the plan document bytes it names, so a swapped digest file cannot silently
-    redefine what a later step binds, and half of the pair is drift. Which
-    *reviewed* digest authorizes the plan is still open (#1404): no ledger row
-    records it yet.
+    and the step that needs it decides what that means for itself. Only an
+    absent pair means that: the digest is checked against the plan document
+    bytes it names, so a swapped digest file cannot silently redefine what a
+    later step binds, and half of the pair is drift.
+
+    No ledger row records this digest and none needs to. The plan is a
+    deterministic function of the reviewed intent row, the policy and the
+    signed tag object, so `plan_sha256` is a derived witness rather than an
+    independently reviewed fact; `enroll_prepared` freezes it from this reader
+    after its own drive, and later steps bind the same value.
     """
     from . import prepared_step
 
@@ -287,6 +291,42 @@ def read_prepared_plan(root, tag):
     if hashlib.sha256(document).hexdigest() != digest:
         _fail("the prepared plan digest does not match its document")
     return digest
+
+
+_PREPARED_FIELDS = ("tag", "target_revision", "repository_id", "actor_id",
+                    "request_sha256")
+
+
+def enroll_prepared(*, root, candidate_root, repository_id, ledger, prepare,
+                    local_tag_state, signer_fingerprint):
+    """The `prepared` step: it drives `prepare` and freezes its own outputs.
+
+    This step's spec is result-bound, so the enrollment recovers only the
+    authorization half from the reviewed intent row and lets the carrier freeze
+    `plan_sha256` / `tag_object_id` from the durable output after the drive.
+    Before that row exists the identity is not derivable and the step stays
+    `pending`; it never reports absent work as done.
+    """
+    from .prepared_step import AuthorizedPreparedCarrier, prepared_operation_id
+
+    def recover(state, operation):
+        authorization = spec_identity(state, candidate_root=candidate_root,
+                                      repository_id=repository_id, ledger=ledger,
+                                      operation_id=prepared_operation_id,
+                                      fields=_PREPARED_FIELDS)
+        if authorization is None:
+            return None
+        # The carrier is built per recovery and lives for one operation, so the
+        # tag its readers query is the one the authorization just named and
+        # cannot drift from the identity `read_back` compares against.
+        tag = authorization["tag"]
+        return AuthorizedPreparedCarrier(
+            root=root, authorization=authorization, prepare=prepare,
+            plan_digest=lambda: read_prepared_plan(root, tag),
+            tag_state=lambda: local_tag_state(tag),
+            signer_fingerprint=signer_fingerprint)
+
+    return RecoveredStep("prepared", recover, drives=True)
 
 
 def enroll_draft(*, root, candidate_root, repository_id, ledger, create_draft,
