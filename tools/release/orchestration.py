@@ -153,7 +153,7 @@ class RequestJournal(AbstractContextManager):
             return self
         try:
             try:
-                self.root.mkdir(mode=0o700)
+                self.root.mkdir(mode=0o700, parents=True)
             except FileExistsError:
                 pass
             else:

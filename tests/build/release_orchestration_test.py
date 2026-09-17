@@ -33,6 +33,18 @@ class RequestJournalTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve() / "journal"
 
+    def test_a_deep_missing_parent_chain_is_created_private(self):
+        # The entry composes request journals under
+        # <gitdir>/lmdj-release-requests/operations/<id>/<step> — parents that
+        # exist only after this creation. A symlinked ancestor still fails
+        # closed; only absent plain directories are created.
+        deep = self.root / "operations" / "request-id" / "candidate-preparation" / "source-setup"
+        with RequestJournal(deep) as journal:
+            journal.create(request())
+        import os
+        mode = oct(deep.stat().st_mode & 0o777)
+        self.assertEqual(mode, "0o700")
+
     def test_same_request_is_idempotent_and_returns_unshared_data(self):
         with RequestJournal(self.root) as journal:
             first = journal.create(request())
