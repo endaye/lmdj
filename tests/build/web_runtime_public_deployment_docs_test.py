@@ -10,6 +10,7 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNBOOK = REPO_ROOT / "docs/deploy/web-runtime-host.md"
+WORKFLOW = REPO_ROOT / ".github/workflows/deploy-web-runtime-host.yml"
 ACCEPTANCE = REPO_ROOT / "docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md"
 DESIGN = REPO_ROOT / "docs/design/2026-08-08-web-runtime-public-deployment-design.md"
 PLAN = REPO_ROOT / "docs/plans/2026-08-08-web-runtime-public-deployment.md"
@@ -101,6 +102,40 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
             self.assertIn(expected, runbook)
         self.assertIn("不是当前远端控制面的动态真相", compact_runbook)
 
+    def test_the_runbook_names_the_deployment_path_it_actually_uses(self) -> None:
+        # The retired Netlify facts elsewhere are retained as history. These are
+        # the ones an operator acts on today, and the runbook named none of them
+        # until the Creator suite's stale assertion exposed the same gap here.
+        source = RUNBOOK.read_text(encoding="utf-8")
+        for expected in (
+            "https://lab.lmdj.workers.dev/",
+            "scripts/cloudflare-host-deploy.sh",
+            "CLOUDFLARE_API_TOKEN",
+            "lmdj.web-runtime-host.deployment-evidence.v3",
+        ):
+            with self.subTest(current=expected):
+                self.assertIn(expected, source)
+
+    def test_the_workflow_deploys_to_the_target_it_was_cut_over_to(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", source)
+        self.assertIn("runtime-canary", source)
+        self.assertIn("CLOUDFLARE_API_TOKEN", source)
+        self.assertIn("scripts/cloudflare-host-deploy.sh", source)
+        self.assertIn("--target web-runtime-host", source)
+        # Any NETLIFY mention at all, but reported by line: the guarantee is
+        # that the cutover left none, and a bare assertNotIn would say only
+        # that one exists somewhere.
+        left = [f"{number}: {line.strip()}"
+                for number, line in enumerate(source.splitlines(), 1)
+                if "NETLIFY" in line]
+        self.assertEqual(left, [],
+                         "why: the workflow still names a retired Netlify "
+                         "input, so its deployment target is ambiguous; "
+                         "remedy: remove the lines listed here")
+        self.assertNotIn("deploy-creator-web", source)
+        self.assertNotIn("publish-release", source)
+
     def test_release_authority_and_header_boundary_are_explicit(self) -> None:
         source = self.read(RUNBOOK)
         self.assertIn("Release ZIP 未修改", source)
@@ -147,7 +182,16 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
     def test_evidence_schemas_preserve_complete_publication_and_recovery_results(self) -> None:
         source = self.read(RUNBOOK)
         self.assertIn("evidence.json", source)
+        # Both, and which is which: the runbook documents the current Cloudflare
+        # schema and retains the retired one for auditing historical artifacts.
+        # Naming only v2 let the runbook claim v3 in one section and describe v2
+        # as exact in another without any test noticing.
+        self.assertIn("lmdj.web-runtime-host.deployment-evidence.v3", source)
         self.assertIn("lmdj.web-runtime-host.deployment-evidence.v2", source)
+        self.assertLess(source.index("deployment-evidence.v3"),
+                        source.index("已退役的 v2（Netlify）"),
+                        "why: the runbook describes the retired schema before "
+                        "the one in use; remedy: state the current schema first")
         self.assertIn("{filename, sha256}", source)
         self.assertIn("github_actions", source)
         self.assertIn("prior_good", source)
