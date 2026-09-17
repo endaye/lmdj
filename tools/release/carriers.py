@@ -808,6 +808,35 @@ def enrolled_candidate_timestamp(transition_root):
     return timestamp
 
 
+def enrolled_candidate_scope_env(preparation_root):
+    """The (path, source_timestamp) the enrolled source-setup scope froze, or None.
+
+    `compose_candidate` binds the process PATH and a Task timestamp into the
+    preparation scope at first enrollment. Both change across shells and
+    processes, so a resumed run can only adopt its own enrollment by reading
+    the recorded values back instead of recomputing them. A missing journal
+    means nothing was enrolled; a present-but-misshapen record is corrupt
+    state and fails closed.
+    """
+    from .candidate_snapshot import read
+    from .orchestration import RequestJournal
+
+    root = Path(preparation_root).absolute() / "source-setup"
+    if not root.is_dir():
+        return None
+    with RequestJournal(root, writable=False) as journal:
+        marker = read(journal, "source-setup-operation.json", optional=True)
+    if marker is None:
+        return None
+    if type(marker) is not dict:
+        _fail("the enrolled source-setup scope is corrupt")
+    path, timestamp = marker.get("path"), marker.get("source_timestamp")
+    if type(path) is not str or not path or type(timestamp) is not int \
+            or not 1 <= timestamp <= 253402300799:
+        _fail("the enrolled source-setup scope records no valid PATH or Task timestamp")
+    return path, timestamp
+
+
 def enroll_candidate(*, request, preparation_root, repository_root, source_root,
                      reservation_root, transition_root, witness_root,
                      repository_id, client, token, authorize, observe_main,
@@ -841,6 +870,21 @@ def enroll_candidate(*, request, preparation_root, repository_root, source_root,
         path=path, author_name=author_name, author_email=author_email,
         source_timestamp=source_timestamp, clock=clock)
     observed = preparation.observe(initialize=True)
+    if observed["status"] == "pending" and drive:
+        # A prior process enrolled this request under its own PATH and Task
+        # timestamp; both are bound into the scope and change across shells.
+        # Adopt the recorded values so the scope binding survives the process
+        # boundary instead of drifting into a permanent "rebound" refusal.
+        recorded = enrolled_candidate_scope_env(preparation_root)
+        if recorded is not None and recorded != (path, source_timestamp):
+            preparation = CandidatePreparation(
+                preparation_root, repository_root=repository_root,
+                source_root=source_root, reservation_root=reservation_root,
+                request=request, authorize=authorize, observe_main=observe_main,
+                path=recorded[0], author_name=author_name,
+                author_email=author_email, source_timestamp=recorded[1],
+                clock=clock)
+            observed = preparation.observe(initialize=True)
     if observed["status"] == "verified":
         driven = observed
     elif not drive:
