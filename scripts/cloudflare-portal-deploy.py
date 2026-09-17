@@ -14,6 +14,43 @@ WORKER = "docs"
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def publish_document(path, text):
+    """Write a document so the rename that publishes it survives a crash.
+
+    The evidence describes a promotion that has already happened remotely, so
+    losing it afterwards leaves a real deployment unverifiable. A partially
+    written file would be worse than none, hence the rename; the directory
+    entry is what the rename creates, hence the second fsync. Not every
+    platform allows fsync on a directory, and failing to harden is not a reason
+    to fail a document that was written.
+    """
+    descriptor, temporary = tempfile.mkstemp(prefix="." + path.name + ".",
+                                             dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as target:
+            target.write(text)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+    try:
+        parent = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(parent)
+    except OSError:
+        pass
+    finally:
+        os.close(parent)
+
+
 def smoke_receipt(output, revision, base_url):
     """Retain only a closed, identity-matched successful smoke receipt."""
     def unique(pairs):
@@ -142,7 +179,7 @@ def publish():
             evidence["recovery"] = {"deployment": state()[0]["versions"], "route": api(f"scripts/{WORKER}/subdomain")}
         raise
     finally:
-        evidence_path.write_text(json.dumps(evidence, indent=2) + "\n")
+        publish_document(evidence_path, json.dumps(evidence, indent=2) + "\n")
 
 
 if __name__ == "__main__":

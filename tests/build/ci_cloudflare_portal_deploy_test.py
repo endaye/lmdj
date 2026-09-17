@@ -197,5 +197,50 @@ class DeploymentTest(unittest.TestCase):
         self.assertNotIn("recovery", evidence)
 
 
+class EvidenceDurabilityTest(unittest.TestCase):
+    """The evidence describes a promotion that already happened remotely."""
+
+    def fsynced(self, call):
+        """The inodes fsynced while `call` runs, in order."""
+        seen = []
+        real = os.fsync
+        def record(descriptor):
+            try:
+                seen.append(os.fstat(descriptor).st_ino)
+            except OSError:
+                pass
+            return real(descriptor)
+        with patch.object(os, "fsync", record):
+            call()
+        return seen
+
+    def test_the_document_is_published_by_a_rename_and_both_are_persisted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "cloudflare-portal-1.json"
+            seen = self.fsynced(
+                lambda: MODULE.publish_document(target, '{"status": "passed"}\n'))
+            self.assertEqual(target.read_text(encoding="utf-8"),
+                             '{"status": "passed"}\n')
+            self.assertEqual(
+                [target.stat().st_ino, target.parent.stat().st_ino], seen,
+                "why: the document or the directory entry the publishing rename "
+                "creates was not persisted, so evidence for a completed "
+                "promotion can be lost; "
+                "remedy: fsync the file, rename it, then fsync the directory",
+            )
+            self.assertEqual(sorted(p.name for p in Path(directory).iterdir()),
+                             [target.name],
+                             "the write left a temporary file behind")
+
+    def test_a_failed_write_leaves_no_partial_document(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "evidence.json"
+            with patch.object(os, "replace", side_effect=OSError("fixture")):
+                with self.assertRaises(OSError):
+                    MODULE.publish_document(target, "{}\n")
+            self.assertFalse(target.exists())
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -434,6 +436,36 @@ class DeployOrchestratorEvidenceTest(unittest.TestCase):
                 expected_contract=contract,
             )
             return output.read_text(encoding="utf-8")
+
+    def fsynced(self, call):
+        """The inodes fsynced while `call` runs, in order."""
+        seen = []
+        real = os.fsync
+        def record(descriptor):
+            try:
+                seen.append(os.fstat(descriptor).st_ino)
+            except OSError:
+                pass
+            return real(descriptor)
+        with patch.object(os, "fsync", record):
+            call()
+        return seen
+
+    def test_the_directory_entry_that_publishes_the_document_is_persisted(self) -> None:
+        # The document describes a deployment that already happened remotely.
+        # Persisting the file but not the rename that publishes it can lose the
+        # evidence for a real deployment.
+        document = self.success_document()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "evidence.json"
+            seen = self.fsynced(lambda: deploy_orchestrator.write_evidence_document(
+                output=output, source=json.dumps(document),
+                expected_contract=document["contract"]))
+            self.assertIn(output.parent.stat().st_ino, seen,
+                          "why: the directory entry the publishing rename creates "
+                          "was not persisted, so evidence for a completed "
+                          "deployment can be lost; "
+                          "remedy: fsync the parent directory after os.replace")
 
     def test_success_evidence_cross_binds_release_and_live_byte_identity(self) -> None:
         document = self.success_document()

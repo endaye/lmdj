@@ -1061,6 +1061,22 @@ def write_evidence_document(
             target.flush()
             os.fsync(target.fileno())
         os.replace(temporary_name, output)
+        # The rename is what publishes the document, so persist the directory
+        # entry too: the deployment it describes has already happened remotely,
+        # and evidence lost after that leaves a real deployment unverifiable.
+        # Not every platform allows fsync on a directory; failing to harden is
+        # not a reason to fail a written document.
+        try:
+            parent = os.open(output.parent, os.O_RDONLY)
+        except OSError:
+            pass
+        else:
+            try:
+                os.fsync(parent)
+            except OSError:
+                pass
+            finally:
+                os.close(parent)
     finally:
         try:
             os.unlink(temporary_name)
