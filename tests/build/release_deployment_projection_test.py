@@ -337,6 +337,38 @@ class CompositionSeamTest(unittest.TestCase):
                     self.assertIsNone(self.composition.deployment_projection(
                         self.root, TAG, step))
 
+    def inspected(self, state):
+        """Run one inspection with the tool stubbed; return the argv it built."""
+        reader = self.composition._CloudflareReader("token", state)
+        with mock.patch.object(self.composition, "_read_only_tool",
+                               return_value=None) as tool:
+            self.assertIsNone(reader.replaced_version("web-runtime-host"))
+        return tool.call_args[0][1]
+
+    def test_the_inspection_workspace_is_one_the_adapter_accepts(self):
+        # The adapter's run store creates its own journal root at 0700 and
+        # refuses one whose group or other bits are set. Pre-creating it here
+        # with the default mode would make every inspection fail on a check
+        # that has nothing to do with the Worker.
+        state = self.root / "build/release/cloudflare-inspection"
+        argv = self.inspected(state)
+        self.assertEqual(argv[-1], str(state))
+        self.assertTrue(state.parent.is_dir(), "the workspace has no parent")
+        self.assertFalse(state.exists(),
+                         "why: the journal root was created here instead of by "
+                         "the adapter, which creates it private; "
+                         "remedy: create only its parent")
+
+    def test_a_workspace_left_readable_is_made_private(self):
+        state = self.root / "build/release/cloudflare-inspection"
+        state.mkdir(parents=True)
+        state.chmod(0o755)
+        self.inspected(state)
+        self.assertEqual(state.stat().st_mode & 0o077, 0,
+                         "why: an existing workspace kept group or other bits, "
+                         "which the adapter refuses; "
+                         "remedy: make it private before inspecting")
+
     def test_an_unreadable_tool_reads_as_no_document(self):
         # Every live read fails closed into None, which each caller turns into
         # `pending` rather than into an assumption about production.

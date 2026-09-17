@@ -198,7 +198,13 @@ class _CloudflareReader:
     def _inspect(self, host):
         if host not in self._inspected:
             try:
-                self._state_root.mkdir(parents=True, exist_ok=True)
+                # Only the parent: the adapter's run store creates its own
+                # journal root at 0700 and refuses one whose group or other
+                # bits are set, so creating it here with the default mode
+                # would make every inspection fail.
+                self._state_root.parent.mkdir(parents=True, exist_ok=True)
+                if self._state_root.is_dir():
+                    os.chmod(self._state_root, 0o700)
             except OSError:
                 _fail("the Cloudflare inspection workspace is unavailable")
             self._inspected[host] = _read_only_tool(
