@@ -35,6 +35,15 @@ def check(url):
             "host_version": HOST_VERSION}
 
 
+def prior_good(host, **changes):
+    value = {"version_id": PRIOR, "version_url": version_url(host, PRIOR),
+             "product_build": "1.0.59.0", "host_version": "2.9.0",
+             "release_files": {"index_sha256": "4" * 64, "manifest_sha256": "5" * 64},
+             "site_response": {"status": 200, "etag": "prior"}}
+    value.update(changes)
+    return value
+
+
 def document(host, **changes):
     immutable_url = version_url(host, PROMOTED)
     live = production_url(host)
@@ -52,7 +61,7 @@ def document(host, **changes):
         "release_files": {"index_sha256": "2" * 64, "manifest_sha256": "3" * 64},
         "publication": {"version_id": PROMOTED, "deployment_id": DEPLOYMENT,
                         "percentage": 100},
-        "prior_good": {"version_id": PRIOR},
+        "prior_good": prior_good(host),
         "immutable": {"version_id": PROMOTED, "url": immutable_url,
                       "http": check(immutable_url), "browser": check(immutable_url)},
         "production": {"url": live, "http": check(live), "browser": check(live)},
@@ -172,6 +181,42 @@ class ShapeTest(unittest.TestCase):
             value["production"]["http"] = dict(value["production"]["http"], **change)
             with self.subTest(change=change), self.assertRaises(CloudflareEvidenceError):
                 validate_document(value, host="creator-web")
+
+    def test_a_first_deployment_has_no_prior(self):
+        # A Worker's first deployment has nothing to roll back to, and
+        # `deployment_effect` branches on exactly that; None must stay valid.
+        self.assertIsNone(
+            validate_document(document("creator-web", prior_good=None),
+                              host="creator-web")["prior_good"])
+
+    def test_a_prior_must_carry_what_the_driver_projects(self):
+        # `tools/release/deployment_effect.py` reads the prior's identity, its
+        # served digests and its recorded response; a prior missing any of them
+        # cannot be projected, so it fails closed here.
+        for absent in ("version_id", "version_url", "product_build",
+                       "host_version", "release_files", "site_response"):
+            value = prior_good("creator-web")
+            del value[absent]
+            with self.subTest(absent=absent), self.assertRaises(CloudflareEvidenceError):
+                validate_document(document("creator-web", prior_good=value),
+                                  host="creator-web")
+        for change in ({"version_id": "not-a-version"},
+                       {"version_url": "https://creator.lmdj.workers.dev"},
+                       {"product_build": "1.0.59"}, {"host_version": "2.9"},
+                       {"release_files": {"index_sha256": "4" * 64}},
+                       {"site_response": {}}):
+            with self.subTest(change=change), self.assertRaises(CloudflareEvidenceError):
+                validate_document(
+                    document("creator-web", prior_good=prior_good("creator-web", **change)),
+                    host="creator-web")
+
+    def test_the_promoted_version_is_not_its_own_prior(self):
+        # Recording it would make recovery a no-op.
+        value = prior_good("creator-web", version_id=PROMOTED,
+                           version_url=version_url("creator-web", PROMOTED))
+        with self.assertRaises(CloudflareEvidenceError):
+            validate_document(document("creator-web", prior_good=value),
+                              host="creator-web")
 
     def test_an_impossible_window_is_refused(self):
         with self.assertRaises(CloudflareEvidenceError):

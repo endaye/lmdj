@@ -181,12 +181,35 @@ def validate_document(document, *, host):
             or publication["percentage"] != 100):
         raise CloudflareEvidenceError("does not record a complete promotion")
 
+    # `None` is the first deployment of a Worker, which has no prior version;
+    # `tools/release/deployment_effect.py` already branches on exactly that.
+    # When a prior exists it must carry everything that consumer projects, so
+    # the Cloudflare document is a drop-in for the Netlify one it replaces.
     prior = document["prior_good"]
-    if prior is not None and (
-            not isinstance(prior, dict) or set(prior) != {"version_id"}
-            or not isinstance(prior["version_id"], str)
-            or _VERSION.fullmatch(prior["version_id"]) is None):
-        raise CloudflareEvidenceError("records an invalid prior version")
+    if prior is not None:
+        if (not isinstance(prior, dict)
+                or set(prior) != {"host_version", "product_build",
+                                  "release_files", "site_response",
+                                  "version_id", "version_url"}
+                or not isinstance(prior["version_id"], str)
+                or _VERSION.fullmatch(prior["version_id"]) is None
+                or prior["version_url"] != version_url(host, prior["version_id"])
+                or not isinstance(prior["product_build"], str)
+                or _PRODUCT.fullmatch(prior["product_build"]) is None
+                or not isinstance(prior["host_version"], str)
+                or _HOST.fullmatch(prior["host_version"]) is None
+                or not isinstance(prior["release_files"], dict)
+                or set(prior["release_files"]) != {"index_sha256", "manifest_sha256"}
+                or not all(_digest(prior["release_files"][key])
+                           for key in prior["release_files"])
+                or not isinstance(prior["site_response"], dict)
+                or not prior["site_response"]):
+            raise CloudflareEvidenceError("records an invalid prior version")
+        if prior["version_id"] == publication["version_id"]:
+            # A prior that is the version just promoted is not a rollback
+            # target; recording it would make recovery a no-op.
+            raise CloudflareEvidenceError(
+                "names the promoted version as its own prior")
 
     immutable = document["immutable"]
     if (not isinstance(immutable, dict) or "version_id" not in immutable
