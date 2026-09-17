@@ -336,21 +336,36 @@ BROWSER = {
 # denylist silently admits every credential nobody thought to name.
 BROWSER_ENVIRONMENT = ("CI", "HOME", "LANG", "LC_ALL", "PATH",
                        "PLAYWRIGHT_BROWSERS_PATH", "TMPDIR")
-# Values redacted from any retained diagnostic, by value rather than by name.
-SECRETS = ("CLOUDFLARE_API_TOKEN", "GITHUB_TOKEN", "GH_TOKEN",
-           "NPM_TOKEN", "NODE_AUTH_TOKEN")
+# Any environment name that looks like a credential: a fixed list only protects
+# the names someone remembered, and these tools are handed new ones over time.
+SECRET_NAME = re.compile(r"TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|APIKEY",
+                         re.IGNORECASE)
+# Credentials this process never held still appear in the text tools echo.
+SECRET_TEXT = (
+    # To end of line: a header value is not one token ("Bearer <secret>").
+    re.compile(r"(?i)(authorization\s*:\s*).+"),
+    re.compile(r"(?i)(\bbearer\s+)\S+"),
+    re.compile(r"(?i)((?:token|secret|password|api[_-]?key)\s*[=:]\s*)\S+"),
+)
 
 
 def _redacted(text):
-    """Remove known credential values; tools echo them on failure.
+    """Remove credentials tools echo on failure, by value and by shape.
 
-    Every non-empty value is replaced regardless of length. A short token is
-    still a token, and the costs are not symmetric: over-redacting makes a
-    diagnostic noisier, under-redacting leaves a credential on disk.
+    Every credential-looking environment value is replaced regardless of
+    length: a short token is still a token, and the costs are not symmetric —
+    over-redacting makes a diagnostic noisier, under-redacting leaves a
+    credential on disk. Value replacement alone is not enough, because it can
+    only remove what this process held; an adapter that minted its own token,
+    or read one from a config file, still echoes it. So known credential-
+    carrying shapes are redacted too.
     """
-    for name in SECRETS:
-        value = os.environ.get(name)
-        if value:
+    # Shapes first: they remove whole assignments and headers, so a marker left
+    # behind by value replacement cannot itself look like one and be mangled.
+    for pattern in SECRET_TEXT:
+        text = pattern.sub(r"\1[REDACTED]", text)
+    for name, value in os.environ.items():
+        if value and SECRET_NAME.search(name):
             text = text.replace(value, f"[REDACTED {name}]")
     return text
 
@@ -374,10 +389,35 @@ def _diagnostic(directory, name, result):
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / name
     body = _redacted((result.stdout or "") + (result.stderr or ""))
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # O_NOFOLLOW: the directory is an operator-supplied path that other local
+    # operators may share, and the diagnostic name is predictable, so a
+    # pre-placed link must not redirect this write.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError:
+        raise CloudflareDeployError("could not retain a diagnostic safely") from None
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         handle.write(body)
     return path
+
+
+def _completed(command, *, cwd, timeout, environment=None):
+    """Run one command, turning every launch and timeout failure into ours."""
+    try:
+        return subprocess.run(command, cwd=cwd, capture_output=True, text=True,
+                              timeout=timeout, env=environment)
+    except subprocess.TimeoutExpired as expired:
+        return type("Expired", (), {
+            "returncode": 124,
+            "stdout": (expired.stdout or b"").decode("utf-8", "replace")
+            if isinstance(expired.stdout, bytes) else (expired.stdout or ""),
+            "stderr": f"timed out after {timeout}s"})()
+    except OSError:
+        # A missing interpreter or unresolvable PATH is a failed leg, not a
+        # traceback out of the entry point.
+        return type("Unlaunched", (), {
+            "returncode": 127, "stdout": "", "stderr": "command could not be launched"})()
 
 
 def real_adapter(diagnostics, *, timeout=2400):
@@ -388,9 +428,9 @@ def real_adapter(diagnostics, *, timeout=2400):
     instead and the failure names the file.
     """
     def run(arguments):
-        result = subprocess.run(
+        result = _completed(
             ["bash", str(ROOT / "scripts" / "cloudflare-host.sh"), *arguments],
-            cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+            cwd=ROOT, timeout=timeout)
         if result.returncode:
             path = _diagnostic(diagnostics, _log_name("adapter", arguments[0]),
                                result)
@@ -419,11 +459,10 @@ def real_browser(host, diagnostics, *, timeout=900):
         environment.update({"LMDJ_WEB_HOST_CLEAN_ROOM": "1",
                             f"{prefix}_EXTERNAL_SERVER": "1",
                             f"{prefix}_BASE_URL": url})
-        result = subprocess.run(
+        result = _completed(
             ["npm", "--prefix", str(ROOT / "tests/platform/web"), "test", "--",
              f"--project={project}", "--reporter=json", spec],
-            cwd=ROOT, capture_output=True, text=True, timeout=timeout,
-            env=environment)
+            cwd=ROOT, timeout=timeout, environment=environment)
         if result.returncode or not _browser_ran(result.stdout):
             path = _diagnostic(diagnostics,
                                _log_name("browser", urlsplit(url).hostname),

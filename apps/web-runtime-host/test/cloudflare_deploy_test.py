@@ -515,11 +515,54 @@ class EntryPointTest(unittest.TestCase):
             path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
         self.assertNotIn("abc123", path.read_text(encoding="utf-8"))
 
-    def test_a_retained_diagnostic_redacts_secrets_and_is_owner_only(self):
-        result = type("R", (), {"returncode": 1, "stdout": "token=s3cr3t-value",
-                                "stderr": "Authorization: Bearer s3cr3t-value"})()
+    def test_a_hung_or_unlaunchable_command_is_our_error_not_a_traceback(self):
+        # main only catches CloudflareDeployError, so anything else escaping
+        # here becomes a traceback and a non-2 exit.
+        adapter = cloudflare_deploy.real_adapter(self.root, timeout=1)
+        for raised in (cloudflare_deploy.subprocess.TimeoutExpired("npm", 1),
+                       FileNotFoundError("npm")):
+            with self.subTest(raised=type(raised).__name__), \
+                    patch.object(cloudflare_deploy.subprocess, "run",
+                                 side_effect=raised), \
+                    self.assertRaises(CloudflareDeployError):
+                adapter(["candidate", TAG])
+
+    def test_a_credential_shaped_name_is_redacted_without_being_listed(self):
+        result = type("R", (), {"returncode": 1, "stdout": "v=zz9", "stderr": ""})()
         with patch.dict(cloudflare_deploy.os.environ,
-                        {"CLOUDFLARE_API_TOKEN": "s3cr3t-value"}):
+                        {"SOME_VENDOR_TOKEN": "zz9"}, clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        self.assertNotIn("zz9", path.read_text(encoding="utf-8"))
+
+    def test_a_credential_this_process_never_held_is_still_redacted(self):
+        # Value replacement cannot reach a token the adapter minted itself.
+        result = type("R", (), {
+            "returncode": 1,
+            "stdout": "Authorization: Bearer minted-elsewhere-9\n",
+            "stderr": "api_key = other-minted-value\n"})()
+        with patch.dict(cloudflare_deploy.os.environ, {}, clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        body = path.read_text(encoding="utf-8")
+        self.assertNotIn("minted-elsewhere-9", body)
+        self.assertNotIn("other-minted-value", body)
+        self.assertIn("[REDACTED]", body)
+
+    def test_a_linked_diagnostic_path_is_refused(self):
+        victim = self.root / "victim.txt"
+        victim.write_text("original", encoding="utf-8")
+        (self.root / "adapter.log").symlink_to(victim)
+        result = type("R", (), {"returncode": 1, "stdout": "x", "stderr": ""})()
+        with self.assertRaises(CloudflareDeployError):
+            cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        self.assertEqual(victim.read_text(encoding="utf-8"), "original")
+
+    def test_a_retained_diagnostic_redacts_secrets_and_is_owner_only(self):
+        result = type("R", (), {
+            "returncode": 1,
+            "stdout": "value is s3cr3t-value here\n",
+            "stderr": "Authorization: Bearer s3cr3t-value\n"})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"CLOUDFLARE_API_TOKEN": "s3cr3t-value"}, clear=True):
             path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
         body = path.read_text(encoding="utf-8")
         self.assertNotIn("s3cr3t-value", body)
