@@ -170,22 +170,43 @@ class PullRequestLaneVisibilityTest(unittest.TestCase):
         )
 
     def test_the_plan_splits_selected_into_verified_and_batch_only(self) -> None:
-        plan = self.preflight.build_plan(ROOT, "HEAD", only=[
-            "ci_contract", "deploy_contract", "portal",
-        ])
+        # Against a Pull Request workflow this test writes, so the partition is
+        # proven rather than re-derived from the same file it asserts about.
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        repository.write(
+            self.preflight.PR_WORKFLOW,
+            "jobs:\n  docs-static:\n    if: >-\n"
+            "      fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static\n",
+        )
+        repository.write("docs/guide.md", "text\n")
+        # One lane the workflow gates on and one it does not: the partition is
+        # only observable when `selected` carries both kinds.
+        repository.write("tools/release/probe.py", "# probe\n")
+        repository.commit("a change under a one-lane Pull Request workflow")
+        plan = self.preflight.build_plan(repository.path, repository.base_sha)
+        self.assertEqual(self.preflight.pull_request_lanes(repository.path),
+                         frozenset({"docs_static"}))
         self.assertEqual(
-            plan["pull_request_verified"], ["ci_contract", "portal"],
+            plan["pull_request_verified"], ["docs_static"],
             "why: the plan no longer separates the selected lanes a Pull "
             "Request verifies from the rest; "
             "remedy: keep `pull_request_verified` and `batch_only` partitioning "
             "`selected`",
         )
-        self.assertEqual(
-            plan["batch_only"], ["deploy_contract"],
+        self.assertIn(
+            "deploy_contract", plan["batch_only"],
             "why: a selected lane no Pull Request runs was not reported as "
             "batch-only, so it reaches main unverified without a warning; "
             "remedy: keep `batch_only` listing every selected lane outside "
             "`pull_request_lanes`",
+        )
+        self.assertEqual(
+            sorted(plan["pull_request_verified"] + plan["batch_only"]),
+            sorted(plan["selected"]),
+            "why: the two lists must partition `selected`, or a selected lane "
+            "is reported as neither verified nor unverified; "
+            "remedy: derive both from `selected` alone",
         )
 
     def test_an_unreadable_workflow_reports_no_pr_lanes(self) -> None:
