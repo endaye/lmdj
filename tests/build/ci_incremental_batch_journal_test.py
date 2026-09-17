@@ -55,6 +55,13 @@ class MemoryTransport:
         return {"comments": deepcopy(self.comments[start:end]),
                 "next": str(end) if end < len(self.comments) else None}
 
+    def last(self, issue_id):
+        if self.fail_read:
+            raise OSError("state API unavailable")
+        if self.hide_comments or not self.comments:
+            return None
+        return deepcopy(self.comments[-1])
+
 
 class JournalTest(unittest.TestCase):
     def setUp(self):
@@ -191,6 +198,71 @@ class JournalTest(unittest.TestCase):
         self.transport.body["checkpoint"] = {"head": None, "pending": None}
         with self.assertRaisesRegex(JournalBlocked, "unanchored"):
             self.journal.load()
+
+    def test_stranded_pending_blocks_on_tail_peek_without_full_replay(self):
+        self.append(0)
+        self.transport.reject_post = True
+        with self.assertRaises(JournalBlocked):
+            self.append(1)
+        self.transport.page_reads = 0
+        with self.assertRaisesRegex(JournalBlocked, "uncertain"):
+            self.journal.load()
+        self.assertEqual(self.transport.page_reads, 0,
+                         "why: blocked journal full-replays every health tick; remedy: fail fast on the tail peek")
+
+    def test_reconcile_pending_clears_proven_absent_intent_and_recovers(self):
+        self.append(0)
+        self.transport.reject_post = True
+        with self.assertRaises(JournalBlocked):
+            self.append(1)
+        digest = self.anchor.read()["pending"]["digest"]
+        self.transport.page_reads = 0
+        events = self.journal.reconcile_pending(digest)
+        self.assertEqual(len(events), 1, "why: drain lost committed history; remedy: clear only the stranded intent")
+        self.assertGreater(self.transport.page_reads, 0,
+                           "why: absence claimed without the complete replay; remedy: prove against every comment")
+        self.assertIsNone(self.anchor.read()["pending"],
+                          "why: stranded intent survived the drain; remedy: restore the anchor after the absence proof")
+        self.transport.reject_post = False
+        self.append(1)
+        self.assertEqual(len(self.journal.load()), 2,
+                         "why: drained journal cannot accept new events; remedy: continue from the retained head")
+
+    def test_reconcile_pending_requires_the_exact_audited_digest(self):
+        self.transport.reject_post = True
+        with self.assertRaises(JournalBlocked):
+            self.append(0)
+        with self.assertRaisesRegex(JournalBlocked, "different intent"):
+            self.journal.reconcile_pending("0" * 64)
+        self.assertIsNotNone(self.anchor.read()["pending"],
+                             "why: wrong digest cleared the intent; remedy: bind the exact audited digest")
+
+    def test_reconcile_pending_refuses_when_nothing_is_stranded(self):
+        self.append(0)
+        with self.assertRaisesRegex(JournalBlocked, "no stranded pending"):
+            self.journal.reconcile_pending("0" * 64)
+
+    def test_reconcile_pending_never_clears_a_persisted_event(self):
+        self.transport.lose_post_response = True
+        with self.assertRaises(JournalBlocked):
+            self.append(0)
+        digest = self.anchor.read()["pending"]["digest"]
+        with self.assertRaisesRegex(JournalBlocked, "persisted"):
+            self.journal.reconcile_pending(digest)
+        self.assertIsNotNone(self.anchor.read()["pending"],
+                             "why: committed event cleared by hand; remedy: ordinary load recovery adopts it")
+        self.assertEqual(len(self.journal.load()), 1,
+                         "why: ordinary recovery did not adopt the persisted event; remedy: inspect pending")
+
+    def test_reconcile_pending_refuses_a_forked_intent(self):
+        self.append(0)
+        self.transport.reject_post = True
+        with self.assertRaises(JournalBlocked):
+            self.append(1)
+        pending = self.anchor.read()["pending"]
+        self.transport.body["checkpoint"]["pending"] = {**pending, "previous": "f" * 64}
+        with self.assertRaisesRegex(JournalBlocked, "not the chain successor"):
+            self.journal.reconcile_pending(pending["digest"])
 
 
 if __name__ == "__main__":

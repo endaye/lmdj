@@ -240,6 +240,15 @@ pending；后续通知只替换尚未运行的通知，不取消正在执行的�
 两种请求都强制完整 16-suite，目标不随 main 漂移，不推进自动 processed。重送同 ID
 恢复原请求；真正重新测试使用新 ID，而不是混合 Re-run jobs 的不同 attempt。
 
+搁浅 pending 恢复使用 `batch_operation=reconcile-pending` 与闭合
+`batch_request={"pending_digest":"<64-hex-digest>"}`：操作者先以只读方式审计调度器
+journal 的完整评论清单，确认该 pending 事件从未持久化，再在命令里钉死它的 digest；
+journal 仅在 digest 精确匹配、pending 确为链后继、且完整认证重放证明事件缺席时，才把
+锚点归位 `{head, None}`。该操作绝不重放 POST、绝不产生 execute；被丢弃的事件由下一次
+普通 reconcile 从真实运行状态幂等重新推导。pending 已持久化、无搁浅、digest 不符或链
+分叉时一律 fail-closed。journal 被阻期间，健康检查先以尾部窥视比对 pending，不匹配即
+阻断，不再每次全量重放而耗尽请求预算。
+
 每日产品 cron 与每日未启动告警均已退役。独立轻量健康巡检按 UTC 每小时
 7、22、37、52 分运行，用于恢复已有 pending、请求和报告，不能因日期启动产品测试。
 完成接续采用只读 `Incremental Completion` 中继，`Self-test Report` 不直接监听自己。

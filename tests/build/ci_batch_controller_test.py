@@ -41,6 +41,9 @@ class Memory:
     def page(self, issue, cursor):
         return {"comments": deepcopy(self.comments), "next": None}
 
+    def last(self, issue):
+        return deepcopy(self.comments[-1]) if self.comments else None
+
     def append(self, issue, envelope):
         kind = envelope["event"]["type"]
         failure = self.fail

@@ -120,6 +120,13 @@ class RehearsalWorkflowTests(unittest.TestCase):
         self.assertIn('action=idle\n', output)
         self.assertNotIn('action=execute', output)
 
+    def test_reconcile_pending_routes_audited_digest_to_same_runtime_without_execution(self):
+        request = '{"pending_digest":"' + '0' * 64 + '"}'
+        commands, output = self.invoke('reconcile-pending', request)
+        self.assertEqual(commands[0][:3], ['python3', 'scripts/ci/batch_runtime.py', 'reconcile-pending'])
+        self.assertIn('--request', commands[0])
+        self.assertNotIn('action=execute', output)
+
     def report_code(self):
         step = self.control.split('      - name: Report through the isolated outbox under the short writer lock\n', 1)[1]
         step = step.split('      - ', 1)[0]
@@ -172,7 +179,7 @@ class RehearsalWorkflowTests(unittest.TestCase):
 
     def test_manual_choices_and_inputs_are_explicit_without_new_trigger(self):
         inputs = block(block(block(self.source, 'on', 0), 'workflow_dispatch', 2), 'inputs', 4)
-        for operation in ('resume', 'report-init-outbox', 'report-review', 'report-batches', 'report-drain', 'report-discovery'):
+        for operation in ('resume', 'reconcile-pending', 'report-init-outbox', 'report-review', 'report-batches', 'report-drain', 'report-discovery'):
             self.assertIn(operation, field(block(inputs, 'batch_operation', 6), 'options', 8))
 
         self.assertIn("github.run_attempt == '1'", field(self.control, 'if', 4))
