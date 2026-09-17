@@ -21,6 +21,7 @@ from tools.release.carriers import (  # noqa: E402
     enroll_tag,
     enroll_verification,
     enrolled_candidate_timestamp,
+    enrolled_candidate_scope_env,
     read_candidate_identity,
     read_prepared_plan,
     read_verified_batch,
@@ -1681,6 +1682,37 @@ class CandidateEnrollmentTest(unittest.TestCase):
                            canonical_json({"author": {"timestamp": "soon"}}))
         with self.assertRaises(JournalError):
             enrolled_candidate_timestamp(root)
+
+    def test_the_scope_env_is_recovered_from_the_enrolled_source_setup(self):
+        from tools.release.carriers import enrolled_candidate_scope_env
+        from tools.release.candidate_source_setup import CandidateSourceSetup
+        from tools.release.model import canonical_json
+        from tools.release.orchestration import RequestJournal
+
+        root = self.root / "preparation" / "source-setup"
+        self.assertIsNone(enrolled_candidate_scope_env(self.root / "preparation"))
+        root.mkdir(parents=True, mode=0o700)
+        self.assertIsNone(enrolled_candidate_scope_env(self.root / "preparation"))
+        scope = {"branch": "feat/release-candidate-x", "path": "/usr/bin:/bin",
+                 "source_timestamp": 1789550000, "request": request(mode="new", requested_tag=None)}
+        with RequestJournal(root) as journal:
+            journal._write(CandidateSourceSetup.MARKER, canonical_json(scope))
+        self.assertEqual(enrolled_candidate_scope_env(self.root / "preparation"),
+                         ("/usr/bin:/bin", 1789550000))
+
+    def test_a_corrupt_scope_env_fails_closed(self):
+        from tools.release.carriers import enrolled_candidate_scope_env
+        from tools.release.candidate_source_setup import CandidateSourceSetup
+        from tools.release.model import canonical_json
+        from tools.release.orchestration import RequestJournal
+
+        root = self.root / "preparation" / "source-setup"
+        root.mkdir(parents=True, mode=0o700)
+        with RequestJournal(root) as journal:
+            journal._write(CandidateSourceSetup.MARKER,
+                           canonical_json({"path": "/usr/bin:/bin", "source_timestamp": "soon"}))
+        with self.assertRaises(JournalError):
+            enrolled_candidate_scope_env(self.root / "preparation")
 
 
 class RecoveredDispatchTest(unittest.TestCase):
