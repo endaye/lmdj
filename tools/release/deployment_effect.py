@@ -24,19 +24,12 @@ from .orchestration import JournalError, _validate_state
 from .orchestration_driver import Observation
 
 HOSTS = {
-    "deploy-web-runtime-host.yml": ("runtime", "web-runtime-host", "runtime-host-deployment-evidence", "lmdj.web-runtime-host.deployment-evidence.v2"),
-    "deploy-creator-web.yml": ("creator", "creator-web", "creator-host-deployment-evidence", "lmdj.creator-web.deployment-evidence.v1"),
+    "deploy-web-runtime-host.yml": ("runtime", "web-runtime-host", "runtime-host-deployment-evidence", "lmdj.web-runtime-host.deployment-evidence.v3"),
+    "deploy-creator-web.yml": ("creator", "creator-web", "creator-host-deployment-evidence", "lmdj.creator-web.deployment-evidence.v2"),
 }
 # Each Host's contract names the validator that may accept its documents and
 # how the frozen projection is read out of one. The projection's own shape is
 # the same either way, so `self.expected` and the comparison never change.
-#
-# `HOSTS` above still names the Netlify contracts, so nothing reaches this set
-# on the live path yet: the deployment workflows write the Cloudflare contracts,
-# and flipping `HOSTS` to match needs the effect suite's fixtures converted and
-# `release_live_host_test` dispositioned in the same change. That is #1499. The
-# routing below is proven by its own tests meanwhile, not exercised in
-# production.
 CLOUDFLARE = {
     "lmdj.web-runtime-host.deployment-evidence.v3",
     "lmdj.creator-web.deployment-evidence.v2",
