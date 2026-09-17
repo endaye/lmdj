@@ -154,9 +154,17 @@ class RequestJournal(AbstractContextManager):
         try:
             missing = []
             walk = self.root
-            while not walk.exists():
-                missing.append(walk)
-                if walk.parent == walk:
+            while True:
+                # lstat, never exists(): a symlinked ancestor would otherwise
+                # pass as an existing directory and redirect the journal.
+                info = os.lstat(walk) if os.path.lexists(walk) else None
+                if info is None:
+                    missing.append(walk)
+                elif stat.S_ISLNK(info.st_mode):
+                    _fail("journal directory or ancestor is a symlink")
+                elif not stat.S_ISDIR(info.st_mode):
+                    _fail("journal ancestor is not a directory")
+                if info is not None or walk.parent == walk:
                     break
                 walk = walk.parent
             # Each level is created private: mkdir's mode applies to that
@@ -168,7 +176,7 @@ class RequestJournal(AbstractContextManager):
                 try:
                     level.mkdir(mode=0o700)
                 except FileExistsError:
-                    pass
+                    continue
                 parent = os.open(level.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
                 try:
                     os.fsync(parent)
