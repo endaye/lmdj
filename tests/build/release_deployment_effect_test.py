@@ -107,16 +107,21 @@ class CloudflareEffectShapeTest(unittest.TestCase):
         result = self.validate(document, CLOUDFLARE_CONTRACTS["creator-web"])
         self.assertNotEqual(result.returncode, 0)
 
-    def test_the_validator_refuses_undecodable_input_with_a_reason(self):
+    def test_the_validator_refuses_unreadable_input_with_a_reason(self):
         # The effect refuses any nonzero exit, so this is about what the
-        # operator reads: a reason, not a traceback.
-        result = subprocess.run(
-            [sys.executable, str(self.VALIDATOR), "validate",
-             CLOUDFLARE_CONTRACTS["creator-web"]],
-            input=b"\xff\xfe not json", capture_output=True, timeout=10)
-        self.assertEqual(result.returncode, 2)
-        self.assertIn(b"is not a readable document", result.stderr)
-        self.assertNotIn(b"Traceback", result.stderr)
+        # operator reads: a reason, not a traceback or a decoder message. Both
+        # ways an input can be unreadable, since they reach different handlers.
+        for label, payload in (("undecodable bytes", b"\xff\xfe not json"),
+                               ("valid bytes, not JSON", b"not json at all")):
+            with self.subTest(input=label):
+                result = subprocess.run(
+                    [sys.executable, str(self.VALIDATOR), "validate",
+                     CLOUDFLARE_CONTRACTS["creator-web"]],
+                    input=payload, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(b"is not a readable document", result.stderr)
+                self.assertNotIn(b"Traceback", result.stderr)
+                self.assertNotIn(b"Expecting value", result.stderr)
 
     def test_the_validator_refuses_an_unsupported_contract(self):
         document = self.document()
