@@ -723,6 +723,31 @@ class PreparedAuthorizationTest(unittest.TestCase):
             validate_authorization(self.authorization(plan_sha256=PLAN,
                                                       tag_object_id=TAG_OBJECT))
 
+    def test_a_malformed_derived_field_fails_closed_at_the_freeze(self):
+        # `freeze_spec` is the boundary where the derived half joins the
+        # authorization, so it is where a corrupted output must be rejected —
+        # not one frame later inside `read_back`, which a future caller could
+        # skip.
+        from tools.release.prepared_step import (
+            PreparedStepError,
+            freeze_spec,
+        )
+
+        class Tag:
+            def __init__(self, object_id):
+                self.object_id = object_id
+
+        with self.assertRaises(PreparedStepError):
+            freeze_spec(self.authorization(), plan_sha256="not-a-digest",
+                        tag_state=Tag(TAG_OBJECT))
+        with self.assertRaises(PreparedStepError):
+            freeze_spec(self.authorization(), plan_sha256=PLAN,
+                        tag_state=Tag("not-an-object-id"))
+        frozen = freeze_spec(self.authorization(), plan_sha256=PLAN,
+                             tag_state=Tag(TAG_OBJECT))
+        self.assertEqual(frozen["plan_sha256"], PLAN)
+        self.assertEqual(frozen["tag_object_id"], TAG_OBJECT)
+
     def test_an_operation_from_another_request_fails_closed(self):
         from tools.release.prepared_step import (
             PreparedStepError,

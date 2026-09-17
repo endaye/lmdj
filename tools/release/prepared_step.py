@@ -104,8 +104,10 @@ def freeze_spec(authorization, *, plan_sha256, tag_state):
     than reaching `read_back`.
     """
     validate_authorization(authorization)
-    return dict(authorization, plan_sha256=plan_sha256,
+    spec = dict(authorization, plan_sha256=plan_sha256,
                 tag_object_id=tag_state.object_id)
+    validate_spec(spec)
+    return spec
 
 
 def output_relative(tag):
