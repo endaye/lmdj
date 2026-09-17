@@ -612,6 +612,31 @@ class EntryPointTest(unittest.TestCase):
                                           "adapter.log", result)
         self.assertEqual(list(elsewhere.iterdir()), [])
 
+    def test_a_shorter_credential_cannot_leave_a_longer_one_s_tail(self):
+        # Replacing in iteration order would turn "abcdef" into
+        # "[REDACTED A_TOKEN]ef" and leave the tail of a real secret behind.
+        result = type("R", (), {"returncode": 1, "stdout": "v=abcdef\n",
+                                "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"A_TOKEN": "abcd", "B_TOKEN": "abcdef"}, clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        body = path.read_text(encoding="utf-8")
+        self.assertNotIn("abcdef", body)
+        self.assertNotIn("ef\n", body)
+        self.assertIn("[REDACTED B_TOKEN]", body)
+
+    def test_a_marker_is_not_rewritten_by_another_credential(self):
+        # One pass cannot re-enter what it just wrote, so the name that says
+        # which credential leaked survives.
+        result = type("R", (), {"returncode": 1, "stdout": "v=real-secret\n",
+                                "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"FIRST_TOKEN": "real-secret",
+                         "SECOND_TOKEN": "REDACTED"}, clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        self.assertIn("[REDACTED FIRST_TOKEN]",
+                      path.read_text(encoding="utf-8"))
+
     def test_a_hung_or_unlaunchable_command_is_our_error_not_a_traceback(self):
         # main only catches CloudflareDeployError, so anything else escaping
         # here becomes a traceback and a non-2 exit.

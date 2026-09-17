@@ -374,12 +374,20 @@ def _redacted(text):
     # Values first, so a credential this process held is named in the marker
     # and an operator can tell which one leaked. The shape patterns then skip
     # what is already replaced, and catch the ones held elsewhere.
-    for name, value in os.environ.items():
-        # Below four characters a value is not a credential but is very likely
-        # a substring of unrelated output, and a mangled diagnostic helps
-        # nobody. Shape redaction below still covers assignments and headers.
-        if value and len(value) >= 4 and SECRET_NAME.search(name):
-            text = text.replace(value, f"[REDACTED {name}]")
+    # Below four characters a value is not a credential but is very likely a
+    # substring of unrelated output, and a mangled diagnostic helps nobody.
+    # Shape redaction below still covers assignments and headers at any length.
+    named = {value: name for name, value in os.environ.items()
+             if value and len(value) >= 4 and SECRET_NAME.search(name)}
+    if named:
+        # One pass, longest value first. Replacing in iteration order lets a
+        # shorter credential that is a prefix of a longer one consume only part
+        # of it and leave the tail behind; and a single pass cannot re-enter a
+        # marker it just wrote, so one credential's name cannot be rewritten by
+        # another's value.
+        values = sorted(named, key=len, reverse=True)
+        text = re.compile("|".join(re.escape(value) for value in values)).sub(
+            lambda match: f"[REDACTED {named[match.group(0)]}]", text)
     for pattern in SECRET_TEXT:
         text = pattern.sub(_mask, text)
     return text
