@@ -1303,7 +1303,7 @@ class InputAndPolicyTests(unittest.TestCase):
 
     def test_trusted_config_enforces_approved_dollar_caps_and_order(self):
         config = test_config_document()
-        for key, value in (("monthly_usd", 20.01), ("pilot_usd", 20.01), ("per_pr_usd", 1.01)):
+        for key, value in (("monthly_usd", 100.01), ("pilot_usd", 100.01), ("per_pr_usd", 1.01)):
             invalid_budget = {**config["budget"], key: value}
             with self.assertRaisesRegex(adapter.EngineError, "dollar budget"):
                 adapter._safe_config({"schema": adapter.CONFIG_SCHEMA, "budget": invalid_budget,
