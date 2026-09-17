@@ -1179,8 +1179,18 @@ class Ledger:
 
     @staticmethod
     def _record_amount(record: dict[str, Any]) -> float:
+        # Reserved records commit their worst-case reservation: that is the
+        # in-flight liability the admission gate measured. Reconciled records
+        # commit their metered actual. Uncertain records commit nothing: the
+        # outcome was never observed or never priceable, and keeping the
+        # reservation committed would permanently occupy budget that no
+        # metered spend corresponds to (Issue #1469). The record's durable
+        # reserved_amount_usd is untouched; only committed accounting treats
+        # an unobserved outcome as unbilled.
         if record.get("status") == "reconciled" and record.get("actual_amount_usd") is not None:
             return _conservative_amount(record["actual_amount_usd"])
+        if record.get("status") == "uncertain":
+            return 0.0
         return _conservative_amount(record["reserved_amount_usd"])
 
     def _committed(self, records: dict[str, dict[str, Any]], predicate) -> float:

@@ -1330,6 +1330,10 @@ class InputAndPolicyTests(unittest.TestCase):
                 ledger.admit(request_id="run:1:glm:1", provider="glm", **kwargs)
 
     def test_uncertain_reservation_is_retained(self):
+        # Issue #1469: the uncertain record keeps its durable reservation for
+        # audit, but committed accounting must stop holding the amount after
+        # the outcome is known to be unobservable, so the same reservation
+        # size is admissible again on the same envelope.
         config = test_config(per_pr=0.0002)["budget"]
         with tempfile.TemporaryDirectory() as directory:
             ledger = adapter.Ledger(Path(directory) / "ledger.jsonl", config)
@@ -1341,16 +1345,98 @@ class InputAndPolicyTests(unittest.TestCase):
                 billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
                 max_requests=8, max_provider_requests=2,
                 per_pr_usd=0.0002, monthly_usd=20.0, pilot_usd=20.0, price_revision="fixture-price-v1")
+            self.assertEqual(reservation["reserved_amount_usd"], 0.00015)
             ledger.reconcile(reservation, status="uncertain", actual_amount=None, usage=None)
+            record = ledger._records()["run:2:deepseek:1"]
+            self.assertEqual(record["status"], "uncertain")
+            self.assertEqual(record["reserved_amount_usd"], 0.00015)
+            admitted = ledger.admit(
+                approval_id="fixture-approval", attempt_id="run:2", request_id="run:2:glm:1",
+                provider="glm", model="fixture-model", priced_response_model="fixture-served-model",
+                input_price=0.000001, output_price=0.000001,
+                context_token_limit=100, output_token_cap=50, fixed_request_charge=0.0,
+                billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
+                max_requests=8, max_provider_requests=2,
+                per_pr_usd=0.0002, monthly_usd=20.0, pilot_usd=20.0, price_revision="fixture-price-v1")
+            self.assertEqual(admitted["reserved_amount_usd"], 0.00015)
+
+    def test_mixed_settled_and_failed_attempt_commits_only_metered_actual(self):
+        config = test_config(per_pr=0.0004)["budget"]
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = adapter.Ledger(Path(directory) / "ledger.jsonl", config)
+            settled = ledger.admit(
+                approval_id="fixture-approval", attempt_id="run:mix", request_id="run:mix:deepseek:1",
+                provider="deepseek", model="fixture-model", priced_response_model="fixture-served-model",
+                input_price=0.000001, output_price=0.000001,
+                context_token_limit=100, output_token_cap=50, fixed_request_charge=0.0,
+                billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
+                max_requests=8, max_provider_requests=2,
+                per_pr_usd=0.0004, monthly_usd=20.0, pilot_usd=20.0, price_revision="fixture-price-v1")
+            self.assertEqual(settled["reserved_amount_usd"], 0.00015)
+            failed = ledger.admit(
+                approval_id="fixture-approval", attempt_id="run:mix", request_id="run:mix:glm:1",
+                provider="glm", model="fixture-model", priced_response_model="fixture-served-model",
+                input_price=0.000001, output_price=0.000001,
+                context_token_limit=200, output_token_cap=50, fixed_request_charge=0.0,
+                billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
+                max_requests=8, max_provider_requests=2,
+                per_pr_usd=0.0004, monthly_usd=20.0, pilot_usd=20.0, price_revision="fixture-price-v1")
+            self.assertEqual(failed["reserved_amount_usd"], 0.00025)
+            # Both in-flight reservations hold the cap before any outcome.
             with self.assertRaisesRegex(adapter.AdmissionDenied, "request cost budget exhausted"):
                 ledger.admit(
-                    approval_id="fixture-approval", attempt_id="run:2", request_id="run:2:glm:1",
-                    provider="glm", model="fixture-model", priced_response_model="fixture-served-model",
+                    approval_id="fixture-approval", attempt_id="run:mix", request_id="run:mix:deepseek:2",
+                    provider="deepseek", model="fixture-model", priced_response_model="fixture-served-model",
                     input_price=0.000001, output_price=0.000001,
                     context_token_limit=100, output_token_cap=50, fixed_request_charge=0.0,
                     billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
                     max_requests=8, max_provider_requests=2,
-                    per_pr_usd=0.0002, monthly_usd=20.0, pilot_usd=20.0, price_revision="fixture-price-v1")
+                    per_pr_usd=0.0004, monthly_usd=20.0, pilot_usd=20.0, price_revision="fixture-price-v1")
+            ledger.reconcile(settled, status="reconciled", actual_amount=0.0001,
+                             usage={"prompt_tokens": 60, "completion_tokens": 40, "total_tokens": 100})
+            ledger.reconcile(failed, status="uncertain", actual_amount=None, usage=None)
+            records = ledger._records()
+            self.assertEqual(records["run:mix:deepseek:1"]["actual_amount_usd"], 0.0001)
+            self.assertEqual(records["run:mix:glm:1"]["status"], "uncertain")
+            # Committed converges to the settled actual plus nothing for the
+            # failed request, so an admission that the in-flight pair crowded
+            # out fits again.
+            admitted = ledger.admit(
+                approval_id="fixture-approval", attempt_id="run:mix", request_id="run:mix:deepseek:2",
+                provider="deepseek", model="fixture-model", priced_response_model="fixture-served-model",
+                input_price=0.000001, output_price=0.000001,
+                context_token_limit=100, output_token_cap=50, fixed_request_charge=0.0,
+                billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
+                max_requests=8, max_provider_requests=2,
+                per_pr_usd=0.0004, monthly_usd=20.0, pilot_usd=20.0, price_revision="fixture-price-v1")
+            self.assertEqual(admitted["reserved_amount_usd"], 0.00015)
+
+    def test_budget_exhaustion_recovers_after_reconciliation_without_cap_changes(self):
+        config = test_config(per_pr=0.0003)["budget"]
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = adapter.Ledger(Path(directory) / "ledger.jsonl", config)
+            kwargs = dict(approval_id="fixture-approval", attempt_id="run:recover",
+                          model="fixture-model", priced_response_model="fixture-served-model",
+                          input_price=0.000001, output_price=0.000001,
+                          context_token_limit=100, output_token_cap=50, fixed_request_charge=0.0,
+                          billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
+                          max_requests=8, max_provider_requests=2,
+                          per_pr_usd=0.0003, monthly_usd=20.0, pilot_usd=20.0,
+                          price_revision="fixture-price-v1")
+            first = ledger.admit(request_id="run:recover:deepseek:1", provider="deepseek", **kwargs)
+            second = ledger.admit(request_id="run:recover:glm:1", provider="glm", **kwargs)
+            with self.assertRaisesRegex(adapter.AdmissionDenied, "request cost budget exhausted"):
+                ledger.admit(request_id="run:recover:deepseek:2", provider="deepseek", **kwargs)
+            ledger.reconcile(first, status="reconciled", actual_amount=0.00005,
+                             usage={"prompt_tokens": 30, "completion_tokens": 20, "total_tokens": 50})
+            ledger.reconcile(second, status="uncertain", actual_amount=None, usage=None)
+            # The caps are unchanged; only the committed basis shrank to the
+            # settled actual plus nothing for the dead reservation, so the
+            # same size admits again.
+            third = ledger.admit(request_id="run:recover:deepseek:2", provider="deepseek", **kwargs)
+            self.assertEqual(third["reserved_amount_usd"], 0.00015)
+            records = ledger._records()
+            self.assertEqual(records["run:recover:deepseek:2"]["status"], "reserved")
 
     def test_ledger_rejects_corrupt_record_before_budget_calculation(self):
         config = test_config()["budget"]

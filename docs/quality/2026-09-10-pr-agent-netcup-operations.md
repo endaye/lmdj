@@ -32,7 +32,11 @@ and the active ledger restarted empty before installing release
 verified, runner ACLs reapplied). Known deferred defect: the reserve-full-
 context policy makes committed reservations diverge from actual cost; a
 follow-up Task should align reservations with metered usage so the ledger
-stops exhausting budgets that were never really spent.
+stops exhausting budgets that were never really spent. Resolved 2026-09-17
+by the reservation-settlement Task (#1469): the engine's committed accounting
+now counts reconciled records at their metered actual and uncertain records
+at zero, while admission-time reservations and the durable record amounts
+are unchanged, so committed totals converge to real spend after each outcome.
 
 ## Automatic push and explicit repair recheck (Issues #1322 / #1305)
 
