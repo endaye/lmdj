@@ -419,13 +419,13 @@ def _diagnostic(directory, name, result):
     deployment tool commonly echoes the token or header it failed with, and a
     retained diagnostic must not be where that ends up readable.
     """
+    # A pre-placed link at the diagnostics entry is refused. A symlinked
+    # ancestor is not detected here and is not claimed to be: that needs an
+    # O_DIRECTORY descriptor and openat, which #1487 owns across all the
+    # writers rather than at this one door.
     if directory.is_symlink():
         raise CloudflareDeployError("diagnostic directory is unsafe")
     directory.mkdir(parents=True, exist_ok=True)
-    # Containment after creation catches an ancestor that pointed elsewhere; it
-    # does not close the swap-between-check-and-open race, which #1487 owns.
-    if directory.resolve().parent != directory.parent.resolve():
-        raise CloudflareDeployError("diagnostic directory resolves outside its root")
     path = directory / name
     body = _redacted((result.stdout or "") + (result.stderr or ""))
     # O_NOFOLLOW: the directory is an operator-supplied path that other local
