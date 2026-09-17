@@ -269,9 +269,13 @@ class AuthorizedPreparedCarrier:
         tag_state = self.tag_state()
         if plan is None:
             # Nothing this step writes exists yet. A local signed tag without
-            # the output is the reconcile case prepare() owns, and prepare()
-            # refuses a local tag that does not match the reviewed target, so
-            # this is still positively absent work and not a partial result.
+            # the output is the reconcile case `prepare` owns: it reuses a tag
+            # that matches the reviewed target and signer and writes the plan,
+            # and refuses one that does not ("local tag conflict; formal tags
+            # are never moved", pinned by `release_prepare_test`'s
+            # `test_prepare_rejects_remote_or_conflicting_local_tag`). Calling
+            # that state pending instead would strand the reconcile case for
+            # good, so it stays absent work and a refusal surfaces as unknown.
             return "absent", None
         if tag_state is None:
             # read_back's own verdict for a plan whose signed tag is gone:

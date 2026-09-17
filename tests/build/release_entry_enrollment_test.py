@@ -637,6 +637,22 @@ class PreparedEnrollmentTest(unittest.TestCase):
         step = self.step()
         self.assertEqual(step.observe(state(), self.operation()).status, "absent")
 
+    def test_a_leftover_tag_prepare_refuses_surfaces_as_unknown(self):
+        # prepare owns the reconcile case and refuses a local tag that does not
+        # match the reviewed target, so classifying "tag without output" as
+        # absent work never rebuilds over drift: the driver asks the step to
+        # act and the refusal surfaces as unknown with the tag untouched.
+        self.tag = LocalTag(target_revision="9" * 40)
+        self.raises = True
+        step = self.step()
+        self.assertEqual(step.observe(state(), self.operation()).status, "absent")
+        carrier = step.carrier(state(), self.operation())
+        observed = carrier.advance(state(), self.operation(),
+                                   before_write=lambda: None)
+        self.assertEqual(observed.status, "unknown")
+        self.assertEqual(self.tag.target_revision, "9" * 40)
+        self.assertEqual(self.prepared_calls, ["lmdj-v" + BUILD])
+
     def test_a_failing_prepare_reports_unknown_and_never_retries(self):
         # prepare owns its own durable recovery, so a raised call is an unknown
         # write result the carrier reports as such: it must not swallow the
