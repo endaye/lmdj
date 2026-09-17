@@ -6,6 +6,10 @@
 #include <span>
 #include <memory>
 
+#ifdef ESP_PLATFORM
+#include "driver/i2c_master.h"
+#endif
+
 namespace lmdj::cardputer {
 
 // This entire interface, including destruction, has one audio-task owner.
@@ -91,6 +95,9 @@ struct EspAudioConfig {
   std::uint8_t codec_volume{};
   std::uint32_t dma_blocks{};
   int audio_core{};
+  // Borrowed from the Host's keyboard bus; it must outlive the audio session.
+  // Standalone audio probes may leave this null to own a dedicated bus.
+  i2c_master_bus_handle_t shared_bus{};
 };
 
 class EspAudioIo final : public AudioIo {
@@ -107,6 +114,9 @@ class EspAudioIo final : public AudioIo {
   // Reserve the next completed DMA buffer before rendering, separating DMA
   // pacing wait from render/convert/submit CPU work. write consumes it.
   bool wait_writable() noexcept;
+  // Timestamp of the delivered EOF that granted the current reservation.
+  // Audio owner only; same esp_timer microsecond clock as the service probe.
+  std::uint64_t reserved_eof_us() const noexcept;
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

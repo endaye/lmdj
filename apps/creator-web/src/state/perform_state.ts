@@ -344,6 +344,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
   let capture: PerformanceMasterCapture | null = null;
   let disconnectCapture: (() => void) | null = null;
   let launchPollGeneration = 0;
+  let replayPollGeneration = 0;
   let closePromise: Promise<void> | null = null;
   let leavePromise: Promise<void> | null = null;
   let recordSetupPromise: Promise<void> | null = null;
@@ -951,6 +952,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
     },
     async beginReplay(performanceId) {
       try {
+        replayPollGeneration += 1;
         dispatch({type: "replay", replay: await session.beginPerformanceReplay({
           replayId: createId(), performanceId,
         })});
@@ -958,6 +960,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
     },
     async stopReplay() {
       if (state.replay === null) return;
+      replayPollGeneration += 1;
       const replayId = state.replay.replayId;
       dispatch({type: "error", message: null});
       for (let attempt = 0; attempt < maximumStatusQueries; attempt += 1) {
@@ -979,9 +982,15 @@ export function createPerformController(options: PerformControllerOptions): Perf
       throw error;
     },
     async refreshReplay() {
-      if (state.replay === null) return;
+      const current = state.replay;
+      if (current === null) return;
+      const generation = replayPollGeneration;
       try {
-        const replay = await session.queryPerformanceReplayStatus(state.replay.replayId);
+        const replay = await session.queryPerformanceReplayStatus(current.replayId);
+        // A reply that outlived a stop (or a newer replay) describes a state
+        // the surface has already left; only a current reply may dispatch.
+        if (generation !== replayPollGeneration) return;
+        if (state.replay?.replayId !== current.replayId) return;
         dispatch({type: "replay", replay});
         if (replay.state !== "playing") dispatch({type: "neutral"});
       } catch (error) { fail(error); }

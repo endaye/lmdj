@@ -232,7 +232,6 @@ CASES = {
     ".github/actions/web-ci-proof/action.yml": set(LANES),
     ".github/workflows/ci-self-hosted-benchmark.yml": {"ci_contract"},
     ".github/workflows/pr-contract.yml": {"ci_contract"},
-    ".github/scripts/grok_review.py": {"ci_contract"},
     ".gitattributes": set(LANES),
 }
 
@@ -447,6 +446,24 @@ class ChangeScopeTest(unittest.TestCase):
             )
         ]
         self.assertEqual(unmatched, [], "unclassified tracked paths:\n" + "\n".join(unmatched))
+
+    def test_generated_dev_outputs_are_not_tracked(self):
+        inventory = subprocess.run(
+            ["git", "ls-files", "--", "build/dev/"], cwd=ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout
+        self.assertEqual(inventory, "",
+                         "why: generated build/dev outputs are tracked; "
+                         "remedy: remove only generated outputs from the index, retaining local files")
+
+    def test_generated_dev_outputs_are_ignored(self):
+        result = subprocess.run(
+            ["git", "check-ignore", "--no-index", "--", "build/dev/CMakeCache.txt"],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0,
+                         "why: build/dev outputs can be staged accidentally; "
+                         "remedy: restore the build/dev/ ignore rule")
 
     def test_every_document_a_test_reads_reaches_that_test_lane(self):
         # A test that asserts on a document's content is a gate over that
@@ -859,11 +876,21 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(unknown["mode"], "full")
         self.assertEqual(self.true_lanes(unknown), LANES)
 
-    def test_grok_review_script_is_ci_contract_and_similar_unknown_name_is_full(self):
-        # The workflow half of this rule went with grok-review.yml when the
-        # lane moved into ci.yml (#659); ci.yml is a full-CI control-plane
-        # path, so the job it now holds is covered by that rule instead.
-        manifest = self.classify([".github/scripts/grok_review.py"])
+    def test_retired_review_paths_keep_ownership_for_deletion_and_historical_diffs(self):
+        for filename in (
+            ".github/scripts/advisory_review_liveness.py", ".github/scripts/grok_review.py",
+            ".github/workflows/advisory-review-liveness.yml", ".github/workflows/pr-agent-credential-preflight.yml",
+        ):
+            with self.subTest(filename=filename):
+                manifest = self.classify([filename])
+                self.assertEqual(manifest["mode"], "focused")
+                self.assertEqual(self.true_lanes(manifest), {"ci_contract"})
+
+    def test_review_target_script_is_ci_contract_and_similar_unknown_name_is_full(self):
+        # `.github/scripts/pr_review_target.py` binds a review run to a PR head
+        # and publishes the trusted review; an unknown workflow with a similar
+        # name is still a full-CI control-plane path.
+        manifest = self.classify([".github/scripts/pr_review_target.py"])
         self.assertEqual(manifest["mode"], "focused")
         self.assertEqual(self.true_lanes(manifest), {"ci_contract"})
         unknown = self.classify([".github/workflows/grok-review-control.yml"])
@@ -874,6 +901,19 @@ class ChangeScopeTest(unittest.TestCase):
         manifest = self.classify([".github/workflows/pr-contract.yml"])
         self.assertEqual(manifest["mode"], "focused")
         self.assertEqual(self.true_lanes(manifest), {"ci_contract"})
+
+    def test_a_portal_witness_inventory_selects_the_portal_lane(self):
+        # The generated-only receipt evidence path binds to the PR-gate
+        # portal-provenance check run; if a witness-shaped head did not select
+        # the portal lane, every such receipt would stay pending forever.
+        manifest = self.classify([
+            "apps/architecture-portal/versioned_provenance/version-1.0.57.0.json",
+            "apps/architecture-portal/versioned_metadata/version-1.0.57.0.json",
+            "apps/architecture-portal/versioned_sidebars/version-1.0.57.0-sidebars.json",
+            "apps/architecture-portal/static/versions/1.0.57.0/manifest.json",
+        ])
+        self.assertEqual(manifest["mode"], "focused")
+        self.assertEqual(self.true_lanes(manifest), {"portal"})
 
     def test_a_scheduled_sweep_of_main_is_full_and_trusted(self):
         """#543: the daily sweep runs the complete manifest-selected set.
@@ -1136,7 +1176,7 @@ class ChangeScopeTest(unittest.TestCase):
     def test_unsafe_main_pushes_stay_full(self):
         cases = {
             "product assembly": ["products/lmdj/assembly.json"],
-            "contract": ["contracts/project/lmdj.project.v1.schema.json"],
+            "contract": ["contracts/project/lmdj.project.v5.schema.json"],
             "ci control": [".github/workflows/ci.yml"],
             "ci script": ["scripts/ci/change_scope.py"],
             "unknown path": ["invented-top-level/file.txt"],

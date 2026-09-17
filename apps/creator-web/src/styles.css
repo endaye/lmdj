@@ -8,40 +8,7 @@
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 768px; }
 button { font: inherit; }
-
-.workspace {
-  min-height: 100dvh;
-  display: grid;
-  grid-template:
-    "status status" auto
-    "rail surface" minmax(0, 1fr)
-    "pads pads" auto / 11rem minmax(0, 1fr);
-  background:
-    radial-gradient(circle at 75% 10%, #26303b 0, transparent 35%),
-    #101216;
-}
-
-.status-bar {
-  grid-area: status;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 1.5rem;
-  min-height: 4.5rem;
-  padding: .75rem 1.25rem;
-  border-bottom: 1px solid #353b45;
-  background: rgb(16 18 22 / 88%);
-}
-
-.brand { letter-spacing: .16em; }
-.brand-block { display: grid; gap: .15rem; }
-.build-identity { color: #9da6b4; font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.status-facts { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; margin: 0 auto 0 0; }
-.status-facts div { display: flex; gap: .45rem; }
-.status-facts dt, .eyebrow { color: #9da6b4; }
-.status-facts dd { margin: 0; font-variant-numeric: tabular-nums; }
-.runtime-state { display: grid; text-align: right; color: #b7ffc5; }
-.status-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.eyebrow { color: #9da6b4; }
 
 button {
   min-height: 44px;
@@ -55,56 +22,49 @@ button:not(:disabled):hover { border-color: #b7ffc5; }
 button:not(:disabled):focus-visible { outline: 3px solid #b7ffc5; outline-offset: 2px; }
 button:disabled { color: #737b87; }
 
-.mode-rail {
-  grid-area: rail;
-  display: flex;
-  flex-direction: column;
-  gap: .65rem;
-  padding: 1rem;
-  border-right: 1px solid #353b45;
-}
-
-.sequence-surface {
-  display: grid;
-  gap: 1rem;
-  padding: 1.25rem;
-}
-
-.sequence-transport,
-.sequence-settings {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-}
-
 .sequence-settings label {
   display: grid;
   gap: 0.25rem;
 }
-.sequence-settings form { display: flex; align-items: end; gap: .6rem; }
-.sequence-settings input[type="number"] { width: 5.5rem; }
-.sequence-settings input[type="range"] { width: 8rem; }
-.sequence-surface [aria-label="Sequence recovery"] article {
+.sequence-surface [aria-label="Sequence recovery"] article,
+.sequence-touch-workspace [aria-label="Sequence recovery"] article {
   display: flex; flex-wrap: wrap; align-items: end; gap: .65rem;
 }
-.sequence-transport p[role="status"] { margin: 0; min-width: 7rem; color: #b7ffc5; text-transform: capitalize; }
-.sequence-transport .transport-hint, .sequence-transport .transport-frame { margin: 0; color: #9da6b4; }
+.sequence-overview,
+.project-overview,
+.sample-overview,
+.perform-overview {
+  display: grid;
+  gap: 8px;
+  pointer-events: none;
+}
+.sequence-touch-workspace {
+  display: grid;
+  gap: 0.75rem;
+}
 .sequence-error { margin: 0; padding: .75rem 1rem; border: 1px solid #ff7777; border-radius: .65rem; color: #ffc0c0; background: #2a1719; }
 .sample-overlay-host > .sample-surface > :not(.capture-panel-dialog) {
   visibility: hidden;
 }
-.mode-button { display: grid; grid-template-columns: 1.25rem 1fr auto; gap: .5rem; align-items: center; text-align: left; }
-.mode-button.is-active { border-color: #b7ffc5; background: #232a34; }
 .mode-glyph { color: #9da6b4; text-align: center; }
-.mode-button.is-active .mode-glyph { color: #b7ffc5; }
-.mode-button small { color: #737b87; }
 
 .project-surface { grid-area: surface; min-width: 0; padding: clamp(1.25rem, 3vw, 3rem); }
 .surface-heading { display: flex; justify-content: space-between; gap: 2rem; align-items: flex-start; }
 .surface-heading h1 { margin: .25rem 0 0; font-size: clamp(1.6rem, 3vw, 3rem); }
 .eyebrow { margin: 0; text-transform: uppercase; letter-spacing: .12em; }
 .project-actions { display: flex; gap: .65rem; }
+.project-chooser-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .5rem 12px;
+}
+.project-local-count {
+  margin: 0;
+  color: #9ec9f5;
+  font-size: 10px;
+  letter-spacing: .08em;
+}
 .project-summary { display: grid; grid-template-columns: repeat(4, minmax(8rem, 1fr)); gap: .75rem; margin: 2rem 0; }
 .import-progress { display: grid; gap: .5rem; margin: 1.5rem 0 0; padding: 1rem; border: 1px solid #353b45; border-radius: .75rem; background: #171b21; }
 .import-progress p { margin: 0; }
@@ -114,9 +74,34 @@ button:disabled { color: #737b87; }
 .empty-hint { color: #9da6b4; }
 .project-summary dd { margin: .35rem 0 0; overflow-wrap: anywhere; }
 .local-projects { display: grid; gap: .75rem; padding: 0; list-style: none; }
-.local-projects li { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; border: 1px solid #353b45; border-radius: .75rem; background: #171b21; }
-.local-projects li div { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: baseline; }
+.local-projects li {
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border: 1px solid #353b45;
+  border-radius: 10px;
+  background: #171b21;
+}
+.local-projects li.is-current { background: #314352; border-color: #314352; }
+.local-projects li div { display: flex; flex-wrap: wrap; gap: .35rem 1rem; align-items: baseline; }
 .local-projects li span { color: #9da6b4; }
+.project-card-index {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: #343a34;
+  color: #adb6aa;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.local-projects li.is-current .project-card-index {
+  background: #9ec9f5;
+  color: #202321;
+}
 .project-actions input[type="file"] { display: none; }
 
 .sample-surface {
@@ -155,15 +140,15 @@ button:disabled { color: #737b87; }
   position: relative;
   min-height: 12rem;
   overflow: hidden;
-  border-radius: .65rem;
-  background: #0b0d10;
+  border-radius: 8px;
+  background: #2a2433;
 }
 .waveform-canvas svg { display: block; width: 100%; height: 12rem; }
-.waveform-canvas path[data-waveform] { fill: #80a9ff; stroke: #a9c3ff; stroke-width: 1; }
-.waveform-canvas line[data-zero-line] { stroke: #737b87; stroke-width: 1; }
-.waveform-canvas line[data-handle] { stroke: #b7ffc5; stroke-width: 3; }
+.waveform-canvas path[data-waveform] { fill: #c5a5f4; stroke: #d4c0f8; stroke-width: 1; }
+.waveform-canvas line[data-zero-line] { stroke: #5c5368; stroke-width: 1; }
+.waveform-canvas line[data-handle] { stroke: #c5a5f4; stroke-width: 2; }
 .waveform-canvas line[data-playhead] { stroke: #ffb36b; stroke-width: 2; }
-.waveform-canvas rect[data-selection-mask] { fill: rgb(3 5 8 / 62%); }
+.waveform-canvas rect[data-selection-mask] { fill: rgb(20 16 26 / 72%); }
 .waveform-unavailable { display: grid; min-height: 12rem; margin: 0; place-items: center; color: #9da6b4; }
 .waveform-grip-zone {
   position: absolute;
@@ -175,27 +160,32 @@ button:disabled { color: #737b87; }
 }
 .waveform-grip-bar {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 14px;
-  border: 1px solid #b7ffc5;
-  border-radius: 4px;
-  background: rgb(183 255 197 / 26%);
+  top: 8px;
+  bottom: 8px;
+  width: 20px;
+  border: 0;
+  border-radius: 10px;
+  background: #c5a5f4;
   pointer-events: none;
 }
 .waveform-grip-bar::before, .waveform-grip-bar::after {
   content: "";
   position: absolute;
   left: 50%;
-  width: 6px;
-  height: 6px;
-  translate: -50% 0;
-  border-radius: 50%;
-  background: #b7ffc5;
+  width: 2px;
+  height: 10px;
+  translate: -50% -50%;
+  border-radius: 1px;
+  background: #443750;
 }
-.waveform-grip-bar::before { top: 6px; }
-.waveform-grip-bar::after { bottom: 6px; }
-.waveform-grip-zone:hover + .waveform-grip-bar { background: rgb(183 255 197 / 46%); }
+.waveform-grip-bar::before { top: 42%; }
+.waveform-grip-bar::after { top: 58%; }
+.waveform-grip-zone:hover + .waveform-grip-bar { filter: brightness(1.08); }
+/* D03 widened the Sample editor's grip to 20px and recentred it on
+   GRIP_BAR_PX / 2. The Pad Capture panel shares this class but still centres
+   its grips with a hardcoded 7px, so it keeps the 14px bar that offset is
+   half of; otherwise both Capture grips sit 3px off the boundary they mark. */
+.waveform-grip-bar[data-capture-grip] { width: 14px; }
 .waveform-handle {
   position: absolute;
   top: 0;
@@ -214,11 +204,39 @@ button:disabled { color: #737b87; }
   gap: .65rem;
   align-items: center;
 }
-.waveform-values label { display: grid; grid-template-columns: auto minmax(8rem, 1fr) auto; gap: .5rem; align-items: center; flex: 1 1 14rem; }
+.waveform-values {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.waveform-value-card {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: #202321;
+  flex: 1 1 10rem;
+}
+.waveform-value-card span {
+  color: #adb6aa;
+  font-size: 8px;
+  letter-spacing: .06em;
+}
+.waveform-value-card .sample-value-input {
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #c5a5f4;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.waveform-value-card small { color: #adb6aa; }
 .sample-value-input, .sample-controls input[type="range"] {
   min-height: 44px;
   color: inherit;
-  accent-color: #b7ffc5;
+  accent-color: #c5a5f4;
 }
 .sample-value-input {
   width: 100%;
@@ -368,8 +386,6 @@ button:disabled { color: #737b87; }
   background: #11151a;
 }
 .quota-summary, .quota-usage { color: #c7ced9; }
-
-.pads { grid-area: pads; padding: 1rem 1.25rem 1.25rem; border-top: 1px solid #353b45; }
 .bank-selector { display: flex; gap: .5rem; margin-bottom: .75rem; }
 .bank-selector button { min-width: 3rem; }
 .bank-selector .is-active { color: #101216; background: #b7ffc5; border-color: #b7ffc5; }
@@ -394,8 +410,7 @@ button:disabled { color: #737b87; }
 .perform-patterns,
 .perform-fx,
 .perform-recording,
-.perform-replay,
-.perform-surface > [aria-label="Perform instrument"] {
+.perform-replay {
   border: 1px solid #353b45;
   border-radius: .85rem;
   background: rgb(23 27 33 / 92%);
@@ -439,11 +454,40 @@ button:disabled { color: #737b87; }
 }
 .perform-project-summary { margin: 0; }
 .perform-project-summary div { max-width: 12rem; }
+.perform-live-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.perform-live-title { margin: 0; letter-spacing: .08em; }
+.perform-live-cue {
+  color: #b7ffc5;
+  font-variant-numeric: tabular-nums;
+}
+.perform-pattern-slots button {
+  display: grid;
+  gap: .15rem;
+  align-content: center;
+  justify-items: start;
+  text-align: left;
+}
+.perform-slot-index { font-variant-numeric: tabular-nums; }
+.perform-slot-state { color: #9da6b4; }
 .perform-fx {
   display: grid;
-  grid-template-columns: repeat(8, minmax(3.5rem, 1fr));
-  min-height: 15rem;
+  gap: .75rem;
   padding: 1rem;
+}
+.perform-live-faders {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(3.5rem, 1fr));
+  gap: .75rem;
+}
+.perform-fx-more-bank {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(3.5rem, 1fr));
+  gap: .75rem;
 }
 .perform-fx label { display: grid; justify-items: center; gap: .5rem; }
 .perform-fx input[type="range"] {
@@ -462,7 +506,6 @@ button:disabled { color: #737b87; }
   border-color: #b7ffc5;
   background: #b7ffc5;
 }
-.perform-surface > [aria-label="Perform instrument"] { padding: .85rem; }
 .perform-recording,
 .perform-replay { padding: 1rem; }
 .perform-recording output,
@@ -514,11 +557,6 @@ button:disabled { color: #737b87; }
 .error-panel button { justify-self: start; }
 
 @media (max-width: 900px) {
-  .workspace { grid-template-columns: 4rem minmax(0, 1fr); }
-  .mode-label { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; }
-  .mode-rail { padding-inline: .5rem; }
-  .mode-button { display: flex; justify-content: center; }
-  .mode-button small { display: none; }
   .project-summary { grid-template-columns: repeat(2, minmax(8rem, 1fr)); }
   .sample-heading { display: grid; }
   .selected-sample { grid-template-columns: 1fr 1fr; }
@@ -552,3 +590,523 @@ button:disabled { color: #737b87; }
   .candidate-target { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }
 .candidate-surface .candidate-classification { display: flex; align-items: center; gap: .6rem; }
+
+.hardware-workspace {
+  min-height: 100dvh;
+  overflow: auto;
+  color: #e8eadf;
+  background: #1c1e1a;
+}
+.hardware-console {
+  position: relative;
+  width: 880px;
+  height: 592px;
+  margin: 24px auto;
+  background: #22241f;
+  flex-shrink: 0;
+}
+.hardware-console > [aria-label="Physical controls"] {
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  width: 80px;
+  height: 560px;
+}
+.hardware-console > [aria-label="Overview display"] {
+  position: absolute;
+  left: 112px;
+  top: 16px;
+  width: 752px;
+  height: 176px;
+  overflow: hidden;
+  pointer-events: none;
+  background: #141613;
+  border-radius: 4px;
+}
+.hardware-console > [aria-label="Pad matrix"] {
+  position: absolute;
+  left: 112px;
+  top: 208px;
+  width: 368px;
+  height: 368px;
+}
+.hardware-console > [aria-label="Touch workspace"] {
+  position: absolute;
+  left: 496px;
+  top: 208px;
+  width: 368px;
+  height: 368px;
+  overflow: auto;
+  padding: 16px;
+  background: #252925;
+  border-radius: 12px;
+}
+.physical-controls {
+  /* Three children (brand, encoders, keys). Empty 16px tracks would steal
+     auto-placement and squash the 2×2 knobs into a gutter. */
+  display: grid;
+  height: 560px;
+  grid-template-rows: 80px 80px 368px;
+  row-gap: 16px;
+}
+.physical-brand {
+  display: grid;
+  place-items: center;
+}
+.physical-brand svg {
+  display: block;
+  width: 80px;
+  height: 80px;
+}
+.physical-encoders,
+.physical-keys {
+  display: grid;
+  grid-template-columns: 32px 32px;
+  justify-content: space-between;
+  align-content: space-between;
+}
+.physical-encoders {
+  grid-template-rows: 32px 32px;
+  height: 80px;
+}
+.physical-keys {
+  grid-template-rows: repeat(8, 32px);
+  height: 368px;
+}
+.physical-encoder,
+.physical-key {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #f1f2e9;
+  background: #343a34;
+  border: .5px solid #50584f;
+}
+.physical-encoder {
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+.physical-encoder svg,
+.physical-key svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+  pointer-events: none;
+}
+.physical-encoder svg {
+  width: 32px;
+  height: 32px;
+}
+.physical-key.is-active {
+  color: #20251c;
+  background: #f1f2e9;
+  border: 2px solid #ddf478;
+}
+.physical-key.is-active.has-icon[aria-label="Project"] svg,
+.physical-key.is-active.has-icon[aria-label="Sample"] svg,
+.physical-key.is-active.has-icon[aria-label="Perform"] svg,
+.physical-key.is-active.has-icon[aria-label^="Perform —"] svg {
+  filter: brightness(0);
+}
+.physical-key.has-icon {
+  display: grid;
+  place-items: center;
+}
+.overview-display {
+  display: grid;
+  gap: 8px;
+  height: 100%;
+  padding: 16px;
+  pointer-events: none;
+}
+.overview-primary {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: baseline;
+}
+.overview-context,
+.overview-phase {
+  margin: 0;
+  color: #f1f2e9;
+  font-size: 12px;
+  letter-spacing: .04em;
+  font-variant-numeric: tabular-nums;
+}
+.overview-bpm {
+  margin: 0;
+  color: #ddf478;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.overview-phase {
+  color: #adb6aa;
+}
+.overview-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin: 0;
+}
+.overview-facts div { display: flex; gap: .45rem; }
+.overview-facts dt { color: #8b8e82; }
+.overview-facts dd { margin: 0; }
+.overview-build,
+.overview-grid-caption {
+  margin: 0;
+  color: #8b8e82;
+  font-size: 11px;
+}
+.hardware-console .pad-grid {
+  width: 368px;
+  height: 368px;
+  gap: 16px;
+  grid-template-columns: repeat(4, 80px);
+  grid-template-rows: repeat(4, 80px);
+}
+.hardware-console .pad {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  min-height: 80px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: #202321;
+  border: .5px solid #50584f;
+  color: #f1f2e9;
+  display: block;
+  text-align: left;
+}
+.hardware-console .pad strong {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  font-size: 9px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.hardware-console .pad kbd {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font-size: 9px;
+  background: none;
+  border: 0;
+  color: #adb6aa;
+  padding: 0;
+}
+.hardware-console .pad span {
+  position: absolute;
+  left: 8px;
+  bottom: 6px;
+  font-size: 8px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: #adb6aa;
+}
+.hardware-console .pad[data-assigned="true"] span { color: #f1f2e9; }
+.hardware-console .pad[data-assigned="true"][data-identity="0"] { box-shadow: inset 0 0 0 1px #ddf478; }
+.hardware-console .pad[data-assigned="true"][data-identity="1"] { box-shadow: inset 0 0 0 1px #f0c49a; }
+.hardware-console .pad[data-assigned="true"][data-identity="2"] { box-shadow: inset 0 0 0 1px #c9b4f0; }
+.hardware-console .pad[data-assigned="true"][data-identity="3"] { box-shadow: inset 0 0 0 1px #9ad8e0; }
+.hardware-console .pad[data-assigned="true"][data-identity="4"] { box-shadow: inset 0 0 0 1px #f0b8d0; }
+.hardware-console .pad[data-outcome="started"] { box-shadow: inset 0 0 0 2px #ddf478; }
+.touch-system {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.touch-system button { min-height: 40px; }
+.touch-fallback-note { color: #8b8e82; }
+.hardware-workspace .sequence-touch-workspace,
+.hardware-workspace .project-surface,
+.hardware-workspace .sample-surface,
+.hardware-workspace .perform-surface {
+  grid-area: auto;
+  padding: 0;
+}
+.hardware-workspace .sequence-touch-workspace h1,
+.hardware-workspace .project-surface h1,
+.hardware-workspace .sample-surface h1,
+.hardware-workspace .perform-surface h1 { font-size: 1.25rem; }
+.hardware-workspace .sample-surface .eyebrow { display: none; }
+.hardware-workspace .sample-surface h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 400;
+  letter-spacing: .04em;
+}
+.hardware-workspace .waveform-canvas,
+.hardware-workspace .waveform-unavailable { min-height: 128px; }
+.hardware-workspace .waveform-canvas svg { height: 128px; }
+.hardware-workspace .project-surface .eyebrow { display: none; }
+.hardware-workspace .project-surface h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 400;
+  letter-spacing: .04em;
+}
+.hardware-workspace .local-projects { gap: 12px; }
+.hardware-workspace .local-projects li {
+  min-height: 56px;
+  background: #202321;
+  border: 0;
+}
+.hardware-workspace .local-projects li.is-current { background: #314352; }
+.hardware-workspace .local-projects li button {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #9ec9f5;
+  color: #202321;
+}
+.hardware-workspace .project-actions button {
+  min-height: 40px;
+  border-radius: 8px;
+}
+.hardware-workspace .stage-note { display: none; }
+
+.sequence-editor-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.sequence-editor-header h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 400;
+  letter-spacing: .04em;
+}
+.sequence-editor-mode {
+  margin: 0;
+  color: #ddf478;
+  font-size: 10px;
+  letter-spacing: .08em;
+}
+.sequence-settings {
+  display: grid;
+  gap: 12px;
+}
+.sequence-pattern-select {
+  display: grid;
+  gap: 0.25rem;
+}
+.sequence-param-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.sequence-param-card {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: #202321;
+}
+.sequence-param-card p {
+  margin: 0;
+  color: #adb6aa;
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+.sequence-param-card output {
+  color: #ddf478;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.sequence-param-swing output { color: #9ec9f5; }
+.sequence-param-card input[type="range"] {
+  width: 100%;
+  accent-color: #ddf478;
+}
+.sequence-param-swing input[type="range"] { accent-color: #9ec9f5; }
+.sequence-param-card button,
+.sequence-bars-form button[type="submit"] {
+  min-height: 32px;
+  border-radius: 8px;
+}
+.sequence-segment {
+  display: grid;
+  grid-template-columns: 48px repeat(4, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+.sequence-segment span {
+  color: #adb6aa;
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+.sequence-segment button {
+  min-height: 44px;
+  border-radius: 8px;
+  background: #343a34;
+  color: #f1f2e9;
+  border: 0;
+}
+.sequence-segment button[aria-pressed="true"] {
+  background: #ddf478;
+  color: #202321;
+}
+.sequence-quantize {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #adb6aa;
+  font-size: 10px;
+  letter-spacing: .04em;
+}
+.hardware-workspace .sequence-touch-workspace h1 { font-size: 16px; }
+
+/* D04 Perform. The pictured MASTER fader, LP/HP/BP filter type, MUTE/SOLO and
+   the output meters have no Host action, so the skin covers only Launch, the
+   two named live faders, FX / MORE, HOLD and the existing panels. */
+.hardware-workspace .perform-live-header {
+  align-items: baseline;
+}
+.hardware-workspace .perform-live-title {
+  font-size: 16px;
+  letter-spacing: .08em;
+  color: #f1f2e9;
+}
+.hardware-workspace .perform-live-cue {
+  color: #ddf478;
+  font-size: 10px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.hardware-workspace .perform-patterns,
+.hardware-workspace .perform-fx,
+.hardware-workspace .perform-recording,
+.hardware-workspace .perform-replay {
+  border: 0;
+  border-radius: 10px;
+  background: #202321;
+}
+.hardware-workspace .perform-patterns,
+.hardware-workspace .perform-fx { padding: 12px; gap: 12px; }
+.hardware-workspace .perform-bank button {
+  min-height: 32px;
+  min-width: 40px;
+  border: 0;
+  border-radius: 8px;
+  background: #343a34;
+  color: #f1f2e9;
+}
+.hardware-workspace .perform-bank button[aria-pressed="true"] {
+  background: #ddf478;
+  color: #202321;
+}
+/* Section blocks: the acknowledged slot is filled, the queued slot outlined.
+   .perform-slot-state repeats both in words so colour is never the only cue. */
+.hardware-workspace .perform-pattern-slots {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.hardware-workspace .perform-pattern-slots button {
+  min-height: 56px;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: #343a34;
+  color: #f1f2e9;
+  box-shadow: none;
+}
+.hardware-workspace .perform-pattern-slots button[data-launch="pending"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px #ddf478;
+}
+.hardware-workspace .perform-pattern-slots button[data-launch="acknowledged"] {
+  background: #ddf478;
+  color: #202321;
+  box-shadow: none;
+}
+.hardware-workspace .perform-slot-index {
+  color: #adb6aa;
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+.hardware-workspace .perform-slot-id { font-size: 12px; }
+.hardware-workspace .perform-slot-state {
+  font-size: 9px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: #adb6aa;
+}
+.hardware-workspace .perform-pattern-slots
+  button[data-launch="pending"] .perform-slot-state { color: #ddf478; }
+.hardware-workspace .perform-pattern-slots
+  button[data-launch="acknowledged"] .perform-slot-index,
+.hardware-workspace .perform-pattern-slots
+  button[data-launch="acknowledged"] .perform-slot-state { color: #202321; }
+.hardware-workspace .perform-fader {
+  gap: 4px;
+  padding: 12px 8px;
+  border-radius: 10px;
+  background: #343a34;
+}
+.hardware-workspace .perform-fader-name {
+  color: #adb6aa;
+  font-size: 10px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.hardware-workspace .perform-fader-value {
+  color: #ddf478;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.hardware-workspace .perform-fader input[type="range"] {
+  block-size: 120px;
+  accent-color: #ddf478;
+}
+.hardware-workspace .perform-fx-more {
+  min-height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: #343a34;
+  color: #f1f2e9;
+  letter-spacing: .06em;
+}
+.hardware-workspace .perform-fx-more[aria-expanded="true"] {
+  background: #9ec9f5;
+  color: #202321;
+}
+.hardware-workspace .perform-fx-more-bank {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #343a34;
+}
+.hardware-workspace .perform-fx-more-bank span {
+  color: #adb6aa;
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+.hardware-workspace .perform-fx-more-bank input[type="range"] {
+  block-size: 80px;
+  accent-color: #9ec9f5;
+}
+.hardware-workspace .perform-hold {
+  min-height: 40px;
+  border: 0;
+  border-radius: 8px;
+  background: #343a34;
+  color: #f1f2e9;
+}
+.hardware-workspace .perform-hold[aria-pressed="true"] {
+  background: #ddf478;
+  color: #202321;
+}
+.hardware-workspace .perform-recording button,
+.hardware-workspace .perform-replay button {
+  min-height: 40px;
+  border-radius: 8px;
+}

@@ -10,10 +10,12 @@ is replaced, so a green test cannot come from replacing the reviewer itself.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import base64
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -27,9 +29,13 @@ from unittest import mock
 import shutil
 
 
+_MODULE_IMPORT_T0 = time.monotonic()
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
 import pr_agent_review as adapter
+
+_MODULE_IMPORT_SECONDS = time.monotonic() - _MODULE_IMPORT_T0
 
 
 FIXTURES = ROOT / "tests/fixtures/ci/pr-agent"
@@ -1037,19 +1043,106 @@ class InputAndPolicyTests(unittest.TestCase):
             adapter.authenticate_input(signed_input(enlarge))
 
     def test_wrong_side_and_outside_diff_findings_are_rejected(self):
-        wrong_side = {"review": {"key_issues_to_review": [{
-            "relevant_file": "src/example.py", "issue_header": "Bug", "issue_content": "bad",
-            "start_line": 1, "end_line": 1,
-        }]}}
-        with self.assertRaisesRegex(adapter.EngineError, "changed RIGHT-side line"):
-            adapter._validate_native_mapping(wrong_side, self.authenticated)
+        for path, start, end, reason in (
+            ("src/example.py", 1, 1, "changed RIGHT-side line"),
+            ("not-changed.py", 2, 2, "outside the changed path"),
+            ("src/example.py", 3, 2, "changed RIGHT-side line"),
+        ):
+            with self.subTest(path=path, start=start, end=end), self.assertRaisesRegex(adapter.EngineError, reason):
+                adapter._validate_native_mapping({"review": {
+                    "general_comments": "Reviewed.", "key_issues_to_review": [{
+                        "relevant_file": path, "issue_header": "Bug", "issue_content": "bad",
+                        "start_line": start, "end_line": end,
+                    }]}}, self.authenticated)
 
-        outside = {"review": {"key_issues_to_review": [{
-            "relevant_file": "not-changed.py", "issue_header": "Bug", "issue_content": "bad",
-            "start_line": 2, "end_line": 2,
-        }]}}
-        with self.assertRaisesRegex(adapter.EngineError, "outside the changed path"):
-            adapter._validate_native_mapping(outside, self.authenticated)
+    def test_yaml_block_scalar_path_anchors_to_the_exact_inventory(self):
+        mapped = adapter._validate_native_mapping({"review": {
+            "general_comments": "Reviewed.", "key_issues_to_review": [{
+                "relevant_file": "src/example.py\n", "issue_header": "Bug", "issue_content": "anchored",
+                "start_line": 2, "end_line": 3,
+            }]}}, self.authenticated)
+        self.assertEqual(mapped["findings"], [{"path": "src/example.py", "line": 2, "body": "Bug: anchored"}])
+
+    def test_exact_git_path_keeps_surrounding_whitespace(self):
+        authenticated = copy.deepcopy(self.authenticated)
+        authenticated["files"][0]["path"] = " spaced.py "
+        mapped = adapter._validate_native_mapping({"review": {
+            "general_comments": "Reviewed.", "key_issues_to_review": [{
+                "relevant_file": " spaced.py ", "issue_header": "Bug", "issue_content": "anchored",
+                "start_line": 2, "end_line": 3,
+            }]}}, authenticated)
+        self.assertEqual(mapped["findings"][0]["path"], " spaced.py ")
+
+    def test_malformed_finding_fields_are_still_rejected(self):
+        for finding in (
+            {"relevant_file": 7, "issue_header": "Bug", "issue_content": "x", "start_line": 2, "end_line": 2},
+            {"relevant_file": "src/example.py", "issue_header": "Bug", "issue_content": "", "start_line": 2, "end_line": 2},
+            {"relevant_file": "src/example.py", "issue_header": "Bug", "issue_content": "x", "start_line": "2", "end_line": 2},
+        ):
+            with self.subTest(finding=finding), self.assertRaisesRegex(adapter.EngineError, "invalid typed fields"):
+                adapter._validate_native_mapping({"review": {"general_comments": "s", "key_issues_to_review": [finding]}},
+                                                 self.authenticated)
+        duplicate = {"relevant_file": "src/example.py", "issue_header": "Bug", "issue_content": "x", "start_line": 2, "end_line": 2}
+        with self.assertRaisesRegex(adapter.EngineError, "duplicated"):
+            adapter._validate_native_mapping({"review": {"general_comments": "s", "key_issues_to_review": [duplicate, dict(duplicate)]}},
+                                             self.authenticated)
+
+    def test_prompt_lists_the_changed_right_side_lines_of_every_hunk(self):
+        prompt = adapter.render_prompt_input(self.authenticated)
+        for file in self.authenticated["files"]:
+            for hunk in file["hunks"]:
+                header = f"BEGIN HUNK RIGHT-SIDE LINES path={file['path']} id={hunk['id']}"
+                self.assertIn(header, prompt)
+                block = prompt.split(header, 1)[1].split("END HUNK RIGHT-SIDE LINES", 1)[0]
+                listed = [int(line.split(":", 1)[0]) for line in block.splitlines()[1:] if line.strip()]
+                self.assertEqual(listed, hunk["right_lines"])
+        # Coverage still sees the exact hunk bytes and content blocks.
+        coverage = adapter._make_coverage(self.authenticated, provider="deepseek", model=model_identity(), prompt=prompt, usage=None)
+        self.assertTrue(coverage["complete"])
+
+    def test_trusted_owner_is_root_or_the_current_account(self):
+        self.assertTrue(adapter._trusted_owner(0))
+        self.assertTrue(adapter._trusted_owner(os.getuid()))
+        self.assertFalse(adapter._trusted_owner(os.getuid() + 1_000_003))
+
+    def test_witness_cli_prints_the_trusted_configuration_or_a_bounded_error(self):
+        witness = {"schema": adapter.WITNESS_SCHEMA, "provider_order": ["deepseek"], "providers": {}, "engine": {"name": "pr-agent"}}
+        with mock.patch.object(adapter, "describe_engine", return_value=witness), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(adapter._main(["--witness", "--config", "/x/runtime.toml"]), 0)
+        self.assertEqual(json.loads(out.getvalue()), witness)
+        with mock.patch.object(adapter, "describe_engine", side_effect=adapter.EngineError("engine_unavailable", "bounded")), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(adapter._main(["--witness"]), 2)
+        self.assertEqual(json.loads(out.getvalue())["error_class"], "engine_unavailable")
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            adapter._main([])
+
+    def test_describe_engine_binds_config_and_installed_identity(self):
+        if not SOURCE_ROOT.joinpath("pr_agent").is_dir():
+            self.skipTest(f"pinned PR-Agent source is unavailable: {SOURCE_ROOT}")
+        with tempfile.TemporaryDirectory() as directory:
+            source = bound_source(SOURCE_ROOT, Path(directory) / "source")
+            config_path = source / "runtime.toml"
+            config_path.write_text((ROOT / "scripts/ci/pr-agent/runtime.toml").read_text(encoding="utf-8"), encoding="utf-8")
+            config_path.chmod(0o644)
+            with mock.patch.object(adapter, "TRUSTED_ENGINE_ROOT", source), \
+                    mock.patch.object(adapter, "TRUSTED_CONFIG_ROOT", source):
+                try:
+                    witness = adapter.describe_engine(config_path=config_path, source_root=source,
+                                                      engine_cwd=Path(directory) / "engine")
+                except adapter.EngineError as exc:
+                    self.skipTest(f"pinned dependencies unavailable in this interpreter: {exc.safe_message}")
+            config_identity = adapter._file_identity(config_path)
+            adapter_identity = adapter._file_identity(source / "pr_agent_review.py")
+        self.assertEqual(witness["schema"], adapter.WITNESS_SCHEMA)
+        self.assertEqual(witness["provider_order"], ["deepseek"])
+        self.assertTrue(witness["providers"]["deepseek"]["enabled"])
+        self.assertEqual(witness["providers"]["deepseek"]["model"], "deepseek/deepseek-flash")
+        self.assertEqual(witness["engine"]["name"], "pr-agent")
+        self.assertEqual(witness["engine"]["source_commit"], adapter.UPSTREAM_COMMIT)
+        self.assertEqual(witness["engine"]["runtime_config"], config_identity)
+        self.assertEqual(witness["engine"]["bundle"]["adapter_sha256"], adapter_identity["sha256"])
 
     def test_missing_native_findings_list_is_not_a_clean_review_without_yaml_dependency(self):
         with self.assertRaisesRegex(adapter.EngineError, "missing its findings list"):
@@ -1062,6 +1155,55 @@ class InputAndPolicyTests(unittest.TestCase):
             adapter._validate_native_mapping({"review": {
                 "general_comments": "clean", "key_issues_to_review": [], "ignored": "x",
             }}, self.authenticated)
+
+    def test_refused_repair_verdict_keeps_the_validated_review(self):
+        """One unusable recheck verdict must not void the head's review."""
+        request = {"comment_id": 70, "thread_id": "T70", "original_head": "a" * 40,
+                   "path": "src/example.py", "original_line": 2, "body": "Return value must be two.",
+                   "original_content": "def value():\n    return 1\n",
+                   "fix_diff": "@@ -1,2 +1,2 @@\n def value():\n-    return 1\n+    return 2\n",
+                   "conversation": [{"id": 70, "author_id": 20, "body": "Return value must be two.",
+                                     "updated_at": "2026-09-14T00:00:00Z"}]}
+        authenticated = adapter.authenticate_input(
+            signed_input(lambda document: document.update(repair_request=request)))
+        verdict = {"comment_id": 70, "verdict": "resolved",
+                   "reason": "The return literal is now two, as the original finding required.",
+                   # The exact observed defect: the quote is a substring of the
+                   # original content, but it does not cover the finding anchor.
+                   "original_quote": "def value():", "current_quote": "    return 2",
+                   "start_line": 2, "end_line": 2}
+        native = {"review": {"general_comments": "Reviewed.", "key_issues_to_review": [],
+                             "repair_recheck": verdict}}
+        # The verdict validator itself stays strict for the publication paths.
+        with self.assertRaisesRegex(adapter.EngineError,
+                                    "original source quote does not cover the finding anchor"):
+            adapter.validate_repair_verdicts(native, authenticated)
+        self.assertEqual(adapter._validate_native_mapping(native, authenticated),
+                         {"summary": "Reviewed.", "findings": []})
+        # Ordinary review rules are not relaxed by that tolerance.
+        with self.assertRaisesRegex(adapter.EngineError, "model-supplied summary"):
+            adapter._validate_native_mapping({"review": {"key_issues_to_review": [], "repair_recheck": verdict}},
+                                             authenticated)
+
+    def test_malformed_authenticated_repair_context_still_fails_closed(self):
+        """The verdict tolerance must not swallow an input-invalid refusal."""
+        request = {"comment_id": 70, "thread_id": "T70", "original_head": "a" * 40,
+                   "path": "src/example.py", "original_line": 2, "body": "Return value must be two.",
+                   "original_content": "def value():\n    return 1\n",
+                   # The authenticated context, not the model: no hunk header parses.
+                   "fix_diff": "@@ malformed @@\n def value():\n",
+                   "conversation": [{"id": 70, "author_id": 20, "body": "Return value must be two.",
+                                     "updated_at": "2026-09-14T00:00:00Z"}]}
+        authenticated = adapter.authenticate_input(
+            signed_input(lambda document: document.update(repair_request=request)))
+        verdict = {"comment_id": 70, "verdict": "resolved",
+                   "reason": "The return literal is now two, as the original finding required.",
+                   "original_quote": "    return 1", "current_quote": "    return 2",
+                   "start_line": 2, "end_line": 2}
+        native = {"review": {"general_comments": "Reviewed.", "key_issues_to_review": [],
+                             "repair_recheck": verdict}}
+        with self.assertRaisesRegex(adapter.EngineError, "malformed hunk header"):
+            adapter._validate_native_mapping(native, authenticated)
 
     def test_actual_repository_config_is_valid_and_inactive_before_engine_import(self):
         source_bytes = (ROOT / "scripts/ci/pr-agent/config.toml").read_bytes()
@@ -1627,7 +1769,9 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(body["model"], "deepseek-flash")
         self.assertEqual(body["max_tokens"], 4096)
         self.assertNotIn("max_completion_tokens", body)
-        for forbidden in ("thinking", "reasoning_effort", "tools", "tool_choice", "web_search_options", "service_tier"):
+        # DeepSeek V4 thinks by default; the engine asks for plain output.
+        self.assertEqual(body["thinking"], {"type": "disabled"})
+        for forbidden in ("reasoning_effort", "tools", "tool_choice", "web_search_options", "service_tier"):
             self.assertNotIn(forbidden, body)
         self.assertEqual(request.headers["authorization"], "Bearer fixture-secret")
         return body
@@ -1652,7 +1796,7 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             payload["usage"] = usage
         return httpx.Response(200, request=request, json=payload)
 
-    def test_flash_real_handler_serializes_default_thinking_and_prices_full_reasoning_usage(self):
+    def test_flash_real_handler_disables_thinking_on_the_wire_and_prices_full_usage(self):
         self.configure_flash_fixture()
         wire_calls = []
 
@@ -2019,6 +2163,16 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(calls[0]["max_retries"], 0)
         prompt = "\n".join(str(item.get("content", "")) for item in calls[0]["messages"])
         self.assertIn("nonempty review.general_comments summary", prompt)
+        system_prompt = next(item["content"] for item in calls[0]["messages"] if item["role"] == "system")
+        example = system_prompt.split("Example output:\n", 1)[1].split("Write your own summary", 1)[0]
+        self.assertNotIn("```", example)
+        # Validate the example actually sent through the real PRReviewer and
+        # LiteLLM handler. The upstream example asks for fields our consumer
+        # rejects even when their feature flags are disabled.
+        example_native = adapter._strict_native_yaml(upstream, example)
+        self.assertEqual(set(example_native["review"]), {"general_comments", "key_issues_to_review"})
+        self.assertNotIn("relevant_tests", system_prompt)
+        self.assertNotIn("security_concerns", system_prompt)
         for expected in ("return 1", "return 2", "removed content", "src-example-h1", "obsolete-h1"):
             self.assertIn(expected, prompt)
         self.assertNotIn("must-not-leak", prompt)
@@ -2040,6 +2194,78 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             "why: the trusted source must not acquire unverified bytecode during import; "
             "remedy: keep PYTHONDONTWRITEBYTECODE enabled for the engine boundary",
         )
+
+    def test_repair_context_crosses_real_handler_and_verdict_resolves_selected_thread(self):
+        from ci_review_recheck_test import Platform, native_fixture
+        api = Platform()
+        self.addCleanup(api.history.source.tearDown)
+        request = api.collect()
+        self.input_path.write_text(json.dumps(api.document), encoding="utf-8")
+        calls = []
+
+        async def completion(**kwargs):
+            calls.append(kwargs)
+            prompt = "\n".join(m["content"] for m in kwargs["messages"])
+            self.assertIn(adapter.repair_prompt_block(request), prompt)
+            self.assertIn("An author saying fixed/done", prompt)
+            self.assertIsNone(os.environ.get("GITHUB_TOKEN"))
+            # Return the quote syntax actually shown at the real handler seam,
+            # rather than bypassing YAML formatting with a JSON response.
+            quote_example = prompt.split("Source quote encoding example:\n", 1)[1].split("End source quote example.", 1)[0]
+            expected = native_fixture()["review"]["repair_recheck"]
+            response_yaml = ("review:\n  general_comments: The changed return value is two.\n"
+                             "  key_issues_to_review: []\n  repair_recheck:\n"
+                             "    comment_id: 70\n    verdict: resolved\n"
+                             + "    reason: " + json.dumps(expected["reason"]) + "\n"
+                             + "    start_line: 2\n    end_line: 2\n" + quote_example)
+            return FakeCompletion({"model": "fixture-deepseek-served", "model_version": "fixture-version-1",
+                                   "choices": [{"message": {"content": response_yaml}, "finish_reason": "stop"}],
+                                   "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}})
+
+        result, _, ledger = self.run_with_fake(completion)
+        self.assertEqual(result["status"], "reviewed", result)
+        attempt = result["attempts"][result["selected_attempt"]]
+        self.assertTrue(attempt["coverage"]["complete"])
+        self.assertEqual(attempt["native_review"], native_fixture())
+        self.assertTrue(api.publish(attempt["native_review"])["resolved"])
+        self.assertEqual(api.writes, ["reply", "resolveReviewThread"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([json.loads(line)["status"] for line in ledger.read_text().splitlines()], ["reserved", "reconciled"])
+
+    def test_push_batch_crosses_real_handler_once_and_resolves_each_thread(self):
+        from ci_review_recheck_test import BatchPlatform
+        api = BatchPlatform()
+        self.addCleanup(api.history.source.tearDown)
+        requests, _ = api.collect_batch()
+        self.input_path.write_text(json.dumps(api.document), encoding="utf-8")
+        calls = []
+
+        async def completion(**kwargs):
+            import yaml
+            calls.append(kwargs)
+            prompt = "\n".join(m["content"] for m in kwargs["messages"])
+            for request in requests:
+                self.assertIn(adapter.repair_prompt_block(request), prompt)
+            self.assertIn("repair_rechecks, a YAML list", prompt)
+            self.assertIsNone(os.environ.get("GITHUB_TOKEN"))
+            numbered = json.loads(prompt.split("BEGIN LMDJ REPAIR CURRENT SOURCE\n", 1)[1].split("\nEND LMDJ REPAIR CURRENT SOURCE", 1)[0])
+            quoted = next(row for row in numbered["lines"] if row["text"] == "    return 2")
+            native = api.native()
+            for verdict in native["review"]["repair_rechecks"]:
+                verdict.update(current_quote=quoted["text"], start_line=quoted["line"], end_line=quoted["line"])
+            return FakeCompletion({"model": "fixture-deepseek-served",
+                "choices": [{"message": {"content": yaml.safe_dump(native, default_style='"')}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}})
+
+        result, _, ledger = self.run_with_fake(completion)
+        self.assertEqual(result["status"], "reviewed", result)
+        attempt = result["attempts"][result["selected_attempt"]]
+        self.assertTrue(attempt["coverage"]["complete"])
+        receipt = api.publish_batch(attempt["native_review"])
+        self.assertEqual(len(receipt["receipts"]), 2)
+        self.assertEqual(api.states, {"T70": True, "T71": True})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([json.loads(line)["status"] for line in ledger.read_text().splitlines()], ["reserved", "reconciled"])
 
     def test_stock_reviewer_without_funding_uses_only_the_review_post(self):
         """The actual stock handler must reach review transport without balance work."""
@@ -2143,6 +2369,7 @@ class RealHandlerIntegrationTests(unittest.TestCase):
                 self.assertEqual(result["status"], "not-reviewed")
                 self.assertEqual(result["attempts"][0]["error_class"], "invalid_output")
                 self.assertEqual(result["attempts"][0]["usage"]["prompt_tokens"], 10)
+                self.assertIn(f"finish_reason={finish_reason or 'unknown'}", result["attempts"][0]["error"])
                 self.assertEqual(len(calls), 1)
                 self.assertEqual(
                     {json.loads(line)["status"] for line in ledger.read_text().splitlines()},
@@ -2470,6 +2697,56 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(adapter.EngineError, "empty or oversized"):
             adapter._strict_native_yaml(upstream, "x" * (adapter.MAX_NATIVE_OUTPUT_BYTES + 1))
 
+    def test_single_fenced_yaml_reaches_actual_handler_review(self):
+        async def fake_acompletion(**kwargs):
+            return FakeCompletion({
+                "model": "fixture-deepseek-served",
+                "choices": [{"message": {"content": (
+                    "```yaml\nreview:\n  general_comments: |-\n"
+                    "    Checked error handling: caller state is preserved.\n"
+                    "  key_issues_to_review: []\n```\n"
+                )}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            })
+
+        result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "reviewed", result["attempts"][0]["error"])
+        attempt = result["attempts"][0]
+        self.assertEqual(attempt["review"], {
+            "summary": "Checked error handling: caller state is preserved.", "findings": [],
+        })
+        self.assertTrue(attempt["coverage"]["complete"])
+        self.assertEqual(attempt["usage"]["num_ai_calls"], 1)
+        self.assertEqual([json.loads(line)["status"] for line in ledger.read_text().splitlines()],
+                         ["reserved", "reconciled"])
+
+    def test_yaml_envelope_does_not_hide_invalid_documents(self):
+        hostile = self.root / "engine"
+        hostile.mkdir()
+        with adapter._isolated_environment(hostile, "__never_read__", "__never_read__"):
+            upstream = adapter._import_upstream(self.source_root)
+        valid = "review:\n  general_comments: clean\n  key_issues_to_review: []\n"
+        cases = [
+            "prose\n```yaml\n" + valid + "```",
+            "```yaml\n" + valid + "```\nprose",
+            "```yaml\n" + valid + "```\n```yaml\n" + valid + "```",
+            "```yaml\n" + valid,
+            "```yaml\nreview:\n  general_comments: one\n  general_comments: two\n  key_issues_to_review: []\n```",
+            "```yaml\nreview: &r\n  general_comments: clean\n  key_issues_to_review: []\n```",
+            "```yaml\n" + valid + "  extra_field: forbidden\n```",
+        ]
+        for text in cases:
+            with self.subTest(text=text), self.assertRaises(adapter.EngineError):
+                adapter._strict_native_yaml(upstream, text)
+
+    def test_yaml_syntax_diagnostic_has_location_and_no_model_text(self):
+        text = "review:\n  general_comments: secret-marker: invalid\n  key_issues_to_review: []\n"
+        with self.assertRaises(adapter.EngineError) as raised:
+            adapter._strict_native_yaml({}, text)
+        self.assertIn("line=2", raised.exception.safe_message)
+        self.assertIn("sha256=" + hashlib.sha256(text.encode()).hexdigest(), raised.exception.safe_message)
+        self.assertNotIn("secret-marker", raised.exception.safe_message)
+
     def test_oversized_raw_prediction_fails_at_the_actual_handler_boundary(self):
         calls = []
 
@@ -2764,6 +3041,67 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         self.assertEqual({record["status"] for record in records}, {"reserved", "uncertain"})
 
 
+CHILD_PROGRESS_TIMEOUT_SECONDS = 120
+CHILD_TOTAL_CEILING_SECONDS = 1200
+
+
+def run_child_with_watchdog(command, *, cwd, env):
+    """Run the integration child, killing it on no test progress, not on slowness.
+
+    The child's unittest transcript is streamed line by line (-u keeps the
+    pipe flushed); every received line is test activity and resets the
+    progress timer.  Returns (completed_process, stalled, hit_ceiling).
+    """
+    import threading
+
+    process = subprocess.Popen(
+        command, cwd=cwd, env=env, text=True, bufsize=1,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    activity = threading.Event()
+
+    def drain(stream, sink):
+        for line in stream:
+            sink.append(line)
+            activity.set()
+
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+    readers = [
+        threading.Thread(target=drain, args=(process.stdout, stdout_lines), daemon=True),
+        threading.Thread(target=drain, args=(process.stderr, stderr_lines), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    stalled = False
+    hit_ceiling = False
+    deadline = time.monotonic() + CHILD_PROGRESS_TIMEOUT_SECONDS
+    ceiling = time.monotonic() + CHILD_TOTAL_CEILING_SECONDS
+    while process.poll() is None:
+        now = time.monotonic()
+        if now >= ceiling:
+            hit_ceiling = True
+            break
+        if now >= deadline:
+            stalled = True
+            break
+        # One-second quantum so a silently finished child is reaped promptly;
+        # any transcript line re-arms the progress timer.
+        activity.wait(timeout=1.0)
+        if activity.is_set():
+            activity.clear()
+            deadline = time.monotonic() + CHILD_PROGRESS_TIMEOUT_SECONDS
+    if stalled or hit_ceiling:
+        process.kill()
+    process.wait()
+    for reader in readers:
+        reader.join(timeout=5)
+    completed = subprocess.CompletedProcess(
+        command, process.returncode, "".join(stdout_lines), "".join(stderr_lines),
+    )
+    return completed, stalled, hit_ceiling
+
+
 class IntegrationProxyTests(unittest.TestCase):
     def test_litellm_import_uses_bundled_cost_map_without_metadata_http(self):
         """The pinned engine import must not fetch mutable LiteLLM metadata."""
@@ -2840,6 +3178,63 @@ print(json.dumps({"calls": calls, "source": info, "model_cost_entries": len(lite
             f"the first LiteLLM import\nstdout={completed.stdout}\nstderr={completed.stderr}",
         )
 
+    def test_watchdog_allows_a_slow_but_progressing_child(self):
+        child = (
+            "import sys, time\n"
+            "for tick in range(10):\n"
+            "    print(f'test_tick_{tick} ... ok', file=sys.stderr, flush=True)\n"
+            "    time.sleep(0.2)\n"
+        )
+        with mock.patch.multiple(
+            __name__, CHILD_PROGRESS_TIMEOUT_SECONDS=1.0, CHILD_TOTAL_CEILING_SECONDS=30.0,
+        ):
+            completed, stalled, hit_ceiling = run_child_with_watchdog(
+                [sys.executable, "-u", "-c", child], cwd=ROOT, env=dict(os.environ),
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertFalse(stalled, "a progressing child must never be stalled")
+        self.assertFalse(hit_ceiling)
+        self.assertIn("test_tick_9 ... ok", completed.stderr)
+
+    def test_watchdog_kills_a_hung_child_and_names_the_test_in_flight(self):
+        child = (
+            "import sys, time\n"
+            "print('test_started ... ', file=sys.stderr, flush=True)\n"
+            "time.sleep(30)\n"
+        )
+        with mock.patch.multiple(
+            __name__, CHILD_PROGRESS_TIMEOUT_SECONDS=0.5, CHILD_TOTAL_CEILING_SECONDS=30.0,
+        ):
+            started = time.monotonic()
+            completed, stalled, hit_ceiling = run_child_with_watchdog(
+                [sys.executable, "-u", "-c", child], cwd=ROOT, env=dict(os.environ),
+            )
+            elapsed = time.monotonic() - started
+        self.assertTrue(stalled)
+        self.assertFalse(hit_ceiling)
+        self.assertLess(elapsed, 10, "the hung child must be killed near the progress timeout")
+        self.assertIn("test_started", completed.stderr)
+        self.assertNotEqual(completed.returncode, 0)
+
+    def test_watchdog_total_ceiling_stops_a_forever_progressing_child(self):
+        child = (
+            "import sys, time\n"
+            "while True:\n"
+            "    print('progress', file=sys.stderr, flush=True)\n"
+            "    time.sleep(0.1)\n"
+        )
+        with mock.patch.multiple(
+            __name__, CHILD_PROGRESS_TIMEOUT_SECONDS=30.0, CHILD_TOTAL_CEILING_SECONDS=1.0,
+        ):
+            started = time.monotonic()
+            completed, stalled, hit_ceiling = run_child_with_watchdog(
+                [sys.executable, "-u", "-c", child], cwd=ROOT, env=dict(os.environ),
+            )
+            elapsed = time.monotonic() - started
+        self.assertFalse(stalled, "progress means never stalled")
+        self.assertTrue(hit_ceiling)
+        self.assertLess(elapsed, 10, "the ceiling kill must land near the ceiling")
+
     def test_real_handler_suite_runs_in_pinned_python_environment(self):
         if os.environ.get("PR_AGENT_RUN_INTEGRATION") != "1":
             self.skipTest(
@@ -2869,10 +3264,35 @@ print(json.dumps({"calls": calls, "source": info, "model_cost_entries": len(lite
         environment = dict(os.environ)
         environment["PR_AGENT_RUN_INTEGRATION"] = "1"
         environment["PR_AGENT_TEST_SOURCE_ROOT"] = str(source_root)
-        completed = subprocess.run(
-            [str(runtime), str(Path(__file__)), "--integration-child"],
-            cwd=ROOT, env=environment, text=True, capture_output=True, timeout=120,
-        )
+        # The defect this run guards is a HUNG child (e.g. a network-guard
+        # violation looping), not a slow one: the suite's work is legitimate
+        # and host contention scales it (measured 38.5s idle on an M-series
+        # Mac, >120s on a contended shared runner, #1389).  A total wall cap
+        # cannot tell the two apart, so the instrument is a no-progress
+        # watchdog on the child's streamed test transcript (-u keeps the pipe
+        # line-flushed): 120s without any test activity kills the child and
+        # the transcript names the test in flight.  A generous total ceiling
+        # stays as the guard against a child that emits progress forever.
+        command = [str(runtime), "-u", str(Path(__file__)), "--integration-child"]
+        completed, stalled, ceiling = run_child_with_watchdog(command, cwd=ROOT, env=environment)
+        if stalled:
+            self.fail(
+                "why: the integration child made no test progress for "
+                f"{CHILD_PROGRESS_TIMEOUT_SECONDS} seconds and was killed as hung; the partial "
+                "transcript below names the test in flight when the watchdog fired, and the "
+                "child's timing trace attributes import versus suite time; remedy: "
+                "investigate the named test for a hang — a slow but progressing "
+                "run is not a failure and must not change this watchdog\n"
+                f"{completed.stdout}\n{completed.stderr}"
+            )
+        if ceiling:
+            self.fail(
+                "why: the integration child emitted progress past the "
+                f"{CHILD_TOTAL_CEILING_SECONDS}-second total ceiling and was killed; the partial "
+                "transcript below shows the unbounded phase; remedy: attribute the "
+                "overrun to a phase before changing the ceiling, the work, or the host\n"
+                f"{completed.stdout}\n{completed.stderr}"
+            )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
 
@@ -2886,5 +3306,14 @@ def run_suite(integration_child=False):
 
 
 if __name__ == "__main__":
-    failed = not run_suite("--integration-child" in sys.argv).wasSuccessful()
+    integration_child = "--integration-child" in sys.argv
+    suite_t0 = time.monotonic()
+    failed = not run_suite(integration_child).wasSuccessful()
+    print(
+        f"timing schema=lmdj.ci-pr-agent-phase-timing.v1 "
+        f"role={'integration-child' if integration_child else 'parent'} "
+        f"module_import_seconds={_MODULE_IMPORT_SECONDS:.3f} "
+        f"suite_seconds={time.monotonic() - suite_t0:.3f}",
+        file=sys.stderr,
+    )
     raise SystemExit(1 if failed else 0)

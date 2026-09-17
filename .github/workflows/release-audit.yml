@@ -39,7 +39,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
-          node-version: "22"
+          node-version: "26"
 
       # The repository is private and the checkout deliberately persists no
       # credential, so the steps whose git commands must reach the canonical
@@ -80,7 +80,7 @@ jobs:
           fi
 
       - name: Retain the audit report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: always()
         with:
           name: release-audit-${{ github.run_id }}

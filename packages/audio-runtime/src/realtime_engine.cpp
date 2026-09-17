@@ -210,6 +210,7 @@ void RealtimeEngine::publish_audio_observation() noexcept {
       applied_tempo_updates_,
       start_epoch_, observed_claimed_through_,
       observed_current_pattern_generation_, observed_audio_pending_,
+      transport_canceled_publications_,
   });
 }
 
@@ -454,9 +455,10 @@ void RealtimeEngine::apply_published_pattern(
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_audio_observation};
   const auto current =
       current_pattern_slot_.load(std::memory_order_relaxed);
+  const auto preserve_phase = pattern_slots_[publication.slot].preserve_phase;
   if (current != kNoPatternSlot) {
     for (auto& voice : voices_) {
-      if (voice.active && voice.pattern_slot == current) {
+      if (!preserve_phase && voice.active && voice.pattern_voice) {
         stop_voice(voice, runtime_frame);
       }
     }
@@ -468,13 +470,24 @@ void RealtimeEngine::apply_published_pattern(
     }
   }
   auto& next = pattern_slots_[publication.slot];
+  pattern_applied_frames_[publication.slot] = runtime_frame;
   next.state.store(PatternState::current, std::memory_order_release);
   current_pattern_slot_.store(publication.slot, std::memory_order_release);
-  pattern_origin_frame_ = runtime_frame;
+  if (!preserve_phase) pattern_origin_frame_ = runtime_frame;
   observed_current_pattern_generation_ = publication.generation;
   observed_audio_pending_ = {};
   publish_transport_decision();
   pattern_event_index_ = 0;
+  if (preserve_phase && runtime_frame >= pattern_origin_frame_) {
+    const auto local_frame =
+        (runtime_frame - pattern_origin_frame_) % next.pattern->loop_frames();
+    const auto& events = next.pattern->events();
+    pattern_event_index_ = static_cast<std::size_t>(std::lower_bound(
+        events.begin(), events.end(), local_frame,
+        [](const PreparedPatternEvent& event, std::uint64_t frame) {
+          return event.start_frame < frame;
+        }) - events.begin());
+  }
   audio_pending_pattern_generation_.store(0, std::memory_order_release);
   applied_pattern_publications_ += 1;
 }
@@ -518,12 +531,14 @@ void RealtimeEngine::start_pattern_voice(
   voice->pattern_voice = true;
   voice->origin = PadControlOrigin::performance_replay;
   voice->pattern_slot = current_pattern_slot_.load(std::memory_order_relaxed);
+  voice->pattern_generation = pattern_slots_[voice->pattern_slot].generation;
   voice->active = true;
   voice_scan_extent_ = std::max(
-      voice_scan_extent_, static_cast<std::size_t>(voice - voices_.data()) + 1);
+      voice_scan_extent_, static_cast<std::size_t>(voice - voices_.begin()) + 1);
   ++pattern_slots_[voice->pattern_slot].active_voices;
   started_voices_ += 1;
   active_voices_ += 1;
+  peak_voices_ = std::max(peak_voices_, active_voices_);
 }
 
 void RealtimeEngine::schedule_pattern_events(
@@ -798,6 +813,200 @@ PublishResult RealtimeEngine::publish_sample_bank(
   return PublishResult::accepted;
 }
 
+foundation::Result<void> RealtimeEngine::enable_pattern_transport(
+    std::uint64_t generation) {
+  if (state_.load(std::memory_order_acquire) != RealtimeState::stopped ||
+      generation == 0 || generation <= last_pattern_transport_generation_) {
+    return invalid_argument("Pattern transport requires a fresh quiescent generation");
+  }
+  pattern_transport_enabled_ = true;
+  pattern_transport_generation_ = generation;
+  last_pattern_transport_generation_ = generation;
+  pattern_transport_epoch_ = 0;
+  return foundation::Result<void>::success();
+}
+
+PatternTransportSubmit RealtimeEngine::submit_pattern_transport(
+    const PatternTransportCommand& command) {
+  if (!pattern_transport_enabled_) return PatternTransportSubmit::disabled;
+  if (state_.load(std::memory_order_acquire) != RealtimeState::running)
+    return PatternTransportSubmit::not_running;
+  if (pattern_transport_generation_ == 0 ||
+      command.runtime_generation != pattern_transport_generation_)
+    return PatternTransportSubmit::stale_generation;
+  if (pattern_transport_reserved_) return PatternTransportSubmit::busy;
+  if (command.epoch == 0 || command.epoch <= pattern_transport_epoch_ ||
+      (pattern_transport_epoch_ == 0 && command.epoch != 1))
+    return PatternTransportSubmit::stale_epoch;
+  if (command.action != PatternTransportAction::start &&
+      command.action != PatternTransportAction::stop &&
+      command.action != PatternTransportAction::fence)
+    return PatternTransportSubmit::invalid_action;
+  if (command.action == PatternTransportAction::start && control_pattern_playing_)
+    return PatternTransportSubmit::invalid_action;
+  if (command.action == PatternTransportAction::fence && !control_pattern_playing_)
+    return PatternTransportSubmit::not_running;
+
+  PatternTransportCommandCell cell{command.runtime_generation, command.epoch,
+      0, command.action, kNoPatternSlot};
+  if (command.pending_switch) {
+    if (command.action == PatternTransportAction::start)
+      return PatternTransportSubmit::invalid_action;
+    if (command.pending_switch->generation == command.expected_pattern_generation)
+      return PatternTransportSubmit::identity_mismatch;
+    for (std::size_t i = 0; i < pattern_slots_.size(); ++i) {
+      const auto& slot = pattern_slots_[i];
+      const auto state = slot.state.load(std::memory_order_acquire);
+      if ((state == PatternState::current || state == PatternState::pending) &&
+          slot.generation == command.pending_switch->generation &&
+          slot.activation_frame == command.pending_switch->activation_frame &&
+          slot.pattern->pattern_id() == command.pending_switch->pattern_id) {
+        cell.switch_slot = static_cast<std::uint8_t>(i);
+        cell.switch_generation = slot.generation;
+      }
+    }
+    if (cell.switch_slot == kNoPatternSlot)
+      return PatternTransportSubmit::identity_mismatch;
+  }
+  // Every outstanding publication must be named, including an audio-local
+  // claim. No unrelated successor may cross this command's boundary.
+  for (const auto& slot : pattern_slots_) {
+    if (slot.state.load(std::memory_order_acquire) == PatternState::pending &&
+        slot.generation != cell.switch_generation)
+      return PatternTransportSubmit::identity_mismatch;
+  }
+  // Q releases only after A is installed; A releases only after current is
+  // installed. Read in that order before checking current, so a concurrent
+  // apply cannot turn a no-authority command into an unnamed successor.
+  const auto queued = queued_pattern_generation_.load(std::memory_order_acquire);
+  const auto pending = audio_pending_pattern_generation_.load(std::memory_order_acquire);
+  if ((pattern_token_generation(queued) != 0 &&
+       pattern_token_generation(queued) != cell.switch_generation) ||
+      (pattern_token_generation(pending) != 0 &&
+       pattern_token_generation(pending) != cell.switch_generation))
+    return PatternTransportSubmit::identity_mismatch;
+  const auto current = current_pattern_slot_.load(std::memory_order_acquire);
+  // A named current successor needs a real acknowledged predecessor, not
+  // the initial zero sentinel shared by an unacknowledged command.
+  if (current == kNoPatternSlot ||
+      (pattern_slots_[current].generation != command.expected_pattern_generation &&
+       (pattern_slots_[current].generation != cell.switch_generation ||
+        acknowledged_pattern_generation_ == 0 ||
+        command.expected_pattern_generation != acknowledged_pattern_generation_)))
+    return PatternTransportSubmit::identity_mismatch;
+  for (std::size_t i = 0; i < pattern_slots_.size(); ++i) {
+    if (pattern_slots_[i].pattern) {
+      retained_transport_ids_[i] = pattern_slots_[i].pattern->pattern_id();
+      retained_transport_bpms_[i] = pattern_slots_[i].pattern->bpm();
+    } else {
+      retained_transport_ids_[i].reset();
+    }
+  }
+  retained_transport_switch_ = command.pending_switch;
+  pattern_transport_reserved_ = true;
+  pattern_transport_epoch_ = command.epoch;
+  static_cast<void>(pattern_transport_commands_.try_push(cell));
+  return PatternTransportSubmit::accepted;
+}
+
+std::optional<PatternTransportReceipt>
+RealtimeEngine::inspect_pattern_transport_receipt(
+    std::uint64_t generation, std::uint64_t epoch) const {
+  if (generation == 0 || epoch == 0 ||
+      !pattern_transport_reserved_ || generation != pattern_transport_generation_ ||
+      epoch != pattern_transport_epoch_) return std::nullopt;
+  if (!retained_transport_receipt_) {
+    PatternTransportReceiptCell cell;
+    if (!pattern_transport_receipts_.try_pop(cell)) return std::nullopt;
+    if (cell.generation != generation || cell.epoch != epoch) return std::nullopt;
+    retained_transport_receipt_ = cell;
+  }
+  const auto& cell = *retained_transport_receipt_;
+  if (cell.generation != generation || cell.epoch != epoch) return std::nullopt;
+  return PatternTransportReceipt{cell.generation, cell.epoch, cell.effective_frame,
+      cell.origin_frame, cell.pattern_generation,
+      *retained_transport_ids_[cell.pattern_slot],
+      retained_transport_bpms_[cell.pattern_slot], cell.playing, cell.decision,
+      retained_transport_switch_,
+      cell.decision == PatternCutoffDecision::applied_before_cutoff
+          ? std::optional<std::uint64_t>{cell.switch_applied_frame} : std::nullopt};
+}
+
+bool RealtimeEngine::acknowledge_pattern_transport_receipt(
+    std::uint64_t generation, std::uint64_t epoch) noexcept {
+  if (generation == 0 || epoch == 0 ||
+      !pattern_transport_reserved_ || !retained_transport_receipt_ ||
+      generation != pattern_transport_generation_ || epoch != pattern_transport_epoch_ ||
+      retained_transport_receipt_->generation != generation ||
+      retained_transport_receipt_->epoch != epoch)
+    return false;
+  control_pattern_playing_ = retained_transport_receipt_->playing;
+  acknowledged_pattern_generation_ = retained_transport_receipt_->pattern_generation;
+  retained_transport_receipt_.reset();
+  retained_transport_switch_.reset();
+  pattern_transport_reserved_ = false;
+  return true;
+}
+
+void RealtimeEngine::apply_pattern_transport(std::uint64_t frame) noexcept {
+  PatternTransportCommandCell command;
+  if (!pattern_transport_commands_.try_pop(command)) return;
+  PatternTransportReceiptCell receipt{};
+  receipt.generation = command.generation;
+  receipt.epoch = command.epoch;
+  receipt.effective_frame = frame;
+  if (command.switch_slot != kNoPatternSlot) {
+    const auto current = current_pattern_slot_.load(std::memory_order_relaxed);
+    if (current == command.switch_slot &&
+        pattern_applied_frames_[current] < frame) {
+      receipt.decision = PatternCutoffDecision::applied_before_cutoff;
+      receipt.switch_applied_frame = pattern_applied_frames_[current];
+    } else {
+      // The sole audio owner resolves both Q and L before this callback's
+      // claim/apply. Control cannot cancel, publish or reclaim while reserved.
+      std::uint32_t canceled_token;
+      if (audio_pending_pattern_ &&
+          audio_pending_pattern_->generation == command.switch_generation) {
+        canceled_token = audio_pending_pattern_generation_.exchange(
+            0, std::memory_order_acq_rel);
+        audio_pending_pattern_.reset();
+        observed_audio_pending_ = {};
+      } else {
+        canceled_token = queued_pattern_generation_.exchange(
+            0, std::memory_order_seq_cst);
+      }
+      pattern_slots_[command.switch_slot].state.store(
+          PatternState::reclaimable, std::memory_order_release);
+      receipt.decision = PatternCutoffDecision::canceled_at_cutoff;
+      observed_claimed_through_ = std::max(
+          observed_claimed_through_, command.switch_generation);
+      // Control may already have canceled L's token and counted that terminal
+      // outcome. Audio must still release L and retain the cutoff receipt, but
+      // only the owner removing a live token counts the cancellation.
+      if (canceled_token != 0) ++transport_canceled_publications_;
+    }
+  }
+  if (command.action == PatternTransportAction::start) {
+    pattern_playing_ = true;
+    pattern_origin_frame_ = frame;
+    pattern_event_index_ = 0;
+  } else if (command.action == PatternTransportAction::stop) {
+    pattern_playing_ = false;
+    for (auto& voice : voices_) {
+      if (voice.active && voice.pattern_voice &&
+          voice.pattern_slot < pattern_slots_.size() &&
+          voice.pattern_generation == pattern_slots_[voice.pattern_slot].generation)
+        stop_voice(voice, frame);
+    }
+  }
+  receipt.origin_frame = pattern_origin_frame_;
+  receipt.playing = pattern_playing_;
+  receipt.pattern_slot = current_pattern_slot_.load(std::memory_order_relaxed);
+  receipt.pattern_generation = pattern_slots_[receipt.pattern_slot].generation;
+  publish_transport_decision();
+  static_cast<void>(pattern_transport_receipts_.try_push(receipt));
+}
+
 PatternPublication RealtimeEngine::publish_pattern_view(
     PreparedPatternView&& pattern,
     std::optional<std::uint64_t> requested_activation_frame,
@@ -814,12 +1023,22 @@ PatternPublication RealtimeEngine::publish_pattern_view_immediate(
       PatternPublicationTiming::immediate);
 }
 
+PatternPublication RealtimeEngine::publish_pattern_view_preserving_phase(
+    PreparedPatternView&& pattern, std::uint64_t expected_generation) noexcept {
+  return publish_pattern_view_impl(std::move(pattern), std::nullopt, std::nullopt,
+      PatternPublicationTiming::preserve_phase, expected_generation);
+}
+
 PatternPublication RealtimeEngine::publish_pattern_view_impl(
     PreparedPatternView&& pattern,
     std::optional<std::uint64_t> requested_activation_frame,
     std::optional<PatternReplacementAuthority> replacement_authority,
-    PatternPublicationTiming timing) noexcept {
+    PatternPublicationTiming timing, std::uint64_t expected_generation) noexcept {
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
+  if (pattern_transport_reserved_) {
+    ++pattern_publication_rejections_;
+    return {PatternPublishResult::publication_pending, 0, 0};
+  }
   for (;;) {
     // Only non-realtime control retries. Audio closes admission without
     // waiting: at most one previously admitted control CAS remains in flight.
@@ -847,6 +1066,11 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
     const auto observed_pending_generation = observed_mailbox != 0
         ? pattern_token_generation(observed_mailbox)
         : observed_audio_generation;
+    if (timing == PatternPublicationTiming::preserve_phase &&
+        observed_pending_generation != 0) {
+      ++pattern_publication_rejections_;
+      return {PatternPublishResult::publication_pending, 0, 0};
+    }
     std::optional<std::uint64_t> observed_pending_activation;
     std::optional<std::uint64_t> claimed_next_activation;
     bool authorized_replacement = false;
@@ -906,6 +1130,21 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
 
     const auto current =
         current_pattern_slot_.load(std::memory_order_acquire);
+    if (timing == PatternPublicationTiming::preserve_phase) {
+      if (current == kNoPatternSlot || expected_generation == 0 ||
+          pattern_slots_[current].generation != expected_generation) {
+        ++pattern_publication_rejections_;
+        return {PatternPublishResult::phase_mismatch, 0, 0};
+      }
+      const auto& previous = *pattern_slots_[current].pattern;
+      if (previous.project_id() != pattern.project_id() ||
+          previous.pattern_id() != pattern.pattern_id() ||
+          previous.bpm() != pattern.bpm() || previous.ppq() != pattern.ppq() ||
+          previous.loop_length_ticks() != pattern.loop_length_ticks()) {
+        ++pattern_publication_rejections_;
+        return {PatternPublishResult::phase_mismatch, 0, 0};
+      }
+    }
     if (current != kNoPatternSlot &&
         pattern_slots_[current].pattern->project_id() != pattern.project_id()) {
       pattern_publication_rejections_ += 1;
@@ -936,6 +1175,7 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
     slot->pattern.emplace(std::move(pattern));
     slot->active_voices = 0;
     slot->generation = *generation;
+    slot->preserve_phase = timing == PatternPublicationTiming::preserve_phase;
 
     const auto running =
         state_.load(std::memory_order_acquire) == RealtimeState::running;
@@ -944,7 +1184,7 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
       const auto observed_frame =
           transport_decision_.read().rendered_frames;
       activation_frame = observed_frame;
-      if (timing == PatternPublicationTiming::immediate) {
+      if (timing != PatternPublicationTiming::scheduled) {
         activation_frame = observed_frame;
       } else if (authorized_replacement &&
                  requested_activation_frame.has_value()) {
@@ -1040,6 +1280,7 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
 
 bool RealtimeEngine::cancel_pattern_publication(
     const PatternReplacementAuthority& authority) noexcept {
+  if (pattern_transport_reserved_) return false;
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
   if (cancel_unclaimed_pattern_publication(authority)) {
     return true;
@@ -1074,6 +1315,7 @@ bool RealtimeEngine::cancel_pattern_publication(
 
 bool RealtimeEngine::cancel_unclaimed_pattern_publication(
     const PatternReplacementAuthority& authority) noexcept {
+  if (pattern_transport_reserved_) return false;
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
   while (pattern_claim_closed_.load(std::memory_order_seq_cst) != 0) {
     // Control only; do not issue another Q modification during audio claim.
@@ -1135,6 +1377,7 @@ foundation::Result<void> RealtimeEngine::clear_pattern_view() noexcept {
 }
 
 std::size_t RealtimeEngine::reclaim_retired_patterns() noexcept {
+  if (pattern_transport_reserved_) return 0;
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
   std::size_t reclaimed = 0;
   for (auto& slot : pattern_slots_) {
@@ -1344,6 +1587,13 @@ foundation::Result<void> RealtimeEngine::start() {
         "with a new engine instance");
   }
 
+  pattern_transport_commands_.clear_quiescent();
+  pattern_transport_receipts_.clear_quiescent();
+  retained_transport_receipt_.reset();
+  pattern_transport_reserved_ = false;
+  control_pattern_playing_ = false;
+  acknowledged_pattern_generation_ = 0;
+  pattern_playing_ = false;
   queue_.clear_quiescent();
   fx_queue_.clear_quiescent();
   master_fx_.reset();
@@ -1369,6 +1619,7 @@ foundation::Result<void> RealtimeEngine::start() {
   started_voices_ = 0;
   completed_voices_ = 0;
   active_voices_ = 0;
+  peak_voices_ = 0;
   cancelled_voices_ = 0;
   invalid_events_ = 0;
   audio_invalid_events_ = 0;
@@ -1413,6 +1664,20 @@ foundation::Result<void> RealtimeEngine::start() {
 }
 
 void RealtimeEngine::stop() noexcept {
+  // The callback is quiescent here. Discard volatile transport state together
+  // with its generation; obsolete reservations must not block stopped setup.
+  pattern_transport_generation_ = 0;
+  pattern_transport_epoch_ = 0;
+  pattern_transport_commands_.clear_quiescent();
+  pattern_transport_receipts_.clear_quiescent();
+  retained_transport_receipt_.reset();
+  retained_transport_switch_.reset();
+  for (auto& id : retained_transport_ids_) id.reset();
+  retained_transport_bpms_.fill(0);
+  pattern_transport_reserved_ = false;
+  control_pattern_playing_ = false;
+  acknowledged_pattern_generation_ = 0;
+  pattern_playing_ = false;
   const PublishOnReturn audio_publish{*this, &RealtimeEngine::publish_audio_observation};
   const PublishOnReturn control_publish{*this, &RealtimeEngine::publish_control_observation};
   observed_last_queued_ = {};
@@ -1705,14 +1970,24 @@ void RealtimeEngine::render(
   std::uint8_t published_slot = 0;
   while (publish_queue_.try_pop(published_slot)) {
     apply_published_bank(published_slot);
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+    testing::invoke_realtime_hook(
+        testing::RealtimeHookPoint::bank_applied_before_pending_release);
+#endif
     pending_publications_.fetch_sub(1, std::memory_order_release);
   }
-  // Before the control events below, so an audition published and started in
-  // the same callback is audible in that callback rather than the next.
-  std::uint8_t published_audition = 0;
-  while (audition_publish_queue_.try_pop(published_audition)) {
-    apply_published_audition(published_audition);
-  }
+  const auto refresh_audition_publications = [this]() noexcept {
+    std::uint8_t published_audition = 0;
+    for (std::size_t applied = 0;
+         applied < kRealtimeAuditionBankCapacity &&
+         audition_publish_queue_.try_pop(published_audition);
+         ++applied) {
+      apply_published_audition(published_audition);
+    }
+  };
+  // Apply publication-only updates even when no audition start is queued.
+  refresh_audition_publications();
+  if (frames != 0) apply_pattern_transport(absolute_start_frame);
   if (!audio_pending_pattern_.has_value()) {
 #if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
     testing::invoke_realtime_hook(testing::RealtimeHookPoint::before_pattern_claim);
@@ -1823,6 +2098,10 @@ void RealtimeEngine::render(
     const auto audition = event.kind == PadControlKind::audition_start;
     std::uint8_t audition_slot = kNoAuditionSlot;
     if (audition) {
+      // Acquiring this command orders the producer's preceding publications.
+      // The initial drain may predate them; refresh before choosing the latest
+      // source, with a fixed pool-sized bound even if control keeps publishing.
+      refresh_audition_publications();
       audition_slot = current_audition_slot_.load(std::memory_order_acquire);
       if (audition_slot == kNoAuditionSlot) {
         audio_invalid_events_ += 1;
@@ -1924,12 +2203,13 @@ void RealtimeEngine::render(
     }
     voice->active = true;
     voice_scan_extent_ = std::max(
-        voice_scan_extent_, static_cast<std::size_t>(voice - voices_.data()) + 1);
+        voice_scan_extent_, static_cast<std::size_t>(voice - voices_.begin()) + 1);
     if (auto* const owner = bank_slot_for(bank_slot); owner != nullptr) {
       ++owner->active_voices;
     }
     started_voices_ += 1;
     active_voices_ += 1;
+    peak_voices_ = std::max(peak_voices_, active_voices_);
     if (!replay && !audition) {
       if (trigger_outcome_ring_.try_push(RuntimeTriggerOutcomeEvent{
               event.sequence,
@@ -1974,7 +2254,8 @@ void RealtimeEngine::render(
         stop_voice(voice, runtime_frame);
       }
     }
-    schedule_pattern_events(runtime_frame);
+    if (!pattern_transport_enabled_ || pattern_playing_)
+      schedule_pattern_events(runtime_frame);
 
     for (std::size_t index = 0; index < voice_scan_extent_; ++index) {
       auto& voice = voices_[index];
@@ -2179,7 +2460,7 @@ PatternTelemetry RealtimeEngine::pattern_telemetry() const noexcept {
       c.accepted_pattern_publications_,
       a.applied_pattern_publications_,
       c.superseded_pattern_publications_,
-      c.canceled_pattern_publications_,
+      c.canceled_pattern_publications_ + a.transport_canceled_publications,
       c.reclaimed_patterns_,
       c.pattern_publication_rejections_,
   };

@@ -1,4 +1,5 @@
 #include "usb_transfer_endpoint.hpp"
+#include "status_payload.hpp"
 
 #ifdef ESP_PLATFORM
 
@@ -183,17 +184,7 @@ void UsbTransferEndpoint::handle_frame(const TransferFrame& frame) noexcept {
       respond_result(opcode, frame.request_id, TransferSessionResult::invalid_transfer);
       return;
     }
-    const auto status = host_.read_status();
-    std::array<std::byte, 14> status_payload{};
-    status_payload[0] = std::byte{};
-    status_payload[1] = std::byte{};
-    status_payload[2] = std::byte(static_cast<std::uint8_t>(status.phase));
-    status_payload[3] = std::byte(static_cast<std::uint8_t>(status.error));
-    status_payload[4] = std::byte(status.armed ? 1 : 0);
-    status_payload[5] = std::byte(status.muted ? 1 : 0);
-    status_payload[6] = std::byte(status.volume);
-    status_payload[7] = std::byte(status.pad_count);
-    write_u64(status_payload.data() + 8, status.content_bytes);
+    const auto status_payload = encode_status_payload(host_.read_status());
     respond(opcode, frame.request_id, status_payload);
     return;
   }

@@ -28,8 +28,23 @@ from tools.release.hydrate import (  # noqa: E402
     hydrate_release_intent_targets,
 )
 from tools.release.github_api import GitHubApiError, GitHubClient  # noqa: E402
-from tools.release.model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, ReleaseModelError  # noqa: E402
+from tools.release.model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, ReleaseModelError, canonical_json, canonical_sha256  # noqa: E402
+from tools.release.publication import PublicationError, collect_publication  # noqa: E402
+from tools.release.publication_evidence import collect_publication_patch  # noqa: E402
+from tools.release.changelog import ChangelogError  # noqa: E402
 from tools.release.openpgp import OpenPgpError, OpenPgpVerifier  # noqa: E402
+from tools.release.orchestration import (  # noqa: E402
+    JournalError,
+    RequestJournal,
+    STEPS,
+    validate_request,
+)
+from tools.release.orchestration_backend import ReleaseBackend  # noqa: E402
+from tools.release.orchestration_driver import ReleaseDriver  # noqa: E402
+from tools.release.orchestration_policy import (  # noqa: E402
+    OrchestrationPolicyError,
+    load_orchestration_policy,
+)
 from tools.release.prepare import (  # noqa: E402
     PrepareContext, PrepareError, default_profile_builder, default_profile_verifier,
     load_authority_documents, prepare,
@@ -79,6 +94,14 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     published_verified.add_argument("tag")
     published_verified.add_argument("release_id", type=int)
     published_verified.add_argument("plan_sha256")
+    recorded = commands.add_parser("publication-record")
+    recorded.add_argument("tag")
+    recorded.add_argument("release_id", type=int)
+    recorded.add_argument("plan_sha256")
+    evidence = commands.add_parser("publication-patch")
+    evidence.add_argument("tag")
+    evidence.add_argument("release_id", type=int)
+    evidence.add_argument("plan_sha256")
     published = commands.add_parser("publish-draft")
     published.add_argument("tag")
     published.add_argument("release_id", type=int)
@@ -100,6 +123,20 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
         selected = rehearsal_commands.add_parser(name)
         selected.add_argument("tag")
     commands.add_parser("hydrate")
+    started = commands.add_parser("run")
+    started.add_argument(
+        "--authority", required=True, metavar="REF",
+        help="opaque reference to the independently authenticated authorization record",
+    )
+    started.add_argument("--tag", help="exact Product tag for an already-frozen release scope")
+    started.add_argument(
+        "--base-revision", metavar="SHA",
+        help="frozen main input revision; defaults to the canonical main revision",
+    )
+    continued = commands.add_parser("resume")
+    continued.add_argument("request_id")
+    reported = commands.add_parser("status")
+    reported.add_argument("request_id", nargs="?")
     audited = commands.add_parser("audit")
     mode = audited.add_mutually_exclusive_group(required=True)
     mode.add_argument("--local", action="store_true")
@@ -156,6 +193,115 @@ def build_audit_context(root: Path, *, remote: bool = False) -> AuditContext:
         root, policy, ledger, selected_git, selected_github,
         authority_reader=load_authority_documents,
     )
+
+
+ORCHESTRATION_POLICY_PATH = Path("tools/release/orchestration-policy.json")
+
+
+def release_journal_root(root: Path, git) -> Path:
+    """The request journal lives beside the repository's own Git directory."""
+    directory = git.runner.run(
+        ("git", "-C", str(root), "rev-parse", "--absolute-git-dir")
+    ).stdout.strip()
+    return Path(directory) / "lmdj-release-requests"
+
+
+def release_carriers(context: PrepareContext, policy) -> tuple:
+    """Step carriers enrolled for this scope.
+
+    Empty until each step's exact far-side verifier is enrolled; `run` and
+    `resume` refuse a scope with an unowned step rather than half-driving it.
+    """
+    return ()
+
+
+def build_orchestration_policy(root: Path, context: PrepareContext):
+    return load_orchestration_policy(root / ORCHESTRATION_POLICY_PATH, context.policy)
+
+
+def build_request(
+    context: PrepareContext,
+    policy,
+    *,
+    authority_ref: str,
+    tag: str | None = None,
+    base_revision: str | None = None,
+) -> dict:
+    """Freeze one release request from the authenticated canonical control."""
+    control = context.git.main_revision()
+    base = base_revision or control
+    # A frozen base revision is part of the immutable request identity, so it is
+    # checked for canonical reachability before it is frozen, not after.
+    if not context.git.is_main_ancestor(base):
+        raise CommandError(
+            "release base revision is not reachable canonical history",
+            detail=f"{base} (remedy: use a merged main revision or omit --base-revision)",
+        )
+    scope = {
+        "repository": context.policy.repository,
+        "actor_id": context.github.get_authenticated_actor(),
+        "authority_ref": authority_ref,
+        "policy_digest": policy.digest,
+        "control_revision": control,
+        "base_revision": base,
+        "mode": "tag" if tag else "new",
+        "requested_tag": tag,
+    }
+    request = {"id": "release-" + canonical_sha256(scope)[:16], **scope}
+    validate_request(request)
+    return request
+
+
+def format_request_status(root: Path, git, request_id: str | None = None) -> str:
+    """Report the local request journal: progress record, never far-side proof."""
+    directory = release_journal_root(root, git)
+    if not directory.is_dir():
+        # No request has ever been created here; reading must not create one.
+        return "release request journal: no requests\n"
+    report = []
+    with RequestJournal(directory, writable=False) as journal:
+        if request_id is not None:
+            state = journal.read(request_id)
+            if state is None:
+                raise JournalError(
+                    "why: request is missing; remedy: use the request ID printed by `run`"
+                )
+            states = [state]
+        else:
+            states = []
+            for name in sorted(os.listdir(directory)):
+                if not name.endswith(".json"):
+                    continue
+                try:
+                    state = journal.read(name[:-5])
+                except JournalError as error:
+                    # A listing reports what it can read and names the rest; the
+                    # named-request form below is what fails closed.
+                    report.append(f"unreadable journal entry: {name} ({error})\n")
+                    continue
+                if state is None:
+                    continue
+                states.append(state)
+        for state in states:
+            records = state["transitions"]
+            verified = [record["step"] for record in records if record["status"] == "verified"]
+            # The next step is the first record that is not verified: a verified
+            # count indexes the wrong step if the journal is not a verified prefix.
+            outstanding = next(
+                (record["step"] for record in records if record["status"] != "verified"), None
+            )
+            unresolved = bool(records) and records[-1]["status"] == "intent"
+            report.append(
+                f"release request: {state['request']['id']}\n"
+                f"  scope: mode={state['request']['mode']} "
+                f"tag={state['request']['requested_tag'] or '-'}\n"
+                f"  verified: {len(verified)}/{len(STEPS)}\n"
+                f"  step: {outstanding or '-'}\n"
+                f"  outstanding intent: {outstanding if unresolved else '-'}\n"
+            )
+    if not report:
+        return "release request journal: no requests\n"
+    return "source: local request journal; run `resume` to re-verify against live state\n" + "".join(report)
 
 
 def _authenticated_github_client(runner: CommandRunner) -> GitHubClient:
@@ -269,7 +415,32 @@ def main(argv: list[str] | None = None) -> int:
             print(f"evidence document: {written.evidence_document}")
             print("next step: commit both files as a docs Pull Request through the Integration Queue")
             return 0
+        if options.command == "status":
+            print(format_request_status(root, GitRepository(root), options.request_id), end="")
+            return 0
         context = build_context(root)
+        if options.command in ("run", "resume"):
+            policy = build_orchestration_policy(root, context)
+            carriers = release_carriers(context, policy)
+            backend = ReleaseBackend(context.git, context.github, carriers=carriers)
+            driver = ReleaseDriver(release_journal_root(root, context.git), policy, backend)
+            unowned = backend.missing(STEPS)
+            if unowned:
+                # Refuse before the request is created: an unowned step is never
+                # reported absent, and no later transition may run without it.
+                raise CommandError(
+                    "release scope has steps without an enrolled carrier",
+                    detail=", ".join(unowned),
+                )
+            result = (
+                driver.run(build_request(
+                    context, policy, authority_ref=options.authority,
+                    tag=options.tag, base_revision=options.base_revision,
+                ))
+                if options.command == "run" else driver.resume(options.request_id)
+            )
+            _print_drive_result(result)
+            return 0 if result.status == "complete" else 2
         if options.command == "prepare":
             prepared = prepare(options.tag, context)
             print(f"release plan sha256: {prepared.digest}")
@@ -291,6 +462,11 @@ def main(argv: list[str] | None = None) -> int:
                 options.tag, options.release_id, options.plan_sha256, context,
             )
             _print_release_result(result)
+        elif options.command == "publication-record":
+            record = collect_publication(options.tag, options.release_id, options.plan_sha256, context)
+            print(canonical_json(record).decode("utf-8"), end="")
+        elif options.command == "publication-patch":
+            print(collect_publication_patch(options.tag, options.release_id, options.plan_sha256, context), end="")
         elif options.command == "publish-draft":
             result = publish_draft(
                 options.tag, options.release_id, options.plan_sha256, context,
@@ -301,15 +477,25 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as error:
         return 0 if error.code == 0 else 64
     except (
-        CommandError, GitHubApiError, GitRepositoryError, HydrateError, OpenPgpError,
+        CommandError, GitHubApiError, GitRepositoryError, HydrateError, JournalError,
+        OpenPgpError, OrchestrationPolicyError,
         PrepareError, ProfileError, PromotionError, RehearsalError, ReleaseModelError,
-        TransitionError, OSError,
+        TransitionError, PublicationError, ChangelogError, OSError,
     ) as error:
         detail = error.detail if isinstance(error, (CommandError, HydrateError)) else ""
         suffix = f": {detail}" if detail else ""
         print(f"release verification error: {error}{suffix}", file=sys.stderr)
         return 2
     return 0
+
+
+def _print_drive_result(result) -> None:
+    print(f"release request: {result.request_id}")
+    print(f"request status: {result.status}")
+    print(f"step: {result.step or '-'}")
+    print(f"verified steps: {len(result.verified_steps)}/{len(STEPS)}")
+    if result.status != "complete":
+        print("next step: reconcile the reported step, then resume this same request ID")
 
 
 def _print_release_result(result) -> None:

@@ -18,9 +18,15 @@ SPEC.loader.exec_module(MODULE)
 VERSION = "12345678-1234-1234-1234-123456789012"
 
 
+def receipt(url):
+    return {"schema": "lmdj.release-changelog-smoke.v1", "revision": "source", "pages": [
+        {"route": "/releases/", "url": url + "/releases/", "source_sha256": "a" * 64,
+         "content_sha256": "b" * 64, "response_sha256": "c" * 64, "response_bytes": 123}]}
+
+
 class DeploymentTest(unittest.TestCase):
     def scenario(self, *, exists=False, preview_failure=False, production_failure=False, lost_receipt=False,
-                 upload_failure=False, concurrent_at=None, recovery_failure=False):
+                 upload_failure=False, concurrent_at=None, recovery_failure=False, invalid_receipt=False):
         prior = [{"id": "prior", "versions": [{"version_id": "previous", "percentage": 100}]}] if exists else []
         state = {"deployments": prior, "route": {"enabled": exists, "previews_enabled": True}, "writes": []}
         lost = False
@@ -64,7 +70,8 @@ class DeploymentTest(unittest.TestCase):
                 state["deployments"] = [{"id": "operator", "versions": [{"version_id": "operator-version", "percentage": 100}]}]
             if (preview_failure and VERSION[:8] in url) or (production_failure and url == "https://docs.lmdj.workers.dev"):
                 raise subprocess.CalledProcessError(1, command)
-            return subprocess.CompletedProcess(command, 0)
+            invalid = invalid_receipt is True or invalid_receipt == phase
+            return subprocess.CompletedProcess(command, 0, "not a receipt" if invalid else json.dumps(receipt(url)))
 
         with tempfile.TemporaryDirectory() as directory:
             env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": "source",
@@ -72,7 +79,7 @@ class DeploymentTest(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True), patch.object(MODULE, "urlopen", side_effect=request), \
                  patch.object(MODULE.subprocess, "check_output", return_value="source"), \
                  patch.object(MODULE.subprocess, "run", side_effect=run), patch.object(MODULE.time, "sleep"):
-                if preview_failure or production_failure or lost_receipt or upload_failure or concurrent_at:
+                if preview_failure or production_failure or lost_receipt or upload_failure or concurrent_at or invalid_receipt:
                     with self.assertRaises((subprocess.CalledProcessError, OSError, RuntimeError)):
                         MODULE.publish()
                 else:
@@ -85,6 +92,48 @@ class DeploymentTest(unittest.TestCase):
         self.assertEqual(evidence["status"], "passed")
         self.assertTrue(state["route"]["enabled"])
         self.assertEqual(state["deployments"][0]["versions"][0]["version_id"], VERSION)
+        for phase in ("preview", "production"):
+            self.assertEqual(evidence[phase]["changelogs"], receipt(evidence[phase]["url"]))
+
+    def test_smoke_exit_zero_without_receipt_does_not_promote(self):
+        state, evidence = self.scenario(exists=True, invalid_receipt=True)
+        self.assertEqual(evidence["status"], "failed")
+        self.assertEqual(state["deployments"][0]["id"], "prior")
+        self.assertFalse(any(path.endswith("/deployments") for path, _ in state["writes"]))
+
+    def test_receipt_identity_schema_and_complete_page_shape_are_required(self):
+        base = "https://docs.lmdj.workers.dev"
+        valid = receipt(base)
+        cases = []
+        for field, value in (("revision", "other"), ("schema", "unknown"), ("pages", []), ("extra", "not permitted")):
+            item = copy.deepcopy(valid)
+            item[field] = value
+            cases.append(item)
+        for field, value in (("url", "https://wrong.invalid/releases/"), ("route", "/other/"),
+                             ("source_sha256", "bad"), ("response_bytes", True)):
+            item = copy.deepcopy(valid)
+            item["pages"][0][field] = value
+            cases.append(item)
+        duplicate = copy.deepcopy(valid)
+        duplicate["pages"] *= 2
+        cases.append(duplicate)
+        for item in cases:
+            with self.subTest(item=item):
+                with self.assertRaisesRegex(RuntimeError, "why:.*remedy:"):
+                    MODULE.smoke_receipt(json.dumps(item), "source", base)
+
+    def test_invalid_production_receipt_retains_preview_and_recovers_prior(self):
+        state, evidence = self.scenario(exists=True, invalid_receipt="production")
+        self.assertEqual(evidence["status"], "failed")
+        self.assertIn("changelogs", evidence["preview"])
+        self.assertNotIn("production", evidence)
+        self.assertEqual(state["deployments"][0]["versions"][0]["version_id"], "previous")
+
+    def test_duplicate_receipt_fields_are_not_accepted_as_canonical(self):
+        base = "https://docs.lmdj.workers.dev"
+        raw = json.dumps(receipt(base)).replace('"revision": "source"', '"revision": "other", "revision": "source"')
+        with self.assertRaisesRegex(RuntimeError, "receipt is absent or mismatched"):
+            MODULE.smoke_receipt(raw, "source", base)
 
     def test_failed_initial_preview_keeps_route_disabled(self):
         state, _ = self.scenario(preview_failure=True)

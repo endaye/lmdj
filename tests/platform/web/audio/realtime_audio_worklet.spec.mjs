@@ -1,4 +1,5 @@
 import {expect, test} from "@playwright/test";
+import {test as opfsTest} from "../project_io/opfs_browser.fixture.mjs";
 
 
 const FORMAL_HOST_PAGE = "/formal-audio/lmdj-web-runtime.html";
@@ -57,6 +58,750 @@ async function activateFromClick(page, sampleRate) {
   return page.evaluate(() => window.__lmdjFormalActivation);
 }
 
+
+opfsTest("live press and release complete while an executor owns a paused OPFS write", async ({page}) => {
+  opfsTest.setTimeout(120_000);
+  await waitForFormalHost(page);
+  expect((await activateFromClick(page, 48_000)).ok).toBe(true);
+  const command = (action) => page.evaluate((value) =>
+    window.Module._lmdj_web_audio_test_transport_probe(value), action);
+  const until = async (expected) => {
+    await expect.poll(async () => {
+      expect(await command(2)).toBeGreaterThanOrEqual(0);
+      const state = await command(0);
+      expect(state, "OPFS probe failed").not.toBe(9);
+      return state;
+    }, {timeout: 30_000}).toBe(expected);
+  };
+  try {
+    expect(await command(1)).toBe(1);
+    await expect.poll(async () => {
+      await command(2);
+      expect(await command(0), "OPFS prepare failed").not.toBe(9);
+      return command(5);
+    }, {timeout: 30_000}).toBe(1);
+    expect(await command(0)).toBe(1);
+
+    // This is the existing real Bank/press/voice outcome journey, on the same
+    // control lane which would be blocked by an inline storage operation.
+    const proof = await page.evaluate(() =>
+      window.lmdjWebRuntimeHostTest.runSharedEngineProof());
+    expect(proof.outcome).toMatchObject({
+      sequence: proof.admittedSequence, outcome: "voice_started",
+    });
+    expect(proof.outputEnergy).toBeGreaterThan(0);
+    const released = await page.evaluate(() =>
+      window.lmdjWebRuntimeHost.transport.send({
+        protocol_version: 1, request_id: crypto.randomUUID(),
+        operation: "trigger", payload: {slot: 0, kind: "release"},
+      }));
+    expect(released).toMatchObject({ok: true, result: {accepted: true}});
+    expect(await command(0)).toBe(1); // IO still held, no early completion.
+    await expect.poll(() => command(4)).toBe(1);
+    const status = await page.evaluate(() =>
+      window.lmdjWebRuntimeHost.transport.send({
+        protocol_version: 1, request_id: crypto.randomUUID(),
+        operation: "host.status", payload: {},
+      }));
+    expect(status.ok).toBe(true); // Shutdown request did not join inline.
+    expect(await command(0)).toBe(1);
+    expect(await command(6)).toBe(1);
+    await until(4); // Exact bytes read, completion consumed once, owner stopped.
+    await expect.poll(() => command(3)).toBe(1);
+    await until(6); // New worker reacquires lease and reads the same exact bytes.
+    expect(await page.evaluate(async () => {
+      const root = await navigator.storage.getDirectory();
+      const directory = await root.getDirectoryHandle("transport-executor-proof");
+      return (await (await directory.getFileHandle("receipt")).getFile()).text();
+    })).toBe("retained OPFS transport completion");
+  } finally {
+    await command(6); // Never leave the intentional latch held on assertion failure.
+  }
+});
+
+test("global Pattern transport records live input through real OPFS and settles off the dispatch tail", async ({page}) => {
+  test.setTimeout(120_000);
+  await waitForFormalHost(page);
+  expect((await activateFromClick(page, 48_000)).ok).toBe(true);
+
+  const sendTransport = (operation, payload) =>
+    page.evaluate(({operation, payload}) =>
+      window.lmdjWebRuntimeHost.transport.send({
+        protocol_version: 1,
+        request_id: crypto.randomUUID(),
+        operation,
+        payload,
+      }), {operation, payload});
+  const inspectTransport = (sessionId) =>
+    sendTransport("pattern.transport.inspect", {session_id: sessionId});
+
+  const journey = await page.evaluate(async () => {
+    const send = (operation, payload, sidecar) =>
+      window.lmdjWebRuntimeHost.transport.send(
+        {
+          protocol_version: 1,
+          request_id: crypto.randomUUID(),
+          operation,
+          payload,
+        },
+        sidecar === undefined ? {} : {sidecar},
+      );
+    const projectId = crypto.randomUUID();
+    const patternId = crypto.randomUUID();
+    const sessionId = crypto.randomUUID();
+    const frames = 480;
+    const wav = new Uint8Array(44 + frames * 2);
+    const view = new DataView(wav.buffer);
+    const ascii = (offset, value) => {
+      for (let index = 0; index < value.length; ++index) {
+        wav[offset + index] = value.charCodeAt(index);
+      }
+    };
+    ascii(0, "RIFF");
+    view.setUint32(4, 36 + frames * 2, true);
+    ascii(8, "WAVE");
+    ascii(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, 48_000, true);
+    view.setUint32(28, 96_000, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    ascii(36, "data");
+    view.setUint32(40, frames * 2, true);
+    for (let frame = 0; frame < frames; ++frame) {
+      view.setInt16(
+        44 + frame * 2,
+        Math.round(Math.sin(2 * Math.PI * 440 * frame / 48_000) * 8_000),
+        true,
+      );
+    }
+    const wavSha256 = [...new Uint8Array(
+      await crypto.subtle.digest("SHA-256", wav),
+    )].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const importToken = crypto.randomUUID();
+    const assetId = crypto.randomUUID();
+    const created = await send("project.create", {
+      project_id: projectId,
+      bpm: 120,
+      initial_pattern: {pattern_id: patternId, bars: 1, events: []},
+      pattern_transport: true,
+    });
+    const importBegun = await send("sample.import.begin", {
+      import_token: importToken,
+      command_id: crypto.randomUUID(),
+      expected_revision: 0,
+      slot: {bank: 0, pad: 0},
+      asset_id: assetId,
+      byte_length: wav.byteLength,
+    });
+    const importChunked = await send("sample.import.chunk", {
+      import_token: importToken,
+      offset: 0,
+      final: true,
+      sidecar: {sidecar_bytes: wav.byteLength, sidecar_sha256: wavSha256},
+    }, wav);
+    const importCommitted = await send("sample.import.commit", {
+      import_token: importToken,
+    });
+    const snapshot = await send("snapshot.reload", {pattern_id: patternId});
+    const activated = await send("audio.activate", {});
+    // The pending ticket returns through the ordinary serializer while the
+    // audio receipt is still outstanding.
+    const ticket = await send("pattern.transport.request", {
+      session_id: sessionId,
+      project_id: projectId,
+      command_id: crypto.randomUUID(),
+      expected_epoch: 1,
+      intent: "record",
+      expected_revision: null,
+    });
+    return {
+      projectId, patternId, sessionId,
+      created, importBegun, importChunked, importCommitted, snapshot,
+      activated, ticket,
+    };
+  });
+  expect(journey.created).toMatchObject({ok: true});
+  expect(journey.importBegun).toMatchObject({ok: true});
+  expect(journey.importChunked).toMatchObject({ok: true});
+  expect(journey.importCommitted).toMatchObject({ok: true});
+  expect(journey.snapshot).toMatchObject({ok: true});
+  expect(journey.activated).toMatchObject({ok: true});
+  // Completion ordering: the ticket's status snapshot precedes any
+  // continuation step, so it always reports the pending phase.
+  expect(journey.ticket).toMatchObject({
+    ok: true,
+    result: {submit: "accepted", status: {phase: "awaiting_audio"}},
+  });
+
+  await expect.poll(async () => {
+    const status = await inspectTransport(journey.sessionId);
+    return status.ok && status.result.recording === true &&
+      status.result.phase === "idle";
+  }, {timeout: 30_000}).toBe(true);
+
+  // Live input is admitted post-enqueue and journaled durably before its
+  // response returns.
+  expect(await sendTransport("trigger", {slot: 0, velocity: 100}))
+    .toMatchObject({ok: true, result: {status: "enqueued"}});
+  expect(await sendTransport("trigger", {slot: 0, kind: "release"}))
+    .toMatchObject({ok: true, result: {accepted: true}});
+
+  expect((await sendTransport("pattern.transport.request", {
+    session_id: journey.sessionId,
+    project_id: journey.projectId,
+    command_id: crypto.randomUUID(),
+    expected_epoch: 2,
+    intent: "record",
+    expected_revision: null,
+  }))).toMatchObject({ok: true, result: {submit: "accepted"}});
+  // Storage settlement and the committed-Pattern publication are separate
+  // completions; the cadence drives both without a dispatch tail.
+  await expect.poll(async () => {
+    const status = await inspectTransport(journey.sessionId);
+    return status.ok && status.result.recording === false &&
+      status.result.phase === "idle" &&
+      status.result.publication_pending === false;
+  }, {timeout: 30_000}).toBe(true);
+
+  const truth = await sendTransport("project.inspect", {});
+  expect(truth.ok).toBe(true);
+  const events = truth.result.project.patterns[journey.patternId].events;
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100});
+
+  // A live Pad survives Record-off and Pattern Stop.
+  expect(await sendTransport("trigger", {slot: 0, velocity: 100}))
+    .toMatchObject({ok: true, result: {status: "enqueued"}});
+  expect(await sendTransport("trigger", {slot: 0, kind: "release"}))
+    .toMatchObject({ok: true, result: {accepted: true}});
+  expect((await sendTransport("pattern.transport.request", {
+    session_id: journey.sessionId,
+    project_id: journey.projectId,
+    command_id: crypto.randomUUID(),
+    expected_epoch: 3,
+    intent: "play_stop",
+    expected_revision: null,
+  }))).toMatchObject({ok: true, result: {submit: "accepted"}});
+  await expect.poll(async () => {
+    const status = await inspectTransport(journey.sessionId);
+    return status.ok && status.result.playing === false &&
+      status.result.phase === "idle";
+  }, {timeout: 30_000}).toBe(true);
+  expect(await sendTransport("trigger", {slot: 0, velocity: 100}))
+    .toMatchObject({ok: true, result: {status: "enqueued"}});
+  expect(await sendTransport("trigger", {slot: 0, kind: "release"}))
+    .toMatchObject({ok: true, result: {accepted: true}});
+});
+
+test("a Sample commit during Pattern transport recording is honestly rejected and the journal survives", async ({page}) => {
+  test.setTimeout(120_000);
+  await waitForFormalHost(page);
+  expect((await activateFromClick(page, 48_000)).ok).toBe(true);
+
+  const sendTransport = (operation, payload, sidecar) =>
+    page.evaluate(({operation, payload, hasSidecar}) =>
+      window.lmdjWebRuntimeHost.transport.send(
+        {
+          protocol_version: 1,
+          request_id: crypto.randomUUID(),
+          operation,
+          payload,
+        },
+        hasSidecar ? {sidecar: window.__lmdjTransportCaptureWav} : {},
+      ), {operation, payload, hasSidecar: sidecar === true});
+  const inspectTransport = (sessionId) =>
+    sendTransport("pattern.transport.inspect", {session_id: sessionId});
+
+  const setup = await page.evaluate(async () => {
+    const send = (operation, payload, sidecar) =>
+      window.lmdjWebRuntimeHost.transport.send(
+        {
+          protocol_version: 1,
+          request_id: crypto.randomUUID(),
+          operation,
+          payload,
+        },
+        sidecar === undefined ? {} : {sidecar},
+      );
+    const frames = 480;
+    const wav = new Uint8Array(44 + frames * 2);
+    const view = new DataView(wav.buffer);
+    const ascii = (offset, value) => {
+      for (let index = 0; index < value.length; ++index) {
+        wav[offset + index] = value.charCodeAt(index);
+      }
+    };
+    ascii(0, "RIFF");
+    view.setUint32(4, 36 + frames * 2, true);
+    ascii(8, "WAVE");
+    ascii(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, 48_000, true);
+    view.setUint32(28, 96_000, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    ascii(36, "data");
+    view.setUint32(40, frames * 2, true);
+    for (let frame = 0; frame < frames; ++frame) {
+      view.setInt16(44 + frame * 2, 2_000, true);
+    }
+    window.__lmdjTransportCaptureWav = wav;
+    const wavSha256 = [...new Uint8Array(
+      await crypto.subtle.digest("SHA-256", wav),
+    )].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const projectId = crypto.randomUUID();
+    const patternId = crypto.randomUUID();
+    const sessionId = crypto.randomUUID();
+    const created = await send("project.create", {
+      project_id: projectId,
+      bpm: 120,
+      initial_pattern: {pattern_id: patternId, bars: 1, events: []},
+      pattern_transport: true,
+    });
+    const importToken = crypto.randomUUID();
+    const assetId = crypto.randomUUID();
+    const imported = await send("sample.import.begin", {
+      import_token: importToken,
+      command_id: crypto.randomUUID(),
+      expected_revision: 0,
+      slot: {bank: 0, pad: 0},
+      asset_id: assetId,
+      byte_length: wav.byteLength,
+    });
+    const chunked = await send("sample.import.chunk", {
+      import_token: importToken,
+      offset: 0,
+      final: true,
+      sidecar: {sidecar_bytes: wav.byteLength, sidecar_sha256: wavSha256},
+    }, wav);
+    const committed = await send("sample.import.commit", {
+      import_token: importToken,
+    });
+    const snapshot = await send("snapshot.reload", {pattern_id: patternId});
+    const activated = await send("audio.activate", {});
+    const ticket = await send("pattern.transport.request", {
+      session_id: sessionId,
+      project_id: projectId,
+      command_id: crypto.randomUUID(),
+      expected_epoch: 1,
+      intent: "record",
+      expected_revision: null,
+    });
+    return {
+      projectId, patternId, sessionId, wavSha256,
+      created, imported, chunked, committed, snapshot, activated, ticket,
+    };
+  });
+  expect(setup.created.ok).toBe(true);
+  expect(setup.imported.ok).toBe(true);
+  expect(setup.chunked.ok).toBe(true);
+  expect(setup.committed.ok).toBe(true);
+  expect(setup.snapshot.ok).toBe(true);
+  expect(setup.activated.ok).toBe(true);
+  expect(setup.ticket).toMatchObject({ok: true, result: {submit: "accepted"}});
+  await expect.poll(async () => {
+    const status = await inspectTransport(setup.sessionId);
+    return status.ok && status.result.recording === true &&
+      status.result.phase === "idle";
+  }, {timeout: 30_000}).toBe(true);
+  expect(await sendTransport("trigger", {slot: 0, velocity: 100}))
+    .toMatchObject({ok: true, result: {status: "enqueued"}});
+  expect(await sendTransport("trigger", {slot: 0, kind: "release"}))
+    .toMatchObject({ok: true, result: {accepted: true}});
+
+  // The capture-style commit keeps its legacy busy guard while the transport
+  // journal is open: honestly rejected, never a silent journal seal.
+  const capture = await page.evaluate(async (setup) => {
+    const send = (operation, payload, sidecar) =>
+      window.lmdjWebRuntimeHost.transport.send(
+        {
+          protocol_version: 1,
+          request_id: crypto.randomUUID(),
+          operation,
+          payload,
+        },
+        sidecar === undefined ? {} : {sidecar},
+      );
+    const wav = window.__lmdjTransportCaptureWav;
+    const importToken = crypto.randomUUID();
+    const truth = await send("project.inspect", {});
+    const begun = await send("sample.import.begin", {
+      import_token: importToken,
+      command_id: crypto.randomUUID(),
+      expected_revision: truth.result.project_revision,
+      slot: {bank: 0, pad: 1},
+      asset_id: crypto.randomUUID(),
+      byte_length: wav.byteLength,
+    });
+    const chunked = await send("sample.import.chunk", {
+      import_token: importToken,
+      offset: 0,
+      final: true,
+      sidecar: {sidecar_bytes: wav.byteLength, sidecar_sha256: setup.wavSha256},
+    }, wav);
+    const rejected = await send("sample.import.commit", {
+      import_token: importToken,
+    });
+    const pressAfter = await send("trigger", {slot: 0, velocity: 100});
+    const releaseAfter = await send("trigger", {slot: 0, kind: "release"});
+    return {begun, chunked, rejected, pressAfter, releaseAfter};
+  }, setup);
+  expect(capture.begun.ok).toBe(true);
+  expect(capture.chunked.ok).toBe(true);
+  expect(capture.rejected).toMatchObject({
+    ok: false,
+    error: {code: "INVALID_ARGUMENT"},
+  });
+  expect(capture.pressAfter).toMatchObject({
+    ok: true, result: {status: "enqueued"},
+  });
+  expect(capture.releaseAfter).toMatchObject({
+    ok: true, result: {accepted: true},
+  });
+  const status = await inspectTransport(setup.sessionId);
+  expect(status).toMatchObject({
+    ok: true,
+    result: {recording: true, phase: "idle", error: null},
+  });
+});
+
+test("owner loss mid-recording seals the transport admission for the recovery surface on reopen", async ({page}) => {
+  test.setTimeout(120_000);
+  await waitForFormalHost(page);
+  expect((await activateFromClick(page, 48_000)).ok).toBe(true);
+
+  const setup = await page.evaluate(async () => {
+    const send = (operation, payload, sidecar) =>
+      window.lmdjWebRuntimeHost.transport.send(
+        {
+          protocol_version: 1,
+          request_id: crypto.randomUUID(),
+          operation,
+          payload,
+        },
+        sidecar === undefined ? {} : {sidecar},
+      );
+    const frames = 480;
+    const wav = new Uint8Array(44 + frames * 2);
+    const view = new DataView(wav.buffer);
+    const ascii = (offset, value) => {
+      for (let index = 0; index < value.length; ++index) {
+        wav[offset + index] = value.charCodeAt(index);
+      }
+    };
+    ascii(0, "RIFF");
+    view.setUint32(4, 36 + frames * 2, true);
+    ascii(8, "WAVE");
+    ascii(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, 48_000, true);
+    view.setUint32(28, 96_000, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    ascii(36, "data");
+    view.setUint32(40, frames * 2, true);
+    for (let frame = 0; frame < frames; ++frame) {
+      view.setInt16(44 + frame * 2, 2_000, true);
+    }
+    const wavSha256 = [...new Uint8Array(
+      await crypto.subtle.digest("SHA-256", wav),
+    )].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const projectId = crypto.randomUUID();
+    const patternId = crypto.randomUUID();
+    const sessionId = crypto.randomUUID();
+    const created = await send("project.create", {
+      project_id: projectId,
+      bpm: 120,
+      initial_pattern: {pattern_id: patternId, bars: 1, events: []},
+      pattern_transport: true,
+    });
+    const importToken = crypto.randomUUID();
+    const imported = await send("sample.import.begin", {
+      import_token: importToken,
+      command_id: crypto.randomUUID(),
+      expected_revision: 0,
+      slot: {bank: 0, pad: 0},
+      asset_id: crypto.randomUUID(),
+      byte_length: wav.byteLength,
+    });
+    const chunked = await send("sample.import.chunk", {
+      import_token: importToken,
+      offset: 0,
+      final: true,
+      sidecar: {sidecar_bytes: wav.byteLength, sidecar_sha256: wavSha256},
+    }, wav);
+    const committed = await send("sample.import.commit", {
+      import_token: importToken,
+    });
+    const snapshot = await send("snapshot.reload", {pattern_id: patternId});
+    const activated = await send("audio.activate", {});
+    const ticket = await send("pattern.transport.request", {
+      session_id: sessionId,
+      project_id: projectId,
+      command_id: crypto.randomUUID(),
+      expected_epoch: 1,
+      intent: "record",
+      expected_revision: null,
+    });
+    return {
+      projectId, patternId, sessionId,
+      created, imported, chunked, committed, snapshot, activated, ticket,
+    };
+  });
+  expect(setup.created.ok).toBe(true);
+  expect(setup.ticket).toMatchObject({ok: true, result: {submit: "accepted"}});
+
+  const inspectTransport = (sessionId) =>
+    page.evaluate((id) =>
+      window.lmdjWebRuntimeHost.transport.send({
+        protocol_version: 1,
+        request_id: crypto.randomUUID(),
+        operation: "pattern.transport.inspect",
+        payload: {session_id: id},
+      }), sessionId);
+  await expect.poll(async () => {
+    const status = await inspectTransport(setup.sessionId);
+    return status.ok && status.result.recording === true &&
+      status.result.phase === "idle";
+  }, {timeout: 30_000}).toBe(true);
+  await page.evaluate(() =>
+    window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "trigger",
+      payload: {slot: 0, velocity: 100},
+    }));
+  await page.evaluate(() =>
+    window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "trigger",
+      payload: {slot: 0, kind: "release"},
+    }));
+
+  // A mid-recording reload kills the Worker without a Close: owner loss.
+  await page.reload();
+  await waitForFormalHost(page);
+  const reopened = await page.evaluate(async ({projectId, patternId}) => {
+    const send = (operation, payload) =>
+      window.lmdjWebRuntimeHost.transport.send({
+        protocol_version: 1,
+        request_id: crypto.randomUUID(),
+        operation,
+        payload,
+      });
+    const opened = await send("project.open", {
+      project_id: projectId,
+      pattern_id: patternId,
+      pattern_transport: true,
+    });
+    const listed = await send("sequence.recovery.list", {});
+    return {opened, listed};
+  }, setup);
+  expect(reopened.opened.ok).toBe(true);
+  expect(reopened.opened.result.project_id).toBe(setup.projectId);
+  expect(reopened.listed).toMatchObject({ok: true});
+  // The Host injects the retained Project path into the listing; a regression
+  // there answers with an error or another Project's candidates, not this one.
+  expect(Object.keys(reopened.listed.result).sort()).toEqual([
+    "candidates",
+    "project_revision",
+  ]);
+  expect(reopened.listed.result.candidates).toHaveLength(1);
+  expect(reopened.listed.result.candidates).toContainEqual(
+    expect.objectContaining({
+      session_id: setup.sessionId,
+      reason: "owner_lost",
+    }),
+  );
+});
+
+test("cross-identity snapshot reload under an armed transport rebinds instead of bricking", async ({page}) => {
+  test.setTimeout(120_000);
+  await waitForFormalHost(page);
+  expect((await activateFromClick(page, 48_000)).ok).toBe(true);
+
+  const setup = await page.evaluate(async () => {
+    const send = (operation, payload, sidecar) =>
+      window.lmdjWebRuntimeHost.transport.send(
+        {
+          protocol_version: 1,
+          request_id: crypto.randomUUID(),
+          operation,
+          payload,
+        },
+        sidecar === undefined ? {} : {sidecar},
+      );
+    const frames = 480;
+    const wav = new Uint8Array(44 + frames * 2);
+    const view = new DataView(wav.buffer);
+    const ascii = (offset, value) => {
+      for (let index = 0; index < value.length; ++index) {
+        wav[offset + index] = value.charCodeAt(index);
+      }
+    };
+    ascii(0, "RIFF");
+    view.setUint32(4, 36 + frames * 2, true);
+    ascii(8, "WAVE");
+    ascii(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, 48_000, true);
+    view.setUint32(28, 96_000, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    ascii(36, "data");
+    view.setUint32(40, frames * 2, true);
+    for (let frame = 0; frame < frames; ++frame) {
+      view.setInt16(44 + frame * 2, 2_000, true);
+    }
+    const wavSha256 = [...new Uint8Array(
+      await crypto.subtle.digest("SHA-256", wav),
+    )].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const projectId = crypto.randomUUID();
+    const patternA = crypto.randomUUID();
+    const patternB = crypto.randomUUID();
+    const sessionId = crypto.randomUUID();
+    const created = await send("project.create", {
+      project_id: projectId,
+      bpm: 120,
+      initial_pattern: {pattern_id: patternA, bars: 1, events: []},
+      pattern_transport: true,
+    });
+    const importToken = crypto.randomUUID();
+    await send("sample.import.begin", {
+      import_token: importToken,
+      command_id: crypto.randomUUID(),
+      expected_revision: 0,
+      slot: {bank: 0, pad: 0},
+      asset_id: crypto.randomUUID(),
+      byte_length: wav.byteLength,
+    });
+    await send("sample.import.chunk", {
+      import_token: importToken,
+      offset: 0,
+      final: true,
+      sidecar: {sidecar_bytes: wav.byteLength, sidecar_sha256: wavSha256},
+    }, wav);
+    await send("sample.import.commit", {import_token: importToken});
+    const madeB = await send("pattern.create", {
+      command_id: crypto.randomUUID(),
+      expected_revision: 1,
+      pattern_id: patternB,
+      bars: 1,
+    });
+    const snapshot = await send("snapshot.reload", {pattern_id: patternA});
+    const activated = await send("audio.activate", {});
+    const ticket = await send("pattern.transport.request", {
+      session_id: sessionId,
+      project_id: projectId,
+      command_id: crypto.randomUUID(),
+      expected_epoch: 1,
+      intent: "record",
+      expected_revision: null,
+    });
+    return {
+      projectId, patternA, patternB, sessionId,
+      created, madeB, snapshot, activated, ticket,
+    };
+  });
+  expect(setup.created.ok).toBe(true);
+  expect(setup.madeB.ok).toBe(true);
+  expect(setup.activated.ok).toBe(true);
+  expect(setup.ticket).toMatchObject({ok: true, result: {submit: "accepted"}});
+
+  const sendTransport = (operation, payload) =>
+    page.evaluate(({operation, payload}) =>
+      window.lmdjWebRuntimeHost.transport.send({
+        protocol_version: 1,
+        request_id: crypto.randomUUID(),
+        operation,
+        payload,
+      }), {operation, payload});
+  const inspectTransport = (sessionId) =>
+    sendTransport("pattern.transport.inspect", {session_id: sessionId});
+  const pollUntil = (predicate) => expect.poll(async () => {
+    const status = await inspectTransport(setup.sessionId);
+    return status.ok && predicate(status.result);
+  }, {timeout: 30_000}).toBe(true);
+
+  await pollUntil((s) => s.recording === true && s.phase === "idle");
+  await sendTransport("trigger", {slot: 0, velocity: 100});
+  await sendTransport("trigger", {slot: 0, kind: "release"});
+  expect((await sendTransport("pattern.transport.request", {
+    session_id: setup.sessionId,
+    project_id: setup.projectId,
+    command_id: crypto.randomUUID(),
+    expected_epoch: 2,
+    intent: "record",
+    expected_revision: null,
+  }))).toMatchObject({ok: true, result: {submit: "accepted"}});
+  await pollUntil((s) =>
+    s.recording === false && s.phase === "idle" &&
+    s.publication_pending === false);
+  expect((await sendTransport("pattern.transport.request", {
+    session_id: setup.sessionId,
+    project_id: setup.projectId,
+    command_id: crypto.randomUUID(),
+    expected_epoch: 3,
+    intent: "play_stop",
+    expected_revision: null,
+  }))).toMatchObject({ok: true, result: {submit: "accepted"}});
+  await pollUntil((s) => s.playing === false && s.phase === "idle");
+
+  // Stopped-state cross-identity reload: the engagement rebinds and the next
+  // Record works on the new Pattern instead of bricking. The reload's pending
+  // publication applies at the Bar boundary; a Record before that is a
+  // transient refusal, so poll it.
+  expect(await sendTransport("snapshot.reload", {pattern_id: setup.patternB}))
+    .toMatchObject({ok: true});
+  let lastTicket = null;
+  try {
+    await expect.poll(async () => {
+      lastTicket = await sendTransport("pattern.transport.request", {
+        session_id: setup.sessionId,
+        project_id: setup.projectId,
+        command_id: crypto.randomUUID(),
+        expected_epoch: 4,
+        intent: "record",
+        expected_revision: null,
+      });
+      return lastTicket.ok;
+    }, {timeout: 30_000}).toBe(true);
+  } catch (error) {
+    throw new Error(
+      `record after cross-identity reload never accepted: ${JSON.stringify(lastTicket)}`,
+      {cause: error},
+    );
+  }
+  await pollUntil((s) => s.recording === true && s.phase === "idle");
+  await sendTransport("trigger", {slot: 0, velocity: 100});
+  await sendTransport("trigger", {slot: 0, kind: "release"});
+  expect((await sendTransport("pattern.transport.request", {
+    session_id: setup.sessionId,
+    project_id: setup.projectId,
+    command_id: crypto.randomUUID(),
+    expected_epoch: 5,
+    intent: "record",
+    expected_revision: null,
+  }))).toMatchObject({ok: true, result: {submit: "accepted"}});
+  await pollUntil((s) =>
+    s.recording === false && s.phase === "idle" &&
+    s.publication_pending === false);
+  const truth = await sendTransport("project.inspect", {});
+  expect(truth.ok).toBe(true);
+  expect(
+    truth.result.project.patterns[setup.patternB].events,
+  ).toHaveLength(1);
+});
 
 test("compatibility press renders the published Bank through the Wasm AudioWorklet", async ({page}) => {
   test.setTimeout(120_000);

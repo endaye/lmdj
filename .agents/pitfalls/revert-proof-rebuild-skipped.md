@@ -1,7 +1,7 @@
 ---
 id: revert-proof-rebuild-skipped
 area: core
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/issues/769
@@ -9,7 +9,7 @@ recurrences:
   - date: 2026-09-09
     occurrence: https://github.com/endaye/lmdj/issues/1058
     observed_by: Claude Code (Opus 5)
-exit: none
+exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
 # Proving a change by reverting it silently tests a stale binary when the restore moves a file's mtime backwards
@@ -63,6 +63,12 @@ line while `grep` showed the source was already correct. Deleting
 The dangerous direction is the other one. If the restore precedes the
 *breaking* run, a perturbation that never actually took effect reports green,
 and a perturbation proof that proves nothing gets written into a report as if
-it did. Escalated as
-https://github.com/endaye/lmdj/issues/1058: use `git checkout --` rather than
-`cp` to roll back, because it stamps the current mtime.
+it did.
+
+The recurrence-2 escalation [#1058](https://github.com/endaye/lmdj/issues/1058)
+exits to a skill rule: which artifact a proof runs against is a verification
+method, not a derivable product invariant, so no gate qualifies. `issue-done`
+§1 now fixes the discipline — restore with `git checkout --` / `git stash`
+(current mtime, never a timestamp-preserving `cp`/`tar` rollback without a
+follow-up `touch` and `__pycache__` clear), capture the proof rebuild's exit
+status, and confirm the failure line sits inside the test under proof.

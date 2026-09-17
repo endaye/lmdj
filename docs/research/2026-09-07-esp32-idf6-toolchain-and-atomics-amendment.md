@@ -793,3 +793,212 @@ capture 脚本成功只表示“已复现并验证这份失败裁决”；它分
 Task；若选择裁切 `application.hpp` 或设计新 Runtime Artifact/Contract/Profile，则属于
 未授权的 B2，必须先有产品决策。本轮没有 callback deadline、jitter、underrun、voice count、
 音频输出、文件系统实际运行或任何真机证据。
+
+## 10. B2 T4：窄 Runtime Facade 的 exact-source 探针（2026-09-09）
+
+本节是随后单独授权的 B2 T4，不改写 A/B1 的历史裁决。依据
+[B2 计划](../plans/2026-09-08-lmdj-esp32-runtime-only-b2.md) 与
+[本轮执行记录](../plans/2026-09-09-esp32-runtime-probe-t4.md)，只研究已合入 T1–T3
+的窄 Runtime Facade。**完整交叉编译/链接成功，但无 PSRAM 的固定对象容量阻断；
+这不是可运行固件 PASS，也不是进入 T5 的依据。** 没有私改产品源码、缩小队列/voice
+容量、改测试阈值、烧录、选择 transport、创建 Host 或进行 Release。
+
+### 10.1 输入、保留范围与真实构建结果
+
+固定产品源码 revision：`b24114f5082cbdd494bb599b49e6e6f2674da44b`，是 Task
+开始时的新鲜 `origin/main`，包含 T1–T3。仓库内仅本附录与 T4 计划为 docs-only
+修改；capture 前后核对 HEAD 与非文档文件清洁性。该 SHA 是实验输入，不把后来
+文档 commit 的 SHA 冒充产品源码的重新构建结果。
+
+独立工程：`/Users/endaye/esp/lmdj-spike/lmdj-runtime-probe-t4/`；A/B1 工程未覆盖。
+EIM 管理的 ESP-IDF v6.1 `fff9895c82d744c7237be8847347bdd1b07c6643`，Xtensa
+GCC 15.2.0 `esp-15.2.0_20251204`，ESP32-S3、Picolibc、`-Og`、`gnu++20`、
+`-fexceptions`、`-fno-rtti`，`CONFIG_SPIRAM` 未启用。只对 SDK headers 使用
+SYSTEM 分类；18 个 Core 源的展开编译参数均为 `-Wall -Wextra -Wpedantic -Werror`，
+没有沿用 IDF 的产品 warning 豁免。C++ exceptions 是既有 probe-local 条件，
+不是批准新的产品配置。
+
+以该 checkout 的 native CMake File API producer 核对 wrapper 的每个 target
+源列表及依赖，完整编译 Foundation 3、Authoring Domain 3、Project Cooker 6、
+Audio Runtime 5、Runtime Facade 1，合计 **18/18 对象、5 个 archive**。T1 的
+Performance Runtime 是独立 target，不是 T3 窄入口的依赖。没有 Project IO、Provider
+SDK、完整 Application 或 Host target；但现有宽库仍声明 `artifact.cpp` 的文件哈希、
+WAV reader/writer、offline renderer 等源，不能从 wrapper 中悄悄删除。
+
+| 本轮证据目录 | 实际退出码 | 裁决 |
+| --- | --- | --- |
+| `compile-all` | 127 | EIM activation 未将 `idf.py` 放入 PATH；尚未开始产品编译 |
+| `compile-all-02` | 2 | probe 引用了私有 `MasterFxControlEvent`；仅删除 probe 中该行 |
+| `compile-all-03` | 0 | 全 18 源编译、393 个显式 LMDJ text roots 保留到最终 ELF |
+| `compile-facade` | 0 | 全 18 源编译、17 个 Runtime Facade API roots 保留到最终 ELF |
+| `compile-positive` | 0 | 独立、从未执行的九类 64 位原子正对照镜像 |
+| `analyze-all` / `analyze-facade` / `analyze-positive` | 各 0 | 对象清单、最终 roots、符号、relocation、size 与正对照核验 |
+
+采用 EIM Python 显式调用 IDF 工具后解决第一项；第二项没有修改任何产品文件。
+原始失败输出、当轮 scaffold 与真实退出码均保留，不覆盖、不改写为 PASS。
+全保留模式从每个实际 archive member 提取导出 LMDJ text roots，再核对最终 ELF；
+不是只写一个空 `app_main` 然后凭成功链接宣称产品代码都在镜像里。`app_main` 不运行
+Facade/Engine，所以链接器没有为动态创建的 Engine 预留数十万字节 BSS。
+
+API-rooted 镜像中 `describe_artifact`、`render_offline`、文件 stream 等查询项为零；
+full-retention 镜像确实保留它们。**这是 linker GC 的可达性差异，不是 target 声明边界
+已完成隔离。** 若后续要求库本身也不声明 file/offline 源，应另开修复 Task。
+
+### 10.2 最终镜像与逐 archive 归因
+
+下列均为本轮最终链接的 IDF size/map 数值（字节），不是含 debug archive 文件长度，
+也不是 A/B1 的替代数据。
+
+| 项目 | full-retention | Facade API-rooted |
+| --- | ---: | ---: |
+| Flash Code | 537282 | 314746 |
+| Flash Data（含异常展开等） | 216364 | 113320 |
+| DIRAM（IDF 归类，含其分配的 text/data/BSS） | 53922 | 53922 |
+| IRAM（IDF 单独归类） | 16384 | 16384 |
+| `.dram0.data` | 13067 | 13067 |
+| `.dram0.bss` | 7600 | 7600 |
+| app `.bin` | 816512（`0xc7580`） | 490928（`0x77db0`） |
+
+本轮 API 镜像 `.iram0.text` 为 48611、vectors 为 1028 字节；IDF 将一部分指令区
+计入 DIRAM，不能再把完整 IRAM section 加到表中 DIRAM 造成重复。map 的 dummy
+映射区不是实际 RAM 对象，不能把 ELF 所有 `SHF_ALLOC` 大小相加当作堆使用量。
+
+| Archive | 全保留 Code / Flash Data / DIRAM | API-rooted Code / Flash Data / DIRAM |
+| --- | ---: | ---: |
+| Foundation | 136877 / 30548 / 596 | 40096 / 11274 / 596 |
+| Authoring Domain | 65685 / 11142 / 0 | 4345 / 411 / 0 |
+| Project Cooker | 34701 / 5768 / 0 | 10087 / 1779 / 0 |
+| Audio Runtime | 48921 / 4116 / 0 | 26140 / 1079 / 0 |
+| Runtime Facade | 5978 / 561 / 0 | 5966 / 561 / 0 |
+
+这些是同一镜像的归因，不是可独立相加的增量产品预算。SDK、libc、libstdc++ 等完整
+逐 archive 记录另见 `analysis-*/archives.json`；Flash 容纳镜像不代表 RAM 容纳运行态。
+
+### 10.3 原子计数与实际 callback 路径
+
+全 5 个 LMDJ archive 的 `nm -u` 及代码/literal relocation 中，`__atomic_*_8`
+均为 **0**；首先核对 18 个对象、393 roots 无缺失，才解释零值。两种普通镜像的
+最终 ELF 都含一个 helper family `__atomic_fetch_or_8`，由 SDK
+`esp_gpio_reserve.c.obj` / `esp_gpio_reserve` 引用，不是 Runtime Facade callback。
+SDK archive 还引用 load/and 的 64 位 helper，但对应引用不全保留到普通最终镜像。
+
+独立正对照的 `atomic64-positive.cpp.obj` 和最终 ELF 同时检出 load、store、exchange、
+compare_exchange、fetch_add/sub/and/or/xor 共 **9/9 families**。代码/literal 各一条
+relocation 不算两个运行时调用；该镜像从未执行，也不混入普通镜像尺寸。
+
+检查实际 `RuntimeFacade::render → RealtimeEngine::render`：Facade 使用 32 位 gate
+CAS，调用 Engine，发布 consumed 32 位值并释放 gate；Engine 路径覆盖固定 SPSC
+队列、bank/pattern publication、voice 启停、PCM 读取、FX 与 ValueChannel observation。
+反汇编可见相应 `s32c1i` / `memw`，不是通过匹配 `telemetry()` 代替 callback。
+带 observation-reader mutex 的 telemetry、load 的解码/分配、stop 的 thread yield
+属于本轮检查到的控制侧路径。
+
+`callback-static.json` 保存从真实 Facade render 入口追踪的 direct-call/literal-reference
+图（60 个函数），未发现其中已解析函数名指向 64 位原子 helper、mutex、allocation 或
+文件 IO。但它保留 **36 条 callx 指令尚未逐条完成寄存器数据流裁决**，并非完整封闭
+callgraph；ROM/库实现及间接调用仍有限制。因此本轮可以报告 LMDJ 对象无 64 位
+helper 引用、已解析路径的归因，不能单凭符号零计数宣称普遍无锁/无分配/无 IO，
+更不能证明实时 deadline。
+
+### 10.4 目标 ABI 固定对象、stack 与动态准备预算
+
+尺寸来自 target ELF 中的常量向量与 `xtensa-esp32s3-elf-gdb` 对同一 ELF 的 DWARF
+`sizeof` / `ptype /o`，不采用主机 ABI。最初 generic GDB debug-offset 失败日志保留于
+`sizes-initial`；正确 target wrapper 的结果保留于 `sizes-target-gdb` / `sizes-target-layout`。
+
+| 固定对象或 Engine 内部成员 | 目标字节数 |
+| --- | ---: |
+| `RealtimeEngine` | **594624** |
+| `RuntimeFacade::Impl` | 8416 |
+| `RuntimeFacade` | 4 |
+| 三者合计，Facade 的 `fixed_bytes` | **603044** |
+| Engine control queue | 65728 |
+| Engine FX queue | 8384 |
+| Engine capture queue | 65728 |
+| Engine trigger-outcome queue | 98496 |
+| Engine voice-state queue | 327872 |
+| Engine voices | 10240 |
+
+后六项已经包含在 Engine 内，不能再次加入总计。仅 voice-state queue 就占 327872
+字节；这些是当前固定容量的真实对象布局，不是按可用内存推算出的允许配置。
+[ESP32-S3 官方 datasheet](https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf)
+给出 512 KiB 片上 SRAM 与另 16 KiB RTC SRAM。**Engine 单对象已超过 524288 字节，
+甚至超过两者相加的 540672 字节**，尚未计 SDK 占用、stack、PCM、Bank 或分配器。
+在本轮无 PSRAM 范围内，这足以判定当前实现的结构性容量阻断，无需冒险尝试运行。
+RTC RAM 并不是可与普通堆任意拼接的单个连续分配；8 MB Flash 也不是可替代的 RAM。
+
+动态部分按 `RuntimeFacade::load` 的实际 admission 公式独立列账。示例使用仓库
+`tests/fixtures/contracts/runtime-content-v1.hex`：248 个编码字节，解码字节 SHA-256
+`5e441b59ea4a75e3a1a91f0ea10cb8e893a8b542f5923545e1d89596d8e65705`；2 Pads
+共享 1 个 4-frame mono PCM16 sample、1 event。它只是极小控制样本，不是产品容量目标。
+
+| 预算项 | 字节 |
+| --- | ---: |
+| fixed | 603044 |
+| encoded input | 248 |
+| 唯一 PCM16 payload | 8 |
+| 两个 Pad 的 prepared float Bank payload | 32 |
+| metadata payload | 907 |
+| preparation workspace（最大临时 float、event、Bank、PatternView） | 2248 |
+| platform reserve 之前的小计 | **606487** |
+
+目标辅助类型包括 Snapshot 96、PcmSample 20、ResolvedPad 96、shared_ptr 8、
+ResolvedEvent 24、PreparedPatternEvent 64、PatternEvent 16、Bank 2096、PatternView
+120 字节；公式与计算保留于 `check-evidence.py` / `budget-model.json`。这不是实测
+heap peak；有效配置还必须加入非零 platform reserve，覆盖 allocator/control-block、
+capacity rounding、SDK tasks、DMA 等，不能拿 reserve=0 当可接受配置。
+
+`-fstack-usage` 报告 Facade render 32、Engine render 384、Facade load 2672、
+内部 decoder 6800、`Impl::drain_events` 3632 字节单函数静态 frame。decoder 与
+drain_events 各自已大于本 probe 默认 `CONFIG_ESP_MAIN_TASK_STACK_SIZE=3584`。
+这些不是累加后的最大调用栈或真机 high-water mark；未来 Host 必须独立测量/配置
+task stacks，不能据此在本研究内随意扩大 stack 并宣称内存问题解决。
+
+### 10.5 主机控制、证据复核与停止边界
+
+同一输入 SHA 新鲜 native configure/build 成功，22 项主机控制为 **21/22 PASS**，
+真实 CTest exit 8。T1 consumer/bridge/adapter/replay、T2 runtime-content/export、
+T3 runtime-facade/quiescence/stress 与全部本轮 audio 控制通过；5 项 stress 均执行。
+失败项 `facade.application` 的 manifest 对比仍硬编码 Facade `3.1.0`、Audio Runtime
+`3.0.0`，输入 revision 的真实 manifest 为 `3.2.0` / `3.1.0`。该事实不来自 T4 文档
+改动；本轮不修它、不删除它、不把整个选择报告为通过。原始命令与全部失败上下文见
+`host-control/command.json` / `output.log`。
+
+```bash
+ctest --preset dev --output-on-failure -R '^(audio\.(value_channel|realtime_queue|prepared_sample_bank|realtime_engine|snapshot_publication_invariant|master_fx|master_fx_determinism|master_fx_allocation_guard|realtime_spsc_stress|snapshot_publication_stress|long_sample_publication_stress|master_fx_stress)|facade\.(application|performance_runtime_consumer|performance_runtime_bridge|performance_engine_adapter|performance_replay|runtime_content_export|runtime_facade(_quiescence|_stress)?)|cooker.runtime_content)$'
+```
+
+本机 `evidence/` 保留每次 command、raw output、真实 exit、输入身份、scaffold，以及
+三组 ELF/map/bin、展开编译参数、源 hash、roots、nm、反汇编、relocation、stack 和 size。
+`capture.py` 拒绝覆盖同名实验目录；重放需要新的标签与新的 analysis 输出目录，使用
+`inputs.json` 指定的固定源码 checkout。`check-evidence.py` 的首轮反汇编解析错误
+保留为 `integrity-final` exit 1，修正仅限脚本；`integrity-final-02` exit 0 核验了
+18 源/roots、9-helper 正对照、脚本语法，并证明删去 producer source 或一个 archive
+会被明确拒绝。最终证据包带独立 SHA-256 清单，仅本机保存，不上传公共资产。
+
+仓库验证使用 `scripts/local-ci.sh --lanes docs_static`、staged ownership admission、
+相对链接/差异检查及 `scripts/docs-site.sh check`，不新增 CI gate。Pitfall impact:
+none；本轮容量与版本断言发现可直接从源码/测试表达，不新建流程 ledger 条目。
+Version impact: none；Documentation impact: none（仅实验研究，不宣称 Portal 的
+受支持平台边界改变，无 Product/Module/Contract/Build/Channel 分配）。
+
+**有效审查和 merge 仍等待用户指定的、由另一 agent 负责的 CI scope 修复。** 本轮
+没有审查接管或 CI 修复。T4 的负面容量结果应先进入后续独立设计/修复决策；T5、
+heap/largest-block 实测、callback deadline/jitter/underrun、I2S、听感与真机验收均未执行。
+
+### 10.6 后续处理记录（2026-09-12）
+
+以上是固定输入 `b24114f5082cbdd494bb599b49e6e6f2674da44b` 的历史实验，
+不是 current main 的容量或测试状态。随后两个独立 Task 已合入：
+
+- [PR #1060](https://github.com/endaye/lmdj/pull/1060) 修正了
+  `facade.application` 的过期版本断言，并记录该测试通过；本节原始 **21/22、exit 8**
+  及其原始失败输出保持不变，不用后续修复重写旧输入的实验结果。
+- [PR #1081](https://github.com/endaye/lmdj/pull/1081) 为 Runtime Facade 引入
+  基于 receipt 上界的 voice-state 存储，并记录目标机资源验证。其源码、镜像和极小
+  golden fixture 与 T4 的身份／验证范围分开；它处理后续容量问题，但不把本节
+  **603044 字节 fixed model** 改判为可运行，也不证明正常音乐容量、I2S 或完整真机验收。
+
+这些链接补齐历史发现的后续去向，不扩大 T4 的研究结论，也不解除另行进行的
+CI scope 修复所对应的有效审查／合并暂停条件。原始 callback 间接调用、stack、
+deadline 与硬件未测项仍按当时证据保留；后续实验必须绑定各自的准确身份。

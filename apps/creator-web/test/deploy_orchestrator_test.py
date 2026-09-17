@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -459,6 +460,56 @@ class DeployOrchestratorEvidenceTest(unittest.TestCase):
             self.write(document, document["contract"]),
             json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
         )
+
+    def test_read_only_validator_reuses_writer_schema_without_file_effects(self) -> None:
+        for document in (self.success_document(), self.recovery_document()):
+            with self.subTest(contract=document["contract"]):
+                self.assertEqual(
+                    deploy_orchestrator.validate_evidence_document(
+                        source=json.dumps(document), expected_contract=document["contract"]),
+                    document,
+                )
+                with tempfile.TemporaryDirectory() as directory:
+                    result = subprocess.run(
+                        [sys.executable, deploy_orchestrator.__file__,
+                         "evidence-validate-document", document["contract"]],
+                        input=json.dumps(document), text=True, capture_output=True,
+                        cwd=directory, timeout=10,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, self.write(document, document["contract"]))
+                    self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_read_only_validator_refuses_one_fact_identity_drift(self) -> None:
+        paths = [
+            ("production", "url"),
+            ("publication", "same_deploy_id"),
+            ("publication", "response", "site_id"),
+            ("immutable", "http", "result", "index_sha256"),
+            ("production", "browser", "product_build"),
+            ("prior_good", "site_response", "published_deploy", "id"),
+            ("prior_good", "immutable", "http", "result", "manifest_sha256"),
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                document = self.success_document()
+                target = document
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = "wrong"
+                with self.assertRaises(deploy_orchestrator.DeployOrchestratorError):
+                    deploy_orchestrator.validate_evidence_document(
+                        source=json.dumps(document), expected_contract=document["contract"])
+                with tempfile.TemporaryDirectory() as directory:
+                    result = subprocess.run(
+                        [sys.executable, deploy_orchestrator.__file__,
+                         "evidence-validate-document", document["contract"]],
+                        input=json.dumps(document), text=True, capture_output=True,
+                        cwd=directory, timeout=10,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(list(Path(directory).iterdir()), [])
 
     def test_success_evidence_accepts_manifest_verified_asset_count(self) -> None:
         document = self.success_document()

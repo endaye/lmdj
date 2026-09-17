@@ -1,0 +1,250 @@
+# Pattern transport: Facade, runtime and Creator integration
+
+## Goal and authority
+
+Complete the remaining integration for [#1230](https://github.com/endaye/lmdj/issues/1230), then return to U1/U2 and the complete [U0–U8 migration](../../plans/2026-09-11-creator-ui-migration.md). This is an execution plan for the approved [transport architecture](../specs/2026-09-11-global-pattern-transport-design.md), not a replacement success criterion. No brainstorming, new transport product decision, release, deployment or user-data deletion is included.
+
+The six approved transitions, restart at Pattern beginning without count-in, and Record-off without playback restart are settled. The demo does not need old Sequence storage compatibility. Preserve existing bytes and report unsupported/unresolved recovery; do not convert or delete user storage. The owner waiver for PR #1265 applied only to its exact head, not to these Tasks.
+
+## Inspected baseline
+
+Source: `e5195d1524b0581c777ecf8ee4bb14773fc3fa07` (PR #1265 merged). These are source observations, not fresh runtime acceptance:
+
+- PR #1247 supplies `RealtimeEngine::enable_pattern_transport`, `submit_pattern_transport`, historical `inspect_pattern_transport_receipt`, acknowledgment and phase-preserving publication. Audio receipts contain generation, epoch, effective/origin frame, Pattern/publication identity and cutoff-relative switch disposition.
+- PR #1260 supplies `SequenceJournalStore::prepare_admission`, candidate append, retained admission/cutoff fences, retained switch authority, closure, transfer and completion. `sequence_admission.hpp` defines bounded candidates and canonical-tail transfer/checkpoint receipts.
+- PR #1265 supplies the isolated WebKit setup for real OPFS proof. Mac dependencies must be installed locally; Windows/WSL caches are not portable proof inputs.
+- `Application::Impl::begin_sequence` creates the journal synchronously under `sequence_mutex`, anchors at the supplied frame and immediately registers a live `SequenceRuntime`. `record_sequence_event` appends a complete recoverable tail before advancing its input sequence. These functions are not prepared admission or an asynchronous transport coordinator.
+- `ControlRuntime` still implements `sequence.record.begin` and records immediately after accepted engine enqueue. `runtime_session.mjs` serializes runtime actions. Neither exposes the proposed global request/inspect transport API.
+- `ControlBridge::process` serializes dispatch through the complete Asyncify suspension/rewind. `library_opfs_storage.js::suspend` rejects reentry. Merely returning a Promise or moving a synchronous flush into a later dispatch cannot satisfy nonblocking transport continuation.
+
+## Invariants and implementation order
+
+One Facade coordinator owns the transport operation and journal; one audio owner applies clocks; one existing input controller retains live input/result authority. Creator only submits intents and renders projections. No second Runtime, no page-owned recording state, no engine-wide Stop as Pattern Stop, no dummy Pattern or silence publication.
+
+Implement T0 → T1a → T1b → T2 → T3 → T4. Each is one isolated, declared Task and Conventional Commit, with current-head review through `issue-done`. T1b has a durable conversion producer followed by its prepared-owner consumer, as described below; neither drops any T1 acceptance. T1a/T1b together retain the complete T1 acceptance below. Shared files have one writer. Broad CI repair remains with the other agent. A foundational Task is not global transport acceptance and must not enable Creator prematurely.
+
+### T0 — Prove the execution port before transporting IO through it
+
+**Defect caught:** a paused prepare/flush suspends the entire control lane, or a second request reenters a suspended Asyncify stack.
+
+**Files:**
+
+- New `packages/application-facade/include/lmdj/facade/pattern_transport_ports.hpp` and `packages/application-facade/src/pattern_transport_executor.cpp`.
+- `packages/application-facade/CMakeLists.txt` and new `tests/core/facade/pattern_transport_executor_test.cpp`.
+- `packages/web-runtime-platform/src/bridge.cpp`, `packages/web-runtime-platform/include/lmdj/web_runtime/control_runtime.hpp`, `packages/web-runtime-platform/src/control_runtime.cpp`, `packages/web-runtime-platform/CMakeLists.txt`.
+- `packages/web-runtime-platform/test/control_runtime_test.cpp`, `packages/web-runtime-platform/test/performance_bridge_test.cpp`, `tests/platform/web/audio/realtime_failure.spec.mjs`, `tests/platform/web/audio/realtime_audio_worklet.spec.mjs`, `tests/platform/web/audio/realtime_audio_worklet.html`.
+- New conformance-only `packages/web-runtime-platform/test/pattern_transport_opfs_probe.hpp` and `.cpp` own the real storage probe, keeping Project I/O includes out of production Host source. Only the conformance link compiles them.
+- `scripts/web-toolchain-conformance.sh` runs the new paused-OPFS journey on the already configured isolated WebKit environment as well as the existing Chromium audio suite, catching cross-worker lease/Asyncify regressions on both platforms.
+- `scripts/ci/scope_policy.json`: admit only the two new conformance probe paths to their owning Web lanes. The staged ownership suite found these exact paths unclassified; no general CI repair or broad fallback rule is included.
+- `apps/docs-site/docs/core/modules/application-facade.mdx`, `apps/docs-site/docs/core/modules/web-runtime-platform.mdx`, corresponding `apps/docs-site/diagrams/application-facade.architecture.json` and `web-runtime-platform.architecture.json`, plus generated outputs from the canonical diagram command.
+
+**Port contract:** submit reserves a bounded ticket and returns without invoking blocking preparation/IO inline. Ticket binds runtime generation, transport epoch, command ID and monotonically identified step. Poll returns pending or one retained completion, with typed success/refusal/unknown outcome. Explicit consume is required before ticket reuse. Duplicate submit with changed payload is refused; timeout neither erases a ticket nor retries an effect. Queue exhaustion is a refusal before effect. No timer qualifies as completion.
+
+Execution ownership must be proven in this Task. A dedicated non-audio execution context may own preparation and its Project writer lease, while the control thread owns engine submissions and consumes immutable completion results. All storage operations on a lease, including destruction, stay on its owning execution context; never carry an OPFS numeric lease token into another worker's JS registry. Do not share a mutable `Application` across workers without an explicit lock/ownership proof. The control path must not wait on an application mutex held across that work.
+
+During pre-admission preparation and after acknowledged cutoff, live input remains live-only and must run while IO is paused. During admission and fence retention, preserve existing post-enqueue append result semantics: a trigger that needs durable candidate retention cannot be reported successful early. This is not permission to move input into a second queue or make journaling fire-and-forget.
+
+- [x] Register the native component target `lmdj_pattern_transport_executor_tests` / CTest `facade.pattern_transport_executor`; use a deterministic latch to hold work and assert submit returns and the owner can inspect pending state.
+- [x] Add stale completion, duplicate request, queue full, unknown result and disposal/join tests. Dispose must settle or preserve recovery, not detach a worker retaining freed Facade memory. Completion is bound to the retained request cell; no externally supplied completion identity can overwrite it. Stale generation/step/epoch and wrong-ticket consume are rejected.
+- [x] In real browser conformance, hold an actual OPFS operation across dispatch turns; prove a live press/release and its existing receipt complete before unblocking prepare/flush. Then release IO, consume completion once and inspect persisted data. The T0 probe pauses `create_immutable` after write/before flush; actual Sequence preparation remains T1.
+- [x] Preserve the existing reentry guard and bridge serialization tests. Extend the declared existing audio browser specs discovered by standard Web toolchain proof; add any additional harness source to this declaration before editing. Do not create an undiscovered spec.
+- [x] Run native component, relevant bridge tests, real Chromium/isolated WebKit proof and ASan/TSan for any new shared-thread state. Do not proceed to global opt-in if only a fake executor passed.
+
+T0 local evidence (Mac arm64, 2026-09-13): six executor cases pass in `dev`, `asan` and `tsan`; `host.web_control_runtime`, `host.web_performance_bridge` and `host.web_source_boundary` pass. The conformance-off Web target builds without the probe exports/hook. `scripts/docs-site.sh check` passes (144 tests, 47 routes); staged ownership passes 74/74 after adding the two exact probe paths.
+
+The complete `scripts/web-toolchain-conformance.sh proof` passes with `EMSDK=/Users/endaye/Projects/lmdj/build/toolchains/emsdk`, `TMPDIR=/private/tmp`, `CMAKE_BUILD_PARALLEL_LEVEL=6` and the supported `LMDJ_WEBKIT_OPFS_EXECUTABLE=/Users/endaye/Library/Caches/ms-playwright/webkit-2336/pw_run.sh` override. This is native arm64 WebKit 26.5, not the unfinished 26.6 download and not a Windows/WSL cache copy. Chromium: toolchain 2, Project I/O 31, audio 23 pass. WebKit: toolchain 1 pass/1 existing capability skip; persistent-profile Project I/O 23 pass/8 existing Chromium-owned skips; new paused-OPFS journey 1 pass. Skips are not positive platform acceptance. The default Mac `/var` temporary path initially failed the existing environment resolver's canonical-path assertions; the same five tests pass with canonical `TMPDIR`, without assertion or resolver changes.
+
+The browser journey retains the full sequence: actual write held before flush → existing Bank/live press/voice outcome and release receipt → nonblocking shutdown request plus Control status → IO release and exact readback → once-only consumption and worker-owned lease destruction → new-worker lease reacquisition/readback → browser reads identical persisted bytes. T1–T4, production lifecycle barriers and Creator global opt-in remain pending; T0 adds no Project storage migration or deletion.
+
+If the current platform cannot implement this port without changing #725 successful/failed/unknown admission outcomes or violating single-owner Asyncify/lease rules, record that exact dependency and stop the adapter implementation. Do not weaken the approved architecture to fit the existing dispatch loop.
+
+### T1 — Prepared journal, acknowledged admission and exactly-once transfer
+
+Execution boundary: ship T1a (shared production event reducer) before T1b (prepared admission, durable candidate conversion and recovery). T1a extracts the existing `SequenceRuntime` Pad math into the declared internal controller files, makes the existing Sequence path consume it, and tests the acknowledged-origin/nonzero-phase calculation and correlation rules. It allocates no storage format or public API and does not satisfy the durable T1 acceptance checkboxes below. T1b must still prove every native/OPFS transfer, crash/retry, cutoff and recovery leg. This producer/consumer split prevents a second overdub algorithm from being introduced while the admission storage adapter is built.
+
+**T1a local evidence (2026-09-13):** the first build of `lmdj_pattern_admission_tests` failed for the absent internal controller header. After extracting the production reducer, `facade.pattern_admission` passes seven scenarios: retained-origin tick math versus a reset origin, orphan/stale release correlation, retrigger and terminal completion, legacy release/quantization/idempotent merge, Swing, Pattern-end duration clipping and multi-bar onset. The existing Sequence lifecycle/recovery/rebase shards also pass (25 scenarios); the same four CTests pass under native Mac ASan. The origin test supplies an anchor explicitly: it does not prove that the not-yet-implemented prepared-admission caller obtains the correct audio receipt. No T1 checkbox is discharged by these reducer tests. Sequence still owns validation, its mutex, storage append, rollback and acknowledgment. No new concurrency, public ABI, storage format, module boundary or user-data operation is introduced. The current Facade page describes the extracted internal owner boundary; its existing module diagram remains accurate.
+
+**Defect caught:** mid-loop Record uses the button frame as tick zero, a pre-admission release fabricates an event, or retry transfers the same retained candidates twice.
+
+**T1b producer/consumer boundary:** the durable conversion Task produces internal `build_admission_transfer` / `commit_admission_transfer` and the historical timing-profile storage they consume. Its actual Facade recovery journeys use known retained admission/cutoff fences, not a running transport owner. The following prepared-owner Task consumes these functions through T0's execution context and must still implement closed preparation/activation, validated post-enqueue candidates, deadline/capacity closure, settings/rebase ordering, switch-segment reconciliation and owner-loss recovery/discard. This is not a substitute for those missing lifecycle legs: all T1 checkboxes below remain pending until the complete owning workflow is proven. T2–T4 and U0–U8 retain their original scope.
+
+The timing producer must persist the actual acknowledged settings/clock anchor before retaining later input. Several setting changes before the same next watermark are legal; no record may change already retained input or backdate an already transferred checkpoint. The converter does not infer absent settings history from the current Project or synthesize missing segment/fence authority. Connecting existing settings mutations to this ordering remains part of the prepared-owner consumer; the new converter is not yet a live input API.
+
+**T1b conversion-producer local evidence (2026-09-13, Mac arm64):** the initial converter stub failed the nonzero-origin transfer assertion. A later regression failed because a new timing profile could backdate a transferred checkpoint; the production codec now refuses that record without changing bytes. The six CTests `facade.pattern_admission`, the three `facade.sequence_surface` shards, `project_io.sequence_journal` and `project_io.session_mutual_exclusion` pass in dev and ASan. The final reducer/converter target passes 13 scenarios, including immutable retry/collision, an excluded release preserving checkpoint/input sequence and target-segment clock requirements. The native recovery journey kills a child after durable conversion but before delivery, reopens and retries the same transfer, terminalizes with its retained cutoff, seals, applies to the original/alternate existing Pattern, compares complete events/revision and untouched assets/Banks, and refuses a second Apply without changing Truth.
+
+The complete standard `scripts/web-toolchain-conformance.sh proof` passes with the same native Mac Emscripten/Node/WebKit override and canonical `TMPDIR` recorded under T0. Project I/O: Chromium 37 pass; isolated WebKit 29 pass and 8 existing Chromium-owned skips. Chromium audio: 23 pass; isolated WebKit paused-OPFS journey: 1 pass. Both browsers execute all four new conversion/recovery journeys: origin/settings fixture × original/alternate existing Pattern. Each compares the full transfer/checksum and retained journal bytes after lost response, exact retry, terminal tail, sealed recovery, committed events/revision and repeat-Apply Truth. The first browser attempt failed before recovery because the fixture omitted the required replay collaborator; the final fixture supplies the production unavailable replay controller and does not stub recovery. These are not audible playback, real-device Safari, live settings acquisition or full T1 acceptance.
+
+Portal check passes (144 tests, 47 routes), dependency/active-tree checks pass, and staged ownership passes 74/74. The first portal pass rejected displaying private journal discriminators as registered Contract IDs; the current page correctly describes private v3 without changing the validator. Existing module dependency diagrams remain accurate: Facade still depends on Project I/O, and no new module/control lane is introduced. Pitfall impact: none — the conversion/time-history defects are expressed by product regressions; no new process gate, timeout, skip or broad CI repair is added.
+
+The complete native dev target graph builds. `python3 tests/build/facade_surface_sharding_test.py build/core/dev` then passes. Its first invocation lacked the required build-directory argument; the second could not discover commands for unbuilt executables in the partial build. Building the registered binaries cleared discovery without editing the gate or shard inventory; the new recovery case remains in the existing recovery shard.
+
+**PR #1295 review follow-up:** retained review run `34765825201`, attempt 2, identified a real snapshot validation gap. The native regression first failed because a rechecksummed sealed profile could predate an earlier candidate; the shared validator now checks earlier candidates and nonterminal transfer checkpoints on both append and snapshot reads, without constraining old settings by later input or a terminal cutoff. Native and real OPFS regressions separately exercise retained-candidate and transferred-prefix histories, reopen a valid sealed snapshot first, then reject the damaged snapshot while preserving every byte. A separate converter case checks initial Quantize enabled/Swing 60 without a timing profile (14 reducer/converter scenarios). These remain conversion-producer tests, not prepared-owner or global transport acceptance. Both failed review publication attempts remain recorded; neither is current-head review approval.
+
+**Files:**
+
+- `packages/application-facade/include/lmdj/facade/application.hpp`, `packages/application-facade/src/application.cpp`.
+- New internal `packages/application-facade/src/pattern_admission_controller.hpp` and `.cpp`; `packages/application-facade/CMakeLists.txt`.
+- T1b durable conversion authority: `packages/project-io/include/lmdj/project_io/sequence_admission.hpp`, `sequence_journal.hpp`, `packages/project-io/src/sequence_admission_codec.hpp`, `.cpp`, `sequence_journal.cpp`, and `tests/core/project_io/sequence_journal_test.cpp`. Preparation retains Quantize/Swing; immutable timing-profile records bind later settings to a control watermark, Pattern/publication, revision and exact tick numerator/frame anchor. Missing historical authority remains unresolved, never guessed from current Project settings. These are internal journal metadata, not Project Truth. Existing unsupported admission bytes are preserved; no compatibility reader or data deletion is added.
+- `tests/core/facade/sequence_surface_test.cpp`; new `tests/core/facade/pattern_admission_test.cpp` registered as `lmdj_pattern_admission_tests` / `facade.pattern_admission`.
+- `tests/core/project_io/session_mutual_exclusion_test.cpp`: update its explicit Sequence journal fixture to the new internal discriminator; preserve the mutual-exclusion assertion.
+- `tests/platform/web/project_io/project_io_web_test.cpp`, `tests/platform/web/project_io/project_io_web_conformance.spec.mjs` for real Facade/storage recovery; declare any required harness linkage changes before editing.
+- `tests/platform/web/project_io/CMakeLists.txt`: link the actual Application Facade (with Cooker, Audio Runtime and Provider SDK dependencies) into the existing test executable for candidate conversion and public recovery. Added subdirectories are excluded from unrelated default targets; production OPFS link isolation remains unchanged.
+- `/core/modules/application-facade/` and `/core/modules/project-io/` current pages and corresponding module diagram sources/generated outputs if their boundaries change.
+
+Use the existing journal and `SequenceRuntime` reducer; do not implement a second quantization/overdub algorithm. Add a prepared state with candidate admission closed. Reserve durable admission capacity and its terminal/error record before the fence. Activation takes the retained audio origin/BPM/Pattern identity plus effective frame; origin anchors tick zero, while the effective frame and watermark bound eligibility.
+
+Candidate identity is the original accepted input sequence/correlation, not the journal sequence. Retain candidates only at the existing post-enqueue point; known refusal creates none. A release can close only a matching journal-owned press. Preserve the existing per-slot retrigger behavior and sixteenth-tick finalization. Candidate transfer computes a complete canonical tail and checkpoint, binds exact source digests/receipts, and advances the journal sequence only after durable success. Reconcile an ambiguous append before draining further; never enqueue live input from recovery.
+
+- [x] First red assertion: an admitted mid-loop press/release produces the correct nonzero Pattern tick without resetting origin. (facade.pattern_admission reducer scenarios, PR #1291/#1298)
+- [x] Prove pre-admission press/post-admission release is live-only; owned press/post-cutoff release uses ordinary terminal completion rather than a fabricated cutoff release. (pattern_admission_test.cpp `prepared_owner_keeps_post_close_input_live_only` et al.)
+- [x] Crash/reopen after candidate append, fence retention, transfer append and receipt response loss. Compare complete Pattern/Pad Slot events, revision and transfer identity, not just event count. (T1b native recovery journey + Chromium/isolated WebKit OPFS journeys, PR #1295)
+- [x] Reach last reserved capacity and deadline deterministically: close at watermark B, persist reason/prefix, keep subsequent input live-only, and drain that prefix once after delayed receipt. Storage failure reports the uncertain suffix explicitly. (facade.pattern_admission capacity/deadline scenarios; `prepared_owner_reports_an_uncertain_suffix_on_storage_failure`)
+- [x] Keep unresolved fence state unresolved after owner loss; verify original/alternate existing Pattern recovery and user-requested discard without deleting unrelated data. (T1b recovery journeys; Host-facing listing shipped later in PR #1367)
+- [x] Native and real OPFS assertions must cover the same far-side state. Reuse storage fault injection and writer leases, not a filesystem-only mock as browser proof. (PR #1265 isolated WebKit + T1b OPFS journeys)
+
+### T2 — Facade transport coordinator and historical effect reconciliation
+
+**Defect caught:** retry toggles twice, durable Record-off is reported as failure of all effects, or a delayed switch observation selects the wrong Pattern at cutoff.
+
+**Files:**
+
+- `packages/application-facade/include/lmdj/facade/application.hpp`, `packages/application-facade/src/application.cpp`, `packages/application-facade/include/lmdj/facade/pattern_transport_ports.hpp`.
+- New `packages/application-facade/src/pattern_transport_controller.hpp` and `.cpp`; `packages/application-facade/CMakeLists.txt`.
+- New `tests/core/facade/pattern_transport_test.cpp` registered as `lmdj_pattern_transport_tests` / `facade.pattern_transport`; existing `tests/core/facade/sequence_surface_test.cpp`.
+- Application Facade current page and architecture source/generated outputs.
+
+Expose typed request/inspect/continue operations. Bind session/project identity, runtime generation, command ID, expected epoch, intent and relevant expected revision. Resolve the intent once against applied state, retain the operation through terminal outcome, and reject a new mutation while unresolved. Same ID/different payload is invalid; same ID/same payload returns/reconciles its retained operation. Stale generations cannot mutate a restarted session.
+
+The coordinator selects effects, the execution port performs preparation/storage off the control lane, and the audio port submits and inspects the real engine command. Request and continuation never wait for a future receipt. Status separates applied audio state, pending target, operation phase, journal/admission state, exact publication/switch authority, committed revision and structured recovery error. No recording-only successful steady state.
+
+- [x] Verify all six transitions using the production engine adapter plus journal storage. Playing-only starts no journal. Stopped starts at acknowledged origin; playing Record uses a fence with unchanged origin. (pattern_transport_test.cpp six scenarios; play-only asserts no journal on disk after the T2.8 lazy creation, PR #1342)
+- [x] End recording by acknowledged cutoff, drain/reconcile switch first, then terminal commit. Record-off leaves scheduling running; Play/Stop stops scheduling before slow/failed flush. Known audio state remains visible on IO failure. (PR #1338/#1342 terminal settle_close; `recording_record_commits_and_keeps_playing`; `close_failure_after_ack_keeps_audio_and_retries`; `recording_play_stop_reload_retains_committed_events`)
+- [x] For S < F / S = F / S > F, delay inspection past S and assert the historical receipt selects retain/cancel/cancel. Journal segments never extend past F; cancellation failure alone selects nothing. (PR #1330/#1332/#1333/#1334/#1336; `switch_at_or_after_cutoff_is_canceled`, `switch_applied_before_cutoff_is_retained`, drain source prefix/target segment)
+- [x] Retain a recording fence durably before acknowledging/releasing the audio receipt. Unknown/lost receipt blocks contradictory closure; it does not authorize guessing from telemetry. (PR #1320)
+- [x] After durable commit, phase-preserving replacement may remain pending/refused when slots are full. Keep committed revision separate and retry the same replacement without restarting, reopening the journal or committing twice. (PR #1337 `refused_switch_publication_retries_without_a_ghost_applied`)
+- [x] Inject each failure before/after effect and completion delivery. Stale/duplicate completion cannot overwrite newer state, consume a receipt twice or synthesize success. (PR #1329 flush retry; `admission_after_cutoff_receipt_stays_live_only` PR #1338; deterministic fence failure parks the engagement in error, PR #1370)
+
+### T3 — Public runtime/bridge integration and lifecycle barrier
+
+**Defect caught:** the JS lane waits for a whole transport operation, direct legacy recording creates a second journal owner, or replacement disposes unresolved recording.
+
+**Files:**
+
+- `packages/web-runtime-platform/src/control_runtime.cpp`, `src/bridge.cpp`, `include/lmdj/web_runtime/control_runtime.hpp` and `CMakeLists.txt`.
+- `packages/web-runtime-platform/web/protocol.mjs`, `web/runtime_session.mjs`, `web/runtime_types.d.ts`.
+- `packages/web-runtime-platform/test/control_runtime_test.cpp`, `test/performance_bridge_test.cpp`, `test/runtime_session.test.mjs`, `tests/platform/web/audio/realtime_failure.spec.mjs`, `tests/platform/web/audio/realtime_audio_worklet.spec.mjs`, `tests/platform/web/audio/realtime_audio_worklet.html`.
+- `/core/modules/web-runtime-platform/`, `/platform/web-runtime/`, `/platform/input/` current pages and affected diagrams.
+
+Add capability-negotiated `pattern.transport.request` and `pattern.transport.inspect`, with internal continuation scheduling. Return the pending ticket through the existing serializer, release its tail, then reenter for short epoch-checked steps. Do not await audio acknowledgment or a long IO job inside that tail. Native/other Host consumers remain explicit legacy users until they opt in; legacy `stopSequence` keeps its journal meaning. Global-enabled sessions reject conflicting direct legacy writes.
+
+- [x] Wire the actual post-enqueue sequence/release correlation into T1 without altering returned successful/failed/unknown input outcomes. Unknown input is never automatically retriggered. (PR #1345; `test_pattern_transport_records_live_input_and_rejects_legacy_writes`; facade admit seam PR #1340)
+- [x] Hold each preparation, audio, storage and publication completion separately; prove applicable live input and releases remain serviceable, and verify journaling responses are not reported before durability. (PR #1345 ticket/continuation semantics; `publication_pending` separation; durable-candidate readback)
+- [x] Explicit Suspend, Project replacement and disposal enter a shutdown barrier: acknowledged Pattern Stop, admission closure, journal settlement/recoverable refusal, required input release, then lifecycle effect. Unknown closure prevents a clean replacement claim. (PR #1345 `test_pattern_transport_suspend_barrier_settles_recording` / `test_pattern_transport_unknown_closure_blocks_clean_suspend`)
+- [x] Sample capture, performance audio recording/replay and audition keep existing busy/ownership guards. Test live Pad and non-Pattern replay survival across Pattern Stop. (PR #1345 live-Pad survival assertions; capture/transport journal conflict repaired in PR #1363)
+- [x] Run native control/bridge tests, runtime-session tests and full standard Web proof with fresh Mac toolchain dependencies. Browser tests exercise actual Wasm/OPFS and completion ordering. (PR #1345: host suites, runtime_session 103/103, Chromium audio 25/25 incl. 2 new journeys, isolated WebKit OPFS 1/1)
+
+### T4 — Creator global owner, six transitions and U2 handoff
+
+**Defect caught:** navigation stops recording, two components own transport, or UI labels advance ahead of acknowledged audio/durable state.
+
+**Files:**
+
+- `apps/creator-web/src/app.tsx`, `src/runtime/sequence_actions.ts`, `src/state/sequence_state.ts`.
+- New `src/state/pattern_transport_state.ts` and `src/runtime/pattern_transport_actions.ts` under `apps/creator-web/`.
+- Existing `src/components/sequence_surface.tsx` and `src/components/perform_surface.tsx`; hardware control binding paths must be resolved from actual U1 delivery before editing.
+- `apps/creator-web/test/sequence_actions.test.ts`, `test/sequence_state.test.ts`, new `test/pattern_transport_actions.test.ts`, new `test/pattern_transport_state.test.ts`, relevant app/workspace tests.
+- `tests/platform/web/creator/creator_web_sequence.spec.mjs`; `apps/docs-site/docs/hosts/creator-web.mdx` and affected workflow page/diagram.
+
+Only the app's single session owner opts in. Physical Play/Stop and Record always mean global Pattern transport, never Sample capture or master recording. Every mode consumes the same projection and command identity. Remove ordinary mode-leave journal Stop only after T3 is proven; retain separately owned sample/audition cleanup. Show busy, refused, committed-but-not-published and recoverable states honestly.
+
+- [x] Reducer/action tests reject stale responses, retain failed operation identity and preserve revision when absent/null. Retry inspects/reconciles, never sends a new inverse toggle. (PR #1386: pattern_transport_state.test.ts 7 cases, pattern_transport_actions.test.ts 4 cases; `reconcilePatternTransportJourney` resends the retained command verbatim)
+- [x] Real packaged journey: opened material → Play → Record → live Pad events → Record-off → page changes → continued playback → Stop → reopen; verify precise events/revision, runtime scheduling and one session/input subscription. (PR #1386 journey ① "global Pattern transport plays, overdubs, survives navigation, stops, and reopens with exact truth")
+- [x] Separate journey: stopped Record → overdub → Pattern switch → Play/Stop → reopen; include failed flush retry, failed publication retry, owner loss/recovery and discard. (PR #1386 journey ② ticket-loss reconcile with replayed identity + journey ③ "owner loss surfaces the interrupted recording for honest refusal and discard" over the PR #1367 recovery surface; publication refusal/retry covered natively in PR #1337 and by the reload coordination in PR #1370)
+- [x] Preserve real acoustic/device acceptance gaps. Synthetic samples and WebKit automation are software evidence, not hearing, touch, MIDI hardware or physical Safari acceptance. (Retained: issue #1230 acceptance item, `docs/quality/2026-08-17-manual-verification-todo.md` W1/W2/W5, U7 #1221)
+- [x] Run full Creator proof, new journeys and portal checks. #1230 remains open until every acceptance item has applicable evidence/disposition. U2 still needs the migration layout work; U3–U8 and U7/U8 human acceptance/observation conditions remain intact. (PR #1386: vitest 580/581 with the sole failure being the pre-existing main red tracked as issue #1387; Creator browser journeys pass; portal check 47 routes)
+
+## Delivery addendum (2026-09-16)
+
+All Tasks T0–T4 are merged. During T3/T4 integration, five bounded repair Tasks
+shipped against the same design, each one Conventional Commit with current-head
+review:
+
+- PR #1337 test(facade): refused switch publication retries without a ghost applied.
+- PR #1338 fix(facade): commit retained Pattern events on plain transport close —
+  the T2 `finish_close` path never performed the terminal commit without an
+  applied switch, so recorded events never reached Project Truth.
+- PR #1339 feat(facade): public pattern transport controller factory; PR #1340
+  admit seam; PR #1341 storage-platform lease sharing (the factory's fresh
+  platform instance conflicted with the Host writer lease, PROJECT_BUSY);
+  PR #1342 lazy journal creation and settle_close (the coordinator never
+  created the admission journal outside test fixtures).
+- PR #1363 fix(facade): register vended transport controllers as known Sequence
+  owners — a Sample capture commit during transport recording destroyed the
+  active journal.
+- PR #1367 fix(facade): seal owner-lost transport admissions into the recovery
+  listing — SIGKILL/reload mid-recording previously listed no recovery.
+- PR #1370 fix(web-runtime): coordinate stopped cross-identity reload with
+  armed Pattern transport — an accepted publication could vanish and a
+  deterministic fence failure looped forever in awaiting_audio (engagement
+  bricking); receipt-apply failures now classify deterministic errors into a
+  parked error phase.
+
+Explicitly retained follow-ups, not silently settled here:
+
+- Playing-state applied switch leaves the coordinator's bound Pattern stale;
+  Record-after-switch can hit the same fence mismatch (flagged in PR #1370).
+- issue #1387: creator-web Project-contract families still accept retired
+  v3/v4 levels (pre-existing main red from #1364, found while shipping T4).
+- Real acoustic/device acceptance remains open per T4's retained gap clause.
+
+## Verification commands and delivery
+
+Commands below are planned, not passed. New targets must be registered by their owning Task before use; individual tests should isolate one defect.
+
+```bash
+bash scripts/core.sh configure dev
+cmake --build --preset dev --target lmdj_pattern_transport_executor_tests
+ctest --preset dev --output-on-failure -R '^facade\.pattern_transport_executor$'
+cmake --build --preset dev --target lmdj_pattern_admission_tests lmdj_facade_sequence_surface_tests
+ctest --preset dev --output-on-failure -R '^facade\.(pattern_admission|sequence_surface(\..*)?)$'
+cmake --build --preset dev --target lmdj_pattern_transport_tests
+ctest --preset dev --output-on-failure -R '^facade\.pattern_transport$'
+bash scripts/web-toolchain-conformance.sh proof
+bash scripts/creator-web.sh test
+bash scripts/creator-web.sh proof
+bash scripts/docs-site.sh check
+python3 tests/build/ci_change_scope_test.py
+git diff --check
+```
+
+For concurrency changes use the equivalent registered targets in `asan` and `tsan` and the relevant existing stress suite; `full`/`proof` alone excludes stress. Never lower thresholds, delete journey legs or increase timeouts for green. Record unsupported platform checks as unexecuted. Stage new files before ownership verification; no broad CI scope edits unless an exact newly declared path lacks ownership.
+
+## Version Management
+
+Version impact: none for the planning change, staged T0 source Task and T1a internal reducer extraction; no active manifests, Product Build or Assembly changed.
+
+T0 implementation is staged source only: a new additive C++ port/header and conformance-only Web probe, with no existing public layout or Web protocol change. No active manifest identity or Product Build is allocated; distribution still requires the assessment below.
+
+T1b's conversion producer changes the C++ admission preparation/state layouts and the private Sequence active/recovery grammar to `lmdj.sequence.journal.v3` / `lmdj.sequence.recovery.v3`: preparation retains Quantize/Swing and snapshots retain timing profiles. This is an incompatible internal storage boundary, not a Project Truth Contract change. Native and OPFS tests reject v1/v2/unknown discriminators without altering their bytes; no old-version reader, conversion or deletion is added. Performance journal discriminators are unchanged. No Module/Product identity is allocated in this staged-source Task; do not distribute it with prior binaries or claim ABI compatibility.
+
+T0–T4 are staged source integration until allocation. They add public Facade/runtime APIs and change Host behavior. Assess C++ ABI (including changed layouts), Web protocol capability/version and the complete active manifest consumer closure before distributing a build. Carry forward the staged Audio Runtime ABI and Sequence storage format boundaries from the preceding plans. No old storage reader/writer compatibility is required; unsupported data remains preserved. Do not hand-edit generated Assembly locks or reuse old binaries across the ABI boundary. A team-test/release allocation is a separate version Task requiring current manifest-derived identities and an immutable portal snapshot; no version number is guessed here.
+
+## Documentation Impact
+
+Documentation impact: required
+Affected portal pages: /core/modules/application-facade/ /core/modules/web-runtime-platform/ /core/modules/project-io/
+The original planning-only change had no portal impact. T0 updates current pages and architecture diagram sources/generated outputs to distinguish the executor foundation from the still-pending global coordinator/Creator integration.
+
+Implementation Tasks declare Documentation impact: required with their exact affected routes listed above, update current pages/diagram sources and run the portal check in the same Task. Any additional affected route/file must be added to the owning declaration before editing. Do not rewrite prior snapshots or describe the full transport as implemented when only a dependency is present.
+
+## Planning Task boundary
+
+Declared files: this file and `docs/plans/2026-09-11-creator-ui-migration.md`. Verify baseline symbols, linked files, Task ownership, scope classification, documentation declaration and whitespace; no product test pass is claimed by committing this plan. PR uses `Relates to #1230` and `Relates to #1207`. No release, cleanup, protection change or inherited review waiver.
+
+### Initial local preflight (2026-09-13)
+
+At the baseline above, fresh Mac `scripts/core.sh configure dev` fails because `tests/platform/cardputer/CMakeLists.txt` registers `platform.cardputer.input.feedback_interleaving` twice (the dedicated executable and the input-scenario loop). No transport executable was built or tested.
+
+The initial staged `python3 tests/build/ci_change_scope_test.py` run executed 72 tests and failed the two whole-index ownership/top-level assertions: that baseline tracked 2,093 paths under `build/`, which the policy did not admit. This was not caused by the new plan. No broad build-artifact ownership rule, deletion or skipped assertion was added by this Task.
+
+Refreshed base `c1d5e827` includes the separate repairs (#1263/#1266). After a fast-forward retaining only the two declared document edits, Mac Core configuration passes and the full staged ownership suite passes 74/74. The initial configuration/ownership blockers are cleared; this is not evidence that the new transport integration or its browser acceptance is implemented.

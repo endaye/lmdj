@@ -1,6 +1,6 @@
 import {readFile} from "node:fs/promises";
 
-import {expect, test} from "@playwright/test";
+import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
@@ -375,7 +375,7 @@ async function armPadOutcomeObservation(pad) {
 async function latchLoopToggle(page) {
   await expect(page.getByRole("button", {name: "Loop"}))
     .toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
-  const pad = page.getByRole("button", {name: "Pad A1 — assigned"});
+  const pad = page.getByRole("button", {name: "Pad A1 — assigned", exact: true});
   await expect(pad).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
   await pad.focus();
   await page.keyboard.down("Enter");
@@ -523,7 +523,7 @@ test("persisted page lifecycle retains the Project and live input surface", asyn
   await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {
     timeout: 30_000,
   });
-  const pad = page.getByRole("button", {name: "Pad A1 — assigned"});
+  const pad = page.getByTestId("pad-matrix").getByRole("button", {name: /^Pad A1 — assigned/});
   await armPadOutcomeObservation(pad);
   await page.keyboard.down("KeyQ");
   await expect(pad).toHaveAttribute("data-proof-outcome-observed", /.+/, {
@@ -652,7 +652,7 @@ test.describe("synthetic Web MIDI", () => {
     test.setTimeout(180_000);
     await page.goto("/index.html");
     await importAndActivate(page);
-    await page.getByRole("button", {name: "Bank C"}).click();
+    await page.getByTestId("physical-controls").getByRole("button", {name: "Bank C", exact: true}).click();
     await page.getByRole("button", {name: "Enable MIDI"}).click();
     await page.evaluate(() => {
       for (let note = 36; note <= 51; note += 1) window.__creatorMidi.emit(note);

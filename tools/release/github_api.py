@@ -22,6 +22,32 @@ class GitHubApiError(RuntimeError):
     """A GitHub release projection or request is unavailable or malformed."""
 
 
+def valid_release_pr_document(document) -> bool:
+    """Pure POST preflight shared by the producer and the actual transport."""
+    return _valid_task_pr_document(document, r"docs/release-evidence-[0-9a-f]{64}")
+
+
+def valid_candidate_pr_document(document) -> bool:
+    """Same bounded document contract, with a disjoint candidate branch scope."""
+    return _valid_task_pr_document(document, r"feat/release-candidate-[0-9a-f]{64}")
+
+
+def valid_witness_pr_document(document) -> bool:
+    """Witness-only follow-up; never reuse allocation/publication branches."""
+    return _valid_task_pr_document(document, r"docs/release-witness-[0-9a-f]{64}")
+
+
+def _valid_task_pr_document(document, branch) -> bool:
+    return (type(document) is dict
+            and set(document) == {"title", "body", "head", "base", "draft", "maintainer_can_modify"}
+            and type(document.get("head")) is str
+            and re.fullmatch(branch, document["head"]) is not None
+            and document.get("base") == "main" and document.get("draft") is False
+            and document.get("maintainer_can_modify") is False
+            and all(type(document.get(k)) is str and 0 < len(document[k]) <= 20000
+                    for k in ("title", "body")))
+
+
 class CiScopeUnavailableError(GitHubApiError):
     """The exact run retains no readable scope manifest for its head SHA.
 
@@ -152,6 +178,7 @@ class GitHubRelease:
     upload_url: str
     assets: tuple[GitHubAsset, ...]
     target_commitish: str
+    published_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -561,6 +588,128 @@ class GitHubClient:
         """Download one artifact archive without forwarding credentials onward."""
         return self._download_artifact_archive(artifact.archive_download_url, _CI_SCOPE_SIZE_CAP)
 
+    def get_release_review_page(self, number, kind, cursor=None, thread_id=None) -> object:
+        """Fixed read-only GraphQL inventory queries; no caller query/mutation."""
+        from .review_inventory import query_document
+        document = query_document(number, kind, cursor, thread_id)
+        response = self._request("POST", "/graphql", json.dumps(document).encode("utf-8"),
+                                 content_type="application/json")
+        if len(response.body) > 16 * 1024 * 1024:
+            raise GitHubApiError("GitHub release review page exceeds read limit")
+        value = _json_response(response, {200})
+        # A duplicated JSON identity must not silently become last-key-wins.
+        def unique(pairs):
+            result = {}
+            for key, item in pairs:
+                if key in result:
+                    raise GitHubApiError("GitHub release review page has duplicate JSON fields")
+                result[key] = item
+            return result
+        json.loads(response.body, object_pairs_hook=unique)
+        return value
+
+    def release_pr_request(self, method: str, suffix: str, document=None) -> object:
+        """Narrow evidence-PR transport; no admin, auto-merge or branch writes."""
+        return self._task_pr_request(method, suffix, document, r"docs/release-evidence-[0-9a-f]{64}")
+
+    def candidate_pr_request(self, method: str, suffix: str, document=None) -> object:
+        """Candidate-only PR routes; publication branch scope stays unchanged."""
+        return self._task_pr_request(method, suffix, document, r"feat/release-candidate-[0-9a-f]{64}")
+
+    def witness_pr_request(self, method: str, suffix: str, document=None) -> object:
+        """Closed witness PR routes; no new kind of mutation is authorized."""
+        return self._task_pr_request(method, suffix, document, r"docs/release-witness-[0-9a-f]{64}")
+
+    def _task_pr_request(self, method, suffix, document, branch):
+        if type(method) is not str or type(suffix) is not str:
+            raise GitHubApiError("why: release PR request identity is invalid; remedy: use the exact evidence PR controller")
+        number = r"[1-9][0-9]*"
+        page = r"(?:[1-9]|[1-9][0-9]|100)"
+        valid = False
+        if method == "GET" and document is None:
+            valid = (suffix in ("", "/branches/main", "/user")
+                     or re.fullmatch(rf"/git/ref/heads/{branch}", suffix)
+                     or re.fullmatch(rf"/pulls/{number}", suffix)
+                     or re.fullmatch(rf"/pulls\?state=all&head=endaye:{branch}&base=main&per_page=100&page={page}", suffix))
+        elif method == "POST" and suffix == "/pulls" and type(document) is dict:
+            valid = _valid_task_pr_document(document, branch)
+        elif method == "PUT" and re.fullmatch(rf"/pulls/{number}/merge", suffix) and type(document) is dict:
+            valid = set(document) == {"sha", "merge_method"} and _sha(document.get("sha")) and document.get("merge_method") == "squash"
+        if not valid:
+            raise GitHubApiError("why: release PR route or mutation is outside the closed interface; remedy: use the exact evidence PR controller")
+        url = "/user" if suffix == "/user" else "/repos/endaye/lmdj" + suffix
+        response = self._request(method, url, None if document is None else json.dumps(document).encode(),
+                                 content_type=None if document is None else "application/json")
+        return _json_response(response, {201} if method == "POST" else {200})
+
+    def dispatch_release(self, spec, *, before_post):
+        """One exact main dispatch, called only after durable intent persistence.
+
+        No retry, run-name correlation or ACK-as-completion. Main may advance
+        after this read: the receipt consumer refuses a different control SHA.
+        Publication/deployment workflows retain their own protected gates.
+        """
+        from .durable_dispatch import validate_spec
+        validate_spec(spec)
+        if not callable(before_post):
+            raise GitHubApiError("why: dispatch write guard is missing; remedy: use the durable controller")
+        workflow,inputs,repository_id,actor_id,workflow_id,control_revision=(spec[key] for key in
+            ("workflow","inputs","repository_id","actor_id","workflow_id","control_revision"))
+        prefix="/repos/endaye/lmdj"
+        actor=_json_response(self._request("GET","/user"),{200})
+        repo=_json_response(self._request("GET",prefix),{200})
+        selected=_json_response(self._request("GET",prefix+"/actions/workflows/"+workflow),{200})
+        main=_json_response(self._request("GET",prefix+"/branches/main"),{200})
+        if not (type(actor) is dict and type(actor.get("id")) is int and actor["id"]==actor_id
+                and type(repo) is dict and type(repo.get("id")) is int and repo["id"]==repository_id and repo.get("full_name")=="endaye/lmdj"
+                and type(selected) is dict and type(selected.get("id")) is int and selected["id"]==workflow_id
+                and selected.get("path")==".github/workflows/"+workflow and selected.get("state")=="active"
+                and type(main) is dict and main.get("name")=="main" and main.get("protected") is True
+                and type(main.get("commit")) is dict and main["commit"].get("sha")==control_revision):
+            raise GitHubApiError("why: dispatch actor, workflow or main scope changed; remedy: reconcile the original operation without retry")
+        before_post()
+        response=self._request("POST",prefix+"/actions/workflows/"+workflow+"/dispatches",
+                               json.dumps({"ref":"main","inputs":inputs}).encode(),content_type="application/json")
+        if response.status != 204:
+            raise GitHubApiError("why: dispatch result is unconfirmed; remedy: reconcile the original durable intent without another POST")
+
+    def get_dispatch_evidence(self, path: str, *, raw: bool = False) -> object:
+        """GET-only exact-run release correlation; no dispatch route."""
+        prefix = "/repos/endaye/lmdj"
+        if type(path) is not str or not path.startswith(prefix) or type(raw) is not bool:
+            raise GitHubApiError("why: dispatch evidence route is not canonical; remedy: use the closed exact-run reader")
+        suffix = path[len(prefix):]
+        identifier, page = r"[1-9][0-9]*", r"(?:[1-9]|[1-9][0-9]|100)"
+        if raw:
+            if re.fullmatch(rf"/actions/artifacts/{identifier}/zip", suffix) is None:
+                raise GitHubApiError("why: dispatch archive route is invalid; remedy: select the authenticated numeric artifact")
+            return self._download_artifact_archive(path, 2 * 1024 * 1024)
+        workflows = ("publish-release.yml", "deploy-web-runtime-host.yml", "deploy-creator-web.yml")
+        if not (suffix == "/branches/main" or suffix in ("/actions/workflows/"+w for w in workflows)
+                or any(re.fullmatch(rf"/actions/workflows/{re.escape(w)}/runs\?per_page=100&page={page}", suffix) for w in workflows)
+                or re.fullmatch(rf"/actions/runs/{identifier}(?:/attempts/1)?", suffix)
+                or re.fullmatch(rf"/actions/runs/{identifier}/(?:attempts/1/jobs|artifacts)\?per_page=100&page={page}", suffix)):
+            raise GitHubApiError("why: dispatch JSON route is outside the allowlist; remedy: use the exact first-attempt read interface")
+        return _json_response(self._request("GET", path), {200})
+
+    def get_changelog_site_evidence(self, path: str, *, raw: bool = False) -> object:
+        """Closed read-only transport for exact Portal deployment evidence."""
+        prefix = "/repos/endaye/lmdj"
+        if type(path) is not str or not path.startswith(prefix) or type(raw) is not bool:
+            raise GitHubApiError("why: Portal evidence route is not canonical; remedy: use the exact read-only consumer")
+        suffix = path[len(prefix):]
+        identifier = r"[1-9][0-9]*"
+        page = r"(?:[1-9]|[1-9][0-9]|100)"
+        if raw:
+            if re.fullmatch(rf"/actions/artifacts/{identifier}/zip", suffix) is None:
+                raise GitHubApiError("why: Portal archive route is invalid; remedy: select the authenticated numeric artifact")
+            return self._download_artifact_archive(path, 2 * 1024 * 1024)
+        if not (suffix in ("/branches/main", "/actions/workflows/deploy-cloudflare-portal.yml")
+                or re.fullmatch(rf"/actions/runs/{identifier}(?:/attempts/1)?", suffix)
+                or re.fullmatch(rf"/actions/runs/{identifier}/(?:attempts/1/jobs|artifacts)\?per_page=100&page={page}", suffix)):
+            raise GitHubApiError("why: Portal JSON route is outside the allowlist; remedy: use exact run, first attempt and bounded inventories")
+        return _json_response(self._request("GET", path), {200})
+
     def get_batch_evidence(self, path: str, *, raw: bool = False) -> object:
         """Closed GET-only transport for the inactive full-batch consumer.
 
@@ -686,6 +835,13 @@ class GitHubClient:
             name, len(reviewers), prevent_self_review, protected, custom,
             tuple(branch_policies),
         )
+
+    def get_authenticated_actor(self) -> int:
+        """Return the numeric identity behind the configured credential, not its login."""
+        document = _json_response(self._request("GET", "/user"), {200})
+        if not isinstance(document, dict) or type(document.get("id")) is not int or document["id"] <= 0:
+            raise GitHubApiError("GitHub authenticated actor identity is unavailable")
+        return document["id"]
 
     def list_releases(self, repository: str) -> list[GitHubRelease]:
         """Return the complete typed Release inventory through strict pagination."""
@@ -1193,9 +1349,17 @@ def _parse_release(
         make_latest = None
     else:
         raise GitHubApiError("GitHub Release projection is invalid")
+    published_at = document.get("published_at")
+    if published_at is not None:
+        if type(published_at) is not str or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", published_at) is None:
+            raise GitHubApiError("why: GitHub Release publication timestamp is not canonical UTC; remedy: reconcile the numeric Release API response; do not substitute a local date")
+        try:
+            datetime.strptime(published_at, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            raise GitHubApiError("why: GitHub Release publication timestamp is not a valid calendar time; remedy: reconcile the numeric Release API response; do not substitute a local date") from None
     return GitHubRelease(
         identifier, tag, name, body, draft, prerelease, make_latest, html_url, upload_url,
-        tuple(_parse_asset(item, repository, identifier) for item in assets), target_commitish,
+        tuple(_parse_asset(item, repository, identifier) for item in assets), target_commitish, published_at,
     )
 
 

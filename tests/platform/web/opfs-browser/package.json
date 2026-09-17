@@ -1,0 +1,8 @@
+{
+  "name": "@lmdj/opfs-webkit-installer",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Isolated OPFS acceptance browser installer; not a product or test-client dependency",
+  "engines": {"node": "26.x"},
+  "devDependencies": {"playwright": "1.64.0-alpha-2026-09-11"}
+}

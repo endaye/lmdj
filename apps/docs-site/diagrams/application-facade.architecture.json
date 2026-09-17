@@ -154,7 +154,7 @@
     },
     {
       "title": "Performance authority",
-      "body": "Twenty Performance operations plus three Pattern Slot commands; open gestures, HOLD and the last acknowledged launch come from record status, never from Host prediction."
+      "body": "Twenty Performance operations plus three Pattern Slot commands; open gestures, HOLD and the last acknowledged launch come from record status, never from Host prediction. Staged transport executor: one bounded retained ticket binds generation/epoch/command/step. Worker owns work and lease destruction; Control submit/inspect never waits for IO. Consume after reconciliation; unknown never authorizes retry. Global integration pending."
     },
     {
       "title": "Runtime boundary",

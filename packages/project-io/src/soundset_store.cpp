@@ -19,11 +19,14 @@
 
 #include <lmdj/project_io/soundset_catalog_transport.hpp>
 
+#include "storage_error.hpp"
+
 namespace lmdj::project_io {
 namespace {
 
 using foundation::Error;
 using foundation::ErrorCode;
+using detail::sanitized_storage_error;
 
 constexpr std::string_view kHostDirectory = ".lmdj-host";
 constexpr std::string_view kSetsDirectory = "soundsets";
@@ -345,13 +348,20 @@ struct SoundSetStore::Impl {
     using Result = foundation::Result<StoredSoundSet>;
     const auto directory = sets_root() / std::string{manifest_sha256};
     const auto present = platform->directory_exists(directory);
-    if (!present.has_value() || !present.value()) {
+    if (!present.has_value()) {
+      return Result::failure(
+          sanitized_storage_error(
+              present.error(), "Sound Set directory could not be inspected"));
+    }
+    if (!present.value()) {
       return Result::failure(not_found("Sound Set is not in the Set Store"));
     }
     const auto bytes =
         platform->read_complete(directory / std::string{kManifestName});
     if (!bytes.has_value()) {
-      return Result::failure(not_found("Sound Set manifest could not be read"));
+      return Result::failure(
+          sanitized_storage_error(
+              bytes.error(), "Sound Set manifest could not be read"));
     }
     if (digest_of(bytes.value()) != manifest_sha256) {
       return Result::failure(
@@ -459,12 +469,17 @@ struct SoundSetStore::Impl {
       pending.pop_back();
       const auto names = platform->list_names(area);
       if (!names.has_value()) {
-        return Result::failure(names.error());
+        return Result::failure(
+            sanitized_storage_error(
+                names.error(), "Sound Set staging area could not be listed"));
       }
       for (const auto& entry : names.value()) {
         const auto length = platform->byte_length(area / entry);
         if (!length.has_value()) {
-          return Result::failure(length.error());
+          return Result::failure(
+              sanitized_storage_error(
+                  length.error(),
+                  "Sound Set staging entry could not be measured"));
         }
         const auto summed = checked_sum(total, length.value());
         if (!summed.has_value()) {
@@ -478,7 +493,10 @@ struct SoundSetStore::Impl {
       }
       const auto children = platform->list_directories(area);
       if (!children.has_value()) {
-        return Result::failure(children.error());
+        return Result::failure(
+            sanitized_storage_error(
+                children.error(),
+                "Sound Set staging area could not be walked"));
       }
       for (const auto& child : children.value()) {
         pending.push_back(area / child);
@@ -563,7 +581,10 @@ foundation::Result<StoredSoundSet> SoundSetStore::acquire(
   // publication discipline instead of two.
   auto destination_lease = impl_->platform->acquire_writer(destination);
   if (!destination_lease.has_value()) {
-    return Result::failure(destination_lease.error());
+    return Result::failure(
+        sanitized_storage_error(
+            destination_lease.error(),
+            "Sound Set destination could not be leased"));
   }
   const auto already_present = impl_->platform->directory_exists(destination);
   const auto published = impl_->load(entry.manifest_sha256);
@@ -654,7 +675,9 @@ foundation::Result<StoredSoundSet> SoundSetStore::acquire(
   const auto staging = impl_->staging_root() / entry.manifest_sha256;
   auto lease = impl_->platform->acquire_writer(staging);
   if (!lease.has_value()) {
-    return Result::failure(lease.error());
+    return Result::failure(
+        sanitized_storage_error(
+            lease.error(), "Sound Set staging area could not be leased"));
   }
   const auto discard = [&]() {
     lease.value().reset();
@@ -685,14 +708,19 @@ foundation::Result<StoredSoundSet> SoundSetStore::acquire(
     const auto ensured = impl_->platform->ensure_directory(directory);
     if (!ensured.has_value()) {
       discard();
-      return Result::failure(ensured.error());
+      return Result::failure(
+          sanitized_storage_error(
+              ensured.error(),
+              "Sound Set staging directories could not be created"));
     }
   }
   const auto wrote_manifest = impl_->platform->create_immutable(
       staging / std::string{kManifestName}, manifest_object);
   if (!wrote_manifest.has_value()) {
     discard();
-    return Result::failure(wrote_manifest.error());
+    return Result::failure(
+        sanitized_storage_error(
+            wrote_manifest.error(), "Sound Set manifest could not be staged"));
   }
   for (const auto& artifact : artifacts.value()) {
     const auto blob = transport.read_blob_object(
@@ -724,21 +752,28 @@ foundation::Result<StoredSoundSet> SoundSetStore::acquire(
         staging / artifact.sha256, blob.value());
     if (!wrote.has_value()) {
       discard();
-      return Result::failure(wrote.error());
+      return Result::failure(
+          sanitized_storage_error(
+              wrote.error(), "Sound Set Artifact could not be staged"));
     }
   }
 
   const auto ensured = impl_->platform->ensure_directory(impl_->sets_root());
   if (!ensured.has_value()) {
     discard();
-    return Result::failure(ensured.error());
+    return Result::failure(
+        sanitized_storage_error(
+            ensured.error(),
+            "Sound Set destination root could not be created"));
   }
   lease.value().reset();
   const auto published_now =
       impl_->platform->publish_directory_if_absent(staging, destination);
   if (!published_now.has_value()) {
     (void)impl_->platform->remove_tree(staging);
-    return Result::failure(published_now.error());
+    return Result::failure(
+        sanitized_storage_error(
+            published_now.error(), "Sound Set could not be published"));
   }
   (void)impl_->platform->remove_tree(staging);
   return Result::success(StoredSoundSet{std::move(manifest), total.value()});
@@ -757,7 +792,9 @@ foundation::Result<std::vector<StoredSoundSet>> SoundSetStore::list() const {
   }
   const auto names = impl_->platform->list_directories(root);
   if (!names.has_value()) {
-    return Result::failure(names.error());
+    return Result::failure(
+        sanitized_storage_error(
+            names.error(), "Sound Set store could not be listed"));
   }
   std::vector<StoredSoundSet> sets;
   for (const auto& name : names.value()) {
@@ -833,7 +870,9 @@ foundation::Result<std::vector<std::byte>> SoundSetStore::read_artifact(
                     std::string{artifact_sha256};
   auto bytes = impl_->platform->read_complete(path);
   if (!bytes.has_value()) {
-    return Result::failure(bytes.error());
+    return Result::failure(
+        sanitized_storage_error(
+            bytes.error(), "Sound Set Artifact could not be read"));
   }
   if (bytes.value().size() != declared->byte_length ||
       digest_of(bytes.value()) != artifact_sha256) {

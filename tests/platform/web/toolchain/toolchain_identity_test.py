@@ -116,7 +116,7 @@ def assert_browser_package() -> None:
         "version": "0.0.0",
         "private": True,
         "type": "module",
-        "engines": {"node": "22.x"},
+        "engines": {"node": "26.x"},
         "scripts": {"test": "playwright test"},
         "devDependencies": {
             "@netlify/headers-parser": "10.1.0",
@@ -127,7 +127,7 @@ def assert_browser_package() -> None:
     package_lock = json.loads(PACKAGE_LOCK_PATH.read_text(encoding="utf-8"))
     assert package_lock["lockfileVersion"] == 3
     root = package_lock["packages"][""]
-    assert root["engines"] == {"node": "22.x"}
+    assert root["engines"] == {"node": "26.x"}
     assert root["devDependencies"] == {
         "@netlify/headers-parser": "10.1.0",
         "@playwright/test": "1.62.1",

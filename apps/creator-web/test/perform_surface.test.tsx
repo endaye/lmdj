@@ -152,6 +152,57 @@ function authority(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// Gate for the fake-tool-stub-strictness escalation (#726): the Perform
+// controller reaches these session methods without any test opting in —
+// connect() subscribes the capture status and refreshes the performance and
+// recovery lists, and perform_surface.tsx polls refreshReplay every 250 ms.
+// A bare vi.fn() resolves undefined where the real session returns a value,
+// and the gap only fires when a test outlives one poll tick (#713). Keep the
+// list in step with the controller's connect() and interval paths.
+test("wall-clock-reachable session double methods keep faithful defaults", () => {
+  const reachable = [
+    "subscribePerformanceMasterCaptureStatus",
+    "listPerformances",
+    "listPerformanceRecovery",
+    "queryPerformanceReplayStatus",
+  ] as const;
+  const {session} = sessionFixture();
+  for (const method of reachable) {
+    const double = session[method];
+    const implemented = typeof double === "function" &&
+      (!vi.isMockFunction(double) || double.getMockImplementation() !== undefined);
+    expect(
+      implemented,
+      `session double "${method}" is reached by wall-clock (connect() or the ` +
+      "250 ms replay poll) but has no default implementation: give it a " +
+      "faithful neutral default in sessionFixture, or remove it from the " +
+      "controller's wall-clock path",
+    ).toBe(true);
+  }
+});
+
+test("the replay poll default stays neutral and never settles", async () => {
+  // Presence is not enough for the 250 ms poll: a production-shaped default
+  // that resolves a concrete status can land after a test staged its own
+  // state and overwrite it — the second load-sensitive failure #713 traded
+  // for the first. The neutral default models a poll the Core has not
+  // answered yet, so it must not settle even after microtasks drain.
+  const {session} = sessionFixture();
+  let settled = false;
+  void session.queryPerformanceReplayStatus("replay-1").then(
+    () => { settled = true; },
+    () => { settled = true; },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(
+    settled,
+    "session double \"queryPerformanceReplayStatus\" resolves on its own: " +
+    "a poll the test never answered can overwrite staged state when it " +
+    "settles late — keep the neutral never-settling default, or let each " +
+    "test stage the answer itself",
+  ).toBe(false);
+});
+
 function controllerFixture(options: {
   captureState?: "unconfigured" | "configured" | "ready" | "unavailable";
   state?: CreatorState;
@@ -239,13 +290,13 @@ function renderSurface(fixture = controllerFixture()) {
   let state = creatorState();
   const onBankChange = vi.fn((bank) => { state = {...state, activeBank: bank}; });
   const rendered = render(
-    <PerformSurface controller={fixture.controller} creatorState={state}
+    <PerformSurface controller={fixture.controller}
       project={project} bank={state.activeBank} onBankChange={onBankChange} />,
   );
   return {fixture, onBankChange, rerender(bank = state.activeBank) {
     state = {...state, activeBank: bank};
     rendered.rerender(<PerformSurface controller={fixture.controller}
-      creatorState={state} project={project} bank={bank}
+      project={project} bank={bank}
       onBankChange={onBankChange} />);
   }, unmount: rendered.unmount};
 }
@@ -256,13 +307,34 @@ test("renders Pattern, fixed FX chain, one global HOLD, then the existing Pad su
   const pattern = within(surface).getByRole("region", {name: "Pattern Launch"});
   const fx = within(surface).getByRole("region", {name: "Performance FX"});
   const hold = within(surface).getByRole("button", {name: "HOLD"});
-  const pads = within(surface).getByRole("region", {name: "Perform instrument"});
+  // The console's Pad matrix is the one Pad surface; Perform mounts none of
+  // its own, so a second identical grid never competes for the same names.
+  expect(within(surface).queryByRole("region", {name: "Perform instrument"})).toBeNull();
   expect(pattern.compareDocumentPosition(fx) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   expect(fx.compareDocumentPosition(hold) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
-  expect(hold.compareDocumentPosition(pads) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   expect(within(surface).getAllByRole("button", {name: "HOLD"})).toHaveLength(1);
   expect(within(fx).getAllByRole("slider").map((slider) => slider.getAttribute("aria-label")))
+    .toEqual(["Filter", "Delay"]);
+  for (const pictured of ["LP", "HP", "BP", "MASTER", "MUTE", "SOLO"]) {
+    expect(within(surface).queryByRole("slider", {name: pictured})).toBeNull();
+    expect(within(surface).queryByRole("button", {name: pictured})).toBeNull();
+  }
+});
+
+test("keeps the other six confirmed FX behind FX / MORE", async () => {
+  renderSurface();
+  const fx = screen.getByRole("region", {name: "Performance FX"});
+  const more = within(fx).getByRole("button", {name: "FX / MORE"});
+  expect(more.getAttribute("aria-expanded")).toBe("false");
+  expect(within(fx).queryByRole("slider", {name: "Reverb"})).toBeNull();
+
+  await userEvent.click(more);
+  expect(more.getAttribute("aria-expanded")).toBe("true");
+  expect(within(fx).getAllByRole("slider").map((slider) => slider.getAttribute("aria-label")))
     .toEqual(["Filter", "Delay", "Reverb", "Stutter", "Gate", "Reverse", "Crush", "Cutter"]);
+
+  await userEvent.click(more);
+  expect(within(fx).queryByRole("slider", {name: "Cutter"})).toBeNull();
 });
 
 test("switches Bank synchronously without any Core request", async () => {
@@ -276,7 +348,6 @@ test("switches Bank synchronously without any Core request", async () => {
   rendered.rerender(1);
   expect(screen.getByRole("button", {name: "Bank B"}).getAttribute("aria-pressed"))
     .toBe("true");
-  expect(screen.getAllByRole("button", {name: /^Pad B/})).toHaveLength(16);
 });
 
 test.each([
@@ -487,6 +558,26 @@ test("forwards every FX raw value with exact Core keys and no Host clock or sour
   }
 });
 
+test("releases an open FX gesture when FX / MORE collapses it away", async () => {
+  const {fixture} = renderSurface();
+  await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
+  const more = screen.getByRole("button", {name: "FX / MORE"});
+  await userEvent.click(more);
+  const reverb = screen.getByRole("slider", {name: "Reverb"});
+  fireEvent.pointerDown(reverb, {pointerId: 5});
+  fireEvent.change(reverb, {target: {value: "700"}});
+  await waitFor(() => expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(2));
+
+  // Collapsing unmounts the input, so the gesture cannot be closed by a later
+  // pointerup on it; the bank has to close it or Core keeps it open forever.
+  await userEvent.click(more);
+  await waitFor(() => expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(3));
+  const requests = fixture.runtime.calls.raw.mock.calls.map(([request]) => request);
+  expect(requests.map(({event}) => event.kind))
+    .toEqual(["fx_engage", "fx_move", "fx_release"]);
+  expect(requests[2]?.event).toMatchObject({fx: "reverb"});
+});
+
 test("closes active gestures on stop and rejects their releases in the next recording", async () => {
   const fixture = controllerFixture();
   renderSurface(fixture);
@@ -583,6 +674,31 @@ test("keeps Pattern launch pending until query reports the actual acknowledgemen
     lastLaunchAck: {requestId: "event-1", patternSlot: 0, effectiveTick: 1920}}));
   await waitFor(() => expect(screen.getByRole("button", {name: "Launch Pattern 1"})
     .getAttribute("aria-busy")).toBe("false"));
+});
+
+test("says queued and playing in words, not only through the launch attribute", async () => {
+  const fixture = controllerFixture();
+  const query = fixture.runtime.session.queryPerformanceRecordingStatus as ReturnType<typeof vi.fn>;
+  query.mockResolvedValueOnce(authority({
+    pendingLaunch: {requestId: "event-1", patternSlot: 0, targetTick: 1920, claimed: false},
+  }));
+  renderSurface(fixture);
+  const slot = () => screen.getByRole("button", {name: "Launch Pattern 1"});
+  const cue = () => screen.getByLabelText("Pattern launch cue").textContent;
+  expect(slot().textContent).not.toMatch(/Queued|Playing/);
+  expect(cue()).toBe("No Pattern queued");
+
+  await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
+  await userEvent.click(slot());
+  await waitFor(() => expect(slot().textContent).toMatch(/Queued/));
+  expect(slot().getAttribute("data-launch")).toBe("pending");
+  expect(cue()).toBe("Slot 1 queued");
+
+  query.mockResolvedValueOnce(authority({journalRevision: 2,
+    lastLaunchAck: {requestId: "event-1", patternSlot: 0, effectiveTick: 1920}}));
+  await waitFor(() => expect(slot().textContent).toMatch(/Playing/));
+  expect(slot().getAttribute("data-launch")).toBe("acknowledged");
+  expect(cue()).toBe("Slot 1 live");
 });
 
 test("does not invent pending UI when the first authority query already has the ack", async () => {
@@ -1006,6 +1122,64 @@ test("retries replay neutral reset until Core reports a terminal state", async (
   expect(session.stopPerformanceReplay).toHaveBeenCalledTimes(3);
   expect(fixture.controller.getState().replay?.state).toBe("stopped");
   expect(fixture.controller.getState().replayNeutral).toBe(true);
+});
+
+test("a replay poll reply that outlives Stop Replay cannot overwrite the terminal state", async () => {
+  const fixture = controllerFixture();
+  const session = fixture.runtime.session;
+  (session.beginPerformanceReplay as ReturnType<typeof vi.fn>)
+    .mockResolvedValue({replayId: "replay-1", state: "playing",
+      resolvedRevision: 7, eventCursor: 0, eventCount: 4,
+      projectRevision: null});
+  (session.stopPerformanceReplay as ReturnType<typeof vi.fn>)
+    .mockResolvedValue({replayId: "replay-1", requestId: "stop-replay",
+      state: "stopped", resolvedRevision: 7, eventCursor: 0, eventCount: 4,
+      replayed: false, projectRevision: null});
+  // The poll answers only when the test says so: this reply carries the
+  // pre-stop state and lands after the terminal transition (#746).
+  const pendingPolls: ((status: unknown) => void)[] = [];
+  (session.queryPerformanceReplayStatus as ReturnType<typeof vi.fn>)
+    .mockImplementation(() => new Promise((resolve) => {
+      pendingPolls.push(resolve);
+    }));
+
+  await fixture.controller.beginReplay(ids.performance);
+  void fixture.controller.refreshReplay();
+  expect(pendingPolls.length).toBe(1);
+  await fixture.controller.stopReplay();
+  expect(fixture.controller.getState().replay?.state).toBe("stopped");
+  expect(fixture.controller.getState().replayNeutral).toBe(true);
+
+  for (const answer of pendingPolls) {
+    answer({replayId: "replay-1", state: "playing", resolvedRevision: 7,
+      eventCursor: 0, eventCount: 4, projectRevision: null});
+  }
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(fixture.controller.getState().replay?.state).toBe("stopped");
+  expect(fixture.controller.getState().replayNeutral).toBe(true);
+});
+
+test("a current replay poll reply still refreshes the playing state", async () => {
+  const fixture = controllerFixture();
+  const session = fixture.runtime.session;
+  (session.beginPerformanceReplay as ReturnType<typeof vi.fn>)
+    .mockResolvedValue({replayId: "replay-1", state: "playing",
+      resolvedRevision: 7, eventCursor: 0, eventCount: 4,
+      projectRevision: null});
+  const pendingPolls: ((status: unknown) => void)[] = [];
+  (session.queryPerformanceReplayStatus as ReturnType<typeof vi.fn>)
+    .mockImplementation(() => new Promise((resolve) => {
+      pendingPolls.push(resolve);
+    }));
+
+  await fixture.controller.beginReplay(ids.performance);
+  const poll = fixture.controller.refreshReplay();
+  for (const answer of pendingPolls) {
+    answer({replayId: "replay-1", state: "playing", resolvedRevision: 8,
+      eventCursor: 1, eventCount: 4, projectRevision: null});
+  }
+  await poll;
+  expect(fixture.controller.getState().replay?.resolvedRevision).toBe(8);
 });
 
 test("refuses to leave while replay neutral reset remains pending", async () => {

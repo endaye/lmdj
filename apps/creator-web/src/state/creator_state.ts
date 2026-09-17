@@ -6,6 +6,7 @@ import type {
   SampleInspect,
 } from "../runtime/runtime_types";
 import {
+  clearSampleVoiceRenderState,
   initialSampleState,
   preparedSampleState,
   reduceSampleState,
@@ -393,6 +394,9 @@ export function creatorReducer(
         projectProjectionRefresh: action.phase === "ready"
           ? state.projectProjectionRefresh
           : null,
+        sample: action.phase === "ready"
+          ? state.sample
+          : clearSampleVoiceRenderState(state.sample),
       };
     case "projects-listing":
       return {
@@ -528,7 +532,13 @@ export function creatorReducer(
         transfer: {phase: "idle", completedBytes: 0, totalBytes: 0},
       };
     case "audio-changed":
-      return {...state, audio: {phase: action.phase}};
+      return {
+        ...state,
+        audio: {phase: action.phase},
+        sample: action.phase === "suspended" || action.phase === "recovering"
+          ? clearSampleVoiceRenderState(state.sample)
+          : state.sample,
+      };
     case "audio-activation-restored":
       return {...state, audio: {phase: action.phase}};
     case "bank-selected":

@@ -20,6 +20,8 @@
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/project_store.hpp>
 
+#include "storage_error.hpp"
+
 namespace lmdj::project_io {
 namespace {
 
@@ -54,14 +56,7 @@ Error session_not_found() {
   return Error{ErrorCode::not_found, "Project Bundle import session was not found"};
 }
 
-Error sanitized_storage_error(const Error& source, std::string message) {
-  auto details = nlohmann::json::object();
-  if (source.details.is_object() &&
-      source.details.contains("storage_condition")) {
-    details["storage_condition"] = source.details.at("storage_condition");
-  }
-  return Error{source.code, std::move(message), std::move(details)};
-}
+using detail::sanitized_storage_error;
 
 bool lowercase_sha256(std::string_view value) {
   return value.size() == 64U &&
@@ -187,10 +182,10 @@ struct BundleEntry {
   std::string sha256;
 };
 
-// The container version this Build writes. A Bundle index at an older
-// readable version keeps its own value, because the digest is computed over
-// the index and must reproduce exactly what its packer wrote.
-constexpr std::string_view kBundleContractVersion = "1.3.0";
+// The container version this Build writes. During active development Bundles
+// carry no backward compatibility: readers accept exactly this envelope
+// (docs/prd/decisions/2026-09-15-project-bundle-current-level-only.md).
+constexpr std::string_view kBundleContractVersion = "2.0.0";
 
 struct ParsedIndex {
   foundation::ProjectId project_id;
@@ -218,17 +213,9 @@ foundation::Result<ParsedIndex> parse_index(std::string_view encoded) {
            "project_id",
            "uncompressed_bytes"}) ||
       index.at("contract") != "lmdj.project-bundle.v1" ||
-      (index.at("contract_version") != "1.0.0" &&
-       index.at("contract_version") != "1.1.0" &&
-       index.at("contract_version") != "1.2.0" &&
-       index.at("contract_version") != kBundleContractVersion) ||
+      index.at("contract_version") != kBundleContractVersion ||
       index.at("compression") != "none" ||
-      !index.at("project_contract").is_string() ||
-      (index.at("project_contract") != "lmdj.project.v1" &&
-       index.at("project_contract") != "lmdj.project.v2" &&
-       index.at("project_contract") != "lmdj.project.v3" &&
-       index.at("project_contract") != "lmdj.project.v4" &&
-       index.at("project_contract") != "lmdj.project.v5") ||
+      index.at("project_contract") != "lmdj.project.v5" ||
       !index.at("project_id").is_string() ||
       !index.at("bundle_digest").is_string() ||
       !index.at("entries").is_array()) {
@@ -410,17 +397,15 @@ std::string_view project_contract_id(domain::ProjectContract contract) {
 //
 // `project_contract` is recomputed from the Project on disk rather than copied
 // from an incoming index, so an index that misstates its Contract level fails
-// the comparison -- but only at the granularity the loader preserves. `load`
-// collapses v1, v2 and v3 to `ProjectContract::v3` (see `parse_project` in
-// project_store.cpp), so this distinguishes v4 from not-v4 and nothing finer,
-// and a truthful v1 or v2 index therefore still fails. That gap predates this
-// Build: before the Contract moved to 1.2.0 the level here was the constant
-// `lmdj.project.v3`, so a v1 or v2 Bundle never imported either.
+// the comparison. Bundles carry no backward compatibility during active
+// development: `parse_index` accepts only the current envelope and only the
+// writer's Project Contract level, so a legacy-level index is refused before
+// this digest is ever computed
+// (docs/prd/decisions/2026-09-15-project-bundle-current-level-only.md).
 //
-// `contract_version` describes the container an older packer wrote, so it is
-// the index's own value and is consequently NOT authenticated by this digest.
-// What still constrains it is `parse_index`'s allowlist of readable container
-// versions, and nothing else.
+// `contract_version` is the index's own value and is consequently NOT
+// authenticated by this digest; what constrains it is `parse_index` accepting
+// exactly `kBundleContractVersion`.
 foundation::Result<std::string> project_digest(
     const ProjectStoragePlatform& platform,
     const std::filesystem::path& path,

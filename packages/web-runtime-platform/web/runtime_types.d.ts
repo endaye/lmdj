@@ -58,6 +58,56 @@ export interface SequenceRecoveryCandidate {
   readonly eventCount: number;
 }
 
+export type PatternTransportPhase =
+  | "idle"
+  | "preparing"
+  | "awaiting_audio"
+  | "flushing"
+  | "reconciling"
+  | "error";
+
+export type PatternTransportIntent = "play_stop" | "record";
+
+export interface PatternTransportStatus {
+  readonly engaged: boolean;
+  readonly playing: boolean;
+  readonly recording: boolean;
+  readonly phase: PatternTransportPhase;
+  readonly runtimeGeneration: number;
+  readonly transportEpoch: number;
+  readonly originFrame: number;
+  readonly commandId: string | null;
+  readonly publicationPending: boolean;
+  readonly error: Readonly<{
+    code: string;
+    message: string;
+    details: Readonly<Record<string, unknown>>;
+  }> | null;
+}
+
+export interface PatternTransportRequest {
+  readonly sessionId: string;
+  readonly projectId: string;
+  readonly commandId: string;
+  readonly expectedEpoch: number;
+  readonly intent: PatternTransportIntent;
+  readonly expectedRevision: number | null;
+}
+
+export interface PatternTransportTicket {
+  readonly sessionId: string;
+  readonly commandId: string;
+  readonly submit: "accepted" | "replayed";
+  readonly status: PatternTransportStatus;
+}
+
+export interface PatternTransportRuntimeSession {
+  requestPatternTransport(
+    request: PatternTransportRequest,
+  ): Promise<PatternTransportTicket>;
+  inspectPatternTransport(sessionId: string): Promise<PatternTransportStatus>;
+}
+
 export interface SequenceRuntimeSession {
   createPattern(request: {
     readonly patternId: string;

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Actual Runtime/Git/ZIP composition; HTTP fixtures are not platform acceptance."""
 from copy import deepcopy
+from contextlib import redirect_stdout
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -221,6 +224,46 @@ class CompletionTest(unittest.TestCase):
         self.assertNotIn('issues: write',text)
         self.assertNotIn('workflow_dispatch:',text)
         self.assertIn('workflows: ["Self-test Report"]',text)
+        self.assertIn('timeout-minutes: 25', text)
+
+    def test_cli_primary_quota_prints_closed_http_diagnostic(self):
+        from self_test_report import GitHubApiError
+        log = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'receipt.json'
+            event = Path(directory) / 'event.json'
+            event.write_text('{}')
+            error = GitHubApiError(403, 'quota', remaining=0, reset=1788877325)
+            with mock.patch.dict(os.environ, {'GITHUB_EVENT_PATH': str(event)}, clear=False), \
+                    mock.patch('incremental_entry.load_storage', return_value={'scheduler': {}}), \
+                    mock.patch.object(relay.batch_runtime, 'Runtime', side_effect=error), \
+                    redirect_stdout(log):
+                self.assertEqual(relay.main(['--output', str(output)]), 1)
+        rows = [json.loads(line) for line in log.getvalue().splitlines() if line.startswith('{')]
+        self.assertEqual(rows, [{'schema': 'lmdj.ci-entry-diagnostic.v1', 'operation': 'relay',
+                                 'stage': 'authenticate', 'error_kind': 'github-api-error',
+                                 'http': {'status': 403, 'remaining': 0, 'reset': 1788877325}}])
+        self.assertIn('why: completion relay could not authenticate its source; remedy:', log.getvalue())
+        self.assertNotIn('quota', log.getvalue().split('why:', 1)[0])
+
+    def test_cli_post_auth_failure_does_not_label_authenticate(self):
+        log = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'receipt.json'
+            event = Path(directory) / 'event.json'
+            event.write_text('{}')
+            runtime = mock.Mock()
+            runtime.diagnostic_stage = None
+            with mock.patch.dict(os.environ, {'GITHUB_EVENT_PATH': str(event)}, clear=False), \
+                    mock.patch('incremental_entry.load_storage', return_value={'scheduler': {}}), \
+                    mock.patch.object(relay.batch_runtime, 'Runtime', return_value=runtime), \
+                    mock.patch.object(relay, 'produce', side_effect=OSError('SECRET')), \
+                    redirect_stdout(log):
+                self.assertEqual(relay.main(['--output', str(output)]), 1)
+        rows = [json.loads(line) for line in log.getvalue().splitlines() if line.startswith('{')]
+        self.assertEqual(rows[0]['stage'], 'unknown')
+        self.assertEqual(rows[0]['error_kind'], 'os-error')
+        self.assertNotIn('SECRET', log.getvalue())
 
 
 if __name__=='__main__': unittest.main()

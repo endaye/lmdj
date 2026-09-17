@@ -21,7 +21,7 @@ ACTION_PINS = {
     "actions/checkout": ("de0fac2e4500dabe0009e67214ff5f5447ce83dd", "v6.0.2"),
     "actions/setup-python": ("a309ff8b426b58ec0e2a45f0f869d46889d02405", "v6.2.0"),
     "actions/setup-node": ("249970729cb0ef3589644e2896645e5dc5ba9c38", "v6.5.0"),
-    "actions/upload-artifact": ("ea165f8d65b6e75b540449e92b4886f43607fa02", "v4.6.2"),
+    "actions/upload-artifact": ("b7c566a772e6b6bfb58ed0dc250532a479d7789f", "v6.0.0"),
 }
 
 
@@ -65,7 +65,7 @@ class ReleaseAuditWorkflowTest(unittest.TestCase):
         self.assertIn("uses: actions/setup-python@", source)
         self.assertIn('python-version: "3.11"', source)
         self.assertIn("uses: actions/setup-node@", source)
-        self.assertIn('node-version: "22"', source)
+        self.assertIn('node-version: "26"', source)
 
     def assert_snapshot_node_call(self, *, current: bool, historical_script: bool) -> None:
         with tempfile.TemporaryDirectory() as directory:

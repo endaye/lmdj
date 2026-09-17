@@ -38,7 +38,7 @@ runs:
 
     - uses: actions/setup-node@v6
       with:
-        node-version: "22"
+        node-version: "26"
 
     - name: Configure bounded build parallelism
       uses: ./.github/actions/configure-build-acceleration
@@ -60,7 +60,7 @@ runs:
     - name: Restore pinned hosted emsdk
       id: emsdk-cache
       if: ${{ steps.cache-strategy.outputs.persistent != 'true' }}
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: build/toolchains/emsdk
         key: emsdk-${{ env.LMDJ_EMSDK_REVISION }}-${{ env.LMDJ_EMSDK_VERSION }}-${{ runner.os }}-${{ runner.arch }}
@@ -165,7 +165,7 @@ runs:
 
     - name: Restore hosted Playwright browsers
       if: ${{ steps.cache-strategy.outputs.persistent != 'true' }}
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cache/ms-playwright
         key: playwright-${{ hashFiles('tests/platform/web/package-lock.json') }}-${{ runner.os }}-${{ runner.arch }}
@@ -187,6 +187,19 @@ runs:
           flock "$lock_file" npx --no-install playwright install chromium webkit
         else
           npx --no-install playwright install chromium webkit
+        fi
+
+    - name: Prepare isolated OPFS WebKit for Project IO acceptance
+      if: ${{ inputs.lane == 'web_toolchain' }}
+      shell: bash
+      env:
+        INSTALL_SYSTEM_DEPS: ${{ inputs.install-system-deps }}
+      run: |
+        set -euo pipefail
+        if [[ "$INSTALL_SYSTEM_DEPS" == 'true' ]]; then
+          bash scripts/prepare-opfs-webkit.sh --with-deps
+        else
+          bash scripts/prepare-opfs-webkit.sh
         fi
 
     - name: Execute the selected Web proof
@@ -211,7 +224,7 @@ runs:
     # real failure rather than masking it with an upload error.
     - name: Upload failed Web proof evidence
       if: failure()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: web-ci-failure-${{ inputs.lane }}
         path: tests/platform/web/test-results

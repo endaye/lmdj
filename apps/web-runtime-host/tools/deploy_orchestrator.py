@@ -1010,9 +1010,14 @@ def _valid_recovery_smokes(
     )
 
 
-def write_evidence_document(
-    *, output: Path, source: str, expected_contract: str
-) -> None:
+def validate_evidence_document(
+    *, source: str, expected_contract: str
+) -> dict[str, object]:
+    """Validate retained evidence without touching disk or contacting a Site.
+
+    This checks document consistency only. The caller must authenticate its
+    run/artifact, bind the frozen release and Site, and verify current state.
+    """
     document = parse_json_document(source, "deployment evidence")
     if document.get("contract") != expected_contract:
         raise DeployOrchestratorError("deployment evidence contract is invalid")
@@ -1037,6 +1042,15 @@ def write_evidence_document(
             raise DeployOrchestratorError("deployment recovery evidence schema is invalid")
     else:
         raise DeployOrchestratorError("deployment evidence contract is unsupported")
+    return document
+
+
+def write_evidence_document(
+    *, output: Path, source: str, expected_contract: str
+) -> None:
+    document = validate_evidence_document(
+        source=source, expected_contract=expected_contract,
+    )
     serialized = canonical_json(document) + "\n"
     if output.is_symlink() or not output.parent.is_dir() or output.parent.is_symlink():
         raise DeployOrchestratorError("deployment evidence target is unsafe")
@@ -1121,6 +1135,8 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     evidence_document = commands.add_parser("evidence-write-document")
     evidence_document.add_argument("output", type=Path)
     evidence_document.add_argument("contract")
+    evidence_validation = commands.add_parser("evidence-validate-document")
+    evidence_validation.add_argument("contract")
     return parser.parse_args(argv)
 
 
@@ -1228,6 +1244,12 @@ def run(options: argparse.Namespace) -> None:
         return
     if options.command == "evidence-init":
         initialize_evidence_target(options.repo_root, options.deploy_root)
+        return
+    if options.command == "evidence-validate-document":
+        document = validate_evidence_document(
+            source=sys.stdin.read(), expected_contract=options.contract,
+        )
+        print(canonical_json(document))
         return
     if options.command == "evidence-write-document":
         write_evidence_document(

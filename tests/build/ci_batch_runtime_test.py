@@ -69,6 +69,8 @@ class Http:
             if body["query"] == runtime.storage.COMMENTS_QUERY:
                 issue["comments"] = {"nodes": deepcopy(self.comments), "totalCount": len(self.comments),
                                      "pageInfo": {"hasNextPage": False, "endCursor": None}}
+            elif body["query"] == runtime.storage.LAST_QUERY:
+                issue["comments"] = {"nodes": deepcopy(self.comments[-1:]), "totalCount": len(self.comments)}
             elif "comments{totalCount}" in body["query"]:
                 issue["comments"] = {"totalCount": len(self.comments)}
             return {"data": {"repository": {"nameWithOwner": "endaye/lmdj", "issue": issue}}}
@@ -160,17 +162,17 @@ class RuntimeTests(unittest.TestCase):
             GitHubApiError(403, "quota", remaining=0, reset=120),
             {"ok": True},
             GitHubApiError(403, "quota", remaining=0, reset=140),
+            {"ok": True},
         ])
         sleeps = []
         instance.clock = lambda: clock[0]
         instance.transport.clock = instance.clock
         with mock.patch.object(runtime.time, "sleep", side_effect=lambda delay: (sleeps.append(delay), clock.__setitem__(0, clock[0] + delay))):
             self.assertEqual(instance.call("GET", "/first"), {"ok": True})
-            with self.assertRaises(runtime.storage.JournalBlocked):
-                instance.transport._call("GET", "/second")
-        self.assertEqual(sleeps, [20.0])
-        self.assertLess(instance.retry_budget.remaining, 25.0)
-        self.assertEqual(self.api._request.call_count, 3)
+            self.assertEqual(instance.transport._call("GET", "/second"), {"ok": True})
+        self.assertEqual(sleeps, [20.0, 20.0])
+        self.assertEqual(instance.retry_budget.remaining, 25.0)
+        self.assertEqual(self.api._request.call_count, 4)
 
     def test_runtime_forbidden_and_malformed_reset_are_not_retried(self):
         instance = runtime.Runtime(self.config, root=self.root, api=self.api,
@@ -203,8 +205,8 @@ class RuntimeTests(unittest.TestCase):
     def test_lock_held_quota_does_not_sleep_or_mutate_and_later_context_recovers(self):
         instance = self.make()
         self.api._request = mock.Mock(side_effect=[
-            GitHubApiError(403, "quota", remaining=0, reset=120),
-            GitHubApiError(403, "quota", remaining=0, reset=120)])
+            GitHubApiError(403, "forbidden", remaining=10, reset=120),
+            GitHubApiError(429, "secondary")])
         sleeps = []
         with mock.patch.object(runtime.time, "sleep", side_effect=sleeps.append):
             with self.assertRaises(batch.BatchError):
@@ -216,6 +218,19 @@ class RuntimeTests(unittest.TestCase):
         later = self.make()
         self.api._request = mock.Mock(return_value={"healthy": True})
         self.assertEqual(later.call("GET", "/later-health"), {"healthy": True})
+
+    def test_lock_held_primary_quota_waits_until_reset_and_is_not_not_live(self):
+        instance = self.make()
+        clock = [100.0]
+        instance.clock = lambda: clock[0]
+        instance.transport.clock = instance.clock
+        self.api._request = mock.Mock(side_effect=[
+            GitHubApiError(403, "quota", remaining=0, reset=120), {"healthy": True}])
+        sleeps = []
+        with mock.patch.object(runtime.time, "sleep", side_effect=lambda delay: (sleeps.append(delay), clock.__setitem__(0, clock[0] + delay))):
+            self.assertEqual(instance.call("GET", "/locked-primary"), {"healthy": True})
+        self.assertEqual(sleeps, [20.0])
+        self.assertEqual(self.api._request.call_count, 2)
 
     def test_unlocked_transport_unknown_post_is_attempted_once_without_retry(self):
         instance = runtime.Runtime(self.config, root=self.root, api=self.api,
@@ -334,6 +349,51 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(batch.BatchError):
             self.make().reconcile(execute=True)
         self.assertFalse(any(m == "PATCH" for m, _, _ in self.api.calls))
+
+    def test_reconcile_pending_requires_closed_audited_digest(self):
+        for command in (None, {}, {"pending_digest": "0" * 63}, {"pending_digest": "F" * 64},
+                        {"pending_digest": "0" * 64, "extra": 1}, ["pending_digest"]):
+            with self.subTest(command=command):
+                with self.assertRaisesRegex(batch.BatchError, "closed audited pending digest"):
+                    self.make().reconcile_pending(command)
+        self.assertEqual(self.api.calls, [],
+                         "why: malformed command reached the API; remedy: close the schema before authentication")
+
+    def test_reconcile_pending_drains_stranded_intent_without_execution(self):
+        instance = self.make()
+        instance.initialize()
+        journal = self.make().journal()
+        journal.append({"id": "one", "epoch": "isolated-fixture", "generation": 0,
+                        "type": "observe", "data": {"target": self.sha, "descends_pending": True}})
+        self.api.fail = ("POST", "/repos/endaye/lmdj/issues/782/comments")
+        with self.assertRaises(batch.BatchError):
+            journal.append({"id": "two", "epoch": "isolated-fixture", "generation": 1,
+                            "type": "observe", "data": {"target": self.sha, "descends_pending": True}})
+        self.api.fail = None
+        pending = json.loads(self.api.issue["body"])["payload"]["pending"]
+        self.assertIsNotNone(pending, "why: fixture lost the stranded intent; remedy: retain prepared identity")
+        with self.assertRaisesRegex(batch.BatchError, "uncertain"):
+            self.make().journal().load()
+        answer = self.make().reconcile_pending({"pending_digest": pending["digest"]})
+        self.assertEqual(answer["action"], "reconciled-pending",
+                         "why: drain posed as another action; remedy: its own non-execution answer")
+        self.assertIsNone(answer["request"], "why: drain emitted execution; remedy: reconcile re-derives, never replays")
+        checkpoint = json.loads(self.api.issue["body"])["payload"]
+        self.assertIsNone(checkpoint["pending"],
+                          "why: stranded intent survived the drain; remedy: restore the anchor after the absence proof")
+        self.assertEqual([event["id"] for event in self.make().journal().load()], ["one"],
+                         "why: drain lost committed history; remedy: clear only the stranded intent")
+        follow = self.make().reconcile(execute=True)
+        self.assertEqual(follow["action"], "execute",
+                         "why: drained scheduler cannot resume ordinary work; remedy: re-derive from actual runs")
+
+    def test_reconcile_pending_refuses_when_nothing_is_stranded(self):
+        self.make().initialize()
+        with self.assertRaisesRegex(batch.BatchError, "no stranded pending"):
+            self.make().reconcile_pending({"pending_digest": "0" * 64})
+        checkpoint = json.loads(self.api.issue["body"])["payload"]
+        self.assertEqual(checkpoint, {"head": None, "pending": None},
+                         "why: refused drain mutated the anchor; remedy: fail closed before any write")
 
     def test_live_controller_job_is_not_executor_terminal(self):
         self.make().initialize()
@@ -936,6 +996,39 @@ class RuntimeTests(unittest.TestCase):
             status = runtime.main(['resume', '--config', str(self.root / 'unused'), '--output', str(self.root / 'absent')])
         self.assertEqual(status, 1)
         constructor.assert_not_called()
+
+    def test_reconcile_pending_cli_requires_digest_file_before_constructing_runtime(self):
+        with mock.patch.object(runtime, 'Runtime') as constructor:
+            status = runtime.main(['reconcile-pending', '--config', str(self.root / 'unused'), '--output', str(self.root / 'absent')])
+        self.assertEqual(status, 1)
+        constructor.assert_not_called()
+
+    def test_actual_reconcile_pending_cli_drains_stranded_intent(self):
+        self.api.add_run(20)
+        instance = self.make(20)
+        instance.initialize()
+        journal = self.make(20).journal()
+        journal.append({'id': 'one', 'epoch': 'isolated-fixture', 'generation': 0,
+                        'type': 'observe', 'data': {'target': self.sha, 'descends_pending': True}})
+        self.api.fail = ('POST', '/repos/endaye/lmdj/issues/782/comments')
+        with self.assertRaises(batch.BatchError):
+            journal.append({'id': 'two', 'epoch': 'isolated-fixture', 'generation': 1,
+                            'type': 'observe', 'data': {'target': self.sha, 'descends_pending': True}})
+        self.api.fail = None
+        digest = json.loads(self.api.issue['body'])['payload']['pending']['digest']
+        status, answer = self.resume_cli(json.dumps({'pending_digest': digest}), 'reconcile-pending')
+        self.assertEqual(status, 0)
+        self.assertEqual(answer['action'], 'reconciled-pending')
+        self.assertIsNone(json.loads(self.api.issue['body'])['payload']['pending'],
+                          'why: stranded intent survived the drain; remedy: restore the anchor after the absence proof')
+
+    def test_reconcile_pending_cli_duplicate_key_refuses_without_output(self):
+        self.api.add_run(20)
+        self.make(20).initialize()
+        status, answer = self.resume_cli('{"pending_digest":"' + '0' * 64 + '","pending_digest":"' + '1' * 64 + '"}',
+                                         'reconcile-pending')
+        self.assertEqual(status, 1)
+        self.assertIsNone(answer)
 
     def test_resume_requires_same_writer_lock(self):
         self.paused_debts()

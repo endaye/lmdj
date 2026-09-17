@@ -578,3 +578,105 @@ test("Voice-state overflow terminalizes the real Worklet at production capacity"
   });
   expect(cleanup.renderCallsAfterFatal).toBe(cleanup.renderCallsAtFatal);
 });
+
+
+test("global Pattern transport rejects un-negotiated requests and conflicting legacy writes", async ({page}) => {
+  test.setTimeout(120_000);
+  await waitForFormalHost(page);
+  expect((await activateFromClick(page)).ok).toBe(true);
+  await installSubmissionHelper(page);
+
+  const result = await page.evaluate(async () => {
+    const submit = window.__lmdjRealtimeFailureSubmit;
+    const delay = (milliseconds) =>
+      new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+    const projectId = crypto.randomUUID();
+    const patternId = crypto.randomUUID();
+    const sessionId = crypto.randomUUID();
+
+    // Without the Project-open marker the session never negotiated transport.
+    const created = await submit("project.create", {
+      project_id: projectId,
+      bpm: 120,
+      initial_pattern: {pattern_id: patternId, bars: 1, events: []},
+    });
+    const notNegotiated = await submit("pattern.transport.request", {
+      session_id: sessionId,
+      project_id: projectId,
+      command_id: crypto.randomUUID(),
+      expected_epoch: 1,
+      intent: "play_stop",
+      expected_revision: null,
+    });
+
+    // A negotiated, engaged session rejects a conflicting direct legacy write:
+    // the transport coordinator is the single journal owner.
+    const transportProjectId = crypto.randomUUID();
+    const transportPatternId = crypto.randomUUID();
+    const transportSessionId = crypto.randomUUID();
+    const optedIn = await submit("project.create", {
+      project_id: transportProjectId,
+      bpm: 120,
+      initial_pattern: {pattern_id: transportPatternId, bars: 1, events: []},
+      pattern_transport: true,
+    });
+    const snapshot = await submit("snapshot.reload", {
+      pattern_id: transportPatternId,
+    });
+    const activated = await submit("audio.activate", {});
+    const ticket = await submit("pattern.transport.request", {
+      session_id: transportSessionId,
+      project_id: transportProjectId,
+      command_id: crypto.randomUUID(),
+      expected_epoch: 1,
+      intent: "record",
+      expected_revision: null,
+    });
+    let recording = false;
+    const deadline = performance.now() + 30_000;
+    while (!recording && performance.now() < deadline) {
+      const status = await submit("pattern.transport.inspect", {
+        session_id: transportSessionId,
+      });
+      recording = status.ok === true &&
+        status.result.recording === true &&
+        status.result.phase === "idle";
+      if (!recording) await delay(2);
+    }
+    const legacyBegin = await submit("sequence.record.begin", {
+      session_id: transportSessionId,
+      pattern_id: transportPatternId,
+      expected_revision: 0,
+    });
+    return {
+      created,
+      notNegotiated,
+      optedIn,
+      snapshot,
+      activated,
+      ticket,
+      recording,
+      legacyBegin,
+      transportProjectId,
+      transportPatternId,
+      transportSessionId,
+    };
+  });
+  expect(result.created.ok).toBe(true);
+  expect(result.notNegotiated).toMatchObject({
+    ok: false,
+    error: {code: "HOST_STATE_INVALID"},
+  });
+  expect(result.optedIn.ok).toBe(true);
+  expect(result.snapshot.ok).toBe(true);
+  expect(result.activated.ok).toBe(true);
+  expect(result.ticket).toMatchObject({
+    ok: true,
+    result: {submit: "accepted"},
+  });
+  expect(result.recording).toBe(true);
+  expect(result.legacyBegin).toMatchObject({
+    ok: false,
+    error: {code: "HOST_STATE_INVALID"},
+  });
+});

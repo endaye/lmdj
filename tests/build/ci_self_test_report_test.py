@@ -769,12 +769,33 @@ class ReportingErrorTest(unittest.TestCase):
         self.assertEqual(rep.with_retry(read, sleep=sleep, clock=lambda: clock[0]), "ok")
         self.assertEqual(sleeps, [5.0])
 
+    def test_primary_quota_wait_does_not_consume_the_short_secondary_budget(self) -> None:
+        clock = [100.0]
+        sleeps = []
+        budget = rep.RetryBudget()
+        calls = [0]
+
+        def read():
+            calls[0] += 1
+            if calls[0] == 1:
+                raise rep.GitHubApiError(403, "quota", remaining=0, reset=700)
+            return "ok"
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+        self.assertEqual(rep.with_retry(read, sleep=sleep, clock=lambda: clock[0], budget=budget), "ok")
+        self.assertEqual(sleeps, [600.0])
+        self.assertEqual(budget.remaining, sum(rep.RETRY_DELAYS))
+
     def test_primary_quota_reset_beyond_budget_is_deferred_and_auth_forbidden_is_final(self) -> None:
         sleeps = []
-        deferred = rep.GitHubApiError(403, "quota", remaining=0, reset=1000)
+        deferred = rep.GitHubApiError(403, "quota", remaining=0,
+                                      reset=100 + int(rep.PRIMARY_WAIT_CAP_SECONDS) + 1)
         with self.assertRaises(rep.GitHubApiError):
             rep.with_retry(lambda: (_ for _ in ()).throw(deferred), sleep=sleeps.append,
-                            clock=lambda: 100.0, deadline=110.0)
+                            clock=lambda: 100.0)
         self.assertEqual(sleeps, [])
         forbidden = rep.GitHubApiError(403, "forbidden", remaining=10, reset=105)
         with self.assertRaises(rep.GitHubApiError):

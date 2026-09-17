@@ -19,7 +19,7 @@ import unittest
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 from urllib.parse import urlsplit
 
 
@@ -149,6 +149,8 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
                 self.headers.get("Authorization", "")
             )
             self.server.append_log("netlify create-draft")
+            if self.server.after_create is not None:
+                self.server.after_create()
             response: dict[str, object] = {
                 "id": self.server.deploy_id,
                 "site_id": SITE_ID,
@@ -230,6 +232,10 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
         if path != f"/api/v1/sites/{SITE_ID}":
             self.send_json(404, {"error": "not found"})
             return
+        if self.server.fail_site_after_create and "netlify create-draft" in self.server.command_log.read_text(encoding="utf-8"):
+            self.server.append_log("netlify current-site unavailable")
+            self.send_json(503, {"error": "fixture unavailable"})
+            return
         self.server.authorization_headers.append(self.headers.get("Authorization", ""))
         if (
             self.server.reconcile_override_deploy_id
@@ -271,6 +277,8 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
 
 
 class FakeNetlifyServer(ThreadingHTTPServer):
+    after_create: Callable[[], None] | None
+    fail_site_after_create: bool
     command_log: Path
     create_document: object | None
     deploy_id: str
@@ -339,6 +347,8 @@ class DeployCommandTest(unittest.TestCase):
         self.assertEqual(snapshot_tree(REAL_EVIDENCE_ROOT), self.real_evidence_before)
 
     def reset_server(self) -> None:
+        self.server.after_create = None
+        self.server.fail_site_after_create = False
         self.server.deploy_id = DEPLOY_ID
         self.server.deploy_url = f"https://{DEPLOY_ID}--lmdj-creator.netlify.app"
         self.server.published_id = DEPLOY_ID
@@ -1142,6 +1152,72 @@ def verify_distribution(dist_root, repo_root):
             "  scripts/creator-web-deploy.sh smoke BASE_URL PRODUCT_BUILD HOST_VERSION\n",
         )
 
+    def frozen_request_environment(self) -> dict[str, str]:
+        prior = None if not self.server.current_deploy_id else {
+            "id": self.server.current_deploy_id, "site_id": SITE_ID,
+            "deploy_ssl_url": self.server.current_deploy_url, "state": "ready",
+        }
+        site = {"id": SITE_ID, "state": "current", "ssl_url": PRODUCTION_URL,
+                "published_deploy": prior}
+        raw = (json.dumps(site, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        return {"LMDJ_RELEASE_REQUEST_ID": "a" * 64,
+                "LMDJ_PRIOR_SITE_SHA256": hashlib.sha256(raw).hexdigest()}
+
+    def assert_request_refused_before_site_write(self, environment: dict[str, str]) -> None:
+        completed = self.run_command("deploy", TAG, environment=environment)
+        self.assertNotEqual(completed.returncode, 0, completed.stderr)
+        for write in ("netlify create-draft", "netlify publish same-id",
+                      "netlify restore prior-id", "netlify disable-site"):
+            self.assertNotIn(write, self.command_log())
+        self.assertFalse((self.deploy_root / "evidence.json").exists())
+        self.assertFalse((self.deploy_root / "recovery-evidence.json").exists())
+
+    def test_managed_request_accepts_exact_frozen_site(self) -> None:
+        completed = self.run_command("deploy", TAG, environment=self.frozen_request_environment())
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.server.current_deploy_id, DEPLOY_ID)
+
+    def test_managed_request_refuses_prior_changed_before_workflow(self) -> None:
+        environment = self.frozen_request_environment()
+        self.server.current_deploy_id = "other-789"
+        self.server.current_deploy_url = "https://other-789--lmdj-creator.netlify.app"
+        self.assert_request_refused_before_site_write(environment)
+        self.assertEqual(self.server.current_deploy_id, "other-789")
+
+    def test_managed_first_publication_refuses_new_prior(self) -> None:
+        self.server.current_deploy_id = ""
+        environment = self.frozen_request_environment()
+        self.server.current_deploy_id = PRIOR_DEPLOY_ID
+        self.assert_request_refused_before_site_write(environment)
+        self.assertEqual(self.server.current_deploy_id, PRIOR_DEPLOY_ID)
+
+    def test_managed_request_requires_prior_digest(self) -> None:
+        environment = self.frozen_request_environment()
+        environment["LMDJ_PRIOR_SITE_SHA256"] = ""
+        self.assert_request_refused_before_site_write(environment)
+
+    def test_managed_request_refuses_different_frozen_digest(self) -> None:
+        environment = self.frozen_request_environment()
+        environment["LMDJ_PRIOR_SITE_SHA256"] = "f" * 64
+        self.assert_request_refused_before_site_write(environment)
+
+    def test_managed_request_rejects_malformed_prior_digest(self) -> None:
+        environment = self.frozen_request_environment()
+        environment["LMDJ_PRIOR_SITE_SHA256"] = "not-a-digest"
+        self.assert_request_refused_before_site_write(environment)
+
+    def test_managed_request_accepts_exact_empty_site(self) -> None:
+        self.server.current_deploy_id = ""
+        completed = self.run_command("deploy", TAG, environment=self.frozen_request_environment())
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.server.current_deploy_id, DEPLOY_ID)
+
+    def test_managed_request_preserves_zero_file_prior_projection(self) -> None:
+        self.server.site_files_response = []
+        completed = self.run_command("deploy", TAG, environment=self.frozen_request_environment())
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIsNone(json.loads((self.deploy_root / "evidence.json").read_bytes())["prior_good"])
+
     def test_deploy_orders_real_stage_api_smoke_restore_and_production_smoke(self) -> None:
         completed = self.run_command("deploy", TAG)
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -1167,6 +1243,7 @@ def verify_distribution(dist_root, repo_root):
                 "netlify create-draft",
                 "http-smoke immutable",
                 "playwright immutable",
+                "netlify get-current-site",
                 "netlify publish same-id",
                 "http-smoke production",
                 "playwright production",
@@ -1179,7 +1256,7 @@ def verify_distribution(dist_root, repo_root):
         self.assertEqual(len([path for path in files if path.startswith("/assets/")]), 9)
         self.assertEqual(
             self.server.authorization_headers,
-            [f"Bearer {NETLIFY_TOKEN}"] * 5,
+            [f"Bearer {NETLIFY_TOKEN}"] * 6,
         )
 
     def test_dual_release_validates_full_inventory_and_stages_creator_triplet(self) -> None:
@@ -1607,6 +1684,51 @@ def verify_distribution(dist_root, repo_root):
         )
         self.assertNotEqual(completed.returncode, 0)
         self.assertNotIn("netlify create-draft", self.command_log())
+
+    def test_publish_rechecks_preflight_pointer_after_candidate_validation(self) -> None:
+        completed = self.run_command("deploy", TAG)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        log = self.command_log()
+        draft = log.index("netlify create-draft")
+        publish = log.index("netlify publish same-id")
+        self.assertIn("netlify get-current-site", log[draft + 1:publish])
+
+    def assert_prepublication_refusal(self) -> None:
+        completed = self.run_command("deploy", TAG)
+        self.assertNotEqual(completed.returncode, 0)
+        log = self.command_log()
+        self.assertIn("netlify create-draft", log)
+        for command in ("netlify publish same-id", "netlify restore prior-id", "netlify disable-site"):
+            self.assertNotIn(command, log)
+        self.assertFalse((self.deploy_root / "evidence.json").exists())
+        self.assertFalse((self.deploy_root / "recovery-evidence.json").exists())
+
+    def install_pointer_change_after_create(self) -> None:
+        def change():
+            self.server.current_deploy_id = "other-789"
+            self.server.current_deploy_url = PRODUCTION_URL.replace("https://", "https://other-789--")
+        self.server.after_create = change
+
+    def test_changed_pointer_before_publication_is_not_overwritten_or_restored(self) -> None:
+        self.install_pointer_change_after_create()
+        self.assert_prepublication_refusal()
+        self.assertEqual(self.server.current_deploy_id, "other-789")
+
+    def test_first_publication_does_not_overwrite_a_new_pointer(self) -> None:
+        self.server.current_deploy_id = ""
+        self.server.current_deploy_url = ""
+        self.install_pointer_change_after_create()
+        self.assert_prepublication_refusal()
+        self.assertEqual(self.server.current_deploy_id, "other-789")
+
+    def test_disabled_site_before_publication_is_not_enabled(self) -> None:
+        self.server.after_create = lambda:setattr(self.server, "site_disabled", True)
+        self.assert_prepublication_refusal()
+        self.assertTrue(self.server.site_disabled)
+
+    def test_unreadable_site_before_publication_never_starts_recovery(self) -> None:
+        self.server.fail_site_after_create = True
+        self.assert_prepublication_refusal()
 
     def test_candidate_immutable_must_match_staged_release_bytes(self) -> None:
         completed = self.run_command(

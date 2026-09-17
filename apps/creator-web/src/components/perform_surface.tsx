@@ -1,24 +1,27 @@
 import {useEffect, useState, useSyncExternalStore} from "react";
 
-import type {createCreatorInputController} from "../runtime/input_controller";
 import type {ProjectView} from "../runtime/runtime_types";
-import type {Bank, CreatorState} from "../state/creator_state";
+import type {Bank} from "../state/creator_state";
+import {
+  type PatternTransportState,
+} from "../state/pattern_transport_state";
+import {transportStatusLabel} from "./transport_status";
 import {
   PERFORMANCE_FX_ORDER,
   type PerformController,
   type PerformState,
 } from "../state/perform_state";
 import {FxSliderBank} from "./fx_slider_bank";
-import {PadSurface} from "./pad_surface";
 import {PatternLaunchStrip} from "./pattern_launch_strip";
 
 export interface PerformSurfaceProps {
   readonly controller: PerformController;
-  readonly creatorState: CreatorState;
   readonly project: ProjectView;
-  readonly padController?: ReturnType<typeof createCreatorInputController>;
   readonly bank: Bank;
   readonly onBankChange: (bank: Bank) => void;
+  // The Perform surface renders the same global Pattern transport projection
+  // every other mode consumes; it never drives it.
+  readonly transport?: PatternTransportState;
 }
 
 function RecordingPanel(props: {
@@ -181,17 +184,26 @@ export function PerformSurface(props: PerformSurfaceProps) {
     const timer = window.setInterval(() => { void controller.refreshReplay(); }, 250);
     return () => window.clearInterval(timer);
   }, [controller, state.replay?.state]);
-  const padState = props.creatorState.activeBank === props.bank
-    ? props.creatorState
-    : {...props.creatorState, activeBank: props.bank};
   const captureMessage = state.captureStatus.state === "configured"
     ? "Preparing recording…"
     : state.captureStatus.state === "unavailable"
       ? state.captureStatus.error.message
       : null;
   const performing = ["recording", "flushing"].includes(state.recording.phase);
+  // D04 heads the touch workspace with the switch cue. NEXT BAR is pictured
+  // text; the Host only knows whether a launch is queued or acknowledged.
+  const cue = state.pendingLaunch !== null
+    ? `Slot ${state.pendingLaunch.patternSlot + 1} queued`
+    : state.lastLaunchAck !== null
+      ? `Slot ${state.lastLaunchAck.patternSlot + 1} live`
+      : "No Pattern queued";
   return (
     <main className="perform-surface" aria-label="Perform">
+      <header className="perform-live-header">
+        <p className="perform-live-title">LIVE CONTROLS</p>
+        <output className="perform-live-cue"
+          aria-label="Pattern launch cue">{cue}</output>
+      </header>
       <PatternLaunchStrip slots={props.project.patternSlots}
         patterns={props.project.patterns}
         pending={state.pendingLaunch} lastAck={state.lastLaunchAck} bank={props.bank}
@@ -223,11 +235,6 @@ export function PerformSurface(props: PerformSurfaceProps) {
       <button className="perform-hold" type="button" aria-pressed={state.hold}
         disabled={!performing}
         onClick={() => controller.toggleHold()}>HOLD</button>
-      <section aria-label="Perform instrument">
-        {props.padController === undefined
-          ? <PadSurface state={padState} />
-          : <PadSurface state={padState} controller={props.padController} />}
-      </section>
       <RecordingPanel state={state} canRecord={controller.canRecord()}
         onRecord={() => { void controller.record(); }}
         onFlush={() => { void controller.flush(); }}
@@ -247,6 +254,14 @@ export function PerformSurface(props: PerformSurfaceProps) {
           void controller.discardRecovery(sessionId);
         }} />
       {captureMessage !== null ? <p role="status">{captureMessage}</p> : null}
+      {props.transport !== undefined ? (
+        <output role="status" aria-label="Pattern transport status">
+          Pattern transport: {transportStatusLabel(props.transport)}
+          {props.transport.status?.publicationPending === true
+            ? " · committed, publication pending"
+            : ""}
+        </output>
+      ) : null}
       {state.error !== null ? <p role="alert">{state.error}</p> : null}
     </main>
   );

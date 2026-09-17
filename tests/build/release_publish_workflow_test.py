@@ -11,6 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/publish-release.yml"
 ACTION_PINS = {
+    "actions/upload-artifact": ("b7c566a772e6b6bfb58ed0dc250532a479d7789f", "v6.0.0"),
     "actions/checkout": ("de0fac2e4500dabe0009e67214ff5f5447ce83dd", "v6.0.2"),
     "actions/setup-python": ("a309ff8b426b58ec0e2a45f0f869d46889d02405", "v6.2.0"),
 }
@@ -76,13 +77,16 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
         inputs = self.mapping_block(dispatch, "inputs", 4)
         self.assertEqual(
             set(self.direct_mapping(inputs, 6)),
-            {"tag", "release_id", "plan_sha256"},
+            {"tag", "release_id", "plan_sha256", "request_id"},
         )
         expected = {
             "tag": ("Exact verified tag", "string"),
             "release_id": ("Numeric Draft Release ID", "string"),
             "plan_sha256": ("Exact plan SHA-256", "string"),
         }
+        self.assertEqual(self.direct_mapping(self.mapping_block(inputs, "request_id", 6), 8), {
+            "description": "Optional release operation digest for correlation only",
+            "required": "false", "default": '""', "type": "string"})
         for name, (description, kind) in expected.items():
             with self.subTest(name=name):
                 fields = self.direct_mapping(self.mapping_block(inputs, name, 6), 8)

@@ -166,19 +166,45 @@ def read_working_inventory(root: Path, base_sha: str, classifier) -> tuple:
     Untracked files are added explicitly because `git diff` never reports
     them, and an unclassified new file is precisely what upgrades CI to full
     mode.
+
+    The return value pairs the inventory with the untracked path set, so the
+    caller can tell an unclassified stale leftover on disk apart from an
+    unclassified tracked path.
     """
     tracked = classifier.parse_name_status_z(
         _git(root, "diff", "--name-status", "-z", base_sha)
     )
     seen = {path for record in tracked for path in record.paths}
-    untracked = [
-        classifier.ChangedFile("A", (path,))
+    untracked_paths = [
+        path
         for path in _split_z(
             _git(root, "ls-files", "--others", "--exclude-standard", "-z")
         )
         if path not in seen
     ]
-    return tuple(tracked) + tuple(untracked)
+    untracked = [
+        classifier.ChangedFile("A", (path,)) for path in untracked_paths
+    ]
+    return tuple(tracked) + tuple(untracked), frozenset(untracked_paths)
+
+
+def name_untracked_cause(reason: str, untracked_paths: frozenset) -> str:
+    """Name the cause when an unclassified path is an untracked leftover.
+
+    A stale untracked directory left behind by a reorganisation upgrades every
+    local classification to full, and a bare `unclassified path` diagnostic
+    names the path but not the cause. Untracked files only exist in the local
+    working inventory, so this rewrite is local-only and CI wording is
+    unchanged.
+    """
+    prefix = "unclassified path: "
+    if not reason.startswith(prefix) or reason[len(prefix):] not in untracked_paths:
+        return reason
+    return (
+        f"unclassified untracked path: {reason[len(prefix):]} "
+        "(on disk but not tracked; remove it, ignore it, or give it a scope "
+        "policy rule - it upgrades every local classification here to full)"
+    )
 
 
 def repository_blobs(root: Path) -> dict[str, str]:
@@ -451,7 +477,7 @@ def build_plan(
 
     base_sha = resolve_base_sha(root, base_ref)
     head_sha = _git(root, "rev-parse", "HEAD").decode().strip()
-    inventory = read_working_inventory(root, base_sha, classifier)
+    inventory, untracked_paths = read_working_inventory(root, base_sha, classifier)
     # The scope policy exemption has to be computed here too. Unlike CI, this
     # advisory pre-flight deliberately classifies the working tree, so compare
     # its policy with the merge-base policy instead of requiring it to match
@@ -476,6 +502,14 @@ def build_plan(
         event_name="pull_request", draft=False, labels=(),
         policy_edit_preserving=policy_edit_preserving,
     )
+    if untracked_paths:
+        manifest = {
+            **manifest,
+            "reasons": [
+                name_untracked_cause(reason, untracked_paths)
+                for reason in manifest["reasons"]
+            ],
+        }
 
     selected = [lane for lane, on in sorted(manifest["lanes"].items()) if on]
     # Kept before `--lanes` narrows the run: a local restriction says which

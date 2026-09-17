@@ -35,17 +35,15 @@ _ROOT_KEYS = {
     "uncompressed_bytes",
 }
 _ENTRY_KEYS = {"bytes", "offset", "path", "sha256"}
-# The container version this tool writes, and every container version it
-# still reads. Widening the Project Contract enum is an additive Contract
-# MINOR; current readers retain every earlier envelope version unchanged.
-CONTRACT_VERSION = "1.3.0"
-READABLE_CONTRACT_VERSIONS = frozenset({"1.0.0", "1.1.0", "1.2.0", CONTRACT_VERSION})
-# Every Project Contract level a Bundle may name; keep all readers aligned.
+# The container version this tool writes, and the only one it reads: during
+# active development Bundles do not carry backward compatibility, so every
+# reader accepts exactly the current envelope (decision
+# docs/prd/decisions/2026-09-15-project-bundle-current-level-only.md).
+CONTRACT_VERSION = "2.0.0"
+READABLE_CONTRACT_VERSIONS = frozenset({CONTRACT_VERSION})
+# The single Project Contract level a Bundle may name: the level the writer
+# produces. Keep all readers aligned.
 PROJECT_CONTRACTS = frozenset({
-    "lmdj.project.v1",
-    "lmdj.project.v2",
-    "lmdj.project.v3",
-    "lmdj.project.v4",
     "lmdj.project.v5",
 })
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -55,6 +53,11 @@ _UUID = re.compile(
 )
 _PATH = re.compile(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\Z")
 _CHECKPOINT = re.compile(r"history/checkpoints/(?:0|[1-9][0-9]*)\.json\Z")
+# Any Project Contract level string: the initial checkpoint stays at the level
+# the Project was born with, because Project I/O promotes on persist and never
+# rewrites checkpoint 0. Only the head checkpoint carries the current-level
+# gate (PROJECT_CONTRACTS).
+_PROJECT_CONTRACT = re.compile(r"lmdj\.project\.v[1-9][0-9]*\Z")
 
 
 class BundleError(ValueError):
@@ -426,7 +429,8 @@ def _load_project_identity(source: Path, files: list[_SourceFile]) -> tuple[str,
     project_id = checkpoint.get("project_id") if isinstance(checkpoint, dict) else None
     if (
         not isinstance(checkpoint, dict)
-        or checkpoint.get("contract") not in PROJECT_CONTRACTS
+        or not isinstance(checkpoint.get("contract"), str)
+        or _PROJECT_CONTRACT.fullmatch(checkpoint["contract"]) is None
         or not isinstance(project_id, str)
         or _UUID.fullmatch(project_id) is None
     ):

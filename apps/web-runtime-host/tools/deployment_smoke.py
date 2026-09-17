@@ -656,10 +656,15 @@ def smoke_http(
     expected_host_version: str,
     expected_host_id: str | None = None,
     expected_deploy_id: str | None = None,
+    expected_index_sha256: str | None = None,
+    expected_manifest_sha256: str | None = None,
     require_https: bool = True,
     timeout_seconds: float = 10.0,
 ) -> dict[str, object]:
     """Validate index, manifest, every declared asset, and negative routes."""
+    for value in (expected_index_sha256, expected_manifest_sha256):
+        if value is not None and (not isinstance(value, str) or HASH_PATTERN.fullmatch(value) is None):
+            raise SmokeError("why: expected release digest is invalid; remedy: supply the authenticated frozen release SHA-256 in lowercase hexadecimal")
     root = _validated_base_url(
         base_url,
         require_https=require_https,
@@ -705,6 +710,9 @@ def smoke_http(
     )
     if root_index_bytes != index_bytes:
         raise SmokeError("root index identity does not match /index.html")
+    index_digest = hashlib.sha256(index_bytes).hexdigest()
+    if expected_index_sha256 is not None and index_digest != expected_index_sha256:
+        raise SmokeError("why: index digest differs from the expected release; remedy: reconcile deployed bytes with the frozen release without accepting a changed digest")
     manifest_bytes, _ = _fetch(
         opener,
         url=urljoin(root, "host-manifest.json"),
@@ -714,6 +722,9 @@ def smoke_http(
         limit=MAX_MANIFEST_BYTES,
         timeout_seconds=timeout_seconds,
     )
+    manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
+    if expected_manifest_sha256 is not None and manifest_digest != expected_manifest_sha256:
+        raise SmokeError("why: manifest digest differs from the expected release; remedy: reconcile deployed bytes with the frozen release without accepting a changed digest")
     try:
         index = root_index_bytes.decode("utf-8")
     except UnicodeDecodeError:
@@ -725,7 +736,6 @@ def smoke_http(
         expected_host_version=expected_host_version,
         expected_host_id=resolved_host_id,
     )
-    manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
     _require_exact_once(
         index,
         f'<meta name="lmdj-host-manifest-sha256" content="{manifest_digest}">',
@@ -792,7 +802,7 @@ def smoke_http(
     result: dict[str, object] = {
         "asset_count": len(assets),
         "host_version": expected_host_version,
-        "index_sha256": hashlib.sha256(index_bytes).hexdigest(),
+        "index_sha256": index_digest,
         "manifest_sha256": manifest_digest,
         "product_build": expected_product_build,
         "root_final_path": root_final_path,

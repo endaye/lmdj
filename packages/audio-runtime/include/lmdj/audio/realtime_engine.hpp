@@ -85,6 +85,7 @@ enum class PatternPublishResult : std::uint8_t {
   pattern_slots_full,
   publish_queue_full,
   generation_exhausted,
+  phase_mismatch,
 };
 
 struct PatternPublication {
@@ -102,6 +103,35 @@ struct PatternReplacementAuthority {
   std::uint64_t generation;
   foundation::PatternId pattern_id;
   std::uint64_t activation_frame;
+};
+
+enum class PatternTransportAction : std::uint8_t { start, stop, fence };
+enum class PatternTransportSubmit : std::uint8_t {
+  accepted, busy, disabled, not_running, stale_generation,
+  stale_epoch, identity_mismatch, invalid_action
+};
+enum class PatternCutoffDecision : std::uint8_t {
+  none, applied_before_cutoff, canceled_at_cutoff
+};
+struct PatternTransportCommand {
+  std::uint64_t runtime_generation{};
+  std::uint64_t epoch{};
+  std::uint64_t expected_pattern_generation{};
+  PatternTransportAction action{};
+  std::optional<PatternReplacementAuthority> pending_switch;
+};
+struct PatternTransportReceipt {
+  std::uint64_t runtime_generation{};
+  std::uint64_t epoch{};
+  std::uint64_t effective_frame{};
+  std::uint64_t origin_frame{};
+  std::uint64_t pattern_generation{};
+  foundation::PatternId pattern_id;
+  std::uint16_t bpm{};
+  bool playing{};
+  PatternCutoffDecision switch_decision{};
+  std::optional<PatternReplacementAuthority> switch_authority;
+  std::optional<std::uint64_t> switch_applied_frame;
 };
 
 struct PatternTelemetry {
@@ -411,6 +441,18 @@ class RealtimeEngine final {
   // Construction allocates the complete Voice-state queue, before publication
   // to audio. Default callers retain the full Capture-backlog capacity.
   RealtimeEngine() = default;
+  // Quiescent, before start. Nonzero generations strictly increase across
+  // enable calls on this Engine only; exhaustion requires a fresh Engine.
+  // No ordering across Engines, Projects, processes or opaque session IDs.
+  foundation::Result<void> enable_pattern_transport(std::uint64_t generation);
+  // These three methods share the serialized control owner (not observers).
+  // One reservation lasts through receipt acknowledgment. Inspect copies the
+  // historical value; the caller must retain it before acknowledgment.
+  PatternTransportSubmit submit_pattern_transport(const PatternTransportCommand&);
+  std::optional<PatternTransportReceipt> inspect_pattern_transport_receipt(
+      std::uint64_t generation, std::uint64_t epoch) const;
+  bool acknowledge_pattern_transport_receipt(
+      std::uint64_t generation, std::uint64_t epoch) noexcept;
   // Opt-in only for a caller retaining <= kRealtimeQueueCapacity commands until
   // receipt retirement. It must acquire audio consumption, drain Voice states,
   // then retire receipts, in that order. No switching after construction.
@@ -464,6 +506,13 @@ class RealtimeEngine final {
   // racing this call cannot make the internally observed frame stale.
   PatternPublication publish_pattern_view_immediate(
       PreparedPatternView&& pattern) noexcept;
+  // Serialized control owner, like all publication/reclaim APIs. Requires the
+  // exact current generation and identical Project/Pattern, BPM, PPQ and loop.
+  // Refuses pending publications or a reserved transport command. Applies at
+  // the first effective render frame without changing origin or sounding voices.
+  // Explicit Pattern-stopped remains stopped; legacy scheduling stays enabled.
+  PatternPublication publish_pattern_view_preserving_phase(
+      PreparedPatternView&& pattern, std::uint64_t expected_generation) noexcept;
   // Control thread, concurrent with render. Cancels the exact pending
   // publication until the render apply point claims it. False means the
   // authority was stale or the apply point already won.
@@ -525,6 +574,9 @@ class RealtimeEngine final {
   std::uint64_t consumed_controls_audio() const noexcept {
     return dequeued_events_;
   }
+  // Sole audio consumer or quiescent caller only. Counts actual allocated
+  // voices, including overlap wholly inside a block; reset by start, not stop.
+  std::uint32_t peak_voices_audio() const noexcept { return peak_voices_; }
   // Any non-realtime thread (including control), not the audio callback.
   // Counters are exact after quiescence and a best-effort snapshot while running.
   RealtimeTelemetry telemetry() const noexcept;
@@ -562,6 +614,7 @@ class RealtimeEngine final {
   enum class PatternPublicationTiming : std::uint8_t {
     scheduled,
     immediate,
+    preserve_phase,
   };
   static_assert(std::atomic<BankState>::is_always_lock_free);
   static_assert(std::atomic<PatternState>::is_always_lock_free);
@@ -602,6 +655,7 @@ class RealtimeEngine final {
     std::uint64_t generation = 0;
     std::uint64_t activation_frame = 0;
     std::size_t active_voices = 0;
+    bool preserve_phase = false;
   };
 
   struct PatternPublishEntry {
@@ -610,6 +664,47 @@ class RealtimeEngine final {
     std::uint64_t activation_frame;
   };
   static_assert(std::is_trivially_copyable_v<PatternPublishEntry>);
+
+  struct PatternTransportCommandCell {
+    std::uint64_t generation{};
+    std::uint64_t epoch{};
+    std::uint64_t switch_generation{};
+    PatternTransportAction action{};
+    std::uint8_t switch_slot{kNoPatternSlot};
+  };
+  struct PatternTransportReceiptCell {
+    std::uint64_t generation{};
+    std::uint64_t epoch{};
+    std::uint64_t effective_frame{};
+    std::uint64_t origin_frame{};
+    std::uint64_t pattern_generation{};
+    std::uint64_t switch_applied_frame{};
+    std::uint8_t pattern_slot{kNoPatternSlot};
+    bool playing{};
+    PatternCutoffDecision decision{};
+  };
+  static_assert(std::is_trivially_copyable_v<PatternTransportCommandCell>);
+  static_assert(std::is_trivially_copyable_v<PatternTransportReceiptCell>);
+  void apply_pattern_transport(std::uint64_t frame) noexcept;
+  detail::FixedSpscQueue<PatternTransportCommandCell, 1> pattern_transport_commands_;
+  mutable detail::FixedSpscQueue<PatternTransportReceiptCell, 1> pattern_transport_receipts_;
+  mutable std::optional<PatternTransportReceiptCell> retained_transport_receipt_;
+  std::array<std::optional<foundation::PatternId>, kRealtimePatternCapacity>
+      retained_transport_ids_;
+  std::array<std::uint16_t, kRealtimePatternCapacity> retained_transport_bpms_{};
+  std::optional<PatternReplacementAuthority> retained_transport_switch_;
+  // Control-owned, published to audio only by the command queue.
+  std::uint64_t pattern_transport_generation_{};
+  std::uint64_t last_pattern_transport_generation_{};
+  std::uint64_t pattern_transport_epoch_{};
+  std::uint64_t acknowledged_pattern_generation_{};
+  bool pattern_transport_reserved_{};
+  bool control_pattern_playing_{};
+  // Mode is quiescent-only; playing and applied frames are audio-owned.
+  bool pattern_transport_enabled_{};
+  bool pattern_playing_{};
+  std::uint64_t transport_canceled_publications_{};
+  std::array<std::uint64_t, kRealtimePatternCapacity> pattern_applied_frames_{};
 
   enum class MasterFxControlKind : std::uint8_t { gesture, tempo };
   struct MasterFxControlEvent {
@@ -621,6 +716,7 @@ class RealtimeEngine final {
 
   struct Voice {
     std::uint64_t sequence = 0;
+    std::uint64_t pattern_generation = 0;
     std::uint8_t slot = 0;
     const float* samples = nullptr;
     PreparedSampleMaterialView material{};
@@ -681,7 +777,8 @@ class RealtimeEngine final {
       PreparedPatternView&& pattern,
       std::optional<std::uint64_t> activation_frame,
       std::optional<PatternReplacementAuthority> replacement_authority,
-      PatternPublicationTiming timing) noexcept;
+      PatternPublicationTiming timing,
+      std::uint64_t expected_generation = 0) noexcept;
   void schedule_pattern_events(std::uint64_t runtime_frame) noexcept;
   void start_pattern_voice(
       const PreparedPatternEvent& event,
@@ -743,6 +840,7 @@ class RealtimeEngine final {
   std::uint64_t started_voices_ = 0;
   std::uint64_t completed_voices_ = 0;
   std::uint32_t active_voices_ = 0;
+  std::uint32_t peak_voices_ = 0;
   std::uint64_t cancelled_voices_ = 0;
   std::uint64_t invalid_events_ = 0;
   std::uint64_t audio_invalid_events_ = 0;
@@ -825,6 +923,7 @@ class RealtimeEngine final {
     std::uint64_t claimed_through = 0;
     std::uint64_t current_pattern_generation = 0;
     PatternObservation pending{};
+    std::uint64_t transport_canceled_publications{};
   };
   struct ControlObservation {
     std::uint64_t start_epoch_ = 0;

@@ -1,12 +1,16 @@
 ---
 id: rspack-cache-stalls-corrected-mdx-build
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/commit/c5cbf6161320d2ddec1d8e3f76d051e591590726
     observed_by: Codex
-exit: none
+  - date: 2026-09-14
+    occurrence: https://github.com/endaye/lmdj/pull/1298
+    observed_by: Grok 4.6
+exit: skill:.agents/skills/issue-done/SKILL.md
+escalation: https://github.com/endaye/lmdj/issues/1299
 ---
 
 # After a failed MDX compilation, a retained local Rspack cache can accompany a stalled corrected build; preserve it and compare a cold build before changing source or gates.
@@ -39,6 +43,9 @@ Do not clean another session's worktree or weaken minification, snapshots,
 routes, tests or link checks. A killed process is not a successful build, even
 if its signal handler exits zero: require complete build and far-side checks.
 
-`exit: none`: this is one local environment observation; cache-associated
-stalling is not deterministically inferable from product source. No automatic
-cache deletion, retry loop or new global gate is justified.
+Cache-associated stalling is not deterministically inferable from product
+source, so no automatic cache deletion, retry loop or new global gate is
+justified; the recurrence-2 escalation [#1299](https://github.com/endaye/lmdj/issues/1299)
+exits to a skill rule instead: `issue-done` §1 now prescribes the stop,
+preserve and cold-rebuild handling above for a stalled owned `docusaurus`
+process during `scripts/docs-site.sh check`.

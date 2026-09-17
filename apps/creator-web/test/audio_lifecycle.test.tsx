@@ -1,4 +1,4 @@
-import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
+import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
 
@@ -324,7 +324,7 @@ test("Runtime replacement cannot leave an aborted import permanently visible", a
   await screen.findByRole("button", {name: "Open Project 11111111"});
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
   await userEvent.upload(input!, new File(["bundle"], "stage7.lmdj"));
-  await screen.findByText("importing");
+  await waitFor(() => expect(screen.getByTestId("creator-phase").textContent).toBe("importing"));
 
   first.emit({
     state: "restart-required",
@@ -563,6 +563,20 @@ test("a Runtime publication during activation wins over later refusal", async ()
   } finally {
     activationStub.current = null;
   }
+});
+
+test("hardware layout keeps Activate audio in the touch workspace", async () => {
+  const user = userEvent.setup();
+  const value = sessionFixture("gate");
+  render(<App runtimeFactory={() => value.session} />);
+  await user.click(await screen.findByRole("button", {
+    name: "Open Project 11111111",
+  }));
+  await screen.findByRole("heading", {name: "Project 11111111"});
+  const touch = screen.getByRole("region", {name: "Touch workspace"});
+  expect(within(touch).getByRole("button", {name: "Activate audio"})).toBeTruthy();
+  expect(within(screen.getByRole("region", {name: "Overview display"}))
+    .queryByRole("button", {name: "Activate audio"})).toBeNull();
 });
 
 test("Activate audio is disabled unless the Host is parked at audio-suspended", async () => {

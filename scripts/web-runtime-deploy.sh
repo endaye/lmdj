@@ -34,6 +34,7 @@ prior_manifest_sha256=''
 staged_index_sha256=''
 staged_manifest_sha256=''
 current_site_json='{}'
+preflight_site_json=''
 current_site_file_count=0
 prior_immutable_http_result='{}'
 prior_immutable_browser_result='{}'
@@ -626,6 +627,22 @@ preflight_prior_good() {
   local identity_json=''
   local fields=''
   get_current_site_preflight
+  preflight_site_json="$current_site_json"
+  if [[ -n "${LMDJ_PRIOR_SITE_SHA256:-}" ]]; then
+    local observed_site_sha256=''
+    observed_site_sha256="$(
+      without_deploy_secrets "$python_bin" -c '
+import hashlib,json,sys
+site=json.load(sys.stdin)
+raw=(json.dumps(site,ensure_ascii=False,sort_keys=True,separators=(",", ":"))+"\n").encode("utf-8")
+print(hashlib.sha256(raw).hexdigest())
+' <<<"$preflight_site_json"
+    )"
+    [[ "$observed_site_sha256" == "$LMDJ_PRIOR_SITE_SHA256" ]] || {
+      fail "why: Site differs from original request; remedy: reconcile the frozen request and current Site without replacing its prior or deploying"
+      return
+    }
+  fi
   [[ "$current_site_state" != 'disabled' ]] || {
     fail "Netlify site is already disabled; refusing automatic enable or publication"
     return
@@ -855,6 +872,18 @@ run_browser_smoke() {
 }
 
 publish_deploy() {
+  # Compare the actual Site projection immediately before any public write.
+  # Refusal is not a publication attempt: recovery must not touch another
+  # operator's pointer. This observation is not an atomic Netlify CAS.
+  [[ -n "$preflight_site_json" ]] || {
+    fail "why: Netlify publication has no frozen preflight Site; remedy: restore verified preflight evidence before starting a new deployment"
+    return
+  }
+  get_current_site 30
+  [[ "$current_site_json" == "$preflight_site_json" ]] || {
+    fail "why: Netlify Site changed since preflight; refusing publication; remedy: reconcile the current Site with the original deployment request without restoring or disabling it"
+    return
+  }
   publication_attempted=1
   publish_response_json="$(
     with_netlify_credential \
@@ -934,6 +963,16 @@ print(json.dumps(document,sort_keys=True,separators=(",",":")))
 deploy_release() {
   local selected_tag="$1"
   tag="$selected_tag"
+  if [[ -n "${LMDJ_RELEASE_REQUEST_ID:-}" ]]; then
+    [[ "$LMDJ_RELEASE_REQUEST_ID" =~ ^[0-9a-f]{64}$ && "${LMDJ_PRIOR_SITE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || {
+      fail "why: managed deployment has no valid original Site binding; remedy: restore the original request ID and frozen Site digest, never redispatch with a new prior"
+      return
+    }
+  fi
+  if [[ -n "${LMDJ_PRIOR_SITE_SHA256:-}" && ! "$LMDJ_PRIOR_SITE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+    fail "why: frozen Site digest is malformed; remedy: restore its original canonical SHA256 before deployment"
+    return
+  fi
   require_secret GITHUB_TOKEN
   require_secret NETLIFY_RUNTIME_SITE_ID
   require_secret NETLIFY_AUTH_TOKEN

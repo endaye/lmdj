@@ -43,6 +43,15 @@ function(lmdj_add_test)
   list(GET TEST_COMMAND 0 lmdj_test_executable)
   if(TARGET "${lmdj_test_executable}")
     list(APPEND lmdj_test_labels native)
+    # The instrumented binary this test runs must also be named by the root
+    # lmdj_coverage_targets list whenever the coverage test preset selects this
+    # test; the coverage configure gate reads this property to name a target
+    # that list has not learned yet.
+    set_property(
+      GLOBAL APPEND
+      PROPERTY lmdj_native_test_registrations
+      "${TEST_NAME}|${lmdj_test_executable}"
+    )
   endif()
   set(lmdj_test_working_directory_property)
   if(TEST_WORKING_DIRECTORY)

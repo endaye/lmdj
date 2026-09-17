@@ -30,6 +30,9 @@ recurrences:
   - date: 2026-09-07
     occurrence: https://github.com/endaye/lmdj/pull/761
     observed_by: Codex
+  - date: 2026-09-16
+    occurrence: https://github.com/endaye/lmdj/pull/1417
+    observed_by: Kimi Code CLI
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -69,6 +72,25 @@ simply write the witness: it is the cheaper of the two, and a witness for a
 genuinely non-divergent squash costs one file.
 
 ## How to apply
+
+Prevent it first. Direct-parent provenance resolves with no witness when the
+commit introducing the metadata has the recorded source revision as its parent.
+The freeze records the HEAD it ran against, and a squash merge makes that parent
+`main`'s tip at merge time, so the two agree only when the freeze is the first
+and only commit on a branch cut from the current `main`, merged before `main`
+moves. A freeze bundled into a branch that already carries commits records a
+branch commit the squash discards, and no arrangement of the merge can recover
+it. Every snapshot frozen so far (1.0.52.0 through 1.0.57.0) recorded such a
+branch commit, and five of the six then needed a witness: this entry's
+recurrences are that bundling, not bad luck at merge time.
+
+The detection also moved earlier. The full Architecture Portal lane in `ci.yml`
+is conditioned on the main incremental-batch fixed-target mode, so no Pull
+Request ever ran it and a broken snapshot surfaced only on the next main run:
+that is how Build 1.0.57.0 was found, already merged. The `Architecture Portal
+provenance` job in `pr-contract.yml` now runs the same portal lane commands
+against the Pull Request head whenever the change selects the portal lane, so
+the repair is decided before merge instead of after.
 
 When a Product Build snapshot and post-freeze current-page edits land in the
 same squash, generate the witness with

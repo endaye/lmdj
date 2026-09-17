@@ -62,6 +62,8 @@ export const HOST_OPERATIONS = Object.freeze([
   "audio.activate",
   "audio.suspend",
   "trigger",
+  "pattern.transport.request",
+  "pattern.transport.inspect",
   "sequence.record.begin",
   "sequence.capture.disarm",
   "sequence.record.event",
@@ -690,6 +692,30 @@ function requireSampleOperationPayload(operation, payload) {
         (hasExactKeys(payload, ["slot", "kind"]) &&
           isUnsignedInteger(payload.slot, 63) &&
           payload.kind === "release");
+      break;
+    case "pattern.transport.request":
+      valid =
+        hasExactKeys(payload, [
+          "session_id",
+          "project_id",
+          "command_id",
+          "expected_epoch",
+          "intent",
+          "expected_revision",
+        ]) &&
+        UUID_PATTERN.test(payload.session_id) &&
+        UUID_PATTERN.test(payload.project_id) &&
+        UUID_PATTERN.test(payload.command_id) &&
+        isUnsignedInteger(payload.expected_epoch) &&
+        payload.expected_epoch > 0 &&
+        (payload.intent === "play_stop" || payload.intent === "record") &&
+        (payload.expected_revision === null ||
+          isUnsignedInteger(payload.expected_revision));
+      break;
+    case "pattern.transport.inspect":
+      valid =
+        hasExactKeys(payload, ["session_id"]) &&
+        UUID_PATTERN.test(payload.session_id);
       break;
     case "sequence.record.begin":
       valid =

@@ -1078,7 +1078,7 @@ def soundset_facade_contract(executable: Path, temp_root: Path) -> None:
     assert empty["error"]["code"] == "MISSING_ASSET"
     assert empty["error"]["details"] == {}
 
-    # A Project the CLI creates is lmdj.project.v4 from its first persist, so
+    # A Project the CLI creates is lmdj.project.v5 from its first persist, so
     # a Sound Set installs into it with no intervening command: this is the
     # path a first-run user takes.
     project = temp_root / "soundset-beat.lmdj"
@@ -1226,9 +1226,10 @@ def soundset_acceptance_journey(executable: Path, temp_root: Path) -> None:
     fresh CLI process per request, and every leg asserted on its far side --
     the Project revision, the Bank's Pad occupancy, the Asset table and the
     Workspace Set Store -- never on a success code alone. The Project is the
-    one `project.create` just made: since #769 that is `lmdj.project.v4` from
-    its first persist, so no preparatory command stands between creating a
-    Project and installing a Set. A leg that needs one is a regression.
+    one `project.create` just made: since #769 that is a current-level
+    (`lmdj.project.v5`) Project from its first persist, so no preparatory
+    command stands between creating a Project and installing a Set. A leg
+    that needs one is a regression.
     """
     workspace = temp_root / "acceptance-workspace"
     publish_workspace_catalog(workspace)

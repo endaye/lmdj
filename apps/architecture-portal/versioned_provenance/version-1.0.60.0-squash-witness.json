@@ -1,0 +1,290 @@
+{
+  "schema_version": 1,
+  "product_build": "1.0.60.0",
+  "source_revision": "ffac7e3b706b2a116df5651d31bd26e71b565850",
+  "introducing_revision": "9dc59d9b9ce43e25198c192c9f61f4f60f1b728b",
+  "source_tree": "52c2af0eb4c24f568af8b4c01934102ae54eb8da",
+  "entries": [
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/application-facade.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/application-facade.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/audio-runtime.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/audio-runtime.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/authoring-domain.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/authoring-domain.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/foundation.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/foundation.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/lmdj-core.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/lmdj-core.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/lmdj-product.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/lmdj-product.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/project-cooker.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/project-cooker.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/project-io.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/project-io.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/provider-sdk.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/provider-sdk.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/web-runtime-platform.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.60.0/diagrams/web-runtime-platform.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/assembly/lmdj.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/contracts/artifact-audio.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/contracts/assembly.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/contracts/capability.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/contracts/cardputer-transfer.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/contracts/error-module-version.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/contracts/overview.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/contracts/project-bundle.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/contracts/project.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/contracts/runtime-snapshot.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/contracts/slice-points.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/contracts/soundset-catalog.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/contracts/soundset.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/core/modules/application-facade.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/core/modules/audio-runtime.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/core/modules/authoring-domain.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/core/modules/foundation.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/core/modules/project-cooker.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/core/modules/project-io.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/core/modules/provider-sdk.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/core/modules/web-runtime-platform.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/core/overview.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/history/legacy-patch-architecture.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/hosts/cardputer-host.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/hosts/core-cli.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/hosts/core-mcp.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/hosts/creator-web.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/hosts/native-host.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/hosts/overview.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/hosts/web-runtime.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/operations/creator-changelog.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/operations/documentation-governance.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/operations/runtime-changelog.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/operations/testing-and-proof.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/operations/version-and-release.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/overview/index.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/platform/input.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/platform/native-audio.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/platform/storage.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/platform/web-runtime.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/product/capability-map.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/product/positioning.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/product/workflows.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/providers/local-proof.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/providers/local-sample-slice.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/providers/overview.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.60.0/releases/index.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_metadata/version-1.0.60.0.json",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_sidebars/version-1.0.60.0-sidebars.json",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versions.json",
+      "mode": "100644",
+      "source_base64": "WwogICIxLjAuNTkuMCIsCiAgIjEuMC41OC4wIiwKICAiMS4wLjU3LjAiLAogICIxLjAuNTYuMCIsCiAgIjEuMC41NS4wIiwKICAiMS4wLjU0LjAiLAogICIxLjAuNTMuMCIsCiAgIjEuMC41Mi4wIgpdCg=="
+    }
+  ]
+}

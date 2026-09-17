@@ -6,6 +6,7 @@ cross-process retry requires the separately managed durable reporting outbox.
 """
 import argparse
 import base64
+import hashlib
 import io
 import json
 import os
@@ -120,7 +121,7 @@ def _historical_closed_map(api, repository, repo_id, workflow_id, run, publisher
             and publisher.get('conclusion') == 'success', 'historical mapping did not succeed with an exact attempt')
     _step(publisher, 'Map merged PR without another AI call')
     _step(publisher, 'Publish exact-head review and scope', 'skipped')
-    uploads = [i for i, s in enumerate(publisher.get('steps', [])) if s.get('name') == 'Run actions/upload-artifact@v4' and s.get('conclusion') == 'success']
+    uploads = [i for i, s in enumerate(publisher.get('steps', [])) if s.get('name') == 'Run actions/upload-artifact@v6' and s.get('conclusion') == 'success']
     mapper = next(i for i, s in enumerate(publisher['steps']) if s.get('name') == 'Map merged PR without another AI call')
     require(len(uploads) == 1 and uploads[0] > mapper, 'historical map upload is missing or precedes mapping')
     prefix = f'/repos/{repository}'
@@ -205,9 +206,11 @@ def collect(api, repository, run_id, attempt):
     conclusion = producers[0].get("conclusion")
     require(conclusion in {"success", "failure"}, "review producer did not retain a completed result")
     producer = job("Review fallback", conclusion)
-    for name in ("Collect complete fixed input without executing PR files", "Run actions/upload-artifact@v4"):
+    for name in ("Collect complete fixed input without executing PR files", "Run actions/upload-artifact@v6"):
         _step(producer, name)
-    _step(producer, "Save honest final result", conclusion)
+    finalizers = [s for s in producer.get("steps", []) if s.get("name") == "Save honest final result"]
+    require(len(finalizers) == 1, "required review step is missing or incomplete")
+    finalizer = finalizers[0].get("conclusion")
     if conclusion == "failure":
         # The current finalizer saves complete failure receipts before exiting 1.
         # A cancelled/otherwise broken producer is not an all-backend verdict.
@@ -229,20 +232,80 @@ def collect(api, repository, run_id, attempt):
     require(isinstance(payload, bytes) and len(payload) <= LIMIT, "review archive exceeds budget")
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = archive.namelist()
-        history_document = (json.loads(archive.read("history.json"), object_pairs_hook=change_scope.reject_duplicates)
-                            if "history.json" in names else None)
-        v2_archive = isinstance(history_document, dict) and history_document.get("schema") == review_scope.HISTORY_SCHEMA_V2
-        required = [{"context.json", "history.json", "result.json", "failure.json"},
-                    {"context.json", "history.json", "result.json", "review.json"}]
-        if v2_archive:
-            required = [{*entry, "collector.json", "t2-config-witness.json"} for entry in required]
-        base_names = {name for name in names if not name.startswith("coverage-")}
-        coverage_names = {name for name in names if name.startswith("coverage-")}
-        require(len(names) == len(set(names)) and base_names in required
-                and all(name.endswith(".json") and name != "coverage-.json" for name in coverage_names),
-                "review archive schema is not closed")
         require(sum(i.file_size for i in archive.infolist()) <= LIMIT, "expanded review archive exceeds budget")
-        documents = {name: json.loads(archive.read(name), object_pairs_hook=change_scope.reject_duplicates) for name in names}
+        generated_document = None
+        if names == ["generated-only-receipt.json"]:
+            # The third closed bucket is archive-driven: the receipt-only shape
+            # selects it, then the producer facts must corroborate -- a
+            # generated-only collection exits 0 with every model step gated
+            # off, so the producer succeeded and its finalizer was skipped.
+            require(conclusion == "success" and finalizer == "skipped",
+                    "generated-only review archive contradicts its producer receipt")
+            generated_document = json.loads(archive.read("generated-only-receipt.json"),
+                                            object_pairs_hook=change_scope.reject_duplicates)
+            documents = {}
+        else:
+            # Any other archive shape keeps the exact existing step contract: a
+            # skipped finalizer with a normal archive refuses here with the
+            # step message, before any schema reading.
+            require(finalizer == conclusion, "required review step is missing or incomplete")
+            history_document = (json.loads(archive.read("history.json"), object_pairs_hook=change_scope.reject_duplicates)
+                                if "history.json" in names else None)
+            v2_archive = isinstance(history_document, dict) and history_document.get("schema") == review_scope.HISTORY_SCHEMA_V2
+            required = [{"context.json", "history.json", "result.json", "failure.json"},
+                        {"context.json", "history.json", "result.json", "review.json"}]
+            if v2_archive:
+                required = [{*entry, "collector.json", "t2-config-witness.json"} for entry in required]
+            # The current T2 producer retains these diagnostic JSON files alongside
+            # the canonical receipts. They are bounded/parsed below but never supply
+            # review authority. Historical v2 archives may omit them; v1 may not add
+            # them. Keep every other member and canonical-receipt check closed.
+            diagnostics = {"t2-input.json", "collection-receipt.json", "t2-result.json"} if v2_archive else set()
+            base_names = {name for name in names if not name.startswith("coverage-") and name not in diagnostics}
+            coverage_names = {name for name in names if name.startswith("coverage-")}
+            require(len(names) == len(set(names)) and base_names in required
+                    and all(name.endswith(".json") and name != "coverage-.json" for name in coverage_names),
+                    "review archive schema is not closed")
+            documents = {name: json.loads(archive.read(name), object_pairs_hook=change_scope.reject_duplicates) for name in names}
+    if generated_document is not None:
+        receipt = generated_document
+        require(isinstance(receipt, dict) and set(receipt) == {
+            "schema", "status", "identity", "head_sha", "excluded_generated", "receipt_sha256"},
+            "generated-only receipt schema is not closed")
+        require(receipt["schema"] == pipeline.input_producer.GENERATED_ONLY_RECEIPT_SCHEMA
+                and receipt["status"] == "generated-only", "unsupported generated-only receipt")
+        identity = receipt["identity"]
+        require(isinstance(identity, dict) and set(identity) == set(pipeline.input_producer.IDENTITY_KEYS)
+                and identity["repository"] == repository and identity["run_id"] == str(run_id)
+                and identity["run_attempt"] == attempt and identity["head_sha"] == head
+                and receipt["head_sha"] == head
+                and type(identity["pull_request"]) is int and identity["pull_request"] >= 1
+                and all(type(identity[key]) is str and re.fullmatch("[0-9a-f]{40}", identity[key])
+                        for key in ("base_sha", "head_sha", "control_sha")),
+                "generated-only receipt identity differs from actual artifact/run")
+        unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+        require(type(receipt["receipt_sha256"]) is str
+                and receipt["receipt_sha256"] == hashlib.sha256(
+                    pipeline.input_producer.json_bytes(unsigned)).hexdigest(),
+                "generated-only receipt self-describing digest differs")
+        excluded = receipt["excluded_generated"]
+        require(pipeline.input_producer.generated_only_excluded_valid(excluded),
+                "generated-only receipt excluded-path entries are not closed")
+        control = identity["control_sha"]
+        comparison = api.compare(control, main)
+        require(comparison.get("status") in {"ahead", "identical"} and comparison.get("merge_base_commit", {}).get("sha") == control,
+                "review control is not verified main ancestry")
+        require(_source(api, repository, run["head_sha"], WORKFLOW) == _source(api, repository, control, WORKFLOW),
+                "actual review workflow source differs from trusted control")
+        if run["event"] == "workflow_dispatch":
+            require(run.get("head_branch") == "main" and run["head_sha"] == control, "manual review source is not trusted main control")
+        else:
+            associated = run.get("pull_requests")
+            require(run["head_sha"] == head and isinstance(associated, list) and (not associated or any(
+                p.get("number") == identity["pull_request"] for p in associated)),
+                "review PR event does not bind actual head")
+        # An authenticated generated-only run is not a backend failure.
+        return None
     context = documents["context.json"]
     require(isinstance(context, dict) and set(context) == {"identity", "changed_paths"}, "review context schema is not closed")
     identity = context["identity"]
@@ -259,8 +322,11 @@ def collect(api, repository, run_id, attempt):
         require(run.get("head_branch") == "main" and run["head_sha"] == control, "manual review source is not trusted main control")
     else:
         associated = run.get("pull_requests")
+        # The associated PR head is live metadata: GitHub updates it after a
+        # push even on historical runs. Bind the reviewed revision to the run's
+        # own head_sha and retained artifact; this connection binds PR identity.
         require(run["head_sha"] == head and isinstance(associated, list) and (not associated or any(
-            p.get("number") == identity["pr_number"] and p.get("head", {}).get("sha") == head for p in associated)),
+            p.get("number") == identity["pr_number"] for p in associated)),
             "review PR event does not bind actual head")
     policy = test_scope.parse_policy(*[json.loads(_source(api, repository, control, "scripts/ci/" + name),
                                                object_pairs_hook=change_scope.reject_duplicates)

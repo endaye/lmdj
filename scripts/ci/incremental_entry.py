@@ -85,7 +85,7 @@ def diagnostic(operation, stage, error):
              ScopeError: "scope-error", json.JSONDecodeError: "json-error", OSError: "os-error",
              GitHubApiError: "github-api-error", HTTPError: "http-error"}
     answer = {"schema": "lmdj.ci-entry-diagnostic.v1",
-            "operation": operation if type(operation) is str and operation in {"control", "reports"} else "unknown",
+            "operation": operation if type(operation) is str and operation in {"control", "reports", "relay"} else "unknown",
             "stage": stage if type(stage) is str and stage in DIAGNOSTIC_STAGES else "unknown",
             "error_kind": kinds.get(type(error), "unknown")}
     http = http_diagnostic(error)

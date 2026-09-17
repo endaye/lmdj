@@ -3,10 +3,15 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <vector>
 #include <lmdj/facade/runtime_facade.hpp>
+#include "audio_diagnostics.hpp"
 #ifdef ESP_PLATFORM
 #include "audio_driver.hpp"
+#include "audio_diagnostics.hpp"
+#include "resource_observation.hpp"
 #endif
 
 namespace lmdj::cardputer {
@@ -30,6 +35,16 @@ class AudioSession {
   virtual AudioStopResult stop_and_join() noexcept = 0;
   virtual void set_output(std::uint8_t volume, bool muted) noexcept = 0;
   virtual bool healthy() const noexcept = 0;
+  // Optional capability keeps existing fake/alternate sessions source
+  // compatible; the ESP implementation publishes it after its finish barrier.
+  virtual std::optional<std::size_t> stopped_stack_high_water_bytes() const noexcept {
+    return std::nullopt;
+  }
+  // New diagnostic method for ESP platform
+  virtual bool read_diagnostics(AudioDiagnosticsSnapshot& result) const noexcept {
+    result = {};
+    return false;
+  }
 };
 
 enum class HostResult : std::uint8_t {
@@ -57,6 +72,18 @@ struct HostStatus {
   // Consumed receipts, never inferred audible/active voice state.
   std::uint32_t last_receipt_sequence{};
   facade::RuntimeCommandOutcome last_receipt_outcome{};
+  // Acknowledged local press until acknowledged release/stop. This does not
+  // describe Pattern voices or the duration of a One Shot sample's tail.
+  std::array<bool, 4> pad_active{};
+};
+
+struct HostAudioObservation {
+  // Boot-local generation, never a Facade epoch or cross-reset identity.
+  std::uint64_t generation{};
+  std::array<char, 64> content_sha256{};
+  std::uint64_t content_bytes{};
+  bool start_succeeded{}, quiescent{}, silent{}, diagnostics_available{};
+  AudioDiagnosticsSnapshot diagnostics;
 };
 
 // All methods below have one serialized executor owner. AudioSession must
@@ -75,6 +102,14 @@ class RuntimeHost final {
   HostResult shutdown() noexcept;
   void poll() noexcept;
   HostStatus read_status() const noexcept { return status_; }
+#ifdef ESP_PLATFORM
+  // Serialized control-owner boundary for future diagnostics extraction. The
+  // sample is sequential and is not a callback/ISR operation.
+  void read_resources(ResourceObservation& result) const noexcept;
+#endif
+  // Serialized control owner. While audio owns the observation, return no
+  // data rather than an older completed observation relabeled as current.
+  bool read_audio_observation(HostAudioObservation&) const noexcept;
 
  private:
   static void render(void*, float*, float*, std::uint32_t) noexcept;
@@ -89,7 +124,11 @@ class RuntimeHost final {
   HostStatus status_;
   facade::RuntimeEpoch epoch_;
   std::uint32_t sequence_{};
+  // One byte per permitted outstanding command, allocated only at setup.
+  // Facade receipt credits prevent slot reuse before its receipt is polled.
+  std::vector<std::uint8_t> pending_pad_commands_;
   bool audio_owned_{};
+  HostAudioObservation observation_{};
 };
 
 #ifdef ESP_PLATFORM
@@ -109,6 +148,12 @@ class EspAudioSession final : public AudioSession {
   AudioStopResult stop_and_join() noexcept override;
   void set_output(std::uint8_t volume, bool muted) noexcept override;
   bool healthy() const noexcept override;
+  // Control owner only. Never reads mutable audio-owned data while running;
+  // returns false until the start attempt has published its finished release.
+  bool read_diagnostics(AudioDiagnosticsSnapshot&) const noexcept override;
+  // Same owner/barrier as diagnostics. Unavailable if no worker ran. Captured
+  // before task deletion; does not establish idle-task memory reclamation.
+  std::optional<std::size_t> stopped_stack_high_water_bytes() const noexcept override;
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

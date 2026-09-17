@@ -3,7 +3,218 @@
 Date: 2026-09-10 (Asia/Shanghai)
 
 Task: LMDJ #1153 / umbrella #1149 T4
-Status: service-environment tooling and Flash inventory binding documented; host installation and review acceptance pending
+Status: production pilot implementation in progress; see the current record below.
+
+## Automatic push and explicit repair recheck (Issues #1322 / #1305)
+
+After the updated adapter is installed, a maintainer can request one source
+repair recheck using the existing workflow on main:
+
+```bash
+gh workflow run pr-review.yml --ref main \
+  -f pr_number=PR_NUMBER -f recheck_comment_id=ORIGINAL_BOT_COMMENT_ID
+```
+
+Use the numeric ID in the original inline comment's GitHub API URL, not its
+review ID or a reply ID. After the batch-capable adapter is installed, PR push
+(`pull_request.synchronize`) automatically includes unresolved bot findings in
+the same ordinary model review. Open/reopen/ready events and an empty manual
+dispatch remain ordinary reviews. “fixed” replies and comment commands are not
+triggers. The existing provider timeout, token and monetary budgets apply.
+
+The complete thread inventory excludes human/resolved threads and paths absent
+from the current text input. Original bot roots are considered in comment-ID
+order, with at most four authentication attempts and 1 MiB of combined repair
+context per run. The Actions collection step log and summary report collected,
+not-rechecked and deferred candidates. Unchanged source, unavailable original
+evidence and overflow remain open; use the explicit entry above or manual
+review. A path-only repair proof cannot establish cross-file/runtime fixes.
+The same original artifact is cached within the observation; head and thread
+boundary reads remain fresh. An empty candidate list adds no model call.
+
+Continuous pushes share the existing cancel-in-progress PR concurrency group;
+superseded results must still pass fresh head checks. This is coalescing, not
+a fixed debounce window or guaranteed execution order. Do not dispatch an old
+run concurrently as a retry: it can cancel the current PR run. Retry the current
+head through the existing explicit entry when needed. GitHub event/concurrency
+semantics: [events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows),
+[concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+
+The collector authenticates the selected LMDJ bot finding against its retained
+review artifact, captures the full conversation and original-to-current source
+change, and binds them to the current PR input. The model returns `resolved`,
+`unresolved` or `insufficient_evidence`. Only source-provable repairs with
+concrete original/current quotes and a causal explanation can resolve. The
+recheck executes no tests or PR files. Runtime claims requiring execution,
+unavailable/expired original artifacts, unsupported path moves and incomplete
+source evidence require manual review. New findings also prevent auto-resolution.
+
+GitHub currently requires `contents: write` as well as `pull-requests: write`
+for `resolveReviewThread` / `unresolveReviewThread` with installation tokens
+([GitHub issue](https://github.com/github/gh-aw/issues/35726)). Only the separate
+publisher job holds that permission; target and model jobs remain read-only.
+The publisher executes trusted main control code, never PR files or merge calls.
+A successfully posted evidence reply does not prove that thread resolution
+succeeded: check the final GraphQL thread state and the retained receipt.
+
+The separate publisher validates the current head and conversation again,
+replies with the verdict and evidence, and resolves only the selected bot
+thread. Human threads are never selected. Retry receipts prevent duplicate
+replies for the same captured request; uncertain writes are reconciled by
+reading their actual state. A detected head/conversation race after resolve
+causes a compensating reopen. GitHub has no conditional-head thread mutation:
+cancellation, API failure or a change after the final read can leave a race
+requiring manual inspection. Current-head review and merge conversation checks
+remain required; this result never grants merge authority.
+
+`pr-review-result-HEAD-RUN-ATTEMPT` retains `t2-input.json` (including
+`repair_request` or automatic `repair_requests`) and `t2-result.json` (including
+the native `repair_recheck` or `repair_rechecks` verdicts). The publisher's scope artifact also retains `repair-recheck.json`
+after each successful thread publication, retaining partial batch receipts
+if a later thread refuses publication. Each batch must supply exactly one
+verdict per request before any thread can be mutated. A missing/invalid verdict from an older
+installed adapter fails closed. Install a reviewed adapter with the existing
+`install.sh` procedure below; preserve the previous release and shared ledger.
+
+## 2026-09-12 takeover and current installation
+
+The owner requested direct DeepSeek integration; the current Task is
+`docs/plans/2026-09-12-pr-agent-cutover.md`. The former deploy-runner/systemd
+entrypoint is retired by this Task. Historical evidence below remains unchanged.
+The new entrypoints are `scripts/ci/pr-agent/install.sh` and `run-engine.sh`;
+the model and budget are in the separately installed `runtime.toml`.
+
+Read-only host/API inspection during takeover found `netcup01`, four online
+matching Netcup runners (01-04), four offline elastic runners, and the GitHub
+secret name `PR_AGENT_DEEPSEEK_API_KEY`. No secret values were printed. The
+actual `actions.runner.endaye-lmdj.netcup-lmdj-linux.service` runs as
+`lmdj-runner-01` with `NoNewPrivileges=yes` under the existing CI slice.
+Review execution uses the runner account, not the unactivated dedicated T4
+service. Dedicated 1-vCPU/2-GiB isolation and co-running capacity are not proven.
+
+The prior session's final message said one model call had run and a second had
+not run. Retained host artifacts and the monetary ledger show two calls:
+
+| UTC start | Input | Result | Usage | Ledger amount USD |
+| --- | --- | --- | --- | --- |
+| 2026-09-11 16:32:31 | historical PR #1233 | reviewed, complete input | 23313 input / 699 output | 0.0078327 |
+| 2026-09-11 16:34:25 | same historical PR | not-reviewed, invalid_output | 23313 input / 287 output | 0.0073383 |
+
+These are conservative peak-price ledger calculations, not a provider invoice.
+The second failure is `native review contains unsupported fields`. Both calls
+used run_id `1`, attempt `1`, head
+`255cde310fccd7f701f90a5cad0a295174a6556f`, base
+`8338b7cd0334b441a39be099e9a9d02ae3b0022e`, control
+`9a3c34ffe0b19bee794e87f593b9bc726baf2e77`. Neither is an Actions run or
+authenticated current-head publication. First-call findings were moved to
+summary by the uncommitted adapter; they are not proof of valid inline review
+or defect-detection quality. That relaxation is removed in the final Task.
+
+Original host files: `/tmp/live-result-1233.json`, `/tmp/live-result-1233b.json`,
+and `/var/lib/lmdj/pr-agent/engine-state/ledger.jsonl`. Local copies and this
+session's raw tests are retained in `/tmp/lmdj-pr-agent-cutover.Jx0gpqLL/`.
+The real rendered-prompt regression reproduces the upstream example/consumer
+contradiction before the fix; it then passes with one configured schema.
+The upstream PRReviewer and LiteLLM engine remain pinned and unchanged.
+
+The configured Flash model, peak input/output rates and non-thinking parameter
+were refreshed from the official DeepSeek [pricing](https://api-docs.deepseek.com/quick_start/pricing/)
+and [thinking-mode](https://api-docs.deepseek.com/guides/thinking_mode/) pages on
+2026-09-12. Runtime caps remain USD 1 per PR attempt, USD 20 pilot/month,
+60 seconds per request, 600 seconds per engine invocation, 4096 output tokens.
+No manual paid call was added by this continuation.
+
+### Verified continuation receipt
+
+The installer completed with exit 0 and selected
+`/var/lib/lmdj/pr-agent/releases/cutover.5Jaxm58H`. The original release
+`/var/lib/lmdj/pr-agent/releases/c734251f52c21d8a1b2265e3284c1a98fb8ca5d8ff108f2afbc38c2cec387416`
+is unchanged and retained as `previous`. Runner 01 verified the candidate
+before the switch; runner 02 independently read the installed witness after it.
+These are installation checks, not independent source review or model calls.
+
+- Installed adapter SHA-256:
+  `6bbe205f95b6957ee62995a39b7aa88f34eddef656ef1e24e84c58153d39c176`.
+- Runtime SHA-256:
+  `c02b452c9d8c3269bc5025bd9f13a98e0f9c33cbcf9d50c9150575edd230fa74`.
+- Monetary ledger SHA-256, identical before and after:
+  `132139c2d65951e848a381ec06e335a0657438389293a208096b248f35ddee85`.
+
+Raw logs under the local evidence directory above retain the failed runs as
+well as the corrections. Final child processes all exited 0:
+
+| Check | Result | Log |
+| --- | --- | --- |
+| Pinned engine suite, including its real-handler subprocess | 58 passed, no skips | `engine-tests-v3.log` |
+| Direct real PRReviewer/LiteLLM handler suite | 39 passed, no skips; overlaps the parent suite | `engine-child-tests-v2.log` |
+| Input, protocol, workflow and consumer regressions | 412 passed, no skips after independent-review corrections | `protocol-tests-v3.log` |
+| Change-scope ownership, including retained deletion-path rules | 72 passed | `scope-tests-v3.log` |
+| Real Linux root/ACL installer and workflow-lock fixtures, no provider | 6 passed | `install-tests-v3.log` |
+| Actual installation and post-switch runner witness | Passed; ledger unchanged | `host-install-v1.log` |
+| Portal validation and build | Passed, 46 routes | `docs-check-v5.log` |
+
+Pinned actionlint 1.7.12 with ShellCheck 0.9.0 on Linux and shell syntax checks
+also passed. Failed-candidate and busy-lock behavior were exercised in separate
+temporary fixture roots, not by disrupting the installed production release.
+Independent review found and corrected a stale test that rejected retained
+deletion-path ownership, and a witness/installation race. The workflow now
+holds one slot lock across both witness and model execution; witness failure
+prevents model entry. Three still-active generic pipeline regressions were also
+restored. The final heredoc shell spelling is separately exercised by the real
+Linux lock fixtures and the affected workflow/pipeline suite; earlier logs are
+not rewritten as final-head evidence.
+
+### Update and rollback
+
+Stage the reviewed repository copies of `install.sh`, `run-engine.sh`,
+`runtime.toml` and `pr_agent_review.py` in a dedicated host directory. Run
+`sudo -n bash STAGING/install.sh STAGING`. The installer requires the existing
+root-owned bundle, Python 3.12, ACL tools and a free slot lock. It copies the
+bundle into a new protected release, updates only that candidate's member
+identities, verifies it with a runner-account `--witness`, and atomically
+switches `current`, retaining `previous`. A failed candidate is retained for
+inspection; it never replaces current. The original seed archive digest stays
+provenance, while adapter/config hashes bind the installed overlay.
+
+The account-level witness does not enter the runner's systemd mount namespace.
+PR #1238 run `34628173677` attempt 1 exposed this boundary: it made zero model
+calls, reported `budget_exhausted`, and failed to open the ledger lock with
+`EROFS` inside runner 04's service despite working ACLs and only USD 0.015171
+recorded spend. Preserve that failed run; it is not provider/budget acceptance.
+
+Keep `ProtectSystem=strict`. The Netcup unit template allows only
+`-/var/lib/lmdj/pr-agent/engine-state` and `-/var/lib/lmdj/pr-agent/engine` via
+an additive `ReadWritePaths=` line. The `-` permits absent directories during
+provisioning; it does not update an already running mount namespace. For
+existing Netcup services, install that same line in a root-owned dedicated
+drop-in, daemon-reload, and restart only idle services one at a time. Offline
+elastic units stay stopped. Check GitHub busy state and host worker processes
+before each restart; wait for busy workers rather than interrupting them.
+Never make the installation root or release/configuration bytes writable.
+Read back effective properties and verify state access from the restarted
+service's actual mount namespace; retain ledger bytes through the operation.
+The real systemd tests in `ci_pr_agent_install_test.py` reproduce the denied
+case and exercise both allowed state writes and denied installation writes.
+They do not call a provider or substitute for a real PR Review run.
+
+To roll back, first read and record the exact protected previous directory and
+current link. Under the same `slot.lock`, atomically replace only `current`
+with a symlink to that recorded directory, then run `run-engine.sh --witness`
+and compare the complete identity with its retained witness. Keep all release
+directories and monetary records. A workflow revert restores old routing,
+whose model availability was already unreliable; it does not prove health.
+
+### Remaining acceptance
+
+The proposed workflow still needs independent current-head review and merge,
+then a real Actions current-head collect/review/publish/read-back. Its own PR
+uses trusted base scripts, so missing new entrypoints before merge must not
+be bypassed by executing PR-owned code. New push/rerun, stale/duplicate output,
+cancellation/recovery, quality/cohort and real rollback/restoration retain their
+own evidence gaps. #1149, #1153, #1154 and #1155 are not completed by these
+manual replays. Historical failure Issues need individual disposition.
+
+## Historical T4 source and acceptance record
 
 ## What this Task implements
 

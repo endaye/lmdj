@@ -33,6 +33,9 @@ COMMENTS_QUERY = f"""query($owner:String!,$name:String!,$number:Int!,$after:Stri
  repository(owner:$owner,name:$name) {{ nameWithOwner issue(number:$number) {{ number id
  comments(first:100,after:$after) {{ totalCount pageInfo {{ hasNextPage endCursor }}
  nodes {{ fullDatabaseId {METADATA} }} }} }} }} }}"""
+LAST_QUERY = f"""query($owner:String!,$name:String!,$number:Int!) {{
+ repository(owner:$owner,name:$name) {{ nameWithOwner issue(number:$number) {{ number id
+ comments(last:1) {{ totalCount nodes {{ fullDatabaseId {METADATA} }} }} }} }} }}"""
 
 
 def require(condition, why):
@@ -136,9 +139,8 @@ class GitHubJournalTransport:
             # Journal writes and GraphQL reads are POSTs: never replay an
             # unknown POST. Only an idempotent REST GET may be retried.
             if method == "GET":
-                if self.lock_held():
-                    return call()
-                return with_retry(call, sleep=time.sleep, clock=self.clock, budget=self.retry_budget)
+                return with_retry(call, sleep=time.sleep, clock=self.clock,
+                                  budget=self.retry_budget, secondary=not self.lock_held())
             return call()
         except Exception as error:
             raise JournalBlocked("why: GitHub journal request unavailable or write outcome unknown; remedy: reconcile existing intent without repeating a write") from error
@@ -370,6 +372,34 @@ class GitHubJournalTransport:
         session["next"] = next_cursor
         session["seen"].add(next_cursor)
         return {"comments": comments, "next": next_cursor}
+
+    def last(self, issue_id):
+        """Tail peek for the stranded-pending guard; carries no writer trust.
+
+        A None or mismatch can only block the caller; a match still faces the
+        complete replay in Journal.load, which authenticates every writer."""
+        self._fixed(issue_id)
+        issue = self._query(LAST_QUERY)
+        connection = issue.get("comments")
+        require(isinstance(connection, dict) and type(connection.get("totalCount")) is int
+                and connection["totalCount"] >= 0 and isinstance(connection.get("nodes"), list),
+                "comment tail inventory malformed")
+        nodes = connection["nodes"]
+        require(len(nodes) <= 1, "comment tail exceeds requested size")
+        if connection["totalCount"] == 0:
+            require(not nodes, "empty journal returned a tail comment")
+            return None
+        require(len(nodes) == 1, "comment tail is truncated")
+        node = nodes[0]
+        require(isinstance(node, dict), "null or malformed comment node")
+        raw_id = node.get("fullDatabaseId")
+        require(isinstance(raw_id, str) and re.fullmatch(r"[1-9][0-9]*", raw_id),
+                "comment BigInt identity is not decimal text")
+        self._metadata(node, comment=True)
+        document = decode(node["body"])
+        require(document["kind"] == "event", "journal object is stored in the wrong location")
+        return {"id": int(raw_id), "edited": False,
+                "envelope": document["payload"], "provenance": document["writer"]}
 
     def authenticate(self, record, issue_id):
         self._fixed(issue_id)

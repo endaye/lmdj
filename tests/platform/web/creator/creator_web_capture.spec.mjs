@@ -1,15 +1,24 @@
 import {readFile} from "node:fs/promises";
 
-import {expect, test} from "@playwright/test";
+import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 
 import {CAPTURE_FIXTURE_SECONDS} from "./fixtures/make_capture_fixture.mjs";
+
+// Play/Stop and Record are the console's physical keys. Their accessible
+// names carry their state ("Play/Stop — Pattern is playing", "Record — stop
+// recording …"), so they are addressed by prefix inside the physical column,
+// which also keeps "Record Sample" and "Record Performance" out of reach.
+const physicalKey = (page, name) =>
+  page.getByTestId("physical-controls").getByRole("button", {name});
+const playStopKey = (page) => physicalKey(page, /^Play\/Stop/);
+const recordKey = (page) => physicalKey(page, /^Record\b/);
 
 const sampleBundle = process.env.LMDJ_CREATOR_WEB_SAMPLE_BUNDLE;
 const GRANTED = "creator-capture-chromium";
 const DENIED = "creator-capture-denied-chromium";
 
 // Read the revision from the exported report, the same way the Sample Editor
-// spec does: .project-summary renders only in Project mode, so a DOM probe
+// spec does: the upper screen's .overview-facts carries Rev in every mode, so a DOM probe
 // cannot verify a commit made from the Sample surface.
 async function expectProjectRevision(page, expectedRevision) {
   const downloadPromise = page.waitForEvent("download");
@@ -21,7 +30,10 @@ async function expectProjectRevision(page, expectedRevision) {
 async function report(page, options = {}) {
   const downloadPromise = page.waitForEvent("download");
   if (options.force === true) {
-    await page.locator(".status-actions button")
+    // While the capture dialog is modal the rest of the shell is inert, so a
+    // role query cannot see the button; a CSS locator still can, and a
+    // programmatic click is exactly what `force` means here.
+    await page.getByTestId("touch-workspace").locator("button")
       .filter({hasText: "Export report"})
       .evaluate((element) => element.click());
   } else {
@@ -79,7 +91,11 @@ async function inspectProjectTruth(page) {
 }
 
 async function pressRecordedPad(page, accessibleName, code) {
-  const pad = page.getByRole("button", {name: accessibleName});
+  // The console's Pad matrix is the trigger surface in every mode; its pads
+  // append a key hint to the name, so the caller's name is matched as a prefix.
+  const pad = page.getByTestId("pad-matrix").getByRole("button", {
+    name: new RegExp("^" + accessibleName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+  });
   await expect(pad).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
   await pad.evaluate((element) => {
     element.removeAttribute("data-proof-outcome-observed");
@@ -116,8 +132,20 @@ async function importV1SampleProject(page) {
   await (await chooserPromise).setFiles(sampleBundle);
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.locator(".project-summary"))
-    .toContainText("Revision46", {timeout: 120_000});
+  await expect(page.locator(".overview-display > .overview-facts"))
+    .toContainText("Rev46", {timeout: 120_000});
+}
+
+async function inspectTransportProjection(page) {
+  const response = await page.evaluate(() =>
+    window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "host.status",
+      payload: {},
+    }));
+  expect(response.ok).toBe(true);
+  return response.result.pattern_transport;
 }
 
 async function enterSampleEditor(page) {
@@ -126,7 +154,7 @@ async function enterSampleEditor(page) {
 }
 
 async function selectPadWithoutPress(page, label) {
-  await page.getByRole("button", {name: label}).evaluate((element) => element.click());
+  await page.getByRole("button", {name: label, exact: true}).evaluate((element) => element.click());
 }
 
 // Record until the panel reports at least `seconds` of buffered audio. The
@@ -278,7 +306,7 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
     .toBeVisible({timeout: 180_000});
   await panel.getByRole("button", {name: "Close"}).click();
   await expect(panel).toBeHidden();
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true}))
     .toBeVisible();
   // The committed capture flows through the ordinary post-import behaviour:
   // the Pad reads assigned and the Sample Editor renders its waveform.
@@ -335,9 +363,12 @@ test("ordinary Sample focus loss keeps the retained trim dialog visible", async 
   await expect(panel.getByRole("button", {name: "Record into Pad A1"})).toBeVisible();
 });
 
-test("armed Pad capture commits without stopping the active Sequence", async ({page}, testInfo) => {
+test("armed Pad capture commit is guarded by the open transport journal and never stops playback", async ({page}, testInfo) => {
   test.skip(testInfo.project.name !== GRANTED);
-  test.setTimeout(600_000);
+  // Two full capture cycles (the refused take and the committed replacement)
+  // plus two Record cycles: the budget grows with the journey, not to hide a
+  // hang.
+  test.setTimeout(900_000);
   await installProjectInspectProbe(page);
   await page.goto("/index.html");
   await importV1SampleProject(page);
@@ -351,8 +382,11 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
   const panel = await recordAtLeast(page, "Pad A1", 1);
 
   await panel.getByRole("button", {name: "Continue in Sequence"}).click();
-  await expect(page.getByRole("heading", {name: "Sequence"})).toBeVisible();
-  await page.getByRole("button", {name: "Record"}).click();
+  // The Sequence editor is one component in both layouts and names itself
+  // "Sequence editor"; that region is the destination, whichever shell
+  // mounts it.
+  await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
+  await recordKey(page).click();
   await expect(page.getByRole("status").filter({hasText: "recording"}))
     .toBeVisible();
 
@@ -363,19 +397,59 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
   );
 
   // A distinct non-armed Pad is ordinary Sequence input before the Capture
-  // stop gesture. This event must survive the Capture commit/rebase boundary.
+  // stop gesture. This event must survive the Capture commit boundary.
   await pressRecordedPad(page, "Pad A2 — assigned", "KeyW");
 
-  // The armed Pad stops only its capture. The Sequence session stays beneath
-  // the trim overlay and the armed hit itself is not recorded.
+  // The armed Pad stops only its capture. The global Pattern transport keeps
+  // playing beneath the trim overlay and the armed hit itself is not recorded.
   await page.keyboard.press("KeyQ");
   await expect(panel.getByRole("slider", {name: /^Pad A1 End —/}))
     .toBeVisible({timeout: 30_000});
+
+  // While the transport journal is open, the Sample-class commit keeps the
+  // legacy busy guard (#1363): the refusal is honest, the take is retained,
+  // and the panel keeps its controls.
   await panel.getByRole("button", {name: "Commit"}).click();
-  await expect(panel).toBeHidden({timeout: 180_000});
-  await expect(page.getByRole("status").filter({hasText: "recording"}))
+  await expect(panel.getByRole("alert"))
+    .toContainText("Sample operation failed", {timeout: 30_000});
+  await expect(panel.getByRole("button", {name: "Commit"})).toBeVisible();
+  await expect(panel.getByRole("slider", {name: /^Pad A1 End —/}))
+    .toBeVisible();
+
+  // The take cannot commit while the journal is open; Discard is the explicit
+  // user escape, and Record-off then settles the journal without stopping
+  // playback.
+  await panel.getByRole("button", {name: "Discard"}).click();
+  // Sequence mode shows no Sample picker; the console matrix is where the
+  // discarded Pad reads as empty again.
+  await expect(page.getByTestId("pad-matrix").getByRole("button", {name: /^Pad A1 — empty/}))
     .toBeVisible({timeout: 30_000});
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+  await recordKey(page).click();
+  await expect(page.getByRole("status").filter({hasText: "playing"}))
+    .toBeVisible({timeout: 30_000});
+
+  // The replacement take commits at the legal point: no open journal, and
+  // playback never stopped. Sample mode mounts no transport widget, so the
+  // continuity assertion reads the Runtime's own projection.
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
+  const whileSampling = await inspectTransportProjection(page);
+  expect(whileSampling).toMatchObject({engaged: true, playing: true});
+  await selectPadWithoutPress(page, "Pad A1 — empty");
+  const replacement = await recordAtLeast(page, "Pad A1", 1);
+  await replacement.getByRole("button", {name: "Stop"}).click();
+  await expect(replacement.getByRole("slider", {name: /^Pad A1 End —/}))
+    .toBeVisible({timeout: 30_000});
+  await replacement.getByRole("button", {name: "Commit"}).click();
+  // In Sample mode the panel intentionally stays open after a commit and
+  // returns to its idle state; while it is open its modal hides the Pad grid
+  // from the accessibility tree, so Close it (the take is already committed)
+  // before reading the grid.
+  await expect(replacement)
+    .toContainText("Ready to record into Pad A1", {timeout: 180_000});
+  await replacement.getByRole("button", {name: "Close"}).click();
+  await expect(replacement).toBeHidden({timeout: 30_000});
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true}))
     .toBeVisible({timeout: 30_000});
   const committedTruth = await inspectProjectTruth(page);
   const committedAsset = committedTruth.project.banks[0].pads[0].asset_id;
@@ -388,13 +462,30 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
     sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
   });
   expect(committedArtifact.byte_length).toBeGreaterThan(44);
+  // The Pattern kept playing through the commit.
+  const afterCommit = await inspectTransportProjection(page);
+  expect(afterCommit).toMatchObject({engaged: true, playing: true});
 
-  // Once committed and rebased, the same Pad is a normal playable/recordable
-  // input for the still-active session.
+  // The transport still plays; back in Sequence mode, a fresh Record makes
+  // the committed Pad ordinary recordable input for the same Pattern.
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
+  await recordKey(page).click();
+  await expect(page.getByRole("status").filter({hasText: "recording"}))
+    .toBeVisible({timeout: 30_000});
   await pressRecordedPad(page, "Pad A1 — assigned", "KeyQ");
-  await page.getByRole("button", {name: "Stop"}).click();
+  await recordKey(page).click();
+  await expect(page.getByRole("status").filter({hasText: "playing"}))
+    .toBeVisible({timeout: 30_000});
+  await playStopKey(page).click();
   await expect(page.getByRole("status").filter({hasText: "stopped"}))
     .toBeVisible({timeout: 30_000});
+
+  // The report's revision pair settles once the Stop's authority refresh has
+  // landed; the upper screen's Rev is that refresh's far side.
+  const settledTruth = await inspectProjectTruth(page);
+  await expect(page.locator(".overview-display > .overview-facts")).toContainText(
+    `Rev${settledTruth.project_revision}`, {timeout: 30_000});
 
   const evidence = await report(page);
   expect(evidence.sequence.semantic_state).toBe("stopped");
@@ -423,7 +514,7 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
     lineage: null,
   });
 
-  const expectedFinalRevision = initialTruth.project_revision + 2;
+  const expectedFinalRevision = initialTruth.project_revision + 3;
   expect(persisted.project_revision).toBe(expectedFinalRevision);
   expect(persisted.project.revision).toBe(expectedFinalRevision);
 
@@ -455,7 +546,7 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
     event.duration_tick > 0 && event.velocity > 0)).toBe(true);
 
   await page.getByRole("button", {name: "Sample"}).click();
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true}))
     .toBeVisible({timeout: 30_000});
 });
 
@@ -532,7 +623,7 @@ test("capture never leaks device identity or filesystem paths", async ({page}, t
     .toBeVisible({timeout: 180_000});
   await panel.getByRole("button", {name: "Close"}).click();
   await expect(panel).toBeHidden();
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true}))
     .toBeVisible();
 
   // Only the Artifact bytes and their SHA-256 identity persist: no device

@@ -107,6 +107,20 @@ No wildcard is an implementation mandate. T1 freezes the inactive supplier
 activation contract; actual supplier health and deployment are T4/T5 evidence,
 and must not be claimed by closing the design task.
 
+## 2026-09-12 owner-directed production pilot
+
+The owner asked for direct DeepSeek PR-Agent integration and retirement of
+unused paths after stopping the earlier workers. The current bounded Task is
+[`2026-09-12-pr-agent-cutover.md`](2026-09-12-pr-agent-cutover.md).
+It supersedes the shadow-first scheduling requirement for this pilot, not the
+historical T4/T5 acceptance verdicts. Dedicated-service resource isolation,
+the four-provider cohort, quality comparison and full recovery/rollback
+acceptance remain uncompleted; none is reclassified as PASS by this change.
+Current-head independent review and all input, budget, scope and publication
+invariants still apply. The sections below retain the original plan and its
+dated source-only evidence; consult the new Task and operations record for the
+current route and unresolved work.
+
 ## T1 — 制定 PR-Agent 接入设计、验收口径与费用预算 (#1150)
 
 Dependencies: none.

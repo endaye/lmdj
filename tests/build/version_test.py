@@ -66,7 +66,7 @@ expected_modules = {
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "6.0.0",
+        "6.1.0",
         3,
         {
             "foundation": "0.4.0",
@@ -79,45 +79,45 @@ expected_modules = {
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "5.3.0",
+        "5.3.1",
         2,
         {
-            "application-facade": "6.0.0",
+            "application-facade": "6.1.0",
             "audio-runtime": "5.0.0",
         },
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "3.3.5",
+        "3.3.6",
         2,
-        {"application-facade": "6.0.0"},
+        {"application-facade": "6.1.0"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "3.4.0",
+        "3.4.1",
         2,
-        {"application-facade": "6.0.0"},
+        {"application-facade": "6.1.0"},
     ),
     "apps/native-host/module.json": (
         "native-host",
-        "3.4.0",
+        "3.4.1",
         2,
         {
-            "application-facade": "6.0.0",
+            "application-facade": "6.1.0",
             "audio-runtime": "5.0.0",
         },
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "4.3.0",
+        "4.3.1",
         2,
-        {"web-runtime-platform": "5.3.0"},
+        {"web-runtime-platform": "5.3.1"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "4.3.0",
+        "4.4.0",
         2,
-        {"web-runtime-platform": "5.3.0"},
+        {"web-runtime-platform": "5.3.1"},
     ),
 }
 for relative, (
@@ -285,10 +285,8 @@ with tempfile.TemporaryDirectory() as temp_dir:
         repo_root=authority_root,
     ) == provider_digest
 assert assembly["contracts"] == [
-    {"id": "lmdj.project.v3", "version": "3.0.0"},
-    {"id": "lmdj.project.v4", "version": "4.1.0"},
     {"id": "lmdj.project.v5", "version": "5.0.0"},
-    {"id": "lmdj.project-bundle.v1", "version": "1.3.0"},
+    {"id": "lmdj.project-bundle.v1", "version": "2.0.0"},
     {"id": "lmdj.soundset.v1", "version": "1.1.0"},
     {"id": "lmdj.soundset-catalog.v1", "version": "1.0.0"},
     {"id": "lmdj.capability.v2", "version": "2.0.0"},
@@ -308,12 +306,8 @@ expected_contract_sources = {
     "contracts/capability/lmdj.capability.v2.schema.json": "2.0.0",
     "contracts/error/lmdj.error.v1.schema.json": "1.1.0",
     "contracts/module/lmdj.module.v1.schema.json": "1.0.0",
-    "contracts/project/lmdj.project.v1.schema.json": "1.0.0",
-    "contracts/project/lmdj.project.v2.schema.json": "2.0.0",
-    "contracts/project/lmdj.project.v3.schema.json": "3.0.0",
-    "contracts/project/lmdj.project.v4.schema.json": "4.1.0",
     "contracts/project/lmdj.project.v5.schema.json": "5.0.0",
-    "contracts/project/lmdj.project-bundle.v1.schema.json": "1.3.0",
+    "contracts/project/lmdj.project-bundle.v1.schema.json": "2.0.0",
     "contracts/soundset/lmdj.soundset.v1.schema.json": "1.1.0",
     "contracts/soundset-catalog/lmdj.soundset-catalog.v1.schema.json": "1.0.0",
     "contracts/runtime-content/lmdj.runtime-content.v1.schema.json": "1.0.0",

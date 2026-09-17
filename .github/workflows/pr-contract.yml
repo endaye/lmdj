@@ -104,7 +104,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "26"
       - name: Run every CI-control contract
         run: python3 -m unittest discover -s tests/build -p 'ci_*_test.py'
       - uses: actions/setup-python@v6
@@ -158,10 +158,49 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "26"
       - name: Check Pull Request documentation impact
         env:
           PORTAL_PR_BODY: ${{ needs.change-scope.outputs.pull-request-body }}
           PORTAL_BASE_SHA: ${{ needs.change-scope.outputs.base-sha }}
           PORTAL_HEAD_SHA: ${{ needs.change-scope.outputs.head-sha }}
         run: node apps/docs-site/scripts/check-doc-impact.mjs
+
+  portal-provenance:
+    # Snapshot provenance is verified before merge, not after. The full
+    # Architecture Portal lane in ci.yml is conditioned on the main
+    # incremental-batch fixed-target mode, so no Pull Request ever ran it and a
+    # frozen snapshot whose provenance a squash had broken could only be found
+    # by the next main run -- which is how Build 1.0.57.0 was found, already on
+    # main. This runs exactly the portal lane commands from
+    # scripts/ci/local_lanes.json (scripts/docs-site.sh install + check,
+    # including release-docs snapshot provenance of a newly committed witness)
+    # against the exact Pull Request head, on the general role rather than the
+    # heavy native queue. The verification is self-authenticating from Git
+    # objects. The literal job name is a published check-run surface: keep it
+    # stable, since readers may bind to it.
+    name: Architecture Portal provenance
+    needs: change-scope
+    if: >-
+      !cancelled() &&
+      needs.change-scope.outputs.trusted-head == 'true' &&
+      fromJSON(needs.change-scope.outputs.manifest).lanes.portal
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.change-scope.outputs.head-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the exact tested PR head
+        env:
+          EXPECTED_HEAD: ${{ needs.change-scope.outputs.head-sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "26"
+      - name: Install locked portal dependencies
+        run: scripts/docs-site.sh install
+      - name: Verify architecture portal
+        run: scripts/docs-site.sh check

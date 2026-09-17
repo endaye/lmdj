@@ -57,7 +57,12 @@ Before editing:
 
 1. fetch and prune remote refs;
 2. confirm the current worktree has no task-related uncommitted changes;
-3. create the task branch from the latest `origin/main`;
+3. create the task branch from the latest `origin/main` **without tracking
+   it** — `git worktree add --no-track .worktrees/<task> -b <prefix>/<task>
+   origin/main`. A branch created with `-b <task> origin/main` alone inherits
+   `origin/main` as its upstream, and an IDE "sync" then pushes the Task
+   straight to `main`; see
+   [`task-branch-upstream-tracks-main`](../../.agents/pitfalls/task-branch-upstream-tracks-main.md);
 4. create or enter its isolated worktree;
 5. run the smallest relevant baseline verification.
 
@@ -122,9 +127,9 @@ tooling, projected identities or documented source facts. Full self-test batches
 still include portal verification; unrelated PRs do not acquire a hidden
 all-portal pre-push build.
 
-Coding agents normally commit completed verified Tasks autonomously; this
-covers local commits only. Explicitly restricted draft work stays uncommitted.
-Every later state transition remains separately authorized.
+Coding agents complete verified Tasks under the standing authorization in
+`AGENTS.md`: commit, push, PR, current-head review and guarded squash merge.
+Explicitly restricted draft or local-only work retains its narrower boundary.
 
 ## 5. Pull Request and merge
 
@@ -216,6 +221,17 @@ Squash ancestry alone is insufficient: verify the complete local patch and
 worktree cleanliness, locks and active sessions before any authorized removal.
 Never switch/reset another session's checkout to make cleanup convenient.
 
+Prevent the witness rather than repairing it. Provenance resolves with no
+witness when the commit introducing a snapshot's metadata has the recorded
+source revision as its parent. A squash merge makes that parent whichever
+commit was `main`'s tip at merge time, and the freeze records the HEAD it ran
+against, so the two agree only when the freeze is the first and only commit on
+a branch cut from the current `main` and the merge happens before `main` moves.
+Do not bundle a snapshot freeze into a branch that already carries commits: the
+freeze then records a branch commit the squash discards, and direct-parent
+provenance can never resolve. Every snapshot frozen so far recorded such a
+branch commit, and five of the six then needed a witness.
+
 For a Task allocating a Product Build or introducing a snapshot, verify
 provenance against the actual merged introducing SHA. If a squash witness is
 missing, use the official `architecture-portal.sh witness` generator and ship
@@ -225,7 +241,7 @@ authorization.
 
 ## 6. Releases and urgent fixes
 
-Releases remain manual from an explicitly chosen, verified exact main-history
+Releases begin with a user request for an explicitly chosen, verified exact main-history
 candidate under [version-management.md](version-management.md) and the
 `lmdj-release` skill. A green complete self-test is reusable only if the canonical
 release verifier accepts its complete, current, exact-candidate evidence; it
@@ -237,8 +253,10 @@ Use only `scripts/release.sh`, beginning with a fresh exact-tag remote audit.
 Publication uses the separately dispatched `publish-release.yml` workflow and
 its protected `release` Environment; a self-test does not invoke it.
 Prepare, one exact tag push, Draft creation, protected publication, each Host
-deployment and Channel promotion are separate authorization and verification
-boundaries. Follow the canonical policy's current asset inventory, signatures,
+deployment and Channel promotion are separate verification boundaries covered
+by one overall release authorization. Continue covered transitions after each
+successful verification without asking again; stop for a failed gate, required
+external approval or missing scope. Follow the canonical policy's current asset inventory, signatures,
 profile and historical exceptions rather than duplicating them here.
 The [Web Host release and deployment policy](version-management.md) is
 authoritative for the release profile, signed asset inventory, independent Host
@@ -267,6 +285,7 @@ designed → planned → implemented → committed → pushed → merged
          → channel-promoted → release-verified
 ```
 
-A completed state does not imply permission for the next one. In particular,
-a commit does not authorize push, Pull Request creation, merge, tag, release,
-deployment, or Channel promotion.
+A completed state does not itself imply permission for the next one. Permission
+comes from the user's Task or release request and the standing rules in
+`AGENTS.md`, not from a green check or prior transition. Task authorization does
+not initiate a release, and a release request does not authorize protection bypass.

@@ -164,12 +164,12 @@ class Runtime:
     def call(self, method, path, body=None, *, raw=False):
         try:
             call = lambda: self.api._request(method, path, body=body, raw=raw)
-            # Reads made while the short writer lock is held must not sleep
-            # through a primary reset; the next health tick will retry them.
+            # Writer-lock GETs still wait for a known primary reset; they must
+            # not sleep on secondary/transport throttling. A later reset stays
+            # unknown for the next health tick, never "controller not live".
             if method == "GET":
-                if self.lock_held():
-                    return call()
-                return with_retry(call, sleep=time.sleep, clock=self.clock, budget=self.retry_budget)
+                return with_retry(call, sleep=time.sleep, clock=self.clock,
+                                  budget=self.retry_budget, secondary=not self.lock_held())
             return call()
         except Exception as error:
             raise batch.BatchError("why: runtime API unavailable or write outcome unknown; remedy: reconcile without replaying the write") from error
@@ -408,6 +408,24 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
         return {"schema": SCHEMA, "action": action, "reason": reason, "request": request,
                 "executor": deepcopy(self.current), "state": state}
 
+    def reconcile_pending(self, command):
+        """Operator-audited drain of a stranded pending intent; never execution.
+
+        The journal performs the exact-digest binding and the complete
+        authenticated absence proof; this layer only closes the command
+        schema and authenticates the writer. The answer action can never be
+        'execute': the dropped event is re-derived by the next ordinary
+        reconcile from actual run state, not replayed here."""
+        require(isinstance(command, dict) and set(command) == {"pending_digest"}
+                and isinstance(command["pending_digest"], str) and len(command["pending_digest"]) == 64
+                and all(character in "0123456789abcdef" for character in command["pending_digest"]),
+                "reconcile-pending requires a closed audited pending digest")
+        self.authenticate_current()
+        self.journal().reconcile_pending(command["pending_digest"])
+        return self.answer("reconciled-pending",
+                           "stranded pending cleared after exact absence proof; ordinary reconcile re-derives the dropped event",
+                           None, None)
+
     def reconcile(self, *, execute=False, explicit=None, resume=None):
         if resume is not None:
             require(execute is False and explicit is None, "resume cannot authorize execution or an explicit batch")
@@ -462,7 +480,7 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("init", "reconcile", "settle", "resume"))
+    parser.add_argument("command", choices=("init", "reconcile", "settle", "resume", "reconcile-pending"))
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -470,14 +488,22 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         require(not args.output.exists(), "output already exists; a stale execute action must never be reused")
-        require(args.request is None or args.command in {'reconcile', 'resume'}, "request requires reconcile or resume mode")
+        require(args.request is None or args.command in {'reconcile', 'resume', 'reconcile-pending'},
+                "request requires reconcile, resume or reconcile-pending mode")
         require(args.command != 'resume' or args.request is not None, "resume requires its explicit command file")
+        require(args.command != 'reconcile-pending' or args.request is not None,
+                "reconcile-pending requires the audited pending digest file")
         runtime = Runtime(strict_json(args.config.read_bytes()), root=args.root)
         command = strict_json(args.request.read_bytes()) if args.request else None
         require(args.command != 'resume' or isinstance(command, dict), "resume requires an explicit command object")
-        answer = runtime.initialize() if args.command == "init" else runtime.reconcile(
-            execute=args.command == "reconcile", explicit=command if args.command == 'reconcile' else None,
-            resume=command if args.command == 'resume' else None)
+        if args.command == "init":
+            answer = runtime.initialize()
+        elif args.command == "reconcile-pending":
+            answer = runtime.reconcile_pending(command)
+        else:
+            answer = runtime.reconcile(
+                execute=args.command == "reconcile", explicit=command if args.command == 'reconcile' else None,
+                resume=command if args.command == 'resume' else None)
         with args.output.open("x") as stream:
             stream.write(self_test.canonical_json(answer) + "\n")
     except Exception:

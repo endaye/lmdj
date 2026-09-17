@@ -23,12 +23,16 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
 
 API_ROOT = "https://api.github.com"
 API_VERSION = "2022-11-28"
+# One primary window is at most one hour. Jobs wait this bound, then fail closed.
+PRIMARY_WAIT_CAP_SECONDS = 20 * 60
+PRIMARY_RETRY_LIMIT = 1
 
 EXIT_OK = 0
 EXIT_UNREADABLE = 2
@@ -42,6 +46,108 @@ class TargetUnavailable(RuntimeError):
     """The Pull Request could not be read; nothing about it is known."""
 
 
+def _now() -> float:
+    return time.time()
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _header_values(headers, name: str) -> list[str]:
+    if headers is None:
+        return []
+    getter = getattr(headers, "get_all", None)
+    if callable(getter):
+        values = getter(name, [])
+        return [value for value in values if isinstance(value, str)]
+    if not hasattr(headers, "items"):
+        return []
+    wanted = name.lower()
+    return [value for key, value in headers.items()
+            if str(key).lower() == wanted and isinstance(value, str)]
+
+
+def _decimal_header(headers, name: str) -> int | None:
+    values = _header_values(headers, name)
+    if len(values) != 1:
+        return None
+    value = values[0]
+    if 1 <= len(value) <= 12 and value.isascii() and value.isdecimal():
+        return int(value)
+    return None
+
+
+def _primary_wait_seconds(error: BaseException) -> float | None:
+    """Seconds until X-RateLimit-Reset when remaining is 0; otherwise not retryable."""
+    if not isinstance(error, urllib.error.HTTPError) or error.code not in (403, 429):
+        return None
+    remaining = _decimal_header(error.headers, "X-RateLimit-Remaining")
+    reset = _decimal_header(error.headers, "X-RateLimit-Reset")
+    if remaining == 0 and reset is not None:
+        return max(0.0, float(reset) - _now())
+    return None
+
+
+def _open_github(make_request: Callable[[], urllib.request.Request]) -> bytes:
+    """Retry one refused primary-quota call until reset, inside the job bound."""
+    retries = 0
+    deadline = _now() + PRIMARY_WAIT_CAP_SECONDS
+    while True:
+        try:
+            with urllib.request.urlopen(make_request(), timeout=60) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            wait = _primary_wait_seconds(error)
+            if wait is None or retries >= PRIMARY_RETRY_LIMIT or _now() + wait > deadline:
+                raise
+            try:
+                error.close()
+            except OSError:
+                pass
+            if wait > 0:
+                print(
+                    f"why: GitHub REST remaining=0 until reset in {int(wait)}s; "
+                    "remedy: wait the bounded primary window, then continue fail-closed",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                _sleep(wait)
+            retries += 1
+
+
+def github_request(
+    method: str,
+    url: str,
+    token: str,
+    payload: Mapping[str, object] | None = None,
+) -> object:
+    """One authenticated GitHub REST call; only the trusted publisher uses writes."""
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+
+    def make_request() -> urllib.request.Request:
+        return urllib.request.Request(
+            url,
+            data=data,
+            method=method,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": API_VERSION,
+                "User-Agent": "lmdj-pr-review",
+            },
+        )
+
+    try:
+        body = _open_github(make_request)
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"GitHub {method} {url} failed: {error.code} {detail[:2000]}") from error
+    if not body:
+        return None
+    return json.loads(body.decode("utf-8"))
+
+
 def _api(path: str) -> object:
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
@@ -49,18 +155,20 @@ def _api(path: str) -> object:
             "why: GITHUB_TOKEN is unset, so the Pull Request head cannot be read; "
             "remedy: pass secrets.GITHUB_TOKEN to the step"
         )
-    request = urllib.request.Request(
-        f"{API_ROOT}{path}",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": API_VERSION,
-            "User-Agent": "lmdj-pr-review-target",
-        },
-    )
+
+    def make_request() -> urllib.request.Request:
+        return urllib.request.Request(
+            f"{API_ROOT}{path}",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": API_VERSION,
+                "User-Agent": "lmdj-pr-review-target",
+            },
+        )
+
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return json.loads(response.read().decode("utf-8"))
+        return json.loads(_open_github(make_request).decode("utf-8"))
     except (urllib.error.URLError, ValueError) as error:
         detail = getattr(error, "code", None) or str(error)
         raise TargetUnavailable(
@@ -186,26 +294,13 @@ def validate_review(payload: object, *, coverage: Mapping | None = None) -> dict
     return payload
 
 
-def publish_review(repository: str, number: int, head: str, run: str, attempt: str,
-                   backend: str, payload: object, *, api: Request | None = None,
-                   write: Callable[[str, dict], object] | None = None,
-                   coverage: Mapping | None = None, history_digest: str | None = None,
-                   history_marker: str | None = None) -> str:
-    """Only trusted publisher holds PR write permission; reject stale before mutation.
-
-    COMMENT reviews (not APPROVE/REQUEST_CHANGES) keep model text advisory.
-    A clean summary has no inline comments, so creates no blocking thread (#707).
-    Each attempt gets its own immutable review; later runs cannot rewrite evidence.
-    """
+def review_payload(repository: str, number: int, head: str, run: str, attempt: str,
+                   backend: str, payload: object, *, coverage: Mapping | None = None,
+                   history_digest: str | None = None, history_marker: str | None = None) -> dict:
+    """Pure canonical payload for publication and historical artifact verification."""
     model = validate_review(payload, coverage=coverage)
     identity = review_identity(repository, number, head, run, attempt, backend,
                                history_digest=history_digest)
-    target = resolve_target(repository, number, api=api)
-    if target["review"] != "true" or target["base_ref"] != "main":
-        raise TargetUnavailable("why: target is no longer reviewable; remedy: inspect the PR and take over manually")
-    diagnostic = stale_head_diagnostic(head, target["head_sha"], number)
-    if diagnostic:
-        raise TargetUnavailable(diagnostic)
     marker = "<!-- lmdj-grok-review -->" if backend == "grok" else f"<!-- lmdj-review: {backend} -->"
     if history_marker is not None:
         if not history_marker.startswith("<!-- lmdj-review-history-v2 ") or not history_marker.endswith(" -->"):
@@ -219,12 +314,90 @@ def publish_review(repository: str, number: int, head: str, run: str, attempt: s
             "This COMMENT review does not approve, reject or merge the PR.")
     comments = [{"path": item["path"], "line": item["line"], "side": "RIGHT",
                  "body": f"{marker}\n{identity}\n{item['body']}"} for item in model["findings"]]
+    return {"commit_id": head, "event": "COMMENT", "body": body, "comments": comments}
+
+
+def publish_review(repository: str, number: int, head: str, run: str, attempt: str,
+                   backend: str, payload: object, *, api: Request | None = None,
+                   write: Callable[[str, dict], object] | None = None,
+                   coverage: Mapping | None = None, history_digest: str | None = None,
+                   history_marker: str | None = None) -> str:
+    """Only trusted publisher holds PR write permission; reject stale before mutation.
+
+    COMMENT reviews (not APPROVE/REQUEST_CHANGES) keep model text advisory.
+    A clean summary has no inline comments, so creates no blocking thread (#707).
+    Each attempt gets its own immutable review; later runs cannot rewrite evidence.
+    """
+    data = review_payload(repository, number, head, run, attempt, backend, payload,
+                          coverage=coverage, history_digest=history_digest, history_marker=history_marker)
+    identity = review_identity(repository, number, head, run, attempt, backend, history_digest=history_digest)
+    target = resolve_target(repository, number, api=api)
+    if target["review"] != "true" or target["base_ref"] != "main":
+        raise TargetUnavailable("why: target is no longer reviewable; remedy: inspect the PR and take over manually")
+    diagnostic = stale_head_diagnostic(head, target["head_sha"], number)
+    if diagnostic:
+        raise TargetUnavailable(diagnostic)
     if write is None:
-        from grok_review import github_request
         write = lambda path, data: github_request("POST", f"{API_ROOT}{path}",
                                                    os.environ["GITHUB_TOKEN"], data)
     write(f"/repos/{repository}/pulls/{number}/reviews",
-          {"commit_id": head, "event": "COMMENT", "body": body, "comments": comments})
+          data)
+    # An unavoidable API race may leave a correctly attached historical review.
+    # Never describe it as current; the job fails and the new head needs its own run.
+    live = resolve_target(repository, number, api=api)
+    diagnostic = stale_head_diagnostic(head, live["head_sha"], number)
+    if diagnostic:
+        raise TargetUnavailable(diagnostic)
+    return identity
+
+
+def generated_identity(repository: str, number: int, head: str, run: str,
+                       attempt: str, receipt_sha256: str) -> str:
+    """The closed marker identity of a control-plane generated-only receipt."""
+    if (not re.fullmatch(r"[0-9a-f]{40}", head) or not run.isdigit()
+            or not attempt.isdigit() or number < 1
+            or not re.fullmatch(r"[\w.-]+/[\w.-]+", repository)
+            or not re.fullmatch(r"[0-9a-f]{64}", receipt_sha256)):
+        raise TargetUnavailable("why: invalid generated-only review identity; remedy: use trusted resolver outputs")
+    return (f"<!-- lmdj-review-generated-v1 {repository} {number} {head} {run} {attempt} "
+            f"sha256={receipt_sha256} -->")
+
+
+def generated_body(repository: str, number: int, head: str, run: str, attempt: str,
+                   receipt_sha256: str) -> str:
+    """The exact COMMENT body a generated-only publication writes; readers recompute it."""
+    identity = generated_identity(repository, number, head, run, attempt, receipt_sha256)
+    return (identity + "\n## generated-only change receipt\n\n"
+            "Every changed path on this head is a tool-generated Architecture Portal "
+            "snapshot/provenance artifact whose bytes a deterministic gate verifies. "
+            "This COMMENT review records the control-plane receipt; it does not approve, "
+            "reject or merge the PR.")
+
+
+def publish_generated(repository: str, number: int, head: str, run: str, attempt: str,
+                      receipt_sha256: str, *, api: Request | None = None,
+                      write: Callable[[str, dict], object] | None = None) -> str:
+    """COMMENT review carrying the generated-only receipt marker; advisory only.
+
+    Same posture as ``publish_review``: only the trusted publisher holds PR
+    write permission, the target is re-resolved and the head re-checked before
+    and after the single mutation, and the COMMENT event never approves,
+    rejects or merges the PR.
+    """
+    identity = generated_identity(repository, number, head, run, attempt, receipt_sha256)
+    data = {"commit_id": head, "event": "COMMENT",
+            "body": generated_body(repository, number, head, run, attempt, receipt_sha256)}
+    target = resolve_target(repository, number, api=api)
+    if target["review"] != "true" or target["base_ref"] != "main":
+        raise TargetUnavailable("why: target is no longer reviewable; remedy: inspect the PR and take over manually")
+    diagnostic = stale_head_diagnostic(head, target["head_sha"], number)
+    if diagnostic:
+        raise TargetUnavailable(diagnostic)
+    if write is None:
+        write = lambda path, data: github_request("POST", f"{API_ROOT}{path}",
+                                                   os.environ["GITHUB_TOKEN"], data)
+    write(f"/repos/{repository}/pulls/{number}/reviews",
+          data)
     # An unavoidable API race may leave a correctly attached historical review.
     # Never describe it as current; the job fails and the new head needs its own run.
     live = resolve_target(repository, number, api=api)

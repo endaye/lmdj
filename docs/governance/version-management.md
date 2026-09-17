@@ -214,7 +214,7 @@ commit。源码中的 `assembly.lock.json` 也不能保存包含它自身的 Git
 - tag 是不可变身份，不得移动、覆盖或复用。
 - tag 创建前必须解析并记录完整目标 SHA。
 - 创建 tag 不代表获准 push、创建 GitHub Release、部署或发布。
-- push tag、Release、部署和渠道晋级都需要各自独立授权与证据。
+- 一次整体发版授权覆盖 push tag、Release、部署和渠道晋级，各段仍需独立证据；用户明确限制范围时遵循较窄授权。
 - 错误 tag 不移动；创建更正 tag，并在事故记录中说明旧 tag。
 - 不对普通工作分支的每个 commit 打 tag。
 
@@ -284,7 +284,7 @@ Product tag 只指向已合入 `main`、CI 通过并生成匹配 Build Manifest 
 
 New Product tags require merged-main Proof first. 该 Proof 必须绑定将成为 tag target
 的精确 `main` revision、Product Build 与 Assembly lock hash；创建、签名、push tag、
-Release、部署和 Channel promotion 仍是分别授权和分别验证的动作。
+Release、部署和 Channel promotion 仍是分别验证的动作；整体发版授权覆盖这些转换。
 
 ### 5.4 Module、Contract 与 Provider tag
 
@@ -558,8 +558,9 @@ release-verified
 
 正常发布只通过 `scripts/release.sh` 与受保护 workflow 完成。每次操作先运行 exact-tag
 remote audit；随后 `prepare`、单 tag push、Draft 创建、Draft 发布、Runtime deployment 与
-Channel promotion（`promote`，见 §3.1）分别授权、分别验证，并在一个 mutation 后停止。命令输出的下一步只是导航，
-不构成下一权限边界的批准。
+Channel promotion（`promote`，见 §3.1）分别验证。按照 `AGENTS.md`，一次整体发版授权覆盖
+这些转换；每段通过后继续执行已覆盖的下一段，不重复询问。仅当门禁失败、范围缺失、
+必需外部审批或显式用户限制时停止。命令输出本身不是授权来源。
 
 `docs/release-evidence/release-intents.json` 是经 review 的 release intent ledger：它记录允许
 考虑的 exact identity、target、disposition、channel、profile 与 evidence path，但不缓存或
@@ -625,11 +626,11 @@ workflow_dispatch/push/workflow_run/schedule 闭集，不能从排队 request ki
 独立重算 exact target、current/frozen/executor policy 一致的全 16-suite passed verdict。
 focused、none、债务、旧 policy、缺 artifact 或跨 SHA/attempt 拼接一律不授予候选资格。
 
-新 batch reference 全部写入 plan `ci` 及永久 `lmdj.release-plan-marker.v3`；v1/v2 marker
+新 batch reference 全部写入 plan `ci` 及永久 `lmdj.release-plan-marker.v3`（带冻结 changelog 时为 v4）；v1/v2 marker
 不证明 batch 引用，旧 self-test v2 与 legacy v1 历史不迁移。仅 `Disposition.PUBLISHED`
 可读取 recorded attempt 的稳定来源/target/control/event provenance 而不再次要求短期 artifact
 或永远不变的 current policy；仍必须通过实际 immutable tag、signer、Release、assets 和
-精确 v3 marker 验证。allocated/abandoned/superseded 不能使用这条历史例外。
+精确 v3/v4 marker 验证。allocated/abandoned/superseded 不能使用这条历史例外。
 本协议不自动选择候选，不修改既有 intent。手动精确 full 能力由上述统一入口保留；
 旧 `ci.yml` dispatch 的退役不删除历史来源验证，也不降低完整证据要求。
 
@@ -644,13 +645,31 @@ Notes、asset inventory 与 plan 的结构和 digest 是确定性的；独立 Op
 因此不承诺重新签名得到逐字节相同的 signature。重试复用并验证已经持久化的 exact signature，
 不会用新签名覆盖它。
 
+带冻结日志的 Web Hosts Product intent 可携带闭合 `changelog` 文档
+（`lmdj.release-changelog.v1`），精确匹配 tag、Product Build、profile 与 target。
+该文档记录固定已发布基线、完整提交范围、分类条目与排除理由；PR 审查负责文字事实，
+prepare 负责重验真实 Git 范围。文档进入 canonical plan，统一 renderer 同时供 Release
+与后续 doc-site 投影使用。永久 `lmdj.release-plan-marker.v4` 保留既有 CI 身份并额外
+绑定结构化内容与 notes 摘要；Draft、published verifier 与 remote audit 必须核对完整
+正文，不接受仅 marker 正确但文字已变的 Release，也不新增第七项资产。
+旧无 changelog 的历史 intent/plan 保持 v1–v3，不重写公开历史。该扩展不自动切换所有
+旧调用者；新总控的强制日志准入与网站发布验证需完成各自接入，不能用兼容路径宣称
+完整自动发布已实现。
+
+公开记录采集使用 `scripts/release.sh publication-record TAG RELEASE_ID PLAN_SHA256`，
+重新执行 exact published verification，并以 API 的真实 `published_at`、numeric ID、
+冻结 tag / target / plan / changelog digests 输出 canonical JSON。日期缺失或两次观察间
+Release / intent 变化时拒绝采集，不拿本机时间替代。输出记录不是 ledger 变更或网站
+发布证明；后续证据 Task 仍须经 review 合入 published intent 与公开记录，生成页面、
+同步独立页数清单，再完成正常 Git-triggered 发布和线上验证。
+
 公开 publication 只由 dispatch-only `publish-release.yml` 完成。Workflow 以 exact tag、numeric
 Release ID 和 plan digest 重建并验证 Draft，通过受保护 `release` Environment 的 exact-main
 策略门后，以一次 PATCH 设置 `draft=false`、精确 prerelease 与 exact make-latest policy，随后重新验证 metadata
 与资产不变。GitHub Release API 没有本流程可依赖的强条件更新契约，所以 mutation 前后验证用于
 检测并 fail closed，而不宣称消除 TOCTOU。当前单人维护者模式明确要求零 required reviewer，
 `prevent_self_review` 不启用，并且只允许 exact `main` branch policy；显式 workflow dispatch 与
-每次独立授权是人工边界，remote audit 对 GitHub 侧配置 fail closed。Publication 不触发
+整体发版授权是人工边界，remote audit 对 GitHub 侧配置 fail closed。Publication 不触发
 Runtime deployment；后者保持 manual-only exact-tag dispatch，并与 Channel promotion 分离。
 
 所有 non-stable Release 都是 prerelease 且 `latest=false`。Stable 是否成为 `latest` 只由 ledger

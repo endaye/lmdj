@@ -165,11 +165,11 @@ test("accepts exactly the Bundle levels the Contract declares", () => {
     [...READABLE_PROJECT_CONTRACTS].sort(),
     [...BUNDLE_SCHEMA.properties.project_contract.enum].sort(),
   );
-  // Older container versions stay readable, so the reader's set is a superset;
-  // what it may never omit is the version the packer writes today.
-  assert.equal(
-    READABLE_CONTRACT_VERSIONS.includes(WRITER_CONTRACT_VERSION),
-    true,
+  // Bundles carry no backward compatibility during active development: the
+  // reader accepts exactly the container version the packer writes today.
+  assert.deepEqual(
+    [...READABLE_CONTRACT_VERSIONS],
+    [BUNDLE_SCHEMA.properties.contract_version.const],
   );
 });
 
@@ -189,22 +189,26 @@ test("refuses a Project Contract level the Contract does not declare", async () 
   assert.deepEqual(calls, []);
 });
 
-test("still reads the container versions earlier Builds wrote", async () => {
+test("refuses container versions and Project levels earlier Builds wrote", async () => {
   for (const [contractVersion, projectContract] of [
     ["1.0.0", "lmdj.project.v1"],
     ["1.1.0", "lmdj.project.v3"],
+    ["1.3.0", WRITER_PROJECT_CONTRACT],
+    [WRITER_CONTRACT_VERSION, "lmdj.project.v4"],
   ]) {
     const fixture = await bundleFixture(
       [new TextEncoder().encode("manifest")],
       {contractVersion, projectContract},
     );
     const calls = [];
-    const result = await importProjectBundle(trackedFile(fixture.bytes), {
-      crypto: {subtle: webcrypto.subtle, randomUUID: () => IMPORT_TOKEN},
-      send: successfulSend(calls, fixture.index),
-    });
-    assert.equal(result.projectId, PROJECT_ID);
-    assert.equal(calls.at(-1).operation, "project.import.commit");
+    await assert.rejects(
+      importProjectBundle(trackedFile(fixture.bytes), {
+        crypto: {subtle: webcrypto.subtle, randomUUID: () => IMPORT_TOKEN},
+        send: async (...args) => calls.push(args),
+      }),
+      (error) => error.code === "INVALID_PROJECT",
+    );
+    assert.deepEqual(calls, []);
   }
 });
 

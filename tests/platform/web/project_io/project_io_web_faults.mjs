@@ -33,6 +33,14 @@ export const STORAGE_CONDITION_FAULTS = Object.freeze([
   "InvalidStateError",
 ]);
 
+// Fixture barrier is after a successful C++ append and its observed OPFS flush,
+// before the fixture response. These are response-loss, not pre-fsync faults.
+export const ADMISSION_RESPONSE_LOSS_STEPS = Object.freeze([
+  "candidate", "fence", "transfer",
+]);
+export const ADMISSION_RESPONSE_LOSS_BARRIER =
+  "admission-after-durable-before-response";
+
 // Mirrors the native Project I/O Sequence flush commit/recovery boundaries.
 // Web conformance consumes this list so new boundaries cannot silently lose
 // OPFS restart coverage.

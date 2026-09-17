@@ -20,6 +20,12 @@ interface PatternLaunchStripProps {
 
 const BANKS = ["A", "B", "C", "D"] as const;
 
+const LAUNCH_STATE = Object.freeze({
+  pending: "Queued",
+  acknowledged: "Playing",
+  idle: "",
+});
+
 export function PatternLaunchStrip(props: PatternLaunchStripProps) {
   const [patternId, setPatternId] = useState(props.patterns[0]?.patternId ?? "");
   const [assignmentSlot, setAssignmentSlot] = useState(0);
@@ -91,18 +97,29 @@ export function PatternLaunchStrip(props: PatternLaunchStripProps) {
           onClick={() => props.onMove(moveFrom, moveTo)}>Move Pattern</button>
       </div>
       <div className="perform-pattern-slots" role="group" aria-label="Pattern slots">
-        {props.slots.map((patternId, patternSlot) => (
-          <button type="button" key={patternSlot}
-            aria-label={`Launch Pattern ${patternSlot + 1}`}
-            aria-busy={props.pending?.patternSlot === patternSlot}
-            data-pattern-id={patternId ?? undefined}
-            data-launch={props.pending?.patternSlot === patternSlot ? "pending" :
-              props.lastAck?.patternSlot === patternSlot ? "acknowledged" : "idle"}
-            disabled={props.disabled}
-            onClick={() => props.onLaunch(patternSlot)}>
-            {patternSlot + 1} · {patternId === null ? "Empty" : patternId.slice(0, 8)}
-          </button>
-        ))}
+        {props.slots.map((patternId, patternSlot) => {
+          const launch = props.pending?.patternSlot === patternSlot ? "pending"
+            : props.lastAck?.patternSlot === patternSlot ? "acknowledged" : "idle";
+          return (
+            <button type="button" key={patternSlot}
+              aria-label={`Launch Pattern ${patternSlot + 1}`}
+              aria-busy={launch === "pending"}
+              data-pattern-id={patternId ?? undefined}
+              data-launch={launch}
+              disabled={props.disabled}
+              onClick={() => props.onLaunch(patternSlot)}>
+              <span className="perform-slot-index">
+                {String(patternSlot + 1).padStart(2, "0")}
+              </span>
+              <span className="perform-slot-id">
+                {patternId === null ? "Empty" : patternId.slice(0, 8)}
+              </span>
+              {/* D04 fills the playing section and outlines the queued one.
+                  This word carries the same distinction without colour. */}
+              <span className="perform-slot-state">{LAUNCH_STATE[launch]}</span>
+            </button>
+          );
+        })}
       </div>
       <output role="status" aria-label="Pattern launch status">
         {props.pending !== null

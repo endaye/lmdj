@@ -27,14 +27,14 @@ on:
       batch_operation:
         description: Durable manual controls; exact full uses reconcile with an explicit node/candidate request.
         type: choice
-        options: [report-legacy, init, reconcile, settle, resume, report-init-outbox, report-review, report-batches, report-drain, report-discovery, recovery-probe, claim-probe, cancel-probe]
+        options: [report-legacy, init, reconcile, settle, resume, reconcile-pending, report-init-outbox, report-review, report-batches, report-drain, report-discovery, recovery-probe, claim-probe, cancel-probe]
         default: reconcile
       journal_config:
         description: Optional isolated journal JSON; empty uses the committed production scheduler. Init requires explicit config.
         type: string
         required: false
       batch_request:
-        description: Explicit node/candidate JSON for reconcile, or required closed id/suites/reason JSON for resume.
+        description: Explicit node/candidate JSON for reconcile, closed id/suites/reason JSON for resume, or the audited pending digest JSON for reconcile-pending.
         type: string
         required: false
       report_config:
@@ -86,7 +86,8 @@ jobs:
       (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_run' ||
        github.event_name == 'workflow_dispatch')
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
-    timeout-minutes: 10
+    # Covers one bounded GitHub REST primary reset wait, not product work.
+    timeout-minutes: 25
     concurrency:
       group: self-test-report
       cancel-in-progress: false
@@ -158,8 +159,8 @@ jobs:
               command = ['python3', 'scripts/ci/batch_runtime.py', operation,
                      '--config', str(config), '--output', str(output)]
           if os.environ.get('BATCH_REQUEST'):
-              if operation not in ('reconcile', 'resume'):
-                  raise SystemExit('why: explicit request outside reconcile/resume; remedy: select its command or omit the request')
+              if operation not in ('reconcile', 'resume', 'reconcile-pending'):
+                  raise SystemExit('why: explicit request outside reconcile/resume/reconcile-pending; remedy: select its command or omit the request')
               request = directory / 'request.json'
               request.write_text(os.environ['BATCH_REQUEST'])
               command += ['--request', str(request)]
@@ -423,7 +424,7 @@ jobs:
                      '--summary', os.environ['GITHUB_STEP_SUMMARY']]
           raise SystemExit(subprocess.run(command, check=False).returncode)
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: ${{ always() && !(github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') && !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' && inputs.batch_operation != 'cancel-probe' }}
         with:
           name: batch-controller-${{ github.run_id }}-${{ github.run_attempt }}

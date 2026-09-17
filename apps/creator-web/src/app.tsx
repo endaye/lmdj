@@ -1,19 +1,32 @@
 import {CandidateSurface, isCandidateSession} from "./components/candidate_surface";
-import {useCallback, useEffect, useReducer, useRef, useState} from "react";
+import {
+  useCallback,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 
-import {BankSelector} from "./components/bank_selector";
 import {ErrorPanel} from "./components/error_panel";
-import {ModeRail, type CreatorMode} from "./components/mode_rail";
+import {
+  HardwareConsole,
+  retireCreatorLayoutPreference,
+} from "./components/hardware_console";
+import type {CreatorMode} from "./components/creator_mode";
+import {OverviewDisplay} from "./components/overview_display";
 import {PadSurface} from "./components/pad_surface";
+import {PhysicalControls} from "./components/physical_controls";
 import {PerformSurface} from "./components/perform_surface";
 import {ProjectSurface} from "./components/project_surface";
+import {ProjectTouchWorkspace} from "./components/project_touch_workspace";
 import {SampleSurface} from "./components/sample_surface";
-import {SequenceSurface} from "./components/sequence_surface";
+import {SequenceTouchWorkspace} from "./components/sequence_touch_workspace";
 import {
   isSoundSetSession,
   SoundSetSurface,
 } from "./components/soundset_surface";
-import {StatusBar, type MidiStatus} from "./components/status_bar";
+import type {MidiStatus} from "./components/midi_status";
 import {
   createAcceptanceReport,
   serializeAcceptanceReport,
@@ -33,19 +46,25 @@ import {
 } from "./runtime/input_controller";
 import {reloadPrepareJourney, retryPrepareJourney} from "./runtime/sample_actions";
 import {
-  beginSequenceJourney,
   disarmSequenceCaptureJourney,
   isSequenceSession,
   reconcileSequenceAuthoringRevision,
   refreshSequenceJourney,
-  stopSequenceJourney,
 } from "./runtime/sequence_actions";
+import {
+  inspectPatternTransportJourney,
+  isPatternTransportSession,
+  reconcilePatternTransportJourney,
+  requestPatternTransportJourney,
+} from "./runtime/pattern_transport_actions";
 import {
   activateCreatorAudio,
   RuntimeProvider,
   useRuntime,
   type RuntimeProviderPhase,
 } from "./runtime/runtime_context";
+import type {PatternTransportIntent} from
+  "@lmdj/web-runtime-platform/runtime_types";
 import type {
   CreatorRuntimeSession,
   CreatorPerformanceRuntimeSession,
@@ -57,12 +76,22 @@ import type {
 import {
   creatorReducer,
   initialCreatorState,
+  selectCanActivateAudio,
   selectCanImportProject,
   selectCanOpenProject,
   selectCreatorPhase,
   type CreatorState,
 } from "./state/creator_state";
 import {initialSequenceState, reduceSequence} from "./state/sequence_state";
+import {
+  initialPatternTransportState,
+  reducePatternTransport,
+  selectTransportBusy,
+  selectTransportPlaying,
+  selectTransportRecording,
+  type PatternTransportCommand,
+  type PatternTransportState,
+} from "./state/pattern_transport_state";
 import {
   createPerformController,
   type PerformController,
@@ -221,6 +250,10 @@ function Workspace({
 }: WorkspaceProps) {
   const [state, dispatch] = useReducer(creatorReducer, initialState);
   const [sequence, dispatchSequence] = useReducer(reduceSequence, initialSequenceState);
+  const [transport, dispatchTransport] = useReducer(
+    reducePatternTransport,
+    initialPatternTransportState,
+  );
   const [listAttempt, setListAttempt] = useState(0);
   const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
   const [showLocalProjects, setShowLocalProjects] = useState(false);
@@ -233,6 +266,7 @@ function Workspace({
   const [performController, setPerformController] =
     useState<PerformController | null>(null);
   const [performCaptureConfigured, setPerformCaptureConfigured] = useState(false);
+  const [captureTransportOverlay, setCaptureTransportOverlay] = useState(false);
   const [candidateAudio, setCandidateAudio] = useState<Readonly<{
     projectId: string; revision: number; preparing: boolean;
   }> | null>(null);
@@ -258,9 +292,17 @@ function Workspace({
   const armedCaptureStopIntent = useRef<() => void>(() => {});
   const stateRef = useRef(state);
   const sequenceRef = useRef(sequence);
+  const transportRef = useRef<PatternTransportState>(transport);
+  const transportRetriedCommandRef = useRef<Readonly<{
+    commandId: string;
+    attempts: number;
+  }> | null>(null);
+  const transportSettledEpochRef = useRef(0);
+  const patternSelectionRef = useRef(0);
   const armedCaptureSlotRef = useRef(armedCaptureSlot);
   stateRef.current = state;
   sequenceRef.current = sequence;
+  transportRef.current = transport;
   armedCaptureSlotRef.current = armedCaptureSlot;
   activeModeRef.current = activeMode;
   if (sequenceAuthoringProjectId.current !== (state.project.current?.projectId ?? null)) {
@@ -273,6 +315,10 @@ function Workspace({
       sequence.status?.expectedRevision ?? 0,
     );
   }
+
+  // The workspace shell and its stored layout preference are gone; clear the
+  // stale key once so no browser keeps a value nothing reads.
+  useEffect(() => { retireCreatorLayoutPreference(); }, []);
 
   useEffect(() => {
     const project = state.project.current;
@@ -305,15 +351,44 @@ function Workspace({
     });
   }, [session, runtimePhase]);
 
+  // The app's single session owner opts in to the global Pattern transport:
+  // one engagement identity per open Project, regenerated on replacement
+  // because the runtime engagement dies with the Project session. Navigation
+  // between modes never touches it.
   useEffect(() => {
-    if (!isSequenceSession(session)) return;
-    const unsubscribe = session.subscribeSequenceBarBoundary((boundary) => {
-      void session.querySequenceStatus().then((status) => {
-        dispatchSequence({type: "boundary", status, patternId: boundary.patternId});
-      }, sequenceFailure);
+    const project = state.project.current;
+    if (!isPatternTransportSession(session)) return;
+    if (runtimePhase !== "ready") {
+      // A replaced/restarting Runtime has no engagement; never keep showing
+      // the retired projection.
+      if (transportRef.current.sessionId !== null) {
+        dispatchTransport({type: "disengaged"});
+      }
+      return;
+    }
+    if (project === null) {
+      if (transportRef.current.sessionId !== null) {
+        dispatchTransport({type: "disengaged"});
+      }
+      return;
+    }
+    if (transportRef.current.sessionId !== null &&
+        transportRef.current.projectId === project.projectId) return;
+    transportSettledEpochRef.current = 0;
+    transportRetriedCommandRef.current = null;
+    const sessionId = crypto.randomUUID();
+    dispatchTransport({
+      type: "engaged",
+      sessionId,
+      projectId: project.projectId,
+      revision: project.revision,
     });
-    return () => { unsubscribe(); };
-  }, [session]);
+    void inspectPatternTransportJourney(session, sessionId).then(
+      (status) => dispatchTransport({type: "observed", status}),
+      () => {},
+    );
+    void refreshSequence();
+  }, [session, runtimePhase, state.project.current]);
 
   const resetInputForAdverseLifecycle = () => {
     const current = inputController.current;
@@ -403,6 +478,16 @@ function Workspace({
     if (runtimeHostState === "running") {
       inputAdverseState.current = null;
       dispatch({type: "audio-changed", phase: "running"});
+      // Suspend retires the transport engagement (the Engine stop wipes its
+      // generation), so a fresh running state re-reads the projection and its
+      // epoch authority instead of trusting the pre-Suspend one.
+      const current = transportRef.current;
+      if (isPatternTransportSession(session) && current.sessionId !== null) {
+        void inspectPatternTransportJourney(session, current.sessionId).then(
+          (status) => dispatchTransport({type: "observed", status}),
+          () => {},
+        );
+      }
     } else if (
       runtimeHostState === "recovering" && runtimeRecoveryProbeReady === true
     ) {
@@ -668,6 +753,11 @@ function Workspace({
     if (!token) return false;
     dispatch({type: "project-opening"});
     resetInputForAdverseLifecycle();
+    // Project replacement retires the Runtime engagement even when the
+    // incoming Project has the same id; the projection must not keep showing
+    // the retired engagement's state. The engagement effect re-engages once
+    // the replacement is ready.
+    dispatchTransport({type: "disengaged"});
     try {
       const project = await openProjectJourney(token.session, summary);
       if (!ownsProjectAction(token)) return false;
@@ -690,6 +780,9 @@ function Workspace({
     const controller = new AbortController();
     importController.current = controller;
     resetInputForAdverseLifecycle();
+    // Same as open: an import replaces the Project session, so the transport
+    // projection is disengaged until the replacement is ready.
+    dispatchTransport({type: "disengaged"});
     dispatch({type: "transfer-started", totalBytes: file.size});
     try {
       const project = await importProjectJourney(
@@ -878,61 +971,202 @@ function Workspace({
     if (!isSequenceSession(session) || project === null) return;
     try {
       const authority = await refreshSequenceJourney(session, project.projectId);
+      // The transport commits through its own coordinator, so the legacy
+      // Sequence status can lag Project Truth; reconcile the revision against
+      // the authoritative projection as well.
+      const inspected = await session.inspectProject();
+      const inspectedRevision =
+        inspected !== null && typeof inspected === "object" &&
+        "project_revision" in inspected &&
+        typeof inspected.project_revision === "number" &&
+        Number.isInteger(inspected.project_revision) &&
+        inspected.project_revision >= 0
+          ? inspected.project_revision
+          : null;
+      const committedRevision = Math.max(
+        authority.status.expectedRevision,
+        inspectedRevision ?? 0,
+      );
       sequenceAuthoringRevision.current = reconcileSequenceAuthoringRevision(
         sequenceAuthoringRevision.current,
         project.revision,
-        authority.status.expectedRevision,
+        committedRevision,
       );
-      dispatchSequence({type: "authority", status: authority.status});
+      dispatchTransport({type: "revision", revision: committedRevision});
+      if (transportRef.current.sessionId === null) {
+        dispatchSequence({type: "authority", status: authority.status});
+      } else {
+        // The transport projection owns live playback/recording state, so the
+        // legacy mirror only follows parked (closed) journal authority, with
+        // the revision reconciled against the Project projection — the
+        // transport coordinator commits outside the legacy journal status.
+        if (authority.status.state === "inactive" ||
+            authority.status.state === "recoverable") {
+          dispatchSequence({
+            type: "authority",
+            status: {...authority.status, expectedRevision: committedRevision},
+          });
+        }
+        if (committedRevision > project.revision) {
+          // A transport commit advanced Project Truth; the revision display
+          // follows the commit.
+          dispatch({
+            type: "project-revision-updated",
+            revision: committedRevision,
+          });
+        }
+      }
       dispatchSequence({type: "recovery", candidates: authority.recovery});
     } catch (error) {
       sequenceFailure(error);
     }
   };
 
-  const recordSequence = async () => {
-    await sequenceAuthoringTail.current;
-    const project = stateRef.current.project.current;
-    if (!isSequenceSession(session) || project === null ||
-        stateRef.current.audio.phase !== "running") return;
-    const sessionId = crypto.randomUUID();
+  // A failed submit is reconciled by inspection first; the retained command
+  // is resent verbatim only when authority proves it never landed. Retry is
+  // never a new inverse toggle.
+  const reconcileTransport = async (): Promise<void> => {
+    if (!isPatternTransportSession(session)) return;
+    const current = transportRef.current;
+    if (current.sessionId === null) return;
     try {
-      const status = await beginSequenceJourney(session, {
-        sessionId,
-        patternId: sequence.selectedPatternId ?? project.patternId,
-        expectedRevision: sequenceAuthoringRevision.current,
-        armedCaptureSlot: armedCaptureSlotRef.current,
-      });
-      dispatchSequence({type: "recording", status, sessionId});
+      const status = await inspectPatternTransportJourney(
+        session,
+        current.sessionId,
+      );
+      dispatchTransport({type: "observed", status});
+      // The ref only advances at the next render; the retry decision below
+      // needs the post-observation state, so apply the reducer locally.
+      const after = reducePatternTransport(current, {type: "observed", status});
+      const retained = after.lastFailed;
+      const project = stateRef.current.project.current;
+      const retry = transportRetriedCommandRef.current;
+      // A refused command that never landed may be retried with its identical
+      // identity — the Runtime sanctions this for transient pre-effect refusals
+      // (a pending Pattern publication after a stopped-state switch) and for
+      // lost-request classes where nothing executed. Terminal refusals (a
+      // revision conflict, an invalid argument) are never resent: the error
+      // stays visible and a fresh user intent gets fresh authority. Bound the
+      // attempts either way.
+      const RETRIABLE = after.errorCode === "HOST_STATE_INVALID" ||
+        after.errorCode === "HOST_TIMEOUT" || after.errorCode === "ABORTED";
+      if (retained === null || project === null || after.sessionId === null ||
+          selectTransportBusy(after) || !RETRIABLE ||
+          (after.status !== null && after.status.transportEpoch >= retained.epoch) ||
+          (retry !== null && retry.commandId === retained.commandId &&
+            retry.attempts >= 12)) {
+        return;
+      }
+      transportRetriedCommandRef.current = {
+        commandId: retained.commandId,
+        attempts: retry !== null && retry.commandId === retained.commandId
+          ? retry.attempts + 1
+          : 1,
+      };
+      dispatchTransport({type: "requested", command: retained});
+      try {
+        const reconciled = await reconcilePatternTransportJourney(session, {
+          sessionId: after.sessionId,
+          projectId: project.projectId,
+          commandId: retained.commandId,
+          expectedEpoch: retained.epoch,
+          intent: retained.intent,
+          expectedRevision: retained.expectedRevision,
+        });
+        dispatchTransport({
+          type: "submitted",
+          commandId: retained.commandId,
+          status: reconciled.ticket.status,
+        });
+        dispatchTransport({type: "observed", status: reconciled.status});
+      } catch (error) {
+        dispatchTransport({
+          type: "failed",
+          command: retained,
+          errorCode: errorCode(error),
+        });
+      }
     } catch (error) {
-      sequenceFailure(error);
+      dispatchTransport({type: "observe-failed", errorCode: errorCode(error)});
+      return;
     }
   };
 
-  const stopSequence = async (): Promise<boolean> => {
-    const currentSequence = sequenceRef.current;
-    if (!isSequenceSession(session) || currentSequence.sessionId === null) return false;
-    const commandId = crypto.randomUUID();
-    dispatchSequence({type: "flushing", commandId});
+  const submitTransportIntent = async (intent: PatternTransportIntent) => {
+    const project = stateRef.current.project.current;
+    const current = transportRef.current;
+    if (!isPatternTransportSession(session) || project === null ||
+        current.sessionId === null || current.projectId !== project.projectId ||
+        stateRef.current.audio.phase !== "running" ||
+        selectTransportBusy(current)) {
+      return;
+    }
+    const epoch = Math.max(
+      current.status?.transportEpoch ?? 0,
+      current.pending?.epoch ?? 0,
+      current.lastFailed?.epoch ?? 0,
+    ) + 1;
+    const command: PatternTransportCommand = Object.freeze({
+      commandId: crypto.randomUUID(),
+      intent,
+      epoch,
+      // Journal creation is the only intent that needs revision authority;
+      // an absent/null revision on any other intent preserves the retained
+      // one.
+      expectedRevision: intent === "record" &&
+          current.status?.recording !== true
+        ? sequenceAuthoringRevision.current
+        : null,
+    });
+    dispatchTransport({type: "requested", command});
     try {
-      const status = await stopSequenceJourney(
-        session, currentSequence.sessionId, commandId,
-      );
-      dispatchSequence({type: "stopped", status, commandId});
-      const project = stateRef.current.project.current;
-      if (project !== null && status.committedRevision !== null) {
-        dispatch({
-          type: "project-revision-updated",
-          revision: status.committedRevision,
-        });
-      }
-      return true;
+      const ticket = await requestPatternTransportJourney(session, {
+        sessionId: current.sessionId,
+        projectId: project.projectId,
+        commandId: command.commandId,
+        expectedEpoch: command.epoch,
+        intent,
+        expectedRevision: command.expectedRevision,
+      });
+      dispatchTransport({
+        type: "submitted",
+        commandId: command.commandId,
+        status: ticket.status,
+      });
     } catch (error) {
-      sequenceFailure(error);
-      await refreshSequence();
-      return false;
+      dispatchTransport({type: "failed", command, errorCode: errorCode(error)});
+      void reconcileTransport();
     }
   };
+
+  const transportBusy = selectTransportBusy(transport);
+  // Busy and failed operations are observed through inspection until they
+  // settle; the runtime drives the continuation cadence, the Creator only
+  // polls the projection.
+  useEffect(() => {
+    if (!isPatternTransportSession(session) || transport.sessionId === null) {
+      return;
+    }
+    if (!transportBusy && transport.lastFailed === null) return;
+    const timer = window.setInterval(() => {
+      void reconcileTransport();
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [session, transport.sessionId, transportBusy, transport.lastFailed]);
+
+  // A newly settled operation re-reads journal/recovery authority once, so a
+  // committed Record-off surfaces its revision and a failed one its recovery.
+  useEffect(() => {
+    const status = transport.status;
+    if (status === null || !status.engaged || status.phase !== "idle" ||
+        status.transportEpoch === 0 ||
+        status.transportEpoch <= transportSettledEpochRef.current) {
+      return;
+    }
+    transportSettledEpochRef.current = status.transportEpoch;
+    transportRetriedCommandRef.current = null;
+    void refreshSequence();
+  }, [transport.status]);
 
   const stopArmedCapture = async () => {
     const current = sequenceRef.current;
@@ -950,6 +1184,14 @@ function Workspace({
       const project = stateRef.current.project.current;
       const currentSequence = sequenceRef.current;
       if (!isSequenceSession(session) || project === null) return;
+      const currentTransport = transportRef.current;
+      if (currentTransport.sessionId !== null &&
+          (selectTransportBusy(currentTransport) ||
+            selectTransportRecording(currentTransport))) {
+        // The runtime rejects a settings write mid-recording: its admission
+        // fence retains the timing authority.
+        return;
+      }
       const result = await session.updateSequenceSettings({
         expectedRevision: sequenceAuthoringRevision.current,
         sessionId: currentSequence.sessionId,
@@ -958,6 +1200,7 @@ function Workspace({
         swingPercent: changes.swingPercent ?? null,
       });
       sequenceAuthoringRevision.current = result.committedRevision;
+      dispatchTransport({type: "revision", revision: result.committedRevision});
       dispatch({
         type: "project-sequence-settings-updated",
         revision: result.committedRevision,
@@ -974,8 +1217,14 @@ function Workspace({
   const createPattern = (bars: 1 | 2 | 4 | 8): Promise<void> => {
     const operation = sequenceAuthoringTail.current.then(async () => {
       const project = stateRef.current.project.current;
-      if (!isSequenceSession(session) || project === null ||
-          sequenceRef.current.phase !== "stopped") return;
+      const currentTransport = transportRef.current;
+      const transportActive = currentTransport.sessionId !== null &&
+        (selectTransportBusy(currentTransport) ||
+          selectTransportPlaying(currentTransport) ||
+          selectTransportRecording(currentTransport));
+      if (!isSequenceSession(session) || project === null || transportActive ||
+          (currentTransport.sessionId === null &&
+            sequenceRef.current.phase !== "stopped")) return;
       const patternId = crypto.randomUUID();
       const result = await session.createPattern({
         patternId,
@@ -983,11 +1232,17 @@ function Workspace({
         expectedRevision: sequenceAuthoringRevision.current,
       });
       sequenceAuthoringRevision.current = result.committedRevision;
+      dispatchTransport({type: "revision", revision: result.committedRevision});
       dispatch({
         type: "project-pattern-created",
         revision: result.committedRevision,
         pattern: {patternId: result.patternId, bars: result.bars},
       });
+      if (currentTransport.sessionId !== null &&
+          isPatternTransportSession(session)) {
+        // Make the new Pattern runtime-current so the next Play starts it.
+        await session.reloadSnapshot(result.patternId);
+      }
       dispatchSequence({type: "selected", patternId: result.patternId});
     }).catch(sequenceFailure);
     sequenceAuthoringTail.current = operation;
@@ -997,7 +1252,18 @@ function Workspace({
   const capturePhaseChanged = useCallback((phase: CapturePhase) => {
     if (phase === "trimming" || phase === "commit-error" || phase === "committing") {
       dispatchSequence({type: "trim-overlay"});
+      // The legacy overlay gate needs a legacy Sequence session. Under the
+      // global transport the journal has no legacy session, so an armed
+      // Capture trimmed over an active transport recording opens the overlay
+      // through this Host-local flag instead.
+      const legacySequenceActive =
+        ["recording", "switch-pending"].includes(sequenceRef.current.phase) &&
+        sequenceRef.current.sessionId !== null;
+      if (!legacySequenceActive && selectTransportRecording(transportRef.current)) {
+        setCaptureTransportOverlay(true);
+      }
     } else if (phase === "idle" || phase === "permission-error") {
+      setCaptureTransportOverlay(false);
       const currentSequence = sequenceRef.current;
       const slot = armedCaptureSlotRef.current;
       if (isSequenceSession(session) && currentSequence.sessionId !== null && slot !== null) {
@@ -1029,6 +1295,40 @@ function Workspace({
   }, [session]);
 
   const selectSequencePattern = async (patternId: string) => {
+    if (!session) return;
+    const current = transportRef.current;
+    if (isPatternTransportSession(session) && current.sessionId !== null) {
+      if (selectTransportBusy(current)) return;
+      // Under the global transport, selection publishes the chosen Pattern as
+      // runtime-current. A playing engagement refuses the reload honestly
+      // ("stop playback before reloading another Pattern"); a stopped one is
+      // retired and re-vended on the next request against the current
+      // Pattern, with the Engine generation — and therefore the epoch
+      // sequence — continuing. Right after a committed Record-off the
+      // replaced publication can still be retiring, so the identical publish
+      // is retried a few times before the refusal is shown.
+      const selection = ++patternSelectionRef.current;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+          await session.reloadSnapshot(patternId);
+          if (patternSelectionRef.current !== selection) return;
+          dispatchSequence({type: "selected", patternId});
+          return;
+        } catch (error) {
+          if (errorCode(error) !== "HOST_STATE_INVALID" || attempt === 4 ||
+              patternSelectionRef.current !== selection) {
+            if (patternSelectionRef.current === selection) {
+              sequenceFailure(error);
+            }
+            return;
+          }
+          await new Promise((resolve) => {
+            window.setTimeout(resolve, 400);
+          });
+        }
+      }
+      return;
+    }
     if (!isSequenceSession(session)) return;
     if (sequence.phase === "recording" && sequence.sessionId !== null) {
       try {
@@ -1058,250 +1358,345 @@ function Workspace({
   const staleSampleRuntime = state.sample.lastError?.code === "COOK_FAILED" &&
     state.sample.lastError.retryPrepare && state.sample.savedRevision !== null &&
     state.sample.runtimeRevision !== state.sample.savedRevision;
+  const sequenceEnabled = isSequenceSession(session) &&
+    state.project.phase === "ready" && state.project.current !== null;
+  const performEnabled = performController !== null && performCaptureConfigured &&
+    state.project.phase === "ready" && state.project.current !== null;
+  const sliceEnabled = isCandidateSession(session) && state.project.phase === "ready" &&
+    state.project.current !== null && sequence.phase === "stopped";
+  const soundSetEnabled = isSoundSetSession(session);
+  // Physical Play/Stop and Record always mean the global Pattern transport —
+  // never Sample capture or master recording — and every mode consumes this
+  // same projection.
+  const transportReady = isPatternTransportSession(session) &&
+    transport.sessionId !== null &&
+    state.project.phase === "ready" && state.project.current !== null &&
+    state.audio.phase === "running";
+  const recording = selectTransportRecording(transport);
+  const playing = selectTransportPlaying(transport);
+  // The armed-Capture trim overlay over an active recording, whether the
+  // recording is a legacy Sequence session or the global Pattern transport.
+  const trimOverlayOpen = sequence.phase === "trim-overlay" ||
+    captureTransportOverlay;
+  const applyMode = (mode: CreatorMode) => {
+    setActiveMode(mode);
+  };
+  const selectMode = (mode: CreatorMode) => {
+    inputController.current?.clearPressed();
+    // Normal navigation never stops the global Pattern transport; only the
+    // separately owned performance recording leaves with its mode.
+    if (activeModeRef.current === "perform" && mode !== "perform" &&
+      performControllerRef.current !== null) {
+      void performControllerRef.current.leave().then(
+        () => applyMode(mode),
+        () => {},
+      );
+      return;
+    }
+    applyMode(mode);
+  };
+  const selectBank = (bank: typeof state.activeBank) => {
+    inputController.current?.clearPressed();
+    dispatch({type: "bank-selected", bank});
+  };
+  const runtimeActions = session && inputController.current
+    ? {
+        audioActivationReady: runtimeHostState === "audio-suspended",
+        onActivateAudio: (event: ReactMouseEvent<HTMLButtonElement>) => {
+          void activateAudio(event.nativeEvent);
+        },
+        onSuspendAudio: () => { void suspendAudio(); },
+        onEnableMidi: () => { void inputController.current?.enableMidi(); },
+        onExportReport: exportReport,
+      }
+    : {};
+  const padSurface = (
+    <PadSurface
+      state={state}
+      armedCaptureSlot={armedCaptureSlot}
+      {...(inputController.current ? {controller: inputController.current} : {})}
+    />
+  );
 
   return (
-    <div className="workspace">
-      <StatusBar
-        state={state}
-        midi={midi}
-        {...(buildIdentity ? {buildIdentity} : {})}
-        {...(session && inputController.current
-          ? {
-              audioActivationReady: runtimeHostState === "audio-suspended",
-              onActivateAudio: (event) => { void activateAudio(event.nativeEvent); },
-              onSuspendAudio: () => { void suspendAudio(); },
-              onEnableMidi: () => { void inputController.current?.enableMidi(); },
-              onExportReport: exportReport,
-            }
-          : {})}
-      />
-      <ModeRail
-        activeMode={activeMode}
-        soundSetEnabled={isSoundSetSession(session)}
-        sliceEnabled={isCandidateSession(session) && state.project.phase === "ready" &&
-          state.project.current !== null && sequence.phase === "stopped"}
-        sequenceEnabled={isSequenceSession(session) &&
-          state.project.phase === "ready" && state.project.current !== null}
-        performEnabled={performController !== null && performCaptureConfigured &&
-          state.project.phase === "ready" && state.project.current !== null}
-        onSelect={(mode) => {
-          inputController.current?.clearPressed();
-          if (activeModeRef.current === "perform" && mode !== "perform" &&
-            performControllerRef.current !== null) {
-            void performControllerRef.current.leave().then(
-              () => setActiveMode(mode),
-              () => {},
-            );
-            return;
-          }
-          if (mode === "sample" && ["recording", "switch-pending", "flushing"]
-            .includes(sequenceRef.current.phase)) {
-            if (sequenceRef.current.phase !== "flushing") {
-              void stopSequence().then((stopped) => {
-                if (stopped) setActiveMode("sample");
-              });
-            }
-            return;
-          }
-          setActiveMode(mode);
-        }}
-      />
-      {candidateAudio !== null && candidateAudio.projectId === state.project.current?.projectId &&
-        (candidateAudio.preparing || state.sample.savedRevision !== state.sample.runtimeRevision) ? (
-        <section className="sample-runtime-stale" aria-label="Project audio status">
-          <p role="status">{candidateAudio.preparing
-            ? `Preparing audio at revision ${candidateAudio.revision}…`
-            : `Saved at revision ${candidateAudio.revision}; audio is not ready.`}</p>
-          <button type="button" disabled={candidateAudio.preparing || projectActions.busy || runtimePhase !== "ready"}
-            onClick={() => { void refreshCandidateProject(candidateAudio.projectId).catch(() => {}); }}>
-            Retry audio preparation
-          </button>
-        </section>
-      ) : null}
-      {activeMode === "project" ? (
-        <>
-          <ProjectSurface
-            state={state}
-            canOpen={canOpenProject}
-            canImport={canImportProject}
-            showLocalProjects={showLocalProjects}
-            onShowLocal={() => setShowLocalProjects(true)}
-            onHideLocal={() => setShowLocalProjects(false)}
-            onOpen={(summary) => { void openProject(summary); }}
-            onImport={(file) => { void importProject(file); }}
-          />
-          <section className="pads" aria-label="Instrument">
-            <BankSelector
+    <div className="hardware-workspace">
+        <HardwareConsole
+          physicalControls={
+            <PhysicalControls
+              activeMode={activeMode}
               activeBank={state.activeBank}
-              onSelect={(bank) => {
-                inputController.current?.clearPressed();
-                dispatch({type: "bank-selected", bank});
-              }}
+              // The physical keys gate on the same reachability the mode rail
+              // uses. A weaker condition mounted an operable-looking Sequence
+              // editor whose every action silently returned without a Sequence
+              // capability. Perform keeps the looser gate on purpose: its
+              // touch workspace has a placeholder that names what is missing.
+              sequenceEnabled={sequenceEnabled}
+              performEnabled={state.project.phase === "ready" &&
+                state.project.current !== null}
+              onSelectMode={selectMode}
+              onSelectBank={selectBank}
+              onRecord={() => { void submitTransportIntent("record"); }}
+              recordEnabled={transportReady && !transportBusy}
+              recording={recording}
+              onPlayStop={() => { void submitTransportIntent("play_stop"); }}
+              playEnabled={transportReady && !transportBusy}
+              playing={playing}
             />
-            <PadSurface
+          }
+          overview={
+            <OverviewDisplay
               state={state}
-              {...(inputController.current ? {controller: inputController.current} : {})}
+              activeMode={activeMode}
+              sequence={sequence}
+              transport={transport}
+              midi={midi}
+              {...(buildIdentity ? {buildIdentity} : {})}
             />
-          </section>
-        </>
-      ) : activeMode === "sample" ? (
-        <>
-          {state.sample.lastError?.code === "UNSUPPORTED_AUDIO" ? (
-            <p className="sample-error" role="status">
-              Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz
-            </p>
-          ) : null}
-          {staleSampleRuntime ? (
-            <section className="sample-runtime-stale" aria-label="Sample Runtime status">
-              <p role="status">
-                Saved at revision {state.sample.savedRevision}; Runtime is still revision{
-                  " "}{state.sample.runtimeRevision === null
-                  ? "unavailable"
-                  : state.sample.runtimeRevision}
-              </p>
-              <button
-                type="button"
-                disabled={sampleRetryAction.current !== null ||
-                  state.sample.pendingAction !== null}
-                onClick={() => { void retryPrepare(); }}
-              >
-                Retry Prepare
-              </button>
-            </section>
-          ) : null}
-        </>
-      ) : activeMode === "sequence" && state.project.current !== null ? (
-        <>
-          <SequenceSurface
-            project={state.project.current}
-            state={sequence}
-            ready={isSequenceSession(session) && state.audio.phase === "running"}
-            onRecord={() => { void recordSequence(); }}
-            onStop={() => { void stopSequence(); }}
-            onRefresh={() => { void refreshSequence(); }}
-            onSwitch={(patternId) => { void selectSequencePattern(patternId); }}
-            onCreatePattern={(bars) => { void createPattern(bars); }}
-            onSettingsChange={(changes) => { void updateSequenceSettings(changes); }}
-            onRecover={(candidate, destinationPatternId) => {
-              if (!isSequenceSession(session)) return;
-              void session.applySequenceRecovery({
-                sessionId: candidate.sessionId,
-                destinationPatternId,
-              }).then((status) => {
-                if (status.committedRevision !== null) {
-                  dispatch({type: "project-revision-updated", revision: status.committedRevision});
-                }
-                return refreshSequence();
-              }, sequenceFailure);
-            }}
-            onDiscard={(candidate) => {
-              if (!isSequenceSession(session)) return;
-              void session.discardSequenceRecovery(candidate.sessionId)
-                .then(() => refreshSequence(), sequenceFailure);
-            }}
-          />
-          <section className="pads" aria-label="Sequence instrument">
-            <BankSelector activeBank={state.activeBank} onSelect={(bank) => {
-              inputController.current?.clearPressed();
-              dispatch({type: "bank-selected", bank});
-            }} />
-            <PadSurface state={state} armedCaptureSlot={armedCaptureSlot}
-              {...(inputController.current ? {controller: inputController.current} : {})} />
-          </section>
-        </>
-      ) : activeMode === "slice" && isCandidateSession(session) && state.project.current !== null ? (
-        <CandidateSurface key={state.project.current.projectId}
-          session={session} projectId={state.project.current.projectId}
-          projectRevision={state.project.current.revision}
-          onRefreshProject={(revision) => refreshCandidateProject(state.project.current!.projectId, revision)} />
-      ) : activeMode === "soundset" && isSoundSetSession(session) ? (
-        <SoundSetSurface
-          session={session}
-          projectRevision={state.project.current?.revision ?? null}
-          activeBank={state.activeBank}
-          onBankChange={(bank) => {
-            inputController.current?.clearPressed();
-            dispatch({type: "bank-selected", bank});
-          }}
-          onInstalled={(revision) => {
-            // The install committed ordinary Assets and Pad assignments, so
-            // the Pad projection every other surface reads is now stale.
-            dispatch({type: "project-revision-updated", revision});
-            void refreshPerformProject().catch(() => {});
-          }}
-        />
-      ) : activeMode === "perform" && state.project.current !== null &&
-        performController !== null ? (
-        <PerformSurface
-          controller={performController}
-          creatorState={state}
-          project={state.project.current}
-          bank={state.activeBank}
-          onBankChange={(bank) => {
-            inputController.current?.clearPressed();
-            dispatch({type: "bank-selected", bank});
-          }}
-          {...(inputController.current ? {padController: inputController.current} : {})}
-        />
-      ) : null}
-      {activeMode === "sample" || armedCaptureSlot !== null ||
-      sequence.phase === "trim-overlay" ||
-      (activeMode === "sequence" && state.sampleProjectionRefresh !== null) ? (
-        <div className={sequence.phase === "trim-overlay" ? "sample-overlay-host" : ""}
-          hidden={activeMode !== "sample" && sequence.phase !== "trim-overlay"}>
-          <SampleSurface
-            state={state}
-            dispatch={dispatch}
-            filePickIntent={sampleFilePickIntent}
-            captureStopRequest={captureStopRequest}
-            captureBackgrounded={activeMode !== "sample" &&
-              sequence.phase !== "trim-overlay"}
-            closeCaptureAfterResolution={activeMode !== "sample"}
-            {...(sequence.sessionId !== null && sequence.phase === "trim-overlay" &&
-              sequence.status !== null
-              ? {sequenceCapture: {
-                  sessionId: sequence.sessionId,
-                  expectedRevision: sequence.status.expectedRevision,
+          }
+          pads={padSurface}
+          touchWorkspace={
+            <>
+              <section className="touch-system" aria-label="System">
+                <button
+                  type="button"
+                  disabled={!selectCanActivateAudio(state) ||
+                    runtimeActions.onActivateAudio === undefined ||
+                    runtimeActions.audioActivationReady !== true}
+                  onClick={runtimeActions.onActivateAudio}
+                >
+                  Activate audio
+                </button>
+                <button
+                  type="button"
+                  disabled={state.audio.phase !== "running" ||
+                    runtimeActions.onSuspendAudio === undefined}
+                  onClick={runtimeActions.onSuspendAudio}
+                >
+                  Suspend audio
+                </button>
+                <button
+                  type="button"
+                  disabled={state.runtime.phase !== "ready" ||
+                    runtimeActions.onEnableMidi === undefined ||
+                    midi?.permission === "granted" ||
+                    midi?.permission === "requesting"}
+                  onClick={runtimeActions.onEnableMidi}
+                >
+                  Enable MIDI
+                </button>
+                <button
+                  type="button"
+                  disabled={state.runtime.phase !== "ready" ||
+                    runtimeActions.onExportReport === undefined}
+                  onClick={runtimeActions.onExportReport}
+                >
+                  Export report
+                </button>
+                <button
+                  type="button"
+                  disabled={!sliceEnabled}
+                  aria-label={sliceEnabled
+                    ? "Slice"
+                    : "Slice — open a Project with candidate support"}
+                  onClick={() => selectMode("slice")}
+                >
+                  Slice
+                </button>
+                <button
+                  type="button"
+                  disabled={!soundSetEnabled}
+                  aria-label={soundSetEnabled
+                    ? "Sound Sets"
+                    : "Sound Sets — wait for the Runtime to start"}
+                  onClick={() => selectMode("soundset")}
+                >
+                  Sound Sets
+                </button>
+              </section>
+              {candidateAudio !== null && candidateAudio.projectId === state.project.current?.projectId &&
+                (candidateAudio.preparing || state.sample.savedRevision !== state.sample.runtimeRevision) ? (
+                <section className="sample-runtime-stale" aria-label="Project audio status">
+                  <p role="status">{candidateAudio.preparing
+                    ? `Preparing audio at revision ${candidateAudio.revision}…`
+                    : `Saved at revision ${candidateAudio.revision}; audio is not ready.`}</p>
+                  <button type="button" disabled={candidateAudio.preparing || projectActions.busy || runtimePhase !== "ready"}
+                    onClick={() => { void refreshCandidateProject(candidateAudio.projectId).catch(() => {}); }}>
+                    Retry audio preparation
+                  </button>
+                </section>
+              ) : null}
+              {activeMode === "project" ? (
+                <ProjectTouchWorkspace
+                  state={state}
+                  canOpen={canOpenProject}
+                  canImport={canImportProject}
+                  showLocalProjects={showLocalProjects}
+                  onShowLocal={() => setShowLocalProjects(true)}
+                  onHideLocal={() => setShowLocalProjects(false)}
+                  onOpen={(summary) => { void openProject(summary); }}
+                  onImport={(file) => { void importProject(file); }}
+                />
+              ) : activeMode === "sample" ? (
+                <>
+                  {state.sample.lastError?.code === "UNSUPPORTED_AUDIO" ? (
+                    <p className="sample-error" role="status">
+                      Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz
+                    </p>
+                  ) : null}
+                  {staleSampleRuntime ? (
+                    <section className="sample-runtime-stale" aria-label="Sample Runtime status">
+                      <p role="status">
+                        Saved at revision {state.sample.savedRevision}; Runtime is still revision{
+                          " "}{state.sample.runtimeRevision === null
+                          ? "unavailable"
+                          : state.sample.runtimeRevision}
+                      </p>
+                      <button
+                        type="button"
+                        disabled={sampleRetryAction.current !== null ||
+                          state.sample.pendingAction !== null}
+                        onClick={() => { void retryPrepare(); }}
+                      >
+                        Retry Prepare
+                      </button>
+                    </section>
+                  ) : null}
+                </>
+              ) : activeMode === "sequence" && state.project.current !== null ? (
+              <SequenceTouchWorkspace
+                project={state.project.current}
+                state={sequence}
+                transport={transport}
+                onRefresh={() => {
+                  void refreshSequence();
+                  void reconcileTransport();
                 }}
-              : {})}
-            onCaptureSlotChange={setArmedCaptureSlot}
-            onCapturePhaseChange={capturePhaseChanged}
-            onContinueCaptureInSequence={() => {
-              if (isSequenceSession(session) && state.project.current !== null) {
-                setActiveMode("sequence");
-              }
-            }}
-            {...(isSampleSession(session) ? {session} : {})}
-            {...(inputController.current ? {controller: inputController.current} : {})}
-          />
-        </div>
-      ) : null}
-      <ErrorPanel
-        code={state.runtime.errorCode}
-        details={state.runtime.errorDetails}
-        {...(session && state.runtime.errorCode === "DUPLICATE_ID"
-          ? {onOpenLocalProject: () => {
-              setShowLocalProjects(true);
-              setListAttempt((attempt) => attempt + 1);
-            }}
-          : {})}
-        {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry
-          ? {onRetryProject: () => {
-              if (busyRetry.kind === "list") {
-                setListAttempt((attempt) => attempt + 1);
-              } else {
-                void openProject(busyRetry.project);
-              }
-            }}
-          : {})}
-        {...(state.runtime.errorCode === "HOST_RESTART_REQUIRED" ||
-          state.runtime.errorCode === "HOST_TIMEOUT") && onRetryRuntime
-          ? {onRetryRuntime}
-          : {}}
-        {...(state.runtime.phase === "ready"
-          ? {onDismiss: () => dispatch({type: "runtime-error-dismissed"})}
-          : {})}
-      />
+                onSwitch={(patternId) => { void selectSequencePattern(patternId); }}
+                  onCreatePattern={(bars) => { void createPattern(bars); }}
+                  onSettingsChange={(changes) => { void updateSequenceSettings(changes); }}
+                  onRecover={(candidate, destinationPatternId) => {
+                    if (!isSequenceSession(session)) return;
+                    void session.applySequenceRecovery({
+                      sessionId: candidate.sessionId,
+                      destinationPatternId,
+                    }).then((status) => {
+                      if (status.committedRevision !== null) {
+                        dispatch({type: "project-revision-updated", revision: status.committedRevision});
+                      }
+                      return refreshSequence();
+                    }, sequenceFailure);
+                  }}
+                  onDiscard={(candidate) => {
+                    if (!isSequenceSession(session)) return;
+                    void session.discardSequenceRecovery(candidate.sessionId)
+                      .then(() => refreshSequence(), sequenceFailure);
+                  }}
+                />
+              ) : activeMode === "perform" && state.project.current !== null ? (
+                performController !== null ? (
+                  <PerformSurface
+                    controller={performController}
+                    project={state.project.current}
+                    bank={state.activeBank}
+                    onBankChange={selectBank}
+                    transport={transport}
+                  />
+                ) : (
+                  <main className="perform-surface" aria-label="Perform">
+                    <h1>Perform</h1>
+                    <p>Launch and FX wait for running audio and capture storage.</p>
+                  </main>
+                )
+              ) : activeMode === "slice" && isCandidateSession(session) &&
+                state.project.current !== null ? (
+                <CandidateSurface key={state.project.current.projectId}
+                  session={session} projectId={state.project.current.projectId}
+                  projectRevision={state.project.current.revision}
+                  onRefreshProject={(revision) => refreshCandidateProject(
+                    state.project.current!.projectId, revision,
+                  )} />
+              ) : activeMode === "soundset" && isSoundSetSession(session) ? (
+                <SoundSetSurface
+                  session={session}
+                  projectRevision={state.project.current?.revision ?? null}
+                  activeBank={state.activeBank}
+                  onBankChange={selectBank}
+                  onInstalled={(revision) => {
+                    dispatch({type: "project-revision-updated", revision});
+                    void refreshPerformProject().catch(() => {});
+                  }}
+                />
+              ) : (
+                <p className="touch-fallback-note">
+                  Open a Project with candidate or Sound Set support.
+                </p>
+              )}
+              {/* One Sample surface, on the same terms the retired workspace
+                  shell used: shown in Sample mode, carried hidden while an
+                  armed capture, an open trim overlay or a Sequence-side
+                  projection refresh must survive a mode switch, and unmounted
+                  otherwise so a return to Sample resumes on a fresh mount. */}
+              {(activeMode === "sample" ||
+                armedCaptureSlot !== null ||
+                trimOverlayOpen ||
+                (activeMode === "sequence" && state.sampleProjectionRefresh !== null)) ? (
+              <div className={trimOverlayOpen ? "sample-overlay-host" : ""}
+                hidden={activeMode !== "sample" && !trimOverlayOpen}>
+                <SampleSurface
+                  state={state}
+                  dispatch={dispatch}
+                  filePickIntent={sampleFilePickIntent}
+                  captureStopRequest={captureStopRequest}
+                  captureBackgrounded={activeMode !== "sample" && !trimOverlayOpen}
+                  closeCaptureAfterResolution={activeMode !== "sample"}
+                  {...(sequence.sessionId !== null && sequence.phase === "trim-overlay" &&
+                    sequence.status !== null
+                    ? {sequenceCapture: {
+                        sessionId: sequence.sessionId,
+                        expectedRevision: sequence.status.expectedRevision,
+                      }}
+                    : {})}
+                  onCaptureSlotChange={setArmedCaptureSlot}
+                  onCapturePhaseChange={capturePhaseChanged}
+                  onContinueCaptureInSequence={() => {
+                    if (isSequenceSession(session) && state.project.current !== null) {
+                      setActiveMode("sequence");
+                    }
+                  }}
+                  {...(isSampleSession(session) ? {session} : {})}
+                  {...(inputController.current ? {controller: inputController.current} : {})}
+                />
+              </div>
+              ) : null}
+              <ErrorPanel
+                code={state.runtime.errorCode}
+                details={state.runtime.errorDetails}
+                {...(session && state.runtime.errorCode === "DUPLICATE_ID"
+                  ? {onOpenLocalProject: () => {
+                      setShowLocalProjects(true);
+                      setListAttempt((attempt) => attempt + 1);
+                    }}
+                  : {})}
+                {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry
+                  ? {onRetryProject: () => {
+                      if (busyRetry.kind === "list") {
+                        setListAttempt((attempt) => attempt + 1);
+                      } else {
+                        void openProject(busyRetry.project);
+                      }
+                    }}
+                  : {})}
+                {...(state.runtime.errorCode === "HOST_RESTART_REQUIRED" ||
+                  state.runtime.errorCode === "HOST_TIMEOUT") && onRetryRuntime
+                  ? {onRetryRuntime}
+                  : {}}
+                {...(state.runtime.phase === "ready"
+                  ? {onDismiss: () => dispatch({type: "runtime-error-dismissed"})}
+                  : {})}
+              />
+            </>
+          }
+        />
     </div>
   );
 }

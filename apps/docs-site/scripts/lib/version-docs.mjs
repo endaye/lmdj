@@ -3,7 +3,7 @@ import {readFile, mkdir, writeFile} from 'node:fs/promises';
 import {execFile, spawn} from 'node:child_process';
 import {promisify} from 'node:util';
 import {readRepoFacts} from './repo-facts.mjs';
-import {createSnapshotMetadata, freezeDiagramAssets} from './snapshot-provenance.mjs';
+import {createSnapshotMetadata, freezeDiagramAssets, verifySnapshotProvenance} from './snapshot-provenance.mjs';
 
 const execFileAsync = promisify(execFile);
 const RELEASE_CHANNELS = new Set(['canary', 'dev', 'beta', 'stable']);
@@ -141,4 +141,65 @@ export async function freezeVersion(options) {
   });
   await writeMetadata(requestedVersion, metadata);
   await run('npm', ['run', 'check']);
+}
+
+// Recovery is verification of an already complete, uncommitted freeze, never
+// regeneration. The caller retains exclusive ownership of the source worktree.
+export async function resumeVersion(options) {
+  const {repoRoot, portalRoot, requestedVersion, revision, channel} = options;
+  const require = (condition, reason) => {
+    if (!condition) throw new Error(`why: snapshot resume ${reason}; remedy: retain the original source worktree and snapshot bytes; reconcile the failed freeze without regenerating or overwriting history`);
+  };
+  require(/^\d+\.\d+\.\d+\.\d+$/.test(requestedVersion ?? ''), 'requires a four-part Product Build');
+  require(/^[0-9a-f]{40}$/.test(revision ?? ''), 'requires the original full source SHA');
+  require(RELEASE_CHANNELS.has(channel), 'requires the original release channel');
+  const getHead = options.getHeadRevision ?? (() => defaultHeadRevision(repoRoot));
+  const readMetadata = options.readMetadata ?? (() => readFile(
+    path.join(portalRoot, 'versioned_metadata', `version-${requestedVersion}.json`), 'utf8'));
+  const readVersions = options.readVersions ?? (() => defaultReadVersions(portalRoot));
+  const readSourceVersions = options.readSourceVersions ?? (async () => {
+    let relative = path.relative(repoRoot, path.join(portalRoot, 'versions.json')).split(path.sep).join('/');
+    require(relative && !relative.startsWith('../') && !path.isAbsolute(relative), 'portal path escapes repository');
+    const {stdout: entry} = await execFileAsync('git', ['ls-tree', revision, '--', relative], {cwd: repoRoot});
+    if (!entry.trim()) return [];
+    if (entry.startsWith('120000 ')) {
+      const {stdout: target} = await execFileAsync('git', ['show', `${revision}:${relative}`], {cwd: repoRoot});
+      require(relative === 'apps/docs-site/versions.json' && target === '../architecture-portal/versions.json',
+        'source versions symlink is not the canonical compatibility alias');
+      relative = 'apps/architecture-portal/versions.json';
+      const {stdout: canonical} = await execFileAsync('git', ['ls-tree', revision, '--', relative], {cwd: repoRoot});
+      require(canonical.startsWith('100644 blob '), 'canonical source versions is not a regular tracked file');
+    } else {
+      require(entry.startsWith('100644 blob '), 'source versions is not a regular tracked file');
+    }
+    const {stdout} = await execFileAsync('git', ['show', `${revision}:${relative}`], {cwd: repoRoot});
+    return JSON.parse(stdout);
+  });
+  const facts = options.facts ?? await readRepoFacts({repoRoot, revision, channel});
+  const verify = options.verifyProvenance ?? verifySnapshotProvenance;
+  const run = options.run ?? ((command, args) => defaultRun(portalRoot, command, args));
+  let original;
+  const check = async () => {
+    require(await getHead() === revision, 'HEAD differs from original source SHA');
+    const raw = await readMetadata();
+    require(original === undefined || raw === original, 'metadata changed during verification');
+    const metadata = JSON.parse(raw);
+    require(metadata.schema_version === 2, 'requires authenticated schema 2 metadata');
+    require(metadata.revision === revision && metadata.channel === channel, 'source SHA or channel differs');
+    const versions = await readVersions();
+    const prior = await readSourceVersions();
+    require(Array.isArray(prior) && !prior.includes(requestedVersion)
+      && sameJson(versions, [requestedVersion, ...prior]), 'versions inventory differs from source plus this Build');
+    const errors = validateReleaseSnapshot({facts, versions, metadata, snapshotExists: true});
+    require(errors.length === 0, errors.join('; '));
+    const provenance = await verify({repoRoot, portalRoot, metadata, headRevision: revision});
+    require(provenance.length === 0, provenance.join('; '));
+    original ??= raw;
+  };
+  await check();
+  await run('npm', ['run', 'check']);
+  // The gate may fail or its tools may drift the source/output. Neither a
+  // previous pass nor a zero child exit replaces the far-side revalidation.
+  await check();
+  return {status: 'snapshot-verified', product_build: requestedVersion, revision, channel};
 }

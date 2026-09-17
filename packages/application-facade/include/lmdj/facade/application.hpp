@@ -18,6 +18,7 @@
 #include <lmdj/cooker/runtime_snapshot.hpp>
 #include <lmdj/cooker/sample_analysis.hpp>
 #include <lmdj/domain/command_handler.hpp>
+#include <lmdj/facade/pattern_transport_controller.hpp>
 #include <lmdj/facade/performance_ports.hpp>
 #include <lmdj/facade/performance_replay.hpp>
 #include <lmdj/foundation/error.hpp>
@@ -559,6 +560,13 @@ class Application {
       const RuntimeContentExportRequest& request);
   foundation::Result<RuntimeProjectWriterLease> acquire_project_writer(
       const std::filesystem::path& project_path);
+  // Host-facing Pattern transport factory (#1230). Unlike the free function,
+  // the returned controller's Journal/Store run on this Application's storage
+  // platform instance, so a Host-held Project writer lease never reports the
+  // bundle busy to the controller's own admission writes. The Host names only
+  // Facade/Audio types.
+  std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
+      PatternTransportAudioPort& audio, PatternTransportControllerConfig config);
   foundation::Result<domain::ProjectState> create_initial_project(
       const InitialProjectRequest& request);
   foundation::Result<domain::AppliedCommand> import_artifact_bytes(

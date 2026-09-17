@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
-          node-version: '22.16.0'
+          node-version: '26'
       - name: Build and verify the Git source
         timeout-minutes: 15
         run: |
@@ -42,7 +42,7 @@ jobs:
         run: python3 scripts/cloudflare-portal-deploy.py
       - name: Retain deployment and recovery observations
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: cloudflare-portal-${{ github.sha }}
           path: ${{ runner.temp }}/cloudflare-portal-${{ github.run_id }}.json

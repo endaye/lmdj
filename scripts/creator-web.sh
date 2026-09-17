@@ -89,7 +89,7 @@ activate_toolchain() {
   export EMSDK_QUIET=1
   # shellcheck disable=SC1090
   source "$EMSDK/emsdk_env.sh" >/dev/null
-  if [[ -n "${EMSDK_NODE:-}" ]]; then
+  if ! command -v node >/dev/null 2>&1 && [[ -n "${EMSDK_NODE:-}" ]]; then
     PATH="$(dirname "$EMSDK_NODE"):$PATH"
     export PATH
   fi
@@ -99,8 +99,8 @@ activate_toolchain() {
       exit 2
     }
   done
-  if [[ "$(node -p 'process.versions.node.split(".")[0]')" != "22" ]]; then
-    echo "Creator Web error: Node 22 is required, got $(node --version)" >&2
+  if [[ "$(node -p 'process.versions.node.split(".")[0]')" != "26" ]]; then
+    echo "Creator Web error: Node 26 is required, got $(node --version)" >&2
     exit 2
   fi
 }

@@ -119,6 +119,7 @@ bool AudioDriver::stop() noexcept {
 #include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
 #include "esp_attr.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -126,7 +127,7 @@ bool AudioDriver::stop() noexcept {
 namespace lmdj::cardputer {
 struct EspAudioIo::Impl {
   explicit Impl(EspAudioConfig supplied) : config(supplied) {}
-  struct Eof { void* buffer; std::uint32_t sequence; std::uint32_t committed; int core; };
+  struct Eof { void* buffer; std::uint32_t sequence; std::uint32_t committed; int core; std::uint64_t time_us; };
   EspAudioConfig config;
   i2c_master_bus_handle_t bus{};
   i2c_master_dev_handle_t codec{};
@@ -143,6 +144,18 @@ struct EspAudioIo::Impl {
   static_assert(std::atomic<bool>::is_always_lock_free);
 
   bool owner() const noexcept { return xPortGetCoreID() == config.audio_core; }
+  bool reservation_current() noexcept {
+    // At EOF k the next descriptor starts transmitting. Our completed slot
+    // starts again at EOF k + dma_blocks - 1, not at its own next EOF. Check
+    // around the copy: matching bytes/generation alone can accept a copy into
+    // an already transmitting buffer. This observes delivered callbacks, not
+    // hardware progress while an interrupt is masked; it is no analogue proof.
+    if (fault.load() || sequence.load() - reserved.sequence >= config.dma_blocks - 1) {
+      fault.store(true);
+      return false;
+    }
+    return true;
+  }
   bool reg(std::uint8_t address, std::uint8_t value) noexcept {
     if (!codec) return false;
     const std::uint8_t bytes[]{address, value};
@@ -155,7 +168,8 @@ struct EspAudioIo::Impl {
     const auto serial = self.sequence.fetch_add(1, std::memory_order_relaxed) + 1;
     if (serial == 0) { self.fault.store(true, std::memory_order_relaxed); return false; }
     const Eof event{data->dma_buf, serial,
-        self.committed[(serial - 1) % self.config.dma_blocks].load(std::memory_order_acquire), xPortGetCoreID()};
+        self.committed[(serial - 1) % self.config.dma_blocks].load(std::memory_order_acquire),
+        xPortGetCoreID(), static_cast<std::uint64_t>(esp_timer_get_time())};
     BaseType_t wake = pdFALSE;
     if (data->size != AudioDriver::frames_per_block * 4 ||
         xQueueSendFromISR(self.queue, &event, &wake) != pdTRUE)
@@ -184,14 +198,18 @@ bool EspAudioIo::configure() noexcept {
   for (auto& value : s.committed) value.store(0);
   s.queue = xQueueCreate(s.config.dma_blocks, sizeof(Impl::Eof));
   if (!s.queue) return false;
-  i2c_master_bus_config_t bus{};
-  bus.i2c_port = I2C_NUM_0;
-  bus.sda_io_num = static_cast<gpio_num_t>(s.config.sda);
-  bus.scl_io_num = static_cast<gpio_num_t>(s.config.scl);
-  bus.clk_source = I2C_CLK_SRC_DEFAULT;
-  bus.glitch_ignore_cnt = 7;
-  bus.flags.enable_internal_pullup = true;
-  if (i2c_new_master_bus(&bus, &s.bus) != ESP_OK) return false;
+  if (s.config.shared_bus) {
+    s.bus = s.config.shared_bus;
+  } else {
+    i2c_master_bus_config_t bus{};
+    bus.i2c_port = I2C_NUM_0;
+    bus.sda_io_num = static_cast<gpio_num_t>(s.config.sda);
+    bus.scl_io_num = static_cast<gpio_num_t>(s.config.scl);
+    bus.clk_source = I2C_CLK_SRC_DEFAULT;
+    bus.glitch_ignore_cnt = 7;
+    bus.flags.enable_internal_pullup = true;
+    if (i2c_new_master_bus(&bus, &s.bus) != ESP_OK) return false;
+  }
   i2c_device_config_t codec{};
   codec.dev_addr_length = I2C_ADDR_BIT_LEN_7;
   codec.device_address = s.config.codec_address;
@@ -203,7 +221,7 @@ bool EspAudioIo::configure() noexcept {
   // ES8311 BCLK-derived clock, 48 kHz / 16-bit stereo input. Board pins and
   // analogue output level are supplied by Assembly/research configuration.
   constexpr std::uint8_t registers[][2]{{0x01,0xB5},{0x02,0x18},{0x0D,0x01},
-      {0x12,0},{0x13,0x10},{0x32,0},{0x37,0x08},{0x09,0x0C}};
+      {0x12,0x02},{0x13,0x10},{0x32,0},{0x37,0x08},{0x09,0x0C}};
   for (const auto& pair : registers) if (!s.reg(pair[0], pair[1])) return false;
   if (!mute(true)) return false;
   i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
@@ -238,7 +256,9 @@ bool EspAudioIo::mute(bool value) noexcept {
     const bool minimum = s.reg(0x32, 0);
     return muted && minimum;
   }
-  return s.reg(0x32, s.config.codec_volume) && s.reg(0x31, 0);
+  // Startup calls this only after the silent DMA prewarm has reached output.
+  // Keep the DAC powered down until its BCLK-derived clock is established.
+  return s.reg(0x12, 0) && s.reg(0x32, s.config.codec_volume) && s.reg(0x31, 0);
 }
 
 bool EspAudioIo::enable() noexcept {
@@ -266,16 +286,22 @@ bool EspAudioIo::wait_writable() noexcept {
   return true;
 }
 
+std::uint64_t EspAudioIo::reserved_eof_us() const noexcept {
+  return impl_->reserved.time_us;
+}
+
 bool EspAudioIo::write(std::span<const std::int16_t> pcm, std::size_t& accepted) noexcept {
   accepted = 0;
   auto& s = *impl_;
   if (pcm.size() != AudioDriver::frames_per_block * 2 || !wait_writable()) return false;
+  if (!s.reservation_current()) { s.writable = false; return false; }
   std::size_t bytes{};
   const auto result = i2s_channel_write(s.tx, pcm.data(), pcm.size_bytes(), &bytes, 0);
   accepted = bytes / sizeof(std::int16_t);
   s.writable = false;
   if (result != ESP_OK || bytes != pcm.size_bytes() ||
-      std::memcmp(s.reserved.buffer, pcm.data(), pcm.size_bytes()) != 0 || s.fault.load()) return false;
+      std::memcmp(s.reserved.buffer, pcm.data(), pcm.size_bytes()) != 0 ||
+      !s.reservation_current()) return false;
   s.submitted = s.reserved.sequence;
   s.committed[(s.submitted - 1) % s.config.dma_blocks].store(s.submitted, std::memory_order_release);
   return true;
@@ -319,7 +345,10 @@ bool EspAudioIo::release() noexcept {
   if (s.callbacks && !disable_and_quiesce()) return false;
   if (s.tx) { if (i2s_del_channel(s.tx) != ESP_OK) return false; s.tx = nullptr; }
   if (s.codec) { if (i2c_master_bus_rm_device(s.codec) != ESP_OK) return false; s.codec = nullptr; }
-  if (s.bus) { if (i2c_del_master_bus(s.bus) != ESP_OK) return false; s.bus = nullptr; }
+  if (s.bus) {
+    if (!s.config.shared_bus && i2c_del_master_bus(s.bus) != ESP_OK) return false;
+    s.bus = nullptr;
+  }
   if (s.queue) { vQueueDelete(s.queue); s.queue = nullptr; }
   return true;
 }

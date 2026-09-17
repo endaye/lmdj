@@ -281,6 +281,32 @@ class FixtureHandler(BaseHTTPRequestHandler):
 
 
 class DeploymentSmokeTest(unittest.TestCase):
+    def test_frozen_release_digests_accept_exact_live_bytes(self) -> None:
+        expected = {"expected_index_sha256":hashlib.sha256(self.fixture.payloads["/index.html"]).hexdigest(),
+                    "expected_manifest_sha256":hashlib.sha256(self.fixture.payloads["/host-manifest.json"]).hexdigest()}
+        self.assertEqual(smoke_http(base_url=self.server.base_url, expected_product_build="1.0.15.2",
+            expected_host_version="1.2.0", require_https=False, **expected), self.smoke())
+
+    def test_wrong_frozen_index_refuses_before_asset_reads(self) -> None:
+        self._assert_frozen_digest_refused("expected_index_sha256", "index digest")
+
+    def test_wrong_frozen_manifest_refuses_before_asset_reads(self) -> None:
+        self._assert_frozen_digest_refused("expected_manifest_sha256", "manifest digest")
+
+    def _assert_frozen_digest_refused(self, key, message) -> None:
+        import deployment_smoke
+        self.smoke()  # Success baseline through the same full validator/server.
+        fetched = []
+        actual = deployment_smoke._fetch
+        def observe(*args, **kwargs):
+            fetched.append(kwargs["url"])
+            return actual(*args, **kwargs)
+        with patch("deployment_smoke._fetch", side_effect=observe):
+            with self.assertRaisesRegex(SmokeError, message):
+                smoke_http(base_url=self.server.base_url, expected_product_build="1.0.15.2",
+                    expected_host_version="1.2.0", require_https=False, **{key:"f"*64})
+        self.assertFalse(any("/assets/" in url for url in fetched))
+
     def setUp(self) -> None:
         self.fixture = SmokeFixture()
         self.server = FixtureServer(self.fixture)
