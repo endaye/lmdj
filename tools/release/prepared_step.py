@@ -61,6 +61,55 @@ def validate_spec(spec):
         _fail("numeric scope identities are invalid")
 
 
+_AUTHORIZATION = {"operation_id", "request_sha256", "repository_id", "actor_id",
+                  "tag", "target_revision"}
+
+
+def validate_authorization(authorization):
+    """The pre-write half of a `prepared` spec: what the reviewed intent binds.
+
+    `plan_sha256` and `tag_object_id` are this step's own outputs — the spec is
+    result-bound by ruling, not by omission — so they are absent here by
+    construction. This stays a separate entry point from `validate_spec` on
+    purpose: merging the two would let the weaker pre-write shape stand in for
+    the complete one that `read_back` is the judge of.
+    """
+    if type(authorization) is not dict or set(authorization) != _AUTHORIZATION:
+        _fail("authorization fields are invalid")
+    if not all(isinstance(authorization[k], str) and _DIGEST.fullmatch(authorization[k])
+               for k in ("operation_id", "request_sha256")):
+        _fail("authorization digests are invalid")
+    if authorization["operation_id"] != prepared_operation_id(
+            authorization["request_sha256"]):
+        _fail("operation differs from the original request")
+    if not isinstance(authorization["target_revision"], str) \
+            or _SHA.fullmatch(authorization["target_revision"]) is None:
+        _fail("authorization revision is invalid")
+    if type(authorization["tag"]) is not str \
+            or _TAG.fullmatch(authorization["tag"]) is None:
+        _fail("tag is invalid")
+    if type(authorization["repository_id"]) is not int \
+            or authorization["repository_id"] <= 0 \
+            or type(authorization["actor_id"]) is not int \
+            or authorization["actor_id"] <= 0:
+        _fail("numeric authorization identities are invalid")
+
+
+def freeze_spec(authorization, *, plan_sha256, tag_state):
+    """The complete result-bound spec, frozen from what `prepare` produced.
+
+    The authorization half comes from the reviewed intent row; the two derived
+    fields come from the durable output. `validate_spec` remains the judge of
+    the result, so a malformed digest or tag object id fails closed here rather
+    than reaching `read_back`.
+    """
+    validate_authorization(authorization)
+    spec = dict(authorization, plan_sha256=plan_sha256,
+                tag_object_id=tag_state.object_id)
+    validate_spec(spec)
+    return spec
+
+
 def output_relative(tag):
     from urllib.parse import quote
     if type(tag) is not str or _TAG.fullmatch(tag) is None:
@@ -152,3 +201,93 @@ class PreparedCarrier:
     def _read_back(self):
         return read_back(self.root, self.spec, tag_state=self.tag_state(),
                          signer_fingerprint=self.signer_fingerprint)
+
+
+class AuthorizedPreparedCarrier:
+    """`prepared` before its own outputs exist: authorize, drive once, freeze.
+
+    This step's spec is result-bound: `plan_sha256` and `tag_object_id` are
+    what `prepare()` produces. The carrier therefore holds only the
+    authorization half — the fields the reviewed intent row froze — drives
+    `prepare` once under the driver's guard, and only then freezes the complete
+    spec from the durable output and verifies it through `read_back`.
+
+    Freezing from the output makes two of `read_back`'s comparisons
+    tautological: the recorded digest and the tag object id are where the spec
+    just came from. The comparisons that carry the weight are not. The plan
+    document bytes must hash to the recorded digest, so a swapped digest file
+    cannot redefine what this step reports; and the signed tag must carry the
+    reviewed `target_revision` and the trusted signer, which is what binds the
+    derived witness back to the reviewed intent. `prepare()` itself re-verifies
+    the intent authorization, the target's canonical main ancestry, the product
+    proof, the profile assets and the changelog source before it writes, and
+    refuses to move an existing formal tag.
+    """
+
+    def __init__(self, *, root, authorization, prepare, plan_digest, tag_state,
+                 signer_fingerprint):
+        """prepare: trusted composition calling prepare(tag, context) once.
+
+        plan_digest and tag_state are zero-argument readers of the durable
+        local output and the local signed tag; trusted composition binds them
+        to the real repository and the policy's product fingerprint.
+        """
+        validate_authorization(authorization)
+        if not callable(prepare) or not callable(plan_digest) \
+                or not callable(tag_state) \
+                or not isinstance(signer_fingerprint, str) or not signer_fingerprint:
+            _fail("requires the trusted prepare controller, output readers and signer")
+        self.root = Path(root).absolute()
+        self.authorization = deepcopy(authorization)
+        self.prepare = prepare
+        self.plan_digest = plan_digest
+        self.tag_state = tag_state
+        self.signer_fingerprint = signer_fingerprint
+
+    def observe(self, state, operation):
+        status, evidence = self._verified()
+        return Observation(status, evidence)
+
+    def advance(self, state, operation, *, before_write):
+        if not callable(before_write):
+            _fail("requires the driver's durable write guard")
+        status, evidence = self._verified()
+        if status == "verified":
+            return Observation(status, evidence)
+        if status != "absent":
+            # Present-but-unverified local state is never rebuilt over.
+            return Observation(status)
+        before_write()
+        try:
+            self.prepare(self.authorization["tag"])
+        except Exception:
+            # prepare() owns its own durable recovery; never half-report.
+            return Observation("unknown")
+        status, evidence = self._verified()
+        return Observation(status, evidence)
+
+    def _verified(self):
+        plan = self.plan_digest()
+        tag_state = self.tag_state()
+        if plan is None:
+            # Nothing this step writes exists yet. A local signed tag without
+            # the output is the reconcile case `prepare` owns: it reuses a tag
+            # that matches the reviewed target and signer and writes the plan,
+            # and refuses one that does not ("local tag conflict; formal tags
+            # are never moved", pinned by `release_prepare_test`'s
+            # `test_prepare_rejects_remote_or_conflicting_local_tag`). Calling
+            # that state pending instead would strand the reconcile case for
+            # good, so it stays absent work and a refusal surfaces as unknown.
+            return "absent", None
+        if tag_state is None:
+            # read_back's own verdict for a plan whose signed tag is gone:
+            # present work that cannot be verified. Never absent, so the driver
+            # waits for the restored tag instead of rebuilding over the drift.
+            return "pending", None
+        spec = freeze_spec(self.authorization, plan_sha256=plan,
+                           tag_state=tag_state)
+        observed = read_back(self.root, spec, tag_state=tag_state,
+                             signer_fingerprint=self.signer_fingerprint)
+        if isinstance(observed, dict):
+            return "verified", observed["evidence"]
+        return observed, None

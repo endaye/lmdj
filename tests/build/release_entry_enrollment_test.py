@@ -16,6 +16,7 @@ from tools.release.carriers import (  # noqa: E402
     enroll_draft,
     enroll_final,
     enroll_intent,
+    enroll_prepared,
     enroll_promotion,
     enroll_verification,
     enrolled_candidate_timestamp,
@@ -519,6 +520,255 @@ class PreparedPlanRecoveryTest(unittest.TestCase):
         self.write_plan("not-a-digest")
         with self.assertRaises(JournalError):
             read_prepared_plan(self.root, "lmdj-v" + BUILD)
+
+
+SIGNER = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+TAG_OBJECT = "7" * 40
+
+
+class LocalTag:
+    """The local signed tag state the prepared carrier reads back."""
+
+    def __init__(self, *, object_id=TAG_OBJECT, target_revision=TARGET,
+                 signer_fingerprint=SIGNER):
+        self.object_id = object_id
+        self.target_revision = target_revision
+        self.signer_fingerprint = signer_fingerprint
+
+
+class PreparedEnrollmentTest(unittest.TestCase):
+    """`prepared` authorizes before the write and freezes its own outputs."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.prepared_calls = []
+        self.tag = None
+        self.raises = False
+
+    def body(self):
+        return b'{"fixture": "prepared-plan"}'
+
+    def write_plan(self):
+        import hashlib
+
+        from tools.release import prepared_step
+
+        output = self.root / prepared_step.output_relative("lmdj-v" + BUILD)
+        output.mkdir(parents=True, exist_ok=True)
+        (output / prepared_step._PLAN_DOCUMENT).write_bytes(self.body())
+        (output / prepared_step._PLAN_DIGEST).write_text(
+            hashlib.sha256(self.body()).hexdigest() + "\n")
+
+    def prepare(self, tag):
+        self.prepared_calls.append(tag)
+        if self.raises:
+            raise RuntimeError("sensitive-upstream-error-not-for-public-status")
+        # The real prepare signs the local tag first and then writes the plan.
+        self.tag = LocalTag()
+        self.write_plan()
+
+    def step(self, *, ledger=None, signer=SIGNER):
+        return enroll_prepared(
+            root=self.root, candidate_root=self.root, repository_id=12,
+            ledger=Ledger() if ledger is None else ledger,
+            prepare=self.prepare,
+            local_tag_state=lambda _tag: self.tag,
+            signer_fingerprint=signer)
+
+    def operation(self):
+        return {"step": "prepared", "operation_id": DIGEST, "status": "intent",
+                "evidence": None}
+
+    def test_the_step_drives_its_own_write(self):
+        self.assertTrue(callable(getattr(self.step(), "advance", None)))
+
+    def test_the_step_waits_until_the_reviewed_row_lands(self):
+        # The intent row is this run's own intent-step output and it is what
+        # authorizes the write; before it lands there is nothing to authorize,
+        # so the step waits rather than driving prepare on a guessed identity.
+        (self.root / "candidate-transition.json").write_text(json.dumps(
+            candidate_document(witness_merge={"merge": {"merge_sha": TARGET}})))
+        new_mode = state(request=request(mode="new", requested_tag=None))
+        step = self.step(ledger=Ledger(rows={}))
+        self.assertEqual(step.observe(new_mode, self.operation()).status, "pending")
+        step.advance(new_mode, self.operation(), before_write=lambda: None)
+        self.assertEqual(self.prepared_calls, [])
+
+    def test_an_unauthorized_tag_fails_closed_rather_than_waiting(self):
+        step = self.step(ledger=Ledger(rows={}))
+        with self.assertRaises(JournalError):
+            step.observe(state(), self.operation())
+        self.assertEqual(self.prepared_calls, [])
+
+    def test_the_step_drives_prepare_once_and_freezes_its_own_output(self):
+        import hashlib
+
+        step = self.step()
+        # Nothing this step writes exists yet, so the driver is told to act.
+        self.assertEqual(step.observe(state(), self.operation()).status, "absent")
+        guarded = []
+        step.advance(state(), self.operation(),
+                     before_write=lambda: guarded.append(True))
+        self.assertEqual(guarded, [True])
+        self.assertEqual(self.prepared_calls, ["lmdj-v" + BUILD])
+        observed = step.observe(state(), self.operation())
+        self.assertEqual(observed.status, "verified")
+        self.assertEqual(observed.evidence["reference"], "prepared:lmdj-v" + BUILD)
+        # The frozen digest is the one prepare recorded, not an invented value.
+        from tools.release.carriers import read_prepared_plan
+
+        self.assertEqual(read_prepared_plan(self.root, "lmdj-v" + BUILD),
+                         hashlib.sha256(self.body()).hexdigest())
+
+    def test_an_existing_prepared_output_is_verified_without_a_drive(self):
+        self.tag = LocalTag()
+        self.write_plan()
+        step = self.step()
+        self.assertEqual(step.observe(state(), self.operation()).status, "verified")
+        step.advance(state(), self.operation(), before_write=lambda: None)
+        self.assertEqual(self.prepared_calls, [])
+
+    def test_a_local_tag_without_the_output_is_still_absent_work(self):
+        # prepare owns the reconcile case and refuses a tag that does not match
+        # the reviewed target, so this is absent work rather than a partial one.
+        self.tag = LocalTag()
+        step = self.step()
+        self.assertEqual(step.observe(state(), self.operation()).status, "absent")
+
+    def test_a_leftover_tag_prepare_refuses_surfaces_as_unknown(self):
+        # prepare owns the reconcile case and refuses a local tag that does not
+        # match the reviewed target, so classifying "tag without output" as
+        # absent work never rebuilds over drift: the driver asks the step to
+        # act and the refusal surfaces as unknown with the tag untouched.
+        self.tag = LocalTag(target_revision="9" * 40)
+        self.raises = True
+        step = self.step()
+        self.assertEqual(step.observe(state(), self.operation()).status, "absent")
+        carrier = step.carrier(state(), self.operation())
+        observed = carrier.advance(state(), self.operation(),
+                                   before_write=lambda: None)
+        self.assertEqual(observed.status, "unknown")
+        self.assertEqual(self.tag.target_revision, "9" * 40)
+        self.assertEqual(self.prepared_calls, ["lmdj-v" + BUILD])
+
+    def test_a_failing_prepare_reports_unknown_and_never_retries(self):
+        # prepare owns its own durable recovery, so a raised call is an unknown
+        # write result the carrier reports as such: it must not swallow the
+        # error, invent evidence, or call prepare a second time.
+        self.raises = True
+        carrier = self.step().carrier(state(), self.operation())
+        observed = carrier.advance(state(), self.operation(),
+                                   before_write=lambda: None)
+        self.assertEqual(observed.status, "unknown")
+        self.assertIsNone(observed.evidence)
+        self.assertEqual(self.prepared_calls, ["lmdj-v" + BUILD])
+
+    def test_a_plan_whose_signed_tag_is_gone_stays_pending(self):
+        # Present work that cannot be verified is never absent: the driver waits
+        # for the restored tag instead of rebuilding over the drift.
+        self.write_plan()
+        step = self.step()
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        step.advance(state(), self.operation(), before_write=lambda: None)
+        self.assertEqual(self.prepared_calls, [])
+
+    def test_a_signed_tag_on_another_target_fails_closed(self):
+        from tools.release.prepared_step import PreparedStepError
+
+        self.write_plan()
+        self.tag = LocalTag(target_revision="9" * 40)
+        step = self.step()
+        with self.assertRaises(PreparedStepError):
+            step.observe(state(), self.operation())
+
+    def test_a_tag_signed_by_another_key_fails_closed(self):
+        from tools.release.prepared_step import PreparedStepError
+
+        self.write_plan()
+        self.tag = LocalTag()
+        step = self.step(signer="B" * 40)
+        with self.assertRaises(PreparedStepError):
+            step.observe(state(), self.operation())
+
+
+class PreparedAuthorizationTest(unittest.TestCase):
+    """The pre-write half stays a separate, narrower shape than the spec."""
+
+    def authorization(self, **changes):
+        from tools.release.prepared_step import prepared_operation_id
+
+        document = {"operation_id": prepared_operation_id(DIGEST),
+                    "request_sha256": DIGEST, "repository_id": 12,
+                    "actor_id": 34, "tag": "lmdj-v" + BUILD,
+                    "target_revision": TARGET}
+        document.update(changes)
+        return document
+
+    def test_the_reviewed_pre_write_fields_validate(self):
+        from tools.release.prepared_step import validate_authorization
+
+        self.assertIsNone(validate_authorization(self.authorization()))
+
+    def test_the_result_fields_are_not_accepted_as_authorization(self):
+        # The two shapes must not stand in for one another: `validate_spec`
+        # stays the only judge of the complete, result-bound spec.
+        from tools.release.prepared_step import (
+            PreparedStepError,
+            validate_authorization,
+        )
+
+        with self.assertRaises(PreparedStepError):
+            validate_authorization(self.authorization(plan_sha256=PLAN,
+                                                      tag_object_id=TAG_OBJECT))
+
+    def test_a_malformed_derived_field_fails_closed_at_the_freeze(self):
+        # `freeze_spec` is the boundary where the derived half joins the
+        # authorization, so it is where a corrupted output must be rejected —
+        # not one frame later inside `read_back`, which a future caller could
+        # skip.
+        from tools.release.prepared_step import (
+            PreparedStepError,
+            freeze_spec,
+        )
+
+        class Tag:
+            def __init__(self, object_id):
+                self.object_id = object_id
+
+        with self.assertRaises(PreparedStepError):
+            freeze_spec(self.authorization(), plan_sha256="not-a-digest",
+                        tag_state=Tag(TAG_OBJECT))
+        with self.assertRaises(PreparedStepError):
+            freeze_spec(self.authorization(), plan_sha256=PLAN,
+                        tag_state=Tag("not-an-object-id"))
+        frozen = freeze_spec(self.authorization(), plan_sha256=PLAN,
+                             tag_state=Tag(TAG_OBJECT))
+        self.assertEqual(frozen["plan_sha256"], PLAN)
+        self.assertEqual(frozen["tag_object_id"], TAG_OBJECT)
+
+    def test_an_operation_from_another_request_fails_closed(self):
+        from tools.release.prepared_step import (
+            PreparedStepError,
+            validate_authorization,
+        )
+
+        with self.assertRaises(PreparedStepError):
+            validate_authorization(self.authorization(operation_id="9" * 64))
+
+    def test_a_missing_authorization_field_fails_closed(self):
+        from tools.release.prepared_step import (
+            PreparedStepError,
+            validate_authorization,
+        )
+
+        for absent in ("tag", "target_revision", "repository_id", "actor_id",
+                       "request_sha256", "operation_id"):
+            document = self.authorization()
+            del document[absent]
+            with self.assertRaises(PreparedStepError):
+                validate_authorization(document)
 
 
 class Projection:

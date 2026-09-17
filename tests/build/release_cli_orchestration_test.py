@@ -25,6 +25,7 @@ from tools.release.orchestration_driver import Observation  # noqa: E402
 
 CONTROL = "b" * 40
 ACTOR = 123
+SIGNER = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
 
 
 class Runner:
@@ -330,6 +331,7 @@ class RealCompositionTest(unittest.TestCase):
         self.context = type("Context", (), {
             "git": CompositionGit(self.root), "github": CompositionGitHub(),
             "policy": Policy(), "repo_root": self.root,
+            "tag_signer_fingerprint": SIGNER,
         })()
         self.policy = cli.build_orchestration_policy(self.root, self.context)
 
@@ -348,7 +350,7 @@ class RealCompositionTest(unittest.TestCase):
                       return_value=reader):
             return cli.release_carriers(self.context, self.policy, request)
 
-    def test_the_entry_exposes_the_twelve_enrolled_carriers_in_order(self):
+    def test_the_entry_exposes_the_thirteen_enrolled_carriers_in_order(self):
         from tools.release.carriers import (
             DeferredCandidate,
             RecoveredDispatch,
@@ -359,21 +361,21 @@ class RealCompositionTest(unittest.TestCase):
         carriers = self.carriers(self.request())
         self.assertEqual(tuple(carrier.step for carrier in carriers),
                          ENROLLED_STEPS)
-        self.assertEqual(len(carriers), 12)
+        self.assertEqual(len(carriers), 13)
         self.assertIs(type(carriers[0]), DeferredCandidate)
         for carrier in carriers[1:]:
             self.assertIn(type(carrier), (RecoveredStep, RecoveredDispatch))
         for step in ("publication", "runtime", "creator"):
             selected = carriers[ENROLLED_STEPS.index(step)]
             self.assertIs(type(selected), RecoveredDispatch)
-        for step in ("verification", "intent", "changelog", "draft",
+        for step in ("verification", "intent", "changelog", "prepared", "draft",
                      "published_record", "changelog_site", "promotion",
                      "final"):
             self.assertIs(type(carriers[ENROLLED_STEPS.index(step)]),
                           RecoveredStep)
         backend = ReleaseBackend(self.context.git, self.context.github,
                                  carriers=carriers)
-        self.assertEqual(backend.missing(STEPS), ("prepared", "tag"))
+        self.assertEqual(backend.missing(STEPS), ("tag",))
 
     def test_run_refuses_the_unenrolled_steps_before_any_request(self):
         request_ids = []
@@ -390,8 +392,10 @@ class RealCompositionTest(unittest.TestCase):
             code = cli.main(["--repo-root", str(self.root), "run",
                              "--authority", "issue:1301"])
         self.assertEqual(code, 2)
-        self.assertIn("prepared", output.getvalue())
         self.assertIn("tag", output.getvalue())
+        # `prepared` is enrolled now, so it must not be named as unowned; the
+        # refusal still has to fire on the one step that is.
+        self.assertNotIn("prepared", output.getvalue())
         self.assertFalse(journal.exists())
         self.assertEqual(request_ids, [])
 
@@ -416,6 +420,9 @@ class CompositionGit:
             return True
         except CommandError:
             return False
+
+    def local_tag_state(self, tag):
+        raise AssertionError("assembly never reads local tags")
 
 
 class CompositionGitHub:
