@@ -672,6 +672,47 @@ class EntryPointTest(unittest.TestCase):
         self.assertNotIn("raw-output", body)
         self.assertIn("withheld", body)
 
+    def test_every_launch_failure_keeps_its_diagnostic(self):
+        # Anything escaping to main's backstop loses the file an operator needs.
+        adapter = cloudflare_deploy.real_adapter(self.root, timeout=1)
+        for raised in (ValueError("bad env"),
+                       cloudflare_deploy.subprocess.SubprocessError("other")):
+            with self.subTest(raised=type(raised).__name__), \
+                    patch.object(cloudflare_deploy.subprocess, "run",
+                                 side_effect=raised), \
+                    self.assertRaises(CloudflareDeployError) as caught:
+                adapter(["candidate", TAG])
+            self.assertIn("inspect", str(caught.exception))
+
+    def test_a_large_environment_still_gets_a_diagnostic(self):
+        # Falling back keeps the longest-first ordering that matters, so a big
+        # environment costs the single-pass property, not the whole file.
+        result = type("R", (), {"returncode": 1, "stdout": "v=abcdef\n",
+                                "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"A_TOKEN": "abcd", "B_TOKEN": "abcdef"}, clear=True), \
+                patch.object(cloudflare_deploy.re, "compile",
+                             side_effect=cloudflare_deploy.re.error("too big")):
+            body = cloudflare_deploy._redacted("v=abcdef\n")
+        self.assertNotIn("abcdef", body)
+        self.assertIn("[REDACTED B_TOKEN]", body)
+
+    def test_the_backstop_retains_a_redacted_diagnostic(self):
+        errors = io.StringIO()
+        with patch.object(cloudflare_deploy, "deploy",
+                          side_effect=RuntimeError("upstream s3cr3t-value")), \
+                patch.dict(cloudflare_deploy.os.environ,
+                           {"CLOUDFLARE_API_TOKEN": "s3cr3t-value"}), \
+                contextlib.redirect_stderr(errors):
+            code = cloudflare_deploy.main(self.arguments())
+        self.assertEqual(code, 2)
+        self.assertIn("inspect", errors.getvalue())
+        retained = (self.root / "state" / "diagnostics" / "unattributed.log")
+        self.assertTrue(retained.is_file())
+        body = retained.read_text(encoding="utf-8")
+        self.assertIn("RuntimeError", body)
+        self.assertNotIn("s3cr3t-value", body)
+
     def test_a_hung_or_unlaunchable_command_is_our_error_not_a_traceback(self):
         # main only catches CloudflareDeployError, so anything else escaping
         # here becomes a traceback and a non-2 exit.

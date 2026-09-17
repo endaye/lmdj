@@ -389,21 +389,35 @@ def _redacted(text):
         # marker it just wrote, so one credential's name cannot be rewritten by
         # another's value.
         values = sorted(named, key=len, reverse=True)
-        text = re.compile("|".join(re.escape(value) for value in values)).sub(
-            lambda match: f"[REDACTED {named[match.group(0)]}]", text)
+        try:
+            text = re.compile("|".join(re.escape(v) for v in values)).sub(
+                lambda match: f"[REDACTED {named[match.group(0)]}]", text)
+        except re.error:
+            # A very large environment can exceed the engine's limits. Falling
+            # back to sequential replacement keeps the longest-first ordering
+            # that matters and costs only the single-pass marker property, so
+            # a big environment does not cost the diagnostic entirely.
+            for value in values:
+                text = text.replace(value, f"[REDACTED {named[value]}]")
     for pattern in SECRET_TEXT:
         text = pattern.sub(_mask, text)
     return text
+
+
+# The opening of a marker, not the whole thing: a shape pattern captures one
+# token, so a marker carrying a variable name is only partly inside the value.
+MARKER = re.compile(r"\[REDACTED\b")
 
 
 def _mask(match):
     """Redact this match unless its value is already a marker.
 
     Per match, not per line: a line carrying one redacted value must not shield
-    a second, still-real secret beside it.
+    a second, still-real secret beside it. The marker is recognised by its
+    shape rather than by a bare substring.
     """
     prefix, value = match.group(1), match.group(2)
-    return prefix + (value if "[REDACTED" in value else "[REDACTED]")
+    return prefix + (value if MARKER.search(value) else "[REDACTED]")
 
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
@@ -459,9 +473,10 @@ def _completed(command, *, cwd, timeout, environment=None):
         return type("Expired", (), {
             "returncode": TIMED_OUT, "stdout": expired.stdout or "",
             "stderr": f"timed out after {timeout}s"})()
-    except OSError:
-        # A missing interpreter or unresolvable PATH is a failed leg, not a
-        # traceback out of the entry point.
+    except (OSError, ValueError, subprocess.SubprocessError):
+        # A missing interpreter, an unusable environment or any other launch
+        # failure is a failed leg with a retained diagnostic, not a traceback
+        # and not the entry point's unattributed backstop.
         return type("Unlaunched", (), {
             "returncode": UNLAUNCHED, "stdout": "",
             "stderr": "command could not be launched"})()
@@ -604,12 +619,21 @@ def main(argv=None):
     except CloudflareDeployError as error:
         print(str(error), file=sys.stderr)
         return 2
-    except Exception:
+    except Exception as error:
         # A backstop, not a substitute for attributing failures above: an
         # unexpected exception must not become a traceback whose text could
-        # carry credentials into the log.
-        print(str(CloudflareDeployError("failed for an unattributed reason")),
-              file=sys.stderr)
+        # carry credentials into the log. It is still retained, redacted, so
+        # the failure can be reconciled rather than only counted.
+        retained = type("Unexpected", (), {
+            "returncode": 1, "stdout": f"{type(error).__name__}: {error}\n",
+            "stderr": ""})()
+        try:
+            path = _diagnostic(diagnostics, "unattributed.log", retained)
+            detail = f"; inspect {path}"
+        except Exception:
+            detail = ""
+        print(str(CloudflareDeployError(
+            f"failed for an unattributed reason{detail}")), file=sys.stderr)
         return 2
     print(json.dumps({"host": arguments.target, "tag": arguments.tag,
                       "evidence": str(written)}, sort_keys=True))
