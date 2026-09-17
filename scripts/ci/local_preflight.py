@@ -23,6 +23,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -34,6 +35,12 @@ POLICY_PATH = ROOT / "scripts/ci/scope_policy.json"
 CLASSIFIER_PATH = ROOT / "scripts/ci/change_scope.py"
 LANE_COMMANDS_PATH = ROOT / "scripts/ci/local_lanes.json"
 DOC_IMPACT_CHECKER = ROOT / "apps/docs-site/scripts/check-doc-impact.mjs"
+PR_WORKFLOW = ".github/workflows/pr-contract.yml"
+# Deliberately narrower than the expression and wider than one spelling: the
+# lane name is what matters, and a job condition reformatted around it (a moved
+# paren, an added space, a different `needs` path) must not quietly empty the
+# set and report every lane unverified.
+_LANE_GATE = re.compile(r"\.lanes\.([a-z_]+)")
 
 LANE_COMMANDS_SCHEMA = "lmdj.ci-local-lanes.v1"
 _LANE_KEYS = {"requires", "commands", "ci_only"}
@@ -522,6 +529,7 @@ def build_plan(
             raise ValueError(f"unknown lane(s): {', '.join(unknown)}")
         selected = [lane for lane in selected if lane in set(only)]
 
+    verified_by_pull_request = pull_request_lanes(root)
     blobs = repository_blobs(root)
     grouped = lane_input_paths(policy, blobs, classifier)
     keys = {
@@ -536,6 +544,12 @@ def build_plan(
         "mode": manifest["mode"],
         "reasons": manifest["reasons"],
         "selected": selected,
+        # Which of the selected lanes a Pull Request will actually run, and
+        # which will not be verified until a main batch picks the change up.
+        "pull_request_verified": [
+            lane for lane in selected if lane in verified_by_pull_request],
+        "batch_only": [
+            lane for lane in selected if lane not in verified_by_pull_request],
         "ci_lanes": ci_lanes,
         "lane_commands": lane_commands,
         "cache_keys": keys,
@@ -547,6 +561,74 @@ def build_plan(
         "changed_paths": changed_paths(inventory),
         "pr_body": read_pr_body(pr_body_path) if pr_body_path is not None else None,
     }
+
+
+def job_conditions(source: str) -> list[str]:
+    """Every job-level `if:` expression in a workflow, continuations included.
+
+    A lane name gates a Pull Request only where a *job's* own condition names
+    it. A step condition inside that job, a comment, a step name, an `env:`
+    value or a `run:` script are not gates, and reading one as a gate would
+    report an unverified lane as verified — the false assurance this partition
+    exists to remove. So the scan stays inside the `jobs:` block and accepts
+    `if:` only at the indentation a job's own keys sit at.
+    """
+    lines = source.splitlines()
+    conditions: list[str] = []
+    jobs_indent = job_indent = gate_indent = None
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if jobs_indent is not None and indent <= jobs_indent:
+            # A sibling of `jobs:` ends the block; this line may open it again.
+            jobs_indent = job_indent = gate_indent = None
+        if jobs_indent is None:
+            if stripped.startswith("jobs:"):
+                jobs_indent = indent
+            continue
+        if job_indent is None:
+            job_indent = indent
+            continue
+        if indent <= job_indent:
+            # A new job name. Its own keys set the gate level for its body, so
+            # jobs that indent differently from each other still work.
+            gate_indent = None
+            continue
+        if gate_indent is None:
+            # The first line inside a job body is one of its keys: a nested
+            # block can only appear after the key that opens it.
+            gate_indent = indent
+        if indent != gate_indent or not stripped.startswith("if:"):
+            continue
+        block = [stripped[len("if:"):]]
+        while index < len(lines):
+            following = lines[index]
+            if following.strip() and len(following) - len(following.lstrip()) <= indent:
+                break
+            block.append(following.strip())
+            index += 1
+        conditions.append(" ".join(block))
+    return conditions
+
+
+def pull_request_lanes(root: Path) -> frozenset[str]:
+    """The lanes a Pull Request can actually run, read from its own workflow.
+
+    Every other selected lane belongs to an admitted main batch, so a change
+    that only it owns reaches `main` unverified. Derived from the workflow
+    rather than listed here, so the two cannot drift apart.
+    """
+    try:
+        source = (root / PR_WORKFLOW).read_text(encoding="utf-8")
+    except OSError:
+        return frozenset()
+    return frozenset(lane for condition in job_conditions(source)
+                     for lane in _LANE_GATE.findall(condition))
 
 
 def execute(
@@ -741,6 +823,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "mode": plan["mode"],
             "reasons": plan["reasons"],
             "selected": plan["selected"],
+            "pull_request_verified": plan["pull_request_verified"],
+            "batch_only": plan["batch_only"],
             "input_counts": plan["input_counts"],
             "declaration": _declaration_plan(plan),
         }
@@ -751,6 +835,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"pre-flight: {plan['mode']} mode, "
         f"{len(plan['selected'])} lane(s): {', '.join(plan['selected']) or 'none'}"
     )
+    if plan["batch_only"]:
+        # Selected is not the same as verified at merge: a Pull Request runs
+        # only the lanes its own workflow gates on. Everything else waits for an
+        # admitted main batch, so run it here or push it unverified.
+        print(
+            "  not run by a Pull Request: "
+            f"{', '.join(plan['batch_only'])}"
+            " -- run them here (--lanes) or they reach main unverified"
+        )
     try:
         # Report the uncached declaration before lanes; declaration-only never
         # invokes the lane executor.

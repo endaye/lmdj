@@ -123,6 +123,188 @@ class TemporaryRepository:
         self._directory.cleanup()
 
 
+class PullRequestLaneVisibilityTest(unittest.TestCase):
+    """A selected lane is not a verified lane; the plan has to say which."""
+
+    def setUp(self) -> None:
+        self.preflight = load_module("local_preflight_under_test", PREFLIGHT_PATH)
+
+    def test_the_pr_lanes_come_from_the_pr_workflow(self) -> None:
+        # Derived, not listed: a hardcoded set would drift from the workflow
+        # and start lying in the same way the output used to.
+        lanes = self.preflight.pull_request_lanes(ROOT)
+        source = (ROOT / self.preflight.PR_WORKFLOW).read_text(encoding="utf-8")
+        conditions = self.preflight.job_conditions(source)
+        self.assertEqual(
+            lanes, frozenset(lane for condition in conditions
+                             for lane in self.preflight._LANE_GATE.findall(condition)),
+            "why: the Pull Request lane set no longer comes from the job "
+            f"conditions in {self.preflight.PR_WORKFLOW}, so it can disagree "
+            "with what a Pull Request actually gates on; "
+            "remedy: derive it from those conditions instead of listing lanes",
+        )
+        self.assertTrue(conditions, "the Pull Request workflow gates on nothing")
+        self.assertTrue(
+            lanes,
+            "why: no lane was recovered from "
+            f"{self.preflight.PR_WORKFLOW}, so every lane would be reported "
+            "batch-only; "
+            "remedy: repair `_LANE_GATE` against the workflow's job conditions",
+        )
+
+    def test_a_batch_only_lane_is_named_as_unverified(self) -> None:
+        # `deploy_contract` is the one that let a main breakage through: it is
+        # selected by `tools/release/` changes and never runs on a Pull Request.
+        lanes = self.preflight.pull_request_lanes(ROOT)
+        self.assertIn(
+            "ci_contract", lanes,
+            "why: `ci_contract` is gated by the Pull Request workflow but was "
+            "not recovered, so the pre-flight would call a verified lane "
+            "unverified; "
+            "remedy: repair `pull_request_lanes` against the workflow",
+        )
+        self.assertNotIn(
+            "deploy_contract", lanes,
+            "why: `deploy_contract` lives in the batch-only workflow, so "
+            "reporting it as Pull Request verified restores the false "
+            "assurance this entry records; "
+            "remedy: keep `pull_request_lanes` reading only the Pull Request "
+            "workflow",
+        )
+
+    def test_the_plan_splits_selected_into_verified_and_batch_only(self) -> None:
+        # Against a Pull Request workflow this test writes, so the partition is
+        # proven rather than re-derived from the same file it asserts about.
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        repository.write(
+            self.preflight.PR_WORKFLOW,
+            "jobs:\n  docs-static:\n    if: >-\n"
+            "      fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static\n",
+        )
+        repository.write("docs/guide.md", "text\n")
+        # One lane the workflow gates on and one it does not: the partition is
+        # only observable when `selected` carries both kinds.
+        repository.write("tools/release/probe.py", "# probe\n")
+        repository.commit("a change under a one-lane Pull Request workflow")
+        plan = self.preflight.build_plan(repository.path, repository.base_sha)
+        self.assertEqual(self.preflight.pull_request_lanes(repository.path),
+                         frozenset({"docs_static"}))
+        self.assertEqual(
+            plan["pull_request_verified"], ["docs_static"],
+            "why: the plan no longer separates the selected lanes a Pull "
+            "Request verifies from the rest; "
+            "remedy: keep `pull_request_verified` and `batch_only` partitioning "
+            "`selected`",
+        )
+        self.assertIn(
+            "deploy_contract", plan["batch_only"],
+            "why: a selected lane no Pull Request runs was not reported as "
+            "batch-only, so it reaches main unverified without a warning; "
+            "remedy: keep `batch_only` listing every selected lane outside "
+            "`pull_request_lanes`",
+        )
+        self.assertEqual(
+            sorted(plan["pull_request_verified"] + plan["batch_only"]),
+            sorted(plan["selected"]),
+            "why: the two lists must partition `selected`, or a selected lane "
+            "is reported as neither verified nor unverified; "
+            "remedy: derive both from `selected` alone",
+        )
+
+    def test_a_reformatted_job_condition_still_names_its_lane(self) -> None:
+        # The recovered set must survive an edit to the condition around the
+        # lane name; an empty set would silently report every lane unverified.
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        for spelling in (
+            "if: fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static",
+            "if: ${{ fromJSON( needs.change-scope.outputs.manifest ).lanes.docs_static }}",
+            "if: needs.change-scope.outputs.manifest.lanes.docs_static",
+        ):
+            with self.subTest(spelling=spelling):
+                repository.write(
+                    self.preflight.PR_WORKFLOW,
+                    f"jobs:\n  docs-static:\n    {spelling}\n    steps: []\n")
+                self.assertEqual(
+                    self.preflight.pull_request_lanes(repository.path),
+                    frozenset({"docs_static"}),
+                    "why: a reformatted job condition stopped naming its lane, "
+                    "so the pre-flight would report a verified lane as "
+                    "batch-only; "
+                    "remedy: match the lane name, not one spelling of the "
+                    "expression around it",
+                )
+
+    def test_a_lane_named_outside_a_job_condition_is_not_a_gate(self) -> None:
+        # A lane name in a comment, a step name, an `env:` value or a `run:`
+        # script is prose. Reading it as a gate would report an unverified lane
+        # as verified, which is the false assurance this partition removes.
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        repository.write(self.preflight.PR_WORKFLOW, "\n".join([
+            "# fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan",
+            "on: pull_request",
+            "env:",
+            "  TOP: fromJSON(x).lanes.core_ubuntu",
+            "jobs:",
+            "  docs-static:",
+            "    if: fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static",
+            "    env:",
+            "      NOTE: fromJSON(x).lanes.deploy_contract",
+            "    steps:",
+            "      - name: mention .lanes.package in a step name",
+            "        if: fromJSON(x).lanes.creator",
+            "        run: echo 'fromJSON(x).lanes.web_runtime_host'",
+            "",
+        ]))
+        self.assertEqual(
+            self.preflight.pull_request_lanes(repository.path),
+            frozenset({"docs_static"}),
+            "why: a lane named outside a job condition was read as a Pull "
+            "Request gate, so a lane no job runs would be reported verified; "
+            "remedy: read only the workflow's `if:` expressions",
+        )
+
+    def test_a_job_gate_is_found_after_a_nested_block(self) -> None:
+        # A job whose first key opens a nested mapping still has its own `if:`
+        # at the job-key level. Missing it would report a gated lane as
+        # batch-only, the false-negative direction of the same defect.
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        repository.write(self.preflight.PR_WORKFLOW, "\n".join([
+            "jobs:",
+            "  first:",
+            "    strategy:",
+            "      matrix:",
+            "        os: [ubuntu-latest]",
+            "    if: fromJSON(x).lanes.docs_static",
+            "    steps: []",
+            "  second:",
+            "      name: indented differently from its sibling",
+            "      if: fromJSON(x).lanes.portal",
+            "",
+        ]))
+        self.assertEqual(
+            self.preflight.pull_request_lanes(repository.path),
+            frozenset({"docs_static", "portal"}),
+            "why: a job-level condition was skipped, so a lane a Pull Request "
+            "does gate on would be reported batch-only; "
+            "remedy: take each job's own key indentation as its gate level",
+        )
+
+    def test_an_unreadable_workflow_reports_no_pr_lanes(self) -> None:
+        # Fail closed: if the workflow cannot be read, every lane is treated as
+        # unverified rather than silently assumed covered.
+        self.assertEqual(
+            self.preflight.pull_request_lanes(Path("/nonexistent")),
+            frozenset(),
+            "why: an unreadable Pull Request workflow produced lanes anyway, "
+            "so the pre-flight would assume coverage it cannot see; "
+            "remedy: return an empty set when the workflow cannot be read",
+        )
+
+
 class LaneTableContractTest(unittest.TestCase):
     """The local command table must stay aligned with the CI policy."""
 
@@ -1229,6 +1411,7 @@ class AdvisoryBoundaryTest(unittest.TestCase):
         import io
         from unittest import mock
         plan = {"mode": "full", "selected": ["portal"], "ci_lanes": ["portal"], "base_sha": "a" * 40, "head_sha": "b" * 40,
+                "pull_request_verified": ["portal"], "batch_only": [],
                 "pr_body": "body", "changed_paths": ["apps/docs-site/docs/x.mdx"]}
         for verdict, expected in ((self.preflight.PASS, 0), (self.preflight.FAIL, 1)):
             with mock.patch.object(self.preflight, "build_plan", return_value=plan), \

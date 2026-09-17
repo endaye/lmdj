@@ -282,3 +282,45 @@ def write_document(path, document, *, host):
         except FileNotFoundError:
             pass
     return target
+
+
+def main(argv=None):
+    """Validate a document on stdin and echo it canonically, or refuse.
+
+    The release driver's deployment effect verifier runs one trusted validator
+    per contract as a subprocess, so the document it compares against the frozen
+    projection is one a validator accepted rather than one it parsed itself.
+    This is that validator for the Cloudflare contracts; the Netlify ones keep
+    their own in each Host's `deploy_orchestrator`.
+    """
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=("validate",))
+    parser.add_argument("contract")
+    arguments = parser.parse_args(argv)
+    hosts = {contract: host for host, contract in CONTRACTS.items()}
+    try:
+        host = hosts.get(arguments.contract)
+        if host is None:
+            raise CloudflareEvidenceError("names an unsupported contract")
+        document = json.loads(sys.stdin.read())
+        validate_document(document, host=host)
+    except CloudflareEvidenceError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    except (ValueError, OSError):
+        # A decode failure, a truncated pipe and a document that is not JSON
+        # are the same answer to the caller: this input cannot be validated.
+        # Refusing them the same way keeps the operator's message a reason
+        # rather than a traceback.
+        print(str(CloudflareEvidenceError("is not a readable document")), file=sys.stderr)
+        return 2
+    print(json.dumps(document, ensure_ascii=False, sort_keys=True,
+                     separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

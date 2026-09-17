@@ -10,6 +10,7 @@ import subprocess
 import struct
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 import zipfile
 import zlib
@@ -23,6 +24,136 @@ from tools.release.orchestration import STEPS, JournalError
 from tools.release.orchestration_driver import Observation
 from tools.release.orchestration_driver import ReleaseDriver
 import release_orchestration_driver_test as driver_fixture
+
+
+CLOUDFLARE_CONTRACTS = {
+    "web-runtime-host": "lmdj.web-runtime-host.deployment-evidence.v3",
+    "creator-web": "lmdj.creator-web.deployment-evidence.v2",
+}
+# Built in a child so the two Hosts' same-named tool imports stay isolated, the
+# way this file already loads the Netlify fixtures. These documents are what the
+# deployment workflows publish today; `HOSTS` still expects the Netlify
+# contracts, and flips to these with the frozen projection in #1477.
+CLOUDFLARE_DOCUMENT = """
+import json, sys
+sys.path.insert(0, "apps/web-runtime-host/tools")
+from cloudflare_deployment_evidence import CONTRACTS, WORKERS, production_url, version_url
+host = sys.argv[1]
+p, hv = "1.0.60.0", "3.0.0"
+v = "1f2e3d4c-5b6a-4788-9900-aabbccddeeff"
+stem = {"creator-web": "lmdj-creator-web"}.get(host, "lmdj-web-runtime-host")
+def check(url):
+    return {"status": "passed", "url": url, "product_build": p, "host_version": hv}
+iu, lu = version_url(host, v), production_url(host)
+print(json.dumps({
+    "contract": CONTRACTS[host], "tag": "lmdj-v" + p, "product_build": p,
+    "host_version": hv, "git_revision": "b" * 40, "channel": "canary",
+    "worker": WORKERS[host],
+    "release_url": "https://github.com/endaye/lmdj/releases/tag/lmdj-v" + p,
+    "archive": {"filename": stem + "-" + hv + "-product-" + p + ".zip", "sha256": "1" * 64},
+    "release_files": {"index_sha256": "2" * 64, "manifest_sha256": "3" * 64},
+    "publication": {"version_id": v, "deployment_id": "9a8b7c6d-5e4f-4302-8110-223344556677",
+                    "percentage": 100},
+    "prior_good": None,
+    "immutable": {"version_id": v, "url": iu, "http": check(iu), "browser": check(iu)},
+    "production": {"url": lu, "http": check(lu), "browser": check(lu)},
+    "github_actions": {"run_id": "41",
+                       "run_url": "https://github.com/endaye/lmdj/actions/runs/41"},
+    "started_at": "2026-09-17T04:00:00Z", "ended_at": "2026-09-17T04:20:00Z"}))
+"""
+
+
+class CloudflareEffectShapeTest(unittest.TestCase):
+    """The Cloudflare routing #1477 switches on, proven before it is switched.
+
+    `HOSTS` still names the Netlify contracts, so nothing here is on the live
+    path yet. These pin the two pieces that must already be right when it flips:
+    the trusted validator the effect will run, and the extraction that turns a
+    Cloudflare document into the one projection shape the comparison uses.
+    """
+
+    VALIDATOR = ROOT / "apps/web-runtime-host/tools/cloudflare_deployment_evidence.py"
+
+    def document(self, host="web-runtime-host"):
+        loaded = subprocess.run([sys.executable, "-c", CLOUDFLARE_DOCUMENT, host],
+                                capture_output=True, text=True, check=True, timeout=10)
+        return json.loads(loaded.stdout)
+
+    def extractor(self, contract):
+        # `_site` and `_prior` read nothing but the contract, so a stand-in
+        # carrying one is enough; building a DeploymentEffect would drag in the
+        # dispatch consumer without testing more.
+        stub = SimpleNamespace(contract=contract)
+        return (lambda d: DeploymentEffect._site(stub, d),
+                lambda p: DeploymentEffect._prior(stub, p))
+
+    def validate(self, document, contract):
+        return subprocess.run(
+            [sys.executable, str(self.VALIDATOR), "validate", contract],
+            input=json.dumps(document), capture_output=True, text=True, timeout=10)
+
+    def test_the_trusted_validator_accepts_and_echoes_canonically(self):
+        # `_document` compares the validator's stdout with canonical_json, so a
+        # mismatch here would refuse every Cloudflare deployment once flipped.
+        for host, contract in CLOUDFLARE_CONTRACTS.items():
+            with self.subTest(host=host):
+                document = self.document(host)
+                result = self.validate(document, contract)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.encode(), canonical_json(document))
+
+    def test_the_validator_refuses_a_document_from_another_host(self):
+        document = self.document()
+        result = self.validate(document, CLOUDFLARE_CONTRACTS["creator-web"])
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_the_validator_refuses_unreadable_input_with_a_reason(self):
+        # The effect refuses any nonzero exit, so this is about what the
+        # operator reads: a reason, not a traceback or a decoder message. Both
+        # ways an input can be unreadable, since they reach different handlers.
+        for label, payload in (("undecodable bytes", b"\xff\xfe not json"),
+                               ("valid bytes, not JSON", b"not json at all")):
+            with self.subTest(input=label):
+                result = subprocess.run(
+                    [sys.executable, str(self.VALIDATOR), "validate",
+                     CLOUDFLARE_CONTRACTS["creator-web"]],
+                    input=payload, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(b"is not a readable document", result.stderr)
+                self.assertNotIn(b"Traceback", result.stderr)
+                self.assertNotIn(b"Expecting value", result.stderr)
+
+    def test_the_validator_refuses_an_unsupported_contract(self):
+        document = self.document()
+        result = self.validate(document, "lmdj.web-runtime-host.deployment-evidence.v2")
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_the_worker_is_the_site_identity(self):
+        document = self.document()
+        site, _ = self.extractor(CLOUDFLARE_CONTRACTS["web-runtime-host"])
+        self.assertEqual(site(document), document["worker"])
+        # The Netlify branch is untouched and still reads its own key.
+        netlify, _ = self.extractor("lmdj.web-runtime-host.deployment-evidence.v2")
+        self.assertEqual(netlify({"site_id": "a-netlify-site"}), "a-netlify-site")
+
+    def test_the_prior_projects_into_the_one_comparison_shape(self):
+        prior = {
+            "version_id": "0e1d2c3b-4a59-4677-8899-ffeeddccbbaa",
+            "version_url": "https://0e1d2c3b-lab.lmdj.workers.dev",
+            "product_build": "1.0.59.0", "host_version": "2.9.0",
+            "release_files": {"index_sha256": "4" * 64, "manifest_sha256": "5" * 64},
+            "site_response": {"status": 200},
+        }
+        _, project = self.extractor(CLOUDFLARE_CONTRACTS["web-runtime-host"])
+        projected = project(prior)
+        # Exactly the key set DeploymentEffect validates on the frozen prior.
+        self.assertEqual(set(projected), {
+            "deploy_id", "deploy_url", "product_build", "host_version",
+            "index_sha256", "manifest_sha256"})
+        self.assertEqual(projected["deploy_id"], prior["version_id"])
+        self.assertEqual(projected["deploy_url"], prior["version_url"])
+        self.assertEqual(projected["index_sha256"], "4" * 64)
+        self.assertEqual(projected["manifest_sha256"], "5" * 64)
 
 
 class RuntimeEffectTest(unittest.TestCase):

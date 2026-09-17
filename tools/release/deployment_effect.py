@@ -24,8 +24,22 @@ from .orchestration import JournalError, _validate_state
 from .orchestration_driver import Observation
 
 HOSTS = {
-    "deploy-web-runtime-host.yml": ("runtime", "web-runtime-host", "runtime-host-deployment-evidence", "lmdj.web-runtime-host.deployment-evidence.v3"),
-    "deploy-creator-web.yml": ("creator", "creator-web", "creator-host-deployment-evidence", "lmdj.creator-web.deployment-evidence.v2"),
+    "deploy-web-runtime-host.yml": ("runtime", "web-runtime-host", "runtime-host-deployment-evidence", "lmdj.web-runtime-host.deployment-evidence.v2"),
+    "deploy-creator-web.yml": ("creator", "creator-web", "creator-host-deployment-evidence", "lmdj.creator-web.deployment-evidence.v1"),
+}
+# Each Host's contract names the validator that may accept its documents and
+# how the frozen projection is read out of one. The projection's own shape is
+# the same either way, so `self.expected` and the comparison never change.
+#
+# `HOSTS` above still names the Netlify contracts, so nothing reaches this set
+# on the live path yet: the deployment workflows write the Cloudflare contracts,
+# and flipping `HOSTS` to match needs the effect suite's fixtures converted and
+# `release_live_host_test` dispositioned in the same change. That is #1499. The
+# routing below is proven by its own tests meanwhile, not exercised in
+# production.
+CLOUDFLARE = {
+    "lmdj.web-runtime-host.deployment-evidence.v3",
+    "lmdj.creator-web.deployment-evidence.v2",
 }
 LIMIT = 1024 * 1024  # Existing promotion evidence archive bound, not a log dump.
 ROOT = Path(__file__).resolve().parents[2]
@@ -65,6 +79,24 @@ class DeploymentEffect:
         self.consumer = consumer
         self.spec, self.expected = deepcopy(spec), deepcopy(expected)
         self.step, self.host, self.artifact_name, self.contract = HOSTS[spec["workflow"]]
+
+    def _site(self, document):
+        """The Site identity this deployment published to, by contract."""
+        # Cloudflare names the Worker; Netlify named the Site. The frozen
+        # projection binds one identity either way, under one key.
+        return document["worker" if self.contract in CLOUDFLARE else "site_id"]
+
+    def _prior(self, prior):
+        """The replaced deployment, projected into the one comparison shape."""
+        if self.contract in CLOUDFLARE:
+            return {"deploy_id": prior["version_id"], "deploy_url": prior["version_url"],
+                    "product_build": prior["product_build"],
+                    "host_version": prior["host_version"],
+                    **{k: prior["release_files"][k]
+                       for k in ("index_sha256", "manifest_sha256")}}
+        return {**{k: prior[k] for k in ("deploy_id", "deploy_url", "product_build", "host_version")},
+                **{k: prior["immutable"]["http"]["result"][k]
+                   for k in ("index_sha256", "manifest_sha256")}}
 
     def _binding(self, binding):
         actual = self.consumer.verify(run_id=binding["run_id"], actor_id=self.spec["actor_id"],
@@ -127,8 +159,13 @@ class DeploymentEffect:
         require(type(document) is dict, "document is invalid")
         # Execute only this installed trusted tool, never candidate/tag files.
         env = {k:v for k,v in os.environ.items() if k in ("PATH", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP")}
-        result = subprocess.run([sys.executable, "-s", "-B", str(ROOT / "apps" / self.host / "tools/deploy_orchestrator.py"),
-            "evidence-validate-document", self.contract], input=payload, capture_output=True, env=env, timeout=10)
+        validator, verb = (
+            (ROOT / "apps/web-runtime-host/tools/cloudflare_deployment_evidence.py", "validate")
+            if self.contract in CLOUDFLARE
+            else (ROOT / "apps" / self.host / "tools/deploy_orchestrator.py",
+                  "evidence-validate-document"))
+        result = subprocess.run([sys.executable, "-s", "-B", str(validator),
+            verb, self.contract], input=payload, capture_output=True, env=env, timeout=10)
         require(result.returncode == 0 and result.stdout == canonical_json(document),
                 "canonical Host validation refused")
         return document, artifact, inventory, expires
@@ -151,9 +188,9 @@ class DeploymentEffect:
             if prior is not None:
                 if canonical_sha256(prior["site_response"]) != self.spec["inputs"]["prior_site_sha256"]:
                     return Observation("conflict")
-                prior = {**{k:prior[k] for k in ("deploy_id", "deploy_url", "product_build", "host_version")},
-                         **{k:prior["immutable"]["http"]["result"][k] for k in ("index_sha256", "manifest_sha256")}}
-            projection = {**{k:document[k] for k in ("product_build", "host_version", "site_id", "archive", "release_files")},
+                prior = self._prior(prior)
+            projection = {**{k:document[k] for k in ("product_build", "host_version", "archive", "release_files")},
+                          "site_id":self._site(document),
                           "target_revision":document["git_revision"], "prior":prior,
                           "prior_site_sha256":self.spec["inputs"]["prior_site_sha256"]}
             if (projection != self.expected or document["tag"] != self.spec["inputs"]["tag"]
