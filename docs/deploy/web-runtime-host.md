@@ -1,5 +1,12 @@
 # Web Runtime Host 公共发布运行手册
 
+> 2026-09-17 切换更新：Runtime 的部署 workflow 已重新启用，并改走共享受管 Cloudflare
+> adapter（`scripts/cloudflare-host-deploy.sh TAG --target web-runtime-host`），目标
+> `https://lab.lmdj.workers.dev/`（#1490）。下述 Netlify `deploy` 路径已退役：它现在明确拒绝，
+> 除非显式设置 `LMDJ_ALLOW_RETIRED_NETLIFY_DEPLOY=1`，该开关只为历史审计与其
+> 自身测试而存在，不是部署入口。`stage` 与 `verify` 不变，Cloudflare adapter 仍
+> 依赖它们取已验证的签名输入。
+>
 > 2026-09-08 退役更新：旧 Netlify 站点已按用户授权删除，对应 GitHub 手动部署
 > workflow 已停用。下述 Netlify 路径仅供历史审计，不再是可用的生产或回滚入口。
 > 当前部署与恢复使用 [Cloudflare Host 手册](cloudflare-hosts.md)，
