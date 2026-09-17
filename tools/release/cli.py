@@ -45,6 +45,7 @@ from tools.release.orchestration_policy import (  # noqa: E402
     OrchestrationPolicyError,
     load_orchestration_policy,
 )
+from tools.release.entry_composition import compose_candidate  # noqa: E402
 from tools.release.prepare import (  # noqa: E402
     PrepareContext, PrepareError, default_profile_builder, default_profile_verifier,
     load_authority_documents, prepare,
@@ -200,19 +201,40 @@ ORCHESTRATION_POLICY_PATH = Path("tools/release/orchestration-policy.json")
 
 def release_journal_root(root: Path, git) -> Path:
     """The request journal lives beside the repository's own Git directory."""
-    directory = git.runner.run(
-        ("git", "-C", str(root), "rev-parse", "--absolute-git-dir")
-    ).stdout.strip()
-    return Path(directory) / "lmdj-release-requests"
+    from tools.release.entry_composition import release_journal_root as impl
+
+    return impl(root, git)
 
 
-def release_carriers(context: PrepareContext, policy) -> tuple:
-    """Step carriers enrolled for this scope.
+def release_carriers(context: PrepareContext, policy, request) -> tuple:
+    """Step carriers enrolled for this scope, from the trusted composition.
 
-    Empty until each step's exact far-side verifier is enrolled; `run` and
-    `resume` refuse a scope with an unowned step rather than half-driving it.
+    The twelve enrolled steps assemble as lazy request-bound wrappers; the
+    `prepared` and `tag` steps stay unenrolled while their spec freezing is
+    unsettled (#1404), and `run`/`resume` refuse a scope with an unowned step
+    rather than half-driving it. Assembly performs no drives and no batch or
+    site reads.
     """
-    return ()
+    from tools.release.entry_composition import compose_carriers
+
+    return compose_carriers(context, policy, request)
+
+
+def _resume_request(root: Path, git, request_id: str):
+    """The frozen request for a resume, read-only; None when the journal has none."""
+    directory = release_journal_root(root, git)
+    if not directory.is_dir():
+        return None
+    try:
+        with RequestJournal(directory, writable=False) as journal:
+            alias = journal.read_alias(request_id)
+            if alias is not None:
+                return alias["request"]
+            state = journal.read(request_id)
+    except JournalError:
+        # The driver's own resume path reports the unreadable journal.
+        return None
+    return state["request"] if state is not None else None
 
 
 def build_orchestration_policy(root: Path, context: PrepareContext):
@@ -421,9 +443,25 @@ def main(argv: list[str] | None = None) -> int:
         context = build_context(root)
         if options.command in ("run", "resume"):
             policy = build_orchestration_policy(root, context)
-            carriers = release_carriers(context, policy)
+            request = (
+                build_request(
+                    context, policy, authority_ref=options.authority,
+                    tag=options.tag, base_revision=options.base_revision,
+                )
+                if options.command == "run"
+                else _resume_request(root, context.git, options.request_id)
+            )
+            if request is None:
+                # Let the driver report the missing request from its own
+                # journal evidence rather than composing against nothing.
+                driver = ReleaseDriver(
+                    release_journal_root(root, context.git), policy,
+                    ReleaseBackend(context.git, context.github, carriers=()))
+                result = driver.resume(options.request_id)
+                _print_drive_result(result)
+                return 0 if result.status == "complete" else 2
+            carriers = release_carriers(context, policy, request)
             backend = ReleaseBackend(context.git, context.github, carriers=carriers)
-            driver = ReleaseDriver(release_journal_root(root, context.git), policy, backend)
             unowned = backend.missing(STEPS)
             if unowned:
                 # Refuse before the request is created: an unowned step is never
@@ -432,11 +470,11 @@ def main(argv: list[str] | None = None) -> int:
                     "release scope has steps without an enrolled carrier",
                     detail=", ".join(unowned),
                 )
+            candidate = compose_candidate(context, policy, request)
+            driver = ReleaseDriver(release_journal_root(root, context.git), policy,
+                                   backend, candidate=candidate)
             result = (
-                driver.run(build_request(
-                    context, policy, authority_ref=options.authority,
-                    tag=options.tag, base_revision=options.base_revision,
-                ))
+                driver.run(request)
                 if options.command == "run" else driver.resume(options.request_id)
             )
             _print_drive_result(result)

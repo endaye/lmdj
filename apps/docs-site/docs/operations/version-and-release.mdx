@@ -480,6 +480,10 @@ fail-closed，effect 验证复用 `DeploymentEffect`（对 run 留存证据逐�
 `batch-result:<run_id>:<witness>` 引用。candidate 状态读取按请求绑定，他人分配不可顶替。
 entry_gates 另补 `batch_evidence_consumer` 组装：repository/workflow 身份与 producer pin 只取自
 钉住 policy 的 `batch_evidence_source`。
+真实入口的组装层 `tools/release/entry_composition.py` 现已把上述 12 步接成惰性、
+请求绑定的 carrier 组装（`cli.release_carriers` 改为三参委托）；组装本身不驱动
+任何步骤，reviewed changelog 编辑输入与只读冻结部署投影两个 seam 仍具名拒绝，
+对应步骤如实报 `pending`。
 `prepared` 与 `tag` 的登记录入仍未完成（#1404 待裁决），`release_carriers` 因此继续拒绝执行。
 
 带 `changelog` 的 reviewed intent 现已接通 prepare / Draft / published 验证：正文

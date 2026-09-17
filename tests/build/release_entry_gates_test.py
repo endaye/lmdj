@@ -123,6 +123,15 @@ class DispatchAuthorityTest(unittest.TestCase):
         with self.assertRaises(EntryGateError):
             authorize("not-a-spec")
 
+    def test_a_spec_without_a_control_revision_still_binds_the_request(self):
+        # The PR-sequence specs carry no control revision; the request binding
+        # and actor checks still apply.
+        spec = self.spec()
+        del spec["control_revision"]
+        self.gate()(spec)  # no raise
+        with self.assertRaises(EntryGateError):
+            self.gate()(self.spec(control_revision="9" * 40))
+
     def test_live_authority_loss_fails_closed(self):
         with self.assertRaises(EntryGateError):
             self.gate(github=GitHubStub(actor=35))(self.spec())
@@ -341,6 +350,35 @@ class ReviewGateTest(unittest.TestCase):
         with self.assertRaises(Exception):
             self.gate(self.graphql_client(rows))(
                 "candidate", {"head_sha": self.head}, {"number": self.number})
+
+    def test_an_unresolved_thread_or_closing_relation_conflicts(self):
+        rows = self.rows()
+        rows["reviewThreads"] = [dict(id="T_1", isResolved=False,
+                                      isOutdated=False,
+                                      path="tools/release/example.py",
+                                      comments={"totalCount": 1})]
+        rows["T_1"] = [dict(id="RC_1_1", databaseId=411, body="thread comment",
+                            createdAt="2026-09-13T01:00:00Z",
+                            updatedAt="2026-09-13T01:00:00Z",
+                            author={"login": "reviewer", "databaseId": 20},
+                            originalCommit={"oid": self.head},
+                            commit={"oid": self.head},
+                            path="tools/release/example.py",
+                            diffHunk="@@ -1 +1 @@\n-old\n+new",
+                            originalLine=1, line=None,
+                            pullRequest={"databaseId": 41, "number": self.number},
+                            pullRequestReview={"id": "R_60", "databaseId": 60})]
+        observed = self.gate(self.graphql_client(rows))(
+            "candidate", {"head_sha": self.head}, {"number": self.number})
+        self.assertEqual(observed.status, "conflict")
+        rows = self.rows()
+        rows["closingIssuesReferences"] = [dict(
+            id="I_1", databaseId=300, number=1301,
+            repository={"databaseId": self.repo_id,
+                        "nameWithOwner": "endaye/lmdj"})]
+        observed = self.gate(self.graphql_client(rows))(
+            "candidate", {"head_sha": self.head}, {"number": self.number})
+        self.assertEqual(observed.status, "conflict")
 
     def test_a_gate_without_an_exact_head_or_kind_fails_closed(self):
         gate = self.gate(self.graphql_client(self.rows()))

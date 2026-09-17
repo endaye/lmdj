@@ -124,6 +124,7 @@ class ReleaseEntryPointTest(unittest.TestCase):
         stream = capture if capture is not None else io.StringIO()
         with patch.object(cli, "build_context", return_value=self.context), \
                 patch.object(cli, "release_carriers", return_value=selected), \
+                patch.object(cli, "compose_candidate", return_value=None), \
                 contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
             return cli.main(["--repo-root", str(self.root), *arguments])
 
@@ -284,6 +285,155 @@ class ReleaseEntryPointTest(unittest.TestCase):
         output = io.StringIO()
         self.assertEqual(self.run_cli(["resume", "release-" + "0" * 16], capture=output), 2)
         self.assertIn("request is missing", output.getvalue())
+
+
+class RealCompositionTest(unittest.TestCase):
+    """The shipped release_carriers assembles the twelve enrolled carriers.
+
+    Only the review-reader seam is patched (the production one speaks HTTPS);
+    every other composition input is answered by the fixture repository or
+    the fixture GitHub stub, so this exercises the real assembly path.
+    """
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        base = Path(temporary.name).resolve()
+        self.root = base / "repo"
+        self.root.mkdir()
+        subprocess.run(["git", "init", "--quiet", "-b", "main", str(self.root)],
+                       check=True)
+        subprocess.run(["git", "-C", str(self.root), "config", "user.name",
+                        "Release Fixture"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "config", "user.email",
+                        "fixture@example.invalid"], check=True)
+        workflows = self.root / ".github/workflows"
+        workflows.mkdir(parents=True)
+        for name in ("publish-release.yml", "deploy-web-runtime-host.yml",
+                     "deploy-creator-web.yml"):
+            (workflows / name).write_text("name: fixture\n")
+        policy_dir = self.root / "tools/release"
+        policy_dir.mkdir(parents=True)
+        shutil.copy(ROOT / "tools/release/orchestration-policy.json",
+                    policy_dir / "orchestration-policy.json")
+        storage_dir = self.root / "scripts/ci"
+        storage_dir.mkdir(parents=True)
+        shutil.copy(ROOT / "scripts/ci/incremental_storage.json",
+                    storage_dir / "incremental_storage.json")
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "--quiet", "-m",
+                        "fixture main"], check=True)
+        self.control = subprocess.run(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"],
+            check=True, capture_output=True).stdout.decode().strip()
+        self.gitdir = self.root / ".git"
+        self.context = type("Context", (), {
+            "git": CompositionGit(self.root), "github": CompositionGitHub(),
+            "policy": Policy(), "repo_root": self.root,
+        })()
+        self.policy = cli.build_orchestration_policy(self.root, self.context)
+
+    def request(self):
+        return cli.build_request(self.context, self.policy,
+                                 authority_ref="issue:1301")
+
+    def carriers(self, request):
+        def reader(repository):
+            return type("Reader", (), {
+                "get": lambda self, path, fresh=False: {"id": 12}})()
+
+        with patch("tools.release.entry_composition.release_token",
+                   return_value="fixture-only-no-credential"), \
+                patch("tools.release.entry_composition.production_review_reader",
+                      return_value=reader):
+            return cli.release_carriers(self.context, self.policy, request)
+
+    def test_the_entry_exposes_the_twelve_enrolled_carriers_in_order(self):
+        from tools.release.carriers import (
+            DeferredCandidate,
+            RecoveredDispatch,
+            RecoveredStep,
+        )
+        from tools.release.entry_composition import ENROLLED_STEPS
+
+        carriers = self.carriers(self.request())
+        self.assertEqual(tuple(carrier.step for carrier in carriers),
+                         ENROLLED_STEPS)
+        self.assertEqual(len(carriers), 12)
+        self.assertIs(type(carriers[0]), DeferredCandidate)
+        for carrier in carriers[1:]:
+            self.assertIn(type(carrier), (RecoveredStep, RecoveredDispatch))
+        for step in ("publication", "runtime", "creator"):
+            selected = carriers[ENROLLED_STEPS.index(step)]
+            self.assertIs(type(selected), RecoveredDispatch)
+        for step in ("verification", "intent", "changelog", "draft",
+                     "published_record", "changelog_site", "promotion",
+                     "final"):
+            self.assertIs(type(carriers[ENROLLED_STEPS.index(step)]),
+                          RecoveredStep)
+        backend = ReleaseBackend(self.context.git, self.context.github,
+                                 carriers=carriers)
+        self.assertEqual(backend.missing(STEPS), ("prepared", "tag"))
+
+    def test_run_refuses_the_unenrolled_steps_before_any_request(self):
+        request_ids = []
+        journal = self.gitdir / "lmdj-release-requests"
+        output = io.StringIO()
+        with patch.object(cli, "build_context", return_value=self.context), \
+                patch.object(cli, "compose_candidate", return_value=None), \
+                patch("tools.release.entry_composition.release_token",
+                      return_value="fixture-only-no-credential"), \
+                patch("tools.release.entry_composition.production_review_reader",
+                      return_value=lambda repository: type("Reader", (), {
+                          "get": lambda self, path, fresh=False: {"id": 12}})()), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = cli.main(["--repo-root", str(self.root), "run",
+                             "--authority", "issue:1301"])
+        self.assertEqual(code, 2)
+        self.assertIn("prepared", output.getvalue())
+        self.assertIn("tag", output.getvalue())
+        self.assertFalse(journal.exists())
+        self.assertEqual(request_ids, [])
+
+
+class CompositionGit:
+    """Answer the composition's Git reads from the real fixture repository."""
+
+    def __init__(self, root):
+        self.root = Path(root)
+        from tools.release.commands import CommandRunner
+
+        self.runner = CommandRunner()
+
+    def main_revision(self):
+        return self.runner.run(
+            ("git", "-C", str(self.root), "rev-parse", "main")).stdout.strip()
+
+    def is_main_ancestor(self, target):
+        try:
+            self.runner.run(("git", "-C", str(self.root), "merge-base",
+                             "--is-ancestor", target, "main"))
+            return True
+        except CommandError:
+            return False
+
+
+class CompositionGitHub:
+    def get_authenticated_actor(self):
+        return ACTOR
+
+    def get_dispatch_evidence(self, path, *, raw=False):
+        workflow = path.rsplit("/", 1)[-1]
+        return {"id": {"publish-release.yml": 501,
+                       "deploy-web-runtime-host.yml": 502,
+                       "deploy-creator-web.yml": 503}[workflow],
+                "path": ".github/workflows/" + workflow}
+
+    def get_batch_evidence(self, path, *, raw=False):
+        raise AssertionError("assembly never reads batch evidence")
+
+    def get_release_by_tag(self, repository, tag):
+        raise AssertionError("assembly never reads releases")
 
 
 if __name__ == "__main__":
