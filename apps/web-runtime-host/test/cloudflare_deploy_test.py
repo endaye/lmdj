@@ -50,8 +50,8 @@ class Adapter:
     """The shared Cloudflare adapter, recording the order it was driven in."""
 
     def __init__(self, *, exists=True, fail=None, promoted_version=CANDIDATE,
-                 workspace=None, stage=True, receipt=None, prior_receipt=None):
-        self.receipt, self.prior_receipt = receipt, prior_receipt
+                 workspace=None, stage=True, receipt=None):
+        self.receipt = receipt
         self.exists = exists
         self.fail = fail
         self.promoted_version = promoted_version
@@ -78,11 +78,6 @@ class Adapter:
             return json.dumps({"result": {"version_id": CANDIDATE},
                                "workspace": str(self.workspace)})
         if command == "promote":
-            if self.stage:
-                write_stage(Path(self.workspace) / "prior" / host,
-                            self.prior_receipt
-                            or receipt(host, tag=PRIOR_TAG, product="1.0.59.0",
-                                       version="2.9.0"))
             return json.dumps({"result": {"id": DEPLOYMENT,
                                           "version_id": self.promoted_version},
                                "workspace": str(self.workspace)})
@@ -128,10 +123,18 @@ class DeployTest(unittest.TestCase):
 
     def read_site(self, url):
         self.reads.append((url, list(self.adapter.calls)))
-        return {"status": 200, "etag": "prior"}
+        return self.observation
+
+    observation = {"response": {"status": 200, "etag": "prior"},
+                   "product_build": "1.0.59.0", "host_version": "2.9.0",
+                   "release_files": {"index_sha256": "4" * 64,
+                                     "manifest_sha256": "5" * 64}}
 
     def deploy_once(self, host="web-runtime-host", *, adapter=None,
-                    browser=None, http=None, prior=True, **changes):
+                    browser=None, http=None, prior=True, observation=None,
+                    **changes):
+        if observation is not None:
+            self.observation = observation
         self.adapter = adapter or Adapter()
         if self.adapter.workspace is None:
             self.adapter.workspace = self.root / "state" / "workspace"
@@ -169,6 +172,37 @@ class DeployTest(unittest.TestCase):
 
     def test_a_complete_creator_deployment_records_valid_evidence(self):
         self.complete_deployment("creator-web")
+
+    def test_the_prior_is_described_from_what_production_served(self):
+        # Not from re-staging its signed release afterwards, which would
+        # describe what that release should have been rather than what was live.
+        self.deploy_once()
+        prior = self.written()["prior_good"]
+        self.assertEqual(prior["product_build"], "1.0.59.0")
+        self.assertEqual(prior["host_version"], "2.9.0")
+        self.assertEqual(prior["release_files"]["index_sha256"], "4" * 64)
+        self.assertEqual(prior["site_response"], {"status": 200, "etag": "prior"})
+        self.assertEqual(prior["version_id"], PRIOR_VERSION)
+
+    def test_a_same_tag_redeploy_still_describes_the_replaced_deployment(self):
+        # The prior comes from the live observation, so it cannot be confused
+        # with the candidate's own release when the tags match.
+        self.deploy_once(prior_tag=TAG)
+        prior = self.written()["prior_good"]
+        self.assertEqual(prior["product_build"], "1.0.59.0")
+        self.assertNotEqual(prior["product_build"],
+                            self.written()["product_build"])
+
+    def test_an_incomplete_prior_observation_is_refused(self):
+        for absent in ("response", "product_build", "host_version",
+                       "release_files"):
+            self.setUp()
+            observation = dict(DeployTest.observation)
+            del observation[absent]
+            with self.subTest(absent=absent), self.assertRaises(CloudflareDeployError):
+                self.deploy_once(observation=observation)
+            self.assertFalse(self.output.exists())
+        self.assertNotIn("candidate", self.adapter.calls)
 
     def test_the_prior_is_read_before_anything_mutates(self):
         # The digest the release driver froze before dispatch must describe the

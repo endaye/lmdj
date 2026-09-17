@@ -16,6 +16,12 @@ served-file digests are all read back from that receipt rather than accepted
 from the caller. A caller cannot describe a deployment as something other than
 what it actually published.
 
+The prior is described from what production was serving, observed once before
+anything mutates. Re-staging its signed release afterwards would describe what
+that release *should* have been rather than what was live, would read the
+candidate's own receipt on a same-tag redeploy, and would move a whole class of
+failure to after the promotion — leaving production changed with no document.
+
 Every result in the document is observed here. The adapter runs its own
 exact-signed HTTP verification and refuses to proceed without it, but this
 module records nothing on that basis: it re-runs `cloudflare_smoke` against the
@@ -140,8 +146,9 @@ def deploy(*, host, tag, run_id, state_root, output,
     stdout. `verify_http(distribution, url, preview)` runs `cloudflare_smoke`
     against the staged signed bytes and `browser(url)` runs the Host's existing
     Playwright deployment spec against that URL; both must return exactly
-    `True`. `read_site(url)` returns the recorded production response the
-    pre-dispatch prior digest is taken over.
+    `True`. `read_site(url)` observes what production is serving right now and
+    returns `{response, product_build, host_version, release_files}`, where
+    `response` is the recorded document the frozen prior digest is taken over.
     """
     if host not in WORKERS:
         raise CloudflareDeployError("names an unconfigured Host")
@@ -154,15 +161,13 @@ def deploy(*, host, tag, run_id, state_root, output,
     root = Path(state_root).resolve()
     live = _live(adapter, common)
     prior_deployment = live["deployment"] if live["exists"] else None
-    prior_site_response = read_site(production_url(host))
-    if not isinstance(prior_site_response, dict) or not prior_site_response:
-        raise CloudflareDeployError("read no prior production response")
+    observed = read_site(production_url(host))
 
     if prior_deployment is None:
         if prior_tag is not None:
             raise CloudflareDeployError(
                 "names a prior tag for a Worker that has no deployment")
-        prior_version = None
+        prior_good = None
     else:
         if prior_tag is None:
             raise CloudflareDeployError(
@@ -170,6 +175,7 @@ def deploy(*, host, tag, run_id, state_root, output,
         prior_version = prior_deployment.get("version_id")
         if not isinstance(prior_version, str):
             raise CloudflareDeployError("read a deployment with no version identity")
+        prior_good = _prior(observed, host, prior_version)
 
     uploaded = _adapter_result(
         adapter(["candidate", tag, *common, "--node", node,
@@ -192,10 +198,10 @@ def deploy(*, host, tag, run_id, state_root, output,
     _passed(verify_http(distribution, immutable_url, True), "HTTP", immutable_url)
     _passed(browser(immutable_url), "browser", immutable_url)
 
-    published = _adapter_result(
+    promoted = _adapter_result(
         adapter(["promote", tag, *common, "--version", version,
-                 *(("--prior-tag", prior_tag) if prior_tag else ())]), "promote")
-    promoted = published["result"]
+                 *(("--prior-tag", prior_tag) if prior_tag else ())]),
+        "promote")["result"]
     if promoted.get("version_id") != version:
         raise CloudflareDeployError("promoted a version other than the candidate")
     deployment = promoted.get("id")
@@ -205,24 +211,6 @@ def deploy(*, host, tag, run_id, state_root, output,
     live_url = production_url(host)
     _passed(verify_http(distribution, live_url, False), "HTTP", live_url)
     _passed(browser(live_url), "browser", live_url)
-
-    prior_good = None
-    if prior_version is not None:
-        # `promote` re-stages the signed prior for its own recovery checks, at
-        # `<workspace>/<host>` when it is the same release and `prior/<host>`
-        # otherwise, so the prior is described from verified bytes too.
-        promote_root = _staged(published, host, root, sub=() if prior_tag == tag
-                               else ("prior",))
-        prior = _described(_receipt(promote_root, prior_tag, host, "prior release"),
-                           "prior release")
-        prior_good = {
-            "version_id": prior_version,
-            "version_url": version_url(host, prior_version),
-            "product_build": prior["product_build"],
-            "host_version": prior["host_version"],
-            "release_files": prior["release_files"],
-            "site_response": prior_site_response,
-        }
 
     document = {
         "contract": _contract(host),
@@ -279,6 +267,27 @@ def _passed(result, kind, url):
     """A verifier reports exactly True; anything else is not a passed check."""
     if result is not True:
         raise CloudflareDeployError(f"{kind} verification of {url} did not pass")
+
+
+def _prior(observed, host, version):
+    """The replaced deployment, from what production was serving beforehand."""
+    if not isinstance(observed, dict):
+        raise CloudflareDeployError("read no prior production observation")
+    response = observed.get("response")
+    if not isinstance(response, dict) or not response:
+        raise CloudflareDeployError("read no prior production response")
+    files = observed.get("release_files")
+    if (not isinstance(files, dict)
+            or set(files) != {"index_sha256", "manifest_sha256"}
+            or not all(isinstance(files[key], str) for key in files)):
+        raise CloudflareDeployError("observed no prior served-file digests")
+    for field in ("product_build", "host_version"):
+        if not isinstance(observed.get(field), str):
+            raise CloudflareDeployError(f"observed no prior {field}")
+    return {"version_id": version, "version_url": version_url(host, version),
+            "product_build": observed["product_build"],
+            "host_version": observed["host_version"],
+            "release_files": dict(files), "site_response": response}
 
 
 def _staged(reported, host, root, sub=()):
