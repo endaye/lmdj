@@ -495,6 +495,26 @@ class EntryPointTest(unittest.TestCase):
                                              environment={"PATH": "/usr/bin"})
                 self.assertFalse(passed)
 
+    def test_a_diagnostic_name_never_escapes_its_directory(self):
+        # The name is derived from a URL hostname; nothing derived from data
+        # may decide where a file lands.
+        for label in ("../../etc/passwd", "a/b", "", None, "x\x00y",
+                      "lab.lmdj.workers.dev"):
+            with self.subTest(label=label):
+                name = cloudflare_deploy._log_name("browser", label)
+                # The invariant is containment, not the absence of dots: a name
+                # with no separator cannot traverse wherever it is joined.
+                self.assertEqual(Path(name).name, name)
+                self.assertEqual((self.root / name).resolve().parent,
+                                 self.root.resolve())
+
+    def test_even_a_short_secret_is_redacted(self):
+        result = type("R", (), {"returncode": 1, "stdout": "tok=abc123",
+                                "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ, {"GH_TOKEN": "abc123"}):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        self.assertNotIn("abc123", path.read_text(encoding="utf-8"))
+
     def test_a_retained_diagnostic_redacts_secrets_and_is_owner_only(self):
         result = type("R", (), {"returncode": 1, "stdout": "token=s3cr3t-value",
                                 "stderr": "Authorization: Bearer s3cr3t-value"})()

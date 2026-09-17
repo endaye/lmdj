@@ -63,6 +63,7 @@ import datetime as dt
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from urllib.parse import urlsplit
@@ -341,12 +342,26 @@ SECRETS = ("CLOUDFLARE_API_TOKEN", "GITHUB_TOKEN", "GH_TOKEN",
 
 
 def _redacted(text):
-    """Remove known credential values; tools echo them on failure."""
+    """Remove known credential values; tools echo them on failure.
+
+    Every non-empty value is replaced regardless of length. A short token is
+    still a token, and the costs are not symmetric: over-redacting makes a
+    diagnostic noisier, under-redacting leaves a credential on disk.
+    """
     for name in SECRETS:
         value = os.environ.get(name)
-        if value and len(value) > 7:
+        if value:
             text = text.replace(value, f"[REDACTED {name}]")
     return text
+
+
+_SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _log_name(prefix, label):
+    """A retained diagnostic never takes its name from an unsanitised value."""
+    cleaned = _SAFE_NAME.sub("_", label or "")
+    return f"{prefix}-{cleaned or 'unknown'}.log"
 
 
 def _diagnostic(directory, name, result):
@@ -377,7 +392,8 @@ def real_adapter(diagnostics, *, timeout=2400):
             ["bash", str(ROOT / "scripts" / "cloudflare-host.sh"), *arguments],
             cwd=ROOT, capture_output=True, text=True, timeout=timeout)
         if result.returncode:
-            path = _diagnostic(diagnostics, f"adapter-{arguments[0]}.log", result)
+            path = _diagnostic(diagnostics, _log_name("adapter", arguments[0]),
+                               result)
             raise CloudflareDeployError(f"{arguments[0]} failed; inspect {path}")
         return result.stdout
     return run
@@ -408,9 +424,10 @@ def real_browser(host, diagnostics, *, timeout=900):
              f"--project={project}", "--reporter=json", spec],
             cwd=ROOT, capture_output=True, text=True, timeout=timeout,
             env=environment)
-        origin = urlsplit(url).hostname or "origin"
         if result.returncode or not _browser_ran(result.stdout):
-            path = _diagnostic(diagnostics, f"browser-{origin}.log", result)
+            path = _diagnostic(diagnostics,
+                               _log_name("browser", urlsplit(url).hostname),
+                               result)
             raise CloudflareDeployError(f"browser check of {url} failed; inspect {path}")
         return True
     return check
