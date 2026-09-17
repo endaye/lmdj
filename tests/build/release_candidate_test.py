@@ -25,6 +25,13 @@ class ReservationTest(unittest.TestCase):
         self.root = self.fixture.root
         self.state = self.root / "private-state"
         self.reservations = CandidateReservations(self.root, self.state)
+        # Derived, never restated: the fixture's Product Build is the history
+        # floor, and a reservation is always the number above the floor. Pinning
+        # the answer as a literal made these tests fail the next time anyone
+        # moved the fixture's Build, which says nothing about reservations.
+        self.floor = self.fixture.version["build"]
+        self.reserved = f"1.0.{self.floor + 1}.0"
+        self.after_reserved = f"1.0.{self.floor + 2}.0"
         self.request = {"id":"release-1", "repository":"example/product", "actor_id":123,
                         "authority_ref":"thread:release-1", "policy_digest":"a" * 64,
                         "control_revision":"b" * 40, "base_revision":self.fixture.base,
@@ -43,7 +50,7 @@ class ReservationTest(unittest.TestCase):
 
     def test_first_reservation_and_restart_reuse_exact_bytes(self):
         record = self.reserve()
-        self.assertEqual(record["version"], "1.0.57.0")
+        self.assertEqual(record["version"], self.reserved)
         raw = (self.state / CATALOG).read_bytes()
         self.reservations = CandidateReservations(self.root, self.state)
         self.assertEqual(self.reserve(), record)
@@ -54,7 +61,8 @@ class ReservationTest(unittest.TestCase):
     def test_new_request_never_reuses_failed_reservation(self):
         first = self.reserve()
         second = self.reserve(dict(self.request, id="release-2"))
-        self.assertEqual((first["version"], second["version"]), ("1.0.57.0", "1.0.58.0"))
+        self.assertEqual((first["version"], second["version"]),
+                         (self.reserved, self.after_reserved))
         self.assertEqual(self.reserve(), first)
 
     def test_reverted_higher_build_stays_consumed(self):
@@ -71,7 +79,7 @@ class ReservationTest(unittest.TestCase):
         self.fixture.write(VERSION, canonical_json({**self.fixture.version, "milestone":2, "minor":3, "patch":4}))
         base = self.commit()
         record = self.reserve(dict(self.request, base_revision=base), self.fixture.reader.freeze(base), base)
-        self.assertEqual(record["version"], "2.3.57.0")
+        self.assertEqual(record["version"], f"2.3.{self.floor + 1}.0")
 
     def test_concurrent_allocation_then_revert_is_still_candidate_changed(self):
         original = (self.state / CATALOG).read_bytes()
@@ -97,14 +105,16 @@ class ReservationTest(unittest.TestCase):
     def test_resume_competition_refuses_without_renumbering(self):
         first = self.reserve()
         raw = (self.state / CATALOG).read_bytes()
-        self.fixture.write(VERSION, canonical_json({**self.fixture.version, "build":57}))
+        self.fixture.write(VERSION,
+                           canonical_json({**self.fixture.version,
+                                           "build": self.floor + 1}))
         self.commit()
         self.fixture.write(VERSION, canonical_json(self.fixture.version))
         main = self.commit()
         with self.assertRaisesRegex(JournalError, "candidate-changed"):
             self.reserve(main=main)
         self.assertEqual((self.state / CATALOG).read_bytes(), raw)
-        self.assertEqual(first["version"], "1.0.57.0")
+        self.assertEqual(first["version"], self.reserved)
 
     def test_malformed_historical_manifest_is_not_skipped(self):
         raw = (self.state / CATALOG).read_bytes()
@@ -215,7 +225,7 @@ class ReservationTest(unittest.TestCase):
             os._exit(99)
         _, status = os.waitpid(child, 0)
         self.assertEqual(os.waitstatus_to_exitcode(status), 23)
-        self.assertEqual(self.reserve()["version"], "1.0.57.0")
+        self.assertEqual(self.reserve()["version"], self.reserved)
         envelope = json.loads((self.state / CATALOG).read_bytes())
         self.assertEqual(len(envelope["catalogue"]["reservations"]), 1)
 
@@ -224,7 +234,7 @@ class ReservationTest(unittest.TestCase):
         with patch.object(CandidateReservations, "_save", side_effect=OSError("fixture")):
             with self.assertRaises(OSError): self.reserve()
         self.assertEqual((self.state / CATALOG).read_bytes(), raw)
-        self.assertEqual(self.reserve()["version"], "1.0.57.0")
+        self.assertEqual(self.reserve()["version"], self.reserved)
 
 
 if __name__ == "__main__":

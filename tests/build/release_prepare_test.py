@@ -925,15 +925,22 @@ class ReleasePrepareTest(unittest.TestCase):
         )
 
     def test_default_proof_reader_parses_the_tracked_immutable_snapshot(self) -> None:
+        # Read from whatever snapshot the tree actually tracks. A named Build
+        # made this test fail when the retained snapshots moved past it, which
+        # says nothing about whether the reader parses one.
+        snapshots = sorted(
+            (ROOT / "apps/architecture-portal/versioned_metadata").glob("version-*.json"))
+        self.assertTrue(snapshots, "the tree tracks no immutable Portal snapshot")
+        build = snapshots[0].name[len("version-"):-len(".json")]
         intent = next(
             entry for entry in load_ledger_document(
                 {
                     "schema": "lmdj.release-intents.v1",
                     "entries": [{
-                        "tag": "lmdj-v1.0.20.0", "kind": "product", "identity": "1.0.20.0",
+                        "tag": f"lmdj-v{build}", "kind": "product", "identity": build,
                         "target_revision": "f4674ada631d6af7ad8b9dd9f440671c2736d293",
                         "channel": "canary", "disposition": "releasable", "profile": "web-runtime-host",
-                        "snapshot": "1.0.20.0", "merged_main_run_id": 123,
+                        "snapshot": build, "merged_main_run_id": 123,
                         "evidence_paths": ["docs/release-evidence/example.md"],
                     }],
                     "historical_exceptions": [],
@@ -941,8 +948,8 @@ class ReleasePrepareTest(unittest.TestCase):
             ).entries
         )
         proof = read_product_snapshot_proof(ROOT, intent)
-        self.assertEqual(proof.product_build, "1.0.20.0")
-        self.assertEqual(proof.snapshot, "1.0.20.0")
+        self.assertEqual(proof.product_build, build)
+        self.assertEqual(proof.snapshot, build)
 
     def test_cli_context_uses_canonical_authority_and_real_snapshot_reader(self) -> None:
         context = cli.build_context(
