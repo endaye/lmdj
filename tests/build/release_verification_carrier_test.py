@@ -48,8 +48,19 @@ class MemoryTransport:
     def page(self, issue_id, cursor):
         start = int(cursor or 0)
         end = start + 1
-        return {"comments": deepcopy(self.comments[start:end]),
-                "next": str(end) if end < len(self.comments) else None}
+        rows = deepcopy(self.comments[start:end])
+        return {"comments": rows,
+                "next": str(end) if end < len(self.comments) else None,
+                "cursor": str(end) if rows else None}
+
+    def page_after(self, issue_id, cursor):
+        start = int(cursor)
+        end = start + 1
+        rows = deepcopy(self.comments[start:end])
+        return {"comments": rows,
+                "next": str(end) if end < len(self.comments) else None,
+                "cursor": str(end) if rows else None,
+                "total": len(self.comments)}
 
     def last(self, issue_id):
         if not self.comments:

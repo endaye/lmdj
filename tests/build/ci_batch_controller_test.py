@@ -39,7 +39,15 @@ class Memory:
         self.checkpoint = deepcopy(replacement)
 
     def page(self, issue, cursor):
-        return {"comments": deepcopy(self.comments), "next": None}
+        return {"comments": deepcopy(self.comments), "next": None,
+                "cursor": str(len(self.comments)) if self.comments else None}
+
+    def page_after(self, issue, cursor):
+        start = int(cursor)
+        rows = deepcopy(self.comments[start:])
+        return {"comments": rows, "next": None,
+                "cursor": str(len(self.comments)) if rows else None,
+                "total": len(self.comments)}
 
     def last(self, issue):
         return deepcopy(self.comments[-1]) if self.comments else None

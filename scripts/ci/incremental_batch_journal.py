@@ -79,25 +79,19 @@ class Journal:
         require(type(issue_id) is int and issue_id > 0, "journal needs a fixed issue ID")
         self.issue_id, self.transport, self.anchor = issue_id, transport, anchor
         self.authenticate, self.lock_held = authenticate, lock_held
+        # Complete authenticated history verified by THIS process, if any:
+        # {"head", "cursor", "count", "envelopes", "ids"}. Later reads verify
+        # only what follows it and fall back to a complete replay whenever the
+        # anchor head no longer matches, so no check is ever skipped.
+        self._verified = None
 
     def _guard(self):
         require(self.lock_held() is True, "journal operation lacks the shared short writer lock")
         require(self.anchor is not None, "durable journal checkpoint is unavailable",
                 "configure an authenticated checkpoint object; do not infer progress from comments alone")
 
-    def _read(self):
-        cursor, seen, comments = None, set(), []
-        while True:
-            page = self.transport.page(self.issue_id, cursor)
-            require(isinstance(page, dict) and set(page) == {"comments", "next"}
-                    and isinstance(page["comments"], list), "invalid or incomplete journal page")
-            comments.extend(page["comments"])
-            cursor = page["next"]
-            if cursor is None:
-                break
-            require(isinstance(cursor, str) and cursor and cursor not in seen, "journal pagination loop")
-            seen.add(cursor)
-        previous, envelopes, ids = None, [], set()
+    def _verify(self, comments, previous, ids):
+        envelopes = []
         for comment in comments:
             require(isinstance(comment, dict) and set(comment) == {"id", "edited", "envelope", "provenance"},
                     "invalid journal comment metadata")
@@ -116,13 +110,80 @@ class Journal:
             envelopes.append(envelope)
         return envelopes, previous
 
+    def _read_complete(self):
+        cursor, seen, comments, end = None, set(), [], None
+        while True:
+            page = self.transport.page(self.issue_id, cursor)
+            require(isinstance(page, dict) and set(page) == {"comments", "next", "cursor"}
+                    and isinstance(page["comments"], list), "invalid or incomplete journal page")
+            comments.extend(page["comments"])
+            if page["cursor"] is not None:
+                require(isinstance(page["cursor"], str) and bool(page["cursor"]), "invalid journal page cursor")
+                end = page["cursor"]
+            cursor = page["next"]
+            if cursor is None:
+                break
+            require(isinstance(cursor, str) and cursor and cursor not in seen, "journal pagination loop")
+            seen.add(cursor)
+        ids = set()
+        envelopes, head = self._verify(comments, None, ids)
+        self._verified = {"head": head, "cursor": end, "count": len(envelopes),
+                          "envelopes": envelopes, "ids": ids}
+        return envelopes, head
+
+    def _read_delta(self, cache):
+        """Authenticate only what follows the history this process verified.
+
+        The chain still has to continue from the cached head, every new comment
+        faces the same metadata/writer/digest checks, and the provider's total
+        must equal the cached count plus the delta. Anything else blocks."""
+        require(hasattr(self.transport, "page_after"), "transport cannot read a bounded delta")
+        cursor, seen, comments, end, total = cache["cursor"], set(), [], None, None
+        while True:
+            page = self.transport.page_after(self.issue_id, cursor)
+            require(isinstance(page, dict) and set(page) == {"comments", "next", "cursor", "total"}
+                    and isinstance(page["comments"], list), "invalid or incomplete journal delta")
+            require(type(page["total"]) is int and page["total"] >= 0, "journal delta total is invalid")
+            require(total in (None, page["total"]), "journal inventory changed during the delta read")
+            total = page["total"]
+            comments.extend(page["comments"])
+            if page["cursor"] is not None:
+                require(isinstance(page["cursor"], str) and bool(page["cursor"]), "invalid journal delta cursor")
+                end = page["cursor"]
+            cursor = page["next"]
+            if cursor is None:
+                break
+            require(isinstance(cursor, str) and bool(cursor) and cursor not in seen,
+                    "journal delta pagination loop")
+            seen.add(cursor)
+        require(total == cache["count"] + len(comments), "journal inventory changed during the delta read",
+                "stop admission; reconcile the exact authenticated history before trusting a delta")
+        if not comments:
+            return list(cache["envelopes"]), cache["head"]
+        ids = set(cache["ids"])
+        envelopes, head = self._verify(comments, cache["head"], ids)
+        self._verified = {"head": head, "cursor": end or cache["cursor"],
+                          "count": cache["count"] + len(envelopes),
+                          "envelopes": [*cache["envelopes"], *envelopes], "ids": ids}
+        return list(self._verified["envelopes"]), head
+
+    def _read(self, expected_head):
+        """Complete authenticated history, reusing a verified prefix in-process.
+
+        The prefix is reused only while the anchor still names exactly the head
+        this process verified; any other head forces a complete replay."""
+        cache = self._verified
+        if cache is not None and cache["cursor"] is not None and cache["head"] == expected_head:
+            return self._read_delta(cache)
+        return self._read_complete()
+
     def _peek_pending(self, anchor):
         """Fail fast on a proven-absent stranded pending before any full replay.
 
         A blocked journal must not burn the writer's request budget on every
         health tick; that exhaustion is what strands appends in the first
         place. The peek can only block: a matching tail still faces the
-        complete authenticated replay below, so no trust moves to it."""
+        authenticated history read below, so no trust moves to it."""
         pending = anchor["pending"]
         require(isinstance(pending, dict), "anchor pending intent is malformed",
                 "reconcile the exact pending event; do not issue a second POST")
@@ -140,7 +201,7 @@ class Journal:
             require(isinstance(anchor, dict) and set(anchor) == {"head", "pending"}, "anchor is missing or malformed")
             if anchor["pending"] is not None:
                 self._peek_pending(anchor)
-            envelopes, head = self._read()
+            envelopes, head = self._read(anchor["head"])
             if anchor["pending"] is not None:
                 pending = anchor["pending"]
                 require(envelopes and envelopes[-1] == pending and pending["previous"] == anchor["head"],
@@ -178,7 +239,7 @@ class Journal:
                     "operator audit names a different intent; remedy: re-audit the exact stranded pending before clearing")
             require(pending.get("previous") == anchor["head"],
                     "stranded intent is not the chain successor; remedy: reconcile forked history first, never clear by hand")
-            envelopes, head = self._read()
+            envelopes, head = self._read(anchor["head"])
             require(all(envelope != pending for envelope in envelopes),
                     "pending append persisted; remedy: ordinary load recovery adopts it, never clear a committed event")
             require(head == anchor["head"], "journal suffix is missing or unanchored",

@@ -43,11 +43,15 @@ class OutboxTests(unittest.TestCase):
     def test_delivery_reuses_each_authenticated_append_result_without_third_history_read(self):
         # Real Journal pre/post reads, transport/API doubles. This count is not
         # a production latency claim or a proof of GitHub permissions/locking.
-        with mock.patch.object(self.memory, "page", wraps=self.memory.page) as page:
+        with mock.patch.object(self.memory, "page", wraps=self.memory.page) as page, \
+                mock.patch.object(self.memory, "page_after", wraps=self.memory.page_after) as delta:
             delivered = self.fresh().deliver(self.api, self.report)
-            self.assertEqual(page.call_count, 10,
-                "why: four appends need eight authenticated pre/post reads plus initial/recovery reads; "
-                "remedy: replay the verified append result instead of reading the entire history a third time")
+            self.assertLessEqual(page.call_count, 3,
+                "why: the four appends re-read the complete history instead of their authenticated delta "
+                f"(complete reads: {page.call_count}; the per-append rule performs 10); "
+                "remedy: verify the history once per process and authenticate only new events")
+            self.assertGreater(delta.call_count, 0,
+                "why: appends skipped the authenticated delta read; remedy: verify every new event")
         self.assertEqual(delivered["status"], "delivered")
         state = self.fresh().load()
         row = next(iter(state["deliveries"].values()))
