@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import time
 from urllib.request import Request, urlopen
@@ -52,8 +53,10 @@ def publish_document(path, text):
         return
     try:
         os.fsync(parent)
-    except OSError:
-        pass
+    except OSError as error:
+        # Say so rather than report a durable write that is not one.
+        print(f"warning: could not persist the directory entry that publishes "
+              f"{path}: {error}", file=sys.stderr)
     finally:
         os.close(parent)
 

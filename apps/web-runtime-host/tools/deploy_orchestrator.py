@@ -1073,8 +1073,10 @@ def write_evidence_document(
         else:
             try:
                 os.fsync(parent)
-            except OSError:
-                pass
+            except OSError as error:
+                # Say so rather than report a durable write that is not one.
+                print(f"warning: could not persist the directory entry that "
+                      f"publishes {output}: {error}", file=sys.stderr)
             finally:
                 os.close(parent)
     finally:

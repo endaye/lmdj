@@ -221,28 +221,43 @@ class EvidenceDurabilityTest(unittest.TestCase):
                 lambda: MODULE.publish_document(target, '{"status": "passed"}\n'))
             self.assertEqual(target.read_text(encoding="utf-8"),
                              '{"status": "passed"}\n')
-            # `os.replace` is `rename(2)` within one directory, so the bytes
-            # fsynced before it carry the inode the document ends up with.
-            # Membership and order, not an exact list: an unrelated fsync
-            # elsewhere is not this test's business, but persisting the file
-            # before publishing it is.
-            document, parent = target.stat().st_ino, target.parent.stat().st_ino
-            self.assertIn(document, seen,
-                          "why: the document's own bytes were not persisted "
-                          "before the rename published them; "
-                          "remedy: fsync the file before os.replace")
-            self.assertIn(parent, seen,
-                          "why: the directory entry the publishing rename "
-                          "creates was not persisted, so evidence for a "
-                          "completed promotion can be lost; "
-                          "remedy: fsync the parent directory after os.replace")
-            self.assertLess(seen.index(document), seen.index(parent),
-                            "why: the directory entry was persisted before the "
-                            "bytes it publishes; "
-                            "remedy: fsync the file, rename it, then the directory")
+            # The exact sequence, not membership. `os.replace` is `rename(2)`
+            # within one directory, so the bytes fsynced before it carry the
+            # inode the document ends up with; and a regression that dropped
+            # the file fsync would still satisfy a membership check if anything
+            # else in the process fsynced that inode while this ran.
+            self.assertEqual(
+                [target.stat().st_ino, target.parent.stat().st_ino], seen,
+                "why: the document's bytes and the directory entry the "
+                "publishing rename creates were not both persisted, in that "
+                "order, so evidence for a completed promotion can be lost; "
+                "remedy: fsync the file, rename it, then fsync the directory",
+            )
             self.assertEqual(sorted(entry.name for entry in Path(directory).iterdir()),
                              [target.name],
                              "the write left a temporary file behind")
+
+    def test_a_directory_that_cannot_be_persisted_is_reported(self):
+        # A write that could not be hardened must not read as a durable one.
+        # Failing it instead would lose the document entirely on a platform
+        # that refuses fsync on a directory, which is worse than saying so.
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "evidence.json"
+            errors = io.StringIO()
+            real = os.fsync
+            def refuse_directories(descriptor):
+                if os.fstat(descriptor).st_ino == target.parent.stat().st_ino:
+                    raise OSError("fixture")
+                return real(descriptor)
+            with patch.object(os, "fsync", refuse_directories), \
+                    patch("sys.stderr", errors):
+                MODULE.publish_document(target, "{}\n")
+            self.assertEqual(target.read_text(encoding="utf-8"), "{}\n")
+            self.assertIn("could not persist the directory entry",
+                          errors.getvalue(),
+                          "why: a directory entry that could not be persisted "
+                          "was reported as a durable write; "
+                          "remedy: say so on stderr and keep the document")
 
     def test_a_failed_handover_closes_the_descriptor_it_was_given(self):
         # `mkstemp` hands over an open descriptor; if wrapping it fails, nothing

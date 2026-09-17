@@ -480,11 +480,17 @@ class DeployOrchestratorEvidenceTest(unittest.TestCase):
             seen = self.fsynced(lambda: deploy_orchestrator.write_evidence_document(
                 output=output, source=json.dumps(document),
                 expected_contract=document["contract"]))
-            self.assertIn(output.parent.stat().st_ino, seen,
-                          "why: the directory entry the publishing rename creates "
-                          "was not persisted, so evidence for a completed "
-                          "deployment can be lost; "
-                          "remedy: fsync the parent directory after os.replace")
+            # The exact sequence, not membership: `os.replace` is `rename(2)`
+            # within one directory, so the bytes fsynced before it carry the
+            # inode the document ends up with, and a run that dropped the file
+            # fsync would still satisfy a membership check if anything else in
+            # the process happened to fsync that inode.
+            self.assertEqual(
+                [output.stat().st_ino, output.parent.stat().st_ino], seen,
+                "why: the document's bytes and the directory entry the "
+                "publishing rename creates were not both persisted, in that "
+                "order, so evidence for a completed deployment can be lost; "
+                "remedy: fsync the file, rename it, then fsync the directory")
 
     def test_success_evidence_cross_binds_release_and_live_byte_identity(self) -> None:
         document = self.success_document()
