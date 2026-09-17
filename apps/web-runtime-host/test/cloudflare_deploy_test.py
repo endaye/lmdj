@@ -39,10 +39,13 @@ def release(host, product="1.0.60.0", version="3.0.0"):
 class Adapter:
     """The shared Cloudflare adapter, recording the order it was driven in."""
 
-    def __init__(self, *, exists=True, fail=None, promoted_version=CANDIDATE):
+    def __init__(self, *, exists=True, fail=None, promoted_version=CANDIDATE,
+                 workspace=None, stage=True):
         self.exists = exists
         self.fail = fail
         self.promoted_version = promoted_version
+        self.workspace = workspace
+        self.stage = stage
         self.calls = []
 
     def __call__(self, arguments):
@@ -57,7 +60,11 @@ class Adapter:
                                "deployment": deployment, "route": None,
                                "records": []})
         if command == "candidate":
-            return json.dumps({"result": {"version_id": CANDIDATE}})
+            host = arguments[arguments.index("--target") + 1]
+            if self.stage:
+                (Path(self.workspace) / host / "dist").mkdir(parents=True, exist_ok=True)
+            return json.dumps({"result": {"version_id": CANDIDATE},
+                               "workspace": str(self.workspace)})
         if command == "promote":
             return json.dumps({"result": {"id": DEPLOYMENT,
                                           "version_id": self.promoted_version}})
@@ -74,6 +81,18 @@ class Browser:
             raise CloudflareDeployError("browser check failed")
 
 
+class Http:
+    """The exact-signed HTTP verification this module runs for itself."""
+
+    def __init__(self, fail_on=None):
+        self.fail_on, self.seen = fail_on, []
+
+    def __call__(self, distribution, url, preview):
+        self.seen.append((url, preview, distribution.is_dir()))
+        if self.fail_on is not None and self.fail_on in url:
+            raise CloudflareDeployError("exact signed HTTP verification failed")
+
+
 class DeployTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -88,14 +107,17 @@ class DeployTest(unittest.TestCase):
         return {"status": 200, "etag": "prior"}
 
     def deploy_once(self, host="web-runtime-host", *, adapter=None,
-                    browser=None, prior=True, **changes):
+                    browser=None, http=None, prior=True, **changes):
         self.adapter = adapter or Adapter()
+        if self.adapter.workspace is None:
+            self.adapter.workspace = self.root / "workspace"
         self.browser = browser or Browser()
+        self.http = http or Http()
         arguments = dict(
             host=host, tag=TAG, release=release(host), run_id=RUN_ID,
             git_revision=REVISION, state_root=self.root / "state",
             output=self.output, node=NODE, wrangler=WRANGLER,
-            adapter=self.adapter, browser=self.browser,
+            adapter=self.adapter, verify_http=self.http, browser=self.browser,
             read_site=self.read_site, clock=lambda: next(self.stamps),
             prior_tag=PRIOR_TAG if prior else None,
             prior_release=release(host, "1.0.59.0", "2.9.0") if prior else None)
@@ -114,6 +136,11 @@ class DeployTest(unittest.TestCase):
                           "percentage": 100})
         self.assertEqual(self.browser.seen,
                          [version_url(host, CANDIDATE), production_url(host)])
+        # The HTTP results in the document are the ones this module observed.
+        self.assertEqual([(url, preview) for url, preview, _ in self.http.seen],
+                         [(version_url(host, CANDIDATE), True),
+                          (production_url(host), False)])
+        self.assertTrue(all(staged for _, _, staged in self.http.seen))
 
     def test_a_complete_runtime_deployment_records_valid_evidence(self):
         self.complete_deployment("web-runtime-host")
@@ -174,6 +201,40 @@ class DeployTest(unittest.TestCase):
         with self.assertRaises(CloudflareDeployError):
             self.deploy_once(browser=Browser(fail_on="//lab."))
         self.assertIn("promote", self.adapter.calls)
+        self.assertFalse(self.output.exists())
+
+    def test_a_failed_candidate_http_check_never_promotes(self):
+        with self.assertRaises(CloudflareDeployError):
+            self.deploy_once(http=Http(fail_on=CANDIDATE[:8]))
+        self.assertNotIn("promote", self.adapter.calls)
+        self.assertFalse(self.output.exists())
+
+    def test_a_failed_production_http_check_records_nothing(self):
+        with self.assertRaises(CloudflareDeployError):
+            self.deploy_once(http=Http(fail_on="//lab."))
+        self.assertIn("promote", self.adapter.calls)
+        self.assertFalse(self.output.exists())
+
+    def test_a_candidate_that_staged_nothing_is_refused(self):
+        # Without the staged signed bytes there is nothing to verify against,
+        # so the run must stop rather than record an unverified pass.
+        with self.assertRaises(CloudflareDeployError):
+            self.deploy_once(adapter=Adapter(stage=False))
+        self.assertNotIn("promote", self.adapter.calls)
+        self.assertFalse(self.output.exists())
+
+    def test_a_deployment_without_a_version_identity_is_refused(self):
+        class NoVersion(Adapter):
+            def __call__(self, arguments):
+                if arguments[0] == "inspect":
+                    self.calls.append("inspect")
+                    return json.dumps({"worker": "w", "exists": True,
+                                       "deployment": {"id": DEPLOYMENT},
+                                       "route": None, "records": []})
+                return super().__call__(arguments)
+
+        with self.assertRaises(CloudflareDeployError):
+            self.deploy_once(adapter=NoVersion())
         self.assertFalse(self.output.exists())
 
     def test_promoting_another_version_is_refused(self):

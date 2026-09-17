@@ -9,11 +9,12 @@ evidence.
 
 Two properties shape the code.
 
-The `http` results in the document are not independent assertions. `candidate`
-refuses to return unless `cloudflare_smoke` passed on the version URL, and
-`promote` refuses unless it passed on both the preview and the stable URL. So
-recording them as passed is a faithful restatement of those commands having
-succeeded, not a second, weaker check invented here.
+Every result in the document is observed here. The adapter runs its own
+exact-signed HTTP verification and refuses to proceed without it, but this
+module records nothing on that basis: it re-runs `cloudflare_smoke` against the
+signed distribution the adapter staged, so `immutable.http` and `production.http`
+say what this module saw rather than what another module promised. A document
+must never assert a check nobody in it performed.
 
 Nothing is written unless every leg passed. A deployment whose browser check
 failed must not leave behind a document saying the HTTP check passed: the
@@ -67,18 +68,20 @@ def _adapter_result(output, what):
     document = _parsed(output, what)
     if not isinstance(document, dict) or not isinstance(document.get("result"), dict):
         raise CloudflareDeployError(f"{what} did not return a result")
-    return document["result"]
+    return document
 
 
 def deploy(*, host, tag, release, run_id, git_revision, state_root, output,
-           node, wrangler, adapter, browser, read_site, clock,
+           node, wrangler, adapter, verify_http, browser, read_site, clock,
            prior_tag=None, prior_release=None):
     """Run the whole deployment and write its evidence, or raise having written nothing.
 
     `adapter(arguments)` runs `scripts/cloudflare-host.sh` and returns its
-    stdout. `browser(url)` runs the Host's existing Playwright deployment spec
-    against that URL and raises if it fails. `read_site(url)` returns the
-    recorded production response the pre-dispatch prior digest is taken over.
+    stdout. `verify_http(distribution, url, preview)` runs `cloudflare_smoke`
+    against the staged signed bytes and raises if it fails. `browser(url)` runs
+    the Host's existing Playwright deployment spec against that URL and raises
+    if it fails. `read_site(url)` returns the recorded production response the
+    pre-dispatch prior digest is taken over.
     """
     if host not in WORKERS:
         raise CloudflareDeployError("names an unconfigured Host")
@@ -109,7 +112,9 @@ def deploy(*, host, tag, release, run_id, git_revision, state_root, output,
         if prior_tag is None:
             raise CloudflareDeployError(
                 "must name the signed prior tag of the deployment it replaces")
-        prior_version = prior_deployment["version_id"]
+        prior_version = prior_deployment.get("version_id")
+        if not isinstance(prior_version, str):
+            raise CloudflareDeployError("read a deployment with no version identity")
         prior_good = {
             "version_id": prior_version,
             "version_url": version_url(host, prior_version),
@@ -119,21 +124,26 @@ def deploy(*, host, tag, release, run_id, git_revision, state_root, output,
             "site_response": prior_site_response,
         }
 
-    candidate = _adapter_result(
+    uploaded = _adapter_result(
         adapter(["candidate", tag, *common, "--node", node,
                  "--wrangler", wrangler]), "candidate")
-    version = candidate.get("version_id")
+    version = uploaded["result"].get("version_id")
     if not isinstance(version, str):
         raise CloudflareDeployError("candidate returned no version identity")
     immutable_url = version_url(host, version)
+    # The adapter stages the signed release at `<workspace>/<host>` and reports
+    # the workspace, so the bytes it verified against are the bytes checked here.
+    distribution = _distribution(uploaded, host)
 
-    # The browser leg the adapter does not run. It must pass before production
-    # is touched: a candidate that only serves correct bytes is not a Host.
+    # Both legs this module records, in the order production may be touched: a
+    # candidate that only serves correct bytes is not yet a working Host.
+    verify_http(distribution, immutable_url, True)
     browser(immutable_url)
 
     promoted = _adapter_result(
         adapter(["promote", tag, *common, "--version", version,
-                 *(("--prior-tag", prior_tag) if prior_tag else ())]), "promote")
+                 *(("--prior-tag", prior_tag) if prior_tag else ())]),
+        "promote")["result"]
     if promoted.get("version_id") != version:
         raise CloudflareDeployError("promoted a version other than the candidate")
     deployment = promoted.get("id")
@@ -141,6 +151,7 @@ def deploy(*, host, tag, release, run_id, git_revision, state_root, output,
         raise CloudflareDeployError("promotion returned no deployment identity")
 
     live_url = production_url(host)
+    verify_http(distribution, live_url, False)
     browser(live_url)
 
     document = {
@@ -192,6 +203,16 @@ def _result(url, release):
     return {"status": "passed", "url": url,
             "product_build": release["product_build"],
             "host_version": release["host_version"]}
+
+
+def _distribution(uploaded, host):
+    workspace = uploaded.get("workspace")
+    if not isinstance(workspace, str) or not workspace:
+        raise CloudflareDeployError("candidate reported no staging workspace")
+    distribution = Path(workspace) / host / "dist"
+    if not distribution.is_dir():
+        raise CloudflareDeployError("candidate staged no signed distribution")
+    return distribution
 
 
 def _live(adapter, common):
