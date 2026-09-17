@@ -331,14 +331,37 @@ BROWSER = {
                          "deployment/web_runtime_host_deployment.spec.mjs",
                          "LMDJ_WEB_HOST"),
 }
-SECRETS = ("CLOUDFLARE_API_TOKEN", "GITHUB_TOKEN")
+# An allowlist, not a denylist: the browser runs third-party test code, and a
+# denylist silently admits every credential nobody thought to name.
+BROWSER_ENVIRONMENT = ("CI", "HOME", "LANG", "LC_ALL", "PATH",
+                       "PLAYWRIGHT_BROWSERS_PATH", "TMPDIR")
+# Values redacted from any retained diagnostic, by value rather than by name.
+SECRETS = ("CLOUDFLARE_API_TOKEN", "GITHUB_TOKEN", "GH_TOKEN",
+           "NPM_TOKEN", "NODE_AUTH_TOKEN")
+
+
+def _redacted(text):
+    """Remove known credential values; tools echo them on failure."""
+    for name in SECRETS:
+        value = os.environ.get(name)
+        if value and len(value) > 7:
+            text = text.replace(value, f"[REDACTED {name}]")
+    return text
 
 
 def _diagnostic(directory, name, result):
-    """Retain a failed command's output without putting it in the error."""
+    """Retain a failed command's output without putting it in the error.
+
+    The output is redacted by value and the file is owner-only: a failing
+    deployment tool commonly echoes the token or header it failed with, and a
+    retained diagnostic must not be where that ends up readable.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / name
-    path.write_text((result.stdout or "") + (result.stderr or ""), encoding="utf-8")
+    body = _redacted((result.stdout or "") + (result.stderr or ""))
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(body)
     return path
 
 
@@ -375,21 +398,42 @@ def real_browser(host, diagnostics, *, timeout=900):
     project, spec, prefix = BROWSER[host]
 
     def check(url):
-        environment = {k: v for k, v in os.environ.items() if k not in SECRETS}
+        environment = {name: os.environ[name] for name in BROWSER_ENVIRONMENT
+                       if name in os.environ}
         environment.update({"LMDJ_WEB_HOST_CLEAN_ROOM": "1",
                             f"{prefix}_EXTERNAL_SERVER": "1",
                             f"{prefix}_BASE_URL": url})
         result = subprocess.run(
             ["npm", "--prefix", str(ROOT / "tests/platform/web"), "test", "--",
-             f"--project={project}", spec],
+             f"--project={project}", "--reporter=json", spec],
             cwd=ROOT, capture_output=True, text=True, timeout=timeout,
             env=environment)
-        if result.returncode:
-            origin = urlsplit(url).hostname or "origin"
+        origin = urlsplit(url).hostname or "origin"
+        if result.returncode or not _browser_ran(result.stdout):
             path = _diagnostic(diagnostics, f"browser-{origin}.log", result)
             raise CloudflareDeployError(f"browser check of {url} failed; inspect {path}")
         return True
     return check
+
+
+def _browser_ran(output):
+    """True only when the spec actually ran and every test passed.
+
+    A zero exit is not proof: a project or spec filter that matches nothing, or
+    a skipped spec, exits cleanly and would otherwise be written into the
+    evidence as a passed browser check.
+    """
+    try:
+        report = json.loads(output)
+    except (TypeError, ValueError):
+        return False
+    stats = report.get("stats") if isinstance(report, dict) else None
+    if not isinstance(stats, dict):
+        return False
+    expected = stats.get("expected")
+    return (isinstance(expected, int) and expected > 0
+            and stats.get("unexpected") == 0 and stats.get("flaky") == 0
+            and stats.get("skipped") == 0)
 
 
 def real_site_reader():

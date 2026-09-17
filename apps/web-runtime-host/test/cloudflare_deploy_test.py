@@ -443,21 +443,68 @@ class EntryPointTest(unittest.TestCase):
         self.assertEqual(seen["node"], NODE)
         self.assertEqual(seen["wrangler"], WRANGLER)
 
-    def test_the_browser_secrets_never_reach_the_spec(self):
-        # The Playwright run has no business holding deployment credentials.
+    def browser_run(self, *, stdout, returncode=0, environment=None):
         check = cloudflare_deploy.real_browser("web-runtime-host", self.root)
-        with patch.object(cloudflare_deploy.subprocess, "run") as runner:
-            runner.return_value = type("R", (), {"returncode": 0, "stdout": "",
-                                                 "stderr": ""})()
+        result = type("R", (), {"returncode": returncode, "stdout": stdout,
+                                "stderr": ""})()
+        with patch.object(cloudflare_deploy.subprocess, "run",
+                          return_value=result) as runner:
             with patch.dict(cloudflare_deploy.os.environ,
-                            {"CLOUDFLARE_API_TOKEN": "secret",
-                             "GITHUB_TOKEN": "secret", "PATH": "/usr/bin"}):
-                self.assertTrue(check("https://lab.lmdj.workers.dev"))
-        environment = runner.call_args.kwargs["env"]
-        self.assertNotIn("CLOUDFLARE_API_TOKEN", environment)
-        self.assertNotIn("GITHUB_TOKEN", environment)
+                            environment or {}, clear=True):
+                try:
+                    passed = check("https://lab.lmdj.workers.dev")
+                except CloudflareDeployError:
+                    passed = False
+        return passed, runner.call_args.kwargs["env"]
+
+    def report(self, **stats):
+        counts = {"expected": 1, "unexpected": 0, "flaky": 0, "skipped": 0}
+        counts.update(stats)
+        return json.dumps({"stats": counts})
+
+    def test_the_browser_environment_is_an_allowlist(self):
+        # The browser runs third-party test code; a denylist silently admits
+        # every credential nobody thought to name.
+        passed, environment = self.browser_run(
+            stdout=self.report(),
+            environment={"CLOUDFLARE_API_TOKEN": "secret", "GITHUB_TOKEN": "s",
+                         "CLOUDFLARE_ACCOUNT_ID": "acct", "NPM_TOKEN": "npm",
+                         "PATH": "/usr/bin", "HOME": "/home/runner"})
+        self.assertTrue(passed)
+        self.assertEqual(set(environment),
+                         {"PATH", "HOME", "LMDJ_WEB_HOST_CLEAN_ROOM",
+                          "LMDJ_WEB_HOST_EXTERNAL_SERVER",
+                          "LMDJ_WEB_HOST_BASE_URL"})
         self.assertEqual(environment["LMDJ_WEB_HOST_BASE_URL"],
                          "https://lab.lmdj.workers.dev")
+
+    def test_a_clean_exit_that_ran_nothing_is_not_a_pass(self):
+        # A project or spec filter matching nothing exits 0; writing that into
+        # the evidence as a passed browser check is exactly what must not happen.
+        for stats in ({"expected": 0}, {"skipped": 1}, {"unexpected": 1},
+                      {"flaky": 1}):
+            with self.subTest(stats=stats):
+                passed, _ = self.browser_run(stdout=self.report(**stats),
+                                             environment={"PATH": "/usr/bin"})
+                self.assertFalse(passed)
+
+    def test_unreadable_reporter_output_is_not_a_pass(self):
+        for stdout in ("", "not json", "[]", '{"stats": "none"}'):
+            with self.subTest(stdout=stdout):
+                passed, _ = self.browser_run(stdout=stdout,
+                                             environment={"PATH": "/usr/bin"})
+                self.assertFalse(passed)
+
+    def test_a_retained_diagnostic_redacts_secrets_and_is_owner_only(self):
+        result = type("R", (), {"returncode": 1, "stdout": "token=s3cr3t-value",
+                                "stderr": "Authorization: Bearer s3cr3t-value"})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"CLOUDFLARE_API_TOKEN": "s3cr3t-value"}):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        body = path.read_text(encoding="utf-8")
+        self.assertNotIn("s3cr3t-value", body)
+        self.assertIn("[REDACTED CLOUDFLARE_API_TOKEN]", body)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":
