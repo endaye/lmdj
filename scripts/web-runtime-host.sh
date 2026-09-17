@@ -306,6 +306,7 @@ run_nonbrowser_tests() {
   python3 "$repo_root/apps/web-runtime-host/test/netlify_api_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/cloudflare_api_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/cloudflare_deployment_evidence_test.py"
+  python3 "$repo_root/apps/web-runtime-host/test/cloudflare_deploy_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/cloudflare_release_stage_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/cloudflare_transaction_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/cloudflare_run_store_test.py"
