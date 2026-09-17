@@ -355,14 +355,26 @@ class RuntimeEffectTest(unittest.TestCase):
         self.assertEqual(self.drive().status, "unknown")
 
     def test_internally_consistent_foreign_site_cannot_be_accepted(self):
-        # Every mention of the Worker replaced at once, so the document agrees
-        # with itself about a Worker that is not this Host's. The Cloudflare
-        # validator binds the Worker to the Host, so this never reaches the
-        # frozen comparison: it is refused one layer earlier than Netlify's was.
-        worker = self.document["worker"]
-        self.document = json.loads(
-            canonical_json(self.document).replace(worker.encode(), b"different"))
-        self.assertEqual(self.document["worker"], "different")
+        # Every field that names the Worker moved together, so the document
+        # agrees with itself about a Worker that is not this Host's. Field by
+        # field rather than a byte replace: `creator` is a substring of its own
+        # contract and archive name, and rewriting those would refuse the
+        # document for a reason this test is not about.
+        d = self.document
+        worker = d["worker"]
+        def moved(url):
+            self.assertIn(worker, url)
+            return url.replace(worker, "different")
+        d["worker"] = "different"
+        for stage in ("immutable", "production"):
+            d[stage]["url"] = moved(d[stage]["url"])
+            for side in ("http", "browser"):
+                d[stage][side]["url"] = moved(d[stage][side]["url"])
+        d["prior_good"]["version_url"] = moved(d["prior_good"]["version_url"])
+        # Only the Worker moved: the contract and the archive still name this
+        # Host, so the refusal can only be about the Worker.
+        self.assertEqual(d["contract"], HOSTS[self.workflow][3])
+        self.assertIn(HOSTS[self.workflow][1], d["archive"]["filename"])
         self.pack()
         self.assertEqual(self.drive().status, "unknown")
 
