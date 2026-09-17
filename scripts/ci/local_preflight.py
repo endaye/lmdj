@@ -23,6 +23,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -34,6 +35,8 @@ POLICY_PATH = ROOT / "scripts/ci/scope_policy.json"
 CLASSIFIER_PATH = ROOT / "scripts/ci/change_scope.py"
 LANE_COMMANDS_PATH = ROOT / "scripts/ci/local_lanes.json"
 DOC_IMPACT_CHECKER = ROOT / "apps/docs-site/scripts/check-doc-impact.mjs"
+PR_WORKFLOW = ".github/workflows/pr-contract.yml"
+_LANE_GATE = re.compile(r"manifest\)\.lanes\.([a-z_]+)")
 
 LANE_COMMANDS_SCHEMA = "lmdj.ci-local-lanes.v1"
 _LANE_KEYS = {"requires", "commands", "ci_only"}
@@ -522,6 +525,7 @@ def build_plan(
             raise ValueError(f"unknown lane(s): {', '.join(unknown)}")
         selected = [lane for lane in selected if lane in set(only)]
 
+    verified_by_pull_request = pull_request_lanes(root)
     blobs = repository_blobs(root)
     grouped = lane_input_paths(policy, blobs, classifier)
     keys = {
@@ -536,6 +540,12 @@ def build_plan(
         "mode": manifest["mode"],
         "reasons": manifest["reasons"],
         "selected": selected,
+        # Which of the selected lanes a Pull Request will actually run, and
+        # which will not be verified until a main batch picks the change up.
+        "pull_request_verified": [
+            lane for lane in selected if lane in verified_by_pull_request],
+        "batch_only": [
+            lane for lane in selected if lane not in verified_by_pull_request],
         "ci_lanes": ci_lanes,
         "lane_commands": lane_commands,
         "cache_keys": keys,
@@ -547,6 +557,20 @@ def build_plan(
         "changed_paths": changed_paths(inventory),
         "pr_body": read_pr_body(pr_body_path) if pr_body_path is not None else None,
     }
+
+
+def pull_request_lanes(root: Path) -> frozenset[str]:
+    """The lanes a Pull Request can actually run, read from its own workflow.
+
+    Every other selected lane belongs to an admitted main batch, so a change
+    that only it owns reaches `main` unverified. Derived from the workflow
+    rather than listed here, so the two cannot drift apart.
+    """
+    try:
+        source = (root / PR_WORKFLOW).read_text(encoding="utf-8")
+    except OSError:
+        return frozenset()
+    return frozenset(_LANE_GATE.findall(source))
 
 
 def execute(
@@ -741,6 +765,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "mode": plan["mode"],
             "reasons": plan["reasons"],
             "selected": plan["selected"],
+            "pull_request_verified": plan["pull_request_verified"],
+            "batch_only": plan["batch_only"],
             "input_counts": plan["input_counts"],
             "declaration": _declaration_plan(plan),
         }
@@ -751,6 +777,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"pre-flight: {plan['mode']} mode, "
         f"{len(plan['selected'])} lane(s): {', '.join(plan['selected']) or 'none'}"
     )
+    if plan["batch_only"]:
+        # Selected is not the same as verified at merge: a Pull Request runs
+        # only the lanes its own workflow gates on. Everything else waits for an
+        # admitted main batch, so run it here or push it unverified.
+        print(
+            "  not run by a Pull Request: "
+            f"{', '.join(plan['batch_only'])}"
+            " -- run them here (--lanes) or they reach main unverified"
+        )
     try:
         # Report the uncached declaration before lanes; declaration-only never
         # invokes the lane executor.

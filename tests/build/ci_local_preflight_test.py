@@ -123,6 +123,83 @@ class TemporaryRepository:
         self._directory.cleanup()
 
 
+class PullRequestLaneVisibilityTest(unittest.TestCase):
+    """A selected lane is not a verified lane; the plan has to say which."""
+
+    def setUp(self) -> None:
+        self.preflight = load_module("local_preflight_under_test", PREFLIGHT_PATH)
+
+    def test_the_pr_lanes_come_from_the_pr_workflow(self) -> None:
+        # Derived, not listed: a hardcoded set would drift from the workflow
+        # and start lying in the same way the output used to.
+        lanes = self.preflight.pull_request_lanes(ROOT)
+        source = (ROOT / self.preflight.PR_WORKFLOW).read_text(encoding="utf-8")
+        self.assertEqual(
+            lanes, frozenset(self.preflight._LANE_GATE.findall(source)),
+            "why: the Pull Request lane set no longer comes from "
+            f"{self.preflight.PR_WORKFLOW}, so it can disagree with what a "
+            "Pull Request actually gates on; "
+            "remedy: derive it from that workflow instead of listing lanes",
+        )
+        self.assertTrue(
+            lanes,
+            "why: no lane was recovered from "
+            f"{self.preflight.PR_WORKFLOW}, so every lane would be reported "
+            "batch-only; "
+            "remedy: repair `_LANE_GATE` against the workflow's job conditions",
+        )
+
+    def test_a_batch_only_lane_is_named_as_unverified(self) -> None:
+        # `deploy_contract` is the one that let a main breakage through: it is
+        # selected by `tools/release/` changes and never runs on a Pull Request.
+        lanes = self.preflight.pull_request_lanes(ROOT)
+        self.assertIn(
+            "ci_contract", lanes,
+            "why: `ci_contract` is gated by the Pull Request workflow but was "
+            "not recovered, so the pre-flight would call a verified lane "
+            "unverified; "
+            "remedy: repair `pull_request_lanes` against the workflow",
+        )
+        self.assertNotIn(
+            "deploy_contract", lanes,
+            "why: `deploy_contract` lives in the batch-only workflow, so "
+            "reporting it as Pull Request verified restores the false "
+            "assurance this entry records; "
+            "remedy: keep `pull_request_lanes` reading only the Pull Request "
+            "workflow",
+        )
+
+    def test_the_plan_splits_selected_into_verified_and_batch_only(self) -> None:
+        plan = self.preflight.build_plan(ROOT, "HEAD", only=[
+            "ci_contract", "deploy_contract", "portal",
+        ])
+        self.assertEqual(
+            plan["pull_request_verified"], ["ci_contract", "portal"],
+            "why: the plan no longer separates the selected lanes a Pull "
+            "Request verifies from the rest; "
+            "remedy: keep `pull_request_verified` and `batch_only` partitioning "
+            "`selected`",
+        )
+        self.assertEqual(
+            plan["batch_only"], ["deploy_contract"],
+            "why: a selected lane no Pull Request runs was not reported as "
+            "batch-only, so it reaches main unverified without a warning; "
+            "remedy: keep `batch_only` listing every selected lane outside "
+            "`pull_request_lanes`",
+        )
+
+    def test_an_unreadable_workflow_reports_no_pr_lanes(self) -> None:
+        # Fail closed: if the workflow cannot be read, every lane is treated as
+        # unverified rather than silently assumed covered.
+        self.assertEqual(
+            self.preflight.pull_request_lanes(Path("/nonexistent")),
+            frozenset(),
+            "why: an unreadable Pull Request workflow produced lanes anyway, "
+            "so the pre-flight would assume coverage it cannot see; "
+            "remedy: return an empty set when the workflow cannot be read",
+        )
+
+
 class LaneTableContractTest(unittest.TestCase):
     """The local command table must stay aligned with the CI policy."""
 
@@ -1229,6 +1306,7 @@ class AdvisoryBoundaryTest(unittest.TestCase):
         import io
         from unittest import mock
         plan = {"mode": "full", "selected": ["portal"], "ci_lanes": ["portal"], "base_sha": "a" * 40, "head_sha": "b" * 40,
+                "pull_request_verified": ["portal"], "batch_only": [],
                 "pr_body": "body", "changed_paths": ["apps/docs-site/docs/x.mdx"]}
         for verdict, expected in ((self.preflight.PASS, 0), (self.preflight.FAIL, 1)):
             with mock.patch.object(self.preflight, "build_plan", return_value=plan), \
