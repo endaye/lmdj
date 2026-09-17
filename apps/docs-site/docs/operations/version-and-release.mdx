@@ -484,7 +484,10 @@ entry_gates 另补 `batch_evidence_consumer` 组装：repository/workflow 身份
 请求绑定的 carrier 组装（`cli.release_carriers` 改为三参委托）；组装本身不驱动
 任何步骤，reviewed changelog 编辑输入与只读冻结部署投影两个 seam 仍具名拒绝，
 对应步骤如实报 `pending`。
-`prepared` 与 `tag` 的登记录入仍未完成（#1404 待裁决），`release_carriers` 因此继续拒绝执行。
+`prepared` 与 `tag` 的登记录入仍未完成，`release_carriers` 因此继续拒绝执行。#1404 的 spec
+冻结问题已裁决：两步的 spec 确认为结果绑定，`prepared` 在 advance 内按「授权 spec → 驱动一次
+→ 结果 spec → read-back」两阶段冻结，`tag` 直接复用既有恢复模式；reviewed intent 绑定输入，
+不绑定派生的 `plan_sha256` / `tag_object_id`。登记本身是两个独立实现 Task。
 
 带 `changelog` 的 reviewed intent 现已接通 prepare / Draft / published 验证：正文
 进入 plan 摘要，prepare 重验真实 Git 范围，恢复时检查本地 notes，Draft 与公开
