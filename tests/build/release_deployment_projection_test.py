@@ -209,6 +209,48 @@ class ProjectionTest(unittest.TestCase):
         self.assertIn("already frozen", str(raised.exception))
         self.assertEqual(projection.read_frozen(self.root, TAG, "runtime"), frozen)
 
+    def test_the_freeze_persists_its_bytes_and_the_entry_that_publishes_them(self):
+        # The projection is the agreement for the rest of the drive, and the
+        # drive outlives this process. Losing the rename would send the next
+        # resume back to observe a production the deployment already replaced.
+        self.prepared()
+        seen = []
+        real = os.fsync
+        def record(descriptor):
+            try:
+                seen.append(os.fstat(descriptor).st_ino)
+            except OSError:
+                pass
+            return real(descriptor)
+        with mock.patch.object(os, "fsync", record):
+            projection.projection(self.root, TAG, "runtime", reader=Reader())
+        path = self.root / projection.output_relative(TAG, "runtime")
+        self.assertIn(path.stat().st_ino, seen,
+                      "why: the frozen bytes were not persisted before the "
+                      "rename published them; remedy: fsync before os.replace")
+        self.assertIn(path.parent.stat().st_ino, seen,
+                      "why: the directory entry the publishing rename creates "
+                      "was not persisted, so the freeze can be lost and a "
+                      "resume would observe a replaced production; "
+                      "remedy: fsync the parent after os.replace")
+        self.assertEqual(sorted(entry.name for entry in path.parent.iterdir()),
+                         [path.name], "the freeze left a temporary file behind")
+
+    def test_a_failed_handover_closes_the_descriptor_it_was_given(self):
+        self.prepared()
+        closed = []
+        real = os.close
+        with mock.patch.object(os, "fdopen", side_effect=ValueError("fixture")), \
+                mock.patch.object(os, "close",
+                                  lambda fd: (closed.append(fd), real(fd))[1]):
+            with self.assertRaises(ValueError):
+                projection.projection(self.root, TAG, "runtime", reader=Reader())
+        self.assertEqual(len(closed), 1,
+                         "why: the descriptor mkstemp handed over was not closed "
+                         "when wrapping it failed; "
+                         "remedy: close it before re-raising")
+        self.assertIsNone(projection.read_frozen(self.root, TAG, "runtime"))
+
     def test_a_freeze_of_the_wrong_shape_is_refused(self):
         # A document that reached the disk without the compared fields cannot
         # become an expectation; the effect would refuse it anyway, and this

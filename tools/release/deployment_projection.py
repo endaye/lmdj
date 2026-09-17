@@ -126,26 +126,53 @@ def freeze(root, tag, step, projection):
         if canonical_json(existing) != payload:
             _fail("was already frozen with different contents")
         return existing
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle, staged = tempfile.mkstemp(prefix=".lmdj-deploy-projection-",
-                                      dir=str(path.parent))
     try:
-        with os.fdopen(handle, "wb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        _fail("has nowhere to be written")
+    # A refusal to overwrite a link someone placed here, not a race guard: the
+    # write lands in a sibling temporary file and `os.replace` is `rename(2)`,
+    # which replaces a destination symlink itself rather than following it.
+    if path.is_symlink() or path.parent.is_symlink():
+        _fail("would be written through a link")
+    try:
+        descriptor, staged = tempfile.mkstemp(prefix="." + path.name + ".",
+                                              dir=str(path.parent))
+    except OSError:
+        _fail("could not be staged beside its output")
+    try:
+        try:
+            stream = os.fdopen(descriptor, "wb")
+        except BaseException:
+            # mkstemp handed over an open descriptor; if wrapping it fails the
+            # descriptor is ours to close and nothing else will.
+            os.close(descriptor)
+            raise
+        with stream as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(staged, path)
         staged = None
     except OSError:
         _fail("could not be written atomically")
     finally:
-        if staged is not None and os.path.exists(staged):
-            os.unlink(staged)
-    # The directory entry publishes the file; without this the freeze can be
-    # lost while the bytes survive.
-    descriptor = os.open(path.parent, os.O_RDONLY)
+        if staged is not None:
+            try:
+                os.unlink(staged)
+            except OSError:
+                pass
+    # The rename is what publishes the freeze, so persist the directory entry
+    # too. Not every platform allows fsync on a directory; failing to harden is
+    # not a reason to fail a projection that was written.
+    try:
+        descriptor = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        return deepcopy(projection)
     try:
         os.fsync(descriptor)
+    except OSError:
+        pass
     finally:
         os.close(descriptor)
     return deepcopy(projection)
