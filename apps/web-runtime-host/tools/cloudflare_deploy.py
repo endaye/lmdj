@@ -7,7 +7,20 @@ read the pre-dispatch prior, upload and verify a candidate, check it in a real
 browser, promote it, check production in a real browser, and only then write the
 evidence.
 
-Two properties shape the code.
+Three properties shape the code.
+
+The release the document describes is the one that was staged. `cloudflare_host`
+stages a verified signed release at `<workspace>/<host>` and leaves its receipt
+there, so the Product Build, Host version, source revision, archive digest and
+served-file digests are all read back from that receipt rather than accepted
+from the caller. A caller cannot describe a deployment as something other than
+what it actually published.
+
+The prior is described from what production was serving, observed once before
+anything mutates. Re-staging its signed release afterwards would describe what
+that release *should* have been rather than what was live, would read the
+candidate's own receipt on a same-tag redeploy, and would move a whole class of
+failure to after the promotion — leaving production changed with no document.
 
 Every result in the document is observed here. The adapter runs its own
 exact-signed HTTP verification and refuses to proceed without it, but this
@@ -69,12 +82,44 @@ class CloudflareDeployError(RuntimeError):
             "exact target before another attempt")
 
 
-def _release_fields(release, what):
-    if (not isinstance(release, dict)
-            or set(release) != {"archive", "host_version", "product_build",
-                                "release_files"}):
-        raise CloudflareDeployError(f"has no complete {what} description")
-    return release
+_STAGE = "stage.json"
+
+
+def _receipt(directory, tag, host, what):
+    """The staging receipt `cloudflare_host` left beside the distribution."""
+    try:
+        document = json.loads((directory / _STAGE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise CloudflareDeployError(f"has no readable {what} staging receipt") from None
+    if not isinstance(document, dict) or document.get("kind") != "verified-host-stage":
+        raise CloudflareDeployError(f"has no verified {what} staging receipt")
+    if document.get("tag") != tag or document.get("host_id") != host:
+        raise CloudflareDeployError(f"staged another tag or Host for its {what}")
+    return document
+
+
+def _described(receipt, what):
+    """The release fields the evidence document carries, from the receipt."""
+    archive = receipt.get("archive")
+    files = receipt.get("files")
+    if (not isinstance(archive, dict) or not isinstance(files, dict)
+            or not isinstance(archive.get("name"), str)
+            or not isinstance(archive.get("sha256"), str)):
+        raise CloudflareDeployError(f"has an incomplete {what} staging receipt")
+    served = {}
+    for member, key in (("index.html", "index_sha256"),
+                        ("host-manifest.json", "manifest_sha256")):
+        entry = files.get(member)
+        if not isinstance(entry, dict) or not isinstance(entry.get("sha256"), str):
+            raise CloudflareDeployError(f"staged no {member} for its {what}")
+        served[key] = entry["sha256"]
+    for field in ("product_build", "host_version", "source"):
+        if not isinstance(receipt.get(field), str):
+            raise CloudflareDeployError(f"has no {field} in its {what} receipt")
+    return {"product_build": receipt["product_build"],
+            "host_version": receipt["host_version"],
+            "archive": {"filename": archive["name"], "sha256": archive["sha256"]},
+            "release_files": served}
 
 
 def _parsed(output, what):
@@ -92,26 +137,21 @@ def _adapter_result(output, what):
     return document
 
 
-def deploy(*, host, tag, release, run_id, git_revision, state_root, output,
+def deploy(*, host, tag, run_id, state_root, output,
            node, wrangler, adapter, verify_http, browser, read_site, clock,
-           prior_tag=None, prior_release=None):
+           prior_tag=None):
     """Run the whole deployment and write its evidence, or raise having written nothing.
 
     `adapter(arguments)` runs `scripts/cloudflare-host.sh` and returns its
     stdout. `verify_http(distribution, url, preview)` runs `cloudflare_smoke`
     against the staged signed bytes and `browser(url)` runs the Host's existing
     Playwright deployment spec against that URL; both must return exactly
-    `True`. `read_site(url)` returns the recorded production response the
-    pre-dispatch prior digest is taken over.
+    `True`. `read_site(url)` observes what production is serving right now and
+    returns `{response, product_build, host_version, release_files}`, where
+    `response` is the recorded document the frozen prior digest is taken over.
     """
     if host not in WORKERS:
         raise CloudflareDeployError("names an unconfigured Host")
-    _release_fields(release, "release")
-    if (prior_tag is None) != (prior_release is None):
-        raise CloudflareDeployError(
-            "must describe its prior release exactly when it names a prior tag")
-    if prior_release is not None:
-        _release_fields(prior_release, "prior release")
 
     started_at = clock()
     common = ["--target", host, "--state-root", str(state_root)]
@@ -121,9 +161,7 @@ def deploy(*, host, tag, release, run_id, git_revision, state_root, output,
     root = Path(state_root).resolve()
     live = _live(adapter, common)
     prior_deployment = live["deployment"] if live["exists"] else None
-    prior_site_response = read_site(production_url(host))
-    if not isinstance(prior_site_response, dict) or not prior_site_response:
-        raise CloudflareDeployError("read no prior production response")
+    observed = read_site(production_url(host))
 
     if prior_deployment is None:
         if prior_tag is not None:
@@ -137,14 +175,7 @@ def deploy(*, host, tag, release, run_id, git_revision, state_root, output,
         prior_version = prior_deployment.get("version_id")
         if not isinstance(prior_version, str):
             raise CloudflareDeployError("read a deployment with no version identity")
-        prior_good = {
-            "version_id": prior_version,
-            "version_url": version_url(host, prior_version),
-            "product_build": prior_release["product_build"],
-            "host_version": prior_release["host_version"],
-            "release_files": dict(prior_release["release_files"]),
-            "site_response": prior_site_response,
-        }
+        prior_good = _prior(observed, host, prior_version)
 
     uploaded = _adapter_result(
         adapter(["candidate", tag, *common, "--node", node,
@@ -155,7 +186,12 @@ def deploy(*, host, tag, release, run_id, git_revision, state_root, output,
     immutable_url = version_url(host, version)
     # The adapter stages the signed release at `<workspace>/<host>` and reports
     # the workspace, so the bytes it verified against are the bytes checked here.
-    distribution = _distribution(uploaded, host, root)
+    staged = _staged(uploaded, host, root)
+    distribution = staged / "dist"
+    if not distribution.is_dir():
+        raise CloudflareDeployError("candidate staged no signed distribution")
+    receipt = _receipt(staged, tag, host, "release")
+    release = _described(receipt, "release")
 
     # Both legs this module records, in the order production may be touched: a
     # candidate that only serves correct bytes is not yet a working Host.
@@ -181,7 +217,7 @@ def deploy(*, host, tag, release, run_id, git_revision, state_root, output,
         "tag": tag,
         "product_build": release["product_build"],
         "host_version": release["host_version"],
-        "git_revision": git_revision,
+        "git_revision": receipt["source"],
         "channel": "canary",
         "worker": WORKERS[host],
         "release_url": f"https://github.com/endaye/lmdj/releases/tag/{tag}",
@@ -233,20 +269,42 @@ def _passed(result, kind, url):
         raise CloudflareDeployError(f"{kind} verification of {url} did not pass")
 
 
-def _distribution(uploaded, host, root):
-    workspace = uploaded.get("workspace")
+def _prior(observed, host, version):
+    """The replaced deployment, from what production was serving beforehand."""
+    if not isinstance(observed, dict):
+        raise CloudflareDeployError("read no prior production observation")
+    response = observed.get("response")
+    if not isinstance(response, dict) or not response:
+        raise CloudflareDeployError("read no prior production response")
+    files = observed.get("release_files")
+    if (not isinstance(files, dict)
+            or set(files) != {"index_sha256", "manifest_sha256"}
+            or not all(isinstance(files[key], str) for key in files)):
+        raise CloudflareDeployError("observed no prior served-file digests")
+    for field in ("product_build", "host_version"):
+        if not isinstance(observed.get(field), str):
+            raise CloudflareDeployError(f"observed no prior {field}")
+    return {"version_id": version, "version_url": version_url(host, version),
+            "product_build": observed["product_build"],
+            "host_version": observed["host_version"],
+            "release_files": dict(files), "site_response": response}
+
+
+def _staged(reported, host, root, sub=()):
+    """The adapter's staging directory for this Host, inside this run's root."""
+    workspace = reported.get("workspace")
     if not isinstance(workspace, str) or not workspace:
-        raise CloudflareDeployError("candidate reported no staging workspace")
+        raise CloudflareDeployError("reported no staging workspace")
     # The adapter stages under the state root it was given, so a reported path
-    # outside it is not this run's staging tree and must not be verified.
+    # outside it is not this run's staging tree and must not be trusted.
     resolved = Path(workspace).resolve()
     if resolved != root and root not in resolved.parents:
         raise CloudflareDeployError(
-            "candidate reported a workspace outside this run's state root")
-    distribution = resolved / host / "dist"
-    if not distribution.is_dir():
-        raise CloudflareDeployError("candidate staged no signed distribution")
-    return distribution
+            "reported a workspace outside this run's state root")
+    staged = resolved.joinpath(*sub, host)
+    if not staged.is_dir():
+        raise CloudflareDeployError("staged no signed release")
+    return staged
 
 
 def _live(adapter, common):
