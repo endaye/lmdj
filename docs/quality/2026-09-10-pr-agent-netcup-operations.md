@@ -18,6 +18,22 @@ peak cache-miss rates) is unchanged. The raised caps take effect on the review
 host only after the overlay is reinstalled from the main revision carrying
 this change; until then reviews keep failing with `budget_exhausted`.
 
+## 2026-09-17 ledger archive at the reinstall
+
+The 09-10 pilot's ledger held 760 records reserving USD 242.81 against
+USD 15.88 of actual spend: every attempt reserves the full 1M context at peak
+cache-miss rates, so failed admissions dominate the ledger while the real
+invoice stays two orders of magnitude lower. The archived total exceeded the
+new USD 100 caps, so the raised budget would still have admitted nothing.
+At the owner's decision the ledger was archived intact on the review host as
+`/var/lib/lmdj/pr-agent/engine-state/ledger.jsonl.archive-2026-09-17-pre-raise`
+and the active ledger restarted empty before installing release
+`cutover.f8Ktuvu6` (adapter `dab008ceb`, runtime caps USD 100, witness
+verified, runner ACLs reapplied). Known deferred defect: the reserve-full-
+context policy makes committed reservations diverge from actual cost; a
+follow-up Task should align reservations with metered usage so the ledger
+stops exhausting budgets that were never really spent.
+
 ## Automatic push and explicit repair recheck (Issues #1322 / #1305)
 
 After the updated adapter is installed, a maintainer can request one source
