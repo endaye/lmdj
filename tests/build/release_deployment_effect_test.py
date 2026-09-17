@@ -31,9 +31,8 @@ CLOUDFLARE_CONTRACTS = {
     "creator-web": "lmdj.creator-web.deployment-evidence.v2",
 }
 # Built in a child so the two Hosts' same-named tool imports stay isolated, the
-# way this file already loads the Netlify fixtures. These documents are what the
-# deployment workflows publish today; `HOSTS` still expects the Netlify
-# contracts, and flips to these with the frozen projection in #1477.
+# way this file loads every Host fixture. These documents are what the
+# deployment workflows publish, and what `HOSTS` now expects.
 CLOUDFLARE_DOCUMENT = """
 import json, sys
 sys.path.insert(0, "apps/web-runtime-host/tools")
@@ -64,12 +63,13 @@ print(json.dumps({
 
 
 class CloudflareEffectShapeTest(unittest.TestCase):
-    """The Cloudflare routing #1477 switches on, proven before it is switched.
+    """The two pieces the live routing rests on, each pinned on its own.
 
-    `HOSTS` still names the Netlify contracts, so nothing here is on the live
-    path yet. These pin the two pieces that must already be right when it flips:
-    the trusted validator the effect will run, and the extraction that turns a
-    Cloudflare document into the one projection shape the comparison uses.
+    The effect suite drives these through a real `DeploymentEffect`; these pin
+    them where a driven test cannot say which half failed: the trusted validator
+    the effect runs, and the extraction that turns a Cloudflare document into
+    the one projection shape the comparison uses. The Netlify branch stays
+    covered here because no live workflow reaches it any more.
     """
 
     VALIDATOR = ROOT / "apps/web-runtime-host/tools/cloudflare_deployment_evidence.py"
@@ -164,12 +164,12 @@ class RuntimeEffectTest(unittest.TestCase):
         m.configure(self.workflow)
         self.managed = m
         self.step, host, artifact_name, _ = HOSTS[self.workflow]
-        fixture_file = ROOT / "apps" / host / "test/deploy_orchestrator_test.py"
+        fixture_file = ROOT / "apps/web-runtime-host/test/cloudflare_deployment_evidence_test.py"
         # Isolate the two Hosts' same-named Python imports. Do not replace their
         # production schema validator with a test callback.
         loaded = subprocess.run([sys.executable, "-c",
-            "import json,runpy,sys; m=runpy.run_path(sys.argv[1]); print(json.dumps(m['DeployOrchestratorEvidenceTest']().success_document()))",
-            str(fixture_file)], capture_output=True, text=True, check=True, timeout=10)
+            "import json,runpy,sys; m=runpy.run_path(sys.argv[1]); print(json.dumps(m['document'](sys.argv[2])))",
+            str(fixture_file), host], capture_output=True, text=True, check=True, timeout=10)
         self.document = json.loads(loaded.stdout)
         self.document["github_actions"] = {"run_id":"41", "run_url":"https://github.com/endaye/lmdj/actions/runs/41"}
         c = m.child; f = c.fixture
@@ -198,10 +198,12 @@ class RuntimeEffectTest(unittest.TestCase):
             return result
         c.client._http_transport = complete
         d = self.document; prior = d["prior_good"]
-        self.expected = {**{k:deepcopy(d[k]) for k in ("product_build", "host_version", "site_id", "archive", "release_files")},
+        self.expected = {**{k:deepcopy(d[k]) for k in ("product_build", "host_version", "archive", "release_files")},
+            "site_id":d["worker"],
             "target_revision":d["git_revision"], "prior_site_sha256":c.spec["inputs"]["prior_site_sha256"], "prior":{
-                **{k:prior[k] for k in ("deploy_id", "deploy_url", "product_build", "host_version")},
-                **{k:prior["immutable"]["http"]["result"][k] for k in ("index_sha256", "manifest_sha256")}}}
+                "deploy_id":prior["version_id"], "deploy_url":prior["version_url"],
+                **{k:prior[k] for k in ("product_build", "host_version")},
+                **{k:prior["release_files"][k] for k in ("index_sha256", "manifest_sha256")}}}
         self.effect = DeploymentEffect(consumer=f.consumer, spec=c.spec, expected=self.expected)
         m.adapter.verify_effect = self.effect
         self.next_step = STEPS[STEPS.index(self.step)+1]
@@ -298,7 +300,7 @@ class RuntimeEffectTest(unittest.TestCase):
 
     def test_duplicate_json_key_is_rejected_before_host_parser(self):
         raw = canonical_json(self.document)
-        self.pack(payload=b'{"site_id":"foreign",'+raw[1:])
+        self.pack(payload=b'{"worker":"foreign",'+raw[1:])
         self.assertEqual(self.drive().status, "unknown")
 
     def _compressed_evidence(self, compression, *, forged=False):
@@ -352,14 +354,24 @@ class RuntimeEffectTest(unittest.TestCase):
         self.artifact["workflow_run"]["id"] = 42
         self.assertEqual(self.drive().status, "unknown")
 
-    def test_internally_consistent_foreign_site_is_not_the_frozen_site(self):
-        d = self.document
-        d["site_id"] = "different-site"
-        d["publication"]["response"]["site_id"] = "different-site"
-        d["prior_good"]["site_response"]["id"] = "different-site"
-        d["prior_good"]["site_response"]["published_deploy"]["site_id"] = "different-site"
+    def test_internally_consistent_foreign_site_cannot_be_accepted(self):
+        # Every mention of the Worker replaced at once, so the document agrees
+        # with itself about a Worker that is not this Host's. The Cloudflare
+        # validator binds the Worker to the Host, so this never reaches the
+        # frozen comparison: it is refused one layer earlier than Netlify's was.
+        worker = self.document["worker"]
+        self.document = json.loads(
+            canonical_json(self.document).replace(worker.encode(), b"different"))
+        self.assertEqual(self.document["worker"], "different")
         self.pack()
-        self.assertEqual(self.drive().status, "conflict")
+        self.assertEqual(self.drive().status, "unknown")
+
+    def test_a_frozen_site_the_document_does_not_name_is_a_conflict(self):
+        # The comparison the validator cannot make: the Host's own Worker is
+        # valid, and the projection this release froze names another.
+        self.drive()
+        self.effect.expected["site_id"] = "another-worker"
+        self.assertEqual(self.observe().status, "conflict")
 
     def test_reused_reader_uses_live_clock_for_deployment_retention(self):
         class Clock(datetime):
@@ -392,7 +404,7 @@ class RuntimeEffectTest(unittest.TestCase):
         original = subprocess.run
         def expire(*args, **kwargs):
             result = original(*args, **kwargs)
-            if "evidence-validate-document" in args[0]:
+            if self.document["contract"] in args[0]:
                 c._fixed_now = datetime(2026, 9, 14, tzinfo=timezone.utc)
             return result
         with patch("tools.release.deployment_effect.subprocess.run", side_effect=expire):
