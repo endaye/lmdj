@@ -442,6 +442,7 @@ class CompositionGitHub:
         return ACTOR
 
     def get_dispatch_evidence(self, path, *, raw=False):
+        assert path.startswith("/repos/endaye/lmdj/"), path
         workflow = path.rsplit("/", 1)[-1]
         return {"id": {"publish-release.yml": 501,
                        "deploy-web-runtime-host.yml": 502,

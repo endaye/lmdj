@@ -176,7 +176,7 @@ def _release_author(git):
 
 def _workflow_id(github, workflow):
     """The pinned workflow's numeric identity, resolved live and path-checked."""
-    document = github.get_dispatch_evidence(f"/actions/workflows/{workflow}")
+    document = github.get_dispatch_evidence(f"/repos/endaye/lmdj/actions/workflows/{workflow}")
     identity = document.get("id") if isinstance(document, dict) else None
     if type(identity) is not int or identity <= 0 \
             or document.get("path") != f"{_WORKFLOWS_DIR}/{workflow}":
