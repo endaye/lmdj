@@ -1049,6 +1049,13 @@ case "$command_name" in
     ;;
   deploy)
     [[ $# -eq 1 ]] || { usage; exit 64; }
+    # Retired. The Netlify site this path publishes to was deleted on
+    # 2026-09-08, so it can only fail, and both deployment workflows now run
+    # the Cloudflare adapter instead. The source is retained as historical
+    # tooling per #927; the explicit opt-in exists for that and for its own
+    # tests, not for deploying anything.
+    [[ "${LMDJ_ALLOW_RETIRED_NETLIFY_DEPLOY:-}" == "1" ]] || fail \
+      "this Netlify deployment path is retired and its site is deleted; remedy: use scripts/cloudflare-host-deploy.sh TAG --target creator-web"
     validate_tag "$1"
     for command in git gpg gh "$python_bin" npm; do
       require_command "$command"

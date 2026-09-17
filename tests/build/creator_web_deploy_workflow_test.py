@@ -247,9 +247,11 @@ class CreatorWebDeployWorkflowTest(unittest.TestCase):
         self.assertIn('scripts/cloudflare-host-deploy.sh "$tag"', source)
         self.assertIn("--target creator-web", source)
         self.assertIn("CLOUDFLARE_API_TOKEN", source)
-        # The Netlify sites are deleted; the production path must not name them.
+        # The Netlify sites are deleted; the production path must not name them,
+        # and must not invoke the retired verb that publishes to one.
         self.assertNotIn("NETLIFY", source)
         self.assertNotIn("netlify.app", source)
+        self.assertNotIn("creator-web-deploy.sh deploy", source)
 
     def test_release_tag_selection_fails_closed(self) -> None:
         source = self.workflow_source()

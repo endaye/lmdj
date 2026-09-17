@@ -1028,9 +1028,22 @@ def verify_distribution(dist_root, repo_root):
             """,
         )
 
+    def test_the_retired_deploy_verb_refuses_without_the_opt_in(self) -> None:
+        """The site it publishes to is deleted; it must say so, not try."""
+        completed = self.run_command(
+            "deploy", TAG, environment={"LMDJ_ALLOW_RETIRED_NETLIFY_DEPLOY": ""})
+        self.assertNotEqual(completed.returncode, 0)
+        combined = completed.stdout + completed.stderr
+        self.assertIn("retired", combined)
+        self.assertIn("cloudflare-host-deploy.sh", combined)
+        self.assertIn("creator-web", combined)
+
     def environment(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         environment = os.environ.copy()
         environment.pop("LMDJ_NETLIFY_API_BASE", None)
+        # The deploy verb is retired behind an explicit opt-in; these are the
+        # historical tests that still exercise it (#1473, #927).
+        environment["LMDJ_ALLOW_RETIRED_NETLIFY_DEPLOY"] = "1"
         environment.update(
             {
                 "PATH": f"{self.bin}{os.pathsep}{environment['PATH']}",
