@@ -87,14 +87,14 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   // promised to keep, and the icon is what it promised to change.
   const record = keys.getByRole("button", {name: "Record", exact: true});
   await expect(record).toHaveClass(/\bhas-icon\b/);
-  await expect(record.locator("img")).toHaveCount(1);
+  await expect(record.locator("svg")).toHaveCount(1);
   await expect(record).toHaveText("");
   const playStop = keys.getByRole("button", {
     name: "Play/Stop — needs a playable Project and running audio",
     exact: true,
   });
   await expect(playStop).toHaveClass(/\bhas-icon\b/);
-  await expect(playStop.locator("img")).toHaveCount(1);
+  await expect(playStop.locator("svg")).toHaveCount(1);
   await expect(playStop).toHaveText("");
   const shot = process.env.LMDJ_HARDWARE_CONSOLE_SHOT;
   if (shot) {
