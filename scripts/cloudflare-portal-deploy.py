@@ -27,7 +27,14 @@ def publish_document(path, text):
     descriptor, temporary = tempfile.mkstemp(prefix="." + path.name + ".",
                                              dir=path.parent)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as target:
+        try:
+            stream = os.fdopen(descriptor, "w", encoding="utf-8", newline="\n")
+        except BaseException:
+            # mkstemp handed over an open descriptor; if wrapping it fails the
+            # descriptor is ours to close and nothing else will.
+            os.close(descriptor)
+            raise
+        with stream as target:
             target.write(text)
             target.flush()
             os.fsync(target.fileno())

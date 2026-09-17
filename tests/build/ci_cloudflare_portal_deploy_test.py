@@ -221,16 +221,46 @@ class EvidenceDurabilityTest(unittest.TestCase):
                 lambda: MODULE.publish_document(target, '{"status": "passed"}\n'))
             self.assertEqual(target.read_text(encoding="utf-8"),
                              '{"status": "passed"}\n')
-            self.assertEqual(
-                [target.stat().st_ino, target.parent.stat().st_ino], seen,
-                "why: the document or the directory entry the publishing rename "
-                "creates was not persisted, so evidence for a completed "
-                "promotion can be lost; "
-                "remedy: fsync the file, rename it, then fsync the directory",
-            )
-            self.assertEqual(sorted(p.name for p in Path(directory).iterdir()),
+            # `os.replace` is `rename(2)` within one directory, so the bytes
+            # fsynced before it carry the inode the document ends up with.
+            # Membership and order, not an exact list: an unrelated fsync
+            # elsewhere is not this test's business, but persisting the file
+            # before publishing it is.
+            document, parent = target.stat().st_ino, target.parent.stat().st_ino
+            self.assertIn(document, seen,
+                          "why: the document's own bytes were not persisted "
+                          "before the rename published them; "
+                          "remedy: fsync the file before os.replace")
+            self.assertIn(parent, seen,
+                          "why: the directory entry the publishing rename "
+                          "creates was not persisted, so evidence for a "
+                          "completed promotion can be lost; "
+                          "remedy: fsync the parent directory after os.replace")
+            self.assertLess(seen.index(document), seen.index(parent),
+                            "why: the directory entry was persisted before the "
+                            "bytes it publishes; "
+                            "remedy: fsync the file, rename it, then the directory")
+            self.assertEqual(sorted(entry.name for entry in Path(directory).iterdir()),
                              [target.name],
                              "the write left a temporary file behind")
+
+    def test_a_failed_handover_closes_the_descriptor_it_was_given(self):
+        # `mkstemp` hands over an open descriptor; if wrapping it fails, nothing
+        # else will close it, and a deploy that writes evidence on every path
+        # would leak one per attempt.
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "evidence.json"
+            closed = []
+            real = os.close
+            with patch.object(os, "fdopen", side_effect=ValueError("fixture")), \
+                    patch.object(os, "close", lambda fd: (closed.append(fd), real(fd))[1]):
+                with self.assertRaises(ValueError):
+                    MODULE.publish_document(target, "{}\n")
+            self.assertEqual(len(closed), 1,
+                             "why: the descriptor mkstemp handed over was not "
+                             "closed when wrapping it failed; "
+                             "remedy: close it before re-raising")
+            self.assertEqual(list(Path(directory).iterdir()), [])
 
     def test_a_failed_write_leaves_no_partial_document(self):
         with tempfile.TemporaryDirectory() as directory:
