@@ -392,11 +392,21 @@ class EntryPointTest(unittest.TestCase):
         self.captured = {}
 
     def arguments(self, *, state_root=None):
+        (self.root / "state").mkdir(exist_ok=True)
         return [TAG, "--target", "web-runtime-host",
                 "--state-root", str(state_root or self.root / "state"),
                 "--output", str(self.root / "evidence.json"),
                 "--run-id", str(RUN_ID), "--node", NODE, "--wrangler", WRANGLER,
                 "--prior-tag", PRIOR_TAG]
+
+    def test_a_state_root_that_does_not_exist_is_refused(self):
+        errors = io.StringIO()
+        absent = self.root / "never-created"
+        with contextlib.redirect_stderr(errors):
+            code = cloudflare_deploy.main(self.arguments(state_root=absent))
+        self.assertEqual(code, 2)
+        self.assertIn("does not exist", errors.getvalue())
+        self.assertFalse(absent.exists())
 
     def test_a_relative_state_root_is_refused(self):
         # Every local operator shares one root; a relative one is not shared.

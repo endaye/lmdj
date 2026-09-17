@@ -469,9 +469,14 @@ def _completed(command, *, cwd, timeout, environment=None):
         return subprocess.run(command, cwd=cwd, capture_output=True, text=True,
                               timeout=timeout, env=environment)
     except subprocess.TimeoutExpired as expired:
-        # Always launched with text=True, so whatever was captured is str.
+        captured = expired.stdout or ""
+        if isinstance(captured, bytes):
+            # Launched with text=True, so this is only reachable from a caller
+            # that built the exception itself; the failure path must not turn
+            # that into a TypeError inside redaction.
+            captured = captured.decode("utf-8", "replace")
         return type("Expired", (), {
-            "returncode": TIMED_OUT, "stdout": expired.stdout or "",
+            "returncode": TIMED_OUT, "stdout": captured,
             "stderr": f"timed out after {timeout}s"})()
     except (OSError, ValueError, subprocess.SubprocessError):
         # A missing interpreter, an unusable environment or any other launch
@@ -607,6 +612,10 @@ def main(argv=None):
         if not arguments.state_root.is_absolute():
             raise CloudflareDeployError(
                 "requires an absolute state root shared by all local operators")
+        if not arguments.state_root.is_dir():
+            # A mistyped root should be refused, not conjured by a failure path
+            # and then shared by nothing.
+            raise CloudflareDeployError("state root does not exist")
         written = deploy(
             host=arguments.target, tag=arguments.tag, run_id=arguments.run_id,
             state_root=arguments.state_root, output=arguments.output,
