@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import time
 from urllib.request import Request, urlopen
@@ -12,6 +13,52 @@ from urllib.request import Request, urlopen
 ACCOUNT = "0b62b8881c07f48f7935f5380a1f55db"
 WORKER = "docs"
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def publish_document(path, text):
+    """Write a document so the rename that publishes it survives a crash.
+
+    The evidence describes a promotion that has already happened remotely, so
+    losing it afterwards leaves a real deployment unverifiable. A partially
+    written file would be worse than none, hence the rename; the directory
+    entry is what the rename creates, hence the second fsync. Not every
+    platform allows fsync on a directory, and failing to harden is not a reason
+    to fail a document that was written.
+    """
+    descriptor, temporary = tempfile.mkstemp(prefix="." + path.name + ".",
+                                             dir=path.parent)
+    try:
+        try:
+            stream = os.fdopen(descriptor, "w", encoding="utf-8", newline="\n")
+        except BaseException:
+            # mkstemp handed over an open descriptor; if wrapping it fails the
+            # descriptor is ours to close and nothing else will.
+            os.close(descriptor)
+            raise
+        with stream as target:
+            target.write(text)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+    try:
+        parent = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(parent)
+    except OSError as error:
+        # Say so rather than report a durable write that is not one.
+        print(f"warning: could not persist the directory entry that publishes "
+              f"{path}: {error}", file=sys.stderr)
+    finally:
+        os.close(parent)
 
 
 def smoke_receipt(output, revision, base_url):
@@ -142,7 +189,7 @@ def publish():
             evidence["recovery"] = {"deployment": state()[0]["versions"], "route": api(f"scripts/{WORKER}/subdomain")}
         raise
     finally:
-        evidence_path.write_text(json.dumps(evidence, indent=2) + "\n")
+        publish_document(evidence_path, json.dumps(evidence, indent=2) + "\n")
 
 
 if __name__ == "__main__":

@@ -197,5 +197,95 @@ class DeploymentTest(unittest.TestCase):
         self.assertNotIn("recovery", evidence)
 
 
+class EvidenceDurabilityTest(unittest.TestCase):
+    """The evidence describes a promotion that already happened remotely."""
+
+    def fsynced(self, call):
+        """The inodes fsynced while `call` runs, in order."""
+        seen = []
+        real = os.fsync
+        def record(descriptor):
+            try:
+                seen.append(os.fstat(descriptor).st_ino)
+            except OSError:
+                pass
+            return real(descriptor)
+        with patch.object(os, "fsync", record):
+            call()
+        return seen
+
+    def test_the_document_is_published_by_a_rename_and_both_are_persisted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "cloudflare-portal-1.json"
+            seen = self.fsynced(
+                lambda: MODULE.publish_document(target, '{"status": "passed"}\n'))
+            self.assertEqual(target.read_text(encoding="utf-8"),
+                             '{"status": "passed"}\n')
+            # The exact sequence, not membership. `os.replace` is `rename(2)`
+            # within one directory, so the bytes fsynced before it carry the
+            # inode the document ends up with; and a regression that dropped
+            # the file fsync would still satisfy a membership check if anything
+            # else in the process fsynced that inode while this ran.
+            self.assertEqual(
+                [target.stat().st_ino, target.parent.stat().st_ino], seen,
+                "why: the document's bytes and the directory entry the "
+                "publishing rename creates were not both persisted, in that "
+                "order, so evidence for a completed promotion can be lost; "
+                "remedy: fsync the file, rename it, then fsync the directory",
+            )
+            self.assertEqual(sorted(entry.name for entry in Path(directory).iterdir()),
+                             [target.name],
+                             "the write left a temporary file behind")
+
+    def test_a_directory_that_cannot_be_persisted_is_reported(self):
+        # A write that could not be hardened must not read as a durable one.
+        # Failing it instead would lose the document entirely on a platform
+        # that refuses fsync on a directory, which is worse than saying so.
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "evidence.json"
+            errors = io.StringIO()
+            real = os.fsync
+            def refuse_directories(descriptor):
+                if os.fstat(descriptor).st_ino == target.parent.stat().st_ino:
+                    raise OSError("fixture")
+                return real(descriptor)
+            with patch.object(os, "fsync", refuse_directories), \
+                    patch("sys.stderr", errors):
+                MODULE.publish_document(target, "{}\n")
+            self.assertEqual(target.read_text(encoding="utf-8"), "{}\n")
+            self.assertIn("could not persist the directory entry",
+                          errors.getvalue(),
+                          "why: a directory entry that could not be persisted "
+                          "was reported as a durable write; "
+                          "remedy: say so on stderr and keep the document")
+
+    def test_a_failed_handover_closes_the_descriptor_it_was_given(self):
+        # `mkstemp` hands over an open descriptor; if wrapping it fails, nothing
+        # else will close it, and a deploy that writes evidence on every path
+        # would leak one per attempt.
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "evidence.json"
+            closed = []
+            real = os.close
+            with patch.object(os, "fdopen", side_effect=ValueError("fixture")), \
+                    patch.object(os, "close", lambda fd: (closed.append(fd), real(fd))[1]):
+                with self.assertRaises(ValueError):
+                    MODULE.publish_document(target, "{}\n")
+            self.assertEqual(len(closed), 1,
+                             "why: the descriptor mkstemp handed over was not "
+                             "closed when wrapping it failed; "
+                             "remedy: close it before re-raising")
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_a_failed_write_leaves_no_partial_document(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "evidence.json"
+            with patch.object(os, "replace", side_effect=OSError("fixture")):
+                with self.assertRaises(OSError):
+                    MODULE.publish_document(target, "{}\n")
+            self.assertFalse(target.exists())
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+
 if __name__ == "__main__":
     unittest.main()
