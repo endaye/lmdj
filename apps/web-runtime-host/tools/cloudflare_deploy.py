@@ -27,6 +27,16 @@ path is resolved and required to sit inside that root before anything is
 verified: a stale or unrelated staging tree cannot be substituted by a
 malformed result.
 
+Nothing is written unless every leg passed, and nothing is undone either. When
+a check fails after promotion, production is left serving a version that passed
+exact-signed HTTP but failed its browser leg, and no document is recorded, so
+the release driver sees an unverified deployment rather than a verified one.
+This module does not roll that back. `cloudflare_transaction.promote` owns
+recovery inside its own transaction, with preconditions it verified; issuing a
+second production mutation from out here, on a failure this module cannot
+characterise, is exactly the blind retry the run store exists to prevent. The
+operator reconciles with the adapter's `recover`.
+
 Nothing is written unless every leg passed. A deployment whose browser check
 failed must not leave behind a document saying the HTTP check passed: the
 release driver would read that as a verified deployment. Failure raises and the

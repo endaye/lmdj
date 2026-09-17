@@ -209,6 +209,15 @@ class DeployTest(unittest.TestCase):
         self.assertIn("promote", self.adapter.calls)
         self.assertFalse(self.output.exists())
 
+    def test_a_post_promotion_failure_issues_no_second_mutation(self):
+        # Production is left serving the promoted version and the operator
+        # reconciles with the adapter's `recover`. Rolling back from out here
+        # would be a blind production mutation on an uncharacterised failure.
+        with self.assertRaises(CloudflareDeployError):
+            self.deploy_once(browser=Browser(fail_on="//lab."))
+        self.assertEqual(self.adapter.calls, ["inspect", "candidate", "promote"])
+        self.assertNotIn("recover", self.adapter.calls)
+
     def test_a_failed_candidate_http_check_never_promotes(self):
         with self.assertRaises(CloudflareDeployError):
             self.deploy_once(http=Http(fail_on=CANDIDATE[:8]))
