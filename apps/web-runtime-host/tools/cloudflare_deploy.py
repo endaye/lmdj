@@ -55,11 +55,16 @@ def _release_fields(release, what):
     return release
 
 
-def _adapter_result(output, what):
+def _parsed(output, what):
+    """Every adapter read goes through here so only one exception type escapes."""
     try:
-        document = json.loads(output)
+        return json.loads(output)
     except (TypeError, ValueError):
         raise CloudflareDeployError(f"{what} did not return a readable result") from None
+
+
+def _adapter_result(output, what):
+    document = _parsed(output, what)
     if not isinstance(document, dict) or not isinstance(document.get("result"), dict):
         raise CloudflareDeployError(f"{what} did not return a result")
     return document["result"]
@@ -190,7 +195,7 @@ def _result(url, release):
 
 
 def _live(adapter, common):
-    document = json.loads(adapter(["inspect", *common]))
+    document = _parsed(adapter(["inspect", *common]), "inspect")
     if not isinstance(document, dict) or "exists" not in document:
         raise CloudflareDeployError("could not read the live Worker state")
     if document["exists"] and not isinstance(document.get("deployment"), dict):

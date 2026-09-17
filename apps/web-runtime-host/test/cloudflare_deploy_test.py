@@ -105,18 +105,21 @@ class DeployTest(unittest.TestCase):
     def written(self):
         return json.loads(self.output.read_text(encoding="utf-8"))
 
-    def test_a_complete_deployment_records_valid_evidence(self):
-        for host in ("web-runtime-host", "creator-web"):
-            with self.subTest(host=host):
-                self.setUp()
-                self.deploy_once(host)
-                document = self.written()
-                self.assertEqual(validate_document(document, host=host), document)
-                self.assertEqual(document["publication"],
-                                 {"version_id": CANDIDATE,
-                                  "deployment_id": DEPLOYMENT, "percentage": 100})
-                self.assertEqual(self.browser.seen,
-                                 [version_url(host, CANDIDATE), production_url(host)])
+    def complete_deployment(self, host):
+        self.deploy_once(host)
+        document = self.written()
+        self.assertEqual(validate_document(document, host=host), document)
+        self.assertEqual(document["publication"],
+                         {"version_id": CANDIDATE, "deployment_id": DEPLOYMENT,
+                          "percentage": 100})
+        self.assertEqual(self.browser.seen,
+                         [version_url(host, CANDIDATE), production_url(host)])
+
+    def test_a_complete_runtime_deployment_records_valid_evidence(self):
+        self.complete_deployment("web-runtime-host")
+
+    def test_a_complete_creator_deployment_records_valid_evidence(self):
+        self.complete_deployment("creator-web")
 
     def test_the_prior_is_read_before_anything_mutates(self):
         # The digest the release driver froze before dispatch must describe the
