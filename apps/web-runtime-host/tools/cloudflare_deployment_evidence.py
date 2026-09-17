@@ -248,7 +248,14 @@ def write_document(path, document, *, host):
     descriptor, temporary = tempfile.mkstemp(prefix=f".{target.name}.",
                                              dir=target.parent)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+        try:
+            stream = os.fdopen(descriptor, "w", encoding="utf-8", newline="\n")
+        except BaseException:
+            # mkstemp handed over an open descriptor; if wrapping it fails the
+            # descriptor is ours to close and nothing else will.
+            os.close(descriptor)
+            raise
+        with stream as handle:
             handle.write(serialized)
             handle.flush()
             os.fsync(handle.fileno())
