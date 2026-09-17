@@ -482,8 +482,15 @@ entry_gates 另补 `batch_evidence_consumer` 组装：repository/workflow 身份
 钉住 policy 的 `batch_evidence_source`。
 真实入口的组装层 `tools/release/entry_composition.py` 现已把全部 14 步接成惰性、
 请求绑定的 carrier 组装（`cli.release_carriers` 改为三参委托）；组装本身不驱动
-任何步骤，reviewed changelog 编辑输入与只读冻结部署投影两个 seam 仍具名拒绝，
-对应步骤如实报 `pending`。
+任何步骤，reviewed changelog 编辑输入这一个 seam 仍具名拒绝，对应步骤如实报 `pending`。
+只读冻结部署投影已建成：`tools/release/deployment_projection.py` 从本次发布自身的
+prepared 产出（plan 文档与它点名的已暂存 Host 归档）加上一次 Worker 读取与一次公开
+origin 读取组装投影，随即冻结在 `build/release/<tag>/deployment/<step>.json`；派发后的
+resume 读回这份字节，而不是再去观测已被本次部署替换掉的生产。Worker 身份、两个 origin
+形状与被替换版本都取自已安装的只读 Cloudflare 工具（`cloudflare_host.py inspect`、
+`cloudflare_deployment_evidence.py urls`、`cloudflare_site_observation.py`），本模块不自行
+声明任何一个。Cloudflare token 属于授权操作者且从不被记录：没有它就读不到 Worker，
+`runtime` / `creator` 两步如实报 `pending`，与 `prepare` 尚未运行时同一种回答。
 `prepared` 已登记：它的 spec 是结果绑定的（`plan_sha256` / `tag_object_id` 由 `prepare()`
 自己产出），故按两阶段冻结——`enroll_prepared` 先从 reviewed intent 行恢复写入前即可知的
 授权字段（`validate_authorization` 是与 `validate_spec` 分开的窄入口），在 driver 的

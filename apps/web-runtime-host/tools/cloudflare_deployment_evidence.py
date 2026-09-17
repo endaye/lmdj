@@ -285,24 +285,37 @@ def write_document(path, document, *, host):
 
 
 def main(argv=None):
-    """Validate a document on stdin and echo it canonically, or refuse.
+    """Validate a document on stdin and echo it canonically, or name a Host's origins.
 
     The release driver's deployment effect verifier runs one trusted validator
     per contract as a subprocess, so the document it compares against the frozen
     projection is one a validator accepted rather than one it parsed itself.
     This is that validator for the Cloudflare contracts; the Netlify ones keep
-    their own in each Host's `deploy_orchestrator`.
+    their own in each Host's `deploy_orchestrator`. `urls` is the same module
+    answering where a Host is served, for callers that must name an origin
+    before any document exists to validate.
     """
     import argparse
     import sys
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("validate",))
-    parser.add_argument("contract")
+    parser.add_argument("command", choices=("validate", "urls"))
+    parser.add_argument("subject", metavar="CONTRACT|HOST")
+    parser.add_argument("--version", help="urls only: also report this version's immutable origin")
     arguments = parser.parse_args(argv)
     hosts = {contract: host for host, contract in CONTRACTS.items()}
     try:
-        host = hosts.get(arguments.contract)
+        if arguments.command == "urls":
+            # One statement of the two URL shapes, for every caller that needs
+            # to name an origin before a document exists to validate.
+            answer = {"host": arguments.subject,
+                      "production": production_url(arguments.subject)}
+            if arguments.version is not None:
+                answer["version"] = version_url(arguments.subject, arguments.version)
+            print(json.dumps(answer, ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":")))
+            return 0
+        host = hosts.get(arguments.subject)
         if host is None:
             raise CloudflareEvidenceError("names an unsupported contract")
         document = json.loads(sys.stdin.read())

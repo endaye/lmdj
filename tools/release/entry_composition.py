@@ -11,12 +11,10 @@ request or drive. The `scripts/ci` modules use bare sibling imports by design
 the same self-registration pattern `cli.py` and `tag_verifier.py` use for the
 repository root.
 
-Two composition inputs have no production channel yet and stay named,
-fail-closed seams rather than inventions: the reviewed changelog editorial
-input and the read-only frozen deployment projection assembly (the Host site
-identities live in GitHub Environment secrets this host cannot read). While
-they are undefined those steps honestly stay `pending`; the wiring itself is
-complete and needs no change once the channels land.
+One composition input has no production channel yet and stays a named,
+fail-closed seam rather than an invention: the reviewed changelog editorial
+input. While it is undefined that step honestly stays `pending`; the wiring
+itself is complete and needs no change once the channel lands.
 """
 
 import json
@@ -151,16 +149,118 @@ def reviewed_changelog_editorial():
     return None
 
 
-def deployment_projection(host):
-    """None while the read-only frozen projection assembly is unbuilt.
+_HOST_TOOLS = ROOT / "apps/web-runtime-host/tools"
+# Read-only Cloudflare tools, run as installed trusted tools the same way the
+# deployment effect runs its validator: never a candidate worktree's copy.
+_WORKER_INSPECT = _HOST_TOOLS / "cloudflare_host.py"
+_SITE_OBSERVATION = _HOST_TOOLS / "cloudflare_site_observation.py"
+_HOST_ORIGINS = _HOST_TOOLS / "cloudflare_deployment_evidence.py"
+_READ_TIMEOUT = 120
 
-    The deployment spec binds release-asset digests, the host version, the
-    site identity and the pre-dispatch Site prior. The site identities live in
-    GitHub Environment secrets this host cannot read, so the projection cannot
-    be assembled locally yet; the step stays `pending` rather than
-    fabricating one.
+
+def _read_only_tool(tool, arguments, *, environment=None):
+    """Run one installed read-only tool and return its document, or None.
+
+    None is "could not read", never "read nothing": every caller turns it into
+    `pending` rather than into an assumption about production.
     """
-    return None
+    env = {k: v for k, v in os.environ.items()
+           if k in ("PATH", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP")}
+    env.update(environment or {})
+    try:
+        result = subprocess.run([sys.executable, "-s", "-B", str(tool), *arguments],
+                                capture_output=True, env=env, timeout=_READ_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        document = json.loads(result.stdout)
+    except ValueError:
+        return None
+    return document if type(document) is dict else None
+
+
+class _CloudflareReader:
+    """The live facts the frozen projection cannot derive from the release.
+
+    Each answer comes from an installed read-only tool, so this module states
+    no Worker name, no URL shape and no deployment identity of its own. The
+    Cloudflare token is the operator's; without it the Worker cannot be read
+    and every projection stays `pending`.
+    """
+
+    def __init__(self, token, state_root):
+        self._token = token
+        self._state_root = Path(state_root)
+        self._inspected = {}
+
+    def _inspect(self, host):
+        if host not in self._inspected:
+            try:
+                self._state_root.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                _fail("the Cloudflare inspection workspace is unavailable")
+            self._inspected[host] = _read_only_tool(
+                _WORKER_INSPECT,
+                ("inspect", "--target", host, "--state-root", str(self._state_root)),
+                environment={"CLOUDFLARE_API_TOKEN": self._token})
+        return self._inspected[host]
+
+    def worker(self, host):
+        document = self._inspect(host)
+        if document is None or type(document.get("worker")) is not str:
+            _fail(f"the live Worker identity for {host} is unavailable")
+        return document["worker"]
+
+    def version_url(self, host, version):
+        document = _read_only_tool(_HOST_ORIGINS,
+                                   ("urls", host, "--version", version))
+        if document is None or type(document.get("version")) is not str:
+            _fail(f"the immutable origin for {host} is unavailable")
+        return document["version"]
+
+    def replaced_version(self, host):
+        from .deployment_projection import NO_DEPLOYMENT
+
+        document = self._inspect(host)
+        if document is None:
+            return None
+        if not document.get("exists") or document.get("deployment") is None:
+            return NO_DEPLOYMENT
+        deployment = document["deployment"]
+        if type(deployment) is not dict \
+                or type(deployment.get("version_id")) is not str:
+            _fail("the live Worker deployment is unreadable")
+        return deployment["version_id"]
+
+    def observe(self, host):
+        origins = _read_only_tool(_HOST_ORIGINS, ("urls", host))
+        if origins is None or type(origins.get("production")) is not str:
+            _fail(f"the production origin for {host} is unavailable")
+        return _read_only_tool(_SITE_OBSERVATION, (origins["production"],))
+
+
+_INSPECT_STATE = "build/release/cloudflare-inspection"
+
+
+def deployment_projection(root, tag, step):
+    """The frozen deployment projection for this step, or None while unreadable.
+
+    Assembled once from this release's own prepared output plus one read of the
+    live Worker and its public origin, then frozen: a resume after the dispatch
+    reads those bytes back rather than observing a production the deployment
+    has already replaced. The Cloudflare token is the authorized operator's and
+    is never recorded; without it the Worker cannot be read and the step stays
+    `pending`, which is also what an unprepared release reports.
+    """
+    from .deployment_projection import projection
+
+    token = os.environ.get("CLOUDFLARE_API_TOKEN")
+    if not token:
+        return None
+    return projection(root, tag, step,
+                      reader=_CloudflareReader(token, Path(root) / _INSPECT_STATE))
 
 
 def _release_author(git):
@@ -672,7 +772,8 @@ def compose_carriers(context, policy, request):
                           producer_revision=_producer_revision(
                               root, git, "deploy-web-runtime-host.yml",
                               request["control_revision"]),
-                          projection_for=lambda tag: deployment_projection("runtime"),
+                          projection_for=lambda tag, step="runtime":
+                              deployment_projection(root, tag, step),
                           transition_for=dispatch_for("runtime",
                                                       "deploy-web-runtime-host.yml")),
         enroll_deployment("creator", candidate_root=candidate_root,
@@ -682,7 +783,8 @@ def compose_carriers(context, policy, request):
                           producer_revision=_producer_revision(
                               root, git, "deploy-creator-web.yml",
                               request["control_revision"]),
-                          projection_for=lambda tag: deployment_projection("creator"),
+                          projection_for=lambda tag, step="creator":
+                              deployment_projection(root, tag, step),
                           transition_for=dispatch_for("creator",
                                                       "deploy-creator-web.yml")),
         enroll_promotion(candidate_root=candidate_root,

@@ -174,9 +174,11 @@ def deploy(*, host, tag, run_id, state_root, output,
     root = Path(state_root).resolve()
     live = _live(adapter, common)
     prior_deployment = live["deployment"] if live["exists"] else None
-    observed = read_site(production_url(host))
 
     if prior_deployment is None:
+        # A first deployment has no prior to read. Observing the origin anyway
+        # would fail on the 404 it must serve, and turn the supported first
+        # deployment into an error.
         if prior_tag is not None:
             raise CloudflareDeployError(
                 "names a prior tag for a Worker that has no deployment")
@@ -185,7 +187,7 @@ def deploy(*, host, tag, run_id, state_root, output,
         prior_version = prior_deployment.get("version_id")
         if not isinstance(prior_version, str):
             raise CloudflareDeployError("read a deployment with no version identity")
-        prior_good = _prior(observed, host, prior_version)
+        prior_good = _prior(read_site(production_url(host)), host, prior_version)
         if prior_tag is None:
             prior_tag = "lmdj-v" + prior_good["product_build"]
 

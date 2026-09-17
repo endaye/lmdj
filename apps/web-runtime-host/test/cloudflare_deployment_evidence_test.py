@@ -3,6 +3,7 @@
 
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -258,6 +259,40 @@ class WriteTest(unittest.TestCase):
         missing = self.root / "absent-directory" / "evidence.json"
         with self.assertRaises(CloudflareEvidenceError):
             write_document(missing, document("creator-web"), host="creator-web")
+
+
+class OriginCommandTest(unittest.TestCase):
+    """`urls` is the one place any caller learns where a Host is served."""
+
+    TOOL = ROOT / "apps/web-runtime-host/tools/cloudflare_deployment_evidence.py"
+
+    def run_tool(self, *arguments):
+        return subprocess.run([sys.executable, str(self.TOOL), "urls", *arguments],
+                              capture_output=True, text=True, timeout=10)
+
+    def test_it_reports_the_same_production_origin_the_module_computes(self):
+        for host in CONTRACTS:
+            with self.subTest(host=host):
+                result = self.run_tool(host)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["production"],
+                                 production_url(host))
+
+    def test_it_reports_the_immutable_origin_for_a_named_version(self):
+        result = self.run_tool("web-runtime-host", "--version", PROMOTED)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["version"],
+                         version_url("web-runtime-host", PROMOTED))
+
+    def test_it_omits_the_immutable_origin_when_no_version_is_named(self):
+        self.assertNotIn("version", json.loads(self.run_tool("creator-web").stdout))
+
+    def test_it_refuses_an_unconfigured_host(self):
+        self.assertNotEqual(self.run_tool("portal").returncode, 0)
+
+    def test_it_refuses_an_invalid_version(self):
+        self.assertNotEqual(
+            self.run_tool("creator-web", "--version", "not-a-version").returncode, 0)
 
 
 if __name__ == "__main__":
