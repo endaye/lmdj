@@ -5,6 +5,19 @@ Date: 2026-09-10 (Asia/Shanghai)
 Task: LMDJ #1153 / umbrella #1149 T4
 Status: production pilot implementation in progress; see the current record below.
 
+## 2026-09-17 budget raise to USD 100 (owner decision)
+
+The pilot spent its original USD 20 budget (the ledger's lifetime pilot total,
+not the calendar-month key, tripped first) and every PR review returned
+`budget_exhausted` with `num_ai_calls=0`. At the owner's decision the approved
+dollar caps are raised: engine caps `MAX_MONTHLY_USD`/`MAX_PILOT_USD` are now
+USD 100, and both `config.toml` and the installed `runtime.toml` set
+`monthly_usd`/`pilot_usd` to USD 100. The per-attempt cap stays USD 1 and the
+request-count caps are unchanged; the reservation basis (full 1M context at
+peak cache-miss rates) is unchanged. The raised caps take effect on the review
+host only after the overlay is reinstalled from the main revision carrying
+this change; until then reviews keep failing with `budget_exhausted`.
+
 ## Automatic push and explicit repair recheck (Issues #1322 / #1305)
 
 After the updated adapter is installed, a maintainer can request one source
