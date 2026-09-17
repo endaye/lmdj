@@ -18,6 +18,7 @@ adapters for every step.
 from copy import deepcopy
 from typing import Any, Callable, NoReturn
 import json
+import os
 from pathlib import Path
 import re
 
@@ -809,31 +810,61 @@ def enrolled_candidate_timestamp(transition_root):
 
 
 def enrolled_candidate_scope_env(preparation_root):
-    """The (path, source_timestamp) the enrolled source-setup scope froze, or None.
+    """The (PATH, source_timestamp) this request's enrollment froze, or None.
 
     `compose_candidate` binds the process PATH and a Task timestamp into the
-    preparation scope at first enrollment. Both change across shells and
+    candidate scope at first enrollment. Both change across shells and
     processes, so a resumed run can only adopt its own enrollment by reading
-    the recorded values back instead of recomputing them. A missing journal
+    the recorded values back: the PATH lives in the source-setup marker, the
+    timestamp in the parent candidate-preparation marker. A missing journal
     means nothing was enrolled; a present-but-misshapen record is corrupt
-    state and fails closed.
+    state and fails closed. The parent marker is read with a raw nofollow
+    open rather than a journal context: intermediate directories created by
+    our own umask may be world-readable, and the privacy invariant belongs
+    to the journals themselves, not to ancestors this function never owned.
     """
     from .candidate_snapshot import read
+    from .candidate_preparation import CandidatePreparation
     from .orchestration import RequestJournal
 
-    root = Path(preparation_root).absolute() / "source-setup"
-    if not root.is_dir():
+    parent = Path(preparation_root).absolute()
+    root = parent / "source-setup"
+    if not parent.is_dir():
         return None
-    with RequestJournal(root, writable=False) as journal:
-        marker = read(journal, "source-setup-operation.json", optional=True)
-    if marker is None:
+    path = timestamp = None
+    if root.is_dir():
+        with RequestJournal(root, writable=False) as journal:
+            marker = read(journal, "source-setup-operation.json", optional=True)
+        if marker is not None:
+            if type(marker) is not dict:
+                _fail("the enrolled source-setup scope is corrupt")
+            path = marker.get("path")
+            if type(path) is not str or not path:
+                _fail("the enrolled source-setup scope records no valid PATH")
+    marker_path = parent / CandidatePreparation.MARKER
+    try:
+        fd = os.open(marker_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except (FileNotFoundError, NotADirectoryError):
+        fd = None
+    except OSError:
+        _fail("the enrolled candidate scope is unreadable")
+    if fd is not None:
+        try:
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                raw = stream.read(65537)
+            if len(raw) > 65536:
+                _fail("the enrolled candidate scope is corrupt")
+            try:
+                parent_marker = json.loads(raw)
+            except ValueError:
+                _fail("the enrolled candidate scope is corrupt")
+            timestamp = parent_marker.get("source_timestamp") if type(parent_marker) is dict else None
+            if type(timestamp) is not int or not 1 <= timestamp <= 253402300799:
+                _fail("the enrolled candidate scope records no valid Task timestamp")
+        finally:
+            os.close(fd)
+    if path is None and timestamp is None:
         return None
-    if type(marker) is not dict:
-        _fail("the enrolled source-setup scope is corrupt")
-    path, timestamp = marker.get("path"), marker.get("source_timestamp")
-    if type(path) is not str or not path or type(timestamp) is not int \
-            or not 1 <= timestamp <= 253402300799:
-        _fail("the enrolled source-setup scope records no valid PATH or Task timestamp")
     return path, timestamp
 
 

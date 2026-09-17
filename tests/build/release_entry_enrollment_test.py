@@ -1686,8 +1686,10 @@ class CandidateEnrollmentTest(unittest.TestCase):
     def test_the_scope_env_is_recovered_from_the_enrolled_source_setup(self):
         from tools.release.carriers import enrolled_candidate_scope_env
         from tools.release.candidate_source_setup import CandidateSourceSetup
+        from tools.release.candidate_preparation import CandidatePreparation
         from tools.release.model import canonical_json
         from tools.release.orchestration import RequestJournal
+        import os
 
         root = self.root / "preparation" / "source-setup"
         self.assertIsNone(enrolled_candidate_scope_env(self.root / "preparation"))
@@ -1697,12 +1699,26 @@ class CandidateEnrollmentTest(unittest.TestCase):
                  "source_timestamp": 1789550000, "request": request(mode="new", requested_tag=None)}
         with RequestJournal(root) as journal:
             journal._write(CandidateSourceSetup.MARKER, canonical_json(scope))
+        # The PATH comes from the child marker; the timestamp from the parent
+        # candidate-preparation marker.
+        self.assertEqual(enrolled_candidate_scope_env(self.root / "preparation"),
+                         ("/usr/bin:/bin", None))
+        parent = self.root / "preparation"
+        parent.mkdir(mode=0o700, exist_ok=True)
+        if os.stat(parent).st_mode & 0o077:
+            # The earlier parents=True creation left this level at the process
+            # umask; a real enrollment would have created it private.
+            os.chmod(parent, 0o700)
+        with RequestJournal(parent) as journal:
+            parent_scope = {"source_timestamp": 1789550000}
+            journal._write(CandidatePreparation.MARKER, canonical_json(parent_scope))
         self.assertEqual(enrolled_candidate_scope_env(self.root / "preparation"),
                          ("/usr/bin:/bin", 1789550000))
 
     def test_a_corrupt_scope_env_fails_closed(self):
         from tools.release.carriers import enrolled_candidate_scope_env
         from tools.release.candidate_source_setup import CandidateSourceSetup
+        from tools.release.candidate_preparation import CandidatePreparation
         from tools.release.model import canonical_json
         from tools.release.orchestration import RequestJournal
 
@@ -1710,7 +1726,7 @@ class CandidateEnrollmentTest(unittest.TestCase):
         root.mkdir(parents=True, mode=0o700)
         with RequestJournal(root) as journal:
             journal._write(CandidateSourceSetup.MARKER,
-                           canonical_json({"path": "/usr/bin:/bin", "source_timestamp": "soon"}))
+                           canonical_json({"path": 7, "source_timestamp": "soon"}))
         with self.assertRaises(JournalError):
             enrolled_candidate_scope_env(self.root / "preparation")
 
