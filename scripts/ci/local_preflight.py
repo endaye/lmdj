@@ -564,23 +564,43 @@ def build_plan(
 
 
 def job_conditions(source: str) -> list[str]:
-    """Every `if:` expression in a workflow, folded continuations included.
+    """Every job-level `if:` expression in a workflow, continuations included.
 
-    A lane name is a gate only where a job's condition names it. Anywhere else
-    in the file — a comment, a step name, a `run:` script — it is prose, and
-    reading it as a gate would report an unverified lane as verified, which is
-    the false assurance this whole partition exists to remove.
+    A lane name gates a Pull Request only where a *job's* own condition names
+    it. A step condition inside that job, a comment, a step name, an `env:`
+    value or a `run:` script are not gates, and reading one as a gate would
+    report an unverified lane as verified — the false assurance this partition
+    exists to remove. So the scan stays inside the `jobs:` block and accepts
+    `if:` only at the indentation a job's own keys sit at.
     """
     lines = source.splitlines()
     conditions: list[str] = []
+    jobs_indent = job_indent = gate_indent = None
     index = 0
     while index < len(lines):
         line = lines[index]
         index += 1
-        if not line.strip().startswith("if:"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
         indent = len(line) - len(line.lstrip())
-        block = [line.strip()[len("if:"):]]
+        if jobs_indent is not None and indent <= jobs_indent:
+            # A sibling of `jobs:` ends the block; this line may open it again.
+            jobs_indent = job_indent = gate_indent = None
+        if jobs_indent is None:
+            if stripped.startswith("jobs:"):
+                jobs_indent = indent
+            continue
+        if job_indent is None:
+            job_indent = indent
+            continue
+        if indent <= job_indent:
+            continue
+        if gate_indent is None:
+            gate_indent = indent
+        if indent != gate_indent or not stripped.startswith("if:"):
+            continue
+        block = [stripped[len("if:"):]]
         while index < len(lines):
             following = lines[index]
             if following.strip() and len(following) - len(following.lstrip()) <= indent:

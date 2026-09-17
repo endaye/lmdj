@@ -244,6 +244,9 @@ class PullRequestLaneVisibilityTest(unittest.TestCase):
         self.addCleanup(repository.close)
         repository.write(self.preflight.PR_WORKFLOW, "\n".join([
             "# fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan",
+            "on: pull_request",
+            "env:",
+            "  TOP: fromJSON(x).lanes.core_ubuntu",
             "jobs:",
             "  docs-static:",
             "    if: fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static",
@@ -251,6 +254,7 @@ class PullRequestLaneVisibilityTest(unittest.TestCase):
             "      NOTE: fromJSON(x).lanes.deploy_contract",
             "    steps:",
             "      - name: mention .lanes.package in a step name",
+            "        if: fromJSON(x).lanes.creator",
             "        run: echo 'fromJSON(x).lanes.web_runtime_host'",
             "",
         ]))
