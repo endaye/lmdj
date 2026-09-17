@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """The deployment sequence records evidence only when every leg passed."""
 
+import contextlib
+import io
 import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "apps/web-runtime-host/tools"))
 
+import cloudflare_deploy  # noqa: E402
 from cloudflare_deploy import CloudflareDeployError, deploy  # noqa: E402
 from cloudflare_deployment_evidence import (  # noqa: E402
     production_url,
@@ -376,6 +380,413 @@ class DeployTest(unittest.TestCase):
         with self.assertRaises(CloudflareDeployError):
             self.deploy_once(adapter=Adapter(receipt=document))
         self.assertFalse(self.output.exists())
+
+
+class EntryPointTest(unittest.TestCase):
+    """The shipped command refuses bad input and never invents an exit code."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.captured = {}
+
+    def arguments(self, *, state_root=None):
+        (self.root / "state").mkdir(exist_ok=True)
+        return [TAG, "--target", "web-runtime-host",
+                "--state-root", str(state_root or self.root / "state"),
+                "--output", str(self.root / "evidence.json"),
+                "--run-id", str(RUN_ID), "--node", NODE, "--wrangler", WRANGLER,
+                "--prior-tag", PRIOR_TAG]
+
+    def test_a_state_root_that_does_not_exist_is_refused(self):
+        errors = io.StringIO()
+        absent = self.root / "never-created"
+        with contextlib.redirect_stderr(errors):
+            code = cloudflare_deploy.main(self.arguments(state_root=absent))
+        self.assertEqual(code, 2)
+        self.assertIn("does not exist", errors.getvalue())
+        self.assertFalse(absent.exists())
+
+    def test_a_relative_state_root_is_refused(self):
+        # Every local operator shares one root; a relative one is not shared.
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            code = cloudflare_deploy.main(self.arguments(state_root=Path("state")))
+        self.assertEqual(code, 2)
+        self.assertIn("state root", errors.getvalue())
+
+    def test_a_failed_run_leaves_the_output_path_untouched(self):
+        # Diagnostics belong beside the run's own state; a caller checking for
+        # the evidence path must not find its directory conjured by a failure.
+        output = self.root / "evidence" / "evidence.json"
+        errors = io.StringIO()
+        with patch.object(cloudflare_deploy, "deploy",
+                          side_effect=CloudflareDeployError("candidate failed")), \
+                contextlib.redirect_stderr(errors):
+            code = cloudflare_deploy.main(
+                [TAG, "--target", "web-runtime-host",
+                 "--state-root", str(self.root / "state"),
+                 "--output", str(output), "--run-id", str(RUN_ID),
+                 "--node", NODE, "--wrangler", WRANGLER])
+        self.assertEqual(code, 2)
+        self.assertFalse(output.exists())
+        self.assertFalse(output.parent.exists())
+
+    def test_a_failed_deployment_exits_two_without_a_traceback(self):
+        errors = io.StringIO()
+        with patch.object(cloudflare_deploy, "deploy",
+                          side_effect=CloudflareDeployError("candidate failed")), \
+                contextlib.redirect_stderr(errors):
+            code = cloudflare_deploy.main(self.arguments())
+        self.assertEqual(code, 2)
+        self.assertIn("candidate failed", errors.getvalue())
+
+    def test_a_complete_deployment_reports_where_the_evidence_landed(self):
+        written = self.root / "evidence.json"
+        output = io.StringIO()
+        with patch.object(cloudflare_deploy, "deploy", return_value=written), \
+                contextlib.redirect_stdout(output):
+            code = cloudflare_deploy.main(self.arguments())
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(output.getvalue()),
+                         {"host": "web-runtime-host", "tag": TAG,
+                          "evidence": str(written)})
+
+    def test_the_command_passes_the_operator_inputs_through(self):
+        seen = {}
+
+        def record(**arguments):
+            seen.update(arguments)
+            return self.root / "evidence.json"
+
+        with patch.object(cloudflare_deploy, "deploy", side_effect=record), \
+                contextlib.redirect_stdout(io.StringIO()):
+            cloudflare_deploy.main(self.arguments())
+        self.assertEqual(seen["host"], "web-runtime-host")
+        self.assertEqual(seen["tag"], TAG)
+        self.assertEqual(seen["prior_tag"], PRIOR_TAG)
+        self.assertEqual(seen["run_id"], str(RUN_ID))
+        self.assertEqual(seen["node"], NODE)
+        self.assertEqual(seen["wrangler"], WRANGLER)
+
+    def browser_run(self, *, stdout, returncode=0, environment=None):
+        check = cloudflare_deploy.real_browser("web-runtime-host", self.root)
+        result = type("R", (), {"returncode": returncode, "stdout": stdout,
+                                "stderr": ""})()
+        with patch.object(cloudflare_deploy.subprocess, "run",
+                          return_value=result) as runner:
+            with patch.dict(cloudflare_deploy.os.environ,
+                            environment or {}, clear=True):
+                try:
+                    passed = check("https://lab.lmdj.workers.dev")
+                except CloudflareDeployError:
+                    passed = False
+        return passed, runner.call_args.kwargs["env"]
+
+    def report(self, **stats):
+        counts = {"expected": 1, "unexpected": 0, "flaky": 0, "skipped": 0}
+        counts.update(stats)
+        return json.dumps({"stats": counts})
+
+    def test_the_browser_environment_is_an_allowlist(self):
+        # The browser runs third-party test code; a denylist silently admits
+        # every credential nobody thought to name.
+        passed, environment = self.browser_run(
+            stdout=self.report(),
+            environment={"CLOUDFLARE_API_TOKEN": "secret", "GITHUB_TOKEN": "s",
+                         "CLOUDFLARE_ACCOUNT_ID": "acct", "NPM_TOKEN": "npm",
+                         "PATH": "/usr/bin", "HOME": "/home/runner"})
+        self.assertTrue(passed)
+        self.assertEqual(set(environment),
+                         {"PATH", "HOME", "LMDJ_WEB_HOST_CLEAN_ROOM",
+                          "LMDJ_WEB_HOST_EXTERNAL_SERVER",
+                          "LMDJ_WEB_HOST_BASE_URL"})
+        self.assertEqual(environment["LMDJ_WEB_HOST_BASE_URL"],
+                         "https://lab.lmdj.workers.dev")
+
+    def test_a_clean_exit_that_ran_nothing_is_not_a_pass(self):
+        # A project or spec filter matching nothing exits 0; writing that into
+        # the evidence as a passed browser check is exactly what must not happen.
+        for stats in ({"expected": 0}, {"skipped": 1}, {"unexpected": 1},
+                      {"flaky": 1}):
+            with self.subTest(stats=stats):
+                passed, _ = self.browser_run(stdout=self.report(**stats),
+                                             environment={"PATH": "/usr/bin"})
+                self.assertFalse(passed)
+
+    def test_unreadable_reporter_output_is_not_a_pass(self):
+        for stdout in ("", "not json", "[]", '{"stats": "none"}'):
+            with self.subTest(stdout=stdout):
+                passed, _ = self.browser_run(stdout=stdout,
+                                             environment={"PATH": "/usr/bin"})
+                self.assertFalse(passed)
+
+    def test_a_diagnostic_name_never_escapes_its_directory(self):
+        # The name is derived from a URL hostname; nothing derived from data
+        # may decide where a file lands.
+        for label in ("../../etc/passwd", "a/b", "", None, "x\x00y",
+                      "lab.lmdj.workers.dev"):
+            with self.subTest(label=label):
+                name = cloudflare_deploy._log_name("browser", label)
+                # The invariant is containment, not the absence of dots: a name
+                # with no separator cannot traverse wherever it is joined.
+                self.assertEqual(Path(name).name, name)
+                self.assertEqual((self.root / name).resolve().parent,
+                                 self.root.resolve())
+
+    def test_even_a_short_secret_is_redacted(self):
+        result = type("R", (), {"returncode": 1, "stdout": "tok=abc123",
+                                "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ, {"GH_TOKEN": "abc123"}):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        self.assertNotIn("abc123", path.read_text(encoding="utf-8"))
+
+    def test_the_browser_keeps_the_proxy_a_runner_needs(self):
+        # Without these the browser cannot reach the deployed origin behind an
+        # egress proxy, and that failure would read as a regression.
+        _, environment = self.browser_run(
+            stdout=self.report(),
+            environment={"PATH": "/usr/bin", "HTTPS_PROXY": "http://p:3128",
+                         "NO_PROXY": "localhost", "SOME_TOKEN": "secret"})
+        self.assertEqual(environment["HTTPS_PROXY"], "http://p:3128")
+        self.assertEqual(environment["NO_PROXY"], "localhost")
+        self.assertNotIn("SOME_TOKEN", environment)
+
+    def test_a_non_string_diagnostic_label_does_not_escape(self):
+        # The factory is exported; a caller passing anything must not produce a
+        # TypeError where a CloudflareDeployError is documented.
+        for label in (7, object(), ["a"]):
+            with self.subTest(label=type(label).__name__):
+                name = cloudflare_deploy._log_name("adapter", label)
+                self.assertEqual(Path(name).name, name)
+
+    def test_an_unattributed_failure_still_exits_two(self):
+        errors = io.StringIO()
+        with patch.object(cloudflare_deploy, "deploy",
+                          side_effect=RuntimeError("upstream text")), \
+                contextlib.redirect_stderr(errors):
+            code = cloudflare_deploy.main(self.arguments())
+        self.assertEqual(code, 2)
+        # The upstream text may carry credentials; only the category is said.
+        self.assertNotIn("upstream text", errors.getvalue())
+        self.assertIn("unattributed", errors.getvalue())
+
+    def test_a_relative_state_root_creates_nothing(self):
+        # The refusal happens before `deploy`, so the adapter and browser
+        # closures never run and no diagnostics tree appears anywhere.
+        before = sorted(Path.cwd().iterdir())
+        with contextlib.redirect_stderr(io.StringIO()):
+            code = cloudflare_deploy.main(self.arguments(state_root=Path("state")))
+        self.assertEqual(code, 2)
+        self.assertEqual(sorted(Path.cwd().iterdir()), before)
+        self.assertFalse((Path.cwd() / "state").exists())
+
+    def test_a_named_marker_survives_the_shape_pass(self):
+        # A credential this process held should be named even when its only
+        # occurrence is inside a header the shape patterns also match.
+        result = type("R", (), {
+            "returncode": 1,
+            "stdout": "Authorization: Bearer held-by-this-process\n",
+            "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"CLOUDFLARE_API_TOKEN": "held-by-this-process"},
+                        clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        body = path.read_text(encoding="utf-8")
+        self.assertNotIn("held-by-this-process", body)
+        self.assertIn("[REDACTED CLOUDFLARE_API_TOKEN]", body)
+
+    def test_a_redacted_value_does_not_shield_a_second_secret(self):
+        # Per match, not per line: one already-masked value on a line must not
+        # let a real secret beside it survive.
+        result = type("R", (), {
+            "returncode": 1,
+            "stdout": "token=held-value other_token=never-held-value\n",
+            "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"SOME_TOKEN": "held-value"}, clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        body = path.read_text(encoding="utf-8")
+        self.assertNotIn("held-value", body)
+        self.assertNotIn("never-held-value", body)
+        self.assertIn("[REDACTED SOME_TOKEN]", body)
+
+    def test_a_linked_diagnostic_directory_is_refused(self):
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        (self.root / "diagnostics").symlink_to(elsewhere)
+        result = type("R", (), {"returncode": 1, "stdout": "x", "stderr": ""})()
+        with self.assertRaises(CloudflareDeployError):
+            cloudflare_deploy._diagnostic(self.root / "diagnostics",
+                                          "adapter.log", result)
+        self.assertEqual(list(elsewhere.iterdir()), [])
+
+    def test_a_shorter_credential_cannot_leave_a_longer_one_s_tail(self):
+        # Replacing in iteration order would turn "abcdef" into
+        # "[REDACTED A_TOKEN]ef" and leave the tail of a real secret behind.
+        result = type("R", (), {"returncode": 1, "stdout": "v=abcdef\n",
+                                "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"A_TOKEN": "abcd", "B_TOKEN": "abcdef"}, clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        body = path.read_text(encoding="utf-8")
+        self.assertNotIn("abcdef", body)
+        self.assertNotIn("ef\n", body)
+        self.assertIn("[REDACTED B_TOKEN]", body)
+
+    def test_a_marker_is_not_rewritten_by_another_credential(self):
+        # One pass cannot re-enter what it just wrote, so the name that says
+        # which credential leaked survives.
+        result = type("R", (), {"returncode": 1, "stdout": "v=real-secret\n",
+                                "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"FIRST_TOKEN": "real-secret",
+                         "SECOND_TOKEN": "REDACTED"}, clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        self.assertIn("[REDACTED FIRST_TOKEN]",
+                      path.read_text(encoding="utf-8"))
+
+    def test_the_browser_keeps_the_trust_its_proxy_needs(self):
+        # Forwarding the proxy without its CA bundle fails the leg after
+        # promotion, which is the failure the proxy entries exist to avoid.
+        _, environment = self.browser_run(
+            stdout=self.report(),
+            environment={"PATH": "/usr/bin", "HTTPS_PROXY": "http://p:3128",
+                         "NODE_EXTRA_CA_CERTS": "/etc/ca.pem"})
+        self.assertEqual(environment["NODE_EXTRA_CA_CERTS"], "/etc/ca.pem")
+
+    def test_a_timeout_says_so_rather_than_reporting_a_failure(self):
+        # A hung run and a failed assertion call for different remedies.
+        adapter = cloudflare_deploy.real_adapter(self.root, timeout=1)
+        with patch.object(cloudflare_deploy.subprocess, "run",
+                          side_effect=cloudflare_deploy.subprocess.TimeoutExpired(
+                              "npm", 1)):
+            with self.assertRaises(CloudflareDeployError) as raised:
+                adapter(["candidate", TAG])
+        self.assertIn("timed out", str(raised.exception))
+        with patch.object(cloudflare_deploy.subprocess, "run",
+                          side_effect=FileNotFoundError("npm")):
+            with self.assertRaises(CloudflareDeployError) as raised:
+                adapter(["candidate", TAG])
+        self.assertIn("could not be launched", str(raised.exception))
+
+    def test_output_is_withheld_when_redaction_cannot_run(self):
+        # Redaction is what makes retaining the output safe at all.
+        result = type("R", (), {"returncode": 1, "stdout": "raw-output",
+                                "stderr": ""})()
+        with patch.object(cloudflare_deploy, "_redacted",
+                          side_effect=RuntimeError("pattern too large")):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        body = path.read_text(encoding="utf-8")
+        self.assertNotIn("raw-output", body)
+        self.assertIn("withheld", body)
+
+    def test_every_launch_failure_keeps_its_diagnostic(self):
+        # Anything escaping to main's backstop loses the file an operator needs.
+        adapter = cloudflare_deploy.real_adapter(self.root, timeout=1)
+        for raised in (ValueError("bad env"),
+                       cloudflare_deploy.subprocess.SubprocessError("other")):
+            with self.subTest(raised=type(raised).__name__), \
+                    patch.object(cloudflare_deploy.subprocess, "run",
+                                 side_effect=raised), \
+                    self.assertRaises(CloudflareDeployError) as caught:
+                adapter(["candidate", TAG])
+            self.assertIn("inspect", str(caught.exception))
+
+    def test_a_large_environment_still_gets_a_diagnostic(self):
+        # Falling back keeps the longest-first ordering that matters, so a big
+        # environment costs the single-pass property, not the whole file.
+        result = type("R", (), {"returncode": 1, "stdout": "v=abcdef\n",
+                                "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"A_TOKEN": "abcd", "B_TOKEN": "abcdef"}, clear=True), \
+                patch.object(cloudflare_deploy.re, "compile",
+                             side_effect=cloudflare_deploy.re.error("too big")):
+            body = cloudflare_deploy._redacted("v=abcdef\n")
+        self.assertNotIn("abcdef", body)
+        self.assertIn("[REDACTED B_TOKEN]", body)
+
+    def test_the_backstop_retains_a_redacted_diagnostic(self):
+        errors = io.StringIO()
+        with patch.object(cloudflare_deploy, "deploy",
+                          side_effect=RuntimeError("upstream s3cr3t-value")), \
+                patch.dict(cloudflare_deploy.os.environ,
+                           {"CLOUDFLARE_API_TOKEN": "s3cr3t-value"}), \
+                contextlib.redirect_stderr(errors):
+            code = cloudflare_deploy.main(self.arguments())
+        self.assertEqual(code, 2)
+        self.assertIn("inspect", errors.getvalue())
+        retained = (self.root / "state" / "diagnostics" / "unattributed.log")
+        self.assertTrue(retained.is_file())
+        body = retained.read_text(encoding="utf-8")
+        self.assertIn("RuntimeError", body)
+        self.assertNotIn("s3cr3t-value", body)
+
+    def test_a_hung_or_unlaunchable_command_is_our_error_not_a_traceback(self):
+        # main only catches CloudflareDeployError, so anything else escaping
+        # here becomes a traceback and a non-2 exit.
+        adapter = cloudflare_deploy.real_adapter(self.root, timeout=1)
+        for raised in (cloudflare_deploy.subprocess.TimeoutExpired("npm", 1),
+                       FileNotFoundError("npm")):
+            with self.subTest(raised=type(raised).__name__), \
+                    patch.object(cloudflare_deploy.subprocess, "run",
+                                 side_effect=raised), \
+                    self.assertRaises(CloudflareDeployError):
+                adapter(["candidate", TAG])
+
+    def test_a_credential_shaped_name_is_redacted_without_being_listed(self):
+        result = type("R", (), {"returncode": 1, "stdout": "v=zz9q",
+                                "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"SOME_VENDOR_TOKEN": "zz9q"}, clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        self.assertNotIn("zz9q", path.read_text(encoding="utf-8"))
+
+    def test_a_value_too_short_to_be_a_credential_is_left_alone(self):
+        # Replacing it everywhere would mangle unrelated output, and a
+        # three-character secret is not a real one.
+        result = type("R", (), {"returncode": 1, "stdout": "path a/b/c ok",
+                                "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"SOME_TOKEN": "a/b"}, clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        self.assertIn("path a/b/c ok", path.read_text(encoding="utf-8"))
+
+    def test_a_credential_this_process_never_held_is_still_redacted(self):
+        # Value replacement cannot reach a token the adapter minted itself.
+        result = type("R", (), {
+            "returncode": 1,
+            "stdout": "Authorization: Bearer minted-elsewhere-9\n",
+            "stderr": "api_key = other-minted-value\n"})()
+        with patch.dict(cloudflare_deploy.os.environ, {}, clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        body = path.read_text(encoding="utf-8")
+        self.assertNotIn("minted-elsewhere-9", body)
+        self.assertNotIn("other-minted-value", body)
+        self.assertIn("[REDACTED]", body)
+
+    def test_a_linked_diagnostic_path_is_refused(self):
+        victim = self.root / "victim.txt"
+        victim.write_text("original", encoding="utf-8")
+        (self.root / "adapter.log").symlink_to(victim)
+        result = type("R", (), {"returncode": 1, "stdout": "x", "stderr": ""})()
+        with self.assertRaises(CloudflareDeployError):
+            cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        self.assertEqual(victim.read_text(encoding="utf-8"), "original")
+
+    def test_a_retained_diagnostic_redacts_secrets_and_is_owner_only(self):
+        result = type("R", (), {
+            "returncode": 1,
+            "stdout": "value is s3cr3t-value here\n",
+            "stderr": "Authorization: Bearer s3cr3t-value\n"})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"CLOUDFLARE_API_TOKEN": "s3cr3t-value"}, clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        body = path.read_text(encoding="utf-8")
+        self.assertNotIn("s3cr3t-value", body)
+        self.assertIn("[REDACTED CLOUDFLARE_API_TOKEN]", body)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

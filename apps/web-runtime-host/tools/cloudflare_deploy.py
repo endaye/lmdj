@@ -58,8 +58,15 @@ output path is never created.
 
 from __future__ import annotations
 
+import argparse
+import datetime as dt
 import json
+import os
 from pathlib import Path
+import re
+import subprocess
+import sys
+from urllib.parse import urlsplit
 
 from cloudflare_deployment_evidence import (
     CloudflareEvidenceError,
@@ -314,3 +321,333 @@ def _live(adapter, common):
     if document["exists"] and not isinstance(document.get("deployment"), dict):
         raise CloudflareDeployError("read an existing Worker with no deployment")
     return document
+
+
+ROOT = Path(__file__).resolve().parents[3]
+BROWSER = {
+    "creator-web": ("creator-deployment",
+                    "deployment/creator_web_deployment.spec.mjs",
+                    "LMDJ_CREATOR_WEB"),
+    "web-runtime-host": ("chromium",
+                         "deployment/web_runtime_host_deployment.spec.mjs",
+                         "LMDJ_WEB_HOST"),
+}
+# An allowlist, not a denylist: the browser runs third-party test code, and a
+# denylist silently admits every credential nobody thought to name.
+BROWSER_ENVIRONMENT = ("CI", "HOME", "LANG", "LC_ALL", "PATH",
+                       "PLAYWRIGHT_BROWSERS_PATH", "TMPDIR",
+                       # A runner behind an egress proxy cannot reach the
+                       # deployed origin without these, and that failure would
+                       # read as a regression rather than an environment.
+                       "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+                       "http_proxy", "https_proxy", "no_proxy",
+                       # And the trust to go with them: a TLS-inspecting proxy
+                       # without its CA bundle fails the leg after promotion.
+                       "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR")
+# Any environment name that looks like a credential: a fixed list only protects
+# the names someone remembered, and these tools are handed new ones over time.
+SECRET_NAME = re.compile(r"TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|APIKEY",
+                         re.IGNORECASE)
+# Credentials this process never held still appear in the text tools echo.
+# Each captures its prefix and the value separately; `_mask` decides per match,
+# so one already-redacted value on a line cannot shield a second real one.
+SECRET_TEXT = (
+    # To end of line: a header value is not one token ("Bearer <secret>").
+    re.compile(r"(?i)(authorization\s*:\s*)(.+)"),
+    re.compile(r"(?i)(\bbearer\s+)(\S+)"),
+    re.compile(r"(?i)((?:token|secret|password|api[_-]?key)\s*[=:]\s*)(\S+)"),
+)
+
+
+def _redacted(text):
+    """Remove credentials tools echo on failure, by value and by shape.
+
+    Value replacement covers what this process held, and is deliberately not
+    length-limited beyond a floor: below four characters a value is not
+    plausibly a credential but is very likely a substring of unrelated output,
+    and a diagnostic mangled into uselessness protects nobody. Above it,
+    replacement stands however short the value is.
+
+    Value replacement alone is not enough either, because it can only remove
+    what this process held; an adapter that minted its own token, or read one
+    from a config file, still echoes it. So credential-carrying shapes are
+    redacted too, at any length, which is what covers a genuinely short token
+    appearing as `token=abc` or behind an `Authorization` header.
+    """
+    # Values first, so a credential this process held is named in the marker
+    # and an operator can tell which one leaked. The shape patterns then skip
+    # what is already replaced, and catch the ones held elsewhere.
+    # Below four characters a value is not a credential but is very likely a
+    # substring of unrelated output, and a mangled diagnostic helps nobody.
+    # Shape redaction below still covers assignments and headers at any length.
+    named = {value: name for name, value in os.environ.items()
+             if value and len(value) >= 4 and SECRET_NAME.search(name)}
+    if named:
+        # One pass, longest value first. Replacing in iteration order lets a
+        # shorter credential that is a prefix of a longer one consume only part
+        # of it and leave the tail behind; and a single pass cannot re-enter a
+        # marker it just wrote, so one credential's name cannot be rewritten by
+        # another's value.
+        values = sorted(named, key=len, reverse=True)
+        try:
+            text = re.compile("|".join(re.escape(v) for v in values)).sub(
+                lambda match: f"[REDACTED {named[match.group(0)]}]", text)
+        except re.error:
+            # A very large environment can exceed the engine's limits. Falling
+            # back to sequential replacement keeps the longest-first ordering
+            # that matters and costs only the single-pass marker property, so
+            # a big environment does not cost the diagnostic entirely.
+            for value in values:
+                text = text.replace(value, f"[REDACTED {named[value]}]")
+    for pattern in SECRET_TEXT:
+        text = pattern.sub(_mask, text)
+    return text
+
+
+# The opening of a marker, not the whole thing: a shape pattern captures one
+# token, so a marker carrying a variable name is only partly inside the value.
+MARKER = re.compile(r"\[REDACTED\b")
+
+
+def _mask(match):
+    """Redact this match unless its value is already a marker.
+
+    Per match, not per line: a line carrying one redacted value must not shield
+    a second, still-real secret beside it. The marker is recognised by its
+    shape rather than by a bare substring.
+    """
+    prefix, value = match.group(1), match.group(2)
+    return prefix + (value if MARKER.search(value) else "[REDACTED]")
+
+
+_SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _log_name(prefix, label):
+    """A retained diagnostic never takes its name from an unsanitised value."""
+    cleaned = _SAFE_NAME.sub("_", str(label) if label else "")
+    return f"{prefix}-{cleaned or 'unknown'}.log"
+
+
+def _diagnostic(directory, name, result):
+    """Retain a failed command's output without putting it in the error.
+
+    The output is redacted by value and the file is owner-only: a failing
+    deployment tool commonly echoes the token or header it failed with, and a
+    retained diagnostic must not be where that ends up readable.
+    """
+    # A pre-placed link at the diagnostics entry is refused. A symlinked
+    # ancestor is not detected here and is not claimed to be: that needs an
+    # O_DIRECTORY descriptor and openat, which #1487 owns across all the
+    # writers rather than at this one door.
+    if directory.is_symlink():
+        raise CloudflareDeployError("diagnostic directory is unsafe")
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    try:
+        body = _redacted((result.stdout or "") + (result.stderr or ""))
+    except Exception:
+        # Redaction is what makes retaining the output safe. If it cannot run,
+        # the output is not written: a diagnostic is worth less than a leak.
+        body = "[diagnostic withheld: redaction failed]\n"
+    # O_NOFOLLOW: the directory is an operator-supplied path that other local
+    # operators may share, and the diagnostic name is predictable, so a
+    # pre-placed link must not redirect this write.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError:
+        raise CloudflareDeployError("could not retain a diagnostic safely") from None
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(body)
+    return path
+
+
+def _completed(command, *, cwd, timeout, environment=None):
+    """Run one command, turning every launch and timeout failure into ours."""
+    try:
+        return subprocess.run(command, cwd=cwd, capture_output=True, text=True,
+                              timeout=timeout, env=environment)
+    except subprocess.TimeoutExpired as expired:
+        captured = expired.stdout or ""
+        if isinstance(captured, bytes):
+            # Launched with text=True, so this is only reachable from a caller
+            # that built the exception itself; the failure path must not turn
+            # that into a TypeError inside redaction.
+            captured = captured.decode("utf-8", "replace")
+        return type("Expired", (), {
+            "returncode": TIMED_OUT, "stdout": captured,
+            "stderr": f"timed out after {timeout}s"})()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        # A missing interpreter, an unusable environment or any other launch
+        # failure is a failed leg with a retained diagnostic, not a traceback
+        # and not the entry point's unattributed backstop.
+        return type("Unlaunched", (), {
+            "returncode": UNLAUNCHED, "stdout": "",
+            "stderr": "command could not be launched"})()
+
+
+TIMED_OUT = 124
+UNLAUNCHED = 127
+
+
+def _outcome(result):
+    """How a command ended, since the remedies differ."""
+    return {TIMED_OUT: "timed out", UNLAUNCHED: "could not be launched"}.get(
+        result.returncode, "failed")
+
+
+def real_adapter(diagnostics, *, timeout=2400):
+    """`scripts/cloudflare-host.sh`, with its output retained rather than raised.
+
+    The adapter talks to Cloudflare and GitHub, so its stderr is exactly the
+    text that must not become an error message; it is written beside the run
+    instead and the failure names the file.
+    """
+    def run(arguments):
+        result = _completed(
+            ["bash", str(ROOT / "scripts" / "cloudflare-host.sh"), *arguments],
+            cwd=ROOT, timeout=timeout)
+        if result.returncode:
+            path = _diagnostic(diagnostics, _log_name("adapter", arguments[0]),
+                               result)
+            raise CloudflareDeployError(
+                f"{arguments[0]} {_outcome(result)}; inspect {path}")
+        return result.stdout
+    return run
+
+
+def real_http_verification():
+    """The Host smoke, reported as the exact True the sequence requires."""
+    from cloudflare_smoke import smoke
+
+    def verify(distribution, url, preview):
+        try:
+            observed = smoke(distribution, url, preview=preview)
+        except Exception:
+            # Upstream text may embed credentials; the category is the report.
+            raise CloudflareDeployError(
+                f"exact signed HTTP verification of {url} failed") from None
+        return isinstance(observed, dict) and observed.get("status") == "passed"
+    return verify
+
+
+def real_browser(host, diagnostics, *, timeout=900):
+    """The Host's existing Playwright deployment spec, against one base URL."""
+    project, spec, prefix = BROWSER[host]
+
+    def check(url):
+        environment = {name: os.environ[name] for name in BROWSER_ENVIRONMENT
+                       if name in os.environ}
+        environment.update({"LMDJ_WEB_HOST_CLEAN_ROOM": "1",
+                            f"{prefix}_EXTERNAL_SERVER": "1",
+                            f"{prefix}_BASE_URL": url})
+        result = _completed(
+            ["npm", "--prefix", str(ROOT / "tests/platform/web"), "test", "--",
+             f"--project={project}", "--reporter=json", spec],
+            cwd=ROOT, timeout=timeout, environment=environment)
+        if result.returncode or not _browser_ran(result.stdout):
+            path = _diagnostic(diagnostics,
+                               _log_name("browser", urlsplit(url).hostname),
+                               result)
+            # A hung run and a failed assertion call for different remedies.
+            raise CloudflareDeployError(
+                f"browser check of {url} {_outcome(result)}; inspect {path}")
+        return True
+    return check
+
+
+def _browser_ran(output):
+    """True only when the spec actually ran and every test passed.
+
+    A zero exit is not proof: a project or spec filter that matches nothing, or
+    a skipped spec, exits cleanly and would otherwise be written into the
+    evidence as a passed browser check.
+    """
+    try:
+        report = json.loads(output)
+    except (TypeError, ValueError):
+        return False
+    stats = report.get("stats") if isinstance(report, dict) else None
+    if not isinstance(stats, dict):
+        return False
+    expected = stats.get("expected")
+    return (isinstance(expected, int) and expected > 0
+            and stats.get("unexpected") == 0 and stats.get("flaky") == 0
+            and stats.get("skipped") == 0)
+
+
+def real_site_reader():
+    from cloudflare_site_observation import ObservationError, observe
+
+    def read(url):
+        try:
+            return observe(url)
+        except ObservationError as error:
+            raise CloudflareDeployError(f"could not observe {url} ({error})") from None
+        except Exception:
+            raise CloudflareDeployError(f"could not observe {url}") from None
+    return read
+
+
+def _clock():
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Deploy one Host to Cloudflare")
+    parser.add_argument("tag")
+    parser.add_argument("--target", required=True, choices=CONTRACT_HOSTS)
+    parser.add_argument("--state-root", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--node", required=True)
+    parser.add_argument("--wrangler", required=True)
+    parser.add_argument("--prior-tag")
+    arguments = parser.parse_args(argv)
+    # Beside this run's own state, not beside the evidence: a failed run must
+    # not create anything at or around the output path a caller checks for.
+    diagnostics = arguments.state_root / "diagnostics"
+    try:
+        if not arguments.state_root.is_absolute():
+            raise CloudflareDeployError(
+                "requires an absolute state root shared by all local operators")
+        if not arguments.state_root.is_dir():
+            # A mistyped root should be refused, not conjured by a failure path
+            # and then shared by nothing.
+            raise CloudflareDeployError("state root does not exist")
+        written = deploy(
+            host=arguments.target, tag=arguments.tag, run_id=arguments.run_id,
+            state_root=arguments.state_root, output=arguments.output,
+            node=arguments.node, wrangler=arguments.wrangler,
+            adapter=real_adapter(diagnostics),
+            verify_http=real_http_verification(),
+            browser=real_browser(arguments.target, diagnostics),
+            read_site=real_site_reader(), clock=_clock,
+            prior_tag=arguments.prior_tag)
+    except CloudflareDeployError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    except Exception as error:
+        # A backstop, not a substitute for attributing failures above: an
+        # unexpected exception must not become a traceback whose text could
+        # carry credentials into the log. It is still retained, redacted, so
+        # the failure can be reconciled rather than only counted.
+        retained = type("Unexpected", (), {
+            "returncode": 1, "stdout": f"{type(error).__name__}: {error}\n",
+            "stderr": ""})()
+        try:
+            path = _diagnostic(diagnostics, "unattributed.log", retained)
+            detail = f"; inspect {path}"
+        except Exception:
+            detail = ""
+        print(str(CloudflareDeployError(
+            f"failed for an unattributed reason{detail}")), file=sys.stderr)
+        return 2
+    print(json.dumps({"host": arguments.target, "tag": arguments.tag,
+                      "evidence": str(written)}, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

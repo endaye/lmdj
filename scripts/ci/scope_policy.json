@@ -163,6 +163,7 @@
     {"match": {"kind": "exact", "value": "scripts/docs-site.sh"}, "lanes": ["portal"]},
     {"match": {"kind": "exact", "value": "scripts/web-runtime-deploy.sh"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "exact", "value": "scripts/cloudflare-host.sh"}, "lanes": ["web_runtime_host", "deploy_contract"]},
+    {"match": {"kind": "exact", "value": "scripts/cloudflare-host-deploy.sh"}, "lanes": ["web_runtime_host", "deploy_contract"]},
     {"match": {"kind": "exact", "value": "scripts/creator-web-deploy.sh"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "exact", "value": "scripts/release.sh"}, "lanes": ["deploy_contract", "ci_contract"]},
     {"match": {"kind": "exact", "value": "scripts/local-ci.sh"}, "lanes": ["ci_contract"]},
