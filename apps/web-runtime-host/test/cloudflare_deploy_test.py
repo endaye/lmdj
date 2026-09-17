@@ -28,19 +28,30 @@ NODE = "/opt/node/bin/node"
 WRANGLER = "/opt/wrangler/bin/wrangler.js"
 
 
-def release(host, product="1.0.60.0", version="3.0.0"):
+def receipt(host, tag=None, product="1.0.60.0", version="3.0.0",
+            source=REVISION, index="2" * 64, manifest="3" * 64):
     stem = {"creator-web": "lmdj-creator-web"}.get(host, "lmdj-web-runtime-host")
-    return {"product_build": product, "host_version": version,
-            "archive": {"filename": f"{stem}-{version}-product-{product}.zip",
+    return {"kind": "verified-host-stage", "source": source,
+            "tag": tag or ("lmdj-v" + product), "host_id": host,
+            "product_build": product, "host_version": version,
+            "archive": {"name": f"{stem}-{version}-product-{product}.zip",
                         "sha256": "1" * 64},
-            "release_files": {"index_sha256": "2" * 64, "manifest_sha256": "3" * 64}}
+            "files": {"index.html": {"sha256": index},
+                      "host-manifest.json": {"sha256": manifest}}}
+
+
+def write_stage(directory, document):
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "dist").mkdir(exist_ok=True)
+    (directory / "stage.json").write_text(json.dumps(document), encoding="utf-8")
 
 
 class Adapter:
     """The shared Cloudflare adapter, recording the order it was driven in."""
 
     def __init__(self, *, exists=True, fail=None, promoted_version=CANDIDATE,
-                 workspace=None, stage=True):
+                 workspace=None, stage=True, receipt=None, prior_receipt=None):
+        self.receipt, self.prior_receipt = receipt, prior_receipt
         self.exists = exists
         self.fail = fail
         self.promoted_version = promoted_version
@@ -59,15 +70,22 @@ class Adapter:
             return json.dumps({"worker": "w", "exists": self.exists,
                                "deployment": deployment, "route": None,
                                "records": []})
+        host = arguments[arguments.index("--target") + 1]
         if command == "candidate":
-            host = arguments[arguments.index("--target") + 1]
             if self.stage:
-                (Path(self.workspace) / host / "dist").mkdir(parents=True, exist_ok=True)
+                write_stage(Path(self.workspace) / host,
+                            self.receipt or receipt(host))
             return json.dumps({"result": {"version_id": CANDIDATE},
                                "workspace": str(self.workspace)})
         if command == "promote":
+            if self.stage:
+                write_stage(Path(self.workspace) / "prior" / host,
+                            self.prior_receipt
+                            or receipt(host, tag=PRIOR_TAG, product="1.0.59.0",
+                                       version="2.9.0"))
             return json.dumps({"result": {"id": DEPLOYMENT,
-                                          "version_id": self.promoted_version}})
+                                          "version_id": self.promoted_version},
+                               "workspace": str(self.workspace)})
         raise AssertionError(command)
 
 
@@ -120,13 +138,11 @@ class DeployTest(unittest.TestCase):
         self.browser = browser or Browser()
         self.http = http or Http()
         arguments = dict(
-            host=host, tag=TAG, release=release(host), run_id=RUN_ID,
-            git_revision=REVISION, state_root=self.root / "state",
+            host=host, tag=TAG, run_id=RUN_ID, state_root=self.root / "state",
             output=self.output, node=NODE, wrangler=WRANGLER,
             adapter=self.adapter, verify_http=self.http, browser=self.browser,
             read_site=self.read_site, clock=lambda: next(self.stamps),
-            prior_tag=PRIOR_TAG if prior else None,
-            prior_release=release(host, "1.0.59.0", "2.9.0") if prior else None)
+            prior_tag=PRIOR_TAG if prior else None)
         arguments.update(changes)
         return deploy(**arguments)
 
@@ -177,10 +193,34 @@ class DeployTest(unittest.TestCase):
             self.deploy_once(prior=False)
         self.assertFalse(self.output.exists())
 
-    def test_a_prior_tag_without_its_release_is_refused(self):
+    def test_the_document_describes_what_was_staged(self):
+        # Not what a caller said: the Build, Host version, source revision and
+        # digests all come from the receipt the adapter left behind.
+        self.deploy_once(adapter=Adapter(receipt=receipt(
+            "web-runtime-host", product="1.0.60.0", version="3.1.0",
+            source="c" * 40, index="7" * 64)))
+        document = self.written()
+        self.assertEqual(document["host_version"], "3.1.0")
+        self.assertEqual(document["git_revision"], "c" * 40)
+        self.assertEqual(document["release_files"]["index_sha256"], "7" * 64)
+        self.assertEqual(document["archive"]["filename"],
+                         "lmdj-web-runtime-host-3.1.0-product-1.0.60.0.zip")
+
+    def test_a_receipt_for_another_tag_is_refused(self):
         with self.assertRaises(CloudflareDeployError):
-            self.deploy_once(prior_release=None)
+            self.deploy_once(adapter=Adapter(
+                receipt=receipt("web-runtime-host", tag="lmdj-v1.0.58.0")))
         self.assertFalse(self.output.exists())
+
+    def test_an_incomplete_receipt_is_refused(self):
+        for absent in ("archive", "files", "product_build", "host_version",
+                       "source", "kind"):
+            document = receipt("web-runtime-host")
+            del document[absent]
+            self.setUp()
+            with self.subTest(absent=absent), self.assertRaises(CloudflareDeployError):
+                self.deploy_once(adapter=Adapter(receipt=document))
+            self.assertFalse(self.output.exists())
 
     def test_a_failed_candidate_never_promotes_or_records(self):
         with self.assertRaises(CloudflareDeployError):
@@ -280,7 +320,8 @@ class DeployTest(unittest.TestCase):
 
     def test_an_unconfigured_host_is_refused(self):
         with self.assertRaises(CloudflareDeployError):
-            self.deploy_once(host="portal")
+            self.deploy_once(host="portal", adapter=Adapter(
+                receipt=receipt("web-runtime-host")))
         self.assertFalse(self.output.exists())
 
     def test_an_unreadable_adapter_result_is_refused(self):
@@ -295,11 +336,11 @@ class DeployTest(unittest.TestCase):
             self.deploy_once(adapter=Silent(exists=False), prior=False)
         self.assertFalse(self.output.exists())
 
-    def test_a_release_description_must_be_complete(self):
-        incomplete = release("web-runtime-host")
-        del incomplete["release_files"]
+    def test_a_served_file_digest_must_be_staged(self):
+        document = receipt("web-runtime-host")
+        del document["files"]["host-manifest.json"]
         with self.assertRaises(CloudflareDeployError):
-            self.deploy_once(release=incomplete)
+            self.deploy_once(adapter=Adapter(receipt=document))
         self.assertFalse(self.output.exists())
 
 
