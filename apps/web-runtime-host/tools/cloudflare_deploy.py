@@ -58,8 +58,14 @@ output path is never created.
 
 from __future__ import annotations
 
+import argparse
+import datetime as dt
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
+from urllib.parse import urlsplit
 
 from cloudflare_deployment_evidence import (
     CloudflareEvidenceError,
@@ -314,3 +320,125 @@ def _live(adapter, common):
     if document["exists"] and not isinstance(document.get("deployment"), dict):
         raise CloudflareDeployError("read an existing Worker with no deployment")
     return document
+
+
+ROOT = Path(__file__).resolve().parents[3]
+BROWSER = {
+    "creator-web": ("creator-deployment",
+                    "deployment/creator_web_deployment.spec.mjs",
+                    "LMDJ_CREATOR_WEB"),
+    "web-runtime-host": ("chromium",
+                         "deployment/web_runtime_host_deployment.spec.mjs",
+                         "LMDJ_WEB_HOST"),
+}
+SECRETS = ("CLOUDFLARE_API_TOKEN", "GITHUB_TOKEN")
+
+
+def _diagnostic(directory, name, result):
+    """Retain a failed command's output without putting it in the error."""
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_text((result.stdout or "") + (result.stderr or ""), encoding="utf-8")
+    return path
+
+
+def real_adapter(diagnostics, *, timeout=2400):
+    """`scripts/cloudflare-host.sh`, with its output retained rather than raised.
+
+    The adapter talks to Cloudflare and GitHub, so its stderr is exactly the
+    text that must not become an error message; it is written beside the run
+    instead and the failure names the file.
+    """
+    def run(arguments):
+        result = subprocess.run(
+            ["bash", str(ROOT / "scripts" / "cloudflare-host.sh"), *arguments],
+            cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+        if result.returncode:
+            path = _diagnostic(diagnostics, f"adapter-{arguments[0]}.log", result)
+            raise CloudflareDeployError(f"{arguments[0]} failed; inspect {path}")
+        return result.stdout
+    return run
+
+
+def real_http_verification():
+    """The Host smoke, reported as the exact True the sequence requires."""
+    from cloudflare_smoke import smoke
+
+    def verify(distribution, url, preview):
+        observed = smoke(distribution, url, preview=preview)
+        return isinstance(observed, dict) and observed.get("status") == "passed"
+    return verify
+
+
+def real_browser(host, diagnostics, *, timeout=900):
+    """The Host's existing Playwright deployment spec, against one base URL."""
+    project, spec, prefix = BROWSER[host]
+
+    def check(url):
+        environment = {k: v for k, v in os.environ.items() if k not in SECRETS}
+        environment.update({"LMDJ_WEB_HOST_CLEAN_ROOM": "1",
+                            f"{prefix}_EXTERNAL_SERVER": "1",
+                            f"{prefix}_BASE_URL": url})
+        result = subprocess.run(
+            ["npm", "--prefix", str(ROOT / "tests/platform/web"), "test", "--",
+             f"--project={project}", spec],
+            cwd=ROOT, capture_output=True, text=True, timeout=timeout,
+            env=environment)
+        if result.returncode:
+            origin = urlsplit(url).hostname or "origin"
+            path = _diagnostic(diagnostics, f"browser-{origin}.log", result)
+            raise CloudflareDeployError(f"browser check of {url} failed; inspect {path}")
+        return True
+    return check
+
+
+def real_site_reader():
+    from cloudflare_site_observation import ObservationError, observe
+
+    def read(url):
+        try:
+            return observe(url)
+        except ObservationError as error:
+            raise CloudflareDeployError(f"could not observe {url} ({error})") from None
+    return read
+
+
+def _clock():
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Deploy one Host to Cloudflare")
+    parser.add_argument("tag")
+    parser.add_argument("--target", required=True, choices=CONTRACT_HOSTS)
+    parser.add_argument("--state-root", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--node", required=True)
+    parser.add_argument("--wrangler", required=True)
+    parser.add_argument("--prior-tag")
+    arguments = parser.parse_args(argv)
+    diagnostics = arguments.output.parent
+    try:
+        if not arguments.state_root.is_absolute():
+            raise CloudflareDeployError(
+                "requires an absolute state root shared by all local operators")
+        written = deploy(
+            host=arguments.target, tag=arguments.tag, run_id=arguments.run_id,
+            state_root=arguments.state_root, output=arguments.output,
+            node=arguments.node, wrangler=arguments.wrangler,
+            adapter=real_adapter(diagnostics),
+            verify_http=real_http_verification(),
+            browser=real_browser(arguments.target, diagnostics),
+            read_site=real_site_reader(), clock=_clock,
+            prior_tag=arguments.prior_tag)
+    except CloudflareDeployError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(json.dumps({"host": arguments.target, "tag": arguments.tag,
+                      "evidence": str(written)}, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

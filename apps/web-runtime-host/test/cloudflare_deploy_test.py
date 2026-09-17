@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """The deployment sequence records evidence only when every leg passed."""
 
+import contextlib
+import io
 import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "apps/web-runtime-host/tools"))
 
+import cloudflare_deploy  # noqa: E402
 from cloudflare_deploy import CloudflareDeployError, deploy  # noqa: E402
 from cloudflare_deployment_evidence import (  # noqa: E402
     production_url,
@@ -376,6 +380,84 @@ class DeployTest(unittest.TestCase):
         with self.assertRaises(CloudflareDeployError):
             self.deploy_once(adapter=Adapter(receipt=document))
         self.assertFalse(self.output.exists())
+
+
+class EntryPointTest(unittest.TestCase):
+    """The shipped command refuses bad input and never invents an exit code."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.captured = {}
+
+    def arguments(self, *, state_root=None):
+        return [TAG, "--target", "web-runtime-host",
+                "--state-root", str(state_root or self.root / "state"),
+                "--output", str(self.root / "evidence.json"),
+                "--run-id", str(RUN_ID), "--node", NODE, "--wrangler", WRANGLER,
+                "--prior-tag", PRIOR_TAG]
+
+    def test_a_relative_state_root_is_refused(self):
+        # Every local operator shares one root; a relative one is not shared.
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            code = cloudflare_deploy.main(self.arguments(state_root=Path("state")))
+        self.assertEqual(code, 2)
+        self.assertIn("state root", errors.getvalue())
+
+    def test_a_failed_deployment_exits_two_without_a_traceback(self):
+        errors = io.StringIO()
+        with patch.object(cloudflare_deploy, "deploy",
+                          side_effect=CloudflareDeployError("candidate failed")), \
+                contextlib.redirect_stderr(errors):
+            code = cloudflare_deploy.main(self.arguments())
+        self.assertEqual(code, 2)
+        self.assertIn("candidate failed", errors.getvalue())
+
+    def test_a_complete_deployment_reports_where_the_evidence_landed(self):
+        written = self.root / "evidence.json"
+        output = io.StringIO()
+        with patch.object(cloudflare_deploy, "deploy", return_value=written), \
+                contextlib.redirect_stdout(output):
+            code = cloudflare_deploy.main(self.arguments())
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(output.getvalue()),
+                         {"host": "web-runtime-host", "tag": TAG,
+                          "evidence": str(written)})
+
+    def test_the_command_passes_the_operator_inputs_through(self):
+        seen = {}
+
+        def record(**arguments):
+            seen.update(arguments)
+            return self.root / "evidence.json"
+
+        with patch.object(cloudflare_deploy, "deploy", side_effect=record), \
+                contextlib.redirect_stdout(io.StringIO()):
+            cloudflare_deploy.main(self.arguments())
+        self.assertEqual(seen["host"], "web-runtime-host")
+        self.assertEqual(seen["tag"], TAG)
+        self.assertEqual(seen["prior_tag"], PRIOR_TAG)
+        self.assertEqual(seen["run_id"], str(RUN_ID))
+        self.assertEqual(seen["node"], NODE)
+        self.assertEqual(seen["wrangler"], WRANGLER)
+
+    def test_the_browser_secrets_never_reach_the_spec(self):
+        # The Playwright run has no business holding deployment credentials.
+        check = cloudflare_deploy.real_browser("web-runtime-host", self.root)
+        with patch.object(cloudflare_deploy.subprocess, "run") as runner:
+            runner.return_value = type("R", (), {"returncode": 0, "stdout": "",
+                                                 "stderr": ""})()
+            with patch.dict(cloudflare_deploy.os.environ,
+                            {"CLOUDFLARE_API_TOKEN": "secret",
+                             "GITHUB_TOKEN": "secret", "PATH": "/usr/bin"}):
+                self.assertTrue(check("https://lab.lmdj.workers.dev"))
+        environment = runner.call_args.kwargs["env"]
+        self.assertNotIn("CLOUDFLARE_API_TOKEN", environment)
+        self.assertNotIn("GITHUB_TOKEN", environment)
+        self.assertEqual(environment["LMDJ_WEB_HOST_BASE_URL"],
+                         "https://lab.lmdj.workers.dev")
 
 
 if __name__ == "__main__":
