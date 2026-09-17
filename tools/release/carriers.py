@@ -253,11 +253,10 @@ def read_prepared_plan(root, tag):
     The path is the one `prepared_step` reads back from, so the enrollment and
     the step agree on where the plan lives. `None` means the prepared output is
     not there yet, which is the same condition `prepared_step.read_back` reports
-    as "absent"; the step that needs it decides what that means for itself, and
-    and the step that needs it decides what that means for itself. Only an
-    absent pair means that: the digest is checked against the plan document
-    bytes it names, so a swapped digest file cannot silently redefine what a
-    later step binds, and half of the pair is drift.
+    as "absent"; the step that needs it decides what that means for itself.
+    Only an absent pair means that: the digest is checked against the plan
+    document bytes it names, so a swapped digest file cannot silently redefine
+    what a later step binds, and half of the pair is drift.
 
     No ledger row records this digest and none needs to. The plan is a
     deterministic function of the reviewed intent row, the policy and the
