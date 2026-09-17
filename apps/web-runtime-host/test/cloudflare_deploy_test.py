@@ -72,25 +72,31 @@ class Adapter:
 
 
 class Browser:
-    def __init__(self, fail_on=None):
-        self.fail_on, self.seen = fail_on, []
+    def __init__(self, fail_on=None, soft_fail_on=None):
+        self.fail_on, self.soft_fail_on, self.seen = fail_on, soft_fail_on, []
 
     def __call__(self, url):
         self.seen.append(url)
         if self.fail_on is not None and self.fail_on in url:
             raise CloudflareDeployError("browser check failed")
+        if self.soft_fail_on is not None and self.soft_fail_on in url:
+            return None
+        return True
 
 
 class Http:
     """The exact-signed HTTP verification this module runs for itself."""
 
-    def __init__(self, fail_on=None):
-        self.fail_on, self.seen = fail_on, []
+    def __init__(self, fail_on=None, soft_fail_on=None):
+        self.fail_on, self.soft_fail_on, self.seen = fail_on, soft_fail_on, []
 
     def __call__(self, distribution, url, preview):
         self.seen.append((url, preview, distribution.is_dir()))
         if self.fail_on is not None and self.fail_on in url:
             raise CloudflareDeployError("exact signed HTTP verification failed")
+        if self.soft_fail_on is not None and self.soft_fail_on in url:
+            return None
+        return True
 
 
 class DeployTest(unittest.TestCase):
@@ -110,7 +116,7 @@ class DeployTest(unittest.TestCase):
                     browser=None, http=None, prior=True, **changes):
         self.adapter = adapter or Adapter()
         if self.adapter.workspace is None:
-            self.adapter.workspace = self.root / "workspace"
+            self.adapter.workspace = self.root / "state" / "workspace"
         self.browser = browser or Browser()
         self.http = http or Http()
         arguments = dict(
@@ -235,6 +241,27 @@ class DeployTest(unittest.TestCase):
 
         with self.assertRaises(CloudflareDeployError):
             self.deploy_once(adapter=NoVersion())
+        self.assertFalse(self.output.exists())
+
+    def test_a_verifier_that_does_not_report_true_is_not_a_pass(self):
+        # A check that skipped, retried into a falsy result or reported a soft
+        # failure must never be written down as passed.
+        for kind, made in (("http", lambda u: {"http": Http(soft_fail_on=u)}),
+                           ("browser", lambda u: {"browser": Browser(soft_fail_on=u)})):
+            for url in (CANDIDATE[:8], "//lab."):
+                self.setUp()
+                with self.subTest(kind=kind, url=url), \
+                        self.assertRaises(CloudflareDeployError):
+                    self.deploy_once(**made(url))
+                self.assertFalse(self.output.exists())
+
+    def test_a_workspace_outside_the_state_root_is_refused(self):
+        # The verified bytes must provably be the ones this run staged.
+        foreign = self.root / "elsewhere"
+        (foreign / "web-runtime-host" / "dist").mkdir(parents=True)
+        with self.assertRaises(CloudflareDeployError):
+            self.deploy_once(adapter=Adapter(workspace=foreign))
+        self.assertNotIn("promote", self.adapter.calls)
         self.assertFalse(self.output.exists())
 
     def test_promoting_another_version_is_refused(self):

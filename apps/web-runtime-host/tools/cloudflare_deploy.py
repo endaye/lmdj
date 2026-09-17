@@ -16,6 +16,17 @@ signed distribution the adapter staged, so `immutable.http` and `production.http
 say what this module saw rather than what another module promised. A document
 must never assert a check nobody in it performed.
 
+Both verifiers must return exactly `True`, the idiom `cloudflare_transaction`
+already uses. Not raising is too weak a signal: a check that skipped, returned
+a falsy result or reported a soft failure would otherwise be written down as
+`passed`.
+
+The bytes each check runs against are provably this run's. The adapter stages
+under the `--state-root` it was given and reports the workspace, so the reported
+path is resolved and required to sit inside that root before anything is
+verified: a stale or unrelated staging tree cannot be substituted by a
+malformed result.
+
 Nothing is written unless every leg passed. A deployment whose browser check
 failed must not leave behind a document saying the HTTP check passed: the
 release driver would read that as a verified deployment. Failure raises and the
@@ -78,9 +89,9 @@ def deploy(*, host, tag, release, run_id, git_revision, state_root, output,
 
     `adapter(arguments)` runs `scripts/cloudflare-host.sh` and returns its
     stdout. `verify_http(distribution, url, preview)` runs `cloudflare_smoke`
-    against the staged signed bytes and raises if it fails. `browser(url)` runs
-    the Host's existing Playwright deployment spec against that URL and raises
-    if it fails. `read_site(url)` returns the recorded production response the
+    against the staged signed bytes and `browser(url)` runs the Host's existing
+    Playwright deployment spec against that URL; both must return exactly
+    `True`. `read_site(url)` returns the recorded production response the
     pre-dispatch prior digest is taken over.
     """
     if host not in WORKERS:
@@ -97,6 +108,7 @@ def deploy(*, host, tag, release, run_id, git_revision, state_root, output,
 
     # The prior is read before anything mutates, so the digest the release
     # driver froze before dispatch is the one this deployment replaced.
+    root = Path(state_root).resolve()
     live = _live(adapter, common)
     prior_deployment = live["deployment"] if live["exists"] else None
     prior_site_response = read_site(production_url(host))
@@ -133,12 +145,12 @@ def deploy(*, host, tag, release, run_id, git_revision, state_root, output,
     immutable_url = version_url(host, version)
     # The adapter stages the signed release at `<workspace>/<host>` and reports
     # the workspace, so the bytes it verified against are the bytes checked here.
-    distribution = _distribution(uploaded, host)
+    distribution = _distribution(uploaded, host, root)
 
     # Both legs this module records, in the order production may be touched: a
     # candidate that only serves correct bytes is not yet a working Host.
-    verify_http(distribution, immutable_url, True)
-    browser(immutable_url)
+    _passed(verify_http(distribution, immutable_url, True), "HTTP", immutable_url)
+    _passed(browser(immutable_url), "browser", immutable_url)
 
     promoted = _adapter_result(
         adapter(["promote", tag, *common, "--version", version,
@@ -151,8 +163,8 @@ def deploy(*, host, tag, release, run_id, git_revision, state_root, output,
         raise CloudflareDeployError("promotion returned no deployment identity")
 
     live_url = production_url(host)
-    verify_http(distribution, live_url, False)
-    browser(live_url)
+    _passed(verify_http(distribution, live_url, False), "HTTP", live_url)
+    _passed(browser(live_url), "browser", live_url)
 
     document = {
         "contract": _contract(host),
@@ -205,11 +217,23 @@ def _result(url, release):
             "host_version": release["host_version"]}
 
 
-def _distribution(uploaded, host):
+def _passed(result, kind, url):
+    """A verifier reports exactly True; anything else is not a passed check."""
+    if result is not True:
+        raise CloudflareDeployError(f"{kind} verification of {url} did not pass")
+
+
+def _distribution(uploaded, host, root):
     workspace = uploaded.get("workspace")
     if not isinstance(workspace, str) or not workspace:
         raise CloudflareDeployError("candidate reported no staging workspace")
-    distribution = Path(workspace) / host / "dist"
+    # The adapter stages under the state root it was given, so a reported path
+    # outside it is not this run's staging tree and must not be verified.
+    resolved = Path(workspace).resolve()
+    if resolved != root and root not in resolved.parents:
+        raise CloudflareDeployError(
+            "candidate reported a workspace outside this run's state root")
+    distribution = resolved / host / "dist"
     if not distribution.is_dir():
         raise CloudflareDeployError("candidate staged no signed distribution")
     return distribution
