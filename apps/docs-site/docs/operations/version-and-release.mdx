@@ -480,7 +480,7 @@ fail-closed，effect 验证复用 `DeploymentEffect`（对 run 留存证据逐�
 `batch-result:<run_id>:<witness>` 引用。candidate 状态读取按请求绑定，他人分配不可顶替。
 entry_gates 另补 `batch_evidence_consumer` 组装：repository/workflow 身份与 producer pin 只取自
 钉住 policy 的 `batch_evidence_source`。
-真实入口的组装层 `tools/release/entry_composition.py` 现已把 13 步接成惰性、
+真实入口的组装层 `tools/release/entry_composition.py` 现已把全部 14 步接成惰性、
 请求绑定的 carrier 组装（`cli.release_carriers` 改为三参委托）；组装本身不驱动
 任何步骤，reviewed changelog 编辑输入与只读冻结部署投影两个 seam 仍具名拒绝，
 对应步骤如实报 `pending`。
@@ -491,7 +491,15 @@ entry_gates 另补 `batch_evidence_consumer` 组装：repository/workflow 身份
 `read_back` 校验。reviewed intent 绑定输入，不绑定那两个派生摘要，账本不新增字段。
 授权行未落地时该步如实报 `pending`；`prepare()` 抛错报 `unknown` 且不重试；计划已写而本地
 签名 tag 缺失时报 `pending`，绝不在漂移上重建。
-`tag` 是唯一仍未登记的步骤，`release_carriers` 因此继续拒绝执行整个范围。
+`tag` 无需新契约：它排在 `prepared` 之后，spec 的每个字段此时都已存在——prepared 产出给出
+`plan_sha256`，本地签名 tag 给出 `tag_object_id`——故 `enroll_tag` 直接复用既有恢复模式，
+与 `enroll_draft` 同构，任一者缺席即如实报 `pending` 而不推送。spec 的 `signer_fingerprint`
+取自钉住的 policy 而非被验证的 tag，本地与远端两侧的可信签名者比对因此都是真实校验；推送完成
+但远端尚不可观测时报 `unknown` 而非 `pending`，下一次 advance 走 reconcile 而不重推。
+
+14 步全部登记后，`backend.missing(STEPS)` 为空，`run` / `resume` 不再因缺少载体而拒绝整个
+范围——拒绝机制本身未变，只是无可报告。这只证明完整离线编排与入口所有权：每步在自身身份
+尚未存在时仍如实报 `pending`，真实凭据、签名、发布与部署不在此范围内。
 
 带 `changelog` 的 reviewed intent 现已接通 prepare / Draft / published 验证：正文
 进入 plan 摘要，prepare 重验真实 Git 范围，恢复时检查本地 notes，Draft 与公开

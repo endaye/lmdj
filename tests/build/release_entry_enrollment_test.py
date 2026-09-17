@@ -18,6 +18,7 @@ from tools.release.carriers import (  # noqa: E402
     enroll_intent,
     enroll_prepared,
     enroll_promotion,
+    enroll_tag,
     enroll_verification,
     enrolled_candidate_timestamp,
     read_candidate_identity,
@@ -769,6 +770,143 @@ class PreparedAuthorizationTest(unittest.TestCase):
             del document[absent]
             with self.assertRaises(PreparedStepError):
                 validate_authorization(document)
+
+
+class TagEnrollmentTest(unittest.TestCase):
+    """`tag` needs no new contract: every spec field exists when it runs."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.local = None
+        self.remote = None
+        self.pushed = []
+        self.publishes = True
+
+    def write_plan(self):
+        import hashlib
+
+        from tools.release import prepared_step
+
+        output = self.root / prepared_step.output_relative("lmdj-v" + BUILD)
+        output.mkdir(parents=True, exist_ok=True)
+        body = b'{"fixture": "prepared-plan"}'
+        (output / prepared_step._PLAN_DOCUMENT).write_bytes(body)
+        (output / prepared_step._PLAN_DIGEST).write_text(
+            hashlib.sha256(body).hexdigest() + "\n")
+
+    def prepared(self):
+        """The state `prepared` leaves behind: the plan and its signed tag."""
+        self.write_plan()
+        self.local = LocalTag()
+
+    def push_tag(self, tag):
+        self.pushed.append(tag)
+        if self.publishes:
+            self.remote = LocalTag()
+
+    def step(self, *, ledger=None, signer=SIGNER):
+        return enroll_tag(
+            root=self.root, candidate_root=self.root, repository_id=12,
+            ledger=Ledger() if ledger is None else ledger,
+            push_tag=self.push_tag,
+            local_tag_state=lambda _tag: self.local,
+            remote_tag_state=lambda _tag: self.remote,
+            signer_fingerprint=signer)
+
+    def operation(self):
+        return {"step": "tag", "operation_id": DIGEST, "status": "intent",
+                "evidence": None}
+
+    def test_the_step_drives_its_own_write(self):
+        self.assertTrue(callable(getattr(self.step(), "advance", None)))
+
+    def test_the_step_waits_until_prepared_has_written_its_plan(self):
+        self.local = LocalTag()
+        step = self.step()
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        step.advance(state(), self.operation(), before_write=lambda: None)
+        self.assertEqual(self.pushed, [])
+
+    def test_the_step_waits_when_the_plan_has_no_signed_tag(self):
+        # This step pushes a tag; it never creates one. Without the signed tag
+        # there is no `tag_object_id` to bind, so it waits rather than pushing.
+        self.write_plan()
+        step = self.step()
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        step.advance(state(), self.operation(), before_write=lambda: None)
+        self.assertEqual(self.pushed, [])
+
+    def test_the_step_pushes_the_prepared_tag_and_verifies_the_remote(self):
+        self.prepared()
+        step = self.step()
+        # The local tag is there and the remote is not: the driver drives it.
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
+        guarded = []
+        step.advance(state(), self.operation(),
+                     before_write=lambda: guarded.append(True))
+        self.assertEqual(guarded, [True])
+        self.assertEqual(self.pushed, ["lmdj-v" + BUILD])
+        observed = step.observe(state(), self.operation())
+        self.assertEqual(observed.status, "verified")
+        self.assertEqual(observed.evidence["reference"], "tag:lmdj-v" + BUILD)
+
+    def test_an_already_pushed_tag_verifies_without_a_second_push(self):
+        self.prepared()
+        self.remote = LocalTag()
+        step = self.step()
+        self.assertEqual(step.observe(state(), self.operation()).status, "verified")
+        step.advance(state(), self.operation(), before_write=lambda: None)
+        self.assertEqual(self.pushed, [])
+
+    def test_a_push_whose_remote_is_not_observable_is_unknown_not_pending(self):
+        # A completed push with no observable remote is an unknown write
+        # result, never outstanding work: the next advance must reconcile
+        # rather than push again over the unknown.
+        self.prepared()
+        self.publishes = False
+        carrier = self.step().carrier(state(), self.operation())
+        observed = carrier.advance(state(), self.operation(),
+                                   before_write=lambda: None)
+        self.assertEqual(observed.status, "unknown")
+        self.assertIsNone(observed.evidence)
+        self.assertEqual(self.pushed, ["lmdj-v" + BUILD])
+
+    def test_a_remote_tag_differing_from_the_local_one_fails_closed(self):
+        from tools.release.tag_step import TagStepError
+
+        self.prepared()
+        self.remote = LocalTag(object_id="9" * 40)
+        step = self.step()
+        with self.assertRaises(TagStepError):
+            step.observe(state(), self.operation())
+
+    def test_the_spec_binds_the_policy_signer_not_the_tag_s_own(self):
+        # Taking the fingerprint from the tag being verified would make the
+        # trusted-signer comparison tautological on both sides.
+        from tools.release.tag_step import TagStepError
+
+        self.prepared()
+        self.remote = LocalTag()
+        step = self.step(signer="B" * 40)
+        with self.assertRaises(TagStepError):
+            step.observe(state(), self.operation())
+
+    def test_a_local_tag_on_another_target_fails_closed(self):
+        from tools.release.tag_step import TagStepError
+
+        self.prepared()
+        self.local = LocalTag(target_revision="9" * 40)
+        step = self.step()
+        with self.assertRaises(TagStepError):
+            step.observe(state(), self.operation())
+
+    def test_an_unauthorized_tag_fails_closed_rather_than_waiting(self):
+        step = self.step(ledger=Ledger(rows={}))
+        with self.assertRaises(JournalError):
+            step.observe(state(), self.operation())
+        self.assertEqual(self.pushed, [])
 
 
 class Projection:
