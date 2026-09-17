@@ -562,6 +562,31 @@ class EntryPointTest(unittest.TestCase):
         self.assertNotIn("upstream text", errors.getvalue())
         self.assertIn("unattributed", errors.getvalue())
 
+    def test_a_relative_state_root_creates_nothing(self):
+        # The refusal happens before `deploy`, so the adapter and browser
+        # closures never run and no diagnostics tree appears anywhere.
+        before = sorted(Path.cwd().iterdir())
+        with contextlib.redirect_stderr(io.StringIO()):
+            code = cloudflare_deploy.main(self.arguments(state_root=Path("state")))
+        self.assertEqual(code, 2)
+        self.assertEqual(sorted(Path.cwd().iterdir()), before)
+        self.assertFalse((Path.cwd() / "state").exists())
+
+    def test_a_named_marker_survives_the_shape_pass(self):
+        # A credential this process held should be named even when its only
+        # occurrence is inside a header the shape patterns also match.
+        result = type("R", (), {
+            "returncode": 1,
+            "stdout": "Authorization: Bearer held-by-this-process\n",
+            "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"CLOUDFLARE_API_TOKEN": "held-by-this-process"},
+                        clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        body = path.read_text(encoding="utf-8")
+        self.assertNotIn("held-by-this-process", body)
+        self.assertIn("[REDACTED CLOUDFLARE_API_TOKEN]", body)
+
     def test_a_hung_or_unlaunchable_command_is_our_error_not_a_traceback(self):
         # main only catches CloudflareDeployError, so anything else escaping
         # here becomes a traceback and a non-2 exit.

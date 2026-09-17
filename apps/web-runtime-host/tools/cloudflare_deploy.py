@@ -346,11 +346,13 @@ BROWSER_ENVIRONMENT = ("CI", "HOME", "LANG", "LC_ALL", "PATH",
 SECRET_NAME = re.compile(r"TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|APIKEY",
                          re.IGNORECASE)
 # Credentials this process never held still appear in the text tools echo.
+# Each skips text already replaced, so a named marker survives the shape pass.
 SECRET_TEXT = (
     # To end of line: a header value is not one token ("Bearer <secret>").
-    re.compile(r"(?i)(authorization\s*:\s*).+"),
-    re.compile(r"(?i)(\bbearer\s+)\S+"),
-    re.compile(r"(?i)((?:token|secret|password|api[_-]?key)\s*[=:]\s*)\S+"),
+    re.compile(r"(?i)(authorization\s*:\s*)(?![^\n]*\[REDACTED).+"),
+    re.compile(r"(?i)(\bbearer\s+)(?![^\n]*\[REDACTED)\S+"),
+    re.compile(r"(?i)((?:token|secret|password|api[_-]?key)\s*[=:]\s*)"
+               r"(?![^\n]*\[REDACTED)\S+"),
 )
 
 
@@ -365,16 +367,17 @@ def _redacted(text):
     or read one from a config file, still echoes it. So known credential-
     carrying shapes are redacted too.
     """
-    # Shapes first: they remove whole assignments and headers, so a marker left
-    # behind by value replacement cannot itself look like one and be mangled.
-    for pattern in SECRET_TEXT:
-        text = pattern.sub(r"\1[REDACTED]", text)
+    # Values first, so a credential this process held is named in the marker
+    # and an operator can tell which one leaked. The shape patterns then skip
+    # what is already replaced, and catch the ones held elsewhere.
     for name, value in os.environ.items():
         # Below four characters a value is not a credential but is very likely
         # a substring of unrelated output, and a mangled diagnostic helps
-        # nobody. Shape redaction above still covers assignments and headers.
+        # nobody. Shape redaction below still covers assignments and headers.
         if value and len(value) >= 4 and SECRET_NAME.search(name):
             text = text.replace(value, f"[REDACTED {name}]")
+    for pattern in SECRET_TEXT:
+        text = pattern.sub(r"\1[REDACTED]", text)
     return text
 
 
