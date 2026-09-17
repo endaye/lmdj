@@ -637,6 +637,41 @@ class EntryPointTest(unittest.TestCase):
         self.assertIn("[REDACTED FIRST_TOKEN]",
                       path.read_text(encoding="utf-8"))
 
+    def test_the_browser_keeps_the_trust_its_proxy_needs(self):
+        # Forwarding the proxy without its CA bundle fails the leg after
+        # promotion, which is the failure the proxy entries exist to avoid.
+        _, environment = self.browser_run(
+            stdout=self.report(),
+            environment={"PATH": "/usr/bin", "HTTPS_PROXY": "http://p:3128",
+                         "NODE_EXTRA_CA_CERTS": "/etc/ca.pem"})
+        self.assertEqual(environment["NODE_EXTRA_CA_CERTS"], "/etc/ca.pem")
+
+    def test_a_timeout_says_so_rather_than_reporting_a_failure(self):
+        # A hung run and a failed assertion call for different remedies.
+        adapter = cloudflare_deploy.real_adapter(self.root, timeout=1)
+        with patch.object(cloudflare_deploy.subprocess, "run",
+                          side_effect=cloudflare_deploy.subprocess.TimeoutExpired(
+                              "npm", 1)):
+            with self.assertRaises(CloudflareDeployError) as raised:
+                adapter(["candidate", TAG])
+        self.assertIn("timed out", str(raised.exception))
+        with patch.object(cloudflare_deploy.subprocess, "run",
+                          side_effect=FileNotFoundError("npm")):
+            with self.assertRaises(CloudflareDeployError) as raised:
+                adapter(["candidate", TAG])
+        self.assertIn("could not be launched", str(raised.exception))
+
+    def test_output_is_withheld_when_redaction_cannot_run(self):
+        # Redaction is what makes retaining the output safe at all.
+        result = type("R", (), {"returncode": 1, "stdout": "raw-output",
+                                "stderr": ""})()
+        with patch.object(cloudflare_deploy, "_redacted",
+                          side_effect=RuntimeError("pattern too large")):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        body = path.read_text(encoding="utf-8")
+        self.assertNotIn("raw-output", body)
+        self.assertIn("withheld", body)
+
     def test_a_hung_or_unlaunchable_command_is_our_error_not_a_traceback(self):
         # main only catches CloudflareDeployError, so anything else escaping
         # here becomes a traceback and a non-2 exit.

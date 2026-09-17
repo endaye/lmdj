@@ -340,7 +340,10 @@ BROWSER_ENVIRONMENT = ("CI", "HOME", "LANG", "LC_ALL", "PATH",
                        # deployed origin without these, and that failure would
                        # read as a regression rather than an environment.
                        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-                       "http_proxy", "https_proxy", "no_proxy")
+                       "http_proxy", "https_proxy", "no_proxy",
+                       # And the trust to go with them: a TLS-inspecting proxy
+                       # without its CA bundle fails the leg after promotion.
+                       "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR")
 # Any environment name that looks like a credential: a fixed list only protects
 # the names someone remembered, and these tools are handed new ones over time.
 SECRET_NAME = re.compile(r"TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|APIKEY",
@@ -427,7 +430,12 @@ def _diagnostic(directory, name, result):
         raise CloudflareDeployError("diagnostic directory is unsafe")
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / name
-    body = _redacted((result.stdout or "") + (result.stderr or ""))
+    try:
+        body = _redacted((result.stdout or "") + (result.stderr or ""))
+    except Exception:
+        # Redaction is what makes retaining the output safe. If it cannot run,
+        # the output is not written: a diagnostic is worth less than a leak.
+        body = "[diagnostic withheld: redaction failed]\n"
     # O_NOFOLLOW: the directory is an operator-supplied path that other local
     # operators may share, and the diagnostic name is predictable, so a
     # pre-placed link must not redirect this write.
@@ -449,13 +457,24 @@ def _completed(command, *, cwd, timeout, environment=None):
     except subprocess.TimeoutExpired as expired:
         # Always launched with text=True, so whatever was captured is str.
         return type("Expired", (), {
-            "returncode": 124, "stdout": expired.stdout or "",
+            "returncode": TIMED_OUT, "stdout": expired.stdout or "",
             "stderr": f"timed out after {timeout}s"})()
     except OSError:
         # A missing interpreter or unresolvable PATH is a failed leg, not a
         # traceback out of the entry point.
         return type("Unlaunched", (), {
-            "returncode": 127, "stdout": "", "stderr": "command could not be launched"})()
+            "returncode": UNLAUNCHED, "stdout": "",
+            "stderr": "command could not be launched"})()
+
+
+TIMED_OUT = 124
+UNLAUNCHED = 127
+
+
+def _outcome(result):
+    """How a command ended, since the remedies differ."""
+    return {TIMED_OUT: "timed out", UNLAUNCHED: "could not be launched"}.get(
+        result.returncode, "failed")
 
 
 def real_adapter(diagnostics, *, timeout=2400):
@@ -472,7 +491,8 @@ def real_adapter(diagnostics, *, timeout=2400):
         if result.returncode:
             path = _diagnostic(diagnostics, _log_name("adapter", arguments[0]),
                                result)
-            raise CloudflareDeployError(f"{arguments[0]} failed; inspect {path}")
+            raise CloudflareDeployError(
+                f"{arguments[0]} {_outcome(result)}; inspect {path}")
         return result.stdout
     return run
 
@@ -510,7 +530,9 @@ def real_browser(host, diagnostics, *, timeout=900):
             path = _diagnostic(diagnostics,
                                _log_name("browser", urlsplit(url).hostname),
                                result)
-            raise CloudflareDeployError(f"browser check of {url} failed; inspect {path}")
+            # A hung run and a failed assertion call for different remedies.
+            raise CloudflareDeployError(
+                f"browser check of {url} {_outcome(result)}; inspect {path}")
         return True
     return check
 
