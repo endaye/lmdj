@@ -93,7 +93,9 @@ jobs:
     needs: preflight
     environment: runtime-canary
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    # 80, not 75: the job now pins a second Node and installs Wrangler before
+    # it deploys. The step budgets below still have to fit inside this.
+    timeout-minutes: 80
     steps:
       - name: Checkout protected main tooling
         timeout-minutes: 5
@@ -132,6 +134,19 @@ jobs:
           node-version: "26"
           cache: npm
           cache-dependency-path: tests/platform/web/package-lock.json
+
+      - name: Verify the recorded upload Node survived
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The adapter checks this too, but only at the upload boundary. Fail
+          # here instead of thirty minutes in, if the tool cache moved.
+          found="$("$LMDJ_UPLOAD_NODE" --version)"
+          [[ "$found" == "v22.16.0" ]] || {
+            echo "pinned upload Node is $found, not v22.16.0" >&2
+            exit 64
+          }
 
       - name: Install the pinned deploy CLI without deployment credentials
         timeout-minutes: 5

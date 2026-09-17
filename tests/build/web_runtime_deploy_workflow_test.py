@@ -456,7 +456,7 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         self.assertIn(
             "timeout --signal=TERM --kill-after=900s 1080s", deploy_step
         )
-        self.assertIn("timeout-minutes: 75", source)
+        self.assertIn("timeout-minutes: 80", source)
 
         preflight_budgets = {
             "Record dispatch correlation": 1,
@@ -469,7 +469,11 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         step_budgets = {
             "Checkout protected main tooling": 5,
             "Set up Python": 3,
+            "Set up the pinned upload Node": 3,
+            "Record the pinned upload Node": 1,
             "Set up Node": 3,
+            "Verify the recorded upload Node survived": 1,
+            "Install the pinned deploy CLI without deployment credentials": 5,
             "Install browser smoke dependencies": 5,
             "Install Chromium": 10,
             "Deploy signed Runtime Host release to Cloudflare": 35,
@@ -530,7 +534,7 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
             }
         ) * 60
         upload_budget = step_budgets["Upload deployment evidence and failure logs"] * 60
-        job_budget = 75 * 60
+        job_budget = 80 * 60
         self.assertLessEqual(recovery_worst + 60, recovery_kill_budget)
         self.assertLessEqual(main_budget + recovery_kill_budget, deploy_step_budget)
         self.assertLessEqual(
