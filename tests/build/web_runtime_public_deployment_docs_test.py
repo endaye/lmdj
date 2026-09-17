@@ -123,7 +123,16 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
         self.assertIn("CLOUDFLARE_API_TOKEN", source)
         self.assertIn("scripts/cloudflare-host-deploy.sh", source)
         self.assertIn("--target web-runtime-host", source)
-        self.assertNotIn("NETLIFY", source)
+        # Any NETLIFY mention at all, but reported by line: the guarantee is
+        # that the cutover left none, and a bare assertNotIn would say only
+        # that one exists somewhere.
+        left = [f"{number}: {line.strip()}"
+                for number, line in enumerate(source.splitlines(), 1)
+                if "NETLIFY" in line]
+        self.assertEqual(left, [],
+                         "why: the workflow still names a retired Netlify "
+                         "input, so its deployment target is ambiguous; "
+                         "remedy: remove the lines listed here")
         self.assertNotIn("deploy-creator-web", source)
         self.assertNotIn("publish-release", source)
 
@@ -173,7 +182,16 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
     def test_evidence_schemas_preserve_complete_publication_and_recovery_results(self) -> None:
         source = self.read(RUNBOOK)
         self.assertIn("evidence.json", source)
+        # Both, and which is which: the runbook documents the current Cloudflare
+        # schema and retains the retired one for auditing historical artifacts.
+        # Naming only v2 let the runbook claim v3 in one section and describe v2
+        # as exact in another without any test noticing.
+        self.assertIn("lmdj.web-runtime-host.deployment-evidence.v3", source)
         self.assertIn("lmdj.web-runtime-host.deployment-evidence.v2", source)
+        self.assertLess(source.index("deployment-evidence.v3"),
+                        source.index("已退役的 v2（Netlify）"),
+                        "why: the runbook describes the retired schema before "
+                        "the one in use; remedy: state the current schema first")
         self.assertIn("{filename, sha256}", source)
         self.assertIn("github_actions", source)
         self.assertIn("prior_good", source)

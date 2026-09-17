@@ -55,9 +55,10 @@ Creator deployment、Runtime deployment 或 Channel promotion。
   Creator ZIP/checksum/signature 与 Runtime ZIP/checksum/signature，共六项签名资产。
 - Creator 部署只从六资产 Release 选择 Creator 三项，验证整份六资产 inventory 后才 staging；
   不重建源码、不修改 Release ZIP，也不读取 Runtime payload 作为 Creator 内容。
-- Creator 生产 URL 固定为 `https://lmdj-creator.netlify.app/`；Runtime 生产 URL 固定为
-  `https://lmdj-runtime.netlify.app/`。两个 URL、Site、Deploy ID、Environment、凭据、smoke、
-  evidence 与 exact prior rollback 完全独立。
+- Creator 生产 URL 固定为 `https://creator.lmdj.workers.dev/`；Runtime 生产 URL 固定为
+  `https://lab.lmdj.workers.dev/`。两个 URL、Worker、版本身份、Environment、凭据、smoke、
+  evidence 与 exact prior rollback 完全独立。（切换前分别是
+  `https://lmdj-creator.netlify.app/` 与 `https://lmdj-runtime.netlify.app/`，站点已删除。）
 - `.github/workflows/deploy-creator-web.yml` 只有 `workflow_dispatch`，是 manual-only exact-tag
   transaction；Release publication 不 fan-out 到 Creator 或 Runtime，Creator dispatch 也不触发
   Runtime deployment。

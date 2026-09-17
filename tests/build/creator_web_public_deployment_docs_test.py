@@ -125,7 +125,16 @@ class CreatorWebPublicDeploymentDocsTest(unittest.TestCase):
         self.assertIn("CLOUDFLARE_API_TOKEN", source)
         self.assertIn("scripts/cloudflare-host-deploy.sh", source)
         self.assertIn("--target creator-web", source)
-        self.assertNotIn("NETLIFY", source)
+        # Any NETLIFY mention at all, but reported by line: the guarantee is
+        # that the cutover left none, and a bare assertNotIn would say only
+        # that one exists somewhere.
+        left = [f"{number}: {line.strip()}"
+                for number, line in enumerate(source.splitlines(), 1)
+                if "NETLIFY" in line]
+        self.assertEqual(left, [],
+                         "why: the workflow still names a retired Netlify "
+                         "input, so its deployment target is ambiguous; "
+                         "remedy: remove the lines listed here")
         self.assertNotIn("deploy-web-runtime-host", source)
         self.assertNotIn("publish-release", source)
 

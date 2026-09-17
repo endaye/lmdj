@@ -263,8 +263,24 @@ gh run download RUN_ID --name runtime-host-deployment-evidence --dir evidence/RU
 python3 -m json.tool evidence/RUN_ID/evidence.json
 ```
 
-`evidence.json` 的 exact top-level schema 是
-`lmdj.web-runtime-host.deployment-evidence.v2`：
+当前 `evidence.json` 的 exact top-level schema 是
+`lmdj.web-runtime-host.deployment-evidence.v3`，闭合字段集为 `archive`、`channel`、
+`contract`、`ended_at`、`git_revision`、`github_actions`、`host_version`、`immutable`、
+`prior_good`、`product_build`、`production`、`publication`、`release_files`、`release_url`、
+`started_at`、`tag`、`worker`。与下表所述的 v2 相比，Cloudflare 形状的差异是：
+
+| 字段 | v3（当前，Cloudflare） | v2（历史，Netlify） |
+| --- | --- | --- |
+| 站点身份 | `worker` | `site_id` |
+| `publication` | `{version_id, deployment_id, percentage}`，`percentage` 必须为 100 | `{same_deploy_id, response}` |
+| `immutable` | `{version_id, url, http, browser}` | `{deploy_id, deploy_url, http, browser}` |
+| `prior_good` | `{version_id, version_url, product_build, host_version, release_files, site_response}`；`version_id` 不得等于本次 `publication.version_id` | 见下表 |
+
+校验器是 `apps/web-runtime-host/tools/cloudflare_deployment_evidence.py`，
+`tools/release/deployment_effect.py` 按 `HOSTS` 选中它。
+
+> 以下字段表描述**已退役的 v2（Netlify）**形状 —— 契约 ID
+> `lmdj.web-runtime-host.deployment-evidence.v2` —— 保留供历史 artifact 审计：
 
 | 字段 | 精确内容 |
 | --- | --- |
