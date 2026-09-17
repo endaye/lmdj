@@ -595,8 +595,13 @@ def job_conditions(source: str) -> list[str]:
             job_indent = indent
             continue
         if indent <= job_indent:
+            # A new job name. Its own keys set the gate level for its body, so
+            # jobs that indent differently from each other still work.
+            gate_indent = None
             continue
         if gate_indent is None:
+            # The first line inside a job body is one of its keys: a nested
+            # block can only appear after the key that opens it.
             gate_indent = indent
         if indent != gate_indent or not stripped.startswith("if:"):
             continue

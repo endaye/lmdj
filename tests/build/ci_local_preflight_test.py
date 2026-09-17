@@ -266,6 +266,33 @@ class PullRequestLaneVisibilityTest(unittest.TestCase):
             "remedy: read only the workflow's `if:` expressions",
         )
 
+    def test_a_job_gate_is_found_after_a_nested_block(self) -> None:
+        # A job whose first key opens a nested mapping still has its own `if:`
+        # at the job-key level. Missing it would report a gated lane as
+        # batch-only, the false-negative direction of the same defect.
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        repository.write(self.preflight.PR_WORKFLOW, "\n".join([
+            "jobs:",
+            "  first:",
+            "    strategy:",
+            "      matrix:",
+            "        os: [ubuntu-latest]",
+            "    if: fromJSON(x).lanes.docs_static",
+            "    steps: []",
+            "  second:",
+            "      name: indented differently from its sibling",
+            "      if: fromJSON(x).lanes.portal",
+            "",
+        ]))
+        self.assertEqual(
+            self.preflight.pull_request_lanes(repository.path),
+            frozenset({"docs_static", "portal"}),
+            "why: a job-level condition was skipped, so a lane a Pull Request "
+            "does gate on would be reported batch-only; "
+            "remedy: take each job's own key indentation as its gate level",
+        )
+
     def test_an_unreadable_workflow_reports_no_pr_lanes(self) -> None:
         # Fail closed: if the workflow cannot be read, every lane is treated as
         # unverified rather than silently assumed covered.
