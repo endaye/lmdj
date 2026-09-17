@@ -209,6 +209,10 @@ def write_document(path, document, *, host):
     """Validate, then write the document atomically as `evidence.json`."""
     validate_document(document, host=host)
     target = Path(path)
+    # A refusal to overwrite a link someone placed here, not a race guard: the
+    # write lands in a sibling temporary file and `os.replace` is `rename(2)`,
+    # which replaces a destination symlink itself rather than following it, so
+    # a link appearing after this check cannot redirect the bytes.
     if target.is_symlink() or not target.parent.is_dir() or target.parent.is_symlink():
         raise CloudflareEvidenceError("target is unsafe")
     serialized = json.dumps(document, ensure_ascii=False, sort_keys=True,

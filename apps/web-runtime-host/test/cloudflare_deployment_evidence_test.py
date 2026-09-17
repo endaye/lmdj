@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """The Cloudflare evidence document must be exactly what the driver accepts."""
 
-from copy import deepcopy
 import json
 from pathlib import Path
 import sys
