@@ -553,6 +553,57 @@ historical evidence. The F1-F6 correction report at
 corrected exact source HEAD/base, five-file inventory, test exits/counts/skips,
 raw receipt paths, and remaining live acceptance gaps for this Task.
 
+## S1 installed-attempt supervisor source boundary (2026-09-11)
+
+The new `scripts/ci/pr_agent_attempt_supervisor.py` is the bounded source-side
+entrypoint for the future installed supervisor. Its public verbs are exactly
+`submit REQUEST_UUID`, `observe ATTEMPT_UUID`, `cancel ATTEMPT_UUID` and
+read-only `status`; mutation accepts only a strict UUID and reads a
+root-published spool generation. It does not accept a path, command, Python
+interpreter, provider, environment, unit, hash or timeout from the caller, and
+it refuses the old service-owned independent-flock profile and any GitHub
+Actions intake until the separately owned S4 boundary exists.
+
+The source binds closed internal schemas
+`lmdj.pr-agent-supervisor-installation.v1`,
+`lmdj.pr-agent-supervisor-admission.v1` and `lmdj.pr-agent-attempt.v1`.
+Admission binds the exact existing seven-field T2 identity, positive job ID,
+root-operator intake digest, complete input digest/length and T2 input digest,
+successful producer witness and independently approved installation identity.
+The fixed installation manifest binds source, adapter, config, bundle and
+installation-record member bytes to an immutable deployment revision, fixed
+`lmdj-pr-agent`/Python 3.12 runtime identity, and one-slot limits of 1 CPU,
+2 GiB, CPUWeight 1, TasksMax 128, 600 seconds maximum engine deadline, 10
+seconds launch observation, 5 seconds TERM/KILL grace and 10 seconds final
+closure observation.
+
+Each attempt uses one root-generated UUID and one durable append-only journal
+whose protected checkpoint authenticates the predecessor tip. The source
+journey is validate installation/spool, serialize metadata writers, acquire
+the single `/run/lmdj-pr-agent/slot.lock` descriptor, publish immutable input,
+persist `launch_pending`, launch one fixed `systemd-run --pipe --wait
+--service-type=exec` invocation, observe InvocationID/MainPID/start/boot/
+cgroup/slot identity, classify business/cancel/timeout, prove launcher and
+descendant closure, authenticate no-follow result/coverage output, copy and
+fsync root-owned evidence, read back a terminal receipt and only then close the
+slot descriptor. Restart recovery observes the same exact unit and never
+relaunches it; missing invocation, changed boot, output mutation, unknown wait
+or unproven closure remains `uncertain` and fences new work. Duplicate terminal
+requests revalidate the full journal and evidence and return the same result
+without a second launch.
+
+The S1 local suite is `tests/build/ci_pr_agent_attempt_supervisor_test.py`.
+Its helper is a temporary installed executable, while the test uses real
+Popen pipes, `pass_fds`, file publication, no-follow reads and competing OFD
+flocks; only root/PID1/host identity and low-level launch observation are
+replaced. The verified run on the clean local checkout passed 13 tests with
+zero failures and zero skips. This is source/local journey evidence only: the
+manifest is not installed, the production unit remains inactive, and no host,
+systemd/PID1, provider credential, GitHub intake, runner capacity, paid
+provider, T5 shadow or T6 cutover acceptance is claimed here. S2 owns protected
+installation and the one-launcher transition; S3 owns the complete producer;
+S4 owns authenticated Actions intake.
+
 ## Version and documentation impact
 
 Version impact: none. Documentation impact: required for the Portal route
