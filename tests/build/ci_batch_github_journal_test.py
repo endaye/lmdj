@@ -659,8 +659,11 @@ class GitHubJournalTest(unittest.TestCase):
         self.journal.append({"id": "one"})
         self.assertEqual(self.journal.load(), [{"id": "one"}])
         self.api.comments[0]["editor"] = {"__typename": "User", "id": "human"}
+        # The edit is behind the prefix this process verified; the next complete
+        # replay refuses it rather than adopting it silently.
+        fresh = Journal(782, self.transport, self.anchor, self.transport.authenticate, lambda: self.lock)
         with self.assertRaisesRegex(JournalBlocked, "comment was edited"):
-            self.journal.load()
+            fresh.load()
         self.api.comments[0]["editor"] = None
         self.api.issue["editor"] = {"__typename": "User", "id": "human"}
         with self.assertRaisesRegex(JournalBlocked, "last editor"):
@@ -741,6 +744,37 @@ class GitHubJournalTest(unittest.TestCase):
         self.journal.append({"id": "two"})
         self.assertEqual(self.journal.load(), [{"id": "one"}, {"id": "two"}],
                          "why: drained journal cannot continue; remedy: append from the retained head")
+
+    def test_page_after_returns_only_new_comments_and_authenticates_them(self):
+        self.journal.append({"id": "one"})
+        cursor = self.transport.page(782, None)["cursor"]
+        self.assertTrue(cursor, "why: complete page walk exposed no resume cursor; remedy: return endCursor")
+        self.api.comment_pages = 2
+        prior = len(self.api.calls)
+        self.journal.append({"id": "two"})
+        self.journal.append({"id": "three"})
+        delta = self.transport.page_after(782, cursor)
+        self.assertEqual([row["envelope"]["event"] for row in delta["comments"]],
+                         [{"id": "two"}, {"id": "three"}],
+                         "why: delta read returned history the caller already verified; remedy: read after the cursor")
+        self.assertIsNone(delta["next"])
+        self.assertEqual(delta["total"], 3)
+        self.assertTrue(any(method == "GET" and "/actions/runs/17/attempts/1" in path
+                            for method, path, _ in self.api.calls[prior:]),
+                        "why: delta accepted a comment without writer provenance; remedy: authenticate every node")
+
+    def test_page_after_refuses_an_unauthenticated_cursor(self):
+        self.journal.append({"id": "one"})
+        with self.assertRaisesRegex(JournalBlocked, "authenticated cursor"):
+            self.transport.page_after(782, None)
+
+    def test_page_after_rejects_an_edited_new_comment(self):
+        self.journal.append({"id": "one"})
+        cursor = self.transport.page(782, None)["cursor"]
+        self.journal.append({"id": "two"})
+        self.api.comments[-1]["editor"] = {"__typename": "User", "id": "human"}
+        with self.assertRaisesRegex(JournalBlocked, "comment was edited"):
+            self.transport.page_after(782, cursor)
 
     def test_reconcile_pending_through_transport_never_clears_a_persisted_event(self):
         self.api.lose_post = True

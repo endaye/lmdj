@@ -7,6 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
+from incremental_batch import digest
 from incremental_batch_journal import IssueBodyAnchor, Journal, JournalBlocked
 
 
@@ -18,6 +19,7 @@ class MemoryTransport:
         self.posts = 0
         self.body_writes = 0
         self.page_reads = 0
+        self.delta_reads = 0
         self.fail_read = False
         self.lose_post_response = False
         self.reject_post = False
@@ -49,11 +51,27 @@ class MemoryTransport:
         if self.fail_read:
             raise OSError("state API unavailable")
         if self.hide_comments:
-            return {"comments": [], "next": None}
+            return {"comments": [], "next": None, "cursor": None}
         start = int(cursor or 0)
         end = start + 1  # intentionally exercise every page
-        return {"comments": deepcopy(self.comments[start:end]),
-                "next": str(end) if end < len(self.comments) else None}
+        rows = deepcopy(self.comments[start:end])
+        return {"comments": rows,
+                "next": str(end) if end < len(self.comments) else None,
+                "cursor": str(end) if rows else None}
+
+    def page_after(self, issue_id, cursor):
+        self.delta_reads += 1
+        if self.fail_read:
+            raise OSError("state API unavailable")
+        if self.hide_comments:
+            return {"comments": [], "next": None, "cursor": None, "total": len(self.comments)}
+        start = int(cursor)
+        end = start + 1
+        rows = deepcopy(self.comments[start:end])
+        return {"comments": rows,
+                "next": str(end) if end < len(self.comments) else None,
+                "cursor": str(end) if rows else None,
+                "total": len(self.comments)}
 
     def last(self, issue_id):
         if self.fail_read:
@@ -96,20 +114,33 @@ class JournalTest(unittest.TestCase):
         self.append(0)
         self.append(1)
         self.transport.comments.pop()
-        with self.assertRaisesRegex(JournalBlocked, "suffix is missing"):
+        # In-process the verified prefix is not replayed, but a changed
+        # inventory can never be absorbed into it.
+        with self.assertRaisesRegex(JournalBlocked, "inventory changed"):
             self.journal.load()
+        # Any later process replays the complete history and reports the
+        # unanchored suffix itself.
+        fresh = Journal(7, self.transport, self.anchor, self.authenticate, lambda: self.lock)
+        with self.assertRaisesRegex(JournalBlocked, "suffix is missing"):
+            fresh.load()
 
     def test_whole_comment_history_deletion_is_not_empty_state(self):
         self.append(0)
         self.transport.comments.clear()
-        with self.assertRaisesRegex(JournalBlocked, "suffix is missing"):
+        with self.assertRaisesRegex(JournalBlocked, "inventory changed"):
             self.journal.load()
+        fresh = Journal(7, self.transport, self.anchor, self.authenticate, lambda: self.lock)
+        with self.assertRaisesRegex(JournalBlocked, "suffix is missing"):
+            fresh.load()
 
     def test_manually_edited_comment_is_rejected(self):
         self.append(0)
         self.transport.comments[0]["edited"] = True
+        # The edit lands in the prefix this process already authenticated, so
+        # it must be refused by the next complete replay, not silently adopted.
+        fresh = Journal(7, self.transport, self.anchor, self.authenticate, lambda: self.lock)
         with self.assertRaisesRegex(JournalBlocked, "comment was edited"):
-            self.journal.load()
+            fresh.load()
 
     def test_manual_checkpoint_edit_is_rejected(self):
         self.append(0)
@@ -190,8 +221,9 @@ class JournalTest(unittest.TestCase):
     def test_corrupt_payload_digest_is_rejected(self):
         self.append(0)
         self.transport.comments[0]["envelope"]["event"]["generation"] = 999
+        fresh = Journal(7, self.transport, self.anchor, self.authenticate, lambda: self.lock)
         with self.assertRaisesRegex(JournalBlocked, "digest mismatch"):
-            self.journal.load()
+            fresh.load()
 
     def test_unanchored_tail_is_not_guessed(self):
         self.append(0)
@@ -216,11 +248,11 @@ class JournalTest(unittest.TestCase):
         with self.assertRaises(JournalBlocked):
             self.append(1)
         digest = self.anchor.read()["pending"]["digest"]
-        self.transport.page_reads = 0
+        self.transport.delta_reads = 0
         events = self.journal.reconcile_pending(digest)
         self.assertEqual(len(events), 1, "why: drain lost committed history; remedy: clear only the stranded intent")
-        self.assertGreater(self.transport.page_reads, 0,
-                           "why: absence claimed without the complete replay; remedy: prove against every comment")
+        self.assertGreater(self.transport.delta_reads, 0,
+                           "why: absence claimed without authenticating the tail; remedy: prove against every comment")
         self.assertIsNone(self.anchor.read()["pending"],
                           "why: stranded intent survived the drain; remedy: restore the anchor after the absence proof")
         self.transport.reject_post = False
@@ -263,6 +295,70 @@ class JournalTest(unittest.TestCase):
         self.transport.body["checkpoint"]["pending"] = {**pending, "previous": "f" * 64}
         with self.assertRaisesRegex(JournalBlocked, "not the chain successor"):
             self.journal.reconcile_pending(pending["digest"])
+
+    def test_in_process_appends_verify_the_history_once(self):
+        for number in range(4):
+            self.append(number)
+        # One complete walk (the empty start plus its adoption), then deltas:
+        # the old per-append rule re-read the whole history twice per append.
+        self.assertEqual(self.transport.page_reads, 2,
+                         "why: each append re-verified the complete history; remedy: verify it once per process")
+        self.assertGreater(self.transport.delta_reads, 0,
+                           "why: later appends skipped the authenticated tail; remedy: verify the delta")
+        self.assertEqual([event["id"] for event in self.journal.load()], ["0", "1", "2", "3"],
+                         "why: reuse dropped authenticated history; remedy: return cached prefix plus delta")
+
+    def tail(self, previous, event, *, provenance="trusted-run", edited=False, digest_override=None):
+        envelope = {"previous": previous, "event": dict(event)}
+        envelope["digest"] = digest_override or digest({"previous": previous, "event": envelope["event"]})
+        return {"id": len(self.transport.comments) + 1, "edited": edited,
+                "envelope": envelope, "provenance": provenance}
+
+    def test_incremental_read_rejects_every_tail_forgery(self):
+        self.append(0)
+        head = self.anchor.read()["head"]
+        event = {"id": "1", "epoch": "one", "generation": 1, "type": "observe", "data": {"target": "a" * 40}}
+        cases = {
+            "edited": (self.tail(head, event, edited=True), "comment was edited"),
+            "untrusted writer": (self.tail(head, event, provenance="human"), "untrusted journal writer"),
+            "chain break": (self.tail("f" * 64, event), "missing or forked"),
+            "digest tamper": (self.tail(head, event, digest_override="0" * 64), "digest mismatch"),
+            "duplicate id": ({**self.tail(head, event), "id": self.transport.comments[0]["id"]},
+                             "duplicate or invalid journal comment ID"),
+        }
+        for name, (tampered, message) in cases.items():
+            with self.subTest(name=name):
+                before = deepcopy(self.transport.comments)
+                self.transport.comments.append(tampered)
+                with self.assertRaisesRegex(JournalBlocked, message):
+                    self.journal.load()
+                self.transport.comments = before
+
+    def test_incremental_read_rejects_a_changed_inventory(self):
+        self.append(0)
+        self.append(1)
+        self.transport.comments = self.transport.comments[:1]
+        with self.assertRaisesRegex(JournalBlocked, "inventory changed"):
+            self.journal.load()
+
+    def test_foreign_write_invalidates_the_cache(self):
+        self.append(0)
+        first = self.transport.page_reads
+        other = Journal(7, self.transport, self.anchor, self.authenticate, lambda: self.lock)
+        other.append({"id": "1", "epoch": "one", "generation": 1, "type": "observe", "data": {"target": "a" * 40}})
+        events = self.journal.load()
+        self.assertEqual([event["id"] for event in events], ["0", "1"],
+                         "why: a foreign write was not seen; remedy: replay completely when the head moved")
+        self.assertGreater(self.transport.page_reads, first,
+                           "why: a foreign head was trusted as a delta base; remedy: re-verify the complete history")
+
+    def test_reuse_matches_a_fresh_process(self):
+        for number in range(3):
+            self.append(number)
+        reused = self.journal.load()
+        fresh = Journal(7, self.transport, self.anchor, self.authenticate, lambda: self.lock)
+        self.assertEqual(reused, fresh.load(),
+                         "why: in-process reuse produced a different history; remedy: keep verification equivalent")
 
 
 if __name__ == "__main__":

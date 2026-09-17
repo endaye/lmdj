@@ -243,11 +243,21 @@ pending；后续通知只替换尚未运行的通知，不取消正在执行的�
 搁浅 pending 恢复使用 `batch_operation=reconcile-pending` 与闭合
 `batch_request={"pending_digest":"<64-hex-digest>"}`：操作者先以只读方式审计调度器
 journal 的完整评论清单，确认该 pending 事件从未持久化，再在命令里钉死它的 digest；
-journal 仅在 digest 精确匹配、pending 确为链后继、且完整认证重放证明事件缺席时，才把
+journal 仅在 digest 精确匹配、pending 确为链后继、且完整认证历史证明事件缺席时，才把
 锚点归位 `{head, None}`。该操作绝不重放 POST、绝不产生 execute；被丢弃的事件由下一次
 普通 reconcile 从真实运行状态幂等重新推导。pending 已持久化、无搁浅、digest 不符或链
 分叉时一律 fail-closed。journal 被阻期间，健康检查先以尾部窥视比对 pending，不匹配即
 阻断，不再每次全量重放而耗尽请求预算。
+
+journal 的完整认证历史在**单个进程内至多验证一次**：同进程的后续读取只认证锚点与
+增量（`comments(after:)` 之后的新评论），仍逐条执行元数据／编辑／bot 身份、writer
+run/workflow/control provenance、前任链接、digest 与总数核对；服务端总数必须等于
+已认证数量加增量，任何不符立即阻断。锚点 head 与已认证 head 不一致（他处写入）时
+强制回到完整重放，因此跳过任何检查都不可能发生。这与共享 5,000 请求/小时的额度直接
+相关：一次 reconcile 最多四次 append，旧规则使每次 append 都重放两遍完整历史，单次
+tick 约需 4,300 请求而无法完成；一次进程内验证把该成本降到约 500–700。进程内已认证
+前缀若被带外编辑（评论正文改变了但 digest 未变），会在下一个进程的完整重放中阻断，
+而不会在本进程内被采纳。
 
 每日产品 cron 与每日未启动告警均已退役。独立轻量健康巡检按 UTC 每小时
 7、22、37、52 分运行，用于恢复已有 pending、请求和报告，不能因日期启动产品测试。

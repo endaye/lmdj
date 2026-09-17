@@ -371,7 +371,60 @@ class GitHubJournalTransport:
         session["count"] = count
         session["next"] = next_cursor
         session["seen"].add(next_cursor)
-        return {"comments": comments, "next": next_cursor}
+        return {"comments": comments, "next": next_cursor,
+                # Position after this page's last comment. A reader that has
+                # already authenticated the complete history through here can
+                # resume from this cursor instead of replaying it.
+                "cursor": info.get("endCursor") if comments else None}
+
+    def page_after(self, issue_id, cursor):
+        """One delta page strictly after an already authenticated cursor.
+
+        The bounded half of the once-per-process verification rule: the caller
+        authenticated the complete history through `cursor` in this process, so
+        this read only authenticates what follows it. Node checks, totals and
+        writer provenance are identical to `page()`; an unknown or contradictory
+        inventory is refused rather than guessed. Each call is its own read
+        transaction, so no page session state is carried in or out."""
+        self._fixed(issue_id)
+        require(isinstance(cursor, str) and bool(cursor), "delta read needs an authenticated cursor")
+        self._begin_read_transaction()
+        issue = self._query(COMMENTS_QUERY, cursor)
+        connection = issue.get("comments")
+        require(isinstance(connection, dict) and type(connection.get("totalCount")) is int
+                and connection["totalCount"] >= 0 and isinstance(connection.get("nodes"), list)
+                and isinstance(connection.get("pageInfo"), dict), "comment delta malformed")
+        info = connection["pageInfo"]
+        require(type(info.get("hasNextPage")) is bool, "comment delta completion is not boolean")
+        next_cursor = info.get("endCursor") if info["hasNextPage"] else None
+        require(not info["hasNextPage"] or isinstance(next_cursor, str) and bool(next_cursor),
+                "missing next comment cursor")
+        comments = []
+        require(len(connection["nodes"]) <= 100, "comment delta exceeds requested size")
+        for node in connection["nodes"]:
+            require(isinstance(node, dict), "null or malformed comment node")
+            raw_id = node.get("fullDatabaseId")
+            require(isinstance(raw_id, str) and re.fullmatch(r"[1-9][0-9]*", raw_id),
+                    "comment BigInt identity is not decimal text")
+            self._metadata(node, comment=True)
+            document = decode(node["body"])
+            require(document["kind"] == "event", "journal object is stored in the wrong location")
+            comments.append({"id": int(raw_id), "edited": False,
+                             "envelope": document["payload"], "provenance": document["writer"]})
+        writers = {json.dumps(row["provenance"], sort_keys=True): row["provenance"] for row in comments}
+        unchecked = {key: value for key, value in writers.items() if key not in self._checked_writers}
+        if unchecked:
+            control_proofs, workflow_proofs = _PageControlProofs(), _PageControlProofs()
+            with ThreadPoolExecutor(max_workers=min(4, len(unchecked))) as readers:
+                futures = [readers.submit(self._writer, writer, remember=False,
+                                           control_proofs=control_proofs, workflow_proofs=workflow_proofs)
+                           for writer in unchecked.values()]
+                for future in futures:
+                    future.result()
+            self._checked_writers.update(unchecked)
+        return {"comments": comments, "next": next_cursor,
+                "cursor": info.get("endCursor") if comments else None,
+                "total": connection["totalCount"]}
 
     def last(self, issue_id):
         """Tail peek for the stranded-pending guard; carries no writer trust.

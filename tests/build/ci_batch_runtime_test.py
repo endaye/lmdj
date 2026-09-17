@@ -47,6 +47,7 @@ class Http:
         self.comments, self.runs, self.jobs, self.artifacts, self.downloads = [], {}, {}, {}, {}
         self.fail, self.lose, self.pages_override = None, None, {}
         self.old_runs, self.old_report_runs = [], []
+        self.comment_rows_served = 0
         self.add_run(17)
 
     def add_run(self, number):
@@ -67,8 +68,13 @@ class Http:
         if method == "POST" and path == "/graphql":
             issue = deepcopy(self.issue)
             if body["query"] == runtime.storage.COMMENTS_QUERY:
-                issue["comments"] = {"nodes": deepcopy(self.comments), "totalCount": len(self.comments),
-                                     "pageInfo": {"hasNextPage": False, "endCursor": None}}
+                after = body["variables"].get("after")
+                start = int(after or 0)
+                rows = self.comments[start:]
+                self.comment_rows_served += len(rows)
+                issue["comments"] = {"nodes": deepcopy(rows), "totalCount": len(self.comments),
+                                     "pageInfo": {"hasNextPage": False,
+                                                  "endCursor": str(len(self.comments)) if rows else None}}
             elif body["query"] == runtime.storage.LAST_QUERY:
                 issue["comments"] = {"nodes": deepcopy(self.comments[-1:]), "totalCount": len(self.comments)}
             elif "comments{totalCount}" in body["query"]:
@@ -349,6 +355,26 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(batch.BatchError):
             self.make().reconcile(execute=True)
         self.assertFalse(any(m == "PATCH" for m, _, _ in self.api.calls))
+
+    def test_append_sequence_authenticates_the_history_once(self):
+        seeder = self.make()
+        seeder.initialize()
+        seeded = seeder.journal()
+        for number in range(4):
+            seeded.append({"id": f"seed-{number}", "epoch": "isolated-fixture", "generation": number,
+                           "type": "observe", "data": {"target": self.sha, "descends_pending": True}})
+        self.api.add_run(18)
+        worker = self.make(18)
+        self.api.comment_rows_served = 0
+        journal = worker.journal()
+        for number in range(4):
+            journal.append({"id": f"run-{number}", "epoch": "isolated-fixture", "generation": 4 + number,
+                            "type": "observe", "data": {"target": self.sha, "descends_pending": True}})
+        served = self.api.comment_rows_served
+        self.assertLessEqual(served, 4 + 5,
+                             "why: each append re-verified the complete history instead of its delta "
+                             f"(served {served} comment rows; the per-append rule measures 48); "
+                             "remedy: verify the history once per process")
 
     def test_reconcile_pending_requires_closed_audited_digest(self):
         for command in (None, {}, {"pending_digest": "0" * 63}, {"pending_digest": "F" * 64},

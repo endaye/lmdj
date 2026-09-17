@@ -117,6 +117,7 @@ class Runtime:
         require(isinstance(config, dict) and set(config) == {
             "repository", "issue_number", "issue_node_id", "bot_node_id", "workflow_id", "epoch"}, "invalid runtime config")
         self.config, self.root = deepcopy(config), Path(root)
+        self._journal = None
         self.env = dict(os.environ if environment is None else environment)
         require(config["repository"] == self.env.get("GITHUB_REPOSITORY"), "repository differs from workflow context")
         require(self.env.get("GITHUB_REF") == "refs/heads/main", "runtime only accepts main workflow context")
@@ -279,9 +280,15 @@ class Runtime:
         return self.answer("initialized", "empty journal only; no tested baseline", None, None)
 
     def journal(self):
-        number = self.config["issue_number"]
-        anchor = IssueBodyAnchor(number, self.transport, self.transport.authenticate, self.lock_held)
-        return Journal(number, self.transport, anchor, self.transport.authenticate, self.lock_held)
+        # One instance per process: its verified history is what lets the up to
+        # four appends of a single reconcile authenticate the complete journal
+        # once instead of once per append. The short writer lock still
+        # serializes writers, and any anchor-head mismatch replays in full.
+        if self._journal is None:
+            number = self.config["issue_number"]
+            anchor = IssueBodyAnchor(number, self.transport, self.transport.authenticate, self.lock_held)
+            self._journal = Journal(number, self.transport, anchor, self.transport.authenticate, self.lock_held)
+        return self._journal
 
     def old_runs_terminal(self):
         # Query all not-completed states, not a bounded recent completed window.
