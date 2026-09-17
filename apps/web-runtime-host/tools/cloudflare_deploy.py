@@ -335,7 +335,12 @@ BROWSER = {
 # An allowlist, not a denylist: the browser runs third-party test code, and a
 # denylist silently admits every credential nobody thought to name.
 BROWSER_ENVIRONMENT = ("CI", "HOME", "LANG", "LC_ALL", "PATH",
-                       "PLAYWRIGHT_BROWSERS_PATH", "TMPDIR")
+                       "PLAYWRIGHT_BROWSERS_PATH", "TMPDIR",
+                       # A runner behind an egress proxy cannot reach the
+                       # deployed origin without these, and that failure would
+                       # read as a regression rather than an environment.
+                       "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+                       "http_proxy", "https_proxy", "no_proxy")
 # Any environment name that looks like a credential: a fixed list only protects
 # the names someone remembered, and these tools are handed new ones over time.
 SECRET_NAME = re.compile(r"TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|APIKEY",
@@ -365,7 +370,10 @@ def _redacted(text):
     for pattern in SECRET_TEXT:
         text = pattern.sub(r"\1[REDACTED]", text)
     for name, value in os.environ.items():
-        if value and SECRET_NAME.search(name):
+        # Below four characters a value is not a credential but is very likely
+        # a substring of unrelated output, and a mangled diagnostic helps
+        # nobody. Shape redaction above still covers assignments and headers.
+        if value and len(value) >= 4 and SECRET_NAME.search(name):
             text = text.replace(value, f"[REDACTED {name}]")
     return text
 
@@ -375,7 +383,7 @@ _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
 
 def _log_name(prefix, label):
     """A retained diagnostic never takes its name from an unsanitised value."""
-    cleaned = _SAFE_NAME.sub("_", label or "")
+    cleaned = _SAFE_NAME.sub("_", str(label) if label else "")
     return f"{prefix}-{cleaned or 'unknown'}.log"
 
 
@@ -386,6 +394,8 @@ def _diagnostic(directory, name, result):
     deployment tool commonly echoes the token or header it failed with, and a
     retained diagnostic must not be where that ends up readable.
     """
+    if directory.is_symlink():
+        raise CloudflareDeployError("diagnostic directory is unsafe")
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / name
     body = _redacted((result.stdout or "") + (result.stderr or ""))
@@ -408,10 +418,9 @@ def _completed(command, *, cwd, timeout, environment=None):
         return subprocess.run(command, cwd=cwd, capture_output=True, text=True,
                               timeout=timeout, env=environment)
     except subprocess.TimeoutExpired as expired:
+        # Always launched with text=True, so whatever was captured is str.
         return type("Expired", (), {
-            "returncode": 124,
-            "stdout": (expired.stdout or b"").decode("utf-8", "replace")
-            if isinstance(expired.stdout, bytes) else (expired.stdout or ""),
+            "returncode": 124, "stdout": expired.stdout or "",
             "stderr": f"timed out after {timeout}s"})()
     except OSError:
         # A missing interpreter or unresolvable PATH is a failed leg, not a
@@ -444,7 +453,12 @@ def real_http_verification():
     from cloudflare_smoke import smoke
 
     def verify(distribution, url, preview):
-        observed = smoke(distribution, url, preview=preview)
+        try:
+            observed = smoke(distribution, url, preview=preview)
+        except Exception:
+            # Upstream text may embed credentials; the category is the report.
+            raise CloudflareDeployError(
+                f"exact signed HTTP verification of {url} failed") from None
         return isinstance(observed, dict) and observed.get("status") == "passed"
     return verify
 
@@ -500,6 +514,8 @@ def real_site_reader():
             return observe(url)
         except ObservationError as error:
             raise CloudflareDeployError(f"could not observe {url} ({error})") from None
+        except Exception:
+            raise CloudflareDeployError(f"could not observe {url}") from None
     return read
 
 
@@ -534,6 +550,13 @@ def main(argv=None):
             prior_tag=arguments.prior_tag)
     except CloudflareDeployError as error:
         print(str(error), file=sys.stderr)
+        return 2
+    except Exception:
+        # A backstop, not a substitute for attributing failures above: an
+        # unexpected exception must not become a traceback whose text could
+        # carry credentials into the log.
+        print(str(CloudflareDeployError("failed for an unattributed reason")),
+              file=sys.stderr)
         return 2
     print(json.dumps({"host": arguments.target, "tag": arguments.tag,
                       "evidence": str(written)}, sort_keys=True))

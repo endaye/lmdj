@@ -515,6 +515,36 @@ class EntryPointTest(unittest.TestCase):
             path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
         self.assertNotIn("abc123", path.read_text(encoding="utf-8"))
 
+    def test_the_browser_keeps_the_proxy_a_runner_needs(self):
+        # Without these the browser cannot reach the deployed origin behind an
+        # egress proxy, and that failure would read as a regression.
+        _, environment = self.browser_run(
+            stdout=self.report(),
+            environment={"PATH": "/usr/bin", "HTTPS_PROXY": "http://p:3128",
+                         "NO_PROXY": "localhost", "SOME_TOKEN": "secret"})
+        self.assertEqual(environment["HTTPS_PROXY"], "http://p:3128")
+        self.assertEqual(environment["NO_PROXY"], "localhost")
+        self.assertNotIn("SOME_TOKEN", environment)
+
+    def test_a_non_string_diagnostic_label_does_not_escape(self):
+        # The factory is exported; a caller passing anything must not produce a
+        # TypeError where a CloudflareDeployError is documented.
+        for label in (7, object(), ["a"]):
+            with self.subTest(label=type(label).__name__):
+                name = cloudflare_deploy._log_name("adapter", label)
+                self.assertEqual(Path(name).name, name)
+
+    def test_an_unattributed_failure_still_exits_two(self):
+        errors = io.StringIO()
+        with patch.object(cloudflare_deploy, "deploy",
+                          side_effect=RuntimeError("upstream text")), \
+                contextlib.redirect_stderr(errors):
+            code = cloudflare_deploy.main(self.arguments())
+        self.assertEqual(code, 2)
+        # The upstream text may carry credentials; only the category is said.
+        self.assertNotIn("upstream text", errors.getvalue())
+        self.assertIn("unattributed", errors.getvalue())
+
     def test_a_hung_or_unlaunchable_command_is_our_error_not_a_traceback(self):
         # main only catches CloudflareDeployError, so anything else escaping
         # here becomes a traceback and a non-2 exit.
@@ -528,11 +558,22 @@ class EntryPointTest(unittest.TestCase):
                 adapter(["candidate", TAG])
 
     def test_a_credential_shaped_name_is_redacted_without_being_listed(self):
-        result = type("R", (), {"returncode": 1, "stdout": "v=zz9", "stderr": ""})()
+        result = type("R", (), {"returncode": 1, "stdout": "v=zz9q",
+                                "stderr": ""})()
         with patch.dict(cloudflare_deploy.os.environ,
-                        {"SOME_VENDOR_TOKEN": "zz9"}, clear=True):
+                        {"SOME_VENDOR_TOKEN": "zz9q"}, clear=True):
             path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
-        self.assertNotIn("zz9", path.read_text(encoding="utf-8"))
+        self.assertNotIn("zz9q", path.read_text(encoding="utf-8"))
+
+    def test_a_value_too_short_to_be_a_credential_is_left_alone(self):
+        # Replacing it everywhere would mangle unrelated output, and a
+        # three-character secret is not a real one.
+        result = type("R", (), {"returncode": 1, "stdout": "path a/b/c ok",
+                                "stderr": ""})()
+        with patch.dict(cloudflare_deploy.os.environ,
+                        {"SOME_TOKEN": "a/b"}, clear=True):
+            path = cloudflare_deploy._diagnostic(self.root, "adapter.log", result)
+        self.assertIn("path a/b/c ok", path.read_text(encoding="utf-8"))
 
     def test_a_credential_this_process_never_held_is_still_redacted(self):
         # Value replacement cannot reach a token the adapter minted itself.
