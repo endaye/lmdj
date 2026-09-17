@@ -854,7 +854,10 @@ def enrolled_candidate_scope_env(preparation_root):
                 raw = stream.read(65537)
             if len(raw) > 65536:
                 _fail("the enrolled candidate scope is corrupt")
-            parent_marker = json.loads(raw)
+            try:
+                parent_marker = json.loads(raw)
+            except ValueError:
+                _fail("the enrolled candidate scope is corrupt")
             timestamp = parent_marker.get("source_timestamp") if type(parent_marker) is dict else None
             if type(timestamp) is not int or not 1 <= timestamp <= 253402300799:
                 _fail("the enrolled candidate scope records no valid Task timestamp")
