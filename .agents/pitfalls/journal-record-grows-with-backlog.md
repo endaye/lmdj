@@ -3,7 +3,7 @@ id: journal-record-grows-with-backlog
 area: ci-release
 status: absorbed
 recurrences:
-  - date: 2026-09-18
+  - date: 2026-09-17
     occurrence: https://github.com/endaye/lmdj/issues/1048
     observed_by: Claude Fable 5.1
 exit: gate:tests/build/ci_batch_controller_test.py
