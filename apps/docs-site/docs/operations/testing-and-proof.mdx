@@ -3,7 +3,7 @@ title: Testing 与 Proof
 area: operations
 status: partial
 owners: [core, quality]
-source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md, docs/quality/2026-08-12-stage7-creator-editor-review.md, docs/quality/2026-08-24-creator-capture-precommit-crop.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/quality/2026-08-09-stage8-sample-editor-acceptance.md, docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md, docs/release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md, docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md, docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md, docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md, docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md, docs/release-evidence/release-intents.json, scripts/core.sh, scripts/release.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/creator-web-deploy.sh, scripts/web-toolchain-conformance.sh, .github/workflows/pr-review.yml, .github/workflows/pr-contract.yml, .github/workflows/self-test-report.yml, apps/docs-site/scripts/check-doc-impact.mjs, scripts/ci/self_test.py, scripts/ci/self_test_report.py, scripts/ci/batch_verdict.py, scripts/ci/batch_execution.py, scripts/ci/batch_evidence_validation.py, scripts/ci/report_outbox.py, scripts/ci/elastic_runner.py, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, scripts/ci/incremental_entry.py, scripts/ci/incremental_storage.json, scripts/ci/test_scope.py, scripts/ci/batch_runtime.py, scripts/ci/report_runtime.py, scripts/ci/review_discovery_runtime.py, scripts/ci/review_wait.py, .github/workflows/incremental-completion.yml, scripts/ci/incremental_completion.py, docs/plans/2026-09-08-lmdj-ci-completion-relay.md, scripts/ci/pr-agent/deploy-runner.sh, scripts/ci/pr-agent/netcup-review.json, tests/build/ci_pr_agent_runner_test.py, docs/quality/2026-09-10-pr-agent-netcup-operations.md, .github/workflows/pr-agent-credential-preflight.yml, scripts/ci/pr_agent_credential_preflight.py, tests/build/ci_pr_agent_credential_preflight_test.py]
+source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md, docs/quality/2026-08-12-stage7-creator-editor-review.md, docs/quality/2026-08-24-creator-capture-precommit-crop.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/quality/2026-08-09-stage8-sample-editor-acceptance.md, docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md, docs/release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md, docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md, docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md, docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md, docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md, docs/release-evidence/release-intents.json, scripts/core.sh, scripts/release.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/creator-web-deploy.sh, scripts/web-toolchain-conformance.sh, .github/workflows/pr-review.yml, .github/workflows/pr-contract.yml, .github/workflows/self-test-report.yml, apps/docs-site/scripts/check-doc-impact.mjs, scripts/ci/self_test.py, scripts/ci/self_test_report.py, scripts/ci/batch_verdict.py, scripts/ci/batch_execution.py, scripts/ci/batch_evidence_validation.py, scripts/ci/report_outbox.py, scripts/ci/elastic_runner.py, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, scripts/ci/incremental_entry.py, scripts/ci/incremental_storage.json, scripts/ci/test_scope.py, scripts/ci/batch_runtime.py, scripts/ci/report_runtime.py, scripts/ci/review_discovery_runtime.py, scripts/ci/review_wait.py, .github/workflows/incremental-completion.yml, scripts/ci/incremental_completion.py, docs/plans/2026-09-08-lmdj-ci-completion-relay.md, scripts/ci/pr-agent/deploy-runner.sh, scripts/ci/pr-agent/netcup-review.json, tests/build/ci_pr_agent_runner_test.py, docs/quality/2026-09-10-pr-agent-netcup-operations.md, .github/workflows/pr-agent-credential-preflight.yml, scripts/ci/pr_agent_credential_preflight.py, tests/build/ci_pr_agent_credential_preflight_test.py, scripts/ci/pr_agent_attempt_supervisor.py, tests/build/ci_pr_agent_attempt_supervisor_test.py, docs/plans/2026-09-11-pr-agent-attempt-supervisor.md]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -658,6 +658,41 @@ mutation、systemd activation、co-running resource/process-recovery 或 API
 paths 与 rendered command contract；不证明非 root Linux T2 CLI startup 或
 systemd admission。T3 仍只负责协议 consumer，T5 负责 shadow Actions route，
 T6 负责 production；T4/T1153 仍 open。
+
+### S1 installed-attempt supervisor source journey（source/local，未安装）
+
+新增的 `scripts/ci/pr_agent_attempt_supervisor.py` 是未来受保护安装的
+foreground supervisor source。它只接受 `submit REQUEST_UUID`、
+`observe ATTEMPT_UUID`、`cancel ATTEMPT_UUID` 和只读 `status`；mutation
+selector 只能是 canonical UUID，并从 root-published spool generation 读取
+closed admission。CLI 不接受 path、argv、environment、Python、provider、unit、
+digest 或 timeout override；当前 root-operator admission 是 S1 的 source
+boundary，GitHub Actions intake 要等独立 S4 验证。
+
+S1 的 closed internal schemas 是
+`lmdj.pr-agent-supervisor-installation.v1`、
+`lmdj.pr-agent-supervisor-admission.v1` 与 `lmdj.pr-agent-attempt.v1`。
+固定 manifest 绑定 immutable deployment revision、source/adapter/config/
+bundle/installation-record bytes、`lmdj-pr-agent` Python 3.12 runtime 以及
+1 CPU/2 GiB/CPUWeight 1/TasksMax 128 envelope；engine deadline 不超过 600
+seconds，launch observation、TERM/KILL grace、final closure 分别是
+10/5/5/10 seconds。每个 attempt 只产生一个 root-generated UUID，metadata
+mutex 串行 journal writers，one shared slot OFD 从 immutable input publication
+贯穿固定 `systemd-run --pipe --wait --service-type=exec` invocation、实际
+InvocationID/MainPID/start/boot/cgroup/slot observation、bounded output drain、
+no-follow evidence publication 到 terminal readback；descriptor 在 terminal
+fsync 后最后关闭。
+
+本地 `tests/build/ci_pr_agent_attempt_supervisor_test.py` 通过同一个 public
+`main`，使用实际 Popen、pipe、`pass_fds`、flock、fsync/readback 和临时安装的
+child，只有 root/PID1/host identity 与 low-level observation 由 seam 替换。
+13 tests 全部通过、0 failures、0 skips；覆盖 normal input→launch→observe→
+collect→terminal→duplicate、competing request fencing、pre-observation crash
+recovery、cancel revalidation、checkpoint residue、schema/type/old-launcher
+refusal、symlink output 和 terminal evidence corruption。该结果只证明
+source/local journey，不是 installed Linux/PID1/systemd/OFD/cgroup、provider
+credential/API、runner capacity、T5 shadow 或 T6 cutover acceptance；production
+service 仍 inactive，未执行 host mutation、workflow/GitHub 写入或 provider call。
 
 目标槽位的静态 envelope 是 one review slot、1 vCPU (`CPUQuota=100%`)、
 2 GiB (`MemoryMax=2G`)、low CPU weight 的 sibling
