@@ -17,7 +17,13 @@ from the caller. A caller cannot describe a deployment as something other than
 what it actually published.
 
 The prior is described from what production was serving, observed once before
-anything mutates. Re-staging its signed release afterwards would describe what
+anything mutates, and named from the same observation. The adapter needs the
+prior's signed tag to re-stage it for its own recovery checks; deriving it from
+the Product Build production reports is safer than being told, because a tag
+that is merely wrong still stages successfully and only fails later, at the byte
+comparison, reported as a promotion failure. Here a wrong Build cannot even be
+formed. The manifest is the lead; `promote`'s exact-byte check against the live
+prior URL remains the gate. Re-staging its signed release afterwards would describe what
 that release *should* have been rather than what was live, would read the
 candidate's own receipt on a same-tag redeploy, and would move a whole class of
 failure to after the promotion — leaving production changed with no document.
@@ -176,13 +182,12 @@ def deploy(*, host, tag, run_id, state_root, output,
                 "names a prior tag for a Worker that has no deployment")
         prior_good = None
     else:
-        if prior_tag is None:
-            raise CloudflareDeployError(
-                "must name the signed prior tag of the deployment it replaces")
         prior_version = prior_deployment.get("version_id")
         if not isinstance(prior_version, str):
             raise CloudflareDeployError("read a deployment with no version identity")
         prior_good = _prior(observed, host, prior_version)
+        if prior_tag is None:
+            prior_tag = "lmdj-v" + prior_good["product_build"]
 
     uploaded = _adapter_result(
         adapter(["candidate", tag, *common, "--node", node,
@@ -603,7 +608,6 @@ def main(argv=None):
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--node", required=True)
     parser.add_argument("--wrangler", required=True)
-    parser.add_argument("--prior-tag")
     arguments = parser.parse_args(argv)
     # Beside this run's own state, not beside the evidence: a failed run must
     # not create anything at or around the output path a caller checks for.
@@ -623,8 +627,7 @@ def main(argv=None):
             adapter=real_adapter(diagnostics),
             verify_http=real_http_verification(),
             browser=real_browser(arguments.target, diagnostics),
-            read_site=real_site_reader(), clock=_clock,
-            prior_tag=arguments.prior_tag)
+            read_site=real_site_reader(), clock=_clock)
     except CloudflareDeployError as error:
         print(str(error), file=sys.stderr)
         return 2

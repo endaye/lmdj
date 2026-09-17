@@ -109,6 +109,22 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up the pinned upload Node
+        timeout-minutes: 3
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.16.0"
+
+      - name: Record the pinned upload Node
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The adapter refuses any Node but 22.16.0 for the Worker upload,
+          # while the browser leg needs 26. Record this one before the next
+          # setup-node takes over PATH; the tool cache keeps both.
+          printf 'LMDJ_UPLOAD_NODE=%s\n' "$(command -v node)" >> "$GITHUB_ENV"
+
       - name: Set up Node
         timeout-minutes: 3
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -116,6 +132,14 @@ jobs:
           node-version: "26"
           cache: npm
           cache-dependency-path: tests/platform/web/package-lock.json
+
+      - name: Install the pinned deploy CLI without deployment credentials
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/host-wrangler-$GITHUB_RUN_ID" \
+            --no-audit --no-fund wrangler@4.129.1
 
       - name: Install browser smoke dependencies
         timeout-minutes: 5
@@ -127,23 +151,31 @@ jobs:
         working-directory: tests/platform/web
         run: npx --no-install playwright install --with-deps chromium
 
-      - name: Deploy signed Runtime Host release
+      - name: Deploy signed Runtime Host release to Cloudflare
         timeout-minutes: 35
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          NETLIFY_RUNTIME_SITE_ID: ${{ secrets.NETLIFY_RUNTIME_SITE_ID }}
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          WRANGLER_SEND_METRICS: "false"
           LMDJ_RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
           LMDJ_RELEASE_REQUEST_ID: ${{ inputs.request_id }}
           LMDJ_PRIOR_SITE_SHA256: ${{ inputs.prior_site_sha256 }}
         run: |
           set -euo pipefail
           mkdir -p build/deploy/web-runtime-host
+          state="$RUNNER_TEMP/host-state-$GITHUB_RUN_ID"
+          mkdir -p "$state"
           tag="$LMDJ_RELEASE_TAG"
           timeout --signal=TERM --kill-after=900s 1080s \
-            scripts/web-runtime-deploy.sh deploy "$tag" 2>&1 |
-            tee build/deploy/web-runtime-host/deployment.log
+            scripts/cloudflare-host-deploy.sh "$tag" \
+              --target web-runtime-host \
+              --state-root "$state" \
+              --output build/deploy/web-runtime-host/evidence.json \
+              --run-id "$GITHUB_RUN_ID" \
+              --node "$LMDJ_UPLOAD_NODE" \
+              --wrangler "$RUNNER_TEMP/host-wrangler-$GITHUB_RUN_ID/node_modules/wrangler/bin/wrangler.js" \
+            2>&1 | tee build/deploy/web-runtime-host/deployment.log
 
       - name: Upload deployment evidence and failure logs
         timeout-minutes: 5
@@ -153,6 +185,5 @@ jobs:
           name: runtime-host-deployment-evidence
           path: |
             build/deploy/web-runtime-host/evidence.json
-            build/deploy/web-runtime-host/recovery-evidence.json
             build/deploy/web-runtime-host/deployment.log
           if-no-files-found: warn

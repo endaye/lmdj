@@ -36,17 +36,19 @@ EXPECTED_ACTION_PINS = {
         "v6.0.0",
     ),
 }
+# Retired with the Netlify sites; a reappearance is a regression, not a rename.
 NETLIFY_CREDENTIALS = {
     "NETLIFY_RUNTIME_SITE_ID",
     "NETLIFY_AUTH_TOKEN",
 }
-CREDENTIAL_ENVIRONMENT = NETLIFY_CREDENTIALS | {"GITHUB_TOKEN"}
+DEPLOY_CREDENTIALS = {"CLOUDFLARE_API_TOKEN"}
+CREDENTIAL_ENVIRONMENT = DEPLOY_CREDENTIALS | {"GITHUB_TOKEN"}
 # `github.token` is the scoped, ephemeral Actions token and the workflow grants it
 # only `contents: read`, so the credential-free preflight may read Release metadata
 # with it. The Netlify secrets are environment-scoped and stay in the deploy job.
 GITHUB_TOKEN_STEPS = {
     "Verify signed Runtime Host release",
-    "Deploy signed Runtime Host release",
+    "Deploy signed Runtime Host release to Cloudflare",
 }
 
 
@@ -242,9 +244,12 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         permissions = self.mapping_block(source, "permissions", 0)
         self.assertEqual(self.direct_mapping(permissions, 2), {"contents": "read"})
         self.assertIn("ref: main", source)
-        self.assertIn('scripts/web-runtime-deploy.sh deploy "$tag"', source)
-        self.assertIn("NETLIFY_RUNTIME_SITE_ID", source)
-        self.assertIn("NETLIFY_AUTH_TOKEN", source)
+        self.assertIn('scripts/cloudflare-host-deploy.sh "$tag"', source)
+        self.assertIn("--target web-runtime-host", source)
+        self.assertIn("CLOUDFLARE_API_TOKEN", source)
+        # The Netlify sites are deleted; the production path must not name them.
+        self.assertNotIn("NETLIFY", source)
+        self.assertNotIn("netlify.app", source)
 
     def test_release_tag_selection_fails_closed(self) -> None:
         source = self.workflow_source()
@@ -301,7 +306,7 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         deploy_job = self.mapping_block(jobs, "deploy", 2)
         self.assertNotIn("env", self.direct_mapping(deploy_job, 4))
 
-        deploy_step = self.step_named(source, "Deploy signed Runtime Host release")
+        deploy_step = self.step_named(source, "Deploy signed Runtime Host release to Cloudflare")
         deploy_environment = self.direct_mapping(
             self.mapping_block(deploy_step, "env", 8),
             10,
@@ -310,10 +315,8 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
             deploy_environment,
             {
                 "GITHUB_TOKEN": "${{ github.token }}",
-                "NETLIFY_RUNTIME_SITE_ID": (
-                    "${{ secrets.NETLIFY_RUNTIME_SITE_ID }}"
-                ),
-                "NETLIFY_AUTH_TOKEN": "${{ secrets.NETLIFY_AUTH_TOKEN }}",
+                "CLOUDFLARE_API_TOKEN": "${{ secrets.CLOUDFLARE_API_TOKEN }}",
+                "WRANGLER_SEND_METRICS": '"false"',
                 "LMDJ_RELEASE_TAG": "${{ needs.preflight.outputs.tag }}",
                 "LMDJ_RELEASE_REQUEST_ID": "${{ inputs.request_id }}",
                 "LMDJ_PRIOR_SITE_SHA256": "${{ inputs.prior_site_sha256 }}",
@@ -329,7 +332,7 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
                 10,
             )
             self.assertTrue(
-                NETLIFY_CREDENTIALS.isdisjoint(environment),
+                DEPLOY_CREDENTIALS.isdisjoint(environment),
                 f"Netlify credential leaked to non-deploy step: {name}",
             )
             if name not in GITHUB_TOKEN_STEPS:
@@ -374,7 +377,7 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
                 continue
             environment = self.direct_mapping(self.mapping_block(step, "env", 8), 10)
             self.assertTrue(
-                NETLIFY_CREDENTIALS.isdisjoint(environment),
+                DEPLOY_CREDENTIALS.isdisjoint(environment),
                 f"preflight must stay credential-free: {step.splitlines()[0]}",
             )
         for forbidden in ("setup-node", "npm ci", "playwright", "chromium"):
@@ -424,11 +427,11 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
     def test_workflow_scopes_secrets_and_always_uploads_evidence(self) -> None:
         source = self.workflow_source()
         self.assertIn(
-            "NETLIFY_RUNTIME_SITE_ID: ${{ secrets.NETLIFY_RUNTIME_SITE_ID }}",
+            "CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}",
             source,
         )
         self.assertIn(
-            "NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}",
+            "WRANGLER_SEND_METRICS: \"false\"",
             source,
         )
         upload_pin, upload_version = EXPECTED_ACTION_PINS[
@@ -441,13 +444,15 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         self.assertIn("if: always()", source)
         self.assertIn("name: runtime-host-deployment-evidence", source)
         self.assertIn("build/deploy/web-runtime-host/evidence.json", source)
-        self.assertIn("build/deploy/web-runtime-host/recovery-evidence.json", source)
+        # The Cloudflare path records recovery in the adapter's run store, not
+        # as a second artifact member.
+        self.assertNotIn("recovery-evidence.json", source)
         self.assertIn("build/deploy/web-runtime-host/deployment.log", source)
         self.assertIn("if-no-files-found: warn", source)
 
     def test_internal_timeout_leaves_bounded_recovery_and_upload_budget(self) -> None:
         source = self.workflow_source()
-        deploy_step = self.step_named(source, "Deploy signed Runtime Host release")
+        deploy_step = self.step_named(source, "Deploy signed Runtime Host release to Cloudflare")
         self.assertIn(
             "timeout --signal=TERM --kill-after=900s 1080s", deploy_step
         )
@@ -467,7 +472,7 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
             "Set up Node": 3,
             "Install browser smoke dependencies": 5,
             "Install Chromium": 10,
-            "Deploy signed Runtime Host release": 35,
+            "Deploy signed Runtime Host release to Cloudflare": 35,
             "Upload deployment evidence and failure logs": 5,
         }
         for job, budgets in (
@@ -515,12 +520,12 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         )
         recovery_kill_budget = 900
         main_budget = 1080
-        deploy_step_budget = step_budgets["Deploy signed Runtime Host release"] * 60
+        deploy_step_budget = step_budgets["Deploy signed Runtime Host release to Cloudflare"] * 60
         setup_budget = sum(
             minutes
             for name, minutes in step_budgets.items()
             if name not in {
-                "Deploy signed Runtime Host release",
+                "Deploy signed Runtime Host release to Cloudflare",
                 "Upload deployment evidence and failure logs",
             }
         ) * 60

@@ -721,10 +721,11 @@ current 页面已在同一变更中更正。`1.0.45.0` 快照按政策保持不�
 
 后续标准 profile `web-hosts` 为一个 Product Build/tag 创建一份精确六资产 Release：Creator 与
 Runtime 各自贡献 ZIP、checksum 和 detached checksum signature。Release assets 是签名输入，
-Creator 与 Runtime 仍是不同 Host/SemVer 和不同部署状态。Creator 生产目标是
-`https://lmdj-creator.netlify.app/`，Runtime 是 `https://lmdj-runtime.netlify.app/`；两条
-manual-only dispatch 的授权、Environment、Site credential、evidence 与 exact prior rollback
-独立，publish-release.yml 不 fan-out 到部署。
+Creator 与 Runtime 仍是不同 Host/SemVer 和不同部署状态。生产目标已随 Cloudflare 迁移改变：
+Creator 是 `https://creator.lmdj.workers.dev/`，Runtime 是 `https://lab.lmdj.workers.dev/`
+（原 `lmdj-creator.netlify.app` / `lmdj-runtime.netlify.app` 两个站点已于 2026-09-08 经授权
+删除）。两条 manual-only dispatch 的授权、Environment、credential、evidence 与 exact prior
+rollback 独立，publish-release.yml 不 fan-out 到部署。
 
 历史 `1.0.40.0` tag、Release 与已记录部署保持不可变，不能补写 Creator 资产或重解释成
 `web-hosts`。新 profile 只约束后续已分配并经 protected main 合并的 Product Build。Creator
@@ -733,12 +734,22 @@ Site 的外部 provisioning 尚须 live 证据；workflow 已存在不自动表�
 
 ## Runtime Host 公共发布
 
-Runtime Host 的两阶段发布工具和 workflow 定义已经存在：不持有 Netlify credential 的
+Runtime Host 的两阶段发布工具和 workflow 定义已经存在：不持有部署 credential 的
 preflight job 先从 canonical origin 验证 remote annotated signed Product tag、protected
 `main` ancestry，以及 Release 精确三资产 ZIP、checksum 和受信 Release checksum key 的
 detached armored signature，并完成资产下载与 staging；Product tag key 与 checksum key 的
 固定指纹和用途相互独立，不能替代，signature 验证先于 checksum 解析。只有它通过后才安装
-Node/Chromium，部署 job 在接触 Netlify 前对同一 Release 再验证一次。
+Node/Chromium，部署 job 在接触生产前对同一 Release 再验证一次。
+
+部署 job 现在走共享受管 Cloudflare adapter（`scripts/cloudflare-host-deploy.sh`）：
+`candidate` 上传并对版本 URL 做精确签名字节校验 → 浏览器校验版本 URL → `promote` 对
+preview 与 stable 两侧校验 → 浏览器校验生产 URL → 写出 Runtime Host 部署证据文档的
+第 3 版（内部部署证据版本，不是产品 Contract；前缀不变，故 release driver 的证据校验
+无需改动）。每条 HTTP 与浏览器结果都由该命令自己观测
+并绑定到所部署的身份，任一腿未通过就不写证据。被替换部署的身份取自**变更前**对生产的一次
+观测，promote 所需的 prior signed tag 由同一观测的 Product Build 派生，再由 adapter 对着
+真实字节校验。upload 要求钉住的 Node 22.16.0 与 Wrangler 4.129.1，与浏览器腿的 Node 26
+并存。Creator 尚未切换（#1472）；生产路径上的 Netlify 退役见 #1473。
 Core Release 的资产集自 2026-08-24 起为四资产（#286）：除 ZIP、checksum 和受信
 signature 外，`build-manifest.json` 不再打进归档，而是作为并列 detached 资产
 `<archive-stem>.build-manifest.json` 发布（决策
