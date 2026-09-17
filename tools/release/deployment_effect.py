@@ -24,7 +24,7 @@ from .orchestration import JournalError, _validate_state
 from .orchestration_driver import Observation
 
 HOSTS = {
-    "deploy-web-runtime-host.yml": ("runtime", "web-runtime-host", "runtime-host-deployment-evidence", "lmdj.web-runtime-host.deployment-evidence.v2"),
+    "deploy-web-runtime-host.yml": ("runtime", "web-runtime-host", "runtime-host-deployment-evidence", "lmdj.web-runtime-host.deployment-evidence.v3"),
     "deploy-creator-web.yml": ("creator", "creator-web", "creator-host-deployment-evidence", "lmdj.creator-web.deployment-evidence.v1"),
 }
 LIMIT = 1024 * 1024  # Existing promotion evidence archive bound, not a log dump.

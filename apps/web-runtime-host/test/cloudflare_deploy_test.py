@@ -62,10 +62,12 @@ class Adapter:
         self.workspace = workspace
         self.stage = stage
         self.calls = []
+        self.seen = []
 
     def __call__(self, arguments):
         command = arguments[0]
         self.calls.append(command)
+        self.seen.append(list(arguments))
         if self.fail == command:
             raise CloudflareDeployError(f"{command} failed")
         if command == "inspect":
@@ -226,10 +228,14 @@ class DeployTest(unittest.TestCase):
             self.deploy_once(adapter=Adapter(exists=False))
         self.assertFalse(self.output.exists())
 
-    def test_an_existing_deployment_without_its_prior_tag_is_refused(self):
-        with self.assertRaises(CloudflareDeployError):
-            self.deploy_once(prior=False)
-        self.assertFalse(self.output.exists())
+    def test_the_prior_tag_is_derived_from_what_production_serves(self):
+        # A tag that is merely wrong still stages and only fails later at the
+        # byte comparison; a derived Build cannot be wrong in the first place.
+        self.deploy_once(prior=False)
+        promote = [call for call in self.adapter.seen if call[0] == "promote"][0]
+        self.assertIn("--prior-tag", promote)
+        self.assertEqual(promote[promote.index("--prior-tag") + 1],
+                         "lmdj-v1.0.59.0")
 
     def test_the_document_describes_what_was_staged(self):
         # Not what a caller said: the Build, Host version, source revision and
@@ -396,8 +402,7 @@ class EntryPointTest(unittest.TestCase):
         return [TAG, "--target", "web-runtime-host",
                 "--state-root", str(state_root or self.root / "state"),
                 "--output", str(self.root / "evidence.json"),
-                "--run-id", str(RUN_ID), "--node", NODE, "--wrangler", WRANGLER,
-                "--prior-tag", PRIOR_TAG]
+                "--run-id", str(RUN_ID), "--node", NODE, "--wrangler", WRANGLER]
 
     def test_a_state_root_that_does_not_exist_is_refused(self):
         errors = io.StringIO()
@@ -465,7 +470,6 @@ class EntryPointTest(unittest.TestCase):
             cloudflare_deploy.main(self.arguments())
         self.assertEqual(seen["host"], "web-runtime-host")
         self.assertEqual(seen["tag"], TAG)
-        self.assertEqual(seen["prior_tag"], PRIOR_TAG)
         self.assertEqual(seen["run_id"], str(RUN_ID))
         self.assertEqual(seen["node"], NODE)
         self.assertEqual(seen["wrangler"], WRANGLER)
