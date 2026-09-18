@@ -204,6 +204,17 @@ Pattern, not against its own stale one.
 
 ### L2 — Publish the pending overlay on the control cadence
 
+**Blocked pending design.** L2 as written below has the Host publish the
+projection. Implementing it showed that every overlay publication advances the
+engine publication generation the admission is bound to, so Record-off fails its
+own journal invariant with `cutoff does not match last applied publication`.
+The owner has settled ownership — the coordinator publishes, not the Host — and
+[`2026-09-18-transport-overlay-publication-authority.md`](../specs/2026-09-18-transport-overlay-publication-authority.md)
+carries the verified cause and the five decisions (O1–O5) an implementation Task
+must settle first. The file list and checkboxes below are superseded by whatever
+that design concludes; two of its findings survive unchanged and are recorded
+there.
+
 **Defect caught:** the recorded pass stays inaudible until Record is switched
 off — the reported defect.
 
@@ -275,7 +286,13 @@ Version impact: required.
   `PatternTransportController::project_overlay`). Additive, source- and
   binary-additive to existing callers: SemVer **minor** on
   `packages/application-facade/module.json`, currently `6.1.0`, with
-  `api_version` re-derived rather than assumed.
+  `api_version` re-derived rather than assumed. **Correction:** this bump does
+  not belong in L1. `products/lmdj/assembly.json` and `assembly.lock.json` pin
+  the module version, so the lock verifier refuses a module bump without an
+  Assembly regeneration (`module source identity mismatch for
+  application-facade`), and `git-workflow.md` reserves allocation material for
+  the version-cut Pull Request. The bump is owed and recorded on #1513; L1
+  shipped with every manifest byte-identical to `main`.
 - `web-runtime-platform` changes behavior with no public API change: SemVer
   **patch** on `packages/web-runtime-platform/module.json`, currently `5.3.1`,
   and its `application-facade` dependency pin follows the new Facade minor.
