@@ -1730,6 +1730,32 @@ class CandidateEnrollmentTest(unittest.TestCase):
         with self.assertRaises(JournalError):
             enrolled_candidate_scope_env(self.root / "preparation")
 
+    def test_enrollment_provisions_the_build_reservation_catalogue(self):
+        # The M3 first run failed here: the entry never enrolled the BUILD
+        # catalogue, so the preparation's first reserve leg died with
+        # "BUILD catalogue is missing or unsafe". enroll_candidate provisions
+        # it idempotently before the preparation's first observation.
+        from tools.release.carriers import enroll_candidate
+        from tools.release.candidate import CATALOG
+        from tools.release.candidate_preparation import CandidatePreparationError
+
+        reservation_root = self.root / "reservations"
+        with self.assertRaises(CandidatePreparationError):
+            enroll_candidate(
+                request=request(mode="new", requested_tag=None),
+                preparation_root=self.root / "preparation",
+                repository_root=self.root / "repo", source_root=self.root / "src",
+                reservation_root=reservation_root,
+                transition_root=self.root / "transition",
+                witness_root=self.root / "witness", repository_id=12,
+                client=None, token="FIXTURE-NOT-A-SECRET",
+                authorize=lambda _request: None, observe_main=lambda: TARGET,
+                review=lambda *a: None, verify_merged=lambda *a: None,
+                clock=lambda: 1789550000, path="/usr/bin:/bin",
+                author_name="Fixture", author_email="fixture@example.invalid",
+                source_timestamp=1789550000, drive=False)
+        self.assertTrue((reservation_root / CATALOG).exists())
+
 
 class RecoveredDispatchTest(unittest.TestCase):
     """The managed dispatch wrapper: pending until derivable, never self-driving."""
