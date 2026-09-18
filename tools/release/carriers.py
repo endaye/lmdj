@@ -900,6 +900,10 @@ def enroll_candidate(*, request, preparation_root, repository_root, source_root,
         request=request, authorize=authorize, observe_main=observe_main,
         path=path, author_name=author_name, author_email=author_email,
         source_timestamp=source_timestamp, clock=clock)
+    # The BUILD catalogue is provisioned once per repository by the trusted
+    # entry, before the preparation's first reservation leg; enroll is
+    # idempotent for existing storage (it only validates the binding).
+    preparation.material.reservations.enroll(request["repository"])
     try:
         observed = preparation.observe(initialize=True)
     except CandidatePreparationError as first:
