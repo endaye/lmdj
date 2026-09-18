@@ -312,8 +312,20 @@ def main(argv=None):
         if arguments.command == "urls":
             # One statement of the two URL shapes, for every caller that needs
             # to name an origin before a document exists to validate.
+            # Both: `host` is what was asked about, `worker` is the canonical
+            # name the rest of this module uses. They are not the same string,
+            # and a caller comparing the wrong one silently compares a step
+            # name with a Worker name.
+            # `production_url` validates the Host first, so an unconfigured
+            # one is refused with this module's reason rather than a KeyError.
+            production = production_url(arguments.subject)
+            # Both: `host` is what was asked about, `worker` is the canonical
+            # name the rest of this module uses. They are not the same string,
+            # and a caller comparing the wrong one silently compares a step
+            # name with a Worker name.
             answer = {"host": arguments.subject,
-                      "production": production_url(arguments.subject)}
+                      "worker": WORKERS[arguments.subject],
+                      "production": production}
             if arguments.version is not None:
                 answer["version"] = version_url(arguments.subject, arguments.version)
             print(json.dumps(answer, ensure_ascii=False, sort_keys=True,

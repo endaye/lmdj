@@ -175,8 +175,11 @@ def _read_only_tool(tool, arguments, *, environment=None):
     if result.returncode != 0:
         return None
     try:
-        document = json.loads(result.stdout)
-    except ValueError:
+        # Explicit UTF-8, not `text=True`: that decodes with the locale's
+        # preferred encoding, so the same bytes could parse on one machine and
+        # fail on another. These tools emit JSON, which is UTF-8 by definition.
+        document = json.loads(result.stdout.decode("utf-8"))
+    except (ValueError, AttributeError):
         return None
     return document if type(document) is dict else None
 
@@ -227,13 +230,13 @@ class _CloudflareReader:
         return document["version"]
 
     def replaced_version(self, host):
-        from .deployment_projection import NO_DEPLOYMENT
+        from .deployment_projection import NoDeployment
 
         document = self._inspect(host)
         if document is None:
             return None
         if not document.get("exists") or document.get("deployment") is None:
-            return NO_DEPLOYMENT
+            return NoDeployment()
         deployment = document["deployment"]
         if type(deployment) is not dict \
                 or type(deployment.get("version_id")) is not str:

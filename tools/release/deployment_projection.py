@@ -37,9 +37,12 @@ ARCHIVE_PREFIXES = {spec.host_id: spec.archive_prefix
                     for spec in (WEB_RUNTIME_SPEC, CREATOR_WEB_SPEC)}
 ENTRY = "dist/index.html"
 MANIFEST = "dist/host-manifest.json"
-# A Web Host release archive, not a retained evidence archive: this bounds how
-# much of a staged asset the projection will hash, so a corrupt or hostile
-# archive cannot make a read-only step consume the machine.
+# A Web Host release archive, not a retained evidence archive: this bounds the
+# size of a staged asset this module will touch at all, so a corrupt or hostile
+# archive cannot make a read-only step consume the machine. The archive is read
+# twice — once streamed to check its digest, once opened by `zipfile` for the
+# two entry files — because a zip's directory needs random access and cannot be
+# hashed in the same pass. The bound is on the archive, not on total I/O.
 LIMIT = 256 * 1024 * 1024
 # The two entry files are an HTML page and a JSON manifest. Bounding them by
 # the archive's size would let the two of them together decompress to twice it;
@@ -282,7 +285,14 @@ def _archive_contents(path, expected_sha256):
 
 
 class NoDeployment:
-    """The Worker exists but holds no deployment: a first deployment, not a gap."""
+    """The Worker exists but holds no deployment: a first deployment, not a gap.
+
+    Compared by type, never by identity with the singleton below. A reader
+    assembled from a second import of this module — the candidate-worktree copy
+    the surrounding code guards against — would hand back a different object,
+    and identity would send a first deployment down the "invalid version"
+    branch instead.
+    """
 
     def __repr__(self):
         return "NO_DEPLOYMENT"
@@ -340,7 +350,7 @@ def assemble(root, tag, step, *, reader):
         # answer: a projection that guessed the prior would authorize a
         # deployment against a state nobody observed.
         return None
-    if version is NO_DEPLOYMENT:
+    if type(version) is NoDeployment:
         prior = None
         # Nothing was served, so there is no observation to digest. The
         # deployment effect compares this digest only against a recorded
@@ -356,7 +366,16 @@ def assemble(root, tag, step, *, reader):
             # A deployed Worker whose origin cannot be read is a gap, not a
             # first deployment; the prior it would replace is unknown.
             return None
-        prior = _replaced(observation, version, reader.version_url(host, version))
+        deploy_url = reader.version_url(host, version)
+        # The immutable per-version origin, not the production one: a
+        # well-formed but wrong URL would freeze and only be caught by the
+        # effect's field comparison, long after the dispatch. Checked as a
+        # relationship rather than a template, so the URL shape stays the
+        # evidence module's to state.
+        if type(deploy_url) is not str or version[:8] not in deploy_url \
+                or site_id not in deploy_url:
+            _fail("reads an immutable origin that names another version or Worker")
+        prior = _replaced(observation, version, deploy_url)
         prior_site_sha256 = canonical_sha256(observation["response"])
 
     return validate({
