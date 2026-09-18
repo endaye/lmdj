@@ -303,7 +303,9 @@ def main() -> int:
         (
             "web-runtime-lab:",
             'python-version: "3.11"',
-            'node-version: "22"',
+            # Node 26 since #1306 unified the CI runtime; CLAUDE.md names it
+            # as the pinned version for every Web Host lane.
+            'node-version: "26"',
             "run: scripts/web-runtime-lab.sh test",
         ),
         "CI workflow",

@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-09
     occurrence: https://github.com/endaye/lmdj/issues/1029
     observed_by: Codex
+  - date: 2026-09-18
+    occurrence: https://github.com/endaye/lmdj/pull/1516
+    observed_by: Claude Opus 5
 exit: gate:tests/build/version_test.py
 ---
 
@@ -67,6 +70,18 @@ validator and the release evidence chain bind.
   `["portal"]` only. Every lane runs today because the full rule wins, not
   because anyone declared a mapping for these files, so a check parked in an
   incidentally selected lane stops running the moment that full rule narrows.
+
+The third recurrence, [#1516](https://github.com/endaye/lmdj/pull/1516), was the
+Build allocation itself: it moved `products/lmdj/version.json` to `1.0.61.0`
+without regenerating the pair, so `main` carried an identity describing
+`1.0.60.0`. The mechanism held — `version_test.py` failed with the generator's
+own mismatch reason — but it caught it after the merge, because the lanes that
+run ctest are batch-only and no Pull Request check runs them (see
+[`local-ci-list-names-batch-lanes`](local-ci-list-names-batch-lanes.md)). So the
+exit still enforces the invariant; what it does not do is enforce it before
+`main` moves. Allocating a Build is exactly the change the "How to apply" first
+bullet names, and it is the one change most likely to be prepared by tooling
+rather than by someone reading this entry.
 
 The recurrence at [#1029](https://github.com/endaye/lmdj/issues/1029) exposed
 stale Product, Assembly, Platform and Host projections during canonical canary
