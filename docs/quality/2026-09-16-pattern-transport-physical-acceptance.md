@@ -41,7 +41,8 @@ browser versions, input/output route, and the SHA-256 of any exported report.
 
 ## Legs — every leg has a far-side assertion per transition
 
-The six state-table cells are legs T-L1 through T-L6. "Authority" means the
+The six state-table cells are legs T-L1 through T-L6; T-L7 is the live
+loop-overdub leg they do not cover. "Authority" means the
 visible transport status plus, where named, a reload/reopen of the Project.
 
 | Leg | From → action → To | Far-side assertions |
@@ -52,6 +53,7 @@ visible transport status plus, where named, a reload/reopen of the Project.
 | T-L4 | Playing+Recording → Record → Playing | Playback continues with **no audible interruption**; recording stops; the just-recorded events play back on the next pass. |
 | T-L5 | Playing+Recording → Play/Stop → Stopped | Both playback and recording end; committed events survive reload (Pattern content, Pad Slot references, committed revision). |
 | T-L6 | Playing → Record → Playing+Recording (overdub) | Second-pass Pad hits overlay the first pass; the first-pass events remain audible and intact after commit and reload. |
+| T-L7 | Playing+Recording, stay in Record across a loop boundary | What was played into one pass is audible on the next pass **without leaving Record**, with no beat restart and no gap at the boundary. Switching Record off afterwards still commits exactly once — the already-audible pass is not duplicated or lost. |
 | T-N1 | Playing+Recording, navigate Project/Sample/Sequence/Perform and back | No implicit stop and no audible gap at any mode transition; on return to Sequence the projection matches authority (playing/recording, no phantom failure banner); exactly one engagement — a second device-visible session or doubled event stream is a failure. |
 | T-N2 | Reload the page mid-recording | The recovery surface appears; choosing recover retains the sealed events on reload, choosing discard leaves the Pattern exactly as before the attempt — one outcome, never partial. |
 | T-N3 | Stop after a switch with a pending publication (switch Pattern, then immediately Play/Stop) | No ghost switch applies after stop; the audible Pattern and the reloaded Pattern agree. |
@@ -60,8 +62,8 @@ visible transport status plus, where named, a reload/reopen of the Project.
 
 | ID | Platform | Browser | Input | Legs | Status |
 | --- | --- | --- | --- | --- | --- |
-| T1 | macOS | Chrome | Pointer + physical keyboard | T-L1…T-L6, T-N1…T-N3 | unverified |
-| T2 | iPadOS | Safari | Touch | T-L1…T-L6, T-N1, T-N2; plus background → foreground → lock → unlock during playing+recording, with at most one explicit activation per interruption and the transport authority correct after each recovery | unverified |
+| T1 | macOS | Chrome | Pointer + physical keyboard | T-L1…T-L7, T-N1…T-N3 | unverified |
+| T2 | iPadOS | Safari | Touch | T-L1…T-L7, T-N1, T-N2; plus background → foreground → lock → unlock during playing+recording, with at most one explicit activation per interruption and the transport authority correct after each recovery | unverified |
 | T3 | macOS | Chrome | Physical MIDI | T-L3, T-L4, T-L6 with Pad hits delivered by the controller; recorded events reference the correct Pad Slots | unverified — run together with the M6 re-run |
 
 T2 additionally inherits the L5 lifecycle expectation: a route interruption
