@@ -103,7 +103,7 @@ class CandidateBuildMaterial:
         """
         raw = subprocess.run(
             [sys.executable, str(RUNTIME_IDENTITY_TOOL), "--repo-root", str(root)],
-            check=True, capture_output=True,
+            capture_output=True,
         )
         require(raw.returncode == 0, "the trusted Runtime identity generator failed")
         files = {}
@@ -129,14 +129,19 @@ class CandidateBuildMaterial:
             reserved = ProductVersion(*(int(part) for part in reservation["version"].split(".")))
             try:
                 files = render_build_material(root, expected, reserved)
-                # The identity generator reads a tree, so stage the reserved
-                # four files into this disposable export first; it then derives
-                # the identity from exactly the reserved build state.
-                for name, raw in files.items():
-                    (root / name).write_bytes(raw)
-                files.update(self._runtime_identity(root))
             except Exception:
                 raise JournalError("why: canonical candidate material generation refused; remedy: retain the reservation and repair the original input or reconcile a new candidate, never bypass Assembly validation") from None
+            # The identity generator reads a tree, so stage the reserved
+            # four files into this disposable export first; it then derives
+            # the identity from exactly the reserved build state.
+            for name, raw in files.items():
+                (root / name).write_bytes(raw)
+            try:
+                files.update(self._runtime_identity(root))
+            except JournalError:
+                raise
+            except Exception:
+                raise JournalError("why: Runtime identity generation failed for the reserved build; remedy: restore the trusted tools/web-runtime/generate_runtime_identity.py and its canonical inputs, then rerun without reconciling the reservation") from None
         self.inputs.verify(frozen, main_revision)
         require(lookup(request, frozen, main_revision) == reservation,
                 "reservation changed during generation")

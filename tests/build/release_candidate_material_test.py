@@ -185,6 +185,13 @@ class MaterialTest(unittest.TestCase):
             with self.subTest(reserved=reserved), self.assertRaisesRegex(ValueError, "reservation"):
                 version.render_build_material(self.root, self.current, reserved)
 
+    def test_identity_generator_failure_keeps_its_own_reason(self):
+        tool = self.container / "fail.py"
+        tool.write_text("raise SystemExit(3)\n")
+        with patch.object(candidate_material, "RUNTIME_IDENTITY_TOOL", tool):
+            with self.assertRaisesRegex(JournalError, "the trusted Runtime identity generator failed"):
+                self.prepare()
+
     def test_export_rejects_wrong_git_blob_bytes(self):
         original = self.tool.inputs.git
         def corrupt(*args, **kwargs):
