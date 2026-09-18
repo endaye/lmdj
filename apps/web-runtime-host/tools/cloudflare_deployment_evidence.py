@@ -73,20 +73,28 @@ class CloudflareEvidenceError(ValueError):
             "never from another deployment's results")
 
 
-def production_url(host):
-    """The fixed public URL this Host is promoted to."""
+def worker_for(host):
+    """The Worker this Host is promoted to, or a refusal for an unknown Host.
+
+    The one place a Host name becomes a Worker name, so no caller has to index
+    `WORKERS` after validating somewhere else and hope the two agree.
+    """
     if host not in WORKERS:
         raise CloudflareEvidenceError("names an unconfigured Host")
-    return f"https://{WORKERS[host]}.lmdj.workers.dev"
+    return WORKERS[host]
+
+
+def production_url(host):
+    """The fixed public URL this Host is promoted to."""
+    return f"https://{worker_for(host)}.lmdj.workers.dev"
 
 
 def version_url(host, version):
     """The immutable per-version preview URL Cloudflare serves."""
-    if host not in WORKERS:
-        raise CloudflareEvidenceError("names an unconfigured Host")
+    worker = worker_for(host)
     if not isinstance(version, str) or _VERSION.fullmatch(version) is None:
         raise CloudflareEvidenceError("names an invalid version identity")
-    return f"https://{version[:8]}-{WORKERS[host]}.lmdj.workers.dev"
+    return f"https://{version[:8]}-{worker}.lmdj.workers.dev"
 
 
 def _digest(value):
@@ -316,16 +324,15 @@ def main(argv=None):
             # name the rest of this module uses. They are not the same string,
             # and a caller comparing the wrong one silently compares a step
             # name with a Worker name.
-            # `production_url` validates the Host first, so an unconfigured
-            # one is refused with this module's reason rather than a KeyError.
-            production = production_url(arguments.subject)
             # Both: `host` is what was asked about, `worker` is the canonical
             # name the rest of this module uses. They are not the same string,
             # and a caller comparing the wrong one silently compares a step
-            # name with a Worker name.
+            # name with a Worker name. Both come from `worker_for`, so an
+            # unconfigured Host is refused with this module's reason and there
+            # is no second table lookup to drift from it.
             answer = {"host": arguments.subject,
-                      "worker": WORKERS[arguments.subject],
-                      "production": production}
+                      "worker": worker_for(arguments.subject),
+                      "production": production_url(arguments.subject)}
             if arguments.version is not None:
                 answer["version"] = version_url(arguments.subject, arguments.version)
             print(json.dumps(answer, ensure_ascii=False, sort_keys=True,

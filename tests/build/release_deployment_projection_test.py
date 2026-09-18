@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 import zipfile
@@ -491,6 +492,23 @@ class CompositionSeamTest(unittest.TestCase):
         answer.write_text("print('{\"worker\": \"lab\"}')\n", encoding="utf-8")
         self.assertEqual(self.composition._read_only_tool(answer, ()),
                          {"worker": "lab"})
+
+    def test_a_tool_that_hangs_is_bounded_by_the_timeout(self):
+        # The defect this replaced: reading a pipe blocks until EOF, so a tool
+        # that prints a little and then hangs never reaches the size bound or
+        # the timeout, and the drive stalls instead of reporting `pending`.
+        hang = self.root / "hang.py"
+        hang.write_text("import sys, time\n"
+                        "sys.stdout.write('{\"worker\": \"lab\"}')\n"
+                        "sys.stdout.flush()\n"
+                        "time.sleep(600)\n", encoding="utf-8")
+        started = time.monotonic()
+        with mock.patch.object(self.composition, "_READ_TIMEOUT", 3):
+            self.assertIsNone(self.composition._read_only_tool(hang, ()))
+        self.assertLess(time.monotonic() - started, 60,
+                        "why: the call was not bounded by the timeout, so a "
+                        "hung tool stalls the drive; "
+                        "remedy: bound the duration and kill the child")
 
     def test_an_unreadable_tool_reads_as_no_document(self):
         # Every live read fails closed into None, which each caller turns into

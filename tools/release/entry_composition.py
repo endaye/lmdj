@@ -23,6 +23,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -170,25 +171,23 @@ def _read_only_tool(tool, arguments, *, environment=None):
     env = {k: v for k, v in os.environ.items()
            if k in ("PATH", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP")}
     env.update(environment or {})
-    child = None
+    # stdout to a temporary file, not a pipe: reading a pipe blocks until EOF,
+    # so a tool that prints a little and then hangs would never reach either
+    # the size bound or the timeout, and the drive would stall instead of
+    # reporting `pending`. With a file there is nothing to block on, `run`
+    # bounds the duration and kills the child, and only a bounded prefix is
+    # read back into memory.
     try:
-        # A bounded read rather than `subprocess.run`: that captures whatever
-        # the child prints before anything can refuse it, and the timeout is
-        # not a size bound. These answers are a handful of fields. stderr is
-        # discarded at the pipe so a chatty child cannot block on it either.
-        child = subprocess.Popen([sys.executable, "-s", "-B", str(tool), *arguments],
-                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                 env=env)
-        payload = child.stdout.read(_READ_LIMIT + 1)
-        child.stdout.close()
-        if child.wait(timeout=_READ_TIMEOUT) != 0 or len(payload) > _READ_LIMIT:
-            return None
+        with tempfile.TemporaryFile() as sink:
+            subprocess.run([sys.executable, "-s", "-B", str(tool), *arguments],
+                           stdout=sink, stderr=subprocess.DEVNULL, env=env,
+                           timeout=_READ_TIMEOUT, check=True)
+            sink.seek(0)
+            payload = sink.read(_READ_LIMIT + 1)
     except (OSError, subprocess.SubprocessError):
         return None
-    finally:
-        if child is not None and child.poll() is None:
-            child.kill()
-            child.wait()
+    if len(payload) > _READ_LIMIT:
+        return None
     try:
         # Explicit UTF-8, not `text=True`: that decodes with the locale's
         # preferred encoding, so the same bytes could parse on one machine and
