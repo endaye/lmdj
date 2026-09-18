@@ -73,20 +73,28 @@ class CloudflareEvidenceError(ValueError):
             "never from another deployment's results")
 
 
-def production_url(host):
-    """The fixed public URL this Host is promoted to."""
+def worker_for(host):
+    """The Worker this Host is promoted to, or a refusal for an unknown Host.
+
+    The one place a Host name becomes a Worker name, so no caller has to index
+    `WORKERS` after validating somewhere else and hope the two agree.
+    """
     if host not in WORKERS:
         raise CloudflareEvidenceError("names an unconfigured Host")
-    return f"https://{WORKERS[host]}.lmdj.workers.dev"
+    return WORKERS[host]
+
+
+def production_url(host):
+    """The fixed public URL this Host is promoted to."""
+    return f"https://{worker_for(host)}.lmdj.workers.dev"
 
 
 def version_url(host, version):
     """The immutable per-version preview URL Cloudflare serves."""
-    if host not in WORKERS:
-        raise CloudflareEvidenceError("names an unconfigured Host")
+    worker = worker_for(host)
     if not isinstance(version, str) or _VERSION.fullmatch(version) is None:
         raise CloudflareEvidenceError("names an invalid version identity")
-    return f"https://{version[:8]}-{WORKERS[host]}.lmdj.workers.dev"
+    return f"https://{version[:8]}-{worker}.lmdj.workers.dev"
 
 
 def _digest(value):
@@ -285,24 +293,52 @@ def write_document(path, document, *, host):
 
 
 def main(argv=None):
-    """Validate a document on stdin and echo it canonically, or refuse.
+    """Validate a document on stdin and echo it canonically, or name a Host's origins.
 
     The release driver's deployment effect verifier runs one trusted validator
     per contract as a subprocess, so the document it compares against the frozen
     projection is one a validator accepted rather than one it parsed itself.
     This is that validator for the Cloudflare contracts; the Netlify ones keep
-    their own in each Host's `deploy_orchestrator`.
+    their own in each Host's `deploy_orchestrator`. `urls` is the same module
+    answering where a Host is served, for callers that must name an origin
+    before any document exists to validate.
     """
     import argparse
     import sys
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("validate",))
-    parser.add_argument("contract")
+    parser.add_argument("command", choices=("validate", "urls"))
+    parser.add_argument("subject", metavar="CONTRACT|HOST")
+    parser.add_argument("--version", help="urls only: also report this version's immutable origin")
     arguments = parser.parse_args(argv)
     hosts = {contract: host for host, contract in CONTRACTS.items()}
+    if arguments.command != "urls" and arguments.version is not None:
+        # Silently dropping it would let a mistyped subcommand validate a
+        # document while appearing to ask about a version.
+        parser.error("--version is only meaningful for urls")
     try:
-        host = hosts.get(arguments.contract)
+        if arguments.command == "urls":
+            # One statement of the two URL shapes, for every caller that needs
+            # to name an origin before a document exists to validate.
+            # Both: `host` is what was asked about, `worker` is the canonical
+            # name the rest of this module uses. They are not the same string,
+            # and a caller comparing the wrong one silently compares a step
+            # name with a Worker name.
+            # Both: `host` is what was asked about, `worker` is the canonical
+            # name the rest of this module uses. They are not the same string,
+            # and a caller comparing the wrong one silently compares a step
+            # name with a Worker name. Both come from `worker_for`, so an
+            # unconfigured Host is refused with this module's reason and there
+            # is no second table lookup to drift from it.
+            answer = {"host": arguments.subject,
+                      "worker": worker_for(arguments.subject),
+                      "production": production_url(arguments.subject)}
+            if arguments.version is not None:
+                answer["version"] = version_url(arguments.subject, arguments.version)
+            print(json.dumps(answer, ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":")))
+            return 0
+        host = hosts.get(arguments.subject)
         if host is None:
             raise CloudflareEvidenceError("names an unsupported contract")
         document = json.loads(sys.stdin.read())

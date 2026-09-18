@@ -123,6 +123,17 @@ class CloudflareEffectShapeTest(unittest.TestCase):
                 self.assertNotIn(b"Traceback", result.stderr)
                 self.assertNotIn(b"Expecting value", result.stderr)
 
+    def test_urls_refuses_an_unconfigured_host_with_this_modules_reason(self):
+        # Not merely a nonzero exit: an unconfigured Host must fail with the
+        # module's own reason, never a traceback from a second table lookup.
+        result = subprocess.run(
+            [sys.executable, str(self.VALIDATOR), "urls", "portal"],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("names an unconfigured Host", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn("KeyError", result.stderr)
+
     def test_the_validator_refuses_an_unsupported_contract(self):
         document = self.document()
         result = self.validate(document, "lmdj.web-runtime-host.deployment-evidence.v2")

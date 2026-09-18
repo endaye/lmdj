@@ -222,6 +222,10 @@ class DeployTest(unittest.TestCase):
     def test_a_first_deployment_has_no_prior(self):
         self.deploy_once(adapter=Adapter(exists=False), prior=False)
         self.assertIsNone(self.written()["prior_good"])
+        # And the origin is never read: a Worker with no deployment serves
+        # nothing, so observing it would turn a supported first deployment
+        # into an error about a 404 that is exactly what should be there.
+        self.assertEqual(self.reads, [])
 
     def test_a_prior_tag_without_a_deployment_is_refused(self):
         with self.assertRaises(CloudflareDeployError):
