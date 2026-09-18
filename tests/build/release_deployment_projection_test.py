@@ -359,15 +359,31 @@ class ProjectionTest(unittest.TestCase):
             projection.projection(self.root, TAG, "runtime", reader=Reader())
         self.assertIn("not a regular file", str(raised.exception))
 
-    def test_a_production_origin_is_not_accepted_as_the_immutable_one(self):
+    def test_a_url_that_is_not_the_immutable_origin_is_refused(self):
         # A well-formed but wrong URL would freeze and only be caught by the
-        # effect's field comparison, long after the dispatch.
-        self.prepared()
-        reader = Reader()
-        reader.version_url = lambda host, version: f"https://{WORKER}.lmdj.workers.dev"
-        with self.assertRaises(JournalError) as raised:
-            projection.projection(self.root, TAG, "runtime", reader=reader)
-        self.assertIn("names another version or Worker", str(raised.exception))
+        # effect's field comparison, long after the dispatch. A substring test
+        # passed several of these; the check is on the host's first label,
+        # which is where the two origins actually differ.
+        wrong = {
+            "production": f"https://{WORKER}.lmdj.workers.dev",
+            "worker in the path": f"https://{VERSION[:8]}.lmdj.workers.dev/{WORKER}",
+            "prefix in the path": f"https://{WORKER}.lmdj.workers.dev/{VERSION[:8]}",
+            "both in a query": f"https://{WORKER}.lmdj.workers.dev/?v={VERSION[:8]}-{WORKER}",
+            "another version": f"https://0e1d2c3b-{WORKER}.lmdj.workers.dev",
+            "another worker": f"https://{VERSION[:8]}-creator.lmdj.workers.dev",
+        }
+        for label, url in wrong.items():
+            with self.subTest(url=label):
+                directory = tempfile.TemporaryDirectory()
+                self.addCleanup(directory.cleanup)
+                self.root = Path(directory.name)
+                self.prepared()
+                reader = Reader()
+                reader.version_url = lambda host, version, u=url: u
+                with self.assertRaises(JournalError) as raised:
+                    projection.projection(self.root, TAG, "runtime", reader=reader)
+                self.assertIn("names another version or Worker",
+                              str(raised.exception))
 
     def test_a_first_deployment_is_decided_by_type_not_identity(self):
         # A reader assembled from a second import of this module hands back a

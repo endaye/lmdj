@@ -22,6 +22,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from urllib.parse import urlsplit
 import zipfile
 
 from .batch_reference import digest, sha
@@ -366,10 +367,15 @@ def assemble(root, tag, step, *, reader):
         return None
     if type(version) is NoDeployment:
         prior = None
-        # Nothing was served, so there is no observation to digest. The
-        # deployment effect compares this digest only against a recorded
-        # `prior_good`, which is absent for a first deployment; it still has to
-        # be a well-formed digest, and this one says exactly what was seen.
+        # A placeholder, and deliberately so. Nothing was observed on this
+        # branch — `observe` is not called, because a Worker holding no
+        # deployment serves nothing to observe. The effect recomputes this
+        # digest only inside its `prior_good is not None` branch, which a first
+        # deployment never reaches, so the value is never compared against
+        # anything; what is required of it is only that it is a well-formed
+        # digest, which both `validate` here and the effect's own guard demand.
+        # It is derived rather than constant so two Hosts' first deployments do
+        # not freeze the same bytes.
         prior_site_sha256 = canonical_sha256(
             {"worker": site_id, "served": False})
     else:
@@ -383,11 +389,15 @@ def assemble(root, tag, step, *, reader):
         deploy_url = reader.version_url(host, version)
         # The immutable per-version origin, not the production one: a
         # well-formed but wrong URL would freeze and only be caught by the
-        # effect's field comparison, long after the dispatch. Checked as a
-        # relationship rather than a template, so the URL shape stays the
-        # evidence module's to state.
-        if type(deploy_url) is not str or version[:8] not in deploy_url \
-                or site_id not in deploy_url:
+        # effect's field comparison, long after the dispatch. Checked on the
+        # host's first label, which is where the two origins differ — a
+        # substring test would pass the production origin whenever the
+        # version's prefix happened to appear anywhere in it. Scheme and domain
+        # stay the evidence module's to state.
+        if type(deploy_url) is not str:
+            _fail("reads an immutable origin that names another version or Worker")
+        label = (urlsplit(deploy_url).hostname or "").split(".")[0]
+        if label != f"{version[:8]}-{site_id}":
             _fail("reads an immutable origin that names another version or Worker")
         prior = _replaced(observation, version, deploy_url)
         prior_site_sha256 = canonical_sha256(observation["response"])
