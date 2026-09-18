@@ -432,6 +432,151 @@ struct OwnerFixture {
   }
 };
 
+// #1513: the live overlay must be the same conversion the close commits, so a
+// recording can never hear an overdub that its commit will not keep.
+void live_projection_matches_the_transfer_it_will_commit() {
+  using namespace lmdj;
+  using namespace project_io;
+  auto swung = retained_fixture();
+  swung.admission->preparation.quantize_enabled = true;
+  swung.admission->preparation.swing_percent = 60;
+  swung.admission->candidates[0].runtime_frame = 31000;
+  swung.admission->candidates[1].runtime_frame = 37000;
+  auto retrigger = retained_fixture();
+  retrigger.admission->candidates.push_back(
+      {12, 49000, {0, 1}, SequenceCandidateKind::press, 95, 80});
+  auto multi_bar = retained_fixture();
+  multi_bar.bars = 2;
+  multi_bar.admission->candidates[0].runtime_frame = 145000;
+  multi_bar.admission->candidates[1].runtime_frame = 151000;
+  for (const auto& journal : {retained_fixture(), swung, retrigger, multi_bar}) {
+    const auto last = journal.admission->candidates.back().watermark;
+    const auto transfer = facade::detail::build_admission_transfer(
+        journal, foundation::CommandId{uuid(6)}, last, false);
+    LMDJ_CHECK(transfer.has_value());
+    const auto projected = facade::detail::project_admission_overlay(journal);
+    LMDJ_CHECK(projected.has_value());
+    LMDJ_CHECK(projected.value().has_value());
+    LMDJ_CHECK(*projected.value() == transfer.value().recoverable_tail);
+  }
+}
+
+// The whole point of the fix: what is held right now is already audible, and
+// its release only corrects the duration.
+void live_projection_shows_a_held_press_before_its_release() {
+  using namespace lmdj;
+  using namespace project_io;
+  auto journal = retained_fixture();
+  journal.admission->candidates = {
+      {10, 25000, {0, 1}, SequenceCandidateKind::press, 90, 72}};
+  const auto held = facade::detail::project_admission_overlay(journal);
+  LMDJ_CHECK(held.has_value() && held.value().has_value());
+  LMDJ_CHECK(*held.value() == std::vector<PatternEvent>(
+      {{{0, 1}, 960, domain::kSixteenthTicks, 90}}));
+  journal.admission->candidates.push_back(
+      {11, 43000, {0, 1}, SequenceCandidateKind::release, 0, 72});
+  const auto released = facade::detail::project_admission_overlay(journal);
+  LMDJ_CHECK(released.has_value() && released.value().has_value());
+  LMDJ_CHECK(*released.value() == std::vector<PatternEvent>({{{0, 1}, 960, 720, 90}}));
+}
+
+void live_projection_excludes_the_same_candidates_as_the_transfer() {
+  using namespace lmdj;
+  using namespace project_io;
+  auto journal = retained_fixture();
+  journal.admission->candidates = {
+      {10, 12000, {0, 1}, SequenceCandidateKind::press, 90, 60},
+      {11, 14000, {0, 1}, SequenceCandidateKind::release, 0, 60},
+      {12, 25000, {0, 1}, SequenceCandidateKind::press, 95, 72},
+      {13, 31000, {0, 1}, SequenceCandidateKind::release, 0, 72}};
+  auto cutoff = *journal.admission->admission_fence;
+  cutoff.kind = SequenceFenceKind::cutoff;
+  cutoff.command_id = foundation::CommandId{uuid(7)};
+  cutoff.transport_epoch = 12;
+  cutoff.effective_frame = 30000;
+  journal.admission->cutoff_fence = cutoff;
+  const auto transfer = facade::detail::build_admission_transfer(
+      journal, foundation::CommandId{uuid(6)}, 13, false);
+  LMDJ_CHECK(transfer.has_value());
+  const auto projected = facade::detail::project_admission_overlay(journal);
+  LMDJ_CHECK(projected.has_value() && projected.value().has_value());
+  LMDJ_CHECK(*projected.value() == transfer.value().recoverable_tail);
+  LMDJ_CHECK(*projected.value() == std::vector<PatternEvent>({{{0, 1}, 960, 240, 95}}));
+}
+
+// A pending switch owns its own boundary; an overlay that crossed it would be
+// heard against a Pattern the admission has not reconciled.
+void live_projection_declines_an_unreconciled_switch_prefix() {
+  using namespace lmdj;
+  auto journal = retained_fixture();
+  journal.admission->applied_switches.push_back(
+      {foundation::PatternId{uuid(9)}, 22, 28000});
+  LMDJ_CHECK(!facade::detail::build_admission_transfer(
+      journal, foundation::CommandId{uuid(6)}, 11, false).has_value());
+  const auto projected = facade::detail::project_admission_overlay(journal);
+  LMDJ_CHECK(projected.has_value());
+  LMDJ_CHECK(!projected.value().has_value());
+}
+
+void live_projection_declines_before_activation_and_after_completion() {
+  using namespace lmdj;
+  auto unactivated = retained_fixture();
+  unactivated.admission->admission_fence.reset();
+  const auto before = facade::detail::project_admission_overlay(unactivated);
+  LMDJ_CHECK(before.has_value() && !before.value().has_value());
+  auto completed = retained_fixture();
+  completed.admission->completed = true;
+  const auto after = facade::detail::project_admission_overlay(completed);
+  LMDJ_CHECK(after.has_value() && !after.value().has_value());
+  project_io::ActiveSequenceJournal none = retained_fixture();
+  none.admission.reset();
+  const auto absent = facade::detail::project_admission_overlay(none);
+  LMDJ_CHECK(absent.has_value() && !absent.value().has_value());
+}
+
+// After a switch drain the journal already holds converted events while new
+// candidates can all be excluded or orphaned. The overlay still has to carry
+// what is there, or the recording would fall silent between transfers.
+void live_projection_retains_pending_events_when_no_candidate_converts() {
+  using namespace lmdj;
+  using namespace project_io;
+  auto journal = retained_fixture();
+  const auto press = facade::detail::build_admission_transfer(
+      journal, foundation::CommandId{uuid(6)}, 10, false);
+  LMDJ_CHECK(press.has_value());
+  journal.admission->transfers.push_back(press.value());
+  journal.admission->candidates.erase(journal.admission->candidates.begin());
+  journal.admission->candidates.front().press_sequence = 71;  // stale release
+  journal.pending_events = press.value().recoverable_tail;
+  journal.last_input_sequence = 1;
+  const auto projected = facade::detail::project_admission_overlay(journal);
+  LMDJ_CHECK(projected.has_value() && projected.value().has_value());
+  LMDJ_CHECK(*projected.value() == press.value().recoverable_tail);
+  LMDJ_CHECK(!projected.value()->empty());
+  // Nothing is admitted into a freshly reconciled segment either.
+  journal.admission->candidates.clear();
+  const auto drained = facade::detail::project_admission_overlay(journal);
+  LMDJ_CHECK(drained.has_value() && drained.value().has_value());
+  LMDJ_CHECK(*drained.value() == press.value().recoverable_tail);
+}
+
+// The exactly-once guard: projecting is a read, so however many times the Host
+// publishes an overlay, the transfer the close commits is the same one.
+void projection_does_not_change_the_transfer_the_close_commits() {
+  using namespace lmdj;
+  const auto undisturbed = facade::detail::build_admission_transfer(
+      retained_fixture(), foundation::CommandId{uuid(6)}, 11, false);
+  LMDJ_CHECK(undisturbed.has_value());
+  auto journal = retained_fixture();
+  for (int repeat = 0; repeat < 3; ++repeat) {
+    LMDJ_CHECK(facade::detail::project_admission_overlay(journal).has_value());
+  }
+  const auto after = facade::detail::build_admission_transfer(
+      journal, foundation::CommandId{uuid(6)}, 11, false);
+  LMDJ_CHECK(after.has_value());
+  LMDJ_CHECK(after.value() == undisturbed.value());
+}
+
 void prepared_owner_uses_origin_not_the_admission_frame() {
   using namespace lmdj;
   using namespace facade::detail;
@@ -705,6 +850,13 @@ int main() {
     swing_uses_the_existing_odd_sixteenth_grid();
     release_duration_stops_at_the_pattern_end();
     multi_bar_onset_does_not_wrap_at_one_bar();
+    live_projection_matches_the_transfer_it_will_commit();
+    live_projection_shows_a_held_press_before_its_release();
+    live_projection_excludes_the_same_candidates_as_the_transfer();
+    live_projection_declines_an_unreconciled_switch_prefix();
+    live_projection_declines_before_activation_and_after_completion();
+    live_projection_retains_pending_events_when_no_candidate_converts();
+    projection_does_not_change_the_transfer_the_close_commits();
     prepared_owner_uses_origin_not_the_admission_frame();
     prepared_owner_keeps_post_close_input_live_only();
     prepared_owner_leaves_unresolved_fence_after_owner_loss();
@@ -714,7 +866,7 @@ int main() {
     prepared_owner_closes_at_deadline_before_the_next_candidate();
     prepared_owner_reports_an_uncertain_suffix_on_storage_failure();
     prepared_owner_surfaces_a_failed_storage_failure_close();
-    std::cout << "pattern admission tests: PASS (23 scenarios)\n";
+    std::cout << "pattern admission tests: PASS (30 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

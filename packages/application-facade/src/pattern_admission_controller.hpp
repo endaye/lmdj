@@ -25,6 +25,17 @@ foundation::Result<project_io::SequenceAdmissionTransfer> commit_admission_trans
     const project_io::SequenceAdmissionIdentity& identity,
     foundation::CommandId transfer_id, std::uint64_t last_watermark, bool terminal);
 
+// Projects the Pattern events the open admission would contribute if it ended
+// now, for a live overlay publication (#1513). Pure: reads the durable journal,
+// mutates nothing, advances no watermark and mints no receipt identity, so the
+// transfer a later close commits is unaffected by any number of projections.
+// It shares the transfer builder's conversion, so a recording hears exactly
+// what its close will commit. `std::nullopt` means there is nothing to project
+// yet — an unactivated, completed or sealed admission, or a candidate prefix
+// awaiting switch reconciliation — never a failure of the recording.
+foundation::Result<std::optional<std::vector<domain::PatternEvent>>>
+project_admission_overlay(const project_io::ActiveSequenceJournal& journal);
+
 enum class PatternAdmissionAdmit : std::uint8_t { retained, live_only };
 
 // Prepared admission owner: closed prepare/activate, post-enqueue candidates,

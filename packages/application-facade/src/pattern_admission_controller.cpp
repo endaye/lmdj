@@ -50,22 +50,21 @@ std::optional<std::uint64_t> last_retained_watermark(
 }
 }  // namespace
 
-foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transfer(
+namespace {
+
+// The one admission conversion, shared by the durable transfer builder and the
+// live overlay projection, so a recording can never hear a different overdub
+// than the one its close commits (#1513). An empty `transfer_id` is projection
+// mode: the caller takes only `recoverable_tail`, mints no receipt identity,
+// and an empty candidate prefix is an ordinary live state rather than an
+// unresolved one.
+TransferResult convert_admission(
     const project_io::ActiveSequenceJournal& journal,
-    foundation::CommandId transfer_id, std::uint64_t last_watermark, bool terminal) {
+    std::optional<foundation::CommandId> transfer_id,
+    std::uint64_t last_watermark, bool terminal) {
   using namespace project_io;
-  if (!domain::is_valid_uuid(transfer_id.value()) || !journal.admission) {
-    return conversion_error("admission_identity_missing");
-  }
+  const auto projection = !transfer_id.has_value();
   const auto& admission = *journal.admission;
-  for (const auto& retained : admission.transfers) {
-    if (retained.transfer_id == transfer_id) {
-      if (retained.terminal != terminal || retained.last_watermark != last_watermark) {
-        return conversion_error("transfer_identity_collision");
-      }
-      return TransferResult::success(retained);
-    }
-  }
   if (!admission.admission_fence || admission.completed ||
       (!admission.transfers.empty() && admission.transfers.back().terminal) ||
       (journal.state != SequenceSessionState::active &&
@@ -110,7 +109,8 @@ foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transf
         press.raw_attack_tick, press.onset_tick, press.velocity, press.press_sequence});
   }
   std::uint64_t overlay_generation = 0;
-  Transfer result{transfer_id, terminal, 0, 0, sequence_admission_candidates_sha256({}),
+  Transfer result{transfer_id.value_or(foundation::CommandId{""}), terminal, 0, 0,
+      sequence_admission_candidates_sha256({}),
       {}, journal.pattern_id, journal.expected_revision, {}, events, checkpoint};
   if (terminal) {
     if (last_watermark != 0 || !admission.closure || !admission.cutoff_fence ||
@@ -127,10 +127,18 @@ foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transf
     result.checkpoint.last_runtime_frame = admission.cutoff_fence->effective_frame;
     return TransferResult::success(std::move(result));
   }
-  if (admission.candidates.empty() ||
-      admission.candidates.size() > kSequenceAdmissionMaxCandidates ||
+  if (admission.candidates.size() > kSequenceAdmissionMaxCandidates ||
       (admission.closure && !admission.cutoff_fence)) {
     return conversion_error("candidate_prefix_unresolved");
+  }
+  if (admission.candidates.empty()) {
+    if (!projection) return conversion_error("candidate_prefix_unresolved");
+    // Nothing admitted into this segment yet: what the recording would
+    // contribute is the already converted pending tail, held presses included.
+    PatternEventReducer reducer{journal.bars, false, 50,
+        overlay_generation, events, pressed};
+    result.recoverable_tail = reducer.recoverable_tail();
+    return TransferResult::success(std::move(result));
   }
   const auto end = std::ranges::find(admission.candidates, last_watermark,
                                     &SequenceAdmissionCandidate::watermark);
@@ -203,8 +211,55 @@ foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transf
     result.checkpoint = std::move(checkpoint);
   } else {
     result.checkpoint = previous_checkpoint;
+    if (projection) {
+      PatternEventReducer reducer{journal.bars, false, 50,
+          overlay_generation, events, pressed};
+      result.recoverable_tail = reducer.recoverable_tail();
+    }
   }
   return TransferResult::success(std::move(result));
+}
+
+}  // namespace
+
+foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transfer(
+    const project_io::ActiveSequenceJournal& journal,
+    foundation::CommandId transfer_id, std::uint64_t last_watermark, bool terminal) {
+  if (!domain::is_valid_uuid(transfer_id.value()) || !journal.admission) {
+    return conversion_error("admission_identity_missing");
+  }
+  for (const auto& retained : journal.admission->transfers) {
+    if (retained.transfer_id == transfer_id) {
+      if (retained.terminal != terminal || retained.last_watermark != last_watermark) {
+        return conversion_error("transfer_identity_collision");
+      }
+      return TransferResult::success(retained);
+    }
+  }
+  return convert_admission(journal, transfer_id, last_watermark, terminal);
+}
+
+foundation::Result<std::optional<std::vector<domain::PatternEvent>>>
+project_admission_overlay(const project_io::ActiveSequenceJournal& journal) {
+  using Projection =
+      foundation::Result<std::optional<std::vector<domain::PatternEvent>>>;
+  if (!journal.admission) return Projection::success(std::nullopt);
+  const auto last = journal.admission->candidates.empty()
+      ? 0
+      : journal.admission->candidates.back().watermark;
+  auto converted = convert_admission(journal, std::nullopt, last, false);
+  if (!converted.has_value()) {
+    // Every conversion refusal is an ordinary state of a live recording: not
+    // yet activated, already completed, sealed, or an unreconciled switch
+    // prefix awaiting its retained audio boundary. None of them is an error
+    // for an overlay, and none may poison the transport engagement. Anything
+    // that is not a conversion refusal still reaches the caller.
+    if (converted.error().code == foundation::ErrorCode::invalid_argument) {
+      return Projection::success(std::nullopt);
+    }
+    return Projection::failure(converted.error());
+  }
+  return Projection::success(std::move(converted.value().recoverable_tail));
 }
 
 foundation::Result<project_io::SequenceAdmissionTransfer> commit_admission_transfer(
