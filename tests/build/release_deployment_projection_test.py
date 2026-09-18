@@ -198,6 +198,45 @@ class ProjectionTest(unittest.TestCase):
         self.assertEqual(creator["archive"]["filename"],
                          f"lmdj-creator-web-{HOST_VERSION}-product-{BUILD}.zip")
 
+    def test_a_concurrent_drive_cannot_replace_a_frozen_projection(self):
+        # The existence check and the write are not one operation, so two
+        # drives for the same tag can both see nothing frozen. The loser must
+        # fail closed rather than replace bytes the winner is already bound to.
+        self.prepared()
+        frozen = projection.projection(self.root, TAG, "runtime", reader=Reader())
+        real = projection.read_frozen
+
+        def blind_once(*arguments, calls=[]):
+            # Only the existence check misses it, the way the losing drive's
+            # would; the handler then reads what is actually on disk.
+            calls.append(None)
+            return None if len(calls) == 1 else real(*arguments)
+
+        with mock.patch.object(projection, "read_frozen", blind_once):
+            with self.assertRaises(JournalError) as raised:
+                projection.freeze(self.root, TAG, "runtime",
+                                  dict(frozen, site_id="another-worker"))
+        self.assertIn("another drive", str(raised.exception))
+        self.assertEqual(real(self.root, TAG, "runtime"), frozen)
+        path = self.root / projection.output_relative(TAG, "runtime")
+        self.assertEqual(sorted(entry.name for entry in path.parent.iterdir()),
+                         [path.name], "the losing writer left a temporary behind")
+
+    def test_a_concurrent_drive_that_agrees_gets_the_frozen_bytes(self):
+        # Losing the race is not an error when both drives assembled the same
+        # projection: the loser is bound to exactly what the winner wrote.
+        self.prepared()
+        frozen = projection.projection(self.root, TAG, "runtime", reader=Reader())
+        real = projection.read_frozen
+
+        def blind_once(*arguments, calls=[]):
+            calls.append(None)
+            return None if len(calls) == 1 else real(*arguments)
+
+        with mock.patch.object(projection, "read_frozen", blind_once):
+            self.assertEqual(
+                projection.freeze(self.root, TAG, "runtime", dict(frozen)), frozen)
+
     def test_a_second_freeze_with_different_contents_is_refused(self):
         # One drive, one agreement: the freeze is write-once, so a later
         # assembly that disagrees is reported rather than silently adopted.
@@ -436,6 +475,22 @@ class CompositionSeamTest(unittest.TestCase):
                          "why: an existing workspace kept group or other bits, "
                          "which the adapter refuses; "
                          "remedy: make it private before inspecting")
+
+    def test_a_tool_that_floods_stdout_reads_as_no_document(self):
+        # The timeout is not a size bound: without one, whatever the child
+        # prints is captured before anything can refuse it.
+        flood = self.root / "flood.py"
+        flood.write_text(
+            "import sys\n"
+            "sys.stdout.write('{\"a\": \"' + 'x' * (2 * 1024 * 1024) + '\"}')\n",
+            encoding="utf-8")
+        self.assertIsNone(self.composition._read_only_tool(flood, ()))
+
+    def test_a_tool_within_the_bound_still_reads(self):
+        answer = self.root / "answer.py"
+        answer.write_text("print('{\"worker\": \"lab\"}')\n", encoding="utf-8")
+        self.assertEqual(self.composition._read_only_tool(answer, ()),
+                         {"worker": "lab"})
 
     def test_an_unreadable_tool_reads_as_no_document(self):
         # Every live read fails closed into None, which each caller turns into

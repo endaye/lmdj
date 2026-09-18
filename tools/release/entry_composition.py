@@ -156,6 +156,9 @@ _WORKER_INSPECT = _HOST_TOOLS / "cloudflare_host.py"
 _SITE_OBSERVATION = _HOST_TOOLS / "cloudflare_site_observation.py"
 _HOST_ORIGINS = _HOST_TOOLS / "cloudflare_deployment_evidence.py"
 _READ_TIMEOUT = 120
+# These tools answer with a handful of fields; anything larger is not an
+# answer this module knows how to use.
+_READ_LIMIT = 1024 * 1024
 
 
 def _read_only_tool(tool, arguments, *, environment=None):
@@ -167,19 +170,31 @@ def _read_only_tool(tool, arguments, *, environment=None):
     env = {k: v for k, v in os.environ.items()
            if k in ("PATH", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP")}
     env.update(environment or {})
+    child = None
     try:
-        result = subprocess.run([sys.executable, "-s", "-B", str(tool), *arguments],
-                                capture_output=True, env=env, timeout=_READ_TIMEOUT)
+        # A bounded read rather than `subprocess.run`: that captures whatever
+        # the child prints before anything can refuse it, and the timeout is
+        # not a size bound. These answers are a handful of fields. stderr is
+        # discarded at the pipe so a chatty child cannot block on it either.
+        child = subprocess.Popen([sys.executable, "-s", "-B", str(tool), *arguments],
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                 env=env)
+        payload = child.stdout.read(_READ_LIMIT + 1)
+        child.stdout.close()
+        if child.wait(timeout=_READ_TIMEOUT) != 0 or len(payload) > _READ_LIMIT:
+            return None
     except (OSError, subprocess.SubprocessError):
         return None
-    if result.returncode != 0:
-        return None
+    finally:
+        if child is not None and child.poll() is None:
+            child.kill()
+            child.wait()
     try:
         # Explicit UTF-8, not `text=True`: that decodes with the locale's
         # preferred encoding, so the same bytes could parse on one machine and
         # fail on another. These tools emit JSON, which is UTF-8 by definition.
-        document = json.loads(result.stdout.decode("utf-8"))
-    except (ValueError, AttributeError):
+        document = json.loads(payload.decode("utf-8"))
+    except ValueError:
         return None
     return document if type(document) is dict else None
 

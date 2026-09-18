@@ -161,8 +161,17 @@ def freeze(root, tag, step, projection):
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(staged, path)
-        staged = None
+        # `link` rather than `replace`: the existence check above and this
+        # write are not one operation, so two drives for the same tag can both
+        # see nothing frozen. `link` fails when the name is taken, which makes
+        # the second writer lose the race instead of silently replacing bytes
+        # the first drive is already bound to.
+        os.link(staged, path)
+    except FileExistsError:
+        frozen = read_frozen(root, tag, step)
+        if frozen is None or canonical_json(frozen) != payload:
+            _fail("was frozen by another drive with different contents")
+        return deepcopy(frozen)
     except OSError:
         _fail("could not be written atomically")
     finally:
@@ -237,38 +246,43 @@ def _archive_contents(path, expected_sha256):
         _fail("cannot read the staged archive it names")
     if payload_size > LIMIT:
         _fail("reads a staged archive beyond the release bound")
-    read = hashlib.sha256()
-    try:
-        with path.open("rb") as stream:
-            for block in iter(lambda: stream.read(1024 * 1024), b""):
-                read.update(block)
-    except OSError:
-        _fail("cannot read the staged archive it names")
-    if read.hexdigest() != expected_sha256:
-        _fail("reads a staged archive whose bytes differ from the plan")
     digests = {}
     bodies = {}
     try:
-        with zipfile.ZipFile(path) as archive:
-            if not {ENTRY, MANIFEST} <= set(archive.namelist()):
-                _fail("reads a staged archive without both entry files")
-            for member, key in ((ENTRY, "index_sha256"),
-                                (MANIFEST, "manifest_sha256")):
-                info = archive.getinfo(member)
-                # A directory or link entry under an entry file's name opens as
-                # an empty stream, so it would digest to the empty string
-                # instead of failing. The plan's archive digest already refuses
-                # a tampered archive; this refuses a build that produced one.
-                if info.is_dir() or (info.external_attr >> 16) & 0o170000 == 0o120000:
-                    _fail("reads an entry file that is not a regular file")
-                if info.file_size > ENTRY_LIMIT:
-                    _fail("reads an entry file beyond the entry bound")
-                with archive.open(info) as stream:
-                    body = stream.read(ENTRY_LIMIT + 1)
-                if len(body) > ENTRY_LIMIT:
-                    _fail("reads an entry file beyond the entry bound")
-                bodies[member] = body
-                digests[key] = hashlib.sha256(body).hexdigest()
+        # One open for both passes: hashing the file and then reopening it by
+        # name would let the digest and the entry bytes describe two different
+        # archives. A zip's directory needs random access, so it cannot be
+        # parsed in the hashing pass — but it can be parsed from the same
+        # descriptor, which is the same inode either way.
+        with path.open("rb") as handle:
+            read = hashlib.sha256()
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                read.update(block)
+            if read.hexdigest() != expected_sha256:
+                _fail("reads a staged archive whose bytes differ from the plan")
+            handle.seek(0)
+            with zipfile.ZipFile(handle) as archive:
+                if not {ENTRY, MANIFEST} <= set(archive.namelist()):
+                    _fail("reads a staged archive without both entry files")
+                for member, key in ((ENTRY, "index_sha256"),
+                                    (MANIFEST, "manifest_sha256")):
+                    info = archive.getinfo(member)
+                    # A directory or link entry under an entry file's name
+                    # opens as an empty stream, so it would digest to the empty
+                    # string instead of failing. The plan's archive digest
+                    # already refuses a tampered archive; this refuses a build
+                    # that produced one.
+                    if info.is_dir() \
+                            or (info.external_attr >> 16) & 0o170000 == 0o120000:
+                        _fail("reads an entry file that is not a regular file")
+                    if info.file_size > ENTRY_LIMIT:
+                        _fail("reads an entry file beyond the entry bound")
+                    with archive.open(info) as stream:
+                        body = stream.read(ENTRY_LIMIT + 1)
+                    if len(body) > ENTRY_LIMIT:
+                        _fail("reads an entry file beyond the entry bound")
+                    bodies[member] = body
+                    digests[key] = hashlib.sha256(body).hexdigest()
     except (OSError, zipfile.BadZipFile):
         _fail("cannot open the staged archive it names")
     manifest = bodies[MANIFEST]
