@@ -297,6 +297,48 @@ foundation::Result<PatternAdmissionAdmit> PatternTransportCoordinator::admit(
   return owner_.admit(candidate);
 }
 
+foundation::Result<std::optional<PatternTransportOverlayProjection>>
+PatternTransportCoordinator::project_overlay() {
+  using Projection =
+      foundation::Result<std::optional<PatternTransportOverlayProjection>>;
+  // Once the cutoff receipt is applied the candidate set is frozen and the
+  // close owns the next publication, so an overlay here could only race it.
+  if (!recording_ || close_pending_) return Projection::success(std::nullopt);
+  const auto journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) {
+    if (journal.error().code == foundation::ErrorCode::not_found) {
+      return Projection::success(std::nullopt);
+    }
+    return Projection::failure(journal.error());
+  }
+  if (journal.value().session_id != session_) {
+    return Projection::success(std::nullopt);
+  }
+  auto projected = project_admission_overlay(journal.value());
+  if (!projected.has_value()) return Projection::failure(projected.error());
+  if (!projected.value().has_value()) return Projection::success(std::nullopt);
+  // The journal's Pattern is the one the conversion validated its segment
+  // against, and the one the switch machinery re-anchors; publishing the
+  // overlay against anything else would sound it on the wrong Pattern. It is
+  // part of the projected content: a reconciled switch can carry identical
+  // events onto a different Pattern, and a generation that ignored the
+  // identity would leave a de-duplicating Host publishing the old one.
+  if (projected_ != *projected.value() ||
+      projected_pattern_ != journal.value().pattern_id) {
+    const auto had_content = !projected_.empty();
+    projected_ = std::move(*projected.value());
+    projected_pattern_ = journal.value().pattern_id;
+    // Advance whenever there is something to publish, and also when an overlay
+    // that was published has become empty: a Host that de-duplicates on the
+    // generation has to be told to drop it, not left holding stale content.
+    // The one case that spends nothing is the first empty projection of a
+    // recording that has contributed nothing yet.
+    if (!projected_.empty() || had_content) ++projection_generation_;
+  }
+  return Projection::success(PatternTransportOverlayProjection{
+      journal.value().pattern_id, projection_generation_, projected_});
+}
+
 foundation::Result<void> PatternTransportCoordinator::continue_operation() {
   if (close_pending_ && pending_) {
     const auto closed = finish_close();

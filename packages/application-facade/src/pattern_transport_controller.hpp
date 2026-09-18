@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <vector>
 
 #include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/facade/pattern_transport_ports.hpp>
@@ -31,6 +32,15 @@ class PatternTransportAudioPort {
   }
 };
 
+// What an open recording would contribute to its Pattern if it ended now.
+// `generation` advances only when `events` changes, so a caller that publishes
+// on change publishes once per change.
+struct PatternTransportOverlayProjection {
+  foundation::PatternId pattern_id;
+  std::uint64_t generation{};
+  std::vector<domain::PatternEvent> events;
+};
+
 class PatternTransportCoordinator {
  public:
   PatternTransportCoordinator(
@@ -44,6 +54,11 @@ class PatternTransportCoordinator {
   foundation::Result<void> continue_operation();
   foundation::Result<PatternAdmissionAdmit> admit(
       const project_io::SequenceAdmissionCandidate& candidate);
+  // Reads the durable admission and projects it; mutates no journal and
+  // advances no watermark, so it cannot disturb the transfer a close commits.
+  // `std::nullopt` means nothing to publish right now.
+  foundation::Result<std::optional<PatternTransportOverlayProjection>>
+  project_overlay();
 
  private:
   audio::PatternTransportAction audio_action(
@@ -77,6 +92,18 @@ class PatternTransportCoordinator {
   std::optional<foundation::Error> error_;
   bool close_pending_{};
   bool close_applied_switch_{};
+  // Last projected content, the Pattern it belongs to, and the generation that
+  // names both. Content, not call count, is what advances the generation. The
+  // Pattern is part of that content: identical events on a different Pattern
+  // are a different overlay. An *empty-events* projection keeps generation
+  // zero only while nothing has been published yet; once something has, going
+  // empty advances it so the Host drops what it published. `std::nullopt` —
+  // nothing to project at all — updates none of this: the last published
+  // (Pattern, events) pair stays the comparison basis, which is what a Host
+  // still holds.
+  std::vector<domain::PatternEvent> projected_;
+  std::optional<foundation::PatternId> projected_pattern_;
+  std::uint64_t projection_generation_{};
 };
 
 }  // namespace lmdj::facade::detail

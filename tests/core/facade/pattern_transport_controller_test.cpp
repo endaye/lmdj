@@ -530,6 +530,171 @@ void recording_press_and_release_are_retained() {
   LMDJ_CHECK(!f.journal_exists());
 }
 
+// #1513: the Host publishes this projection so the pass just played is audible
+// on the next one. Outside an open recording there is nothing to publish.
+void overlay_projection_is_empty_outside_an_open_recording() {
+  Fixture f;
+  const auto before = f.controller->project_overlay();
+  LMDJ_CHECK(before.has_value());
+  LMDJ_CHECK(!before.value().has_value());
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const lmdj::facade::PatternTransportCandidate press{
+      10, admission_frame(f.bundle), {0, 1}, true, 90, 10};
+  LMDJ_CHECK(f.controller->admit(press).has_value());
+  LMDJ_CHECK(f.controller->project_overlay().value().has_value());
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  const auto after = f.controller->project_overlay();
+  LMDJ_CHECK(after.has_value());
+  LMDJ_CHECK(!after.value().has_value());
+}
+
+// The load-bearing fact: what the Host hears mid-recording is what Record-off
+// writes to Project Truth.
+void overlay_projection_carries_the_events_the_close_will_commit() {
+  Fixture f;
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const auto frame = admission_frame(f.bundle);
+  LMDJ_CHECK(f.controller->admit({10, frame, {0, 1}, true, 90, 10}).has_value());
+  f.audio.render(6'000);
+  LMDJ_CHECK(f.controller->admit({11, frame + 6'000, {0, 1}, false, 0, 10})
+                 .has_value());
+  const auto projected = f.controller->project_overlay();
+  LMDJ_CHECK(projected.has_value() && projected.value().has_value());
+  LMDJ_CHECK(projected.value()->pattern_id == f.pattern);
+  const auto heard = projected.value()->events;
+  LMDJ_CHECK(heard.size() == 1);
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  lmdj::project_io::ProjectStore store;
+  const auto project = store.load(f.bundle);
+  LMDJ_CHECK(project.has_value());
+  LMDJ_CHECK(project.value().patterns.at(f.pattern).events == heard);
+}
+
+void overlay_generation_advances_only_when_the_projection_changes() {
+  Fixture f;
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  // A recording that has contributed nothing publishes nothing: generation
+  // stays zero rather than costing the Host one empty publication.
+  const auto empty = f.controller->project_overlay();
+  LMDJ_CHECK(empty.has_value() && empty.value().has_value());
+  LMDJ_CHECK(empty.value()->events.empty());
+  LMDJ_CHECK(empty.value()->generation == 0);
+  const auto frame = admission_frame(f.bundle);
+  LMDJ_CHECK(f.controller->admit({10, frame, {0, 1}, true, 90, 10}).has_value());
+  const auto pressed = f.controller->project_overlay();
+  LMDJ_CHECK(pressed.has_value() && pressed.value().has_value());
+  LMDJ_CHECK(pressed.value()->generation == 1);
+  LMDJ_CHECK(pressed.value()->events.size() == 1);
+  // Repeating the call changes nothing, so the Host does not republish.
+  const auto repeated = f.controller->project_overlay();
+  LMDJ_CHECK(repeated.has_value() && repeated.value().has_value());
+  LMDJ_CHECK(repeated.value()->generation == 1);
+  LMDJ_CHECK(repeated.value()->events == pressed.value()->events);
+  // The release corrects the held press's duration, which is new content. The
+  // frame delta must exceed one sixteenth, or the correction would land on the
+  // same 240-tick default the held press already projects and nothing changes.
+  f.audio.render(18'000);
+  LMDJ_CHECK(f.controller->admit({11, frame + 18'000, {0, 1}, false, 0, 10})
+                 .has_value());
+  const auto released = f.controller->project_overlay();
+  LMDJ_CHECK(released.has_value() && released.value().has_value());
+  LMDJ_CHECK(released.value()->generation == 2);
+  LMDJ_CHECK(released.value()->events != pressed.value()->events);
+}
+
+// The exactly-once guard: projecting is a read, so a Host that publishes an
+// overlay on every input commits exactly what a Host that never projects does.
+void overlay_projection_does_not_disturb_the_commit() {
+  std::vector<lmdj::domain::PatternEvent> committed[2];
+  for (int projecting = 0; projecting < 2; ++projecting) {
+    Fixture f;
+    f.settle(f.make(6, 1, PatternTransportIntent::record));
+    const auto frame = admission_frame(f.bundle);
+    LMDJ_CHECK(f.controller->admit({10, frame, {0, 1}, true, 90, 10}).has_value());
+    if (projecting != 0) {
+      for (int repeat = 0; repeat < 3; ++repeat) {
+        LMDJ_CHECK(f.controller->project_overlay().has_value());
+      }
+    }
+    f.audio.render(6'000);
+    LMDJ_CHECK(f.controller->admit({11, frame + 6'000, {0, 1}, false, 0, 10})
+                   .has_value());
+    if (projecting != 0) {
+      LMDJ_CHECK(f.controller->project_overlay().has_value());
+    }
+    f.settle(f.make(7, 2, PatternTransportIntent::record));
+    lmdj::project_io::ProjectStore store;
+    const auto project = store.load(f.bundle);
+    LMDJ_CHECK(project.has_value());
+    committed[projecting] = project.value().patterns.at(f.pattern).events;
+    LMDJ_CHECK(!f.journal_exists());
+  }
+  LMDJ_CHECK(committed[0] == committed[1]);
+  LMDJ_CHECK(committed[0].size() == 1);
+}
+
+// A reconciled switch can carry identical events onto a different Pattern. The
+// generation names the overlay, so the Pattern identity must advance it too, or
+// a Host that de-duplicates on generation keeps publishing the old Pattern's
+// overlay onto the new one.
+void overlay_generation_advances_when_the_projected_pattern_changes() {
+  constexpr auto kPatternB = "00000000-0000-4000-8000-00000000000b";
+  // One Bar of 4/4 at 120 BPM and 48 kHz. A candidate a whole number of Bars
+  // after the transport origin lands on onset tick zero whichever Bar it is,
+  // so both recordings below project the same event.
+  constexpr std::uint64_t kBarFrames = 96'000;
+  Fixture f({PatternId{kPatternB}});
+  // The first Bar boundary at or after both the admission fence and the frames
+  // already rendered. Taking the maximum keeps the render delta non-negative:
+  // an unsigned subtraction the other way round renders for hours.
+  const auto next_bar = [&](std::uint64_t origin, std::uint64_t fence) {
+    const auto rendered = f.audio.engine.telemetry().rendered_frames;
+    const auto floor = fence > rendered ? fence : rendered;
+    return origin +
+           ((floor - origin + kBarFrames - 1) / kBarFrames) * kBarFrames;
+  };
+
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const auto origin = f.controller->inspect().origin_frame;
+  const auto fence_a =
+      f.read_journal().admission->admission_fence->effective_frame;
+  const auto bar_a = next_bar(origin, fence_a);
+  f.audio.render(bar_a - f.audio.engine.telemetry().rendered_frames);
+  LMDJ_CHECK(f.controller->admit({10, bar_a, {0, 1}, true, 90, 10}).has_value());
+  const auto on_a = f.controller->project_overlay();
+  LMDJ_CHECK(on_a.has_value() && on_a.value().has_value());
+  LMDJ_CHECK(on_a.value()->pattern_id == f.pattern);
+  const auto events = on_a.value()->events;
+  const auto generation = on_a.value()->generation;
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+
+  auto view = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB));
+  LMDJ_CHECK(view.has_value());
+  LMDJ_CHECK(f.audio.engine.publish_pattern_view(std::move(view.value()))
+                 .result == PatternPublishResult::accepted);
+  for (unsigned step = 0;
+       step < 100 &&
+       f.audio.engine.pattern_telemetry().pending_generation != 0;
+       ++step) {
+    f.audio.render(9'600);
+  }
+  LMDJ_CHECK(f.audio.engine.current_pattern_id() == PatternId{kPatternB});
+
+  f.settle(f.make(8, 3, PatternTransportIntent::record));
+  const auto journal_b = f.read_journal();
+  LMDJ_CHECK(journal_b.pattern_id == PatternId{kPatternB});
+  const auto fence_b = journal_b.admission->admission_fence->effective_frame;
+  const auto bar_b = next_bar(origin, fence_b);
+  f.audio.render(bar_b - f.audio.engine.telemetry().rendered_frames);
+  LMDJ_CHECK(f.controller->admit({12, bar_b, {0, 1}, true, 90, 12}).has_value());
+  const auto on_b = f.controller->project_overlay();
+  LMDJ_CHECK(on_b.has_value() && on_b.value().has_value());
+  LMDJ_CHECK(on_b.value()->pattern_id == PatternId{kPatternB});
+  // The point of the Bar alignment: identical content on a different Pattern.
+  LMDJ_CHECK(on_b.value()->events == events);
+  LMDJ_CHECK(on_b.value()->generation != generation);
+}
+
 void pre_fence_candidate_is_live_only() {
   Fixture f;
   // A playing Record fences at the current frame, so a candidate stamped
@@ -872,6 +1037,11 @@ int main() {
     record_after_an_applied_switch_retargets_the_bound_pattern();
     applied_switch_mid_recording_settles_through_the_close_path();
     recording_press_and_release_are_retained();
+    overlay_projection_is_empty_outside_an_open_recording();
+    overlay_projection_carries_the_events_the_close_will_commit();
+    overlay_generation_advances_only_when_the_projection_changes();
+    overlay_projection_does_not_disturb_the_commit();
+    overlay_generation_advances_when_the_projected_pattern_changes();
     pre_fence_candidate_is_live_only();
     admission_before_recording_fails();
     release_with_unknown_correlation_fabricates_no_press();
@@ -880,7 +1050,7 @@ int main() {
     known_owner_registration_protects_only_the_open_transport_journal();
     controller_destroyed_after_application_is_safe();
     owner_lost_transport_admission_is_sealed_and_listed();
-    std::cout << "pattern transport controller tests: PASS (17 scenarios)\n";
+    std::cout << "pattern transport controller tests: PASS (22 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
