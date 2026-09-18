@@ -325,12 +325,15 @@ PatternTransportCoordinator::project_overlay() {
   // identity would leave a de-duplicating Host publishing the old one.
   if (projected_ != *projected.value() ||
       projected_pattern_ != journal.value().pattern_id) {
+    const auto had_content = !projected_.empty();
     projected_ = std::move(*projected.value());
     projected_pattern_ = journal.value().pattern_id;
-    // Only content advances the generation. An empty projection records the
-    // new binding without spending one, so a recording that has contributed
-    // nothing still costs the Host no publication.
-    if (!projected_.empty()) ++projection_generation_;
+    // Advance whenever there is something to publish, and also when an overlay
+    // that was published has become empty: a Host that de-duplicates on the
+    // generation has to be told to drop it, not left holding stale content.
+    // The one case that spends nothing is the first empty projection of a
+    // recording that has contributed nothing yet.
+    if (!projected_.empty() || had_content) ++projection_generation_;
   }
   return Projection::success(PatternTransportOverlayProjection{
       journal.value().pattern_id, projection_generation_, projected_});

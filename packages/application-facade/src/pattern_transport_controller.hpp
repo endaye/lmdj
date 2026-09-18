@@ -93,11 +93,14 @@ class PatternTransportCoordinator {
   bool close_pending_{};
   bool close_applied_switch_{};
   // Last projected content, the Pattern it belongs to, and the generation that
-  // names both. Content, not call count, is what advances the generation, and
-  // an empty projection keeps generation zero so a Host publishes no overlay
-  // for a recording that has contributed nothing yet. The Pattern is part of
-  // that content: identical events on a different Pattern are a different
-  // overlay.
+  // names both. Content, not call count, is what advances the generation. The
+  // Pattern is part of that content: identical events on a different Pattern
+  // are a different overlay. An *empty-events* projection keeps generation
+  // zero only while nothing has been published yet; once something has, going
+  // empty advances it so the Host drops what it published. `std::nullopt` —
+  // nothing to project at all — updates none of this: the last published
+  // (Pattern, events) pair stays the comparison basis, which is what a Host
+  // still holds.
   std::vector<domain::PatternEvent> projected_;
   std::optional<foundation::PatternId> projected_pattern_;
   std::uint64_t projection_generation_{};
