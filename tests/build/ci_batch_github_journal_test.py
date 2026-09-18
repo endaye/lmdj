@@ -978,6 +978,20 @@ class GitHubJournalTest(unittest.TestCase):
             self.transport.read_body(782)
         self.assertNotIn("SECRET", str(caught.exception), "why: API exception exposed raw data; remedy: closed diagnostics")
 
+    def test_oversized_record_is_refused_with_closed_kind_before_any_mutation(self):
+        event = {"id": "epoch:0", "epoch": "epoch", "generation": 0, "type": "admit",
+                 "data": {"reasons": ["SECRET-RAW-BODY-MUST-NOT-ESCAPE " + "x" * 100] * 700}}
+        with self.assertRaises(github.JournalRecordOversized) as caught:
+            self.journal.append(event)
+        self.assertIsInstance(caught.exception, JournalBlocked)
+        self.assertIn("why:", str(caught.exception))
+        self.assertIn("remedy:", str(caught.exception))
+        self.assertNotIn("SECRET", str(caught.exception))
+        self.assertFalse(any(method in ("PATCH", "POST") and path != "/graphql" for method, path, _ in self.api.calls),
+                         "why: an oversized record reached a mutation; remedy: refuse before the anchor intent")
+        self.assertEqual(json.loads(self.api.issue["body"])["payload"], {"head": None, "pending": None})
+        self.assertEqual(self.api.comments, [])
+
     def test_nonfinite_write_never_reaches_mutation(self):
         with self.assertRaisesRegex(JournalBlocked, "not strict JSON"):
             self.transport.write_body(782, {"head": float("nan"), "pending": None})

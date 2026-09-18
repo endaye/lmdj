@@ -103,6 +103,7 @@ class EntryTests(unittest.TestCase):
             self.assertEqual(answer, {'schema': 'lmdj.ci-entry-diagnostic.v1',
                 'operation': 'unknown', 'stage': 'unknown', 'error_kind': 'unknown'})
         for error, kind in ((entry.JournalBlocked('SECRET'), 'journal-blocked'),
+                            (entry.JournalRecordOversized('SECRET'), 'journal-record-oversized'),
                             (entry.batch.BatchError('SECRET'), 'batch-error'),
                             (entry.ScopeError('SECRET'), 'scope-error'),
                             (json.JSONDecodeError('SECRET', 'SECRET', 0), 'json-error'),

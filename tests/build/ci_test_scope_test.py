@@ -2,6 +2,7 @@
 """Scope consistency gates; no mocks stand in for Git history operations."""
 import copy
 import json
+import random
 from pathlib import Path
 import subprocess
 import sys
@@ -10,6 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
+import incremental_batch
 import test_scope as scope
 
 
@@ -353,6 +355,125 @@ class GitIntervalTests(unittest.TestCase):
         result = scope.collect_interval(self.repo, self.base, self.base)
         self.assertEqual(result["commits"], [])
         self.assertEqual(result["paths"], [])
+
+
+
+class BoundedReasonsTests(unittest.TestCase):
+    """The admit record is bounded by construction; see .agents/pitfalls/journal-record-grows-with-backlog.md."""
+
+    def encoded(self, reasons):
+        return len(json.dumps(reasons, separators=(",", ":")).encode())
+
+    def test_small_explanation_is_canonical_and_unchanged(self):
+        self.assertEqual(scope.bounded_reasons(["b", "a", "a"]), ["a", "b"])
+
+    def test_large_explanation_keeps_canonical_prefix_and_counts_the_distinct_rest(self):
+        reasons = [f"broad foundational or concurrency impact: packages/p/file_{i:05d}.cpp" for i in range(5000)]
+        bounded = scope.bounded_reasons(reversed(reasons), budget=2000)
+        self.assertLessEqual(self.encoded(bounded), 2000,
+                             "why: bounded explanation exceeds its budget; remedy: measure the encoded record")
+        notices = [r for r in bounded if r.startswith(scope.OMISSION_MARKER)]
+        kept = [r for r in bounded if not r.startswith(scope.OMISSION_MARKER)]
+        self.assertEqual(len(notices), 1)
+        self.assertTrue(kept and kept == sorted(reasons)[:len(kept)],
+                        "why: bound reordered or skipped reasons; remedy: keep the canonical prefix")
+        self.assertIn(f"{5000 - len(kept)} further distinct selection reasons were omitted", notices[0])
+        self.assertIn("remedy:", notices[0])
+        self.assertEqual(scope.bounded_reasons(bounded, budget=2000), bounded,
+                         "why: bound is not idempotent; remedy: a stored request must rebuild to itself")
+
+    def test_notice_cannot_be_confused_with_a_real_why_reason(self):
+        """Real reasons use the why/remedy form, so the notice needs its own marker."""
+        reasons = [f"why: real reason {i:03d} {'x' * 100}; remedy: fix it" for i in range(60)]
+        bounded = scope.bounded_reasons(reasons, budget=2000)
+        self.assertEqual(len([r for r in bounded if r.startswith(scope.OMISSION_MARKER)]), 1)
+        self.assertGreater(len([r for r in bounded if r.startswith("why:")]), 1,
+                           "why: the fixture kept no real why-prefixed reason; remedy: keep the collision in the test")
+
+    def test_duplicates_are_collapsed_before_the_distinct_count(self):
+        reasons = [f"reason {i:04d} {'x' * 200}" for i in range(400)]
+        once = scope.bounded_reasons(reasons, budget=2000)
+        twice = scope.bounded_reasons(reasons + reasons, budget=2000)
+        self.assertEqual(once, twice, "why: duplicate input changed the notice; remedy: count distinct canonical reasons")
+
+    def test_budget_below_one_notice_is_refused_not_exceeded(self):
+        reasons = [f"reason {i:03d} " + "x" * 50 for i in range(40)]
+        with self.assertRaisesRegex(scope.ScopeError, "smaller than one omission notice"):
+            scope.bounded_reasons(reasons, budget=100)
+        self.assertEqual(scope.bounded_reasons(reasons[:1], budget=100), reasons[:1],
+                         "why: a fitting explanation was refused; remedy: check the budget only when bounding")
+
+    def test_result_is_within_budget_for_adversarial_inputs(self):
+        """The bound is what keeps the admit record under the journal limit, so it must
+        hold for every input, not only the shapes the scheduler happens to produce."""
+        notice_floor = self.encoded([scope.OMISSION.format(count=10 ** 9)])
+        random.seed(20260918)
+        checked = 0
+        for _ in range(600):
+            count = random.choice([1, 2, 3, 10, 200, 3000])
+            reasons = [f"{random.choice('abcxyz')} " + "q" * random.choice([1, 40, 300, 3000, 20000])
+                       for _ in range(count)]
+            budget = random.choice([notice_floor, notice_floor + 1, notice_floor + 50, 400, 2000, 16000])
+            bounded = scope.bounded_reasons(reasons, budget=budget)
+            self.assertLessEqual(self.encoded(bounded), budget,
+                                 f"why: bounded explanation exceeds its budget for {count} reasons at budget {budget}; "
+                                 "remedy: the result must be the last accepted candidate or the measured notice")
+            self.assertEqual(scope.bounded_reasons(bounded, budget=budget), bounded,
+                             "why: bound is not idempotent; remedy: a stored request must rebuild to itself")
+            checked += 1
+        self.assertEqual(checked, 600)
+
+    def test_a_single_reason_longer_than_the_budget_still_yields_a_bounded_notice(self):
+        bounded = scope.bounded_reasons(["overlong " + "q" * 50000], budget=2000)
+        self.assertLessEqual(self.encoded(bounded), 2000)
+        self.assertEqual(len(bounded), 1)
+        self.assertTrue(bounded[0].startswith(scope.OMISSION_MARKER))
+
+    def test_a_real_reason_starting_with_the_marker_is_kept_and_round_trips(self):
+        """The marker labels the notice; it is not a reserved namespace, and nothing
+        matches reasons by prefix, so a colliding real reason must behave normally."""
+        genuine = scope.OMISSION_MARKER + " a genuine reason that happens to start this way"
+        reasons = [genuine] + [f"why: real reason {i:04d} {'x' * 120}; remedy: fix" for i in range(300)]
+        bounded = scope.bounded_reasons(reasons, budget=2000)
+        self.assertIn(genuine, bounded, "why: a real reason was dropped for its prefix; remedy: never match reasons by prefix")
+        self.assertEqual(len([r for r in bounded if r.startswith(scope.OMISSION_MARKER)]), 2)
+        self.assertEqual(scope.bounded_reasons(bounded, budget=2000), bounded,
+                         "why: a colliding reason broke idempotence; remedy: the bound must not inspect prefixes")
+
+    def test_validating_a_stored_request_never_rewrites_it(self):
+        """Defect: bounding inside the validation rebuild made replay reject its own history.
+
+        Journal #807 generation 55 stores an admit whose selection carries 532 reasons and
+        57,714 bytes, written long before this bound existed. If _request rebuilt it through
+        the bound it would no longer equal the stored record, and every replay would fail
+        closed on the journal it is meant to read."""
+        policy = scope.load_policy(ROOT)
+        legacy = [f"broad foundational or concurrency impact: packages/p/file_{i:05d}.cpp" for i in range(532)]
+        stored = scope._selection(policy, policy.suite_ids, legacy)
+        self.assertGreater(self.encoded(stored["reasons"]), scope.REASON_BUDGET,
+                           "why: the fixture stopped reproducing an oversized legacy record; remedy: keep it larger than the budget")
+        request = incremental_batch.make_request(policy, request_id="legacy", kind="auto", base_sha="a" * 40,
+                                                 target_sha="b" * 40, control_sha="c" * 40,
+                                                 selection=stored, origin_run={"run_id": 17, "attempt": 1},
+                                                 bound=False)
+        self.assertEqual(request["selection"]["reasons"], stored["reasons"],
+                         "why: constructing without the bound altered the record; remedy: bound only new requests")
+        incremental_batch._request(policy, request)
+
+    def test_every_request_kind_is_bounded_by_construction(self):
+        """Bootstrap, debt recovery and explicit commands all build through make_request."""
+        policy = scope.load_policy(ROOT)
+        crowded = [f"broad foundational or concurrency impact: packages/p/file_{i:05d}.cpp" for i in range(4000)]
+        run = {"run_id": 17, "attempt": 1}
+        for kind, base in (("bootstrap", None), ("auto", "a" * 40), ("node", "a" * 40), ("candidate", "a" * 40)):
+            with self.subTest(kind=kind):
+                selection = scope._selection(policy, policy.suite_ids, crowded)
+                request = incremental_batch.make_request(policy, request_id=f"r:{kind}", kind=kind, base_sha=base,
+                                                         target_sha="b" * 40, control_sha="c" * 40,
+                                                         selection=selection, origin_run=run)
+                self.assertLessEqual(self.encoded(request["selection"]["reasons"]), scope.REASON_BUDGET)
+                self.assertEqual(request["selection"]["suites"], sorted(policy.suite_ids))
+                incremental_batch._request(policy, request)
 
 
 if __name__ == "__main__":

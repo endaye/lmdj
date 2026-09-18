@@ -55,12 +55,22 @@ def new_state(epoch):
 
 
 def make_request(policy, *, request_id, kind, base_sha, target_sha, control_sha,
-                 selection, origin_run):
+                 selection, origin_run, bound=True):
     require(isinstance(request_id, str) and bool(request_id), "missing request identity")
     require(kind in {"auto", "bootstrap", "node", "candidate"}, "unknown request kind")
     if base_sha is not None:
         exact_sha(base_sha)
     selection = test_scope.union_selections(policy, [selection])
+    if bound:
+        # Construction bounds the explanation here, whatever produced the
+        # selection: the auto interval, bootstrap, explicit debt recovery or an
+        # operator command. Validation below passes bound=False: rebuilding a
+        # STORED request must reproduce exactly what was written, including a
+        # record from before this bound existed, or replay would fail closed on
+        # its own history. The bound is idempotent, so a request constructed
+        # here still rebuilds to itself under bound=False.
+        selection = test_scope._selection(policy, selection["suites"],
+                                          test_scope.bounded_reasons(selection["reasons"]))
     if kind in {"bootstrap", "node", "candidate"}:
         require(selection["kind"] == "full", "bootstrap and explicit requests require full scope")
     return {"id": request_id, "kind": kind, "base": base_sha,
@@ -75,7 +85,7 @@ def _request(policy, request):
     rebuilt = make_request(policy, request_id=request["id"], kind=request["kind"],
                            base_sha=request["base"], target_sha=request["target"],
                            control_sha=request["control"], selection=request["selection"],
-                           origin_run=request["origin_run"])
+                           origin_run=request["origin_run"], bound=False)
     require(request == rebuilt, "request policy or canonical representation differs")
 
 

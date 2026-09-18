@@ -15,6 +15,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
 import batch_controller as controller
+import batch_github_journal as github
 import incremental_batch as batch
 from incremental_batch_journal import Journal, JournalBlocked
 import test_scope
@@ -537,6 +538,44 @@ class RealGitTests(unittest.TestCase):
         self.inputs.refresh()
         self.inputs.policy_at = lambda sha: (_ for _ in ()).throw(batch.BatchError("fixture missing policy"))
         self.assertEqual(self.inputs.interval_selection(self.base, self.base, POLICY)["kind"], "full")
+
+    def test_long_backlog_explanation_is_bounded_and_the_admit_record_fits_the_journal(self):
+        """Defect: one reason per changed path over a 261-commit backlog produced a 260 KB admit
+        record, above the 60,000-byte journal object limit, so every tick refused its own admit
+        locally and the scheduler never admitted a batch."""
+        sources = self.root / "packages/application-facade/src"
+        sources.mkdir(parents=True)
+        for index in range(600):
+            (sources / f"fixture_{index:04d}.cpp").write_text("// fixture")
+        self.tip = self.commit()
+        self.inputs.advice = None
+        self.inputs.refresh()
+        selection = self.inputs.interval_selection(self.base, self.tip, POLICY)
+        self.assertGreater(len(selection["reasons"]), 500, "why: the fixture stopped producing a long explanation; remedy: restore the many-path interval")
+        run = {"run_id": 17, "attempt": 1}
+        request = batch.make_request(POLICY, request_id="batch:epoch:1", kind="auto", base_sha=self.base,
+                                     target_sha=self.tip, control_sha=self.tip, selection=selection, origin_run=run)
+        batch._request(POLICY, request)
+        bounded = request["selection"]
+        self.assertEqual(bounded["suites"], sorted(POLICY.suite_ids),
+                         "why: bounding the explanation changed the decision; remedy: bound reasons only, never suites")
+        self.assertLessEqual(len(json.dumps(bounded["reasons"], separators=(",", ":")).encode()), test_scope.REASON_BUDGET)
+        self.assertEqual(len([r for r in bounded["reasons"] if r.startswith(test_scope.OMISSION_MARKER)]), 1)
+        selection = bounded
+        event = {"id": "epoch:1", "epoch": "epoch", "generation": 1, "type": "admit",
+                 "data": {"request": request, "executor_run": run, "history_complete": True,
+                          "ancestor": True, "old_runs_terminal": True}}
+        envelope = {"previous": "f" * 64, "event": event}
+        envelope["digest"] = batch.digest(envelope)
+        writer = {"repository": "endaye/lmdj", "issue_number": 807, "run_id": 17, "run_attempt": 1,
+                  "control_sha": self.tip, "workflow_path": ".github/workflows/self-test-report.yml",
+                  "workflow_id": 352307416, "job_name": "Incremental batch controller"}
+        checkpoint = json.dumps({"schema": github.SCHEMA, "kind": "checkpoint", "writer": writer,
+                                 "payload": {"head": "f" * 64, "pending": envelope}},
+                                sort_keys=True, separators=(",", ":"), allow_nan=False)
+        self.assertLessEqual(len(checkpoint.encode()), github.LIMIT,
+                             "why: the pending admit checkpoint exceeds the journal object limit; remedy: bound the explanation")
+        github.decode(checkpoint)
 
     def test_tag_object_is_not_main_commit(self):
         self.git("tag", "-am", "tag", "candidate")
