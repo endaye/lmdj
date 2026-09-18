@@ -124,7 +124,21 @@ class CandidatePreparation:
         return main
 
     def _child_authorize(self, unused):
-        self._guard(live=self._active[3] and self._active[1]["checked_cut"] is None)
+        if self._active is not None:
+            self._guard(live=self._active[3] and self._active[1]["checked_cut"] is None)
+            return
+        # Post-drive verification (the transition's reviewed-squash proof)
+        # re-proves the same authority without a drive session: this context
+        # performs no writes and the durable receipts it authenticates were
+        # checkpointed under the drive's own writer.
+        try:
+            self.authorize(deepcopy(self.request))
+            main = self._main()
+        except Exception:
+            raise CandidatePreparationError("why: candidate preparation authority or main is unavailable; remedy: restore the original trusted grant without exposing callback output or replaying effects") from None
+        frozen = self.material.inputs.freeze(self.request["base_revision"])
+        self.setup.repository.git("merge-base", "--is-ancestor", self.request["base_revision"], main)
+        self.material.inputs.verify(frozen, main)
 
     def _write_guard(self):
         return self._guard(live=True)
