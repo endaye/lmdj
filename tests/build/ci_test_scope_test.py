@@ -402,6 +402,26 @@ class BoundedReasonsTests(unittest.TestCase):
         self.assertEqual(scope.bounded_reasons(reasons[:1], budget=100), reasons[:1],
                          "why: a fitting explanation was refused; remedy: check the budget only when bounding")
 
+    def test_validating_a_stored_request_never_rewrites_it(self):
+        """Defect: bounding inside the validation rebuild made replay reject its own history.
+
+        Journal #807 generation 55 stores an admit whose selection carries 532 reasons and
+        57,714 bytes, written long before this bound existed. If _request rebuilt it through
+        the bound it would no longer equal the stored record, and every replay would fail
+        closed on the journal it is meant to read."""
+        policy = scope.load_policy(ROOT)
+        legacy = [f"broad foundational or concurrency impact: packages/p/file_{i:05d}.cpp" for i in range(532)]
+        stored = scope._selection(policy, policy.suite_ids, legacy)
+        self.assertGreater(self.encoded(stored["reasons"]), scope.REASON_BUDGET,
+                           "why: the fixture stopped reproducing an oversized legacy record; remedy: keep it larger than the budget")
+        request = incremental_batch.make_request(policy, request_id="legacy", kind="auto", base_sha="a" * 40,
+                                                 target_sha="b" * 40, control_sha="c" * 40,
+                                                 selection=stored, origin_run={"run_id": 17, "attempt": 1},
+                                                 bound=False)
+        self.assertEqual(request["selection"]["reasons"], stored["reasons"],
+                         "why: constructing without the bound altered the record; remedy: bound only new requests")
+        incremental_batch._request(policy, request)
+
     def test_every_request_kind_is_bounded_by_construction(self):
         """Bootstrap, debt recovery and explicit commands all build through make_request."""
         policy = scope.load_policy(ROOT)

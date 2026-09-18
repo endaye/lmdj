@@ -143,6 +143,14 @@ def _encoded_size(reasons):
     return len(json.dumps(reasons, separators=(",", ":")).encode("utf-8"))
 
 
+# Proven at import so the production path can never refuse its own notice, and
+# so a later edit that grows OMISSION past REASON_BUDGET fails loudly here
+# instead of turning into a runtime error under an unrelated diagnostic kind.
+assert _encoded_size([OMISSION.format(count=10 ** 9)]) <= REASON_BUDGET, (
+    "why: the omission notice no longer fits REASON_BUDGET; "
+    "remedy: shorten the notice or raise the budget")
+
+
 def bounded_reasons(reasons, budget=REASON_BUDGET):
     """Canonical (sorted, unique) reasons whose encoding fits the budget.
 

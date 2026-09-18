@@ -30,6 +30,15 @@ the record kept growing. The feedback loop is invisible from the protocol code:
 every operation is correct on its own, and the size is a property of the
 backlog, not of any single event.
 
+A normalization added to fix this must not rewrite stored records. The first
+attempt applied the bound inside `make_request`, which `_request` also uses to
+validate a stored request by rebuilding it and requiring exact equality. Journal
+#807 generation 55 holds an admit written long before the bound, carrying 532
+reasons and 57,714 bytes; rebuilding it through the bound would no longer equal
+the stored record, so every replay would have failed closed on the journal it
+exists to read. That is a worse outage than the one being fixed, and no test
+that only constructs new requests can see it.
+
 ## How to apply
 
 Anything a bounded record carries must itself be bounded by construction, not
@@ -45,3 +54,11 @@ locally and size the resulting record against the limit. The gate
 selection stays full, and asserts the pending-admit checkpoint fits the journal
 object limit; `tests/build/ci_batch_github_journal_test.py` checks an oversized
 record is refused with the closed kind before any anchor or comment mutation.
+
+Separate construction from validation whenever you add such a normalization:
+bound when building a new record, and reproduce a stored one byte for byte,
+including records written before the rule existed. Verify it against the real
+history, not only against records the new code produced -
+`tests/build/ci_test_scope_test.py` replays an oversized legacy record through
+the validation path, and the live check is to rebuild every stored request
+under its own historical policy and require that all of them still validate.
