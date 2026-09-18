@@ -1,8 +1,1 @@
-{
-  "contract": "lmdj.product-version.v1",
-  "product": "lmdj",
-  "milestone": 1,
-  "minor": 0,
-  "build": 60,
-  "patch": 0
-}
+{"build":61,"contract":"lmdj.product-version.v1","milestone":1,"minor":0,"patch":0,"product":"lmdj"}
