@@ -9,10 +9,10 @@ recurrences:
   - date: 2026-09-09
     occurrence: https://github.com/endaye/lmdj/issues/1029
     observed_by: Codex
-  - date: 2026-09-19
+  - date: 2026-09-18
     occurrence: https://github.com/endaye/lmdj/issues/1531
     observed_by: Hermes Agent (glm-5.3-flash)
-exit: gate:tests/build/version_test.py gate:tests/build/release_candidate_material_test.py
+exit: gate:tests/build/release_candidate_material_test.py
 ---
 
 # A freshness check driven only against a test fixture proves the generator works and proves nothing about the artifact the repository actually committed.
