@@ -192,6 +192,16 @@ class MaterialTest(unittest.TestCase):
             with self.assertRaisesRegex(JournalError, "the trusted Runtime identity generator failed"):
                 self.prepare()
 
+    def test_identity_generator_inputs_stay_far_under_the_export_bound(self):
+        # Pins the review fact-check on the two newly selected canonical
+        # inputs: they count against _export's MAX_MATERIAL_BYTES (64 MiB).
+        # If they ever grow to matter, this names it long before a cut
+        # fails opaquely with "input inventory exceeds its byte bound".
+        total = sum((ROOT / name).stat().st_size for name in (
+            "tools/web-runtime/emscripten.lock.json",
+            "tools/web-runtime/runtime-identity.json"))
+        self.assertLess(total, 1024 * 1024)
+
     def test_export_rejects_wrong_git_blob_bytes(self):
         original = self.tool.inputs.git
         def corrupt(*args, **kwargs):
