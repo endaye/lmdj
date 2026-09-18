@@ -127,6 +127,28 @@ returns `unresolved` with the exact lines that still contradict the claim, which
 remains. Hand-resolve ONLY findings that are genuinely wrong or superseded (e.g. the reported
 trigger no longer exists at the current head), and say why in the resolve comment.
 
+Hand-resolving costs you that verification silently. `collect_batch` skips any thread whose
+`isResolved` is already true, so a thread you closed yourself is never a recheck candidate, and
+nothing warns you: the run succeeds and its receipt is simply empty. The collection reads the
+thread inventory in the review job of the NEW head, which starts within seconds of the push, so
+replying-and-resolving straight after pushing normally beats it. Observed on #1507: twelve
+threads over five rounds, every one hand-resolved, every `repair-recheck.json` `{"receipts": []}`
+— including a round resolved 25 minutes before that head's collection ran.
+
+Check the receipt rather than assuming the recheck ran: the record is `repair-recheck.json`
+inside the `pr-test-scope-<head>-<run>-<attempt>` artifact, not the review-result artifact, and
+`{"receipts": []}` means no thread was rechecked at all. `review_pipeline.py` also prints
+`Automatic repair recheck selection: ...` with a per-candidate status (`collected`,
+`not_rechecked` with a reason, `deferred` on the per-run bound), though on the self-hosted review
+host that line may not reach the job log.
+
+So the order is: push the fix, let the synchronize review publish its verdict on each thread,
+then handle only what it leaves — `unresolved` verdicts name the lines that still contradict the
+claim, and a finding that is genuinely wrong or superseded is yours to resolve with a reason.
+Replying without resolving does not block collection; only `isResolved` does. Avoid replying
+while a collection is in flight, though: `collect` refuses a thread whose conversation changed
+during input collection.
+
 ## Auto-merge and docs-only lanes
 
 Auto-merge is opt-in per PR — `gh pr merge --auto --squash`. Nothing merges by itself even with
