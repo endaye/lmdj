@@ -74,8 +74,11 @@ class MaterialTest(unittest.TestCase):
         result = self.prepare()
         expected = version.ProductVersion(self.current.milestone, self.current.minor, self.current.build + 1, 0)
         self.assertEqual(result["binding"]["product_build"], str(expected))
-        from tools.release.candidate_workspace import FILES
-        self.assertEqual(set(result["files"]), FILES)
+        names = {"products/lmdj/version.json", "products/lmdj/assembly.json",
+                 "products/lmdj/assembly.lock.json", "products/lmdj/src/compiled_assembly.cpp",
+                 "products/lmdj/generated/web-runtime-identity.json",
+                 "products/lmdj/generated/web-runtime-identity.mjs"}
+        self.assertEqual(set(result["files"]), names)
         self.assertEqual(before, (self.git("status", "--porcelain"), self.git("write-tree"), self.git("show-ref")))
         self.assertEqual(result["sha256"], canonical_sha256(result["binding"]))
         for item in result["binding"]["files"]:
