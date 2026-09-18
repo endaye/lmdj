@@ -127,13 +127,18 @@ class CandidateReservations:
         import re
         if type(repository) is not str or re.fullmatch(r"[a-z0-9_.-]+/[a-z0-9_.-]+", repository) is None:
             _fail("invalid reservation repository")
-        existed = self.state_root.exists()
-        with RequestJournal(self.state_root) as journal:
-            if existed:
+        catalogue_path = self.state_root / CATALOG
+        if catalogue_path.exists():
+            with RequestJournal(self.state_root) as journal:
                 catalogue = self._read(journal)
                 if catalogue["repository"] != repository:
                     _fail("BUILD catalogue belongs to another repository")
                 return
+        # No catalogue yet: the storage directory may already exist (a prior
+        # run's journal opens create it and its writer lock), so enrollment
+        # provisions the empty catalogue exactly when the directory holds
+        # nothing but its writer lock.
+        with RequestJournal(self.state_root) as journal:
             if sorted(os.listdir(journal.directory)) != ["writer.lock"]:
                 _fail("new BUILD catalogue storage changed during enrollment")
             self._save(journal, {"schema":"lmdj.build-reservations.v1",

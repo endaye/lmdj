@@ -172,13 +172,25 @@ class ReservationTest(unittest.TestCase):
         (self.state / CATALOG).rename(self.state / "retained")
         with self.assertRaisesRegex(JournalError, "missing"):
             self.reserve()
-        with self.assertRaisesRegex(JournalError, "missing"):
+        # Enrollment refuses real retained state: the extra "retained" entry
+        # means this is not empty storage, so it never becomes an allocation.
+        with self.assertRaisesRegex(JournalError, "changed during enrollment"):
             self.reservations.enroll(self.request["repository"])
         self.assertFalse((self.state / CATALOG).exists())
 
-    def test_missing_catalogue_with_only_lock_is_not_new_enrollment(self):
-        (self.state / CATALOG).unlink()
-        with self.assertRaisesRegex(JournalError, "missing"):
+    def test_a_directory_holding_only_the_writer_lock_is_provisioned(self):
+        # The entry's #1489 per-level private creation plus earlier journal
+        # opens leave the directory present with just its writer lock; that
+        # is empty storage, not enrolled history, and enrollment provisions
+        # it. A missing CATALOG beside real state stays a refusal.
+        (self.state / "writer.lock").write_bytes(b"")
+        self.reservations.enroll(self.request["repository"])
+        self.assertTrue((self.state / CATALOG).exists())
+
+    def test_missing_catalogue_with_real_state_is_not_new_enrollment(self):
+        (self.state / CATALOG).rename(self.state / "retained")
+        with self.assertRaisesRegex(JournalError,
+                                    "changed during enrollment"):
             self.reservations.enroll(self.request["repository"])
 
     def test_unsafe_catalogue_is_not_read_or_replaced(self):
