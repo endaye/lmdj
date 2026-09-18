@@ -23,12 +23,36 @@ def require(value, reason):
         raise JournalError(f"why: candidate material {reason}; remedy: retain the original reservation and restore its exact passive Git inputs")
 
 
+RUNTIME_IDENTITY_GENERATOR = "tools/web-runtime/generate_runtime_identity.py"
+RUNTIME_IDENTITY_INPUTS = ("tools/web-runtime/emscripten.lock.json",
+                           "tools/web-runtime/runtime-identity.json")
+
+
 def material_input(name):
     # The canonical generators scan all component manifests, Provider sources,
     # Contracts and Product assembly source. Core/Host implementation bytes are
     # still frozen by CandidateInputs even though this generator does not read them.
     return (name.startswith(("products/lmdj/", "providers/", "contracts/"))
+            or name in RUNTIME_IDENTITY_INPUTS
             or re.fullmatch(r"(?:packages|apps)/[^/]+/module\.json", name) is not None)
+
+
+def _runtime_identity_files(root):
+    """Regenerate the Runtime identity for the reserved build (#1531).
+
+    Reads the NEW version/assembly/lock already materialized in the passive
+    export tree, so the committed identity can never lag the allocated build.
+    """
+    import importlib.util
+
+    source = Path(__file__).resolve().parents[2] / RUNTIME_IDENTITY_GENERATOR
+    spec = importlib.util.spec_from_file_location("lmdj_release_runtime_identity", source)
+    require(spec is not None and spec.loader is not None, f"generator is not importable: {RUNTIME_IDENTITY_GENERATOR}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    identity = module.generate(root)
+    return {str(module.JSON_OUTPUT): module.canonical_json(identity),
+            str(module.MJS_OUTPUT): module.mjs_bytes(identity)}
 
 
 class CandidateBuildMaterial:
@@ -95,6 +119,17 @@ class CandidateBuildMaterial:
                 files = render_build_material(root, expected, reserved)
             except Exception:
                 raise JournalError("why: canonical candidate material generation refused; remedy: retain the reservation and repair the original input or reconcile a new candidate, never bypass Assembly validation") from None
+            # render_build_material returns bytes without writing them; the
+            # identity generator reads the reserved build from the tree, so
+            # materialize the four files in this throwaway export first.
+            for name, raw in files.items():
+                destination = root / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(raw)
+            try:
+                files.update(_runtime_identity_files(root))
+            except Exception:
+                raise JournalError("why: Runtime identity generation refused; remedy: retain the reservation and repair the identity generator inputs (tools/web-runtime policy and toolchain locks), never hand-edit the generated identity") from None
         self.inputs.verify(frozen, main_revision)
         require(lookup(request, frozen, main_revision) == reservation,
                 "reservation changed during generation")

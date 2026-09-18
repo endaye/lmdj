@@ -69,14 +69,13 @@ class MaterialTest(unittest.TestCase):
     def prepare(self):
         return self.tool.prepare(self.request, self.frozen, self.base)
 
-    def test_real_generators_produce_exact_four_files_and_valid_lock(self):
+    def test_real_generators_produce_exact_candidate_files_and_valid_lock(self):
         before = (self.git("status", "--porcelain"), self.git("write-tree"), self.git("show-ref"))
         result = self.prepare()
         expected = version.ProductVersion(self.current.milestone, self.current.minor, self.current.build + 1, 0)
         self.assertEqual(result["binding"]["product_build"], str(expected))
-        names = {"products/lmdj/version.json", "products/lmdj/assembly.json",
-                 "products/lmdj/assembly.lock.json", "products/lmdj/src/compiled_assembly.cpp"}
-        self.assertEqual(set(result["files"]), names)
+        from tools.release.candidate_workspace import FILES
+        self.assertEqual(set(result["files"]), FILES)
         self.assertEqual(before, (self.git("status", "--porcelain"), self.git("write-tree"), self.git("show-ref")))
         self.assertEqual(result["sha256"], canonical_sha256(result["binding"]))
         for item in result["binding"]["files"]:
@@ -95,6 +94,19 @@ class MaterialTest(unittest.TestCase):
         self.assertEqual(compiled, result["files"]["products/lmdj/src/compiled_assembly.cpp"])
         lock = version._lock_document(expected, assembly_path, assembly, compiled, repo_root=self.root)
         self.assertEqual(canonical_json(lock), result["files"]["products/lmdj/assembly.lock.json"])
+        # The Runtime identity moves with the reserved build and matches the
+        # trusted generator run against the materialized tree (#1531).
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "identity_check", ROOT / "tools/web-runtime/generate_runtime_identity.py")
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(module.generate(self.root), json.loads(
+            result["files"]["products/lmdj/generated/web-runtime-identity.json"]))
+        self.assertEqual(module.canonical_json(json.loads(
+            result["files"]["products/lmdj/generated/web-runtime-identity.json"])),
+            result["files"]["products/lmdj/generated/web-runtime-identity.json"])
 
     def test_existing_default_root_verification_remains_unchanged(self):
         current = version.load_version(ROOT / "products/lmdj/version.json")
