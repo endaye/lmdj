@@ -56,6 +56,10 @@ std::optional<std::uint64_t> last_retained_watermark(
 // candidates convert against, a later retained switch they must not cross, and
 // the checkpoint the previous transfer left behind. Shared so a retained
 // transfer and a live projection can never resolve a different segment.
+//
+// Precondition for both helpers below: `journal.admission` holds a value. Each
+// caller establishes it before calling, and both live in this anonymous
+// namespace, so the dereference is not guarded again here.
 struct AdmissionSegment {
   project_io::SequencePublicationAuthority segment;
   std::optional<project_io::SequencePublicationAuthority> pending;
@@ -288,9 +292,13 @@ project_admission_overlay(const project_io::ActiveSequenceJournal& journal) {
   auto resolved = resolve_admission_segment(journal);
   if (!resolved.has_value()) return Projection::failure(resolved.error());
   // A candidate at or after a retained switch awaits the ordinary journal
-  // switch at its audio boundary. Until that reconciles this segment may claim
-  // nothing, which is a live state rather than the conversion failure the
-  // transfer builder reports for the same durable shape.
+  // switch at its audio boundary. The *entire* overlay is withheld until that
+  // reconciles, not merely the crossing candidate: the transfer builder fails
+  // the whole call on the same durable shape, so converting the earlier prefix
+  // here would publish events no transfer would commit. Nothing already
+  // audible is lost - the prefix was projected on an earlier step, before the
+  // crossing candidate landed. This is a live state, not a conversion
+  // failure.
   if (resolved.value().pending) {
     for (const auto& candidate : admission.candidates) {
       if (candidate.runtime_frame >= resolved.value().pending->frame) {

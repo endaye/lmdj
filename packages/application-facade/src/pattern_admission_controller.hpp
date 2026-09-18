@@ -33,6 +33,11 @@ foundation::Result<project_io::SequenceAdmissionTransfer> commit_admission_trans
 // yet — no admission, one not yet activated or already sealed, an owner-lost
 // journal, or candidates awaiting an unreconciled switch. A genuine
 // authority, timing or arithmetic failure is still reported as an error.
+//
+// `std::nullopt` is never evidence that the admission is empty, complete or
+// safe to close: several of those states are ones `build_admission_transfer`
+// reports as an error for the same journal. A caller may use it only to
+// decide there is nothing to publish right now.
 foundation::Result<std::optional<std::vector<domain::PatternEvent>>>
 project_admission_overlay(const project_io::ActiveSequenceJournal& journal);
 

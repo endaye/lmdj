@@ -117,6 +117,9 @@ void cutoff_excludes_orphans_and_uses_ordinary_terminal_completion() {
   LMDJ_CHECK(transfer.value().recoverable_tail ==
       std::vector<PatternEvent>({{{0, 1}, 960, 240, 95}}));
   LMDJ_CHECK(transfer.value().checkpoint.owned_presses.size() == 1);
+  // The last converted candidate is followed by one the cutoff excludes, so
+  // the checkpoint must carry the converted frame and not the excluded one.
+  LMDJ_CHECK(transfer.value().checkpoint.last_runtime_frame == 25000);
   journal.admission->transfers.push_back(transfer.value());
   journal.admission->candidates.clear();
   journal.pending_events = transfer.value().recoverable_tail;
