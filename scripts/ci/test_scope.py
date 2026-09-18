@@ -125,6 +125,51 @@ def labels_to_suites(policy, labels):
     return {label[5:] for label in labels if label != "test:none"}
 
 
+# A journal object (writer, envelope and event) must stay under the
+# batch_github_journal.LIMIT of 60,000 bytes, and a checkpoint carries a whole
+# pending admit. The explanation is the only request field that grows with the
+# unprocessed backlog: one reason per changed path, which reached 2,355 reasons
+# and 261 KB after 261 commits. Suites are the decision and are never touched;
+# reasons only explain it. incremental_batch.make_request applies the bound, so
+# every stored request is bounded by construction, whatever produced it.
+REASON_BUDGET = 16000
+OMISSION_MARKER = "selection explanation truncated:"
+OMISSION = (OMISSION_MARKER + " {count} further distinct selection reasons were omitted; why: the admit record "
+            "must stay within the journal object limit; remedy: recompute the interval selection from Git "
+            "history and policy for the complete explanation")
+
+
+def _encoded_size(reasons):
+    return len(json.dumps(reasons, separators=(",", ":")).encode("utf-8"))
+
+
+def bounded_reasons(reasons, budget=REASON_BUDGET):
+    """Canonical (sorted, unique) reasons whose encoding fits the budget.
+
+    The count is over distinct canonical reasons, which is what a selection
+    stores; duplicates the caller passed are collapsed first, exactly as
+    _selection collapses them. The kept reasons stay in canonical order until
+    the next one would no longer fit beside a single counted omission notice,
+    and that notice then stands for the rest. The notice carries its own
+    marker so it can never be confused with a real reason, which may itself
+    begin with "why:". Applying the bound to its own output changes nothing,
+    so a stored request rebuilds to itself and journal replay stays exact.
+    """
+    ordered = sorted(set(reasons))
+    if _encoded_size(ordered) <= budget:
+        return ordered
+    require(_encoded_size([OMISSION.format(count=len(ordered))]) <= budget,
+            "reason budget is smaller than one omission notice",
+            "raise the budget; a bounded explanation must at least hold its own notice")
+    kept = []
+    for reason in ordered:
+        candidate = sorted([*kept, reason, OMISSION.format(count=len(ordered) - len(kept) - 1)])
+        if _encoded_size(candidate) > budget:
+            break
+        kept.append(reason)
+    return sorted([*kept, OMISSION.format(count=len(ordered) - len(kept))])
+
+
 def _selection(policy, suites, reasons):
     selected = sorted(set(suites))
     require(set(selected) <= set(policy.suite_ids), "unknown selected suite")

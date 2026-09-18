@@ -448,33 +448,6 @@ class ControllerTests(unittest.TestCase):
             self.make(2).reconcile()
 
 
-class BoundedReasonsTests(unittest.TestCase):
-    def test_small_explanation_is_canonical_and_unchanged(self):
-        self.assertEqual(controller.bounded_reasons(["b", "a", "a"]), ["a", "b"])
-
-    def test_large_explanation_keeps_canonical_prefix_and_counts_the_rest(self):
-        reasons = [f"broad foundational or concurrency impact: packages/p/file_{i:05d}.cpp" for i in range(5000)]
-        bounded = controller.bounded_reasons(reversed(reasons), budget=2000)
-        self.assertLessEqual(len(json.dumps(bounded, separators=(",", ":")).encode()), 2000,
-                             "why: bounded explanation exceeds its budget; remedy: measure the encoded record")
-        omissions = [r for r in bounded if r.startswith("why:")]
-        kept = [r for r in bounded if not r.startswith("why:")]
-        self.assertEqual(len(omissions), 1)
-        self.assertTrue(kept and kept == sorted(reasons)[:len(kept)],
-                        "why: bound reordered or skipped reasons; remedy: keep the canonical prefix")
-        self.assertIn(f"{5000 - len(kept)} further selection reasons were omitted", omissions[0])
-        self.assertIn("remedy:", omissions[0])
-        self.assertEqual(controller.bounded_reasons(bounded, budget=2000), bounded,
-                         "why: bound is not idempotent; remedy: a stored request must rebuild to itself")
-
-    def test_budget_below_one_omission_notice_is_refused_not_exceeded(self):
-        reasons = [f"reason {i:03d} " + "x" * 50 for i in range(40)]
-        with self.assertRaisesRegex(batch.BatchError, "smaller than one omission reason"):
-            controller.bounded_reasons(reasons, budget=100)
-        self.assertEqual(controller.bounded_reasons(reasons[:1], budget=100), reasons[:1],
-                         "why: a fitting explanation was refused; remedy: check the budget only when bounding")
-
-
 class RealGitTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -578,15 +551,17 @@ class RealGitTests(unittest.TestCase):
         self.inputs.advice = None
         self.inputs.refresh()
         selection = self.inputs.interval_selection(self.base, self.tip, POLICY)
-        self.assertEqual(selection["suites"], sorted(POLICY.suite_ids),
-                         "why: bounding the explanation changed the decision; remedy: bound reasons only, never suites")
-        self.assertLessEqual(len(json.dumps(selection["reasons"], separators=(",", ":")).encode()), controller.REASON_BUDGET)
-        self.assertEqual(len([r for r in selection["reasons"] if "further selection reasons were omitted" in r]), 1)
-        self.assertEqual(controller.bounded_reasons(selection["reasons"]), selection["reasons"])
+        self.assertGreater(len(selection["reasons"]), 500, "why: the fixture stopped producing a long explanation; remedy: restore the many-path interval")
         run = {"run_id": 17, "attempt": 1}
         request = batch.make_request(POLICY, request_id="batch:epoch:1", kind="auto", base_sha=self.base,
                                      target_sha=self.tip, control_sha=self.tip, selection=selection, origin_run=run)
         batch._request(POLICY, request)
+        bounded = request["selection"]
+        self.assertEqual(bounded["suites"], sorted(POLICY.suite_ids),
+                         "why: bounding the explanation changed the decision; remedy: bound reasons only, never suites")
+        self.assertLessEqual(len(json.dumps(bounded["reasons"], separators=(",", ":")).encode()), test_scope.REASON_BUDGET)
+        self.assertEqual(len([r for r in bounded["reasons"] if r.startswith(test_scope.OMISSION_MARKER)]), 1)
+        selection = bounded
         event = {"id": "epoch:1", "epoch": "epoch", "generation": 1, "type": "admit",
                  "data": {"request": request, "executor_run": run, "history_complete": True,
                           "ancestor": True, "old_runs_terminal": True}}

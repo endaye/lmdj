@@ -61,6 +61,11 @@ def make_request(policy, *, request_id, kind, base_sha, target_sha, control_sha,
     if base_sha is not None:
         exact_sha(base_sha)
     selection = test_scope.union_selections(policy, [selection])
+    # Every stored request is bounded here, whatever produced its selection:
+    # the auto interval, bootstrap, explicit debt recovery or an operator
+    # command. The bound is idempotent, so _request rebuilds this exact value.
+    selection = test_scope._selection(policy, selection["suites"],
+                                      test_scope.bounded_reasons(selection["reasons"]))
     if kind in {"bootstrap", "node", "candidate"}:
         require(selection["kind"] == "full", "bootstrap and explicit requests require full scope")
     return {"id": request_id, "kind": kind, "base": base_sha,
