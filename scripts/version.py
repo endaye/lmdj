@@ -1035,7 +1035,7 @@ def render_build_material(
     expected: ProductVersion,
     reserved: ProductVersion,
 ) -> dict[str, bytes]:
-    """Render four candidate files using canonical Assembly generators.
+    """Render six candidate files using canonical Assembly generators.
 
     The caller supplies a passive, exact-input tree and a verified reservation.
     This function does not allocate a number, modify that tree, run candidate

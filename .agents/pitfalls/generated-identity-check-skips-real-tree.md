@@ -9,7 +9,10 @@ recurrences:
   - date: 2026-09-09
     occurrence: https://github.com/endaye/lmdj/issues/1029
     observed_by: Codex
-exit: gate:tests/build/version_test.py
+  - date: 2026-09-19
+    occurrence: https://github.com/endaye/lmdj/issues/1531
+    observed_by: Hermes Agent (glm-5.3-flash)
+exit: gate:tests/build/version_test.py gate:tests/build/release_candidate_material_test.py
 ---
 
 # A freshness check driven only against a test fixture proves the generator works and proves nothing about the artifact the repository actually committed.
@@ -76,3 +79,17 @@ unchanged fixture-root coverage, implementing the mechanism requested by
 [#749](https://github.com/endaye/lmdj/issues/749). The check fails with the
 generator's concrete mismatch/staleness reason and regeneration remedy; it
 does not add a new workflow or PR required check.
+
+The recurrence at [#1531](https://github.com/endaye/lmdj/issues/1531) showed
+the same torn state being *manufactured* upstream: the candidate cut rendered
+only the four Assembly files, so a merged cut landed `version.json` one build
+ahead of the committed identity and `version_test.py` went red on `main`
+(itself the exit of occurrences 1 and 2 firing as designed). The cut now runs
+the same trusted control-tree generator in
+`tools/release/candidate_material.py` and ships the pair inside the
+candidate's declared file set, and
+`tests/build/release_candidate_material_test.py` asserts the exported pair
+passes the generator's own `--check` at the reserved build. The generator
+stay-executable invariant is unchanged: candidate Git remains data, and the
+generator's output inventory still matches the canary proposal's
+`source_path` inputs.

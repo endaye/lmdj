@@ -6,6 +6,8 @@ The parent must authenticate the request, main and baseline CI before calling.
 from hashlib import sha1, sha256
 from pathlib import Path
 import re
+import subprocess
+import sys
 import tempfile
 
 from scripts.version import ProductVersion, render_build_material
@@ -17,6 +19,13 @@ from .orchestration import JournalError
 MAX_BLOB_BYTES = 8 * 1024 * 1024
 MAX_MATERIAL_BYTES = 64 * 1024 * 1024
 
+# Repository root of the trusted control tree. Candidate Git is data; the
+# Runtime identity generator always executes from this tree (its own module
+# directory's parents[2]), exactly as tools/canary/metadata_proposal.py
+# executes it beside scripts/version.py.
+RUNTIME_IDENTITY_TOOL = Path(__file__).resolve().parents[2] \
+    / "tools/web-runtime/generate_runtime_identity.py"
+
 
 def require(value, reason):
     if not value:
@@ -26,9 +35,14 @@ def require(value, reason):
 def material_input(name):
     # The canonical generators scan all component manifests, Provider sources,
     # Contracts and Product assembly source. Core/Host implementation bytes are
-    # still frozen by CandidateInputs even though this generator does not read them.
+    # still frozen by CandidateInputs even though this generator does not read
+    # them. emscripten.lock.json and runtime-identity.json are canonical
+    # inputs of the Runtime identity generator, matching canary's
+    # tools/canary/metadata_proposal.py source_path inventory.
     return (name.startswith(("products/lmdj/", "providers/", "contracts/"))
-            or re.fullmatch(r"(?:packages|apps)/[^/]+/module\.json", name) is not None)
+            or re.fullmatch(r"(?:packages|apps)/[^/]+/module\.json", name) is not None
+            or name in ("tools/web-runtime/emscripten.lock.json",
+                        "tools/web-runtime/runtime-identity.json"))
 
 
 class CandidateBuildMaterial:
@@ -80,6 +94,28 @@ class CandidateBuildMaterial:
         """Reconstruct the original material without allocating a reservation."""
         return self._prepare(request, frozen, main_revision, allocate=False)
 
+    def _runtime_identity(self, root):
+        """Generated Runtime identity pair from the trusted control-tree tool.
+
+        Candidate Git is data; only installed generator code executes, with
+        repository_root aimed at the passive export so the identity is derived
+        from the exact frozen inputs.
+        """
+        raw = subprocess.run(
+            [sys.executable, str(RUNTIME_IDENTITY_TOOL), "--repo-root", str(root)],
+            check=True, capture_output=True,
+        )
+        require(raw.returncode == 0, "the trusted Runtime identity generator failed")
+        files = {}
+        for name in ("products/lmdj/generated/web-runtime-identity.json",
+                     "products/lmdj/generated/web-runtime-identity.mjs"):
+            filename = root / name
+            require(filename.is_file() and not filename.is_symlink(),
+                    "Runtime identity output is missing")
+            files[name] = filename.read_bytes()
+            filename.unlink()
+        return files
+
     def _prepare(self, request, frozen, main_revision, *, allocate):
         # Actual durable reservation precedes material generation. A generator
         # failure retains its number; retries use the same reservation.
@@ -93,6 +129,12 @@ class CandidateBuildMaterial:
             reserved = ProductVersion(*(int(part) for part in reservation["version"].split(".")))
             try:
                 files = render_build_material(root, expected, reserved)
+                # The identity generator reads a tree, so stage the reserved
+                # four files into this disposable export first; it then derives
+                # the identity from exactly the reserved build state.
+                for name, raw in files.items():
+                    (root / name).write_bytes(raw)
+                files.update(self._runtime_identity(root))
             except Exception:
                 raise JournalError("why: canonical candidate material generation refused; remedy: retain the reservation and repair the original input or reconcile a new candidate, never bypass Assembly validation") from None
         self.inputs.verify(frozen, main_revision)

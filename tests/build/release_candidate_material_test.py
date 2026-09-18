@@ -69,13 +69,15 @@ class MaterialTest(unittest.TestCase):
     def prepare(self):
         return self.tool.prepare(self.request, self.frozen, self.base)
 
-    def test_real_generators_produce_exact_four_files_and_valid_lock(self):
+    def test_real_generators_produce_exact_six_files_and_valid_lock(self):
         before = (self.git("status", "--porcelain"), self.git("write-tree"), self.git("show-ref"))
         result = self.prepare()
         expected = version.ProductVersion(self.current.milestone, self.current.minor, self.current.build + 1, 0)
         self.assertEqual(result["binding"]["product_build"], str(expected))
         names = {"products/lmdj/version.json", "products/lmdj/assembly.json",
-                 "products/lmdj/assembly.lock.json", "products/lmdj/src/compiled_assembly.cpp"}
+                 "products/lmdj/assembly.lock.json", "products/lmdj/src/compiled_assembly.cpp",
+                 "products/lmdj/generated/web-runtime-identity.json",
+                 "products/lmdj/generated/web-runtime-identity.mjs"}
         self.assertEqual(set(result["files"]), names)
         self.assertEqual(before, (self.git("status", "--porcelain"), self.git("write-tree"), self.git("show-ref")))
         self.assertEqual(result["sha256"], canonical_sha256(result["binding"]))
@@ -95,6 +97,13 @@ class MaterialTest(unittest.TestCase):
         self.assertEqual(compiled, result["files"]["products/lmdj/src/compiled_assembly.cpp"])
         lock = version._lock_document(expected, assembly_path, assembly, compiled, repo_root=self.root)
         self.assertEqual(canonical_json(lock), result["files"]["products/lmdj/assembly.lock.json"])
+        # Far-side identity leg: the exported Runtime identity pair satisfies
+        # the canonical generator's own freshness check at the reserved build,
+        # so a cut can no longer land version.json ahead of the identity.
+        check = subprocess.run([sys.executable, str(candidate_material.RUNTIME_IDENTITY_TOOL),
+                                "--repo-root", str(self.root), "--check"],
+                               capture_output=True)
+        self.assertEqual(check.returncode, 0, check.stderr)
 
     def test_existing_default_root_verification_remains_unchanged(self):
         current = version.load_version(ROOT / "products/lmdj/version.json")
