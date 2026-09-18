@@ -202,6 +202,19 @@ class MaterialTest(unittest.TestCase):
             "tools/web-runtime/runtime-identity.json"))
         self.assertLess(total, 1024 * 1024)
 
+    def test_identity_generator_is_a_pure_data_transformer(self):
+        # The cut executes this control-tree tool against candidate-derived
+        # data, so pin the trust boundary the review asked about: the tool
+        # must stay free of dynamic execution and subprocess escape hatches.
+        # Scan non-comment directives, per gate-matches-its-own-prose.
+        source = (ROOT / "tools/web-runtime/generate_runtime_identity.py").read_text()
+        directives = "\n".join(
+            line for line in source.splitlines()
+            if not line.lstrip().startswith("#"))
+        for banned in ("subprocess", "importlib", "__import__",
+                       "exec(", "eval(", "os.system", "popen", "ctypes"):
+            self.assertNotIn(banned, directives)
+
     def test_export_rejects_wrong_git_blob_bytes(self):
         original = self.tool.inputs.git
         def corrupt(*args, **kwargs):
