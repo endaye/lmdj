@@ -212,6 +212,7 @@ class _CloudflareReader:
         self._token = token
         self._state_root = Path(state_root)
         self._inspected = {}
+        self._origins = {}
 
     def _inspect(self, host):
         if host not in self._inspected:
@@ -259,9 +260,21 @@ class _CloudflareReader:
             _fail(f"the live Worker identity for {host} is unavailable")
         return document["worker"]
 
+    def _origins_for(self, host, version=None):
+        """This Host's origins, read once per version asked about.
+
+        A projection assembly asks for the production origin and one version's
+        origin; without this each ask is another subprocess, and the module
+        documents itself as one Worker read and one origin read.
+        """
+        if version not in self._origins:
+            arguments = ("urls", host) + (() if version is None
+                                          else ("--version", version))
+            self._origins[version] = _read_only_tool(_HOST_ORIGINS, arguments)
+        return self._origins[version]
+
     def version_url(self, host, version):
-        document = _read_only_tool(_HOST_ORIGINS,
-                                   ("urls", host, "--version", version))
+        document = self._origins_for(host, version)
         if document is None or type(document.get("version")) is not str:
             _fail(f"the immutable origin for {host} is unavailable")
         return document["version"]
@@ -281,7 +294,7 @@ class _CloudflareReader:
         return deployment["version_id"]
 
     def observe(self, host):
-        origins = _read_only_tool(_HOST_ORIGINS, ("urls", host))
+        origins = self._origins_for(host)
         if origins is None or type(origins.get("production")) is not str:
             _fail(f"the production origin for {host} is unavailable")
         return _read_only_tool(_SITE_OBSERVATION, (origins["production"],))

@@ -569,6 +569,39 @@ class CompositionSeamTest(unittest.TestCase):
             self.assertEqual(reader.replaced_version("web-runtime-host"), VERSION)
         self.assertEqual(tool.call_count, 1)
 
+    def test_one_assembly_reads_each_tool_once(self):
+        # The module documents itself as one Worker read and one origin read.
+        # Without memoizing the origins, `version_url` and `observe` each
+        # launched their own subprocess and `observe` launched a second.
+        reader = self.composition._CloudflareReader("token", self.root / "state")
+        answers = {
+            "cloudflare_host.py": {"worker": "lab", "exists": True,
+                                   "deployment": {"version_id": VERSION}},
+            "cloudflare_deployment_evidence.py": {
+                "host": "web-runtime-host", "worker": WORKER,
+                "production": f"https://{WORKER}.lmdj.workers.dev",
+                "version": VERSION_URL},
+            "cloudflare_site_observation.py": observation(),
+        }
+        seen = []
+
+        def answer(tool, arguments, **kwargs):
+            seen.append(Path(tool).name)
+            return answers[Path(tool).name]
+
+        with mock.patch.object(self.composition, "_read_only_tool", answer):
+            reader.worker("web-runtime-host")
+            reader.replaced_version("web-runtime-host")
+            reader.version_url("web-runtime-host", VERSION)
+            reader.observe("web-runtime-host")
+        self.assertEqual(sorted(seen), [
+            "cloudflare_deployment_evidence.py",
+            "cloudflare_deployment_evidence.py",
+            "cloudflare_host.py",
+            "cloudflare_site_observation.py",
+        ], "why: one assembly launched more subprocesses than the reads it "
+           "documents; remedy: memoize each tool's answer per host and version")
+
     def test_an_unreadable_tool_reads_as_no_document(self):
         # Every live read fails closed into None, which each caller turns into
         # `pending` rather than into an assumption about production.
