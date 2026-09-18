@@ -467,6 +467,25 @@ class CompositionSeamTest(unittest.TestCase):
                          "the adapter, which creates it private; "
                          "remedy: create only its parent")
 
+    def test_a_link_planted_at_the_workspace_is_refused_not_chmodded(self):
+        # The path sits under an ignored directory, so anything that can write
+        # the worktree can plant a link here. `is_dir()` follows links, so
+        # chmodding what it finds would set 0700 on someone else's directory.
+        victim = self.root / "victim"
+        victim.mkdir()
+        victim.chmod(0o755)
+        state = self.root / "build/release" / TAG / "cloudflare-inspection"
+        state.parent.mkdir(parents=True)
+        state.symlink_to(victim)
+        reader = self.composition._CloudflareReader("token", state)
+        with self.assertRaises(JournalError) as raised:
+            reader.replaced_version("web-runtime-host")
+        self.assertIn("not a directory", str(raised.exception))
+        self.assertEqual(victim.stat().st_mode & 0o777, 0o755,
+                         "why: a planted link had its target chmodded, so this "
+                         "process changed permissions on a directory it does "
+                         "not own; remedy: lstat and refuse")
+
     def test_a_workspace_left_readable_is_made_private(self):
         state = self.root / "build/release/cloudflare-inspection"
         state.mkdir(parents=True)

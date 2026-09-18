@@ -21,6 +21,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -220,10 +221,24 @@ class _CloudflareReader:
                 # bits are set, so creating it here with the default mode
                 # would make every inspection fail.
                 self._state_root.parent.mkdir(parents=True, exist_ok=True)
-                if self._state_root.is_dir():
-                    os.chmod(self._state_root, 0o700)
+                # `lstat`, and a refusal rather than a chmod, because this path
+                # sits under an ignored directory anything that can write the
+                # worktree can write. `is_dir()` follows links, so a symlink
+                # planted here would have this process chmod someone else's
+                # directory to 0700.
+                mode = os.lstat(self._state_root).st_mode
+            except FileNotFoundError:
+                mode = None
             except OSError:
                 _fail("the Cloudflare inspection workspace is unavailable")
+            if mode is not None:
+                if not stat.S_ISDIR(mode):
+                    _fail("the Cloudflare inspection workspace is not a directory")
+                if mode & 0o077:
+                    try:
+                        os.chmod(self._state_root, 0o700)
+                    except OSError:
+                        _fail("the Cloudflare inspection workspace cannot be made private")
             self._inspected[host] = _read_only_tool(
                 _WORKER_INSPECT,
                 ("inspect", "--target", host, "--state-root", str(self._state_root)),
