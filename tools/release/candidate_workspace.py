@@ -13,7 +13,9 @@ from .orchestration import validate_request
 from .publication_workspace import PublicationWorkspace, PublicationWorkspaceError
 
 FILES = {"products/lmdj/version.json", "products/lmdj/assembly.json",
-         "products/lmdj/assembly.lock.json", "products/lmdj/src/compiled_assembly.cpp"}
+         "products/lmdj/assembly.lock.json", "products/lmdj/src/compiled_assembly.cpp",
+         "products/lmdj/generated/web-runtime-identity.json",
+         "products/lmdj/generated/web-runtime-identity.mjs"}
 
 
 def require(value, reason):
@@ -85,7 +87,7 @@ class CandidateSourceWorkspace(PublicationWorkspace):
             if observe and previous is None:
                 return dict(status="absent", source=None)
             generated = (self.material.observe if observe else self.material.prepare)(request, frozen, main_revision)
-            require(set(generated["files"]) == FILES, "material inventory is not the four source files")
+            require(set(generated["files"]) == FILES, "material inventory is not the six candidate files")
             # The generator may use another worktree; authenticate this object's
             # base too before constructing any checkout state.
             selected = {}
