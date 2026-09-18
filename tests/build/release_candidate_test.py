@@ -172,13 +172,39 @@ class ReservationTest(unittest.TestCase):
         (self.state / CATALOG).rename(self.state / "retained")
         with self.assertRaisesRegex(JournalError, "missing"):
             self.reserve()
-        with self.assertRaisesRegex(JournalError, "missing"):
+        # Enrollment refuses real retained state: the extra "retained" entry
+        # means this is not empty storage, so it never becomes an allocation.
+        with self.assertRaisesRegex(JournalError, "changed during enrollment"):
             self.reservations.enroll(self.request["repository"])
         self.assertFalse((self.state / CATALOG).exists())
 
-    def test_missing_catalogue_with_only_lock_is_not_new_enrollment(self):
-        (self.state / CATALOG).unlink()
-        with self.assertRaisesRegex(JournalError, "missing"):
+    def test_a_directory_holding_only_the_writer_lock_is_provisioned(self):
+        # The entry's #1489 per-level private creation plus earlier journal
+        # opens leave the directory present with just its writer lock; that
+        # is empty storage, not enrolled history, and enrollment provisions
+        # it. A missing CATALOG beside real state stays a refusal.
+        (self.state / "writer.lock").write_bytes(b"")
+        self.reservations.enroll(self.request["repository"])
+        self.assertTrue((self.state / CATALOG).exists())
+
+    def test_a_symlinked_catalogue_is_never_provisioned_over(self):
+        target = self.root / "outside-catalogue"
+        target.write_bytes(b"{}")
+        link = self.state / "catalogue-link"
+        link.symlink_to(target)
+        # The real catalogue name is the directory name itself; simulate a
+        # symlink planted at that name by swapping it in.
+        real = self.state / CATALOG
+        os.rename(real, self.state / "moved-catalogue")
+        os.rename(link, real)
+        with self.assertRaises(Exception):
+            self.reservations.enroll(self.request["repository"])
+        self.assertTrue(real.is_symlink())
+
+    def test_missing_catalogue_with_real_state_is_not_new_enrollment(self):
+        (self.state / CATALOG).rename(self.state / "retained")
+        with self.assertRaisesRegex(JournalError,
+                                    "changed during enrollment"):
             self.reservations.enroll(self.request["repository"])
 
     def test_unsafe_catalogue_is_not_read_or_replaced(self):
