@@ -44,6 +44,16 @@ Project I/O 写出绑定逐候选 SHA-256 的不可变 receipt，只有 append �
 后续 Pattern segment 缺少时间锚点时拒绝转换。cutoff 后 release 不伪造收尾时间，
 terminal 沿用普通 240-tick 默认完成。
 
+同一转换还有第二个入口 `project_admission_overlay`：它把进行中的 admission
+投影成"若此刻结束将贡献的 Pattern 事件"，供 Host 在录制未关闭时发布 pending
+overlay，使录进去的一遍在下一圈即可听见。该投影是纯读取——不改 journal、不推进
+watermark、不铸造 receipt identity，因此无论投影多少次，之后 close 提交的
+transfer 完全不变，提交仍恰好一次。它与 `build_admission_transfer` 共用同一段
+转换，录音听到的叠录与其提交所保留的必然一致。未激活、已完成、已封存的
+admission，以及尚待 switch 协调的候选前缀，都投影为空而非失败：这些都是在录
+状态的寻常情形，不得污染 transport engagement。候选为空时投影已转换的 pending
+tail，因此刚协调完的 segment 不会在两次 transfer 之间失声。
+
 内部 `PatternAdmissionOwner` 消费上述转换函数：closed prepare/activate、
 admission fence 之后才保留 post-enqueue 候选，fence 前、closure 后与 owner-loss
 输入保持 live-only。容量耗尽由 journal 在最后一槽原子关闭；fence-wait deadline
