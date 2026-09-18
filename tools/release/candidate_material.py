@@ -133,15 +133,24 @@ class CandidateBuildMaterial:
                 raise JournalError("why: canonical candidate material generation refused; remedy: retain the reservation and repair the original input or reconcile a new candidate, never bypass Assembly validation") from None
             # The identity generator reads a tree, so stage the reserved
             # four files into this disposable export first; it then derives
-            # the identity from exactly the reserved build state.
-            for name, raw in files.items():
-                (root / name).write_bytes(raw)
+            # the identity from exactly the reserved build state. The export
+            # is never read again after this block, so the staged files are
+            # always removed here: no failure path can leave a tree whose
+            # version.json is the reserved build beside a stale identity.
+            staged = []
             try:
+                for name, raw in files.items():
+                    path = root / name
+                    path.write_bytes(raw)
+                    staged.append(path)
                 files.update(self._runtime_identity(root))
             except JournalError:
                 raise
             except Exception:
                 raise JournalError("why: Runtime identity generation failed for the reserved build; remedy: restore the trusted tools/web-runtime/generate_runtime_identity.py and its canonical inputs, then rerun without reconciling the reservation") from None
+            finally:
+                for path in staged:
+                    path.unlink(missing_ok=True)
         self.inputs.verify(frozen, main_revision)
         require(lookup(request, frozen, main_revision) == reservation,
                 "reservation changed during generation")
