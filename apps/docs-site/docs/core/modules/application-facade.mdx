@@ -44,6 +44,27 @@ Project I/O 写出绑定逐候选 SHA-256 的不可变 receipt，只有 append �
 后续 Pattern segment 缺少时间锚点时拒绝转换。cutoff 后 release 不伪造收尾时间，
 terminal 沿用普通 240-tick 默认完成。
 
+同一转换还有第二个入口 `project_admission_overlay`：它把进行中的 admission
+投影成"若此刻结束将贡献的 Pattern 事件"，供 Host 在录制未关闭时发布 pending
+overlay，使录进去的一遍在下一圈即可听见。该投影是纯读取——不改 journal、不推进
+watermark、不铸造 receipt identity，因此无论投影多少次，之后 close 提交的
+transfer 完全不变，提交仍恰好一次。它与 `build_admission_transfer` 共用同一段
+转换，录音中听到的叠录与其提交所保留的必然一致。未激活、已完成、已封存的
+admission，以及尚待 switch 协调的候选前缀，都投影为空而非失败：这些都是在录
+状态的寻常情形，不得污染 transport engagement。投影为空绝不构成 admission 为空、
+已完成或可安全关闭的证据——其中若干状态在 `build_admission_transfer` 上是错误。
+候选为空时投影已转换的 pending tail，因此刚协调完的 segment 不会在两次 transfer
+之间失声。
+
+公共侧由 `PatternTransportController::project_overlay` 暴露该投影，Host 因此无需
+命名任何 Project I/O 类型即可取得要发布的事件。它沿用 `SequenceOverlayProjection`
+的 generation 去重形状：generation 只在内容变化时前进，按 generation 去重的 Host
+因而每次变化只发布一次。overlay 的身份是 (Pattern, events) 这一对——协调后的
+switch 可能把完全相同的事件带到另一个 Pattern 上，只看事件的 generation 会让
+Host 继续发布旧 Pattern 的 overlay。空投影只记录新绑定而不消耗 generation，
+尚无贡献的录音因此不花费一次发布。未在录制、close 尚未结算，以及候选前缀尚待
+switch 协调时返回空：cutoff 收据应用后候选集已冻结，下一次发布归 close 所有。
+
 内部 `PatternAdmissionOwner` 消费上述转换函数：closed prepare/activate、
 admission fence 之后才保留 post-enqueue 候选，fence 前、closure 后与 owner-loss
 输入保持 live-only。容量耗尽由 journal 在最后一槽原子关闭；fence-wait deadline

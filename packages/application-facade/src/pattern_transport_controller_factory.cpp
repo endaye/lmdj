@@ -121,6 +121,23 @@ foundation::Result<PatternAdmissionAdmit> PatternTransportController::admit(
           : PatternAdmissionAdmit::live_only);
 }
 
+foundation::Result<std::optional<PatternTransportOverlay>>
+PatternTransportController::project_overlay() {
+  auto projected = impl_->coordinator.project_overlay();
+  if (!projected.has_value()) {
+    return foundation::Result<std::optional<PatternTransportOverlay>>::failure(
+        projected.error());
+  }
+  if (!projected.value().has_value()) {
+    return foundation::Result<std::optional<PatternTransportOverlay>>::success(
+        std::nullopt);
+  }
+  return foundation::Result<std::optional<PatternTransportOverlay>>::success(
+      PatternTransportOverlay{std::move(projected.value()->pattern_id),
+                              projected.value()->generation,
+                              std::move(projected.value()->events)});
+}
+
 std::unique_ptr<PatternTransportController>
 detail::PatternTransportControllerInternalFactory::make(
     lmdj::facade::PatternTransportAudioPort& audio,

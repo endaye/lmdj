@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/domain/project.hpp>
@@ -89,6 +90,20 @@ struct PatternTransportCandidate {
   bool operator==(const PatternTransportCandidate&) const = default;
 };
 
+// What an open recording would contribute to its Pattern if it ended now, for
+// a Host to publish as a pending overlay so the pass just played is audible on
+// the next one (#1513). `pattern_id` is the Pattern the events belong to — the
+// one the admission validated its segment against, which the switch machinery
+// re-anchors — and a Host must publish against it, not against its own binding.
+// `generation` advances only when `events` changes, so a Host that publishes on
+// a new generation publishes once per change.
+struct PatternTransportOverlay {
+  foundation::PatternId pattern_id;
+  std::uint64_t generation{};
+  std::vector<domain::PatternEvent> events;
+  bool operator==(const PatternTransportOverlay&) const = default;
+};
+
 // Host-consumable Pattern transport controller: the public ownership wrapper
 // around the internal coordinator. The Facade compilation unit constructs and
 // self-owns the Sequence Journal and Project Store the coordinator needs, so
@@ -123,6 +138,14 @@ class PatternTransportController {
   // admission/cutoff interval. Same control-lane serialization as `request`.
   foundation::Result<PatternAdmissionAdmit> admit(
       const PatternTransportCandidate& candidate);
+  // Projects the open recording's pending overlay. Same control-lane
+  // serialization as `request`. It is a pure read of durable state: it mutates
+  // no journal and advances no watermark, so however often a Host publishes an
+  // overlay, the transfer the close commits is the same one and the commit
+  // stays exactly once. `std::nullopt` means there is nothing to publish now —
+  // no open recording, a frozen close, or a candidate prefix still awaiting
+  // switch reconciliation — and is never a failure of the recording.
+  foundation::Result<std::optional<PatternTransportOverlay>> project_overlay();
 
  private:
   struct Impl;
