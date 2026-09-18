@@ -134,10 +134,14 @@ class CandidateBuildMaterial:
             # The identity generator reads a tree, so stage the reserved
             # four files into this disposable export first; it then derives
             # the identity from exactly the reserved build state. The export
-            # is never read again after this block, so the staged files are
-            # always removed here: no failure path can leave a tree whose
-            # version.json is the reserved build beside a stale identity.
+            # is never read again after this block, and the finally below
+            # unlinks the staged files and any partial identity outputs on
+            # every path, so no failure leaves a tree whose version.json is
+            # the reserved build beside a stale identity.
             staged = []
+            identity_paths = tuple(root / name for name in (
+                "products/lmdj/generated/web-runtime-identity.json",
+                "products/lmdj/generated/web-runtime-identity.mjs"))
             try:
                 for name, raw in files.items():
                     path = root / name
@@ -149,7 +153,7 @@ class CandidateBuildMaterial:
             except Exception:
                 raise JournalError("why: Runtime identity generation failed for the reserved build; remedy: restore the trusted tools/web-runtime/generate_runtime_identity.py and its canonical inputs, then rerun without reconciling the reservation") from None
             finally:
-                for path in staged:
+                for path in (*staged, *identity_paths):
                     path.unlink(missing_ok=True)
         self.inputs.verify(frozen, main_revision)
         require(lookup(request, frozen, main_revision) == reservation,
