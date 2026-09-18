@@ -239,10 +239,18 @@ class _CloudflareReader:
                         os.chmod(self._state_root, 0o700)
                     except OSError:
                         _fail("the Cloudflare inspection workspace cannot be made private")
-            self._inspected[host] = _read_only_tool(
+            document = _read_only_tool(
                 _WORKER_INSPECT,
                 ("inspect", "--target", host, "--state-root", str(self._state_root)),
                 environment={"CLOUDFLARE_API_TOKEN": self._token})
+            if document is None:
+                # Not cached: `worker` and `replaced_version` share one read so
+                # the Worker identity and the version it holds come from one
+                # observation, but caching a failure would make a single
+                # timeout stick for the rest of the assembly and report
+                # `pending` after the tool would have answered.
+                return None
+            self._inspected[host] = document
         return self._inspected[host]
 
     def worker(self, host):

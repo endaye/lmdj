@@ -529,6 +529,30 @@ class CompositionSeamTest(unittest.TestCase):
                         "hung tool stalls the drive; "
                         "remedy: bound the duration and kill the child")
 
+    def test_a_failed_inspection_is_not_cached(self):
+        # One transient timeout must not make every later read in the same
+        # assembly return None and report `pending` after the tool would
+        # have answered.
+        answers = [None, {"worker": "lab", "exists": True,
+                          "deployment": {"version_id": VERSION}}]
+        reader = self.composition._CloudflareReader("token", self.root / "state")
+        with mock.patch.object(self.composition, "_read_only_tool",
+                               side_effect=answers):
+            self.assertIsNone(reader.replaced_version("web-runtime-host"))
+            self.assertEqual(reader.worker("web-runtime-host"), "lab")
+
+    def test_a_successful_inspection_is_read_once(self):
+        # The Worker identity and the version it holds must come from one
+        # observation, not two reads that could straddle a change.
+        reader = self.composition._CloudflareReader("token", self.root / "state")
+        with mock.patch.object(
+                self.composition, "_read_only_tool",
+                return_value={"worker": "lab", "exists": True,
+                              "deployment": {"version_id": VERSION}}) as tool:
+            self.assertEqual(reader.worker("web-runtime-host"), "lab")
+            self.assertEqual(reader.replaced_version("web-runtime-host"), VERSION)
+        self.assertEqual(tool.call_count, 1)
+
     def test_an_unreadable_tool_reads_as_no_document(self):
         # Every live read fails closed into None, which each caller turns into
         # `pending` rather than into an assumption about production.
