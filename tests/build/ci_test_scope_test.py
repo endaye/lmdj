@@ -2,6 +2,7 @@
 """Scope consistency gates; no mocks stand in for Git history operations."""
 import copy
 import json
+import random
 from pathlib import Path
 import subprocess
 import sys
@@ -401,6 +402,43 @@ class BoundedReasonsTests(unittest.TestCase):
             scope.bounded_reasons(reasons, budget=100)
         self.assertEqual(scope.bounded_reasons(reasons[:1], budget=100), reasons[:1],
                          "why: a fitting explanation was refused; remedy: check the budget only when bounding")
+
+    def test_result_is_within_budget_for_adversarial_inputs(self):
+        """The bound is what keeps the admit record under the journal limit, so it must
+        hold for every input, not only the shapes the scheduler happens to produce."""
+        notice_floor = self.encoded([scope.OMISSION.format(count=10 ** 9)])
+        random.seed(20260918)
+        checked = 0
+        for _ in range(600):
+            count = random.choice([1, 2, 3, 10, 200, 3000])
+            reasons = [f"{random.choice('abcxyz')} " + "q" * random.choice([1, 40, 300, 3000, 20000])
+                       for _ in range(count)]
+            budget = random.choice([notice_floor, notice_floor + 1, notice_floor + 50, 400, 2000, 16000])
+            bounded = scope.bounded_reasons(reasons, budget=budget)
+            self.assertLessEqual(self.encoded(bounded), budget,
+                                 f"why: bounded explanation exceeds its budget for {count} reasons at budget {budget}; "
+                                 "remedy: the result must be the last accepted candidate or the measured notice")
+            self.assertEqual(scope.bounded_reasons(bounded, budget=budget), bounded,
+                             "why: bound is not idempotent; remedy: a stored request must rebuild to itself")
+            checked += 1
+        self.assertEqual(checked, 600)
+
+    def test_a_single_reason_longer_than_the_budget_still_yields_a_bounded_notice(self):
+        bounded = scope.bounded_reasons(["overlong " + "q" * 50000], budget=2000)
+        self.assertLessEqual(self.encoded(bounded), 2000)
+        self.assertEqual(len(bounded), 1)
+        self.assertTrue(bounded[0].startswith(scope.OMISSION_MARKER))
+
+    def test_a_real_reason_starting_with_the_marker_is_kept_and_round_trips(self):
+        """The marker labels the notice; it is not a reserved namespace, and nothing
+        matches reasons by prefix, so a colliding real reason must behave normally."""
+        genuine = scope.OMISSION_MARKER + " a genuine reason that happens to start this way"
+        reasons = [genuine] + [f"why: real reason {i:04d} {'x' * 120}; remedy: fix" for i in range(300)]
+        bounded = scope.bounded_reasons(reasons, budget=2000)
+        self.assertIn(genuine, bounded, "why: a real reason was dropped for its prefix; remedy: never match reasons by prefix")
+        self.assertEqual(len([r for r in bounded if r.startswith(scope.OMISSION_MARKER)]), 2)
+        self.assertEqual(scope.bounded_reasons(bounded, budget=2000), bounded,
+                         "why: a colliding reason broke idempotence; remedy: the bound must not inspect prefixes")
 
     def test_validating_a_stored_request_never_rewrites_it(self):
         """Defect: bounding inside the validation rebuild made replay reject its own history.

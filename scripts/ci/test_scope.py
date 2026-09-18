@@ -159,9 +159,12 @@ def bounded_reasons(reasons, budget=REASON_BUDGET):
     _selection collapses them. The kept reasons stay in canonical order until
     the next one would no longer fit beside a single counted omission notice,
     and that notice then stands for the rest. The notice carries its own
-    marker so it can never be confused with a real reason, which may itself
-    begin with "why:". Applying the bound to its own output changes nothing,
-    so a stored request rebuilds to itself and journal replay stays exact.
+    marker so a reader can tell it apart from a real reason, which may itself
+    begin with "why:". No reason is ever matched by prefix here: the marker is
+    a label, not a reserved namespace, so a genuine reason beginning with it is
+    kept and counted like any other. Applying the bound to its own output
+    changes nothing, because that output is already within budget, so a stored
+    request rebuilds to itself and journal replay stays exact.
     """
     ordered = sorted(set(reasons))
     if _encoded_size(ordered) <= budget:
@@ -175,6 +178,12 @@ def bounded_reasons(reasons, budget=REASON_BUDGET):
         if _encoded_size(candidate) > budget:
             break
         kept.append(reason)
+    # The returned list is exactly the last accepted candidate: accepting a
+    # reason takes kept from k to k+1 and lowers the notice count by one, which
+    # is what this expression rebuilds. When nothing was accepted it is the
+    # notice-only list the require above already measured. So the result is
+    # within budget for every input, including one reason longer than the
+    # budget itself; ci_test_scope_test asserts that over adversarial inputs.
     return sorted([*kept, OMISSION.format(count=len(ordered) - len(kept))])
 
 
