@@ -187,6 +187,20 @@ class ReservationTest(unittest.TestCase):
         self.reservations.enroll(self.request["repository"])
         self.assertTrue((self.state / CATALOG).exists())
 
+    def test_a_symlinked_catalogue_is_never_provisioned_over(self):
+        target = self.root / "outside-catalogue"
+        target.write_bytes(b"{}")
+        link = self.state / "catalogue-link"
+        link.symlink_to(target)
+        # The real catalogue name is the directory name itself; simulate a
+        # symlink planted at that name by swapping it in.
+        real = self.state / CATALOG
+        os.rename(real, self.state / "moved-catalogue")
+        os.rename(link, real)
+        with self.assertRaises(Exception):
+            self.reservations.enroll(self.request["repository"])
+        self.assertTrue(real.is_symlink())
+
     def test_missing_catalogue_with_real_state_is_not_new_enrollment(self):
         (self.state / CATALOG).rename(self.state / "retained")
         with self.assertRaisesRegex(JournalError,
