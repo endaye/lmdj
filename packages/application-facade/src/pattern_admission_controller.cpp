@@ -11,10 +11,13 @@ namespace {
 using Transfer = project_io::SequenceAdmissionTransfer;
 using TransferResult = foundation::Result<Transfer>;
 
-TransferResult conversion_error(const char* reason) {
-  return TransferResult::failure({foundation::ErrorCode::invalid_argument,
+foundation::Error conversion_failure(const char* reason) {
+  return {foundation::ErrorCode::invalid_argument,
       "Pattern admission conversion is unresolved",
-      {{"reason", reason}, {"journal_retained", true}}});
+      {{"reason", reason}, {"journal_retained", true}}};
+}
+TransferResult conversion_error(const char* reason) {
+  return TransferResult::failure(conversion_failure(reason));
 }
 foundation::Result<void> owner_error(const char* reason) {
   return foundation::Result<void>::failure(conversion_error(reason).error());
@@ -48,6 +51,140 @@ std::optional<std::uint64_t> last_retained_watermark(
   }
   return std::nullopt;
 }
+
+// Conversion authority for one durable admission: the publication segment its
+// candidates convert against, a later retained switch they must not cross, and
+// the checkpoint the previous transfer left behind. Shared so a retained
+// transfer and a live projection can never resolve a different segment.
+struct AdmissionSegment {
+  project_io::SequencePublicationAuthority segment;
+  std::optional<project_io::SequencePublicationAuthority> pending;
+  project_io::SequenceAdmissionCheckpoint checkpoint;
+};
+
+foundation::Result<AdmissionSegment> resolve_admission_segment(
+    const project_io::ActiveSequenceJournal& journal) {
+  using namespace project_io;
+  using Resolved = foundation::Result<AdmissionSegment>;
+  const auto& admission = *journal.admission;
+  if (!admission.admission_fence || admission.completed ||
+      (!admission.transfers.empty() && admission.transfers.back().terminal) ||
+      (journal.state != SequenceSessionState::active &&
+       journal.state != SequenceSessionState::switching)) {
+    return Resolved::failure(conversion_failure("admission_fence_unresolved"));
+  }
+  const auto& fence = *admission.admission_fence;
+  SequencePublicationAuthority segment{
+      admission.preparation.pattern_id, admission.preparation.publication_generation,
+      fence.effective_frame};
+  std::optional<SequencePublicationAuthority> pending;
+  for (const auto& authority : admission.applied_switches) {
+    if (authority.generation == admission.segment_generation) segment = authority;
+    if (authority.generation > admission.segment_generation) pending = authority;
+  }
+  if (admission.cutoff_fence && admission.cutoff_fence->switch_outcome ==
+          SequenceSwitchOutcome::applied_before_cutoff) {
+    const auto& cutoff = *admission.cutoff_fence;
+    if (!cutoff.switch_authority || !cutoff.switch_applied_frame) {
+      return Resolved::failure(conversion_failure("switch_authority_missing"));
+    }
+    const SequencePublicationAuthority authority{cutoff.switch_authority->pattern_id,
+        cutoff.switch_authority->generation, *cutoff.switch_applied_frame};
+    if (authority.generation == admission.segment_generation) segment = authority;
+    if (authority.generation > admission.segment_generation) pending = authority;
+  }
+  if (segment.generation != admission.segment_generation ||
+      segment.pattern_id != journal.pattern_id) {
+    return Resolved::failure(conversion_failure("segment_authority_missing"));
+  }
+  SequenceAdmissionCheckpoint checkpoint{
+      segment.pattern_id, segment.generation, segment.frame, {}};
+  if (!admission.transfers.empty() &&
+      admission.transfers.back().checkpoint.publication_generation == segment.generation) {
+    checkpoint = admission.transfers.back().checkpoint;
+  }
+  return Resolved::success(
+      AdmissionSegment{segment, pending, std::move(checkpoint)});
+}
+
+// The single candidate-to-event conversion. Pure: it reads the journal and
+// mutates nothing, so the retained transfer and the live projection cannot
+// compute different overlays from the same durable state.
+struct AdmissionConversion {
+  std::vector<domain::PatternEvent> events;
+  std::map<domain::PadSlotId, PatternOwnedPress> pressed;
+  std::vector<project_io::SequenceCandidateReceipt> receipts;
+  std::uint64_t last_runtime_frame{};
+  bool changed{};
+};
+
+foundation::Result<AdmissionConversion> convert_admission_candidates(
+    const project_io::ActiveSequenceJournal& journal,
+    const AdmissionSegment& resolved,
+    std::span<const project_io::SequenceAdmissionCandidate> candidates) {
+  using namespace project_io;
+  using Converted = foundation::Result<AdmissionConversion>;
+  const auto& admission = *journal.admission;
+  const auto& fence = *admission.admission_fence;
+  const auto& segment = resolved.segment;
+  const auto& pending = resolved.pending;
+  AdmissionConversion state{journal.pending_events, {}, {},
+      resolved.checkpoint.last_runtime_frame, false};
+  for (const auto& press : resolved.checkpoint.owned_presses) {
+    state.pressed.emplace(press.slot, PatternOwnedPress{
+        press.raw_attack_tick, press.onset_tick, press.velocity, press.press_sequence});
+  }
+  std::uint64_t overlay_generation = 0;
+  std::optional<std::uint64_t> previous_frame;
+  for (const auto& candidate : candidates) {
+    state.receipts.push_back(sequence_admission_candidate_receipt(candidate));
+    if (previous_frame && candidate.runtime_frame < *previous_frame) {
+      return Converted::failure(conversion_failure("candidate_frame_regressed"));
+    }
+    previous_frame = candidate.runtime_frame;
+    // Target-side candidates await the ordinary journal switch at its retained
+    // audio boundary. They must not disappear as an excluded source prefix.
+    if (pending && candidate.runtime_frame >= pending->frame) {
+      return Converted::failure(
+          conversion_failure("switch_prefix_requires_reconciliation"));
+    }
+    if (candidate.runtime_frame < segment.frame ||
+        (admission.cutoff_fence &&
+         candidate.runtime_frame >= admission.cutoff_fence->effective_frame)) continue;
+    if (candidate.runtime_frame < state.last_runtime_frame) {
+      return Converted::failure(conversion_failure("candidate_frame_regressed"));
+    }
+    const SequenceAdmissionTimingProfile* profile = nullptr;
+    for (const auto& item : admission.timing_profiles) {
+      if (item.first_watermark <= candidate.watermark &&
+          item.publication_generation == segment.generation) profile = &item;
+    }
+    audio::TransportAnchor anchor{fence.origin_frame, 0, fence.bpm};
+    if (profile) {
+      anchor = {profile->runtime_frame, profile->tick_numerator, profile->bpm};
+    } else if (segment.generation != admission.preparation.publication_generation) {
+      if (!admission.cutoff_fence) {
+        return Converted::failure(
+            conversion_failure("segment_timing_profile_missing"));
+      }
+      anchor = {segment.frame, 0, admission.cutoff_fence->bpm};
+    }
+    const auto ticks = audio::raw_tick_at(anchor, candidate.runtime_frame);
+    if (!ticks.has_value()) return Converted::failure(ticks.error());
+    PatternEventReducer reducer{journal.bars,
+        profile ? profile->quantize_enabled : admission.preparation.quantize_enabled,
+        profile ? profile->swing_percent : admission.preparation.swing_percent,
+        overlay_generation, state.events, state.pressed};
+    if (candidate.kind == SequenceCandidateKind::press) {
+      reducer.press(candidate.slot, ticks.value(), candidate.velocity, candidate.press_sequence);
+    } else if (!reducer.release(candidate.slot, ticks.value(), candidate.press_sequence)) {
+      continue;  // Pre-admission or superseded live press: never invent a journal press.
+    }
+    state.changed = true;
+    state.last_runtime_frame = candidate.runtime_frame;
+  }
+  return Converted::success(std::move(state));
+}
 }  // namespace
 
 foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transfer(
@@ -66,52 +203,14 @@ foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transf
       return TransferResult::success(retained);
     }
   }
-  if (!admission.admission_fence || admission.completed ||
-      (!admission.transfers.empty() && admission.transfers.back().terminal) ||
-      (journal.state != SequenceSessionState::active &&
-       journal.state != SequenceSessionState::switching)) {
-    return conversion_error("admission_fence_unresolved");
-  }
-  const auto& fence = *admission.admission_fence;
-  SequencePublicationAuthority segment{
-      admission.preparation.pattern_id, admission.preparation.publication_generation,
-      fence.effective_frame};
-  std::optional<SequencePublicationAuthority> pending;
-  for (const auto& authority : admission.applied_switches) {
-    if (authority.generation == admission.segment_generation) segment = authority;
-    if (authority.generation > admission.segment_generation) pending = authority;
-  }
-  if (admission.cutoff_fence && admission.cutoff_fence->switch_outcome ==
-          SequenceSwitchOutcome::applied_before_cutoff) {
-    const auto& cutoff = *admission.cutoff_fence;
-    if (!cutoff.switch_authority || !cutoff.switch_applied_frame) {
-      return conversion_error("switch_authority_missing");
-    }
-    const SequencePublicationAuthority authority{cutoff.switch_authority->pattern_id,
-        cutoff.switch_authority->generation, *cutoff.switch_applied_frame};
-    if (authority.generation == admission.segment_generation) segment = authority;
-    if (authority.generation > admission.segment_generation) pending = authority;
-  }
-  if (segment.generation != admission.segment_generation ||
-      segment.pattern_id != journal.pattern_id) {
-    return conversion_error("segment_authority_missing");
-  }
-  SequenceAdmissionCheckpoint checkpoint{
-      segment.pattern_id, segment.generation, segment.frame, {}};
-  if (!admission.transfers.empty() &&
-      admission.transfers.back().checkpoint.publication_generation == segment.generation) {
-    checkpoint = admission.transfers.back().checkpoint;
-  }
+  auto resolved = resolve_admission_segment(journal);
+  if (!resolved.has_value()) return TransferResult::failure(resolved.error());
+  const auto& pending = resolved.value().pending;
+  auto checkpoint = resolved.value().checkpoint;
   const auto previous_checkpoint = checkpoint;
-  auto events = journal.pending_events;
-  std::map<domain::PadSlotId, PatternOwnedPress> pressed;
-  for (const auto& press : checkpoint.owned_presses) {
-    pressed.emplace(press.slot, PatternOwnedPress{
-        press.raw_attack_tick, press.onset_tick, press.velocity, press.press_sequence});
-  }
-  std::uint64_t overlay_generation = 0;
   Transfer result{transfer_id, terminal, 0, 0, sequence_admission_candidates_sha256({}),
-      {}, journal.pattern_id, journal.expected_revision, {}, events, checkpoint};
+      {}, journal.pattern_id, journal.expected_revision, {},
+      journal.pending_events, checkpoint};
   if (terminal) {
     if (last_watermark != 0 || !admission.closure || !admission.cutoff_fence ||
         !admission.candidates.empty() || pending ||
@@ -119,10 +218,13 @@ foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transf
         checkpoint.last_runtime_frame > admission.cutoff_fence->effective_frame) {
       return conversion_error("terminal_authority_unresolved");
     }
+    auto converted = convert_admission_candidates(journal, resolved.value(), {});
+    if (!converted.has_value()) return TransferResult::failure(converted.error());
+    std::uint64_t overlay_generation = 0;
     PatternEventReducer reducer{journal.bars, false, 50,
-        overlay_generation, events, pressed};
+        overlay_generation, converted.value().events, converted.value().pressed};
     reducer.finalize_unreleased(true);
-    result.recoverable_tail = std::move(events);
+    result.recoverable_tail = std::move(converted.value().events);
     result.checkpoint.owned_presses.clear();
     result.checkpoint.last_runtime_frame = admission.cutoff_fence->effective_frame;
     return TransferResult::success(std::move(result));
@@ -140,63 +242,21 @@ foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transf
   result.first_watermark = prefix.front().watermark;
   result.last_watermark = last_watermark;
   result.candidates_sha256 = sequence_admission_candidates_sha256(prefix);
-  bool changed = false;
-  std::optional<std::uint64_t> previous_frame;
-  for (const auto& candidate : prefix) {
-    result.candidate_receipts.push_back(sequence_admission_candidate_receipt(candidate));
-    if (previous_frame && candidate.runtime_frame < *previous_frame) {
-      return conversion_error("candidate_frame_regressed");
-    }
-    previous_frame = candidate.runtime_frame;
-    // Target-side candidates await the ordinary journal switch at its retained
-    // audio boundary. They must not disappear as an excluded source prefix.
-    if (pending && candidate.runtime_frame >= pending->frame) {
-      return conversion_error("switch_prefix_requires_reconciliation");
-    }
-    if (candidate.runtime_frame < segment.frame ||
-        (admission.cutoff_fence &&
-         candidate.runtime_frame >= admission.cutoff_fence->effective_frame)) continue;
-    if (candidate.runtime_frame < checkpoint.last_runtime_frame) {
-      return conversion_error("candidate_frame_regressed");
-    }
-    const SequenceAdmissionTimingProfile* profile = nullptr;
-    for (const auto& item : admission.timing_profiles) {
-      if (item.first_watermark <= candidate.watermark &&
-          item.publication_generation == segment.generation) profile = &item;
-    }
-    audio::TransportAnchor anchor{fence.origin_frame, 0, fence.bpm};
-    if (profile) {
-      anchor = {profile->runtime_frame, profile->tick_numerator, profile->bpm};
-    } else if (segment.generation != admission.preparation.publication_generation) {
-      if (!admission.cutoff_fence) {
-        return conversion_error("segment_timing_profile_missing");
-      }
-      anchor = {segment.frame, 0, admission.cutoff_fence->bpm};
-    }
-    const auto ticks = audio::raw_tick_at(anchor, candidate.runtime_frame);
-    if (!ticks.has_value()) return TransferResult::failure(ticks.error());
-    PatternEventReducer reducer{journal.bars,
-        profile ? profile->quantize_enabled : admission.preparation.quantize_enabled,
-        profile ? profile->swing_percent : admission.preparation.swing_percent,
-        overlay_generation, events, pressed};
-    if (candidate.kind == SequenceCandidateKind::press) {
-      reducer.press(candidate.slot, ticks.value(), candidate.velocity, candidate.press_sequence);
-    } else if (!reducer.release(candidate.slot, ticks.value(), candidate.press_sequence)) {
-      continue;  // Pre-admission or superseded live press: never invent a journal press.
-    }
-    changed = true;
-    checkpoint.last_runtime_frame = candidate.runtime_frame;
-  }
-  if (changed) {
+  auto converted = convert_admission_candidates(journal, resolved.value(), prefix);
+  if (!converted.has_value()) return TransferResult::failure(converted.error());
+  result.candidate_receipts = std::move(converted.value().receipts);
+  if (converted.value().changed) {
     if (journal.last_input_sequence == std::numeric_limits<std::uint64_t>::max()) {
       return conversion_error("journal_input_sequence_exhausted");
     }
     result.journal_input_sequence = journal.last_input_sequence.value_or(0) + 1;
+    std::uint64_t overlay_generation = 0;
     PatternEventReducer reducer{journal.bars, false, 50,
-        overlay_generation, events, pressed};
+        overlay_generation, converted.value().events, converted.value().pressed};
     result.recoverable_tail = reducer.recoverable_tail();
+    checkpoint.last_runtime_frame = converted.value().last_runtime_frame;
     checkpoint.owned_presses.clear();
-    for (const auto& [slot, press] : pressed) {
+    for (const auto& [slot, press] : converted.value().pressed) {
       checkpoint.owned_presses.push_back({slot, *press.correlation,
           press.raw_attack_tick, press.onset_tick, press.velocity});
     }
@@ -205,6 +265,46 @@ foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transf
     result.checkpoint = previous_checkpoint;
   }
   return TransferResult::success(std::move(result));
+}
+
+foundation::Result<std::optional<std::vector<domain::PatternEvent>>>
+project_admission_overlay(const project_io::ActiveSequenceJournal& journal) {
+  using namespace project_io;
+  using Projection =
+      foundation::Result<std::optional<std::vector<domain::PatternEvent>>>;
+  // States a live recording passes through that simply have nothing to show:
+  // no admission at all, one not yet activated or already sealed, a journal
+  // whose owner is gone, or more candidates than the bounded admission admits.
+  // None of these is a conversion failure and none may poison a coordinator.
+  if (!journal.admission) return Projection::success(std::nullopt);
+  const auto& admission = *journal.admission;
+  if (!admission.admission_fence || admission.completed ||
+      (!admission.transfers.empty() && admission.transfers.back().terminal) ||
+      (journal.state != SequenceSessionState::active &&
+       journal.state != SequenceSessionState::switching) ||
+      admission.candidates.size() > kSequenceAdmissionMaxCandidates) {
+    return Projection::success(std::nullopt);
+  }
+  auto resolved = resolve_admission_segment(journal);
+  if (!resolved.has_value()) return Projection::failure(resolved.error());
+  // A candidate at or after a retained switch awaits the ordinary journal
+  // switch at its audio boundary. Until that reconciles this segment may claim
+  // nothing, which is a live state rather than the conversion failure the
+  // transfer builder reports for the same durable shape.
+  if (resolved.value().pending) {
+    for (const auto& candidate : admission.candidates) {
+      if (candidate.runtime_frame >= resolved.value().pending->frame) {
+        return Projection::success(std::nullopt);
+      }
+    }
+  }
+  auto converted =
+      convert_admission_candidates(journal, resolved.value(), admission.candidates);
+  if (!converted.has_value()) return Projection::failure(converted.error());
+  std::uint64_t overlay_generation = 0;
+  PatternEventReducer reducer{journal.bars, false, 50,
+      overlay_generation, converted.value().events, converted.value().pressed};
+  return Projection::success(reducer.recoverable_tail());
 }
 
 foundation::Result<project_io::SequenceAdmissionTransfer> commit_admission_transfer(

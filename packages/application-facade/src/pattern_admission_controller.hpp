@@ -25,6 +25,17 @@ foundation::Result<project_io::SequenceAdmissionTransfer> commit_admission_trans
     const project_io::SequenceAdmissionIdentity& identity,
     foundation::CommandId transfer_id, std::uint64_t last_watermark, bool terminal);
 
+// Projects the events an open admission would contribute if it ended now,
+// through the same conversion `build_admission_transfer` commits. Pure: it
+// reads the durable journal, mutates nothing, advances no watermark and mints
+// no receipt identity, so calling it cannot consume what a later close
+// transfers. `std::nullopt` is an ordinary live state with nothing to show
+// yet — no admission, one not yet activated or already sealed, an owner-lost
+// journal, or candidates awaiting an unreconciled switch. A genuine
+// authority, timing or arithmetic failure is still reported as an error.
+foundation::Result<std::optional<std::vector<domain::PatternEvent>>>
+project_admission_overlay(const project_io::ActiveSequenceJournal& journal);
+
 enum class PatternAdmissionAdmit : std::uint8_t { retained, live_only };
 
 // Prepared admission owner: closed prepare/activate, post-enqueue candidates,
