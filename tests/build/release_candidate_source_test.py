@@ -68,9 +68,12 @@ class SourceProjectionTest(SourceFixture):
         # callback re-proves the request the way the production post-drive
         # path does, while verifying proceeds outside any drive.
         proven = []
-        def post_drive_authorize(scope):
-            proven.append(deepcopy(scope))
         original = self.cut.snapshot.authorize
+        def post_drive_authorize(scope):
+            # Run the real production callback first, then record the scope;
+            # a wrapper (not a stub) keeps the drive-time contract exercised.
+            original(scope)
+            proven.append(deepcopy(scope))
         self.cut.snapshot.authorize = post_drive_authorize
         try:
             doc = "docs/plans/fixture.md"

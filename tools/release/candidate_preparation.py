@@ -131,8 +131,12 @@ class CandidatePreparation:
         # re-proves the same authority without a drive session: this context
         # performs no writes and the durable receipts it authenticates were
         # checkpointed under the drive's own writer.
+        try:
+            self.authorize(deepcopy(self.request))
+            main = self._main()
+        except Exception:
+            raise CandidatePreparationError("why: candidate preparation authority or main is unavailable; remedy: restore the original trusted grant without exposing callback output or replaying effects") from None
         frozen = self.material.inputs.freeze(self.request["base_revision"])
-        main = self._main()
         self.setup.repository.git("merge-base", "--is-ancestor", self.request["base_revision"], main)
         self.material.inputs.verify(frozen, main)
 
