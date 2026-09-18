@@ -7,8 +7,11 @@ be audible on the next one without leaving Record. L0
 ([#1523](https://github.com/endaye/lmdj/pull/1523)) shared the converter and L1
 ([#1527](https://github.com/endaye/lmdj/pull/1527)) exposed the projection. L2
 was to have the Host publish that projection on the control cadence, and that
-is where the plan's declared invariant — "a retired generation keeps its
-existing authority" — turned out to be unsettled rather than merely unstated.
+is where #1513's own acceptance item — "a pending Pattern switch, a cutoff
+fence and a retired generation each keep their existing authority" — turned out
+to be unsettled rather than merely unstated. The plan restated the switch and
+cutoff halves of that item as L2 invariants and carried the retired-generation
+half no further than the issue's wording.
 
 The issue said these rules "need a bounded design before implementation. Do not
 settle those inside an unrelated Task." This is that design. It settles the
@@ -18,12 +21,15 @@ so that no implementation Task quietly picks one.
 ## The defect, verified
 
 Source audit at `ccf6d375`, reproduced by an L2 working tree whose Host
-publishes the projection each control tick. Record-off then fails:
+publishes the projection each control tick. Record-off then fails in
+`switches_valid`, in `packages/project-io/src/sequence_admission_codec.cpp`:
 
 ```
 cutoff does not match last applied publication
-  packages/project-io/src/sequence_admission_codec.cpp:533
 ```
+
+Citations here name functions and refusal messages rather than line numbers,
+which drift as soon as the file changes; grep the message to find the check.
 
 For a cutoff with no switch, `switches_valid` requires the cutoff fence to name
 the admission's last applied publication authority:
