@@ -117,6 +117,9 @@ void cutoff_excludes_orphans_and_uses_ordinary_terminal_completion() {
   LMDJ_CHECK(transfer.value().recoverable_tail ==
       std::vector<PatternEvent>({{{0, 1}, 960, 240, 95}}));
   LMDJ_CHECK(transfer.value().checkpoint.owned_presses.size() == 1);
+  // The last converted candidate is followed by one the cutoff excludes, so
+  // the checkpoint must carry the converted frame and not the excluded one.
+  LMDJ_CHECK(transfer.value().checkpoint.last_runtime_frame == 25000);
   journal.admission->transfers.push_back(transfer.value());
   journal.admission->candidates.clear();
   journal.pending_events = transfer.value().recoverable_tail;
@@ -202,6 +205,118 @@ void switch_target_input_requires_reconciliation_and_its_own_clock() {
     LMDJ_CHECK(transferred.value().checkpoint.publication_generation == 22);
     LMDJ_CHECK(transferred.value().journal_input_sequence == 2);
   }
+}
+
+void projection_equals_the_tail_the_transfer_would_commit() {
+  using namespace lmdj;
+  using namespace project_io;
+  const auto journal = retained_fixture();
+  const auto transfer = facade::detail::build_admission_transfer(
+      journal, foundation::CommandId{uuid(6)}, 11, false);
+  LMDJ_CHECK(transfer.has_value());
+  const auto projection = facade::detail::project_admission_overlay(journal);
+  LMDJ_CHECK(projection.has_value() && projection.value().has_value());
+  LMDJ_CHECK(*projection.value() == transfer.value().recoverable_tail);
+}
+
+void projection_preserves_the_retained_clock_and_quantization() {
+  using namespace lmdj;
+  using namespace project_io;
+  auto journal = retained_fixture();
+  journal.admission->timing_profiles.push_back({foundation::CommandId{uuid(8)},
+      12, journal.pattern_id, 21, 0, 37000, 4'147'200'000, 60, true, 60});
+  journal.admission->candidates.push_back(
+      {12, 43000, {0, 3}, SequenceCandidateKind::press, 99, 88});
+  journal.admission->candidates.push_back(
+      {13, 49000, {0, 3}, SequenceCandidateKind::release, 0, 88});
+  const auto transfer = facade::detail::build_admission_transfer(
+      journal, foundation::CommandId{uuid(6)}, 13, false);
+  LMDJ_CHECK(transfer.has_value());
+  const auto projection = facade::detail::project_admission_overlay(journal);
+  LMDJ_CHECK(projection.has_value() && projection.value().has_value());
+  LMDJ_CHECK(*projection.value() == transfer.value().recoverable_tail);
+}
+
+void projection_holds_a_press_at_a_sixteenth_until_its_release_lands() {
+  using namespace lmdj;
+  using namespace project_io;
+  auto journal = retained_fixture();
+  journal.admission->candidates.pop_back();  // press retained, release not yet
+  const auto held = facade::detail::project_admission_overlay(journal);
+  LMDJ_CHECK(held.has_value() && held.value().has_value());
+  LMDJ_CHECK(*held.value() == std::vector<PatternEvent>(
+      {{{0, 1}, 960, domain::kSixteenthTicks, 90}}));
+  journal.admission->candidates.push_back(
+      {11, 37000, {0, 1}, SequenceCandidateKind::release, 0, 72});
+  const auto released = facade::detail::project_admission_overlay(journal);
+  LMDJ_CHECK(released.has_value() && released.value().has_value());
+  LMDJ_CHECK(*released.value() == std::vector<PatternEvent>({{{0, 1}, 960, 480, 90}}));
+}
+
+void projection_excludes_pre_fence_and_post_cutoff_candidates() {
+  using namespace lmdj;
+  using namespace project_io;
+  auto journal = retained_fixture();
+  journal.admission->candidates = {
+      {10, 12000, {0, 1}, SequenceCandidateKind::press, 90, 60},
+      {11, 14000, {0, 1}, SequenceCandidateKind::release, 0, 60},
+      {12, 25000, {0, 1}, SequenceCandidateKind::press, 95, 72},
+      {13, 31000, {0, 1}, SequenceCandidateKind::release, 0, 72}};
+  journal.admission->closure = SequenceAdmissionClosure{13, SequenceAdmissionCloseReason::capacity};
+  auto cutoff = *journal.admission->admission_fence;
+  cutoff.kind = SequenceFenceKind::cutoff;
+  cutoff.command_id = foundation::CommandId{uuid(7)};
+  cutoff.transport_epoch = 12;
+  cutoff.effective_frame = 30000;
+  journal.admission->cutoff_fence = cutoff;
+  const auto transfer = facade::detail::build_admission_transfer(
+      journal, foundation::CommandId{uuid(6)}, 13, false);
+  LMDJ_CHECK(transfer.has_value());
+  const auto projection = facade::detail::project_admission_overlay(journal);
+  LMDJ_CHECK(projection.has_value() && projection.value().has_value());
+  // The pre-fence press at 12000 and the post-cutoff release at 31000 are
+  // absent from both, so the surviving press is still held at a sixteenth.
+  LMDJ_CHECK(*projection.value() == transfer.value().recoverable_tail);
+  LMDJ_CHECK(*projection.value() == std::vector<PatternEvent>(
+      {{{0, 1}, 960, domain::kSixteenthTicks, 95}}));
+}
+
+void projection_shows_nothing_while_a_switch_awaits_reconciliation() {
+  using namespace lmdj;
+  using namespace project_io;
+  auto journal = retained_fixture();
+  journal.admission->applied_switches.push_back(
+      {foundation::PatternId{uuid(9)}, 22, 28000});
+  // The transfer builder refuses the same durable shape; the projection
+  // reports an ordinary live state instead of poisoning its caller.
+  LMDJ_CHECK(!facade::detail::build_admission_transfer(
+      journal, foundation::CommandId{uuid(6)}, 11, false).has_value());
+  const auto projection = facade::detail::project_admission_overlay(journal);
+  LMDJ_CHECK(projection.has_value() && !projection.value().has_value());
+}
+
+void projection_shows_nothing_before_activation_or_after_sealing() {
+  using namespace lmdj;
+  using namespace project_io;
+  auto unactivated = retained_fixture();
+  unactivated.admission->admission_fence.reset();
+  const auto before = facade::detail::project_admission_overlay(unactivated);
+  LMDJ_CHECK(before.has_value() && !before.value().has_value());
+
+  auto lost = retained_fixture();
+  lost.state = SequenceSessionState::owner_lost;
+  const auto gone = facade::detail::project_admission_overlay(lost);
+  LMDJ_CHECK(gone.has_value() && !gone.value().has_value());
+
+  auto completed = retained_fixture();
+  completed.admission->completed = true;
+  const auto sealed = facade::detail::project_admission_overlay(completed);
+  LMDJ_CHECK(sealed.has_value() && !sealed.value().has_value());
+
+  ActiveSequenceJournal absent = retained_fixture();
+  absent.admission.reset();
+  const auto none = facade::detail::project_admission_overlay(absent);
+  LMDJ_CHECK(none.has_value() && !none.value().has_value());
 }
 
 struct State {
@@ -698,6 +813,12 @@ int main() {
     conversion_retry_returns_the_retained_identity_without_new_input();
     excluded_prefix_preserves_the_checkpoint_and_input_sequence();
     switch_target_input_requires_reconciliation_and_its_own_clock();
+    projection_equals_the_tail_the_transfer_would_commit();
+    projection_preserves_the_retained_clock_and_quantization();
+    projection_holds_a_press_at_a_sixteenth_until_its_release_lands();
+    projection_excludes_pre_fence_and_post_cutoff_candidates();
+    projection_shows_nothing_while_a_switch_awaits_reconciliation();
+    projection_shows_nothing_before_activation_or_after_sealing();
     acknowledged_origin_preserves_mid_loop_phase();
     release_requires_the_owned_correlation();
     retrigger_and_terminal_completion_keep_existing_rules();
@@ -714,7 +835,7 @@ int main() {
     prepared_owner_closes_at_deadline_before_the_next_candidate();
     prepared_owner_reports_an_uncertain_suffix_on_storage_failure();
     prepared_owner_surfaces_a_failed_storage_failure_close();
-    std::cout << "pattern admission tests: PASS (23 scenarios)\n";
+    std::cout << "pattern admission tests: PASS (29 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
