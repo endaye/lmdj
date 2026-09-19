@@ -17,6 +17,9 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(Path(__file__).parent))
+import release_fixture_interpreter as interpreter
+
+interpreter.reexec_when_parent_cannot_start_sanitized()
 import release_managed_dispatch_test as managed_fixture
 from tools.release.deployment_effect import DeploymentEffect, HOSTS, LIMIT
 from tools.release.model import canonical_json, canonical_sha256

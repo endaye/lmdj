@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+import release_fixture_interpreter as interpreter
 from tools.release import evidence_branch as module
 from tools.release.evidence_branch import EvidenceBranchError, PublicationBranch
 from tools.release.evidence_pr import pr_document
@@ -292,7 +293,7 @@ class BranchTest(unittest.TestCase):
     def test_orphaned_git_child_retains_writer_lock_until_remote_finishes(self):
         ready, release = self.root / "hook-ready", self.root / "hook-release"
         hook = self.remote / "hooks/pre-receive"
-        hook.write_text(f"#!{sys.executable}\nfrom pathlib import Path\nimport time\n"
+        hook.write_text(f"#!{interpreter.fixture_python()}\nfrom pathlib import Path\nimport time\n"
             f"Path({str(ready)!r}).touch()\n"
             f"for _ in range(400):\n if Path({str(release)!r}).exists(): break\n time.sleep(0.025)\n"
             f"else: raise SystemExit(1)\n")

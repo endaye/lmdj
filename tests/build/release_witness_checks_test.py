@@ -12,6 +12,7 @@ import release_candidate_witness_task_test as task_fixture
 import release_candidate_witness_test as witness_fixture
 from tools.release.model import canonical_json, canonical_sha256
 from tools.release.witness_checks import WitnessTaskChecks, WitnessChecksError
+import release_fixture_interpreter as interpreter
 
 
 SCRIPT = witness_fixture.SCRIPT.replace("*) exit 64 ;;", '''check)
@@ -40,7 +41,7 @@ class ChecksFixture(task_fixture.TaskFixture):
         self.checks = self.new_checks()
 
     def new_checks(self, **changes):
-        args = dict(control_revision=self.fixture.base, authorize=self.check_auth.append, path=os.environ["PATH"])
+        args = dict(control_revision=self.fixture.base, authorize=self.check_auth.append, path=interpreter.fixture_path())
         args.update(changes)
         return WitnessTaskChecks(self.task, **args)
 

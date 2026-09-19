@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+import release_fixture_interpreter as interpreter
 import release_candidate_cut_test as cut_fixture
 import release_candidate_source_test as source_fixture
 from tools.release.candidate_witness import CandidateWitnessRun, CandidateWitnessError
@@ -89,7 +90,7 @@ class WitnessFixture(source_fixture.SourceFixture):
 
     def new_runner(self, **changes):
         settings = dict(authorize=self.auth_calls.append, observe_main=lambda: self.main,
-                        path=os.environ["PATH"])
+                        path=interpreter.fixture_path())
         settings.update(changes)
         return CandidateWitnessRun(self.verifier, **settings)
 
