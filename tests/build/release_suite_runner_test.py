@@ -120,6 +120,32 @@ class ExecutionTest(RunnerFixture):
         self.assertIn("never executed: release_alpha_test.T.test_0", stderr.getvalue())
         del original
 
+    def test_a_repeated_id_cannot_stand_in_for_a_missing_one(self) -> None:
+        class RepeatingChild:
+            """Same count as discovered: one id twice, another never."""
+
+            def __init__(self, command, **keywords):
+                ids = [test_id for name in command[command.index("--start") + 2:]
+                       for test_id in runner.discover(Path(command[command.index("--start") + 1]))[name]]
+                ids = [ids[0], *ids[:-1]]
+                Path(command[command.index("--worker") + 1]).write_text(
+                    json.dumps({"executed": ids, "errors": [], "successful": True}))
+                self.pid = 1
+
+            def poll(self):
+                return 0
+
+            def wait(self):
+                return 0
+
+        stderr = io.StringIO()
+        with patch.object(runner.subprocess, "Popen", RepeatingChild), patch.object(sys, "stderr", stderr):
+            status = runner.run_sharded(1, self.start)
+        self.assertEqual(status, 1)
+        self.assertIn("shard accounting failed: discovered 6 tests, executed 6", stderr.getvalue())
+        self.assertIn("never executed: release_gamma_test.T.test_0", stderr.getvalue())
+        self.assertIn("unexpected or repeated: release_alpha_test.T.test_0", stderr.getvalue())
+
     def test_a_truncated_worker_report_fails_the_shard_without_a_parent_crash(self) -> None:
         class TruncatingChild:
             """A worker killed mid-write: the report is half a JSON document."""

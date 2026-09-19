@@ -15,6 +15,7 @@ not a faster pass.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import os
 from pathlib import Path
@@ -206,16 +207,19 @@ def run_sharded(shards: int, start: Path = START, pattern: str = PATTERN,
                 summary = [line for line in output.splitlines() if line.startswith("Ran ")]
                 sys.stderr.write(f"{label}: {' '.join(summary)} — {len(group)} modules\n")
     duration = time.monotonic() - started
-    missing = sorted(set(discovered) - set(executed))
-    unexpected = sorted(set(executed) - set(discovered))
+    # Multisets, not sets: a report that names one id twice and another
+    # never would balance the counts and the set differences.
+    counted, expected = Counter(executed), Counter(discovered)
+    missing = sorted(test_id for test_id in expected if counted[test_id] < expected[test_id])
+    unexpected = sorted(test_id for test_id in counted if counted[test_id] > expected[test_id])
     status = 1 if failed else 0
-    if len(executed) != len(discovered) or missing or unexpected:
+    if counted != expected:
         status = 1
         sys.stderr.write(f"\nshard accounting failed: discovered {len(discovered)} tests, executed {len(executed)}\n")
         if missing:
             sys.stderr.write("never executed: " + ", ".join(missing[:20]) + ("..." if len(missing) > 20 else "") + "\n")
         if unexpected:
-            sys.stderr.write("unexpected: " + ", ".join(unexpected[:20]) + "\n")
+            sys.stderr.write("unexpected or repeated: " + ", ".join(unexpected[:20]) + "\n")
     slowest = sorted(durations.items(), key=lambda item: -item[1])[:SLOWEST]
     if slowest:
         sys.stderr.write(f"\nslowest {len(slowest)} tests:\n" + "".join(
