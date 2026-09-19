@@ -261,17 +261,27 @@ class _CloudflareReader:
         return document["worker"]
 
     def _origins_for(self, host, version=None):
-        """This Host's origins, read once per version asked about.
+        """This Host's origins, read once per host and version asked about.
 
         A projection assembly asks for the production origin and one version's
         origin; without this each ask is another subprocess, and the module
-        documents itself as one Worker read and one origin read.
+        documents itself as one Worker read and one origin read. The key
+        carries the host because one reader answers for every Host in the
+        assembly, and `None` is the production ask rather than a missing
+        version.
         """
-        if version not in self._origins:
+        key = (host, version)
+        if key not in self._origins:
             arguments = ("urls", host) + (() if version is None
                                           else ("--version", version))
-            self._origins[version] = _read_only_tool(_HOST_ORIGINS, arguments)
-        return self._origins[version]
+            document = _read_only_tool(_HOST_ORIGINS, arguments)
+            if document is None:
+                # Not cached, for the reason `_inspect` states: a single
+                # timeout would otherwise report the origin unavailable for
+                # the rest of the assembly, after the tool would have answered.
+                return None
+            self._origins[key] = document
+        return self._origins[key]
 
     def version_url(self, host, version):
         document = self._origins_for(host, version)

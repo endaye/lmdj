@@ -602,6 +602,50 @@ class CompositionSeamTest(unittest.TestCase):
         ], "why: one assembly launched more subprocesses than the reads it "
            "documents; remedy: memoize each tool's answer per host and version")
 
+    def test_each_host_gets_its_own_origins_not_the_first_host_answer(self):
+        # One reader answers for every Host in the assembly. Keying the cache
+        # on the version alone returns the first Host's document to the
+        # second, because the production ask is `None` for both — and the
+        # wrong production origin would be frozen into the projection.
+        reader = self.composition._CloudflareReader("token", self.root / "state")
+
+        def answer(tool, arguments, **kwargs):
+            host = arguments[1]
+            return {"host": host, "worker": host,
+                    "production": f"https://{host}.lmdj.workers.dev",
+                    "version": VERSION_URL}
+
+        with mock.patch.object(self.composition, "_read_only_tool", answer):
+            runtime = reader._origins_for("web-runtime-host")
+            creator = reader._origins_for("creator-web")
+        self.assertEqual(creator["production"],
+                         "https://creator-web.lmdj.workers.dev",
+                         "why: a second Host read back the first Host's "
+                         "origins; remedy: key the origins cache on "
+                         "(host, version)")
+
+    def test_a_failed_origins_read_is_retried_not_remembered(self):
+        # `_inspect` states why it does not cache a failure; the origins read
+        # is the same assembly and the same tool boundary. Caching `None`
+        # would report the origin unavailable for the rest of the assembly
+        # after the tool would have answered.
+        reader = self.composition._CloudflareReader("token", self.root / "state")
+        answers_document = {"host": "web-runtime-host", "worker": WORKER,
+                            "production": f"https://{WORKER}.lmdj.workers.dev",
+                            "version": VERSION_URL}
+        answers = [None, answers_document]
+
+        def answer(tool, arguments, **kwargs):
+            return answers.pop(0)
+
+        with mock.patch.object(self.composition, "_read_only_tool", answer):
+            self.assertIsNone(reader._origins_for("web-runtime-host", VERSION))
+            retried = reader._origins_for("web-runtime-host", VERSION)
+        self.assertEqual(
+            retried, answers_document,
+            "why: a transient origins failure stuck for the rest of the "
+            "assembly; remedy: cache only a successful document")
+
     def test_an_unreadable_tool_reads_as_no_document(self):
         # Every live read fails closed into None, which each caller turns into
         # `pending` rather than into an assumption about production.
