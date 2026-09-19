@@ -173,9 +173,13 @@ jobs:
           "$python_path" -c \
             'import sys; raise SystemExit(sys.version_info[:2] != (3, 11))'
 
+          # $RUNNER_TEMP persists on a self-hosted runner, so a shim left by an
+          # earlier run can shadow the interpreter this run just verified.
+          # Recreate the directory empty rather than writing over its contents.
           python_shim_dir="$RUNNER_TEMP/lmdj-python-3.11"
+          rm -rf -- "$python_shim_dir"
           mkdir -p "$python_shim_dir"
-          ln -sf -- "$python_path" "$python_shim_dir/python3"
+          ln -s -- "$python_path" "$python_shim_dir/python3"
           echo "$python_shim_dir" >>"$GITHUB_PATH"
           "$python_shim_dir/python3" --version
       - name: Configure bounded build acceleration

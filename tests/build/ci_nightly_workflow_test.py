@@ -69,6 +69,7 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
         self.assertNotIn("runs-on: ubuntu-24.04", stress, message)
         self.assertNotIn("actions/setup-python", stress, message)
         self.assertIn("Verify self-hosted Python 3.11", stress, message)
+        self.assertIn('rm -rf -- "$python_shim_dir"', stress, message)
         self.assertIn("--repeat until-fail:20", stress, message)
 
     def test_scheduled_tsan_runs_on_the_core_role(self) -> None:

@@ -37,8 +37,9 @@
 
 - Release stress 的可用性跟随该 runner：它离线时 suite 排队而非改跑别处
   （与 macOS gates 的 offline 语义一致，见 portal 页 testing-and-proof）。
-- 该 runner 同时承担 macOS gates；两者未共享并发组，若观察到争用再决定是否
-  把 macOS gates 也加入 `lmdj-native-heavy`。
+- 该 runner 同时承担 macOS gates，因此 `macos-primary` 一并加入
+  `lmdj-native-heavy` 队列：gate 会在同一台机器上构建两次 Core，不排队就会
+  提供这次迁移正要消除的那种争用。走 hosted fallback 时该队列只占一个槽位。
 - `docs/quality/core-test-policy.md` 与 portal 页同步更新；
   `tests/build/ci_nightly_workflow_test.py` 钉住路由、自托管 Python 检查与
   重复命令。
