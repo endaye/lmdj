@@ -30,7 +30,7 @@ ENTRY_POINT_PATH = ROOT / "scripts/local-ci.sh"
 WORKFLOW_PATH = ROOT / ".github/workflows/ci.yml"
 
 PYTHON_TEST_FILE = re.compile(r"[\w./-]*[\w-]+_test\.py")
-RELEASE_DISCOVERY = "python3 -m unittest discover -s tests/build -p 'release_*_test.py'"
+RELEASE_DISCOVERY = "python3 tests/build/release_suite_runner.py"
 
 LANES = {
     "docs_static", "portal", "ci_contract", "core_ubuntu", "core_asan",

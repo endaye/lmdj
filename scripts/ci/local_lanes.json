@@ -159,7 +159,7 @@
     "deploy_contract": {
       "requires": {},
       "commands": [
-        "python3 -m unittest discover -s tests/build -p 'release_*_test.py'",
+        "python3 tests/build/release_suite_runner.py",
         "python3 tests/build/web_runtime_deploy_workflow_test.py",
         "python3 tests/build/creator_web_deploy_workflow_test.py",
         "python3 tests/build/web_runtime_public_deployment_docs_test.py",
@@ -168,7 +168,8 @@
         "python3 apps/creator-web/test/deploy_command_test.py"
       ],
       "ci_only": [
-        "the deploy command suite pins --shards 4 to the hosted runner's four vCPUs; the local run takes the default min(4, os.cpu_count())"
+        "the deploy command suite pins --shards 4 to the hosted runner's four vCPUs; the local run takes the default min(4, os.cpu_count())",
+        "the release suite runner pins --shards 4 on the runner; the local run takes the default min(4, os.cpu_count())"
       ]
     },
     "chameleon_lab": {

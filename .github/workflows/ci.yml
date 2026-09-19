@@ -314,7 +314,11 @@ jobs:
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.deploy_contract && needs.change-scope.outputs.trusted-head == 'true' }}
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
-    timeout-minutes: 15
+    # Hang detection, not a performance budget: the release suite measured
+    # 64 minutes serially on 2026-09-17 and had never finished inside the
+    # former 15; it now runs across four workers (#1506). Re-measure from the
+    # first complete run before tightening.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -345,7 +349,11 @@ jobs:
         run: |
           set -euo pipefail
           scripts/release.sh hydrate
-      - run: python3 -m unittest discover -s tests/build -p 'release_*_test.py'
+      # Every release_*_test.py module, whole modules per worker: modules own
+      # their temporary repositories and ports, classes inside one may share a
+      # seeded filesystem. The runner fails closed when the executed ids differ
+      # from the discovered set.
+      - run: python3 tests/build/release_suite_runner.py --shards 4
       - run: python3 tests/build/web_runtime_deploy_workflow_test.py
       - run: python3 tests/build/creator_web_deploy_workflow_test.py
       - run: python3 tests/build/web_runtime_public_deployment_docs_test.py

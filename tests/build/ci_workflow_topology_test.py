@@ -820,7 +820,10 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             "batch-verdict": 5,
             "docs-static": 10,
             "ci-contract": 10,
-            "deploy-contract": 15,
+            # Hang detection for the sharded release suite: 64 minutes serial
+            # on 2026-09-17, never complete within 15; re-measure after the
+            # first complete run (#1506).
+            "deploy-contract": 30,
             "chameleon-lab": 10,
             "package": 35,
             "core-ubuntu": 30,
