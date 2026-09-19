@@ -170,7 +170,10 @@ def _read_report(report: Path) -> dict:
         payload = json.loads(report.read_text())
     except (OSError, ValueError) as error:
         return {"executed": [], "errors": [f"worker report unreadable: {error}"], "successful": False}
-    if type(payload) is not dict or type(payload.get("executed")) is not list:
+    durations = payload.get("durations", {}) if type(payload) is dict else None
+    if (type(payload) is not dict or type(payload.get("executed")) is not list
+            or type(durations) is not dict
+            or not all(type(k) is str and type(v) in (int, float) for k, v in durations.items())):
         return {"executed": [], "errors": ["worker report malformed"], "successful": False}
     return payload
 

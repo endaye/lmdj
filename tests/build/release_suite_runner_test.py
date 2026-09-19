@@ -146,6 +146,25 @@ class ExecutionTest(RunnerFixture):
         self.assertIn("never executed: release_gamma_test.T.test_0", stderr.getvalue())
         self.assertIn("unexpected or repeated: release_alpha_test.T.test_0", stderr.getvalue())
 
+    def test_a_report_with_malformed_durations_fails_the_shard_without_a_parent_crash(self) -> None:
+        class OddDurationsChild:
+            def __init__(self, command, **keywords):
+                Path(command[command.index("--worker") + 1]).write_text(
+                    json.dumps({"executed": [], "errors": [], "successful": True, "durations": ["not", "a", "map"]}))
+                self.pid = 1
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        stderr = io.StringIO()
+        with patch.object(runner.subprocess, "Popen", OddDurationsChild), patch.object(sys, "stderr", stderr):
+            status = runner.run_sharded(1, self.start)
+        self.assertEqual(status, 1)
+        self.assertIn("worker report malformed", stderr.getvalue())
+
     def test_a_truncated_worker_report_fails_the_shard_without_a_parent_crash(self) -> None:
         class TruncatingChild:
             """A worker killed mid-write: the report is half a JSON document."""
