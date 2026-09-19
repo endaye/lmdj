@@ -38,8 +38,11 @@ std::size_t uxTaskGetStackHighWaterMark(void* task) {
   return stack_bytes;
 }
 int main(int argc, char** argv) {
-  require(argc == 2, "scenario missing");
-  const std::string_view scenario(argv[1]);
+  // The coverage lane probes every instrumented binary with no arguments to
+  // learn its module signature; like the sibling suites, default to one
+  // scenario instead of aborting, and still refuse extra arguments.
+  require(argc <= 2, "at most one scenario");
+  const std::string_view scenario = argc > 1 ? argv[1] : "capabilities";
   fake_timer::now_us = 100;
   const auto value = lmdj::cardputer::capture_control_resources();
   if (scenario == "capabilities") {
