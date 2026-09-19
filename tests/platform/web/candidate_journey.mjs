@@ -109,8 +109,15 @@ const adoption = set => { const {candidate_id, ...request} = selection(set); ret
   command_id: "00000000-0000-4000-8000-000000000005",
   selections: [{candidate_id, bank: 0, pad: 1}, {candidate_id, bank: 2, pad: 3}]}; };
 
+// The full journey ran 32.8 s on the trusted pool's Web Runtime Host lane
+// (run 35419357786) against Playwright's 30 s default, which no measurement
+// had ever set; Creator finishes the same legs in 20.7 s. 60 s is that
+// measurement with headroom, not a target: the journey keeps every leg.
+const CANDIDATE_JOURNEY_TIMEOUT_MS = 60_000;
+
 export function registerCandidateJourneys(host) {
   test(`${host}: real Candidate preview, explicit adoption and restart preserve source and Pattern`, async ({page}) => {
+    test.setTimeout(CANDIDATE_JOURNEY_TIMEOUT_MS);
     const {bytes, imported, truth} = await setup(page, false, host);
     const before = await files(page);
     const job = success(await candidate(page, "runCandidateJob", runRequest()));
