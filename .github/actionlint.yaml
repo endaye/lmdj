@@ -5,6 +5,11 @@ self-hosted-runner:
     - ci-general
     - ci-web-heavy
     - ci-core
+    # Only the CI-only node carries this; #1557 routes the two contract lanes
+    # to it. The trusted macOS runner's own label arrived with #1558, which
+    # moved Release stress onto bare metal.
+    - ci-only-host
+    - lmdj
     - contabo
     - netcup
     - lmdj-ai-isolated
