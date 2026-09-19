@@ -58,6 +58,35 @@ class SourceProjectionTest(SourceFixture):
         self.assertEqual(proof["observed_main"], later)
         self.assertEqual(before, tuple(self.tool.git(*args) for args in (("rev-parse", "HEAD"), ("write-tree",), ("show-ref",), ("status", "--porcelain"))))
 
+    def test_post_drive_authority_reproof_proves_the_same_binding(self):
+        # The transition's reviewed-squash proof runs after the preparation's
+        # drive has closed its journal session, so the snapshot's child
+        # authority callback cannot consult drive-time state. It must still
+        # re-prove the authority live; a callback that assumes the drive
+        # session is a TypeError swallowed into an unknown review (M3 run
+        # release-62ff163458aef10f). Simulate that wiring: the authorize
+        # callback re-proves the request the way the production post-drive
+        # path does, while verifying proceeds outside any drive.
+        proven = []
+        original = self.cut.snapshot.authorize
+        def post_drive_authorize(scope):
+            # Run the real production callback first, then record the scope;
+            # a wrapper (not a stub) keeps the drive-time contract exercised.
+            original(scope)
+            proven.append(deepcopy(scope))
+        self.cut.snapshot.authorize = post_drive_authorize
+        try:
+            doc = "docs/plans/fixture.md"
+            parent = self.commit_tree(self.changed_tree(self.fixture.base, doc, b"new docs"), self.fixture.base)
+            merged = self.commit_tree(self.changed_tree(self.cut_receipt["tree"], doc, b"new docs"), parent)
+            proof = self.check(main_revision=merged, merge_revision=merged)
+            self.assertEqual(proof["merge_sha"], merged)
+        finally:
+            self.cut.snapshot.authorize = original
+        self.assertTrue(proven)
+        for scope in proven:
+            self.assertEqual(scope["source"]["commit"], self.source["commit"])
+
     def test_squash_dropping_parent_document_is_rejected(self):
         parent = self.commit_tree(self.changed_tree(self.fixture.base, "docs/plans/fixture.md", b"preserve"), self.fixture.base)
         merged = self.commit_tree(self.cut_receipt["tree"], parent)
