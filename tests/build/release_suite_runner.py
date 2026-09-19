@@ -37,6 +37,7 @@ SLOWEST = 15
 # deploy command suites and four short docs/workflow suites) need the rest.
 WORKER_TIMEOUT = 1200.0
 POLL = 0.5
+REAP_TIMEOUT = 30.0
 
 
 def discover(start: Path = START, pattern: str = PATTERN) -> dict[str, list[str]]:
@@ -214,7 +215,13 @@ def run_sharded(shards: int, start: Path = START, pattern: str = PATTERN,
                     hung.add(label)
                     _kill(child)
         for label, group, report, log, child in workers:
-            status = child.wait()
+            # Bounded: a killed group whose member is stuck in uninterruptible
+            # I/O must not hold the other shards' reports hostage.
+            try:
+                status = child.wait(timeout=REAP_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                hung.add(label)
+                status = None
             log.seek(0)
             output = log.read().decode("utf-8", "replace")
             log.close()
@@ -223,7 +230,8 @@ def run_sharded(shards: int, start: Path = START, pattern: str = PATTERN,
             durations.update(payload.get("durations", {}))
             if label in hung or status != 0 or payload.get("errors") or not payload.get("successful", False):
                 failed.append(label)
-                reason = f"hung past {worker_timeout:.0f}s and was killed" if label in hung else f"exit {status}"
+                reason = (f"hung past {worker_timeout:.0f}s and was killed" if status is not None and label in hung
+                          else "killed but not reaped within the bound" if status is None else f"exit {status}")
                 errors = "".join(f"{line}\n" for line in payload.get("errors", []))
                 sys.stderr.write(f"\n===== {label} FAILED ({reason}): {' '.join(group)} =====\n{errors}{output}\n")
             else:

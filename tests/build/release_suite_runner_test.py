@@ -109,7 +109,7 @@ class ExecutionTest(RunnerFixture):
             def poll(self):
                 return 0
 
-            def wait(self):
+            def wait(self, timeout=None):
                 return 0
 
         stderr = io.StringIO()
@@ -135,7 +135,7 @@ class ExecutionTest(RunnerFixture):
             def poll(self):
                 return 0
 
-            def wait(self):
+            def wait(self, timeout=None):
                 return 0
 
         stderr = io.StringIO()
@@ -157,7 +157,7 @@ class ExecutionTest(RunnerFixture):
             def poll(self):
                 return 0
 
-            def wait(self):
+            def wait(self, timeout=None):
                 return 0
 
         stderr = io.StringIO()
