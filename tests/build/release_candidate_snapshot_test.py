@@ -12,6 +12,7 @@ from unittest.mock import patch, Mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+import release_fixture_interpreter as interpreter
 import release_candidate_workspace_test as fixture_module
 from tools.release.candidate_snapshot import CandidateSnapshotRun, CandidateSnapshotError
 from tools.release.candidate_workspace import CandidateSourceWorkspace
@@ -81,7 +82,7 @@ class SnapshotFixture(fixture_module.WorkspaceFixture):
         self.calls = []
         self.source = self.prepare()
         self.authorities = []
-        self.runner = CandidateSnapshotRun(self.tool, authorize=self.authorities.append, path=os.environ["PATH"])
+        self.runner = CandidateSnapshotRun(self.tool, authorize=self.authorities.append, path=interpreter.fixture_path())
         self.journal = Path(self.tool.git("rev-parse", "--absolute-git-dir").decode().strip()) / self.tool.JOURNAL_NAME
 
     def run_snapshot(self):
@@ -192,7 +193,7 @@ class SnapshotSafetyTest(SnapshotFixture):
         self.branch, self.root = self.seed_branch, self.seed_root
         self.tool = CandidateSourceWorkspace(self.root, self.fixture.tool)
         self.calls, self.authorities = [], []
-        self.runner = CandidateSnapshotRun(self.tool, authorize=self.authorities.append, path=os.environ["PATH"])
+        self.runner = CandidateSnapshotRun(self.tool, authorize=self.authorities.append, path=interpreter.fixture_path())
         self.journal = Path(self.tool.git("rev-parse", "--absolute-git-dir").decode().strip()) / self.tool.JOURNAL_NAME
         self.addCleanup(self.assert_writer_closed)
 
@@ -236,7 +237,7 @@ class SnapshotSafetyTest(SnapshotFixture):
 
     def test_budget_exhaustion_never_repeats_generation(self):
         self.runner = CandidateSnapshotRun(self.tool, authorize=self.authorities.append,
-                                          path=os.environ["PATH"], verification_limit=1)
+                                          path=interpreter.fixture_path(), verification_limit=1)
         self.run_snapshot()
         with self.assertRaisesRegex(CandidateSnapshotError, "budget exhausted"):
             self.run_snapshot()

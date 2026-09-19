@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+import release_fixture_interpreter as interpreter
 sys.path.insert(0, str(ROOT / "tests/build"))
 import release_candidate_witness_test as fixture
 import release_orchestration_driver_test as driver_fixture
@@ -61,7 +62,7 @@ install) printf 'install\\n' >> .fixture-install-calls ;;
 
     def prepare_cut(self):
         checks = CandidateTaskChecks(self.cut, control_revision=self.fixture.base,
-                                     authorize=lambda scope: None, path=os.environ["PATH"])
+                                     authorize=lambda scope: None, path=interpreter.fixture_path())
         checked = checks.prepare(request=self.request, source=self.source, snapshot_sha256=self.receipt["sha256"],
             author_name="Fixture", author_email="fixture@example.invalid", timestamp=2000000000)
         type(self).seed_checked_cut = deepcopy(checked)
@@ -72,7 +73,7 @@ install) printf 'install\\n' >> .fixture-install-calls ;;
         self.main = self.fixture.base
         self.checked = deepcopy(self.seed_checked_cut)
         self.checks = CandidateTaskChecks(self.cut, control_revision=self.fixture.base,
-            authorize=lambda scope: None, path=os.environ["PATH"])
+            authorize=lambda scope: None, path=interpreter.fixture_path())
         self.parent_root = self.root.parent / "release-parent"
         self.transition_root = self.root.parent / "candidate-transition"
         self.destination = self.root.parent / "witness-task"

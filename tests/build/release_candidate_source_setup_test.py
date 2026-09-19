@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+import release_fixture_interpreter as interpreter
 import release_candidate_material_test as fixture
 from tools.release.candidate import CATALOG
 from tools.release.candidate_source_setup import CandidateSourceSetup, CandidateSourceSetupError
@@ -55,7 +56,7 @@ class SetupFixture(unittest.TestCase):
 
     def new_setup(self, **changes):
         args = dict(repository_root=self.fixture.root, request=self.request,
-            authorize=self.authorized.append, observe_main=lambda: self.main, path=os.environ['PATH'])
+            authorize=self.authorized.append, observe_main=lambda: self.main, path=interpreter.fixture_path())
         args.update(changes)
         return CandidateSourceSetup(self.journal, self.local, **args)
 

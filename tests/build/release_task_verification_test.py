@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+import release_fixture_interpreter as interpreter
 from tools.release.task_verification import PublicationTaskVerifier, TaskVerificationError, task_scope
 from tools.release import task_verification as module
 from tools.release.evidence_pr import pr_document
@@ -62,7 +63,7 @@ class VerificationTest(unittest.TestCase):
             raise RuntimeError("SECRET-AUTH-FAILURE")
 
     def verifier(self):
-        return PublicationTaskVerifier(self.store, self.repo, authorize=self.authorize, path=os.environ["PATH"])
+        return PublicationTaskVerifier(self.store, self.repo, authorize=self.authorize, path=interpreter.fixture_path())
 
     def amend(self):
         self.git("-C", str(self.repo), "add", ".")

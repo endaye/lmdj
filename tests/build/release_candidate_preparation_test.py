@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+import release_fixture_interpreter as interpreter
 import release_candidate_source_setup_test as setup_fixture
 import release_candidate_checks_test as checks_fixture
 from tools.release.candidate_preparation import CandidatePreparation, CandidatePreparationError
@@ -55,7 +56,7 @@ class PreparationFixture(setup_fixture.SetupFixture):
             return 2100000000
         args = dict(repository_root=self.fixture.root, source_root=self.destination,
             reservation_root=self.fixture.state, request=self.request, authorize=self.authorized.append,
-            observe_main=lambda: self.main, path=os.environ['PATH'], author_name='Fixture',
+            observe_main=lambda: self.main, path=interpreter.fixture_path(), author_name='Fixture',
             author_email='fixture@example.invalid', source_timestamp=2000000000, clock=clock)
         args.update(changes)
         return CandidatePreparation(self.parent_root, **args)

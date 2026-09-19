@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+import release_fixture_interpreter as interpreter
 import release_candidate_snapshot_test as snapshot_fixture
 from tools.release.candidate_cut import CandidateCutWorkspace, CandidateCutError
 
@@ -69,7 +70,7 @@ class CutFixture(snapshot_fixture.SnapshotFixture):
         self.tool = snapshot_fixture.CandidateSourceWorkspace(self.root, self.fixture.tool)
         self.calls, self.authorities, self.phases = [], [], []
         self.runner = snapshot_fixture.CandidateSnapshotRun(
-            self.tool, authorize=self.authorities.append, path=os.environ["PATH"])
+            self.tool, authorize=self.authorities.append, path=interpreter.fixture_path())
         self.journal = Path(self.tool.git("rev-parse", "--absolute-git-dir").decode().strip()) / self.tool.JOURNAL_NAME
         self.cut = CandidateCutWorkspace(self.runner)
         self.addCleanup(self.assert_writer_closed)

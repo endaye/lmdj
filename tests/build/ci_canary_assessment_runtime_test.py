@@ -1,5 +1,4 @@
 """Real local processes, not proof of provider or deployment isolation."""
-from functools import lru_cache
 import json
 import os
 from pathlib import Path
@@ -16,32 +15,13 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from tools.canary import assessment_runtime as runtime, records as r
 import ci_canary_assessment_test as fixture
-
-
-@lru_cache(maxsize=16)
-def standalone_python(candidates):
-    """The parent setup-python binary may require stripped loader variables."""
-    for index, candidate in enumerate(candidates):
-        try:
-            result = subprocess.run([candidate, "-I", "-c",
-                "import argparse,json,pathlib,subprocess; print('lmdj-fixture-python-ready')"],
-                env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
-                capture_output=True, timeout=5, check=False)
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        if result.returncode == 0 and result.stdout == b"lmdj-fixture-python-ready\n":
-            if index:
-                print(f"Process fixture uses independently verified interpreter: {candidate}", file=sys.stderr)
-            return candidate
-    raise RuntimeError("why: no fixture Python starts with the sanitized environment; "
-                       "remedy: provide a standalone system Python; do not forward loader variables or skip process tests")
+from release_fixture_interpreter import fixture_python, standalone_python
 
 
 @unittest.skipUnless(os.name == "posix", "assessment process adapter requires POSIX")
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
-        self.child_python = standalone_python(tuple(dict.fromkeys(
-            (sys.executable, "/usr/bin/python3", "/usr/local/bin/python3"))))
+        self.child_python = fixture_python()
         self.fixture = fixture.AssessmentTests()
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)

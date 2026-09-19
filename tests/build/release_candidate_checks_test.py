@@ -10,6 +10,7 @@ from unittest.mock import patch
 import release_candidate_cut_test as cut_fixture
 from tools.release.candidate_checks import CandidateTaskChecks, CandidateChecksError
 from tools.release.model import canonical_json, canonical_sha256
+import release_fixture_interpreter as interpreter
 
 
 SCRIPT = cut_fixture.SCRIPT.replace("*) exit 64 ;;", '''check)
@@ -38,7 +39,7 @@ class ChecksFixture(cut_fixture.CutFixture):
         self.checks = self.new_checks()
 
     def new_checks(self, **changes):
-        arguments = dict(control_revision=self.fixture.base, authorize=self.check_auth.append, path=os.environ["PATH"])
+        arguments = dict(control_revision=self.fixture.base, authorize=self.check_auth.append, path=interpreter.fixture_path())
         arguments.update(changes)
         return CandidateTaskChecks(self.cut, **arguments)
 

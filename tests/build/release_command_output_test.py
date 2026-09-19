@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+import release_fixture_interpreter as interpreter
 from tools.release.orchestration import JournalError, RequestJournal
 from tools.release.task_verification import PublicationTaskVerifier, TaskVerificationError
 
@@ -22,11 +23,11 @@ class OutputTest(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         self.executor = PublicationTaskVerifier(None, self.root,
             authorize=lambda _: self.fail("executor must not invent authorization"),
-            path=os.environ["PATH"])
+            path=interpreter.fixture_path())
 
     def execute(self, script, *, limit=1024, timeout=5):
         with RequestJournal(self.root / "journal") as journal:
-            return self.executor._execute_capture(journal, (sys.executable, "-c", script),
+            return self.executor._execute_capture(journal, (interpreter.fixture_python(), "-c", script),
                                                  timeout, limit=limit)
 
     def assert_result(self, result, code, raw):
@@ -79,7 +80,7 @@ class OutputTest(unittest.TestCase):
     def test_legacy_execution_returns_only_three_fields(self):
         with RequestJournal(self.root / "journal") as journal:
             result = self.executor._execute(journal,
-                (sys.executable, "-c", "import os; os.write(1, b'original')"), 5)
+                (interpreter.fixture_python(), "-c", "import os; os.write(1, b'original')"), 5)
         self.assert_result(result, 0, b"original")
 
     def test_capture_uses_scrubbed_environment(self):
@@ -99,7 +100,7 @@ class OutputTest(unittest.TestCase):
             script = (f"import os, json; s=os.fstat({journal.lock}); "
                       "print(json.dumps([s.st_dev, s.st_ino]))")
             result, captured = self.executor._execute_capture(journal,
-                (sys.executable, "-c", script), 5, limit=1024)
+                (interpreter.fixture_python(), "-c", script), 5, limit=1024)
         self.assertEqual(result[0], 0)
         self.assertEqual(json.loads(captured), [info.st_dev, info.st_ino])
         self.assert_result(result, 0, captured)
@@ -109,7 +110,7 @@ class OutputTest(unittest.TestCase):
             pass
         with patch("tools.release.task_verification.subprocess.Popen") as launch:
             with self.assertRaises(JournalError):
-                self.executor._execute_capture(journal, (sys.executable, "-c", "pass"),
+                self.executor._execute_capture(journal, (interpreter.fixture_python(), "-c", "pass"),
                                                5, limit=1024)
             launch.assert_not_called()
 

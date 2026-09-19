@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+import release_fixture_interpreter as interpreter
 sys.path.insert(0, str(ROOT / "tests/build"))
 import release_candidate_witness_test as fixture
 from tools.release.candidate_task_workspace import CandidateTaskWorkspace, CandidateTaskWorkspaceError
@@ -38,7 +39,7 @@ class WorkspaceFixture(fixture.WitnessFixture):
 
     def new_workspace(self, **changes):
         settings = dict(authorize=lambda scope: None, control_revision=self.fixture.base,
-                        path=os.environ["PATH"])
+                        path=interpreter.fixture_path())
         settings.update(changes)
         return CandidateTaskWorkspace(self.workspace_journal, self.task, **settings)
 
