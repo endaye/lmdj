@@ -9,10 +9,20 @@ The tier determines the maximum timeout and the kind of behavior it proves:
 | --- | --- | --- |
 | `unit` | A single Core Module behavior, isolated from I/O and hosts. | 10 seconds |
 | `component` | A module boundary or capability collaboration. | 30 seconds |
-| `contract` | A versioned contract, conformance rule, or build invariant. | 30 seconds |
+| `contract` | A versioned contract, conformance rule, or build invariant. | 120 seconds |
 | `host` | An Application Facade consumer or host boundary. | 120 seconds |
 | `e2e` | The canonical assembled proof path. | 180 seconds |
 | `stress` | A bounded reliability or load scenario. | 300 seconds |
+
+`contract` shares `host`'s budget because the release invariants it holds prove
+themselves across real Git and build boundaries: each case performs a real
+`git init` with several commits, spawns a child interpreter, and regenerates a
+Portal snapshot. Measured without a sanitizer on an M1, the slowest is 42.5
+seconds and the fastest of that family is 22.1, while a contract test that
+crosses none of those boundaries runs in a fraction of a second. The cap is a
+guardrail against parking a slow test in a fast tier, not a budget to spend —
+the selection rule below still asks for the lowest tier that can prove the
+behavior.
 
 Risk labels describe a cross-cutting concern without creating another tier. The
 current labels are `persistence`, `audio`, `provider`, `assembly`, `abi`,

@@ -4,16 +4,28 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 
 TIERS = {"unit", "component", "contract", "host", "e2e", "stress"}
+# Each tier's budget, and the same numbers `docs/quality/core-test-policy.md`
+# publishes; `policy_errors()` below keeps the two from drifting, which is how
+# `contract` came to be enforced at a value no release invariant could meet.
+#
+# `contract` is 120 because the release invariants in this tier prove
+# themselves across real Git and build boundaries — each case does a real
+# `git init` with several commits, spawns a child interpreter, and regenerates
+# a Portal snapshot. Measured on an M1 without a sanitizer: witness lifecycle
+# 42.5s, state 36.4s, boundary 37.5s, output 31.3s, task verification 23.7s,
+# evidence source 22.1s. A conformance test that crosses none of those stays
+# far below the cap; the cap is a guardrail, not a target.
 MAX_TIMEOUT = {
     "unit": 10.0,
     "component": 30.0,
-    "contract": 30.0,
+    "contract": 120.0,
     "host": 120.0,
     "e2e": 180.0,
     "stress": 300.0,
@@ -102,12 +114,55 @@ def validate(build_dir: Path) -> tuple[list[str], int]:
     return errors, len(tests)
 
 
+POLICY = Path(__file__).resolve().parents[2] / "docs/quality/core-test-policy.md"
+POLICY_ROW = re.compile(r"^\|\s*`(\w+)`\s*\|.*\|\s*(\d+)\s+seconds\s*\|\s*$")
+
+
+def policy_errors() -> list[str]:
+    """The published tier table must be the budget this file enforces.
+
+    Nothing reconciled the two before, so `contract` was published and enforced
+    at 30 seconds while every release invariant in that tier declared 60 or
+    120 — a contradiction only a batch lane could see, and only after a merge.
+    """
+    try:
+        published = {
+            match.group(1): float(match.group(2))
+            for match in map(POLICY_ROW.match,
+                             POLICY.read_text(encoding="utf-8").splitlines())
+            if match
+        }
+    except OSError:
+        return [f"{POLICY.name}: unreadable, so the published tier budget "
+                "cannot be compared with the enforced one"]
+    # A row this parser cannot read is absent from `published`, not zero, and
+    # the comparison below would then report the tier as published `None` —
+    # naming a drift that does not exist and hiding the one that does. Say
+    # which rows could not be read instead.
+    unreadable = sorted(TIERS - set(published))
+    if unreadable:
+        return [f"why: {POLICY.name} publishes no readable budget row for "
+                f"{', '.join(unreadable)}, so the published table cannot be "
+                "compared with the budget this file enforces; remedy: give "
+                "each tier a row of the published shape, "
+                "`| `<tier>` | <description> | <whole number> seconds |`"]
+    if published == MAX_TIMEOUT:
+        return []
+    differing = sorted(set(published) | set(MAX_TIMEOUT))
+    return [
+        f"{POLICY.name}: publishes {published.get(tier)} for {tier} while this "
+        f"file enforces {MAX_TIMEOUT.get(tier)}; remedy: change both together"
+        for tier in differing if published.get(tier) != MAX_TIMEOUT.get(tier)
+    ]
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print(f"usage: {Path(sys.argv[0]).name} <configured-build-dir>", file=sys.stderr)
         return 2
 
     errors, count = validate(Path(sys.argv[1]))
+    errors = policy_errors() + errors
     if errors:
         print("Core test taxonomy: FAIL", file=sys.stderr)
         print("\n".join(errors), file=sys.stderr)
