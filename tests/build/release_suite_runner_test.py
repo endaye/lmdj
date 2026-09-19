@@ -79,6 +79,8 @@ class ExecutionTest(RunnerFixture):
         completed = self.run_runner("--shards", "2")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("Ran 6 of 6 discovered tests from 3 modules across 2 shards", completed.stderr)
+        self.assertIn("slowest 6 tests:", completed.stderr)
+        self.assertRegex(completed.stderr, r"\n +\d+\.\ds  release_alpha_test\.T\.test_0\n")
         self.assertTrue(completed.stderr.rstrip().endswith("OK"), completed.stderr)
 
     def test_a_failing_module_fails_the_run_and_surfaces_its_output(self) -> None:
@@ -122,6 +124,7 @@ class ExecutionTest(RunnerFixture):
         self.assertEqual(payload["executed"],
                          ["release_beta_test.T.test_0", "release_beta_test.T.test_1", "release_gamma_test.T.test_0"])
         self.assertTrue(payload["successful"])
+        self.assertEqual(set(payload["durations"]), set(payload["executed"]))
 
     def test_modules_outside_worker_mode_are_a_usage_error(self) -> None:
         completed = self.run_runner("release_alpha_test")

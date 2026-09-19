@@ -26,6 +26,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 START = ROOT / "tests" / "build"
 PATTERN = "release_*_test.py"
+SLOWEST = 15
 
 
 def discover(start: Path = START, pattern: str = PATTERN) -> dict[str, list[str]]:
@@ -80,15 +81,27 @@ def resolve_shard_count(requested: int | None) -> int:
 
 
 class _RecordingResult(unittest.TextTestResult):
-    """Text output for the log plus the exact executed ids for the report."""
+    """Text output for the log plus the exact executed ids and their durations.
+
+    The durations are the only per-test timing the lane produces: the ctest
+    registrations of these modules carry tier budgets but no Core lane runs
+    them, so a budget question (#1530) is answered from this report.
+    """
 
     def __init__(self, *arguments, **keywords):
         super().__init__(*arguments, **keywords)
         self.executed: list[str] = []
+        self.durations: dict[str, float] = {}
+        self._started = 0.0
 
     def startTest(self, test):  # noqa: N802 - unittest API
         super().startTest(test)
         self.executed.append(test.id())
+        self._started = time.monotonic()
+
+    def stopTest(self, test):  # noqa: N802 - unittest API
+        self.durations[test.id()] = time.monotonic() - self._started
+        super().stopTest(test)
 
 
 def run_worker(report: Path, modules: list[str], start: Path) -> int:
@@ -103,6 +116,7 @@ def run_worker(report: Path, modules: list[str], start: Path) -> int:
     runner = unittest.TextTestRunner(stream=sys.stderr, verbosity=1, resultclass=_RecordingResult)
     result = runner.run(suite)
     report.write_text(json.dumps({"executed": result.executed, "errors": [],
+                                  "durations": result.durations,
                                   "successful": result.wasSuccessful()}))
     return 0 if result.wasSuccessful() else 1
 
@@ -113,6 +127,7 @@ def run_sharded(shards: int, start: Path = START, pattern: str = PATTERN) -> int
     groups = partition(modules, shards)
     started = time.monotonic()
     executed: list[str] = []
+    durations: dict[str, float] = {}
     failed: list[str] = []
     self_path = str(Path(__file__).resolve())
     with tempfile.TemporaryDirectory(prefix="lmdj-release-suite-shards-") as directory:
@@ -131,6 +146,7 @@ def run_sharded(shards: int, start: Path = START, pattern: str = PATTERN) -> int
             log.close()
             payload = json.loads(report.read_text()) if report.exists() else {"executed": [], "errors": ["no report"]}
             executed.extend(payload.get("executed", []))
+            durations.update(payload.get("durations", {}))
             if status != 0 or payload.get("errors") or not payload.get("successful", False):
                 failed.append(label)
                 sys.stderr.write(f"\n===== {label} FAILED (exit {status}): {' '.join(group)} =====\n{output}\n")
@@ -148,6 +164,10 @@ def run_sharded(shards: int, start: Path = START, pattern: str = PATTERN) -> int
             sys.stderr.write("never executed: " + ", ".join(missing[:20]) + ("..." if len(missing) > 20 else "") + "\n")
         if unexpected:
             sys.stderr.write("unexpected: " + ", ".join(unexpected[:20]) + "\n")
+    slowest = sorted(durations.items(), key=lambda item: -item[1])[:SLOWEST]
+    if slowest:
+        sys.stderr.write(f"\nslowest {len(slowest)} tests:\n" + "".join(
+            f"  {seconds:8.1f}s  {test_id}\n" for test_id, seconds in slowest))
     sys.stderr.write(
         f"\nRan {len(executed)} of {len(discovered)} discovered tests from {len(modules)} modules "
         f"across {len(groups)} shards in {duration:.3f}s: {'FAILED' if status else 'OK'}\n")
