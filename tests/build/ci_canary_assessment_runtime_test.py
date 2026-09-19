@@ -216,12 +216,49 @@ class RuntimeTests(unittest.TestCase):
         self.assertIsNone(result["error_class"])
         pid = int(pidfile.read_text())
         for _ in range(100):
-            path = Path(f"/proc/{pid}/stat")
-            if not path.exists() or path.read_text().split()[2] == "Z":
+            if self.departed(pid):
                 break
             time.sleep(0.01)
         else:
             self.fail("why: assessment descendant survived; remedy: kill the attempt process group")
+
+    @staticmethod
+    def departed(pid):
+        """Whether the descendant is gone or a zombie, without racing its exit.
+
+        Checking `/proc/<pid>/stat` for existence and then reading it are two
+        operations, and the exit this waits for lands between them: Linux
+        answers the read with `ProcessLookupError`, which is this test's
+        success condition arriving by another route rather than a failure.
+        """
+        try:
+            return Path(f"/proc/{pid}/stat").read_text().split()[2] == "Z"
+        except (ProcessLookupError, FileNotFoundError):
+            return True
+
+    def test_a_descendant_that_exits_mid_read_counts_as_departed(self):
+        # Not Linux-only: the race this fixes is in the reader, and the reader
+        # is what the poll loop above depends on. On a runner the exit lands
+        # between `exists()` and `read_text()`, and Linux answers the read with
+        # `ProcessLookupError` — the awaited outcome arriving by another route.
+        for error in (ProcessLookupError(3, "No such process"),
+                      FileNotFoundError(2, "No such file or directory")):
+            with self.subTest(error=type(error).__name__):
+                with patch.object(Path, "read_text", side_effect=error):
+                    self.assertTrue(
+                        self.departed(1),
+                        "why: a descendant that vanished while being read was "
+                        "reported as still running, so the poll loop errors "
+                        "instead of succeeding; "
+                        "remedy: treat a vanished process as departed")
+
+    def test_a_running_descendant_is_not_departed(self):
+        # The other direction: a live process must not be mistaken for gone,
+        # or the loop would pass without the descendant ever being killed.
+        with patch.object(Path, "read_text", return_value="1 (sleep) S 0 1 1"):
+            self.assertFalse(self.departed(1))
+        with patch.object(Path, "read_text", return_value="1 (sleep) Z 0 1 1"):
+            self.assertTrue(self.departed(1))
 
     def test_error_envelope_is_not_valid_advice(self):
         self.executable("glm", "print(" + repr(json.dumps({"type": "result", "is_error": True,
