@@ -48,7 +48,7 @@ class RunnerFixture(unittest.TestCase):
     def run_runner(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(runner.__file__), "--start", str(self.start), *arguments],
-            cwd=runner.ROOT, capture_output=True, text=True, timeout=60, check=False)
+            cwd=runner.ROOT, capture_output=True, text=True, timeout=90, check=False)
 
 
 class DiscoveryAndPartitionTest(RunnerFixture):
@@ -104,6 +104,10 @@ class ExecutionTest(RunnerFixture):
                 ids = [test_id for name in modules
                        for test_id in runner.discover(Path(command[command.index("--start") + 1]))[name]]
                 report.write_text(json.dumps({"executed": ids[1:], "errors": [], "successful": True}))
+                self.pid = 1
+
+            def poll(self):
+                return 0
 
             def wait(self):
                 return 0
@@ -115,6 +119,40 @@ class ExecutionTest(RunnerFixture):
         self.assertIn("shard accounting failed: discovered 6 tests, executed 5", stderr.getvalue())
         self.assertIn("never executed: release_alpha_test.T.test_0", stderr.getvalue())
         del original
+
+    def test_a_truncated_worker_report_fails_the_shard_without_a_parent_crash(self) -> None:
+        class TruncatingChild:
+            """A worker killed mid-write: the report is half a JSON document."""
+
+            def __init__(self, command, **keywords):
+                Path(command[command.index("--worker") + 1]).write_text('{"executed": ["release_al')
+                self.pid = 1
+
+            def poll(self):
+                return 0
+
+            def wait(self):
+                return 0
+
+        stderr = io.StringIO()
+        with patch.object(runner.subprocess, "Popen", TruncatingChild), patch.object(sys, "stderr", stderr):
+            status = runner.run_sharded(1, self.start)
+        self.assertEqual(status, 1)
+        self.assertIn("worker report unreadable", stderr.getvalue())
+        self.assertIn("shard accounting failed: discovered 6 tests, executed 0", stderr.getvalue())
+
+    def test_a_hung_worker_is_killed_and_reported_with_the_other_shards(self) -> None:
+        (self.start / "release_omega_test.py").write_text(
+            "import time, unittest\nclass T(unittest.TestCase):\n    def test_hang(self): time.sleep(60)\n")
+        completed = self.run_runner("--shards", "2", "--worker-timeout", "3")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("hung past 3s and was killed", completed.stderr)
+        self.assertIn("release_omega_test", completed.stderr)
+        # The healthy shard still reports its complete run.
+        self.assertRegex(completed.stderr, r"shard \d of 2: Ran \d+ tests")
+        never = [line for line in completed.stderr.splitlines() if line.startswith("never executed:")]
+        self.assertEqual(len(never), 1, completed.stderr)
+        self.assertIn("release_omega_test.T.test_hang", never[0])
 
     def test_worker_mode_records_the_exact_executed_ids(self) -> None:
         report = self.start / "report.json"

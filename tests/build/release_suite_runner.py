@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,10 @@ ROOT = Path(__file__).resolve().parents[2]
 START = ROOT / "tests" / "build"
 PATTERN = "release_*_test.py"
 SLOWEST = 15
+# A worker that outlives this is a hang the parent reports itself, with every
+# other shard's result, instead of leaving the job limit to kill all of them.
+WORKER_TIMEOUT = 1500.0
+POLL = 0.5
 
 
 def discover(start: Path = START, pattern: str = PATTERN) -> dict[str, list[str]]:
@@ -121,7 +126,29 @@ def run_worker(report: Path, modules: list[str], start: Path) -> int:
     return 0 if result.wasSuccessful() else 1
 
 
-def run_sharded(shards: int, start: Path = START, pattern: str = PATTERN) -> int:
+def _kill(child: subprocess.Popen) -> None:
+    """Kill the worker's whole session; a group already gone is not an error."""
+    for target in (lambda: os.killpg(child.pid, signal.SIGKILL), child.kill):
+        try:
+            target()
+        except (ProcessLookupError, PermissionError):
+            continue
+        return
+
+
+def _read_report(report: Path) -> dict:
+    """A missing or truncated report is a failed shard, never a parent crash."""
+    try:
+        payload = json.loads(report.read_text())
+    except (OSError, ValueError) as error:
+        return {"executed": [], "errors": [f"worker report unreadable: {error}"], "successful": False}
+    if type(payload) is not dict or type(payload.get("executed")) is not list:
+        return {"executed": [], "errors": ["worker report malformed"], "successful": False}
+    return payload
+
+
+def run_sharded(shards: int, start: Path = START, pattern: str = PATTERN,
+                worker_timeout: float = WORKER_TIMEOUT) -> int:
     modules = discover(start, pattern)
     discovered = sorted(test_id for ids in modules.values() for test_id in ids)
     groups = partition(modules, shards)
@@ -132,24 +159,43 @@ def run_sharded(shards: int, start: Path = START, pattern: str = PATTERN) -> int
     self_path = str(Path(__file__).resolve())
     with tempfile.TemporaryDirectory(prefix="lmdj-release-suite-shards-") as directory:
         workers = []
-        for index, group in enumerate(groups):
-            report = Path(directory) / f"shard-{index}.json"
-            log = open(Path(directory) / f"shard-{index}.log", "w+b")
-            child = subprocess.Popen(
-                [sys.executable, self_path, "--worker", str(report), "--start", str(start), *group],
-                cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
-            workers.append((f"shard {index} of {len(groups)}", group, report, log, child))
+        try:
+            for index, group in enumerate(groups):
+                report = Path(directory) / f"shard-{index}.json"
+                log = open(Path(directory) / f"shard-{index}.log", "w+b")
+                child = subprocess.Popen(
+                    [sys.executable, self_path, "--worker", str(report), "--start", str(start), *group],
+                    cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                workers.append((f"shard {index} of {len(groups)}", group, report, log, child))
+            # Poll every child so one slow shard never delays another's report,
+            # and a shard past the worker deadline is killed and reported here.
+            deadline = time.monotonic() + worker_timeout
+            hung: set[str] = set()
+            while any(child.poll() is None for *_, child in workers):
+                if time.monotonic() >= deadline:
+                    for label, *_, child in workers:
+                        if child.poll() is None:
+                            hung.add(label)
+                            _kill(child)
+                    break
+                time.sleep(POLL)
+        finally:
+            for *_, child in workers:
+                if child.poll() is None:
+                    _kill(child)
         for label, group, report, log, child in workers:
             status = child.wait()
             log.seek(0)
             output = log.read().decode("utf-8", "replace")
             log.close()
-            payload = json.loads(report.read_text()) if report.exists() else {"executed": [], "errors": ["no report"]}
+            payload = _read_report(report)
             executed.extend(payload.get("executed", []))
             durations.update(payload.get("durations", {}))
-            if status != 0 or payload.get("errors") or not payload.get("successful", False):
+            if label in hung or status != 0 or payload.get("errors") or not payload.get("successful", False):
                 failed.append(label)
-                sys.stderr.write(f"\n===== {label} FAILED (exit {status}): {' '.join(group)} =====\n{output}\n")
+                reason = f"hung past {worker_timeout:.0f}s and was killed" if label in hung else f"exit {status}"
+                errors = "".join(f"{line}\n" for line in payload.get("errors", []))
+                sys.stderr.write(f"\n===== {label} FAILED ({reason}): {' '.join(group)} =====\n{errors}{output}\n")
             else:
                 summary = [line for line in output.splitlines() if line.startswith("Ran ")]
                 sys.stderr.write(f"{label}: {' '.join(summary)} — {len(group)} modules\n")
@@ -181,6 +227,8 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--shards", type=int, default=None,
                         help="worker processes (default: min(4, cpu count))")
+    parser.add_argument("--worker-timeout", type=float, default=WORKER_TIMEOUT,
+                        help="seconds a worker may run before it is killed and reported")
     parser.add_argument("--start", default=str(START), help=argparse.SUPPRESS)
     parser.add_argument("--pattern", default=PATTERN, help=argparse.SUPPRESS)
     parser.add_argument("--worker", default=None, metavar="REPORT", help=argparse.SUPPRESS)
@@ -190,7 +238,10 @@ def main(argv: list[str]) -> int:
         return run_worker(Path(options.worker), options.modules, Path(options.start))
     if options.modules:
         parser.error("modules are only accepted in --worker mode")
-    return run_sharded(resolve_shard_count(options.shards), Path(options.start), options.pattern)
+    if options.worker_timeout <= 0:
+        parser.error("--worker-timeout must be positive")
+    return run_sharded(resolve_shard_count(options.shards), Path(options.start), options.pattern,
+                       options.worker_timeout)
 
 
 if __name__ == "__main__":
