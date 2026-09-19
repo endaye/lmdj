@@ -95,6 +95,14 @@ WEB_HEAVY_DIRECT_PROOFS = {
 GENERAL_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]"
 )
+# The two contract lanes keep the general role but add the CI-only host label:
+# Contabo shares its CPUs with staging and ran them about 3x slower than
+# netcup, past their budgets every time (#1557). The label set is still
+# literal so a later lane cannot inherit the route without review.
+GENERAL_CI_ONLY_ROLE = (
+    "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, ci-only-host]"
+)
+GENERAL_CI_ONLY_JOBS = ("ci-contract", "deploy-contract")
 # General Linux workload cut over to the dual-node general role, mapped to the
 # manifest lane each guards. The role exists on both trusted hosts, so these
 # jobs are the ones that can absorb either node's spare capacity. This stays
@@ -557,7 +565,9 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertEqual(self.job_needs(job_name), {"change-scope"})
-                self.assertIn(GENERAL_ROLE, job)
+                role = GENERAL_CI_ONLY_ROLE if job_name in GENERAL_CI_ONLY_JOBS else GENERAL_ROLE
+                self.assertIn(role, job)
+                self.assertEqual("ci-only-host" in job, job_name in GENERAL_CI_ONLY_JOBS)
                 self.assertNotIn("runs-on: ubuntu-24.04", job)
                 self.assertNotIn("select-ubuntu-runner", job)
                 self.assertIn(TRUST_CONDITION, job)

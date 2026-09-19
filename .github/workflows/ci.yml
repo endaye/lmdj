@@ -253,7 +253,11 @@ jobs:
     name: CI contract
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.ci_contract && needs.change-scope.outputs.trusted-head == 'true' }}
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    # Both hosts carry the general role, but only netcup is CI-only: the
+    # Contabo node shares its CPUs with staging and ran these suites about
+    # 3x slower (CI contract 196 s vs two 10-minute cancellations; the
+    # sharded release suite 8 min vs a 20-minute worker deadline), #1557.
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, ci-only-host]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
@@ -313,7 +317,11 @@ jobs:
     name: Deploy contract
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.deploy_contract && needs.change-scope.outputs.trusted-head == 'true' }}
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    # Both hosts carry the general role, but only netcup is CI-only: the
+    # Contabo node shares its CPUs with staging and ran these suites about
+    # 3x slower (CI contract 196 s vs two 10-minute cancellations; the
+    # sharded release suite 8 min vs a 20-minute worker deadline), #1557.
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, ci-only-host]
     # Hang detection, not a performance budget: the release suite measured
     # 64 minutes serially on 2026-09-17 and had never finished inside the
     # former 15; it now runs across four workers (#1506). Re-measure from the
