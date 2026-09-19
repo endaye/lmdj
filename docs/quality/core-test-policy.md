@@ -686,6 +686,17 @@ approved design and C ABI version review.
 
 ## Product Proof and Evidence Boundaries
 
+The `build.release_*` ctest entries register the release tooling's real-Git
+Python suites so their tiers and budgets stay under the taxonomy gate, but no
+Core lane selects them: `scripts/core.sh test` and `proof` exclude the name
+prefix and the `coverage` preset excludes it too. They exercise no Core
+Module, and the Deploy Contract lane already runs every `release_*_test.py`
+file through `unittest discover`. On 2026-09-19 the 133 entries took 74 of a
+76-minute macOS Core Proof (`transition_journey` alone 589 seconds) while the
+other 210 tests took 1.4 minutes; every Core lane budget had been exhausted by
+that growth, hidden until the identity failure that ended proof in 660 ms was
+repaired. `tests/build/core_script_test.py` pins the exclusion.
+
 Coverage and sanitizer gates supplement but do not replace
 `scripts/core.sh proof`. Product Proof remains the acceptance evidence for the
 Product Assembly, CLI/MCP Product-provider wiring, Golden WAV, Provider

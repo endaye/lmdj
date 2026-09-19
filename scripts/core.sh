@@ -64,12 +64,16 @@ case "$command_name" in
     test_preset="$1"
     test_mode="${2:-full}"
     require_preset "$test_preset"
+    # build.release_* entries are the release tooling's real-Git Python
+    # suites. They exercise no Core Module, and the Deploy Contract lane
+    # already runs every release_*_test.py file, so the Core lanes never
+    # select them: 133 entries cost 74 minutes of a 76-minute macOS proof.
     case "$test_mode" in
       fast)
-        ctest --preset "$test_preset" -L '^(unit|component)$'
+        ctest --preset "$test_preset" -L '^(unit|component)$' -E '^build\.release_'
         ;;
       full)
-        ctest --preset "$test_preset" -LE '^stress$'
+        ctest --preset "$test_preset" -LE '^stress$' -E '^build\.release_'
         ;;
       stress)
         ctest --preset "$test_preset" -L '^stress$'
@@ -145,7 +149,7 @@ case "$command_name" in
     ctest \
       --test-dir "$release_root" \
       --output-on-failure \
-      -E '^(build\.active_tree|build\.version|contract\.schemas|conformance\.|host\.|e2e\.)' \
+      -E '^(build\.active_tree|build\.version|build\.release_|contract\.schemas|conformance\.|host\.|e2e\.)' \
       -LE '^stress$'
 
     python3 tests/conformance/schema_contract_test.py

@@ -201,7 +201,10 @@ scripts/core.sh clean
 except `stress`, `fast` runs only `unit` and `component`, and `stress` runs only
 the `stress` tier. Running `scripts/core.sh test dev` therefore does not run the
 stress tier; run it explicitly when changing lock-free or concurrent code.
-`proof` also excludes the stress tier. The `core-asan` CI job runs `full` then
+`proof` also excludes the stress tier. Neither `test` nor `proof` nor the
+`coverage` preset selects the `build.release_*` entries: those are the release
+tooling's real-Git Python suites, which exercise no Core Module and belong to
+the Deploy Contract lane. The `core-asan` CI job runs `full` then
 `stress`, and `core-asan-macos` selects the `native` label. These belong to
 selected incremental main batches and explicit complete self-tests, not a Pull
 Request merge gate. Main pushes and completed batches wake the incremental

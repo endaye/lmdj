@@ -87,7 +87,7 @@ current-head review 和 conversation protection。旧引擎缺少显式复核结
 ## 测试层级
 unit/component 验证局部边界，integration/e2e 验证组合，stress 验证锁自由/并发，Proof 验证 Headless Core 交付链。
 ## 稳定命令
-`scripts/core.sh test dev full` 运行除 stress 外的完整层级；stress 必须显式运行；`scripts/core.sh proof` 也不包含 stress。
+`scripts/core.sh test dev full` 运行除 stress 外的完整层级；stress 必须显式运行；`scripts/core.sh proof` 也不包含 stress。`test`、`proof` 与 `coverage` preset 都不选择 `build.release_*` 条目：它们是 release 工具链的真实 Git Python 套件，不触及任何 Core Module，由 Deploy Contract lane 全量运行（`unittest discover -p 'release_*_test.py'`）；2026-09-19 的实测里这 133 条占了 macOS Core Proof 76 分钟中的 74 分钟，而其余 210 条只需 1.4 分钟。
 
 ## Version identity fixtures
 
