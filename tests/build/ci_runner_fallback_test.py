@@ -48,6 +48,14 @@ GENERAL_JOBS = {
     "deploy-contract": "deploy_contract",
     "chameleon-lab": "chameleon_lab",
 }
+# Both trusted hosts carry the general role, but only netcup is CI-only.
+# #1557 added that label to the two contract lanes after Contabo, which shares
+# its CPUs with staging, ran them about 3x slower and past their budgets every
+# time. The remaining general lanes still absorb either node's spare capacity.
+GENERAL_CI_ONLY_ROLE = (
+    "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, ci-only-host]"
+)
+GENERAL_CI_ONLY_JOBS = ("ci-contract", "deploy-contract")
 # None of these jobs shares a composite action, so each keeps its own proof
 # path verbatim. Pinning the command per job keeps the cutover a change of
 # where they run and not of what they run.
@@ -241,7 +249,9 @@ class CiRunnerFallbackTest(unittest.TestCase):
         for job_name, lane in GENERAL_JOBS.items():
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertIn(GENERAL_ROLE, job)
+                ci_only = job_name in GENERAL_CI_ONLY_JOBS
+                self.assertIn(GENERAL_CI_ONLY_ROLE if ci_only else GENERAL_ROLE, job)
+                self.assertEqual("ci-only-host" in job, ci_only)
                 self.assertIn("needs: change-scope", job)
                 self.assertNotIn("select-ubuntu-runner", job)
                 self.assertNotIn("runs-on: ubuntu-24.04", job)
