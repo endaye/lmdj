@@ -533,6 +533,42 @@ void test_validation_abort_cleanup_collision_and_contention() {
   LMDJ_CHECK(collision.error().code == ErrorCode::duplicate_id);
 }
 
+void test_unreadable_local_copy_is_named_not_blamed_on_the_bundle() {
+  TempDirectory temp;
+  const auto workspace = temp.path() / "workspace";
+  const auto source = temp.path() / "source.lmdj";
+  create_project(source);
+  const auto fixture = build_fixture(source);
+  auto platform =
+      lmdj::project_io::make_native_project_storage_platform(
+          temp.path() / "leases");
+  ProjectBundleTransfer transfer{platform};
+
+  // A copy of this Project ID already exists locally, and it is damaged:
+  // the Store refuses to load it for reasons that have nothing to do with
+  // the staged bundle.
+  const auto destination =
+      workspace / "projects" / (std::string{kProjectId} + ".lmdj");
+  LMDJ_CHECK(platform->ensure_directory(destination).has_value());
+  LMDJ_CHECK(
+      platform
+          ->create_immutable(
+              destination / "manifest.json",
+              std::span<const std::byte>{})
+          .has_value());
+
+  append_fixture(transfer, workspace, uuid(220), fixture);
+  const auto refused = transfer.commit(uuid(220));
+  LMDJ_CHECK(!refused.has_value());
+  LMDJ_CHECK(refused.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(refused.error().details.at("local_copy") == true);
+  LMDJ_CHECK(
+      !platform
+           ->directory_exists(
+               workspace / ".lmdj-host/import-staging" / uuid(220))
+           .value());
+}
+
 void test_index_canonicality_payload_limits_and_entry_hashes() {
   TempDirectory temp;
   const auto workspace = temp.path() / "workspace";
@@ -645,6 +681,7 @@ int main() {
   try {
     test_streamed_import_is_atomic_discoverable_and_idempotent();
     test_validation_abort_cleanup_collision_and_contention();
+    test_unreadable_local_copy_is_named_not_blamed_on_the_bundle();
     test_index_canonicality_payload_limits_and_entry_hashes();
     test_publish_failure_preserves_visible_projects_and_cleans_staging();
   } catch (const std::exception& error) {

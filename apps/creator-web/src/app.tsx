@@ -155,6 +155,7 @@ const SAMPLE_ERROR_CODES = new Set([
   "HOST_TIMEOUT",
   "HOST_RESTART_REQUIRED",
   "HOST_PROTOCOL_MISMATCH",
+  "LOCAL_PROJECT_UNREADABLE",
 ]);
 function errorCode(error: unknown): string {
   if (error instanceof DOMException && error.name === "AbortError") {
