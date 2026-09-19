@@ -113,20 +113,37 @@ class _RecordingResult(unittest.TextTestResult):
         super().stopTest(test)
 
 
+def _write_report(report: Path, payload: dict) -> None:
+    """Whole document or nothing: a kill mid-write leaves no half report."""
+    staged = report.with_name(report.name + ".tmp")
+    staged.write_text(json.dumps(payload))
+    os.replace(staged, report)
+
+
 def run_worker(report: Path, modules: list[str], start: Path) -> int:
     """Run the named modules in this process and write the executed ids."""
     sys.path.insert(0, str(start))
     loader = unittest.TestLoader()
     suite = unittest.TestSuite(loader.loadTestsFromName(module) for module in modules)
-    if loader.errors:
-        report.write_text(json.dumps({"executed": [], "errors": loader.errors}))
-        sys.stderr.write("\n".join(loader.errors) + "\n")
+    errors = list(loader.errors)
+    # The parent discovered these names from files under `start`; a bare
+    # name that resolved anywhere else would run code the accounting never
+    # saw, so the worker refuses it rather than trusting sys.path order.
+    for module in modules:
+        loaded = sys.modules.get(module)
+        origin = Path(getattr(loaded, "__file__", "") or "").resolve()
+        if loaded is not None and start.resolve() not in origin.parents:
+            errors.append(f"why: module {module} resolved to {origin}, outside {start}; "
+                          f"remedy: remove the shadowing copy from sys.path")
+    if errors:
+        _write_report(report, {"executed": [], "errors": errors, "successful": False})
+        sys.stderr.write("\n".join(errors) + "\n")
         return 1
     runner = unittest.TextTestRunner(stream=sys.stderr, verbosity=1, resultclass=_RecordingResult)
     result = runner.run(suite)
-    report.write_text(json.dumps({"executed": result.executed, "errors": [],
-                                  "durations": result.durations,
-                                  "successful": result.wasSuccessful()}))
+    _write_report(report, {"executed": result.executed, "errors": [],
+                           "durations": result.durations,
+                           "successful": result.wasSuccessful()})
     return 0 if result.wasSuccessful() else 1
 
 

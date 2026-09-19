@@ -2,6 +2,7 @@
 """The sharded release-suite runner keeps whole modules together and fails closed."""
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
 from pathlib import Path
@@ -189,6 +190,26 @@ class ExecutionTest(RunnerFixture):
                          ["release_beta_test.T.test_0", "release_beta_test.T.test_1", "release_gamma_test.T.test_0"])
         self.assertTrue(payload["successful"])
         self.assertEqual(set(payload["durations"]), set(payload["executed"]))
+
+    def test_worker_refuses_a_module_resolved_outside_the_start_directory(self) -> None:
+        # `start` is sys.path[0] in a real worker, so only a name already
+        # bound elsewhere in this process can shadow it; bind one and check
+        # that the worker refuses to run it instead of trusting the binding.
+        shadow = self.start / "shadow"
+        shadow.mkdir()
+        (shadow / "release_beta_test.py").write_text(module(1))
+        spec = importlib.util.spec_from_file_location("release_beta_test", shadow / "release_beta_test.py")
+        bound = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bound)
+        report = self.start / "report.json"
+        stderr = io.StringIO()
+        with patch.dict(sys.modules, {"release_beta_test": bound}), patch.object(sys, "stderr", stderr):
+            status = runner.run_worker(report, ["release_beta_test"], self.start)
+        self.assertEqual(status, 1)
+        payload = json.loads(report.read_text())
+        self.assertEqual(payload["executed"], [])
+        self.assertIn("resolved to", payload["errors"][0])
+        self.assertNotIn("Ran ", stderr.getvalue())
 
     def test_modules_outside_worker_mode_are_a_usage_error(self) -> None:
         completed = self.run_runner("release_alpha_test")
