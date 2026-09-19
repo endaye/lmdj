@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-09-16
     occurrence: https://github.com/endaye/lmdj/issues/1389
     observed_by: Kimi (agent)
+  - date: 2026-09-19
+    occurrence: https://github.com/endaye/lmdj/actions/runs/35419357786
+    observed_by: Claude Code (Fable 5.1)
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/657
 ---

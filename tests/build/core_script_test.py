@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -67,13 +68,13 @@ class CoreScriptTest(unittest.TestCase):
     def test_fast_mode_selects_only_unit_and_component_tiers(self) -> None:
         self.assert_test_arguments(
             ("test", "dev", "fast"),
-            ["--preset", "dev", "-L", "^(unit|component)$"],
+            ["--preset", "dev", "-L", "^(unit|component)$", "-E", "^build\\.release_"],
         )
 
     def test_full_mode_excludes_the_stress_tier(self) -> None:
         self.assert_test_arguments(
             ("test", "dev", "full"),
-            ["--preset", "dev", "-LE", "^stress$"],
+            ["--preset", "dev", "-LE", "^stress$", "-E", "^build\\.release_"],
         )
 
     def test_stress_mode_selects_only_the_stress_tier(self) -> None:
@@ -85,7 +86,7 @@ class CoreScriptTest(unittest.TestCase):
     def test_default_test_mode_is_full(self) -> None:
         self.assert_test_arguments(
             ("test", "dev"),
-            ["--preset", "dev", "-LE", "^stress$"],
+            ["--preset", "dev", "-LE", "^stress$", "-E", "^build\\.release_"],
         )
 
     def test_tsan_preset_selects_all_native_tests(self) -> None:
@@ -102,7 +103,32 @@ class CoreScriptTest(unittest.TestCase):
             {"include": {"label": "^native$"}},
         )
 
-    def test_proof_release_ctest_excludes_stress_label(self) -> None:
+    def test_stress_mode_cannot_select_release_tooling_entries(self) -> None:
+        # The stress selector needs no name exclusion: no build.release_*
+        # entry carries the stress tier label.
+        cmake_source = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        registrations = re.findall(
+            r'lmdj_add_test\(\s*NAME "?build\.release_[^\n]*\n\s*TIER (\w+)',
+            cmake_source,
+        )
+        self.assertGreater(len(registrations), 0)
+        self.assertNotIn("stress", registrations)
+
+    def test_coverage_preset_excludes_release_tooling_entries(self) -> None:
+        presets = json.loads(
+            (REPO_ROOT / "CMakePresets.json").read_text(encoding="utf-8")
+        )
+        coverage = next(
+            preset
+            for preset in presets["testPresets"]
+            if preset["name"] == "coverage"
+        )
+        excluded = re.compile(coverage["filter"]["exclude"]["name"])
+        self.assertIsNotNone(excluded.match("build.release_candidate_transition_journey"))
+        self.assertIsNone(excluded.match("build.release"))
+        self.assertIsNone(excluded.match("facade.candidate_store"))
+
+    def test_proof_release_ctest_excludes_stress_label_and_release_tooling(self) -> None:
         script_source = CORE_SCRIPT.read_text(encoding="utf-8")
         proof_source = script_source.split("  proof)\n", maxsplit=1)[1].split(
             "  clean)\n", maxsplit=1
@@ -111,7 +137,7 @@ class CoreScriptTest(unittest.TestCase):
             """ctest \\
       --test-dir "$release_root" \\
       --output-on-failure \\
-      -E '^(build\\.active_tree|build\\.version|contract\\.schemas|conformance\\.|host\\.|e2e\\.)' \\
+      -E '^(build\\.active_tree|build\\.version|build\\.release_|contract\\.schemas|conformance\\.|host\\.|e2e\\.)' \\
       -LE '^stress$'""",
             proof_source,
         )
