@@ -824,6 +824,44 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 )
         self.assertEqual(self.main_source.count("ci-core"), len(CORE_JOBS))
 
+    def test_the_bare_metal_runner_admits_one_heavy_native_job_at_a_time(self) -> None:
+        """Release stress and the macOS gates share one physical machine.
+
+        #1558 moved the stress suite off the KVM hosts because its 2.67 ms
+        thread-CPU deadline cannot tolerate time it did not consume. The gates
+        build Core twice on the same runner, so without the repository queue a
+        gate would supply the contention the move was made to remove.
+        """
+        self.assertRegex(
+            self.workflow_job("macos-primary"),
+            r"(?m)^    concurrency:\n"
+            r"      group: lmdj-native-heavy\n"
+            r"      queue: max\n"
+            r"      cancel-in-progress: false$",
+            msg=(
+                "why: the macOS gates share the bare-metal runner with the "
+                "relocated Release stress suite, whose gate measures thread CPU "
+                "time against a 2.67 ms deadline; remedy: keep macos-primary in "
+                "the lmdj-native-heavy queue beside core-stress and core-tsan"
+            ),
+        )
+
+    def test_the_self_hosted_python_shim_cannot_inherit_an_earlier_run(self) -> None:
+        """$RUNNER_TEMP persists on a self-hosted runner.
+
+        A shim symlink left by an earlier run sits first on PATH, so without
+        removing the directory a later step's `python3` can resolve to an
+        interpreter this run never verified.
+        """
+        job = self.workflow_job("macos-primary")
+        self.assertIn('rm -rf -- "$python_shim_dir"', job)
+        self.assertLess(
+            job.index('rm -rf -- "$python_shim_dir"'),
+            job.index('mkdir -p "$python_shim_dir"'),
+            "why: the shim directory must be removed before it is recreated; "
+            "remedy: keep the rm -rf immediately before the mkdir -p",
+        )
+
     def test_scope_and_gate_timeouts_are_three_minutes_and_lane_limits_match_policy(self) -> None:
         expected = {
             "change-scope": 3,

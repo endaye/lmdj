@@ -803,6 +803,15 @@ jobs:
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_macos }}
     runs-on: ${{ fromJSON(needs.select-macos-runner.outputs.runner) }}
     timeout-minutes: 30
+    # Release stress moved to this same bare-metal runner in #1558 because its
+    # 2.67 ms thread-CPU deadline cannot survive a hypervisor; a gate compiling
+    # beside it would reintroduce exactly the overruns that move eliminated.
+    # The repository queue is what makes "one heavy native job at a time" true.
+    # On the hosted fallback path the group costs only a queue slot.
+    concurrency:
+      group: lmdj-native-heavy
+      queue: max
+      cancel-in-progress: false
     # Infrastructure failure is adjudicated by the fallback and final gate
     # jobs. Semantic test outcomes are published by the composite action.
     continue-on-error: true
@@ -842,9 +851,13 @@ jobs:
           "$python_path" -c \
             'import sys; raise SystemExit(sys.version_info[:2] != (3, 11))'
 
+          # $RUNNER_TEMP persists on a self-hosted runner, so a shim left by an
+          # earlier run can shadow the interpreter this run just verified.
+          # Recreate the directory empty rather than writing over its contents.
           python_shim_dir="$RUNNER_TEMP/lmdj-python-3.11"
+          rm -rf -- "$python_shim_dir"
           mkdir -p "$python_shim_dir"
-          ln -sf -- "$python_path" "$python_shim_dir/python3"
+          ln -s -- "$python_path" "$python_shim_dir/python3"
           echo "$python_shim_dir" >>"$GITHUB_PATH"
           "$python_shim_dir/python3" --version
       - uses: actions/setup-python@v6

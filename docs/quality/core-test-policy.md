@@ -486,8 +486,8 @@ hosts, not a defect. Routing splits two ways:
   Coverage and Core package — name `ci-core` literally. Architecture Portal
   declares its role inside the called `architecture-portal.yml`, because GitHub
   does not allow a `uses:` job to carry `runs-on`. In the complete self-test batch,
-  Release stress and, since #693, TSan also name `ci-core`;
-  both join the `lmdj-native-heavy` queue so they never run beside each other.
+  TSan names `ci-core` since #693, and Release stress names the trusted
+  bare-metal macOS runner since #1558; both join the `lmdj-native-heavy` queue.
 
 `ci-core` deliberately does not span both hosts: the persistent native `ccache`
 and the preinstalled clang-22/llvm-22 coverage toolchain are shared-host state,
@@ -615,9 +615,16 @@ stress suite would start in the same second and run beside each other. Run
 probe's result unusable -- it measured contention rather than whether the host
 can execute the TSan runtime. A TSan result is only evidence when it runs alone.
 
-The nightly Release stress lane is trusted native workload on `ci-core`: it
-runs at most 20 consecutive successful repetitions and stops on the first
-failure. It does not retry a failed execution.
+The nightly Release stress lane is trusted native workload on the bare-metal
+macOS runner (`self-hosted, macOS, ARM64, lmdj`), not on `ci-core`: it runs at
+most 20 consecutive successful repetitions and stops on the first failure, and
+it does not retry a failed execution. It left the KVM hosts on 2026-09-19
+([decision](../prd/decisions/2026-09-19-release-stress-on-bare-metal.md)): the
+2026-09-16 attribution reads `/proc/stat` in 10 ms ticks, and every overrun
+observed since 2026-09-18 -- four consecutive batches, worst 4.7-9.0 ms, never
+a pass -- was a sub-tick stall the counters cannot see, while the identical
+Release build passed 20/20 repetitions on the M1. The deadline and the
+zero-unattributed-overruns bound are unchanged; only the host is.
 
 ## Sanitizer Selection
 
