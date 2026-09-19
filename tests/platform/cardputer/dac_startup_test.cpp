@@ -39,8 +39,9 @@ void release(lmdj::cardputer::EspAudioIo& io) {
 }
 
 int main(int argc, char** argv) {
-  require(argc == 2, "one startup scenario is required");
-  const std::string_view scenario = argv[1];
+  // Coverage probe: no arguments means the first registered scenario.
+  require(argc <= 2, "at most one startup scenario");
+  const std::string_view scenario = argc > 1 ? argv[1] : "order";
   require(scenario == "order" || scenario == "power_failure", "unknown startup scenario");
   fake_i2c::before_transmit = observe;
   lmdj::cardputer::EspAudioIo io({8, 9, 41, 43, 42, 0x18, 0xBF, 2, 1});

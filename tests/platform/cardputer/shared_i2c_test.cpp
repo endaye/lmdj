@@ -7,8 +7,9 @@
 using namespace lmdj::cardputer;
 
 int main(int argc, char** argv) {
-  CHECK(argc == 2);
-  const std::string_view scenario = argv[1];
+  // Coverage probe: no arguments means the first registered scenario.
+  CHECK(argc <= 2);
+  const std::string_view scenario = argc > 1 ? argv[1] : "restart";
   EspAudioConfig config{8, 9, 41, 43, 42, 0x18, 0x40, 2, 1};
   if (scenario == "owned") {
     EspAudioIo audio(config);

@@ -115,8 +115,10 @@ void failures() {
 }
 }
 int main(int argc, char** argv) {
-  require(argc == 2, "scenario required");
-  const std::string_view scenario(argv[1]);
+  // The coverage probe runs every instrumented binary with no arguments;
+  // default to one scenario like the sibling suites and refuse extra ones.
+  require(argc <= 2, "at most one scenario");
+  const std::string_view scenario = argc > 1 ? argv[1] : "percentile";
   if (scenario == "percentile") percentile();
   else if (scenario == "capacity") capacity();
   else if (scenario == "invalid") invalid();

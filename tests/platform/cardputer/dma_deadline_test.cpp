@@ -34,8 +34,9 @@ int write(const void* data, std::size_t size, std::size_t* bytes) {
 }
 }
 int main(int argc, char** argv) {
-  require(argc == 2, "scenario required");
-  const std::string_view scenario(argv[1]);
+  // Coverage probe: no arguments means the first registered scenario.
+  require(argc <= 2, "at most one scenario");
+  const std::string_view scenario = argc > 1 ? argv[1] : "ontime";
   require(scenario == "ontime" || scenario == "before" || scenario == "during", "unknown scenario");
   lmdj::cardputer::EspAudioIo io({8, 9, 41, 43, 42, 0x18, 0xBF, 2, 1});
   require(io.configure() && io.enable(), "configure/enable failed");
