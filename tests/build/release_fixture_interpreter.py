@@ -69,7 +69,7 @@ def fixture_path():
         wrapper = Path(directory) / name
         wrapper.write_text(f"#!/bin/sh\nexec {shlex.quote(interpreter)} \"$@\"\n")
         wrapper.chmod(0o755)
-    return directory + os.pathsep + os.environ["PATH"]
+    return directory + os.pathsep + os.environ.get("PATH", os.defpath)
 
 
 def reexec_when_parent_cannot_start_sanitized():
@@ -79,9 +79,11 @@ def reexec_when_parent_cannot_start_sanitized():
     test of those tools therefore needs a parent that satisfies the same
     prerequisite. This is a fixture concern only, never production selection.
     """
-    interpreter = fixture_python()
-    if os.path.realpath(interpreter) == os.path.realpath(sys.executable):
+    interpreter = os.path.realpath(fixture_python())
+    if interpreter == os.path.realpath(sys.executable):
         return
+    # One hop only, compared canonically: a second exec means the verified
+    # interpreter still reports a different executable, so stop rather than loop.
     if os.environ.get("LMDJ_FIXTURE_REEXEC") == interpreter:
         raise RuntimeError("why: re-executed fixture interpreter still differs from the verified one; "
                            "remedy: inspect the interpreter candidates instead of looping")

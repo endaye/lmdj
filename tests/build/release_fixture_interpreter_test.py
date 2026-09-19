@@ -42,6 +42,15 @@ class FixtureInterpreterTest(unittest.TestCase):
             interpreter.reexec_when_parent_cannot_start_sanitized()
         execv.assert_not_called()
 
+    def test_fixture_path_survives_an_unset_PATH(self):
+        interpreter.fixture_path.cache_clear()
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PATH", None)
+            path = interpreter.fixture_path()
+        interpreter.fixture_path.cache_clear()
+        self.assertTrue(path.split(os.pathsep)[0].startswith(tempfile.gettempdir().rstrip("/").split("/")[0] + "/"))
+        self.assertIn(os.defpath.strip(os.pathsep), path)
+
     def test_reexec_hands_argv_to_the_verified_interpreter_once(self):
         with patch.object(interpreter, "fixture_python", return_value="/verified/python3"), \
                 patch.object(interpreter.os, "execv") as execv, \
