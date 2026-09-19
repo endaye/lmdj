@@ -49,7 +49,8 @@ sanitized executor and failed 66 of 67 `core (ubuntu)` tests with `exited 127`
 on every netcup runner once the toolcache carried 3.11.16; the 185-byte child
 output matched the loader message exactly. The fixture repair protects tests
 only; `release-audit.yml` runs the same production spawns on the same runners,
-so the exit is the host-level toolcache repair tracked in the escalation.
+so the exit is the host-level toolcache repair tracked in
+[#1551](https://github.com/endaye/lmdj/issues/1551).
 
 `exit: none`: the focused test helper verifies this suite's child interpreter,
 not every subprocess fixture in the repository. Remote acceptance of the repair
