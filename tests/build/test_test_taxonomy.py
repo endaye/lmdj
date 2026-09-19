@@ -156,13 +156,50 @@ def policy_errors() -> list[str]:
     ]
 
 
+CMAKE_DEFAULTS = Path(__file__).resolve().parents[2] / "cmake/LmdjTesting.cmake"
+CMAKE_DEFAULT = re.compile(r"^set\(lmdj_test_timeout_(\w+)\s+(\d+)\)\s*$")
+
+
+def cmake_errors() -> list[str]:
+    """The CMake tier defaults must be the budget this file enforces.
+
+    `lmdj_add_test` gives a registration without TIMEOUT the tier default from
+    `cmake/LmdjTesting.cmake`, and under a sanitizer this file requires every
+    native timeout to equal the tier budget times the multiplier. #1529 raised
+    `contract` here and in the published table but not in CMake, so every
+    default-budget contract test read 90 s under ASan where 360 s was required
+    — a drift only the ASan lane could see (#1557 batch 35441297299).
+    """
+    try:
+        defaults = {
+            match.group(1): float(match.group(2))
+            for match in map(CMAKE_DEFAULT.match,
+                             CMAKE_DEFAULTS.read_text(encoding="utf-8").splitlines())
+            if match
+        }
+    except OSError:
+        return [f"{CMAKE_DEFAULTS.name}: unreadable, so the CMake tier defaults "
+                "cannot be compared with the enforced budget"]
+    unreadable = sorted(TIERS - set(defaults))
+    if unreadable:
+        return [f"why: {CMAKE_DEFAULTS.name} declares no readable default for "
+                f"{', '.join(unreadable)}; remedy: keep one "
+                "`set(lmdj_test_timeout_<tier> <whole number>)` per tier"]
+    return [
+        f"{CMAKE_DEFAULTS.name}: defaults {defaults.get(tier)} for {tier} while "
+        f"this file enforces {MAX_TIMEOUT.get(tier)}; remedy: change both together"
+        for tier in sorted(set(defaults) | set(MAX_TIMEOUT))
+        if defaults.get(tier) != MAX_TIMEOUT.get(tier)
+    ]
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print(f"usage: {Path(sys.argv[0]).name} <configured-build-dir>", file=sys.stderr)
         return 2
 
     errors, count = validate(Path(sys.argv[1]))
-    errors = policy_errors() + errors
+    errors = policy_errors() + cmake_errors() + errors
     if errors:
         print("Core test taxonomy: FAIL", file=sys.stderr)
         print("\n".join(errors), file=sys.stderr)
