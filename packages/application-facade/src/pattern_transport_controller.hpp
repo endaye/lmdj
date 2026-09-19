@@ -30,6 +30,16 @@ class PatternTransportAudioPort {
   virtual std::optional<foundation::PatternId> current_pattern() const {
     return std::nullopt;
   }
+  // Mirrors the public port's overlay publication capability (#1513).
+  virtual foundation::Result<audio::PatternPublication> publish_overlay(
+      const foundation::PatternId& pattern,
+      std::span<const domain::PatternEvent> events) {
+    (void)pattern;
+    (void)events;
+    return foundation::Result<audio::PatternPublication>::failure(
+        {foundation::ErrorCode::unsupported_audio,
+         "Pattern transport overlay publication is not implemented by this host"});
+  }
 };
 
 // What an open recording would contribute to its Pattern if it ended now.
@@ -59,6 +69,16 @@ class PatternTransportCoordinator {
   // `std::nullopt` means nothing to publish right now.
   foundation::Result<std::optional<PatternTransportOverlayProjection>>
   project_overlay();
+  // Publishes the current overlay through the Host's capability and records
+  // the publication generation it created (#1513). Called from the control
+  // cadence (`continue_operation`), never inline on a Pad trigger. Returns
+  // success having published nothing when: the recording is closed or closing
+  // (the close owns the next publication), a switch is pending or was applied
+  // (the boundary belongs to the switch machinery), the projection has not
+  // advanced beyond what was already published, or the Host refused the
+  // publication (queued pool full or seam unimplemented) — refusal is a
+  // capability fact, retried on the next cadence, not an error state.
+  foundation::Result<void> publish_overlay();
 
  private:
   audio::PatternTransportAction audio_action(
@@ -104,6 +124,32 @@ class PatternTransportCoordinator {
   std::vector<domain::PatternEvent> projected_;
   std::optional<foundation::PatternId> projected_pattern_;
   std::uint64_t projection_generation_{};
+  // Projection generation whose publication the coordinator last recorded.
+  // Zero means nothing published yet. De-duplicates content-identical
+  // republication attempts across cadence ticks.
+  std::uint64_t published_projection_generation_{};
+  // Generation of the overlay publication the coordinator last recorded in
+  // the admission journal (admission-overlay). Zero means none yet. Distinct
+  // from projection_generation_, which advances on content even when the Host
+  // refuses or the boundary belongs to a switch.
+  std::uint64_t published_generation_{};
+  bool overlay_publication_pending_{};
+  // An overlay publication handed to the Host but not yet applied by the
+  // engine (it lands at its Bar boundary). The journal record is written only
+  // after it lands, so a retained cutoff never names an unapplied
+  // publication; a closing command in that window reports busy until the
+  // cadence tick past the boundary (#1513).
+  std::uint64_t unlanded_overlay_generation_{};
+  // Bounded retry for a refused overlay publication, keyed to the refused
+  // projection generation: three attempts per content change (#1513).
+  unsigned overlay_refusals_{};
+  std::uint64_t refused_projection_generation_{};
+  std::uint64_t settled_refused_projection_{};
+  // Whether the settled refusal was quota-class (transient) and may re-arm
+  // once for the same content on a later cadence tick (#1513); the one-shot
+  // flag makes the re-arm a bounded recovery window, not a per-tick loop.
+  bool settled_refusal_transient_{};
+  bool transient_retry_spent_{};
 };
 
 }  // namespace lmdj::facade::detail

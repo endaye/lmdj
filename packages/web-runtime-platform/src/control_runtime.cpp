@@ -1150,6 +1150,19 @@ class EnginePatternTransportPort final : public facade::PatternTransportAudioPor
   explicit EnginePatternTransportPort(audio::RealtimeEngine& engine) noexcept
       : engine_(engine) {}
 
+  // The overlay publication capability the coordinator drives (#1513). The
+  // Impl injects its prepare-and-publish closure right after construction:
+  // building the prepared view needs the Runtime Snapshot, which lives on the
+  // Impl, not on this engine-only adapter. Empty means the engagement has not
+  // finished wiring; the coordinator treats that as an ordinary refusal and
+  // retries on the next cadence tick.
+  void bind_overlay_publication(
+      std::function<foundation::Result<audio::PatternPublication>(
+          const foundation::PatternId&, std::span<const domain::PatternEvent>)>
+          publish) {
+    publish_overlay_ = std::move(publish);
+  }
+
   audio::PatternTransportSubmit submit(
       const audio::PatternTransportCommand& command) override {
     return engine_.submit_pattern_transport(command);
@@ -1167,6 +1180,26 @@ class EnginePatternTransportPort final : public facade::PatternTransportAudioPor
   }
   std::optional<audio::PatternReplacementAuthority> pending_switch()
       const override {
+    // The remembered overlay authority is reported only while the engine
+    // itself still holds that exact generation pending — telemetry's snapshot
+    // can diverge from the slot's stored triple, but a pending generation the
+    // engine no longer reports means the overlay was superseded or cancelled,
+    // and the engine's real successor must not be masked by it. Once the
+    // generation is current the overlay applied and the record is spent.
+    if (queued_overlay_.has_value()) {
+      const auto telemetry = engine_.pattern_telemetry();
+      const auto pending_pattern = engine_.pending_pattern_id();
+      // The remembered authority is reported only when the engine itself
+      // still holds that exact publication — same generation AND same
+      // Pattern. Anything else (applied, cancelled, superseded) spends the
+      // record, and the engine's real successor must never be masked.
+      if (telemetry.pending_generation == queued_overlay_->generation &&
+          pending_pattern.has_value() &&
+          *pending_pattern == queued_overlay_->pattern_id) {
+        return *queued_overlay_;
+      }
+      queued_overlay_.reset();
+    }
     const auto pending = engine_.pending_pattern_id();
     const auto telemetry = engine_.pattern_telemetry();
     if (!pending.has_value() || telemetry.pending_generation == 0) {
@@ -1181,9 +1214,33 @@ class EnginePatternTransportPort final : public facade::PatternTransportAudioPor
   std::optional<foundation::PatternId> current_pattern() const override {
     return engine_.current_pattern_id();
   }
+  foundation::Result<audio::PatternPublication> publish_overlay(
+      const foundation::PatternId& pattern,
+      std::span<const domain::PatternEvent> events) override {
+    if (!publish_overlay_) {
+      return foundation::Result<audio::PatternPublication>::failure(
+          {foundation::ErrorCode::internal_error,
+           "Pattern transport overlay publication is not wired"});
+    }
+    const auto published = publish_overlay_(pattern, events);
+    if (published.has_value()) {
+      // Remember the exact authority this port published. Telemetry can
+      // diverge from the slot's stored triple, and a fence naming the overlay
+      // must match the slot exactly, so report the remembered triple while
+      // the publication has not landed (#1513).
+      queued_overlay_ = audio::PatternReplacementAuthority{
+          published.value().generation, pattern,
+          published.value().activation_frame};
+    }
+    return published;
+  }
 
  private:
   audio::RealtimeEngine& engine_;
+  std::function<foundation::Result<audio::PatternPublication>(
+      const foundation::PatternId&, std::span<const domain::PatternEvent>)>
+      publish_overlay_;
+  mutable std::optional<audio::PatternReplacementAuthority> queued_overlay_;
 };
 
 // One engaged global Pattern transport session. The Facade factory owns the
@@ -1623,6 +1680,15 @@ struct ControlRuntime::Impl {
     engagement->session = session_id;
     engagement->generation = enabled_transport_generation;
     engagement->pattern = foundation::PatternId{*pattern_id};
+    // Wire the coordinator's overlay publication capability to this Impl's
+    // prepare-and-publish path (#1513). `this` is stable for the engagement's
+    // lifetime: the engagement is owned by the Impl and both die together.
+    engagement->port.bind_overlay_publication(
+        [this](const foundation::PatternId& selected,
+               std::span<const domain::PatternEvent> events) {
+          return publish_project_pattern(
+              selected, std::nullopt, events);
+        });
     engagement->controller = application.make_pattern_transport_controller(
         engagement->port,
         facade::PatternTransportControllerConfig{
@@ -4804,8 +4870,11 @@ void ControlRuntime::service_pattern_transport() noexcept {
       return;
     }
     const auto status = impl_->transport->controller->inspect();
+    // An open recording keeps the cadence alive even while idle: the
+    // coordinator publishes the pending overlay from continue_operation
+    // (#1513), and its own pending flag makes the steady-state call O(1).
     if (status.phase == facade::PatternTransportPhase::idle &&
-        !impl_->transport->publish_pending) {
+        !impl_->transport->publish_pending && !status.recording) {
       return;
     }
     // A continuation failure is retained on the coordinator and surfaced

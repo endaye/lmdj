@@ -66,7 +66,15 @@ RuntimeSnapshot pattern_snapshot(const char* pattern_id = kPattern) {
           lmdj::foundation::ArtifactRef{std::string(64, 'a'), "audio/wav", 256},
           sample,
           ResolvedPlayback{0, 128, TriggerMode::loop_gate, 1.0F, false},
-      }},
+      },
+       // The overlay projection's recorded events land on pad 1; a prepared
+       // view needs material for every slot an event names (#1513).
+       ResolvedPad{
+           PadSlotId{0, 1},
+           lmdj::foundation::ArtifactRef{std::string(64, 'b'), "audio/wav", 256},
+           sample,
+           ResolvedPlayback{0, 128, TriggerMode::loop_gate, 1.0F, false},
+       }},
       {ResolvedEvent{
           PadSlotId{0, 0}, 0, lmdj::domain::kBarTicks4x4, 127, sample,
       }},
@@ -137,6 +145,14 @@ struct EnginePort final : PatternTransportAudioPort {
   }
   std::optional<lmdj::audio::PatternReplacementAuthority> pending_switch()
       const override {
+    // Report the exact authority this port published, like queue_switch does:
+    // the telemetry snapshot can diverge from the slot's stored triple, and a
+    // fence naming the overlay must match the slot exactly.
+    if (queued_overlay_ &&
+        engine.pattern_telemetry().current_generation <
+            queued_overlay_->generation) {
+      return queued_overlay_;
+    }
     const auto pending = engine.pending_pattern_id();
     if (!pending) {
       // Once the queued switch is current the engine no longer reports it as
@@ -163,6 +179,33 @@ struct EnginePort final : PatternTransportAudioPort {
     if (!report_current_pattern) return std::nullopt;
     return engine.current_pattern_id();
   }
+  // The overlay publication capability (#1513). Records what the coordinator
+  // asked to publish so a test can assert on it; refuses when asked to.
+  std::vector<std::pair<PatternId, std::vector<lmdj::domain::PatternEvent>>>
+      published_overlays;
+  bool refuse_overlay_publication = false;
+  lmdj::foundation::Result<lmdj::audio::PatternPublication> publish_overlay(
+      const PatternId& pattern,
+      std::span<const lmdj::domain::PatternEvent> events) override {
+    if (refuse_overlay_publication) {
+      return lmdj::foundation::Result<lmdj::audio::PatternPublication>::failure(
+          {lmdj::foundation::ErrorCode::bank_quota_exhausted,
+           "test refusal"});
+    }
+    auto view = PreparedPatternView::from_snapshot_with_overlay(
+        pattern_snapshot(pattern.value().c_str()), events);
+    LMDJ_CHECK(view.has_value());
+    const auto publication =
+        engine.publish_pattern_view(std::move(view.value()));
+    LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+    published_overlays.emplace_back(
+        pattern, std::vector<lmdj::domain::PatternEvent>{events.begin(), events.end()});
+    queued_overlay_ = lmdj::audio::PatternReplacementAuthority{
+        publication.generation, pattern, publication.activation_frame};
+    return lmdj::foundation::Result<lmdj::audio::PatternPublication>::success(
+        publication);
+  }
+  std::optional<lmdj::audio::PatternReplacementAuthority> queued_overlay_;
   std::optional<lmdj::audio::PatternReplacementAuthority> queued_switch_;
   void queue_switch(const char* pattern_id, std::uint64_t activation_frame) {
     auto view = PreparedPatternView::from_snapshot(pattern_snapshot(pattern_id));
@@ -227,6 +270,17 @@ struct Fixture {
   }
 
   void settle(const PatternTransportRequest& request) {
+    // A queued-but-unlanded overlay makes a closing command busy; render past
+    // its bar and let the cadence record the landed publication, exactly as a
+    // live host's service tick would, before the command is submitted.
+    for (unsigned step = 0; step < 100; ++step) {
+      if (!audio.pending_switch().has_value() &&
+          audio.engine.pattern_telemetry().pending_generation == 0) {
+        break;
+      }
+      audio.render(9'600);
+      static_cast<void>(controller->publish_overlay());
+    }
     LMDJ_CHECK(controller->request(request) == PatternTransportSubmit::accepted);
     audio.render(1);
     LMDJ_CHECK(controller->continue_operation().has_value());
@@ -1024,11 +1078,114 @@ void controller_destroyed_after_application_is_safe() {
   std::filesystem::remove_all(directory, ignored);
 }
 
+// L2 (#1513): the coordinator publishes the open recording's overlay through
+// the Host capability on the control cadence, records the publication
+// generation in the journal, and the Record-off cutoff still validates — the
+// exact refusal that motivated the coordinator-owned design.
+void overlay_publication_records_and_the_cutoff_matches() {
+  Fixture f;
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const auto frame = admission_frame(f.bundle);
+  LMDJ_CHECK(f.controller->admit({10, frame, {0, 1}, true, 90, 10}).has_value());
+  LMDJ_CHECK(f.controller->publish_overlay().has_value());
+  LMDJ_CHECK(f.audio.published_overlays.size() == 1);
+  LMDJ_CHECK(f.audio.published_overlays[0].first == f.pattern);
+  LMDJ_CHECK(f.audio.published_overlays[0].second.size() == 1);
+  // The journal records the publication only after it lands at its Bar: the
+  // cadence tick past the boundary writes the applied authority.
+  for (unsigned step = 0;
+       step < 100 && f.audio.engine.pattern_telemetry().pending_generation != 0;
+       ++step) {
+    f.audio.render(9'600);
+  }
+  LMDJ_CHECK(f.controller->publish_overlay().has_value());
+  const auto journal_after = f.read_journal();
+  const auto& admission = *journal_after.admission;
+  LMDJ_CHECK(admission.published_generation > admission.segment_generation);
+  // Repeated cadence ticks with no new content publish nothing more.
+  LMDJ_CHECK(f.controller->publish_overlay().has_value());
+  LMDJ_CHECK(f.audio.published_overlays.size() == 1);
+  // The release corrects the held press's duration, which is new content; the
+  // second overlay publishes on the next tick and lands at the next Bar.
+  f.audio.render(18'000);
+  LMDJ_CHECK(f.controller->admit({11, frame + 18'000, {0, 1}, false, 0, 10})
+                 .has_value());
+  LMDJ_CHECK(f.controller->publish_overlay().has_value());
+  LMDJ_CHECK(f.audio.published_overlays.size() == 2);
+  for (unsigned step = 0;
+       step < 100 && f.audio.engine.pattern_telemetry().pending_generation != 0;
+       ++step) {
+    f.audio.render(9'600);
+  }
+  LMDJ_CHECK(f.controller->publish_overlay().has_value());
+  // Record-off after the last overlay landed: the cutoff names the recorded
+  // applied authority — the exact check that refused before the coordinator
+  // owned the publication.
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  LMDJ_CHECK(!f.journal_exists());
+  lmdj::project_io::ProjectStore store;
+  const auto project = store.load(f.bundle);
+  LMDJ_CHECK(project.has_value());
+  LMDJ_CHECK(project.value().patterns.at(f.pattern).events.size() == 1);
+}
+
+// L2 (#1513): a Host refusal (pool full, seam unwired) is a capability fact,
+// not an error: no error phase is entered, the input stays durable, and the
+// SAME content is attempted only once. New retained input re-arms the
+// publication and gets its own attempt once the capability recovers.
+void refused_overlay_publication_settles_and_new_content_retries() {
+  Fixture f;
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const auto frame = admission_frame(f.bundle);
+  LMDJ_CHECK(f.controller->admit({10, frame, {0, 1}, true, 90, 10}).has_value());
+  f.audio.refuse_overlay_publication = true;
+  LMDJ_CHECK(f.controller->publish_overlay().has_value());
+  LMDJ_CHECK(f.controller->inspect().phase == PatternTransportPhase::idle);
+  LMDJ_CHECK(f.controller->inspect().error == std::nullopt);
+  LMDJ_CHECK(f.audio.published_overlays.empty());
+  // Same content: settled by the refusal, no per-tick retry loop.
+  LMDJ_CHECK(f.controller->publish_overlay().has_value());
+  LMDJ_CHECK(f.audio.published_overlays.empty());
+  // New content re-arms the request; the capability has recovered.
+  f.audio.refuse_overlay_publication = false;
+  f.audio.render(18'000);
+  LMDJ_CHECK(f.controller->admit({11, frame + 18'000, {0, 1}, false, 0, 10})
+                 .has_value());
+  LMDJ_CHECK(f.controller->publish_overlay().has_value());
+  LMDJ_CHECK(f.audio.published_overlays.size() == 1);
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  LMDJ_CHECK(!f.journal_exists());
+}
+
+// L2 (#1513): an overlay superseded by a different Pattern's publication
+// before it lands never becomes current; the coordinator drops the marker
+// without recording it, and the switch machinery owns the reconciliation the
+// close then settles through.
+void superseded_overlay_is_dropped_and_the_close_settles() {
+  constexpr auto kPatternB = "00000000-0000-4000-8000-00000000000b";
+  Fixture f({PatternId{kPatternB}});
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const auto frame = admission_frame(f.bundle);
+  LMDJ_CHECK(f.controller->admit({10, frame, {0, 1}, true, 90, 10}).has_value());
+  LMDJ_CHECK(f.controller->publish_overlay().has_value());
+  LMDJ_CHECK(f.audio.published_overlays.size() == 1);
+  // While the transport holds the engine, an outside publication of a
+  // different Pattern is refused by the engine itself — the superseded-by-
+  // switch window cannot be entered from the control lane, which is the
+  // protection the busy guard and the exact-equality landing check rely on.
+  auto view = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB));
+  LMDJ_CHECK(view.has_value());
+  LMDJ_CHECK(f.audio.engine.publish_pattern_view(std::move(view.value()))
+                 .result == PatternPublishResult::publication_pending);
+  f.settle(f.make(7, 2, PatternTransportIntent::record));
+  LMDJ_CHECK(!f.journal_exists());
+}
+
 }  // namespace
 
 int main() {
   try {
-    stopped_record_plays_and_opens_admission();
+        stopped_record_plays_and_opens_admission();
     recording_record_off_closes_and_keeps_playing();
     playing_play_stops_without_a_journal();
     pending_operation_reports_busy_then_replays();
@@ -1042,6 +1199,9 @@ int main() {
     overlay_generation_advances_only_when_the_projection_changes();
     overlay_projection_does_not_disturb_the_commit();
     overlay_generation_advances_when_the_projected_pattern_changes();
+    overlay_publication_records_and_the_cutoff_matches();
+    superseded_overlay_is_dropped_and_the_close_settles();
+    refused_overlay_publication_settles_and_new_content_retries();
     pre_fence_candidate_is_live_only();
     admission_before_recording_fails();
     release_with_unknown_correlation_fabricates_no_press();
@@ -1050,7 +1210,7 @@ int main() {
     known_owner_registration_protects_only_the_open_transport_journal();
     controller_destroyed_after_application_is_safe();
     owner_lost_transport_admission_is_sealed_and_listed();
-    std::cout << "pattern transport controller tests: PASS (22 scenarios)\n";
+    std::cout << "pattern transport controller tests: PASS (25 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

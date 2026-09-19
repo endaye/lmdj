@@ -190,7 +190,7 @@ template <> SequenceAdmissionTimingProfile decode<SequenceAdmissionTimingProfile
 }
 
 template <> SequenceAdmissionState decode<SequenceAdmissionState>(const Json& input) {
-  require(input.is_object() && input.size() == 10, "invalid SequenceAdmissionState shape");
+  require(input.is_object() && input.size() == 11, "invalid SequenceAdmissionState shape");
   return {decode<SequenceAdmissionPreparation>(input.at("preparation")),
           decode<std::vector<SequenceAdmissionCandidate>>(input.at("candidates")),
           decode<std::optional<SequenceAdmissionFence>>(input.at("admission_fence")),
@@ -199,6 +199,7 @@ template <> SequenceAdmissionState decode<SequenceAdmissionState>(const Json& in
           decode<std::vector<SequenceAdmissionTransfer>>(input.at("transfers")),
           decode<std::vector<SequencePublicationAuthority>>(input.at("applied_switches")),
           decode<std::uint64_t>(input.at("segment_generation")),
+          decode<std::uint64_t>(input.at("published_generation")),
           decode<bool>(input.at("completed")),
           decode<std::vector<SequenceAdmissionTimingProfile>>(input.at("timing_profiles"))};
 }
@@ -326,6 +327,7 @@ Json encode(const SequenceAdmissionState& value) {
           {"transfers", value_json(value.transfers)},
           {"applied_switches", value_json(value.applied_switches)},
           {"segment_generation", value_json(value.segment_generation)},
+          {"published_generation", value_json(value.published_generation)},
           {"completed", value_json(value.completed)},
           {"timing_profiles", value_json(value.timing_profiles)}};
 }
@@ -529,7 +531,12 @@ void switches_valid(const SequenceAdmissionState& s) {
       require(pending == 0, "cutoff adds a second unreconciled switch");
     }
   } else {
-    require(f.pattern_id == previous.pattern_id && f.publication_generation == previous.generation,
+    // A cutoff without a switch names the last publication the coordinator
+    // applied for the current segment: the preparation generation when no
+    // overlay has been published, else the latest recorded overlay
+    // republication (#1513).
+    require(f.pattern_id == previous.pattern_id &&
+            f.publication_generation == std::max(previous.generation, s.published_generation),
             "cutoff does not match last applied publication");
   }
 }
@@ -768,7 +775,7 @@ bool apply(ActiveSequenceJournal& journal, const Json& record,
     }
     require(journal.state == SequenceSessionState::active && p.pattern_id == journal.pattern_id,
             "preparation does not match active Pattern");
-    journal.admission = SequenceAdmissionState{p, {}, {}, {}, {}, {}, {}, p.publication_generation, false};
+    journal.admission = SequenceAdmissionState{p, {}, {}, {}, {}, {}, {}, p.publication_generation, 0, false};
     return true;
   }
   require(journal.admission.has_value(), "admission is not prepared");
@@ -861,8 +868,35 @@ bool apply(ActiveSequenceJournal& journal, const Json& record,
       const auto cutoff = cutoff_switch(s);
       require(cutoff && *cutoff == authority, "applied switch conflicts with retained cutoff");
     }
+    // An applied switch is the newest boundary; any overlay recorded before
+    // it belongs to the superseded segment and must not survive as this
+    // segment's applied authority in the cutoff comparison (#1513).
+    s.published_generation = 0;
     s.applied_switches.push_back(authority);
     switches_valid(s);
+    return true;
+  }
+  if (kind == "admission-overlay") {
+    // A same-Pattern live-overlay republication (#1513). The coordinator
+    // publishes an overlay for the current segment; this records the
+    // publication generation that created, so a later cutoff without a switch
+    // validates against it instead of the preparation generation. The journal
+    // proves monotonicity against the state it holds; the coordinator proves
+    // the generation names a real engine publication before writing.
+    require(data.is_object() && data.size() == 1, "invalid admission overlay shape");
+    const auto generation = decode<std::uint64_t>(data.at("publication_generation"));
+    const auto current = segment(s);
+    if (generation == s.published_generation) {
+      // Exact durable retry of an already-retained overlay record.
+      return false;
+    }
+    require(!s.completed && !terminal_retained(s) && s.admission_fence &&
+                !s.cutoff_fence && !pending_switch(s) &&
+                journal.state == SequenceSessionState::active &&
+                generation > s.published_generation &&
+                generation > current.generation,
+            "overlay publication lacks current authority");
+    s.published_generation = generation;
     return true;
   }
   if (kind == "admission-fence") {
@@ -980,6 +1014,11 @@ SequenceAdmissionState snapshot(const Json& input, const ActiveSequenceJournal& 
                   {"identity", input.at("preparation").at("identity")}});
   }
   auto s = decode<SequenceAdmissionState>(input);
+  // The overlay publication generation is a single counter bounded by decode;
+  // the explicit floor keeps it inside the segment authority it can name.
+  require(s.published_generation == 0 ||
+              s.published_generation > s.preparation.publication_generation,
+          "snapshot overlay generation precedes its preparation");
   preparation_valid(s.preparation);
   fences_valid(s);
   switches_valid(s);

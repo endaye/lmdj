@@ -40,6 +40,11 @@ class AudioPortBridge final : public detail::PatternTransportAudioPort {
   std::optional<foundation::PatternId> current_pattern() const override {
     return port_.current_pattern();
   }
+  foundation::Result<audio::PatternPublication> publish_overlay(
+      const foundation::PatternId& pattern,
+      std::span<const domain::PatternEvent> events) override {
+    return port_.publish_overlay(pattern, events);
+  }
 
  private:
   lmdj::facade::PatternTransportAudioPort& port_;
@@ -101,6 +106,10 @@ PatternTransportStatus PatternTransportController::inspect() const {
 
 foundation::Result<void> PatternTransportController::continue_operation() {
   return impl_->coordinator.continue_operation();
+}
+
+foundation::Result<void> PatternTransportController::publish_overlay() {
+  return impl_->coordinator.publish_overlay();
 }
 
 foundation::Result<PatternAdmissionAdmit> PatternTransportController::admit(

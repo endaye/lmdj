@@ -1611,6 +1611,13 @@ foundation::Result<void> SequenceJournal::retain_admission_switch(
   return append_admission_record(platform_, bundle, session, identity,
                                  "admission-switch", admission_codec::encode(authority));
 }
+foundation::Result<void> SequenceJournal::retain_admission_overlay(
+    const std::filesystem::path& bundle, foundation::SequenceSessionId session,
+    const SequenceAdmissionIdentity& identity, std::uint64_t publication_generation) {
+  return append_admission_record(platform_, bundle, session, identity,
+                                 "admission-overlay",
+                                 nlohmann::json{{"publication_generation", publication_generation}});
+}
 foundation::Result<void> SequenceJournal::close_admission(
     const std::filesystem::path& bundle, foundation::SequenceSessionId session,
     const SequenceAdmissionIdentity& identity, const SequenceAdmissionClosure& closure) {

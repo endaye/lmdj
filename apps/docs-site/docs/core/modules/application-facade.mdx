@@ -65,6 +65,17 @@ Host 继续发布旧 Pattern 的 overlay。空投影只记录新绑定而不消�
 尚无贡献的录音因此不花费一次发布。未在录制、close 尚未结算，以及候选前缀尚待
 switch 协调时返回空：cutoff 收据应用后候选集已冻结，下一次发布归 close 所有。
 
+L2 之后发布本身也归协调器所有：`PatternTransportAudioPort` 提供
+`publish_overlay` 能力（构建 prepared view 需要 Runtime Snapshot，归 Host），
+`PatternTransportController::publish_overlay` 在控制节拍上决定何时发布、并在
+admission journal 追加 `admission-overlay` 记录其创建的 publication generation。
+cutoff 无 switch 时据此校验最新发布，而非 preparation generation。发布不改
+journal 的候选集、不推进 watermark、不铸 receipt，close 提交的 transfer 与
+exactly-once 论证保持不变。正在排队的 Pattern switch 拥有下一个边界；已排队
+的同 Pattern overlay 落地前不重复发布（每 Bar 至多一圈叠录，这同时也是可听
+期限）。Host 拒绝发布（4-slot 池满或未接线）是能力事实，节拍保持请求待发、
+不进入 error 相位。
+
 内部 `PatternAdmissionOwner` 消费上述转换函数：closed prepare/activate、
 admission fence 之后才保留 post-enqueue 候选，fence 前、closure 后与 owner-loss
 输入保持 live-only。容量耗尽由 journal 在最后一槽原子关闭；fence-wait deadline

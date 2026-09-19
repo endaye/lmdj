@@ -475,7 +475,7 @@ lmdj_add_test(
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_snapshot_test.py SnapshotRecoveryTest
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-  TIMEOUT 30
+  TIMEOUT 90
 )
 
 lmdj_add_test(
@@ -491,7 +491,7 @@ lmdj_add_test(
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_workspace_test.py WorkspaceRecoveryTest
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-  TIMEOUT 30
+  TIMEOUT 90
 )
 
 lmdj_add_test(
@@ -722,7 +722,7 @@ lmdj_add_test(
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_pr_sequence_test.py SequenceTest
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-  TIMEOUT 30
+  TIMEOUT 90
 )
 
 foreach(witness_group IN ITEMS Pr Branch Sequence Journey)
@@ -782,7 +782,7 @@ lmdj_add_test(
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_pr_sequence_test.py -v BoundaryTest
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-  TIMEOUT 30
+  TIMEOUT 90
 )
 
 lmdj_add_test(

@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include <lmdj/audio/realtime_engine.hpp>
@@ -45,6 +46,22 @@ class PatternTransportAudioPort {
   // binding when it opens a new journal after an applied switch (#1403).
   virtual std::optional<foundation::PatternId> current_pattern() const {
     return std::nullopt;
+  }
+  // Publish a live overlay for the open recording's Pattern (#1513). The
+  // coordinator decides when; the Host performs it, because building the
+  // prepared view needs a Runtime Snapshot from the Application. Returns the
+  // engine's publication receipt, or a failure whose code names the refusal
+  // (publish_queue_full when a publication is already queued for the next
+  // boundary). The default refusal keeps Hosts that predate this seam
+  // building-free; the coordinator simply never publishes through them.
+  virtual foundation::Result<audio::PatternPublication> publish_overlay(
+      const foundation::PatternId& pattern,
+      std::span<const domain::PatternEvent> events) {
+    (void)pattern;
+    (void)events;
+    return foundation::Result<audio::PatternPublication>::failure(
+        {foundation::ErrorCode::unsupported_audio,
+         "Pattern transport overlay publication is not implemented by this host"});
   }
 };
 
@@ -146,6 +163,14 @@ class PatternTransportController {
   // no open recording, a frozen close, or a candidate prefix still awaiting
   // switch reconciliation — and is never a failure of the recording.
   foundation::Result<std::optional<PatternTransportOverlay>> project_overlay();
+  // Publishes the open recording's pending overlay through the Host's
+  // `publish_overlay` capability and records the publication generation it
+  // created in the admission journal (#1513). Driven by the control cadence
+  // (`continue_operation` covers it); never call it inline on a Pad trigger.
+  // Publishing never drains input, advances no watermark and commits nothing,
+  // so the exactly-once argument of the projection carries over: the transfer
+  // a close commits is unchanged by any number of overlay publications.
+  foundation::Result<void> publish_overlay();
 
  private:
   struct Impl;

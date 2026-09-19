@@ -374,6 +374,13 @@ foundation::Result<void> PatternAdmissionOwner::retain_switch(
       bundle_, session_, *identity_, authority);
 }
 
+foundation::Result<void> PatternAdmissionOwner::retain_overlay_publication(
+    std::uint64_t generation) {
+  if (!identity_) return owner_error("admission_identity_missing");
+  return journals_.retain_admission_overlay(
+      bundle_, session_, *identity_, generation);
+}
+
 foundation::Result<void> PatternAdmissionOwner::reconcile_switch(
     project_io::ProjectStore& store) {
   if (!identity_) return owner_error("admission_identity_missing");
