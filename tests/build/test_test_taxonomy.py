@@ -12,9 +12,8 @@ from pathlib import Path
 
 TIERS = {"unit", "component", "contract", "host", "e2e", "stress"}
 # Each tier's budget, and the same numbers `docs/quality/core-test-policy.md`
-# publishes; `test_policy_table_matches_this_budget` keeps the two from
-# drifting, which is how `contract` came to be enforced at a value no release
-# invariant could meet.
+# publishes; `policy_errors()` below keeps the two from drifting, which is how
+# `contract` came to be enforced at a value no release invariant could meet.
 #
 # `contract` is 120 because the release invariants in this tier prove
 # themselves across real Git and build boundaries — each case does a real
@@ -136,6 +135,17 @@ def policy_errors() -> list[str]:
     except OSError:
         return [f"{POLICY.name}: unreadable, so the published tier budget "
                 "cannot be compared with the enforced one"]
+    # A row this parser cannot read is absent from `published`, not zero, and
+    # the comparison below would then report the tier as published `None` —
+    # naming a drift that does not exist and hiding the one that does. Say
+    # which rows could not be read instead.
+    unreadable = sorted(TIERS - set(published))
+    if unreadable:
+        return [f"why: {POLICY.name} publishes no readable budget row for "
+                f"{', '.join(unreadable)}, so the published table cannot be "
+                "compared with the budget this file enforces; remedy: give "
+                "each tier a row of the published shape, "
+                "`| `<tier>` | <description> | <whole number> seconds |`"]
     if published == MAX_TIMEOUT:
         return []
     differing = sorted(set(published) | set(MAX_TIMEOUT))
