@@ -208,22 +208,27 @@ class CiBuildAccelerationTest(unittest.TestCase):
                 job = self.workflow_job(job_name)
                 self.assertIn("change-scope", job)
 
-    def test_linux_native_jobs_retain_every_host_capacity_lock_waiter(self) -> None:
+    def test_native_jobs_retain_every_host_capacity_lock_waiter(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
-        self.assertEqual(
-            source.count("group: lmdj-native-heavy"),
-            5,
-            "why: every job that can contend with native Core work on the shared "
-            "Contabo host must join one capacity queue; remedy: keep the "
-            "lmdj-native-heavy concurrency block on portal, core-ubuntu, package, "
-            "core-asan, and core-coverage",
-        )
         capacity_jobs = (
             "portal",
             "core-ubuntu",
             "package",
             "core-asan",
             "core-coverage",
+            # #1558 moved Release stress to the bare-metal macOS runner because
+            # its 2.67 ms thread-CPU deadline cannot survive a hypervisor. The
+            # gates build Core twice on that same machine, so they join the
+            # queue rather than supply the contention that move removed.
+            "macos-primary",
+        )
+        self.assertEqual(
+            source.count("group: lmdj-native-heavy"),
+            len(capacity_jobs),
+            "why: every job that can contend with timing-sensitive native work "
+            "on a shared machine must join one capacity queue; remedy: keep the "
+            "lmdj-native-heavy concurrency block on "
+            + ", ".join(capacity_jobs),
         )
         for job_name in capacity_jobs:
             with self.subTest(job=job_name):
