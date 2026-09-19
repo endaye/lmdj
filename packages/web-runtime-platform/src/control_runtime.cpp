@@ -868,6 +868,14 @@ Json normalized_error_redacted(
         "WEB_RUNTIME_RESOURCE_LIMIT",
         "Project Bundle exceeds the Web Runtime transfer limit");
   }
+  if (code == "INVALID_PROJECT" && details.is_object() &&
+      details.find("local_copy") != details.end()) {
+    // The refusal describes a Project copy already on this device, not the
+    // bundle being imported (#1438): give the UI a code it can name honestly.
+    return host_error(
+        "LOCAL_PROJECT_UNREADABLE",
+        "the local copy of this Project could not be validated");
+  }
   if (code == "BANK_QUOTA_EXHAUSTED" ||
       code == "PROJECT_QUOTA_EXHAUSTED") {
     return host_error(

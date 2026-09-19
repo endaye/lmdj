@@ -194,3 +194,10 @@ test("error panel renders Dismiss only when a handler is offered", () => {
   rerender(<ErrorPanel code="INVALID_PROJECT" onDismiss={() => {}} />);
   expect(screen.getByRole("button", {name: "Dismiss"})).toBeTruthy();
 });
+
+test("an unreadable local copy is not reported as an invalid bundle", () => {
+  render(<ErrorPanel code="LOCAL_PROJECT_UNREADABLE" />);
+  const message = screen.getByRole("alert").textContent ?? "";
+  expect(message).toContain("local copy");
+  expect(message).not.toContain("Bundle is invalid");
+});

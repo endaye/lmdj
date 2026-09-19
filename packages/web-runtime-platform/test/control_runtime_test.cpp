@@ -1076,6 +1076,19 @@ void test_facade_error_details_follow_an_explicit_safe_schema() {
               {{"storage_condition", "already_exists"}},
           }),
       "DUPLICATE_ID");
+  // An unreadable Project copy already on this device must not reach the
+  // Creator as a claim about the imported bundle (#1438).
+  const auto& unreadable = check_error(
+      lmdj::web_runtime::detail::normalize_error_for_testing(
+          lmdj::foundation::Error{
+              lmdj::foundation::ErrorCode::invalid_project,
+              "Project could not be validated",
+              {{"storage_condition", "io_failure"}, {"local_copy", true}},
+          }),
+      "LOCAL_PROJECT_UNREADABLE");
+  LMDJ_CHECK(
+      unreadable.at("message") ==
+      "the local copy of this Project could not be validated");
 }
 
 class StderrCapture {

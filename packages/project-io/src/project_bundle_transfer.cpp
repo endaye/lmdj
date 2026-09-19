@@ -866,9 +866,16 @@ foundation::Result<LocalProjectSummary> ProjectBundleTransfer::commit(
     const auto existing = summarize_project(
         impl_->platform, destination, session.index->contract_version);
     if (!existing.has_value()) {
-      const auto error = existing.error();
+      // The summary described the local copy, not the staged bundle: keep the
+      // marker so the refusal names the damaged neighbor instead of the
+      // import (#1438).
+      auto error = existing.error();
+      if (error.details.is_object()) {
+        error.details["local_copy"] = true;
+      }
       cleanup();
-      return foundation::Result<LocalProjectSummary>::failure(error);
+      return foundation::Result<LocalProjectSummary>::failure(
+          std::move(error));
     }
     if (existing.value().bundle_digest != session.index->bundle_digest) {
       const auto error = Error{

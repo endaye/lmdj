@@ -35,6 +35,8 @@ function messageFor(
   switch (code) {
     case "INVALID_PROJECT":
       return "The Project Bundle is invalid.";
+    case "LOCAL_PROJECT_UNREADABLE":
+      return "The local copy of this Project on this device could not be read. The imported file is not at fault.";
     case "DUPLICATE_ID":
       return "The import was refused because the local copy of this Project has newer changes. Nothing was lost.";
     case "PROJECT_BUSY":
