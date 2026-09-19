@@ -3,7 +3,8 @@
 
 `python3 -m unittest discover -s tests/build -p 'release_*_test.py'` spends
 its wall clock in real Git children, forks, GPG signatures and Host validator
-interpreters: 74 modules, 1682 tests, 64 minutes serially on 2026-09-17. Each
+interpreters: 74 modules and about 1670 tests on 2026-09-19, 64 minutes
+serially on 2026-09-17; the count drifts as suites are added. Each
 module owns its temporary repositories, journals and loopback ports, so modules
 can run concurrently; classes inside one module may share a seeded filesystem,
 so a module never splits across workers. The parent discovers every test id
@@ -30,7 +31,9 @@ PATTERN = "release_*_test.py"
 SLOWEST = 15
 # A worker that outlives this is a hang the parent reports itself, with every
 # other shard's result, instead of leaving the job limit to kill all of them.
-WORKER_TIMEOUT = 1500.0
+# 20 minutes inside the lane's 30: the remaining lane steps (two sharded
+# deploy command suites and four short docs/workflow suites) need the rest.
+WORKER_TIMEOUT = 1200.0
 POLL = 0.5
 
 
@@ -159,6 +162,7 @@ def run_sharded(shards: int, start: Path = START, pattern: str = PATTERN,
     self_path = str(Path(__file__).resolve())
     with tempfile.TemporaryDirectory(prefix="lmdj-release-suite-shards-") as directory:
         workers = []
+        hung: set[str] = set()
         try:
             for index, group in enumerate(groups):
                 report = Path(directory) / f"shard-{index}.json"
@@ -170,7 +174,6 @@ def run_sharded(shards: int, start: Path = START, pattern: str = PATTERN,
             # Poll every child so one slow shard never delays another's report,
             # and a shard past the worker deadline is killed and reported here.
             deadline = time.monotonic() + worker_timeout
-            hung: set[str] = set()
             while any(child.poll() is None for *_, child in workers):
                 if time.monotonic() >= deadline:
                     for label, *_, child in workers:
@@ -180,8 +183,11 @@ def run_sharded(shards: int, start: Path = START, pattern: str = PATTERN,
                     break
                 time.sleep(POLL)
         finally:
-            for *_, child in workers:
+            # Only reached with children alive on an exception; the deadline
+            # path above already killed and recorded every straggler at once.
+            for label, *_, child in workers:
                 if child.poll() is None:
+                    hung.add(label)
                     _kill(child)
         for label, group, report, log, child in workers:
             status = child.wait()
