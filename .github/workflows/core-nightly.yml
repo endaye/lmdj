@@ -119,19 +119,26 @@ jobs:
       - run: scripts/core.sh test tsan stress
 
   core-stress:
-    # Release stress is trusted native Core workload. The literal role queues
-    # behind other native lanes instead of consuming Hosted Ubuntu minutes.
+    # Release stress is trusted native Core workload, and since #1558 it runs
+    # on the trusted bare-metal macOS runner rather than the shared KVM hosts.
+    # `master_fx_stress` gates the render thread's CPU time against a 2.67 ms
+    # deadline; on a KVM guest without paravirt time accounting, hypervisor
+    # steal is billed to that thread and the /proc/stat attribution added by
+    # the 2026-09-16 decision counts in 10 ms ticks, so every observed 4.7-9 ms
+    # stall (four consecutive batches, never a pass since 2026-09-18) fell in
+    # its blind spot. Bare metal has no hypervisor to steal from; the same
+    # Release build passed 20/20 repetitions there while it failed every
+    # batch on netcup. Decision: docs/prd/decisions/2026-09-19-release-stress-on-bare-metal.md.
     #
-    # Naming the role was not enough. The role spans two runner services on one
-    # physical host, so a sibling job runs beside this one rather than after it,
-    # and twenty consecutive stress repetitions are the least tolerant workload
-    # in the repository. The capacity queue is what makes "queues behind" true.
+    # The repository capacity queue still applies: twenty consecutive stress
+    # repetitions are the least tolerant workload in the repository, and this
+    # runner also hosts the macOS gates.
     if: ${{ inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'stress' }}
     concurrency:
       group: lmdj-native-heavy
       queue: max
       cancel-in-progress: false
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
+    runs-on: [self-hosted, macOS, ARM64, lmdj]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
@@ -144,9 +151,37 @@ jobs:
           EXPECTED_TARGET: ${{ inputs.target_revision }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - run: git lfs checkout -- tests/fixtures
-      - uses: actions/setup-python@v6
+      # The self-hosted macOS runner provides its own Python 3.11; the same
+      # check the macOS gates use, so a relocated setup-python interpreter
+      # never enters this lane's child processes.
+      - name: Verify self-hosted Python 3.11
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if python_path="$(command -v python3.11)"; then
+            :
+          elif python_path="$(command -v python3)" && \
+              "$python_path" -c \
+                'import sys; raise SystemExit(sys.version_info[:2] != (3, 11))'; then
+            :
+          else
+            echo 'self-hosted macOS requires Python 3.11' >&2
+            exit 1
+          fi
+
+          "$python_path" -c \
+            'import sys; raise SystemExit(sys.version_info[:2] != (3, 11))'
+
+          python_shim_dir="$RUNNER_TEMP/lmdj-python-3.11"
+          mkdir -p "$python_shim_dir"
+          ln -sf -- "$python_path" "$python_shim_dir/python3"
+          echo "$python_shim_dir" >>"$GITHUB_PATH"
+          "$python_shim_dir/python3" --version
+      - name: Configure bounded build acceleration
+        uses: ./.github/actions/configure-build-acceleration
         with:
-          python-version: "3.11"
+          use-ccache: "true"
       - run: python3 tests/fixtures/audio/make_fixtures.py
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh

@@ -19,6 +19,12 @@ WORKFLOW = REPO_ROOT / ".github/workflows/core-nightly.yml"
 CORE_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]"
 )
+# The trusted bare-metal macOS runner, the same literal set select-macos-runner
+# emits for the macOS gates. Release stress moved here in #1558: its render
+# deadline gate reads thread CPU time, which a KVM guest without paravirt
+# accounting bills hypervisor steal into, and the 10 ms /proc/stat attribution
+# cannot see the 4.7-9 ms stalls that failed four consecutive batches.
+MACOS_TRUSTED_RUNNER = "runs-on: [self-hosted, macOS, ARM64, lmdj]"
 TSAN_COMMANDS = (
     "python3 tests/fixtures/audio/make_fixtures.py",
     "python3 tests/fixtures/golden/reference_render.py",
@@ -48,15 +54,21 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
         assert match is not None
         return match.group("body")
 
-    def test_release_stress_uses_the_native_core_role(self) -> None:
+    def test_release_stress_runs_on_the_trusted_bare_metal_runner(self) -> None:
         stress = self.job("core-stress")
         message = (
-            "why: trusted Release stress must queue on the native Core role "
-            "instead of consuming Hosted Ubuntu; remedy: route core-stress "
-            f"with {CORE_ROLE} and retain the bounded repeat command"
+            "why: Release stress gates the render thread's CPU time, which a "
+            "KVM guest bills hypervisor steal into below the 10 ms attribution "
+            "tick (#1558), so it runs on the trusted bare-metal macOS runner and "
+            "never on a shared host or Hosted Ubuntu; remedy: route core-stress "
+            f"with {MACOS_TRUSTED_RUNNER}, keep the self-hosted Python 3.11 check "
+            "and the bounded repeat command"
         )
-        self.assertIn(CORE_ROLE, stress, message)
+        self.assertIn(MACOS_TRUSTED_RUNNER, stress, message)
+        self.assertNotIn(CORE_ROLE, stress, message)
         self.assertNotIn("runs-on: ubuntu-24.04", stress, message)
+        self.assertNotIn("actions/setup-python", stress, message)
+        self.assertIn("Verify self-hosted Python 3.11", stress, message)
         self.assertIn("--repeat until-fail:20", stress, message)
 
     def test_scheduled_tsan_runs_on_the_core_role(self) -> None:
@@ -146,7 +158,11 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
         )
 
     def test_both_native_jobs_share_the_repository_capacity_queue(self) -> None:
-        """Naming the `ci-core` role is not enough to make them run one at a time.
+        """Naming a role is not enough to make a native job run alone.
+
+        Release stress now runs on the bare-metal macOS runner, which also
+        hosts the macOS gates; it keeps the queue so twenty repetitions never
+        start beside another admitted heavy lane.
 
         The role spans two runner services on one physical host, so without the
         capacity queue a dispatched probe and the release stress suite start in
@@ -170,10 +186,10 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
                     r"      queue: max\n"
                     r"      cancel-in-progress: false$",
                     msg=(
-                        f"why: {job_name} names the ci-core role, which spans two "
-                        "runner services on one host, so a sibling native job "
-                        "runs beside it rather than after it and consumes the "
-                        "CPU its timing-sensitive tests were budgeted for; "
+                        f"why: {job_name} is timing-sensitive native workload; a "
+                        "sibling heavy job on the same host runs beside it rather "
+                        "than after it and consumes the CPU its tests were "
+                        "budgeted for; "
                         "remedy: keep the lmdj-native-heavy block with queue: "
                         "max before cancel-in-progress: false, the same one "
                         "ci.yml puts on every admitted shared-host lane"
