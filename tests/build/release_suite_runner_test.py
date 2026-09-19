@@ -195,8 +195,9 @@ class ExecutionTest(RunnerFixture):
         # `start` is sys.path[0] in a real worker, so only a name already
         # bound elsewhere in this process can shadow it; bind one and check
         # that the worker refuses to run it instead of trusting the binding.
-        shadow = self.start / "shadow"
-        shadow.mkdir()
+        elsewhere = tempfile.TemporaryDirectory(prefix="lmdj-release-suite-shadow-")
+        self.addCleanup(elsewhere.cleanup)
+        shadow = Path(elsewhere.name)
         (shadow / "release_beta_test.py").write_text(module(1))
         spec = importlib.util.spec_from_file_location("release_beta_test", shadow / "release_beta_test.py")
         bound = importlib.util.module_from_spec(spec)
