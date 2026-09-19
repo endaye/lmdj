@@ -402,7 +402,11 @@ lmdj_add_test(
   TIER e2e
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_transition_test.py TransitionTest.test_cut_merge_is_pending_until_the_reviewed_witness_squash -v
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-  TIMEOUT 900
+  # Tier default (180 s). Measured 96.4 s on the trusted pool (Deploy Contract,
+  # run 35435898163, 2026-09-19); the former 900 s predated any measurement.
+  # A local macOS run can exceed it through Git launch overhead alone (589 s
+  # observed; see .agents/pitfalls/macos-git-launch-overhead.md), but no Core
+  # lane selects build.release_* and the lane that runs it uses unittest.
 )
 
 lmdj_add_test(
@@ -528,7 +532,7 @@ foreach(preparation_case IN ITEMS
     TIER e2e
     COMMAND "${Python3_EXECUTABLE}" tests/build/release_candidate_preparation_test.py "${preparation_case}" -v
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    TIMEOUT 900
+    # Tier default (180 s): 26-30 s each on the trusted pool (run 35435898163).
   )
 endforeach()
 
