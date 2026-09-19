@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-09
     occurrence: https://github.com/endaye/lmdj/issues/1029
     observed_by: Codex
+  - date: 2026-09-18
+    occurrence: https://github.com/endaye/lmdj/issues/1531
+    observed_by: Hermes Agent (glm-5.3-flash)
 exit: gate:tests/build/version_test.py
 ---
 
@@ -67,6 +70,31 @@ validator and the release evidence chain bind.
   `["portal"]` only. Every lane runs today because the full rule wins, not
   because anyone declared a mapping for these files, so a check parked in an
   incidentally selected lane stops running the moment that full rule narrows.
+
+The recurrence at [#1531](https://github.com/endaye/lmdj/issues/1531) is the
+first where the torn state was *manufactured* rather than merely missed. The
+Build allocation [#1516](https://github.com/endaye/lmdj/pull/1516) moved
+`products/lmdj/version.json` to `1.0.61.0` while the candidate cut rendered
+only the four Assembly files, so `main` carried an identity describing
+`1.0.60.0`. The exit held and failed with the generator's own mismatch reason
+— but after the merge, because the lanes that run ctest are batch-only and no
+Pull Request check runs them (see
+[`local-ci-list-names-batch-lanes`](local-ci-list-names-batch-lanes.md)). A
+mechanism that binds the check to the real tree still cannot bind it before
+`main` moves, and allocating a Build is exactly the change the first **How to
+apply** bullet names — and the one most likely to be prepared by tooling
+rather than by someone reading this entry.
+
+The repair, [#1535](https://github.com/endaye/lmdj/pull/1535), moves the
+obligation into the producer: `tools/release/candidate_material.py` loads
+`tools/web-runtime/generate_runtime_identity.py` from the frozen export and
+regenerates the pair for the reserved build, so the cut's declared inventory is
+six files rather than four, and
+`tests/build/release_candidate_material_test.py` asserts that literal inventory
+and runs the generator's own check against the exported pair. That gate holds
+the release path; `tests/build/version_test.py` remains the exit for this entry
+because it is what binds the check to the repository tree for every ordinary
+`assembly.json` or `module.json` change, which no candidate cut sees.
 
 The recurrence at [#1029](https://github.com/endaye/lmdj/issues/1029) exposed
 stale Product, Assembly, Platform and Host projections during canonical canary
