@@ -827,6 +827,62 @@ class RuntimeTests(unittest.TestCase):
         factory.assert_not_called()
         self.assertEqual(destination.read_text(), "previous execute")
 
+    def test_blocked_entry_point_names_the_condition_and_its_stage(self):
+        """A stalled controller printed only its remedy, so the cause had to be
+        guessed from the journal. The sentence must carry the raised condition."""
+        destination = self.root / "answer.json"
+        config = self.root / "config.json"
+        config.write_text("{}")
+        with mock.patch.object(runtime, "Runtime") as factory:
+            instance = factory.return_value
+            instance.diagnostic_stage = "auth-journal-writer"
+            instance.reconcile.side_effect = batch.BatchError(
+                "why: journal head moved; remedy: reconcile the exact head")
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
+                self.assertEqual(
+                    runtime.main(["reconcile", "--config", str(config),
+                                  "--output", str(destination)]), 1)
+        reported = printed.getvalue()
+        self.assertIn("journal head moved", reported)
+        self.assertIn("auth-journal-writer", reported)
+        self.assertIn("remedy: inspect exact journal/run identities", reported)
+        self.assertFalse(destination.exists())
+
+    def test_blocked_entry_point_reports_only_its_own_refusals(self):
+        """Another party's text may quote a response body; only the type is safe."""
+        destination = self.root / "answer.json"
+        config = self.root / "config.json"
+        config.write_text("{}")
+        with mock.patch.object(runtime, "Runtime") as factory:
+            instance = factory.return_value
+            instance.diagnostic_stage = None
+            instance.reconcile.side_effect = RuntimeError("server said " + "x" * 5000)
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
+                self.assertEqual(
+                    runtime.main(["reconcile", "--config", str(config),
+                                  "--output", str(destination)]), 1)
+        reported = printed.getvalue()
+        self.assertIn("RuntimeError", reported)
+        self.assertNotIn("server said", reported)
+        self.assertNotIn("stage:", reported)
+        self.assertLess(len(reported), runtime.DIAGNOSTIC_LIMIT + 300)
+
+    def test_blocked_entry_point_bounds_a_long_refusal(self):
+        """Even this repository's own sentence is bounded."""
+        destination = self.root / "answer.json"
+        config = self.root / "config.json"
+        config.write_text("{}")
+        with mock.patch.object(runtime, "Runtime") as factory:
+            instance = factory.return_value
+            instance.diagnostic_stage = None
+            instance.reconcile.side_effect = batch.BatchError("why: " + "y" * 5000)
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
+                self.assertEqual(
+                    runtime.main(["reconcile", "--config", str(config),
+                                  "--output", str(destination)]), 1)
+        reported = printed.getvalue()
+        self.assertLess(len(reported), runtime.DIAGNOSTIC_LIMIT + 300)
+
     def test_reference_roundtrip_does_not_depend_on_artifact(self):
         value = {"failures": ["core"], "debt": "missing", "raw": ["x" * 1000] * 100}
         self.assertEqual(runtime.decode_reference(runtime.encode_reference(value)), value)
