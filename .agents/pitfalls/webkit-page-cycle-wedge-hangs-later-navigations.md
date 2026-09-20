@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-20
     occurrence: https://github.com/endaye/lmdj/issues/1570
     observed_by: Claude Code (Fable 5.1)
+  - date: 2026-09-20
+    occurrence: https://github.com/endaye/lmdj/pull/1578
+    observed_by: Claude Opus 5 (1M context)
 exit: none
 ---
 
@@ -36,6 +39,25 @@ findings in the same runs (an unclosed writable committed on teardown; see
 made that reading plausible. The URL in the error names the victim, not the
 cause; the cause is how many pages the test had already opened and closed.
 
+Both causes stay open under
+[#1570](https://github.com/endaye/lmdj/issues/1570), which tracks the WebKit
+navigation hangs in the `web_toolchain` lane.
+
+## A second cause with the same symptom: a page whose document is wedged
+
+Parking a page on `about:blank` returns immediately even when the document it
+replaces can never finish tearing down. The Wasm test host stopped at a fault
+point holds a worker suspended forever inside `stopAtFault`; on Linux WebKit
+the page that carried it is never served another navigation, so the next
+`goto` on that reused page hangs until the test timeout. The `/proc` snapshot
+taken at one such timeout (batch run 35496737811) shows the cause is not load:
+every thread of the browser, network and three web processes sits in
+`futex_wait` or `poll`, with 58 GB of memory free, 32 GB of unused `/dev/shm`
+and a load average of 3.7. The browser is idle and simply never answers.
+
+Chromium and macOS WebKit tear the same document down and keep serving the
+page, so only the Linux lane fails, and only for tests that wedge a document.
+
 ## How to apply
 
 When a Playwright navigation hangs for the full test timeout on WebKit, count
@@ -45,7 +67,9 @@ Keep a long test under the threshold by reusing pages: a navigation to
 `about:blank` tears the document down as a close does (its OPFS handles,
 leases and workers go with it), so park closed pages and hand them out again
 rather than opening new ones; `trackedPage` in the conformance spec does
-this. Do not raise the test timeout, retry the navigation, or split the test
+this. Park only a page whose runtime reached a terminal state — the spec
+checks `window.lmdjProjectIoWeb` is absent or `complete` — and close a wedged
+one for real, or the pool hands back a page the browser will never serve. Do not raise the test timeout, retry the navigation, or split the test
 merely to stay under the count. No deterministic gate fits: the wedge lives
 in the browser build and its threshold moves with the host, so this stays
 open with `exit: none`.
