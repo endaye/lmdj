@@ -39,6 +39,9 @@ CONTROLLER_JOB = "Incremental batch controller"
 EMPTY_TEMPLATE = "<!-- lmdj-ci-journal-uninitialized-v1 -->\n"
 REFERENCE_PREFIX = "batch-verdict-v1:zlib-base64:"
 MAX_DOCUMENT = 1000000
+# The failure sentence a stalled controller prints: long enough for a closed
+# `why:`/`remedy:` pair, short enough that no payload can ride along.
+DIAGNOSTIC_LIMIT = 500
 MAX_REFERENCE = 40000
 ARTIFACT_RETENTION = timedelta(days=30)
 
@@ -513,8 +516,19 @@ def main(argv=None):
                 resume=command if args.command == 'resume' else None)
         with args.output.open("x") as stream:
             stream.write(self_test.canonical_json(answer) + "\n")
-    except Exception:
-        print("why: batch runtime did not commit an authenticated action; remedy: inspect exact journal/run identities and reconcile without replaying execution")
+    except Exception as error:
+        # The remedy tells an operator where to look; without the failure
+        # itself they cannot look anywhere. A stalled controller reported only
+        # this sentence, and the cause had to be guessed from the journal
+        # (#1570 investigation, runs 35533247694 and 35535446673). Name the
+        # raised condition and the stage that raised it. Both are closed
+        # repository text — `why:`/`remedy:` sentences and a fixed stage name —
+        # never an API body, token or journal payload, and both are bounded.
+        stage = getattr(locals().get("runtime"), "diagnostic_stage", None)
+        detail = f"{type(error).__name__}: {error}"[:DIAGNOSTIC_LIMIT]
+        print(f"why: batch runtime did not commit an authenticated action ({detail})"
+              + (f"; stage: {stage}" if stage else "")
+              + "; remedy: inspect exact journal/run identities and reconcile without replaying execution")
         return 1
     return 0
 
