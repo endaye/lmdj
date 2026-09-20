@@ -168,7 +168,7 @@
     },
     {
       "title": "Forbidden boundary",
-      "body": "Project Bundle 只进入 Facade，不连接 Creator internals，也不替代 Project Truth。Transport T0 conformance: executor owns paused OPFS while Control admits live press/release. Resume, verify bytes, consume once, release on owner thread and reacquire on a new worker. T3: opted-in sessions reach the Facade-owned transport coordinator through pattern.transport.request/inspect; the pending ticket releases the dispatch tail and the service cadence settles short epoch-checked steps. Legacy stays default."
+      "body": "Project Bundle 只进入 Facade，不连接 Creator internals，也不替代 Project Truth。Transport T0 conformance: executor owns paused OPFS while Control admits live press/release. Resume, verify bytes, consume once, release on owner thread and reacquire on a new worker. T3: opted-in sessions reach the Facade-owned transport coordinator through pattern.transport.request/inspect; the pending ticket releases the dispatch tail and the service cadence settles short epoch-checked steps. Legacy stays default. The Pattern transport live overlay: the Facade coordinator owns publication on the control cadence; the Platform implements the publish capability and keeps servicing an open recording (#1550)."
     }
   ]
 }
