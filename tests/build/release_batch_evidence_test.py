@@ -490,6 +490,29 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
         next(j for j in self.jobs if j["name"] == shared.PREFIX + "creator-web")["conclusion"] = "failure"
         self.rejected("recomputed")
 
+    def observations_case(self, claimed, actual, job="creator-web"):
+        """The cross-check alone: one observation against one API job."""
+        verdict = {"status": "failed", "observations": [{"job": job, "conclusion": claimed}]}
+        producer = {"conclusion": "failure", "steps": [
+            {"name": "Keep failed selected work visible", "conclusion": "failure"}]}
+        jobs = [{"name": shared.PREFIX + shared.JOB_NAMES[job], "conclusion": actual}]
+        return verdict, producer, jobs
+
+    def test_cancelled_product_job_settles_as_the_failure_needs_recorded(self):
+        """A cancelled job must not wedge the journal. `needs` records the suite
+        as failed while the API keeps saying cancelled; the batch stays failed,
+        and the controller can settle the executor that carried it."""
+        shared.validate_job_observations(*self.observations_case("failure", "cancelled"))
+
+    def test_cancelled_product_job_cannot_stand_behind_a_claimed_success(self):
+        """The exception is bounded to a claimed failure."""
+        verdict, producer, jobs = self.observations_case("success", "cancelled")
+        verdict["status"] = "passed"
+        producer["conclusion"] = "success"
+        producer["steps"][0]["conclusion"] = "skipped"
+        with self.assertRaisesRegex(Exception, "contradicts retained needs"):
+            shared.validate_job_observations(verdict, producer, jobs)
+
     def test_macos_primary_continuation_remains_the_only_api_exception(self):
         next(j for j in self.jobs if j["name"] == shared.PREFIX + "macOS gates (primary)")["conclusion"] = "failure"
         self.assertEqual(self.verify(), self.verdict)
