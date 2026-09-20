@@ -71,10 +71,14 @@ foundation::Result<AdmissionSegment> resolve_admission_segment(
   using namespace project_io;
   using Resolved = foundation::Result<AdmissionSegment>;
   const auto& admission = *journal.admission;
+  // owner_lost is accepted: the recovery surface resolves the same durable
+  // segment the live owner would have (#1515). A live owner reaches this
+  // code only in active/switching; nothing else can commit a transfer.
   if (!admission.admission_fence || admission.completed ||
       (!admission.transfers.empty() && admission.transfers.back().terminal) ||
       (journal.state != SequenceSessionState::active &&
-       journal.state != SequenceSessionState::switching)) {
+       journal.state != SequenceSessionState::switching &&
+       journal.state != SequenceSessionState::owner_lost)) {
     return Resolved::failure(conversion_failure("admission_fence_unresolved"));
   }
   const auto& fence = *admission.admission_fence;
@@ -272,20 +276,28 @@ foundation::Result<project_io::SequenceAdmissionTransfer> build_admission_transf
 }
 
 foundation::Result<std::optional<std::vector<domain::PatternEvent>>>
-project_admission_overlay(const project_io::ActiveSequenceJournal& journal) {
+project_admission_overlay(const project_io::ActiveSequenceJournal& journal,
+                          bool finalize) {
   using namespace project_io;
   using Projection =
       foundation::Result<std::optional<std::vector<domain::PatternEvent>>>;
   // States a live recording passes through that simply have nothing to show:
-  // no admission at all, one not yet activated or already sealed, a journal
-  // whose owner is gone, or more candidates than the bounded admission admits.
-  // None of these is a conversion failure and none may poison a coordinator.
+  // no admission at all, one not yet activated, already sealed, or more
+  // candidates than the bounded admission admits. None of these is a
+  // conversion failure and none may poison a coordinator. An owner-lost
+  // journal is empty for the LIVE projection (no coordinator drives it), but
+  // with `finalize` the recovery surface reads the same durable input: the
+  // owner is gone, no cutoff will ever arrive, and the take ends where the
+  // last durably retained candidate left it (#1515).
   if (!journal.admission) return Projection::success(std::nullopt);
   const auto& admission = *journal.admission;
+  const bool live_state = journal.state == SequenceSessionState::active ||
+                          journal.state == SequenceSessionState::switching;
   if (!admission.admission_fence || admission.completed ||
       (!admission.transfers.empty() && admission.transfers.back().terminal) ||
-      (journal.state != SequenceSessionState::active &&
-       journal.state != SequenceSessionState::switching) ||
+      (finalize
+           ? (!live_state && journal.state != SequenceSessionState::owner_lost)
+           : !live_state) ||
       admission.candidates.size() > kSequenceAdmissionMaxCandidates) {
     return Projection::success(std::nullopt);
   }
@@ -302,6 +314,15 @@ project_admission_overlay(const project_io::ActiveSequenceJournal& journal) {
   if (resolved.value().pending) {
     for (const auto& candidate : admission.candidates) {
       if (candidate.runtime_frame >= resolved.value().pending->frame) {
+        // Live: withhold the whole overlay until the switch reconciles - the
+        // prefix was projected on an earlier step. Finalize (recovery): the
+        // owner that would reconcile the switch is gone, so this shape can
+        // never convert; fail so recovery refuses and keeps the journal
+        // instead of silently dropping the retained candidates (#1515).
+        if (finalize) {
+          return Projection::failure(
+              conversion_failure("switch_prefix_requires_reconciliation"));
+        }
         return Projection::success(std::nullopt);
       }
     }
@@ -312,6 +333,11 @@ project_admission_overlay(const project_io::ActiveSequenceJournal& journal) {
   std::uint64_t overlay_generation = 0;
   PatternEventReducer reducer{journal.bars, false, 50,
       overlay_generation, converted.value().events, converted.value().pressed};
+  if (finalize) {
+    // The recovery take is terminal: a held press has no future release, so
+    // it ends after its attack tail exactly like a terminal transfer does.
+    reducer.finalize_unreleased(true);
+  }
   return Projection::success(reducer.recoverable_tail());
 }
 

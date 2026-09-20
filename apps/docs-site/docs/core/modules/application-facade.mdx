@@ -18,13 +18,15 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 提供 Host 唯一 Core 入口并编排模块；不承载 Host UI、协议或产品特例。
 ## 2. 当前实现状态
 Application Facade 提供 Host-neutral Sequence begin/event/flush/stop/switch/status/settings/recovery、Pattern create、Pattern Slot assign/clear/move，以及既有 Project/Bundle/Sample/Runtime/Provider surface。本 Build 追加 Host-neutral 的 Sound Set 操作集，共五个：`soundset.catalog.list`、`soundset.inspect`、`soundset.map.preview`、`soundset.install` 与 `soundset.audition`；配套追加 `SoundSetCatalogSource`、`make_workspace_soundset_catalog`、`SuppliedSoundSetCatalog`/`make_supplied_soundset_catalog`，以及 `SoundSetStoreLimits` 别名——Host 由 Facade 配置 Set Store 上限，因此不必也不允许直呼 Project I/O 类型。`ApplicationConfig` 相应在**末尾追加** `soundset_catalog_transport`、`soundset_catalog_source` 与 `soundset_store_limits` 三个成员：仓库内每一处 brace 初始化都是位置式，中间插入会按类型静默改绑 Host 的协作者。上述 Sound Set surface 在引入时属于兼容追加。Stage 12 L3 的 typed ProjectState 返回值暴露新的 lineage variant，因此此次 Facade 分配 MAJOR；C ABI 形状与 api_version 保持不变。本版新增 Host-neutral 的 Performance 操作集，共二十个：`performance.record.begin`、`performance.record.event`、`performance.record.launch-request`、`performance.record.flush`、`performance.record.status`、`performance.record.stop`、`performance.recording.bind`、`performance.save`、`performance.discard`、`performance.list`、`performance.inspect`、`performance.rename`、`performance.delete`、`performance.replay.begin`、`performance.replay.status`、`performance.replay.stop`、`performance.recovery.list`、`performance.recovery.apply`、`performance.recovery.discard`、`performance.resample.commit`。`ApplicationConfig` 相应接受一组 Facade 自有协作者接口：`PerformanceClock`（权威音乐时间，一次成功 admission 恰好消费一次读取）、`PerformanceInputSequencer`（权威 admission 次序，replayed receipt 不消费序号）、`PatternLaunchAcknowledger`（Core Runtime 拥有小节边界次序与 exactly-once outcome，Host 不解析 Slot）与 `PerformanceReplayController`（含 `ReferencePerformanceReplayController` 与 `PerformanceReplayRuntimeSink`）。`make_engine_performance_adapter` 把这些协作者聚合成 `EnginePerformanceAdapter`，`make_headless_performance_runtime_bridge(make_steady_performance_time_source())` 为 headless Host 提供同一组协作者与一个 `service` 泵。`sample.quota` 以 Project Truth 和目标 Pad 为输入，返回计算所用 revision、Bank/Project target-exclusive 用量、有效剩余额度与目标 Bank 的逐 Pad 占用；查询不读取 Runtime publication residency。Facade 统一持有 writer lease、录音 session、选择性 rebase、幂等 receipt 与 recovery policy。每个 Sequence event 先把 completed events 与未释放 press 的 240-tick 默认形态组成 canonical tail 并耐久 append，成功后才更新内存 state 与 acknowledgement；release 的后续 snapshot 替换真实 duration。运行中的 session 会在 journal append 后保留 exact in-flight flush；post-commit 返回失败的重试先完成该 identity，只消费 immutable original command payload，后到事件仍等待新命令。effective recovery 依 flush 顺序合并 incomplete residual、最后合并最新 durable tail，使同-key acknowledgement 覆盖旧值；active/recoverable status、list 与 apply 共享这一 canonical unique batch，因此 completion 过滤不改变 replay identity、不会恢复已提交事件或重计重叠输入。当前 source 还向匹配的 active session owner 提供带单调 generation 的 immutable pending-overlay projection；它是 Runtime 派生输入，不是 Project Truth、revision 或 receipt。Performance 侧遵循同一分层：`performance.record.status` 返回的权威状态（未闭合的 Pad/FX 手势、HOLD 位、最后一次已确认的 Pattern launch）由 Facade 与 Core 拥有，Host 不得用本地预测替代；`performance.replay.*` 消费 Project Cooker 的 `PerformanceReplayProjection` 并回报 `ReplayState {playing, stopped, complete}`、event cursor、event count 与 resolved revision，这些同样是派生状态，不是 Project Truth。只有 `performance.save`/`rename`/`delete`/`recovery.apply`/`recording.bind`/`resample.commit` 这类提交路径才改变 Project Truth，并且照旧经由 writer lease、幂等 receipt 与 `expected_revision` 完成。Flush/Stop mutation result 保留 committed Pattern identity，使 Host 能在 Project commit 后的 Runtime publication failure 上通过 exact receipt replay 恢复，而不重做 Project mutation。非 Sequence authoring 的本机会话检查、孤儿 journal reconciliation 和 Store mutation 位于同一个 Project-scoped admission critical section，消除 begin-vs-authoring 的检查/使用间隙。选择性 rebase 是封闭白名单：除 BPM、Quantize/Swing 外，只允许 Sequence begin 时登记的空 Pad Capture 以同 session、同 Pad、同 expected revision 提交。Project publication 前先 durable 记录原 command/asset/artifact identity；publication 中断后的 retry/restart 只有在 transaction、receipt、revision、Asset 与 Pad Truth 精确吻合时才完成原提交。未发布时，checked Discard/disarm 仅在无 receipt 且 Project Truth 未变时追加 durable abort。durable marker 存在期间 settings 以 `armed_capture_recovery_pending` 拒绝；所有路径都保留 pending events 并在冲突时 fail closed。
-新版 Sequence admission 的恢复边界：现有 event-only Apply 只接收已有 durable
-terminal transfer 的录制记录；仍含未转换输入或未结束按压 checkpoint 的记录返回
-`sequence_admission_unresolved`，保留原始 sealed journal 和 Project Truth，
-不会创建替代 active journal。显式指定目标 Pattern 也不能绕过此检查。terminal
-transfer 后尚未 flush 的 canonical tail 仍可正常恢复，不要求 admission 已完成
-Project 提交；主动 Discard 与 Apply 分开。这里仅保护恢复边界，尚不代表全局
-transport 的输入转换、历史 Quantize/Swing 权威信息和恢复 UI 已接入。
+新版 Sequence admission 的恢复边界：event-only Apply 接收已有 durable
+terminal transfer 的录制记录；仍含未转换输入或未结束按压 checkpoint 且
+owner 仍在的记录返回 `sequence_admission_unresolved`，保留原始 sealed journal
+和 Project Truth，不会创建替代 active journal。显式指定目标 Pattern 也不能
+绕过此检查。terminal transfer 后尚未 flush 的 canonical tail 仍可正常恢复，
+不要求 admission 已完成 Project 提交；主动 Discard 与 Apply 分开。owner 丢失
+的 journal 永远等不到 terminal transfer：这类记录的 retained admission
+candidates 经同一转换器 finalize（未释放按压止于 attack tail 的 240-tick 默认
+形态）后并入恢复投影，apply 直接落地表演者已听到的 take，不再永久拒绝。
 
 ## 3. 所有权与依赖
 
@@ -103,8 +105,9 @@ busy 守卫（`sequence_session_active` 类型化拒绝），owner-loss 和解�
 直接 legacy `begin_sequence` 只在 transport journal 打开时被拒绝（闲置或已结算的
 controller 不阻塞）；controller 销毁即注销登记。owner 消失的未决 transport admission
 （controller 未结算即销毁、Host 崩溃）在 recovery 列出时被密封为 owner_lost 并列入
-`sequence.recovery.list`；其 apply 以 `sequence_admission_unresolved` 诚实拒绝，discard
-正常释放；存活 owner 的 journal 永不被列出操作密封。
+`sequence.recovery.list`；其 retained candidates 经 admission 转换器 finalize 后由
+apply 恢复为已听到的 take（未释放按压止于 attack tail），discard 正常释放；
+存活 owner 的 journal 永不被列出操作密封。
 结算完整（terminal receipt、tail flush 恰好提交一次、complete）后移除已结算 journal，
 与 legacy stop 的 remove_active_if_complete 一致；再次 Record 走同一懒创建路径开新
 journal。submit 被 Engine 拒绝（如未命名的 pending publication）发生在任何音频效果之前，

@@ -1809,14 +1809,17 @@ void check_transferred_admission_recovery(bool terminal) {
     // owns a press and lacks the cutoff/terminal conversion authority.
     LMDJ_CHECK(journal.read_active(project).value().admission->candidates.empty());
     LMDJ_CHECK(journal.seal(project, session, "owner_lost").has_value());
-    const auto path = journal.list_recoverable(project).value().front().path;
-    const auto bytes = read_bytes(path);
+    // The checkpoint still owns a press and lacks the cutoff conversion
+    // authority, but the owner is gone: no terminal transfer will ever
+    // arrive. Recovery finalizes the owned press after its attack tail and
+    // replays it into the Pattern instead of refusing forever (#1515).
     const auto applied = app.apply_sequence_recovery({project, session, std::nullopt});
-    LMDJ_CHECK(!applied.has_value());
-    LMDJ_CHECK(applied.error().details.at("reason") == "sequence_admission_unresolved");
-    LMDJ_CHECK(applied.error().details.at("journal_retained") == true);
-    LMDJ_CHECK(read_bytes(path) == bytes);
-    LMDJ_CHECK(store.load(project).value() == before);
+    LMDJ_CHECK(applied.has_value());
+    const auto recovered = store.load(project).value();
+    LMDJ_CHECK(recovered.revision == before.revision + 1);
+    LMDJ_CHECK(recovered.patterns.at(pattern).events ==
+        std::vector<lmdj::domain::PatternEvent>({{{0, 0}, 0, 240, 100}}));
+    LMDJ_CHECK(app.list_sequence_recovery({project}).value().empty());
     LMDJ_CHECK(!std::filesystem::exists(project / "recovery/active/sequence.jsonl"));
     return;
   }
@@ -1855,8 +1858,48 @@ void test_terminal_admission_recovers_uncommitted_canonical_tail() {
   check_transferred_admission_recovery(true);
 }
 
-void test_admission_recovery_preserves_owned_press_checkpoint() {
+void test_owner_lost_checkpoint_press_recovers_finalized_tail() {
   check_transferred_admission_recovery(false);
+}
+
+// The take the performer heard survives owner loss: a journal sealed
+// owner-lost with a retained admission fence and a held press recovers its
+// finalized tail instead of being refused forever (#1515).
+void test_owner_lost_admission_recovery_finalizes_the_heard_take() {
+  using namespace lmdj::project_io;
+  TempDirectory temp;
+  const auto project = temp.path() / "owner-lost-admission.lmdj";
+  const PatternId pattern{uuid(920)};
+  const SequenceSessionId session{uuid(921)};
+  Application app(config(temp.path()));
+  create_recordable_project(app, project, pattern);
+  ProjectStore store;
+  const auto before = store.load(project).value();
+  SequenceJournal journal;
+  LMDJ_CHECK(journal.begin(project, session, pattern, 1,
+      sequence_pattern_fingerprint(before.patterns.at(pattern)), before.revision).has_value());
+  const SequenceAdmissionPreparation preparation{
+      {CommandId{uuid(922)}, 1, 1}, before.id, pattern, 1, 10};
+  LMDJ_CHECK(journal.prepare_admission(project, session, preparation).has_value());
+  const SequenceAdmissionFence admission{
+      SequenceFenceKind::admission, CommandId{uuid(923)}, 1, 900, 0,
+      pattern, 1, 120, true, std::nullopt, SequenceSwitchOutcome::none, std::nullopt};
+  LMDJ_CHECK(journal.retain_admission_fence(project, session, preparation.identity,
+      admission).has_value());
+  LMDJ_CHECK(journal.append_admission_candidate(project, session, preparation.identity,
+      {10, 1000, {0, 0}, SequenceCandidateKind::press, 100, 7}).has_value());
+  LMDJ_CHECK(journal.seal(project, session, "owner_lost").has_value());
+  const auto applied = app.apply_sequence_recovery({project, session, std::nullopt});
+  LMDJ_CHECK(applied.has_value());
+  const auto recovered = store.load(project).value();
+  LMDJ_CHECK(recovered.revision == before.revision + 1);
+  // The held press ends after its attack tail: one event at tick 0 with the
+  // default 240-tick release the terminal transfer conversion also uses.
+  LMDJ_CHECK(recovered.patterns.at(pattern).events ==
+      std::vector<lmdj::domain::PatternEvent>({{{0, 0}, 40, 240, 100}}));
+  LMDJ_CHECK(app.list_sequence_recovery({project}).value().empty());
+  LMDJ_CHECK(!app.apply_sequence_recovery({project, session, std::nullopt}).has_value());
+  LMDJ_CHECK(store.load(project).value() == recovered);
 }
 
 void test_converted_admission_survives_lost_response_and_recovers_once() {
@@ -1960,10 +2003,11 @@ constexpr std::array<Scenario, 7> kLifecycleScenarios{
     test_owner_loss_apply_and_discard_are_explicit,
 };
 
-constexpr std::array<Scenario, 12> kRecoveryScenarios{
+constexpr std::array<Scenario, 13> kRecoveryScenarios{
     test_converted_admission_survives_lost_response_and_recovers_once,
     test_terminal_admission_recovers_uncommitted_canonical_tail,
-    test_admission_recovery_preserves_owned_press_checkpoint,
+    test_owner_lost_checkpoint_press_recovers_finalized_tail,
+    test_owner_lost_admission_recovery_finalizes_the_heard_take,
     test_admission_recovery_preserves_unconverted_input,
     test_sigkill_owner_recovers_acknowledged_unflushed_events,
     test_later_flush_supersedes_failed_flush_before_recovery_apply,

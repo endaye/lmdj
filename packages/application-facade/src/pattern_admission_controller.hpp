@@ -33,13 +33,15 @@ foundation::Result<project_io::SequenceAdmissionTransfer> commit_admission_trans
 // yet — no admission, one not yet activated or already sealed, an owner-lost
 // journal, or candidates awaiting an unreconciled switch. A genuine
 // authority, timing or arithmetic failure is still reported as an error.
-//
 // `std::nullopt` is never evidence that the admission is empty, complete or
 // safe to close: several of those states are ones `build_admission_transfer`
 // reports as an error for the same journal. A caller may use it only to
-// decide there is nothing to publish right now.
+// decide there is nothing to publish right now. With `finalize` the same
+// durable input is read terminally for recovery: owner-lost journals project
+// too, and a held press ends after its attack tail (#1515).
 foundation::Result<std::optional<std::vector<domain::PatternEvent>>>
-project_admission_overlay(const project_io::ActiveSequenceJournal& journal);
+project_admission_overlay(const project_io::ActiveSequenceJournal& journal,
+                          bool finalize);
 
 enum class PatternAdmissionAdmit : std::uint8_t { retained, live_only };
 

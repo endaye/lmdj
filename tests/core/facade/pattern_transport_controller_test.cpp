@@ -1,3 +1,4 @@
+#include <cstdio>
 // The public controller header is the boundary that lets a Host drive Pattern
 // transport without naming a Project I/O type; keep it the first include so a
 // stray project_io dependency in it fails this compile.
@@ -1030,18 +1031,24 @@ void owner_lost_transport_admission_is_sealed_and_listed() {
   LMDJ_CHECK(listed.value().size() == 1);
   LMDJ_CHECK(listed.value().front().session_id == f.session);
   LMDJ_CHECK(listed.value().front().reason == "owner_lost");
-  // The retained candidate survives the seal; the unresolved admission is a
-  // recoverable refusal, not a guess.
+  // The owner is gone: no terminal transfer will ever arrive. Recovery
+  // finalizes the retained held press after its attack tail and replays it
+  // into the Pattern instead of refusing forever (#1515).
   const auto applied = f.application.apply_sequence_recovery(
       {f.bundle, f.session, std::nullopt});
-  LMDJ_CHECK(!applied.has_value());
-  LMDJ_CHECK(applied.error().details.at("reason") ==
-             "sequence_admission_unresolved");
+  LMDJ_CHECK(applied.has_value());
+  lmdj::project_io::ProjectStore after(f.platform);
+  const auto settled = after.load(f.bundle);
+  LMDJ_CHECK(settled.has_value());
+  LMDJ_CHECK(settled.value().patterns.at(f.pattern).events ==
+      std::vector<lmdj::domain::PatternEvent>({{{0, 1}, 0, 240, 90}}));
   const auto listed_again = f.application.list_sequence_recovery({f.bundle});
   LMDJ_CHECK(listed_again.has_value());
-  LMDJ_CHECK(listed_again.value().size() == 1);
-  LMDJ_CHECK(f.application.discard_sequence_recovery({f.bundle, f.session, std::nullopt})
-                 .has_value());
+  LMDJ_CHECK(listed_again.value().empty());
+  // The journal was consumed by the recovery itself; an explicit discard has
+  // nothing left to remove.
+  LMDJ_CHECK(!f.application.discard_sequence_recovery(
+                 {f.bundle, f.session, std::nullopt}).has_value());
   const auto empty = f.application.list_sequence_recovery({f.bundle});
   LMDJ_CHECK(empty.has_value());
   LMDJ_CHECK(empty.value().empty());
