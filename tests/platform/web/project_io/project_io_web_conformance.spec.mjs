@@ -626,16 +626,46 @@ function trackRuntimeErrors(page) {
     observer.waiters.clear();
   };
   page.on("pageerror", onPageError);
-  page.once("close", () => {
+  observer.detach = () => {
     page.off("pageerror", onPageError);
     RUNTIME_ERROR_OBSERVERS.delete(page);
-  });
+  };
+  page.once("close", observer.detach);
   RUNTIME_ERROR_OBSERVERS.set(page, observer);
   return page;
 }
 
+// One browser per test is the fixture's isolation unit, and the locked
+// Playwright WebKit (r2336) wedges that browser after roughly seventy-five
+// page open/close cycles: from then on every navigation on any page — plain
+// HTML or Wasm host, persistent context or not, tracing on or off — hangs
+// until the test timeout (#1570). The same browser navigates one page 150
+// times in three seconds. So a page this file closes is not discarded: it is
+// parked on about:blank, which tears its document down the way a close does
+// (its OPFS handles, leases and workers go with the document), and the next
+// `trackedPage` navigates it again instead of opening another. A page that
+// cannot even reach about:blank is closed for real.
+const IDLE_PAGES = new WeakMap();
+
 async function trackedPage(context) {
-  return trackRuntimeErrors(await context.newPage());
+  let idle = IDLE_PAGES.get(context);
+  if (!idle) IDLE_PAGES.set(context, idle = []);
+  let page = idle.pop();
+  while (page && page.isClosed()) page = idle.pop();
+  if (!page) {
+    page = await context.newPage();
+    const close = page.close.bind(page);
+    page.close = async (options) => {
+      RUNTIME_ERROR_OBSERVERS.get(page)?.detach();
+      try {
+        await page.goto("about:blank", {timeout: 10_000});
+      } catch (_) {
+        return close(options);
+      }
+      if (!idle.includes(page)) idle.push(page);
+    };
+  }
+  return trackRuntimeErrors(page);
 }
 
 async function waitForResult(page) {
@@ -840,6 +870,32 @@ async function readPublicationIntentState(page, bundle) {
       return "absent";
     }
   }, {scope});
+}
+
+// The `lmdj.storage.directory-publication.v1` record an interrupted
+// publication leaves behind at each of `PUBLICATION_FAULT_POINTS`, as
+// `readPublicationIntentState` reads it. `before_intent_write` leaves an empty
+// file and `during_intent_write` a torn one; both read as `absent` here and as
+// `pending` to the storage module, which hides the destination either way.
+// From `after_pending_intent` up to the commit the record is `pending`.
+// `before_commit_close` is the one engine-dependent point: the committed
+// record has been written to a writable stream that was never closed. The
+// File System Access specification discards such a stream, and Chromium does,
+// but WebKit's `FileSystemWritableFileStreamSink` destructor closes an
+// unclosed stream as `Completed`, so tearing the publisher page down there
+// commits the buffered record as soon as the sink is collected — a race the
+// inspector may observe on either side. Only the points after the close saw
+// the commit themselves. Whatever the engine left, enumeration must agree
+// with the record and recovery must converge from it; that is the fact the
+// loop below fixes.
+function publicationIntentStatesAfter(point) {
+  const index = PUBLICATION_FAULT_POINTS.indexOf(point);
+  const pending = PUBLICATION_FAULT_POINTS.indexOf("after_pending_intent");
+  const commitClose = PUBLICATION_FAULT_POINTS.indexOf("before_commit_close");
+  if (index < pending) return ["absent"];
+  if (index < commitClose) return ["pending"];
+  if (index === commitClose) return ["pending", "committed"];
+  return ["committed"];
 }
 
 async function storageIntentPresent(page, bundle) {
@@ -1602,7 +1658,9 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
     await inspector.goto(
         `/project_io/project_io_web_test.html?action=inspect_publication&bundle=${bundle}`);
     const beforeRecovery = await waitForResult(inspector);
-    const committed = index >= 7;
+    const intentState = await readPublicationIntentState(controller, bundle);
+    expect(publicationIntentStatesAfter(point)).toContain(intentState);
+    const committed = intentState === "committed";
     expect(beforeRecovery.visible).toBe(committed);
     if (committed) expect(beforeRecovery.complete).toBe(true);
 
