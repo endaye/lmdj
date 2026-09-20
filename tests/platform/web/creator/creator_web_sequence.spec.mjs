@@ -202,7 +202,13 @@ test("global Pattern transport plays, overdubs, survives navigation, stops, and 
   await transportStatus(page, "playing");
   const committed = await inspectTruth(page);
   expect(committed.revision).toBe(baseline.revision + 1);
-  const events = committed.patterns[patternId].events;
+  // Pattern truth orders events by position, not by the order the keys were
+  // pressed: when the two presses straddle the loop boundary the Pad 1 event
+  // sits earlier in the loop than the Pad 0 event. The fact is the set — both
+  // presses committed, each to its own Pad at full velocity — so compare the
+  // events by Pad, not by index (#1562).
+  const events = [...committed.patterns[patternId].events]
+      .sort((left, right) => left.slot.pad - right.slot.pad);
   expect(events).toHaveLength(2);
   expect(events[0]).toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100});
   expect(events[1]).toMatchObject({slot: {bank: 0, pad: 1}, velocity: 100});
