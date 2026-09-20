@@ -28,6 +28,12 @@ navigation continuity, live-Pad behavior at stop).
   transport adoption and the retired-engagement projection fix), served as the
   packaged Creator distribution — not a dev server — so the distribution CSP
   and the real session path are exercised.
+- T-L7 additionally requires the coordinator-owned live overlay publication
+  (#1550, the L2 loop-overdub delivery): the first Product Build whose tree
+  contains `fd8c0761` is the earliest Build on which T-L7 can pass. Rows may
+  record earlier Builds for T-L1…T-L6 and T-N1…T-N3, but a T-L7 `PASS` naming
+  an earlier Build is invalid — the recorded pass would predate the mechanism
+  it claims to hear.
 - Headphones or a wired output route, and a quiet enough room to judge clicks,
   gaps and stuck voices.
 - A Project with at least one Pattern and several assigned Pads with distinct,
