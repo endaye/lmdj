@@ -656,7 +656,9 @@ async function trackedPage(context) {
   // Wasm host's `window.lmdjProjectIoWeb`. One that is anywhere else, or has
   // gone, is not handed out again.
   while (page && (page.isClosed() || page.url() !== "about:blank")) {
-    if (!page.isClosed()) await REAL_CLOSE.get(page)().catch(() => {});
+    if (!page.isClosed()) {
+      await (REAL_CLOSE.get(page) ?? page.close.bind(page))().catch(() => {});
+    }
     page = idle.pop();
   }
   if (!page) {
@@ -903,6 +905,10 @@ function publicationIntentStatesAfter(point) {
   const index = PUBLICATION_FAULT_POINTS.indexOf(point);
   const pending = PUBLICATION_FAULT_POINTS.indexOf("after_pending_intent");
   const commitClose = PUBLICATION_FAULT_POINTS.indexOf("before_commit_close");
+  if (index < 0 || pending < 0 || commitClose < 0) {
+    throw new Error(
+        `publication fault point not in PUBLICATION_FAULT_POINTS: ${point}`);
+  }
   if (index < pending) return ["absent"];
   if (index < commitClose) return ["pending"];
   if (index === commitClose) return ["pending", "committed"];
