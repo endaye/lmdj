@@ -145,6 +145,12 @@ struct SequenceAdmissionState {
   std::vector<SequencePublicationAuthority> applied_switches;
   // Generation of the segment already reconciled by a durable switch record.
   std::uint64_t segment_generation{};
+  // Current live-overlay publication generation the coordinator has published
+  // for this admission (#1513). Overlay republications are same-Pattern: they
+  // advance this counter, not applied_switches, and a cutoff without a switch
+  // validates its publication_generation against it. Zero means nothing has
+  // been published beyond the preparation generation.
+  std::uint64_t published_generation{};
   bool completed{};
   std::vector<SequenceAdmissionTimingProfile> timing_profiles{};
   bool operator==(const SequenceAdmissionState&) const = default;

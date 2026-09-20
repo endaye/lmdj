@@ -64,6 +64,9 @@ class PatternAdmissionOwner {
       const project_io::SequenceAdmissionFence& fence);
   foundation::Result<void> retain_switch(
       const project_io::SequencePublicationAuthority& authority);
+  // Records the publication generation a live-overlay republication created
+  // (#1513), so the cutoff without a switch validates against it.
+  foundation::Result<void> retain_overlay_publication(std::uint64_t generation);
   foundation::Result<void> reconcile_switch(project_io::ProjectStore& store);
   foundation::Result<void> drain_source_prefix(
       project_io::ProjectStore& store, foundation::CommandId transfer_id,

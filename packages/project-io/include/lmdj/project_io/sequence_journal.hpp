@@ -235,6 +235,12 @@ class SequenceJournal {
       const std::filesystem::path& bundle, foundation::SequenceSessionId session,
       const SequenceAdmissionIdentity& identity,
       const SequencePublicationAuthority& authority);
+  // Records a same-Pattern live-overlay publication generation (#1513). One
+  // durable append per published overlay; the cutoff without a switch then
+  // validates against the latest recorded generation.
+  foundation::Result<void> retain_admission_overlay(
+      const std::filesystem::path& bundle, foundation::SequenceSessionId session,
+      const SequenceAdmissionIdentity& identity, std::uint64_t publication_generation);
   foundation::Result<void> retain_admission_timing_profile(
       const std::filesystem::path& bundle, foundation::SequenceSessionId session,
       const SequenceAdmissionIdentity& identity,
