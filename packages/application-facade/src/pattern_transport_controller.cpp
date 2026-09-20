@@ -502,7 +502,7 @@ PatternTransportCoordinator::project_overlay() {
   if (journal.value().session_id != session_) {
     return Projection::success(std::nullopt);
   }
-  auto projected = project_admission_overlay(journal.value());
+  auto projected = project_admission_overlay(journal.value(), false);
   if (!projected.has_value()) return Projection::failure(projected.error());
   if (!projected.value().has_value()) return Projection::success(std::nullopt);
   // The journal's Pattern is the one the conversion validated its segment

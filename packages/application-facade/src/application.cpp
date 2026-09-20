@@ -2092,7 +2092,7 @@ foundation::Result<void> validate_initial_pattern(
   return foundation::Result<void>::success();
 }
 
-std::vector<domain::PatternEvent> canonical_recovery_events(
+foundation::Result<std::vector<domain::PatternEvent>> canonical_recovery_events(
     const project_io::ActiveSequenceJournal& journal) {
   std::vector<domain::PatternEvent> recovered;
   for (const auto& flush : journal.flushes) {
@@ -2101,7 +2101,28 @@ std::vector<domain::PatternEvent> canonical_recovery_events(
           recovered, flush.recovery_events);
     }
   }
-  return domain::merge_pattern_events(recovered, journal.pending_events);
+  recovered = domain::merge_pattern_events(recovered, journal.pending_events);
+  // An owner-lost journal never reaches its cutoff: the transport owner that
+  // would resolve the admission is gone. Its retained candidates are still
+  // the take the performer heard, so the recovery projection finalizes them
+  // (a held press ends after its attack tail) and replays them into the
+  // destination Pattern instead of discarding them (#1515). A conversion
+  // failure is returned, never swallowed: the journal is the only durable
+  // copy of those candidates, so apply must refuse and keep it rather than
+  // commit a take that silently lost them.
+  if (journal.state == project_io::SequenceSessionState::owner_lost) {
+    auto overlay = detail::project_admission_overlay(journal, true);
+    if (!overlay.has_value()) {
+      return foundation::Result<std::vector<domain::PatternEvent>>::failure(
+          overlay.error());
+    }
+    if (overlay.value().has_value()) {
+      recovered = domain::merge_pattern_events(
+          recovered, std::move(*overlay.value()));
+    }
+  }
+  return foundation::Result<std::vector<domain::PatternEvent>>::success(
+      std::move(recovered));
 }
 
 }  // namespace
@@ -3238,7 +3259,9 @@ struct Application::Impl {
     }
     const auto active = sequence_journals.read_active(request.project_path);
     if (active.has_value()) {
-      const auto pending = canonical_recovery_events(active.value()).size();
+      const auto canonical = canonical_recovery_events(active.value());
+      const auto pending = canonical.has_value()
+          ? canonical.value().size() : std::size_t{0};
       return foundation::Result<SequenceStatus>::success(SequenceStatus{
           active.value().state == project_io::SequenceSessionState::switching
               ? SequenceRecordState::switching
@@ -3264,7 +3287,9 @@ struct Application::Impl {
       return foundation::Result<SequenceStatus>::success(SequenceStatus{});
     }
     const auto& candidate = recovery.value().front().journal;
-    const auto pending = canonical_recovery_events(candidate).size();
+    const auto canonical = canonical_recovery_events(candidate);
+    const auto pending = canonical.has_value()
+        ? canonical.value().size() : std::size_t{0};
     return foundation::Result<SequenceStatus>::success(SequenceStatus{
         SequenceRecordState::recoverable,
         candidate.session_id,
@@ -3355,8 +3380,9 @@ struct Application::Impl {
     std::vector<SequenceRecoveryInfo> result;
     result.reserve(listed.value().size());
     for (const auto& candidate : listed.value()) {
-      const auto event_count =
-          canonical_recovery_events(candidate.journal).size();
+      const auto canonical = canonical_recovery_events(candidate.journal);
+      const auto event_count = canonical.has_value()
+          ? canonical.value().size() : std::size_t{0};
       result.push_back(SequenceRecoveryInfo{
           candidate.journal.session_id,
           candidate.journal.pattern_id,
@@ -3409,9 +3435,18 @@ struct Application::Impl {
     // Event-only recovery cannot consume raw candidates or an owned-press
     // checkpoint. A terminal transfer proves all admission input was resolved;
     // admission.completed would be too strict because its flush may be pending.
+    // An owner-lost journal never reaches that terminal transfer - the
+    // transport owner that would resolve it is gone - so blocking it forever
+    // on this boundary would strand the take. Its retained candidates are
+    // instead finalized into the recovery projection by
+    // canonical_recovery_events, which consumes the same converter (#1515).
     const auto& admission = candidate->journal.admission;
+    const bool finalized_owner_lost =
+        candidate->journal.state == project_io::SequenceSessionState::owner_lost &&
+        admission.has_value() && admission->admission_fence.has_value();
     if (admission.has_value() &&
-        (admission->transfers.empty() || !admission->transfers.back().terminal)) {
+        (admission->transfers.empty() || !admission->transfers.back().terminal) &&
+        !finalized_owner_lost) {
       return foundation::Result<SequenceMutationResult>::failure(sequence_error(
           ErrorCode::invalid_argument,
           "Sequence admission is unresolved; retain the recording until its "
@@ -3440,6 +3475,15 @@ struct Application::Impl {
            {"pattern_id", destination.value()}}));
     }
     auto recovered_events = canonical_recovery_events(candidate->journal);
+    // Finding #1515 review: the finalized overlay and this gate must be one
+    // checked result. If the owner-lost overlay failed to convert, the
+    // journal is the only durable copy of the retained candidates — refuse,
+    // keep it, and let explicit Discard decide.
+    if (!recovered_events.has_value()) {
+      // The conversion error already carries {reason, journal_retained}.
+      return foundation::Result<SequenceMutationResult>::failure(
+          recovered_events.error());
+    }
     auto begun = sequence_journals.begin(
         request.project_path,
         request.session_id,
@@ -3450,9 +3494,10 @@ struct Application::Impl {
     if (!begun.has_value()) {
       return foundation::Result<SequenceMutationResult>::failure(begun.error());
     }
+    const auto& events = recovered_events.value();
     std::uint64_t committed_revision = loaded.value().revision;
     bool replayed = false;
-    if (!recovered_events.empty()) {
+    if (!events.empty()) {
       const foundation::CommandId command_id{generated_uuid()};
       auto appended = sequence_journals.append_flush(
           request.project_path,
@@ -3460,7 +3505,7 @@ struct Application::Impl {
           command_id,
           destination,
           loaded.value().revision,
-          recovered_events);
+          events);
       if (!appended.has_value()) {
         (void)sequence_journals.seal(
             request.project_path, request.session_id, "recovery_failed");

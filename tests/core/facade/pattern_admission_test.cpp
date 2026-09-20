@@ -214,7 +214,7 @@ void projection_equals_the_tail_the_transfer_would_commit() {
   const auto transfer = facade::detail::build_admission_transfer(
       journal, foundation::CommandId{uuid(6)}, 11, false);
   LMDJ_CHECK(transfer.has_value());
-  const auto projection = facade::detail::project_admission_overlay(journal);
+  const auto projection = facade::detail::project_admission_overlay(journal, false);
   LMDJ_CHECK(projection.has_value() && projection.value().has_value());
   LMDJ_CHECK(*projection.value() == transfer.value().recoverable_tail);
 }
@@ -232,7 +232,7 @@ void projection_preserves_the_retained_clock_and_quantization() {
   const auto transfer = facade::detail::build_admission_transfer(
       journal, foundation::CommandId{uuid(6)}, 13, false);
   LMDJ_CHECK(transfer.has_value());
-  const auto projection = facade::detail::project_admission_overlay(journal);
+  const auto projection = facade::detail::project_admission_overlay(journal, false);
   LMDJ_CHECK(projection.has_value() && projection.value().has_value());
   LMDJ_CHECK(*projection.value() == transfer.value().recoverable_tail);
 }
@@ -242,13 +242,13 @@ void projection_holds_a_press_at_a_sixteenth_until_its_release_lands() {
   using namespace project_io;
   auto journal = retained_fixture();
   journal.admission->candidates.pop_back();  // press retained, release not yet
-  const auto held = facade::detail::project_admission_overlay(journal);
+  const auto held = facade::detail::project_admission_overlay(journal, false);
   LMDJ_CHECK(held.has_value() && held.value().has_value());
   LMDJ_CHECK(*held.value() == std::vector<PatternEvent>(
       {{{0, 1}, 960, domain::kSixteenthTicks, 90}}));
   journal.admission->candidates.push_back(
       {11, 37000, {0, 1}, SequenceCandidateKind::release, 0, 72});
-  const auto released = facade::detail::project_admission_overlay(journal);
+  const auto released = facade::detail::project_admission_overlay(journal, false);
   LMDJ_CHECK(released.has_value() && released.value().has_value());
   LMDJ_CHECK(*released.value() == std::vector<PatternEvent>({{{0, 1}, 960, 480, 90}}));
 }
@@ -272,7 +272,7 @@ void projection_excludes_pre_fence_and_post_cutoff_candidates() {
   const auto transfer = facade::detail::build_admission_transfer(
       journal, foundation::CommandId{uuid(6)}, 13, false);
   LMDJ_CHECK(transfer.has_value());
-  const auto projection = facade::detail::project_admission_overlay(journal);
+  const auto projection = facade::detail::project_admission_overlay(journal, false);
   LMDJ_CHECK(projection.has_value() && projection.value().has_value());
   // The pre-fence press at 12000 and the post-cutoff release at 31000 are
   // absent from both, so the surviving press is still held at a sixteenth.
@@ -291,8 +291,26 @@ void projection_shows_nothing_while_a_switch_awaits_reconciliation() {
   // reports an ordinary live state instead of poisoning its caller.
   LMDJ_CHECK(!facade::detail::build_admission_transfer(
       journal, foundation::CommandId{uuid(6)}, 11, false).has_value());
-  const auto projection = facade::detail::project_admission_overlay(journal);
+  const auto projection = facade::detail::project_admission_overlay(journal, false);
   LMDJ_CHECK(projection.has_value() && !projection.value().has_value());
+}
+
+// A pending applied switch with a candidate at/after its frame makes the
+// finalized overlay unconvertible. The recovery projection must surface that
+// failure, not swallow it — the journal is the only durable copy (#1515).
+void owner_lost_overlay_failure_propagates_from_the_projection() {
+  using namespace lmdj;
+  using namespace project_io;
+  auto journal = retained_fixture();
+  journal.state = SequenceSessionState::owner_lost;
+  journal.admission->applied_switches.push_back(
+      {foundation::PatternId{uuid(9)}, 22, 5000});
+  // The fixture's candidates (frames 25000/31000) sit at/after the pending
+  // switch frame: conversion must fail, never silently drop the take.
+  const auto projection = facade::detail::project_admission_overlay(journal, true);
+  LMDJ_CHECK(!projection.has_value());
+  LMDJ_CHECK(projection.error().details.at("reason") ==
+             "switch_prefix_requires_reconciliation");
 }
 
 void projection_shows_nothing_before_activation_or_after_sealing() {
@@ -300,22 +318,35 @@ void projection_shows_nothing_before_activation_or_after_sealing() {
   using namespace project_io;
   auto unactivated = retained_fixture();
   unactivated.admission->admission_fence.reset();
-  const auto before = facade::detail::project_admission_overlay(unactivated);
+  const auto before = facade::detail::project_admission_overlay(unactivated, false);
   LMDJ_CHECK(before.has_value() && !before.value().has_value());
 
   auto lost = retained_fixture();
   lost.state = SequenceSessionState::owner_lost;
-  const auto gone = facade::detail::project_admission_overlay(lost);
+  const auto gone = facade::detail::project_admission_overlay(lost, false);
   LMDJ_CHECK(gone.has_value() && !gone.value().has_value());
+
+  // The recovery surface reads the same durable input terminally: the take
+  // the performer heard survives owner loss (#1515). A held press has no
+  // future release, so it ends after its attack tail exactly like a terminal
+  // transfer.
+  auto held = retained_fixture();
+  held.state = SequenceSessionState::owner_lost;
+  held.admission->candidates = {
+      {10, 25000, {0, 1}, SequenceCandidateKind::press, 90, 72}};
+  const auto finalized = facade::detail::project_admission_overlay(held, true);
+  LMDJ_CHECK(finalized.has_value() && finalized.value().has_value());
+  LMDJ_CHECK(*finalized.value() ==
+      std::vector<PatternEvent>({{{0, 1}, 960, 240, 90}}));
 
   auto completed = retained_fixture();
   completed.admission->completed = true;
-  const auto sealed = facade::detail::project_admission_overlay(completed);
+  const auto sealed = facade::detail::project_admission_overlay(completed, false);
   LMDJ_CHECK(sealed.has_value() && !sealed.value().has_value());
 
   ActiveSequenceJournal absent = retained_fixture();
   absent.admission.reset();
-  const auto none = facade::detail::project_admission_overlay(absent);
+  const auto none = facade::detail::project_admission_overlay(absent, false);
   LMDJ_CHECK(none.has_value() && !none.value().has_value());
 }
 
@@ -813,6 +844,7 @@ int main() {
     conversion_retry_returns_the_retained_identity_without_new_input();
     excluded_prefix_preserves_the_checkpoint_and_input_sequence();
     switch_target_input_requires_reconciliation_and_its_own_clock();
+    owner_lost_overlay_failure_propagates_from_the_projection();
     projection_equals_the_tail_the_transfer_would_commit();
     projection_preserves_the_retained_clock_and_quantization();
     projection_holds_a_press_at_a_sixteenth_until_its_release_lands();
