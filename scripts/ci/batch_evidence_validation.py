@@ -88,7 +88,16 @@ def validate_job_observations(checked, producer, jobs):
             continue  # GitHub may omit unexpanded reusable skipped jobs.
         require(len(matches) == 1, "product job API evidence missing or ambiguous")
         actual, claimed = matches[0].get("conclusion"), observation["conclusion"]
-        compatible = actual == claimed or claimed == "failure" and actual in {"timed_out", "action_required", "startup_failure"}
+        # A product job the platform cancels reaches the producer as a failed
+        # suite — `needs` carries `result: cancelled`, which is not success —
+        # while the API keeps reporting `cancelled`. Without this, the verdict
+        # and the API disagree forever, the controller can never settle that
+        # executor, and every later batch stays queued behind it: that is what
+        # stalled the production journal on 2026-09-20 (run 35523421406, whose
+        # `Deploy contract` job was cancelled). The batch stays failed either
+        # way; only the cross-check learns the conclusion the platform used.
+        compatible = actual == claimed or claimed == "failure" and actual in {
+            "timed_out", "action_required", "startup_failure", "cancelled"}
         # Only this reviewed job deliberately uses job-level continuation.
         compatible |= observation["job"] == "macos-primary" and claimed == "success" and actual == "failure"
         require(compatible, "product job API conclusion contradicts retained needs")
