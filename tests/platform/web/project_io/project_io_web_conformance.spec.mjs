@@ -645,8 +645,29 @@ function trackRuntimeErrors(page) {
 // (its OPFS handles, leases and workers go with the document), and the next
 // `trackedPage` navigates it again instead of opening another. A page that
 // cannot even reach about:blank is closed for real.
+//
+// One document must never be parked: a Wasm host stopped at a fault point,
+// whose worker is suspended forever inside `stopAtFault`. Navigating such a
+// page to about:blank returns immediately, but on Linux WebKit the next
+// navigation on that page never completes — the `/proc` snapshot taken at one
+// timeout (#1570, run 35496737811) shows every thread of every WebKit process
+// asleep in `futex_wait`/`poll` with the host otherwise idle: 58 GB free, 32 GB
+// of `/dev/shm` unused, load 3.7. The page is not busy, it is never served
+// again. A page is therefore reusable only when its Wasm host published a
+// terminal report, or when it never loaded one.
 const IDLE_PAGES = new WeakMap();
 const REAL_CLOSE = new WeakMap();
+
+async function pageIsQuiescent(page) {
+  try {
+    return await page.evaluate(() => {
+      const host = window.lmdjProjectIoWeb;
+      return host === undefined || host === null || host.complete === true;
+    });
+  } catch (_) {
+    return false;
+  }
+}
 
 async function trackedPage(context) {
   let idle = IDLE_PAGES.get(context);
@@ -667,6 +688,7 @@ async function trackedPage(context) {
     REAL_CLOSE.set(page, close);
     page.close = async (options) => {
       if (page.url() === "about:blank") return close(options);
+      if (!(await pageIsQuiescent(page))) return close(options);
       try {
         await page.goto("about:blank", {timeout: 10_000});
       } catch (_) {
