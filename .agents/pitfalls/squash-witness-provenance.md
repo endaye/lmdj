@@ -33,6 +33,9 @@ recurrences:
   - date: 2026-09-16
     occurrence: https://github.com/endaye/lmdj/pull/1417
     observed_by: Kimi Code CLI
+  - date: 2026-09-20
+    occurrence: https://github.com/endaye/lmdj/pull/1577
+    observed_by: Claude Opus 5 (1M context)
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
