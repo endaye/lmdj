@@ -848,22 +848,40 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn("remedy: inspect exact journal/run identities", reported)
         self.assertFalse(destination.exists())
 
-    def test_blocked_entry_point_bounds_what_it_prints(self):
-        """The sentence is diagnostic text, never a place for a payload."""
+    def test_blocked_entry_point_reports_only_its_own_refusals(self):
+        """Another party's text may quote a response body; only the type is safe."""
         destination = self.root / "answer.json"
         config = self.root / "config.json"
         config.write_text("{}")
         with mock.patch.object(runtime, "Runtime") as factory:
             instance = factory.return_value
             instance.diagnostic_stage = None
-            instance.reconcile.side_effect = RuntimeError("x" * 5000)
+            instance.reconcile.side_effect = RuntimeError("server said " + "x" * 5000)
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
+                self.assertEqual(
+                    runtime.main(["reconcile", "--config", str(config),
+                                  "--output", str(destination)]), 1)
+        reported = printed.getvalue()
+        self.assertIn("RuntimeError", reported)
+        self.assertNotIn("server said", reported)
+        self.assertNotIn("stage:", reported)
+        self.assertLess(len(reported), runtime.DIAGNOSTIC_LIMIT + 300)
+
+    def test_blocked_entry_point_bounds_a_long_refusal(self):
+        """Even this repository's own sentence is bounded."""
+        destination = self.root / "answer.json"
+        config = self.root / "config.json"
+        config.write_text("{}")
+        with mock.patch.object(runtime, "Runtime") as factory:
+            instance = factory.return_value
+            instance.diagnostic_stage = None
+            instance.reconcile.side_effect = batch.BatchError("why: " + "y" * 5000)
             with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
                 self.assertEqual(
                     runtime.main(["reconcile", "--config", str(config),
                                   "--output", str(destination)]), 1)
         reported = printed.getvalue()
         self.assertLess(len(reported), runtime.DIAGNOSTIC_LIMIT + 300)
-        self.assertNotIn("stage:", reported)
 
     def test_reference_roundtrip_does_not_depend_on_artifact(self):
         value = {"failures": ["core"], "debt": "missing", "raw": ["x" * 1000] * 100}

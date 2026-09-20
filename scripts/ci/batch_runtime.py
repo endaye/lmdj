@@ -496,6 +496,7 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--request", type=Path)
     args = parser.parse_args(argv)
+    runtime = None
     try:
         require(not args.output.exists(), "output already exists; a stale execute action must never be reused")
         require(args.request is None or args.command in {'reconcile', 'resume', 'reconcile-pending'},
@@ -520,12 +521,18 @@ def main(argv=None):
         # The remedy tells an operator where to look; without the failure
         # itself they cannot look anywhere. A stalled controller reported only
         # this sentence, and the cause had to be guessed from the journal
-        # (#1570 investigation, runs 35533247694 and 35535446673). Name the
-        # raised condition and the stage that raised it. Both are closed
-        # repository text — `why:`/`remedy:` sentences and a fixed stage name —
-        # never an API body, token or journal payload, and both are bounded.
-        stage = getattr(locals().get("runtime"), "diagnostic_stage", None)
-        detail = f"{type(error).__name__}: {error}"[:DIAGNOSTIC_LIMIT]
+        # (#1570 investigation, runs 35533247694 and 35535446673).
+        #
+        # Only this repository's own refusals carry a message here: a
+        # `BatchError` or `JournalBlocked` is built from a `why:`/`remedy:`
+        # pair written in `scripts/ci/`, and neither interpolates a response
+        # body or a journal payload. Anything else is named by its type alone,
+        # because its message may quote whatever a server or a parser handed
+        # back. The stage is one of the fixed names the runtime sets around
+        # each authentication step. Both are bounded.
+        stage = getattr(runtime, "diagnostic_stage", None)
+        closed = isinstance(error, (batch.BatchError, storage.JournalBlocked))
+        detail = (f"{type(error).__name__}: {error}" if closed else type(error).__name__)[:DIAGNOSTIC_LIMIT]
         print(f"why: batch runtime did not commit an authenticated action ({detail})"
               + (f"; stage: {stage}" if stage else "")
               + "; remedy: inspect exact journal/run identities and reconcile without replaying execution")
