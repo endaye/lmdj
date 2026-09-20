@@ -646,22 +646,33 @@ function trackRuntimeErrors(page) {
 // `trackedPage` navigates it again instead of opening another. A page that
 // cannot even reach about:blank is closed for real.
 const IDLE_PAGES = new WeakMap();
+const REAL_CLOSE = new WeakMap();
 
 async function trackedPage(context) {
   let idle = IDLE_PAGES.get(context);
   if (!idle) IDLE_PAGES.set(context, idle = []);
   let page = idle.pop();
-  while (page && page.isClosed()) page = idle.pop();
+  // A parked page is on about:blank, whose document cannot carry a previous
+  // Wasm host's `window.lmdjProjectIoWeb`. One that is anywhere else, or has
+  // gone, is not handed out again.
+  while (page && (page.isClosed() || page.url() !== "about:blank")) {
+    if (!page.isClosed()) await REAL_CLOSE.get(page)().catch(() => {});
+    page = idle.pop();
+  }
   if (!page) {
     page = await context.newPage();
     const close = page.close.bind(page);
+    REAL_CLOSE.set(page, close);
     page.close = async (options) => {
-      RUNTIME_ERROR_OBSERVERS.get(page)?.detach();
+      if (page.url() === "about:blank") return close(options);
       try {
         await page.goto("about:blank", {timeout: 10_000});
       } catch (_) {
+        // A real close detaches the observer through its close event, so a
+        // runtime error raised during teardown is still reported.
         return close(options);
       }
+      RUNTIME_ERROR_OBSERVERS.get(page)?.detach();
       if (!idle.includes(page)) idle.push(page);
     };
   }
