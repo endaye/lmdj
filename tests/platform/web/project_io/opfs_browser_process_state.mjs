@@ -28,8 +28,11 @@ function count(path) {
 }
 
 function field(status, name) {
-  const match = status.match(new RegExp(`^${name}:\\s*(.*)$`, "m"));
-  return match ? match[1].trim() : "?";
+  // A plain prefix scan, so a field name is never read as a pattern.
+  for (const line of status.split("\n")) {
+    if (line.startsWith(`${name}:`)) return line.slice(name.length + 1).trim();
+  }
+  return "?";
 }
 
 function command(args) {
@@ -40,13 +43,19 @@ function command(args) {
   }
 }
 
+// The browser is its own executable plus the helper processes it launches
+// from its own install directory, each of which names a path under that
+// directory as its own argv[0]. Matching argv[0] alone keeps an unrelated
+// process that merely mentions the directory — a shell, an installer, the
+// test runner — out of the report.
 export function browserProcesses(executablePath) {
-  const marker = dirname(executablePath);
+  const marker = `${dirname(executablePath)}/`;
   const processes = [];
   for (const entry of readdirSync("/proc")) {
     if (!/^\d+$/.test(entry)) continue;
     const cmdline = read(`/proc/${entry}/cmdline`).split("\0").filter(Boolean);
-    if (!cmdline.some((part) => part.includes(marker))) continue;
+    const image = cmdline[0];
+    if (!image || !(image === executablePath || image.startsWith(marker))) continue;
     processes.push({pid: Number(entry), cmdline});
   }
   return processes;
