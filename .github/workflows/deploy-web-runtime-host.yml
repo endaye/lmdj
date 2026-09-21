@@ -201,4 +201,5 @@ jobs:
           path: |
             build/deploy/web-runtime-host/evidence.json
             build/deploy/web-runtime-host/deployment.log
+            ${{ runner.temp }}/host-state-${{ github.run_id }}/diagnostics
           if-no-files-found: warn

@@ -201,4 +201,5 @@ jobs:
           path: |
             build/deploy/creator-web/evidence.json
             build/deploy/creator-web/deployment.log
+            ${{ runner.temp }}/host-state-${{ github.run_id }}/diagnostics
           if-no-files-found: warn
