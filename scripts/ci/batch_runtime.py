@@ -38,7 +38,7 @@ WORKFLOW = ".github/workflows/self-test-report.yml"
 CONTROLLER_JOB = "Incremental batch controller"
 EMPTY_TEMPLATE = "<!-- lmdj-ci-journal-uninitialized-v1 -->\n"
 REFERENCE_PREFIX = "batch-verdict-v1:zlib-base64:"
-MAX_DOCUMENT = 1000000
+MAX_DOCUMENT = 4000000
 # The failure sentence a stalled controller prints: long enough for a closed
 # `why:`/`remedy:` pair, short enough that no payload can ride along.
 DIAGNOSTIC_LIMIT = 500
