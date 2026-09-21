@@ -334,6 +334,34 @@ class VerificationTest(unittest.TestCase):
         with self.assertRaisesRegex(TaskVerificationError, "automatic replay"):
             self.verifier().run(self.scope)
 
+    def test_timeout_waits_for_the_killed_group_before_reporting(self):
+        """The killed group holds the writer descriptor until it dies. Without
+        the wait, the next attempt met "owned by another writer" instead of the
+        refusal to replay an unknown command (batch run 35544024211)."""
+        observed = []
+        real = module._await_group_exit
+
+        def recording(pid, **kwargs):
+            observed.append(pid)
+            return real(pid, **kwargs)
+
+        (self.repo / "scripts/docs-site.sh").write_text(
+            "printf 'run\\n' >> .task-count\nsleep 10 &\nsleep 10\n")
+        self.amend()
+        checks = ((module.CHECKS[0][0], module.CHECKS[0][1], 0.1), *module.CHECKS[1:])
+        with patch.object(module, "CHECKS", checks), patch.object(module, "_await_group_exit", recording):
+            with self.assertRaisesRegex(TaskVerificationError, "execution budget"):
+                self.verifier().run(self.scope)
+        self.assertEqual(len(observed), 1)
+        # The lock is free the moment the budget error surfaces.
+        with self.assertRaisesRegex(TaskVerificationError, "automatic replay"):
+            self.verifier().run(self.scope)
+
+    def test_group_that_outlives_the_wait_is_still_the_budget_failure(self):
+        """A group that will not leave is reported, never silently retried."""
+        self.assertFalse(module._await_group_exit(
+            os.getpgid(0), timeout=0.0, clock=lambda: 0.0, sleep=lambda _: None))
+
     def test_live_orphan_command_keeps_writer_lock(self):
         (self.repo / ".gitignore").write_text(".task-count\n.ready\n.release\n")
         (self.repo / "scripts/docs-site.sh").write_text(
