@@ -6,7 +6,7 @@ from types import MappingProxyType
 
 SCHEMA = "lmdj.ci-batch-release-reference.v1"
 EXECUTOR_EVENTS = frozenset({"workflow_dispatch", "push", "workflow_run", "schedule"})
-MAX_DOCUMENT = 1000000
+MAX_DOCUMENT = 4000000
 
 
 class BatchEvidenceError(ValueError):
