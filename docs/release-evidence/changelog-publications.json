@@ -1,4 +1,1 @@
-{
-  "schema": "lmdj.release-changelog-publications.v1",
-  "entries": []
-}
+{"entries":[{"changelog_sha256":"c95b37253a7ec4f4b531a751a894ba8d4e1a640a30573dd25b87d8dc611acacf","notes_sha256":"75b0efb866a2e51c17900c25aeabf71b101ec1e677a5e6eea749c0a97d75982a","plan_sha256":"4b221c1322b5e444ea5091ad01b05f43920b96727c494e0b9daa4b2f7b5e3bef","published_at":"2026-09-21T12:49:37Z","release_id":392944682,"tag":"lmdj-v1.0.61.0","target_revision":"07044d2950c3ee6ff382468a536d6be87e5cd5d8"}],"schema":"lmdj.release-changelog-publications.v1"}
