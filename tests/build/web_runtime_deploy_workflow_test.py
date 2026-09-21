@@ -456,6 +456,17 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         )
         self.assertIn("if-no-files-found: warn", source)
 
+    def test_deploy_state_root_is_a_private_directory(self) -> None:
+        deploy_step = self.step_named(
+            self.workflow_source(),
+            "Deploy signed Runtime Host release to Cloudflare",
+        )
+        self.assertIn('mkdir -p "$state"', deploy_step)
+        self.assertLess(
+            deploy_step.index('mkdir -p "$state"'),
+            deploy_step.index('chmod 700 "$state"'),
+        )
+
     def test_internal_timeout_leaves_bounded_recovery_and_upload_budget(self) -> None:
         source = self.workflow_source()
         deploy_step = self.step_named(source, "Deploy signed Runtime Host release to Cloudflare")

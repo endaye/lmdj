@@ -181,6 +181,7 @@ jobs:
           mkdir -p build/deploy/creator-web
           state="$RUNNER_TEMP/host-state-$GITHUB_RUN_ID"
           mkdir -p "$state"
+          chmod 700 "$state"
           tag="$LMDJ_RELEASE_TAG"
           timeout --signal=TERM --kill-after=900s 1080s \
             scripts/cloudflare-host-deploy.sh "$tag" \
