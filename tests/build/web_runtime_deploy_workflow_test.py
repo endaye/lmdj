@@ -450,6 +450,10 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         # as a second artifact member.
         self.assertNotIn("recovery-evidence.json", source)
         self.assertIn("build/deploy/web-runtime-host/deployment.log", source)
+        self.assertIn(
+            "${{ runner.temp }}/host-state-${{ github.run_id }}/diagnostics",
+            source,
+        )
         self.assertIn("if-no-files-found: warn", source)
 
     def test_internal_timeout_leaves_bounded_recovery_and_upload_budget(self) -> None:
