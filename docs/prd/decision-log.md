@@ -483,3 +483,23 @@ Stage 8B 已于 2026-08-16 实现，分配 Product Build `1.0.23.0 canary`，`cr
   `tools/analysis-bench/`。代码只保留在未合并分支
   `feat/audio-analysis-bench-prototype`（PR #153，已关闭不合并）上，本条与
   实施计划文档是它在 `main` 上的唯一记录。
+
+## 2026-09-22
+
+### 已确认：Owner 授权一次性改正 1.0.61.0 已发布 Release 的正文（D8 例外）
+
+- 结论：Owner 在发版线程中显式授权，将 `lmdj-v1.0.61.0`（Release ID
+  392944682）已发布 Release 的正文从通用占位文本改正为「渲染的冻结
+  changelog + v4 plan marker」（plan 摘要 `4b221c13…`）。签名标签、六个
+  签名资产、目标修订与批次证据均未触碰；改正前的正文已留存
+  （发版线程记录），改正后 `verify-published` 与远程审计复核通过。
+- 原因：标准管线的设计顺序是 changelog 绑定先于 `prepare`（驱动器步骤
+  序：candidate → verification → intent → changelog → prepared → …），
+  而本次发布因 9/18 的旧请求与新 FILES 契约不兼容成为不可恢复的僵尸，
+  改走逐命令路径，`prepare`/`publish` 先于 changelog 绑定执行，导致
+  Release 正文为占位文本、plan 摘要在绑定后失配。设计 D8（已发布
+  Release 是不可变审计边界）禁止常规改正文，本次为 Owner 显式授权的
+  一次性例外，不是先例；管线顺序约束与审计校验保持不变。
+- 影响：本条目只记录决策，不修改 D8 或任何工具行为。后续暴露的两个
+  工具缺口另行立项：逐命令路径允许在无 changelog 时 `prepare`（应在
+  入口处 fail-closed），以及僵尸请求缺少退役通道。
