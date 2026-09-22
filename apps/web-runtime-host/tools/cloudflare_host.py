@@ -252,8 +252,10 @@ def main(argv=None):
                 try:
                     smoke(dist, url, preview=url != f'https://{client.worker}.lmdj.workers.dev', recovery_target=recovery,
                           initialization_target=args.target.endswith('-initialization'))
-                except Exception:
-                    raise CommandError('exact signed HTTP verification failed') from None
+                except Exception as error:
+                    # The retained adapter log is the only evidence a failed
+                    # deployment leaves; keep the underlying reason in it.
+                    raise CommandError('exact signed HTTP verification of %s failed (%s)' % (url, error)) from None
                 return True
             if args.command == 'reconcile':
                 expected = {'id': version_id(args.expected_deployment), 'version_id': args.version}
