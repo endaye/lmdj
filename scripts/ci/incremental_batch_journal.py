@@ -111,12 +111,17 @@ class Journal:
         return envelopes, previous
 
     def _read_complete(self):
-        cursor, seen, comments, end = None, set(), [], None
+        cursor, seen, envelopes, end = None, set(), [], None
+        ids, head = set(), None
         while True:
             page = self.transport.page(self.issue_id, cursor)
             require(isinstance(page, dict) and set(page) == {"comments", "next", "cursor"}
                     and isinstance(page["comments"], list), "invalid or incomplete journal page")
-            comments.extend(page["comments"])
+            # Consume this page while its transport writer proofs are current.
+            # The next page refreshes mutable observations; collecting all rows
+            # first would re-authenticate every earlier page over HTTP.
+            verified, head = self._verify(page["comments"], head, ids)
+            envelopes.extend(verified)
             if page["cursor"] is not None:
                 require(isinstance(page["cursor"], str) and bool(page["cursor"]), "invalid journal page cursor")
                 end = page["cursor"]
@@ -125,8 +130,6 @@ class Journal:
                 break
             require(isinstance(cursor, str) and cursor and cursor not in seen, "journal pagination loop")
             seen.add(cursor)
-        ids = set()
-        envelopes, head = self._verify(comments, None, ids)
         self._verified = {"head": head, "cursor": end, "count": len(envelopes),
                           "envelopes": envelopes, "ids": ids}
         return envelopes, head

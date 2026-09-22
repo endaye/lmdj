@@ -6,7 +6,10 @@ recurrences:
   - date: 2026-09-17
     occurrence: https://github.com/endaye/lmdj/issues/1486
     observed_by: Kimi
-exit: gate:tests/build/ci_batch_runtime_test.py
+  - date: 2026-09-22
+    occurrence: https://github.com/endaye/lmdj/issues/1486
+    observed_by: Codex (GPT-5)
+exit: gate:tests/build/ci_batch_github_journal_test.py
 ---
 
 # Verifying the complete journal history on every append makes journal writing O(n) per event, and the shared hourly quota stops the scheduler before it can admit work.
@@ -36,5 +39,12 @@ total to equal the verified count plus the delta, chain every new event onto the
 verified head, and fall back to the complete replay on any mismatch. Measure the
 request cost of the whole operation, not one call: four appends in one process
 that each replay the complete history is eight replays, which the gate
-`tests/build/ci_batch_runtime_test.py` now measures as comment rows served
-(48 before the fix, bounded after it).
+`tests/build/ci_batch_runtime_test.py` measures as comment rows served
+(48 before the fix, bounded after it). Also exercise the real Journal/transport
+composition across multiple pages: row counts missed the second recurrence,
+where the transport authenticated each page but the later aggregate envelope
+walk queried earlier writers again after the page-local cache expired. The
+GitHub transport regression counts actual HTTP fixture calls (eleven writer
+attempt GETs versus seven including the anchor for six writers on three pages).
+Verify each page before fetching the next, retain every chain/ID/digest check,
+and publish the reusable prefix only after the complete read succeeds.
