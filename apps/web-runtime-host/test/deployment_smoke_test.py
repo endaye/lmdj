@@ -28,6 +28,7 @@ from deployment_smoke import (  # noqa: E402
     REQUIRED_SECURITY_HEADERS,
     RedirectGuard,
     SmokeError,
+    USER_AGENT,
     smoke_http,
 )
 
@@ -103,6 +104,7 @@ class SmokeFixture:
         self.edge_rejections: dict[str, tuple[HTTPStatus, bytes]] = {}
         self.forced_ok: set[str] = set()
         self.payloads: dict[str, bytes] = {}
+        self.seen_user_agents: list[str | None] = []
         assets = []
         for stem, suffix, role in ASSET_LAYOUT:
             payload = f"fixture:{stem}{suffix}\n".encode()
@@ -216,6 +218,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         fixture = self.server.fixture
+        fixture.seen_user_agents.append(self.headers.get("User-Agent"))
         if self.path in fixture.delays:
             time.sleep(fixture.delays[self.path])
         if self.path in fixture.edge_rejections:
@@ -349,6 +352,11 @@ class DeploymentSmokeTest(unittest.TestCase):
     def test_accepts_legacy_v1_manifest_as_a_prior_published_rollback_anchor(self) -> None:
         self.fixture.use_legacy_manifest()
         self.assertEqual(self.smoke()["asset_count"], 9)
+
+    def test_every_request_names_the_deployment_tool_user_agent(self) -> None:
+        self.smoke()
+        self.assertTrue(self.fixture.seen_user_agents)
+        self.assertEqual(set(self.fixture.seen_user_agents), {USER_AGENT})
 
     def test_starts_at_root_and_allows_only_a_secure_no_store_redirect_to_index(self) -> None:
         self.fixture.redirects["/"] = "/index.html"
