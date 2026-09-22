@@ -1,8 +1,9 @@
 # Provider benchmark tools
 
-These Python 3.11 standard-library tools consume local evidence. They do not
-execute Providers or depend on Stage 10/11, Provider SDK migration, or draft
-Capability decisions. The smoke generator remains a separate existing tool.
+The validators/scorer are Python 3.11 standard-library consumers of local
+evidence. The S3 runner below additionally builds and executes the fixed S1
+reference Provider through its actual Registry and AttemptStore. It does not
+select or qualify a production Provider. The smoke generator remains separate.
 
 ## Report validator (B1)
 
@@ -142,9 +143,10 @@ checks accepted and rejected cases, numerical boundaries, CLI exit diagnostics,
 read-only behavior and comparison separation. It does not substitute fabricated
 reports for real harness/Provider acceptance runs.
 
-B2 onset scoring, SDK execution, deadline/process-group enforcement, real
-process-tree/GPU sampling and measured candidate evaluation remain separate
-Tasks under the [benchmark plan](../../docs/superpowers/plans/2026-09-08-lmdj-stage12-benchmark-tools.md).
+B2 onset scoring and S3 reference execution are documented below. Hard
+deadline/process-group enforcement and independent process-tree/GPU sampling
+remain separate work under the
+[benchmark plan](../../docs/plans/2026-09-08-lmdj-stage12-benchmark-tools.md).
 
 ## Slice onset scorer (B2)
 
@@ -172,3 +174,62 @@ Version impact: none. Internal tooling/test format only; no Product, Module,
 Host, Provider, Contract, Assembly or Channel identity changes.
 Documentation impact: none. This README documents local tooling; current
 Architecture Portal pages and product availability are unchanged.
+
+## S3 fixed-candidate Slice evaluation
+
+The separate evaluation corpus adds 11 synthetic PCM16 WAVs with authored
+pulse schedules: threshold-adjacent velocity, overlapping tails, refractory-
+adjacent density, mono/stereo right-only signals at 44.1/48 kHz, and silence.
+New labels use zero-frame tolerance; existing smoke labels/tolerances remain
+unchanged. CC0 applies only to generated WAV/manifest bytes in the evaluation
+directory; its LICENSE records the scope. These short constructed signals do
+not represent the distribution of user music or supply listening acceptance.
+
+```bash
+python3 tools/provider-benchmark/generate_sample_slice_evaluation.py --check
+python3 tools/provider-benchmark/tests/sample_slice_evaluation_test.py
+python3 tools/provider-benchmark/run_sample_slice_evaluation.py \
+  --candidate-source /absolute/clean/checkout-of-07044d2950c3ee6ff382468a536d6be87e5cd5d8 \
+  --output-dir /absolute/new/evaluation-run
+```
+
+To intentionally regenerate the retained corpus, omit `--check`. Check mode
+never repairs it. `provider.slice_evaluation_corpus` registers its reproduction,
+independent truth and collector-boundary tests in the component tier. It does
+not automatically rerun timings or claim native Provider execution.
+
+The runner refuses an existing output directory, freezes materialized inputs
+before execution, and builds a small standalone CMake Release target against
+the fixed candidate's foundation, SDK and Slice implementation. No candidate
+source or product manifest is modified. Each case calls real
+`AttemptStore.execute` twice with `{}` parameters, `public` data, `test` platform
+and `local` region; normal registry selection and permissions apply. Each
+attempt is reopened and output digest/length/schema or failed/no-output state
+is checked. Success output bytes are compared exactly (one required
+`slice_points` output, so its byte digest identifies the output set).
+
+The monotonic timer surrounds only `AttemptStore.execute`: it includes input
+authentication, Provider computation, validation and durable writes. It excludes
+fixture reads, compilation, registry setup, reopen and scoring. There is no
+warmup and two repetitions are not a latency distribution. Both raw elapsed
+values and `elapsed / (frames / sample_rate)` are retained; the validator report
+uses the first run, never the best run. Refused inputs have no RTF. RSS/GPU are
+`not_enforceable`/null, and deadline/sampler/kill grace are `not_applicable`.
+Elapsed is an observation, not a hard timeout guarantee.
+
+The emitted JSON goes through the existing scorer and `--require-measured`
+validator. Low recall remains in the counts; it is not converted to a resource
+or schema rejection. Determinism/refusal failures reject. Source changes,
+missing output or schema failure stop collection and preserve raw process
+logs; they cannot produce a passing complete report. A zero exit means the
+bounded observation completed, never production qualification.
+
+`measured.json` retains original stdout/stderr and command returns, decoded
+outputs, predictions, scores and reports. Its `harness_base_revision` plus
+`frozen_inputs` digests describe the actual source overlay; the report format's
+revision fields alone must not be read as a clean implementation at that base.
+The native executable digest, compiler and generated Provider source package
+are separate identities. The run directory additionally retains the build and
+actual AttemptStore files. The committed
+[S3 report](../../docs/quality/2026-09-10-stage12-slice-evaluation.md)
+links the frozen measured record and documents the limitations.

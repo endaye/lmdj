@@ -64,6 +64,16 @@ lmdj_add_test(
   LABELS provider benchmark
   )
 
+lmdj_add_test(
+  NAME provider.slice_evaluation_corpus
+  TIER component
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tools/provider-benchmark/tests/sample_slice_evaluation_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  LABELS provider benchmark
+)
+
 add_subdirectory(apps/web-runtime-host)
 add_subdirectory(packages/web-runtime-platform)
 

@@ -115,6 +115,36 @@ Reason: 保留设计、计划或验收材料；实际产品源事实/可用性�
 - `tools/provider-benchmark/README.md`
 - `docs/quality/2026-09-10-stage12-slice-evaluation.md`
 
+S3 实施清单补充（2026-09-23，先声明后实施）：现有测试入口仅处理固定
+smoke，未输出 execute elapsed。新增专用原生 harness 及标准库收集器；不修改
+Provider、SDK 或产品身份，不建立通用 benchmark 框架。
+
+- `tools/provider-benchmark/CMakeLists.txt`
+- `tools/provider-benchmark/run_sample_slice_evaluation.cpp`
+- `tools/provider-benchmark/run_sample_slice_evaluation.py`
+- `CMakeLists.txt`（注册 generator/component 回归，缺陷：未再生或错误真值未被执行）
+- `docs/quality/evidence/stage12-slice/evaluation/measured.json`（真实原始运行、双跑输出、计分与验证报告）
+- 本计划文件 `docs/plans/2026-09-10-stage12-independent-delivery.md`
+- `tests/fixtures/provider-benchmark/sample-slice-evaluation/velocity-below.wav`
+- `tests/fixtures/provider-benchmark/sample-slice-evaluation/velocity-at.wav`
+- `tests/fixtures/provider-benchmark/sample-slice-evaluation/velocity-high.wav`
+- `tests/fixtures/provider-benchmark/sample-slice-evaluation/tail-separated.wav`
+- `tests/fixtures/provider-benchmark/sample-slice-evaluation/tail-overlap.wav`
+- `tests/fixtures/provider-benchmark/sample-slice-evaluation/dense-below.wav`
+- `tests/fixtures/provider-benchmark/sample-slice-evaluation/dense-at.wav`
+- `tests/fixtures/provider-benchmark/sample-slice-evaluation/mono-44100.wav`
+- `tests/fixtures/provider-benchmark/sample-slice-evaluation/stereo-right-44100.wav`
+- `tests/fixtures/provider-benchmark/sample-slice-evaluation/stereo-right-48000.wav`
+- `tests/fixtures/provider-benchmark/sample-slice-evaluation/silence-stereo.wav`
+
+固定 S1 candidate source `07044d2950c3ee6ff382468a536d6be87e5cd5d8`；
+独立 CMake 工程只构建该源码的 foundation、provider-sdk 和 local.sample.slice。
+扩展 manifest 在执行前冻结，每个 onset 的标签取自合成事件，不读取检测结果；
+扩展语料采用精确 frame tolerance 0，原 smoke 不改。每个用例双跑，计时覆盖
+AttemptStore.execute（含输入认证、Provider、验证、持久化），不含编译/素材读取。
+两次原始 elapsed/RTF 均保留，报告主值用首跑，不以最优值冒充常态。
+已有 scorer 与 validator 必须消费真实输出。资源/生产资格仍按 S1 限制。
+
 验收：
 
 - 覆盖力度差异、尾音重叠、密集瞬态、静音、单/双声道及支持采样率；按构造有独立真值和明确 License。
