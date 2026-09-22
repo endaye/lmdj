@@ -472,9 +472,17 @@ def _manifest_identity(
         raise SmokeError("Host ID or extended manifest identity is invalid")
     if expected_host_id == "creator-web":
         compatible_hosts = manifest["compatible_hosts"]
-        if compatible_hosts != [
-            {"host_id": "web-runtime-host", "host_version": host_version}
-        ]:
+        # Host versions are independent SemVer: the compatible Runtime is the
+        # one this Product Build ships, not the Creator's own version.
+        if (
+            not isinstance(compatible_hosts, list)
+            or len(compatible_hosts) != 1
+            or not isinstance(compatible_hosts[0], dict)
+            or set(compatible_hosts[0]) != {"host_id", "host_version"}
+            or compatible_hosts[0]["host_id"] != "web-runtime-host"
+            or not isinstance(compatible_hosts[0]["host_version"], str)
+            or not compatible_hosts[0]["host_version"]
+        ):
             raise SmokeError("manifest compatible Host identity is invalid")
     return product_build, host_version
 

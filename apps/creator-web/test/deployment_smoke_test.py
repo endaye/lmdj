@@ -68,7 +68,7 @@ class Fixture:
         self.manifest = {
             "assets": entries,
             "compatible_hosts": [
-                {"host_id": "web-runtime-host", "host_version": "3.0.0"}
+                {"host_id": "web-runtime-host", "host_version": "3.1.0"}
             ],
             "distribution_contract": "lmdj.creator-web.distribution.v1",
             "emscripten": {},
@@ -258,6 +258,26 @@ class CreatorDeploymentSmokeTest(unittest.TestCase):
                 expected_host_id="creator-web",
                 require_https=False,
             )
+
+    def test_rejects_a_compatible_host_identity_that_is_not_one_runtime(self) -> None:
+        original = self.fixture.manifest["compatible_hosts"]
+        for compatible in (
+            [],
+            [{"host_id": "other-host", "host_version": "3.1.0"}],
+            [{"host_id": "web-runtime-host"}],
+            [{"host_id": "web-runtime-host", "host_version": ""}],
+            [
+                {"host_id": "web-runtime-host", "host_version": "3.1.0"},
+                {"host_id": "web-runtime-host", "host_version": "3.0.0"},
+            ],
+        ):
+            with self.subTest(compatible=compatible):
+                self.fixture.manifest["compatible_hosts"] = compatible
+                self.fixture.update()
+                with self.assertRaisesRegex(SmokeError, "compatible Host identity"):
+                    self.run_smoke()
+        self.fixture.manifest["compatible_hosts"] = original
+        self.fixture.update()
 
     def _rewrite_as_legacy_creator_2(self) -> None:
         self.fixture.manifest["assets"] = [
