@@ -2,6 +2,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -74,6 +75,103 @@ class TempDirectory {
 
  private:
   std::filesystem::path path_;
+};
+
+// Yield to a competing begin after the real native writer lease is released.
+class ReleaseCallbackPlatform final : public lmdj::project_io::ProjectStoragePlatform {
+ public:
+  explicit ReleaseCallbackPlatform(
+      std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> delegate)
+      : delegate_(std::move(delegate)) {}
+
+  lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path& path) override {
+    auto acquired = delegate_->acquire_writer(path);
+    if (!acquired.has_value()) {
+      return acquired;
+    }
+    struct Lease final : lmdj::project_io::ProjectWriterLease {
+      Lease(std::unique_ptr<lmdj::project_io::ProjectWriterLease> inner,
+            std::function<void()>& callback)
+          : inner_(std::move(inner)), callback_(callback) {}
+      ~Lease() override {
+        inner_.reset();
+        if (callback_) {
+          callback_();
+        }
+      }
+      std::unique_ptr<lmdj::project_io::ProjectWriterLease> inner_;
+      std::function<void()>& callback_;
+    };
+    return decltype(acquired)::success(
+        std::make_unique<Lease>(std::move(acquired.value()), after_release));
+  }
+  lmdj::foundation::Result<void> ensure_directory(
+      const std::filesystem::path& path) override {
+    return delegate_->ensure_directory(path);
+  }
+  lmdj::foundation::Result<bool> exists(
+      const std::filesystem::path& path) const override {
+    return delegate_->exists(path);
+  }
+  lmdj::foundation::Result<bool> directory_exists(
+      const std::filesystem::path& path) const override {
+    return delegate_->directory_exists(path);
+  }
+  lmdj::foundation::Result<std::uint64_t> byte_length(
+      const std::filesystem::path& path) const override {
+    return delegate_->byte_length(path);
+  }
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(
+      const std::filesystem::path& path) const override {
+    return delegate_->read_complete(path);
+  }
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return delegate_->create_immutable(path, bytes);
+  }
+  lmdj::foundation::Result<void> replace_complete(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return delegate_->replace_complete(path, bytes);
+  }
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& path,
+      std::uint64_t valid_prefix_length,
+      std::span<const std::byte> bytes) override {
+    return delegate_->append_durable(path, valid_prefix_length, bytes);
+  }
+  lmdj::foundation::Result<void> remove(
+      const std::filesystem::path& path) override {
+    return delegate_->remove(path);
+  }
+  lmdj::foundation::Result<std::vector<std::string>> list_names(
+      const std::filesystem::path& path) const override {
+    return delegate_->list_names(path);
+  }
+  lmdj::foundation::Result<std::vector<std::string>> list_directories(
+      const std::filesystem::path& path) const override {
+    return delegate_->list_directories(path);
+  }
+  lmdj::foundation::Result<void> remove_tree(
+      const std::filesystem::path& path) override {
+    return delegate_->remove_tree(path);
+  }
+  lmdj::foundation::Result<void> publish_directory_if_absent(
+      const std::filesystem::path& source,
+      const std::filesystem::path& destination) override {
+    return delegate_->publish_directory_if_absent(source, destination);
+  }
+  lmdj::foundation::Result<void> validate_managed_tree(
+      const std::filesystem::path& path) const override {
+    return delegate_->validate_managed_tree(path);
+  }
+
+  std::function<void()> after_release;
+
+ private:
+  std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> delegate_;
 };
 
 Performance performance() {
@@ -508,6 +606,63 @@ void test_legacy_v3_sequence_tail_flush_completion_and_seal_reconcile() {
   LMDJ_CHECK(std::filesystem::exists(candidates.value().front().path));
 }
 
+void test_performance_begin_keeps_owner_across_writer_release() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "project.lmdj";
+  ProjectStore creator;
+  LMDJ_CHECK(creator.create(bundle, empty_v4_project()).has_value());
+  auto platform = std::make_shared<ReleaseCallbackPlatform>(
+      lmdj::project_io::make_default_project_storage_platform());
+  ProjectStore winner{platform};
+  ProjectStore contender;
+  std::optional<lmdj::foundation::Result<
+      lmdj::project_io::PerformanceLifecycleReceipt>> second;
+  bool yielded = false;
+  platform->after_release = [&] {
+    if (yielded) {
+      return;
+    }
+    const auto active = SequenceJournal{}.read_active_performance(bundle);
+    if (!active.has_value() || active.value().expected_revision != 1) {
+      return;
+    }
+    yielded = true;
+    second = contender.begin_performance_draft(
+        bundle,
+        {{CommandId{std::string{kSecondCommandId}}, 0},
+         SequenceSessionId{std::string{kSecondPerformanceSessionId}},
+         PerformanceId{std::string{kSecondPerformanceId}}});
+  };
+  const auto first = winner.begin_performance_draft(
+      bundle,
+      {{CommandId{std::string{kCommandId}}, 0},
+       SequenceSessionId{std::string{kPerformanceSessionId}},
+       PerformanceId{std::string{kPerformanceId}}});
+  if (!first.has_value()) {
+    std::cerr << "begin lost its owner at writer release: "
+              << first.error().message << " " << first.error().details.dump()
+              << '\n';
+    if (second.has_value()) {
+      std::cerr << "competing begin: "
+                << (second->has_value() ? "success" : second->error().message)
+                << '\n';
+    }
+  }
+  LMDJ_CHECK(yielded);
+  LMDJ_CHECK(second.has_value());
+  LMDJ_CHECK(first.has_value());
+  LMDJ_CHECK(!second->has_value());
+  LMDJ_CHECK(second->error().details.at("reason") == "recording_session_active");
+  const auto active = SequenceJournal{}.read_active_performance(bundle);
+  LMDJ_CHECK(active.has_value());
+  LMDJ_CHECK(active.value().session_id.value() == kPerformanceSessionId);
+  const auto truth = creator.load(bundle);
+  LMDJ_CHECK(truth.has_value());
+  LMDJ_CHECK(truth.value().revision == 1);
+  LMDJ_CHECK(truth.value().performances.size() == 1);
+  LMDJ_CHECK(truth.value().performances.contains(active.value().performance_id));
+}
+
 void test_atomic_performance_draft_begin_serializes_writer_lease(
     int iterations) {
   for (int iteration = 0; iteration < iterations; ++iteration) {
@@ -553,6 +708,18 @@ void test_atomic_performance_draft_begin_serializes_writer_lease(
     second_thread.join();
     LMDJ_CHECK(first.has_value());
     LMDJ_CHECK(second.has_value());
+    if (first->has_value() == second->has_value()) {
+      const auto describe = [](const auto& result) {
+        if (result.has_value()) {
+          return std::string{"success"};
+        }
+        return std::string{"failure: "} + result.error().message +
+               " details=" + result.error().details.dump();
+      };
+      std::cerr << "Performance begin iteration " << iteration
+                << ": first=" << describe(*first)
+                << "; second=" << describe(*second) << '\n';
+    }
     LMDJ_CHECK(first->has_value() != second->has_value());
     const auto truth = creator.load(bundle);
     LMDJ_CHECK(truth.has_value());
@@ -578,6 +745,7 @@ int main(int argc, char** argv) {
     test_concurrent_sequence_begins_admit_only_one_session();
     test_concurrent_sequence_and_performance_begins_admit_only_one_kind();
     test_legacy_v3_sequence_tail_flush_completion_and_seal_reconcile();
+    test_performance_begin_keeps_owner_across_writer_release();
     test_atomic_performance_draft_begin_serializes_writer_lease(
         stress ? 32 : 1);
   } catch (const std::exception& error) {
