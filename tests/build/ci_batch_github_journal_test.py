@@ -203,6 +203,38 @@ class GitHubJournalTest(unittest.TestCase):
         self.api._request = request
         return request
 
+    def linked_writer_history(self):
+        from incremental_batch import digest
+        self.multiple_writers(range(17, 23))
+        self.api.comment_pages = 2
+        previous = None
+        for index, node in enumerate(self.api.comments):
+            envelope = {"previous": previous, "event": {"id": str(index)}}
+            envelope["digest"] = digest(envelope)
+            node["body"] = wrapped("event", envelope, {**WRITER, "run_id": 17 + index})
+            previous = envelope["digest"]
+        self.api.issue["body"] = wrapped("checkpoint", {"head": previous, "pending": None})
+
+    def test_complete_journal_read_authenticates_each_page_once(self):
+        self.linked_writer_history()
+        self.journal.load()
+        attempt_reads = sum(method == "GET" and path.endswith("/attempts/1")
+                            for method, path, _ in self.api.calls)
+        self.assertEqual(attempt_reads, 7,
+                         "why: earlier pages repeated writer HTTP authentication; "
+                         "remedy: verify each page before its transport proofs expire")
+
+    def test_later_page_failure_does_not_publish_verified_prefix(self):
+        self.linked_writer_history()
+        document = json.loads(self.api.comments[-1]["body"])
+        document["payload"]["digest"] = "0" * 64
+        self.api.comments[-1]["body"] = json.dumps(document)
+        with self.assertRaisesRegex(JournalBlocked, "digest mismatch"):
+            self.journal.load()
+        self.assertIsNone(self.journal._verified,
+                          "why: failed complete read published a partial prefix; "
+                          "remedy: commit reuse only after all pages verify")
+
     def test_page_authentication_overlaps_four_readers_and_keeps_record_order(self):
         request = self.multiple_writers([17, 18, 19, 20, 21, 22, 23, 24])
         barrier = threading.Barrier(4, timeout=5)
