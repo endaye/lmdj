@@ -2462,3 +2462,41 @@ test("re-engages the Pattern transport with a fresh identity when an open replac
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
   await waitFor(() => expect(transportPhase()).toBe("recording"));
 });
+
+test("recovery refusal retains its full diagnostic envelope across mode navigation", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const message = "Sequence admission is unresolved; retain the recording until its input conversion is finalized, or explicitly discard it";
+  const apply = vi.fn().mockRejectedValue(Object.assign(new Error(message), {
+    code: "INVALID_ARGUMENT",
+    details: {reason: "sequence_admission_unresolved", journal_retained: true},
+  }));
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    listSequenceRecovery: async () => [{
+      sessionId: "retained-session", patternId: ready.project.current!.patternId,
+      bars: 1, reason: "owner_lost", eventCount: 1,
+    }],
+    applySequenceRecovery: apply,
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
+  await userEvent.click(await screen.findByRole("button", {name: "Recover original Pattern"}));
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("INVALID_ARGUMENT"));
+  expect(apply).toHaveBeenCalledExactlyOnceWith({
+    sessionId: "retained-session", destinationPatternId: null,
+  });
+  await userEvent.click(screen.getByText("Developer diagnostics (1)"));
+  const log = screen.getByRole("region", {name: "Developer diagnostics"});
+  expect(within(log).getByText("Recover Sequence Pattern")).toBeTruthy();
+  expect(within(log).getByText("INVALID_ARGUMENT")).toBeTruthy();
+  expect(within(log).getByText(message)).toBeTruthy();
+  expect(within(log).getByText(/"journal_retained": true/).textContent)
+    .toContain('"reason": "sequence_admission_unresolved"');
+  for (const mode of ["Sample", "Project", "Sequence"]) {
+    await userEvent.click(screen.getByRole("button", {name: mode}));
+    expect(within(screen.getByRole("region", {name: "Developer diagnostics"}))
+      .getByText(message)).toBeTruthy();
+  }
+  expect(apply).toHaveBeenCalledTimes(1);
+});
