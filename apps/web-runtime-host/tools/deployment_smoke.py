@@ -291,8 +291,15 @@ def _validate_content_type(headers, *, expected: str, label: str) -> None:
         raise SmokeError(f"{label} content-type charset is invalid")
 
 
+# Cloudflare Bot Fight Mode blocks the urllib default User-Agent as
+# "definitely automated" before requests ever reach the Worker.
+USER_AGENT = "LMDJ-Host-Deployment-Smoke (+https://github.com/endaye/lmdj)"
+
+
 def _request(url: str, cache_control: str) -> Request:
-    request = Request(url, headers={"Accept-Encoding": "identity"})
+    request = Request(
+        url, headers={"Accept-Encoding": "identity", "User-Agent": USER_AGENT}
+    )
     request.lmdj_expected_cache = cache_control
     return request
 
