@@ -157,9 +157,11 @@ def deploy(*, host, tag, run_id, state_root, output,
 
     `adapter(arguments)` runs `scripts/cloudflare-host.sh` and returns its
     stdout. `verify_http(distribution, url, preview)` runs `cloudflare_smoke`
-    against the staged signed bytes and `browser(url)` runs the Host's existing
-    Playwright deployment spec against that URL; both must return exactly
-    `True`. `read_site(url)` observes what production is serving right now and
+    against the staged signed bytes and `browser(url, product_build,
+    host_version)` runs the Host's existing Playwright deployment spec against
+    that URL with the signed identity it must find there; both must return
+    exactly `True`. `read_site(url)` observes what production is serving right
+    now and
     returns `{response, product_build, host_version, release_files}`, where
     `response` is the recorded document the frozen prior digest is taken over.
     """
@@ -210,7 +212,8 @@ def deploy(*, host, tag, run_id, state_root, output,
     # Both legs this module records, in the order production may be touched: a
     # candidate that only serves correct bytes is not yet a working Host.
     _passed(verify_http(distribution, immutable_url, True), "HTTP", immutable_url)
-    _passed(browser(immutable_url), "browser", immutable_url)
+    _passed(browser(immutable_url, release["product_build"],
+                    release["host_version"]), "browser", immutable_url)
 
     promoted = _adapter_result(
         adapter(["promote", tag, *common, "--version", version,
@@ -224,7 +227,8 @@ def deploy(*, host, tag, run_id, state_root, output,
 
     live_url = production_url(host)
     _passed(verify_http(distribution, live_url, False), "HTTP", live_url)
-    _passed(browser(live_url), "browser", live_url)
+    _passed(browser(live_url, release["product_build"],
+                    release["host_version"]), "browser", live_url)
 
     document = {
         "contract": _contract(host),
@@ -543,12 +547,14 @@ def real_browser(host, diagnostics, *, timeout=900):
     """The Host's existing Playwright deployment spec, against one base URL."""
     project, spec, prefix = BROWSER[host]
 
-    def check(url):
+    def check(url, product_build, host_version):
         environment = {name: os.environ[name] for name in BROWSER_ENVIRONMENT
                        if name in os.environ}
         environment.update({"LMDJ_WEB_HOST_CLEAN_ROOM": "1",
                             f"{prefix}_EXTERNAL_SERVER": "1",
-                            f"{prefix}_BASE_URL": url})
+                            f"{prefix}_BASE_URL": url,
+                            f"{prefix}_EXPECTED_PRODUCT_BUILD": product_build,
+                            f"{prefix}_EXPECTED_VERSION": host_version})
         result = _completed(
             ["npm", "--prefix", str(ROOT / "tests/platform/web"), "test", "--",
              f"--project={project}", "--reporter=json", spec],

@@ -94,8 +94,8 @@ class Browser:
     def __init__(self, fail_on=None, soft_fail_on=None):
         self.fail_on, self.soft_fail_on, self.seen = fail_on, soft_fail_on, []
 
-    def __call__(self, url):
-        self.seen.append(url)
+    def __call__(self, url, product_build, host_version):
+        self.seen.append((url, product_build, host_version))
         if self.fail_on is not None and self.fail_on in url:
             raise CloudflareDeployError("browser check failed")
         if self.soft_fail_on is not None and self.soft_fail_on in url:
@@ -166,7 +166,8 @@ class DeployTest(unittest.TestCase):
                          {"version_id": CANDIDATE, "deployment_id": DEPLOYMENT,
                           "percentage": 100})
         self.assertEqual(self.browser.seen,
-                         [version_url(host, CANDIDATE), production_url(host)])
+                         [(version_url(host, CANDIDATE), "1.0.60.0", "3.0.0"),
+                          (production_url(host), "1.0.60.0", "3.0.0")])
         # The HTTP results in the document are the ones this module observed.
         self.assertEqual([(url, preview) for url, preview, _ in self.http.seen],
                          [(version_url(host, CANDIDATE), True),
@@ -487,7 +488,8 @@ class EntryPointTest(unittest.TestCase):
             with patch.dict(cloudflare_deploy.os.environ,
                             environment or {}, clear=True):
                 try:
-                    passed = check("https://lab.lmdj.workers.dev")
+                    passed = check("https://lab.lmdj.workers.dev",
+                                   "1.0.61.0", "4.3.1")
                 except CloudflareDeployError:
                     passed = False
         return passed, runner.call_args.kwargs["env"]
@@ -509,9 +511,14 @@ class EntryPointTest(unittest.TestCase):
         self.assertEqual(set(environment),
                          {"PATH", "HOME", "LMDJ_WEB_HOST_CLEAN_ROOM",
                           "LMDJ_WEB_HOST_EXTERNAL_SERVER",
-                          "LMDJ_WEB_HOST_BASE_URL"})
+                          "LMDJ_WEB_HOST_BASE_URL",
+                          "LMDJ_WEB_HOST_EXPECTED_PRODUCT_BUILD",
+                          "LMDJ_WEB_HOST_EXPECTED_VERSION"})
         self.assertEqual(environment["LMDJ_WEB_HOST_BASE_URL"],
                          "https://lab.lmdj.workers.dev")
+        self.assertEqual(environment["LMDJ_WEB_HOST_EXPECTED_PRODUCT_BUILD"],
+                         "1.0.61.0")
+        self.assertEqual(environment["LMDJ_WEB_HOST_EXPECTED_VERSION"], "4.3.1")
 
     def test_a_clean_exit_that_ran_nothing_is_not_a_pass(self):
         # A project or spec filter matching nothing exits 0; writing that into
