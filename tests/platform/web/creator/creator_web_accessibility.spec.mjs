@@ -255,7 +255,7 @@ for (const viewport of [
       "accept",
       ".wav,.mp3,.m4a,.aac,.flac,audio/wav,audio/wave,audio/mpeg,audio/mp4,audio/aac,audio/flac",
     );
-    const samplePads = page.getByRole("button", {name: /^Pad A\d+ — assigned$/});
+    const samplePads = page.getByRole("button", {name: /^Pad A\d+ — assigned — Key [QWERTYUIASDFGHJK]$/});
     await expect(samplePads).toHaveCount(16);
     for (let index = 0; index < 16; index += 1) {
       const box = await samplePads.nth(index).boundingBox();

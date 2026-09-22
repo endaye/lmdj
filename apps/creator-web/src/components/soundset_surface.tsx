@@ -27,7 +27,6 @@ interface SoundSetSurfaceProps {
   session?: CreatorSoundSetRuntimeSession;
   projectRevision: number | null;
   activeBank: Bank;
-  onBankChange?: (bank: Bank) => void;
   onInstalled?: (revision: number) => void;
   initialState?: SoundSetState;
 }
@@ -124,7 +123,6 @@ export function SoundSetSurface({
   session,
   projectRevision,
   activeBank,
-  onBankChange,
   onInstalled,
   initialState = initialSoundSetState,
 }: SoundSetSurfaceProps) {
@@ -394,12 +392,13 @@ export function SoundSetSurface({
           </button>
 
           <div className="soundset-target">
-            <h4 id="soundset-target-bank">Install into Bank</h4>
+            <h4 id="soundset-target-bank">Install target Bank</h4>
+            <p>Choose where to install. This does not change the playing Bank.</p>
             <BankSelector
+              purpose="install"
               activeBank={state.targetBank}
               onSelect={(bank) => {
                 dispatch({type: "bank-selected", bank});
-                onBankChange?.(bank);
               }}
             />
             <button

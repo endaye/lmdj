@@ -446,7 +446,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   await expect(preview.locator("[data-plan='collision']")).toHaveCount(4);
   await expect(preview.locator("[data-plan='empty-in-set']")).toHaveCount(12);
   await expect(preview.locator("[data-plan='install']")).toHaveCount(0);
-  const install = page.getByRole("button", {name: /^Install /});
+  const install = page.getByRole("button", {name: /^Install (?:into Bank|[0-9]+ of 16 into Bank)/});
   await expect(install).toBeDisabled();
 
   const before = await occupancyOf(page, 0);
@@ -705,14 +705,14 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
       .getByRole("listitem"),
   ).toHaveCount(16);
 
-  await page.getByTestId("touch-workspace").getByRole("button", {name: "Bank B", exact: true}).click();
+  await page.getByTestId("touch-workspace").getByRole("button", {name: "Install target Bank B", exact: true}).click();
   await page.getByRole("button", {name: "Preview mapping into Bank B"})
     .click();
   await expect(preview).toBeVisible({timeout: REQUEST_TIMEOUT_MS});
   const beforeB = await occupancyOf(page, 1);
   expect(Object.keys(beforeB.pads)).toHaveLength(16);
   await page.getByRole("radio", {name: "Replace them with this Set"}).check();
-  await page.getByRole("button", {name: /^Install /}).click();
+  await page.getByRole("button", {name: /^Install (?:into Bank|[0-9]+ of 16 into Bank)/}).click();
   await expect(receipt).toContainText("Installed 11 Pads into Bank B", {
     timeout: REQUEST_TIMEOUT_MS,
   });
