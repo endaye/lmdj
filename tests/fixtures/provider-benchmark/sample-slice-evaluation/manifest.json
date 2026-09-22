@@ -1,0 +1,353 @@
+{
+  "capability": "sample.slice",
+  "generator": "tools/provider-benchmark/generate_sample_slice_evaluation.py",
+  "license": {
+    "affirmer": "Zhang Yuancheng",
+    "canonical_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "scope": "generated WAV files and manifest.json in this directory only",
+    "spdx": "CC0-1.0"
+  },
+  "scenarios": [
+    {
+      "byte_length": 9644,
+      "channels": 1,
+      "class": "success",
+      "expected": {
+        "onset_frames": [
+          480,
+          1440,
+          2400
+        ],
+        "tolerance_frames": 0
+      },
+      "generation": {
+        "channel": 0,
+        "channels": 1,
+        "frame_count": 4800,
+        "onset_frames": [
+          480,
+          1440,
+          2400
+        ],
+        "peak": 4095,
+        "sample_rate": 48000,
+        "tail_frames": 120
+      },
+      "id": "velocity-below",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice-evaluation/velocity-below.wav",
+      "sample_rate": 48000,
+      "sha256": "8db363a92ca98463db093e86e1da4393d465f0c84bf3a16adbeeb95521df0058",
+      "spdx_license": "CC0-1.0"
+    },
+    {
+      "byte_length": 9644,
+      "channels": 1,
+      "class": "success",
+      "expected": {
+        "onset_frames": [
+          480,
+          1440,
+          2400
+        ],
+        "tolerance_frames": 0
+      },
+      "generation": {
+        "channel": 0,
+        "channels": 1,
+        "frame_count": 4800,
+        "onset_frames": [
+          480,
+          1440,
+          2400
+        ],
+        "peak": 4096,
+        "sample_rate": 48000,
+        "tail_frames": 120
+      },
+      "id": "velocity-at",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice-evaluation/velocity-at.wav",
+      "sample_rate": 48000,
+      "sha256": "2761beb9b614eac4b61e37eed1b6001126c49d8e9a6b69f191bde7a9ff70c8ab",
+      "spdx_license": "CC0-1.0"
+    },
+    {
+      "byte_length": 9644,
+      "channels": 1,
+      "class": "success",
+      "expected": {
+        "onset_frames": [
+          480,
+          1440,
+          2400
+        ],
+        "tolerance_frames": 0
+      },
+      "generation": {
+        "channel": 0,
+        "channels": 1,
+        "frame_count": 4800,
+        "onset_frames": [
+          480,
+          1440,
+          2400
+        ],
+        "peak": 24000,
+        "sample_rate": 48000,
+        "tail_frames": 120
+      },
+      "id": "velocity-high",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice-evaluation/velocity-high.wav",
+      "sample_rate": 48000,
+      "sha256": "6bbd2bdee9b6d8d11eef210ecf68796189d67cfc3a4d597eaeb2dd95244bce1e",
+      "spdx_license": "CC0-1.0"
+    },
+    {
+      "byte_length": 9644,
+      "channels": 1,
+      "class": "success",
+      "expected": {
+        "onset_frames": [
+          480,
+          1440
+        ],
+        "tolerance_frames": 0
+      },
+      "generation": {
+        "channel": 0,
+        "channels": 1,
+        "frame_count": 4800,
+        "onset_frames": [
+          480,
+          1440
+        ],
+        "peak": 24000,
+        "sample_rate": 48000,
+        "tail_frames": 720
+      },
+      "id": "tail-separated",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice-evaluation/tail-separated.wav",
+      "sample_rate": 48000,
+      "sha256": "ea3f2aa1dc4a1b9a834f393f10c05310efd66e49b8b95ff932ca8ab18311375b",
+      "spdx_license": "CC0-1.0"
+    },
+    {
+      "byte_length": 9644,
+      "channels": 1,
+      "class": "success",
+      "expected": {
+        "onset_frames": [
+          480,
+          1440
+        ],
+        "tolerance_frames": 0
+      },
+      "generation": {
+        "channel": 0,
+        "channels": 1,
+        "frame_count": 4800,
+        "onset_frames": [
+          480,
+          1440
+        ],
+        "peak": 24000,
+        "sample_rate": 48000,
+        "tail_frames": 1920
+      },
+      "id": "tail-overlap",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice-evaluation/tail-overlap.wav",
+      "sample_rate": 48000,
+      "sha256": "40791ad9a2f6aefbfcf759fe3b5cb289892b132ca89ba5d39d40f8bf0e6dea4f",
+      "spdx_license": "CC0-1.0"
+    },
+    {
+      "byte_length": 9644,
+      "channels": 1,
+      "class": "success",
+      "expected": {
+        "onset_frames": [
+          480,
+          719,
+          958
+        ],
+        "tolerance_frames": 0
+      },
+      "generation": {
+        "channel": 0,
+        "channels": 1,
+        "frame_count": 4800,
+        "onset_frames": [
+          480,
+          719,
+          958
+        ],
+        "peak": 24000,
+        "sample_rate": 48000,
+        "tail_frames": 48
+      },
+      "id": "dense-below",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice-evaluation/dense-below.wav",
+      "sample_rate": 48000,
+      "sha256": "2ddd7460365fa1e22a93595c6e5464e133ec4c5bf0230c2acdc1b82cfc54b85f",
+      "spdx_license": "CC0-1.0"
+    },
+    {
+      "byte_length": 9644,
+      "channels": 1,
+      "class": "success",
+      "expected": {
+        "onset_frames": [
+          480,
+          720,
+          960
+        ],
+        "tolerance_frames": 0
+      },
+      "generation": {
+        "channel": 0,
+        "channels": 1,
+        "frame_count": 4800,
+        "onset_frames": [
+          480,
+          720,
+          960
+        ],
+        "peak": 24000,
+        "sample_rate": 48000,
+        "tail_frames": 48
+      },
+      "id": "dense-at",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice-evaluation/dense-at.wav",
+      "sample_rate": 48000,
+      "sha256": "a0f0d72f89fa218d4bcdc72e8cd505b3e9b20b505fd101cd928d1129975c4897",
+      "spdx_license": "CC0-1.0"
+    },
+    {
+      "byte_length": 9644,
+      "channels": 1,
+      "class": "success",
+      "expected": {
+        "onset_frames": [
+          441,
+          1323,
+          2205
+        ],
+        "tolerance_frames": 0
+      },
+      "generation": {
+        "channel": 0,
+        "channels": 1,
+        "frame_count": 4800,
+        "onset_frames": [
+          441,
+          1323,
+          2205
+        ],
+        "peak": 24000,
+        "sample_rate": 44100,
+        "tail_frames": 120
+      },
+      "id": "mono-44100",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice-evaluation/mono-44100.wav",
+      "sample_rate": 44100,
+      "sha256": "cc035781b8799f6c05112f7b467fdc720ce1e42910834a6a9cbf288b6ee5c0a4",
+      "spdx_license": "CC0-1.0"
+    },
+    {
+      "byte_length": 19244,
+      "channels": 2,
+      "class": "success",
+      "expected": {
+        "onset_frames": [
+          441,
+          1323,
+          2205
+        ],
+        "tolerance_frames": 0
+      },
+      "generation": {
+        "channel": 1,
+        "channels": 2,
+        "frame_count": 4800,
+        "onset_frames": [
+          441,
+          1323,
+          2205
+        ],
+        "peak": 24000,
+        "sample_rate": 44100,
+        "tail_frames": 120
+      },
+      "id": "stereo-right-44100",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice-evaluation/stereo-right-44100.wav",
+      "sample_rate": 44100,
+      "sha256": "6667218914c1a9e62f02f385f224f1adc8bbaf2b9fb975f63e64ccd1fe408b45",
+      "spdx_license": "CC0-1.0"
+    },
+    {
+      "byte_length": 19244,
+      "channels": 2,
+      "class": "success",
+      "expected": {
+        "onset_frames": [
+          480,
+          1440,
+          2400
+        ],
+        "tolerance_frames": 0
+      },
+      "generation": {
+        "channel": 1,
+        "channels": 2,
+        "frame_count": 4800,
+        "onset_frames": [
+          480,
+          1440,
+          2400
+        ],
+        "peak": 24000,
+        "sample_rate": 48000,
+        "tail_frames": 120
+      },
+      "id": "stereo-right-48000",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice-evaluation/stereo-right-48000.wav",
+      "sample_rate": 48000,
+      "sha256": "e692c7705ff5d33deef0ae888a762ed64d2975d413f99d2b5b03f991d0645516",
+      "spdx_license": "CC0-1.0"
+    },
+    {
+      "byte_length": 19244,
+      "channels": 2,
+      "class": "success",
+      "expected": {
+        "onset_frames": [],
+        "tolerance_frames": 0
+      },
+      "generation": {
+        "channel": 1,
+        "channels": 2,
+        "frame_count": 4800,
+        "onset_frames": [],
+        "peak": 24000,
+        "sample_rate": 48000,
+        "tail_frames": 120
+      },
+      "id": "silence-stereo",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice-evaluation/silence-stereo.wav",
+      "sample_rate": 48000,
+      "sha256": "3ac1bdf363578593c029ce12bf607ba277901c9c959ad7fed11b05d0edaadb06",
+      "spdx_license": "CC0-1.0"
+    }
+  ],
+  "schema": "lmdj.provider-benchmark-fixtures.v1"
+}
