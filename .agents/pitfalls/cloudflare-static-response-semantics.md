@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/issues/965
     observed_by: Codex
+  - date: 2026-09-22
+    occurrence: https://github.com/endaye/lmdj/actions/runs/35677810942
+    observed_by: Kimi Code (k3)
 exit: none
 ---
 
@@ -41,6 +44,12 @@ exact-entry readiness before unchanged full smoke, and is closed. Live edge
 propagation remains provider evidence; the deterministic retry tests do not
 turn an upload receipt into HTTP acceptance, so #965 is a recurrence and not
 the mechanism this entry waits for.
+
+The third occurrence is the 1.0.61.0 Runtime promote: the post-cutover
+exact-identity check failed and the transaction's recovery re-published the
+prior version, after which production verified clean on the prior bytes and a
+later full deployment succeeded unchanged — cutover propagation, not a
+product defect.
 
 The escalation Issue is
 https://github.com/endaye/lmdj/issues/985, which names what would close this:
