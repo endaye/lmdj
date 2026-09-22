@@ -652,6 +652,14 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME build.release_live_host
+  TIER contract
+  COMMAND "${Python3_EXECUTABLE}" tests/build/release_live_host_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 90
+)
+
+lmdj_add_test(
   NAME build.release_deployment_effect
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/release_deployment_effect_test.py

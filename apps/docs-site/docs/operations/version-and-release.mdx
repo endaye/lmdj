@@ -322,30 +322,31 @@ Release、签名资产、完整 notes 与冻结候选，并在前后重新认证
 run / attempt、成功的 preflight / deploy 与证据上传，并核对唯一 artifact 来源与摘要。
 复用受信本地 Host 校验器，匹配冻结的 tag、target、Build、Site、发布文件与 exact prior；
 返回前复查关联、库存和期限。recovery 记录不代替成功，未知或失败不重复部署或晋级。
-这些保留证据检查本身不证明当前生产别名或线上内容。新增 live effect 将它们与实时
-Host 验证组合：固定 Site API 的只读 GET 禁止重定向和部署写接口；immutable / production
-分别复用完整 HTTP smoke，核对所有资产、安全响应头与负路径。冻结的 index / manifest
-摘要在解析清单和下载资产前比对；内容漂移不会继续下载其资产。前后回读 Site 指针，
-必须仍为冻结的 deploy ID / Site，之后再次认证原部署证据。每次恢复都重新读取网络；
-漂移或不可读阻止后续步骤，不重新部署。稳定摘要不是缓存，也不保证观察之后站点
-不会变化；这不是新一轮浏览器验收。生产候选与授权组合、prior 冻结的父级组合、最终完整
-双 Site / Release / Portal / Channel 验收及旧晋级 reader 接入仍待完成。
-两个 Host 的部署脚本在 preflight 保存完整 Site 投影，并在候选 immutable 验证后、
-公开写入前再次限时读取。身份、指针或 serving state 变化及读取失败均拒绝公开；
-此时尚未标记 publication attempted，不恢复 prior、不禁用站点、不覆盖别人的新指针。
-可能已创建的未公开 draft 不自动删除。这是写前观察保护，不是 Netlify 原子 CAS；
-末次读取后的并发窗口仍存在，全局 Site 互斥仍须接通。
-托管 Host 派发要求 `prior_site_sha256`，与原 request ID 一同冻结到 durable spec 和
-认证 workflow receipt。只读 `freeze_site` 对配置指定的 Site 执行两次一致读取，返回
-完整规范化投影及摘要；它不证明 prior 内容健康，也不提供授权。部署 preflight 比对
-摘要，变化时在创建 draft 前拒绝，不更换 prior、恢复旧状态或重发请求。空站点与
-零文件 prior 仍保留各自实际 Site 投影，不能混成同一身份。摘要采用排序键、紧凑 UTF-8
-JSON 加一个 LF 的 SHA256；两个 Host 格式一致。不带 request ID 的原手动部署保留，
-带 request ID 却缺少或提供无效摘要则拒绝。旧缺摘要回执不满足新托管输入合同，
-只能显式核对原操作，不能因此补发 workflow。部署 effect 绑定相同摘要，有 prior-good
-时还比对其实际 Site 投影；首发或零文件证据依赖认证成功 workflow 执行的写前检查，
-不把 null prior 当作空站点证明。受信父级仍须组合快照采集、原授权与持久化登记，
-恢复时不能重新冻结线上状态来替换旧摘要；这不是完整总控或无人值守验收。
+这些保留证据检查本身不证明当前生产别名或线上内容。Cloudflare `LiveDeploymentEffect`
+将它们与新鲜的 `LiveHostVerifier` 组合：复用 `cloudflare_host.py inspect` 的 deployment /
+route 解析器，固定 account / Worker API 只允许读取 deployments 和 subdomain，禁止写入、
+重定向、重复 JSON 键和超限响应；API token 不传给公开 origin。URL 取自 Cloudflare 部署
+证据模块，immutable / production 分别检查 root、index、manifest、每个资产的长度与摘要、
+安全响应头及负路径。冻结 index / manifest 摘要在解析清单和下载资产前比对；Preview 的
+`noindex` 规则与 production 隔离，编码点段沿用 Cloudflare 的固定 400 或精确 index 规则。
+随后复用公开 origin observer 比对生产身份与摘要，并回读 deployment / route：必须仍为
+冻结的完整 deployment ID、version ID、100% 单版本和启用的两条路由；相同 Preview 前缀或
+新部署复用同一 version 不能替代原身份。HTTP 前后都重新认证实际保留 artifact。
+每次恢复重新读取网络；漂移或不可读阻止后续步骤，保留原 intent，不重复部署 POST。
+稳定摘要不是缓存，也不保证观察之后 Worker 不会变化；这不是新一轮浏览器验收。
+[#1503](https://github.com/endaye/lmdj/issues/1503) 的重建仅提供核验能力与受管流程测试，
+尚未接入生产组装层；生产候选与授权组合、prior 冻结的父级组合、最终完整
+双 Host / Release / Portal / Channel 验收及旧晋级 reader 接入仍待完成。
+托管 Host 派发仍要求 `prior_site_sha256`，与原 request ID 一同冻结到 durable spec 和
+认证 workflow receipt。Cloudflare 的冻结投影从受信已暂存 archive 派生发布文件摘要，
+从配置的 Worker 当前 version 和公开 origin observer 派生 prior；有 prior 时摘要绑定
+实际 `site_response`。读不到 Worker 或 origin 时不能猜测 prior。无 deployment 的分支
+保留独立状态；它的占位摘要不证明线上空站点，不能替代有 prior 时的观测证据。
+原 Netlify `freeze_site` 已随旧 live verifier 退役；Cloudflare live verifier 不提供新的
+prior 冻结或派发授权，也不在恢复时重新冻结当前状态来替换原摘要。
+部署 effect 保留逐字段比对及原摘要绑定，未知证据不能触发补发 workflow。
+受信父级仍须组合观测、原授权与持久化登记；末次观察后的并发窗口仍存在，
+这不是原子 CAS、全局 Worker 互斥或完整无人值守验收。
 完整候选 CI 证据也使用实时 UTC：下载解析后复核有效期，并在全部校验结束前再次检查
 origin / admission / verdict 三份 artifact 的期限；任一途中到期均拒绝认证。
 已发布版本的历史 provenance 路径不读取这些临时 artifact，也不会提供新候选 verdict。
