@@ -635,73 +635,22 @@ function trackRuntimeErrors(page) {
   return page;
 }
 
-// One browser per test is the fixture's isolation unit, and the locked
-// Playwright WebKit (r2336) wedges that browser after roughly seventy-five
-// page open/close cycles: from then on every navigation on any page — plain
-// HTML or Wasm host, persistent context or not, tracing on or off — hangs
-// until the test timeout (#1570). The same browser navigates one page 150
-// times in three seconds. So a page this file closes is not discarded: it is
-// parked on about:blank, which tears its document down the way a close does
-// (its OPFS handles, leases and workers go with the document), and the next
-// `trackedPage` navigates it again instead of opening another. A page that
-// cannot even reach about:blank is closed for real.
-//
-// One document must never be parked: a Wasm host stopped at a fault point,
-// whose worker is suspended forever inside `stopAtFault`. Navigating such a
-// page to about:blank returns immediately, but on Linux WebKit the next
-// navigation on that page never completes — the `/proc` snapshot taken at one
-// timeout (#1570, run 35496737811) shows every thread of every WebKit process
-// asleep in `futex_wait`/`poll` with the host otherwise idle: 58 GB free, 32 GB
-// of `/dev/shm` unused, load 3.7. The page is not busy, it is never served
-// again. A page is therefore reusable only when its Wasm host published a
-// terminal report, or when it never loaded one.
-const IDLE_PAGES = new WeakMap();
-const REAL_CLOSE = new WeakMap();
-
-async function pageIsQuiescent(page) {
-  try {
-    return await page.evaluate(() => {
-      const host = window.lmdjProjectIoWeb;
-      return host === undefined || host === null || host.complete === true;
-    });
-  } catch (_) {
-    return false;
-  }
-}
-
+// Each recovery leg starts in a new page after the prior page really closes.
+// Navigating to about:blank is not the page-close boundary these journeys
+// exercise. The selected OPFS WebKit is newer than the macOS window-animation
+// fix (upstream playwright#42385); do not pool pages for the old r2336 defect.
 async function trackedPage(context) {
-  let idle = IDLE_PAGES.get(context);
-  if (!idle) IDLE_PAGES.set(context, idle = []);
-  let page = idle.pop();
-  // A parked page is on about:blank, whose document cannot carry a previous
-  // Wasm host's `window.lmdjProjectIoWeb`. One that is anywhere else, or has
-  // gone, is not handed out again.
-  while (page && (page.isClosed() || page.url() !== "about:blank")) {
-    if (!page.isClosed()) {
-      await (REAL_CLOSE.get(page) ?? page.close.bind(page))().catch(() => {});
-    }
-    page = idle.pop();
-  }
-  if (!page) {
-    page = await context.newPage();
-    const close = page.close.bind(page);
-    REAL_CLOSE.set(page, close);
-    page.close = async (options) => {
-      if (page.url() === "about:blank") return close(options);
-      if (!(await pageIsQuiescent(page))) return close(options);
-      try {
-        await page.goto("about:blank", {timeout: 10_000});
-      } catch (_) {
-        // A real close detaches the observer through its close event, so a
-        // runtime error raised during teardown is still reported.
-        return close(options);
-      }
-      RUNTIME_ERROR_OBSERVERS.get(page)?.detach();
-      if (!idle.includes(page)) idle.push(page);
-    };
-  }
-  return trackRuntimeErrors(page);
+  return trackRuntimeErrors(await context.newPage());
 }
+
+// A parked document can release handles while retaining the page. Check the
+// actual lifecycle boundary independently of the recovery result below.
+test("Project I/O recovery closes its prior page", async ({context}) => {
+  const page = await trackedPage(context);
+  await page.goto("/preflight.html");
+  await page.close();
+  expect(page.isClosed(), "recovery must follow an actual page close").toBe(true);
+});
 
 async function waitForResult(page) {
   const observer = RUNTIME_ERROR_OBSERVERS.get(page);

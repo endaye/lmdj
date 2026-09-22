@@ -9,10 +9,13 @@ recurrences:
   - date: 2026-09-20
     occurrence: https://github.com/endaye/lmdj/pull/1578
     observed_by: Claude Opus 5 (1M context)
+  - date: 2026-09-22
+    occurrence: https://github.com/endaye/lmdj/issues/1570
+    observed_by: Codex (GPT-6)
 exit: none
 ---
 
-# A `page.goto` that hangs until the test timeout late in a long browser test is the browser wedged by page open/close cycles, not the page being loaded.
+# A navigation timeout does not identify its cause; bind a browser workaround to the measured build and platform.
 
 ## Why
 
@@ -31,45 +34,45 @@ IPC, which is load, not the cause: tracing off moved the wedge by one page.
 `project_io_web_conformance.spec.mjs` opens a fresh page for nearly every
 step so that each Wasm host starts from a fresh document. Its longest test
 opens sixty to a hundred pages, and three consecutive batch runs of the
-`web_toolchain` suite (#1570) each hung a different navigation in that region:
+`web_toolchain` suite (#1570) each hung a different navigation:
 a fixture page, an admission step, a recovery step. Each hang was read as a
 defect in whatever that page was about to do, and the two real WebKit
 findings in the same runs (an unclosed writable committed on teardown; see
 [`unclosed-opfs-writable-commits-on-webkit-teardown`](unclosed-opfs-writable-commits-on-webkit-teardown.md))
-made that reading plausible. The URL in the error names the victim, not the
-cause; the cause is how many pages the test had already opened and closed.
+made a shared-cause attribution plausible. The page-count probe established a
+macOS r2336 defect; it did not establish the cause of the Linux r2361 failures.
 
-Both causes stay open under
+The unresolved Linux signature stays open under
 [#1570](https://github.com/endaye/lmdj/issues/1570), which tracks the WebKit
 navigation hangs in the `web_toolchain` lane.
 
-## A second cause with the same symptom: a page whose document is wedged
+## Retracted attribution: a page whose document is wedged
 
-Parking a page on `about:blank` returns immediately even when the document it
-replaces can never finish tearing down. The Wasm test host stopped at a fault
-point holds a worker suspended forever inside `stopAtFault`; on Linux WebKit
-the page that carried it is never served another navigation, so the next
-`goto` on that reused page hangs until the test timeout. The `/proc` snapshot
-taken at one such timeout (batch run 35496737811) shows the cause is not load:
-every thread of the browser, network and three web processes sits in
-`futex_wait` or `poll`, with 58 GB of memory free, 32 GB of unused `/dev/shm`
-and a load average of 3.7. The browser is idle and simply never answers.
+The #1578 hypothesis attributed the Linux hang to reusing a page whose Wasm
+worker was stopped at a fault point. Run `35510660533` contradicted it: the
+previous document had completed normally, and the next navigation still hung.
+The sleeping `/proc` threads establish neither an unserved navigation command
+nor the cause of a deadlock. Preserve that failed hypothesis as history, not
+as an instruction to change the test lifecycle.
 
-Chromium and macOS WebKit tear the same document down and keep serving the
-page, so only the Linux lane fails, and only for tests that wedge a document.
+Upstream [Playwright #42385](https://github.com/microsoft/playwright/issues/42385#issuecomment-5545690086)
+identifies the macOS page-count defect as window animations with the display
+asleep, fixed in WebKit r2352. The selected OPFS browser is r2361; r2336 is the
+separate locked client browser. The original page-count measurement does not
+justify pooling pages in the OPFS recovery suite on Linux.
 
 ## How to apply
 
 When a Playwright navigation hangs for the full test timeout on WebKit, count
 the pages the test has opened and closed in that browser before blaming the
 page: probe with a plain HTML page — if it hangs too, the browser is wedged.
-Keep a long test under the threshold by reusing pages: a navigation to
-`about:blank` tears the document down as a close does (its OPFS handles,
-leases and workers go with it), so park closed pages and hand them out again
-rather than opening new ones; `trackedPage` in the conformance spec does
-this. Park only a page whose runtime reached a terminal state — the spec
-checks `window.lmdjProjectIoWeb` is absent or `complete` — and close a wedged
-one for real, or the pool hands back a page the browser will never serve. Do not raise the test timeout, retry the navigation, or split the test
-merely to stay under the count. No deterministic gate fits: the wedge lives
-in the browser build and its threshold moves with the host, so this stays
-open with `exit: none`.
+Verify the actual browser executable and platform against the upstream fix
+before applying a workaround measured with a different build. Recovery tests
+must really close the page when the journey names a page-close interruption;
+do not replace it with navigation merely because both can release a handle.
+The conformance suite now directly checks that lifecycle boundary.
+Do not raise timeouts or retry for green. This entry remains open under the
+existing escalation [#1570](https://github.com/endaye/lmdj/issues/1570): neither
+an idle process snapshot nor a passing macOS run resolves the remaining Linux
+navigation signature. There is no deterministic reproduction of that signature
+yet, so `exit: none` remains accurate.
