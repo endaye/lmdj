@@ -290,6 +290,7 @@ function Workspace({
     baseRevision: number;
   }> | null>(null);
   const sampleFilePickIntent = useRef<(slot: number) => void>(() => {});
+  const samplePadDropIntent = useRef<(slot: number, file: File, target: HTMLElement) => void>(() => {});
   const armedCaptureStopIntent = useRef<() => void>(() => {});
   const stateRef = useRef(state);
   const sequenceRef = useRef(sequence);
@@ -1399,6 +1400,13 @@ function Workspace({
   const selectBank = (bank: typeof state.activeBank) => {
     inputController.current?.clearPressed();
     dispatch({type: "bank-selected", bank});
+    const current = stateRef.current;
+    if (activeMode === "sample" && armedCaptureSlot === null &&
+        current.runtime.phase === "ready" && current.project.phase === "ready" &&
+        current.project.current !== null && current.transfer.phase === "idle") {
+      const localPad = (stateRef.current.sample.selectedSlot ?? 0) % 16;
+      dispatch({type: "sample-action", action: {type: "slot-selected", slot: bank * 16 + localPad}});
+    }
   };
   const runtimeActions = session && inputController.current
     ? {
@@ -1415,6 +1423,14 @@ function Workspace({
     <PadSurface
       state={state}
       armedCaptureSlot={armedCaptureSlot}
+      {...(activeMode === "sample" ? {
+        onSelectSample: (slot: number) => {
+          dispatch({type: "sample-action", action: {type: "slot-selected", slot}});
+        },
+        onChooseSample: (slot: number) => sampleFilePickIntent.current(slot),
+        onDropSample: (slot: number, file: File, target: HTMLElement) =>
+          samplePadDropIntent.current(slot, file, target),
+      } : {})}
       {...(inputController.current ? {controller: inputController.current} : {})}
     />
   );
@@ -1621,7 +1637,6 @@ function Workspace({
                   session={session}
                   projectRevision={state.project.current?.revision ?? null}
                   activeBank={state.activeBank}
-                  onBankChange={selectBank}
                   onInstalled={(revision) => {
                     dispatch({type: "project-revision-updated", revision});
                     void refreshPerformProject().catch(() => {});
@@ -1647,6 +1662,7 @@ function Workspace({
                   state={state}
                   dispatch={dispatch}
                   filePickIntent={sampleFilePickIntent}
+                  padDropIntent={samplePadDropIntent}
                   captureStopRequest={captureStopRequest}
                   captureBackgrounded={activeMode !== "sample" && !trimOverlayOpen}
                   closeCaptureAfterResolution={activeMode !== "sample"}
@@ -1665,7 +1681,6 @@ function Workspace({
                     }
                   }}
                   {...(isSampleSession(session) ? {session} : {})}
-                  {...(inputController.current ? {controller: inputController.current} : {})}
                 />
               </div>
               ) : null}

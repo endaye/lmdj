@@ -55,6 +55,12 @@ Open local 在已有 Project 时仍保持可达；list/import/open/reopen 属于
 
 状态栏显示由生成的 Product Assembly identity 派生的 build 身份（Product Build、Host、Platform 与 protocol 版本），启动时同一身份写入浏览器 console 并暴露为只读的 `window.__LMDJ_CREATOR_BUILD__`；该显示只做呈现，不替代 Runtime Session 对部署 manifest 的验证。状态栏同时显示 Project revision 与 MIDI 授权/输入数；Project Surface 显示 import 传输进度，Local Projects 列表可返回已打开的 Project；Runtime `ready` 时的 advisory 错误可被 Dismiss，`restart-required`、`unsupported`、`failed` 与 `closed` 的 Runtime 错误则保留到 Runtime 自身改变 phase。
 
+Sample 触摸工作区只保留编辑与采集；Bank 导航和可演奏 Pad 网格统一在左侧实体栏／
+Pad 区。该 Pad 区在 Sample mode 同时提供选中态、空槽选样、拖入／替换，以及原有
+pointer／keyboard press、release 和 cancel。Sound Set 的 **Install target Bank**
+是独立安装目标，初始取进入该工作区时的 active Bank；修改它不切换演奏 Bank，之后
+切换实体 Bank 也不会悄悄改写该安装目标。
+
 ## 演奏边界
 
 Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按空间顺序映射：上方 `Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，下方 `A S D F G H J K` 对应 Pad 9–16；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。用户明确授权 Web MIDI 后，Creator 在 channels 1–16 上接受 Note `36..51` 并映射到当前 Bank；Platform 的可选单 channel filter 不由 Creator 启用。每个 Sample press 以串行 inspect→trigger admission 确定 Runtime-effective playback，release/cancel/stop 与 ordered Voice state 共同维护视觉和真实声音。播放头只消费已快照的 Voice render bounds 与 session-local 观察时间，不写 Project Truth、Runtime Snapshot 或音频线程；并发/retrigger 时最新开始的选中-Pad Voice 获得显示所有权。saved Project revision 与 Runtime revision 分开显示，Cook 失败只重试 prepare、不重放 mutation。恢复期间只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。

@@ -887,8 +887,8 @@ async function opfsWavFiles(page) {
 async function installPerformWitnessSample(page) {
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
-  await page.getByTestId("touch-workspace").getByRole("button", {name: "Bank A", exact: true}).click();
-  const pad = page.getByRole("button", {name: /^Pad A1 — assigned$/});
+  await page.getByTestId("physical-controls").getByRole("button", {name: "Bank A", exact: true}).click();
+  const pad = page.getByRole("button", {name: /^Pad A1 — assigned — Key Q$/});
   await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await pad.evaluate((element) => element.click());
   const chooser = page.waitForEvent("filechooser");
@@ -910,8 +910,8 @@ async function installPerformWitnessSample(page) {
 async function replacePadSample(page) {
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
-  await page.getByTestId("touch-workspace").getByRole("button", {name: "Bank A", exact: true}).click();
-  const pad = page.getByRole("button", {name: /^Pad A1 — assigned$/});
+  await page.getByTestId("physical-controls").getByRole("button", {name: "Bank A", exact: true}).click();
+  const pad = page.getByRole("button", {name: /^Pad A1 — assigned — Key Q$/});
   await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await pad.evaluate((element) => element.click());
   const chooser = page.waitForEvent("filechooser");

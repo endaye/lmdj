@@ -130,7 +130,7 @@ button:disabled { color: #737b87; }
   background: #171b21;
 }
 .selected-sample button { grid-column: 1 / -1; justify-self: end; }
-.waveform-editor, .sample-controls, .empty-sample, .sample-pads {
+.waveform-editor, .sample-controls, .empty-sample {
   border: 1px solid #353b45;
   border-radius: .85rem;
   background: rgb(23 27 33 / 92%);
@@ -256,8 +256,7 @@ button:disabled { color: #737b87; }
 .reset-sample { grid-column: 3; }
 .empty-sample { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1rem; }
 .sample-error { margin: 0; padding: .75rem 1rem; border: 1px solid #ff7777; border-radius: .65rem; color: #ffc0c0; background: #2a1719; }
-.sample-pads { padding: .85rem; }
-.sample-pads .pad.is-selected { border-color: #b7ffc5; box-shadow: inset 0 0 0 1px #b7ffc5; }
+.hardware-console .pad.is-selected { border-color: #b7ffc5; box-shadow: inset 0 0 0 1px #b7ffc5; }
 .sample-file-input { display: none; }
 .sample-modal-backdrop {
   position: fixed;
@@ -562,7 +561,6 @@ button:disabled { color: #737b87; }
   .selected-sample { grid-template-columns: 1fr 1fr; }
   .sample-controls { grid-template-columns: 1fr; }
   .volume-control, .reset-sample { grid-column: 1; }
-  .sample-pads .pad-grid { grid-template-columns: repeat(4, minmax(44px, 1fr)); }
   .perform-pattern-slots { grid-template-columns: repeat(4, minmax(4.5rem, 1fr)); }
   .perform-fx { grid-template-columns: repeat(4, minmax(3.5rem, 1fr)); }
   .soundset-list { grid-template-columns: 1fr; }

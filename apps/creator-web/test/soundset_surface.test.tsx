@@ -498,3 +498,19 @@ test("an audition refusal reaches the surface instead of being swallowed", async
   expect(alert.textContent).toContain(
     "Accepted Set audio: PCM16 WAV, mono or stereo, 44.1 or 48 kHz");
 });
+
+test("install target is explicit and independent of the playing Bank", async () => {
+  const session = fakeSession();
+  const view = renderSurface(session);
+  await userEvent.click(await screen.findByRole("button", {name: "Inspect Fixture Foundry CC0"}));
+  expect(await screen.findByText("Choose where to install. This does not change the playing Bank.")).toBeTruthy();
+  const targets = screen.getByRole("group", {name: "Install target Bank"});
+  await userEvent.click(within(targets).getByRole("button", {name: "Install target Bank C"}));
+  view.rerender(<SoundSetSurface session={session} projectRevision={9} activeBank={1} />);
+  expect(within(targets).getByRole("button", {name: "Install target Bank C"})
+    .getAttribute("aria-pressed")).toBe("true");
+  await userEvent.click(screen.getByRole("button", {name: "Preview mapping into Bank C"}));
+  await waitFor(() => expect(session.previewSoundSetMap).toHaveBeenCalledWith(
+    expect.objectContaining({bankId: 2}),
+  ));
+});

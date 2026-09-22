@@ -1,9 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 
-import {BankSelector} from "./bank_selector";
 import {ConfirmationDialog, SampleControls} from "./sample_controls";
 import {WaveformEditor} from "./waveform_editor";
-import type {createCreatorInputController} from "../runtime/input_controller";
 import {
   cancelSamplePreviewJourney,
   captureCommitJourney,
@@ -40,7 +38,6 @@ import {
 } from "../state/sample_state";
 import type {CapturePhase} from "../state/capture_state";
 import {
-  selectVisiblePads,
   type CreatorAction,
   type CreatorState,
 } from "../state/creator_state";
@@ -49,7 +46,7 @@ import {padAddress} from "../state/view_model";
 interface SampleSurfaceProps {
   state: CreatorState;
   session?: CreatorSampleRuntimeSession;
-  controller?: ReturnType<typeof createCreatorInputController>;
+  padDropIntent?: {current: (slot: number, file: File, target: HTMLElement) => void};
   filePickIntent: {current: (slot: number) => void};
   dispatch: (action: CreatorAction) => void;
   captureStopRequest?: number;
@@ -132,10 +129,6 @@ const SAMPLE_ERROR_CODES = new Set([
   "HOST_RESTART_REQUIRED",
   "HOST_PROTOCOL_MISMATCH",
 ]);
-const PAD_KEY_CODES = Object.freeze([
-  "KeyQ", "KeyW", "KeyE", "KeyR", "KeyT", "KeyY", "KeyU", "KeyI",
-  "KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK",
-]);
 
 function publicOperationError(
   error: unknown,
@@ -202,7 +195,7 @@ function quotaErrorCopy(
 export function SampleSurface({
   state,
   session,
-  controller,
+  padDropIntent,
   filePickIntent,
   dispatch,
   captureStopRequest = 0,
@@ -803,6 +796,21 @@ export function SampleSurface({
     fileSlot.current = slot;
     input.current?.click();
   };
+  useEffect(() => {
+    if (padDropIntent === undefined) return;
+    padDropIntent.current = (slot, file, target) => {
+      if (state.project.phase !== "ready" || state.project.current === null ||
+          captureTarget !== null) return;
+      if (selectedSlot !== slot) {
+        dispatch({type: "sample-action", action: {type: "slot-selected", slot}});
+      }
+      replaceReturnFocus.current = target;
+      if (isAssigned(slot)) setPendingFile({slot, file});
+      else void startLongImport({slot, file});
+    };
+    return () => { padDropIntent.current = () => {}; };
+  });
+
   const selectedAddress = selectedSlot === null
     ? "No Pad selected"
     : `Pad ${padAddress({slot: selectedSlot, assetId: inspect?.assetId ?? null})}`;
@@ -928,91 +936,6 @@ export function SampleSurface({
             : <p>{quotaErrorCopy(sample.lastError)}</p>}
         </div>
       )}
-
-      <section className="sample-pads" aria-label="Sample Pads">
-        <BankSelector
-          activeBank={state.activeBank}
-          onSelect={(bank) => {
-            controller?.clearPressed();
-            dispatch({type: "bank-selected", bank});
-          }}
-        />
-        <div className="pad-grid" aria-label="Playable Pads">
-          {selectVisiblePads(state).map((pad) => {
-            const address = padAddress(pad);
-            const selected = sample.selectedSlot === pad.slot;
-            const assigned = pad.assetId !== null ||
-              (selected && inspect?.assetId !== null && inspect?.assetId !== undefined);
-            const outcome = state.pressed.get(pad.slot);
-            return (
-              <button
-                type="button"
-                className={`pad${selected ? " is-selected" : ""}`}
-                data-outcome={outcome ?? "idle"}
-                aria-pressed={selected}
-                aria-label={`Pad ${address} — ${assigned ? "assigned" : "empty"}`}
-                key={pad.slot}
-                disabled={projectUnavailable}
-                onPointerDown={(event) => controller?.pointerDown(event, pad.slot)}
-                onMouseDown={(event) => controller?.pointerDown(event, pad.slot)}
-                onPointerUp={(event) => controller?.pointerUp(event, pad.slot)}
-                onMouseUp={(event) => controller?.pointerUp(event, pad.slot)}
-                onPointerCancel={(event) => controller?.pointerCancel(event, pad.slot)}
-                onKeyDown={(event) => {
-                  if (!assigned || controller === undefined ||
-                    (event.key !== "Enter" && event.key !== " ")) return;
-                  event.preventDefault();
-                  if (event.repeat) return;
-                  const code = PAD_KEY_CODES[pad.slot - state.activeBank * 16];
-                  if (code !== undefined) {
-                    controller.keyDown({code, repeat: false, target: document.body});
-                  }
-                }}
-                onKeyUp={(event) => {
-                  if (!assigned || controller === undefined ||
-                    (event.key !== "Enter" && event.key !== " ")) return;
-                  event.preventDefault();
-                  const code = PAD_KEY_CODES[pad.slot - state.activeBank * 16];
-                  if (code !== undefined) {
-                    controller.keyUp({code, repeat: false, target: document.body});
-                  }
-                }}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  const file = event.dataTransfer.files[0];
-                  if (file === undefined) return;
-                  if (!selected) {
-                    dispatch({
-                      type: "sample-action",
-                      action: {type: "slot-selected", slot: pad.slot},
-                    });
-                  }
-                  if (assigned) {
-                    replaceReturnFocus.current = event.currentTarget;
-                    setPendingFile({slot: pad.slot, file});
-                  }
-                  else void startLongImport({slot: pad.slot, file});
-                }}
-                onClick={(event) => {
-                  if (!selected) {
-                    dispatch({
-                      type: "sample-action",
-                      action: {type: "slot-selected", slot: pad.slot},
-                    });
-                  }
-                  if (!assigned && (controller === undefined || event.detail === 0)) {
-                    chooseFile(pad.slot);
-                  }
-                }}
-              >
-                <strong>{address}</strong>
-                <span>{assigned ? "Assigned" : "Empty"}</span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
 
       <input
         ref={input}

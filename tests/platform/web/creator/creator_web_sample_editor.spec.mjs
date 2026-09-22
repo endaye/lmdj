@@ -316,7 +316,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await activateAudio(page);
   await enterSampleEditor(page);
 
-  await expect(page.getByRole("button", {name: "Pad A1 — empty", exact: true})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Pad A1 — empty — Key Q", exact: true})).toBeVisible();
   await chooseSampleFile(
     page,
     "Add Sample to Pad A1",
@@ -324,7 +324,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     pcm16Wav({}),
   );
   await commitLongSourceSelection(page);
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true}))
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true}))
     .toBeVisible({timeout: 120_000});
   await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
@@ -362,7 +362,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
       },
     );
   });
-  const padA1 = page.getByRole("button", {name: "Pad A1 — assigned", exact: true});
+  const padA1 = page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true});
   await page.emulateMedia({reducedMotion: "reduce"});
   const playheadOffset = await page.evaluate(() =>
     (window.__sampleVoiceStates ?? []).length);
@@ -504,36 +504,36 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
       details: expect.objectContaining({actual_revision: 55, expected_revision: 54}),
     }));
 
-  await selectPadWithoutPress(page, "Pad A2 — assigned");
+  await selectPadWithoutPress(page, "Pad A2 — assigned — Key W");
   await expect(page.getByText(/^Asset /)).toBeVisible({timeout: 30_000});
   const a2Loop = page.getByRole("button", {name: "Loop"});
   await waitForControlMutation(page, a2Loop, () => a2Loop.click(), 56);
-  const padA2 = page.getByRole("button", {name: "Pad A2 — assigned", exact: true});
+  const padA2 = page.getByRole("button", {name: "Pad A2 — assigned — Key W", exact: true});
   await heldPadGesture(page, padA2, ["started"]);
 
-  await selectPadWithoutPress(page, "Pad A1 — assigned");
+  await selectPadWithoutPress(page, "Pad A1 — assigned — Key Q");
   const a1Mute = page.getByRole("button", {name: "Mute"});
   await waitForControlMutation(page, a1Mute, () => a1Mute.click(), 57);
 
-  await selectPadWithoutPress(page, "Pad A3 — assigned");
+  await selectPadWithoutPress(page, "Pad A3 — assigned — Key E");
   const a3Loop = page.getByRole("button", {name: "Loop"});
   await waitForControlMutation(page, a3Loop, () => a3Loop.click(), 58);
   await heldPadGesture(
     page,
-    page.getByRole("button", {name: "Pad A3 — assigned", exact: true}),
+    page.getByRole("button", {name: "Pad A3 — assigned — Key E", exact: true}),
     ["started"],
   );
 
-  await selectPadWithoutPress(page, "Pad A4 — assigned");
+  await selectPadWithoutPress(page, "Pad A4 — assigned — Key R");
   const a4Loop = page.getByRole("button", {name: "Loop"});
   await waitForControlMutation(page, a4Loop, () => a4Loop.click(), 59);
   await heldPadGesture(
     page,
-    page.getByRole("button", {name: "Pad A4 — assigned", exact: true}),
+    page.getByRole("button", {name: "Pad A4 — assigned — Key R", exact: true}),
     ["started"],
   );
 
-  await selectPadWithoutPress(page, "Pad A1 — assigned");
+  await selectPadWithoutPress(page, "Pad A1 — assigned — Key Q");
   await page.evaluate(() => {
     window.__normalizeNextResourceFailureToCook = true;
   });
@@ -593,7 +593,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await expect(page.locator(".overview-display > .overview-facts")).toContainText("Rev60");
   await expect(page.getByText("45 / 64")).toBeVisible();
   await enterSampleEditor(page);
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true})).toBeVisible();
   await expectProjectRevision(page, 60);
   const postReloadOperations = await page.evaluate(() => window.__sampleProofOperations ?? []);
   expect(postReloadOperations.filter((operation) => operation === "sample.import.commit"))
@@ -602,7 +602,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   // F5: a pointer drag aimed at a trim grip moves only that trim point. The
   // retired invisible range bands grabbed the wrong handle or jumped the
   // trim point to the pressed track position.
-  await selectPadWithoutPress(page, "Pad A1 — assigned");
+  await selectPadWithoutPress(page, "Pad A1 — assigned — Key Q");
   await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
   const trimStart = page.getByRole("spinbutton", {name: "Pad A1 Start time (seconds)"});
@@ -661,7 +661,7 @@ test("packaged Sample Editor clamps a plus-one-frame source and admits the quota
   expect(44 + quotaBoundFrames * 2).toBeGreaterThan(1_048_576);
   await commitLongSourceSelection(page);
 
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true}))
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true}))
     .toBeVisible({timeout: 120_000});
   await expect(page.getByText(
     `48 kHz · Mono · ${quotaBoundFrames.toLocaleString("en-US")} frames`,
@@ -704,7 +704,7 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
 
   // F3: diverge the local Project from the imported bundle. Committing a
   // Sample to Pad A1 advances the local Project to revision 47.
-  await expect(page.getByRole("button", {name: "Pad A1 — empty", exact: true})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Pad A1 — empty — Key Q", exact: true})).toBeVisible();
   await chooseSampleFile(
     page,
     "Add Sample to Pad A1",
@@ -712,7 +712,7 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
     pcm16Wav({}),
   );
   await commitLongSourceSelection(page);
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true}))
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true}))
     .toBeVisible({timeout: 120_000});
   await expectProjectRevision(page, 47);
 

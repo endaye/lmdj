@@ -375,7 +375,7 @@ async function armPadOutcomeObservation(pad) {
 async function latchLoopToggle(page) {
   await expect(page.getByRole("button", {name: "Loop"}))
     .toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
-  const pad = page.getByRole("button", {name: "Pad A1 — assigned", exact: true});
+  const pad = page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true});
   await expect(pad).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
   await pad.focus();
   await page.keyboard.down("Enter");

@@ -198,7 +198,7 @@ test("the capture panel and its primary actions stay within the viewport (F1/F2)
   await importV1SampleProject(page);
   await enterSampleEditor(page);
 
-  await selectPadWithoutPress(page, "Pad A1 — empty");
+  await selectPadWithoutPress(page, "Pad A1 — empty — Key Q");
   await page.getByRole("button", {name: "Record Sample"}).click();
   const panel = page.getByRole("dialog", {name: "Pad A1 Pad Capture"});
   await expect(panel).toBeVisible();
@@ -229,7 +229,7 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   await importV1SampleProject(page);
   await enterSampleEditor(page);
 
-  await selectPadWithoutPress(page, "Pad A1 — empty");
+  await selectPadWithoutPress(page, "Pad A1 — empty — Key Q");
   const panel = await recordAtLeast(page, "Pad A1", 1);
   await panel.getByRole("button", {name: "Stop"}).click();
 
@@ -306,7 +306,7 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
     .toBeVisible({timeout: 180_000});
   await panel.getByRole("button", {name: "Close"}).click();
   await expect(panel).toBeHidden();
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true}))
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true}))
     .toBeVisible();
   // The committed capture flows through the ordinary post-import behaviour:
   // the Pad reads assigned and the Sample Editor renders its waveform.
@@ -341,7 +341,7 @@ test("ordinary Sample focus loss keeps the retained trim dialog visible", async 
   await page.goto("/index.html");
   await importV1SampleProject(page);
   await enterSampleEditor(page);
-  await selectPadWithoutPress(page, "Pad A1 — empty");
+  await selectPadWithoutPress(page, "Pad A1 — empty — Key Q");
   const panel = await recordAtLeast(page, "Pad A1", 1);
 
   await page.evaluate(() => window.dispatchEvent(new Event("blur")));
@@ -378,7 +378,7 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
     timeout: 30_000,
   });
   await enterSampleEditor(page);
-  await selectPadWithoutPress(page, "Pad A1 — empty");
+  await selectPadWithoutPress(page, "Pad A1 — empty — Key Q");
   const panel = await recordAtLeast(page, "Pad A1", 1);
 
   await panel.getByRole("button", {name: "Continue in Sequence"}).click();
@@ -398,7 +398,7 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
 
   // A distinct non-armed Pad is ordinary Sequence input before the Capture
   // stop gesture. This event must survive the Capture commit boundary.
-  await pressRecordedPad(page, "Pad A2 — assigned", "KeyW");
+  await pressRecordedPad(page, "Pad A2 — assigned — Key W", "KeyW");
 
   // The armed Pad stops only its capture. The global Pattern transport keeps
   // playing beneath the trim overlay and the armed hit itself is not recorded.
@@ -435,7 +435,7 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
   const whileSampling = await inspectTransportProjection(page);
   expect(whileSampling).toMatchObject({engaged: true, playing: true});
-  await selectPadWithoutPress(page, "Pad A1 — empty");
+  await selectPadWithoutPress(page, "Pad A1 — empty — Key Q");
   const replacement = await recordAtLeast(page, "Pad A1", 1);
   await replacement.getByRole("button", {name: "Stop"}).click();
   await expect(replacement.getByRole("slider", {name: /^Pad A1 End —/}))
@@ -449,7 +449,7 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
     .toContainText("Ready to record into Pad A1", {timeout: 180_000});
   await replacement.getByRole("button", {name: "Close"}).click();
   await expect(replacement).toBeHidden({timeout: 30_000});
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true}))
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true}))
     .toBeVisible({timeout: 30_000});
   const committedTruth = await inspectProjectTruth(page);
   const committedAsset = committedTruth.project.banks[0].pads[0].asset_id;
@@ -473,7 +473,7 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
   await recordKey(page).click();
   await expect(page.getByRole("status").filter({hasText: "recording"}))
     .toBeVisible({timeout: 30_000});
-  await pressRecordedPad(page, "Pad A1 — assigned", "KeyQ");
+  await pressRecordedPad(page, "Pad A1 — assigned — Key Q", "KeyQ");
   await recordKey(page).click();
   await expect(page.getByRole("status").filter({hasText: "playing"}))
     .toBeVisible({timeout: 30_000});
@@ -546,7 +546,7 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
     event.duration_tick > 0 && event.velocity > 0)).toBe(true);
 
   await page.getByRole("button", {name: "Sample"}).click();
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true}))
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true}))
     .toBeVisible({timeout: 30_000});
 });
 
@@ -557,7 +557,7 @@ test("uses queried Bank quota instead of the retired per-Pad capture cap", async
   await importV1SampleProject(page);
   await enterSampleEditor(page);
 
-  await selectPadWithoutPress(page, "Pad A1 — empty");
+  await selectPadWithoutPress(page, "Pad A1 — empty — Key Q");
   // Task #346 removes the old five-second per-Pad commit cap. Record past that
   // boundary and prove the entire buffered take remains selectable while the
   // queried Bank/Project quota is the only commit ceiling.
@@ -577,7 +577,7 @@ test("blur during recording stops capture and keeps the buffer", async ({page}, 
   await importV1SampleProject(page);
   await enterSampleEditor(page);
 
-  await selectPadWithoutPress(page, "Pad A1 — empty");
+  await selectPadWithoutPress(page, "Pad A1 — empty — Key Q");
   const panel = await recordAtLeast(page, "Pad A1", 1);
   await page.evaluate(() => window.dispatchEvent(new Event("blur")));
 
@@ -596,7 +596,7 @@ test("a denied microphone permission is explicit and retryable", async ({page}, 
   await importV1SampleProject(page);
   await enterSampleEditor(page);
 
-  await selectPadWithoutPress(page, "Pad A1 — empty");
+  await selectPadWithoutPress(page, "Pad A1 — empty — Key Q");
   await page.getByRole("button", {name: "Record Sample"}).click();
   const panel = page.getByRole("dialog", {name: "Pad A1 Pad Capture"});
   await expect(panel).toBeVisible();
@@ -615,7 +615,7 @@ test("capture never leaks device identity or filesystem paths", async ({page}, t
   await importV1SampleProject(page);
   await enterSampleEditor(page);
 
-  await selectPadWithoutPress(page, "Pad A1 — empty");
+  await selectPadWithoutPress(page, "Pad A1 — empty — Key Q");
   const panel = await recordAtLeast(page, "Pad A1", 1);
   await panel.getByRole("button", {name: "Stop"}).click();
   await panel.getByRole("button", {name: "Commit"}).click();
@@ -623,7 +623,7 @@ test("capture never leaks device identity or filesystem paths", async ({page}, t
     .toBeVisible({timeout: 180_000});
   await panel.getByRole("button", {name: "Close"}).click();
   await expect(panel).toBeHidden();
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned", exact: true}))
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true}))
     .toBeVisible();
 
   // Only the Artifact bytes and their SHA-256 identity persist: no device
