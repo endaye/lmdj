@@ -93,6 +93,22 @@ class HostCommandTest(unittest.TestCase):
             self.assertEqual(http.call_args.kwargs, {'preview': True, 'recovery_target': False,
                                                      'initialization_target': True})
 
+    def test_a_failed_verification_keeps_the_underlying_reason(self):
+        # The adapter log is the only evidence a failed deployment leaves.
+        def staged(tag, requested_host, workspace):
+            return workspace, {'tag': tag, 'host_id': 'web-runtime-host'}
+        stderr = io.StringIO()
+        with patch.dict(os.environ, {'CLOUDFLARE_API_TOKEN': 'fixture'}), \
+                patch('cloudflare_host.stage', side_effect=staged), \
+                patch('cloudflare_host.CloudflareClient.require_version'), \
+                patch('cloudflare_host.smoke',
+                      side_effect=RuntimeError('why: /index.html returned HTTP 503')), \
+                redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            code = main(['verify', 'lmdj-v1.0.42.0', '--target', 'web-runtime-host',
+                         '--state-root', str(self.root/'state'), '--version', A])
+        self.assertEqual(code, 2)
+        self.assertIn('/index.html returned HTTP 503', stderr.getvalue())
+
     def receipt(self, **overrides):
         row = {'type': 'version-upload', 'version': 1, 'worker_name': self.client.worker,
                'version_id': B, 'preview_url': f'https://{B[:8]}-{self.client.worker}.lmdj.workers.dev'}
