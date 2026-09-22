@@ -1110,3 +1110,11 @@ button:disabled { color: #737b87; }
   min-height: 40px;
   border-radius: 8px;
 }
+
+.diagnostics-log { margin-block: 1rem; overflow-wrap: anywhere; }
+.diagnostics-log summary { cursor: pointer; }
+.diagnostics-log section { max-height: 20rem; overflow: auto; }
+.diagnostics-log ol { padding-inline-start: 1.5rem; }
+.diagnostics-log li { margin-block: 1rem; }
+.diagnostics-log time, .diagnostics-log strong, .diagnostics-log code { display: block; }
+.diagnostics-log pre { white-space: pre-wrap; overflow-wrap: anywhere; }

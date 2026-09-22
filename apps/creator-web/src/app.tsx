@@ -8,6 +8,9 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 
+import {
+  appendDiagnostic, diagnosticRecord, DiagnosticsLog, type DiagnosticRecord,
+} from "./components/diagnostics_log";
 import {ErrorPanel} from "./components/error_panel";
 import {
   HardwareConsole,
@@ -157,13 +160,6 @@ const SAMPLE_ERROR_CODES = new Set([
   "HOST_PROTOCOL_MISMATCH",
   "LOCAL_PROJECT_UNREADABLE",
 ]);
-function errorCode(error: unknown): string {
-  if (error instanceof DOMException && error.name === "AbortError") {
-    return "ABORTED";
-  }
-  return (error as TypedRuntimeError | null)?.code ?? "INTERNAL_ERROR";
-}
-
 function errorDetails(error: unknown): Readonly<Record<string, unknown>> {
   const details = (error as TypedRuntimeError | null)?.details;
   return details !== null && typeof details === "object" && !Array.isArray(details)
@@ -255,6 +251,12 @@ function Workspace({
     reducePatternTransport,
     initialPatternTransportState,
   );
+  const [diagnostics, setDiagnostics] = useState<readonly DiagnosticRecord[]>([]);
+  const reportFailure = useCallback((operation: string, error: unknown): string => {
+    const record = diagnosticRecord(operation, error);
+    setDiagnostics((records) => appendDiagnostic(records, record));
+    return record.code;
+  }, []);
   const [listAttempt, setListAttempt] = useState(0);
   const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
   const [showLocalProjects, setShowLocalProjects] = useState(false);
@@ -386,7 +388,7 @@ function Workspace({
     });
     void inspectPatternTransportJourney(session, sessionId).then(
       (status) => dispatchTransport({type: "observed", status}),
-      () => {},
+      (error) => { reportFailure("Inspect transport engagement", error); },
     );
     void refreshSequence();
   }, [session, runtimePhase, state.project.current]);
@@ -560,7 +562,7 @@ function Workspace({
       },
       (error: unknown) => {
         if (!active) return;
-        const code = errorCode(error);
+        const code = reportFailure("List local Projects", error);
         setBusyRetry(code === "PROJECT_BUSY" ? {kind: "list"} : null);
         if (code === "HOST_RESTART_REQUIRED" || code === "HOST_TIMEOUT") {
           dispatch({
@@ -595,9 +597,10 @@ function Workspace({
   const reportProjectError = (
     error: unknown,
     retry: BusyRetry | null = null,
+    operation = "Open Project",
   ) => {
     if (error instanceof DOMException && error.name === "AbortError") return;
-    const code = errorCode(error);
+    const code = reportFailure(operation, error);
     const details = errorDetails(error);
     setBusyRetry(code === "PROJECT_BUSY" ? retry : null);
     if (code === "HOST_RESTART_REQUIRED" || code === "HOST_TIMEOUT") {
@@ -640,7 +643,7 @@ function Workspace({
       dispatch({
         type: "project-projection-refresh-failed",
         token,
-        errorCode: errorCode(error),
+        errorCode: reportFailure("Refresh Project projection", error),
       });
       throw error;
     } finally {
@@ -801,7 +804,7 @@ function Workspace({
       setShowLocalProjects(false);
       return true;
     } catch (error) {
-      if (ownsProjectAction(token)) reportProjectError(error);
+      if (ownsProjectAction(token)) reportProjectError(error, null, "Import Project");
       return false;
     } finally {
       if (ownsProjectAction(token)) {
@@ -833,7 +836,7 @@ function Workspace({
           reportProjectError(Object.assign(new Error(diagnostics.error_code), {
             code: diagnostics.error_code,
             details: diagnostics.error_details,
-          }));
+          }), null, "Activate audio");
           restorePriorPhase();
         } else {
           restorePriorPhase();
@@ -845,7 +848,7 @@ function Workspace({
       // An untrusted gesture never reached the Runtime. Other failures remain
       // visible through normal error reporting, but none may destroy the
       // pre-attempt audio phase.
-      if (!(error instanceof TypeError)) reportProjectError(error);
+      if (!(error instanceof TypeError)) reportProjectError(error, null, "Activate audio");
       restorePriorPhase();
     }
   };
@@ -901,7 +904,7 @@ function Workspace({
       }
     } catch (error) {
       if (sampleRetryAction.current === token) {
-        const candidate = errorCode(error);
+        const candidate = reportFailure("Retry Sample preparation", error);
         const code = SAMPLE_ERROR_CODES.has(candidate) ? candidate : "INTERNAL_ERROR";
         dispatch({
           type: "sample-action",
@@ -963,8 +966,8 @@ function Workspace({
     URL.revokeObjectURL(url);
   };
 
-  const sequenceFailure = (error: unknown) => {
-    dispatchSequence({type: "failed", errorCode: errorCode(error)});
+  const sequenceFailure = (operation: string, error: unknown) => {
+    dispatchSequence({type: "failed", errorCode: reportFailure(operation, error)});
   };
 
   const refreshSequence = async () => {
@@ -1019,7 +1022,7 @@ function Workspace({
       }
       dispatchSequence({type: "recovery", candidates: authority.recovery});
     } catch (error) {
-      sequenceFailure(error);
+      sequenceFailure("Refresh Sequence authority", error);
     }
   };
 
@@ -1084,11 +1087,11 @@ function Workspace({
         dispatchTransport({
           type: "failed",
           command: retained,
-          errorCode: errorCode(error),
+          errorCode: reportFailure(`Reconcile transport ${retained.intent}`, error),
         });
       }
     } catch (error) {
-      dispatchTransport({type: "observe-failed", errorCode: errorCode(error)});
+      dispatchTransport({type: "observe-failed", errorCode: reportFailure("Inspect transport", error)});
       return;
     }
   };
@@ -1135,7 +1138,7 @@ function Workspace({
         status: ticket.status,
       });
     } catch (error) {
-      dispatchTransport({type: "failed", command, errorCode: errorCode(error)});
+      dispatchTransport({type: "failed", command, errorCode: reportFailure(`Transport ${intent}`, error)});
       void reconcileTransport();
     }
   };
@@ -1210,7 +1213,7 @@ function Workspace({
         swingPercent: result.swingPercent,
       });
       await refreshSequence();
-    }).catch(sequenceFailure);
+    }).catch((error) => sequenceFailure("Update Sequence settings", error));
     sequenceAuthoringTail.current = operation;
     return operation;
   };
@@ -1245,7 +1248,7 @@ function Workspace({
         await session.reloadSnapshot(result.patternId);
       }
       dispatchSequence({type: "selected", patternId: result.patternId});
-    }).catch(sequenceFailure);
+    }).catch((error) => sequenceFailure("Create Pattern", error));
     sequenceAuthoringTail.current = operation;
     return operation;
   };
@@ -1286,7 +1289,7 @@ function Workspace({
           }
           dispatchSequence({type: "trim-closed"});
         }, (error) => {
-          dispatchSequence({type: "failed", errorCode: errorCode(error)});
+          dispatchSequence({type: "failed", errorCode: reportFailure("Disarm Sequence capture", error)});
           dispatchSequence({type: "trim-closed"});
         });
       } else {
@@ -1316,10 +1319,11 @@ function Workspace({
           dispatchSequence({type: "selected", patternId});
           return;
         } catch (error) {
-          if (errorCode(error) !== "HOST_STATE_INVALID" || attempt === 4 ||
+          const code = reportFailure("Select Pattern", error);
+          if (code !== "HOST_STATE_INVALID" || attempt === 4 ||
               patternSelectionRef.current !== selection) {
             if (patternSelectionRef.current === selection) {
-              sequenceFailure(error);
+              dispatchSequence({type: "failed", errorCode: code});
             }
             return;
           }
@@ -1339,7 +1343,7 @@ function Workspace({
         });
         dispatchSequence({type: "switch-pending", status});
       } catch (error) {
-        sequenceFailure(error);
+        sequenceFailure("Switch Pattern", error);
       }
       return;
     }
@@ -1585,12 +1589,12 @@ function Workspace({
                         dispatch({type: "project-revision-updated", revision: status.committedRevision});
                       }
                       return refreshSequence();
-                    }, sequenceFailure);
+                    }, (error) => sequenceFailure("Recover Sequence Pattern", error));
                   }}
                   onDiscard={(candidate) => {
                     if (!isSequenceSession(session)) return;
                     void session.discardSequenceRecovery(candidate.sessionId)
-                      .then(() => refreshSequence(), sequenceFailure);
+                      .then(() => refreshSequence(), (error) => sequenceFailure("Discard Sequence recovery", error));
                   }}
                 />
               ) : activeMode === "perform" && state.project.current !== null ? (
@@ -1669,6 +1673,7 @@ function Workspace({
                 />
               </div>
               ) : null}
+              <DiagnosticsLog records={diagnostics} />
               <ErrorPanel
                 code={state.runtime.errorCode}
                 details={state.runtime.errorDetails}
