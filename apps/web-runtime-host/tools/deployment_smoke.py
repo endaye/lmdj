@@ -675,8 +675,9 @@ def smoke_http(
     expected_manifest_sha256: str | None = None,
     require_https: bool = True,
     timeout_seconds: float = 10.0,
+    traversal_check=None,
 ) -> dict[str, object]:
-    """Validate index, manifest, every declared asset, and negative routes."""
+    """Validate all bytes and routes; a trusted provider may supply its traversal check."""
     for value in (expected_index_sha256, expected_manifest_sha256):
         if value is not None and (not isinstance(value, str) or HASH_PATTERN.fullmatch(value) is None):
             raise SmokeError("why: expected release digest is invalid; remedy: supply the authenticated frozen release SHA-256 in lowercase hexadecimal")
@@ -807,7 +808,7 @@ def smoke_http(
             path=path,
             timeout_seconds=timeout_seconds,
         )
-    _require_traversal_rejection(
+    (traversal_check or _require_traversal_rejection)(
         opener,
         url=root.rstrip("/") + TRAVERSAL_PATH,
         path=TRAVERSAL_PATH,
