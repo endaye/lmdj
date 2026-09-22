@@ -493,6 +493,7 @@ class EntryPointTest(unittest.TestCase):
                                    "1.0.61.0", "4.3.1")
                 except CloudflareDeployError:
                     passed = False
+        self.browser_command = runner.call_args.args[0]
         return passed, runner.call_args.kwargs["env"]
 
     def report(self, **stats):
@@ -547,6 +548,16 @@ class EntryPointTest(unittest.TestCase):
                 passed, _ = self.browser_run(stdout=stdout,
                                              environment={"PATH": "/usr/bin"})
                 self.assertFalse(passed)
+
+    def test_the_browser_command_suppresses_the_npm_banner(self):
+        # npm's run banner shares stdout with the JSON report, and a
+        # banner-prefixed report is unparseable — which must stay a failure,
+        # so the banner must never be emitted in the first place.
+        banner = "> @lmdj/web-toolchain-conformance@0.0.0 test\n{}\n"
+        passed, _ = self.browser_run(stdout=banner,
+                                     environment={"PATH": "/usr/bin"})
+        self.assertFalse(passed)
+        self.assertIn("--silent", self.browser_command[:3])
 
     def test_a_diagnostic_name_never_escapes_its_directory(self):
         # The name is derived from a URL hostname; nothing derived from data

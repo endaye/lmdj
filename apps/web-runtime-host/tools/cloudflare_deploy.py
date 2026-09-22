@@ -556,7 +556,10 @@ def real_browser(host, diagnostics, *, timeout=900):
                             f"{prefix}_EXPECTED_PRODUCT_BUILD": product_build,
                             f"{prefix}_EXPECTED_VERSION": host_version})
         result = _completed(
-            ["npm", "--prefix", str(ROOT / "tests/platform/web"), "test", "--",
+            # --silent: npm's run banner shares stdout with the JSON report,
+            # and a banner-prefixed report is not parseable.
+            ["npm", "--silent", "--prefix", str(ROOT / "tests/platform/web"),
+             "test", "--",
              f"--project={project}", "--reporter=json", spec],
             cwd=ROOT, timeout=timeout, environment=environment)
         if result.returncode or not _browser_ran(result.stdout):
