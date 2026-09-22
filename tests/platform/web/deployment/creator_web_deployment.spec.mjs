@@ -119,7 +119,7 @@ test("published Creator completes authoring, playback, and durable reload", asyn
     .toBeEnabled({timeout: 120_000});
 
   await page.getByRole("button", {name: "Sequence"}).click();
-  await expect(page.getByRole("heading", {name: "Sequence"})).toBeVisible();
+  await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
   await expect(page.getByRole("button", {name: "Record"})).toBeEnabled();
 
   await page.reload();
