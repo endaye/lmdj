@@ -354,7 +354,8 @@ class ProjectStore {
  private:
   struct PerformanceOwnerLocks;
 
-  foundation::Result<void> hold_performance_owner_lock(
+  foundation::Result<std::unique_ptr<PerformanceOwnerLock>>
+  acquire_performance_owner_lock_file(
       const std::filesystem::path& bundle,
       const foundation::SequenceSessionId& session_id);
   void release_performance_owner_lock(

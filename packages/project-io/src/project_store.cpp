@@ -3827,30 +3827,6 @@ ProjectStore::ProjectStore(std::shared_ptr<ProjectStoragePlatform> platform)
       performance_owner_locks_(
           std::make_shared<PerformanceOwnerLocks>()) {}
 
-foundation::Result<void> ProjectStore::hold_performance_owner_lock(
-    const std::filesystem::path& bundle,
-    const foundation::SequenceSessionId& session_id) {
-  const auto key = bundle.lexically_normal().generic_string();
-  std::lock_guard lock(performance_owner_locks_->mutex);
-  const auto existing = performance_owner_locks_->entries.find(key);
-  if (existing != performance_owner_locks_->entries.end()) {
-    return existing->second.session_id == session_id
-               ? foundation::Result<void>::success()
-               : foundation::Result<void>::failure(
-                     recording_session_active_error(
-                         existing->second.session_id));
-  }
-  auto acquired = acquire_performance_owner_lock(bundle, session_id);
-  if (!acquired.has_value()) {
-    return foundation::Result<void>::failure(acquired.error());
-  }
-  performance_owner_locks_->entries.emplace(
-      key,
-      PerformanceOwnerLocks::Entry{
-          session_id, std::move(acquired.value())});
-  return foundation::Result<void>::success();
-}
-
 void ProjectStore::release_performance_owner_lock(
     const std::filesystem::path& bundle) noexcept {
   try {
@@ -3862,7 +3838,7 @@ void ProjectStore::release_performance_owner_lock(
 }
 
 foundation::Result<std::unique_ptr<PerformanceOwnerLock>>
-ProjectStore::acquire_performance_owner_lock(
+ProjectStore::acquire_performance_owner_lock_file(
     const std::filesystem::path& bundle,
     const foundation::SequenceSessionId& session_id) {
   if (!domain::is_valid_uuid(session_id.value())) {
@@ -3921,6 +3897,19 @@ ProjectStore::acquire_performance_owner_lock(
   auto owner_lock = std::unique_ptr<PerformanceOwnerLock>{
       new PerformanceOwnerLock(
           std::make_unique<PerformanceOwnerLock::Impl>(descriptor))};
+  return foundation::Result<std::unique_ptr<PerformanceOwnerLock>>::success(
+      std::move(owner_lock));
+}
+
+foundation::Result<std::unique_ptr<PerformanceOwnerLock>>
+ProjectStore::acquire_performance_owner_lock(
+    const std::filesystem::path& bundle,
+    const foundation::SequenceSessionId& session_id) {
+  auto acquired = acquire_performance_owner_lock_file(bundle, session_id);
+  if (!acquired.has_value()) {
+    return acquired;
+  }
+  auto owner_lock = std::move(acquired.value());
   auto lease = platform_->acquire_writer(bundle);
   if (!lease.has_value()) {
     return foundation::Result<
@@ -4303,7 +4292,7 @@ ProjectStore::begin_performance_draft(
         "Performance draft begin identity is invalid",
     });
   }
-  std::unique_ptr<PerformanceOwnerLock> reattach_owner_lock;
+  std::unique_ptr<PerformanceOwnerLock> owner_lock;
   bool already_attached = false;
   {
     SequenceJournal journal{platform_};
@@ -4335,7 +4324,7 @@ ProjectStore::begin_performance_draft(
             return foundation::Result<PerformanceLifecycleReceipt>::failure(
                 acquired.error());
           }
-          reattach_owner_lock = std::move(acquired.value());
+          owner_lock = std::move(acquired.value());
           auto closed = journal.close_performance_transients_for_owner_loss(
               bundle, request.session_id);
           if (!closed.has_value()) {
@@ -4394,6 +4383,23 @@ ProjectStore::begin_performance_draft(
   if (!valid.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         valid.error());
+  }
+  if (owner_lock == nullptr && !already_attached) {
+    // Publish no active Journal until its owner is protected. In particular,
+    // keep this lock across operation.reset(): a contender must not mistake
+    // the just-committed draft for owner-loss recovery during that handoff.
+    auto directory = platform_->ensure_directory(bundle / "recovery/active");
+    if (!directory.has_value()) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(
+          directory.error());
+    }
+    auto acquired = acquire_performance_owner_lock_file(
+        bundle, request.session_id);
+    if (!acquired.has_value()) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(
+          acquired.error());
+    }
+    owner_lock = std::move(acquired.value());
   }
   SequenceJournal journal{platform_};
   auto active = journal.read_active_performance(bundle);
@@ -4466,23 +4472,17 @@ ProjectStore::begin_performance_draft(
       outcome.value().replayed,
   };
   operation.reset();
-  if (reattach_owner_lock != nullptr) {
+  if (owner_lock != nullptr) {
     const auto key = bundle.lexically_normal().generic_string();
     std::lock_guard lock(performance_owner_locks_->mutex);
     const auto [existing, inserted] =
         performance_owner_locks_->entries.emplace(
             key,
             PerformanceOwnerLocks::Entry{
-                request.session_id, std::move(reattach_owner_lock)});
+                request.session_id, std::move(owner_lock)});
     if (!inserted && existing->second.session_id != request.session_id) {
       return foundation::Result<PerformanceLifecycleReceipt>::failure(
           recording_session_active_error(existing->second.session_id));
-    }
-  } else if (!already_attached) {
-    auto held = hold_performance_owner_lock(bundle, request.session_id);
-    if (!held.has_value()) {
-      return foundation::Result<PerformanceLifecycleReceipt>::failure(
-          held.error());
     }
   }
   return foundation::Result<PerformanceLifecycleReceipt>::success(receipt);
