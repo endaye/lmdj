@@ -479,8 +479,9 @@ class EntryPointTest(unittest.TestCase):
         self.assertEqual(seen["node"], NODE)
         self.assertEqual(seen["wrangler"], WRANGLER)
 
-    def browser_run(self, *, stdout, returncode=0, environment=None):
-        check = cloudflare_deploy.real_browser("web-runtime-host", self.root)
+    def browser_run(self, *, stdout, returncode=0, environment=None,
+                    host="web-runtime-host"):
+        check = cloudflare_deploy.real_browser(host, self.root)
         result = type("R", (), {"returncode": returncode, "stdout": stdout,
                                 "stderr": ""})()
         with patch.object(cloudflare_deploy.subprocess, "run",
@@ -519,6 +520,16 @@ class EntryPointTest(unittest.TestCase):
         self.assertEqual(environment["LMDJ_WEB_HOST_EXPECTED_PRODUCT_BUILD"],
                          "1.0.61.0")
         self.assertEqual(environment["LMDJ_WEB_HOST_EXPECTED_VERSION"], "4.3.1")
+
+    def test_the_creator_browser_environment_names_its_own_prefix(self):
+        passed, environment = self.browser_run(
+            host="creator-web", stdout=self.report(),
+            environment={"PATH": "/usr/bin"})
+        self.assertTrue(passed)
+        self.assertEqual(environment["LMDJ_CREATOR_WEB_EXTERNAL_SERVER"], "1")
+        self.assertEqual(environment["LMDJ_CREATOR_WEB_EXPECTED_PRODUCT_BUILD"],
+                         "1.0.61.0")
+        self.assertEqual(environment["LMDJ_CREATOR_WEB_EXPECTED_VERSION"], "4.3.1")
 
     def test_a_clean_exit_that_ran_nothing_is_not_a_pass(self):
         # A project or spec filter matching nothing exits 0; writing that into
