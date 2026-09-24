@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-09-22
     occurrence: https://github.com/endaye/lmdj/issues/1570
     observed_by: Codex (GPT-6)
+  - date: 2026-09-24
+    occurrence: https://github.com/endaye/lmdj/pull/1607
+    observed_by: Codex (GPT-6)
 exit: none
 ---
 
@@ -46,6 +49,15 @@ The unresolved Linux signature stays open under
 [#1570](https://github.com/endaye/lmdj/issues/1570), which tracks the WebKit
 navigation hangs in the `web_toolchain` lane.
 
+A complete local Project I/O WebKit run on the Linux x64 netcup host reproduced
+the remaining r2361 signature on 2026-09-24. A shared `DEBUG_FILE` captured
+other workers' protocol packets and was rewritten after the failed case; its
+`Playwright.navigate` reply cannot be attributed to the hanging navigation.
+An idle `/proc` snapshot and trace without a frame commit still do not prove
+whether that browser received the command. Capture the entire worker stream
+through a single sidecar and retain a failure-only timeline instead of relying
+on a shared, worker-owned raw protocol file.
+
 ## Retracted attribution: a page whose document is wedged
 
 The #1578 hypothesis attributed the Linux hang to reusing a page whose Wasm
@@ -74,5 +86,6 @@ The conformance suite now directly checks that lifecycle boundary.
 Do not raise timeouts or retry for green. This entry remains open under the
 existing escalation [#1570](https://github.com/endaye/lmdj/issues/1570): neither
 an idle process snapshot nor a passing macOS run resolves the remaining Linux
-navigation signature. There is no deterministic reproduction of that signature
-yet, so `exit: none` remains accurate.
+navigation signature. The full suite reproduced it once locally, while its
+preceding run and a 120-page cycle probe passed; there is no deterministic
+reproduction of the signature yet, so `exit: none` remains accurate.
