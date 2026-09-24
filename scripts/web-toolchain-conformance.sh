@@ -222,10 +222,19 @@ PY
 run_proof_specs() {
   local slot="$1"
   shift
-  LMDJ_WEB_RESULTS_SLOT="$slot" \
-    LMDJ_WEB_HOST_EXTERNAL_SERVER=1 \
-    LMDJ_WEB_HOST_BASE_URL="$proof_server_base_url" \
-    npm --prefix "$web_test_root" test -- "$@"
+  if [[ "$slot" == "project-io-webkit" ]]; then
+    LMDJ_WEB_RESULTS_SLOT="$slot" \
+      LMDJ_WEB_HOST_EXTERNAL_SERVER=1 \
+      LMDJ_WEB_HOST_BASE_URL="$proof_server_base_url" \
+      node "$web_test_root/project_io/webkit_protocol_timeline.mjs" \
+        "$web_test_root/test-results/$slot/webkit-protocol-timeline.jsonl" \
+        npm --prefix "$web_test_root" test -- "$@"
+  else
+    LMDJ_WEB_RESULTS_SLOT="$slot" \
+      LMDJ_WEB_HOST_EXTERNAL_SERVER=1 \
+      LMDJ_WEB_HOST_BASE_URL="$proof_server_base_url" \
+      npm --prefix "$web_test_root" test -- "$@"
+  fi
 }
 
 clean_fixture() {
