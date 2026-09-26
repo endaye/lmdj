@@ -57,7 +57,8 @@ so the exit is the host-level toolcache repair tracked in
 
 The 2026-09-26 repair selects `/usr/bin/python3` for Linux Core (including
 package, ASan, coverage, TSan and benchmark), Deploy contract and release-audit.
-`scripts/ci/host/select-system-python.sh` requires Python 3.11+ and verifies
+The workflow-owned `Select standalone system Python` step requires Python 3.11+
+and verifies
 both startup by name and a `sys.executable` child without loader variables
 before publishing the job-local Python PATH. Failure requires host repair,
 not an expanded production environment allowlist. The exit test exercises

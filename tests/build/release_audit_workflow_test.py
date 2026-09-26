@@ -61,7 +61,7 @@ class ReleaseAuditWorkflowTest(unittest.TestCase):
         source = self.source()
         target_validation = (ROOT / "tools/release/target_validation.py").read_text(encoding="utf-8")
         self.assertIn('"python3", "scripts/version.py", "verify"', target_validation)
-        self.assertIn("run: bash scripts/ci/host/select-system-python.sh", source)
+        self.assertIn("name: Select standalone system Python", source)
         self.assertIn("uses: actions/setup-node@", source)
         self.assertIn('node-version: "26"', source)
 

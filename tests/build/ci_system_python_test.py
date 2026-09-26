@@ -4,18 +4,40 @@ from pathlib import Path
 import json
 import os
 import re
+import shlex
 import subprocess
 import tempfile
+import textwrap
 import unittest
 
 from release_fixture_interpreter import fixture_python
 
 ROOT = Path(__file__).resolve().parents[2]
-SELECTOR = ROOT / "scripts/ci/host/select-system-python.sh"
-SELECT = "run: bash scripts/ci/host/select-system-python.sh"
+SELECT = "name: Select standalone system Python"
+
+
+def selector_script(source):
+    match = re.search(
+        r"name: Select standalone system Python\n        shell: bash\n        run: \|\n"
+        r"((?:          [^\n]*\n|\n)+)", source,
+    )
+    if match is None:
+        raise AssertionError("why: system Python prerequisite is missing; remedy: restore the workflow-owned shell step")
+    return textwrap.dedent(match[1]).rstrip() + "\n"
 
 
 class SystemPythonTest(unittest.TestCase):
+    def run_selector(self, interpreter, env):
+        source = (ROOT / ".github/workflows/ci.yml").read_text()
+        script = selector_script(source)
+        # Replace only the host-specific executable, leaving the actual startup
+        # probe and PATH publication intact. No candidate checkout is present.
+        self.assertEqual(script.count('python_executable="/usr/bin/python3"'), 1)
+        script = script.replace('python_executable="/usr/bin/python3"',
+                                "python_executable=" + shlex.quote(interpreter))
+        return subprocess.run(["bash", "-s"], input=script, env=env,
+                              cwd=env["RUNNER_TEMP"], capture_output=True, text=True)
+
     def test_selected_names_and_sys_executable_start_without_parent_environment(self):
         with tempfile.TemporaryDirectory(prefix="system python ") as directory:
             root = Path(directory)
@@ -24,10 +46,8 @@ class SystemPythonTest(unittest.TestCase):
                    "GITHUB_PATH": str(github_path),
                    "PYTHONHOME": str(root / "invalid-python-home"),
                    "LD_LIBRARY_PATH": str(root / "irrelevant-loader-path")}
-            result = subprocess.run(
-                ["bash", str(SELECTOR), fixture_python()],
-                env=env, capture_output=True, text=True, check=True,
-            )
+            result = self.run_selector(fixture_python(), env)
+            self.assertEqual(result.returncode, 0, result.stderr)
             observation = json.loads(result.stdout)
             self.assertEqual(observation["python"], os.path.realpath(fixture_python()))
             self.assertEqual(observation["version"], observation["sanitized_child"])
@@ -58,14 +78,21 @@ class SystemPythonTest(unittest.TestCase):
                    "GITHUB_PATH": str(github_path), "LD_LIBRARY_PATH": directory}
             control = subprocess.run([str(dependent)], env=env, capture_output=True)
             self.assertEqual(control.returncode, 0)
-            result = subprocess.run(["bash", str(SELECTOR), str(dependent)],
-                                    env=env, capture_output=True, text=True)
+            result = self.run_selector(str(dependent), env)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("libpython fixture: loader variable missing", result.stderr)
             self.assertIn("why: system Python cannot run", result.stderr)
             self.assertIn("remedy: repair the host Python installation", result.stderr)
             self.assertFalse(github_path.exists())
             self.assertEqual(list(root.glob("lmdj-system-python.*")), [])
+
+    def test_all_workflows_use_the_same_verified_shell_probe(self):
+        expected = selector_script((ROOT / ".github/workflows/ci.yml").read_text())
+        for name in ("core-nightly.yml", "ci-self-hosted-core-benchmark.yml", "release-audit.yml"):
+            with self.subTest(workflow=name):
+                actual = selector_script((ROOT / ".github/workflows" / name).read_text())
+                self.assertEqual(actual, expected,
+                                 "why: system Python prerequisites differ; remedy: retain the same sanitized startup probe in every workflow")
 
     def test_core_and_release_consumers_select_system_python_before_execution(self):
         consumers = {
@@ -95,6 +122,9 @@ class SystemPythonTest(unittest.TestCase):
                     self.assertIsNotNone(match, f"missing job {job}")
                     directives = "\n".join(line for line in match[0].splitlines()
                                            if not line.lstrip().startswith("#"))
+                    if "- *standalone-python" in directives:
+                        self.assertIn("- &standalone-python\n        " + SELECT, source)
+                        directives = directives.replace("- *standalone-python", SELECT)
                     message = ("why: Linux Core/release checks require a loader-independent interpreter; "
                                "remedy: select system Python before running the job's Python consumers")
                     self.assertIn(SELECT, directives, message)

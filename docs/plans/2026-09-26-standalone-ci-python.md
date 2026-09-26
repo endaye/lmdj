@@ -14,9 +14,8 @@ coverage, TSan and benchmark consumers of the same prerequisite.
 
 ## Task and declared files
 
-One control-plane Task, one Conventional Commit:
+One control-plane Task; the PR is integrated as one Conventional Commit:
 
-- `scripts/ci/host/select-system-python.sh`
 - `.github/workflows/ci.yml`
 - `.github/workflows/core-nightly.yml`
 - `.github/workflows/ci-self-hosted-core-benchmark.yml`
@@ -30,9 +29,11 @@ One control-plane Task, one Conventional Commit:
 The selector defaults to `/usr/bin/python3`, requires Python 3.11+, and
 probes startup and a nested `sys.executable` child with no inherited loader
 environment. A job-local directory exposes only `python` and `python3`,
-preserving the rest of PATH and later pinned Node setup. An explicit absolute
-interpreter argument supports isolated prerequisite tests. It installs nothing
-and restarts no runner. Checkout's existing clean behavior discards old CMake
+preserving the rest of PATH and later pinned Node setup. The probe lives in the
+workflow control revision (a YAML anchor reuses the CI step), so historical
+candidate checkouts need no newly added script. Tests execute the actual shell
+block and substitute only the host interpreter path for portable fixtures. It
+installs nothing and restarts no runner. Checkout's existing clean behavior discards old CMake
 build caches before the interpreter is selected.
 
 The prerequisite catches an interpreter which cannot start under the production
