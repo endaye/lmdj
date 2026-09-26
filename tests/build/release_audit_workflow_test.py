@@ -19,7 +19,6 @@ from tools.release.target_validation import validate_current_product_snapshot
 WORKFLOW = ROOT / ".github/workflows/release-audit.yml"
 ACTION_PINS = {
     "actions/checkout": ("de0fac2e4500dabe0009e67214ff5f5447ce83dd", "v6.0.2"),
-    "actions/setup-python": ("a309ff8b426b58ec0e2a45f0f869d46889d02405", "v6.2.0"),
     "actions/setup-node": ("249970729cb0ef3589644e2896645e5dc5ba9c38", "v6.5.0"),
     "actions/upload-artifact": ("b7c566a772e6b6bfb58ed0dc250532a479d7789f", "v6.0.0"),
 }
@@ -62,8 +61,7 @@ class ReleaseAuditWorkflowTest(unittest.TestCase):
         source = self.source()
         target_validation = (ROOT / "tools/release/target_validation.py").read_text(encoding="utf-8")
         self.assertIn('"python3", "scripts/version.py", "verify"', target_validation)
-        self.assertIn("uses: actions/setup-python@", source)
-        self.assertIn('python-version: "3.11"', source)
+        self.assertIn("run: bash scripts/ci/host/select-system-python.sh", source)
         self.assertIn("uses: actions/setup-node@", source)
         self.assertIn('node-version: "26"', source)
 
@@ -118,7 +116,7 @@ class ReleaseAuditWorkflowTest(unittest.TestCase):
     def test_actions_are_exactly_pinned_and_checkout_has_no_credentials(self) -> None:
         source = self.source()
         uses_lines = [line.strip() for line in source.splitlines() if "uses:" in line]
-        self.assertEqual(len(uses_lines), 4)
+        self.assertEqual(len(uses_lines), 3)
         for line in uses_lines:
             match = re.fullmatch(
                 r"-?\s*uses: (actions/[a-z-]+)@([0-9a-f]{40}) # (v[0-9]+(?:\.[0-9]+){1,2})",

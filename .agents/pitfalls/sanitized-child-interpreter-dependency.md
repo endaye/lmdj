@@ -1,7 +1,7 @@
 ---
 id: sanitized-child-interpreter-dependency
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/actions/runs/34272435905
@@ -9,7 +9,10 @@ recurrences:
   - date: 2026-09-19
     occurrence: https://github.com/endaye/lmdj/actions/runs/35419357786
     observed_by: Claude Code (Fable 5.1)
-exit: none
+  - date: 2026-09-26
+    occurrence: https://github.com/endaye/lmdj/issues/1551
+    observed_by: Codex
+exit: gate:tests/build/ci_system_python_test.py
 escalation: https://github.com/endaye/lmdj/issues/1551
 ---
 
@@ -52,6 +55,14 @@ only; `release-audit.yml` runs the same production spawns on the same runners,
 so the exit is the host-level toolcache repair tracked in
 [#1551](https://github.com/endaye/lmdj/issues/1551).
 
-`exit: none`: the focused test helper verifies this suite's child interpreter,
-not every subprocess fixture in the repository. Remote acceptance of the repair
-still needs the next exact main ci_contract execution.
+The 2026-09-26 repair selects `/usr/bin/python3` for Linux Core (including
+package, ASan, coverage, TSan and benchmark), Deploy contract and release-audit.
+`scripts/ci/host/select-system-python.sh` requires Python 3.11+ and verifies
+both startup by name and a `sys.executable` child without loader variables
+before publishing the job-local Python PATH. Failure requires host repair,
+not an expanded production environment allowlist. The exit test exercises
+successful isolated spawns, rejects a loader-dependent interpreter, and pins
+all eight consuming jobs to the prerequisite. Existing fixture probes remain
+necessary for other environments. Actual post-change run acceptance is retained
+on #1551 separately; absorption identifies the enforcing mechanism and does not
+claim those remote jobs have already passed.

@@ -71,9 +71,8 @@ jobs:
           EXPECTED_TARGET: ${{ inputs.target_revision }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - run: git lfs checkout -- tests/fixtures
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
+      - name: Select standalone system Python
+        run: bash scripts/ci/host/select-system-python.sh
       - run: python3 tests/fixtures/audio/make_fixtures.py
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
