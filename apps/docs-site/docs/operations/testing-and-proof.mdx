@@ -145,6 +145,15 @@ findings 处置和未覆盖范围；处理 thread 不等于未经检查自动清
 这不是模型对 merge 的自动裁决，clean review 不应产生阻塞用的 inline thread。
 实际 merge SHA、review 证据和动作授权分别核验；空 check 列表和 NEUTRAL 不是通过。
 
+Linux Core（含 package、ASan、coverage、TSan 和 benchmark）、Deploy contract 与
+release-audit 通过 workflow 内的 `Select standalone system Python` 步骤选择主机
+`/usr/bin/python3`（3.11+）。入口先用清空环境后的 Python 启动，再通过
+`sys.executable` 启动仅保留 PATH 的子进程；通过后才把任务临时目录中的
+`python` / `python3` 加入 PATH。这样 release validator 的隔离子进程不依赖
+setup-python toolcache 的 `LD_LIBRARY_PATH`。失败需修复主机 Python，不能把 loader
+变量放回子进程。选择器不安装软件、不重启 runner，也不覆盖其他工具的 PATH。前置检查随 workflow
+控制修订提供，不依赖候选源码存在新脚本，因此历史候选仍能接受验证。
+
 `pr-contract.yml` 是 PR 的 advisory contract：只有非 Draft、同仓库的 PR 才会在受信
 self-hosted `ci-general` 上运行。它在每个 job checkout 并核验事件提供的完整 head SHA；
 Change Scope 按确定性规则选择 `ci_contract` 与 `docs_static`，AI 只能增加建议，不能缩小
