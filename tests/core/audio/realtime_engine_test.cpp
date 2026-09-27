@@ -2142,6 +2142,197 @@ void sparse_high_voice_survives_lower_completion_and_slot_reuse() {
   engine.stop();
 }
 
+// #1176: make slot 127 the only survivor without private Engine access.
+// Each caller selects one transition; fillers end on the first rendered frame.
+struct SparseVoiceFixture {
+  RealtimeEngine engine;
+  std::array<float, 512> sample{};
+
+  explicit SparseVoiceFixture(TriggerMode mode = TriggerMode::loop_gate) {
+    for (std::size_t frame = 0; frame < sample.size(); ++frame) {
+      sample[frame] = static_cast<float>(static_cast<int>(frame % 31) - 15) / 64.0F;
+    }
+    auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+    const std::array<float, 1> silence{};
+    LMDJ_CHECK(bank.set_sample(0, silence).has_value());
+    LMDJ_CHECK(bank.set_sample(1, sample,
+        ResolvedPlayback{0, 512, mode, 1.0F, false}).has_value());
+    LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) == PublishResult::accepted);
+  }
+
+  void start_with_fillers() {
+    LMDJ_CHECK(engine.start().has_value());
+    for (std::uint64_t sequence = 1; sequence < 128; ++sequence) {
+      LMDJ_CHECK(engine.enqueue(TriggerEvent{sequence, 0, 127}) == EnqueueResult::accepted);
+    }
+  }
+
+  void press_high_voice() {
+    start_with_fillers();
+    LMDJ_CHECK(engine.enqueue_control(control(128, 1, PadControlKind::press, 127)) ==
+               EnqueueResult::accepted);
+    render_frames(engine, kRampFrames);
+    LMDJ_CHECK(engine.telemetry().active_voices == 1);
+  }
+};
+
+void sparse_high_voice_preserves_every_pcm_frame_through_natural_end() {
+  SparseVoiceFixture f{TriggerMode::one_shot};
+  f.start_with_fillers();
+  LMDJ_CHECK(f.engine.enqueue(TriggerEvent{128, 1, 127}) == EnqueueResult::accepted);
+  std::array<float, 513> left{}, right{}, expected{};
+  // Independently specified envelope over the entire sample, including both
+  // ramps and the first silent frame after completion. No checksum sampling.
+  for (std::uint32_t frame = 0; frame < f.sample.size(); ++frame) {
+    const float attack = frame < kRampFrames ? ramp_part(frame) : 1.0F;
+    const float boundary = 512 - frame < kRampFrames ? ramp_part(512 - frame) : 1.0F;
+    expected[frame] = f.sample[frame] * (attack * boundary);
+  }
+  f.engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left == expected);
+  LMDJ_CHECK(right == expected);
+  LMDJ_CHECK(f.engine.telemetry().active_voices == 0);
+}
+
+void interior_hole_reuse_preserves_first_free_ascending_mix_order() {
+  RealtimeEngine engine;
+  const std::array<float, 1> silence{};
+  LMDJ_CHECK(engine.load_sample(0, silence).has_value());
+  // Rounding distinguishes slot order: (0.5 + 2^-25) - 0.5 + 2^-26
+  // is 2^-26, whereas appending the reused voice gives 3 * 2^-26.
+  for (std::uint8_t slot = 1; slot <= 4; ++slot) {
+    std::array<float, 512> sample{};
+    sample.fill(std::array{0.5F, -0.5F, 0x1p-26F, 0x1p-25F}[slot - 1]);
+    LMDJ_CHECK(engine.load_sample(slot, sample).has_value());
+  }
+  LMDJ_CHECK(engine.start().has_value());
+  for (const auto event : std::array{TriggerEvent{1, 1, 127}, TriggerEvent{2, 0, 127},
+                                   TriggerEvent{3, 2, 127}, TriggerEvent{4, 3, 127}}) {
+    LMDJ_CHECK(engine.enqueue(event) == EnqueueResult::accepted);
+  }
+  render_frames(engine, kRampFrames);
+  LMDJ_CHECK(engine.telemetry().active_voices == 3);
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{5, 4, 127}) == EnqueueResult::accepted);
+  render_frames(engine, kRampFrames);
+  std::array<float, 32> left{}, right{}, expected{};
+  expected.fill(0x1p-26F);
+  engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left == expected);
+  LMDJ_CHECK(right == expected);
+}
+
+void sparse_high_voice_stop_renders_the_complete_release_tail(PadControlKind kind) {
+  SparseVoiceFixture f;
+  f.press_high_voice();
+  LMDJ_CHECK(f.engine.enqueue_control(control(129, 1, kind)) == EnqueueResult::accepted);
+  std::array<float, kRampFrames + 1> left{}, right{}, expected{};
+  for (std::uint32_t frame = 0; frame < kRampFrames; ++frame) {
+    expected[frame] = f.sample[kRampFrames + frame] *
+        (frame == 0 ? 1.0F : ramp_part(kRampFrames - frame));
+  }
+  f.engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left == expected);
+  LMDJ_CHECK(right == expected);
+  LMDJ_CHECK(f.engine.telemetry().active_voices == 0);
+}
+
+void sparse_high_releasing_voice_is_choked_by_second_stop() {
+  SparseVoiceFixture f;
+  f.press_high_voice();
+  LMDJ_CHECK(f.engine.enqueue_control(control(129, 1, PadControlKind::stop_slot)) ==
+             EnqueueResult::accepted);
+  render_frames(f.engine, 1);
+  LMDJ_CHECK(f.engine.enqueue_control(control(130, 1, PadControlKind::stop_slot)) ==
+             EnqueueResult::accepted);
+  std::array<float, 32> left{}, right{}, silence{};
+  f.engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left == silence);
+  LMDJ_CHECK(right == silence);
+  LMDJ_CHECK(f.engine.telemetry().active_voices == 0);
+}
+
+void sparse_high_preview_uses_its_snapshotted_gain() {
+  SparseVoiceFixture f;
+  f.start_with_fillers();
+  LMDJ_CHECK(f.engine.enqueue_control(control(128, 1, PadControlKind::preview_set, 0,
+      ResolvedPlayback{0, 512, TriggerMode::loop_gate, 0.5F, false})) == EnqueueResult::accepted);
+  LMDJ_CHECK(f.engine.enqueue_control(control(129, 1, PadControlKind::press, 127)) == EnqueueResult::accepted);
+  LMDJ_CHECK(f.engine.enqueue_control(control(130, 1, PadControlKind::preview_clear)) == EnqueueResult::accepted);
+  std::array<float, 128> left{}, right{}, expected{};
+  for (std::uint32_t frame = 0; frame < expected.size(); ++frame) {
+    expected[frame] = f.sample[frame] * 0.5F * (frame < kRampFrames ? ramp_part(frame) : 1.0F);
+  }
+  f.engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left == expected);
+  LMDJ_CHECK(right == expected);
+}
+
+void sparse_high_audition_releases_all_the_way_to_silence() {
+  SparseVoiceFixture f;
+  auto audition = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+  LMDJ_CHECK(audition.set_sample(lmdj::audio::kAuditionSampleSlot, f.sample).has_value());
+  LMDJ_CHECK(f.engine.publish_audition_bank(std::move(audition)) == PublishResult::accepted);
+  f.start_with_fillers();
+  LMDJ_CHECK(f.engine.enqueue_control(control(128, 0, PadControlKind::audition_start, 127)) == EnqueueResult::accepted);
+  render_frames(f.engine, kRampFrames);
+  LMDJ_CHECK(f.engine.telemetry().active_voices == 1);
+  LMDJ_CHECK(f.engine.enqueue_control(control(129, 0, PadControlKind::audition_stop)) == EnqueueResult::accepted);
+  std::array<float, kRampFrames + 1> left{}, right{}, expected{};
+  for (std::uint32_t frame = 0; frame < kRampFrames; ++frame) {
+    expected[frame] = f.sample[kRampFrames + frame] *
+        (frame == 0 ? 1.0F : ramp_part(kRampFrames - frame));
+  }
+  f.engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left == expected);
+  LMDJ_CHECK(right == expected);
+  LMDJ_CHECK(f.engine.telemetry().active_voices == 0);
+}
+
+void sparse_high_voice_stop_then_restart_has_no_stale_pcm() {
+  SparseVoiceFixture f;
+  f.press_high_voice();
+  f.engine.stop();
+  std::array<float, 32> left{}, right{}, silence{};
+  f.engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left == silence);
+  LMDJ_CHECK(right == silence);
+  LMDJ_CHECK(f.engine.start().has_value());
+  f.engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left == silence);
+  LMDJ_CHECK(right == silence);
+  LMDJ_CHECK(f.engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(f.engine.enqueue_control(control(1, 1, PadControlKind::press, 127)) == EnqueueResult::accepted);
+  std::array<float, 32> expected{};
+  for (std::uint32_t frame = 0; frame < expected.size(); ++frame) {
+    expected[frame] = f.sample[frame] * ramp_part(frame);
+  }
+  f.engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left == expected);
+  LMDJ_CHECK(right == expected);
+}
+
+void sparse_high_pattern_voice_obeys_scheduled_release() {
+  SparseVoiceFixture f;
+  auto snapshot = pattern_snapshot(kPatternA, {0, 1}, 127, 120, -8192);
+  snapshot.events[0].duration_tick = 1;
+  auto pattern = PreparedPatternView::from_snapshot(snapshot);
+  LMDJ_CHECK(pattern.has_value());
+  const auto release = pattern.value().events()[0].release_frame;
+  LMDJ_CHECK(f.engine.publish_pattern_view(std::move(pattern.value())).result == PatternPublishResult::accepted);
+  f.start_with_fillers();
+  // Pattern admission runs after the 127 live fillers, before they complete.
+  std::vector<float> left(release + kRampFrames + 1), right(left.size()), expected(left.size());
+  for (std::uint32_t frame = 0; frame < release + kRampFrames; ++frame) {
+    float envelope = frame < kRampFrames ? ramp_part(frame) : 1.0F;
+    if (frame > release) envelope *= ramp_part(kRampFrames - (frame - release));
+    expected[frame] = -0.25F * envelope;
+  }
+  f.engine.render(left.data(), right.data(), static_cast<std::uint32_t>(left.size()));
+  LMDJ_CHECK(left == expected);
+  LMDJ_CHECK(right == expected);
+  LMDJ_CHECK(f.engine.telemetry().active_voices == 0);
+}
+
 void publishes_ordered_mixed_outcomes_at_128_frame_boundaries() {
   RealtimeEngine engine;
   const std::array<float, 256> sample{};
@@ -4612,6 +4803,16 @@ int main() {
   reports_queue_capacity_and_drops();
   caps_simultaneous_voices_and_mixes_each_admitted_voice();
   sparse_high_voice_survives_lower_completion_and_slot_reuse();
+  sparse_high_voice_preserves_every_pcm_frame_through_natural_end();
+  interior_hole_reuse_preserves_first_free_ascending_mix_order();
+  sparse_high_voice_stop_renders_the_complete_release_tail(PadControlKind::release);
+  sparse_high_voice_stop_renders_the_complete_release_tail(PadControlKind::stop_slot);
+  sparse_high_voice_stop_renders_the_complete_release_tail(PadControlKind::stop_all);
+  sparse_high_releasing_voice_is_choked_by_second_stop();
+  sparse_high_preview_uses_its_snapshotted_gain();
+  sparse_high_audition_releases_all_the_way_to_silence();
+  sparse_high_pattern_voice_obeys_scheduled_release();
+  sparse_high_voice_stop_then_restart_has_no_stale_pcm();
   publishes_ordered_mixed_outcomes_at_128_frame_boundaries();
   outcome_ring_reports_capacity_drop_and_restart_resets_it();
   completes_a_sample_across_callback_blocks();

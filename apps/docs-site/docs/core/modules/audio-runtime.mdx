@@ -160,8 +160,22 @@ Master FX prepare；嵌入 Engine 的固定 FX 对象仍计入固定成本。
 不是活跃 Voice 数量。中间空洞保留，仍按槽号升序混音、按首个空槽准入，
 128 Voice 容量不变。live 与 Pattern 启动扩展上界，完成或取消收缩尾部空槽，
 静止 start/stop 重置；不增加 callback 分配、锁或跨线程共享状态。
-这项 source 优化及其 Engine 布局变化与 M1/M2 一同等待后续身份分配和消费者
-重编；减少扫描工作不证明 Cardputer CPU 余量已通过，仍需原 R2 目标复测。
+这项优化最初改变 Engine 私有布局，消费者须一致重编；当前集成身份由上方
+Build Identity 从清单生成。
+
+扫描修复的实际合入源码 `6d4c68042eaf53bbfdc5f16c2398694fbf1c7dfb` 已完成
+同素材、同频率、同阈值的两轮真实 I2S 复测，各 100 次装载/播放/停止/卸载。
+保守服务最大值为 1876/1874 µs，低于原 4266.666… µs 限额；原 4284 µs
+失败保留。完整源码闭包、native reference、目标 ABI 预算与日志见
+[R2 复测记录](https://github.com/endaye/lmdj/blob/main/docs/research/2026-09-10-cardputer-music-capacity-retest.md)。
+该结果绑定上述历史源码，不代表当前版本或任意 128-voice 负载的目标性能。
+
+`audio.realtime_engine` 逐帧核对高位声部的双声道 PCM、自然结束、release、
+stop-slot/stop-all、再次 stop 截断、preview、audition、Pattern 定时释放及
+stop/restart；中间空洞的非结合浮点样本锁定 first-free 分配和升序混音。
+原实现自动评审失败仍保留，后续独立评审已由 owner 采纳；历史补充评审发生在
+合入之后，不冒称原合入前门禁通过。完整 Host、30 分钟、物理 underrun 和
+模拟输出时延仍须各自验收。
 
 默认 Engine 构造的控制/结果/Voice-state 容量保持 `1024/4096/10240`；旧无参数
 `ReceiptBoundedVoiceStates` 构造保持 `1024/4096/2176`。新增显式额度 N 构造
