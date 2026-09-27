@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import time
 import stat
 import subprocess
 import tempfile
@@ -35,6 +36,33 @@ def _checks(scope):
     # to the Task base so whitespace in the introduced commit is actually tested.
     return tuple((label, tuple(scope["base_revision"] if arg == "{base_revision}" else arg for arg in vector), timeout)
                  for label, vector, timeout in CHECKS)
+
+
+
+# The command group inherits the journal's writer descriptor, which is what
+# keeps the lock while a command is alive. `child.wait()` reaps only the direct
+# child; a grandchild killed with it dies asynchronously, and until it does the
+# descriptor — and the lock — survive. The caller that raises the budget error
+# is usually followed immediately by another attempt, which then failed with
+# "journal is unsafe, unavailable or owned by another writer" instead of the
+# honest refusal to replay an unknown command. Under a loaded runner that race
+# reached CI (Deploy Contract, batch run 35544024211). Wait, bounded, for the
+# killed group to leave; a group that outlives the wait is reported as the
+# budget failure it is, never silently retried.
+GROUP_EXIT_TIMEOUT = 30.0
+GROUP_EXIT_POLL = 0.01
+
+
+def _await_group_exit(pid, *, timeout=GROUP_EXIT_TIMEOUT, clock=time.monotonic, sleep=time.sleep):
+    deadline = clock() + timeout
+    while True:
+        try:
+            os.killpg(pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return True
+        if clock() >= deadline:
+            return False
+        sleep(GROUP_EXIT_POLL)
 
 
 class TaskVerificationError(ValueError):
@@ -243,6 +271,7 @@ class PublicationTaskVerifier:
                     except subprocess.TimeoutExpired:
                         os.killpg(child.pid, signal.SIGKILL)
                         child.wait()
+                        _await_group_exit(child.pid)
                         raise TaskVerificationError("why: Task command exceeded its execution budget; remedy: retain the unfinished attempt and diagnose it; no automatic rerun") from None
                 output.seek(0)
                 hasher, length = sha256(), 0
