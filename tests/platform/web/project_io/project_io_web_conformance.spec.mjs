@@ -12,6 +12,7 @@ import {
   STORAGE_CONDITION_FAULTS,
   replacementReachedCommit,
 } from "./project_io_web_faults.mjs";
+import {gotoRetryingCancelledFirstLoad} from "./webkit_cancelled_navigation.mjs";
 
 function canonicalJson(value) {
   if (Array.isArray(value)) {
@@ -120,7 +121,7 @@ const convertedTransfer = (timed) => {
 async function admissionPage(context, bundle, step, options = {}) {
   const page = await trackedPage(context);
   const params = new URLSearchParams({action: "admission", bundle, step, ...options});
-  await page.goto(`/project_io/project_io_web_test.html?${params}`);
+  await navigate(page, `/project_io/project_io_web_test.html?${params}`);
   return page;
 }
 
@@ -184,7 +185,7 @@ async function admissionLostResponse(context, control, bundle, step, options = {
 
 test.describe("S2 actual OPFS admission", () => {
   test.beforeEach(async ({page}) => {
-    await page.goto("/preflight.html");
+    await navigate(page, "/preflight.html");
     // Required for BOTH projects. Locked Linux WebKit currently fails here;
     // unsupported is an unresolved acceptance gap, never a skip or success.
     expect(await inspectStorageCapabilities(page),
@@ -635,6 +636,19 @@ function trackRuntimeErrors(page) {
   return page;
 }
 
+// Every navigation goes through here. A WebKit engine-cancelled first load is
+// retried once and recorded as an annotation; see webkit_cancelled_navigation.mjs.
+async function navigate(page, url, options) {
+  const info = test.info();
+  return gotoRetryingCancelledFirstLoad(page, url, options, {
+    browserName: info.project.use.browserName,
+    onRetry: (error) => {
+      info.annotations.push({type: "webkit-engine-cancelled-first-load", description: url});
+      console.warn(`WebKit cancelled a fresh page's first load; retrying once (#1570): ${url}\n${error.message}`);
+    },
+  });
+}
+
 // Each recovery leg starts in a new page after the prior page really closes.
 // Navigating to about:blank is not the page-close boundary these journeys
 // exercise. The selected OPFS WebKit is newer than the macOS window-animation
@@ -647,7 +661,7 @@ async function trackedPage(context) {
 // actual lifecycle boundary independently of the recovery result below.
 test("Project I/O recovery closes its prior page", async ({context}) => {
   const page = await trackedPage(context);
-  await page.goto("/preflight.html");
+  await navigate(page, "/preflight.html");
   await page.close();
   expect(page.isClosed(), "recovery must follow an actual page close").toBe(true);
 });
@@ -1033,7 +1047,7 @@ async function compareReacquiredLeaseEntry(page) {
 
 test("Web Project I/O reports page runtime failures without waiting for the suite timeout", async ({page}) => {
   trackRuntimeErrors(page);
-  await page.goto("/preflight.html");
+  await navigate(page, "/preflight.html");
   const startedAt = Date.now();
   const failure = expect(waitForResult(page)).rejects.toThrow(
       "Web Project I/O runtime failed: project-io-pageerror-proof");
@@ -1048,7 +1062,7 @@ test("Web Project I/O reports page runtime failures without waiting for the suit
 
 test("Web Project I/O preserves a terminal native report across worker teardown", async ({page}) => {
   trackRuntimeErrors(page);
-  await page.goto("/preflight.html");
+  await navigate(page, "/preflight.html");
   const result = {terminal: "pass"};
   const pending = waitForResult(page);
   await page.evaluate(() => {
@@ -1068,7 +1082,7 @@ test("Web Project I/O binds every mutation to its same-page platform owner", asy
       "owner-binding conformance requires OPFS sync access handles");
   trackRuntimeErrors(page);
   const bundle = `distinct-platform-owner-${Date.now()}`;
-  await page.goto(
+  await navigate(page,
       `/project_io/project_io_web_test.html?action=distinct_platform_mutation_ownership&bundle=${bundle}`);
   const result = await waitForResult(page);
 
@@ -1102,7 +1116,7 @@ test("Web Project I/O creates and opens an untouched v5 Project", async ({contex
   test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
   const project = await trackedPage(context);
   const bundle = `v5-round-trip-${Date.now()}`;
-  await project.goto(
+  await navigate(project,
       `/project_io/project_io_web_test.html?action=prepare&bundle=${bundle}`);
   expect((await waitForResult(project)).revision).toBe(0);
   expect(await readCheckpointShape(project, bundle, 0)).toEqual({
@@ -1136,7 +1150,7 @@ test("Web Project I/O persists Sample staging and Workspace cache behavior", asy
   };
 
   const prepare = await trackedPage(context);
-  await prepare.goto(
+  await navigate(prepare,
       `/project_io/project_io_web_test.html?action=prepare_sample_cache&bundle=${bundle}`);
   expect(await waitForResult(prepare)).toEqual({
     revision: 0,
@@ -1147,7 +1161,7 @@ test("Web Project I/O persists Sample staging and Workspace cache behavior", asy
   await prepare.close();
 
   const mutate = await trackedPage(context);
-  await mutate.goto(
+  await navigate(mutate,
       `/project_io/project_io_web_test.html?action=mutate_sample_cache&bundle=${bundle}`);
   expect(await waitForResult(mutate)).toEqual({
     revision: 1,
@@ -1170,7 +1184,7 @@ test("Web Project I/O persists Sample staging and Workspace cache behavior", asy
   await mutate.close();
 
   const reopen = await trackedPage(context);
-  await reopen.goto(
+  await navigate(reopen,
       `/project_io/project_io_web_test.html?action=reopen_sample_cache&bundle=${bundle}`);
   expect(await waitForResult(reopen)).toEqual({
     revision: 1,
@@ -1197,7 +1211,7 @@ test("Web Project I/O persists Sample staging and Workspace cache behavior", asy
 test("Web Project I/O refuses a directory publication leased on an ancestor", async ({page, browserName}) => {
   test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
   trackRuntimeErrors(page);
-  await page.goto(
+  await navigate(page,
       "/project_io/project_io_web_test.html?action=publication_lease_scope");
   const result = await waitForResult(page);
 
@@ -1233,7 +1247,7 @@ test("Web Project I/O publishes an imported Project Bundle into the Workspace", 
   test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
   const projectId = "00000000-0000-4000-8000-000000000977";
   const imported = await trackedPage(context);
-  await imported.goto(
+  await navigate(imported,
       "/project_io/project_io_web_test.html?action=project_bundle_import");
   const afterCommit = await waitForResult(imported);
   await imported.close();
@@ -1259,7 +1273,7 @@ test("Web Project I/O publishes an imported Project Bundle into the Workspace", 
   expect(afterCommit.reopenPatternCount).toBe(1);
 
   const reopened = await trackedPage(context);
-  await reopened.goto(
+  await navigate(reopened,
       "/project_io/project_io_web_test.html" +
       "?action=project_bundle_import&phase=reopen");
   const afterReload = await waitForResult(reopened);
@@ -1288,7 +1302,7 @@ const SOUNDSET_PUBLISHED = Object.freeze({
 test("Web Project I/O publishes a verified Sound Set into the Workspace Set Store", async ({page, browserName}) => {
   test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
   trackRuntimeErrors(page);
-  await page.goto(
+  await navigate(page,
       "/project_io/project_io_web_test.html?action=soundset_store_publish");
   const result = await waitForResult(page);
 
@@ -1322,7 +1336,7 @@ for (const point of ["during_directory_copy", "after_directory_copy"]) {
   test(`Web Project I/O recovers a Sound Set publication interrupted at ${point}`, async ({context, browserName}) => {
     test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
     const first = await trackedPage(context);
-    await first.goto(
+    await navigate(first,
         "/project_io/project_io_web_test.html?action=soundset_store_publish");
     const published = await waitForResult(first);
     expect(published.acquire).toEqual(SOUNDSET_PUBLISHED);
@@ -1335,7 +1349,7 @@ for (const point of ["during_directory_copy", "after_directory_copy"]) {
     await first.close();
 
     const retry = await trackedPage(context);
-    await retry.goto(
+    await navigate(retry,
         "/project_io/project_io_web_test.html?action=soundset_store_publish");
     const recovered = await waitForResult(retry);
     expect(recovered.acquire).toEqual(SOUNDSET_PUBLISHED);
@@ -1354,7 +1368,7 @@ for (const point of ["during_directory_copy", "after_directory_copy"]) {
 test("Web Project I/O runs common parity and interruption recovery", async ({page, context, browserName}, testInfo) => {
   test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
   trackRuntimeErrors(page);
-  await page.goto("/preflight.html");
+  await navigate(page, "/preflight.html");
   const capabilities = await inspectStorageCapabilities(page);
   if (capabilities.status === "unsupported") {
     expect(browserName).toBe("webkit");
@@ -1370,7 +1384,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
     console.log(`WebKit Project I/O capability limitation: ${JSON.stringify(capabilities)}`);
     return;
   }
-  await page.goto("/project_io/project_io_web_test.html");
+  await navigate(page, "/project_io/project_io_web_test.html");
   const result = await waitForResult(page);
 
   expect(result.projectStore).toBe("pass");
@@ -1388,7 +1402,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect(result.publicationFaultPoints).toEqual(PUBLICATION_FAULT_POINTS);
 
   const unleasedAppend = await trackedPage(context);
-  await unleasedAppend.goto(
+  await navigate(unleasedAppend,
       `/project_io/project_io_web_test.html?action=append_without_lease&bundle=unleased-append-${Date.now()}`);
   expect(await waitForResult(unleasedAppend)).toEqual({
     append: "failed",
@@ -1402,14 +1416,14 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   const leaseInspector = await trackedPage(context);
   const firstLeasePage = await trackedPage(context);
   const competingLeasePage = await trackedPage(context);
-  await leaseInspector.goto("/preflight.html");
+  await navigate(leaseInspector, "/preflight.html");
   await snapshotLeaseEntries(leaseInspector);
   const leasePath = `lease-${Date.now()}.lmdj`;
-  await firstLeasePage.goto(
+  await navigate(firstLeasePage,
       `/project_io/project_io_web_test.html?action=hold_lease&bundle=${leasePath.slice(0, -5)}`);
   expect((await waitForResult(firstLeasePage)).lease).toBe("held");
   expect(await captureNewLeaseEntry(leaseInspector)).not.toBe("");
-  await competingLeasePage.goto(
+  await navigate(competingLeasePage,
       `/project_io/project_io_web_test.html?action=hold_lease&bundle=${leasePath.slice(0, -5)}`);
   expect(await waitForResult(competingLeasePage)).toEqual({
     lease: "failed",
@@ -1429,14 +1443,14 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   for (const point of STORAGE_CONDITION_FAULTS) {
     const bundle = `storage-condition-${point}-${Date.now()}`;
     const controller = await trackedPage(context);
-    await controller.goto("/preflight.html");
+    await navigate(controller, "/preflight.html");
     await writeFaultControl(
         controller,
         `/lmdj-workspace/${bundle}.lmdj/replacement.bin`,
         point);
 
     const writer = await trackedPage(context);
-    await writer.goto(
+    await navigate(writer,
         `/project_io/project_io_web_test.html?action=storage_condition_failure&bundle=${bundle}`);
     await waitForFault(controller, point);
     storageConditionResults.push({
@@ -1469,7 +1483,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   for (const [index, point] of REPLACEMENT_FAULT_POINTS.entries()) {
     const bundle = `fault-${index}-${Date.now()}`;
     const prepare = await trackedPage(context);
-    await prepare.goto(`/project_io/project_io_web_test.html?action=prepare&bundle=${bundle}`);
+    await navigate(prepare, `/project_io/project_io_web_test.html?action=prepare&bundle=${bundle}`);
     expect((await waitForResult(prepare)).revision).toBe(0);
     expect(await readCheckpointShape(prepare, bundle, 0)).toEqual({
       contract: "lmdj.project.v5",
@@ -1487,13 +1501,13 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
         prepare, `/lmdj-workspace/${bundle}.lmdj/manifest.json`, point);
 
     const interrupted = await trackedPage(context);
-    await interrupted.goto(`/project_io/project_io_web_test.html?action=advance&bundle=${bundle}`);
+    await navigate(interrupted, `/project_io/project_io_web_test.html?action=advance&bundle=${bundle}`);
     await waitForFault(prepare, point);
     await interrupted.close();
     await clearFaultControl(prepare);
 
     const restarted = await trackedPage(context);
-    await restarted.goto(`/project_io/project_io_web_test.html?action=reopen&bundle=${bundle}`);
+    await navigate(restarted, `/project_io/project_io_web_test.html?action=reopen&bundle=${bundle}`);
     const expectedRevision = replacementReachedCommit(point) ? 1 : 0;
     expect((await waitForResult(restarted)).revision).toBe(expectedRevision);
     expect(await readCheckpointShape(restarted, bundle, expectedRevision)).toEqual({
@@ -1515,21 +1529,21 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   for (const [index, point] of REPLACEMENT_FAULT_POINTS.entries()) {
     const bundle = `absent-fault-${index}-${Date.now()}`;
     const prepare = await trackedPage(context);
-    await prepare.goto(
+    await navigate(prepare,
         `/project_io/project_io_web_test.html?action=prepare_replacement&scenario=absent&bundle=${bundle}`);
     expect((await waitForResult(prepare)).state).toBe("absent");
     await writeFaultControl(
         prepare, `/lmdj-workspace/${bundle}.lmdj/replacement.bin`, point);
 
     const interrupted = await trackedPage(context);
-    await interrupted.goto(
+    await navigate(interrupted,
         `/project_io/project_io_web_test.html?action=replace&scenario=absent&bundle=${bundle}`);
     await waitForFault(prepare, point);
     await interrupted.close();
     await clearFaultControl(prepare);
 
     const restarted = await trackedPage(context);
-    await restarted.goto(
+    await navigate(restarted,
         `/project_io/project_io_web_test.html?action=reopen_replacement&scenario=absent&bundle=${bundle}`);
     const expectedState = replacementReachedCommit(point)
       ? "new"
@@ -1541,14 +1555,14 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
 
   const corruptBundle = `corrupt-existing-${Date.now()}`;
   const corruptController = await trackedPage(context);
-  await corruptController.goto(
+  await navigate(corruptController,
       `/project_io/project_io_web_test.html?action=prepare_replacement&scenario=existing&bundle=${corruptBundle}`);
   expect((await waitForResult(corruptController)).state).toBe("existing");
   const corruptDestination =
       `/lmdj-workspace/${corruptBundle}.lmdj/replacement.bin`;
   await writeFaultControl(corruptController, corruptDestination, "before_write");
   const corruptWriter = await trackedPage(context);
-  await corruptWriter.goto(
+  await navigate(corruptWriter,
       `/project_io/project_io_web_test.html?action=replace&scenario=existing&bundle=${corruptBundle}`);
   await waitForFault(corruptController, "before_write");
   await corruptController.evaluate(async ({bundle}) => {
@@ -1563,7 +1577,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   await clearFaultControl(corruptController);
 
   const recovery = await trackedPage(context);
-  await recovery.goto(
+  await navigate(recovery,
       `/project_io/project_io_web_test.html?action=recover&scenario=existing&bundle=${corruptBundle}`);
   expect(await waitForResult(recovery)).toEqual({
     recovery: "failed",
@@ -1593,7 +1607,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
 
   const immutableBundle = `immutable-partial-${Date.now()}`;
   const immutableController = await trackedPage(context);
-  await immutableController.goto(
+  await navigate(immutableController,
       `/project_io/project_io_web_test.html?action=prepare_immutable&bundle=${immutableBundle}`);
   expect((await waitForResult(immutableController)).state).toBe("absent");
   await writeFaultControl(
@@ -1601,13 +1615,13 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
       `/lmdj-workspace/${immutableBundle}.lmdj/immutable.bin`,
       "during_write");
   const immutableWriter = await trackedPage(context);
-  await immutableWriter.goto(
+  await navigate(immutableWriter,
       `/project_io/project_io_web_test.html?action=create_immutable_fault&bundle=${immutableBundle}`);
   await waitForFault(immutableController, "during_write");
   await immutableWriter.close();
   await clearFaultControl(immutableController);
   const immutableRestarted = await trackedPage(context);
-  await immutableRestarted.goto(
+  await navigate(immutableRestarted,
       `/project_io/project_io_web_test.html?action=reopen_immutable&bundle=${immutableBundle}`);
   expect((await waitForResult(immutableRestarted)).state).toBe("immutable-retry");
   await immutableRestarted.close();
@@ -1615,10 +1629,10 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
 
   const cleanPublicationBundle = `publication-clean-${Date.now()}`;
   const cleanPublicationController = await trackedPage(context);
-  await cleanPublicationController.goto("/preflight.html");
+  await navigate(cleanPublicationController, "/preflight.html");
   await preparePublicationFixture(cleanPublicationController, cleanPublicationBundle);
   const cleanPublication = await trackedPage(context);
-  await cleanPublication.goto(
+  await navigate(cleanPublication,
       `/project_io/project_io_web_test.html?action=publish_publication&bundle=${cleanPublicationBundle}`);
   expect(await waitForResult(cleanPublication)).toEqual({
     state: "published",
@@ -1630,20 +1644,20 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   for (const [index, point] of PUBLICATION_FAULT_POINTS.entries()) {
     const bundle = `publication-fault-${index}-${Date.now()}`;
     const controller = await trackedPage(context);
-    await controller.goto("/preflight.html");
+    await navigate(controller, "/preflight.html");
     await preparePublicationFixture(controller, bundle);
     await writeFaultControl(
         controller, `/lmdj-workspace/${bundle}.lmdj`, point);
 
     const interrupted = await trackedPage(context);
-    await interrupted.goto(
+    await navigate(interrupted,
         `/project_io/project_io_web_test.html?action=publish_publication&bundle=${bundle}`);
     await waitForFault(controller, point);
     await interrupted.close();
     await clearFaultControl(controller);
 
     const inspector = await trackedPage(context);
-    await inspector.goto(
+    await navigate(inspector,
         `/project_io/project_io_web_test.html?action=inspect_publication&bundle=${bundle}`);
     const beforeRecovery = await waitForResult(inspector);
     const intentState = await readPublicationIntentState(controller, bundle);
@@ -1656,7 +1670,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
     const recoveryAction = committed
       ? "recover_publication"
       : "recover_and_publish";
-    await recovery.goto(
+    await navigate(recovery,
         `/project_io/project_io_web_test.html?action=${recoveryAction}&bundle=${bundle}`);
     expect(await waitForResult(recovery)).toEqual({
       visible: true,
@@ -1671,11 +1685,11 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
 
   const malformedBundle = `publication-malformed-${Date.now()}`;
   const malformedController = await trackedPage(context);
-  await malformedController.goto("/preflight.html");
+  await navigate(malformedController, "/preflight.html");
   await preparePublicationFixture(malformedController, malformedBundle);
   await writeMalformedPublicationIntent(malformedController, malformedBundle);
   const malformedInspector = await trackedPage(context);
-  await malformedInspector.goto(
+  await navigate(malformedInspector,
       `/project_io/project_io_web_test.html?action=inspect_publication&bundle=${malformedBundle}`);
   expect(await waitForResult(malformedInspector)).toEqual({
     visible: false,
@@ -1684,7 +1698,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
     source: true,
   });
   const malformedRecovery = await trackedPage(context);
-  await malformedRecovery.goto(
+  await navigate(malformedRecovery,
       `/project_io/project_io_web_test.html?action=recover_and_publish&bundle=${malformedBundle}`);
   expect(await waitForResult(malformedRecovery)).toEqual({
     visible: true,
@@ -1698,13 +1712,13 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
 
   const legacyBundle = `publication-legacy-${Date.now()}`;
   const legacyController = await trackedPage(context);
-  await legacyController.goto("/preflight.html");
+  await navigate(legacyController, "/preflight.html");
   await legacyController.evaluate(async ({bundle}) => {
     const root = await navigator.storage.getDirectory();
     await root.getDirectoryHandle(`${bundle}.lmdj`, {create: true});
   }, {bundle: legacyBundle});
   const legacyInspector = await trackedPage(context);
-  await legacyInspector.goto(
+  await navigate(legacyInspector,
       `/project_io/project_io_web_test.html?action=inspect_publication&bundle=${legacyBundle}`);
   expect((await waitForResult(legacyInspector)).visible).toBe(true);
   await legacyInspector.close();
@@ -1712,14 +1726,14 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
 
   const cleanupBundle = `publication-cleanup-${Date.now()}`;
   const cleanupController = await trackedPage(context);
-  await cleanupController.goto("/preflight.html");
+  await navigate(cleanupController, "/preflight.html");
   await preparePublicationFixture(cleanupController, cleanupBundle);
   await writeFaultControl(
       cleanupController,
       `/lmdj-workspace/${cleanupBundle}.lmdj`,
       PUBLICATION_CLEANUP_FAULT);
   const cleanupWriter = await trackedPage(context);
-  await cleanupWriter.goto(
+  await navigate(cleanupWriter,
       `/project_io/project_io_web_test.html?action=publish_publication_failure&bundle=${cleanupBundle}`);
   expect((await waitForResult(cleanupWriter)).publish).toBe("failed");
   await cleanupWriter.close();
@@ -1730,7 +1744,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect(await readPublicationIntentState(cleanupController, cleanupBundle))
       .toBe("pending");
   const cleanupInspector = await trackedPage(context);
-  await cleanupInspector.goto(
+  await navigate(cleanupInspector,
       `/project_io/project_io_web_test.html?action=inspect_publication&bundle=${cleanupBundle}`);
   expect(await waitForResult(cleanupInspector)).toEqual({
     visible: false,
@@ -1739,7 +1753,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
     source: true,
   });
   const cleanupRecovery = await trackedPage(context);
-  await cleanupRecovery.goto(
+  await navigate(cleanupRecovery,
       `/project_io/project_io_web_test.html?action=recover_and_publish&bundle=${cleanupBundle}`);
   expect(await waitForResult(cleanupRecovery)).toEqual({
     visible: true,
@@ -1753,9 +1767,9 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
 
   const tornBundle = `storage-intent-torn-${Date.now()}`;
   const tornController = await trackedPage(context);
-  await tornController.goto("/preflight.html");
+  await navigate(tornController, "/preflight.html");
   const tornPrepare = await trackedPage(context);
-  await tornPrepare.goto(
+  await navigate(tornPrepare,
       `/project_io/project_io_web_test.html?action=prepare_replacement&bundle=${tornBundle}&scenario=existing`);
   await waitForResult(tornPrepare);
   await tornPrepare.close();
@@ -1764,7 +1778,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   await writeStorageIntentBody(
       tornController, tornBundle, "{\"contract\":\"lmdj.storage");
   const tornRecovery = await trackedPage(context);
-  await tornRecovery.goto(
+  await navigate(tornRecovery,
       `/project_io/project_io_web_test.html?action=acquire_after_intent&bundle=${tornBundle}`);
   expect(await waitForResult(tornRecovery)).toEqual({
     acquire: "ok",
@@ -1781,7 +1795,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
       tornBundle,
       JSON.stringify({contract: "lmdj.storage.intent.v2", destination: "x"}));
   const tornGuard = await trackedPage(context);
-  await tornGuard.goto(
+  await navigate(tornGuard,
       `/project_io/project_io_web_test.html?action=acquire_after_intent&bundle=${tornBundle}`);
   expect((await waitForResult(tornGuard)).acquire).toBe("failed");
   await tornGuard.close();
