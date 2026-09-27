@@ -53,10 +53,11 @@ const EDITS = [
         this._requestIdToRequest.set(event.requestId, request2);
         this._page.frameManager.requestStarted(request2.request, route2);
         const lmdjEarlyFailure = this._lmdjEarlyProvisionalLoadFailure;
-        if (lmdjEarlyFailure && isNavigationRequest && frame === this._page.mainFrame() &&
-            documentId === lmdjEarlyFailure.loaderId) {
+        if (lmdjEarlyFailure && isNavigationRequest && frame === this._page.mainFrame()) {
+          // The next main-frame document request ends the deferral either way.
           this._lmdjEarlyProvisionalLoadFailure = void 0;
-          this._page.frameManager.frameAbortedNavigation(frame._id, lmdjEarlyFailure.errorText, lmdjEarlyFailure.loaderId);
+          if (documentId === lmdjEarlyFailure.loaderId)
+            this._page.frameManager.frameAbortedNavigation(frame._id, lmdjEarlyFailure.errorText, lmdjEarlyFailure.loaderId);
         }
       }`,
   },

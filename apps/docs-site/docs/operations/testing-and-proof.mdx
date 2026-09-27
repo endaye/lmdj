@@ -557,8 +557,8 @@ Playwright 1.62.1 客户端此时没有 pending document，于是丢掉了这次
 补丁先记住早到的失败，等对应文档请求开始时再重放，`goto` 于是立刻以引擎自己的
 取消错误拒绝。Proof 会先确认补丁已生效，再用一个假的 WebKit pipe 浏览器按实录
 顺序重放：原版客户端超时、补丁版立即拒绝。Project I/O spec 的所有导航都经过同一
-个 helper：只有 WebKit 且页面从未提交过文档（仍是 `about:blank`）时，这个取消
-错误才重试一次，并记为 `webkit-engine-cancelled-first-load` 注解；其他错误、
+个 helper：只有 WebKit、这是该页面经 helper 的第一次导航且仍停在初始
+`about:blank`（从未提交过文档）时，这个取消错误才重试一次，并记为 `webkit-engine-cancelled-first-load` 注解；其他错误、
 已承载文档的页面或第二次取消仍然失败。超时、浏览器版本与页面关闭语义不变。
 
 测试归属跟随被测对象，而不只是测试文件所在目录。`apps/web-runtime-host/test/deploy_command_test.py` 会对着 fake Netlify server 端到端执行 `scripts/web-runtime-deploy.sh`，因此 scope policy 在既有 `apps/web-runtime-host/` 前缀归属之外，另把该套件与它驱动的 `deploy_orchestrator.py`、`netlify_api.py`、`release_bundle.py` 三个工具映射到 `deploy_contract`。在此之前修改 deploy 命令只选中 `deploy_contract`，却从不运行证明该命令的套件——这是保守测试继承策略内部的 fail-open 缺口。现在 Deploy Contract lane 运行该套件，`scripts/web-runtime-host.sh` 的 `run_nonbrowser_tests` 不再运行它，因此 Formal Web Runtime Host proof 的非浏览器阶段不再包含它；其余六个非浏览器套件的被测对象仍归 `web_runtime_host`，保持不变。union 语义无法减去 lane，该套件与三个工具仍会通过目录前缀继续选中 `web_runtime_host`；这种过度选择是 fail-closed 方向，属于接受范围。

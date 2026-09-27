@@ -50,8 +50,8 @@ early failure when its document request starts. The patch is bound to 1.62.1
 and to exactly one site per edit, and it fails closed otherwise. The gate
 replays the recorded order through a fake WebKit pipe browser: the unpatched
 client must time out and the patched one must reject at once. The Project I/O
-spec retries only that engine cancellation, only on WebKit, and only on a page
-that has never committed a document, once, with a
+spec retries only that engine cancellation, only on WebKit, and only on a page's
+first navigation while it is still at its initial `about:blank`, once, with a
 `webkit-engine-cancelled-first-load` annotation. Do not widen that condition.
 If Playwright is upgraded, the patch check fails: re-derive the patch or confirm
 upstream fixed the ordering, then rerun the gate. For any other hang, read the

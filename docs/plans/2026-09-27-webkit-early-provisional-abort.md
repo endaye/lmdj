@@ -42,7 +42,8 @@ WebKit page:
 - A provisional-load failure whose loader is not the main frame's pending
   document is remembered.
 - It is replayed through `frameAbortedNavigation` when that loader's main-frame
-  document request starts.
+  document request starts. The next main-frame document request ends the
+  deferral either way.
 
 The edit accepts only Playwright 1.62.1 with exactly one site per change and
 fails closed with `why`/`remedy` otherwise. The proof checks that the patch is
@@ -52,7 +53,8 @@ Every Project I/O spec navigation goes through one helper. It repeats the
 navigation once only when all of these hold:
 
 - the project is WebKit;
-- the page is open and still `about:blank`, so no document ever committed and
+- this is the page's first navigation through the helper and the page is open
+  and still at its initial `about:blank`, so no document ever committed and
   no page script ran;
 - the error is the engine's `Load request cancelled; maybe frame was detached?`.
 
@@ -70,7 +72,8 @@ Lowest-tier verification:
   existing rejection when the document request arrives first, and is
   idempotent, reversible and fail-closed.
 - `node --test tests/platform/web/project_io/webkit_cancelled_navigation_test.mjs`
-  checks that the retry condition fires once and never otherwise.
+  checks that the retry condition fires once, never on a page the helper already
+  navigated, and never otherwise.
 - The complete Project I/O spec runs on the OPFS WebKit and Chromium to check
   that the patched client and helper leave passing journeys unchanged.
 

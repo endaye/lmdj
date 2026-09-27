@@ -43,6 +43,15 @@ test("a second cancellation fails instead of retrying again", async () => {
   assert.equal(page.calls.length, 2);
 });
 
+test("a page this helper already navigated never retries, even back at about:blank", async () => {
+  const page = fakePage(["response", cancelled()]);
+  assert.equal((await navigate(page)).value, "response");
+  const {error, retries} = await navigate(page);
+  assert.ok(error instanceof Error);
+  assert.equal(retries.length, 0);
+  assert.equal(page.calls.length, 2);
+});
+
 test("every other navigation failure propagates without retry", async () => {
   const cases = [
     {page: fakePage([cancelled()]), browserName: "chromium"},
