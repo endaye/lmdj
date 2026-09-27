@@ -7307,15 +7307,38 @@ void test_pattern_transport_owner_loss_lists_recovery_on_reopen() {
   LMDJ_CHECK(
       recovery.at("candidates").at(0).at("reason") == "owner_lost");
 
-  // The unresolved admission is a recoverable refusal, never a guess; discard
-  // releases it and a fresh transport recording can open a new journal.
-  const auto applied = reopened->dispatch(
+  // The owner is gone, so no terminal transfer will ever arrive: apply
+  // recovers the take the performer heard into the Pattern instead of
+  // refusing forever (#1515), and a fresh transport recording can then open a
+  // new journal.
+  const auto before_apply = check_exact_success(
+      reopened->dispatch("project.inspect", Json::object(), {}),
+      {"project", "project_revision"});
+  check_success(reopened->dispatch(
       "sequence.recovery.apply",
       {{"session_id", kSequenceSessionId}, {"destination_pattern_id", nullptr}},
-      {});
-  LMDJ_CHECK(!applied.value("ok", true));
-  check_success(reopened->dispatch(
-      "sequence.recovery.discard", {{"session_id", kSequenceSessionId}}, {}));
+      {}));
+  const auto after_apply = check_exact_success(
+      reopened->dispatch("project.inspect", Json::object(), {}),
+      {"project", "project_revision"});
+  LMDJ_CHECK(
+      after_apply.at("project_revision").get<std::uint64_t>() ==
+      before_apply.at("project_revision").get<std::uint64_t>() + 1);
+  // The completed press/release pair replays as recorded; the press still
+  // held at owner loss ends after the default 240-tick attack tail. Onsets
+  // follow render timing, so only their order is asserted.
+  const auto& recovered_events =
+      after_apply.at("project").at("patterns").at(kPatternId).at("events");
+  LMDJ_CHECK(recovered_events.size() == 2);
+  for (const auto& event : recovered_events) {
+    LMDJ_CHECK(event.at("slot") == Json({{"bank", 0}, {"pad", 0}}));
+    LMDJ_CHECK(event.at("velocity") == 100);
+  }
+  LMDJ_CHECK(recovered_events.at(0).at("duration_tick").get<std::uint64_t>() > 0);
+  LMDJ_CHECK(recovered_events.at(0).at("duration_tick").get<std::uint64_t>() != 240);
+  LMDJ_CHECK(recovered_events.at(1).at("duration_tick") == 240);
+  LMDJ_CHECK(recovered_events.at(1).at("onset_tick").get<std::uint64_t>() >
+             recovered_events.at(0).at("onset_tick").get<std::uint64_t>());
   const auto& cleared = check_exact_success(
       reopened->dispatch(
           "sequence.recovery.list", {{"project_id", kProjectId}}, {}),
