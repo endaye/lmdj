@@ -7,10 +7,13 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <optional>
+#include <string>
 #include <unistd.h>
 
 #include <lmdj/audio/prepared_sample_bank.hpp>
@@ -205,6 +208,15 @@ struct EnginePort final : PatternTransportAudioPort {
         publication.generation, pattern, publication.activation_frame};
     return lmdj::foundation::Result<lmdj::audio::PatternPublication>::success(
         publication);
+  }
+  bool cancel_overlay(
+      const lmdj::audio::PatternReplacementAuthority& authority) override {
+    if (!queued_overlay_ || queued_overlay_->generation != authority.generation ||
+        !engine.cancel_pattern_publication(authority)) {
+      return false;
+    }
+    queued_overlay_.reset();
+    return true;
   }
   std::optional<lmdj::audio::PatternReplacementAuthority> queued_overlay_;
   std::optional<lmdj::audio::PatternReplacementAuthority> queued_switch_;
@@ -1136,6 +1148,70 @@ void overlay_publication_records_and_the_cutoff_matches() {
   LMDJ_CHECK(project.value().patterns.at(f.pattern).events.size() == 1);
 }
 
+std::string read_bytes(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  LMDJ_CHECK(input.good());
+  return {std::istreambuf_iterator<char>(input), {}};
+}
+
+void write_bytes(const std::filesystem::path& path, const std::string& bytes) {
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  LMDJ_CHECK(output.good());
+  output << bytes;
+  LMDJ_CHECK(output.good());
+}
+
+// L2 (#1513): Record-off right after live input, while the overlay that input
+// produced is still queued for its Bar, is accepted: the coordinator withdraws
+// its own unlanded overlay instead of refusing the close, and the close
+// commits the retained input exactly once.
+void record_off_withdraws_an_unlanded_overlay_and_commits_once() {
+  Fixture f;
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const auto frame = admission_frame(f.bundle);
+  LMDJ_CHECK(f.controller->admit({10, frame, {0, 1}, true, 90, 10}).has_value());
+  f.audio.render(18'000);
+  LMDJ_CHECK(f.controller->admit({11, frame + 18'000, {0, 1}, false, 0, 10})
+                 .has_value());
+  LMDJ_CHECK(f.controller->publish_overlay().has_value());
+  LMDJ_CHECK(f.audio.published_overlays.size() == 1);
+  // A render block lets the audio thread claim the queued publication, as a
+  // live AudioWorklet does within one quantum; the Bar is still ahead.
+  f.audio.render(256);
+  LMDJ_CHECK(f.audio.engine.pattern_telemetry().pending_generation != 0);
+  LMDJ_CHECK(f.controller->request(f.make(7, 2, PatternTransportIntent::record)) ==
+             PatternTransportSubmit::accepted);
+  LMDJ_CHECK(!f.controller->inspect().error.has_value());
+  for (unsigned step = 0; step < 100 && f.journal_exists(); ++step) {
+    f.audio.render(1);
+    LMDJ_CHECK(f.controller->continue_operation().has_value());
+  }
+  LMDJ_CHECK(!f.journal_exists());
+  LMDJ_CHECK(f.controller->inspect().phase == PatternTransportPhase::idle);
+  lmdj::project_io::ProjectStore store;
+  const auto project = store.load(f.bundle);
+  LMDJ_CHECK(project.has_value());
+  LMDJ_CHECK(project.value().patterns.at(f.pattern).events.size() == 1);
+}
+
+// L2 (#1513): the cadence runs on every realtime service tick, so while the
+// coordinator's own overlay is queued for its Bar a tick answers from the port
+// alone. An unreadable journal proves no journal read happens in that window.
+void queued_overlay_tick_reads_no_journal() {
+  Fixture f;
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const auto frame = admission_frame(f.bundle);
+  LMDJ_CHECK(f.controller->admit({10, frame, {0, 1}, true, 90, 10}).has_value());
+  LMDJ_CHECK(f.controller->publish_overlay().has_value());
+  LMDJ_CHECK(f.audio.engine.pattern_telemetry().pending_generation != 0);
+  const auto journal = f.bundle / "recovery/active/sequence.jsonl";
+  const auto bytes = read_bytes(journal);
+  write_bytes(journal, "not a journal\n");
+  LMDJ_CHECK(f.controller->publish_overlay().has_value());
+  write_bytes(journal, bytes);
+  LMDJ_CHECK(f.audio.published_overlays.size() == 1);
+}
+
 // L2 (#1513): a Host refusal (pool full, seam unwired) is a capability fact,
 // not an error: no error phase is entered, the input stays durable, and the
 // SAME content is attempted only once. New retained input re-arms the
@@ -1207,6 +1283,8 @@ int main() {
     overlay_projection_does_not_disturb_the_commit();
     overlay_generation_advances_when_the_projected_pattern_changes();
     overlay_publication_records_and_the_cutoff_matches();
+    record_off_withdraws_an_unlanded_overlay_and_commits_once();
+    queued_overlay_tick_reads_no_journal();
     superseded_overlay_is_dropped_and_the_close_settles();
     refused_overlay_publication_settles_and_new_content_retries();
     pre_fence_candidate_is_live_only();
@@ -1217,7 +1295,7 @@ int main() {
     known_owner_registration_protects_only_the_open_transport_journal();
     controller_destroyed_after_application_is_safe();
     owner_lost_transport_admission_is_sealed_and_listed();
-    std::cout << "pattern transport controller tests: PASS (25 scenarios)\n";
+    std::cout << "pattern transport controller tests: PASS (27 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

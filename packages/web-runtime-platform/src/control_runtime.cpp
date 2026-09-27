@@ -1234,6 +1234,22 @@ class EnginePatternTransportPort final : public facade::PatternTransportAudioPor
     }
     return published;
   }
+  bool cancel_overlay(
+      const audio::PatternReplacementAuthority& authority) override {
+    // Only the exact overlay this port published and still remembers; a
+    // switch or any other publication is never withdrawn through this seam.
+    if (!queued_overlay_.has_value() ||
+        queued_overlay_->generation != authority.generation ||
+        queued_overlay_->pattern_id != authority.pattern_id ||
+        queued_overlay_->activation_frame != authority.activation_frame) {
+      return false;
+    }
+    if (!engine_.cancel_pattern_publication(authority)) {
+      return false;
+    }
+    queued_overlay_.reset();
+    return true;
+  }
 
  private:
   audio::RealtimeEngine& engine_;

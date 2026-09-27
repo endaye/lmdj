@@ -182,9 +182,24 @@ PatternTransportSubmit PatternTransportCoordinator::request(
     // sides remember, never by the Pattern identity (a retarget can rebind
     // pattern_ while the marker lives). A transport command cannot fence
     // across an unlanded publication it would have to name as applied
-    // authority; report busy and let the control cadence retry after the
-    // boundary, which is also the audible deadline (#1513).
-    return PatternTransportSubmit::busy;
+    // authority, and refusing it would refuse Record-off for up to a Bar after
+    // every input. Withdraw the overlay instead: it is not durable until it
+    // lands, the close commits the same retained input, and an engagement
+    // that keeps recording republishes it on the next idle tick (#1513).
+    if (!withdraw_unlanded_overlay(*command.pending_switch)) {
+      // The render thread already reached its apply point; the boundary is
+      // imminent and the next attempt names it as applied.
+      return PatternTransportSubmit::busy;
+    }
+    // A withdrawn publication the render thread had already claimed stays
+    // outstanding until its next quantum retires it, and the engine refuses a
+    // command while any unnamed publication is outstanding. The command is
+    // accepted now and submitted from the cadence once it has retired — one
+    // render quantum, not a Bar.
+    pending_ = request;
+    phase_ = PatternTransportPhase::awaiting_audio;
+    deferred_submit_ = true;
+    return PatternTransportSubmit::accepted;
   }
   const auto submitted = audio_.submit(command);
   if (submitted != audio::PatternTransportSubmit::accepted) {
@@ -362,6 +377,18 @@ foundation::Result<void> PatternTransportCoordinator::publish_overlay() {
       return foundation::Result<void>::success();
     }
   }
+  // While this coordinator's own overlay is still queued for its Bar, the
+  // tick has nothing to do until the boundary, and the port alone can say so.
+  // This cadence runs on every realtime service tick of the control lane:
+  // answering from the journal here cost two journal reads per tick for up to
+  // a Bar after every input, and the lane's requests timed out behind them.
+  if (unlanded_overlay_generation_ != 0) {
+    const auto pending_now = audio_.pending_switch();
+    if (pending_now.has_value() &&
+        pending_now->generation == unlanded_overlay_generation_) {
+      return foundation::Result<void>::success();
+    }
+  }
   // A journal that has retained a switch and awaits reconciliation is in the
   // switching state; the journal would refuse the overlay record for a state
   // it considers ordinary, so hold the publication until reconciliation
@@ -485,6 +512,19 @@ foundation::Result<void> PatternTransportCoordinator::publish_overlay() {
   return foundation::Result<void>::success();
 }
 
+bool PatternTransportCoordinator::withdraw_unlanded_overlay(
+    const audio::PatternReplacementAuthority& authority) {
+  if (!audio_.cancel_overlay(authority)) return false;
+  // Nothing was recorded for it: the journal names an overlay only once it
+  // lands. Forget its content generation so the same projection is published
+  // again if the engagement keeps recording.
+  unlanded_overlay_generation_ = 0;
+  published_projection_generation_ = 0;
+  overlay_publication_pending_ = true;
+  withdrawn_overlay_ = authority;
+  return true;
+}
+
 foundation::Result<std::optional<PatternTransportOverlayProjection>>
 PatternTransportCoordinator::project_overlay() {
   using Projection =
@@ -556,10 +596,52 @@ foundation::Result<void> PatternTransportCoordinator::continue_operation() {
   if (!pending_ || phase_ != PatternTransportPhase::awaiting_audio) {
     return foundation::Result<void>::success();
   }
+  if (deferred_submit_) {
+    // The withdrawn overlay's slot stays outstanding audio-side until its
+    // activation frame. Name it, so the engine accepts the command and cancels
+    // the slot at this command's cutoff; once it has retired, submit unnamed.
+    audio::PatternTransportCommand command{
+        runtime_generation_, pending_->expected_epoch, last_pattern_generation_,
+        audio_action(pending_->intent), {}};
+    command.expected_pattern_generation = audio_.pattern_generation();
+    auto submitted = audio::PatternTransportSubmit::identity_mismatch;
+    if (withdrawn_overlay_) {
+      command.pending_switch = withdrawn_overlay_;
+      submitted = audio_.submit(command);
+    }
+    if (submitted == audio::PatternTransportSubmit::identity_mismatch) {
+      command.pending_switch.reset();
+      withdrawn_overlay_.reset();
+      submitted = audio_.submit(command);
+    }
+    if (submitted == audio::PatternTransportSubmit::identity_mismatch) {
+      return foundation::Result<void>::success();
+    }
+    deferred_submit_ = false;
+    if (submitted != audio::PatternTransportSubmit::accepted) {
+      error_ = foundation::Error{foundation::ErrorCode::invalid_argument,
+                                 "Pattern transport audio submit refused"};
+      pending_.reset();
+      phase_ = PatternTransportPhase::idle;
+      return foundation::Result<void>::failure(*error_);
+    }
+    return foundation::Result<void>::success();
+  }
   const auto receipt = audio_.inspect(
       pending_->runtime_generation, pending_->expected_epoch);
   if (!receipt.has_value()) return foundation::Result<void>::success();
-  const auto applied = apply_receipt(*receipt, *pending_);
+  auto effective = *receipt;
+  if (withdrawn_overlay_ && effective.switch_authority &&
+      effective.switch_authority->generation == withdrawn_overlay_->generation &&
+      effective.switch_decision ==
+          audio::PatternCutoffDecision::canceled_at_cutoff) {
+    // The named slot was this coordinator's own withdrawn overlay: it never
+    // applied and was never recorded, so the fence names no switch.
+    effective.switch_authority.reset();
+    effective.switch_decision = audio::PatternCutoffDecision::none;
+  }
+  withdrawn_overlay_.reset();
+  const auto applied = apply_receipt(effective, *pending_);
   if (!applied.has_value()) {
     error_ = applied.error();
     // A deterministic authority/identity failure (for example a Pattern that

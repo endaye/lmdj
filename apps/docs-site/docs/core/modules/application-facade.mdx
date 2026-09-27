@@ -76,7 +76,12 @@ journal 的候选集、不推进 watermark、不铸 receipt，close 提交的 tr
 exactly-once 论证保持不变。正在排队的 Pattern switch 拥有下一个边界；已排队
 的同 Pattern overlay 落地前不重复发布（每 Bar 至多一圈叠录，这同时也是可听
 期限）。Host 拒绝发布（4-slot 池满或未接线）是能力事实，节拍保持请求待发、
-不进入 error 相位。
+不进入 error 相位。自己的 overlay 排队期间，控制节拍只向 port 询问是否落地、不读
+journal——节拍随每个 realtime service tick 运行，同一 lane 上的请求不能排在逐 tick
+的 journal 读取之后。此时到达的 transport 命令（如 Record-off）不会被拒为 busy：
+协调器经 port 的 `cancel_overlay` 撤回这个尚未落地、也尚未记入 journal 的 overlay，
+命令照常提交，close 提交同一批已保留输入；若仍在录制，下一个空闲节拍重新发布。
+只有渲染线程已认领其应用点、无法撤回时才返回 busy。
 
 内部 `PatternAdmissionOwner` 消费上述转换函数：closed prepare/activate、
 admission fence 之后才保留 post-enqueue 候选，fence 前、closure 后与 owner-loss
