@@ -199,8 +199,20 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: runtime-host-deployment-evidence
+          # Both members share one directory, so evidence.json is the archive
+          # root member the promotion and driver readers select by name.
           path: |
             build/deploy/web-runtime-host/evidence.json
             build/deploy/web-runtime-host/deployment.log
-            ${{ runner.temp }}/host-state-${{ github.run_id }}/diagnostics
           if-no-files-found: warn
+
+      - name: Upload adapter failure diagnostics
+        timeout-minutes: 2
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          # A separate artifact: a path outside the workspace in the evidence
+          # upload would lift its root and nest evidence.json below it.
+          name: runtime-host-deployment-diagnostics
+          path: ${{ runner.temp }}/host-state-${{ github.run_id }}/diagnostics
+          if-no-files-found: ignore
