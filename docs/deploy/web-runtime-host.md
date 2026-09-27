@@ -263,6 +263,11 @@ gh run download RUN_ID --name runtime-host-deployment-evidence --dir evidence/RU
 python3 -m json.tool evidence/RUN_ID/evidence.json
 ```
 
+`evidence.json` 必须是 `runtime-host-deployment-evidence` 的根成员：Channel promotion 与发布 driver
+按名称只读取根目录的 `evidence.json`。adapter 的失败诊断单独上传为
+`runtime-host-deployment-diagnostics`，不能并入证据 artifact；工作区外的路径会抬高上传根目录，
+把 `evidence.json` 嵌到子目录里。
+
 当前 `evidence.json` 的 exact top-level schema 是
 `lmdj.web-runtime-host.deployment-evidence.v3`，闭合字段集为 `archive`、`channel`、
 `contract`、`ended_at`、`git_revision`、`github_actions`、`host_version`、`immutable`、

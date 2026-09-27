@@ -450,11 +450,36 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         # as a second artifact member.
         self.assertNotIn("recovery-evidence.json", source)
         self.assertIn("build/deploy/web-runtime-host/deployment.log", source)
-        self.assertIn(
-            "${{ runner.temp }}/host-state-${{ github.run_id }}/diagnostics",
-            source,
-        )
         self.assertIn("if-no-files-found: warn", source)
+        diagnostics = self.step_named(source, "Upload adapter failure diagnostics")
+        self.assertIn("if: always()", diagnostics)
+        self.assertIn("name: runtime-host-deployment-diagnostics", diagnostics)
+        self.assertIn(
+            "path: ${{ runner.temp }}/host-state-${{ github.run_id }}/diagnostics",
+            diagnostics,
+        )
+        self.assertIn("if-no-files-found: ignore", diagnostics)
+
+    def test_evidence_upload_keeps_evidence_json_at_the_archive_root(self) -> None:
+        # upload-artifact roots the archive at the paths' common ancestor; one
+        # path outside build/deploy/web-runtime-host/ nests evidence.json below it,
+        # and the promotion and driver readers then find no root member.
+        upload = self.step_named(
+            self.workflow_source(), "Upload deployment evidence and failure logs"
+        )
+        block = upload[upload.index("path: |"):].splitlines()[1:]
+        paths = []
+        for line in block:
+            if not line.startswith(" " * 12) or ":" in line:
+                break
+            paths.append(line.strip())
+        self.assertEqual(
+            paths,
+            [
+                "build/deploy/web-runtime-host/evidence.json",
+                "build/deploy/web-runtime-host/deployment.log",
+            ],
+        )
 
     def test_deploy_state_root_is_a_private_directory(self) -> None:
         deploy_step = self.step_named(
@@ -495,6 +520,7 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
             "Install Chromium": 10,
             "Deploy signed Runtime Host release to Cloudflare": 35,
             "Upload deployment evidence and failure logs": 5,
+            "Upload adapter failure diagnostics": 2,
         }
         for job, budgets in (
             ("preflight", preflight_budgets),
@@ -548,9 +574,13 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
             if name not in {
                 "Deploy signed Runtime Host release to Cloudflare",
                 "Upload deployment evidence and failure logs",
+                "Upload adapter failure diagnostics",
             }
         ) * 60
-        upload_budget = step_budgets["Upload deployment evidence and failure logs"] * 60
+        upload_budget = (
+            step_budgets["Upload deployment evidence and failure logs"]
+            + step_budgets["Upload adapter failure diagnostics"]
+        ) * 60
         job_budget = 80 * 60
         self.assertLessEqual(recovery_worst + 60, recovery_kill_budget)
         self.assertLessEqual(main_budget + recovery_kill_budget, deploy_step_budget)

@@ -140,6 +140,11 @@ gh run download RUN_ID --name creator-host-deployment-evidence --dir evidence/RU
 python3 -m json.tool evidence/RUN_ID/evidence.json
 ```
 
+`evidence.json` 必须是 `creator-host-deployment-evidence` 的根成员：Channel promotion 与发布 driver
+按名称只读取根目录的 `evidence.json`。adapter 的失败诊断单独上传为
+`creator-host-deployment-diagnostics`，不能并入证据 artifact；工作区外的路径会抬高上传根目录，
+把 `evidence.json` 嵌到子目录里。
+
 只有 workflow 成功、证据 schema/identity 完整且生产 URL 再验证通过，才可以报告 Creator
 deployed。该结论不自动证明 Runtime deployed、Release promoted 或任何物理 MIDI/Touch/听感门。
 
