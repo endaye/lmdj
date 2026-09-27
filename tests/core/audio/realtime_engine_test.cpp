@@ -2172,9 +2172,36 @@ struct SparseVoiceFixture {
     LMDJ_CHECK(engine.enqueue_control(control(128, 1, PadControlKind::press, 127)) ==
                EnqueueResult::accepted);
     render_frames(engine, kRampFrames);
+    // Establish the sparse fixture through public lifecycle receipts: all 128
+    // admissions happen before any completion, so first-free puts sequence 128
+    // in slot 127. Every filler ends at frame 1; Pad 1 has only its started edge.
+    std::array<RuntimeVoiceStateEvent, 255> states{};
+    LMDJ_CHECK(engine.drain_voice_states(states) == states.size());
+    for (std::size_t i = 0; i < 128; ++i) {
+      LMDJ_CHECK(states[i].state == RuntimeVoiceState::started);
+      LMDJ_CHECK(states[i].sequence == i + 1);
+      LMDJ_CHECK(states[i].runtime_frame == 0);
+    }
+    LMDJ_CHECK(states[127].slot == 1);
+    for (std::size_t i = 128; i < states.size(); ++i) {
+      LMDJ_CHECK(states[i].state == RuntimeVoiceState::completed);
+      LMDJ_CHECK(states[i].sequence == i - 127);
+      LMDJ_CHECK(states[i].runtime_frame == 1);
+    }
     LMDJ_CHECK(engine.telemetry().active_voices == 1);
   }
 };
+
+void render_pcm_blocks(RealtimeEngine& engine,
+                       std::span<float> left, std::span<float> right) {
+  LMDJ_CHECK(left.size() == right.size());
+  for (std::size_t offset = 0; offset < left.size();) {
+    const auto frames = static_cast<std::uint32_t>(
+        std::min<std::size_t>(256, left.size() - offset));
+    engine.render(left.data() + offset, right.data() + offset, frames);
+    offset += frames;
+  }
+}
 
 void sparse_high_voice_preserves_every_pcm_frame_through_natural_end() {
   SparseVoiceFixture f{TriggerMode::one_shot};
@@ -2188,7 +2215,7 @@ void sparse_high_voice_preserves_every_pcm_frame_through_natural_end() {
     const float boundary = 512 - frame < kRampFrames ? ramp_part(512 - frame) : 1.0F;
     expected[frame] = f.sample[frame] * (attack * boundary);
   }
-  f.engine.render(left.data(), right.data(), left.size());
+  render_pcm_blocks(f.engine, left, right);
   LMDJ_CHECK(left == expected);
   LMDJ_CHECK(right == expected);
   LMDJ_CHECK(f.engine.telemetry().active_voices == 0);
@@ -2327,7 +2354,7 @@ void sparse_high_pattern_voice_obeys_scheduled_release() {
     if (frame > release) envelope *= ramp_part(kRampFrames - (frame - release));
     expected[frame] = -0.25F * envelope;
   }
-  f.engine.render(left.data(), right.data(), static_cast<std::uint32_t>(left.size()));
+  render_pcm_blocks(f.engine, left, right);
   LMDJ_CHECK(left == expected);
   LMDJ_CHECK(right == expected);
   LMDJ_CHECK(f.engine.telemetry().active_voices == 0);
