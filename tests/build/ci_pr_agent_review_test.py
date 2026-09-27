@@ -377,7 +377,76 @@ def bound_source(source_root: Path, destination: Path) -> Path:
     return destination
 
 
+class ProviderResponseError(Exception):
+    """Synthetic SDK error containing data that must not escape."""
+
+    def __init__(self, status, error):
+        super().__init__(f"HTTP {status} Authorization: Bearer secret-canary")
+        self.status_code = status
+        self.body = {"error": error, "balance": "private-balance-canary"}
+
+
 class InputAndPolicyTests(unittest.TestCase):
+    def test_provider_limit_warning_explicit_structured_categories_for_four_providers(self):
+        for provider in adapter.SUPPORTED_PROVIDERS:
+            for code, category in (("insufficient_balance", "insufficient_balance"),
+                                   ("quota_exhausted", "quota_exhausted"),
+                                   ("rate_limit_exceeded", "rate_limited"),
+                                   ("unknown", "unknown_limit")):
+                with self.subTest(provider=provider, code=code):
+                    exc = ProviderResponseError(429, {"code": code, "message": "reach limit secret-canary"})
+                    self.assertEqual(adapter._provider_limit_warning(provider, exc), category)
+
+    def test_provider_native_error_codes_override_generic_429(self):
+        cases = [
+            ("deepseek", 402, {}, "insufficient_balance"),
+            ("glm", 429, {"code": "1113"}, "insufficient_balance"),
+            ("glm", 429, {"code": 1302}, "rate_limited"),
+            ("glm", 429, {"code": "1308"}, "quota_exhausted"),
+            ("glm", 429, {"code": "1310"}, "quota_exhausted"),
+            ("glm", 429, {"code": "1316"}, "unknown_limit"),
+            ("kimi", 429, {"type": "rate_limit_reached_error"}, "rate_limited"),
+            ("kimi", 403, {"type": "exceeded_current_quota_error"}, "unknown_limit"),
+            ("kimi", 429, {"type": "exceeded_current_quota_error", "message":
+                          "Your account private-account <private-key> is suspended due to insufficient balance"},
+             "insufficient_balance"),
+            ("xai", 403, {"message": "Your team has either used all available credits or reached its monthly spending limit"},
+             "unknown_limit"),
+        ]
+        for provider, status, error, category in cases:
+            with self.subTest(provider=provider, error=error):
+                self.assertEqual(adapter._provider_limit_warning(provider, ProviderResponseError(status, error)), category)
+
+    def test_bare_429_and_reach_limit_are_unknown_not_balance(self):
+        for provider in adapter.SUPPORTED_PROVIDERS:
+            for status, error in ((429, {}), (403, {"message": "reach limit"})):
+                with self.subTest(provider=provider, status=status):
+                    self.assertEqual(adapter._provider_limit_warning(provider, ProviderResponseError(status, error)), "unknown_limit")
+
+    def test_success_auth_network_and_local_budget_do_not_warn(self):
+        for provider in adapter.SUPPORTED_PROVIDERS:
+            for exc in (ProviderResponseError(200, {"code": "insufficient_balance"}),
+                        ProviderResponseError(401, {"message": "invalid API key"}),
+                        ProviderResponseError(403, {"message": "permission denied"}),
+                        ProviderResponseError(503, {"message": "service unavailable"}),
+                        ProviderResponseError(503, {"code": "quota_exhausted", "message": "quota service unavailable"}),
+                        ProviderResponseError(403, {"message": "permission denied for credits API"}),
+                        RuntimeError("network failure: secret-canary"),
+                        adapter.AdmissionDenied()):
+                with self.subTest(provider=provider, exception=type(exc).__name__):
+                    self.assertIsNone(adapter._provider_limit_warning(provider, exc))
+
+    def test_warning_reads_wrapped_bounded_json_and_ignores_oversized_body(self):
+        exc = ProviderResponseError(429, {"code": "quota_exhausted"})
+        exc.body = json.dumps(exc.body)
+        outer = RuntimeError("SDK wrapper secret-canary")
+        outer.__cause__ = exc
+        self.assertEqual(adapter._provider_limit_warning("glm", outer), "quota_exhausted")
+        exc.body = " " * 16_385 + exc.body
+        self.assertEqual(adapter._provider_limit_warning("glm", outer), "unknown_limit")
+        exc.body = "{broken JSON"
+        self.assertEqual(adapter._provider_limit_warning("glm", outer), "unknown_limit")
+
     def setUp(self):
         self.document = json.loads((FIXTURES / "complete-input.json").read_text(encoding="utf-8"))
         self.authenticated = adapter.authenticate_input(self.document)
@@ -2193,6 +2262,139 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         records = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
         self.assertEqual([record["status"] for record in records], ["reserved", "uncertain", "reserved", "reconciled"])
         self.assertEqual(len({record["request_id"] for record in records}), 2)
+
+    def test_flash_wire_limit_warning_survives_sdk_wrapping_without_leaking_response(self):
+        self.configure_flash_fixture()
+        calls = []
+
+        async def response_factory(httpx, request):
+            calls.append(request)
+            await request.aread()
+            return httpx.Response(429, request=request, json={"error": {
+                "code": "quota_exhausted", "message": "secret-canary private-balance-canary"}})
+
+        output, errors = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            result, _, ledger = self.run_with_wire_transport(response_factory)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["provider_warnings"], ["quota_exhausted"])
+        self.assertEqual(len(calls), 2, "warning must preserve the existing single retry")
+        retained = json.dumps(result) + output.getvalue() + errors.getvalue() + ledger.read_text()
+        for secret in ("secret-canary", "private-balance-canary", "fixture-secret", "Authorization"):
+            self.assertNotIn(secret, retained)
+
+    def test_native_limit_responses_cross_each_provider_http_adapter(self):
+        base_config = self.config_path.read_text().split("\n[providers.glm]")[0]
+        cases = [
+            ("deepseek", "deepseek/deepseek-flash", 402, {}, "insufficient_balance"),
+            ("glm", "zai/glm-5", 429, {"code": "1113"}, "insufficient_balance"),
+            ("kimi", "moonshot/kimi-k2.5", 429, {"type": "rate_limit_reached_error"}, "rate_limited"),
+            ("xai", "xai/grok-4", 403, {"message": "Your team has either used all available credits or reached its monthly spending limit"}, "unknown_limit"),
+        ]
+        for provider, model, status, error, category in cases:
+            with self.subTest(provider=provider):
+                credential = {"deepseek": "DEEPSEEK", "glm": "ZAI", "kimi": "KIMI", "xai": "XAI"}[provider]
+                config = base_config
+                if provider == "deepseek":
+                    config = config.replace("fixture-deepseek-model", model)
+                else:
+                    config = config.replace('provider_order = ["deepseek"]', f'provider_order = ["deepseek", "{provider}"]')
+                    secondary = base_config.split("[providers.deepseek]")[1]
+                    secondary = secondary.replace("fixture-deepseek-model", model)
+                    secondary = secondary.replace("deepseek.invalid.example", f"{provider}.invalid.example")
+                    secondary = secondary.replace("PR_AGENT_DEEPSEEK_API_KEY", f"PR_AGENT_{credential}_API_KEY")
+                    config += f"\n[providers.{provider}]" + secondary
+                for other in adapter.SUPPORTED_PROVIDERS:
+                    if other not in {"deepseek", provider}:
+                        config += f"\n[providers.{other}]\nenabled = false\n"
+                self.config_path.write_text(config)
+
+                async def response_factory(httpx, request):
+                    await request.aread()
+                    if provider != "deepseek" and request.url.host == "deepseek.invalid.example":
+                        return httpx.Response(401, request=request, json={"error": {"message": "invalid API key"}})
+                    return httpx.Response(status, request=request, json={"error": error})
+
+                # Each case owns its ledger and cannot inherit request IDs.
+                (self.root / "wire-ledger.jsonl").unlink(missing_ok=True)
+                with mock.patch.dict(os.environ, {f"PR_AGENT_{credential}_API_KEY": "fixture-secret"}):
+                    result, _, _ = self.run_with_wire_transport(response_factory)
+                self.assertEqual(result["status"], "not-reviewed")
+                self.assertEqual(result["attempts"][-1]["provider"], provider)
+                self.assertEqual(result["attempts"][-1].get("provider_warnings"), [category])
+
+    def test_unreadable_error_response_does_not_replace_failure_or_ledger_receipt(self):
+        class UnreadResponse:
+            @property
+            def text(self):
+                raise RuntimeError("unread response")
+
+        async def fake(**kwargs):
+            exc = ProviderResponseError(429, {})
+            exc.body = None
+            exc.response = UnreadResponse()
+            raise exc
+
+        result, _, ledger = self.run_with_fake(fake)
+        self.assertEqual(result["attempts"][0]["error_class"], "rate_limited")
+        self.assertNotIn("provider_warnings", result["attempts"][0])
+        self.assertEqual([json.loads(line)["status"] for line in ledger.read_text().splitlines()],
+                         ["reserved", "uncertain", "reserved", "uncertain"])
+
+    def test_limit_warning_survives_successful_same_provider_retry(self):
+        calls = []
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text()
+
+        async def fake(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise ProviderResponseError(429, {"code": "rate_limit_exceeded"})
+            return FakeCompletion({"model": "fixture-deepseek-served",
+                "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+
+        result, _, _ = self.run_with_fake(fake)
+        self.assertEqual(result["status"], "reviewed")
+        self.assertEqual(result["attempts"][0]["provider_warnings"], ["rate_limited"])
+        self.assertEqual(len(calls), 2)
+
+    def test_limit_warning_retains_failed_provider_when_fallback_succeeds(self):
+        self.config_path.write_text(self.with_glm_fallback(self.config_path.read_text()))
+        calls = []
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text()
+
+        async def fake(**kwargs):
+            calls.append(kwargs["model"])
+            if kwargs["model"] != "fixture-glm-model":
+                raise ProviderResponseError(429, {"code": "quota_exhausted"})
+            return FakeCompletion({"model": "fixture-glm-served",
+                "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+
+        result, _, _ = self.run_with_fake(fake)
+        self.assertEqual(result["status"], "reviewed")
+        self.assertEqual(result["selected_attempt"], 1)
+        self.assertEqual(result["attempts"][0]["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["provider_warnings"], ["quota_exhausted"])
+        self.assertNotIn("provider_warnings", result["attempts"][1])
+        self.assertEqual(calls, ["fixture-deepseek-model", "fixture-deepseek-model", "fixture-glm-model"])
+
+    def test_limit_warning_survives_total_deadline_after_first_refusal(self):
+        self.config_path.write_text(self.config_path.read_text().replace("engine_deadline_seconds = 600", "engine_deadline_seconds = 1"))
+        calls = []
+
+        async def fake(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise ProviderResponseError(429, {"code": "rate_limit_exceeded"})
+            await asyncio.sleep(5)
+            raise AssertionError("deadline did not cancel the request")
+
+        result, _, _ = self.run_with_fake(fake)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["error_class"], "deadline_exceeded")
+        self.assertEqual(result["attempts"][0]["provider_warnings"], ["rate_limited"])
+        self.assertEqual(len(calls), 2)
 
     def test_flash_real_handler_permanent_http_error_retains_unknown_reservation(self):
         self.configure_flash_fixture()

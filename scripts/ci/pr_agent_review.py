@@ -121,6 +121,9 @@ _SAFE_ERROR_CLASSES = {
     "deadline_exceeded",
     "internal_error",
 }
+PROVIDER_WARNING_CATEGORIES = frozenset({
+    "insufficient_balance", "quota_exhausted", "rate_limited", "unknown_limit",
+})
 _PATH_RE = re.compile(r"^[^\x00\r\n]+$")
 _HUNK_ID_RE = re.compile(r"^[A-Za-z0-9._:/#-]{1,240}$")
 _DIFF_HUNK_HEADER_RE = re.compile(
@@ -1511,6 +1514,71 @@ def _error_class(exc: BaseException) -> str:
     return "internal_error"
 
 
+def _provider_limit_warning(provider: str, exc: BaseException) -> str | None:
+    """Read bounded SDK error facts; return only a finite diagnostic, never text.
+
+    This is deliberately separate from _error_class: diagnostics cannot change
+    the existing retry/fallback or budget policy. Sources are in the Task plan.
+    """
+    ambiguous = False
+    current: BaseException | None = exc
+    for _ in range(5):
+        if current is None:
+            break
+        if isinstance(current, EngineError):
+            return None  # Local admission/validation is not provider quota.
+        response = getattr(current, "response", None)
+        status = getattr(current, "status_code", None)
+        if type(status) is not int:
+            status = getattr(response, "status_code", None)
+        if type(status) is int and (200 <= status < 300 or status == 401 or status >= 500):
+            return None
+        ambiguous |= status == 429
+        if provider == "deepseek" and status == 402:
+            return "insufficient_balance"
+        body = getattr(current, "body", None)
+        if body is None and response is not None:
+            body = getattr(response, "text", None)
+        if isinstance(body, str):
+            if len(body) <= 16_384:
+                try:
+                    body = json.loads(body)
+                except (ValueError, RecursionError):
+                    body = None
+            else:
+                body = None
+        if isinstance(body, dict):
+            error = body.get("error", body)
+            if isinstance(error, dict):
+                codes = {str(error[key]).casefold() for key in ("code", "type")
+                         if type(error.get(key)) in (str, int)}
+                message = error.get("message", "")
+                message = message[:4096].casefold() if isinstance(message, str) else ""
+                if provider == "glm":
+                    if "1113" in codes:
+                        return "insufficient_balance"
+                    if codes & {"1308", "1310"}:
+                        return "quota_exhausted"
+                    if "1302" in codes:
+                        return "rate_limited"
+                if codes & {"insufficient_balance", "credit_balance_exhausted"}:
+                    return "insufficient_balance"
+                if codes & {"quota_exhausted", "insufficient_quota", "usage_limit_exceeded"}:
+                    return "quota_exhausted"
+                if provider == "kimi" and "exceeded_current_quota_error" in codes:
+                    return "insufficient_balance" if "suspended due to insufficient balance" in message else "unknown_limit"
+                if codes & {"rate_limit_exceeded", "rate_limit_reached", "rate_limit_reached_error"}:
+                    return "rate_limited"
+                # Unqualified or compound refusals cannot establish whether
+                # the operator needs funds, quota, or request pacing.
+                ambiguous |= any(word in message for word in (
+                    "reach limit", "reached its monthly spending limit", "insufficient balance",
+                    "quota exhausted", "exceeded your current quota", "rate limit", "used all available credits",
+                ))
+        current = current.__cause__ or current.__context__
+    return "unknown_limit" if ambiguous else None
+
+
 def _strict_native_yaml(upstream: Any, text: str) -> dict[str, Any]:
     """Reject duplicate YAML keys before invoking the pinned parser."""
     if not isinstance(text, str) or not text.strip() or len(text.encode("utf-8")) > MAX_NATIVE_OUTPUT_BYTES:
@@ -1859,6 +1927,16 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
             async with asyncio.timeout(request_timeout):
                 response = await original_completion(**kwargs)
         except BaseException as exc:
+            try:
+                warning = _provider_limit_warning(provider["provider_id"], exc)
+            except Exception:
+                # Diagnostics must never mask the original failure or prevent
+                # its uncertain reservation from being retained below.
+                warning = None
+            if warning is not None:
+                warnings = context.setdefault("provider_warnings", [])
+                if warning not in warnings:
+                    warnings.append(warning)
             raw_breach, raw_output_breach, raw_context_breach = raw_envelope_facts(context)
             ledger.reconcile(
                 reservation, status="uncertain", actual_amount=None, usage=None,
@@ -2637,6 +2715,7 @@ use its actual line numbers. Return one native YAML review document.
                 ) or last_prompt
                 last_usage = context.get("usage") or last_usage
                 attempt_evidence.update({
+                    "provider_warnings": list(context.get("provider_warnings", [])),
                     "prompt": last_prompt,
                     "usage": copy.deepcopy(last_usage),
                     "num_ai_calls": context.get("num_ai_calls", 0),
@@ -2772,6 +2851,8 @@ async def _run_async(authenticated: dict[str, Any], config: dict[str, Any], *, s
                 "usage": coverage["usage"],
                 "duration_ms": duration_ms,
             }
+        if attempt_evidence.get("provider_warnings"):
+            result["provider_warnings"] = attempt_evidence["provider_warnings"]
         attempts.append(result)
         if result["status"] == "reviewed" or attempt_evidence.get("envelope_breach"):
             break

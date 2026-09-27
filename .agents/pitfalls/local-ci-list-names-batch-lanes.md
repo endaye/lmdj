@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-09-27
     occurrence: https://github.com/endaye/lmdj/pull/1550
     observed_by: claude-code/opus-5.5
+  - date: 2026-09-27
+    occurrence: https://github.com/endaye/lmdj/pull/1581
+    observed_by: claude-code/opus-5.5
 exit: gate:tests/build/ci_local_preflight_test.py
 ---
 
@@ -39,3 +42,13 @@ scripts/local-ci.sh --lanes deploy_contract
 `PullRequestLaneVisibilityTest` in
 `tests/build/ci_local_preflight_test.py` holds the derivation, the partition and
 the fail-closed empty set when the workflow cannot be read.
+
+The warning is advisory, and it did not stop two later merges. #1550 broke three
+Chromium realtime transport journeys (`web_runtime_host`, `web_toolchain`).
+#1581 changed owner-lost recovery semantics, and
+`packages/web-runtime-platform/test/control_runtime_test.cpp` plus the Creator
+owner-loss journey kept asserting the old refusal (`core_asan`,
+`core_coverage`, `core_macos`, `creator`). Both stayed red on `main` for a week
+and blocked every complete candidate. When a behavior change reaches Core
+Module source, search every lane's tests for the old assertion, not only the
+module's own tests.

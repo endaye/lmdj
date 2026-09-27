@@ -34,6 +34,18 @@ YAML 语法错误的位置及原文长度/摘要，或已知的 `finish_reason`�
 诊断不输出模型原文；旧记录只有 `malformed` 时不能反推出具体语法错误。
 源码合入后仍需通过下述安装入口更新主机 release，才能应用解析与提示词修复。
 
+仓库 adapter 还会在 `attempts[].provider_warnings` 中保留去重后的供应商
+限额诊断：`insufficient_balance`（余额或资源包不足）、`quota_exhausted`
+（使用额度耗尽）、`rate_limited`（请求速率限制）、`unknown_limit`
+（原因无法确定）。仅凭 HTTP 429 或笼统的 `reach limit` 不判断余额不足。
+`capture` 校验完整结果后，在 Actions warning 和 step summary 中显示
+provider、run、attempt、类别及“请检查该供应商账户余额/额度”的提示；
+不输出供应商原始正文、账户余额、API key 或 Authorization。
+同一供应商重复报错只保留每类一条，后续 retry/fallback 成功也保留此前诊断。
+warning 不改变请求次数、重试、fallback、失败或评审资格，也不主动查询余额。
+旧安装结果可以没有该字段；新增采集能力须通过现有 installer 更新主机
+adapter 才生效，源码合入不代表已经部署，也不激活其余供应商。
+
 安装与更新只有一个入口：`scripts/ci/pr-agent/install.sh <staging-dir>` 以 root
 在主机执行，把现有 bundle 复制到新 release 后写入仓库的 adapter/config，
 重算新版本的成员身份，把 release 设为 root-owned 只读，
@@ -547,6 +559,20 @@ Playwright 原始协议流里的截图、Wasm 或注入脚本载荷。正常通�
 多条浏览器连接复用同一个命令 ID 时，时间线标记响应归属不明。它只帮助定位偶发
 `page.goto` 挂起发生在协议的哪一步，失败仍为失败，
 不代表 WebKit 问题已修复或候选批次可发版。
+
+该时间线在 2026-09-27 定位了这次挂起（[#1570](https://github.com/endaye/lmdj/issues/1570)）：
+Linux r2361 WebKit 为全新页面的 COOP 导航创建新进程 provisional page 后，偶发取消
+它的加载。`Playwright.provisionalLoadFailed` 早于旧进程的文档请求到达，锁定的
+Playwright 1.62.1 客户端此时没有 pending document，于是丢掉了这次中止，
+`page.goto` 一直等到用例超时。`tests/platform/web` 的 `npm ci` 在 postinstall
+阶段给客户端打补丁，只作用于这一个 bundle、版本不符或锚点不唯一时直接失败：
+失败早到时，若主 frame 还没有带 loader 的 pending document，补丁先用客户端自己的
+`frameRequestedNavigation` 登记该 loader，再照常中止。`goto` 于是立刻以引擎自己的
+取消错误拒绝，不依赖文档请求是否到达，也不保留延迟状态。Proof 会先确认补丁已生效，再用一个假的 WebKit pipe 浏览器按实录
+顺序重放：原版客户端超时、补丁版立即拒绝。Project I/O spec 的所有导航都经过同一
+个 helper：只有 WebKit、这是该页面经 helper 的第一次导航且仍停在初始
+`about:blank`（从未提交过文档）时，这个取消错误才重试一次，并记为 `webkit-engine-cancelled-first-load` 注解；其他错误、
+已承载文档的页面或第二次取消仍然失败。超时、浏览器版本与页面关闭语义不变。
 
 测试归属跟随被测对象，而不只是测试文件所在目录。`apps/web-runtime-host/test/deploy_command_test.py` 会对着 fake Netlify server 端到端执行 `scripts/web-runtime-deploy.sh`，因此 scope policy 在既有 `apps/web-runtime-host/` 前缀归属之外，另把该套件与它驱动的 `deploy_orchestrator.py`、`netlify_api.py`、`release_bundle.py` 三个工具映射到 `deploy_contract`。在此之前修改 deploy 命令只选中 `deploy_contract`，却从不运行证明该命令的套件——这是保守测试继承策略内部的 fail-open 缺口。现在 Deploy Contract lane 运行该套件，`scripts/web-runtime-host.sh` 的 `run_nonbrowser_tests` 不再运行它，因此 Formal Web Runtime Host proof 的非浏览器阶段不再包含它；其余六个非浏览器套件的被测对象仍归 `web_runtime_host`，保持不变。union 语义无法减去 lane，该套件与三个工具仍会通过目录前缀继续选中 `web_runtime_host`；这种过度选择是 fail-closed 方向，属于接受范围。
 

@@ -7,6 +7,7 @@
     "node": "26.x"
   },
   "scripts": {
+    "postinstall": "node toolchain/playwright_webkit_abort_patch.mjs apply",
     "test": "playwright test"
   },
   "devDependencies": {
