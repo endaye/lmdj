@@ -1194,6 +1194,33 @@ void record_off_withdraws_an_unlanded_overlay_and_commits_once() {
   LMDJ_CHECK(project.value().patterns.at(f.pattern).events.size() == 1);
 }
 
+// L2 (#1513): a deferred command whose submission meets a real unnamed
+// successor (not the withdrawn slot retiring) is refused after a bounded
+// number of cadence ticks instead of waiting forever, and leaves nothing
+// withdrawn behind for a later command's receipt.
+void deferred_command_meeting_an_unnamed_successor_is_refused() {
+  Fixture f;
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  const auto frame = admission_frame(f.bundle);
+  LMDJ_CHECK(f.controller->admit({10, frame, {0, 1}, true, 90, 10}).has_value());
+  LMDJ_CHECK(f.controller->publish_overlay().has_value());
+  f.audio.render(256);
+  LMDJ_CHECK(f.controller->request(f.make(7, 2, PatternTransportIntent::record)) ==
+             PatternTransportSubmit::accepted);
+  auto view = PreparedPatternView::from_snapshot(pattern_snapshot());
+  LMDJ_CHECK(view.has_value());
+  LMDJ_CHECK(f.audio.engine.publish_pattern_view(std::move(view.value())).result ==
+             PatternPublishResult::accepted);
+  bool refused = false;
+  for (unsigned step = 0; step < 200 && !refused; ++step) {
+    refused = !f.controller->continue_operation().has_value();
+  }
+  LMDJ_CHECK(refused);
+  LMDJ_CHECK(f.controller->inspect().phase == PatternTransportPhase::idle);
+  LMDJ_CHECK(f.controller->inspect().error.has_value());
+  LMDJ_CHECK(f.journal_exists());
+}
+
 // L2 (#1513): the cadence runs on every realtime service tick, so while the
 // coordinator's own overlay is queued for its Bar a tick answers from the port
 // alone. An unreadable journal proves no journal read happens in that window.
@@ -1284,6 +1311,7 @@ int main() {
     overlay_generation_advances_when_the_projected_pattern_changes();
     overlay_publication_records_and_the_cutoff_matches();
     record_off_withdraws_an_unlanded_overlay_and_commits_once();
+    deferred_command_meeting_an_unnamed_successor_is_refused();
     queued_overlay_tick_reads_no_journal();
     superseded_overlay_is_dropped_and_the_close_settles();
     refused_overlay_publication_settles_and_new_content_retries();
@@ -1295,7 +1323,7 @@ int main() {
     known_owner_registration_protects_only_the_open_transport_journal();
     controller_destroyed_after_application_is_safe();
     owner_lost_transport_admission_is_sealed_and_listed();
-    std::cout << "pattern transport controller tests: PASS (27 scenarios)\n";
+    std::cout << "pattern transport controller tests: PASS (28 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

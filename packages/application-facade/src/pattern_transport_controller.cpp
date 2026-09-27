@@ -512,6 +512,12 @@ foundation::Result<void> PatternTransportCoordinator::publish_overlay() {
   return foundation::Result<void>::success();
 }
 
+// Cadence ticks a deferred command may wait for the withdrawn slot to leave
+// the engine's outstanding set. Naming that slot succeeds on the first tick
+// while it is still pending, and an unnamed submit succeeds on the first tick
+// after it retires; a mismatch across this many ticks is a real conflict.
+constexpr unsigned kDeferredSubmitAttempts = 64;
+
 bool PatternTransportCoordinator::withdraw_unlanded_overlay(
     const audio::PatternReplacementAuthority& authority) {
   if (!audio_.cancel_overlay(authority)) return false;
@@ -614,11 +620,19 @@ foundation::Result<void> PatternTransportCoordinator::continue_operation() {
       withdrawn_overlay_.reset();
       submitted = audio_.submit(command);
     }
-    if (submitted == audio::PatternTransportSubmit::identity_mismatch) {
+    if (submitted == audio::PatternTransportSubmit::identity_mismatch &&
+        ++deferred_attempts_ < kDeferredSubmitAttempts) {
       return foundation::Result<void>::success();
     }
     deferred_submit_ = false;
+    deferred_attempts_ = 0;
     if (submitted != audio::PatternTransportSubmit::accepted) {
+      // A mismatch that outlasts the retry budget is a real unnamed successor,
+      // not the withdrawn slot retiring; it is refused like an immediate submit.
+      // Nothing withdrawn may outlive the refused command and be matched
+      // against a later command's receipt. An accepted command keeps it until
+      // its own receipt, which is where the named slot is recognised.
+      withdrawn_overlay_.reset();
       error_ = foundation::Error{foundation::ErrorCode::invalid_argument,
                                  "Pattern transport audio submit refused"};
       pending_.reset();

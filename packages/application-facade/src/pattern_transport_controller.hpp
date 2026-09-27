@@ -154,6 +154,7 @@ class PatternTransportCoordinator {
   // An accepted command waiting for a withdrawn overlay to retire audio-side
   // before it is submitted from the cadence (#1513).
   bool deferred_submit_{};
+  unsigned deferred_attempts_{};
   // The overlay withdrawn for that command, named in its submission while
   // its slot is still outstanding audio-side.
   std::optional<audio::PatternReplacementAuthority> withdrawn_overlay_;
