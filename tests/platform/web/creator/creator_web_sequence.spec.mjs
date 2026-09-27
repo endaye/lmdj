@@ -426,10 +426,10 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
 
 // Owner loss: the reload kills the Runtime Worker without a completed Close,
 // so the recorded admission stays unresolved. On reopen the recovery surface
-// seals it as owner_lost (#1367): Apply is honestly refused (the fence outcome
-// is unknowable), Discard releases it, and a fresh recording opens a new
-// journal.
-test("owner loss surfaces the interrupted recording for honest refusal and discard", async ({page, browserName}) => {
+// seals it as owner_lost (#1367). No terminal transfer can arrive any more, so
+// Apply recovers the heard take into the Pattern (#1515), and a fresh
+// recording then opens a new journal.
+test("owner loss surfaces the interrupted recording and recovers the heard take", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(240_000);
   await installTransportProofRecorder(page);
@@ -457,25 +457,19 @@ test("owner loss surfaces the interrupted recording for honest refusal and disca
   await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
   const recoveryRegion = page.getByRole("region", {name: "Sequence recovery"});
   await expect(recoveryRegion).toBeVisible({timeout: 60_000});
-  // The one-shot Pad press is an admitted candidate but not a complete event
-  // (no release exists for one-shot material), so the sealed candidate
-  // honestly reports zero events.
   await expect(recoveryRegion).toContainText("owner_lost");
 
-  // Apply is honestly refused: the cutoff fence outcome is unknowable, so the
-  // admission is never guessed into a Pattern.
+  // Apply finalizes the owned one-shot press after its attack tail and
+  // commits it: the take the performer heard survives owner loss (#1515).
   await recoveryRegion.getByRole("button", {name: "Recover original Pattern"})
     .click();
-  await expect(page.getByRole("alert")).toBeVisible({timeout: 30_000});
-  await expect(recoveryRegion).toBeVisible();
-
-  // Discard releases the unresolved admission; truth stays untouched.
-  await recoveryRegion.getByRole("button", {name: "Discard"}).click();
   await expect(page.getByRole("region", {name: "Sequence recovery"}))
     .toHaveCount(0, {timeout: 60_000});
-  const discardedTruth = await inspectTruth(page);
-  expect(discardedTruth.revision).toBe(imported.revision);
-  expect(discardedTruth.patterns[patternId].events).toHaveLength(0);
+  const appliedTruth = await inspectTruth(page);
+  expect(appliedTruth.revision).toBe(imported.revision + 1);
+  expect(appliedTruth.patterns[patternId].events).toHaveLength(1);
+  expect(appliedTruth.patterns[patternId].events[0])
+    .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100});
 
   // A fresh recording on the same session opens a new journal and commits.
   await page.getByRole("button", {name: "Activate audio"}).click();
@@ -488,8 +482,8 @@ test("owner loss surfaces the interrupted recording for honest refusal and disca
   await recordKey(page).click();
   await transportStatus(page, "playing");
   const recovered = await inspectTruth(page);
-  expect(recovered.revision).toBe(imported.revision + 1);
-  expect(recovered.patterns[patternId].events).toHaveLength(1);
-  expect(recovered.patterns[patternId].events[0])
-    .toMatchObject({slot: {bank: 0, pad: 1}, velocity: 100});
+  expect(recovered.revision).toBe(imported.revision + 2);
+  expect(recovered.patterns[patternId].events).toHaveLength(2);
+  expect(recovered.patterns[patternId].events)
+    .toContainEqual(expect.objectContaining({slot: {bank: 0, pad: 1}, velocity: 100}));
 });
