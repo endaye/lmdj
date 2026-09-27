@@ -156,6 +156,8 @@ no additional API/ABI, Product Build, tag, Release, Channel or snapshot is
 allocated. The original private-layout break required consumers to rebuild;
 current Module and Assembly identities are derived by the portal from manifests.
 
+## Documentation Impact
+
 Documentation impact: required
 Affected portal pages: /core/modules/audio-runtime/
 Reason: reconcile the measured-source R2 result, adopted reviews and exact PCM
