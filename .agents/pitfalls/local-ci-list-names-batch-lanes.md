@@ -9,10 +9,10 @@ recurrences:
   - date: 2026-09-17
     occurrence: https://github.com/endaye/lmdj/pull/1492
     observed_by: Claude Opus 5
-  - date: 2026-09-28
+  - date: 2026-09-27
     occurrence: https://github.com/endaye/lmdj/pull/1550
     observed_by: claude-code/opus-5.5
-  - date: 2026-09-28
+  - date: 2026-09-27
     occurrence: https://github.com/endaye/lmdj/pull/1581
     observed_by: claude-code/opus-5.5
 exit: gate:tests/build/ci_local_preflight_test.py
