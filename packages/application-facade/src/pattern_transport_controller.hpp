@@ -40,6 +40,12 @@ class PatternTransportAudioPort {
         {foundation::ErrorCode::unsupported_audio,
          "Pattern transport overlay publication is not implemented by this host"});
   }
+  // Mirrors the public port's unlanded-overlay withdrawal (#1513).
+  virtual bool cancel_overlay(
+      const audio::PatternReplacementAuthority& authority) {
+    (void)authority;
+    return false;
+  }
 };
 
 // What an open recording would contribute to its Pattern if it ended now.
@@ -91,6 +97,11 @@ class PatternTransportCoordinator {
       const audio::PatternTransportReceipt& receipt,
       const PatternTransportRequest& request);
   foundation::Result<void> finish_close();
+  // Withdraws this coordinator's own overlay while it is still queued, so a
+  // transport command need not fence across it. False when the Host cannot
+  // withdraw it (already claimed for its apply point, or no capability).
+  bool withdraw_unlanded_overlay(
+      const audio::PatternReplacementAuthority& authority);
 
   PatternTransportAudioPort& audio_;
   project_io::SequenceJournal& journals_;
@@ -140,6 +151,13 @@ class PatternTransportCoordinator {
   // publication; a closing command in that window reports busy until the
   // cadence tick past the boundary (#1513).
   std::uint64_t unlanded_overlay_generation_{};
+  // An accepted command waiting for a withdrawn overlay to retire audio-side
+  // before it is submitted from the cadence (#1513).
+  bool deferred_submit_{};
+  unsigned deferred_attempts_{};
+  // The overlay withdrawn for that command, named in its submission while
+  // its slot is still outstanding audio-side.
+  std::optional<audio::PatternReplacementAuthority> withdrawn_overlay_;
   // Bounded retry for a refused overlay publication, keyed to the refused
   // projection generation: three attempts per content change (#1513).
   unsigned overlay_refusals_{};

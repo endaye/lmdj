@@ -63,6 +63,19 @@ class PatternTransportAudioPort {
         {foundation::ErrorCode::unsupported_audio,
          "Pattern transport overlay publication is not implemented by this host"});
   }
+  // Withdraw an overlay this port published through `publish_overlay` that
+  // has not landed yet (#1513). A transport command cannot fence across the
+  // coordinator's own unlanded overlay, so the coordinator withdraws it and
+  // the command proceeds; the close commits the same retained input. Return
+  // false when the publication can no longer be withdrawn (the render thread
+  // already claimed it for its apply point). The default keeps Hosts that
+  // predate this seam building; for them such a command stays busy until the
+  // overlay lands.
+  virtual bool cancel_overlay(
+      const audio::PatternReplacementAuthority& authority) {
+    (void)authority;
+    return false;
+  }
 };
 
 struct PatternTransportControllerConfig {

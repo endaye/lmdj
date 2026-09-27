@@ -45,6 +45,10 @@ class AudioPortBridge final : public detail::PatternTransportAudioPort {
       std::span<const domain::PatternEvent> events) override {
     return port_.publish_overlay(pattern, events);
   }
+  bool cancel_overlay(
+      const audio::PatternReplacementAuthority& authority) override {
+    return port_.cancel_overlay(authority);
+  }
 
  private:
   lmdj::facade::PatternTransportAudioPort& port_;
