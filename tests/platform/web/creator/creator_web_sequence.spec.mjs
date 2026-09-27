@@ -468,8 +468,9 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
   const appliedTruth = await inspectTruth(page);
   expect(appliedTruth.revision).toBe(imported.revision + 1);
   expect(appliedTruth.patterns[patternId].events).toHaveLength(1);
+  // The one-shot press is finalized with the default 240-tick attack tail.
   expect(appliedTruth.patterns[patternId].events[0])
-    .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100});
+    .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100, duration_tick: 240});
 
   // A fresh recording on the same session opens a new journal and commits.
   await page.getByRole("button", {name: "Activate audio"}).click();
