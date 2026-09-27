@@ -39,11 +39,12 @@ Declared files:
 `npm ci` in `tests/platform/web` runs a postinstall edit of the locked client's
 WebKit page:
 
-- A provisional-load failure whose loader is not the main frame's pending
-  document is remembered.
-- It is replayed through `frameAbortedNavigation` when that loader's main-frame
-  document request starts. The next main-frame document request ends the
-  deferral either way.
+- When a provisional-load failure arrives and no main-frame pending document
+  names a loader yet (`navigateFrame` leaves one without a loader), the failed
+  loader is registered through the client's own `frameRequestedNavigation`.
+- It is then aborted through `frameAbortedNavigation` as before, so `goto`
+  rejects at once, whether or not the document request ever arrives. The edit
+  keeps no deferred state.
 
 The edit accepts only Playwright 1.62.1 with exactly one site per change and
 fails closed with `why`/`remedy` otherwise. The proof checks that the patch is
@@ -68,9 +69,10 @@ Lowest-tier verification:
 - `node --test tests/platform/web/toolchain/playwright_webkit_abort_patch_test.mjs`
   replays the recorded exchange through a fake WebKit inspector-pipe browser
   against scratch copies of the locked client. The unpatched copy times out.
-  The patched copy rejects at once with the engine's error, keeps the
-  existing rejection when the document request arrives first, and is
-  idempotent, reversible and fail-closed.
+  The patched copy rejects at once with the engine's error, also when the
+  document request never arrives, and keeps the existing rejection when the
+  document request arrives first. The patch is idempotent, reversible and
+  fail-closed.
 - `node --test tests/platform/web/project_io/webkit_cancelled_navigation_test.mjs`
   checks that the retry condition fires once, never on a page the helper already
   navigated, and never otherwise.
@@ -78,7 +80,7 @@ Lowest-tier verification:
   that the patched client and helper leave passing journeys unchanged.
 
 The new gate catches a Playwright upgrade or reinstall that silently removes
-the replay, which would bring back the unbounded hang.
+the edit, which would bring back the unbounded hang.
 
 ## Version Management
 

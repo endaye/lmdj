@@ -45,9 +45,10 @@ already cancelled, until the 600-second test timeout.
 
 ## How to apply
 
-`tests/platform/web` postinstall patches the locked client to replay such an
-early failure when its document request starts. The patch is bound to 1.62.1
-and to exactly one site per edit, and it fails closed otherwise. The gate
+`tests/platform/web` postinstall patches the locked client: it registers such
+an early failure's loader as the pending document and aborts it at once. The
+patch is bound to 1.62.1 and to exactly one site per edit, and it fails closed
+otherwise. The gate
 replays the recorded order through a fake WebKit pipe browser: the unpatched
 client must time out and the patched one must reject at once. The Project I/O
 spec retries only that engine cancellation, only on WebKit, and only on a page's

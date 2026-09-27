@@ -10,56 +10,27 @@ import {fileURLToPath, pathToFileURL} from "node:url";
 // moment the main frame has no pending document, so `frameAbortedNavigation`
 // returns early and `page.goto` waits for a commit that never comes.
 //
-// This edit remembers such an early failure and replays it when the matching
-// document request starts, so `goto` rejects with the engine's own error. It
-// is bound to the exact locked client bundle and fails closed on any other.
+// This edit registers the failed loader as the main frame's pending document
+// when no pending document names a loader yet (`navigateFrame` leaves one
+// without), then aborts it as before, so `goto` rejects at once
+// with the engine's own error. It keeps no deferred state. It is bound to the
+// exact locked client bundle and fails closed on any other.
 export const PLAYWRIGHT_VERSION = "1.62.1";
 
 const EDITS = [
   {
-    name: "defer an early provisional-load failure",
+    name: "register an early provisional-load failure",
     original: `          errorText += "; maybe frame was detached?";
         this._page.frameManager.frameAbortedNavigation(this._page.mainFrame()._id, errorText, event.loaderId);
       }
       handleWindowOpen(event) {`,
     patched: `          errorText += "; maybe frame was detached?";
-        const lmdjPendingDocument = this._page.mainFrame().pendingDocument();
-        if (event.loaderId && lmdjPendingDocument?.documentId !== event.loaderId) {
-          // LMDJ #1570: replay once the document request for this loader starts.
-          this._lmdjEarlyProvisionalLoadFailure = { loaderId: event.loaderId, errorText };
-          return;
-        }
+        // LMDJ #1570: the failure can arrive before the loader's document request.
+        if (event.loaderId && !this._page.mainFrame().pendingDocument()?.documentId)
+          this._page.frameManager.frameRequestedNavigation(this._page.mainFrame()._id, event.loaderId);
         this._page.frameManager.frameAbortedNavigation(this._page.mainFrame()._id, errorText, event.loaderId);
       }
       handleWindowOpen(event) {`,
-  },
-  {
-    name: "replay it at the document request",
-    original: `        const request2 = new WKInterceptableRequest(session2, frame, event, redirectedFrom, documentId);
-        let route2;
-        if (intercepted) {
-          route2 = new WKRouteImpl(session2, event.requestId);
-          request2.request.setRawRequestHeaders(null);
-        }
-        this._requestIdToRequest.set(event.requestId, request2);
-        this._page.frameManager.requestStarted(request2.request, route2);
-      }`,
-    patched: `        const request2 = new WKInterceptableRequest(session2, frame, event, redirectedFrom, documentId);
-        let route2;
-        if (intercepted) {
-          route2 = new WKRouteImpl(session2, event.requestId);
-          request2.request.setRawRequestHeaders(null);
-        }
-        this._requestIdToRequest.set(event.requestId, request2);
-        this._page.frameManager.requestStarted(request2.request, route2);
-        const lmdjEarlyFailure = this._lmdjEarlyProvisionalLoadFailure;
-        if (lmdjEarlyFailure && isNavigationRequest && frame === this._page.mainFrame()) {
-          // The next main-frame document request ends the deferral either way.
-          this._lmdjEarlyProvisionalLoadFailure = void 0;
-          if (documentId === lmdjEarlyFailure.loaderId)
-            this._page.frameManager.frameAbortedNavigation(frame._id, lmdjEarlyFailure.errorText, lmdjEarlyFailure.loaderId);
-        }
-      }`,
   },
 ];
 

@@ -554,8 +554,9 @@ Linux r2361 WebKit 为全新页面的 COOP 导航创建新进程 provisional pag
 Playwright 1.62.1 客户端此时没有 pending document，于是丢掉了这次中止，
 `page.goto` 一直等到用例超时。`tests/platform/web` 的 `npm ci` 在 postinstall
 阶段给客户端打补丁，只作用于这一个 bundle、版本不符或锚点不唯一时直接失败：
-补丁先记住早到的失败，等对应文档请求开始时再重放，`goto` 于是立刻以引擎自己的
-取消错误拒绝。Proof 会先确认补丁已生效，再用一个假的 WebKit pipe 浏览器按实录
+失败早到时，若主 frame 还没有带 loader 的 pending document，补丁先用客户端自己的
+`frameRequestedNavigation` 登记该 loader，再照常中止。`goto` 于是立刻以引擎自己的
+取消错误拒绝，不依赖文档请求是否到达，也不保留延迟状态。Proof 会先确认补丁已生效，再用一个假的 WebKit pipe 浏览器按实录
 顺序重放：原版客户端超时、补丁版立即拒绝。Project I/O spec 的所有导航都经过同一
 个 helper：只有 WebKit、这是该页面经 helper 的第一次导航且仍停在初始
 `about:blank`（从未提交过文档）时，这个取消错误才重试一次，并记为 `webkit-engine-cancelled-first-load` 注解；其他错误、

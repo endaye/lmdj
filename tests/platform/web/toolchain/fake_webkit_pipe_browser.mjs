@@ -6,8 +6,9 @@ import {createReadStream, createWriteStream} from "node:fs";
 // the COOP process-swap exchange retained from batch run 36320748849 (#1570):
 // the provisional new-process target is created, its load is cancelled, and
 // it is destroyed. FAKE_WEBKIT_ORDER=early delivers the old process's document
-// request after that failure, as recorded; `late` delivers it before.
-const order = process.env.FAKE_WEBKIT_ORDER === "late" ? "late" : "early";
+// request after that failure, as recorded; `late` delivers it before; `none`
+// never delivers it.
+const order = ["late", "none"].includes(process.env.FAKE_WEBKIT_ORDER) ? process.env.FAKE_WEBKIT_ORDER : "early";
 const output = createWriteStream(null, {fd: 4});
 const send = message => output.write(`${JSON.stringify(message)}\0`);
 const destroyedTargets = new Set();
@@ -56,7 +57,7 @@ function handle(message) {
   } else if (method === "Playwright.navigate") {
     navigate(message);
   } else if (method === "Playwright.close") {
-    process.exit(0);
+    output.end(() => process.exit(0));
   } else {
     const result = method === "Playwright.createContext" ? {browserContextId: "context"} : {};
     send({id, ...(pageProxyId ? {pageProxyId} : {}), result});

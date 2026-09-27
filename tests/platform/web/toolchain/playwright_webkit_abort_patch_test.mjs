@@ -66,6 +66,13 @@ test("the patched client keeps the locked rejection when the document request co
   assert.ok(elapsed < NAVIGATION_TIMEOUT_MS, `rejected after ${elapsed} ms`);
 });
 
+test("the patched client rejects even when the document request never arrives", async () => {
+  const {error, elapsed, url} = await replayNavigation(clients.patched, "none");
+  assert.match(error?.message ?? "", new RegExp(ENGINE_CANCELLED.replace(/[.?;]/g, "\\$&")));
+  assert.ok(elapsed < NAVIGATION_TIMEOUT_MS, `rejected after ${elapsed} ms`);
+  assert.equal(url, "about:blank");
+});
+
 test("patching is idempotent and reversible on the locked bundle", () => {
   const patched = patchBundle(originalSource);
   assert.notEqual(patched, originalSource);
