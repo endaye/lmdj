@@ -407,7 +407,7 @@ class PipelineTests(unittest.TestCase):
                 model = dict(self.model, test_scope={"labels": [label], "reason": "Scope rationale."})
                 self.assertEqual(review_scope.validate_review(policy, model), model)
 
-    def test_t2_result_adapter_consumes_actual_coverage_without_outer_fallback(self):
+    def t2_warning_fixture(self):
         source = json.loads((ROOT / "tests/fixtures/ci/pr-agent/complete-input.json").read_text())
         authenticated = t2.authenticate_input(source)
         coverage = t2._validate_coverage_receipt(t2._make_coverage(
@@ -433,11 +433,57 @@ class PipelineTests(unittest.TestCase):
                    "providers": {"deepseek": {"enabled": True, "model": "fixture-model"},
                                  "glm": {"enabled": False}, "xai": {"enabled": False}, "kimi": {"enabled": False}},
                    "engine": coverage["engine"]}
+        return result, identity, paths, collector, trusted
+
+    def test_t2_result_adapter_consumes_actual_coverage_without_outer_fallback(self):
+        result, identity, paths, collector, trusted = self.t2_warning_fixture()
         history, inventory = pipeline.adapt_t2_result(result, identity=identity, changed_paths=paths,
                                                        collector=collector, trusted_config=trusted)
         self.assertEqual(history["attempts"][0]["backend"], "deepseek")
         self.assertIsNone(review_scope.next_backend(test_scope.load_policy(ROOT), history, identity=identity,
                                                     coverages=inventory, changed_paths=paths))
+
+    def test_capture_provider_warnings_show_finite_categories_and_exact_attempt(self):
+        result, identity, paths, collector, trusted = self.t2_warning_fixture()
+        result["attempts"][0]["provider_warnings"] = sorted(t2.PROVIDER_WARNING_CATEGORIES)
+        result["attempts"][0]["error"] = "secret-canary Authorization: private-key balance=private-balance"
+        pipeline.save(self.directory / "context.json", {"identity": identity, "changed_paths": paths})
+        pipeline.save(self.directory / "t2-result.json", result)
+        summary = self.directory / "summary"
+        output = io.StringIO()
+        with mock.patch.object(pipeline, "trusted_collector", return_value=collector), \
+                mock.patch.object(pipeline, "trusted_config", return_value=trusted), \
+                contextlib.redirect_stdout(output):
+            self.capture("deepseek", GITHUB_STEP_SUMMARY=str(summary))
+        rendered = output.getvalue() + summary.read_text()
+        self.assertEqual(output.getvalue().count("::warning"), 4)
+        for category in t2.PROVIDER_WARNING_CATEGORIES:
+            self.assertIn(f"category={category}", rendered)
+        self.assertIn(f"provider=deepseek run={identity['run_id']} attempt={identity['run_attempt']}", rendered)
+        self.assertIn("请检查该供应商账户余额/额度", rendered)
+        self.assertNotIn("secret-canary", rendered)
+        self.assertNotIn("private-key", rendered)
+        self.assertNotIn("private-balance", rendered)
+        self.assertEqual(pipeline.read(self.directory / "history.json")["attempts"][0]["status"], "failed")
+        self.assertIn("reviewed=false", (self.directory / "output").read_text())
+
+    def test_capture_rejects_unknown_duplicate_and_unbounded_warning_payloads(self):
+        for warnings in (["secret-canary"], ["rate_limited"] * 2, {}, None, [None], [["quota_exhausted"]]):
+            with self.subTest(warnings=warnings):
+                result, identity, paths, collector, trusted = self.t2_warning_fixture()
+                result["attempts"][0]["provider_warnings"] = warnings
+                with self.assertRaisesRegex(review_scope.ReviewScopeError, "finite unique categories"):
+                    pipeline.adapt_t2_result(result, identity=identity, changed_paths=paths,
+                                            collector=collector, trusted_config=trusted)
+
+    def test_absent_provider_warnings_create_no_operator_noise(self):
+        result, _, _, _, _ = self.t2_warning_fixture()
+        summary = self.directory / "summary"
+        output = io.StringIO()
+        with mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(summary)}), contextlib.redirect_stdout(output):
+            pipeline.report_provider_warnings(result)
+        self.assertEqual(output.getvalue(), "")
+        self.assertFalse(summary.exists())
 
     def test_same_path_two_hunk_drop_is_rejected_by_independent_collector(self):
         source = json.loads((ROOT / "tests/fixtures/ci/pr-agent/complete-input.json").read_text())

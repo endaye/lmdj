@@ -34,6 +34,18 @@ YAML 语法错误的位置及原文长度/摘要，或已知的 `finish_reason`�
 诊断不输出模型原文；旧记录只有 `malformed` 时不能反推出具体语法错误。
 源码合入后仍需通过下述安装入口更新主机 release，才能应用解析与提示词修复。
 
+仓库 adapter 还会在 `attempts[].provider_warnings` 中保留去重后的供应商
+限额诊断：`insufficient_balance`（余额或资源包不足）、`quota_exhausted`
+（使用额度耗尽）、`rate_limited`（请求速率限制）、`unknown_limit`
+（原因无法确定）。仅凭 HTTP 429 或笼统的 `reach limit` 不判断余额不足。
+`capture` 校验完整结果后，在 Actions warning 和 step summary 中显示
+provider、run、attempt、类别及“请检查该供应商账户余额/额度”的提示；
+不输出供应商原始正文、账户余额、API key 或 Authorization。
+同一供应商重复报错只保留每类一条，后续 retry/fallback 成功也保留此前诊断。
+warning 不改变请求次数、重试、fallback、失败或评审资格，也不主动查询余额。
+旧安装结果可以没有该字段；新增采集能力须通过现有 installer 更新主机
+adapter 才生效，源码合入不代表已经部署，也不激活其余供应商。
+
 安装与更新只有一个入口：`scripts/ci/pr-agent/install.sh <staging-dir>` 以 root
 在主机执行，把现有 bundle 复制到新 release 后写入仓库的 adapter/config，
 重算新版本的成员身份，把 release 设为 root-owned 只读，

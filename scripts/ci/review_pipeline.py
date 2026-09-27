@@ -163,9 +163,14 @@ def adapt_t2_result(result, *, identity, changed_paths, collector, trusted_confi
     history_attempts, coverages = [], {}
     previous_index = -1
     for attempt in attempts:
-        review_scope.require(isinstance(attempt, dict) and set(attempt) == {
+        review_scope.require(isinstance(attempt, dict) and set(attempt) - {"provider_warnings"} == {
             "status", "error_class", "error", "provider", "model", "engine", "review", "native_review",
             "coverage", "usage", "duration_ms"}, "T2 attempt schema is not closed")
+        warnings = attempt.get("provider_warnings", [])
+        review_scope.require(isinstance(warnings, list) and len(warnings) <= 4
+                             and all(isinstance(item, str) and item in t2.PROVIDER_WARNING_CATEGORIES for item in warnings)
+                             and len(set(warnings)) == len(warnings),
+                             "why: T2 provider warnings are not finite unique categories; remedy: retain only supported warning categories")
         backend = provider_backend.get(attempt["provider"])
         review_scope.require(backend is not None, "T2 result uses an unsupported provider identity")
         review_scope.require(backend in backend_order, "T2 result uses a disabled provider or untrusted order")
@@ -514,6 +519,31 @@ def engine_failure_history(backend, *, result, trusted_config):
                           "engine": None, "provider": None, "model": None, "coverage_sha256": None}]}
 
 
+def report_provider_warnings(result):
+    """Render only validated finite warnings after exact-run result validation."""
+    identity = result["identity"]
+    descriptions = {
+        "insufficient_balance": "供应商报告余额或资源包不足",
+        "quota_exhausted": "供应商报告账户使用额度耗尽",
+        "rate_limited": "供应商报告请求速率受限",
+        "unknown_limit": "供应商报告限额类错误，具体原因未知",
+    }
+    lines = []
+    for attempt in result["attempts"]:
+        for category in attempt.get("provider_warnings", []):
+            line = (f"provider={attempt['provider']} run={identity['run_id']} "
+                    f"attempt={identity['run_attempt']} category={category}: "
+                    f"{descriptions[category]}；请检查该供应商账户余额/额度。"
+                    "评审结论以实际 attempt/fallback 结果为准。")
+            lines.append(line)
+            escaped = line.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print("::warning title=PR-Agent provider limit::" + escaped)
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if lines and summary_path:
+        with Path(summary_path).open("a", encoding="utf-8") as summary:
+            summary.write("\nPR-Agent provider warnings:\n\n<pre>" + html.escape("\n".join(lines)) + "</pre>\n")
+
+
 def capture(directory, backend):
     policy = test_scope.load_policy(ROOT)
     history = read(directory / "history.json")
@@ -535,6 +565,7 @@ def capture(directory, backend):
                 selected = history["attempts"][t2["selected_attempt"]]["backend"] if t2["selected_attempt"] is not None else None
                 review_scope.require(selected is None or backend == selected,
                                      "capture backend disagrees with complete T2 selected attempt")
+            report_provider_warnings(t2)
         else:
             review_scope.require(isinstance(history, list) and not history,
                                  "engine failure cannot be appended to an existing attempt history")
