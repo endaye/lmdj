@@ -15,6 +15,9 @@ recurrences:
   - date: 2026-09-27
     occurrence: https://github.com/endaye/lmdj/pull/1581
     observed_by: claude-code/opus-5.5
+  - date: 2026-09-28
+    occurrence: https://github.com/endaye/lmdj/pull/1576
+    observed_by: claude-code/opus-5.5
 exit: gate:tests/build/ci_local_preflight_test.py
 ---
 
@@ -52,3 +55,8 @@ owner-loss journey kept asserting the old refusal (`core_asan`,
 and blocked every complete candidate. When a behavior change reaches Core
 Module source, search every lane's tests for the old assertion, not only the
 module's own tests.
+
+#1576 sorted the overdub journey's committed events by Pad, but the stop and
+reopen legs of `creator_web_sequence.spec.mjs` kept comparing position-ordered
+truth with that sorted copy. They fail whenever the presses straddle the loop
+boundary, and only the batch-only `creator` lane runs them.
