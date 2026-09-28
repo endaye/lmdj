@@ -299,7 +299,11 @@ def _retire_request(root: Path, request_id: str, tag: str) -> int:
     if request["mode"] == "tag":
         if not request["requested_tag"].startswith("lmdj-v"):
             raise CommandError("tag-mode request names no Product tag", detail=request_id)
-        identity = request["requested_tag"][len("lmdj-v"):]
+        # The same canonical parse the new-mode reservation path applies.
+        try:
+            identity = str(CandidateReservations._parse_version(request["requested_tag"][len("lmdj-v"):]))
+        except (JournalError, TypeError, ValueError):
+            raise CommandError("tag-mode request names no canonical Product Build", detail=request_id) from None
     else:
         reserved = CandidateReservations(root, directory / CATALOG).recorded(request)
         if reserved is None:

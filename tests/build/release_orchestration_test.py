@@ -153,6 +153,7 @@ class RequestJournalTest(unittest.TestCase):
                         dict(self.RETIREMENT, identity="1.0.61"),
                         dict(self.RETIREMENT, superseded_by="v1.0.61.0", identity="1.0.61.0"),
                         dict(self.RETIREMENT, audit=[]),
+                        dict(self.RETIREMENT, audit=["[ok] lmdj-v1.0.60.0: unrelated release"]),
                         {k: v for k, v in self.RETIREMENT.items() if k != "audit"}):
                 with self.assertRaises(JournalError):
                     journal.retire("release-1", bad)

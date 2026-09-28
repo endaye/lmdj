@@ -90,6 +90,9 @@ def _validate_retirement(retirement):
     if (type(audit) is not list or not audit
             or any(type(line) is not str or not line for line in audit)):
         _fail("retirement carries no audit findings")
+    subject = "] " + retirement["superseded_by"] + ": "
+    if not any(subject in line for line in audit):
+        _fail("retirement audit findings do not name the superseding tag")
 
 
 def _validate_state(state):
