@@ -65,6 +65,9 @@ class ReservationTest(unittest.TestCase):
         self.assertIsNone(self.reservations.recorded(dict(self.request, id="release-2")))
         with self.assertRaisesRegex(Exception, "rebound"):
             self.reservations.recorded(dict(self.request, base_revision="f" * 40))
+        # A reader: it does not contend with a live writer.
+        with RequestJournal(self.state):
+            self.assertEqual(str(self.reservations.recorded(self.request)), record["version"])
         # A lookup never allocates: the next request still takes the next number.
         second = self.reserve(dict(self.request, id="release-3"))
         self.assertEqual(int(second["version"].split(".")[2]), int(record["version"].split(".")[2]) + 1)

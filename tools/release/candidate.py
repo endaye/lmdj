@@ -157,7 +157,8 @@ class CandidateReservations:
         so a caller can prove what a superseding tag must be.
         """
         validate_request(request)
-        with RequestJournal(self.state_root) as journal:
+        # A reader: no writer lock, no directory creation, observable during a run.
+        with RequestJournal(self.state_root, writable=False) as journal:
             for record in self._read(journal)["reservations"]:
                 if record["request"]["id"] == request["id"]:
                     if record["request"] != request:

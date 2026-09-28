@@ -297,7 +297,9 @@ def _retire_request(root: Path, request_id: str, tag: str) -> int:
         raise JournalError("why: request is missing; remedy: use a request ID listed by `status`")
     request = state["request"]
     if request["mode"] == "tag":
-        identity = request["requested_tag"].removeprefix("lmdj-v")
+        if not request["requested_tag"].startswith("lmdj-v"):
+            raise CommandError("tag-mode request names no Product tag", detail=request_id)
+        identity = request["requested_tag"][len("lmdj-v"):]
     else:
         reserved = CandidateReservations(root, directory / CATALOG).recorded(request)
         if reserved is None:

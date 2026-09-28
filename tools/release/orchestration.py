@@ -25,6 +25,7 @@ STEPS = ("candidate", "verification", "intent", "changelog", "prepared", "tag",
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,79}\Z")
 _SHA = re.compile(r"[0-9a-f]{40}\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_BUILD = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
 _TAG = re.compile(r"lmdj-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\."
                   r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
 _MAX_BYTES = 1024 * 1024
@@ -79,7 +80,9 @@ def _validate_retirement(retirement):
     _keys(retirement, ("superseded_by", "identity", "observed_utc", "audit"))
     if not _match(_TAG, retirement["superseded_by"]):
         _fail("retirement names no exact Product tag")
-    if retirement["superseded_by"] != "lmdj-v" + str(retirement["identity"]):
+    if not _match(_BUILD, retirement["identity"]):
+        _fail("retirement identity is not a canonical Product Build")
+    if retirement["superseded_by"] != "lmdj-v" + retirement["identity"]:
         _fail("retirement tag and reserved identity differ")
     if type(retirement["observed_utc"]) is not str or not retirement["observed_utc"]:
         _fail("retirement has no audit observation time")
@@ -447,7 +450,8 @@ class RequestJournal(AbstractContextManager):
                 _fail("an alias still resolves to this request")
         record = {"schema": "lmdj.release-request-retirement.v1", "original": deepcopy(state),
                   "original_digest": canonical_sha256(state), "retirement": deepcopy(retirement)}
-        if existing is None:
+        written = existing is None
+        if written:
             self._write(request_id + ".retired",
                         canonical_json({"record": record, "sha256": canonical_sha256(record)}))
         elif existing != record:
@@ -457,7 +461,13 @@ class RequestJournal(AbstractContextManager):
         # The writer lock already excludes other writers; the original is still
         # re-read so only the exact state the record retains is ever removed.
         if self.read(request_id) != state:
-            _fail("original release changed before retirement completed")
+            if written:
+                # Withdraw this call's record so a retry starts from the original.
+                self._active()
+                os.unlink(request_id + ".retired", dir_fd=self.directory)
+                os.fsync(self.directory)
+            _fail("original release changed before retirement completed; "
+                  "reconcile the original request, then retire it again")
         self._active()
         os.unlink(request_id + ".json", dir_fd=self.directory)
         os.fsync(self.directory)

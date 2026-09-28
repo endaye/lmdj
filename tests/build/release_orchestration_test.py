@@ -127,6 +127,10 @@ class RequestJournalTest(unittest.TestCase):
                 with self.assertRaisesRegex(JournalError, "changed before retirement"):
                     journal.retire("release-1", self.RETIREMENT)
             self.assertIsNotNone(journal.read("release-1"))
+            # The withdrawn record leaves a clean retry, not a rebinding refusal.
+            self.assertIsNone(journal.read_retirement("release-1"))
+            journal.retire("release-1", self.RETIREMENT)
+            self.assertIsNone(journal.read("release-1"))
 
     def test_completed_or_intent_holding_requests_are_not_retired(self):
         with RequestJournal(self.root) as journal:
@@ -145,6 +149,8 @@ class RequestJournalTest(unittest.TestCase):
         with RequestJournal(self.root) as journal:
             journal.create(request())
             for bad in (dict(self.RETIREMENT, identity="1.0.62.0"),
+                        dict(self.RETIREMENT, identity=["1.0.61.0"]),
+                        dict(self.RETIREMENT, identity="1.0.61"),
                         dict(self.RETIREMENT, superseded_by="v1.0.61.0", identity="1.0.61.0"),
                         dict(self.RETIREMENT, audit=[]),
                         {k: v for k, v in self.RETIREMENT.items() if k != "audit"}):
