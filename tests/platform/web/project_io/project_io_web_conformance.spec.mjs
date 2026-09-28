@@ -641,7 +641,6 @@ function trackRuntimeErrors(page) {
 async function navigate(page, url, options) {
   const info = test.info();
   return gotoRetryingCancelledFirstLoad(page, url, options, {
-    browserName: info.project.use.browserName,
     onRetry: (error) => {
       info.annotations.push({type: "webkit-engine-cancelled-first-load", description: url});
       console.warn(`WebKit cancelled a fresh page's first load; retrying once (#1570): ${url}\n${error.message}`);
