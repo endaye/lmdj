@@ -402,8 +402,10 @@ def _batch_journal_load(root, token):
                 token=token, lock_held=lambda: False)
             anchor = IssueBodyAnchor(config["issue_number"], transport,
                                      transport.authenticate, lambda: False)
+            # A reader: the release entry never holds the CI writer lock, so
+            # it reads committed history only and never writes the journal.
             held["load"] = Journal(config["issue_number"], transport, anchor,
-                                   transport.authenticate, lambda: False).load
+                                   transport.authenticate, lambda: False).read_committed
         return held["load"]()
 
     return journal_load

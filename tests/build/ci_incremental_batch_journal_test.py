@@ -93,6 +93,45 @@ class JournalTest(unittest.TestCase):
         return self.journal.append({"id": str(number), "epoch": "one", "generation": number,
                                     "type": "observe", "data": {"target": "a" * 40}})
 
+    def reader(self):
+        # The release entry's shape: no writer lock at all.
+        anchor = IssueBodyAnchor(7, self.transport, self.authenticate, lambda: False)
+        return Journal(7, self.transport, anchor, self.authenticate, lambda: False)
+
+    def test_unlocked_reader_reads_committed_history_without_writing(self):
+        for number in range(3):
+            self.append(number)
+        writes, posts = self.transport.body_writes, self.transport.posts
+        self.assertEqual(self.reader().read_committed(), self.journal.load())
+        self.assertEqual((self.transport.body_writes, self.transport.posts), (writes, posts))
+        with self.assertRaisesRegex(JournalBlocked, "writer lock"):
+            self.reader().load()
+
+    def test_unlocked_reader_excludes_an_unanchored_pending_without_adopting_it(self):
+        self.append(0)
+        self.transport.lose_post_response = True
+        with self.assertRaises(JournalBlocked):
+            self.append(1)
+        pending = self.anchor.read()["pending"]
+        self.assertIsNotNone(pending)
+        writes = self.transport.body_writes
+        events = self.reader().read_committed()
+        self.assertEqual([event["id"] for event in events], ["0"])
+        self.assertEqual(self.anchor.read()["pending"], pending)
+        self.assertEqual(self.transport.body_writes, writes)
+
+    def test_unlocked_reader_still_refuses_untrusted_or_unanchored_history(self):
+        self.append(0)
+        self.transport.comments[0]["provenance"] = "someone-else"
+        with self.assertRaises(JournalBlocked):
+            self.reader().read_committed()
+        self.transport.comments[0]["provenance"] = "trusted-run"
+        extra = deepcopy(self.transport.comments[0])
+        extra["id"] = 2
+        self.transport.comments.append(extra)
+        with self.assertRaises(JournalBlocked):
+            self.reader().read_committed()
+
     def test_complete_pagination_and_reopen(self):
         for number in range(4):
             self.append(number)
