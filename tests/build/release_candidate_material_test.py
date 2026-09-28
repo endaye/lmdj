@@ -111,6 +111,15 @@ class MaterialTest(unittest.TestCase):
             result["files"]["products/lmdj/generated/web-runtime-identity.json"])),
             result["files"]["products/lmdj/generated/web-runtime-identity.json"])
 
+        # Check both exported identity files, including the MJS projection,
+        # after materializing the complete reserved candidate.
+        check = subprocess.run([sys.executable, str(ROOT / candidate_material.RUNTIME_IDENTITY_GENERATOR),
+                                "--repo-root", str(self.root), "--check"],
+                               capture_output=True, text=True)
+        self.assertEqual(check.returncode, 0,
+                         "why: exported Runtime identity pair is stale; "
+                         "remedy: regenerate both files from the reserved candidate: " + check.stderr)
+
     def test_existing_default_root_verification_remains_unchanged(self):
         current = version.load_version(ROOT / "products/lmdj/version.json")
         assembly = version._verify_assembly(current, ROOT / "products/lmdj/assembly.json")
@@ -190,6 +199,47 @@ class MaterialTest(unittest.TestCase):
                          version.ProductVersion(self.current.milestone, self.current.minor, self.current.build + 1, 1)):
             with self.subTest(reserved=reserved), self.assertRaisesRegex(ValueError, "reservation"):
                 version.render_build_material(self.root, self.current, reserved)
+
+    def test_identity_generator_failure_retains_reservation_and_writes_no_source(self):
+        generator = self.root / candidate_material.RUNTIME_IDENTITY_GENERATOR
+        generator.write_text("raise RuntimeError('fixture identity failure')\n")
+        self.base = self.commit()
+        self.frozen = self.inputs.freeze(self.base)
+        self.request["base_revision"] = self.base
+        before = (self.git("status", "--porcelain"), self.git("write-tree"), self.git("show-ref"))
+        for _ in range(2):
+            with self.assertRaisesRegex(JournalError, "Runtime identity generation refused"):
+                self.prepare()
+        catalogue = json.loads((self.state / CATALOG).read_bytes())["catalogue"]
+        self.assertEqual(len(catalogue["reservations"]), 1)
+        self.assertEqual(before, (self.git("status", "--porcelain"), self.git("write-tree"), self.git("show-ref")))
+
+    def test_identity_generator_inputs_stay_far_under_the_export_bound(self):
+        # Pins the review fact-check on the two newly selected canonical
+        # inputs: they count against _export's MAX_MATERIAL_BYTES (64 MiB).
+        # If they ever grow to matter, this names it long before a cut
+        # fails opaquely with "input inventory exceeds its byte bound".
+        total = sum((ROOT / name).stat().st_size for name in (
+            "tools/web-runtime/emscripten.lock.json",
+            "tools/web-runtime/runtime-identity.json"))
+        self.assertLess(total, 1024 * 1024,
+                        "why: canonical identity inputs exceed their 1 MiB regression budget; "
+                        "remedy: remove unintended input growth before cutting a candidate")
+
+    def test_identity_generator_is_a_pure_data_transformer(self):
+        # The cut loads this generator from the frozen export and applies it
+        # to materialized candidate data. Its maintained source
+        # must stay free of dynamic execution and subprocess escape hatches.
+        # Scan non-comment directives, per gate-matches-its-own-prose.
+        source = (ROOT / "tools/web-runtime/generate_runtime_identity.py").read_text()
+        directives = "\n".join(
+            line for line in source.splitlines()
+            if not line.lstrip().startswith("#"))
+        for banned in ("subprocess", "importlib", "__import__",
+                       "exec(", "eval(", "os.system", "popen", "ctypes"):
+            self.assertNotIn(banned, directives,
+                             "why: Runtime identity generator contains a dynamic execution hook; "
+                             "remedy: keep the generator a data transformer")
 
     def test_export_rejects_wrong_git_blob_bytes(self):
         original = self.tool.inputs.git
