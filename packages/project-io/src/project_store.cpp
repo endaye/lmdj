@@ -4417,6 +4417,31 @@ ProjectStore::begin_performance_draft(
       });
     }
   } else if (active.error().code == ErrorCode::not_found) {
+    // Refuse, before publishing the active Journal, a begin the commit below
+    // would deterministically refuse. Otherwise a stale expected revision,
+    // for example after an owner-lost winner's begin committed, leaves this
+    // never-committed Performance as the active Journal while Truth names
+    // another. The checks mirror commit_loaded: identity replay first, then
+    // the pure command application. Replays and unknown outcomes are
+    // unchanged.
+    const PersistedCommand persisted{command};
+    if (loaded.value().receipts.contains(request.meta.command_id)) {
+      const auto original =
+          loaded.value().commands.find(request.meta.command_id);
+      if (original == loaded.value().commands.end() ||
+          command_json(original->second) != command_json(persisted)) {
+        return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+            ErrorCode::invalid_argument,
+            "command id is already bound to a different command identity",
+        });
+      }
+    }
+    auto admitted = apply_command(
+        loaded.value().state, persisted, loaded.value().receipts);
+    if (!admitted.has_value()) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(
+          admitted.error());
+    }
     auto begun = journal.begin_performance_draft_locked(
         bundle,
         request.meta.command_id,

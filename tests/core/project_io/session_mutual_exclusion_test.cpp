@@ -663,6 +663,56 @@ void test_performance_begin_keeps_owner_across_writer_release() {
   LMDJ_CHECK(truth.value().performances.contains(active.value().performance_id));
 }
 
+// The interleaving the writer-lease stress hit on the M1 runner: the winner
+// commits its begin and then loses its owner (its store is gone without a
+// close) before the contender starts. The contender's owner-loss reconcile
+// seals the winner's draft as recoverable, and its own stale begin must then
+// be refused before any active Journal is published: an active Journal that
+// names a Performance absent from Project Truth must never exist.
+void test_stale_begin_after_owner_loss_publishes_no_active_journal() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "project.lmdj";
+  ProjectStore creator;
+  LMDJ_CHECK(creator.create(bundle, empty_v4_project()).has_value());
+  {
+    ProjectStore winner;
+    const auto first = winner.begin_performance_draft(
+        bundle,
+        {{CommandId{std::string{kCommandId}}, 0},
+         SequenceSessionId{std::string{kPerformanceSessionId}},
+         PerformanceId{std::string{kPerformanceId}}});
+    LMDJ_CHECK(first.has_value());
+  }
+  ProjectStore contender;
+  const auto second = contender.begin_performance_draft(
+      bundle,
+      {{CommandId{std::string{kSecondCommandId}}, 0},
+       SequenceSessionId{std::string{kSecondPerformanceSessionId}},
+       PerformanceId{std::string{kSecondPerformanceId}}});
+  LMDJ_CHECK(!second.has_value());
+  LMDJ_CHECK(second.error().code == ErrorCode::revision_conflict);
+  const auto active = SequenceJournal{}.read_active_performance(bundle);
+  if (active.has_value()) {
+    std::cerr << "stale begin left an active Journal for Performance "
+              << active.value().performance_id.value() << '\n';
+  }
+  LMDJ_CHECK(!active.has_value());
+  LMDJ_CHECK(active.error().code == ErrorCode::not_found);
+  const auto truth = creator.load(bundle);
+  LMDJ_CHECK(truth.has_value());
+  LMDJ_CHECK(truth.value().revision == 1);
+  LMDJ_CHECK(truth.value().performances.size() == 1);
+  LMDJ_CHECK(truth.value().performances.contains(
+      PerformanceId{std::string{kPerformanceId}}));
+  // The lost owner's committed draft is retained for recovery, not dropped.
+  const auto recoverable =
+      SequenceJournal{}.list_performance_recoverable(bundle);
+  LMDJ_CHECK(recoverable.has_value());
+  LMDJ_CHECK(recoverable.value().size() == 1);
+  LMDJ_CHECK(recoverable.value().front().journal.session_id.value() ==
+             kPerformanceSessionId);
+}
+
 void test_atomic_performance_draft_begin_serializes_writer_lease(
     int iterations) {
   for (int iteration = 0; iteration < iterations; ++iteration) {
@@ -672,6 +722,17 @@ void test_atomic_performance_draft_begin_serializes_writer_lease(
     LMDJ_CHECK(creator.create(bundle, empty_v4_project()).has_value());
     std::atomic<int> ready{0};
     std::atomic<bool> start{false};
+    // Both owners stay alive until both begins return: this checks exclusion
+    // between live owners. A winner whose owner is lost before the contender
+    // starts is the owner-loss path, pinned exactly by
+    // test_stale_begin_after_owner_loss_publishes_no_active_journal.
+    std::atomic<int> finished{0};
+    const auto hold_owner = [&finished] {
+      finished.fetch_add(1, std::memory_order_acq_rel);
+      while (finished.load(std::memory_order_acquire) != 2) {
+        std::this_thread::yield();
+      }
+    };
     std::optional<lmdj::foundation::Result<
         lmdj::project_io::PerformanceLifecycleReceipt>> first;
     std::optional<lmdj::foundation::Result<
@@ -687,6 +748,7 @@ void test_atomic_performance_draft_begin_serializes_writer_lease(
           {{CommandId{std::string{kCommandId}}, 0},
            SequenceSessionId{std::string{kPerformanceSessionId}},
            PerformanceId{std::string{kPerformanceId}}});
+      hold_owner();
     });
     std::thread second_thread([&] {
       ProjectStore store;
@@ -699,6 +761,7 @@ void test_atomic_performance_draft_begin_serializes_writer_lease(
           {{CommandId{std::string{kSecondCommandId}}, 0},
            SequenceSessionId{std::string{kSecondPerformanceSessionId}},
            PerformanceId{std::string{kSecondPerformanceId}}});
+      hold_owner();
     });
     while (ready.load(std::memory_order_acquire) != 2) {
       std::this_thread::yield();
@@ -746,6 +809,7 @@ int main(int argc, char** argv) {
     test_concurrent_sequence_and_performance_begins_admit_only_one_kind();
     test_legacy_v3_sequence_tail_flush_completion_and_seal_reconcile();
     test_performance_begin_keeps_owner_across_writer_release();
+    test_stale_begin_after_owner_loss_publishes_no_active_journal();
     test_atomic_performance_draft_begin_serializes_writer_lease(
         stress ? 32 : 1);
   } catch (const std::exception& error) {
