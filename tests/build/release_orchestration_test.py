@@ -110,6 +110,24 @@ class RequestJournalTest(unittest.TestCase):
             journal.retire("release-1", self.RETIREMENT)
             self.assertIsNone(journal.read("release-1"))
 
+    def test_an_original_that_differs_from_the_record_is_not_removed(self):
+        with RequestJournal(self.root) as journal:
+            journal.create(request())
+            real_read = journal.read
+            calls = []
+
+            def changed_on_recheck(request_id):
+                calls.append(request_id)
+                state = real_read(request_id)
+                if len(calls) == 2 and state is not None:
+                    state = dict(state, request=dict(state["request"], authority_ref="thread:other"))
+                return state
+
+            with patch.object(journal, "read", side_effect=changed_on_recheck):
+                with self.assertRaisesRegex(JournalError, "changed before retirement"):
+                    journal.retire("release-1", self.RETIREMENT)
+            self.assertIsNotNone(journal.read("release-1"))
+
     def test_completed_or_intent_holding_requests_are_not_retired(self):
         with RequestJournal(self.root) as journal:
             journal.create(request())

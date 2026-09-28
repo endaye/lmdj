@@ -56,8 +56,8 @@ progress record, not external proof.
 Only one unfinished request may exist per repository. When a request's later
 steps were completed outside the entry, so that it can never finish, retire it with
 `scripts/release.sh retire REQUEST_ID --superseded-by TAG`. The tag must be
-the request's own reserved Build, published and passing its exact-tag remote
-audit. Retirement refuses an outstanding intent or a completed request, keeps
+the request's own reserved Build (for a tag-mode request, its requested tag),
+published and passing its exact-tag remote audit. Retirement refuses an outstanding intent or a completed request, keeps
 the full original state in a `.retired` record, and mutates nothing remote.
 Never delete or edit journal files by hand.
 

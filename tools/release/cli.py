@@ -140,7 +140,7 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     retired.add_argument("request_id")
     retired.add_argument(
         "--superseded-by", required=True, metavar="TAG",
-        help="published Product tag that is this request's own reserved Build",
+        help="published Product tag that is this request's own reserved Build (tag mode: its requested tag)",
     )
     reported = commands.add_parser("status")
     reported.add_argument("request_id", nargs="?")
@@ -283,7 +283,8 @@ def _retire_request(root: Path, request_id: str, tag: str) -> int:
     """Retire one unfinished request that a published release superseded.
 
     The far side is proven before the journal changes: the tag must be the
-    Build this exact request reserved, and its exact-tag remote audit must pass
+    Build this exact request reserved (a tag-mode request reserves nothing and
+    is bound to its requested tag), and its exact-tag remote audit must pass
     with a published intent. Nothing remote is mutated.
     """
     from tools.release.candidate import CATALOG, CandidateReservations

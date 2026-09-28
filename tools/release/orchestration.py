@@ -454,6 +454,10 @@ class RequestJournal(AbstractContextManager):
             _fail("request retirement cannot be rebound")
         # The record is durable before the original leaves admission; a crash
         # in between leaves both, and repeating the same retirement finishes it.
+        # The writer lock already excludes other writers; the original is still
+        # re-read so only the exact state the record retains is ever removed.
+        if self.read(request_id) != state:
+            _fail("original release changed before retirement completed")
         self._active()
         os.unlink(request_id + ".json", dir_fd=self.directory)
         os.fsync(self.directory)
