@@ -48,7 +48,7 @@ expected_modules = {
     ),
     "packages/project-io/module.json": (
         "project-io",
-        "4.2.0",
+        "4.2.1",
         1,
         {
             "foundation": "0.4.0",
@@ -66,12 +66,12 @@ expected_modules = {
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "6.2.0",
+        "6.2.1",
         3,
         {
             "foundation": "0.4.0",
             "authoring-domain": "4.1.0",
-            "project-io": "4.2.0",
+            "project-io": "4.2.1",
             "project-cooker": "1.2.0",
             "audio-runtime": "5.0.0",
             "provider-sdk": "2.2.0",
@@ -79,45 +79,45 @@ expected_modules = {
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "5.3.2",
+        "5.3.3",
         2,
         {
-            "application-facade": "6.2.0",
+            "application-facade": "6.2.1",
             "audio-runtime": "5.0.0",
         },
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "3.3.7",
+        "3.3.8",
         2,
-        {"application-facade": "6.2.0"},
+        {"application-facade": "6.2.1"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "3.4.2",
+        "3.4.3",
         2,
-        {"application-facade": "6.2.0"},
+        {"application-facade": "6.2.1"},
     ),
     "apps/native-host/module.json": (
         "native-host",
-        "3.4.2",
+        "3.4.3",
         2,
         {
-            "application-facade": "6.2.0",
+            "application-facade": "6.2.1",
             "audio-runtime": "5.0.0",
         },
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "4.3.2",
+        "4.3.3",
         2,
-        {"web-runtime-platform": "5.3.2"},
+        {"web-runtime-platform": "5.3.3"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "4.5.0",
+        "4.5.1",
         2,
-        {"web-runtime-platform": "5.3.2"},
+        {"web-runtime-platform": "5.3.3"},
     ),
 }
 for relative, (
