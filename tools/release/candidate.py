@@ -45,6 +45,10 @@ class CandidateReservations:
         except (ValueError, TypeError, UnicodeError):
             _fail("historical Product version is malformed or unavailable")
 
+    def version_at(self, revision):
+        """The Product version one exact revision carries (read from Git)."""
+        return self._version(revision)
+
     def _history_floor(self, revision, versions=None):
         # Full history, not first-parent/path-simplified history: a higher BUILD
         # allocated then reverted or merged away still consumes its number.

@@ -161,10 +161,10 @@ class CandidatePreparation:
                 raise
         reserved = reservation["version"]
         git = self.setup.repository.git
-        history = git("rev-list", "--first-parent", "--reverse", "--max-count=100000",
+        history = git("rev-list", "--first-parent", "--reverse",
                       self.request["base_revision"] + ".." + main).decode().split()
         for commit in history:
-            if str(self.material.reservations._version(commit)) == reserved:
+            if str(self.material.reservations.version_at(commit)) == reserved:
                 parent = git("rev-parse", commit + "^1").decode().strip()
                 self.material.inputs.verify(frozen, parent)
                 return
