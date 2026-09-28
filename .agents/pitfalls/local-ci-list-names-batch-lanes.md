@@ -1,7 +1,7 @@
 ---
 id: local-ci-list-names-batch-lanes
 area: ci-release
-status: absorbed
+status: open
 recurrences:
   - date: 2026-09-17
     occurrence: https://github.com/endaye/lmdj/pull/1490
@@ -15,7 +15,11 @@ recurrences:
   - date: 2026-09-27
     occurrence: https://github.com/endaye/lmdj/pull/1581
     observed_by: claude-code/opus-5.5
+  - date: 2026-09-28
+    occurrence: https://github.com/endaye/lmdj/pull/1614
+    observed_by: claude-code/opus-5.5
 exit: gate:tests/build/ci_local_preflight_test.py
+escalation: https://github.com/endaye/lmdj/issues/1619
 ---
 
 # `scripts/local-ci.sh --list` names lanes a Pull Request never runs, so a change owned by one of them is unverified at merge.
@@ -52,3 +56,11 @@ owner-loss journey kept asserting the old refusal (`core_asan`,
 and blocked every complete candidate. When a behavior change reaches Core
 Module source, search every lane's tests for the old assertion, not only the
 module's own tests.
+
+#1614 added a `postinstall` script to `tests/platform/web/package.json`.
+`tests/platform/web/toolchain/toolchain_identity_test.py` pins that file
+exactly, but it runs only in the batch-only `web_toolchain` lane, so the
+first complete candidate after the merge failed at its identity step. The
+advisory exit has now failed four times. The entry is reopened, and
+[#1619](https://github.com/endaye/lmdj/issues/1619)
+owns choosing a replacement mechanism.
