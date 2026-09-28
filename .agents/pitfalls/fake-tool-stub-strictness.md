@@ -30,6 +30,9 @@ recurrences:
   - date: 2026-09-11
     occurrence: https://github.com/endaye/lmdj/actions/runs/34633148497/attempts/2
     observed_by: Codex
+  - date: 2026-09-28
+    occurrence: https://github.com/endaye/lmdj/pull/1614
+    observed_by: claude-code/opus-5.5
 exit: gate:apps/creator-web/test/perform_surface.test.tsx
 escalation: https://github.com/endaye/lmdj/issues/726
 ---
@@ -214,3 +217,13 @@ and body to the authenticated model artifact. The regression keeps list/detail
 responses separate and rejects missing, forged, duplicate and mismatched
 identities/locations. No line is inferred from legacy position and no finding
 is omitted. The broader escalation #726 remained open at the time.
+
+On 2026-09-28 the double was a caller-supplied argument. #1614's WebKit
+cancelled-first-load retry was guarded on `browserName === "webkit"`. Its unit
+test passed `"webkit"` explicitly, but the real spec passed
+`test.info().project.use.browserName`, and `devices["Desktop Safari"]` sets
+`defaultBrowserType`, not `browserName`. The guard therefore never matched a
+real run, and the first live cancellation failed batch gen 553. When a guard
+depends on a value the caller derives from configuration, test it with a value
+derived the same way, or read the fact from the real object (here the page's
+own `browserType().name()`), with one end-to-end case over the real client.

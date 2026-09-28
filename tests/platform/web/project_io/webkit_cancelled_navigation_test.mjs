@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
+import {dirname, join} from "node:path";
 import {test} from "node:test";
-import {ENGINE_CANCELLED_LOAD, gotoRetryingCancelledFirstLoad} from "./webkit_cancelled_navigation.mjs";
+import {fileURLToPath} from "node:url";
+import {webkit} from "playwright-core";
+import {ENGINE_CANCELLED_LOAD, gotoRetryingCancelledFirstLoad, pageEngine} from "./webkit_cancelled_navigation.mjs";
 
+const fakeBrowser = join(dirname(fileURLToPath(import.meta.url)), "..", "toolchain", "fake_webkit_pipe_browser.mjs");
 const cancelled = () => new Error(`page.goto: ${ENGINE_CANCELLED_LOAD}\nCall log: navigating`);
 
-function fakePage(outcomes, {url = "about:blank", closed = false} = {}) {
+// Like a Playwright Page, the engine is only reachable through its Browser; a
+// persistent context (`engine: null`) has none.
+function fakePage(outcomes, {url = "about:blank", closed = false, engine = "webkit"} = {}) {
   const calls = [];
+  const browser = engine === null ? null : {browserType: () => ({name: () => engine})};
   return {
     calls,
+    context: () => ({browser: () => browser}),
     isClosed: () => closed,
     url: () => url,
     goto: async (...args) => {
@@ -19,14 +27,17 @@ function fakePage(outcomes, {url = "about:blank", closed = false} = {}) {
   };
 }
 
-async function navigate(page, browserName = "webkit") {
+async function navigate(page) {
   const retries = [];
   const result = await gotoRetryingCancelledFirstLoad(page, "/step", {waitUntil: "load"},
-    {browserName, onRetry: error => retries.push(error)}).then(value => ({value}), error => ({error}));
+    {onRetry: error => retries.push(error)}).then(value => ({value}), error => ({error}));
   return {...result, retries};
 }
 
-test("a WebKit fresh page repeats an engine-cancelled first load once", async () => {
+// The spec passed `test.info().project.use.browserName`, which is undefined for
+// `devices["Desktop Safari"]`, so a real WebKit run never retried (batch gen 553,
+// job 108941563228). The engine now comes from the page; no caller names it.
+test("a WebKit fresh page repeats an engine-cancelled first load once, with no caller-supplied engine", async () => {
   const page = fakePage([cancelled(), "response"]);
   const {value, retries} = await navigate(page);
   assert.equal(value, "response");
@@ -54,15 +65,35 @@ test("a page this helper already navigated never retries, even back at about:bla
 
 test("every other navigation failure propagates without retry", async () => {
   const cases = [
-    {page: fakePage([cancelled()]), browserName: "chromium"},
-    {page: fakePage([cancelled()], {url: "http://127.0.0.1/preflight.html"}), browserName: "webkit"},
-    {page: fakePage([cancelled()], {closed: true}), browserName: "webkit"},
-    {page: fakePage([new Error("page.goto: Timeout 600000ms exceeded.")]), browserName: "webkit"},
+    fakePage([cancelled()], {engine: "chromium"}),
+    fakePage([cancelled()], {engine: null}),
+    fakePage([cancelled()], {url: "http://127.0.0.1/preflight.html"}),
+    fakePage([cancelled()], {closed: true}),
+    fakePage([new Error("page.goto: Timeout 600000ms exceeded.")]),
   ];
-  for (const {page, browserName} of cases) {
-    const {error, retries} = await navigate(page, browserName);
+  for (const page of cases) {
+    const {error, retries} = await navigate(page);
     assert.ok(error instanceof Error);
     assert.equal(retries.length, 0);
     assert.equal(page.calls.length, 1);
+  }
+});
+
+// End to end on the locked (postinstall-patched) client: a real Playwright
+// Page over the recorded #1570 exchange. Every fake navigation is cancelled,
+// so the first load is retried exactly once and the second cancellation fails.
+test("a real Playwright WebKit page reports its engine and retries the cancelled first load once", async () => {
+  process.env.FAKE_WEBKIT_ORDER = "early";
+  const browser = await webkit.launch({executablePath: fakeBrowser, timeout: 10_000});
+  try {
+    const page = await (await browser.newContext()).newPage();
+    assert.equal(pageEngine(page), "webkit");
+    const retries = [];
+    const error = await gotoRetryingCancelledFirstLoad(page, "http://127.0.0.1:9/project_io_web_test.html",
+      {timeout: 3_000}, {onRetry: failure => retries.push(failure)}).then(() => null, failure => failure);
+    assert.equal(retries.length, 1);
+    assert.match(error?.message ?? "", new RegExp(ENGINE_CANCELLED_LOAD.replace(/[.?;]/g, "\\$&")));
+  } finally {
+    await browser.close();
   }
 });
