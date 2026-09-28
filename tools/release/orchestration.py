@@ -77,6 +77,9 @@ def validate_request(request):
 
 
 def _validate_retirement(retirement):
+    if type(retirement) is dict and "superseded_by_build" in retirement:
+        _validate_unreleased_retirement(retirement)
+        return
     _keys(retirement, ("superseded_by", "identity", "observed_utc", "audit"))
     if not _match(_TAG, retirement["superseded_by"]):
         _fail("retirement names no exact Product tag")
@@ -93,6 +96,31 @@ def _validate_retirement(retirement):
     subject = "] " + retirement["superseded_by"] + ": "
     if not any(subject in line for line in audit):
         _fail("retirement audit findings do not name the superseding tag")
+
+
+def _build_triple(value, reason):
+    if not _match(_BUILD, value):
+        _fail(reason)
+    return tuple(int(part) for part in value.split("."))
+
+
+def _validate_unreleased_retirement(retirement):
+    """A never-published candidate superseded by a newer Build allocated on main."""
+    _keys(retirement, ("superseded_by_build", "identity", "main_revision", "observed_utc", "evidence"))
+    reserved = _build_triple(retirement["identity"], "retirement identity is not a canonical Product Build")
+    newer = _build_triple(retirement["superseded_by_build"], "superseding Build is not a canonical Product Build")
+    if newer[:2] != reserved[:2] or newer[2] <= reserved[2] or newer[3] != 0 or reserved[3] != 0:
+        _fail("superseding Build is not a later BUILD on the same product line")
+    if not _match(_SHA, retirement["main_revision"]):
+        _fail("retirement names no exact main revision")
+    if type(retirement["observed_utc"]) is not str or not retirement["observed_utc"]:
+        _fail("retirement has no observation time")
+    evidence = retirement["evidence"]
+    if (type(evidence) is not list or not evidence
+            or any(type(line) is not str or not line for line in evidence)):
+        _fail("retirement carries no evidence")
+    if not any(("lmdj-v" + retirement["identity"]) in line and "no remote tag" in line for line in evidence):
+        _fail("retirement evidence does not prove the reserved Build was never tagged")
 
 
 def _validate_state(state):

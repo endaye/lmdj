@@ -57,9 +57,13 @@ Only one unfinished request may exist per repository. When a request's later
 steps were completed outside the entry, so that it can never finish, retire it with
 `scripts/release.sh retire REQUEST_ID --superseded-by TAG`. The tag must be
 the request's own reserved Build (for a tag-mode request, its requested tag),
-published and passing its exact-tag remote audit. Retirement refuses an outstanding intent or a completed request, keeps
-the full original state in a `.retired` record, and mutates nothing remote.
-Never delete or edit journal files by hand.
+published and passing its exact-tag remote audit. A candidate that was never published, for example one whose complete
+batch went red, is retired with `--superseded-by-build BUILD` once main
+carries that later BUILD on the same product line. Its own reserved Build must
+have no remote tag and no releasable or published intent. Retirement refuses an
+outstanding intent or a completed request, keeps the full original state in a
+`.retired` record, and mutates nothing remote. Never delete or edit journal
+files by hand.
 
 Use `scripts/release.sh prepare TAG`, `scripts/release.sh push-tag TAG`, and
 `scripts/release.sh create-draft TAG` in order when covered and admissible.

@@ -318,6 +318,65 @@ class ReleaseEntryPointTest(unittest.TestCase):
                              "--superseded-by", tag])
         return code, output.getvalue(), calls
 
+    def retire_unreleased(self, request_id, build, *, reserved="1.0.64.0", on_main="1.0.65.0",
+                          remote_tag=None, disposition=None):
+        from tools.release.candidate import CandidateReservations
+        from tools.release.model import Disposition
+        from scripts.version import ProductVersion
+        calls = []
+        version = lambda text: ProductVersion(*map(int, text.split(".")))
+        entries = () if disposition is None else (
+            type("Entry", (), {"tag": f"lmdj-v{reserved}", "disposition": Disposition(disposition)})(),)
+        git = type("Git", (), {"main_revision": lambda self: "f" * 40,
+                                "remote_tag_object": lambda self, tag: calls.append(tag) or remote_tag})()
+        context = type("Context", (), {"git": git, "ledger": type("Ledger", (), {"entries": entries})()})()
+        output = io.StringIO()
+        with patch.object(CandidateReservations, "recorded", return_value=version(reserved)), \
+                patch.object(CandidateReservations, "version_at", return_value=version(on_main)), \
+                patch.object(cli, "build_context", side_effect=lambda root: calls.append("context") or context), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = cli.main(["--repo-root", str(self.root), "retire", request_id,
+                             "--superseded-by-build", build])
+        return code, output.getvalue(), calls
+
+    def test_retire_unreleased_candidate_superseded_by_a_later_build(self):
+        request_id = self.unfinished_request()
+        code, report, calls = self.retire_unreleased(request_id, "1.0.65.0")
+        self.assertEqual(code, 0, report)
+        self.assertIn("(1.0.64.0, never published) superseded by Build 1.0.65.0", report)
+        self.assertEqual(calls, ["context", "lmdj-v1.0.64.0"])
+        self.assertEqual(self.request_ids(), [])
+        with RequestJournal(self.journal()) as journal:
+            retirement = journal.read_retirement(request_id)["retirement"]
+        self.assertEqual((retirement["identity"], retirement["superseded_by_build"],
+                          retirement["main_revision"]), ("1.0.64.0", "1.0.65.0", "f" * 40))
+
+    def test_retire_unreleased_refuses_a_build_that_is_not_later_before_any_network(self):
+        request_id = self.unfinished_request()
+        for build in ("1.0.64.0", "1.0.63.0", "1.1.65.0"):
+            code, report, calls = self.retire_unreleased(request_id, build)
+            self.assertEqual((code, calls), (2, []))
+            self.assertIn("not a later BUILD", report)
+        self.assertEqual(self.request_ids(), [request_id])
+
+    def test_retire_unreleased_requires_main_to_carry_the_build(self):
+        request_id = self.unfinished_request()
+        code, report, _ = self.retire_unreleased(request_id, "1.0.65.0", on_main="1.0.64.0")
+        self.assertEqual(code, 2)
+        self.assertIn("canonical main does not carry the superseding Build", report)
+        self.assertEqual(self.request_ids(), [request_id])
+
+    def test_retire_unreleased_refuses_a_tagged_or_releasable_build(self):
+        request_id = self.unfinished_request()
+        code, report, _ = self.retire_unreleased(request_id, "1.0.65.0", remote_tag="a" * 40)
+        self.assertEqual(code, 2)
+        self.assertIn("the reserved Build was tagged", report)
+        for disposition in ("releasable", "published"):
+            code, report, _ = self.retire_unreleased(request_id, "1.0.65.0", disposition=disposition)
+            self.assertEqual(code, 2)
+            self.assertIn("releasable or published intent", report)
+        self.assertEqual(self.request_ids(), [request_id])
+
     def test_retire_refuses_a_tag_that_is_not_the_reserved_build_before_auditing(self):
         request_id = self.unfinished_request()
         code, report, calls = self.retire(request_id, "lmdj-v1.0.62.0")

@@ -138,9 +138,14 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     continued.add_argument("request_id")
     retired = commands.add_parser("retire")
     retired.add_argument("request_id")
-    retired.add_argument(
-        "--superseded-by", required=True, metavar="TAG",
+    superseded = retired.add_mutually_exclusive_group(required=True)
+    superseded.add_argument(
+        "--superseded-by", metavar="TAG",
         help="published Product tag that is this request's own reserved Build (tag mode: its requested tag)",
+    )
+    superseded.add_argument(
+        "--superseded-by-build", metavar="BUILD",
+        help="later Product Build now allocated on main; this request's own Build was never tagged",
     )
     reported = commands.add_parser("status")
     reported.add_argument("request_id", nargs="?")
@@ -338,6 +343,73 @@ def _retire_request(root: Path, request_id: str, tag: str) -> int:
     return 0
 
 
+def _retire_unreleased_request(root: Path, request_id: str, build: str) -> int:
+    """Retire a never-published candidate that a later allocated Build superseded.
+
+    Proven before the journal changes: this request reserved Build V; the
+    freshly fetched canonical main now carries the named later BUILD on the
+    same product line; no remote tag exists for V; and V's intent is neither
+    releasable nor published. Nothing remote is mutated.
+    """
+    from datetime import datetime, timezone
+    from tools.release.candidate import CATALOG, CandidateReservations
+    from tools.release.model import Disposition
+
+    directory = release_journal_root(root, GitRepository(root))
+    with RequestJournal(directory, writable=False) as journal:
+        state = journal.read(request_id)
+    if state is None:
+        raise JournalError("why: request is missing; remedy: use a request ID listed by `status`")
+    request = state["request"]
+    if request["mode"] != "new":
+        raise CommandError("only a new-mode request reserves a Build that a later Build can supersede",
+                           detail=request_id)
+    reservations = CandidateReservations(root, directory / CATALOG)
+    reserved = reservations.recorded(request)
+    if reserved is None:
+        raise CommandError("request reserved no Build, so no later Build can have superseded it",
+                           detail=request_id)
+    try:
+        newer = CandidateReservations._parse_version(build)
+    except (JournalError, TypeError, ValueError):
+        raise CommandError("superseding Build is not a canonical Product Build", detail=build) from None
+    if ((newer.milestone, newer.minor) != (reserved.milestone, reserved.minor)
+            or newer.build <= reserved.build or newer.patch != 0):
+        raise CommandError("superseding Build is not a later BUILD on the same product line",
+                           detail=f"{build} vs {reserved}")
+    context = build_context(root)
+    main = context.git.main_revision()
+    on_main = reservations.version_at(main)
+    if str(on_main) != str(newer):
+        raise CommandError("canonical main does not carry the superseding Build",
+                           detail=f"main {main} carries {on_main}, not {newer}")
+    tag = f"lmdj-v{reserved}"
+    if context.git.remote_tag_object(tag) is not None:
+        raise CommandError("the reserved Build was tagged; retire it against its published release instead",
+                           detail=tag)
+    entries = [entry for entry in context.ledger.entries if entry.tag == tag]
+    if any(entry.disposition in (Disposition.RELEASABLE, Disposition.PUBLISHED) for entry in entries):
+        raise CommandError("the reserved Build has a releasable or published intent", detail=tag)
+    observed = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    retirement = {
+        "superseded_by_build": str(newer),
+        "identity": str(reserved),
+        "main_revision": main,
+        "observed_utc": observed,
+        "evidence": [
+            f"[ok] {tag}: no remote tag at {observed}",
+            f"[ok] main {main}: carries Product Build {newer}",
+            f"[ok] {tag}: no releasable or published intent in the ledger",
+        ],
+    }
+    for line in retirement["evidence"]:
+        print(line)
+    with RequestJournal(directory) as journal:
+        journal.retire(request_id, retirement, expected_request=request)
+    print(f"release request retired: {request_id} ({reserved}, never published) superseded by Build {newer}")
+    return 0
+
+
 def format_request_status(root: Path, git, request_id: str | None = None) -> str:
     """Report the local request journal: progress record, never far-side proof."""
     directory = release_journal_root(root, git)
@@ -502,6 +574,8 @@ def main(argv: list[str] | None = None) -> int:
             print("next step: commit both files as a docs Pull Request through the Integration Queue")
             return 0
         if options.command == "retire":
+            if options.superseded_by_build is not None:
+                return _retire_unreleased_request(root, options.request_id, options.superseded_by_build)
             return _retire_request(root, options.request_id, options.superseded_by)
         if options.command == "status":
             print(format_request_status(root, GitRepository(root), options.request_id), end="")

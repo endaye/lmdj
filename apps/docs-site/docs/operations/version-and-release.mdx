@@ -637,6 +637,8 @@ main 历史内可到达，重复运行同一 scope 幂等。`status` 只读该�
 `scripts/release.sh retire REQUEST_ID --superseded-by TAG` 是唯一受支持的退役方式：TAG 必须恰好是
 该请求自己在 BUILD 预留目录里绑定的版本（tag 模式的请求不做预留，TAG 必须等于它请求的 tag），精确 tag 的远端审计必须通过，且 intent 为 `published`。
 满足这些条件后，journal 先写入保留完整原始状态的 `REQUEST_ID.retired` 记录，再把该请求移出准入。
+从未发布的候选（例如完整批次变红）改用 `--superseded-by-build BUILD` 退役：canonical main 必须已经带着同一产品线上
+更新的这个 BUILD，而该请求自己预留的 Build 在远端没有 tag，台账里也不是 `releasable` 或 `published`。
 带未决 intent 或已完成的请求一律拒绝；operation 历史和 worktree 原样保留为证据，不修改任何远端状态。
 
 各步仍由该步自己的 far-side 验证器确认；尚未接入某一步 carrier 时，`run`/`resume` 在创建请求前
