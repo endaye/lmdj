@@ -18,6 +18,9 @@ recurrences:
   - date: 2026-09-28
     occurrence: https://github.com/endaye/lmdj/pull/1614
     observed_by: claude-code/opus-5.5
+  - date: 2026-09-28
+    occurrence: https://github.com/endaye/lmdj/pull/1576
+    observed_by: claude-code/opus-5.5
 exit: gate:tests/build/ci_local_preflight_test.py
 escalation: https://github.com/endaye/lmdj/issues/1619
 ---
@@ -64,3 +67,8 @@ first complete candidate after the merge failed at its identity step. The
 advisory exit has now failed four times. The entry is reopened, and
 [#1619](https://github.com/endaye/lmdj/issues/1619)
 owns choosing a replacement mechanism.
+
+#1576 sorted the overdub journey's committed events by Pad, but the stop and
+reopen legs of `creator_web_sequence.spec.mjs` kept comparing position-ordered
+truth with that sorted copy. They fail whenever the presses straddle the loop
+boundary, and only the batch-only `creator` lane runs them.

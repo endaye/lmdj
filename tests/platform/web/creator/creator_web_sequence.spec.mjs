@@ -207,7 +207,8 @@ test("global Pattern transport plays, overdubs, survives navigation, stops, and 
   // sits earlier in the loop than the Pad 0 event. The fact is the set — both
   // presses committed, each to its own Pad at full velocity — so compare the
   // events by Pad, not by index (#1562).
-  const events = [...committed.patterns[patternId].events]
+  const committedEvents = committed.patterns[patternId].events;
+  const events = [...committedEvents]
       .sort((left, right) => left.slot.pad - right.slot.pad);
   expect(events).toHaveLength(2);
   expect(events[0]).toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100});
@@ -230,7 +231,9 @@ test("global Pattern transport plays, overdubs, survives navigation, stops, and 
   await transportStatus(page, "stopped");
   const stopped = await inspectTruth(page);
   expect(stopped.revision).toBe(baseline.revision + 1);
-  expect(stopped.patterns[patternId].events).toEqual(events);
+  // Stop leaves truth untouched: compare it with the committed truth in its
+  // own position order, not with the Pad-sorted copy above.
+  expect(stopped.patterns[patternId].events).toEqual(committedEvents);
 
   // Reopen: identical bytes, revision and events; one session identity drove
   // the whole journey. The proof lives on the window, so read it before the
@@ -247,7 +250,7 @@ test("global Pattern transport plays, overdubs, survives navigation, stops, and 
   await reopenProject(page);
   const reopened = await inspectTruth(page);
   expect(reopened.revision).toBe(baseline.revision + 1);
-  expect(reopened.patterns[patternId].events).toEqual(events);
+  expect(reopened.patterns[patternId].events).toEqual(committedEvents);
 });
 
 test("Record-off ticket loss reconciles the same command; Pattern switch and stopped Record survive reopen", async ({page, browserName}) => {
