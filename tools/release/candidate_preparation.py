@@ -5,6 +5,7 @@ import re
 
 from scripts import version
 from .batch_reference import sha
+from .candidate_inputs import CandidateInputError
 from .candidate_material import CandidateBuildMaterial
 from .candidate_workspace import CandidateSourceWorkspace
 from .candidate_source_setup import CandidateSourceSetup
@@ -138,7 +139,36 @@ class CandidatePreparation:
             raise CandidatePreparationError("why: candidate preparation authority or main is unavailable; remedy: restore the original trusted grant without exposing callback output or replaying effects") from None
         frozen = self.material.inputs.freeze(self.request["base_revision"])
         self.setup.repository.git("merge-base", "--is-ancestor", self.request["base_revision"], main)
-        self.material.inputs.verify(frozen, main)
+        self._verify_inputs_through_own_squash(frozen, main)
+
+    def _verify_inputs_through_own_squash(self, frozen, main):
+        """Inputs at main are the baseline's, or moved only by this candidate's squash.
+
+        Before the cut merges, main must still carry the frozen inputs. After it
+        merges, main necessarily carries this candidate's own new BUILD, so
+        comparing main with the baseline can never pass. Then the first
+        first-parent commit that names the reserved BUILD must sit on a parent
+        whose inputs still equal the baseline: any other allocation or input
+        drift before the squash is still refused.
+        """
+        try:
+            self.material.inputs.verify(frozen, main)
+            return
+        except CandidateInputError:
+            reservation = self.material.reservations.observe(
+                self.request, frozen, self.request["base_revision"])
+            if reservation is None:
+                raise
+        reserved = reservation["version"]
+        git = self.setup.repository.git
+        history = git("rev-list", "--first-parent", "--reverse", "--max-count=100000",
+                      self.request["base_revision"] + ".." + main).decode().split()
+        for commit in history:
+            if str(self.material.reservations._version(commit)) == reserved:
+                parent = git("rev-parse", commit + "^1").decode().strip()
+                self.material.inputs.verify(frozen, parent)
+                return
+        raise CandidateInputError("why: candidate inputs changed since the original baseline without this candidate's squash; remedy: retain the original request baseline and reconcile candidate changes; do not silently allocate or advance to a new source")
 
     def _write_guard(self):
         return self._guard(live=True)

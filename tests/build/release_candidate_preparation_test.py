@@ -107,6 +107,66 @@ class PreparationJourneyTest(PreparationFixture):
         self.assertEqual(self.clock_calls, [True])
 
 
+class PreparationPostMergeAuthorityTest(PreparationFixture):
+    """The transition's reviewed-squash proof re-proves authority after the cut
+    merged, outside any drive session, against a main that carries the cut."""
+
+    def commit(self, tree, parent, message):
+        import subprocess
+        env = dict(os.environ, GIT_AUTHOR_NAME="Fixture", GIT_AUTHOR_EMAIL="fixture@example.invalid",
+                   GIT_COMMITTER_NAME="Fixture", GIT_COMMITTER_EMAIL="fixture@example.invalid",
+                   GIT_AUTHOR_DATE="2000000000 +0000", GIT_COMMITTER_DATE="2000000000 +0000")
+        return subprocess.run(["git", "-C", str(self.fixture.root), "commit-tree", tree, "-p", parent,
+                               "-m", message], check=True, capture_output=True, env=env).stdout.decode().strip()
+
+    def tree_with(self, base_tree, name, data):
+        import subprocess, tempfile
+        root = str(self.fixture.root)
+        with tempfile.TemporaryDirectory() as directory:
+            env = dict(os.environ, GIT_INDEX_FILE=str(Path(directory) / "index"))
+            subprocess.run(["git", "-C", root, "read-tree", base_tree], check=True, env=env)
+            oid = subprocess.run(["git", "-C", root, "hash-object", "-w", "--stdin"], input=data,
+                                 check=True, capture_output=True, env=env).stdout.decode().strip()
+            subprocess.run(["git", "-C", root, "update-index", "--add", "--cacheinfo", f"100644,{oid},{name}"],
+                           check=True, env=env)
+            return subprocess.run(["git", "-C", root, "write-tree"], check=True, capture_output=True,
+                                  env=env).stdout.decode().strip()
+
+    def prepared_cut(self):
+        self.enroll_parent()
+        return self.prepare_parent()["checked_cut"]["cut"]
+
+    def test_merged_own_squash_passes_the_post_drive_reproof(self):
+        cut = self.prepared_cut()
+        squash = self.commit(cut["tree"], self.fixture.base, "squash of the candidate cut")
+        self.main = squash
+        self.parent = self.new_parent()
+        self.parent._child_authorize({})
+
+    def test_input_drift_before_the_squash_is_still_refused(self):
+        from tools.release.candidate_inputs import CandidateInputError
+        cut = self.prepared_cut()
+        base_tree = self.parent.setup.repository.git("rev-parse", self.fixture.base + "^{tree}").decode().strip()
+        drift = self.commit(self.tree_with(base_tree, "products/lmdj/drift.txt", b"drift"),
+                            self.fixture.base, "input drift before the squash")
+        squash = self.commit(self.tree_with(cut["tree"], "products/lmdj/drift.txt", b"drift"),
+                             drift, "squash of the candidate cut")
+        self.main = squash
+        self.parent = self.new_parent()
+        with self.assertRaises(CandidateInputError):
+            self.parent._child_authorize({})
+
+    def test_unmerged_drift_without_the_squash_is_refused(self):
+        from tools.release.candidate_inputs import CandidateInputError
+        self.prepared_cut()
+        base_tree = self.parent.setup.repository.git("rev-parse", self.fixture.base + "^{tree}").decode().strip()
+        self.main = self.commit(self.tree_with(base_tree, "products/lmdj/drift.txt", b"drift"),
+                                self.fixture.base, "input drift, no squash")
+        self.parent = self.new_parent()
+        with self.assertRaises(CandidateInputError):
+            self.parent._child_authorize({})
+
+
 class PreparationEnrollmentTest(PreparationFixture):
     def test_same_type_authority_exception_is_private_at_initial_enrollment(self):
         def refuse(_):
