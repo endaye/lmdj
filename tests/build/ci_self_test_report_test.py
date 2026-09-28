@@ -767,7 +767,68 @@ class ReportingErrorTest(unittest.TestCase):
             clock[0] += seconds
 
         self.assertEqual(rep.with_retry(read, sleep=sleep, clock=lambda: clock[0]), "ok")
-        self.assertEqual(sleeps, [5.0])
+        self.assertEqual(sleeps, [5.0 + rep.PRIMARY_RESET_MARGIN_SECONDS])
+
+    def test_primary_quota_retry_lands_after_the_reset_second(self) -> None:
+        """GitHub still serves the exhausted window during the reset second."""
+        clock = [100.0]
+        sleeps = []
+        calls = []
+
+        def read():
+            calls.append(clock[0])
+            if clock[0] <= 105:
+                raise rep.GitHubApiError(403, "quota", remaining=0, reset=105)
+            return "ok"
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+        self.assertEqual(rep.with_retry(read, sleep=sleep, clock=lambda: clock[0]), "ok")
+        self.assertEqual(len(calls), 2)
+        self.assertGreater(calls[1], 105,
+                           "why: the single primary retry reached GitHub inside the reset second; "
+                           "remedy: wait PRIMARY_RESET_MARGIN_SECONDS past X-RateLimit-Reset")
+
+    def test_primary_quota_elapsed_reset_still_waits_the_margin(self) -> None:
+        """remaining=0 with a past reset is the same stale window, not a free retry."""
+        clock = [100.0]
+        sleeps = []
+        calls = [0]
+
+        def read():
+            calls[0] += 1
+            if calls[0] == 1:
+                raise rep.GitHubApiError(403, "quota", remaining=0, reset=99)
+            return "ok"
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+        self.assertEqual(rep.with_retry(read, sleep=sleep, clock=lambda: clock[0]), "ok")
+        self.assertEqual(sleeps, [float(rep.PRIMARY_RESET_MARGIN_SECONDS)])
+
+    def test_primary_quota_reset_inside_the_cap_is_retried_even_within_the_margin(self) -> None:
+        """The cap bounds the reset, not the margin: a reset 1 s inside it is waited for."""
+        clock = [100.0]
+        sleeps = []
+        calls = [0]
+        reset = 100 + int(rep.PRIMARY_WAIT_CAP_SECONDS) - 1
+
+        def read():
+            calls[0] += 1
+            if calls[0] == 1:
+                raise rep.GitHubApiError(403, "quota", remaining=0, reset=reset)
+            return "ok"
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+        self.assertEqual(rep.with_retry(read, sleep=sleep, clock=lambda: clock[0]), "ok")
+        self.assertEqual(sleeps, [rep.PRIMARY_WAIT_CAP_SECONDS - 1 + rep.PRIMARY_RESET_MARGIN_SECONDS])
 
     def test_primary_quota_wait_does_not_consume_the_short_secondary_budget(self) -> None:
         clock = [100.0]
@@ -786,7 +847,7 @@ class ReportingErrorTest(unittest.TestCase):
             clock[0] += seconds
 
         self.assertEqual(rep.with_retry(read, sleep=sleep, clock=lambda: clock[0], budget=budget), "ok")
-        self.assertEqual(sleeps, [600.0])
+        self.assertEqual(sleeps, [600.0 + rep.PRIMARY_RESET_MARGIN_SECONDS])
         self.assertEqual(budget.remaining, sum(rep.RETRY_DELAYS))
 
     def test_primary_quota_reset_beyond_budget_is_deferred_and_auth_forbidden_is_final(self) -> None:

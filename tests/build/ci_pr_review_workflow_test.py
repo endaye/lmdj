@@ -417,8 +417,75 @@ class PrimaryRateLimitRetryTest(unittest.TestCase):
                 mock.patch.object(target.urllib.request, "urlopen", side_effect=urlopen):
             payload = target._api("/repos/endaye/lmdj/pulls/7")
         self.assertEqual(payload, {"number": 7})
-        self.assertEqual(sleeps, [5])
+        self.assertEqual(sleeps, [5 + target.PRIMARY_RESET_MARGIN_SECONDS])
         self.assertEqual(calls[0], 2)
+
+    def test_retry_lands_after_the_reset_second(self) -> None:
+        """GitHub still serves the exhausted window during the reset second.
+
+        Runs 36361623619 and 36383483648 slept exactly until X-RateLimit-Reset,
+        retried at that second, got remaining=0 with the same reset again, and
+        failed after their single retry.
+        """
+        clock = [100.0]
+        sleeps = []
+        calls = []
+
+        def urlopen(request, timeout=60):
+            calls.append(clock[0])
+            if clock[0] <= 105:
+                raise self.quota_error(remaining=0, reset=105)
+            return self.ok_response(b'{"number":7}')
+
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "fixture-token"}), \
+                mock.patch.object(target, "_now", side_effect=lambda: clock[0]), \
+                mock.patch.object(target, "_sleep", side_effect=lambda seconds: sleeps.append(seconds) or clock.__setitem__(0, clock[0] + seconds)), \
+                mock.patch.object(target.urllib.request, "urlopen", side_effect=urlopen):
+            payload = target._api("/repos/endaye/lmdj/pulls/7")
+        self.assertEqual(payload, {"number": 7})
+        self.assertEqual(len(calls), 2)
+        self.assertGreater(calls[1], 105,
+                           "why: the single retry reached GitHub inside the reset second; "
+                           "remedy: wait PRIMARY_RESET_MARGIN_SECONDS past X-RateLimit-Reset")
+
+    def test_elapsed_reset_still_waits_the_margin(self) -> None:
+        """remaining=0 with a past reset is the same stale window, not a free retry."""
+        clock = [100.0]
+        sleeps = []
+        calls = [0]
+
+        def urlopen(request, timeout=60):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise self.quota_error(remaining=0, reset=99)
+            return self.ok_response(b'{"number":7}')
+
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "fixture-token"}), \
+                mock.patch.object(target, "_now", side_effect=lambda: clock[0]), \
+                mock.patch.object(target, "_sleep", side_effect=lambda seconds: sleeps.append(seconds) or clock.__setitem__(0, clock[0] + seconds)), \
+                mock.patch.object(target.urllib.request, "urlopen", side_effect=urlopen):
+            self.assertEqual(target._api("/repos/endaye/lmdj/pulls/7"), {"number": 7})
+        self.assertEqual(sleeps, [target.PRIMARY_RESET_MARGIN_SECONDS])
+
+    def test_reset_inside_the_job_bound_is_retried_even_within_the_margin(self) -> None:
+        """The cap bounds the reset, not the margin: a reset 1 s inside it is waited for."""
+        clock = [100.0]
+        sleeps = []
+        calls = [0]
+        reset = 100 + target.PRIMARY_WAIT_CAP_SECONDS - 1
+
+        def urlopen(request, timeout=60):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise self.quota_error(remaining=0, reset=reset)
+            return self.ok_response(b'{"number":7}')
+
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "fixture-token"}), \
+                mock.patch.object(target, "_now", side_effect=lambda: clock[0]), \
+                mock.patch.object(target, "_sleep", side_effect=lambda seconds: sleeps.append(seconds) or clock.__setitem__(0, clock[0] + seconds)), \
+                mock.patch.object(target.urllib.request, "urlopen", side_effect=urlopen):
+            self.assertEqual(target._api("/repos/endaye/lmdj/pulls/7"), {"number": 7})
+        self.assertEqual(sleeps, [target.PRIMARY_WAIT_CAP_SECONDS - 1 + target.PRIMARY_RESET_MARGIN_SECONDS])
 
     def test_reset_beyond_the_job_bound_stays_fail_closed(self) -> None:
         sleeps = []
@@ -463,7 +530,7 @@ class PrimaryRateLimitRetryTest(unittest.TestCase):
                 "POST", "https://api.github.com/repos/endaye/lmdj/issues/7/labels",
                 "fixture-token", {"labels": ["test:full"]})
         self.assertEqual(payload, [{"name": "test:full"}])
-        self.assertEqual(sleeps, [8])
+        self.assertEqual(sleeps, [8 + target.PRIMARY_RESET_MARGIN_SECONDS])
         self.assertEqual(calls[0], 2)
 
 

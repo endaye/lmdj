@@ -33,6 +33,9 @@ API_VERSION = "2022-11-28"
 # One primary window is at most one hour. Jobs wait this bound, then fail closed.
 PRIMARY_WAIT_CAP_SECONDS = 20 * 60
 PRIMARY_RETRY_LIMIT = 1
+# GitHub still serves the exhausted window during the X-RateLimit-Reset second,
+# so the single retry waits this long past it instead of landing on it.
+PRIMARY_RESET_MARGIN_SECONDS = 5
 
 EXIT_OK = 0
 EXIT_UNREADABLE = 2
@@ -105,14 +108,15 @@ def _open_github(make_request: Callable[[], urllib.request.Request]) -> bytes:
                 error.close()
             except OSError:
                 pass
-            if wait > 0:
-                print(
-                    f"why: GitHub REST remaining=0 until reset in {int(wait)}s; "
-                    "remedy: wait the bounded primary window, then continue fail-closed",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                _sleep(wait)
+            # The cap bounds the reset; the margin only moves the retry past
+            # the reset second, including a reset that has already elapsed.
+            print(
+                f"why: GitHub REST remaining=0 until reset in {int(wait)}s; "
+                "remedy: wait the bounded primary window, then continue fail-closed",
+                file=sys.stderr,
+                flush=True,
+            )
+            _sleep(wait + PRIMARY_RESET_MARGIN_SECONDS)
             retries += 1
 
 

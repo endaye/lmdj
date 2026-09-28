@@ -109,6 +109,9 @@ RETRY_DELAYS = (5.0, 20.0)
 #: A later reset stays deferred for the next health tick.
 PRIMARY_WAIT_CAP_SECONDS = 20 * 60
 PRIMARY_RETRY_LIMIT = 1
+#: GitHub still serves the exhausted window during the X-RateLimit-Reset second,
+#: so the single primary retry waits this long past it instead of landing on it.
+PRIMARY_RESET_MARGIN_SECONDS = 5
 
 
 class RetryBudget:
@@ -489,7 +492,8 @@ def with_retry(call: Callable[[], object], *, sleep: Callable[[float], None],
                secondary: bool = True) -> object:
     """Retry idempotent reads on secondary throttling or exhausted primary quota.
 
-    Primary remaining=0 waits until X-RateLimit-Reset inside PRIMARY_WAIT_CAP_SECONDS
+    Primary remaining=0 waits until PRIMARY_RESET_MARGIN_SECONDS past
+    X-RateLimit-Reset inside PRIMARY_WAIT_CAP_SECONDS
     and does not consume the short secondary budget. A reset beyond the cap stays
     an unknown/deferred read for the next health tick. Secondary 429/5xx/transport
     retries stay on delays plus RetryBudget. Callers must never use this for writes.
@@ -511,7 +515,9 @@ def with_retry(call: Callable[[], object], *, sleep: Callable[[float], None],
                 if primary_retries >= PRIMARY_RETRY_LIMIT or clock() + delay > primary_deadline:
                     raise
                 primary_retries += 1
-                sleep(delay)
+                # The cap bounds the reset; the margin only moves the retry past
+                # the reset second, including a reset that has already elapsed.
+                sleep(delay + PRIMARY_RESET_MARGIN_SECONDS)
                 continue
             retryable = secondary and (error.status == 429 or error.status >= 500 or error.status == 0)
             if not retryable or attempt >= len(delays):
