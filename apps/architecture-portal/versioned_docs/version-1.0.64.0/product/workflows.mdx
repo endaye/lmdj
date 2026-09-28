@@ -1,0 +1,97 @@
+---
+title: 产品工作流
+area: product
+status: partial
+owners: [product, core]
+source_paths:
+  - docs/design/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md
+  - docs/plans/2026-08-29-lmdj-stage9-switch-boundary-flush.md
+  - docs/quality/2026-08-27-stage9-sequence-recording-review.md
+  - docs/plans/2026-08-29-lmdj-stage10-perform.md
+  - packages/application-facade
+  - packages/project-cooker
+  - packages/project-io
+  - docs/plans/2026-09-06-lmdj-stage11-sound-set.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## 创作与保存
+
+Host 向 Application Facade 发出命令；Authoring Domain 更新 Project Truth；Project I/O 负责事务式存取和录音会话 Journal。Host 不解析 Project bundle。
+
+## Sequence 录音
+
+[2026-08-23 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-08-23-sequence-recording-semantics.md)已由全局 Pattern transport（#1230）取代 Stage 9 的页面级 Sequence 会话：一个 Facade 持有的 coordinator 拥有 journal 与 transport，录音向当前 Pattern 写入 tick-native PPQ 960 事件，没有 Take 产品对象或音频 bounce。Play/Stop 与 Record 是全局键，任何 mode 下都指向同一 projection 与命令身份，普通导航不停止 transport，Sample capture 与 master recording 由各自独立的 workflow 拥有。armed 空 Pad Capture 在 transport 录制中只停采并进入 trim overlay；journal 打开时 Sample 类提交保持 busy 守卫并被诚实拒绝，Record-off 结算后同一选区可提交，播放不中断；录制中 BPM、Quantize/Swing 被拒绝。未知 command 与 identity 冲突均 fail closed。Capture 在 manifest publication 前 durable 固定原 command/asset/artifact；若 Project 已提交而 journal completion 中断，fresh-command retry/restart 只按 exact receipt 与 Project Truth 完成原提交，不创建第二个 Asset 或 revision。若 publication 尚未发生，Discard/disarm 只在 writer lease 下确认无 receipt 且 Project 仍为 exact expected revision、原 Pad 仍空、command/Asset 均不存在后写入 durable abort；matching receipt 完成原提交，任何 identity/Truth 冲突均 fail closed。durable marker 存在时 BPM/Quantize/Swing 也必须先以 `armed_capture_recovery_pending` 拒绝，不能先提交 Project 再失败于 journal rebase。成功或 abort 后消费 arm，pending Sequence events 保留，之后的同 Pad hit 才进入演奏与录制 admission。每个被录制的 Pad 事件在 acknowledged admission/cutoff 区间内先 durable 保留为 candidate，drain 后按 exact fence 幂等提交；提交前它不是 Project Truth。Record-off 以 acknowledged cutoff 结算并提交且播放保持，Stop 先停止调度再结算；ticket 或 receipt 丢失时按同一命令身份 reconcile，绝不发出新的反向 toggle。切换 Pattern：播放中的 engagement 诚实拒绝跨身份 reload，停止态 reload 注销 engagement 并由下一条命令按当前 Pattern 重新 vend。owner-lost 的 transport admission 在列出时被 reconcile 密封为 owner_lost 候选：Apply 被诚实拒绝（fence 结果不可知），Discard 释放它；legacy recovery artifact 仍必须通过原 Pattern fingerprint 或用户明确选择的有效目标后才能提交或丢弃。
+
+## Pad Capture pre-commit 编辑
+
+Creator 的录音会话是视口锚定的模态面板：固定几何（宽度 `min(44rem, calc(100vw - 2rem))`，最大高度 `calc(100dvh - 2rem)` 内部滚动），Header、固定高度波形/电平区与底部操作行三个固定区域，进入 recording 只换内容、不改变外框；打开时焦点落在当前阶段主操作，阶段切换若卸载被聚焦控件则焦点迁往新阶段主操作，Escape 在任意阶段关闭并先停止进行中的录音，关闭后焦点恢复发起按钮。录音后可在 Host-local ephemeral `CaptureBuffer` 里选择严格子区间并执行 **Crop to selection**。Crop 先准备精确 PCM、chunk 索引与增量 block peaks，再原子发布归零的新 buffer revision；缓存同时失效。它可重复执行，且 Commit 继续沿用原有 buffer + selection 接口。Project Truth 只在现有 Commit 成功后变化；当前没有 Undo、持久化 Asset 编辑、自动 silence trimming、fade、normalize 或其他 DSP。
+
+## 长素材摄入与选区提交
+
+Creator 按内容嗅探 WAV、MP3、M4A/AAC、FLAC，在浏览器 Host 堆中以 48 kHz 解码完整来源；100 MiB 源、15 分钟 normalized frames 和双声道门禁在可判定的最早边界 fail closed。波形、试听和裁剪共享唯一 `AudioBuffer`。`sample.quota` 把目标 Pad 当前占用排除后返回 revision-bound Bank/Project effective headroom，选区提交复用既有 PCM16 WAV streaming mutation；恰好 headroom 成功，+1 mono frame 由 Core 以 quota 类别拒绝。Sample 本身不携带 BPM，实时路径不做 time-stretch。
+
+## Sound Set 目录与安装
+
+浏览 Catalog、检查一个 Set、预览映射、安装到用户选定的 Bank，是自 Product Build
+`1.0.44.0` 起的产品工作流。Catalog 索引由拥有 endpoint 的 Host 取回并交给 Core：原生
+Host 读 Workspace 本地的内容寻址目录，Web Host 在浏览器侧 `fetch` 并把字节暂存，Core
+不含网络代码。清单的 Contract 形状、每个 Artifact 的哈希、SPDX 允许清单与署名要求，以及
+四项 Host 容量上限，都在一个 Set 变为可见之前判定；任何一项不通过都不产生分配或下载。
+安装把槽位内容写成普通 Asset 与普通 Pad 指派，一次修订、一张收据；`keep` 只写空 Pad，
+`replace` 写下每一个 proposed Pad，Set 的空槽永不清除已占用的 Pad，被替换的 Asset 不被
+删除。来源记录在既有 Asset Lineage 载体上，安装之后再编辑 Pad 是普通的创作动作。Catalog
+不可达不是致命错误：已发布进 Set Store 的 Set 仍可列出、检查与安装。Set 内音频的试听是
+Facade 的第五个操作，现已在五个 Host 上注册；Creator 在 set 级 demo 与每个已占用槽上各
+提供一个试听控件，外加一个停止控件。试听对 Project Truth 是 query——不建 Asset、不动
+Pad、不推进 revision。拥有引擎的两个 Host——Web Host 与 Native Host——都会把 Facade 交回的
+已重采样 PCM 发布进引擎保留的双槽 audition 池并起声（[#1009](https://github.com/endaye/lmdj/pull/1009)、
+[#1054](https://github.com/endaye/lmdj/pull/1054)），并在回包上带 `played` 说明这一次是否
+真的起了声。CLI 与 MCP 不拥有引擎，在它们上只回报几何。停止只在 Web Host 上有对应操作。
+自动化观察两侧现在都闭合：原生侧有一条 journey 把试听渲染到结束并断言 `played: true`，
+Web 侧在真实浏览器里断言 `played: true` 并确认 Host 在预览播完后仍然站着——详见
+[Sound Set Contract](../contracts/soundset.mdx)。
+
+## Cook 与演奏
+
+Project Cooker 校验 Project Truth 和 Artifact，产生不可变 Runtime Snapshot；Audio Runtime 从快照准备样本并在实时路径消费事件。快照不会反写为 Project Truth。
+
+## Perform 演奏与录制
+
+演奏面运行在共享 Runtime Session 之上。录制前先看 master tap 的 capture 状态：`unconfigured` 表示当前 manifest 或同源 tap URL 不足以配置采集，`configured` 表示配置成立，`ready` 表示 tap 与 AudioWorklet 都已启动；只有 `ready` 允许开始一次音频采集；capture 不可用时实时音频不受影响，Platform 只把采集入口 fail closed。
+
+Creator 的录制面板按一台阶段机推进：`idle → starting → recording → flushing → stopping → stopped`，随后按用户选择进入 `saving` 或 `discarding`。被记录的事件词汇是封闭的七种：Pad hit、Pattern launch、FX 的 engage/move/release，以及 HOLD 的 on 与 off。Pad hit 指向 64 个 Pad Slot 之一，Pattern launch 只指向 16 个 Pattern Slot 之一，FX 固定为 filter、delay、reverb、stutter、gate、reverse、crush、cutter 八级链路、取值域 0..1000；FX 的 Bar 相对周期由整数 BPM transport anchor 推导，不跟墙钟。演奏期的权威状态属于 Facade：未闭合的 Pad 手势、未闭合的 FX 手势、HOLD 开关与最后一次被确认的 Pattern launch 都从 `performance.record.status` 读取，Host 不做本地预测。事件先进入 performance 类型的 journal 会话并 durable append canonical tail，flush 以 command 与 flush identity 记录不可变 canonical payload 并按 receipt 幂等完成；实时线程仍不分配、不加锁、不修改 Project、不做 journal I/O，FX 手势只经由有界控制通道进入引擎。
+
+save 才让一个 Performance 成为 Project Truth：它连同 `recording_artifact` 一起写入 `performances`，在此之前 draft 只存在于 journal；discard 在同一纪律下丢弃 draft。master tap 采到的批次由 Creator Host 的流式 WAV writer 落成录音 Artifact，并通过 `performance.recording.bind` 绑定到该会话。
+
+重放不产生新的 Project Truth：Cooker 的 `cook_performance_replay` 从 Project Truth 与指定 Performance 推出不可变的 replay projection——resolved revision、BPM、Quantize/Swing、64 个 Pad 的解析结果、16 个 Pattern Slot 各自的 Runtime Snapshot、事件边界与事件计数——它是派生状态，既不回写也不持久化。
+
+resample 提交把一段录音变回素材：给定 Performance、起止帧与目标 Pad Slot，Facade 先要求该 Performance 具备已验证的 `audio/wav` 录音 Artifact，再按帧区间选出 PCM16 立体声片段并提交；新 Asset 携带指向来源 Artifact、来源 Project revision、帧区间与来源 Performance 的 Asset Lineage，而 Asset Lineage 要求 Project v4 或更新的 Project Truth；当前 writer 写出 `lmdj.project.v5`。
+
+Performance recovery 与 Sequence 同构：owner 丢失或中断留下的 performance 会话候选可以被列出，再由用户明确 apply 或 discard；未经确认不会自行提交，也不会自行丢弃。
+
+## Provider 尝试
+
+Workspace/Host 选择 Provider。Provider 接收 Artifact 输入和输出 sink；进行中的状态和失败记录在 Attempt Store，而非 Project Truth。
+
+## 产品装配
+
+Product Assembly 固定 Module、Host、Provider、Contract 及版本。Application Facade 是 Host 的唯一 Core 入口。
+
+## 验收分层
+
+单元/组件测试验证边界，Proof 验证组合，CI 验证目标环境，Product Build 固定交付身份，物理设备验收验证最终体验。
+
+## Slice 分析、试听与采用
+
+从保留的源素材选择参考 Provider 并显式授权，分析后检查当前片段。无 onset 是
+成功的空结果。试听/停止不改变 Project；未激活引擎时界面不会声称已经播放。
+逐行选择片段、Bank 与 Pad 后采用，同一片段可进入不同 Pad，不能重复目标。
+一次成功提交产生独立 Asset 并保留源素材、完整谱系与已有 Pattern；重启后由
+Project Truth 和持久 Job 恢复。采用后准备新音频，成功后可立即击打目标 Pad；
+准备失败仍保留已保存结果，并提供不重复采用的音频准备重试。过期 revision、不可用 Set、源损坏或配额不足均
+拒绝，未知响应先检查 Project，不自动重试采用。取消指定 Attempt；丢弃 Set
+不会删除已采用的素材。当前仅有 test 平台参考 Provider，生产能力另行验证。
