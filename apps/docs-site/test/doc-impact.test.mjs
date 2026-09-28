@@ -55,3 +55,35 @@ test('product build and assembly changes cannot opt out of current documentation
     ],
   }), []);
 });
+
+const REQUIRED_WITHOUT_PAGE = 'documentation impact is required but no current portal page changed — update the affected pages under apps/docs-site/docs/ in this PR, or declare "Documentation impact: none" with a reason if no portal truth changes';
+const CUT_BODY = 'Documentation impact: required\nAffected portal pages: /operations/version-and-release/\nReason: reserve a new BUILD with PATCH 0; no product fixes included.';
+const CUT_FILES = [
+  'apps/architecture-portal/static/versions/1.0.64.0/diagrams/foundation.svg',
+  'apps/architecture-portal/versioned_docs/version-1.0.64.0/assembly/lmdj.mdx',
+  'apps/architecture-portal/versioned_metadata/version-1.0.64.0.json',
+  'apps/architecture-portal/versioned_sidebars/version-1.0.64.0-sidebars.json',
+  'apps/architecture-portal/versions.json',
+  'products/lmdj/assembly.json',
+  'products/lmdj/assembly.lock.json',
+  'products/lmdj/generated/web-runtime-identity.json',
+  'products/lmdj/generated/web-runtime-identity.mjs',
+  'products/lmdj/src/compiled_assembly.cpp',
+  'products/lmdj/version.json',
+];
+
+test('a candidate cut carrying its own Build snapshot satisfies required without a current page edit', () => {
+  assert.deepEqual(checkDocumentationImpact({body: CUT_BODY, changedFiles: CUT_FILES, productBuild: '1.0.64.0'}), []);
+});
+
+test('a cut that also changes other source still needs a current page edit', () => {
+  assert.deepEqual(checkDocumentationImpact({
+    body: CUT_BODY,
+    changedFiles: [...CUT_FILES, 'packages/application-facade/module.json'],
+    productBuild: '1.0.64.0',
+  }), [REQUIRED_WITHOUT_PAGE]);
+});
+
+test('a snapshot for a Build other than the current one does not stand in for a current page', () => {
+  assert.deepEqual(checkDocumentationImpact({body: CUT_BODY, changedFiles: CUT_FILES, productBuild: '1.0.65.0'}), [REQUIRED_WITHOUT_PAGE]);
+});

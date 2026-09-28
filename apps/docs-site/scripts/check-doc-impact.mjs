@@ -1,9 +1,24 @@
+import {readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 import {resolveChangedFiles} from './lib/changed-files.mjs';
 
-export function checkDocumentationImpact({body, changedFiles}) {
+// The files a candidate cut writes: regenerated Product identity plus the
+// immutable snapshot. Current pages derive every identity from the manifests,
+// so a cut that touches nothing else has no current page to edit.
+const CUT_IDENTITY_FILE = /^products\/lmdj\/(?:version\.json|assembly(?:\.lock)?\.json|src\/compiled_assembly\.cpp|generated\/web-runtime-identity\.(?:json|mjs))$/;
+const SNAPSHOT_FILE = /^apps\/architecture-portal\/(?:versions\.json$|versioned_(?:docs|sidebars|metadata|provenance)\/|static\/versions\/)/;
+
+function isCandidateCut(changedFiles, productBuild) {
+  if (!productBuild) return false;
+  const metadata = `apps/architecture-portal/versioned_metadata/version-${productBuild}.json`;
+  return changedFiles.includes(metadata)
+    && changedFiles.some((file) => file === 'products/lmdj/version.json')
+    && changedFiles.every((file) => CUT_IDENTITY_FILE.test(file) || SNAPSHOT_FILE.test(file));
+}
+
+export function checkDocumentationImpact({body, changedFiles, productBuild}) {
   const errors = [];
   const impact = body.match(/^Documentation impact:\s*(required|none)\s*$/im)?.[1]?.toLowerCase();
   const reason = body.match(/^Reason:\s*(.*)$/im)?.[1]?.trim();
@@ -21,11 +36,22 @@ export function checkDocumentationImpact({body, changedFiles}) {
     if (!pages || !pages.split(/[\s,]+/).filter(Boolean).every((route) => route.startsWith('/'))) {
       errors.push('affected portal pages must list one or more absolute routes — add an "Affected portal pages:" line whose entries each start with "/" (space- or comma-separated)');
     }
-    if (!currentPortalChanged) errors.push('documentation impact is required but no current portal page changed — update the affected pages under apps/docs-site/docs/ in this PR, or declare "Documentation impact: none" with a reason if no portal truth changes');
+    if (!currentPortalChanged && !isCandidateCut(changedFiles, productBuild)) errors.push('documentation impact is required but no current portal page changed — update the affected pages under apps/docs-site/docs/ in this PR, or declare "Documentation impact: none" with a reason if no portal truth changes');
   } else if (currentPortalChanged) {
     errors.push('documentation impact is none but current portal pages changed — either declare "Documentation impact: required" with "Affected portal pages:" routes, or drop the apps/docs-site/docs/ edits from this PR');
   }
   return errors;
+}
+
+async function readProductBuild() {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+  try {
+    const version = JSON.parse(await readFile(path.join(repoRoot, 'products/lmdj/version.json'), 'utf8'));
+    const parts = [version.milestone, version.minor, version.build, version.patch];
+    return parts.every((part) => Number.isInteger(part) && part >= 0) ? parts.join('.') : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function main() {
@@ -44,7 +70,7 @@ async function main() {
       return;
     }
   }
-  const errors = checkDocumentationImpact({body, changedFiles});
+  const errors = checkDocumentationImpact({body, changedFiles, productBuild: await readProductBuild()});
   if (errors.length) {
     console.error(errors.join('\n'));
     process.exitCode = 1;
