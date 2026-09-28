@@ -1809,6 +1809,51 @@ class CandidateEnrollmentTest(unittest.TestCase):
         self.assertTrue((reservation_root / CATALOG).exists())
 
 
+class BatchJournalReaderCompositionTest(unittest.TestCase):
+    """The verification step reads the CI batch journal as a lock-free reader."""
+
+    def test_the_release_entry_reads_committed_history_without_the_writer_lock(self):
+        # release-be5061a58de507db's verification stayed "unknown" because the
+        # entry called Journal.load() with lock_held=False, which refuses
+        # ("journal operation lacks the shared short writer lock") and could
+        # write the anchor. The reader must use read_committed().
+        import sys
+        import types
+        from unittest.mock import patch
+        from tools.release.entry_composition import _batch_journal_load
+
+        calls, locks = [], []
+
+        class Transport:
+            def __init__(self, **kwargs):
+                locks.append(kwargs["lock_held"]())
+                self.authenticate = lambda *a: True
+
+        class Anchor:
+            def __init__(self, issue, transport, authenticate, lock_held):
+                locks.append(lock_held())
+
+        class Journal:
+            def __init__(self, issue, transport, anchor, authenticate, lock_held):
+                locks.append(lock_held())
+
+            def load(self):
+                calls.append("load")
+                raise AssertionError("a reader must never call the locked writer load")
+
+            def read_committed(self):
+                calls.append("read_committed")
+                return [{"type": "result"}]
+
+        modules = {"batch_github_journal": types.SimpleNamespace(GitHubJournalTransport=Transport),
+                   "incremental_batch_journal": types.SimpleNamespace(IssueBodyAnchor=Anchor, Journal=Journal)}
+        with patch.dict(sys.modules, modules):
+            events = _batch_journal_load(ROOT, "FIXTURE-NOT-A-SECRET")()
+        self.assertEqual(events, [{"type": "result"}])
+        self.assertEqual(calls, ["read_committed"])
+        self.assertEqual(locks, [False, False, False])
+
+
 class RecoveredDispatchTest(unittest.TestCase):
     """The managed dispatch wrapper: pending until derivable, never self-driving."""
 

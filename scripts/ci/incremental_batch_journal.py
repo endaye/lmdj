@@ -58,6 +58,13 @@ an empty checkpoint automatically. Controlled initialization is separate.
 
     def read(self):
         require(self.lock_held() is True, "checkpoint read lacks shared writer lock")
+        return self.peek()
+
+    def peek(self):
+        """The authenticated checkpoint for a reader that holds no writer lock.
+
+        Identical validation to `read`; it never writes, so a release-side
+        observer can read committed state without joining the writer lock."""
         body = self.transport.read_body(self.issue_id)
         require(isinstance(body, dict) and set(body) == {"checkpoint", "provenance"},
                 "checkpoint object is absent or malformed")
@@ -215,6 +222,31 @@ class Journal:
                 anchor = replacement
             require(head == anchor["head"], "journal suffix is missing or unanchored",
                     "stop admission; restore the independent anchor and journal or audit old runs before bootstrap")
+            return [deepcopy(envelope["event"]) for envelope in envelopes]
+        except Exception as error:
+            if isinstance(error, JournalBlocked):
+                raise
+            raise JournalBlocked(f"why: journal state unavailable: {error}; remedy: reconcile storage; do not advance cursor") from error
+
+    def read_committed(self):
+        """Read-only: the complete authenticated history up to the anchored head.
+
+        Takes no writer lock and writes nothing. A persisted-but-unanchored
+        pending append is excluded, never adopted: only a locked writer's
+        `load()` may commit it. Every other check of the complete replay still
+        applies, and any other suffix beyond the anchored head is refused."""
+        try:
+            require(self.anchor is not None, "durable journal checkpoint is unavailable",
+                    "configure an authenticated checkpoint object; do not infer progress from comments alone")
+            anchor = self.anchor.peek()
+            envelopes, head = self._read_complete()
+            if head != anchor["head"]:
+                pending = anchor["pending"]
+                require(isinstance(pending, dict) and envelopes and envelopes[-1] == pending
+                        and pending.get("previous") == anchor["head"],
+                        "journal suffix is missing or unanchored",
+                        "read only anchored history; reconcile the writer's pending append first")
+                envelopes = envelopes[:-1]
             return [deepcopy(envelope["event"]) for envelope in envelopes]
         except Exception as error:
             if isinstance(error, JournalBlocked):
