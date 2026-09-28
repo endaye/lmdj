@@ -14,15 +14,18 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 当前 Product Build 以上方从 active manifests 生成的 Build Identity 为准；各组件页面的身份也从同一份 manifest/Assembly Lock 事实生成，不以以下历史分配记录替代当前版本。
 
-当前分配的 Product Build `1.0.62.0` 补齐 `1.0.61.0` 之后已合入、但当时未升版本的模块身份：
-Application Facade `6.2.0`（Pattern transport overlay 发布与撤回、owner-lost 恢复）、
-Project I/O `4.2.0`（Sequence admission 字段与草稿所有权修复）、Creator Web `4.5.0`
-（developer diagnostics 保留 typed 失败）；Web Runtime Platform `5.3.2` 与各 Host 只跟随依赖做
-PATCH。它不是公共 Release、部署或 Channel 晋级。
+当前分配的 Product Build `1.0.65.0` 带入 Project I/O `4.2.1`：它修复了 Performance draft begin 的一个竞态。
+一个注定被 revision 冲突拒绝的 begin，过去会先写入活动 Journal 再失败，留下一个指向从未提交的
+Performance 的活动 Journal；现在它在写入任何 Journal 之前就返回同样的拒绝。Application Facade
+`6.2.1`、Web Runtime Platform `5.3.3` 与各 Host 只跟随依赖做 PATCH。`1.0.64.0` 的候选因为这个竞态没有通过
+完整批次，从未发布。它不是公共 Release、部署或 Channel 晋级。
 
 ## 历史分配记录
 
 以下描述各次分配当时的变化，不声明当前组件版本或发布状态。
+
+Product Build `1.0.62.0` 曾补齐 `1.0.61.0` 之后已合入、但当时未升版本的模块身份：Application Facade
+`6.2.0`、Project I/O `4.2.0`、Creator Web `4.5.0`，Web Runtime Platform `5.3.2` 与各 Host 跟随依赖做 PATCH。
 
 Product Build `1.0.59.0` 曾新增 Cardputer Host `1.0.1`，绑定 ESP32-S3/Cardputer ADV 的
 Product Assembly profile，供 A1 使用；它不是公共 Release、部署或 Channel 晋级，也不替代真实设备验收。
