@@ -448,6 +448,45 @@ class PrimaryRateLimitRetryTest(unittest.TestCase):
                            "why: the single retry reached GitHub inside the reset second; "
                            "remedy: wait PRIMARY_RESET_MARGIN_SECONDS past X-RateLimit-Reset")
 
+    def test_elapsed_reset_still_waits_the_margin(self) -> None:
+        """remaining=0 with a past reset is the same stale window, not a free retry."""
+        clock = [100.0]
+        sleeps = []
+        calls = [0]
+
+        def urlopen(request, timeout=60):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise self.quota_error(remaining=0, reset=99)
+            return self.ok_response(b'{"number":7}')
+
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "fixture-token"}), \
+                mock.patch.object(target, "_now", side_effect=lambda: clock[0]), \
+                mock.patch.object(target, "_sleep", side_effect=lambda seconds: sleeps.append(seconds) or clock.__setitem__(0, clock[0] + seconds)), \
+                mock.patch.object(target.urllib.request, "urlopen", side_effect=urlopen):
+            self.assertEqual(target._api("/repos/endaye/lmdj/pulls/7"), {"number": 7})
+        self.assertEqual(sleeps, [target.PRIMARY_RESET_MARGIN_SECONDS])
+
+    def test_reset_inside_the_job_bound_is_retried_even_within_the_margin(self) -> None:
+        """The cap bounds the reset, not the margin: a reset 1 s inside it is waited for."""
+        clock = [100.0]
+        sleeps = []
+        calls = [0]
+        reset = 100 + target.PRIMARY_WAIT_CAP_SECONDS - 1
+
+        def urlopen(request, timeout=60):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise self.quota_error(remaining=0, reset=reset)
+            return self.ok_response(b'{"number":7}')
+
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "fixture-token"}), \
+                mock.patch.object(target, "_now", side_effect=lambda: clock[0]), \
+                mock.patch.object(target, "_sleep", side_effect=lambda seconds: sleeps.append(seconds) or clock.__setitem__(0, clock[0] + seconds)), \
+                mock.patch.object(target.urllib.request, "urlopen", side_effect=urlopen):
+            self.assertEqual(target._api("/repos/endaye/lmdj/pulls/7"), {"number": 7})
+        self.assertEqual(sleeps, [target.PRIMARY_WAIT_CAP_SECONDS - 1 + target.PRIMARY_RESET_MARGIN_SECONDS])
+
     def test_reset_beyond_the_job_bound_stays_fail_closed(self) -> None:
         sleeps = []
         error = self.quota_error(remaining=0, reset=100 + target.PRIMARY_WAIT_CAP_SECONDS + 1)

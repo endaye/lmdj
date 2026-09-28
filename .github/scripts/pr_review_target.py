@@ -82,13 +82,13 @@ def _decimal_header(headers, name: str) -> int | None:
 
 
 def _primary_wait_seconds(error: BaseException) -> float | None:
-    """Seconds until just past X-RateLimit-Reset when remaining is 0; otherwise not retryable."""
+    """Seconds until X-RateLimit-Reset when remaining is 0; otherwise not retryable."""
     if not isinstance(error, urllib.error.HTTPError) or error.code not in (403, 429):
         return None
     remaining = _decimal_header(error.headers, "X-RateLimit-Remaining")
     reset = _decimal_header(error.headers, "X-RateLimit-Reset")
     if remaining == 0 and reset is not None:
-        return max(0.0, float(reset) - _now()) + PRIMARY_RESET_MARGIN_SECONDS
+        return max(0.0, float(reset) - _now())
     return None
 
 
@@ -108,14 +108,15 @@ def _open_github(make_request: Callable[[], urllib.request.Request]) -> bytes:
                 error.close()
             except OSError:
                 pass
-            if wait > 0:
-                print(
-                    f"why: GitHub REST remaining=0 until reset in {int(wait)}s; "
-                    "remedy: wait the bounded primary window, then continue fail-closed",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                _sleep(wait)
+            # The cap bounds the reset; the margin only moves the retry past
+            # the reset second, including a reset that has already elapsed.
+            print(
+                f"why: GitHub REST remaining=0 until reset in {int(wait)}s; "
+                "remedy: wait the bounded primary window, then continue fail-closed",
+                file=sys.stderr,
+                flush=True,
+            )
+            _sleep(wait + PRIMARY_RESET_MARGIN_SECONDS)
             retries += 1
 
 

@@ -511,11 +511,13 @@ def with_retry(call: Callable[[], object], *, sleep: Callable[[float], None],
         except GitHubApiError as error:
             primary_exhausted = error.status == 403 and error.remaining == 0 and error.reset is not None
             if primary_exhausted:
-                delay = max(0.0, float(error.reset) - clock()) + PRIMARY_RESET_MARGIN_SECONDS
+                delay = max(0.0, float(error.reset) - clock())
                 if primary_retries >= PRIMARY_RETRY_LIMIT or clock() + delay > primary_deadline:
                     raise
                 primary_retries += 1
-                sleep(delay)
+                # The cap bounds the reset; the margin only moves the retry past
+                # the reset second, including a reset that has already elapsed.
+                sleep(delay + PRIMARY_RESET_MARGIN_SECONDS)
                 continue
             retryable = secondary and (error.status == 429 or error.status >= 500 or error.status == 0)
             if not retryable or attempt >= len(delays):
