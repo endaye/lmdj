@@ -421,7 +421,7 @@ class RequestJournal(AbstractContextManager):
         finally:
             os.close(fd)
 
-    def retire(self, request_id, retirement):
+    def retire(self, request_id, retirement, *, expected_request=None):
         """Replace one unfinished original with its retirement record.
 
         The caller authenticates the supersession far side first: a published,
@@ -443,6 +443,8 @@ class RequestJournal(AbstractContextManager):
             if existing["retirement"] != retirement:
                 _fail("request retirement cannot be rebound")
             return deepcopy(existing)
+        if expected_request is not None and state["request"] != expected_request:
+            _fail("request changed after its supersession was proven")
         records = state["transitions"]
         if len(records) == len(STEPS) and records[-1]["status"] == "verified":
             _fail("a completed release is history, not a retirement candidate")

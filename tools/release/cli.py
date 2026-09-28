@@ -332,7 +332,8 @@ def _retire_request(root: Path, request_id: str, tag: str) -> int:
         "audit": [f"[{item.code}] {item.subject}: {item.message}" for item in report.findings],
     }
     with RequestJournal(directory) as journal:
-        journal.retire(request_id, retirement)
+        # The identity and audit were proven for this exact request.
+        journal.retire(request_id, retirement, expected_request=request)
     print(f"release request retired: {request_id} superseded by {tag}")
     return 0
 

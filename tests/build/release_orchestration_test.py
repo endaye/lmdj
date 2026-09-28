@@ -132,6 +132,16 @@ class RequestJournalTest(unittest.TestCase):
             journal.retire("release-1", self.RETIREMENT)
             self.assertIsNone(journal.read("release-1"))
 
+    def test_retirement_is_bound_to_the_request_its_proof_was_made_for(self):
+        with RequestJournal(self.root) as journal:
+            journal.create(request())
+            with self.assertRaisesRegex(JournalError, "changed after its supersession"):
+                journal.retire("release-1", self.RETIREMENT,
+                               expected_request=dict(request(), authority_ref="thread:other"))
+            self.assertIsNotNone(journal.read("release-1"))
+            journal.retire("release-1", self.RETIREMENT, expected_request=request())
+            self.assertIsNone(journal.read("release-1"))
+
     def test_completed_or_intent_holding_requests_are_not_retired(self):
         with RequestJournal(self.root) as journal:
             journal.create(request())
