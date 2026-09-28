@@ -26,6 +26,7 @@ import batch_verdict
 import incremental_batch as batch
 import test_scope
 GitHubApiError = runtime.with_retry.__globals__["GitHubApiError"]
+RESET_MARGIN = runtime.with_retry.__globals__["PRIMARY_RESET_MARGIN_SECONDS"]
 
 BOT = {"__typename": "Bot", "id": "MDM6Qm90NDE4OTgyODI="}
 
@@ -176,7 +177,8 @@ class RuntimeTests(unittest.TestCase):
         with mock.patch.object(runtime.time, "sleep", side_effect=lambda delay: (sleeps.append(delay), clock.__setitem__(0, clock[0] + delay))):
             self.assertEqual(instance.call("GET", "/first"), {"ok": True})
             self.assertEqual(instance.transport._call("GET", "/second"), {"ok": True})
-        self.assertEqual(sleeps, [20.0, 20.0])
+        # Each retry lands RESET_MARGIN past its own reset: 100 -> 125, then 125 -> 145.
+        self.assertEqual(sleeps, [20.0 + RESET_MARGIN, 140.0 - (120.0 + RESET_MARGIN) + RESET_MARGIN])
         self.assertEqual(instance.retry_budget.remaining, 25.0)
         self.assertEqual(self.api._request.call_count, 4)
 
@@ -205,7 +207,7 @@ class RuntimeTests(unittest.TestCase):
         sleeps = []
         with mock.patch.object(runtime.time, "sleep", side_effect=lambda delay: (sleeps.append(delay), clock.__setitem__(0, clock[0] + delay))):
             self.assertEqual(instance.transport._call("GET", "/recovery"), {"healthy": True})
-        self.assertEqual(sleeps, [20.0])
+        self.assertEqual(sleeps, [20.0 + RESET_MARGIN])
         self.assertEqual(self.api._request.call_count, 2)
 
     def test_lock_held_quota_does_not_sleep_or_mutate_and_later_context_recovers(self):
@@ -235,7 +237,7 @@ class RuntimeTests(unittest.TestCase):
         sleeps = []
         with mock.patch.object(runtime.time, "sleep", side_effect=lambda delay: (sleeps.append(delay), clock.__setitem__(0, clock[0] + delay))):
             self.assertEqual(instance.call("GET", "/locked-primary"), {"healthy": True})
-        self.assertEqual(sleeps, [20.0])
+        self.assertEqual(sleeps, [20.0 + RESET_MARGIN])
         self.assertEqual(self.api._request.call_count, 2)
 
     def test_unlocked_transport_unknown_post_is_attempted_once_without_retry(self):

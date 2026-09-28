@@ -33,6 +33,9 @@ API_VERSION = "2022-11-28"
 # One primary window is at most one hour. Jobs wait this bound, then fail closed.
 PRIMARY_WAIT_CAP_SECONDS = 20 * 60
 PRIMARY_RETRY_LIMIT = 1
+# GitHub still serves the exhausted window during the X-RateLimit-Reset second,
+# so the single retry waits this long past it instead of landing on it.
+PRIMARY_RESET_MARGIN_SECONDS = 5
 
 EXIT_OK = 0
 EXIT_UNREADABLE = 2
@@ -79,13 +82,13 @@ def _decimal_header(headers, name: str) -> int | None:
 
 
 def _primary_wait_seconds(error: BaseException) -> float | None:
-    """Seconds until X-RateLimit-Reset when remaining is 0; otherwise not retryable."""
+    """Seconds until just past X-RateLimit-Reset when remaining is 0; otherwise not retryable."""
     if not isinstance(error, urllib.error.HTTPError) or error.code not in (403, 429):
         return None
     remaining = _decimal_header(error.headers, "X-RateLimit-Remaining")
     reset = _decimal_header(error.headers, "X-RateLimit-Reset")
     if remaining == 0 and reset is not None:
-        return max(0.0, float(reset) - _now())
+        return max(0.0, float(reset) - _now()) + PRIMARY_RESET_MARGIN_SECONDS
     return None
 
 
