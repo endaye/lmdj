@@ -21,6 +21,9 @@ recurrences:
   - date: 2026-09-28
     occurrence: https://github.com/endaye/lmdj/pull/1576
     observed_by: claude-code/opus-5.5
+  - date: 2026-09-28
+    occurrence: https://github.com/endaye/lmdj/pull/1621
+    observed_by: claude-code/opus-5.5
 exit: gate:tests/build/ci_local_preflight_test.py
 escalation: https://github.com/endaye/lmdj/issues/1619
 ---
@@ -72,3 +75,10 @@ owns choosing a replacement mechanism.
 reopen legs of `creator_web_sequence.spec.mjs` kept comparing position-ordered
 truth with that sorted copy. They fail whenever the presses straddle the loop
 boundary, and only the batch-only `creator` lane runs them.
+
+#1621 raised the `web-runtime-host`, `creator-web` and `web-runtime-platform`
+module versions. `tests/conformance/module_graph_test.py` pins all three and
+runs only in the batch-only Core lanes, so `core_asan`, `core_coverage`,
+`core_macos` and `core_ubuntu` went red on the next complete batch. A version
+bump must search every pinned copy of the old version, not only the manifests
+it edits.

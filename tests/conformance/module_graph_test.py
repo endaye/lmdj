@@ -13,7 +13,7 @@ HOST_ROOT = REPO_ROOT / "apps"
 PROVIDER_ROOT = REPO_ROOT / "providers"
 FORBIDDEN_PACKAGE_REFERENCES = ("products/lmdj/", "apps/creator-web/")
 EXPECTED_WEB_HOST_DEPENDENCIES = {
-    "web-runtime-platform": "5.3.1",
+    "web-runtime-platform": "5.3.2",
 }
 
 
@@ -171,19 +171,19 @@ assert web_host_path == REPO_ROOT / "apps/web-runtime-host/module.json"
 assert web_host_manifest == {
     "contract": "lmdj.module.v1",
     "module": "web-runtime-host",
-    "version": "4.3.1",
+    "version": "4.3.2",
     "api_version": 2,
     "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
-}
+}, (web_host_path, web_host_manifest)
 creator_path, creator_manifest = host_manifests["creator-web"]
 assert creator_path == REPO_ROOT / "apps/creator-web/module.json"
 assert creator_manifest == {
     "contract": "lmdj.module.v1",
     "module": "creator-web",
-    "version": "4.4.0",
+    "version": "4.5.0",
     "api_version": 2,
     "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
-}
+}, (creator_path, creator_manifest)
 verify_creator_package_identity(REPO_ROOT)
 
 for _, (path, manifest) in provider_manifests.items():
