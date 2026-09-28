@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-17
     occurrence: https://github.com/endaye/lmdj/issues/1048
     observed_by: Kimi
+  - date: 2026-09-28
+    occurrence: https://github.com/endaye/lmdj/actions/runs/36383374374
+    observed_by: claude-code/opus-5.5
 exit: gate:tests/build/ci_incremental_batch_journal_test.py
 ---
 
@@ -34,3 +37,17 @@ editor provenance and blocks harder) and never by replaying the POST. The gate
 pins both the drain preconditions (exact digest, chain successor, complete
 authenticated absence proof) and the tail-peek fail-fast that keeps a blocked
 journal from full-replaying every tick.
+
+On 2026-09-28 the same strand recurred, and the absorbed mechanism held. Tick
+36383374374 exhausted the Actions `GITHUB_TOKEN` quota (core remaining 466
+down to 0) inside a reconcile, after the anchor recorded pending generation 536
+(`advance`, digest `0848a7e9…`) and before its POST. Every later tick then
+failed `journal-blocked` at `scheduler-read` in about 28 requests, without
+full-replaying the journal. A read-only inventory of all 536 comments proved the
+digest absent and the chain intact up to the anchor head `a68b02fb`. The
+owner-authorized `reconcile-pending` (run 36399839054) drained it, and the next
+ordinary reconcile re-derived the dropped `advance`. What remains is the time
+before anyone notices: no batch ran from 05:49 to 08:53 UTC, and the only
+signal was a generic `journal-blocked` with the `why` withheld. When every
+controller tick fails `journal-blocked` with healthy quota, read the #807
+anchor for a `pending` before anything else.
