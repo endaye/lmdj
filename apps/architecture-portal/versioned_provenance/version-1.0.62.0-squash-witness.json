@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "product_build": "1.0.62.0",
+  "source_revision": "c5ef6fcfcb5ff1c6b495381b3655883212c277bc",
+  "introducing_revision": "06859ded81b74ce813f3f1ebf6b1296bd17958e6",
+  "source_tree": "bb671509160d8ce94eac38a0cf283a2e7e95563c",
+  "entries": [
+    {
+      "path": ".agents/pitfalls/local-ci-list-names-batch-lanes.md",
+      "mode": "100644",
+      "source_base64": "LS0tCmlkOiBsb2NhbC1jaS1saXN0LW5hbWVzLWJhdGNoLWxhbmVzCmFyZWE6IGNpLXJlbGVhc2UKc3RhdHVzOiBhYnNvcmJlZApyZWN1cnJlbmNlczoKICAtIGRhdGU6IDIwMjYtMDktMTcKICAgIG9jY3VycmVuY2U6IGh0dHBzOi8vZ2l0aHViLmNvbS9lbmRheWUvbG1kai9wdWxsLzE0OTAKICAgIG9ic2VydmVkX2J5OiBDbGF1ZGUgT3B1cyA1CiAgLSBkYXRlOiAyMDI2LTA5LTE3CiAgICBvY2N1cnJlbmNlOiBodHRwczovL2dpdGh1Yi5jb20vZW5kYXllL2xtZGovcHVsbC8xNDkyCiAgICBvYnNlcnZlZF9ieTogQ2xhdWRlIE9wdXMgNQogIC0gZGF0ZTogMjAyNi0wOS0yNwogICAgb2NjdXJyZW5jZTogaHR0cHM6Ly9naXRodWIuY29tL2VuZGF5ZS9sbWRqL3B1bGwvMTU1MAogICAgb2JzZXJ2ZWRfYnk6IGNsYXVkZS1jb2RlL29wdXMtNS41CiAgLSBkYXRlOiAyMDI2LTA5LTI3CiAgICBvY2N1cnJlbmNlOiBodHRwczovL2dpdGh1Yi5jb20vZW5kYXllL2xtZGovcHVsbC8xNTgxCiAgICBvYnNlcnZlZF9ieTogY2xhdWRlLWNvZGUvb3B1cy01LjUKZXhpdDogZ2F0ZTp0ZXN0cy9idWlsZC9jaV9sb2NhbF9wcmVmbGlnaHRfdGVzdC5weQotLS0KCiMgYHNjcmlwdHMvbG9jYWwtY2kuc2ggLS1saXN0YCBuYW1lcyBsYW5lcyBhIFB1bGwgUmVxdWVzdCBuZXZlciBydW5zLCBzbyBhIGNoYW5nZSBvd25lZCBieSBvbmUgb2YgdGhlbSBpcyB1bnZlcmlmaWVkIGF0IG1lcmdlLgoKIyMgV2h5CgpgLS1saXN0YCByZXBvcnRlZCBldmVyeSBsYW5lIHRoZSBjaGFuZ2Utc2NvcGUgY2xhc3NpZmllciBzZWxlY3RzLCB3aGljaCByZWFkcwpsaWtlICJ0aGVzZSBsYW5lcyB3aWxsIHZlcmlmeSB0aGlzIFB1bGwgUmVxdWVzdCIuIE9ubHkgdGhlIGxhbmVzCmBwci1jb250cmFjdC55bWxgIGdhdGVzIG9uIGFjdHVhbGx5IHJ1biB0aGVyZTsgdGhlIHJlc3QgbGl2ZSBpbiB0aGUKYHdvcmtmbG93X2NhbGxgLW9ubHkgYGNpLnltbGAgYW5kIHdhaXQgZm9yIGFuIGFkbWl0dGVkIG1haW4gYmF0Y2guICMxNDkwIGFuZAojMTQ5MiBjaGFuZ2VkIGB0b29scy9yZWxlYXNlL2AsIG93bmVkIGJ5IGBkZXBsb3lfY29udHJhY3RgLCBhbmQgYnJva2UgYG1haW5gCndpdGggbm8gUHVsbCBSZXF1ZXN0IGNoZWNrIGFibGUgdG8gY2F0Y2ggaXQuCgojIyBIb3cgdG8gYXBwbHkKClRoZSBwcmUtZmxpZ2h0IG5vdyBkZXJpdmVzIHRoZSBQdWxsIFJlcXVlc3QgbGFuZSBzZXQgZnJvbSBgcHItY29udHJhY3QueW1sYAppdHNlbGYgYW5kIHNwbGl0cyBgc2VsZWN0ZWRgIGludG8gYHB1bGxfcmVxdWVzdF92ZXJpZmllZGAgYW5kIGBiYXRjaF9vbmx5YCwKd2FybmluZyBvbiBhbnkgYmF0Y2gtb25seSBsYW5lLiBSdW4gdGhvc2UgbGFuZXMgbG9jYWxseSBiZWZvcmUgcHVzaGluZzoKCmBgYGJhc2gKc2NyaXB0cy9sb2NhbC1jaS5zaCAtLWxhbmVzIGRlcGxveV9jb250cmFjdApgYGAKCmBQdWxsUmVxdWVzdExhbmVWaXNpYmlsaXR5VGVzdGAgaW4KYHRlc3RzL2J1aWxkL2NpX2xvY2FsX3ByZWZsaWdodF90ZXN0LnB5YCBob2xkcyB0aGUgZGVyaXZhdGlvbiwgdGhlIHBhcnRpdGlvbiBhbmQKdGhlIGZhaWwtY2xvc2VkIGVtcHR5IHNldCB3aGVuIHRoZSB3b3JrZmxvdyBjYW5ub3QgYmUgcmVhZC4KClRoZSB3YXJuaW5nIGlzIGFkdmlzb3J5LCBhbmQgaXQgZGlkIG5vdCBzdG9wIHR3byBsYXRlciBtZXJnZXMuICMxNTUwIGJyb2tlIHRocmVlCkNocm9taXVtIHJlYWx0aW1lIHRyYW5zcG9ydCBqb3VybmV5cyAoYHdlYl9ydW50aW1lX2hvc3RgLCBgd2ViX3Rvb2xjaGFpbmApLgojMTU4MSBjaGFuZ2VkIG93bmVyLWxvc3QgcmVjb3Zlcnkgc2VtYW50aWNzLCBhbmQKYHBhY2thZ2VzL3dlYi1ydW50aW1lLXBsYXRmb3JtL3Rlc3QvY29udHJvbF9ydW50aW1lX3Rlc3QuY3BwYCBwbHVzIHRoZSBDcmVhdG9yCm93bmVyLWxvc3Mgam91cm5leSBrZXB0IGFzc2VydGluZyB0aGUgb2xkIHJlZnVzYWwgKGBjb3JlX2FzYW5gLApgY29yZV9jb3ZlcmFnZWAsIGBjb3JlX21hY29zYCwgYGNyZWF0b3JgKS4gQm90aCBzdGF5ZWQgcmVkIG9uIGBtYWluYCBmb3IgYSB3ZWVrCmFuZCBibG9ja2VkIGV2ZXJ5IGNvbXBsZXRlIGNhbmRpZGF0ZS4gV2hlbiBhIGJlaGF2aW9yIGNoYW5nZSByZWFjaGVzIENvcmUKTW9kdWxlIHNvdXJjZSwgc2VhcmNoIGV2ZXJ5IGxhbmUncyB0ZXN0cyBmb3IgdGhlIG9sZCBhc3NlcnRpb24sIG5vdCBvbmx5IHRoZQptb2R1bGUncyBvd24gdGVzdHMuCg=="
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/application-facade.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/application-facade.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/audio-runtime.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/audio-runtime.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/authoring-domain.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/authoring-domain.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/foundation.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/foundation.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/lmdj-core.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/lmdj-core.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/lmdj-product.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/lmdj-product.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/project-cooker.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/project-cooker.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/project-io.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/project-io.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/provider-sdk.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/provider-sdk.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/web-runtime-platform.html",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/static/versions/1.0.62.0/diagrams/web-runtime-platform.svg",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/assembly/lmdj.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/contracts/artifact-audio.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/contracts/assembly.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/contracts/capability.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/contracts/cardputer-transfer.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/contracts/error-module-version.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/contracts/overview.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/contracts/project-bundle.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/contracts/project.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/contracts/runtime-snapshot.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/contracts/slice-points.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/contracts/soundset-catalog.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/contracts/soundset.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/core/modules/application-facade.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/core/modules/audio-runtime.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/core/modules/authoring-domain.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/core/modules/foundation.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/core/modules/project-cooker.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/core/modules/project-io.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/core/modules/provider-sdk.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/core/modules/web-runtime-platform.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/core/overview.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/history/legacy-patch-architecture.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/hosts/cardputer-host.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/hosts/core-cli.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/hosts/core-mcp.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/hosts/creator-web.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/hosts/native-host.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/hosts/overview.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/hosts/web-runtime.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/operations/creator-changelog.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/operations/documentation-governance.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/operations/runtime-changelog.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/operations/testing-and-proof.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/operations/version-and-release.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/overview/index.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/platform/input.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/platform/native-audio.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/platform/storage.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/platform/web-runtime.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/product/capability-map.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/product/positioning.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/product/workflows.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/providers/local-proof.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/providers/local-sample-slice.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/providers/overview.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/releases/1.0.61.0.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_docs/version-1.0.62.0/releases/index.mdx",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_metadata/version-1.0.62.0.json",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versioned_sidebars/version-1.0.62.0-sidebars.json",
+      "source_absent": true
+    },
+    {
+      "path": "apps/architecture-portal/versions.json",
+      "mode": "100644",
+      "source_base64": "WwogICIxLjAuNjEuMCIsCiAgIjEuMC42MC4wIiwKICAiMS4wLjU5LjAiLAogICIxLjAuNTguMCIsCiAgIjEuMC41Ny4wIiwKICAiMS4wLjU2LjAiLAogICIxLjAuNTUuMCIsCiAgIjEuMC41NC4wIiwKICAiMS4wLjUzLjAiLAogICIxLjAuNTIuMCIKXQo="
+    },
+    {
+      "path": "tests/platform/web/toolchain/toolchain_identity_test.py",
+      "mode": "100755",
+      "source_base64": "IyEvdXNyL2Jpbi9lbnYgcHl0aG9uMwoKaW1wb3J0IGNvcHkKaW1wb3J0IGltcG9ydGxpYi51dGlsCmltcG9ydCBqc29uCmltcG9ydCBvcwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKaW1wb3J0IHJlCmltcG9ydCBzdWJwcm9jZXNzCmltcG9ydCBzeXMKCgpSRVBPX1JPT1QgPSBQYXRoKF9fZmlsZV9fKS5yZXNvbHZlKCkucGFyZW50c1s0XQpMT0NLX1BBVEggPSBSRVBPX1JPT1QgLyAidG9vbHMvd2ViLXJ1bnRpbWUvZW1zY3JpcHRlbi5sb2NrLmpzb24iClZFUklGSUVSX1BBVEggPSBSRVBPX1JPT1QgLyAidG9vbHMvd2ViLXJ1bnRpbWUvdmVyaWZ5X2Vtc2NyaXB0ZW4ucHkiClBBQ0tBR0VfUEFUSCA9IFJFUE9fUk9PVCAvICJ0ZXN0cy9wbGF0Zm9ybS93ZWIvcGFja2FnZS5qc29uIgpQQUNLQUdFX0xPQ0tfUEFUSCA9IFJFUE9fUk9PVCAvICJ0ZXN0cy9wbGF0Zm9ybS93ZWIvcGFja2FnZS1sb2NrLmpzb24iCkNNQUtFX1BBVEggPSBSRVBPX1JPT1QgLyAidGVzdHMvcGxhdGZvcm0vd2ViL3Rvb2xjaGFpbi9DTWFrZUxpc3RzLnR4dCIKUFJPQkVfUEFUSCA9IFJFUE9fUk9PVCAvICJ0ZXN0cy9wbGF0Zm9ybS93ZWIvdG9vbGNoYWluL3Byb2JlLmNwcCIKSURFTlRJVFlfUEFUSCA9IFJFUE9fUk9PVCAvICJidWlsZC93ZWIvdG9vbGNoYWluL3Rvb2xjaGFpbi1pZGVudGl0eS5qc29uIgoKUkVRVUlSRURfTElOS0VSX0ZMQUdTID0gWwogICAgIi1wdGhyZWFkIiwKICAgICItc1dBU01GUyIsCiAgICAiLXNBVURJT19XT1JLTEVUIiwKICAgICItc1dBU01fV09SS0VSUyIsCiAgICAiLXNQUk9YWV9UT19QVEhSRUFEIiwKICAgICItc0lOSVRJQUxfTUVNT1JZPTUzNjg3MDkxMiIsCiAgICAiLXNBTExPV19NRU1PUllfR1JPV1RIPTAiLAogICAgIi1zQVNZTkNJRlk9MSIsCiAgICAiLXNBU1lOQ0lGWV9JTVBPUlRTPVsnbG1kal9vcGZzX2FjcXVpcmVfd3JpdGVyJywnbG1kal9vcGZzX3JlcGxhY2VfY29tcGxldGUnLCdsbWRqX29wZnNfbGlzdF9uYW1lcyddIiwKXQpFWFBFQ1RFRF9MT0NLID0gewogICAgImVtc2RrX3RhZyI6ICI2LjAuNSIsCiAgICAiZW1zZGtfcmV2aXNpb24iOiAiZGZiOWQxYTQ2YzNiYjhmNTJlMWU2MzI0YmUyMzEyM2I5ZDczYzE5MCIsCiAgICAiZW1zY3JpcHRlbl9yZWxlYXNlc19yZXZpc2lvbiI6ICJkYmQ3NTViNWRhMzk5MzI5YzI1NzZmNmUzZGZhN2Y0MTlmNWQ4NDA5IiwKICAgICJlbWNjX3ZlcnNpb24iOiAoCiAgICAgICAgImVtY2MgKEVtc2NyaXB0ZW4gZ2NjL2NsYW5nLWxpa2UgcmVwbGFjZW1lbnQgKyBsaW5rZXIgZW11bGF0aW5nIEdOVSBsZCkgIgogICAgICAgICI2LjAuNSAoMWRiNTEzNzgyYmUyNDQ2OTU4OWQ3Y2I4YTFmMTgzNGU5YTMzZjI3MSkiCiAgICApLAogICAgImluaXRpYWxfbWVtb3J5IjogNTM2ODcwOTEyLAogICAgImFsbG93X21lbW9yeV9ncm93dGgiOiBGYWxzZSwKICAgICJub2RlIjogIjIyIiwKICAgICJwbGF5d3JpZ2h0IjogIjEuNjIuMSIsCiAgICAibGlua2VyX2ZsYWdzIjogUkVRVUlSRURfTElOS0VSX0ZMQUdTLAp9CgoKZGVmIHJlcXVpcmVfZmlsZXMoKSAtPiBOb25lOgogICAgcmVxdWlyZWQgPSBbCiAgICAgICAgTE9DS19QQVRILAogICAgICAgIFZFUklGSUVSX1BBVEgsCiAgICAgICAgUEFDS0FHRV9QQVRILAogICAgICAgIFBBQ0tBR0VfTE9DS19QQVRILAogICAgICAgIENNQUtFX1BBVEgsCiAgICAgICAgUFJPQkVfUEFUSCwKICAgIF0KICAgIG1pc3NpbmcgPSBbcGF0aC5yZWxhdGl2ZV90byhSRVBPX1JPT1QpLmFzX3Bvc2l4KCkgZm9yIHBhdGggaW4gcmVxdWlyZWQgaWYgbm90IHBhdGguaXNfZmlsZSgpXQogICAgYXNzZXJ0IG5vdCBtaXNzaW5nLCBmIm1pc3NpbmcgVGFzayAwIGZpbGVzOiB7JywgJy5qb2luKG1pc3NpbmcpfSIKCgpkZWYgbG9hZF92ZXJpZmllcigpOgogICAgc3BlYyA9IGltcG9ydGxpYi51dGlsLnNwZWNfZnJvbV9maWxlX2xvY2F0aW9uKCJ2ZXJpZnlfZW1zY3JpcHRlbiIsIFZFUklGSUVSX1BBVEgpCiAgICBhc3NlcnQgc3BlYyBpcyBub3QgTm9uZSBhbmQgc3BlYy5sb2FkZXIgaXMgbm90IE5vbmUKICAgIG1vZHVsZSA9IGltcG9ydGxpYi51dGlsLm1vZHVsZV9mcm9tX3NwZWMoc3BlYykKICAgIHNwZWMubG9hZGVyLmV4ZWNfbW9kdWxlKG1vZHVsZSkKICAgIHJldHVybiBtb2R1bGUKCgpkZWYgYXNzZXJ0X2xvY2tfY29udHJhY3QodmVyaWZpZXIpIC0+IE5vbmU6CiAgICBwYXJzZWQgPSBqc29uLmxvYWRzKExPQ0tfUEFUSC5yZWFkX3RleHQoZW5jb2Rpbmc9InV0Zi04IikpCiAgICBhc3NlcnQgcGFyc2VkID09IEVYUEVDVEVEX0xPQ0sKICAgIGFzc2VydCB2ZXJpZmllci52YWxpZGF0ZV9sb2NrKHBhcnNlZCkgPT0gRVhQRUNURURfTE9DSwoKICAgIHJlamVjdGVkID0gW10KCiAgICBkZWYgbXVzdF9yZWplY3QobGFiZWw6IHN0ciwgdmFsdWU6IG9iamVjdCkgLT4gTm9uZToKICAgICAgICB0cnk6CiAgICAgICAgICAgIHZlcmlmaWVyLnZhbGlkYXRlX2xvY2sodmFsdWUpCiAgICAgICAgZXhjZXB0IHZlcmlmaWVyLlZlcmlmaWNhdGlvbkVycm9yOgogICAgICAgICAgICByZWplY3RlZC5hcHBlbmQobGFiZWwpCiAgICAgICAgZWxzZToKICAgICAgICAgICAgcmFpc2UgQXNzZXJ0aW9uRXJyb3IoZiJsb2NrIG11dGF0aW9uIHdhcyBhY2NlcHRlZDoge2xhYmVsfSIpCgogICAgZm9yIGtleSBpbiBFWFBFQ1RFRF9MT0NLOgogICAgICAgIG11dGF0ZWQgPSBjb3B5LmRlZXBjb3B5KEVYUEVDVEVEX0xPQ0spCiAgICAgICAgZGVsIG11dGF0ZWRba2V5XQogICAgICAgIG11c3RfcmVqZWN0KGYibWlzc2luZyB7a2V5fSIsIG11dGF0ZWQpCgogICAgaW52YWxpZF92YWx1ZXMgPSAoCiAgICAgICAgKCJlbXNka190YWciLCAiIiksCiAgICAgICAgKCJlbXNka19yZXZpc2lvbiIsIE5vbmUpLAogICAgICAgICgiZW1zY3JpcHRlbl9yZWxlYXNlc19yZXZpc2lvbiIsIDEpLAogICAgICAgICgiZW1jY192ZXJzaW9uIiwgIiIpLAogICAgICAgICgiaW5pdGlhbF9tZW1vcnkiLCAwKSwKICAgICAgICAoImFsbG93X21lbW9yeV9ncm93dGgiLCAiZmFsc2UiKSwKICAgICAgICAoIm5vZGUiLCAiIiksCiAgICAgICAgKCJwbGF5d3JpZ2h0IiwgTm9uZSksCiAgICAgICAgKCJsaW5rZXJfZmxhZ3MiLCBbXSksCiAgICApCiAgICBmb3Iga2V5LCB2YWx1ZSBpbiBpbnZhbGlkX3ZhbHVlczoKICAgICAgICBtdXRhdGVkID0gY29weS5kZWVwY29weShFWFBFQ1RFRF9MT0NLKQogICAgICAgIG11dGF0ZWRba2V5XSA9IHZhbHVlCiAgICAgICAgbXVzdF9yZWplY3QoZiJpbnZhbGlkIHtrZXl9IiwgbXV0YXRlZCkKCiAgICBtdXRhdGVkID0gY29weS5kZWVwY29weShFWFBFQ1RFRF9MT0NLKQogICAgbXV0YXRlZFsidW5leHBlY3RlZCJdID0gVHJ1ZQogICAgbXVzdF9yZWplY3QoInVuZXhwZWN0ZWQga2V5IiwgbXV0YXRlZCkKICAgIGFzc2VydCBsZW4ocmVqZWN0ZWQpID09IGxlbihFWFBFQ1RFRF9MT0NLKSArIGxlbihpbnZhbGlkX3ZhbHVlcykgKyAxCgoKZGVmIGFzc2VydF9icm93c2VyX3BhY2thZ2UoKSAtPiBOb25lOgogICAgcGFja2FnZSA9IGpzb24ubG9hZHMoUEFDS0FHRV9QQVRILnJlYWRfdGV4dChlbmNvZGluZz0idXRmLTgiKSkKICAgIGFzc2VydCBwYWNrYWdlID09IHsKICAgICAgICAibmFtZSI6ICJAbG1kai93ZWItdG9vbGNoYWluLWNvbmZvcm1hbmNlIiwKICAgICAgICAidmVyc2lvbiI6ICIwLjAuMCIsCiAgICAgICAgInByaXZhdGUiOiBUcnVlLAogICAgICAgICJ0eXBlIjogIm1vZHVsZSIsCiAgICAgICAgImVuZ2luZXMiOiB7Im5vZGUiOiAiMjYueCJ9LAogICAgICAgICJzY3JpcHRzIjogeyJ0ZXN0IjogInBsYXl3cmlnaHQgdGVzdCJ9LAogICAgICAgICJkZXZEZXBlbmRlbmNpZXMiOiB7CiAgICAgICAgICAgICJAbmV0bGlmeS9oZWFkZXJzLXBhcnNlciI6ICIxMC4xLjAiLAogICAgICAgICAgICAiQHBsYXl3cmlnaHQvdGVzdCI6ICIxLjYyLjEiLAogICAgICAgIH0sCiAgICB9CgogICAgcGFja2FnZV9sb2NrID0ganNvbi5sb2FkcyhQQUNLQUdFX0xPQ0tfUEFUSC5yZWFkX3RleHQoZW5jb2Rpbmc9InV0Zi04IikpCiAgICBhc3NlcnQgcGFja2FnZV9sb2NrWyJsb2NrZmlsZVZlcnNpb24iXSA9PSAzCiAgICByb290ID0gcGFja2FnZV9sb2NrWyJwYWNrYWdlcyJdWyIiXQogICAgYXNzZXJ0IHJvb3RbImVuZ2luZXMiXSA9PSB7Im5vZGUiOiAiMjYueCJ9CiAgICBhc3NlcnQgcm9vdFsiZGV2RGVwZW5kZW5jaWVzIl0gPT0gewogICAgICAgICJAbmV0bGlmeS9oZWFkZXJzLXBhcnNlciI6ICIxMC4xLjAiLAogICAgICAgICJAcGxheXdyaWdodC90ZXN0IjogIjEuNjIuMSIsCiAgICB9CiAgICBoZWFkZXJzX3BhcnNlciA9IHBhY2thZ2VfbG9ja1sicGFja2FnZXMiXVsibm9kZV9tb2R1bGVzL0BuZXRsaWZ5L2hlYWRlcnMtcGFyc2VyIl0KICAgIGFzc2VydCBoZWFkZXJzX3BhcnNlclsidmVyc2lvbiJdID09ICIxMC4xLjAiCiAgICBwbGF5d3JpZ2h0ID0gcGFja2FnZV9sb2NrWyJwYWNrYWdlcyJdWyJub2RlX21vZHVsZXMvQHBsYXl3cmlnaHQvdGVzdCJdCiAgICBhc3NlcnQgcGxheXdyaWdodFsidmVyc2lvbiJdID09ICIxLjYyLjEiCgoKZGVmIGFzc2VydF92ZXJpZmllcl9mYWlsc19jbG9zZWQoKSAtPiBOb25lOgogICAgZW52aXJvbm1lbnQgPSBvcy5lbnZpcm9uLmNvcHkoKQogICAgZW52aXJvbm1lbnQucG9wKCJFTVNESyIsIE5vbmUpCiAgICBjb21wbGV0ZWQgPSBzdWJwcm9jZXNzLnJ1bigKICAgICAgICBbc3lzLmV4ZWN1dGFibGUsIHN0cihWRVJJRklFUl9QQVRIKV0sCiAgICAgICAgY3dkPVJFUE9fUk9PVCwKICAgICAgICBlbnY9ZW52aXJvbm1lbnQsCiAgICAgICAgY2hlY2s9RmFsc2UsCiAgICAgICAgY2FwdHVyZV9vdXRwdXQ9VHJ1ZSwKICAgICAgICB0ZXh0PVRydWUsCiAgICApCiAgICBhc3NlcnQgY29tcGxldGVkLnJldHVybmNvZGUgPT0gMgogICAgYXNzZXJ0IGNvbXBsZXRlZC5zdGRvdXQgPT0gIiIKICAgIGFzc2VydCBjb21wbGV0ZWQuc3RkZXJyID09ICJlbXNjcmlwdGVuIHZlcmlmaWNhdGlvbiBlcnJvcjogRU1TREsgaXMgbm90IHNldFxuIgogICAgaWYgSURFTlRJVFlfUEFUSC5pc19maWxlKCk6CiAgICAgICAgc2VyaWFsaXplZCA9IElERU5USVRZX1BBVEgucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpCiAgICAgICAgcGFyc2VkID0ganNvbi5sb2FkcyhzZXJpYWxpemVkKQogICAgICAgIGFzc2VydCBzZXJpYWxpemVkID09IGpzb24uZHVtcHMoCiAgICAgICAgICAgIHBhcnNlZCwKICAgICAgICAgICAgZW5zdXJlX2FzY2lpPUZhbHNlLAogICAgICAgICAgICBzb3J0X2tleXM9VHJ1ZSwKICAgICAgICAgICAgc2VwYXJhdG9ycz0oIiwiLCAiOiIpLAogICAgICAgICkgKyAiXG4iCgoKZGVmIGZ1bmN0aW9uX2JvZHkoc291cmNlOiBzdHIsIG5hbWU6IHN0cikgLT4gc3RyOgogICAgbWF0Y2ggPSByZS5zZWFyY2gocmYiXGJ7bmFtZX1ccypcKFteKV0qXClccypce3siLCBzb3VyY2UsIGZsYWdzPXJlLkRPVEFMTCkKICAgIGFzc2VydCBtYXRjaCBpcyBub3QgTm9uZSwgZiJtaXNzaW5nIGZ1bmN0aW9uIGJvZHk6IHtuYW1lfSIKICAgIHN0YXJ0ID0gbWF0Y2guZW5kKCkKICAgIGRlcHRoID0gMQogICAgaW5kZXggPSBzdGFydAogICAgd2hpbGUgaW5kZXggPCBsZW4oc291cmNlKSBhbmQgZGVwdGg6CiAgICAgICAgaWYgc291cmNlW2luZGV4XSA9PSAieyI6CiAgICAgICAgICAgIGRlcHRoICs9IDEKICAgICAgICBlbGlmIHNvdXJjZVtpbmRleF0gPT0gIn0iOgogICAgICAgICAgICBkZXB0aCAtPSAxCiAgICAgICAgaW5kZXggKz0gMQogICAgYXNzZXJ0IGRlcHRoID09IDAsIGYidW50ZXJtaW5hdGVkIGZ1bmN0aW9uIGJvZHk6IHtuYW1lfSIKICAgIHJldHVybiBzb3VyY2Vbc3RhcnQgOiBpbmRleCAtIDFdCgoKZGVmIGFzc2VydF9hdWRpb19jYWxsYmFja19pc19ub3RfYXN5bmNpZnlfcmVhY2hhYmxlKCkgLT4gTm9uZToKICAgIGNtYWtlID0gQ01BS0VfUEFUSC5yZWFkX3RleHQoZW5jb2Rpbmc9InV0Zi04IikKICAgIHNvdXJjZSA9IFBST0JFX1BBVEgucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpCiAgICBsaW5rX29wdGlvbnMgPSBjbWFrZS5zcGxpdCgidGFyZ2V0X2xpbmtfb3B0aW9ucygiLCAxKVsxXS5zcGxpdCgiXG4pIiwgMSlbMF0KICAgIGZvciBmbGFnIGluIFJFUVVJUkVEX0xJTktFUl9GTEFHUzoKICAgICAgICBhc3NlcnQgbGlua19vcHRpb25zLmNvdW50KGZsYWcpID09IDEsICgKICAgICAgICAgICAgZiJDTWFrZSBtdXN0IGFwcGx5IHJlcXVpcmVkIGxpbmtlciBmbGFnIGV4YWN0bHkgb25jZToge2ZsYWd9IgogICAgICAgICkKICAgIGFzc2VydCAiQVNZTkNJRllfUkVNT1ZFIiBub3QgaW4gY21ha2UKICAgIGFzc2VydCAiYWRkX2xpYnJhcnkocHJvYmVfYXVkaW9fY2FsbGJhY2sgT0JKRUNUIHByb2JlLmNwcCkiIGluIGNtYWtlCiAgICBhc3NlcnQgIkxNREpfUFJPQkVfQVVESU9fQ0FMTEJBQ0s9MSIgaW4gY21ha2UKICAgIGFzc2VydCAiTE1ESl9QUk9CRV9DT05UUk9MPTEiIGluIGNtYWtlCiAgICBhc3NlcnQgIiNpZiBkZWZpbmVkKExNREpfUFJPQkVfQVVESU9fQ0FMTEJBQ0spIiBpbiBzb3VyY2UKICAgIHNoYXJlZF9hdG9taWNzID0gcmUuZmluZGFsbCgKICAgICAgICByIl5leHRlcm4gc3RkOjphdG9taWM8W14+XSs+XHMrKFthLXpBLVpfXVthLXpBLVowLTlfXSopOyQiLAogICAgICAgIHNvdXJjZSwKICAgICAgICBmbGFncz1yZS5NVUxUSUxJTkUsCiAgICApCiAgICBhc3NlcnQgc2hhcmVkX2F0b21pY3MgPT0gWyJzaGFyZWRfcHJvYmVfd29yZCJdLCBzaGFyZWRfYXRvbWljcwogICAgYm9keSA9IGZ1bmN0aW9uX2JvZHkoc291cmNlLCAicHJvY2Vzc19wcm9iZSIpCiAgICBmb3IgYnJpZGdlIGluICgKICAgICAgICAibG1kal9vcGZzX2FjcXVpcmVfd3JpdGVyIiwKICAgICAgICAibG1kal9vcGZzX3JlcGxhY2VfY29tcGxldGUiLAogICAgICAgICJsbWRqX29wZnNfbGlzdF9uYW1lcyIsCiAgICAgICAgImVtc2NyaXB0ZW5fc2xlZXAiLAogICAgICAgICJlbXNjcmlwdGVuX3dnZXQiLAogICAgICAgICJlbXNjcmlwdGVuX2ZldGNoIiwKICAgICk6CiAgICAgICAgYXNzZXJ0IGJyaWRnZSBub3QgaW4gYm9keSwgZiJhdWRpbyBjYWxsYmFjayByZWFjaGVzIEFzeW5jaWZ5IHBhdGg6IHticmlkZ2V9IgogICAgYXNzZXJ0ICJzYW1wbGVzUGVyQ2hhbm5lbCIgaW4gYm9keQogICAgYXNzZXJ0ICJzaGFyZWRfcHJvYmVfd29yZCIgaW4gYm9keQogICAgYXNzZXJ0ICJrUXVhbnR1bU1pc21hdGNoTWFzayIgaW4gc291cmNlCiAgICBhc3NlcnQgInN0ZDo6YXRvbWljPHN0ZDo6dWludDMyX3Q+Ojppc19hbHdheXNfbG9ja19mcmVlIiBpbiBzb3VyY2UKICAgIGFzc2VydCAiY29tcGFyZV9leGNoYW5nZV9zdHJvbmciIGluIHNvdXJjZQogICAgZm9yIHJldGlyZWRfd29yZCBpbiAoIm9ic2VydmVkX2ZyYW1lcyIsICJzaGFyZWRfbWFya2VyIik6CiAgICAgICAgYXNzZXJ0IHJlLnNlYXJjaCgKICAgICAgICAgICAgcmYiXGJzdGQ6OmF0b21pYzxbXj5dKz5ccyt7cmV0aXJlZF93b3JkfVxiIiwKICAgICAgICAgICAgc291cmNlLAogICAgICAgICkgaXMgTm9uZQogICAgYXNzZXJ0ICJyZXR1cm4gdHJ1ZTsiIGluIGJvZHkKCiAgICBvYmplY3RfcGF0aCA9ICgKICAgICAgICBSRVBPX1JPT1QKICAgICAgICAvICJidWlsZC93ZWIvdG9vbGNoYWluL2NtYWtlL0NNYWtlRmlsZXMvcHJvYmVfYXVkaW9fY2FsbGJhY2suZGlyL3Byb2JlLmNwcC5vIgogICAgKQogICAgbGlua19wYXRoID0gUkVQT19ST09UIC8gImJ1aWxkL3dlYi90b29sY2hhaW4vY21ha2UvQ01ha2VGaWxlcy9wcm9iZS5kaXIvbGluay50eHQiCiAgICBpZiBvYmplY3RfcGF0aC5pc19maWxlKCk6CiAgICAgICAgZW1zZGsgPSBQYXRoKG9zLmVudmlyb24uZ2V0KCJFTVNESyIsICIiKSkKICAgICAgICBsbHZtX25tID0gZW1zZGsgLyAidXBzdHJlYW0vYmluL2xsdm0tbm0iCiAgICAgICAgYXNzZXJ0IGxsdm1fbm0uaXNfZmlsZSgpLCAiRU1TREsgbGx2bS1ubSBpcyByZXF1aXJlZCB0byBpbnNwZWN0IHRoZSBjYWxsYmFjayBvYmplY3QiCiAgICAgICAgY29tcGxldGVkID0gc3VicHJvY2Vzcy5ydW4oCiAgICAgICAgICAgIFtzdHIobGx2bV9ubSksICItLXVuZGVmaW5lZC1vbmx5Iiwgc3RyKG9iamVjdF9wYXRoKV0sCiAgICAgICAgICAgIGNoZWNrPUZhbHNlLAogICAgICAgICAgICBjYXB0dXJlX291dHB1dD1UcnVlLAogICAgICAgICAgICB0ZXh0PVRydWUsCiAgICAgICAgKQogICAgICAgIGFzc2VydCBjb21wbGV0ZWQucmV0dXJuY29kZSA9PSAwLCBjb21wbGV0ZWQuc3RkZXJyCiAgICAgICAgdW5kZWZpbmVkID0gewogICAgICAgICAgICBsaW5lLnNwbGl0KClbLTFdCiAgICAgICAgICAgIGZvciBsaW5lIGluIGNvbXBsZXRlZC5zdGRvdXQuc3BsaXRsaW5lcygpCiAgICAgICAgICAgIGlmIGxpbmUuc3RyaXAoKQogICAgICAgIH0KICAgICAgICBhc3NlcnQgdW5kZWZpbmVkID09IHsic2hhcmVkX3Byb2JlX3dvcmQifSwgdW5kZWZpbmVkCiAgICBpZiBsaW5rX3BhdGguaXNfZmlsZSgpOgogICAgICAgIGVtaXR0ZWRfbGluayA9IGxpbmtfcGF0aC5yZWFkX3RleHQoZW5jb2Rpbmc9InV0Zi04IikKICAgICAgICBmb3IgZmxhZyBpbiBSRVFVSVJFRF9MSU5LRVJfRkxBR1M6CiAgICAgICAgICAgIGFzc2VydCBlbWl0dGVkX2xpbmsuY291bnQoZmxhZykgPT0gMSwgKAogICAgICAgICAgICAgICAgZiJlbWl0dGVkIGxpbmsgbXVzdCBjb250YWluIHJlcXVpcmVkIGZsYWcgZXhhY3RseSBvbmNlOiB7ZmxhZ30iCiAgICAgICAgICAgICkKCgpkZWYgbWFpbigpIC0+IGludDoKICAgIHRyeToKICAgICAgICByZXF1aXJlX2ZpbGVzKCkKICAgICAgICB2ZXJpZmllciA9IGxvYWRfdmVyaWZpZXIoKQogICAgICAgIGFzc2VydF9sb2NrX2NvbnRyYWN0KHZlcmlmaWVyKQogICAgICAgIGFzc2VydF9icm93c2VyX3BhY2thZ2UoKQogICAgICAgIGFzc2VydF92ZXJpZmllcl9mYWlsc19jbG9zZWQoKQogICAgICAgIGFzc2VydF9hdWRpb19jYWxsYmFja19pc19ub3RfYXN5bmNpZnlfcmVhY2hhYmxlKCkKICAgIGV4Y2VwdCAoQXNzZXJ0aW9uRXJyb3IsIGpzb24uSlNPTkRlY29kZUVycm9yLCBPU0Vycm9yKSBhcyBlcnJvcjoKICAgICAgICBwcmludChmIndlYiB0b29sY2hhaW4gaWRlbnRpdHk6IEZBSUw6IHtlcnJvcn0iLCBmaWxlPXN5cy5zdGRlcnIpCiAgICAgICAgcmV0dXJuIDEKICAgIHByaW50KCJ3ZWIgdG9vbGNoYWluIGlkZW50aXR5OiBQQVNTIikKICAgIHJldHVybiAwCgoKaWYgX19uYW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIHJhaXNlIFN5c3RlbUV4aXQobWFpbigpKQo="
+    }
+  ]
+}
