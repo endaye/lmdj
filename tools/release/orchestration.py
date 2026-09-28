@@ -75,6 +75,20 @@ def validate_request(request):
         _fail("unknown release request mode")
 
 
+def _validate_retirement(retirement):
+    _keys(retirement, ("superseded_by", "identity", "observed_utc", "audit"))
+    if not _match(_TAG, retirement["superseded_by"]):
+        _fail("retirement names no exact Product tag")
+    if retirement["superseded_by"] != "lmdj-v" + str(retirement["identity"]):
+        _fail("retirement tag and reserved identity differ")
+    if type(retirement["observed_utc"]) is not str or not retirement["observed_utc"]:
+        _fail("retirement has no audit observation time")
+    audit = retirement["audit"]
+    if (type(audit) is not list or not audit
+            or any(type(line) is not str or not line for line in audit)):
+        _fail("retirement carries no audit findings")
+
+
 def _validate_state(state):
     _keys(state, ("schema", "request", "request_digest", "transitions"))
     if state["schema"] != "lmdj.release-request.v1":
@@ -365,6 +379,85 @@ class RequestJournal(AbstractContextManager):
             return
         self._write(request["id"] + ".alias",
                     canonical_json({"alias":alias, "sha256":canonical_sha256(alias)}))
+
+    def read_retirement(self, request_id):
+        self._active()
+        if not _match(_ID, request_id):
+            _fail("invalid retired request ID")
+        try:
+            fd = os.open(request_id + ".retired", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         dir_fd=self.directory)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            _fail("request retirement is unsafe or unavailable")
+        try:
+            self._private(fd)
+            with os.fdopen(fd, "rb", closefd=False) as source:
+                raw = source.read(_MAX_BYTES + 1)
+            if len(raw) > _MAX_BYTES:
+                _fail("request retirement exceeds size limit")
+            envelope = json.loads(raw, object_pairs_hook=_pairs)
+            _keys(envelope, ("record", "sha256"))
+            record = envelope["record"]
+            _keys(record, ("schema", "original", "original_digest", "retirement"))
+            _validate_state(record["original"])
+            _validate_retirement(record["retirement"])
+            if (record["schema"] != "lmdj.release-request-retirement.v1"
+                    or record["original"]["request"]["id"] != request_id
+                    or record["original_digest"] != canonical_sha256(record["original"])
+                    or envelope["sha256"] != canonical_sha256(record)
+                    or raw != canonical_json(envelope)):
+                _fail("request retirement identity or canonical content differs")
+            return record
+        except (ValueError, UnicodeError):
+            _fail("request retirement JSON is malformed")
+        finally:
+            os.close(fd)
+
+    def retire(self, request_id, retirement):
+        """Replace one unfinished original with its retirement record.
+
+        The caller authenticates the supersession far side first: a published,
+        remotely audited tag that is this request's own reserved Build. The
+        record keeps the complete original state, so nothing is dropped without
+        being retained. Admission reads only `.json` originals, so a retired
+        request no longer holds the one-unfinished-release slot. Operation
+        histories and worktrees are left untouched as evidence.
+        """
+        self._active()
+        if not self.writable:
+            _fail("journal is open for reading only")
+        _validate_retirement(retirement)
+        state = self.read(request_id)
+        existing = self.read_retirement(request_id)
+        if state is None:
+            if existing is None:
+                _fail("release request is missing")
+            if existing["retirement"] != retirement:
+                _fail("request retirement cannot be rebound")
+            return deepcopy(existing)
+        records = state["transitions"]
+        if len(records) == len(STEPS) and records[-1]["status"] == "verified":
+            _fail("a completed release is history, not a retirement candidate")
+        if records and records[-1]["status"] == "intent":
+            _fail("an outstanding intent needs reconciliation before retirement")
+        for name in sorted(os.listdir(self.directory)):
+            if name.endswith(".alias") and self.read_alias(name[:-6])["original_id"] == request_id:
+                _fail("an alias still resolves to this request")
+        record = {"schema": "lmdj.release-request-retirement.v1", "original": deepcopy(state),
+                  "original_digest": canonical_sha256(state), "retirement": deepcopy(retirement)}
+        if existing is None:
+            self._write(request_id + ".retired",
+                        canonical_json({"record": record, "sha256": canonical_sha256(record)}))
+        elif existing != record:
+            _fail("request retirement cannot be rebound")
+        # The record is durable before the original leaves admission; a crash
+        # in between leaves both, and repeating the same retirement finishes it.
+        self._active()
+        os.unlink(request_id + ".json", dir_fd=self.directory)
+        os.fsync(self.directory)
+        return deepcopy(record)
 
     def resolve_active(self, request):
         """Read-only admission under the writer lock; never replace authority."""

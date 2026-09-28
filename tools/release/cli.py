@@ -136,6 +136,12 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     )
     continued = commands.add_parser("resume")
     continued.add_argument("request_id")
+    retired = commands.add_parser("retire")
+    retired.add_argument("request_id")
+    retired.add_argument(
+        "--superseded-by", required=True, metavar="TAG",
+        help="published Product tag that is this request's own reserved Build",
+    )
     reported = commands.add_parser("status")
     reported.add_argument("request_id", nargs="?")
     audited = commands.add_parser("audit")
@@ -271,6 +277,57 @@ def build_request(
     request = {"id": "release-" + canonical_sha256(scope)[:16], **scope}
     validate_request(request)
     return request
+
+
+def _retire_request(root: Path, request_id: str, tag: str) -> int:
+    """Retire one unfinished request that a published release superseded.
+
+    The far side is proven before the journal changes: the tag must be the
+    Build this exact request reserved, and its exact-tag remote audit must pass
+    with a published intent. Nothing remote is mutated.
+    """
+    from tools.release.candidate import CATALOG, CandidateReservations
+    from tools.release.model import Disposition
+
+    directory = release_journal_root(root, GitRepository(root))
+    with RequestJournal(directory, writable=False) as journal:
+        state = journal.read(request_id)
+    if state is None:
+        raise JournalError("why: request is missing; remedy: use a request ID listed by `status`")
+    request = state["request"]
+    if request["mode"] == "tag":
+        identity = request["requested_tag"].removeprefix("lmdj-v")
+    else:
+        reserved = CandidateReservations(root, directory / CATALOG).recorded(request)
+        if reserved is None:
+            raise CommandError(
+                "request reserved no Build, so no release can have superseded it",
+                detail=request_id,
+            )
+        identity = str(reserved)
+    if tag != "lmdj-v" + identity:
+        raise CommandError(
+            "superseding tag is not the Build this request reserved",
+            detail=f"{tag} != lmdj-v{identity}",
+        )
+    context = build_audit_context(root, remote=True)
+    report = audit(context, remote=True, tag=tag)
+    print(format_report(report))
+    if report.exit_code != 0:
+        raise CommandError("exact-tag remote audit must pass before retirement", detail=tag)
+    entries = [entry for entry in context.ledger.entries if entry.tag == tag]
+    if len(entries) != 1 or entries[0].disposition != Disposition.PUBLISHED:
+        raise CommandError("only a published release supersedes an unfinished request", detail=tag)
+    retirement = {
+        "superseded_by": tag,
+        "identity": identity,
+        "observed_utc": report.observed_utc,
+        "audit": [f"[{item.code}] {item.subject}: {item.message}" for item in report.findings],
+    }
+    with RequestJournal(directory) as journal:
+        journal.retire(request_id, retirement)
+    print(f"release request retired: {request_id} superseded by {tag}")
+    return 0
 
 
 def format_request_status(root: Path, git, request_id: str | None = None) -> str:
@@ -436,6 +493,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"evidence document: {written.evidence_document}")
             print("next step: commit both files as a docs Pull Request through the Integration Queue")
             return 0
+        if options.command == "retire":
+            return _retire_request(root, options.request_id, options.superseded_by)
         if options.command == "status":
             print(format_request_status(root, GitRepository(root), options.request_id), end="")
             return 0

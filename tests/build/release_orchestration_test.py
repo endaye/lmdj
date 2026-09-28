@@ -65,6 +65,77 @@ class RequestJournalTest(unittest.TestCase):
             with RequestJournal(self.root / "file" / "journal"):
                 pass
 
+    RETIREMENT = {"superseded_by": "lmdj-v1.0.61.0", "identity": "1.0.61.0",
+                  "observed_utc": "2026-09-28T00:00:00Z",
+                  "audit": ["[ok] lmdj-v1.0.61.0: remote tag matches canonical intent"]}
+
+    def test_retirement_frees_admission_and_retains_the_original(self):
+        with RequestJournal(self.root) as journal:
+            original = journal.create(request())
+            with self.assertRaisesRegex(JournalError, "unfinished"):
+                journal.create(dict(request(), id="release-2"))
+            record = journal.retire("release-1", self.RETIREMENT)
+            self.assertEqual(record["original"], original)
+            self.assertIsNone(journal.read("release-1"))
+            self.assertEqual(journal.read_retirement("release-1"), record)
+            self.assertIsNone(journal.resolve_active(dict(request(), id="release-2", control_revision="e" * 40)))
+            journal.create(dict(request(), id="release-2"))
+
+    def test_retirement_is_idempotent_and_cannot_be_rebound(self):
+        with RequestJournal(self.root) as journal:
+            journal.create(request())
+            first = journal.retire("release-1", self.RETIREMENT)
+            self.assertEqual(journal.retire("release-1", self.RETIREMENT), first)
+            with self.assertRaisesRegex(JournalError, "rebound"):
+                journal.retire("release-1", dict(self.RETIREMENT, observed_utc="2026-09-29T00:00:00Z"))
+        with RequestJournal(self.root) as journal:
+            self.assertEqual(journal.read_retirement("release-1"), first)
+
+    def test_crash_between_record_and_unlink_finishes_on_repeat(self):
+        with RequestJournal(self.root) as journal:
+            journal.create(request())
+            real_unlink = os.unlink
+
+            def crash_on_original(path, *args, **kwargs):
+                if path == "release-1.json":
+                    raise OSError("crash")
+                return real_unlink(path, *args, **kwargs)
+
+            with patch("tools.release.orchestration.os.unlink", side_effect=crash_on_original):
+                with self.assertRaises(OSError):
+                    journal.retire("release-1", self.RETIREMENT)
+            # Both survive the crash; admission still counts the original.
+            self.assertIsNotNone(journal.read("release-1"))
+            self.assertIsNotNone(journal.read_retirement("release-1"))
+            journal.retire("release-1", self.RETIREMENT)
+            self.assertIsNone(journal.read("release-1"))
+
+    def test_completed_or_intent_holding_requests_are_not_retired(self):
+        with RequestJournal(self.root) as journal:
+            journal.create(request())
+            record = journal.begin("release-1", STEPS[0])
+            with self.assertRaisesRegex(JournalError, "outstanding intent"):
+                journal.retire("release-1", self.RETIREMENT)
+            journal.confirm("release-1", record["operation_id"], EVIDENCE)
+            for step in STEPS[1:]:
+                record = journal.begin("release-1", step)
+                journal.confirm("release-1", record["operation_id"], EVIDENCE)
+            with self.assertRaisesRegex(JournalError, "completed release"):
+                journal.retire("release-1", self.RETIREMENT)
+
+    def test_retirement_must_name_the_reserved_identity_and_audit(self):
+        with RequestJournal(self.root) as journal:
+            journal.create(request())
+            for bad in (dict(self.RETIREMENT, identity="1.0.62.0"),
+                        dict(self.RETIREMENT, superseded_by="v1.0.61.0", identity="1.0.61.0"),
+                        dict(self.RETIREMENT, audit=[]),
+                        {k: v for k, v in self.RETIREMENT.items() if k != "audit"}):
+                with self.assertRaises(JournalError):
+                    journal.retire("release-1", bad)
+            self.assertIsNotNone(journal.read("release-1"))
+            with self.assertRaisesRegex(JournalError, "missing"):
+                journal.retire("release-9", self.RETIREMENT)
+
     def test_same_request_is_idempotent_and_returns_unshared_data(self):
         with RequestJournal(self.root) as journal:
             first = journal.create(request())
