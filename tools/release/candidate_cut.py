@@ -12,7 +12,7 @@ import re
 import tempfile
 
 from .candidate_snapshot import CandidateSnapshotRun, read
-from .candidate_workspace import FILES
+from .candidate_workspace import FILES, squash_witness_path
 from .model import canonical_json, canonical_sha256
 from .task_verification import verify_tracked_bytes
 
@@ -50,7 +50,10 @@ class CandidateCutWorkspace:
         verify_tracked_bytes(local, tree)
         tree_paths = {row.decode() for row in local.git("ls-tree", "--name-only", "-r", "-z", tree).split(b"\0") if row}
         untracked = {row.decode() for row in local.git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0") if row}
-        require(untracked <= tree_paths, "unrelated untracked files are present")
+        # After the cut merges, the witness step writes this Build's squash
+        # witness here and later re-reads it; it is the only admitted extra.
+        require(untracked - tree_paths <= {squash_witness_path(source["product_build"])},
+                "unrelated untracked files are present")
 
     @staticmethod
     def _verify(verify, verify_locked, root, phase, binding, guard):
