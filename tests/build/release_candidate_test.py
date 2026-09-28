@@ -58,6 +58,20 @@ class ReservationTest(unittest.TestCase):
         record["request"]["id"] = "changed"
         self.assertEqual(self.reserve()["request"], self.request)
 
+    def test_recorded_names_the_exact_reserved_build_without_allocating(self):
+        self.assertIsNone(self.reservations.recorded(self.request))
+        record = self.reserve()
+        self.assertEqual(str(self.reservations.recorded(self.request)), record["version"])
+        self.assertIsNone(self.reservations.recorded(dict(self.request, id="release-2")))
+        with self.assertRaisesRegex(Exception, "rebound"):
+            self.reservations.recorded(dict(self.request, base_revision="f" * 40))
+        # A reader: it does not contend with a live writer.
+        with RequestJournal(self.state):
+            self.assertEqual(str(self.reservations.recorded(self.request)), record["version"])
+        # A lookup never allocates: the next request still takes the next number.
+        second = self.reserve(dict(self.request, id="release-3"))
+        self.assertEqual(int(second["version"].split(".")[2]), int(record["version"].split(".")[2]) + 1)
+
     def test_new_request_never_reuses_failed_reservation(self):
         first = self.reserve()
         second = self.reserve(dict(self.request, id="release-2"))

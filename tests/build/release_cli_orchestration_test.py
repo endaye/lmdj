@@ -282,6 +282,88 @@ class ReleaseEntryPointTest(unittest.TestCase):
             self.context.git.is_main_ancestor = lambda target: target == CONTROL
         self.assertEqual(len(self.request_ids()), 1)
 
+    def unfinished_request(self):
+        # Like a request whose later steps were completed outside the entry:
+        # unfinished in the journal, with no outstanding intent.
+        request = {"id": "release-" + "1" * 16, "repository": "endaye/lmdj", "actor_id": 4829591,
+                   "authority_ref": "issue:1301", "policy_digest": "a" * 64,
+                   "control_revision": CONTROL, "base_revision": CONTROL,
+                   "mode": "new", "requested_tag": None}
+        with RequestJournal(self.journal()) as journal:
+            journal.create(request)
+        return request["id"]
+
+    def retire(self, request_id, tag, *, reserved="1.0.61.0", audit_code="ok",
+               disposition="published"):
+        from tools.release.audit import AuditFinding, AuditReport
+        from tools.release.candidate import CandidateReservations
+        from tools.release.model import Disposition
+        from scripts.version import ProductVersion
+        calls = []
+        entry = type("Entry", (), {"tag": tag, "disposition": Disposition(disposition)})()
+        context = type("AuditContext", (), {"ledger": type("Ledger", (), {"entries": (entry,)})()})()
+
+        def audit(selected, *, remote, tag):
+            calls.append(tag)
+            return AuditReport("2026-09-28T00:00:00Z", "endaye/lmdj", "remote",
+                               (AuditFinding(audit_code, tag, "remote tag matches canonical intent"),))
+
+        version = ProductVersion(*map(int, reserved.split(".")))
+        output = io.StringIO()
+        with patch.object(CandidateReservations, "recorded", return_value=version), \
+                patch.object(cli, "build_audit_context", return_value=context), \
+                patch.object(cli, "audit", side_effect=audit), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = cli.main(["--repo-root", str(self.root), "retire", request_id,
+                             "--superseded-by", tag])
+        return code, output.getvalue(), calls
+
+    def test_retire_refuses_a_tag_that_is_not_the_reserved_build_before_auditing(self):
+        request_id = self.unfinished_request()
+        code, report, calls = self.retire(request_id, "lmdj-v1.0.62.0")
+        self.assertEqual(code, 2)
+        self.assertIn("not the Build this request reserved", report)
+        self.assertEqual(calls, [])
+        self.assertEqual(self.request_ids(), [request_id])
+
+    def test_retire_requires_a_passing_audit_of_a_published_release(self):
+        request_id = self.unfinished_request()
+        code, report, calls = self.retire(request_id, "lmdj-v1.0.61.0", audit_code="conflict")
+        self.assertEqual((code, calls), (2, ["lmdj-v1.0.61.0"]))
+        self.assertIn("remote audit must pass", report)
+        code, report, _ = self.retire(request_id, "lmdj-v1.0.61.0", disposition="releasable")
+        self.assertEqual(code, 2)
+        self.assertIn("only a published release", report)
+        self.assertEqual(self.request_ids(), [request_id])
+
+    def test_retire_refuses_a_request_with_an_outstanding_intent(self):
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 2)
+        (request_id,) = self.request_ids()
+        code, report, _ = self.retire(request_id, "lmdj-v1.0.61.0")
+        self.assertEqual(code, 2)
+        self.assertIn("outstanding intent", report)
+        self.assertEqual(self.request_ids(), [request_id])
+
+    def test_retired_request_no_longer_blocks_a_new_scope(self):
+        request_id = self.unfinished_request()
+        code, report, _ = self.retire(request_id, "lmdj-v1.0.61.0")
+        self.assertEqual(code, 0, report)
+        self.assertIn(f"release request retired: {request_id} superseded by lmdj-v1.0.61.0", report)
+        self.assertEqual(self.request_ids(), [])
+        self.assertTrue((self.journal() / f"{request_id}.retired").is_file())
+        other = "d" * 40
+        main = self.context.git.main_revision
+        self.context.git.is_main_ancestor = lambda target: target in (CONTROL, other)
+        try:
+            self.context.git.main_revision = lambda: other
+            self.assertEqual(self.run_cli(["run", "--authority", "issue:1302"]), 0)
+        finally:
+            self.context.git.main_revision = main
+            self.context.git.is_main_ancestor = lambda target: target == CONTROL
+        self.assertEqual(len(self.request_ids()), 1)
+        self.assertNotEqual(self.request_ids(), [request_id])
+
     def test_resume_of_an_unknown_request_fails_closed(self):
         output = io.StringIO()
         self.assertEqual(self.run_cli(["resume", "release-" + "0" * 16], capture=output), 2)

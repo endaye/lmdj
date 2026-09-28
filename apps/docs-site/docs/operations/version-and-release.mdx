@@ -632,6 +632,13 @@ revision 与 orchestration policy digest 一并冻结，`--base-revision` 与 co
 main 历史内可到达，重复运行同一 scope 幂等。`status` 只读该本地记录：它不联系网络、不重建材料、
 不授予任何权限，其可见范围就是该目录当前账号权限（0700/0600，无凭据）。
 
+同一仓库同时只允许一个未完成请求。如果一个请求的后续步骤已经在入口之外完成（例如 `1.0.61.0`
+在切版后改走了逐条命令），它会永久停在未完成状态并阻塞新的发版。
+`scripts/release.sh retire REQUEST_ID --superseded-by TAG` 是唯一受支持的退役方式：TAG 必须恰好是
+该请求自己在 BUILD 预留目录里绑定的版本（tag 模式的请求不做预留，TAG 必须等于它请求的 tag），精确 tag 的远端审计必须通过，且 intent 为 `published`。
+满足这些条件后，journal 先写入保留完整原始状态的 `REQUEST_ID.retired` 记录，再把该请求移出准入。
+带未决 intent 或已完成的请求一律拒绝；operation 历史和 worktree 原样保留为证据，不修改任何远端状态。
+
 各步仍由该步自己的 far-side 验证器确认；尚未接入某一步 carrier 时，`run`/`resume` 在创建请求前
 拒绝启动并逐项列出缺失步骤，不用 fixture、空结果或 completed 标记代替真实验收。
 

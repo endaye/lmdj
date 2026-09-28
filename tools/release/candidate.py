@@ -149,6 +149,23 @@ class CandidateReservations:
             self._save(journal, {"schema":"lmdj.build-reservations.v1",
                                 "repository":repository, "reservations":[]})
 
+    def recorded(self, request):
+        """The exact BUILD one original request reserved, or None; never allocates.
+
+        Unlike `observe`, this needs no frozen inputs or main observation: it
+        only answers which number the catalogue bound to this exact request,
+        so a caller can prove what a superseding tag must be.
+        """
+        validate_request(request)
+        # A reader: no writer lock, no directory creation, observable during a run.
+        with RequestJournal(self.state_root, writable=False) as journal:
+            for record in self._read(journal)["reservations"]:
+                if record["request"]["id"] == request["id"]:
+                    if record["request"] != request:
+                        _fail("BUILD reservation cannot be rebound")
+                    return self._parse_version(record["version"])
+        return None
+
     def reserve(self, request, frozen, main_revision):
         """After caller authenticates authority/main/CI, reserve before cut edits.
 
