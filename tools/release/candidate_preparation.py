@@ -5,7 +5,7 @@ import re
 
 from scripts import version
 from .batch_reference import sha
-from .candidate_inputs import CandidateInputError
+from .candidate_inputs import VERSION, CandidateInputError
 from .candidate_material import CandidateBuildMaterial
 from .candidate_workspace import CandidateSourceWorkspace
 from .candidate_source_setup import CandidateSourceSetup
@@ -164,6 +164,9 @@ class CandidatePreparation:
         history = git("rev-list", "--first-parent", "--reverse",
                       self.request["base_revision"] + ".." + main).decode().split()
         for commit in history:
+            # A commit without the manifest names no BUILD (as in _history_floor).
+            if not git("ls-tree", commit, "--", VERSION):
+                continue
             if str(self.material.reservations.version_at(commit)) == reserved:
                 parent = git("rev-parse", commit + "^1").decode().strip()
                 self.material.inputs.verify(frozen, parent)
