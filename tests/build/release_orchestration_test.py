@@ -69,6 +69,36 @@ class RequestJournalTest(unittest.TestCase):
                   "observed_utc": "2026-09-28T00:00:00Z",
                   "audit": ["[ok] lmdj-v1.0.61.0: remote tag matches canonical intent"]}
 
+    UNRELEASED = {"superseded_by_build": "1.0.65.0", "identity": "1.0.64.0",
+                  "main_revision": "e" * 40, "observed_utc": "2026-09-28T00:00:00Z",
+                  "evidence": ["[ok] lmdj-v1.0.64.0: no remote tag at 2026-09-28T00:00:00Z"]}
+
+    def test_unreleased_retirement_frees_admission(self):
+        with RequestJournal(self.root) as journal:
+            original = journal.create(request())
+            record = journal.retire("release-1", self.UNRELEASED)
+            self.assertEqual(record["original"], original)
+            self.assertEqual(record["retirement"], self.UNRELEASED)
+            self.assertIsNone(journal.read("release-1"))
+            journal.create(dict(request(), id="release-2"))
+        with RequestJournal(self.root) as journal:
+            self.assertEqual(journal.read_retirement("release-1")["retirement"], self.UNRELEASED)
+
+    def test_unreleased_retirement_requires_a_later_build_and_tag_absence(self):
+        with RequestJournal(self.root) as journal:
+            journal.create(request())
+            for bad in (dict(self.UNRELEASED, superseded_by_build="1.0.64.0"),
+                        dict(self.UNRELEASED, superseded_by_build="1.0.63.0"),
+                        dict(self.UNRELEASED, superseded_by_build="1.1.65.0"),
+                        dict(self.UNRELEASED, superseded_by_build="1.0.65.1"),
+                        dict(self.UNRELEASED, main_revision="main"),
+                        dict(self.UNRELEASED, evidence=["[ok] main: carries 1.0.65.0"]),
+                        dict(self.UNRELEASED, evidence=[]),
+                        dict(self.UNRELEASED, superseded_by="lmdj-v1.0.64.0")):
+                with self.assertRaises(JournalError):
+                    journal.retire("release-1", bad)
+            self.assertIsNotNone(journal.read("release-1"))
+
     def test_retirement_frees_admission_and_retains_the_original(self):
         with RequestJournal(self.root) as journal:
             original = journal.create(request())
