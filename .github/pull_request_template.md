@@ -31,8 +31,8 @@ Reason: <!-- Explain path ownership or the full-upgrade trigger. -->
 --list --json` → `batch_only`). Paste the block `scripts/local-ci.sh --lanes
 <lanes>` prints after they pass. The merge procedure refuses stale or missing
 evidence: `scripts/local-ci.sh --batch-evidence-only --pr-body <file>` on the
-exact head. Use `accepted-risk — <reason>` only for a lane the owner explicitly
-accepted for this head. -->
+exact head. Use `accepted-risk key=<64 hex> — <reason>` (key from the printed
+comment) only for a lane the owner explicitly accepted for those inputs. -->
 
 Batch-only lanes: none
 

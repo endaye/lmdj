@@ -719,7 +719,8 @@ full-risk 路径是每条 lane 的输入，避免共享改动留下 stale cached
 改动选中但 PR 不运行的 lane（`--list --json` 的 `batch_only`）必须在已提交的 head 上
 本地运行，并把通过后打印的 `- <lane>: pass key=<64 hex>` 记录到 PR 描述的
 `## Batch-only Lanes`；无法运行又经 owner 明确接受的 lane 才写
-`accepted-risk — <理由>`，没有这类 lane 时写 `Batch-only lanes: none`。合并前在
+`accepted-risk key=<64 hex> — <理由>`（接受绑定该 lane 的输入，输入改变即失效），
+没有这类 lane 时写 `Batch-only lanes: none`。合并前在
 精确 head 的干净 checkout 上运行 `--batch-evidence-only --pr-body FILE`，缺失、多余、
 过期或格式错误的 lane 都拒绝。key 绑定该 lane 的命令与全部输入内容而非 commit，
 无关的后续提交不使证据失效，改动其输入则失效。这是合并流程检查，不是 required

@@ -381,8 +381,10 @@ Issues. Retain the postmerge live Issue-state audit below.
    commands and every input's content, so a later commit touching those inputs
    makes the evidence stale. Rerun the lane and replace the line. A lane this
    machine cannot run (`not-runnable-here`) is run on a host that can. Only a
-   lane the owner explicitly accepts for this head may read
-   `- <lane>: accepted-risk — <reason>`, and the reason names that acceptance.
+   lane the owner explicitly accepts may read
+   `- <lane>: accepted-risk key=<64 hex> — <reason>`, with the key the printed
+   comment shows for it. The acceptance covers exactly those inputs and goes
+   stale like a pass. The reason names that acceptance.
    Never write `accepted-risk` on your own judgment, and never copy a key from
    `--list` without running the lane. A change with no batch-only lane
    declares `Batch-only lanes: none`.

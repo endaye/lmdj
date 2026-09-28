@@ -87,7 +87,8 @@ The advisory warning is replaced by a merge obligation (#1619, owner's choice
 of option 1). The Pull Request body records every `batch_only` lane under
 `## Batch-only Lanes` as `- <lane>: pass key=<64 hex>`, pasted from the block a
 passing `scripts/local-ci.sh --lanes <lanes>` run prints, or as
-`accepted-risk — <reason>` the owner explicitly accepted. The `issue-done` merge
+`accepted-risk key=<64 hex> — <reason>` the owner explicitly accepted for those
+inputs. The `issue-done` merge
 procedure runs `scripts/local-ci.sh --batch-evidence-only --pr-body <body>` on a
 clean checkout of the exact head. It refuses a missing, extra, stale or
 malformed lane, and the key binds the evidence to the lane's inputs, so an

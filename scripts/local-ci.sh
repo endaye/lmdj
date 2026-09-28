@@ -29,7 +29,7 @@
 # --batch-evidence-only checks the body's `## Batch-only Lanes` section on a
 # clean checkout of the exact head: it must name exactly the selected lanes no
 # Pull Request runs, each with the input-bound `pass key=` a passing
-# `--lanes` run prints (or an owner-accepted `accepted-risk — <reason>`). It
+# `--lanes` run prints (or an owner-accepted `accepted-risk key=<k> — <reason>`). It
 # executes no lane; the merge procedure treats its `fail` as a failed check.
 #
 # Before classifying, the entry point compares the local `origin/main` ref to

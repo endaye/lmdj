@@ -119,8 +119,8 @@ no Pull Request runs (`batch_only`) reaches `main` unverified unless someone
 runs it. The Pull Request body therefore records each one under
 `## Batch-only Lanes` as `- <lane>: pass key=<64 hex>`, pasted from the block a
 passing `scripts/local-ci.sh --lanes <lanes>` run prints. The only alternative
-is `- <lane>: accepted-risk — <reason>` for a lane the owner explicitly accepted
-for that head. A change with no such lane declares `Batch-only lanes: none`.
+is `- <lane>: accepted-risk key=<64 hex> — <reason>` for a lane the owner
+explicitly accepted for those inputs; like a pass, it goes stale when they change. A change with no such lane declares `Batch-only lanes: none`.
 Before merge, `--batch-evidence-only` checks the live body on a clean checkout
 of the exact head and refuses a missing, extra, stale or malformed lane. The
 key binds the evidence to that lane's inputs, not to a commit, so an unrelated

@@ -389,8 +389,9 @@ class BatchOnlyEvidenceTest(unittest.TestCase):
 
     def test_accepted_risk_with_a_reason_passes_and_is_reported(self) -> None:
         plan = self.release_change()
+        key = plan["batch_only_keys"]["deploy_contract"]
         section = [line if not line.startswith("- deploy_contract:")
-                   else "- deploy_contract: accepted-risk — the owner accepted it for this head"
+                   else f"- deploy_contract: accepted-risk key={key} — the owner accepted it for this head"
                    for line in self.evidence(plan)]
         result = self.check(plan, section)
         self.assertEqual(result.verdict, self.preflight.PASS, result.detail)
@@ -399,10 +400,30 @@ class BatchOnlyEvidenceTest(unittest.TestCase):
 
     def test_accepted_risk_without_a_reason_is_refused(self) -> None:
         plan = self.release_change()
+        key = plan["batch_only_keys"]["deploy_contract"]
         section = [line if not line.startswith("- deploy_contract:")
-                   else "- deploy_contract: accepted-risk — "
+                   else f"- deploy_contract: accepted-risk key={key} — "
                    for line in self.evidence(plan)]
         self.assertEqual(self.check(plan, section).verdict, self.preflight.FAIL)
+
+    def test_accepted_risk_without_the_input_key_is_refused(self) -> None:
+        # Review of #1646: an acceptance names the inputs it accepts.
+        plan = self.release_change()
+        section = [line if not line.startswith("- deploy_contract:")
+                   else "- deploy_contract: accepted-risk — the owner accepted it for this head"
+                   for line in self.evidence(plan)]
+        self.assertEqual(self.check(plan, section).verdict, self.preflight.FAIL)
+
+    def test_an_acceptance_for_earlier_inputs_is_stale(self) -> None:
+        earlier = self.release_change("# probe\n")
+        key = earlier["batch_only_keys"]["deploy_contract"]
+        later = self.release_change("# probe, edited after the owner accepted\n")
+        section = [line if not line.startswith("- deploy_contract:")
+                   else f"- deploy_contract: accepted-risk key={key} — the owner accepted it for those inputs"
+                   for line in self.evidence(later)]
+        result = self.check(later, section)
+        self.assertEqual(result.verdict, self.preflight.FAIL)
+        self.assertIn("`deploy_contract` evidence is stale", result.detail)
 
     def test_none_is_valid_only_when_nothing_is_batch_only(self) -> None:
         self.repository.write("docs/guide.md", "text\n")
@@ -446,9 +467,10 @@ class BatchOnlyEvidenceTest(unittest.TestCase):
     def test_a_placeholder_accepted_risk_reason_is_refused(self) -> None:
         # Review of #1646: the reason must say something, not hold a template.
         plan = self.release_change()
-        for reason in ("TBD", "x", "<reason>", "TODO later", "n/a"):
+        key = plan["batch_only_keys"]["deploy_contract"]
+        for reason in ("TBD", "<reason>", "TODO later", "n/a"):
             section = [line if not line.startswith("- deploy_contract:")
-                       else f"- deploy_contract: accepted-risk — {reason}"
+                       else f"- deploy_contract: accepted-risk key={key} — {reason}"
                        for line in self.evidence(plan)]
             self.assertEqual(self.check(plan, section).verdict, self.preflight.FAIL, reason)
 

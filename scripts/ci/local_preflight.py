@@ -66,11 +66,13 @@ BATCH_EVIDENCE_HEADING = "## Batch-only Lanes"
 _BATCH_DECLARATION = re.compile(r"^Batch-only lanes: (.+)$")
 _BATCH_ENTRY = re.compile(r"^- ([a-z_]+): (.*)$")
 _BATCH_PASS = re.compile(r"^pass key=([0-9a-f]{64})$")
-_BATCH_ACCEPTED = re.compile(r"^accepted-risk — (\S.*)$")
+# An owner's acceptance binds to the same input key as a pass: accepting the
+# risk of these inputs does not carry over to changed ones.
+_BATCH_ACCEPTED = re.compile(r"^accepted-risk key=([0-9a-f]{64}) — (\S.*)$")
 _MARKDOWN_HEADING = re.compile(r"^#{1,6}\s")
-# A reason must say something: a template or a filler word is not one.
+# A template left in place is not a reason. Whether a reason is the owner's
+# cannot be decided here; the merge procedure confirms that.
 _PLACEHOLDER_REASON = re.compile(r"<[^>]*>|\b(?:tbd|todo|n/?a|fixme|xxx)\b", re.IGNORECASE)
-_MIN_REASON_WORDS = 3
 
 _DELETED = "0" * 40
 
@@ -495,8 +497,10 @@ def batch_evidence_block(
         if lane in passed:
             lines.append(f"- {lane}: pass key={plan['batch_only_keys'][lane]}")
         else:
-            lines.append(f"<!-- {lane}: not verified by this run; run it, or record "
-                         "`accepted-risk — <reason>` only if the owner accepts it -->")
+            lines.append(
+                f"<!-- {lane}: not verified by this run; run it, or, only if the owner "
+                f"accepts the risk, record `- {lane}: accepted-risk "
+                f"key={plan['batch_only_keys'][lane]} — <reason>` -->")
     return lines
 
 
@@ -541,8 +545,9 @@ def check_batch_evidence(
     declarations = [match for line in section
                     if (match := _BATCH_DECLARATION.match(line))]
     if len(declarations) != 1:
-        return refuse("the section needs exactly one `Batch-only lanes:` line",
-                      "declare the lanes `scripts/local-ci.sh --list` reports as batch_only")
+        return refuse("the section needs exactly one bare `Batch-only lanes:` line",
+                      "add this line on its own: `Batch-only lanes: "
+                      f"{' '.join(plan['ci_batch_only']) or 'none'}`")
     declared_text = declarations[0].group(1).strip()
     declared = [] if declared_text == "none" else declared_text.split()
     expected = list(plan["ci_batch_only"])
@@ -580,8 +585,9 @@ def check_batch_evidence(
             if passed.group(1) != plan["batch_only_keys"][lane]:
                 stale.append(lane)
         elif (risk := _BATCH_ACCEPTED.match(claim)):
-            reason = risk.group(1).strip()
-            if _PLACEHOLDER_REASON.search(reason) or len(reason.split()) < _MIN_REASON_WORDS:
+            if risk.group(1) != plan["batch_only_keys"][lane]:
+                stale.append(lane)
+            elif _PLACEHOLDER_REASON.search(risk.group(2)):
                 malformed.append(lane)
             else:
                 accepted.append(lane)
@@ -592,17 +598,17 @@ def check_batch_evidence(
         problems.append(" ".join(f"`{lane}` has no evidence line" for lane in missing))
     if stale:
         problems.append(" ".join(f"`{lane}` evidence is stale" for lane in stale)
-                        + " (inputs changed after it ran)")
+                        + " (inputs changed after it ran or was accepted)")
     if malformed:
         problems.append(" ".join(f"`{lane}`" for lane in malformed)
-                        + " evidence is neither `pass key=<64 hex>` nor `accepted-risk — <reason>`"
-                        f" with a reason of at least {_MIN_REASON_WORDS} words and no placeholder")
+                        + " evidence is neither `pass key=<64 hex>` nor "
+                        "`accepted-risk key=<64 hex> — <reason>` with a real reason")
     if problems:
         rerun = " ".join(missing + stale + malformed)
         return refuse("; ".join(problems),
                       f"run `scripts/local-ci.sh --lanes {rerun.replace(' ', ',')}` on this head "
-                      "and paste its lines, or record `accepted-risk — <reason>` only for a "
-                      "lane the owner explicitly accepted")
+                      "and paste its lines, or record `accepted-risk key=<current key> — <reason>` "
+                      "only for a lane the owner explicitly accepted for these inputs")
     detail = ""
     if accepted:
         detail = ("accepted-risk needs the owner's explicit acceptance for: "
