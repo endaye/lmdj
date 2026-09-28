@@ -18,6 +18,11 @@ FILES = {"products/lmdj/version.json", "products/lmdj/assembly.json",
          "products/lmdj/generated/web-runtime-identity.mjs"}
 
 
+def squash_witness_path(product_build):
+    """The one post-merge artifact the witness step leaves in the cut worktree."""
+    return f"apps/architecture-portal/versioned_provenance/version-{product_build}-squash-witness.json"
+
+
 def require(value, reason):
     if not value:
         raise PublicationWorkspaceError(f"why: candidate source workspace {reason}; remedy: retain the original reservation and dedicated worktree; do not push an incomplete cut or overwrite drift")

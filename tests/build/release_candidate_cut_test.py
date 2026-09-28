@@ -205,6 +205,28 @@ class CutSafetyTest(CutFixture):
         self.assertEqual(filename.read_bytes(), b"retained")
         self.assertEqual(self.tool.revision("HEAD"), self.source["commit"])
 
+    def test_own_squash_witness_left_after_the_merge_is_admitted_on_revalidation(self):
+        # The witness step writes this Build's squash witness into the cut
+        # worktree after the merge and re-reads it later; every later resume
+        # re-validates this cut and must not refuse that one artifact.
+        from tools.release.candidate_workspace import squash_witness_path
+        first = self.prepare_cut()
+        witness = self.root / squash_witness_path(self.source["product_build"])
+        witness.parent.mkdir(parents=True, exist_ok=True)
+        witness.write_bytes(b"{}\n")
+        self.assertEqual(self.prepare_cut(), first)
+        self.assertEqual(witness.read_bytes(), b"{}\n")
+
+    def test_another_builds_witness_is_still_unrelated(self):
+        from tools.release.candidate_workspace import squash_witness_path
+        self.prepare_cut()
+        other = self.root / squash_witness_path("9.9.9.0")
+        other.parent.mkdir(parents=True, exist_ok=True)
+        other.write_bytes(b"{}\n")
+        with self.assertRaisesRegex(CandidateCutError, "unrelated untracked"):
+            self.prepare_cut()
+        self.assertEqual(other.read_bytes(), b"{}\n")
+
     def test_backdated_cut_refuses_before_staging(self):
         with self.assertRaisesRegex(CandidateCutError, "precedes snapshot freeze"):
             self.prepare_cut(timestamp=1730000000)

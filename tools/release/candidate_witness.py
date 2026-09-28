@@ -11,6 +11,7 @@ import stat
 from .batch_reference import digest, sha
 from .candidate_source import CandidateSourceVerifier
 from .candidate_snapshot import read
+from .candidate_workspace import squash_witness_path
 from .dispatch_receipt import unique
 from .model import canonical_json, canonical_sha256
 from .orchestration import validate_request
@@ -52,7 +53,7 @@ class CandidateWitnessRun:
     def _names(scope):
         build = scope["product_build"]
         return (f"apps/architecture-portal/versioned_metadata/version-{build}.json",
-                f"apps/architecture-portal/versioned_provenance/version-{build}-squash-witness.json")
+                squash_witness_path(build))
 
     def _check_scope_budget(self, scope):
         # Include repeated argument vectors and maximum base64 output, not
