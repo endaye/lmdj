@@ -31,6 +31,11 @@ Reason: test fixture refactor does not change product behavior, public boundarie
 ```
 
 `Reason` 不得为空。`required` 必须列出绝对门户路由，并在同一个 Task/PR 修改对应 current 页面；`none` 不得制造无意义的门户改动或空提交。
+唯一例外是纯候选 cut：changed files 只含 Product 身份再生成文件（`products/lmdj/version.json`、
+`assembly(.lock).json`、`src/compiled_assembly.cpp`、`generated/web-runtime-identity.*`）、
+`versions.json` 与 PR head 的 `version.json` 所指 Product Build 自身的不可变快照，且含该 Build
+的快照元数据；任何其他 Build 的快照路径都不属于这次 cut。current 页面的身份
+全部从 manifest 派生，此时没有可改的 current 页面，快照本身即满足 `required`。
 
 ## 3. 必须评估的变化
 

@@ -41,7 +41,7 @@ schema-2 快照把 37 页 current source、versioned sidebar、十张图的 20 �
 Git 合入 main 触发 Cloudflare 构建；先通过完整 Portal check，再验证同一 Git SHA 的版本 Preview，发布同一个 version ID 并验证生产 smoke。手工本地上传不能替代 Git 生产流程。
 
 ## CI 影响检查
-Pull Request 必须声明 `Documentation impact: required` 或 `none`。需要更新时，changed files 必须包含 current 门户页；无需更新时必须给出具体理由且不能制造空文档 churn。完整检查还要求当前 Product Build 的快照与 source revision、source-rebuilt Product/Assembly facts、37 页清单、sidebar、版本图表、Channel、freeze time 和 introducing commit 一致；来源关系只接受 direct-parent、byte-identical squash projection，或能精确重建已认证 source tree/commit 的显式 squash witness。
+Pull Request 必须声明 `Documentation impact: required` 或 `none`。需要更新时，changed files 必须包含 current 门户页；只改 Product 身份再生成文件并冻结当前 Product Build 快照的纯候选 cut 除外，因为 current 页面身份全部由 manifest 派生；无需更新时必须给出具体理由且不能制造空文档 churn。完整检查还要求当前 Product Build 的快照与 source revision、source-rebuilt Product/Assembly facts、37 页清单、sidebar、版本图表、Channel、freeze time 和 introducing commit 一致；来源关系只接受 direct-parent、byte-identical squash projection，或能精确重建已认证 source tree/commit 的显式 squash witness。
 
 ## Cloudflare 迁移试点
 
