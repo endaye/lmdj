@@ -9,8 +9,10 @@ actually run, or serves a cached pass after an input changed.
 from __future__ import annotations
 
 from collections.abc import Sequence
+import contextlib
 import copy
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -303,6 +305,140 @@ class PullRequestLaneVisibilityTest(unittest.TestCase):
             "so the pre-flight would assume coverage it cannot see; "
             "remedy: return an empty set when the workflow cannot be read",
         )
+
+
+class BatchOnlyEvidenceTest(unittest.TestCase):
+    """A change a Pull Request cannot verify carries current lane evidence (#1619)."""
+
+    ONE_LANE_WORKFLOW = (
+        "jobs:\n  docs-static:\n    if: >-\n"
+        "      fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static\n"
+    )
+
+    def setUp(self) -> None:
+        self.preflight = load_module("local_preflight_evidence_under_test", PREFLIGHT_PATH)
+        self.repository = TemporaryRepository()
+        self.addCleanup(self.repository.close)
+        self.repository.write(self.preflight.PR_WORKFLOW, self.ONE_LANE_WORKFLOW)
+        self.repository.commit("a one-lane Pull Request workflow")
+        self.repository.base_sha = git(self.repository.path, "rev-parse", "HEAD").strip()
+
+    def release_change(self, contents: str = "# probe\n") -> dict:
+        # `tools/release/` selects `deploy_contract`, which no Pull Request runs.
+        self.repository.write("tools/release/probe.py", contents)
+        self.repository.commit("a release tooling change")
+        return self.plan()
+
+    def plan(self, **kwargs) -> dict:
+        return self.preflight.build_plan(self.repository.path, self.repository.base_sha, **kwargs)
+
+    def evidence(self, plan: dict) -> list[str]:
+        passed = [self.preflight.LaneResult(lane, self.preflight.PASS)
+                  for lane in plan["ci_batch_only"]]
+        return self.preflight.batch_evidence_block(plan, passed)
+
+    @staticmethod
+    def body(section: list[str]) -> str:
+        return "\n".join(["## Summary", "", "text", "", *section, "", "## PR Review", "", "Pending"])
+
+    def check(self, plan: dict, section: list[str]):
+        return self.preflight.check_batch_evidence(self.repository.path, plan, self.body(section))
+
+    def test_evidence_a_passing_run_prints_is_accepted(self) -> None:
+        plan = self.release_change()
+        self.assertIn("deploy_contract", plan["ci_batch_only"])
+        result = self.check(plan, self.evidence(plan))
+        self.assertEqual(result.verdict, self.preflight.PASS, result.detail)
+
+    def test_a_body_without_the_section_is_refused(self) -> None:
+        plan = self.release_change()
+        result = self.preflight.check_batch_evidence(
+            self.repository.path, plan, self.body([]))
+        self.assertEqual(result.verdict, self.preflight.FAIL)
+        self.assertIn(self.preflight.BATCH_EVIDENCE_HEADING, result.detail)
+
+    def test_an_undeclared_batch_only_lane_is_refused(self) -> None:
+        plan = self.release_change()
+        declared = [lane for lane in plan["ci_batch_only"] if lane != "deploy_contract"]
+        section = [self.preflight.BATCH_EVIDENCE_HEADING, "",
+                   f"Batch-only lanes: {' '.join(declared) or 'none'}"]
+        result = self.check(plan, section)
+        self.assertEqual(result.verdict, self.preflight.FAIL)
+        self.assertIn("missing: deploy_contract", result.detail)
+
+    def test_a_declared_lane_without_evidence_is_refused(self) -> None:
+        plan = self.release_change()
+        section = [line for line in self.evidence(plan)
+                   if not line.startswith("- deploy_contract:")]
+        result = self.check(plan, section)
+        self.assertEqual(result.verdict, self.preflight.FAIL)
+        self.assertIn("`deploy_contract` has no evidence line", result.detail)
+
+    def test_the_printed_placeholder_is_not_evidence(self) -> None:
+        plan = self.release_change()
+        section = self.preflight.batch_evidence_block(plan, [])
+        result = self.check(plan, section)
+        self.assertEqual(result.verdict, self.preflight.FAIL)
+
+    def test_evidence_from_before_a_later_input_edit_is_stale(self) -> None:
+        section = self.evidence(self.release_change("# probe\n"))
+        later = self.release_change("# probe, edited after the lane ran\n")
+        result = self.check(later, section)
+        self.assertEqual(result.verdict, self.preflight.FAIL)
+        self.assertIn("`deploy_contract` evidence is stale", result.detail)
+
+    def test_accepted_risk_with_a_reason_passes_and_is_reported(self) -> None:
+        plan = self.release_change()
+        section = [line if not line.startswith("- deploy_contract:")
+                   else "- deploy_contract: accepted-risk — the owner accepted it for this head"
+                   for line in self.evidence(plan)]
+        result = self.check(plan, section)
+        self.assertEqual(result.verdict, self.preflight.PASS, result.detail)
+        self.assertEqual(result.accepted_risk, ("deploy_contract",))
+        self.assertIn("owner's explicit acceptance", result.detail)
+
+    def test_accepted_risk_without_a_reason_is_refused(self) -> None:
+        plan = self.release_change()
+        section = [line if not line.startswith("- deploy_contract:")
+                   else "- deploy_contract: accepted-risk — "
+                   for line in self.evidence(plan)]
+        self.assertEqual(self.check(plan, section).verdict, self.preflight.FAIL)
+
+    def test_none_is_valid_only_when_nothing_is_batch_only(self) -> None:
+        self.repository.write("docs/guide.md", "text\n")
+        self.repository.commit("a documentation change")
+        docs_only = self.plan()
+        none = [self.preflight.BATCH_EVIDENCE_HEADING, "", "Batch-only lanes: none"]
+        self.assertEqual(docs_only["ci_batch_only"], [])
+        self.assertEqual(self.check(docs_only, none).verdict, self.preflight.PASS)
+        self.assertEqual(self.check(self.release_change(), none).verdict, self.preflight.FAIL)
+
+    def test_a_dirty_worktree_is_refused(self) -> None:
+        plan = self.release_change()
+        section = self.evidence(plan)
+        self.repository.write("tools/release/probe.py", "# uncommitted\n")
+        result = self.check(plan, section)
+        self.assertEqual(result.verdict, self.preflight.FAIL)
+        self.assertIn("uncommitted changes", result.detail)
+
+    def test_a_local_lane_restriction_does_not_shrink_the_obligation(self) -> None:
+        self.release_change()
+        narrowed = self.plan(only=["docs_static"])
+        self.assertNotIn("deploy_contract", narrowed["selected"])
+        self.assertIn(
+            "deploy_contract", narrowed["ci_batch_only"],
+            "why: `--lanes` narrowed which batch-only lanes need evidence, so a "
+            "local restriction could hide an obligation; remedy: derive "
+            "`ci_batch_only` from `ci_lanes`, never from `selected`",
+        )
+
+    def test_the_cli_needs_a_body_and_rejects_a_lane_restriction(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(self.preflight.main(["--batch-evidence-only"]), 2)
+            self.assertEqual(self.preflight.main(
+                ["--batch-evidence-only", "--pr-body", "body.md", "--lanes", "docs_static"]), 2)
+        self.assertIn("--batch-evidence-only needs --pr-body", stderr.getvalue())
 
 
 class LaneTableContractTest(unittest.TestCase):

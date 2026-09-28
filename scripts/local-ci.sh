@@ -14,6 +14,7 @@
 #   scripts/local-ci.sh --no-cache          # ignore cached lane verdicts
 #   scripts/local-ci.sh --pr-body body.md   # also check the PR body declaration
 #   scripts/local-ci.sh --declaration-only --pr-body body.md # no lane execution
+#   scripts/local-ci.sh --batch-evidence-only --pr-body body.md # merge check (#1619)
 #   scripts/local-ci.sh --install-hook      # install an opt-in pre-push hook
 #   LMDJ_PRE_PUSH_FULL=1 git push           # explicitly run selected lanes
 #
@@ -24,6 +25,12 @@
 # never cached, and it reports not-applicable when the portal lane
 # is not selected, because that is the only condition under which CI checks
 # the declaration.
+#
+# --batch-evidence-only checks the body's `## Batch-only Lanes` section on a
+# clean checkout of the exact head: it must name exactly the selected lanes no
+# Pull Request runs, each with the input-bound `pass key=` a passing
+# `--lanes` run prints (or an owner-accepted `accepted-risk — <reason>`). It
+# executes no lane; the merge procedure treats its `fail` as a failed check.
 #
 # Before classifying, the entry point compares the local `origin/main` ref to
 # the remote's `main`. The classifier resolves its merge base against the

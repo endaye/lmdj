@@ -237,7 +237,11 @@ platform cannot execute. It is advisory only: a green local run authorizes no
 push, Pull Request, or later state transition. `--list` resolves the lane plan
 without running, and `--pr-body body.md` checks a Pull Request body's
 `Documentation impact:` declaration in milliseconds instead of a full portal
-lane run.
+lane run. One local result is a merge obligation: every `batch_only` lane a
+change selects runs locally on the committed head, and the Pull Request body
+records its `pass key=` evidence under `## Batch-only Lanes`, or an
+`accepted-risk` reason the owner explicitly accepted. Before merge,
+`--batch-evidence-only --pr-body body.md` checks it on the exact head (#1619).
 
 Direct verification commands:
 

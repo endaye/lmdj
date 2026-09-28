@@ -58,6 +58,16 @@ NOT_APPLICABLE = "not-applicable"
 # condition under which CI checks it.
 DECLARATION_LANE = "portal"
 
+# A Pull Request whose change selects lanes no Pull Request runs carries their
+# evidence under this heading, and the merge procedure checks it on the exact
+# head with --batch-evidence-only (#1619). The evidence binds to each lane's
+# input-bound cache key, so a later edit to a lane's inputs makes it stale.
+BATCH_EVIDENCE_HEADING = "## Batch-only Lanes"
+_BATCH_DECLARATION = re.compile(r"^Batch-only lanes: (.+)$")
+_BATCH_ENTRY = re.compile(r"^- ([a-z_]+): (.*)$")
+_BATCH_PASS = re.compile(r"^pass key=([0-9a-f]{64})$")
+_BATCH_ACCEPTED = re.compile(r"^accepted-risk — (\S.*)$")
+
 _DELETED = "0" * 40
 
 
@@ -390,6 +400,15 @@ class DeclarationResult:
     detail: str = ""
 
 
+@dataclass
+class BatchEvidenceResult:
+    """The verdict on a Pull Request body's batch-only lane evidence."""
+
+    verdict: str
+    detail: str = ""
+    accepted_risk: tuple[str, ...] = ()
+
+
 def changed_paths(inventory: Iterable) -> list[str]:
     """Flatten the classifier inventory to every path it names.
 
@@ -451,6 +470,131 @@ def check_declaration(
         or f"the checker exited {completed.returncode} without a message"
     )
     return DeclarationResult(FAIL, "; ".join(reported.splitlines()))
+
+
+def batch_evidence_block(
+    plan: Mapping[str, object], results: Sequence[LaneResult],
+) -> list[str]:
+    """The `## Batch-only Lanes` lines this run can attest, ready to paste.
+
+    Only a lane that passed here (or matched a cached pass for the same inputs)
+    gets a `pass key=` line; every other batch-only lane is left for another
+    run, another host, or an owner's explicit risk acceptance.
+    """
+    passed = {result.lane for result in results if result.verdict in (PASS, CACHED_PASS)}
+    batch = plan["ci_batch_only"]
+    lines = [BATCH_EVIDENCE_HEADING, "",
+             f"Batch-only lanes: {' '.join(batch) if batch else 'none'}"]
+    for lane in batch:
+        if lane in passed:
+            lines.append(f"- {lane}: pass key={plan['batch_only_keys'][lane]}")
+        else:
+            lines.append(f"- {lane}: <not verified by this run>")
+    return lines
+
+
+def _evidence_section(body: str) -> list[str] | None:
+    lines = body.splitlines()
+    starts = [index for index, line in enumerate(lines)
+              if line.strip() == BATCH_EVIDENCE_HEADING]
+    if len(starts) != 1:
+        return None
+    section = []
+    for line in lines[starts[0] + 1:]:
+        if line.startswith("## "):
+            break
+        section.append(line.strip())
+    return section
+
+
+def check_batch_evidence(
+    root: Path, plan: Mapping[str, object], body: str,
+) -> BatchEvidenceResult:
+    """Check a body's batch-only lane evidence against this exact clean tree.
+
+    Deterministic and offline: the lane set comes from the same classifier
+    and Pull Request workflow as `--list`, and each `pass key=` must equal the
+    input-bound key recomputed here. It proves the evidence is complete and
+    current, not who produced it; `accepted-risk` needs the owner's explicit
+    acceptance, which the merge procedure, not this check, confirms.
+    """
+    def refuse(why: str, remedy: str) -> BatchEvidenceResult:
+        return BatchEvidenceResult(FAIL, f"why: {why}; remedy: {remedy}")
+
+    if not worktree_is_clean(root):
+        return refuse("the working tree has uncommitted changes, so its keys "
+                      "do not describe the Pull Request head",
+                      "check out the exact head without local edits")
+    section = _evidence_section(body)
+    if section is None:
+        return refuse(f"the body needs exactly one `{BATCH_EVIDENCE_HEADING}` section",
+                      "paste the block `scripts/local-ci.sh --lanes <lane>` prints, "
+                      "or `Batch-only lanes: none`")
+    declarations = [match for line in section
+                    if (match := _BATCH_DECLARATION.match(line))]
+    if len(declarations) != 1:
+        return refuse("the section needs exactly one `Batch-only lanes:` line",
+                      "declare the lanes `scripts/local-ci.sh --list` reports as batch_only")
+    declared_text = declarations[0].group(1).strip()
+    declared = [] if declared_text == "none" else declared_text.split()
+    expected = list(plan["ci_batch_only"])
+    if sorted(declared) != sorted(expected) or len(set(declared)) != len(declared):
+        missing = sorted(set(expected) - set(declared))
+        extra = sorted(set(declared) - set(expected))
+        return refuse(
+            "the declared batch-only lanes differ from what this change selects"
+            f" (missing: {' '.join(missing) or '-'}; unexpected: {' '.join(extra) or '-'})",
+            f"declare exactly `Batch-only lanes: {' '.join(expected) or 'none'}`")
+    entries: dict[str, str] = {}
+    for line in section:
+        match = _BATCH_ENTRY.match(line)
+        if match is None:
+            continue
+        lane, claim = match.groups()
+        if lane in entries:
+            return refuse(f"`{lane}` has more than one evidence line",
+                          "keep exactly one line per batch-only lane")
+        entries[lane] = claim.strip()
+    unexpected = sorted(set(entries) - set(expected))
+    if unexpected:
+        return refuse(f"evidence names lanes this change does not select: {' '.join(unexpected)}",
+                      "remove those lines")
+    # Every lane is judged before refusing, so one run names every lane to fix.
+    accepted: list[str] = []
+    missing: list[str] = []
+    stale: list[str] = []
+    malformed: list[str] = []
+    for lane in expected:
+        claim = entries.get(lane)
+        if claim is None:
+            missing.append(lane)
+        elif (passed := _BATCH_PASS.match(claim)):
+            if passed.group(1) != plan["batch_only_keys"][lane]:
+                stale.append(lane)
+        elif _BATCH_ACCEPTED.match(claim):
+            accepted.append(lane)
+        else:
+            malformed.append(lane)
+    problems = []
+    if missing:
+        problems.append(" ".join(f"`{lane}` has no evidence line" for lane in missing))
+    if stale:
+        problems.append(" ".join(f"`{lane}` evidence is stale" for lane in stale)
+                        + " (inputs changed after it ran)")
+    if malformed:
+        problems.append(" ".join(f"`{lane}`" for lane in malformed)
+                        + " evidence is neither `pass key=<64 hex>` nor `accepted-risk — <reason>`")
+    if problems:
+        rerun = " ".join(missing + stale + malformed)
+        return refuse("; ".join(problems),
+                      f"run `scripts/local-ci.sh --lanes {rerun.replace(' ', ',')}` on this head "
+                      "and paste its lines, or record `accepted-risk — <reason>` only for a "
+                      "lane the owner explicitly accepted")
+    detail = ""
+    if accepted:
+        detail = ("accepted-risk needs the owner's explicit acceptance for: "
+                  + " ".join(accepted))
+    return BatchEvidenceResult(PASS, detail, tuple(accepted))
 
 
 def run_lane(
@@ -536,8 +680,10 @@ def build_plan(
         lane: lane_cache_key(
             lane, lane_commands[lane]["commands"], grouped[lane], blobs
         )
-        for lane in selected
+        for lane in sorted(set(selected) | set(ci_lanes))
     }
+    # Evidence obligations follow what CI selects, never a local `--lanes`.
+    ci_batch_only = [lane for lane in ci_lanes if lane not in verified_by_pull_request]
     return {
         "base_sha": base_sha,
         "head_sha": head_sha,
@@ -551,8 +697,10 @@ def build_plan(
         "batch_only": [
             lane for lane in selected if lane not in verified_by_pull_request],
         "ci_lanes": ci_lanes,
+        "ci_batch_only": ci_batch_only,
+        "batch_only_keys": {lane: keys[lane] for lane in ci_batch_only},
         "lane_commands": lane_commands,
-        "cache_keys": keys,
+        "cache_keys": {lane: keys[lane] for lane in selected},
         "input_counts": {lane: len(grouped[lane]) for lane in selected},
         # The declaration check reuses the inventory that selected the lanes,
         # so the two cannot disagree about what changed. It is deliberately a
@@ -801,12 +949,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true", help="compatibility flag; never overwrites a personal hook")
     parser.add_argument("--declaration-only", action="store_true",
                         help="check --pr-body and exit without executing any selected lane")
+    parser.add_argument(
+        "--batch-evidence-only", action="store_true",
+        help=("check the --pr-body `## Batch-only Lanes` evidence against this "
+              "exact clean head and exit without executing any lane"),
+    )
     args = parser.parse_args(argv)
 
     root = ROOT
     try:
         if args.declaration_only and not args.pr_body:
             raise ValueError("why: --declaration-only needs --pr-body FILE; remedy: pass the declaration file")
+        if args.batch_evidence_only and (not args.pr_body or args.lanes):
+            raise ValueError(
+                "why: --batch-evidence-only needs --pr-body FILE and checks every lane "
+                "CI selects; remedy: pass the body file and drop --lanes")
         if args.install_hook:
             print(f"installed {install_hook(root, force=args.force)}")
             return 0
@@ -817,6 +974,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"pre-flight failed closed: {error}", file=sys.stderr)
         return 2
+
+    if args.batch_evidence_only:
+        evidence = check_batch_evidence(root, plan, plan["pr_body"])
+        payload = {"verdict": evidence.verdict, "detail": evidence.detail,
+                   "batch_only": plan["ci_batch_only"],
+                   "accepted_risk": list(evidence.accepted_risk)}
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            suffix = f" ({evidence.detail})" if evidence.detail else ""
+            print(f"batch-only evidence: {evidence.verdict}{suffix}")
+        return 1 if evidence.verdict == FAIL else 0
 
     if args.list:
         payload = {
@@ -883,6 +1052,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(_render(plan, results, declaration))
+        if results and plan["ci_batch_only"]:
+            print("\n  batch-only evidence for the Pull Request body "
+                  "(checked before merge with --batch-evidence-only):")
+            for line in batch_evidence_block(plan, results):
+                print(f"    {line}" if line else "")
 
     verdicts = [result.verdict for result in results]
     if declaration is not None:

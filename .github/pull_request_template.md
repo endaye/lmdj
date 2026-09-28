@@ -25,6 +25,17 @@ Expected skipped lanes: <!-- Closed lane names, space-separated. -->
 `ci:full` required: no
 Reason: <!-- Explain path ownership or the full-upgrade trigger. -->
 
+## Batch-only Lanes
+
+<!-- Lanes this change selects that no Pull Request runs (`scripts/local-ci.sh
+--list --json` → `batch_only`). Paste the block `scripts/local-ci.sh --lanes
+<lanes>` prints after they pass. The merge procedure refuses stale or missing
+evidence: `scripts/local-ci.sh --batch-evidence-only --pr-body <file>` on the
+exact head. Use `accepted-risk — <reason>` only for a lane the owner explicitly
+accepted for this head. -->
+
+Batch-only lanes: none
+
 ## Version Management
 
 Version impact: none

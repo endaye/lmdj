@@ -369,6 +369,24 @@ Issues. Retain the postmerge live Issue-state audit below.
    Validate a changed body again, without closing/reopening the PR merely to
    manufacture an old CI event.
 
+   **Batch-only lanes need evidence before merge (#1619).** A lane in the
+   `--list --json` `batch_only` list never runs on a Pull Request, so its
+   evidence must come from you. Run each one on the committed head and paste
+   the block the run prints under `## Batch-only Lanes`:
+   ```bash
+   scripts/local-ci.sh --lanes <batch-only lanes, comma-separated>
+   scripts/local-ci.sh --batch-evidence-only --pr-body <body-file>
+   ```
+   Each line reads `- <lane>: pass key=<64 hex>`. The key digests that lane's
+   commands and every input's content, so a later commit touching those inputs
+   makes the evidence stale. Rerun the lane and replace the line. A lane this
+   machine cannot run (`not-runnable-here`) is run on a host that can. Only a
+   lane the owner explicitly accepts for this head may read
+   `- <lane>: accepted-risk — <reason>`, and the reason names that acceptance.
+   Never write `accepted-risk` on your own judgment, and never copy a key from
+   `--list` without running the lane. A change with no batch-only lane
+   declares `Batch-only lanes: none`.
+
    `Documentation impact` means **Architecture Portal pages**, not any file
    under `docs/`. Declare `required` when this change edits a page under
    `apps/docs-site/docs/`, and list routes on a line reading exactly
@@ -411,6 +429,20 @@ Issues. Retain the postmerge live Issue-state audit below.
    permission. Read the PR's current head SHA, open/draft state, conflicts,
    unresolved review threads and effective protection. Unknown mergeability is
    not proof of no conflict: reread with a bounded wait or report it.
+
+   **Check batch-only lane evidence on the exact head.** With a clean checkout
+   of the PR's current head and its live body:
+   ```bash
+   gh pr view <number> --json body -q .body > <body-file>
+   scripts/local-ci.sh --batch-evidence-only --pr-body <body-file>
+   ```
+   A `fail` is a failed premerge check: `why:` names each missing, stale or
+   malformed lane. Rerun those lanes, update the body, and check again. A
+   `pass` that lists `accepted-risk` lanes still needs the owner's explicit
+   acceptance for this head, from the owner in this session, not an agent's
+   judgment. Without it, stop and ask. The check proves the evidence is
+   complete and current for this head, not that the lanes are healthy on
+   `main`.
 2. **Require independent review evidence for that exact head**. Run the read-only
    one-shot helper from trusted repository code, using authenticated API access:
    ```bash

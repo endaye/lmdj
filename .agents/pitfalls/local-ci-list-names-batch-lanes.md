@@ -1,7 +1,7 @@
 ---
 id: local-ci-list-names-batch-lanes
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-17
     occurrence: https://github.com/endaye/lmdj/pull/1490
@@ -82,3 +82,17 @@ runs only in the batch-only Core lanes, so `core_asan`, `core_coverage`,
 `core_macos` and `core_ubuntu` went red on the next complete batch. A version
 bump must search every pinned copy of the old version, not only the manifests
 it edits.
+
+The advisory warning is replaced by a merge obligation (#1619, owner's choice
+of option 1). The Pull Request body records every `batch_only` lane under
+`## Batch-only Lanes` as `- <lane>: pass key=<64 hex>`, pasted from the block a
+passing `scripts/local-ci.sh --lanes <lanes>` run prints, or as
+`accepted-risk — <reason>` the owner explicitly accepted. The `issue-done` merge
+procedure runs `scripts/local-ci.sh --batch-evidence-only --pr-body <body>` on a
+clean checkout of the exact head. It refuses a missing, extra, stale or
+malformed lane, and the key binds the evidence to the lane's inputs, so an
+input edit after the run makes it stale. `BatchOnlyEvidenceTest` in
+`tests/build/ci_local_preflight_test.py` pins the lane set, staleness,
+`accepted-risk`, `none`, the clean-tree requirement, and that `--lanes` cannot
+shrink the obligation. It is a procedure check, not a required status: it
+catches "never ran", not a fabricated line.
