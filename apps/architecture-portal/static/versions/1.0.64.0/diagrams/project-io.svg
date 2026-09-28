@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="a867e544f3f5a291a46683585c1cbc7377ce5e159a2ec1743f322aab02fec0f3">
+  <title id="title">Project I/O Module</title><desc id="description">Project Store、portable Bundle、session-kind journal 与 journaled atomic publication</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
+  <style>
+    :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    @media(prefers-color-scheme:dark){:root{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}}
+    [data-theme=dark]{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}
+    [data-theme=light]{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
+    .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
+  </style>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Project I/O Module</text><text class="page-summary" x="40" y="68">Project Store、portable Bundle、session-kind journal 与 journaled atomic publication</text>
+
+  <g class="connection"><path class="edge-mask" d="M 270 198 H 330 V 318 H 390"/><path class="edge" d="M 270 198 H 330 V 318 H 390" marker-end="url(#arrow)"/><text x="330" y="249">save/export</text></g>
+<g class="connection"><path class="edge-mask" d="M 270 438 H 330 V 318 H 390"/><path class="edge" d="M 270 438 H 330 V 318 H 390" marker-end="url(#arrow)"/><text x="330" y="369">stream import</text></g>
+<g class="connection"><path class="edge-mask" d="M 640 318 H 705 V 318 H 770"/><path class="edge" d="M 640 318 H 705 V 318 H 770" marker-end="url(#arrow)"/><text x="705" y="309">verify first</text></g>
+<g class="connection"><path class="edge-mask" d="M 1010 318 H 1075 V 198 H 1140"/><path class="edge" d="M 1010 318 H 1075 V 198 H 1140" marker-end="url(#arrow)"/><text x="1075" y="249">atomic publish</text></g>
+<g class="connection"><path class="edge-mask" d="M 1010 318 H 1075 V 438 H 1140"/><path class="edge" d="M 1010 318 H 1075 V 438 H 1140" marker-end="url(#arrow)"/><text x="1075" y="369">canonical pack</text></g>
+<g class="connection"><path class="edge-mask" d="M 640 318 H 705 V 478 H 770"/><path class="edge" d="M 640 318 H 705 V 478 H 770" marker-end="url(#arrow)"/><text x="705" y="389">performance session</text></g>
+<g class="connection"><path class="edge-mask" d="M 1010 478 H 1075 V 198 H 1140"/><path class="edge" d="M 1010 478 H 1075 V 198 H 1140" marker-end="url(#arrow)"/><text x="1075" y="329">save or discard</text></g>
+
+    <g class="component kind-host">
+      <rect class="node-mask" x="46" y="146" width="228" height="104" rx="18"/>
+      <rect class="node" x="50" y="150" width="220" height="96" rx="14"/>
+      <text class="node-title" x="66" y="182">Project Truth</text>
+      <text class="node-detail" x="66" y="208">legacy read · current Contract write</text>
+    </g>
+    <g class="component kind-host">
+      <rect class="node-mask" x="46" y="386" width="228" height="104" rx="18"/>
+      <rect class="node" x="50" y="390" width="220" height="96" rx="14"/>
+      <text class="node-title" x="66" y="422">Project Bundle</text>
+      <text class="node-detail" x="66" y="448">transfer-only input</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="386" y="266" width="258" height="104" rx="18"/>
+      <rect class="node" x="390" y="270" width="250" height="96" rx="14"/>
+      <text class="node-title" x="406" y="302">Project I/O</text>
+      <text class="node-detail" x="406" y="328">validate · pack · publish</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="766" y="266" width="248" height="104" rx="18"/>
+      <rect class="node" x="770" y="270" width="240" height="96" rx="14"/>
+      <text class="node-title" x="786" y="302">Journal Overlay</text>
+      <text class="node-detail" x="786" y="328">session kind · tail · receipt</text>
+    </g>
+    <g class="component kind-host">
+      <rect class="node-mask" x="1136" y="146" width="228" height="104" rx="18"/>
+      <rect class="node" x="1140" y="150" width="220" height="96" rx="14"/>
+      <text class="node-title" x="1156" y="182">Project Store</text>
+      <text class="node-detail" x="1156" y="208">committed truth</text>
+    </g>
+    <g class="component kind-host">
+      <rect class="node-mask" x="1136" y="386" width="228" height="104" rx="18"/>
+      <rect class="node" x="1140" y="390" width="220" height="96" rx="14"/>
+      <text class="node-title" x="1156" y="422">Project Bundle</text>
+      <text class="node-detail" x="1156" y="448">canonical export</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="766" y="426" width="248" height="104" rx="18"/>
+      <rect class="node" x="770" y="430" width="240" height="96" rx="14"/>
+      <text class="node-title" x="786" y="462">Performance Draft</text>
+      <text class="node-detail" x="786" y="488">begin · flush · save | discard</text>
+    </g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Dependencies</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Foundation + Authoring Domain. Committed inspection acquires the owner lease without authoring recovery or scavenging.</div></foreignObject></g>
+<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Failure model</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Writer-lease admission closes mutation races; immutable command payload enables replay, while tail-last residual merge preserves only uncommitted owner-loss work.</div></foreignObject></g>
+<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Session kinds</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">The journal separates sequence and performance sessions; a Performance draft begins under the writer lease and resolves to save or discard.</div></foreignObject></g>
+<g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Forbidden boundary</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Bundle is transfer-only; Runtime Snapshot is never persisted as Project Truth. Slice lineage persists terminal evidence, never Workspace lifecycle state.</div></foreignObject></g>
+</svg>
