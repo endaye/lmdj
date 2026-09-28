@@ -111,18 +111,28 @@ def assert_lock_contract(verifier) -> None:
 
 def assert_browser_package() -> None:
     package = json.loads(PACKAGE_PATH.read_text(encoding="utf-8"))
-    assert package == {
+    expected_package = {
         "name": "@lmdj/web-toolchain-conformance",
         "version": "0.0.0",
         "private": True,
         "type": "module",
         "engines": {"node": "26.x"},
-        "scripts": {"test": "playwright test"},
+        "scripts": {
+            # npm ci applies the locked Playwright 1.62.1 WebKit abort patch
+            # (#1570); the proof checks the patch itself.
+            "postinstall": "node toolchain/playwright_webkit_abort_patch.mjs apply",
+            "test": "playwright test",
+        },
         "devDependencies": {
             "@netlify/headers-parser": "10.1.0",
             "@playwright/test": "1.62.1",
         },
     }
+    assert package == expected_package, (
+        f"{PACKAGE_PATH.relative_to(REPO_ROOT).as_posix()} drifted from the "
+        f"pinned browser package: {json.dumps(package, sort_keys=True)}; "
+        "update the pin only for an intended toolchain change"
+    )
 
     package_lock = json.loads(PACKAGE_LOCK_PATH.read_text(encoding="utf-8"))
     assert package_lock["lockfileVersion"] == 3
