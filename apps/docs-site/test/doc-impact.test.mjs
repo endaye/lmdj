@@ -87,3 +87,11 @@ test('a cut that also changes other source still needs a current page edit', () 
 test('a snapshot for a Build other than the current one does not stand in for a current page', () => {
   assert.deepEqual(checkDocumentationImpact({body: CUT_BODY, changedFiles: CUT_FILES, productBuild: '1.0.65.0'}), [REQUIRED_WITHOUT_PAGE]);
 });
+
+test('a snapshot path of another Build does not belong to the current Build\'s cut', () => {
+  assert.deepEqual(checkDocumentationImpact({
+    body: CUT_BODY,
+    changedFiles: [...CUT_FILES, 'apps/architecture-portal/versioned_metadata/version-1.0.65.0.json'],
+    productBuild: '1.0.64.0',
+  }), [REQUIRED_WITHOUT_PAGE]);
+});

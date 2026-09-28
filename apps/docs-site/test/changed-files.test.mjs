@@ -8,7 +8,7 @@ import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 
 import {requireRevision, resolveChangedFiles} from '../scripts/lib/changed-files.mjs';
-import {checkDocumentationImpact} from '../scripts/check-doc-impact.mjs';
+import {checkDocumentationImpact, readProductBuild} from '../scripts/check-doc-impact.mjs';
 
 const execFileAsync = promisify(execFile);
 const SCRIPTS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../scripts');
@@ -161,4 +161,17 @@ test('a malformed revision is refused rather than measured', async (t) => {
     resolveChangedFiles(root, {baseSha: 'HEAD~1', headSha}),
     /40-character revision/,
   );
+});
+
+test('the Product Build is read from the head revision, not the working tree', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'portal-product-build-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  await git(root, ['init', '-b', 'main']);
+  await git(root, ['config', 'user.email', 'portal@example.test']);
+  await git(root, ['config', 'user.name', 'Portal Test']);
+  await put(root, 'products/lmdj/version.json', '{"milestone":1,"minor":0,"build":64,"patch":0}\n');
+  const headSha = await commit(root, 'allocate 1.0.64.0');
+  await put(root, 'products/lmdj/version.json', '{"milestone":1,"minor":0,"build":65,"patch":0}\n');
+
+  assert.equal(await readProductBuild(root, {headSha}), '1.0.64.0');
 });
