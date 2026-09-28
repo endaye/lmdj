@@ -1730,6 +1730,58 @@ class CandidateEnrollmentTest(unittest.TestCase):
         with self.assertRaises(JournalError):
             enrolled_candidate_scope_env(self.root / "preparation")
 
+    def test_a_read_only_observation_adopts_the_enrolled_scope_env(self):
+        # The verification step's receipts (fresh_receipts) observe the
+        # candidate read-only, always in a later process whose fresh
+        # timestamp differs from the enrolled one. A refused adoption left
+        # release-be5061a58de507db's verified candidate "unknown" forever.
+        from unittest.mock import patch
+        import tools.release.carriers as carriers
+        from tools.release.candidate_preparation import CandidatePreparationError
+
+        enrolled = ("/enrolled/bin", 1789550000)
+        prepared = []
+
+        class Preparation:
+            def __init__(self, root, *, path, source_timestamp, **_):
+                self.scope = (path, source_timestamp)
+                self.checks = object()
+                self.material = type("Material", (), {"reservations": type(
+                    "Reservations", (), {"enroll": lambda self, repository: None})()})()
+
+            def observe(self, *, initialize):
+                if self.scope != enrolled:
+                    raise CandidatePreparationError("why: candidate preparation original enrollment is missing, corrupt or rebound")
+                return {"status": "verified", "source": {}, "checked_cut": {}, "frozen": {}}
+
+            def prepare(self, **_):
+                prepared.append(True)
+
+        arguments = dict(
+            request=request(mode="new", requested_tag=None),
+            preparation_root=self.root / "preparation",
+            repository_root=self.root / "repo", source_root=self.root / "src",
+            reservation_root=self.root / "reservations",
+            transition_root=self.root / "transition",
+            witness_root=self.root / "witness", repository_id=12,
+            client=None, token="FIXTURE-NOT-A-SECRET",
+            authorize=lambda _request: None, observe_main=lambda: TARGET,
+            review=lambda *a: None, verify_merged=lambda *a: None,
+            clock=lambda: 1789559999, path="/later/process/bin",
+            author_name="Fixture", author_email="fixture@example.invalid",
+            source_timestamp=1789559999)
+        with patch("tools.release.candidate_preparation.CandidatePreparation", Preparation), \
+                patch.object(carriers, "enrolled_candidate_scope_env", return_value=enrolled), \
+                patch.object(carriers, "assemble_candidate_transition",
+                             side_effect=lambda **kwargs: ("transition", kwargs["checks"])):
+            observed = carriers.enroll_candidate(drive=False, **arguments)
+            self.assertEqual(observed[0], "transition")
+            self.assertEqual(prepared, [])
+            # Nothing enrolled at all still surfaces the original refusal.
+            with patch.object(carriers, "enrolled_candidate_scope_env", return_value=None):
+                with self.assertRaises(CandidatePreparationError):
+                    carriers.enroll_candidate(drive=False, **arguments)
+
     def test_enrollment_provisions_the_build_reservation_catalogue(self):
         # The M3 first run failed here: the entry never enrolled the BUILD
         # catalogue, so the preparation's first reserve leg died with

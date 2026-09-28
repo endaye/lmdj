@@ -907,13 +907,13 @@ def enroll_candidate(*, request, preparation_root, repository_root, source_root,
     try:
         observed = preparation.observe(initialize=True)
     except CandidatePreparationError as first:
-        if not drive:
-            # A read-only observation never adopts: surface the state as-is.
-            raise
         # A scope mismatch raises ("rebound") rather than reporting pending:
         # a prior process under a different PATH/timestamp enrolled this
         # request. Adopt its recorded values and observe again; any other
-        # preparation failure is re-raised unchanged.
+        # preparation failure is re-raised unchanged. Adoption only reads the
+        # enrollment's own values back, so a read-only observation adopts too:
+        # the verification step's receipts always run in a later process,
+        # whose fresh timestamp can never equal the enrolled one.
         recorded = enrolled_candidate_scope_env(preparation_root)
         if recorded is None or recorded == (path, source_timestamp):
             raise
