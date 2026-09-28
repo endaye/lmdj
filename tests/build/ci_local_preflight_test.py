@@ -432,6 +432,40 @@ class BatchOnlyEvidenceTest(unittest.TestCase):
             "`ci_batch_only` from `ci_lanes`, never from `selected`",
         )
 
+    def test_a_sub_heading_ends_the_section(self) -> None:
+        # Review of #1646: a `- <lane>:` line under a `###` sub-heading is not
+        # evidence, so it must not complete a missing lane.
+        plan = self.release_change()
+        section = [line for line in self.evidence(plan)
+                   if not line.startswith("- deploy_contract:")]
+        key = plan["batch_only_keys"]["deploy_contract"]
+        result = self.check(plan, [*section, "", "### Notes", f"- deploy_contract: pass key={key}"])
+        self.assertEqual(result.verdict, self.preflight.FAIL)
+        self.assertIn("`deploy_contract` has no evidence line", result.detail)
+
+    def test_a_placeholder_accepted_risk_reason_is_refused(self) -> None:
+        # Review of #1646: the reason must say something, not hold a template.
+        plan = self.release_change()
+        for reason in ("TBD", "x", "<reason>", "TODO later", "n/a"):
+            section = [line if not line.startswith("- deploy_contract:")
+                       else f"- deploy_contract: accepted-risk — {reason}"
+                       for line in self.evidence(plan)]
+            self.assertEqual(self.check(plan, section).verdict, self.preflight.FAIL, reason)
+
+    def test_a_partly_verified_printed_block_names_the_lanes_still_owed(self) -> None:
+        # Review of #1646: pasting what a partial run prints must fail as
+        # "no evidence line" for exactly the lanes that did not run, never as
+        # a malformed claim.
+        plan = self.release_change()
+        ran = [self.preflight.LaneResult("deploy_contract", self.preflight.PASS)]
+        result = self.check(plan, self.preflight.batch_evidence_block(plan, ran))
+        owed = [lane for lane in plan["ci_batch_only"] if lane != "deploy_contract"]
+        self.assertEqual(result.verdict, self.preflight.FAIL)
+        self.assertNotIn("neither", result.detail)
+        for lane in owed:
+            self.assertIn(f"`{lane}` has no evidence line", result.detail)
+        self.assertNotIn("`deploy_contract` has no evidence line", result.detail)
+
     def test_the_cli_needs_a_body_and_rejects_a_lane_restriction(self) -> None:
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):

@@ -67,6 +67,10 @@ _BATCH_DECLARATION = re.compile(r"^Batch-only lanes: (.+)$")
 _BATCH_ENTRY = re.compile(r"^- ([a-z_]+): (.*)$")
 _BATCH_PASS = re.compile(r"^pass key=([0-9a-f]{64})$")
 _BATCH_ACCEPTED = re.compile(r"^accepted-risk — (\S.*)$")
+_MARKDOWN_HEADING = re.compile(r"^#{1,6}\s")
+# A reason must say something: a template or a filler word is not one.
+_PLACEHOLDER_REASON = re.compile(r"<[^>]*>|\b(?:tbd|todo|n/?a|fixme|xxx)\b", re.IGNORECASE)
+_MIN_REASON_WORDS = 3
 
 _DELETED = "0" * 40
 
@@ -478,8 +482,10 @@ def batch_evidence_block(
     """The `## Batch-only Lanes` lines this run can attest, ready to paste.
 
     Only a lane that passed here (or matched a cached pass for the same inputs)
-    gets a `pass key=` line; every other batch-only lane is left for another
-    run, another host, or an owner's explicit risk acceptance.
+    gets a `pass key=` line. Every other batch-only lane is printed as an HTML
+    comment, which is not an evidence line: pasted as is, the check names it as
+    still owed, left for another run, another host, or an owner's explicit
+    risk acceptance.
     """
     passed = {result.lane for result in results if result.verdict in (PASS, CACHED_PASS)}
     batch = plan["ci_batch_only"]
@@ -489,7 +495,8 @@ def batch_evidence_block(
         if lane in passed:
             lines.append(f"- {lane}: pass key={plan['batch_only_keys'][lane]}")
         else:
-            lines.append(f"- {lane}: <not verified by this run>")
+            lines.append(f"<!-- {lane}: not verified by this run; run it, or record "
+                         "`accepted-risk — <reason>` only if the owner accepts it -->")
     return lines
 
 
@@ -501,7 +508,8 @@ def _evidence_section(body: str) -> list[str] | None:
         return None
     section = []
     for line in lines[starts[0] + 1:]:
-        if line.startswith("## "):
+        # Any heading ends it: a line under a sub-heading is not evidence.
+        if _MARKDOWN_HEADING.match(line):
             break
         section.append(line.strip())
     return section
@@ -571,8 +579,12 @@ def check_batch_evidence(
         elif (passed := _BATCH_PASS.match(claim)):
             if passed.group(1) != plan["batch_only_keys"][lane]:
                 stale.append(lane)
-        elif _BATCH_ACCEPTED.match(claim):
-            accepted.append(lane)
+        elif (risk := _BATCH_ACCEPTED.match(claim)):
+            reason = risk.group(1).strip()
+            if _PLACEHOLDER_REASON.search(reason) or len(reason.split()) < _MIN_REASON_WORDS:
+                malformed.append(lane)
+            else:
+                accepted.append(lane)
         else:
             malformed.append(lane)
     problems = []
@@ -583,7 +595,8 @@ def check_batch_evidence(
                         + " (inputs changed after it ran)")
     if malformed:
         problems.append(" ".join(f"`{lane}`" for lane in malformed)
-                        + " evidence is neither `pass key=<64 hex>` nor `accepted-risk — <reason>`")
+                        + " evidence is neither `pass key=<64 hex>` nor `accepted-risk — <reason>`"
+                        f" with a reason of at least {_MIN_REASON_WORDS} words and no placeholder")
     if problems:
         rerun = " ".join(missing + stale + malformed)
         return refuse("; ".join(problems),
