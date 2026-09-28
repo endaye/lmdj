@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
+import {existsSync} from "node:fs";
+import {readFile} from "node:fs/promises";
 import {dirname, join} from "node:path";
 import {test} from "node:test";
 import {fileURLToPath} from "node:url";
 import {webkit} from "playwright-core";
+import {clientBundle, isPatched} from "../toolchain/playwright_webkit_abort_patch.mjs";
 import {ENGINE_CANCELLED_LOAD, gotoRetryingCancelledFirstLoad, pageEngine} from "./webkit_cancelled_navigation.mjs";
 
-const fakeBrowser = join(dirname(fileURLToPath(import.meta.url)), "..", "toolchain", "fake_webkit_pipe_browser.mjs");
+const webRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const fakeBrowser = join(webRoot, "toolchain", "fake_webkit_pipe_browser.mjs");
 const cancelled = () => new Error(`page.goto: ${ENGINE_CANCELLED_LOAD}\nCall log: navigating`);
 
 // Like a Playwright Page, the engine is only reachable through its Browser; a
@@ -82,7 +86,19 @@ test("every other navigation failure propagates without retry", async () => {
 // End to end on the locked (postinstall-patched) client: a real Playwright
 // Page over the recorded #1570 exchange. Every fake navigation is cancelled,
 // so the first load is retried exactly once and the second cancellation fails.
-test("a real Playwright WebKit page reports its engine and retries the cancelled first load once", async () => {
+test("a real Playwright WebKit page reports its engine and retries the cancelled first load once", async (t) => {
+  // Preconditions fail with their own cause, never as a launch error or a
+  // wrong retry count.
+  assert.ok(existsSync(fakeBrowser),
+    `why: the recorded #1570 fake browser is missing at ${fakeBrowser}; remedy: restore it or update this path`);
+  assert.ok(isPatched(await readFile(await clientBundle(webRoot), "utf8")),
+    "why: the installed Playwright client lacks the #1570 abort patch, so goto never rejects; " +
+    "remedy: run `npm --prefix tests/platform/web ci`");
+  const priorOrder = process.env.FAKE_WEBKIT_ORDER;
+  t.after(() => {
+    if (priorOrder === undefined) delete process.env.FAKE_WEBKIT_ORDER;
+    else process.env.FAKE_WEBKIT_ORDER = priorOrder;
+  });
   process.env.FAKE_WEBKIT_ORDER = "early";
   const browser = await webkit.launch({executablePath: fakeBrowser, timeout: 10_000});
   try {
