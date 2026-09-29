@@ -83,6 +83,7 @@ function sessionFixture({
     },
     listLocalProjects: async () => [],
     importProject: async () => { throw new Error("unused"); },
+    createProject: async () => ({}),
     openProject: async () => ({}),
     inspectProject: async () => ({}),
     reloadSnapshot: async () => ({}),

@@ -203,9 +203,43 @@ export async function openProjectJourney(
   summary: LocalProjectSummary,
 ): Promise<ProjectView> {
   await session.openProject(summary.projectId, summary.patternId);
+  return readOpenedProject(session, summary);
+}
+
+async function readOpenedProject(
+  session: CreatorRuntimeSession,
+  summary: LocalProjectSummary,
+): Promise<ProjectView> {
   const inspected = await session.inspectProject();
   await session.reloadSnapshot(summary.patternId);
   return projectView(summary, inspected);
+}
+
+// A new Project reuses the defaults the existing creation paths already use:
+// the diagnostic Host's project.create and the Sequence "+ NEW" Pattern.
+export const NEW_PROJECT_BPM = 120;
+export const NEW_PROJECT_BARS = 1;
+
+export async function createProjectJourney(
+  session: CreatorRuntimeSession,
+  newId: () => string = () => crypto.randomUUID(),
+): Promise<ProjectView> {
+  const projectId = newId();
+  const patternId = newId();
+  await session.createProject({
+    projectId,
+    patternId,
+    bpm: NEW_PROJECT_BPM,
+    bars: NEW_PROJECT_BARS,
+  });
+  const summary = (await session.listLocalProjects()).find((candidate) =>
+    candidate.projectId === projectId);
+  if (summary === undefined || summary.patternId !== patternId) {
+    throw protocolMismatch("Created Project is not listed");
+  }
+  // project.create leaves the Project open under this session's writer, so
+  // it is read, not reopened.
+  return readOpenedProject(session, summary);
 }
 
 export async function refreshProjectProjectionJourney(

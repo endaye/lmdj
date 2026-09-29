@@ -35,7 +35,7 @@ export function ProjectOverview({state}: ProjectOverviewProps) {
         ) : null}
       </dl>
       <p className="overview-grid-caption">
-        New, Save As, and Project export are not Host actions.
+        Projects save automatically. Duplicate and Project export are not Host actions yet.
       </p>
     </div>
   );

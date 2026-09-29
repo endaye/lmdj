@@ -2867,6 +2867,64 @@ function createRuntimeSessionController(options = {}) {
     }, requestOptions));
   }
 
+  // Creates an empty Project and leaves it open, like openProject. The
+  // caller chooses the identities and defaults; the Core owns validation of
+  // Project Truth and refuses an existing identity with DUPLICATE_ID.
+  function createProject(request, requestOptions = {}) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["projectId", "patternId", "bpm", "bars"]) ||
+      !UUID_PATTERN.test(request.projectId) ||
+      !UUID_PATTERN.test(request.patternId) ||
+      !Number.isInteger(request.bpm) ||
+      request.bpm < 40 ||
+      request.bpm > 240 ||
+      ![1, 2, 4, 8].includes(request.bars)
+    ) {
+      throw new TypeError("Project creation request is invalid");
+    }
+    return serializeProjectAction(async () => {
+      if (closing || !started) {
+        throw typedError("HOST_STATE_INVALID", "Project creation is unavailable");
+      }
+      const result = await boundedRequest("project.create", {
+        project_id: request.projectId,
+        bpm: request.bpm,
+        initial_pattern: {
+          pattern_id: request.patternId,
+          bars: request.bars,
+          events: [],
+        },
+        // Same quiescent negotiation point as project.open.
+        ...(options.patternTransport === true ? {pattern_transport: true} : {}),
+      }, requestOptions);
+      if (
+        !exactKeys(result, [
+          "project_id",
+          "project_revision",
+          "initial_pattern_id",
+          "runtime_ready",
+        ]) ||
+        result.project_id !== request.projectId ||
+        result.initial_pattern_id !== request.patternId ||
+        result.project_revision !== 0 ||
+        typeof result.runtime_ready !== "boolean"
+      ) {
+        throw typedError(
+          "HOST_PROTOCOL_MISMATCH",
+          "Project creation result is invalid",
+        );
+      }
+      return Object.freeze({
+        projectId: result.project_id,
+        patternId: result.initial_pattern_id,
+        projectRevision: result.project_revision,
+        runtimeReady: result.runtime_ready,
+      });
+    });
+  }
+
   async function inspectProject() {
     return recoverableQuery("project.inspect", {});
   }
@@ -5072,6 +5130,7 @@ function createRuntimeSessionController(options = {}) {
     listLocalProjects,
     importProject,
     importAssignSample,
+    createProject,
     openProject,
     inspectProject,
     assignPatternSlot,

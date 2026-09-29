@@ -508,6 +508,7 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
       onProgress({completedBytes: 6, totalBytes: 6});
       return listedSummary;
     },
+    createProject: async () => { calls.push("createProject"); return {}; },
     openProject: async () => { calls.push("openProject"); return {}; },
     inspectProject: async () => {
       calls.push("inspectProject");
@@ -2246,7 +2247,7 @@ test("renders the hardware shell with a read-only overview and no fallback to a 
   expect(screen.getByTestId("hardware-console")).toBeTruthy();
 });
 
-test("hardware Project keeps list/import/open in touch and omits New/Save As", async () => {
+test("hardware Project keeps list/import/open, offers New Project in touch and omits Save As", async () => {
   const user = userEvent.setup();
   render(<App initialState={ready} />);
 
@@ -2254,7 +2255,7 @@ test("hardware Project keeps list/import/open in touch and omits New/Save As", a
   expect(within(display).queryAllByRole("button")).toHaveLength(0);
   expect(within(display).queryByRole("button", {name: "New"})).toBeNull();
   expect(within(display).getByTestId("project-overview").textContent ?? "")
-    .toMatch(/Save As/);
+    .toMatch(/Projects save automatically/);
 
   const touch = screen.getByRole("region", {name: "Touch workspace"});
   expect(within(touch).getByRole("button", {name: "Open local"})).toBeTruthy();
@@ -2262,7 +2263,7 @@ test("hardware Project keeps list/import/open in touch and omits New/Save As", a
   expect(within(touch).getByRole("button", {name: "Activate audio"})).toBeTruthy();
   expect(within(touch).getByRole("button", {name: "Enable MIDI"})).toBeTruthy();
   expect(within(touch).getByRole("button", {name: "Export report"})).toBeTruthy();
-  expect(within(touch).queryByRole("button", {name: "New"})).toBeNull();
+  expect(within(touch).getByRole("button", {name: "New Project"})).toBeTruthy();
   expect(within(touch).queryByRole("button", {name: "Save As"})).toBeNull();
   expect(within(touch).queryByRole("button", {name: "Export project"})).toBeNull();
   expect(within(touch).queryByRole("button", {name: /^Open$/})).toBeNull();

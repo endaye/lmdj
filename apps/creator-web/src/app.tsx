@@ -36,6 +36,7 @@ import {
 } from "./report/acceptance_report";
 import {
   createProjectActionLane,
+  createProjectJourney,
   importProjectJourney,
   listLocalProjectsJourney,
   openProjectJourney,
@@ -80,6 +81,7 @@ import {
   creatorReducer,
   initialCreatorState,
   selectCanActivateAudio,
+  selectCanCreateProject,
   selectCanImportProject,
   selectCanOpenProject,
   selectCreatorPhase,
@@ -731,7 +733,7 @@ function Workspace({
     state.project.current?.patternId, registerRuntimeShutdownBarrier]);
 
   const beginProjectAction = (
-    kind: "open" | "import",
+    kind: "open" | "import" | "create",
     requireSelector = true,
   ): ProjectActionToken | null => {
     if (!session || projectActions.busy ||
@@ -740,7 +742,9 @@ function Workspace({
     if (requireSelector) {
       const allowed = kind === "open"
         ? selectCanOpenProject(stateRef.current)
-        : selectCanImportProject(stateRef.current);
+        : kind === "create"
+          ? selectCanCreateProject(stateRef.current)
+          : selectCanImportProject(stateRef.current);
       if (!allowed) return null;
     }
     return projectActions.claim(session);
@@ -772,6 +776,40 @@ function Workspace({
     } catch (error) {
       if (ownsProjectAction(token)) {
         reportProjectError(error, {kind: "open", project: summary});
+      }
+      return false;
+    } finally {
+      finishProjectAction(token);
+    }
+  };
+
+  const createProject = async () => {
+    const token = beginProjectAction("create");
+    if (!token) return false;
+    dispatch({type: "project-opening"});
+    resetInputForAdverseLifecycle();
+    // Same as open: creation replaces the Project session.
+    dispatchTransport({type: "disengaged"});
+    try {
+      const project = await createProjectJourney(token.session);
+      if (!ownsProjectAction(token)) return false;
+      dispatch({type: "project-ready", project});
+      setShowLocalProjects(false);
+      setActiveMode("sample");
+      return true;
+    } catch (error) {
+      if (!ownsProjectAction(token)) return false;
+      reportProjectError(error, null, "Create Project");
+      // The Host may have stored the Project before a later read failed.
+      // Listing it keeps the error visible while letting the user open the
+      // created Project instead of creating a second one.
+      try {
+        const projects = await listLocalProjectsJourney(token.session);
+        if (ownsProjectAction(token)) {
+          dispatch({type: "project-inventory-updated", projects});
+        }
+      } catch {
+        // The reported creation failure stays the visible outcome.
       }
       return false;
     } finally {
@@ -1361,6 +1399,11 @@ function Workspace({
     sampleRetryAction.current === null &&
     state.sample.pendingAction === null &&
     selectCanImportProject(state);
+  const canCreateProject = session !== undefined &&
+    !projectActions.busy &&
+    sampleRetryAction.current === null &&
+    state.sample.pendingAction === null &&
+    selectCanCreateProject(state);
   const staleSampleRuntime = state.sample.lastError?.code === "COOK_FAILED" &&
     state.sample.lastError.retryPrepare && state.sample.savedRevision !== null &&
     state.sample.runtimeRevision !== state.sample.savedRevision;
@@ -1551,11 +1594,13 @@ function Workspace({
                   state={state}
                   canOpen={canOpenProject}
                   canImport={canImportProject}
+                  canCreate={canCreateProject}
                   showLocalProjects={showLocalProjects}
                   onShowLocal={() => setShowLocalProjects(true)}
                   onHideLocal={() => setShowLocalProjects(false)}
                   onOpen={(summary) => { void openProject(summary); }}
                   onImport={(file) => { void importProject(file); }}
+                  onCreate={() => { void createProject(); }}
                 />
               ) : activeMode === "sample" ? (
                 <>
