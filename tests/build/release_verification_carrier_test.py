@@ -148,7 +148,8 @@ class ComposedReferenceTest(unittest.TestCase):
                          ("c" * 40, "schedule", 1, "5" * 64))
         self.assertEqual(reference["origin_record_digest"], digest_of({"attestation_of": self.ORIGIN}))
         self.assertEqual(reference["admission_record_digest"], digest_of({"attestation_of": self.EXECUTOR}))
-        self.assertEqual(self.consumer.verified, (self.ORIGIN, WITNESS))
+        # The evidence names the origin; the batch is verified at its executor.
+        self.assertEqual(self.consumer.verified, (self.EXECUTOR, WITNESS))
 
     def test_a_non_passed_verdict_is_never_composed(self):
         self.journal.append(self.admit())
@@ -226,7 +227,7 @@ class BatchVerificationTest(unittest.TestCase):
         if reference is None:
             reference = encode_reference(batch_reference_document(run_id, target))
         return {"id": f"result-{run_id}", "epoch": "one", "generation": 1, "type": "result",
-                "data": {"request_id": "batch-request", "run": {"id": 99, "attempt": 1},
+                "data": {"request_id": "batch-request", "run": {"run_id": run_id, "attempt": 1},
                          "target": target, "policy": "2" * 64,
                          "outcomes": outcomes or {"suite-a": "passed"},
                          "reference": reference, "terminal": terminal}}
@@ -269,6 +270,13 @@ class BatchVerificationTest(unittest.TestCase):
     def test_receipts_without_a_witness_revision_conflict(self):
         self.receipts[0] = {}
         self.assertEqual(self.carrier.observe({}, {}).status, "conflict")
+
+    def test_a_result_without_an_exact_first_attempt_executor_conflicts(self):
+        event = self.result_event()
+        event["data"]["run"] = {"run_id": 4242, "attempt": 2}
+        self.journal.append(event)
+        self.assertEqual(self.carrier.observe({}, {}).status, "conflict")
+        self.assertIsNone(self.consumer.verified)
 
     def test_duplicate_results_for_one_target_are_refused(self):
         self.journal.append(self.result_event(run_id=4242))
