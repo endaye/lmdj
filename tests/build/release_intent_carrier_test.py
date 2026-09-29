@@ -18,6 +18,7 @@ from tools.release.intent import (  # noqa: E402
     ledger_append,
     ledger_row,
     pr_document,
+    render_ledger,
     validate_spec,
 )
 
@@ -63,12 +64,12 @@ def seed_repository(root, *, build="1.0.56.0"):
     (root / "docs/release-evidence").mkdir(parents=True)
     (root / "apps/architecture-portal/versions.json").write_text(
         json.dumps(["1.0.52.0", build]) + "\n")
-    (root / "docs/release-evidence/release-intents.json").write_text(json.dumps(
+    (root / "docs/release-evidence/release-intents.json").write_text(render_ledger(
         {"schema": "lmdj.release-intents.v1",
          "entries": [{"tag": "lmdj-v1.0.40.0", "kind": "product", "identity": "1.0.40.0",
                       "target_revision": "c" * 40, "channel": "canary",
                       "disposition": "superseded-unreleased", "profile": "web-hosts"}],
-         "historical_exceptions": []}) + "\n")
+         "historical_exceptions": []}))
     (root / "README.md").write_text("seed\n")
     git("init", "-q", "-b", "main")
     git("config", "user.name", "Seeder")
@@ -263,12 +264,37 @@ class IntentCommitTest(unittest.TestCase):
         document = json.loads(ledger.read_text())
         document["entries"] = [row for row in document["entries"]
                                if row["tag"] != "lmdj-v1.0.57.0"]
-        ledger.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
+        ledger.write_text(render_ledger(document))
         subprocess.run(["git", "-C", str(self.worktree), "-c", "user.name=Fixture",
                         "-c", "user.email=fixture@example.invalid", "commit", "-q",
                         "-am", "drop the intent row"], check=True, capture_output=True)
         with self.assertRaises(IntentError):
             self.new_commit().completed_head()
+
+    def test_the_intent_row_is_one_appended_ledger_line(self):
+        head, _ = self.new_commit().commit(before_write=lambda: None)
+        numstat = subprocess.run(
+            ["git", "-C", str(self.worktree), "diff", "--numstat", self.head, head, "--",
+             "docs/release-evidence/release-intents.json"],
+            capture_output=True, check=True).stdout.decode().split()
+        # The previous last row gains its separating comma; nothing else moves.
+        self.assertEqual(numstat[:2], ["2", "1"])
+
+    def test_recovery_refuses_a_commit_that_reformats_the_ledger(self):
+        self.new_commit().commit(before_write=lambda: None)
+        ledger = self.worktree / "docs/release-evidence/release-intents.json"
+        ledger.write_text(json.dumps(json.loads(ledger.read_text()), indent=2,
+                                     ensure_ascii=False) + "\n")
+        subprocess.run(["git", "-C", str(self.worktree), "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.invalid", "commit", "-q",
+                        "-am", "reformat the ledger"], check=True, capture_output=True)
+        with self.assertRaisesRegex(IntentError, "reformats the ledger"):
+            self.new_commit().completed_head()
+
+    def test_the_canonical_layout_reproduces_the_committed_ledger(self):
+        raw = (Path(__file__).resolve().parents[2]
+               / "docs/release-evidence/release-intents.json").read_text(encoding="utf-8")
+        self.assertEqual(render_ledger(json.loads(raw)), raw)
 
     def test_commit_refuses_files_outside_the_declared_intent_paths(self):
         # A freeze (or a concurrent process) leaves an unrelated worktree file:

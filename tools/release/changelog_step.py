@@ -19,7 +19,7 @@ import re
 from .changelog import ChangelogError, binding, freeze as freeze_changelog
 from .evidence_branch import PublicationBranch
 from .github_api import GitHubClient
-from .intent import _LEDGER_RELATIVE
+from .intent import _LEDGER_RELATIVE, render_ledger
 from .model import canonical_sha256
 from .orchestration_driver import Observation
 from .witness_pr import WitnessPullRequest
@@ -260,8 +260,7 @@ class ChangelogCommit:
         if canonical_sha256(changelog) != self.spec["changelog_sha256"]:
             _fail("the frozen changelog differs from the reviewed document")
         updated = _updated_ledger_document(ledger, self.spec, changelog)
-        (self.root / _LEDGER_RELATIVE).write_text(
-            json.dumps(updated, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        (self.root / _LEDGER_RELATIVE).write_text(render_ledger(updated), encoding="utf-8")
         from .changelog import render as render_changelog
         notes = render_changelog(changelog)
         (self.root / evidence_document_relative(self.spec)).write_text(
