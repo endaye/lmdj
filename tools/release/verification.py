@@ -214,5 +214,5 @@ class BatchVerification:
             return Observation("unknown")
         return Observation("verified", {
             "sha256": canonical_sha256(document),
-            "reference": f"batch-result:{origin}:{witness}",
+            "reference": f"batch-result:{executor_id}:{witness}",
         })

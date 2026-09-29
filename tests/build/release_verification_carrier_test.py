@@ -140,7 +140,7 @@ class ComposedReferenceTest(unittest.TestCase):
         self.journal.append(self.result())
         observed = self.observe()
         self.assertEqual(observed.status, "verified")
-        self.assertEqual(observed.evidence["reference"], f"batch-result:{self.ORIGIN}:{WITNESS}")
+        self.assertEqual(observed.evidence["reference"], f"batch-result:{self.EXECUTOR}:{WITNESS}")
         reference = self.consumer.reference
         self.assertEqual(reference["request"], self.request)
         self.assertEqual((reference["executor_control_revision"], reference["executor_event"],

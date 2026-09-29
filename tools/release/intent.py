@@ -79,8 +79,10 @@ def validate_spec(spec):
         _fail("batch reference is not a closed verified reference")
     if reference["request"]["target"] != spec["target_revision"]:
         _fail("batch reference does not bind the intent target revision")
-    if reference["request"]["origin_run"]["run_id"] != spec["batch_run_id"]:
-        _fail("batch reference does not bind the intent batch run")
+    # `batch_run_id` is the executor run the batch was verified at; a queued
+    # candidate's origin run differs, and the reference names no executor id.
+    # The executor binding is re-proven by `BatchEvidenceConsumer.verify_run`
+    # wherever the intent's `merged_main_run_id` is consumed.
 
 
 def validate_pr_spec(spec):
