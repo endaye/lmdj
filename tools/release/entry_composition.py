@@ -411,8 +411,15 @@ def _batch_journal_load(root, token):
     return journal_load
 
 
-def _batch_reference_for(root, token):
-    """Read the terminal batch result's reference for one witness revision."""
+def _batch_reference_for(root, token, consumer):
+    """The release batch reference for one witness revision's terminal result.
+
+    The journal records the batch verdict; the release reference is assembled
+    from the retained batch facts by the same `release_reference` the
+    verification carrier uses, so both steps bind one identical document.
+    """
+    from .verification import release_reference
+
     load = _batch_journal_load(root, token)
 
     def batch_reference_for(witness):
@@ -430,7 +437,7 @@ def _batch_reference_for(root, token):
         reference = matches[0].get("reference")
         if type(reference) is not str or not reference:
             _fail("the terminal batch result has no durable reference")
-        return reference
+        return release_reference(events, matches[0], witness, consumer)
 
     return batch_reference_for
 
@@ -790,19 +797,20 @@ def compose_carriers(context, policy, request):
                  control_revision=request["control_revision"]),
             github, token, spec_authorize, review, verify_merged, author, path)
 
+    evidence_consumer = batch_evidence_consumer(api_get=github.get_batch_evidence,
+                                                git_root=root,
+                                                policy=context.policy)
     carriers = (
         DeferredCandidate(candidate_enroll),
         enroll_verification(
             candidate_root=candidate_root,
             journal_load=_batch_journal_load(root, token),
-            consumer=batch_evidence_consumer(api_get=github.get_batch_evidence,
-                                             git_root=root,
-                                             policy=context.policy),
+            consumer=evidence_consumer,
             fresh_receipts=_fresh_candidate_receipts(candidate_enroll,
                                                      verify_merged)),
         enroll_intent(candidate_root=candidate_root,
                       repository_id=repository_id,
-                      batch_reference_for=_batch_reference_for(root, token),
+                      batch_reference_for=_batch_reference_for(root, token, evidence_consumer),
                       commit_for=intent_commit_for,
                       sequence_for=intent_sequence_for),
         enroll_changelog(candidate_root=candidate_root, repository_id=repository_id,
