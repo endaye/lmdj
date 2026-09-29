@@ -121,15 +121,15 @@ class ComposedReferenceTest(unittest.TestCase):
                 "data": {"request": request or self.request,
                          "executor_run": executor or {"run_id": self.EXECUTOR, "attempt": 1}}}
 
-    def result(self, *, identity=None):
+    def result(self, *, identity=None, status="passed", terminal=True):
         from scripts.ci.batch_runtime import encode_reference
         verdict = {"identity": identity or {"target_sha": WITNESS, "request_id": "batch-request",
                                             "run_id": self.EXECUTOR, "run_attempt": 1},
-                   "evidence_digest": "5" * 64, "status": "passed"}
+                   "evidence_digest": "5" * 64, "status": status}
         return {"id": "result-1", "epoch": "one", "generation": 2, "type": "result",
                 "data": {"request_id": "batch-request", "run": {"run_id": self.EXECUTOR, "attempt": 1},
                          "target": WITNESS, "policy": "2" * 64, "outcomes": {"suite-a": "passed"},
-                         "reference": encode_reference(verdict), "terminal": True}}
+                         "reference": encode_reference(verdict), "terminal": terminal}}
 
     def observe(self):
         return self.carrier.observe({"request": {}}, {"step": "verification"})
@@ -149,6 +149,29 @@ class ComposedReferenceTest(unittest.TestCase):
         self.assertEqual(reference["origin_record_digest"], digest_of({"attestation_of": self.ORIGIN}))
         self.assertEqual(reference["admission_record_digest"], digest_of({"attestation_of": self.EXECUTOR}))
         self.assertEqual(self.consumer.verified, (self.ORIGIN, WITNESS))
+
+    def test_a_non_passed_verdict_is_never_composed(self):
+        self.journal.append(self.admit())
+        self.journal.append(self.result(status="failed"))
+        self.assertEqual(self.observe().status, "conflict")
+        self.assertIsNone(self.consumer.reference)
+
+    def test_an_unreadable_run_or_attestation_is_unknown_not_conflict(self):
+        self.journal.append(self.admit())
+        self.journal.append(self.result())
+
+        def outage(*args, **kwargs):
+            raise OSError("GitHub unreachable")
+
+        self.consumer.artifact = outage
+        self.assertEqual(self.observe().status, "unknown")
+        self.assertIsNone(self.consumer.reference)
+
+    def test_the_selector_requires_a_terminal_result(self):
+        from tools.release.verification import terminal_result
+        event = self.result(terminal=False)
+        self.assertIsNone(terminal_result([event], WITNESS))
+        self.assertEqual(terminal_result([self.result()], WITNESS)["target"], WITNESS)
 
     def test_a_result_without_its_unique_admission_conflicts(self):
         self.journal.append(self.result())
