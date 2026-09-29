@@ -518,7 +518,7 @@ if (typeof globalThis.window !== "undefined") {
   // Reads every message the Control thread has already published. A delayed
   // timer must never leave a published response unread behind a notification,
   // so each poll drains the outbox before it evaluates any deadline. Returns
-  // false once the transport is terminated.
+  // a falsy value once the transport is terminated.
   function drainTransportMessages() {
     if (transportTerminated) return false;
     if (!host.runtimeInitialized) return true;
@@ -540,20 +540,21 @@ if (typeof globalThis.window !== "undefined") {
         const message = JSON.parse(transportDecoder.decode(bytes));
         if (typeof message.request_id === "string") {
           const pending = pendingRequests.get(message.request_id);
-          if (!pending) {
+          if (pending) {
+            pendingRequests.delete(message.request_id);
+            window.clearTimeout(pending.timeout);
+            detachPendingAbort(pending);
+            if (pending.abortError !== null) {
+              pending.reject(pending.abortError);
+            } else {
+              pending.resolve(message);
+            }
+          } else {
             failClosed(transportFailure(
               "HOST_PROTOCOL_MISMATCH",
               "formal Web Host response request ID is not pending",
             ));
-            break;
-          }
-          pendingRequests.delete(message.request_id);
-          window.clearTimeout(pending.timeout);
-          detachPendingAbort(pending);
-          if (pending.abortError !== null) {
-            pending.reject(pending.abortError);
-          } else {
-            pending.resolve(message);
+            return;
           }
         } else {
           for (const subscriber of notificationSubscribers) {
