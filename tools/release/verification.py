@@ -12,7 +12,7 @@ absence; an unreadable journal is unknown, never a negative proof.
 """
 
 from .batch_evidence import BatchEvidenceConsumer, BatchEvidenceError
-from .batch_reference import parse_reference
+from .batch_reference import SCHEMA, parse_reference
 from .model import canonical_sha256
 from .orchestration_driver import Observation
 
@@ -33,6 +33,75 @@ def _decode(reference):
     document = decode_reference(reference)
     parse_reference(document)
     return document
+
+
+def terminal_result(events, witness):
+    """The unique terminal batch result for the candidate witness, or None."""
+    results = [event["data"] for event in events
+               if isinstance(event, dict) and event.get("type") == "result"
+               and isinstance(event.get("data"), dict) and event["data"].get("target") == witness]
+    if not results:
+        return None
+    if len(results) > 1:
+        _fail("multiple batch results claim the same candidate target")
+    return results[0]
+
+
+def release_reference(events, result, witness, consumer):
+    """The closed release batch reference behind one terminal journal result.
+
+    The batch runtime records its verdict evidence as the journal reference,
+    not the release reference. The release reference is assembled from facts
+    the batch already retains: the frozen request and executor of the admit
+    event for this request, the verdict's evidence digest, the executor run's
+    control and event, and the digests of the origin and admission controller
+    attestations. Assembly grants nothing: every field is then re-proven by
+    `BatchEvidenceConsumer.verify_run`. A result that already carries a
+    release reference is used as-is.
+    """
+    from scripts.ci.batch_runtime import decode_reference
+    from scripts.ci.self_test import digest_of
+
+    document = decode_reference(result.get("reference"))
+    if isinstance(document, dict) and "schema" in document:
+        return parse_reference(document)
+    if not isinstance(document, dict):
+        _fail("batch result reference is not a document")
+    request_id = result.get("request_id")
+    admits = [event["data"] for event in events
+              if isinstance(event, dict) and event.get("type") == "admit"
+              and isinstance(event.get("data"), dict)
+              and isinstance(event["data"].get("request"), dict)
+              and event["data"]["request"].get("id") == request_id]
+    if len(admits) != 1:
+        _fail("batch result has no unique admission for its request")
+    request, executor = admits[0]["request"], admits[0].get("executor_run")
+    if (request.get("target") != witness or not isinstance(executor, dict)
+            or set(executor) != {"run_id", "attempt"} or executor["attempt"] != 1
+            or result.get("run") != executor):
+        _fail("batch admission does not bind the candidate target and executor")
+    identity = document.get("identity")
+    if (not isinstance(identity, dict) or identity.get("target_sha") != witness
+            or identity.get("request_id") != request_id
+            or identity.get("run_id") != executor["run_id"] or identity.get("run_attempt") != 1):
+        _fail("batch verdict does not bind the admitted request and executor")
+    executor_run = consumer.get(f"/actions/runs/{executor['run_id']}/attempts/1")
+    origin_id = request.get("origin_run", {}).get("run_id")
+    origin_run = consumer.get(f"/actions/runs/{origin_id}/attempts/1")
+
+    def attestation(run):
+        return consumer.artifact(run, f"batch-controller-{run['id']}-1", ("result.json",))["result.json"]
+
+    return parse_reference({
+        "schema": SCHEMA,
+        "request": request,
+        "executor_control_revision": executor_run.get("head_sha"),
+        "executor_event": executor_run.get("event"),
+        "run_attempt": 1,
+        "origin_record_digest": digest_of(attestation(origin_run)),
+        "admission_record_digest": digest_of(attestation(executor_run)),
+        "evidence_digest": document.get("evidence_digest"),
+    })
 
 
 class BatchVerification:
@@ -94,7 +163,7 @@ class BatchVerification:
         if reference is None:
             return Observation("pending")
         try:
-            document = _decode(reference)
+            document = release_reference(events, terminal_result(events, witness), witness, self.consumer)
             request = document["request"]
             if request.get("target") != witness:
                 _fail("decoded reference does not bind the candidate target")

@@ -81,6 +81,94 @@ class RecordingConsumer(BatchEvidenceConsumer):
             raise BatchEvidenceError("conflict", "retained evidence contradicts")
 
 
+class ComposingConsumer(RecordingConsumer):
+    """Serves the run and controller-attestation reads the composer makes."""
+
+    def __init__(self):
+        super().__init__()
+        self.reference = None
+
+    def get(self, suffix, *, raw=False):
+        run_id = int(suffix.split("/")[3])
+        return {"id": run_id, "head_sha": "c" * 40, "event": "schedule"}
+
+    def artifact(self, run, name, filenames, *, retention=None):
+        assert name == f"batch-controller-{run['id']}-1" and filenames == ("result.json",)
+        return {"result.json": {"attestation_of": run["id"]}}
+
+    def verify_run(self, reference, *, run_id, target_revision, published=False):
+        self.reference = reference
+        return super().verify_run(reference, run_id=run_id, target_revision=target_revision)
+
+
+class ComposedReferenceTest(unittest.TestCase):
+    """Production shape: the journal result carries the batch verdict, not a release reference."""
+
+    ORIGIN, EXECUTOR = 1111, 2222
+
+    def setUp(self):
+        self.transport = MemoryTransport()
+        self.authenticate = lambda record, issue: issue == 7 and record["provenance"] == "trusted-run"
+        anchor = journal_module.IssueBodyAnchor(7, self.transport, self.authenticate, lambda: True)
+        self.journal = journal_module.Journal(7, self.transport, anchor, self.authenticate, lambda: True)
+        self.consumer = ComposingConsumer()
+        self.carrier = BatchVerification(journal_load=self.journal.load, consumer=self.consumer,
+                                         fresh_receipts=lambda state: {"witness_revision": WITNESS})
+        self.request = deepcopy(batch_reference_document(self.ORIGIN, WITNESS)["request"])
+
+    def admit(self, *, executor=None, request=None):
+        return {"id": "admit-1", "epoch": "one", "generation": 1, "type": "admit",
+                "data": {"request": request or self.request,
+                         "executor_run": executor or {"run_id": self.EXECUTOR, "attempt": 1}}}
+
+    def result(self, *, identity=None):
+        from scripts.ci.batch_runtime import encode_reference
+        verdict = {"identity": identity or {"target_sha": WITNESS, "request_id": "batch-request",
+                                            "run_id": self.EXECUTOR, "run_attempt": 1},
+                   "evidence_digest": "5" * 64, "status": "passed"}
+        return {"id": "result-1", "epoch": "one", "generation": 2, "type": "result",
+                "data": {"request_id": "batch-request", "run": {"run_id": self.EXECUTOR, "attempt": 1},
+                         "target": WITNESS, "policy": "2" * 64, "outcomes": {"suite-a": "passed"},
+                         "reference": encode_reference(verdict), "terminal": True}}
+
+    def observe(self):
+        return self.carrier.observe({"request": {}}, {"step": "verification"})
+
+    def test_a_verdict_result_composes_the_release_reference_from_retained_facts(self):
+        from scripts.ci.self_test import digest_of
+        self.journal.append(self.admit())
+        self.journal.append(self.result())
+        observed = self.observe()
+        self.assertEqual(observed.status, "verified")
+        self.assertEqual(observed.evidence["reference"], f"batch-result:{self.ORIGIN}:{WITNESS}")
+        reference = self.consumer.reference
+        self.assertEqual(reference["request"], self.request)
+        self.assertEqual((reference["executor_control_revision"], reference["executor_event"],
+                          reference["run_attempt"], reference["evidence_digest"]),
+                         ("c" * 40, "schedule", 1, "5" * 64))
+        self.assertEqual(reference["origin_record_digest"], digest_of({"attestation_of": self.ORIGIN}))
+        self.assertEqual(reference["admission_record_digest"], digest_of({"attestation_of": self.EXECUTOR}))
+        self.assertEqual(self.consumer.verified, (self.ORIGIN, WITNESS))
+
+    def test_a_result_without_its_unique_admission_conflicts(self):
+        self.journal.append(self.result())
+        self.assertEqual(self.observe().status, "conflict")
+        self.assertIsNone(self.consumer.reference)
+
+    def test_an_admission_for_another_executor_or_a_foreign_verdict_conflicts(self):
+        self.journal.append(self.admit(executor={"run_id": 9999, "attempt": 1}))
+        self.journal.append(self.result())
+        self.assertEqual(self.observe().status, "conflict")
+        self.transport.comments.clear()
+        self.transport.body = {"checkpoint": {"head": None, "pending": None}, "provenance": "trusted-run"}
+        self.journal._verified = None
+        self.journal.append(self.admit())
+        self.journal.append(self.result(identity={"target_sha": "f" * 40, "request_id": "batch-request",
+                                                  "run_id": self.EXECUTOR, "run_attempt": 1}))
+        self.assertEqual(self.observe().status, "conflict")
+        self.assertIsNone(self.consumer.reference)
+
+
 class BatchVerificationTest(unittest.TestCase):
     def setUp(self):
         self.transport = MemoryTransport()
