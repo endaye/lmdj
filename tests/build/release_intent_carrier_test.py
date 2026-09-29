@@ -47,12 +47,10 @@ def spec(**changes):
             "snapshot_sha256": "c" * 64, "batch_reference": batch_reference(),
             "batch_run_id": RUN_ID}
     base.update(changes)
-    if ("target_revision" in changes or "batch_run_id" in changes) \
-            and "batch_reference" not in changes:
-        # The reference document binds the target and the run; an override of
-        # either must rebind the document or the spec is inconsistent.
-        base["batch_reference"] = batch_reference(target=base["target_revision"],
-                                                  run_id=base["batch_run_id"])
+    if "target_revision" in changes and "batch_reference" not in changes:
+        # The reference document binds the target; an override must rebind
+        # the document or the spec is inconsistent.
+        base["batch_reference"] = batch_reference(target=base["target_revision"])
     return base
 
 
@@ -117,11 +115,13 @@ class IntentDocumentsTest(unittest.TestCase):
             with self.assertRaises(IntentError):
                 validate_spec(spec(batch_reference=bad))
 
-    def test_a_batch_reference_binding_another_target_or_run_is_refused(self):
+    def test_a_batch_reference_binding_another_target_is_refused(self):
         with self.assertRaises(IntentError):
             validate_spec(spec(batch_reference=batch_reference(target="9" * 40)))
-        with self.assertRaises(IntentError):
-            validate_spec(spec(batch_reference=batch_reference(run_id=RUN_ID + 1)))
+
+    def test_a_queued_candidate_binds_its_executor_not_its_origin(self):
+        # The batch run is the executor; a queued request's origin differs.
+        validate_spec(spec(batch_reference=batch_reference(run_id=RUN_ID - 1)))
 
     def test_the_ledger_row_survives_the_ledger_model(self):
         # The row this carrier appends must load under the active policy; a

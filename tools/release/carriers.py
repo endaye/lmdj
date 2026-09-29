@@ -419,13 +419,14 @@ _BATCH_EVIDENCE = re.compile(r"batch-result:([1-9][0-9]*):([0-9a-f]{40})\Z")
 def read_verified_batch(state, *, batch_reference_for):
     """The verification step's frozen batch reference, or None before it ran.
 
-    The driver's journal records the verification step as a digest plus the
-    compact reference `batch-result:<run_id>:<witness>` the verification carrier
-    produced, where the run id is the origin run it verified. The reference
+    The driver's journal records the verification step as the digest of the
+    verified reference document plus the compact reference
+    `batch-result:<run_id>:<witness>`, where the run id is the executor run the
+    batch was verified at. A queued candidate is admitted by an earlier origin
+    run, so the document's own origin never stands in for the executor. The
     document itself comes from the same authenticated batch journal through
-    `batch_reference_for(witness)`, which the composition supplies, so the
-    enrollment never parses evidence text into an identity: the document's own
-    origin run must equal the recorded run id or this fails closed.
+    `batch_reference_for(witness)`, which the composition supplies; it must
+    hash to the recorded digest or this fails closed.
     """
     if type(state) is not dict or type(state.get("transitions")) is not list:
         _fail("requires the running request state")
@@ -436,7 +437,8 @@ def read_verified_batch(state, *, batch_reference_for):
         return None
     evidence = verified[-1].get("evidence")
     reference = evidence.get("reference") if type(evidence) is dict else None
-    if type(reference) is not str:
+    digest = evidence.get("sha256") if type(evidence) is dict else None
+    if type(reference) is not str or type(digest) is not str:
         _fail("the verified verification step exposes no reference")
     matched = _BATCH_EVIDENCE.fullmatch(reference)
     if matched is None:
@@ -457,8 +459,10 @@ def read_verified_batch(state, *, batch_reference_for):
             _fail("the batch reference is undecodable")
     if type(document) is not dict:
         _fail("the batch reference is not a document")
-    if document.get("request", {}).get("origin_run", {}).get("run_id") != run_id:
-        _fail("the batch reference does not bind the verified origin run")
+    from .model import canonical_sha256
+
+    if canonical_sha256(document) != digest:
+        _fail("the batch reference is not the document the verification step verified")
     return {"batch_reference": deepcopy(document), "batch_run_id": run_id,
             "witness_revision": witness}
 

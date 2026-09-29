@@ -337,18 +337,22 @@ class IdentityRecoveryTest(unittest.TestCase):
 
 WITNESS = "7" * 40
 ORIGIN_RUN = 3401234567
-
-
-def verified_state(reference=f"batch-result:{ORIGIN_RUN}:{WITNESS}",
-                   status="verified"):
-    return state(transitions=[{
-        "step": "verification", "operation_id": DIGEST, "status": status,
-        "evidence": {"sha256": DIGEST, "reference": reference}}])
+EXECUTOR_RUN = 3401234599
 
 
 def batch_document(origin_run=ORIGIN_RUN):
     return {"request": {"origin_run": {"run_id": origin_run, "attempt": 1}},
             "schema": "lmdj.batch-reference.v1"}
+
+
+def verified_state(reference=f"batch-result:{EXECUTOR_RUN}:{WITNESS}",
+                   status="verified", document=None):
+    from tools.release.model import canonical_sha256
+
+    digest = canonical_sha256(document if document is not None else batch_document())
+    return state(transitions=[{
+        "step": "verification", "operation_id": DIGEST, "status": status,
+        "evidence": {"sha256": digest, "reference": reference}}])
 
 
 class VerifiedBatchRecoveryTest(unittest.TestCase):
@@ -363,12 +367,13 @@ class VerifiedBatchRecoveryTest(unittest.TestCase):
         self.assertIsNone(read_verified_batch(
             verified_state(status="intent"), batch_reference_for=lambda _w: None))
 
-    def test_the_reference_and_its_origin_run_are_recovered(self):
+    def test_the_reference_and_its_executor_run_are_recovered(self):
+        # A queued candidate: the batch run is the executor the verification
+        # step verified at, never the document's earlier origin run.
         recovered = self.read()
-        self.assertEqual(recovered["batch_run_id"], ORIGIN_RUN)
+        self.assertEqual(recovered["batch_run_id"], EXECUTOR_RUN)
         self.assertEqual(recovered["witness_revision"], WITNESS)
-        self.assertEqual(recovered["batch_reference"]["request"]["origin_run"]["run_id"],
-                         ORIGIN_RUN)
+        self.assertEqual(recovered["batch_reference"], batch_document())
 
     def test_an_encoded_journal_reference_is_decoded(self):
         import scripts.ci.batch_runtime as runtime
@@ -378,15 +383,15 @@ class VerifiedBatchRecoveryTest(unittest.TestCase):
             verified_state(),
             batch_reference_for=lambda _witness: (encoded.decode()
                                                   if isinstance(encoded, bytes) else encoded))
-        self.assertEqual(recovered["batch_run_id"], ORIGIN_RUN)
+        self.assertEqual(recovered["batch_run_id"], EXECUTOR_RUN)
 
-    def test_a_reference_that_does_not_bind_the_verified_run_fails_closed(self):
+    def test_a_reference_other_than_the_verified_document_fails_closed(self):
         with self.assertRaises(JournalError):
             self.read(document=batch_document(origin_run=ORIGIN_RUN + 1))
 
     def test_a_malformed_or_missing_reference_fails_closed(self):
         for reference in ("batch-result:0:" + WITNESS,
-                          "batch-result:" + str(ORIGIN_RUN) + ":short",
+                          "batch-result:" + str(EXECUTOR_RUN) + ":short",
                           "not-a-batch-result"):
             with self.assertRaises(JournalError):
                 self.read(state_document=verified_state(reference=reference))
@@ -1196,10 +1201,12 @@ class IntentEnrollmentTest(unittest.TestCase):
         document = state(request=request(mode="new", requested_tag=None), **changes)
         return document
 
-    def verified(self):
+    def verified(self, document=None):
+        from tools.release.model import canonical_sha256
+
         return self.new_mode(transitions=[{
             "step": "verification", "operation_id": DIGEST, "status": "verified",
-            "evidence": {"sha256": DIGEST,
+            "evidence": {"sha256": canonical_sha256(document or closed_batch_document()),
                          "reference": f"batch-result:{INTENT_RUN}:{WITNESS_MERGE}"}}])
 
     def test_the_step_drives_its_own_write(self):
@@ -1255,16 +1262,16 @@ class IntentEnrollmentTest(unittest.TestCase):
 
     def test_a_reference_document_binding_another_target_fails_closed(self):
         self.write_witness()
-        # The document decodes and binds the recorded run, but certifies a
-        # different revision than the witness merge both records name.
-        step = self.step(batch_reference_for=lambda _w: closed_batch_document(
-            target="4" * 40))
+        # The document is the verified one, but certifies a different
+        # revision than the witness merge both records name.
+        other = closed_batch_document(target="4" * 40)
+        step = self.step(batch_reference_for=lambda _w: other)
         from tools.release.intent import IntentError
 
         with self.assertRaises(IntentError):
-            step.observe(self.verified(), self.operation())
+            step.observe(self.verified(other), self.operation())
 
-    def test_a_batch_reference_binding_another_run_fails_closed(self):
+    def test_a_batch_reference_other_than_the_verified_one_fails_closed(self):
         self.write_witness()
         step = self.step(batch_reference_for=lambda _w: closed_batch_document(
             run_id=INTENT_RUN + 1))

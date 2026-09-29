@@ -189,6 +189,13 @@ class BatchVerification:
             origin = request["origin_run"]["run_id"]
             if type(origin) is not int or origin <= 0:
                 _fail("durable reference has no exact origin run")
+            # The batch that ran the suites. A queued candidate is admitted by
+            # one run and executed by a later one, so the executor is the
+            # result's own run, not the origin that enqueued the request.
+            executor = result.get("run")
+            executor_id = executor.get("run_id") if isinstance(executor, dict) else None
+            if type(executor_id) is not int or executor_id <= 0 or executor.get("attempt") != 1:
+                _fail("batch result names no exact first-attempt executor run")
         except VerificationError:
             return Observation("conflict")
         except EvidenceUnavailable:
@@ -200,12 +207,12 @@ class BatchVerification:
             # result they came from: conflict, never an outage.
             return Observation("conflict")
         try:
-            self.consumer.verify_run(document, run_id=origin, target_revision=witness)
+            self.consumer.verify_run(document, run_id=executor_id, target_revision=witness)
         except BatchEvidenceError:
             return Observation("conflict")
         except Exception:
             return Observation("unknown")
         return Observation("verified", {
             "sha256": canonical_sha256(document),
-            "reference": f"batch-result:{origin}:{witness}",
+            "reference": f"batch-result:{executor_id}:{witness}",
         })
