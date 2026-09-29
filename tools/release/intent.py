@@ -45,6 +45,7 @@ _PR_SPEC_KEYS = _SPEC_KEYS | {"head_sha", "tree_sha"}
 _INTENT_OP_STEP = "intent"
 _LEDGER_RELATIVE = Path("docs/release-evidence/release-intents.json")
 _VERSIONS_RELATIVE = Path("apps/architecture-portal/versions.json")
+_SNAPSHOT_RELATIVE = "apps/architecture-portal/static/versions"
 
 
 def intent_operation_id(request_sha256):
@@ -316,6 +317,24 @@ class IntentCommit:
             _fail("worktree is not at the verified candidate target")
         return None
 
+    def _target_carries_snapshot(self):
+        """True when the certified target already indexes and freezes the Build.
+
+        The one-click candidate step allocates the Build and freezes its
+        snapshot before the batch certifies the target, so the intent then
+        records only its ledger row and document. An index entry without the
+        frozen snapshot is a partial allocation and fails closed.
+        """
+        builds = _read_json(self.root / _VERSIONS_RELATIVE, "portal versions.json is unreadable")
+        if not isinstance(builds, list) or any(not isinstance(b, str) for b in builds):
+            _fail("portal versions.json is not a list of builds")
+        if self.spec["product_build"] not in builds:
+            return False
+        snapshot = f"{_SNAPSHOT_RELATIVE}/{self.spec['product_build']}"
+        if self._git("ls-tree", "--name-only", "HEAD", snapshot).strip() != snapshot.encode():
+            _fail("the target indexes this Product Build without its frozen snapshot")
+        return True
+
     def _append_versions(self):
         builds = _read_json(self.root / _VERSIONS_RELATIVE, "portal versions.json is unreadable")
         if not isinstance(builds, list) or any(not isinstance(b, str) for b in builds):
@@ -342,16 +361,17 @@ class IntentCommit:
         if completed is not None:
             tree = self._git("rev-parse", "HEAD^{tree}").decode().strip()
             return completed, tree
-        self._append_versions()
-        self._git("add", str(_VERSIONS_RELATIVE))
-        self._git("-c", "user.name=" + self.author["author_name"],
-                  "-c", "user.email=" + self.author["author_email"],
-                  "commit", "-m",
-                  f"chore(portal): add {self.spec['product_build']} to version index")
-        before_write()
-        # The official freeze runs against the committed tree at the target.
-        self.freeze(self.root)
-        self._stage_declared()
+        if not self._target_carries_snapshot():
+            self._append_versions()
+            self._git("add", str(_VERSIONS_RELATIVE))
+            self._git("-c", "user.name=" + self.author["author_name"],
+                      "-c", "user.email=" + self.author["author_email"],
+                      "commit", "-m",
+                      f"chore(portal): add {self.spec['product_build']} to version index")
+            before_write()
+            # The official freeze runs against the committed tree at the target.
+            self.freeze(self.root)
+            self._stage_declared()
         self._append_ledger()
         (self.root / intent_document_relative(self.spec)).write_text(
             intent_markdown(self.spec), encoding="utf-8")
