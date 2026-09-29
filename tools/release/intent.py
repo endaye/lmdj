@@ -160,6 +160,26 @@ def pr_document(spec):
     return document
 
 
+def render_ledger(document):
+    """The ledger's canonical layout: each row compact on its own line.
+
+    Appending a row must change one line of the committed ledger, never
+    reformat its history, so every writer renders through this layout.
+    """
+    if not isinstance(document, dict):
+        _fail("release-intents.json is malformed")
+    fields = []
+    for key, value in document.items():
+        name = json.dumps(key, ensure_ascii=False)
+        if isinstance(value, list):
+            rows = ",\n".join("    " + json.dumps(row, ensure_ascii=False, separators=(",", ":"))
+                               for row in value)
+            fields.append(f"  {name}: [\n{rows}\n  ]" if value else f"  {name}: []")
+        else:
+            fields.append(f"  {name}: {json.dumps(value, ensure_ascii=False)}")
+    return "{\n" + ",\n".join(fields) + "\n}\n"
+
+
 def ledger_append(existing_rows, row):
     """One canonical new-ledger rows list; refuses duplicates, keeps history."""
     if not isinstance(existing_rows, list):
@@ -282,6 +302,9 @@ class IntentCommit:
         rows = document.get("entries") if isinstance(document, dict) else None
         if not isinstance(rows, list):
             _fail("committed release-intents.json is malformed")
+        committed = self._git("show", "HEAD:" + str(_LEDGER_RELATIVE)).decode("utf-8")
+        if committed != render_ledger(document):
+            _fail("existing intent commit reformats the ledger beyond its appended row")
         matches = [row for row in rows if row.get("tag") == self.spec["tag"]]
         if len(matches) != 1 or matches[0] != ledger_row(self.spec):
             _fail("existing intent commit does not carry this operation's ledger row")
@@ -350,8 +373,7 @@ class IntentCommit:
         if not isinstance(document, dict) or not isinstance(document.get("entries"), list):
             _fail("release-intents.json is malformed")
         document["entries"] = ledger_append(document["entries"], ledger_row(self.spec))
-        (self.root / _LEDGER_RELATIVE).write_text(
-            json.dumps(document, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        (self.root / _LEDGER_RELATIVE).write_text(render_ledger(document), encoding="utf-8")
 
     def commit(self, *, before_write):
         """Create the single intent docs commit; returns (head_sha, tree_sha)."""

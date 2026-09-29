@@ -57,8 +57,9 @@ def seed_repository(root):
          "profile": "web-hosts", "evidence_paths": ["docs/release-evidence/x.md"],
          "merged_main_run_id": 4242},
     ], "historical_exceptions": []}
-    (root / "docs/release-evidence/release-intents.json").write_text(
-        json.dumps(ledger, indent=2) + "\n")
+    from tools.release.intent import render_ledger
+
+    (root / "docs/release-evidence/release-intents.json").write_text(render_ledger(ledger))
     git("add", "-A")
     git("commit", "-q", "-m", "seed ledger")
     main = git("rev-parse", "HEAD").stdout.decode().strip()
@@ -153,6 +154,12 @@ class ChangelogCommitTest(unittest.TestCase):
                               capture_output=True).stdout.decode().split()
         self.assertEqual(sorted(diff), sorted(["docs/release-evidence/release-intents.json",
                                               evidence_document_relative(self.spec_for_fixture())]))
+        numstat = subprocess.run(
+            ["git", "-C", str(self.worktree), "diff", "--numstat", self.base, head, "--",
+             "docs/release-evidence/release-intents.json"],
+            capture_output=True, check=True).stdout.decode().split()
+        # Binding the changelog rewrites only the intent's own ledger line.
+        self.assertEqual(numstat[:2], ["1", "1"])
         resumed = self.new_commit()
         self.assertIsNotNone(resumed.completed_head())
         self.assertEqual(resumed.completed_head(), head)
