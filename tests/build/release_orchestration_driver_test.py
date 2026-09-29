@@ -104,6 +104,35 @@ class ReleaseDriverTest(unittest.TestCase):
         self.assertEqual(self.backend.observations, list(STEPS))
         self.assertEqual(self.backend.calls, list(STEPS))
 
+    def test_a_begun_self_advancing_step_resumes_through_its_carrier(self):
+        backend = self.backend
+
+        class Advancing:
+            def __init__(self):
+                self.calls, self.fail = 0, True
+
+            def advance(self, state, operation, *, before_write):
+                before_write()
+                self.calls += 1
+                if self.fail:
+                    raise RuntimeError("transport failure after the step began")
+                with (backend.root / operation["operation_id"]).open("x") as output:
+                    json.dump({"request": state["request_digest"],
+                               "operation": operation["operation_id"],
+                               "step": operation["step"]}, output)
+
+        carrier = Advancing()
+        backend.carriers = {"intent": carrier}
+        interrupted = self.driver.run(request())
+        self.assertEqual((interrupted.status, interrupted.step), ("unknown", "intent"))
+        self.assertEqual(self.state()["transitions"][-1]["status"], "intent")
+        carrier.fail = False
+        # The begun intent is driven again by its own carrier, never by
+        # the backend's one-shot execute.
+        self.assertEqual(self.driver.resume("release-1").status, "complete")
+        self.assertEqual(carrier.calls, 2)
+        self.assertNotIn("intent", backend.calls)
+
     def admit_requests(self, *requests):
         def authenticate(bound, policy):
             if not self.backend.auth or policy != POLICY or bound not in requests:
