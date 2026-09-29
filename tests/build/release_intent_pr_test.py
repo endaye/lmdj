@@ -68,7 +68,10 @@ class CarrierFixture(unittest.TestCase):
         pr = IntentPullRequest(root / "pr", api=lambda *a, **k: None,
                                authorize=lambda spec: None, review=lambda *a: None,
                                verify_merged=lambda *a: None)
-        return IntentPrSequence(root, branch=branch, pr=pr)
+        sequence = IntentPrSequence(root, branch=branch, pr=pr)
+        # These cases stub an enrolled sequence; the unenrolled path has its own test.
+        sequence.initialized = lambda spec: True
+        return sequence
 
     def new_carrier(self, commit, sequence):
         return IntentCarrier(commit=commit, sequence=sequence)
@@ -160,6 +163,32 @@ class CarrierProtocolTest(CarrierFixture):
         commit.completed_head = lambda: "3" * 40
         carrier.observe({}, {"step": "intent"})
         self.assertEqual(seen, ["1" * 40, "3" * 40])
+
+    def real_unenrolled_sequence(self):
+        sequence = self.new_sequence()
+        del sequence.initialized  # the real, unenrolled sequence
+        return sequence
+
+    def test_a_commit_whose_sequence_is_not_enrolled_is_pending_work(self):
+        sequence = self.real_unenrolled_sequence()
+        sequence.observe = lambda *a, **k: self.fail("an unenrolled sequence is not observed")
+        carrier = self.new_carrier(self.new_commit(), sequence)
+        carrier._spec = carrier._spec_for(HEAD, TREE)
+        self.assertEqual(carrier.observe({}, {"step": "intent"}).status, "pending")
+
+    def test_advance_enrolls_the_sequence_under_the_guard_before_driving_it(self):
+        sequence = self.real_unenrolled_sequence()
+        calls = []
+        sequence.observe = lambda spec, initialize=False: calls.append(("observe", initialize))
+        sequence.advance = lambda spec, before_write: (
+            calls.append(("advance",)), {"status": "pending", "phase": "branch"})[1]
+        commit = self.new_commit()
+        commit.commit = lambda before_write: (HEAD, TREE)
+        carrier = self.new_carrier(commit, sequence)
+        observed = carrier.advance({}, {"step": "intent"},
+                                   before_write=lambda: calls.append(("guard",)))
+        self.assertEqual(observed.status, "pending")
+        self.assertEqual(calls, [("guard",), ("observe", True), ("advance",)])
 
     def test_advance_requires_the_durable_write_guard(self):
         carrier = self.new_carrier(self.new_commit(), self.new_sequence())

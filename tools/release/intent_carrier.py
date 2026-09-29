@@ -89,6 +89,10 @@ class IntentCarrier:
             self._spec = recovered
         if self._spec is None:
             return Observation("pending")
+        if not self.sequence.initialized(self._spec):
+            # The commit exists but its PR sequence has not been enrolled:
+            # work the driver's advance still has to start, not an outage.
+            return Observation("pending")
         result = self.sequence.observe(self._spec, initialize=False)
         if result["status"] == "merged":
             merge = self.sequence.pr.observe_merge(self._spec)
@@ -104,6 +108,11 @@ class IntentCarrier:
             _fail("requires the driver's durable write guard")
         head, tree = self.commit.commit(before_write=before_write)
         self._spec = self._spec_for(head, tree)
+        if not self.sequence.initialized(self._spec):
+            # `advance` never initializes a sequence: enroll it once under
+            # the driver's write guard, or it would stay `unknown` forever.
+            before_write()
+            self.sequence.observe(self._spec, initialize=True)
         result = self.sequence.advance(self._spec, before_write=before_write)
         if result["status"] == "merged":
             merge = self.sequence.pr.observe_merge(self._spec)

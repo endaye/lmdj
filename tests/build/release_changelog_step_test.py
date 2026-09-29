@@ -222,6 +222,7 @@ class CarrierMappingTest(unittest.TestCase):
                                  pr=_P(root / "pr", api=lambda *a, **k: None,
                                        authorize=lambda s: None, review=lambda *a: None,
                                        verify_merged=lambda *a: None))
+        sequence.initialized = lambda spec_: True
         carrier = ChangelogCarrier(commit=commit, sequence=sequence)
         carrier._spec = spec()
         cases = [("absent", "pending"), ("pending", "pending"),
@@ -237,6 +238,35 @@ class CarrierMappingTest(unittest.TestCase):
             "status": "merged", "phase": "pr", "evidence": None}
         sequence.pr.observe_merge = lambda spec_: {"status": "unverified"}
         self.assertEqual(carrier.observe({}, {"step": "changelog"}).status, "unknown")
+
+    def test_advance_enrolls_an_unenrolled_sequence_under_the_guard(self):
+        container = tempfile.TemporaryDirectory()
+        self.addCleanup(container.cleanup)
+        root = Path(container.name).resolve()
+        commit = ChangelogCommit(root / "worktree", root / "repo",
+                                 spec=spec(), editorial=lambda: ([], []),
+                                 author_name="F", author_email="f@e.invalid")
+        commit.commit = lambda before_write: ("1" * 40, "2" * 40)
+        from tools.release.changelog_step import (
+            ChangelogBranch, ChangelogPrSequence, ChangelogPullRequest)
+
+        sequence = ChangelogPrSequence(
+            root / "sequence",
+            branch=ChangelogBranch(root / "sequence" / "branch", root / "repo", token="FIXTURE",
+                                   authorize=lambda s: None),
+            pr=ChangelogPullRequest(root / "sequence" / "pr", api=lambda *a, **k: None,
+                                    authorize=lambda s: None, review=lambda *a: None,
+                                    verify_merged=lambda *a: None))
+        sequence.initialized = lambda spec_: False
+        calls = []
+        sequence.observe = lambda spec_, initialize=False: calls.append(("observe", initialize))
+        sequence.advance = lambda spec_, before_write: (
+            calls.append(("advance",)), {"status": "pending", "phase": "branch"})[1]
+        carrier = ChangelogCarrier(commit=commit, sequence=sequence)
+        carrier._spec = dict(spec(), head_sha="1" * 40, tree_sha="2" * 40)
+        self.assertEqual(carrier.observe({}, {"step": "changelog"}).status, "pending")
+        carrier.advance({}, {"step": "changelog"}, before_write=lambda: calls.append(("guard",)))
+        self.assertEqual(calls, [("guard",), ("observe", True), ("advance",)])
 
     def test_carrier_refuses_foreign_children(self):
         with self.assertRaises(ChangelogStepError):

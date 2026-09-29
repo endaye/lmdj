@@ -100,6 +100,14 @@ class CandidatePrSequence:
         journal._write(cls._state_file, encoded)
         state["phase"] = phase
 
+    def initialized(self, spec):
+        """Read-only: whether this sequence has enrolled state for the spec."""
+        self._validate_spec(spec)
+        spec = deepcopy(spec)
+        self._children()
+        with RequestJournal(self.root) as journal:
+            return self._read(journal, spec) is not None
+
     def observe(self, spec, *, initialize=False):
         require(type(initialize) is bool, "initialization mode is invalid")
         return self._run(spec, initialize=initialize, mutate=False)

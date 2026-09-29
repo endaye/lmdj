@@ -51,7 +51,9 @@ class SequenceTest(SequenceFixture):
     def test_initialize_branch_pr_merge_and_cold_observation(self):
         self.assertEqual(self.call("advance")["status"], "unknown")
         self.assertFalse(self.p.calls)
+        self.assertFalse(self.call("initialized"))
         self.assertEqual(self.call("observe", initialize=True)["status"], "absent")
+        self.assertTrue(self.call("initialized"))
         self.assertEqual(self.b.pushes, 0)
         self.assertFalse(self.p.writes())
         result = self.call("advance")
