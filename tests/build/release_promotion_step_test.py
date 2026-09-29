@@ -175,7 +175,10 @@ class CarrierFixture(unittest.TestCase):
                                   authorize=lambda _spec: None,
                                   review=lambda *a: None,
                                   verify_merged=lambda *a: None)
-        return PromotionPrSequence(root, branch=branch, pr=pr)
+        sequence = PromotionPrSequence(root, branch=branch, pr=pr)
+        # These cases stub an enrolled sequence; the unenrolled path has its own test.
+        sequence.initialized = lambda spec: True
+        return sequence
 
 
 class PromotionCarrierTest(CarrierFixture):
@@ -197,6 +200,23 @@ class PromotionCarrierTest(CarrierFixture):
             self.assertEqual(observed.status, expected, status)
             if expected == "verified":
                 self.assertEqual(observed.evidence["reference"], "promotion-pr:7")
+
+    def test_advance_enrolls_an_unenrolled_sequence_under_the_guard(self):
+        sequence = self.new_sequence()
+        sequence.initialized = lambda spec: False
+        calls = []
+        sequence.observe = lambda spec, initialize=False: (
+            calls.append(("observe", initialize)), {"status": "absent", "phase": "branch"})[1]
+        sequence.advance = lambda spec, before_write: (
+            calls.append(("advance",)), {"status": "pending", "phase": "branch"})[1]
+        commit = self.new_commit()
+        commit.commit = lambda before_write: ("1" * 40, "2" * 40)
+        carrier = PromotionCarrier(commit=commit, sequence=sequence)
+        self.assertEqual(carrier.observe({}, {"step": "promotion"}).status, "pending")
+        carrier._spec = carrier._spec_for("1" * 40, "2" * 40)
+        self.assertEqual(carrier.observe({}, {"step": "promotion"}).status, "pending")
+        carrier.advance({}, {"step": "promotion"}, before_write=lambda: calls.append(("guard",)))
+        self.assertEqual(calls, [("guard",), ("observe", True), ("advance",)])
 
     def test_merged_sequence_without_verified_merge_is_unknown(self):
         sequence = self.new_sequence()
