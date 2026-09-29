@@ -360,7 +360,11 @@ class ChangelogCarrier:
         self._spec = dict(deepcopy(self.commit.spec), head_sha=head, tree_sha=tree)
         if not self.sequence.initialized(self._spec):
             before_write()
-            self.sequence.observe(self._spec, initialize=True)
+            enrolled = self.sequence.observe(self._spec, initialize=True)
+            if enrolled["status"] not in ("absent", "pending", "merged"):
+                # Enrollment did not reach a drivable state: report it, never
+                # drive the sequence past an unresolved child.
+                return Observation("unknown" if enrolled["status"] == "unknown" else "conflict")
         result = self.sequence.advance(self._spec, before_write=before_write)
         if result["status"] == "merged":
             merge = self.sequence.pr.observe_merge(self._spec)

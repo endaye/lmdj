@@ -259,7 +259,8 @@ class CarrierMappingTest(unittest.TestCase):
                                     verify_merged=lambda *a: None))
         sequence.initialized = lambda spec_: False
         calls = []
-        sequence.observe = lambda spec_, initialize=False: calls.append(("observe", initialize))
+        sequence.observe = lambda spec_, initialize=False: (
+            calls.append(("observe", initialize)), {"status": "absent", "phase": "branch"})[1]
         sequence.advance = lambda spec_, before_write: (
             calls.append(("advance",)), {"status": "pending", "phase": "branch"})[1]
         carrier = ChangelogCarrier(commit=commit, sequence=sequence)

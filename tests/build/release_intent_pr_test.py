@@ -179,7 +179,8 @@ class CarrierProtocolTest(CarrierFixture):
     def test_advance_enrolls_the_sequence_under_the_guard_before_driving_it(self):
         sequence = self.real_unenrolled_sequence()
         calls = []
-        sequence.observe = lambda spec, initialize=False: calls.append(("observe", initialize))
+        sequence.observe = lambda spec, initialize=False: (
+            calls.append(("observe", initialize)), {"status": "absent", "phase": "branch"})[1]
         sequence.advance = lambda spec, before_write: (
             calls.append(("advance",)), {"status": "pending", "phase": "branch"})[1]
         commit = self.new_commit()
@@ -189,6 +190,18 @@ class CarrierProtocolTest(CarrierFixture):
                                    before_write=lambda: calls.append(("guard",)))
         self.assertEqual(observed.status, "pending")
         self.assertEqual(calls, [("guard",), ("observe", True), ("advance",)])
+
+    def test_an_unresolved_enrollment_is_reported_and_never_driven(self):
+        for status, expected in (("unknown", "unknown"), ("conflict", "conflict")):
+            sequence = self.real_unenrolled_sequence()
+            sequence.observe = lambda spec, initialize=False, status=status: {
+                "status": status, "phase": "initializing", "evidence": None}
+            sequence.advance = lambda *a, **k: self.fail("an unresolved enrollment is not driven")
+            commit = self.new_commit()
+            commit.commit = lambda before_write: (HEAD, TREE)
+            carrier = self.new_carrier(commit, sequence)
+            observed = carrier.advance({}, {"step": "intent"}, before_write=lambda: None)
+            self.assertEqual(observed.status, expected, status)
 
     def test_advance_requires_the_durable_write_guard(self):
         carrier = self.new_carrier(self.new_commit(), self.new_sequence())

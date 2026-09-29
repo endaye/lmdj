@@ -205,7 +205,8 @@ class PromotionCarrierTest(CarrierFixture):
         sequence = self.new_sequence()
         sequence.initialized = lambda spec: False
         calls = []
-        sequence.observe = lambda spec, initialize=False: calls.append(("observe", initialize))
+        sequence.observe = lambda spec, initialize=False: (
+            calls.append(("observe", initialize)), {"status": "absent", "phase": "branch"})[1]
         sequence.advance = lambda spec, before_write: (
             calls.append(("advance",)), {"status": "pending", "phase": "branch"})[1]
         commit = self.new_commit()
