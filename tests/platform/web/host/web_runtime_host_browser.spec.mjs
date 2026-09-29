@@ -1646,6 +1646,53 @@ test("Chromium serializes concurrent Control requests across an OPFS suspension"
 });
 
 
+test("Chromium delayed main-thread timers settle a response published before its deadline", async ({
+  browserName,
+  page,
+}) => {
+  // A hidden Safari tab runs main-thread timers at about 1 Hz, so the
+  // transport's next poll and deadline timer both fire after a short (1 s)
+  // deadline even though the Control thread published the response within
+  // milliseconds. Judging the deadline before reading that response turned
+  // the interruption's audio.suspend into HOST_TIMEOUT and restart-required
+  // on every tab switch (#1440). Every main-thread timer is held here until
+  // the deadline has elapsed in real time, then released in order.
+  test.skip(browserName !== "chromium");
+  await openPackagedHost(page);
+
+  const outcome = await page.evaluate(async () => {
+    const nativeSetTimeout = window.setTimeout;
+    const held = [];
+    window.setTimeout = (callback) => {
+      held.push(callback);
+      return 0;
+    };
+    const elapse = (milliseconds) =>
+      new Promise((resolvePromise) => nativeSetTimeout(resolvePromise, milliseconds));
+    // A poll already scheduled before the hold may still fire once; after it,
+    // every reschedule is held.
+    await elapse(100);
+    const response = window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "host.status",
+      payload: {},
+    }, { deadlineMs: 1_000 });
+    await elapse(1_200);
+    window.setTimeout = nativeSetTimeout;
+    for (const callback of held.splice(0)) callback();
+    try {
+      return { ok: (await response).ok };
+    } catch (error) {
+      return { error: error?.code ?? String(error) };
+    }
+  });
+
+  expect(outcome).toEqual({ ok: true });
+  await expect(page.locator("#host-state")).toHaveText("audio-suspended");
+});
+
+
 test("Chromium rejects protocol mismatch before OPFS mutation", async ({
   browserName,
   page,

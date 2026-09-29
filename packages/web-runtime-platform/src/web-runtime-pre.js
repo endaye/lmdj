@@ -458,10 +458,19 @@ if (typeof globalThis.window !== "undefined") {
         () => onRequestDeadline(requestId), remaining);
       return true;
     }
-    if (
-      pending.deadlineLinearized === true ||
-      cancelControlRequest(requestId) === 0
-    ) {
+    const cancellation = pending.deadlineLinearized === true
+      ? 0
+      : cancelControlRequest(requestId);
+    // `not_found` means the Control thread no longer owns the request: its
+    // response is already published. A throttled main thread (a hidden
+    // Safari tab polls at about 1 Hz) can reach the deadline before reading
+    // it, so the published response settles the request, not a timeout.
+    if (cancellation === -1 && drainTransportMessages() &&
+        pendingRequests.get(requestId) !== pending) {
+      return true;
+    }
+    if (transportTerminated) return false;
+    if (cancellation === 0) {
       pending.deadlineLinearized = true;
       if (pending.settlementDeadlineAt === null) {
         pending.settlementDeadlineAt =
@@ -487,6 +496,10 @@ if (typeof globalThis.window !== "undefined") {
   function onRequestDeadline(requestId) {
     const pending = pendingRequests.get(requestId);
     if (!pending || transportTerminated) return;
+    if (!drainTransportMessages() ||
+        pendingRequests.get(requestId) !== pending) {
+      return;
+    }
     linearizeRequestDeadline(requestId, pending);
   }
 
@@ -502,58 +515,51 @@ if (typeof globalThis.window !== "undefined") {
     window.setTimeout(pollTransport, TRANSPORT_POLL_INTERVAL_MS);
   }
 
-  function pollTransport() {
-    pollScheduled = false;
-    if (transportTerminated) return;
-    if (!host.runtimeInitialized) {
-      scheduleTransportPoll();
-      return;
-    }
-    for (const [requestId, pending] of pendingRequests) {
-      if (
-        performance.now() >= pending.deadlineAt &&
-        pending.deadlineLinearized !== true &&
-        !linearizeRequestDeadline(requestId, pending)
-      ) {
-        return;
-      }
-    }
+  // Reads every message the Control thread has already published. A delayed
+  // timer must never leave a published response unread behind a notification,
+  // so each poll drains the outbox before it evaluates any deadline. Returns
+  // false once the transport is terminated.
+  function drainTransportMessages() {
+    if (transportTerminated) return false;
+    if (!host.runtimeInitialized) return true;
     const output = _malloc(65_536);
     const requiredPointer = _malloc(4);
     try {
-      const status = _lmdj_web_host_poll(output, 65_536, requiredPointer);
-      const required = HEAPU32[requiredPointer >> 2];
-      if (status === 1) {
+      while (!transportTerminated) {
+        const status = _lmdj_web_host_poll(output, 65_536, requiredPointer);
+        const required = HEAPU32[requiredPointer >> 2];
+        if (status === 2 || status === 3) {
+          failClosed(transportFailure(
+            status === 2 ? "HOST_PROTOCOL_MISMATCH" : "HOST_STATE_INVALID",
+            "formal Web Host transport failed",
+          ));
+          break;
+        }
+        if (status !== 1) break;
         const bytes = HEAPU8.slice(output, output + required);
         const message = JSON.parse(transportDecoder.decode(bytes));
         if (typeof message.request_id === "string") {
           const pending = pendingRequests.get(message.request_id);
-          if (pending) {
-            pendingRequests.delete(message.request_id);
-            window.clearTimeout(pending.timeout);
-            detachPendingAbort(pending);
-            if (pending.abortError !== null) {
-              pending.reject(pending.abortError);
-            } else {
-              pending.resolve(message);
-            }
-          } else {
+          if (!pending) {
             failClosed(transportFailure(
               "HOST_PROTOCOL_MISMATCH",
               "formal Web Host response request ID is not pending",
             ));
-            return;
+            break;
+          }
+          pendingRequests.delete(message.request_id);
+          window.clearTimeout(pending.timeout);
+          detachPendingAbort(pending);
+          if (pending.abortError !== null) {
+            pending.reject(pending.abortError);
+          } else {
+            pending.resolve(message);
           }
         } else {
           for (const subscriber of notificationSubscribers) {
             subscriber(message);
           }
         }
-      } else if (status === 2 || status === 3) {
-        failClosed(transportFailure(
-          status === 2 ? "HOST_PROTOCOL_MISMATCH" : "HOST_STATE_INVALID",
-          "formal Web Host transport failed",
-        ));
       }
     } catch {
       failClosed(transportFailure(
@@ -563,6 +569,26 @@ if (typeof globalThis.window !== "undefined") {
     } finally {
       _free(requiredPointer);
       _free(output);
+    }
+    return !transportTerminated;
+  }
+
+  function pollTransport() {
+    pollScheduled = false;
+    if (transportTerminated) return;
+    if (!host.runtimeInitialized) {
+      scheduleTransportPoll();
+      return;
+    }
+    if (!drainTransportMessages()) return;
+    for (const [requestId, pending] of pendingRequests) {
+      if (
+        performance.now() >= pending.deadlineAt &&
+        pending.deadlineLinearized !== true &&
+        !linearizeRequestDeadline(requestId, pending)
+      ) {
+        return;
+      }
     }
     scheduleTransportPoll();
   }
