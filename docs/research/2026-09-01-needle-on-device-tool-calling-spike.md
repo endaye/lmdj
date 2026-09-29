@@ -54,7 +54,7 @@
 | 问题 | 档案 |
 | --- | --- |
 | 自然语言控制属于哪个用户、哪个 Stage？ | [nl-control-target-user-and-stage](../prd/questions/nl-control-target-user-and-stage.md) |
-| 离线可用是硬需求还是可选便利？ | [offline-operation-requirement](../prd/questions/offline-operation-requirement.md) |
+| 离线可用是硬需求还是可选便利？ | 已由 [2026-09-29 Creator 用户流程决策](../prd/decisions/2026-09-29-creator-user-workflow-baseline.md) 第 12 条确认（#534） |
 | 模型产出的 Pattern 候选是否越过产品定位边界？ | [model-generated-pattern-candidates](../prd/questions/model-generated-pattern-candidates.md) |
 | AI 提议的状态变更：确认在前还是撤销在后？ | [ai-change-confirm-or-undo](../prd/questions/ai-change-confirm-or-undo.md) |
 

@@ -10,6 +10,8 @@
 
 注记（2026-08-26）：本文的 Stage/切片排序与 Take 相关表述（§5「Take 录制」、§6「Sampler Edit + Take Recording，并把 Take 纳入 Creator Export」）已被 [2026-07-30 新内核重设计](../design/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)与 [2026-08-23 Sequence 录音语义决策](decisions/2026-08-23-sequence-recording-semantics.md)取代：不存在 Take 产品对象，录音只写 Pattern 事件，Export Pack 只从 Project Truth 派生。正文按原样保留为历史摘要，不作为现行路线图。
 
+注记（2026-09-29）：Creator 的用户操作流程以 [2026-09-29 Creator 用户流程决策](decisions/2026-09-29-creator-user-workflow-baseline.md)为准：先对齐 Koala 再优化，Project 标签定位为进出口与工程库，离线必须可用，不登录也能完整创作。现状与目标的逐项对照见 [Creator 用户操作流程（内部版）](../design/2026-09-29-creator-user-workflow-design.md)。本文 §3 关于 Creator Export ZIP 已实现的表述与现状不符。
+
 ## 1. 产品定义
 
 LMDJ 不是 AI 音乐生成器、简化 DAW 或音乐游戏，而是一层把音乐变成可编辑、可演奏、可继续制作的 AI-native Playable Layer：
