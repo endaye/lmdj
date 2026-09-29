@@ -139,18 +139,16 @@ class BatchVerification:
         self.fresh_receipts = fresh_receipts
 
     def _result_for(self, events, witness):
-        results = []
-        for event in events:
-            data = event.get("data") if isinstance(event, dict) else None
-            if isinstance(data, dict) and event.get("type") == "result" \
-                    and data.get("target") == witness:
-                results.append(data)
+        # The terminal check lives in terminal_result so both selections agree.
+        results = [event["data"] for event in events
+                   if isinstance(event, dict) and event.get("type") == "result"
+                   and isinstance(event.get("data"), dict) and event["data"].get("target") == witness]
         if not results:
             return None
         if len(results) > 1:
             _fail("multiple batch results claim the same candidate target")
-        result = results[0]
-        if result.get("terminal") is not True:
+        result = terminal_result(events, witness)
+        if result is None:
             _fail("batch result for the candidate is not proven terminal")
         outcomes = result.get("outcomes")
         if not isinstance(outcomes, dict) or not outcomes:
