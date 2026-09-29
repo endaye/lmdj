@@ -222,6 +222,38 @@ class IntentCommitTest(unittest.TestCase):
         resumed_head, resumed_tree = self.new_commit().commit(before_write=lambda: None)
         self.assertEqual((head, tree), (resumed_head, resumed_tree))
 
+    def seed_candidate_snapshot(self, *, frozen=True):
+        # The one-click candidate step already indexed and froze the Build.
+        (self.repository / "apps/architecture-portal/versions.json").write_text(
+            json.dumps(["1.0.52.0", "1.0.56.0", "1.0.57.0"]) + "\n")
+        if frozen:
+            snapshot = self.repository / "apps/architecture-portal/static/versions/1.0.57.0"
+            snapshot.mkdir(parents=True)
+            (snapshot / "index.html").write_text("snapshot\n")
+        subprocess.run(["git", "-C", str(self.repository), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(self.repository), "-c", "user.name=Seeder",
+                        "-c", "user.email=seed@example.invalid", "commit", "-q", "-m",
+                        "candidate cut"], check=True)
+        self.head = subprocess.run(["git", "-C", str(self.repository), "rev-parse", "HEAD"],
+                                   capture_output=True, check=True).stdout.decode().strip()
+
+    def test_a_target_carrying_the_candidate_snapshot_records_only_the_intent(self):
+        self.seed_candidate_snapshot()
+        head, tree = self.new_commit().commit(before_write=lambda: None)
+        self.assertEqual(self.freeze_calls, [])
+        changed = subprocess.run(
+            ["git", "-C", str(self.worktree), "diff", "--name-only", self.head, head],
+            capture_output=True, check=True).stdout.decode().split()
+        self.assertEqual(changed, ["docs/release-evidence/lmdj-v1.0.57.0-canary-release-intent.md",
+                                   "docs/release-evidence/release-intents.json"])
+        self.assertEqual(self.new_commit().commit(before_write=lambda: None), (head, tree))
+
+    def test_a_target_indexing_the_build_without_its_snapshot_is_refused(self):
+        self.seed_candidate_snapshot(frozen=False)
+        with self.assertRaisesRegex(IntentError, "without its frozen snapshot"):
+            self.new_commit().commit(before_write=lambda: None)
+        self.assertEqual(self.freeze_calls, [])
+
     def test_recovery_refuses_a_commit_that_lacks_the_ledger_row(self):
         commit = self.new_commit()
         commit.commit(before_write=lambda: None)
