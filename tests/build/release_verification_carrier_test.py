@@ -161,10 +161,26 @@ class ComposedReferenceTest(unittest.TestCase):
         self.journal.append(self.result())
 
         def outage(*args, **kwargs):
-            raise OSError("GitHub unreachable")
+            raise BatchEvidenceError("external-error", "read-only GitHub evidence request failed")
 
         self.consumer.artifact = outage
         self.assertEqual(self.observe().status, "unknown")
+        self.assertIsNone(self.consumer.reference)
+
+    def test_a_malformed_attestation_or_missing_origin_conflicts(self):
+        self.journal.append(self.admit())
+        self.journal.append(self.result())
+        self.consumer.artifact = lambda *a, **k: {}
+        self.assertEqual(self.observe().status, "conflict")
+        del self.consumer.artifact
+        self.transport.comments.clear()
+        self.transport.body = {"checkpoint": {"head": None, "pending": None}, "provenance": "trusted-run"}
+        self.journal._verified = None
+        request = deepcopy(self.request)
+        del request["origin_run"]
+        self.journal.append(self.admit(request=request))
+        self.journal.append(self.result())
+        self.assertEqual(self.observe().status, "conflict")
         self.assertIsNone(self.consumer.reference)
 
     def test_the_selector_requires_a_terminal_result(self):

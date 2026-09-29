@@ -92,7 +92,10 @@ def release_reference(events, result, witness, consumer):
         _fail("batch verdict does not bind the admitted request and executor")
     if document.get("status") != "passed":
         _fail("batch verdict is not passed")
-    origin_id = request.get("origin_run", {}).get("run_id")
+    origin = request.get("origin_run")
+    origin_id = origin.get("run_id") if isinstance(origin, dict) else None
+    if type(origin_id) is not int or origin_id <= 0:
+        _fail("batch admission retains no exact origin run")
     try:
         executor_run = consumer.get(f"/actions/runs/{executor['run_id']}/attempts/1")
         origin_run = consumer.get(f"/actions/runs/{origin_id}/attempts/1")
@@ -101,7 +104,11 @@ def release_reference(events, result, witness, consumer):
             return consumer.artifact(run, f"batch-controller-{run['id']}-1", ("result.json",))["result.json"]
 
         origin_record, admission_record = attestation(origin_run), attestation(executor_run)
-    except Exception as error:
+    except BatchEvidenceError as error:
+        if error.code == "external-error":
+            raise EvidenceUnavailable("batch run or controller attestation could not be read") from error
+        raise
+    except OSError as error:
         raise EvidenceUnavailable("batch run or controller attestation could not be read") from error
     return parse_reference({
         "schema": SCHEMA,
@@ -174,7 +181,10 @@ class BatchVerification:
         if reference is None:
             return Observation("pending")
         try:
-            document = release_reference(events, terminal_result(events, witness), witness, self.consumer)
+            result = terminal_result(events, witness)
+            if result is None:
+                return Observation("pending")
+            document = release_reference(events, result, witness, self.consumer)
             request = document["request"]
             if request.get("target") != witness:
                 _fail("decoded reference does not bind the candidate target")
