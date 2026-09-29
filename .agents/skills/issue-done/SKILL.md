@@ -192,7 +192,10 @@ Read these before shipping; each is a real recurrence, not a hypothetical:
   unreproduced ones as an explicit gap beside the test. A `blur` dispatched
   into a page that owns an AudioContext is the worked example: the window
   event is the easy half, the context interruption is the half that hides
-  defects. When a side effect needs a seam the packaged product must not
+  defects. A hidden page also throttles main-thread timers (about 1 Hz in
+  Safari), which a synthetic `visibilitychange` never does: gate every
+  wall-clock deadline that spans a hidden edge with held or delayed timers.
+  When a side effect needs a seam the packaged product must not
   carry, gate it in a component test and name that companion gate in a comment
   on the packaged journey.
 

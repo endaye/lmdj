@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-07
     occurrence: https://github.com/endaye/lmdj/issues/738
     observed_by: claude-fable-5-1
+  - date: 2026-09-29
+    occurrence: https://github.com/endaye/lmdj/issues/1440
+    observed_by: claude-opus-5-5
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -46,6 +49,15 @@ test. `blur` and `visibilitychange` on a page that owns an AudioContext, a
 media device, a wake lock or a storage handle are the recurring examples: the
 window event is the easy half, and the resource interruption is the half that
 carries the defects.
+
+A hidden page has a second non-event side effect: the browser throttles its
+main-thread timers (macOS Safari runs a hidden tab's `setTimeout` at about
+1 Hz). Chromium journeys that dispatch a synthetic `visibilitychange` keep
+16 ms timers, so every wall-clock deadline measured by main-thread timers
+across a hidden edge — the Runtime transport's one-second short deadline, the
+recovery activation budget — stayed green while a real Safari tab switch
+drove the Host to `restart-required` (#1440). Gate such deadlines with held or
+delayed main-thread timers, not only with the event.
 
 Where reproducing a side effect would need a seam that must not exist in the
 packaged product, gate that half at the layer that can reach it — a component
