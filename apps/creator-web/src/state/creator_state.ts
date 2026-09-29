@@ -107,6 +107,7 @@ export type CreatorAction =
     }
   | {type: "projects-listing"}
   | {type: "projects-loaded"; projects: LocalProjectSummary[]}
+  | {type: "project-inventory-updated"; projects: LocalProjectSummary[]}
   | {type: "project-opening"}
   | {type: "project-ready"; project: ProjectView}
   | {type: "project-projection-refresh-started"; token: ProjectProjectionRefreshToken}
@@ -205,6 +206,9 @@ export function isCreatorActionAllowed(
         state.project.phase !== "opening";
     case "projects-loaded":
       return state.runtime.phase === "ready" && state.project.phase === "listing";
+    case "project-inventory-updated":
+      return state.runtime.phase === "ready" && state.project.phase !== "listing" &&
+        state.project.phase !== "opening";
     case "project-opening":
       return state.runtime.phase === "ready" &&
         state.transfer.phase === "idle" &&
@@ -373,7 +377,12 @@ function replaceProjectSummary(
     replaced = true;
     return summary;
   });
-  if (!replaced) next.push(summary);
+  if (!replaced) {
+    next.push(summary);
+    // Keep the inventory order listLocalProjectsJourney produces.
+    next.sort((left, right) =>
+      left.projectId < right.projectId ? -1 : left.projectId > right.projectId ? 1 : 0);
+  }
   return next;
 }
 
@@ -405,6 +414,13 @@ export function creatorReducer(
         runtime: {...state.runtime, errorCode: null, errorDetails: {}},
         projectProjectionRefresh: null,
       };
+    case "project-inventory-updated":
+      // Only the library list changes; the phase, the open Project and any
+      // visible error stay as they are.
+      return {
+        ...state,
+        project: {...state.project, projects: [...action.projects]},
+      };
     case "projects-loaded":
       return {
         ...state,
@@ -425,7 +441,14 @@ export function creatorReducer(
     case "project-ready":
       return {
         ...state,
-        project: {...state.project, phase: "ready", current: action.project},
+        // A created or imported Project was not in the boot inventory; the
+        // library must list the Project that is now open.
+        project: {
+          ...state.project,
+          phase: "ready",
+          projects: replaceProjectSummary(state.project.projects, action.project),
+          current: action.project,
+        },
         runtime: {...state.runtime, errorCode: null, errorDetails: {}},
         audio: {phase: "inactive"},
         sample: preparedSampleState(action.project.revision),
@@ -748,6 +771,10 @@ export function selectCanOpenProject(state: CreatorState): boolean {
 }
 
 export function selectCanImportProject(state: CreatorState): boolean {
+  return selectCanChangeProject(state);
+}
+
+export function selectCanCreateProject(state: CreatorState): boolean {
   return selectCanChangeProject(state);
 }
 

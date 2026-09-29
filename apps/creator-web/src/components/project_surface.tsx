@@ -10,12 +10,14 @@ interface ProjectSurfaceProps {
   state: CreatorState;
   canOpen?: boolean;
   canImport?: boolean;
+  canCreate?: boolean;
   showLocalProjects?: boolean;
   hideSummary?: boolean;
   onShowLocal?: () => void;
   onHideLocal?: () => void;
   onOpen?: (project: LocalProjectSummary) => void;
   onImport?: (file: File) => void;
+  onCreate?: () => void;
 }
 
 export function formatBytes(bytes: number): string {
@@ -29,12 +31,14 @@ export function ProjectSurface({
   state,
   canOpen = false,
   canImport = false,
+  canCreate = false,
   showLocalProjects = false,
   hideSummary = false,
   onShowLocal,
   onHideLocal,
   onOpen,
   onImport,
+  onCreate,
 }: ProjectSurfaceProps) {
   const project = state.project.current;
   const showChooser = project === null || showLocalProjects;
@@ -63,6 +67,13 @@ export function ProjectSurface({
               Back to Project
             </button>
           ) : null}
+          <button
+            type="button"
+            disabled={!canCreate}
+            onClick={onCreate}
+          >
+            New Project
+          </button>
           <button
             type="button"
             aria-controls="local-projects"
@@ -120,7 +131,7 @@ export function ProjectSurface({
           {project === null ? (
             <>
               <span>No local Project is open.</span>{" "}
-              <span className="empty-hint">Import a .lmdj bundle to begin.</span>
+              <span className="empty-hint">Create a new Project or import a .lmdj bundle.</span>
             </>
           ) : (
             <span>No other local Project is stored on this device.</span>

@@ -206,3 +206,39 @@ test("ready active Runtime survives portrait and landscape resize", async ({page
     });
   }
 });
+
+test("New Project creates a stored empty Project that reopens after a reload", async ({page}) => {
+  test.setTimeout(180_000);
+  await page.goto("/index.html");
+  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
+    timeout: 30_000,
+  });
+
+  // Creation opens the new Project on the Sample page with every Pad empty.
+  await page.getByRole("button", {name: "New Project"}).click();
+  await expect(page.getByRole("button", {name: "Sample", exact: true}))
+    .toHaveAttribute("aria-current", "page", {timeout: 60_000});
+  await expect(page.getByTestId("creator-phase")).toHaveText("ready");
+  await expect(page.getByRole("button", {name: /^Pad A\d+ — empty — Key [QWERTYUIASDFGHJK]$/}))
+    .toHaveCount(16);
+
+  // The far side of creation is storage: a fresh document lists exactly the
+  // created Project and opens it. A reload can overlap the previous document's
+  // writer release, which surfaces as a visible, retryable PROJECT_BUSY.
+  await page.reload();
+  const open = page.getByRole("button", {name: /^Open Project [0-9a-f]{8}$/});
+  await expect(open).toHaveCount(1, {timeout: 30_000});
+  await open.click();
+  const heading = page.getByRole("heading", {name: /^Project [0-9a-f]{8}$/});
+  const retry = page.getByRole("button", {name: "Retry project"});
+  for (let attempt = 0; attempt < 5 && !(await heading.isVisible()); attempt += 1) {
+    await expect(heading.or(retry)).toBeVisible({timeout: 60_000});
+    if (await retry.isVisible()) {
+      await page.waitForTimeout(1_000);
+      await retry.click();
+    }
+  }
+  await expect(heading).toBeVisible({timeout: 60_000});
+  await expect(page.getByRole("button", {name: /^Pad A\d+ — empty — Key [QWERTYUIASDFGHJK]$/}))
+    .toHaveCount(16);
+});

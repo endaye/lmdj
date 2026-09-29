@@ -228,6 +228,12 @@ export interface CreatorRuntimeSession {
       onProgress: (progress: TransferProgress) => void;
     },
   ): Promise<LocalProjectSummary>;
+  createProject(request: {
+    projectId: string;
+    patternId: string;
+    bpm: number;
+    bars: 1 | 2 | 4 | 8;
+  }): Promise<unknown>;
   openProject(
     projectId: string,
     patternId: string,

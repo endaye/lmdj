@@ -94,7 +94,7 @@ test("formatBytes renders human units", () => {
   expect(formatBytes(-1)).toBe("0 B");
 });
 
-test("D01 Project cards keep Open and omit Save and New", () => {
+test("D01 Project cards keep Open, offer New Project and omit Save", () => {
   const onOpen = vi.fn();
   const withList: CreatorState = {
     ...ready,
@@ -117,7 +117,7 @@ test("D01 Project cards keep Open and omit Save and New", () => {
   fireEvent.click(screen.getByRole("button", {name: "Open Project 01234567"}));
   expect(onOpen).toHaveBeenCalledWith(withList.project.projects[0]);
   expect(screen.queryByRole("button", {name: /^SAVE$/i})).toBeNull();
-  expect(screen.queryByRole("button", {name: /NEW PROJECT/i})).toBeNull();
+  expect(screen.getByRole("button", {name: "New Project"})).toBeTruthy();
   expect(screen.queryByRole("button", {name: /SAVE AS/i})).toBeNull();
 });
 

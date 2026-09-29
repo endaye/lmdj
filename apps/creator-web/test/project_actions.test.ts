@@ -3,6 +3,7 @@ import {describe, expect, test} from "vitest";
 import * as projectActions from "../src/runtime/project_actions";
 import {
   createProjectActionLane,
+  createProjectJourney,
   importProjectJourney,
   listLocalProjectsJourney,
   openProjectJourney,
@@ -81,6 +82,10 @@ function sessionFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
       calls.push("importProject");
       return summary;
     },
+    createProject: async () => {
+      calls.push("createProject");
+      return {};
+    },
     openProject: async () => {
       calls.push("openProject");
       return {};
@@ -151,6 +156,39 @@ describe("Project journeys", () => {
       .toEqual([first.projectId, second.projectId]);
     session.listLocalProjects = async () => [];
     expect(await listLocalProjectsJourney(session)).toEqual([]);
+  });
+
+  test("creates a Project with the default tempo and a one-Bar Pattern under fresh identities", async () => {
+    const requests: unknown[] = [];
+    const ids = [PROJECT_ID, PATTERN_ID];
+    const {session} = sessionFixture({
+      createProject: async (request) => { requests.push(request); return {}; },
+      listLocalProjects: async () => [summary],
+    });
+    await createProjectJourney(session, () => ids.shift()!);
+    expect(requests).toEqual([{
+      projectId: PROJECT_ID,
+      patternId: PATTERN_ID,
+      bpm: 120,
+      bars: 1,
+    }]);
+  });
+
+  test("reads the created Project without reopening it", async () => {
+    const ids = [PROJECT_ID, PATTERN_ID];
+    const {session, calls} = sessionFixture({
+      listLocalProjects: async () => [summary],
+    });
+    const view = await createProjectJourney(session, () => ids.shift()!);
+    expect(calls).toEqual(["createProject", "inspectProject", "reloadSnapshot"]);
+    expect(view.projectId).toBe(PROJECT_ID);
+  });
+
+  test("refuses a created Project that the inventory does not list", async () => {
+    const ids = [PROJECT_ID, PATTERN_ID];
+    const {session} = sessionFixture({listLocalProjects: async () => []});
+    await expect(createProjectJourney(session, () => ids.shift()!))
+      .rejects.toMatchObject({code: "HOST_PROTOCOL_MISMATCH"});
   });
 
   test("opens, inspects, reloads, and emits one authoritative View Model", async () => {

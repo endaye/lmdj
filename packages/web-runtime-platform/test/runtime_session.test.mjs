@@ -36,6 +36,7 @@ const API = [
   "discardSequenceRecovery",
   "disarmSequenceCapture",
   "flushSequence",
+  "createProject",
   "importProject",
   "installSoundSet",
   "importAssignSample",
@@ -5490,6 +5491,133 @@ test("Pattern transport requires opt-in and negotiates the marker at Project ope
     pattern_id: TRANSPORT_PATTERN_ID,
   });
   await legacy.session.close();
+});
+
+function createdProject(overrides = {}) {
+  return {
+    project_id: TRANSPORT_PROJECT_ID,
+    project_revision: 0,
+    initial_pattern_id: TRANSPORT_PATTERN_ID,
+    runtime_ready: false,
+    ...overrides,
+  };
+}
+
+const CREATE_REQUEST = Object.freeze({
+  projectId: TRANSPORT_PROJECT_ID,
+  patternId: TRANSPORT_PATTERN_ID,
+  bpm: 120,
+  bars: 1,
+});
+
+test("Project creation sends the chosen identities with an empty initial Pattern", async () => {
+  const creates = [];
+  const {session} = fixture({
+    send: async (envelope) => {
+      if (envelope.operation === "project.create") {
+        creates.push(envelope.payload);
+        return success(envelope, createdProject());
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.createProject(CREATE_REQUEST);
+  assert.deepEqual(creates, [{
+    project_id: TRANSPORT_PROJECT_ID,
+    bpm: 120,
+    initial_pattern: {pattern_id: TRANSPORT_PATTERN_ID, bars: 1, events: []},
+  }]);
+  await session.close();
+});
+
+test("Project creation returns the created identities at revision 0", async () => {
+  const {session} = fixture({
+    send: async (envelope) => envelope.operation === "project.create"
+      ? success(envelope, createdProject())
+      : success(envelope, defaultResult(envelope.operation)),
+  });
+  await session.start();
+  assert.deepEqual(await session.createProject(CREATE_REQUEST), {
+    projectId: TRANSPORT_PROJECT_ID,
+    patternId: TRANSPORT_PATTERN_ID,
+    projectRevision: 0,
+    runtimeReady: false,
+  });
+  await session.close();
+});
+
+test("Project creation negotiates the Pattern transport marker in an opted-in session", async () => {
+  const creates = [];
+  const {session} = fixture({
+    patternTransport: true,
+    send: async (envelope) => {
+      if (envelope.operation === "project.create") {
+        creates.push(envelope.payload);
+        return success(envelope, createdProject());
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.createProject(CREATE_REQUEST);
+  assert.equal(creates[0].pattern_transport, true);
+  await session.close();
+});
+
+test("Project creation refuses an invalid request before any Host request", async () => {
+  const operations = [];
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  const before = operations.length;
+  for (const request of [
+    null,
+    {...CREATE_REQUEST, projectId: "not-a-uuid"},
+    {...CREATE_REQUEST, patternId: "not-a-uuid"},
+    {...CREATE_REQUEST, bpm: 39},
+    {...CREATE_REQUEST, bpm: 241},
+    {...CREATE_REQUEST, bpm: 120.5},
+    {...CREATE_REQUEST, bars: 3},
+    {...CREATE_REQUEST, extra: true},
+  ]) {
+    assert.throws(() => session.createProject(request), /Project creation request is invalid/);
+  }
+  assert.equal(operations.length, before);
+  await session.close();
+});
+
+test("Project creation is unavailable before the session starts", async () => {
+  const operations = [];
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await assert.rejects(
+    session.createProject(CREATE_REQUEST),
+    (error) => error.code === "HOST_STATE_INVALID",
+  );
+  assert.equal(operations.includes("project.create"), false);
+});
+
+test("Project creation rejects a Host result naming another Project", async () => {
+  const {session} = fixture({
+    send: async (envelope) => envelope.operation === "project.create"
+      ? success(envelope, createdProject({project_id: "00000000-0000-4000-8000-0000000000dd"}))
+      : success(envelope, defaultResult(envelope.operation)),
+  });
+  await session.start();
+  await assert.rejects(
+    session.createProject(CREATE_REQUEST),
+    (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+  );
+  await session.close();
 });
 
 test("Pattern transport request returns the pending ticket without awaiting settlement", async () => {
