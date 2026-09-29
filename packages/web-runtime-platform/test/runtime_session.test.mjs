@@ -4196,6 +4196,50 @@ test("visibility cleanup is once per adverse edge and repeats after a later edge
   assert.equal(operations.filter((value) => value === "sample.stop").length, 2);
 });
 
+test("hidden interruption defers recovery activation to the visible edge", async () => {
+  // Hidden-tab timer throttling (about 1 Hz in Safari) consumed the one-second
+  // recovery activation budget before its callback wait resumed, failing the
+  // Host on every tab switch (#1440).
+  const browserWindow = new EventTarget();
+  const browserDocument = new EventTarget();
+  browserDocument.visibilityState = "visible";
+  const operations = [];
+  const {session} = fixture({
+    browserDocument,
+    browserWindow,
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      return success(
+        envelope,
+        envelope.operation === "host.status"
+          ? {acknowledged_generation: 1, control_generation: 1}
+          : defaultResult(envelope.operation),
+      );
+    },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  operations.length = 0;
+
+  browserDocument.visibilityState = "hidden";
+  browserDocument.dispatchEvent(new Event("visibilitychange"));
+  await drainTasks();
+  assert.equal(session.diagnostics().state, "recovering");
+  assert.deepEqual(operations, ["sample.stop", "audio.suspend"]);
+
+  browserDocument.visibilityState = "visible";
+  browserDocument.dispatchEvent(new Event("visibilitychange"));
+  for (let attempt = 0; attempt < 100; ++attempt) {
+    if (session.diagnostics().recovery_probe_ready === true) break;
+    await Promise.resolve();
+  }
+  assert.equal(session.diagnostics().recovery_probe_ready, true);
+  assert.deepEqual(
+    operations,
+    ["sample.stop", "audio.suspend", "audio.activate", "host.status"],
+  );
+});
+
 test("returns typed admission and publishes normalized Runtime outcomes", async () => {
   const {emitNotification, session} = fixture({
     send: async (envelope) => ({

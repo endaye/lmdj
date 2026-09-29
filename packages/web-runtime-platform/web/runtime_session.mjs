@@ -2086,11 +2086,15 @@ function createRuntimeSessionController(options = {}) {
       monotonicNow() + deadlineForOperation("audio.activate"),
     callbackReady = false,
   ) {
+    // A hidden page defers activation to its visible edge: hidden-tab timer
+    // throttling (about 1 Hz in Safari) would otherwise consume the one-second
+    // activation budget before the callback wait even observes a quantum.
     if (
       recoveryEpoch !== epoch ||
       epoch.activationStarted ||
       machine.state !== "recovering" ||
-      audioContext?.state !== "running"
+      audioContext?.state !== "running" ||
+      visibilityHidden
     ) {
       return;
     }
@@ -2241,7 +2245,18 @@ function createRuntimeSessionController(options = {}) {
     } else {
       visibilityHidden = false;
       activeAdverseConditions.delete("visibilitychange");
+      resumeDeferredRecoveryActivation();
       renderDiagnostics();
+    }
+  }
+
+  function resumeDeferredRecoveryActivation() {
+    if (
+      recoveryEpoch?.suspendComplete &&
+      machine.state === "recovering" &&
+      audioContext?.state === "running"
+    ) {
+      activateRuntimeForRecovery(recoveryEpoch);
     }
   }
 
@@ -2261,11 +2276,7 @@ function createRuntimeSessionController(options = {}) {
   function observePageShow() {
     pageHidden = false;
     activeAdverseConditions.delete("pagehide");
-    if (recoveryEpoch?.suspendComplete && machine.state === "recovering") {
-      if (audioContext?.state === "running") {
-        activateRuntimeForRecovery(recoveryEpoch);
-      }
-    }
+    resumeDeferredRecoveryActivation();
   }
 
   function observePageHide(event) {
