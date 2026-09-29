@@ -470,7 +470,8 @@ test("suspend, restart, and reopen clear an active loop toggle before reactivati
 // hidden Safari tab runs them at about 1 Hz. That half is gated by the Host
 // transport test "Chromium delayed main-thread timers settle a response
 // published before its deadline" and the Runtime Session test "hidden
-// interruption defers recovery activation to the visible edge" (#1440).
+// interruption recovery waits for the callback without main-thread timers"
+// (#1440).
 test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(180_000);

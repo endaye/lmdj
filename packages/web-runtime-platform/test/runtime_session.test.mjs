@@ -188,6 +188,7 @@ function fixture({
   connectAudioWorkletDirect,
   preflight,
   now,
+  timers,
   inputOwnership,
   soundsetCatalog,
   manifestSource = {
@@ -296,6 +297,7 @@ function fixture({
         protocol_version: 1,
       }),
       ...(now === undefined ? {} : {now}),
+      ...(timers === undefined ? {} : {timers}),
     },
   });
   return {
@@ -1595,6 +1597,51 @@ test("activation waits for a resumed AudioWorklet callback within its original b
   heartbeat = 0;
   assert.equal(await wrapped, true);
   assert.equal(activations.length, 3);
+});
+
+test("hidden interruption recovery waits for the callback without main-thread timers", async () => {
+  // A hidden Safari tab runs setTimeout at about 1 Hz. A timer-driven
+  // heartbeat wait spent the one-second recovery activation budget before its
+  // first check and failed the Host on every tab switch (#1440). Main-thread
+  // timers never fire here.
+  const browserDocument = new EventTarget();
+  browserDocument.visibilityState = "visible";
+  let heartbeat = 0;
+  const {session} = fixture({
+    browserDocument,
+    timers: {setTimeout: () => 0, clearTimeout() {}},
+    audioCallbackHeartbeat: () => heartbeat,
+    send: async (envelope) => success(
+      envelope,
+      envelope.operation === "host.status"
+        ? {acknowledged_generation: 1, control_generation: 1}
+        : defaultResult(envelope.operation),
+    ),
+  });
+  const within = (promise) => Promise.race([
+    promise,
+    new Promise((resolvePromise) =>
+      setTimeout(() => resolvePromise("stalled"), 2_000)),
+  ]);
+  await session.start();
+  const activation = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  heartbeat = 1;
+  assert.equal(await within(activation), true);
+
+  browserDocument.visibilityState = "hidden";
+  browserDocument.dispatchEvent(new Event("visibilitychange"));
+  await drainTasks();
+  heartbeat = 2;
+  const ready = await within((async () => {
+    while (session.diagnostics().recovery_probe_ready !== true) {
+      await drainTasks();
+    }
+    return true;
+  })());
+  assert.equal(ready, true);
+  assert.equal(session.diagnostics().state, "recovering");
 });
 
 test("foreground loss while recovery waits for heartbeat invalidates the old gesture", async () => {
@@ -4194,50 +4241,6 @@ test("visibility cleanup is once per adverse edge and repeats after a later edge
   browserDocument.dispatchEvent(new Event("visibilitychange"));
   await drainTasks();
   assert.equal(operations.filter((value) => value === "sample.stop").length, 2);
-});
-
-test("hidden interruption defers recovery activation to the visible edge", async () => {
-  // Hidden-tab timer throttling (about 1 Hz in Safari) consumed the one-second
-  // recovery activation budget before its callback wait resumed, failing the
-  // Host on every tab switch (#1440).
-  const browserWindow = new EventTarget();
-  const browserDocument = new EventTarget();
-  browserDocument.visibilityState = "visible";
-  const operations = [];
-  const {session} = fixture({
-    browserDocument,
-    browserWindow,
-    send: async (envelope) => {
-      operations.push(envelope.operation);
-      return success(
-        envelope,
-        envelope.operation === "host.status"
-          ? {acknowledged_generation: 1, control_generation: 1}
-          : defaultResult(envelope.operation),
-      );
-    },
-  });
-  await session.start();
-  await session.activateAudio(createUserGestureToken({isTrusted: true}));
-  operations.length = 0;
-
-  browserDocument.visibilityState = "hidden";
-  browserDocument.dispatchEvent(new Event("visibilitychange"));
-  await drainTasks();
-  assert.equal(session.diagnostics().state, "recovering");
-  assert.deepEqual(operations, ["sample.stop", "audio.suspend"]);
-
-  browserDocument.visibilityState = "visible";
-  browserDocument.dispatchEvent(new Event("visibilitychange"));
-  for (let attempt = 0; attempt < 100; ++attempt) {
-    if (session.diagnostics().recovery_probe_ready === true) break;
-    await Promise.resolve();
-  }
-  assert.equal(session.diagnostics().recovery_probe_ready, true);
-  assert.deepEqual(
-    operations,
-    ["sample.stop", "audio.suspend", "audio.activate", "host.status"],
-  );
 });
 
 test("returns typed admission and publishes normalized Runtime outcomes", async () => {

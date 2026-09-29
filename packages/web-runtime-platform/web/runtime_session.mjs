@@ -2086,15 +2086,11 @@ function createRuntimeSessionController(options = {}) {
       monotonicNow() + deadlineForOperation("audio.activate"),
     callbackReady = false,
   ) {
-    // A hidden page defers activation to its visible edge: hidden-tab timer
-    // throttling (about 1 Hz in Safari) would otherwise consume the one-second
-    // activation budget before the callback wait even observes a quantum.
     if (
       recoveryEpoch !== epoch ||
       epoch.activationStarted ||
       machine.state !== "recovering" ||
-      audioContext?.state !== "running" ||
-      visibilityHidden
+      audioContext?.state !== "running"
     ) {
       return;
     }
@@ -2245,18 +2241,7 @@ function createRuntimeSessionController(options = {}) {
     } else {
       visibilityHidden = false;
       activeAdverseConditions.delete("visibilitychange");
-      resumeDeferredRecoveryActivation();
       renderDiagnostics();
-    }
-  }
-
-  function resumeDeferredRecoveryActivation() {
-    if (
-      recoveryEpoch?.suspendComplete &&
-      machine.state === "recovering" &&
-      audioContext?.state === "running"
-    ) {
-      activateRuntimeForRecovery(recoveryEpoch);
     }
   }
 
@@ -2276,7 +2261,11 @@ function createRuntimeSessionController(options = {}) {
   function observePageShow() {
     pageHidden = false;
     activeAdverseConditions.delete("pagehide");
-    resumeDeferredRecoveryActivation();
+    if (recoveryEpoch?.suspendComplete && machine.state === "recovering") {
+      if (audioContext?.state === "running") {
+        activateRuntimeForRecovery(recoveryEpoch);
+      }
+    }
   }
 
   function observePageHide(event) {
@@ -2606,11 +2595,29 @@ function createRuntimeSessionController(options = {}) {
     return heartbeat;
   }
 
+  // Yields one task without a timer. A hidden Safari tab runs setTimeout at
+  // about 1 Hz, which would spend the one-second activation budget of an
+  // interruption recovery before a single heartbeat check; message tasks are
+  // not timer-throttled.
+  function yieldTask() {
+    if (typeof MessageChannel !== "function") {
+      return new Promise((resolvePromise) =>
+        timers.setTimeout(resolvePromise, 0));
+    }
+    return new Promise((resolvePromise) => {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => {
+        channel.port1.close();
+        resolvePromise();
+      };
+      channel.port2.postMessage(null);
+    });
+  }
+
   async function awaitAudioCallbackAfterResume(baseline, deadline) {
     let heartbeat = readAudioCallbackHeartbeat();
     while (heartbeat === baseline && monotonicNow() < deadline) {
-      await new Promise((resolvePromise) =>
-        timers.setTimeout(resolvePromise, 0));
+      await yieldTask();
       heartbeat = readAudioCallbackHeartbeat();
     }
     if (heartbeat === baseline) {
