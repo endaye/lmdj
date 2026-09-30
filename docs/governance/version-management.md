@@ -71,22 +71,27 @@ MILESTONE.MINOR.BUILD.PATCH
 
 当前定义：
 
-| Milestone | 定义 | 完成门禁 |
-| --- | --- | --- |
-| M1 | Headless 64-Pad Beat Project + Sampler + Pattern Playback + Offline WAV Render + Golden Audio + CLI/MCP + 测试 Provider 切换与失败隔离 | Headless Core Proof 计划 PR 1–6 全部合入，双平台 CI 通过，Proof E2E 通过 |
-
-M2 及以后必须由新的已批准设计分配，不能在实现过程中自行命名。
+| Milestone | 定义 | 完成门禁 | 状态 |
+| --- | --- | --- | --- |
+| M1 | Headless 64-Pad Beat Project + Sampler + Pattern Playback + Offline WAV Render + Golden Audio + CLI/MCP + 单点能力迭代（Stage 1–11） | 覆盖 1.0.1.0 至 1.0.66.0 全部历史构建，核心音频引擎与单点编辑能力完备 | 已收官（历史构建保持不可变） |
+| M2 | Full-Workflow Creator & AI Instrument（完整四区工作流与 AI 采样乐器，2.0 时代） | 四区硬件对齐交互闭环通过（Umbrella #1207 / #1658）、Stage 12A Slice 候选采纳闭环（#1163）、Web Creator proof 与真实多浏览器/触控验收通过 | 当前活跃能力列车 |
+| M3 及以后 | Embedded & Dedicated Hardware Groovebox（Cardputer ADV Runtime Host 与独立便携硬件生态，Umbrella #1104） | 必须由新的已批准设计分配，不能在实现过程中自行命名 | 规划与设计准备中 |
 
 ### 2.2 MINOR
 
-`MINOR` 是同一 Milestone 内经设计批准的兼容子列车。
+`MINOR` 是同一 Milestone 内的功能阶段与能力列车编号（以及经设计批准的兼容子列车）。
 
-- 默认值为 `0`。
-- 普通功能、修复、PR 或 Provider 更新不增加 `MINOR`。
-- 只有需要在同一 Milestone 内长期并行维护两个兼容产品列车时才增加。
-- 增加 `MINOR` 必须写明兼容范围、迁移策略和支持期限。
-
-M1 当前固定为 `1.0.*.*`。
+- M1 历史构建保持不可变，全部固定为 `1.0.*.*`。
+- M2 正式启用按功能阶段（Stage & Umbrella）递增的 MINOR 规划：
+  - `2.0.*.*`：**Web Creator 4-Zone Workflow**（四区完整工作流闭环，对齐 Koala，Umbrella #1207 / #1658）
+  - `2.1.*.*`：**AI Slice & Candidate Adoption**（智能切片与候选采纳，Stage 12A #1163）
+  - `2.2.*.*`：**AI Stem Separation**（智能分轨隔离，Stage 12B #1164）
+  - `2.3.*.*`：**AI Pattern Generation & Audio Tagging**（律动生成与素材自动打标，Stage 12C #1165 + Stage 13 #1189）
+  - `2.4.*.*`：**Prosumer DAW Export & Cloud Loop**（专业导出与多端工程互通）
+- 递增规则：
+  - 每个重大 Stage 或主要能力 Umbrella 达成并集成时递增 `MINOR`。
+  - 普通功能迭代、PR 修复、依赖更新在当前 MINOR 内部单调递增 `BUILD`，不跨越 `MINOR`。
+  - 若需在同一 Milestone 内长期并行维护两个兼容产品列车，亦分配不同 `MINOR`（须写明兼容范围、迁移策略和支持期限）。
 
 ### 2.3 BUILD
 
@@ -102,7 +107,8 @@ M1 当前固定为 `1.0.*.*`。
 - 同一个 Git SHA 不得分配两个不同 Product Build Version。
 - 同一个 Product Build Version 不得指向两个 Git SHA。
 
-M1 的第一个可构建集成版本为 `1.0.1.0`。
+M1 的第一个可构建集成版本为 `1.0.1.0`，最终历史收官构建为 `1.0.66.0`。
+M2 首个产品构建继承单调递增的 `BUILD` 序列（如 `2.0.67.0`）。
 
 ### 2.4 PATCH
 
@@ -150,7 +156,7 @@ Channel 不是版本号的一部分。同一 Build 可以从 `canary` 晋级到 
 Channel 降级或撤回只改变发布记录，不删除原 Build、tag 或验证证据。
 
 M1 Headless Core Proof 最多进入 `dev`；它没有 Creator UI 和真实用户闭环，不能被
-标记为 `beta` 或 `stable`。
+标记为 `beta` 或 `stable`。M2 引入完整的 Creator UI 与真实用户创作闭环，达到对应门禁后允许晋级至 `beta` 与 `stable`。
 
 ### 3.1 Channel promotion 机制
 
@@ -481,7 +487,9 @@ revision 和 Assembly Lock hash。`/versions/PRODUCT_BUILD/` 是不可变说明�
 版本，也不授权 tag、push、Release、部署或 Channel 晋级。具体规则见
 `docs/governance/architecture-portal.md`。
 
-## 10. M1 开发版本表
+## 10. 产品 Milestone 开发与演进版本表
+
+### 10.1 M1 历史开发版本表
 
 M1 采用六个顺序 PR Gate；Build 编号已经分配，失败或取消也不复用：
 
@@ -503,6 +511,18 @@ M1 采用六个顺序 PR Gate；Build 编号已经分配，失败或取消也不
 
 只有对应 PR squash-merge、CI 和 Build Manifest 校验通过后，Integration Owner 才能
 创建 `lmdj-v1.0.<BUILD>.0` tag。
+
+### 10.2 M2 版本演进与规划表
+
+M2（2.0 时代）将功能演进与 Umbrella 规划映射至明确的 MINOR 阶梯：
+
+| MINOR 阶段 | 核心主题与 Umbrella | 关键交付内容 | 计划 Channel |
+| --- | --- | --- | --- |
+| `2.0.*.*` | Web Creator 4-Zone Workflow (#1207, #1658) | 四区（Project / Sample / Sequence / Perform）对齐 Koala 工作流，硬件映射交互闭环，首发 2.0 完整创作台 | `dev` / `beta` |
+| `2.1.*.*` | AI Slice & Candidate Adoption (#472, #1163) | Stage 12A Slice 参考能力、瞬态切片、Candidate 临时试听与原子采纳 | `dev` / `beta` |
+| `2.2.*.*` | AI Stem Separation (#1164) | Stage 12B Stem 分离能力、后台异步任务与独立音轨提取 | `dev` / `beta` |
+| `2.3.*.*` | AI Pattern & Audio Tagging (#1165, #1189) | Stage 12C 智能律动生成与 Stage 13 采样素材智能打标 | `dev` / `beta` |
+| `2.4.*.*` | Prosumer DAW Export & Cloud Loop | 完整导出通用 DAW 工程包（Ableton 等）、工程多端同步与版本归档 | `beta` / `stable` |
 
 ## 11. 每份未来实施计划的强制章节
 
