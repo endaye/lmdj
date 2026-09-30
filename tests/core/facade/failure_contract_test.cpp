@@ -44,6 +44,7 @@ namespace {
 using lmdj::facade::Application;
 using lmdj::facade::ApplicationConfig;
 using lmdj::facade::InitialProjectRequest;
+using lmdj::facade::ProjectDuplicateRequest;
 using lmdj::facade::SampleImportBeginRequest;
 using lmdj::facade::SampleInspectRequest;
 using lmdj::facade::SampleQuotaRequest;
@@ -551,6 +552,10 @@ void test_every_public_entry_converts_an_unexpected_throw_to_its_envelope() {
   });
   check_typed("list_local_projects", [&] {
     return application.list_local_projects();
+  });
+  check_typed("duplicate_project", [&] {
+    return application.duplicate_project(
+        ProjectDuplicateRequest{ProjectId{uuid(780)}, ProjectId{uuid(797)}});
   });
   check_typed("inspect_sample", [&] {
     return application.inspect_sample(SampleInspectRequest{project, {0, 0}});

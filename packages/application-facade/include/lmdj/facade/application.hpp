@@ -262,6 +262,13 @@ struct LocalProjectSummary {
       default;
 };
 
+// Duplicates the workspace Project `source_project_id` under the new,
+// caller-supplied `project_id`.
+struct ProjectDuplicateRequest {
+  foundation::ProjectId source_project_id;
+  foundation::ProjectId project_id;
+};
+
 struct ProjectBundleImportSession {
   std::string token;
   std::uint64_t expected_index_bytes;
@@ -572,6 +579,14 @@ class Application {
   foundation::Result<domain::AppliedCommand> import_artifact_bytes(
       const ArtifactBytesImportRequest& request);
   foundation::Result<std::vector<LocalProjectSummary>> list_local_projects();
+  // Publishes an independent copy of a workspace Project's committed Project
+  // Truth and Artifacts under a new identity, with a fresh history at revision
+  // zero. A source with a live Sequence, Pattern transport or Performance
+  // session in this Application, a recording Journal left by any owner, or a
+  // writer in another process is refused; nothing is published unless the
+  // whole copy is.
+  foundation::Result<LocalProjectSummary> duplicate_project(
+      const ProjectDuplicateRequest& request);
   foundation::Result<ProjectBundleImportSession>
   begin_project_bundle_import(
       const ProjectBundleImportBeginRequest& request);

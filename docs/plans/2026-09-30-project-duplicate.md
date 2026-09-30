@@ -71,11 +71,34 @@ that is open in another tab or recording, and must never publish a partial copy.
      - publish token: exactly one claim and commit, cancellation, forced
        failure;
      - interrupted staging recovery.
-2. **application-facade** (`feat/1684-facade-duplicate`): `duplicate_project`.
-   - Holds `sequence_mutex` and runs `admit_non_sequence_authoring`.
-   - Refuses pending Sample imports on the source.
-   - Delegates to Task 1.
-   - Tests: `facade.application`.
+2. **application-facade** (`feat/1684-facade-duplicate`): typed
+   `duplicate_project(ProjectDuplicateRequest{source_project_id, project_id})`
+   returning `LocalProjectSummary`, for the Workspace the Application owns.
+   There is no JSON, C API, MCP or CLI operation: the Web Host calls the typed
+   project API.
+   - It validates both identities, then holds the Project-scoped admission
+     lock (`admit_non_sequence_authoring`) through the copy. A live in-process
+     Sequence, Pattern transport or Performance session is refused, and no
+     in-process authoring commits to the source mid-copy.
+   - **It does not reconcile an orphaned Journal.** Normal authoring seals a
+     crashed owner's active Journal as `owner_lost` before admission.
+     Duplicate passes `reconcile_owner_loss = false`, so Project I/O refuses
+     the active Journal and it stays active. The take is recovered by reopening
+     the source, never silently left out of a copy.
+   - **Sample imports on the source are not refused.** An import's commit takes
+     the same admission lock, so the copy is always a consistent committed
+     snapshot and the import lands only on the source.
+   - Declared files:
+     - `packages/application-facade/include/lmdj/facade/application.hpp`
+     - `packages/application-facade/src/application.cpp`
+     - `tests/core/facade/application_test.cpp`
+     - `tests/core/facade/failure_contract_test.cpp`
+     - `apps/docs-site/docs/core/modules/application-facade.mdx`
+     - this plan
+   - Lowest-tier tests: `facade.application` (listed copy with the same Truth;
+     live Sequence refusal; crashed owner's active Journal refused and not
+     sealed; invalid identities) and `facade.failure_contracts` (an unexpected
+     throw becomes the public envelope).
 3. **web-runtime-platform** (after #1660 Task 2): Host `project.duplicate` and
    Runtime Session `duplicateProject`, plus an OPFS case, because OPFS
    publication is copy → verify → commit.
@@ -117,7 +140,7 @@ Owed MINOR bumps:
 | Module | From | To | Task |
 |---|---|---|---|
 | `project-io` | 4.2.1 | 4.3.0 | Task 1 |
-| `application-facade` | 6.2.1 | 6.3.0 | Task 2 |
+| `application-facade` | 6.2.1 | 6.3.0 | Task 2 (typed `duplicate_project`) |
 | `web-runtime-platform` | 5.3.3 | 5.4.0 | Task 3 |
 | `creator-web` | 4.5.1 | 4.6.0 | Task 4 |
 
