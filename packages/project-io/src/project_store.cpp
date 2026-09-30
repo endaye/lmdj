@@ -89,7 +89,7 @@ struct BindPerformanceRecording {
 };
 
 // History commands persist a checked content delta, never a session stack.
-// The portable bundle exporter still emits only the current Project Truth.
+// Portable bundles retain these transactions, but never the session stack.
 struct HistoryRestore {
   domain::CommandMeta meta;
   std::string history_session_id;

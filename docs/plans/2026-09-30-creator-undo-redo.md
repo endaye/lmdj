@@ -21,6 +21,7 @@
 - 文档及身份：本计划、受影响模块／Host 清单及依赖、Assembly 及 Runtime identity 生成物、当前门户页面和架构源图、Host package 身份、version/module graph/Host boundary 身份清单测试；身份变更按下节执行，不改历史决策。
 - 流程经验：`.agents/pitfalls/web-proofs-share-destructive-build-root.md` 记录同一工作树 Web proof 的共享清理边界；不改变测试门禁。
 - 覆盖率登记：根 `CMakeLists.txt` 将新增 Domain 与 Project I/O 测试登记到既有 coverage target inventory，保持完整收集与原有阈值。
+- Web 测试夹具：`tests/platform/web/project_io/CMakeLists.txt` 启用栈越界检查，捕获固定栈预算内的内存覆盖；替换／重开动作使用独立函数，避免叠加 common-parity 夹具的大型状态帧，保留所有故障点与远端断言。
 
 每个测试固定一个缺陷；用户旅程每次转换之后立即断言。验证至少包含 A→B→Undo A→Redo B 的内容与递增 revision、Redo 分叉、重复请求、无变化、清空 Pad 保留事件、同一产物重做、Sequence 分组、录制／恢复守卫、保存与重开、所有权变化、素材保留及持久化故障。
 运行相关 CTest unit/component、Web 平台与 Creator 单元测试、Creator/Web proof、文档检查和最终 lane 分类要求的验证；并发路径变更补充对应 stress/ASan 验证。真实设备听感与生命周期只记录实际执行结果，不以自动化替代。

@@ -1143,6 +1143,53 @@ std::optional<nlohmann::json> run_history_action() {
       {"artifact_byte_length",artifact.byte_length},{"artifact_bytes",text(value(store.read_artifact(bundle,artifact), "history final bytes"))}}}};
 }
 
+// Run the Project replacement legs outside the large common-parity frame.
+// Stacking both fixtures' ProjectState values exceeds the existing 128 KiB
+// worker stack before parse_project can report a result.
+std::optional<nlohmann::json> run_project_replacement_action() {
+  using namespace lmdj;
+  const auto action = query("action");
+  if (action != "prepare" && action != "advance" && action != "reopen") {
+    return std::nullopt;
+  }
+  auto platform = project_io::make_web_project_storage_platform();
+  require(platform != nullptr, "Web platform factory returned null");
+  const auto requested_bundle = query("bundle");
+  require(!requested_bundle.empty(), "fault bundle is missing");
+  const auto fault_bundle = std::filesystem::path{"/lmdj-workspace"} /
+      (requested_bundle + ".lmdj");
+  project_io::ProjectStore fault_store{platform};
+  if (action == "prepare") {
+    const auto present = value(platform->exists(fault_bundle / "manifest.json"), "fault exists");
+    if (!present) {
+      auto initial = value(domain::create_project(
+          foundation::ProjectId{uuid("11")}, 120), "fault create state");
+      success(fault_store.create(fault_bundle, initial), "fault prepare");
+    }
+  } else if (action == "advance") {
+    const auto current = value(fault_store.load(fault_bundle), "fault advance load");
+    domain::CreatePattern command{
+        domain::CommandMeta{foundation::CommandId{uuid("12")}, current.revision},
+        domain::Pattern{foundation::PatternId{uuid("13")}, 1,
+                        {domain::PatternEvent{
+                            domain::PadSlotId{0, 0},
+                            0,
+                            domain::kSixteenthTicks,
+                            100}}}};
+    (void)value(fault_store.execute(fault_bundle, domain::Command{command}),
+                "fault advance execute");
+  } else if (action == "reopen") {
+    auto recovery_lease = value(
+        platform->acquire_writer(fault_bundle), "fault recovery lease");
+    recovery_lease.reset();
+  } else {
+    throw std::runtime_error("unknown fault action");
+  }
+  const auto reopened = value(fault_store.load(fault_bundle), "fault common reopen");
+  return nlohmann::json{{"complete", true}, {"result", {{"revision", reopened.revision},
+                                           {"bundle", requested_bundle}}}};
+}
+
 nlohmann::json run_suite() {
   using namespace lmdj;
   auto platform = project_io::make_web_project_storage_platform();
@@ -1566,36 +1613,7 @@ nlohmann::json run_suite() {
       };
     }
 
-    project_io::ProjectStore fault_store{platform};
-    if (action == "prepare") {
-      const auto present = value(platform->exists(fault_bundle / "manifest.json"), "fault exists");
-      if (!present) {
-        auto initial = value(domain::create_project(
-            foundation::ProjectId{uuid("11")}, 120), "fault create state");
-        success(fault_store.create(fault_bundle, initial), "fault prepare");
-      }
-    } else if (action == "advance") {
-      const auto current = value(fault_store.load(fault_bundle), "fault advance load");
-      domain::CreatePattern command{
-          domain::CommandMeta{foundation::CommandId{uuid("12")}, current.revision},
-          domain::Pattern{foundation::PatternId{uuid("13")}, 1,
-                          {domain::PatternEvent{
-                              domain::PadSlotId{0, 0},
-                              0,
-                              domain::kSixteenthTicks,
-                              100}}}};
-      (void)value(fault_store.execute(fault_bundle, domain::Command{command}),
-                  "fault advance execute");
-    } else if (action == "reopen") {
-      auto recovery_lease = value(
-          platform->acquire_writer(fault_bundle), "fault recovery lease");
-      recovery_lease.reset();
-    } else {
-      throw std::runtime_error("unknown fault action");
-    }
-    const auto reopened = value(fault_store.load(fault_bundle), "fault common reopen");
-    return {{"complete", true}, {"result", {{"revision", reopened.revision},
-                                             {"bundle", requested_bundle}}}};
+    throw std::runtime_error("unknown fault action");
   }
 
   const auto sequence = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -1886,7 +1904,8 @@ int main() {
   nlohmann::json report;
   try {
     report_progress("native-suite-start");
-    auto action = run_history_action();
+    auto action = run_project_replacement_action();
+    if (!action.has_value()) action = run_history_action();
     if (!action.has_value()) action = run_admission_action();
     if (!action.has_value()) {
       action = run_soundset_store_action();
