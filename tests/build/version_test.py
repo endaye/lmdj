@@ -285,7 +285,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
         repo_root=authority_root,
     ) == provider_digest
 assert assembly["contracts"] == [
-    {"id": "lmdj.project.v5", "version": "5.0.0"},
+    {"id": "lmdj.project.v5", "version": "5.1.0"},
     {"id": "lmdj.project-bundle.v1", "version": "2.0.0"},
     {"id": "lmdj.soundset.v1", "version": "1.1.0"},
     {"id": "lmdj.soundset-catalog.v1", "version": "1.0.0"},
@@ -306,7 +306,7 @@ expected_contract_sources = {
     "contracts/capability/lmdj.capability.v2.schema.json": "2.0.0",
     "contracts/error/lmdj.error.v1.schema.json": "1.1.0",
     "contracts/module/lmdj.module.v1.schema.json": "1.0.0",
-    "contracts/project/lmdj.project.v5.schema.json": "5.0.0",
+    "contracts/project/lmdj.project.v5.schema.json": "5.1.0",
     "contracts/project/lmdj.project-bundle.v1.schema.json": "2.0.0",
     "contracts/soundset/lmdj.soundset.v1.schema.json": "1.1.0",
     "contracts/soundset-catalog/lmdj.soundset-catalog.v1.schema.json": "1.0.0",
