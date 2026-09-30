@@ -715,6 +715,17 @@ full-risk 路径是每条 lane 的输入，避免共享改动留下 stale cached
 非 portal 改动的 not-applicable 不是门户通过。完整门户 check 仅受影响 Task 本地运行，
 同时保留在完整批次，不是全仓 pre-push 门禁。
 
+一类本地结果是合并义务（[#1619](https://github.com/endaye/lmdj/issues/1619)）：
+改动选中但 PR 不运行的 lane（`--list --json` 的 `batch_only`）必须在已提交的 head 上
+本地运行，并把通过后打印的 `- <lane>: pass key=<64 hex>` 记录到 PR 描述的
+`## Batch-only Lanes`；无法运行又经 owner 明确接受的 lane 才写
+`accepted-risk key=<64 hex> — <理由>`（接受绑定该 lane 的输入，输入改变即失效），
+没有这类 lane 时写 `Batch-only lanes: none`。合并前在
+精确 head 的干净 checkout 上运行 `--batch-evidence-only --pr-body FILE`，缺失、多余、
+过期或格式错误的 lane 都拒绝。key 绑定该 lane 的命令与全部输入内容而非 commit，
+无关的后续提交不使证据失效，改动其输入则失效。这是合并流程检查，不是 required
+status：它证明证据完整且对应当前输入，不证明是谁运行的，也不授予任何权限。
+
 安装的 pre-push 默认不运行重型验证，显式 `LMDJ_PRE_PUSH_FULL=1 git push` 才运行
 所选 lanes 并传播失败。迁移只接受本工具精确旧模板，先保留备份；个人 hook、symlink、
 冲突备份即使 `--force` 也不覆盖。共享 hooks 路径不能成为遍历修改所有 worktree 的理由。

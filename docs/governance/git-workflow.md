@@ -103,15 +103,30 @@ scripts/local-ci.sh --list --json          # classify without running lanes
 scripts/local-ci.sh --lanes core_ubuntu   # explicitly run relevant local lanes
 scripts/local-ci.sh                       # explicitly run all selected lanes
 scripts/local-ci.sh --declaration-only --pr-body <body-file>
+scripts/local-ci.sh --batch-evidence-only --pr-body <body-file>
 scripts/local-ci.sh --install-hook        # install/migrate this tool's hook
 LMDJ_PRE_PUSH_FULL=1 git push             # opt in to heavy pre-push verification
 ```
 
-A local pass or cached pass is not merge/release evidence and grants no remote
-authority. Unavailable platforms, toolchains and packaging preconditions report
+A local pass or cached pass grants no remote authority and is not release
+evidence. Unavailable platforms, toolchains and packaging preconditions report
 `not-runnable-here`, never pass. Input-bound caches remain outside the worktree.
 `--declaration-only` requires a body file, executes no lanes and never caches
 the body check. A not-applicable declaration check is not portal verification.
+
+One local result is a merge obligation (#1619). A lane the change selects but
+no Pull Request runs (`batch_only`) reaches `main` unverified unless someone
+runs it. The Pull Request body therefore records each one under
+`## Batch-only Lanes` as `- <lane>: pass key=<64 hex>`, pasted from the block a
+passing `scripts/local-ci.sh --lanes <lanes>` run prints. The only alternative
+is `- <lane>: accepted-risk key=<64 hex> — <reason>` for a lane the owner
+explicitly accepted for those inputs; like a pass, it goes stale when they change. A change with no such lane declares `Batch-only lanes: none`.
+Before merge, `--batch-evidence-only` checks the live body on a clean checkout
+of the exact head and refuses a missing, extra, stale or malformed lane. The
+key binds the evidence to that lane's inputs, not to a commit, so an unrelated
+later commit keeps it and an input edit invalidates it. This is a merge
+procedure check, not a required CI status: it needs no branch-protection
+change and grants nothing by passing.
 
 The installed hook does no heavy work by default. Only explicit
 `LMDJ_PRE_PUSH_FULL=1` runs the selected lane set and propagates its failure.
