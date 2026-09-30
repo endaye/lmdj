@@ -4169,6 +4169,56 @@ test("explicit suspend keeps the AudioContext rendering until Host quiescence", 
   assert.equal(context.state, "suspended");
 });
 
+test("reactivation waits until both Host and AudioContext suspension commit", async () => {
+  let releaseHostSuspend;
+  let hostSuspendStartedResolve;
+  const hostSuspendStarted = new Promise(resolve => { hostSuspendStartedResolve = resolve; });
+  let releaseContextSuspend;
+  const contextMaySuspend = new Promise(resolve => { releaseContextSuspend = resolve; });
+  let contextSuspendStartedResolve;
+  const contextSuspendStarted = new Promise(resolve => { contextSuspendStartedResolve = resolve; });
+  const {context, session} = fixture({send: async envelope => {
+    if (envelope.operation === "audio.suspend") {
+      hostSuspendStartedResolve();
+      return new Promise(resolve => {
+        releaseHostSuspend = () => resolve(success(envelope, {}));
+      });
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  context.suspend = async () => {
+    contextSuspendStartedResolve();
+    await contextMaySuspend;
+    context.state = "suspended";
+    context.dispatchEvent(new Event("statechange"));
+  };
+  await session.start();
+  assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  const suspending = session.suspendAudio();
+  try {
+    await hostSuspendStarted;
+    assert.equal(session.diagnostics().state, "running");
+    assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), false);
+    releaseHostSuspend();
+    await contextSuspendStarted;
+    assert.equal(context.state, "running");
+    assert.equal(session.diagnostics().state, "running");
+    assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), false);
+    releaseContextSuspend();
+    assert.equal(await suspending, true);
+    assert.equal(context.state, "suspended");
+    assert.equal(session.diagnostics().state, "audio-suspended");
+    assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+    assert.equal(context.state, "running");
+    assert.equal(session.diagnostics().state, "running");
+  } finally {
+    releaseHostSuspend?.();
+    releaseContextSuspend();
+    await suspending;
+    await session.close();
+  }
+});
+
 test("visibility cleanup is once per adverse edge and repeats after a later edge", async () => {
   const browserWindow = new EventTarget();
   const browserDocument = new EventTarget();

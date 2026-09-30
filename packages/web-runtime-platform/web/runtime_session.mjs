@@ -2802,14 +2802,22 @@ function createRuntimeSessionController(options = {}) {
       if (closing || machine.state !== "running") {
         return false;
       }
-      machine.handleOperation("audio.suspend");
-      expectedContextSuspend = true;
       // The Host closes its admission gate by requesting one final
       // AudioWorklet quantum. Suspending the browser context concurrently can
       // remove that quantum and strand Host quiescence until its deadline.
       // Commit Host quiescence first, then park the browser context.
       await boundedRequest("audio.suspend", {});
+      if (closing || machine.state !== "running") {
+        return false;
+      }
+      expectedContextSuspend = true;
       await (audioContext?.suspend?.() ?? Promise.resolve());
+      if (closing || machine.state !== "running") {
+        return false;
+      }
+      // Publishing this state enables reactivation. An earlier transition
+      // lets resume race the still-pending suspend and parks active audio.
+      machine.handleOperation("audio.suspend");
       return true;
     } catch (error) {
       fail(error);
