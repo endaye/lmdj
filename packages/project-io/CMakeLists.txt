@@ -7,6 +7,7 @@ add_library(
   lmdj_project_io
   STATIC
     src/project_store.cpp
+    src/authoring_history.cpp
     src/workspace_cache.cpp
     src/project_bundle_transfer.cpp
     src/sequence_journal.cpp
@@ -68,6 +69,7 @@ if(BUILD_TESTING)
     lmdj_project_io_testable
     STATIC
       src/project_store.cpp
+      src/authoring_history.cpp
       src/workspace_cache.cpp
       src/project_bundle_transfer.cpp
       src/sequence_journal.cpp
@@ -94,6 +96,14 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_project_io_testable)
   lmdj_target_sanitizers(lmdj_project_io_testable)
+
+  add_executable(lmdj_authoring_history_tests "${CMAKE_SOURCE_DIR}/tests/core/project_io/authoring_history_test.cpp")
+  target_include_directories(lmdj_authoring_history_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_authoring_history_tests PRIVATE lmdj_project_io_testable)
+  target_compile_definitions(lmdj_authoring_history_tests PRIVATE LMDJ_PROJECT_IO_TESTING=1)
+  lmdj_target_warnings(lmdj_authoring_history_tests)
+  lmdj_target_sanitizers(lmdj_authoring_history_tests)
+  lmdj_add_test(NAME project_io.authoring_history TIER component COMMAND lmdj_authoring_history_tests LABELS persistence)
 
   add_executable(
     lmdj_project_store_tests

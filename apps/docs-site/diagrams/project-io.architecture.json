@@ -23,7 +23,7 @@
   ],
   "cards": [
     {"title": "Dependencies", "body": "Foundation + Authoring Domain. Committed inspection acquires the owner lease without authoring recovery or scavenging."},
-    {"title": "Failure model", "body": "Writer-lease admission closes mutation races; immutable command payload enables replay, while tail-last residual merge preserves only uncommitted owner-loss work."},
+    {"title": "Failure model", "body": "Writer-lease admission closes mutation races; immutable command payload enables replay, while tail-last residual merge preserves only uncommitted owner-loss work. Facade-owned session history follows the manifest boundary; unresolved outcomes and both stacks retain original Artifact bytes."},
     {"title": "Session kinds", "body": "The journal separates sequence and performance sessions; a Performance draft begins under the writer lease and resolves to save or discard."},
     {"title": "Forbidden boundary", "body": "Bundle is transfer-only; Runtime Snapshot is never persisted as Project Truth. Slice lineage persists terminal evidence, never Workspace lifecycle state."}
   ]

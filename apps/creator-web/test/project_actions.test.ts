@@ -7,6 +7,7 @@ import {
   importProjectJourney,
   listLocalProjectsJourney,
   openProjectJourney,
+  refreshProjectProjectionJourney,
 } from "../src/runtime/project_actions";
 import type {
   CreatorRuntimeSession,
@@ -321,4 +322,18 @@ test("Project action module has no New, Save As, or Project export journey", () 
   expect(projectActions).not.toHaveProperty("createEmptyProject");
   expect(projectActions).not.toHaveProperty("saveAsProject");
   expect(projectActions).not.toHaveProperty("exportProject");
+});
+
+ test("refreshes the same Project when history changes its first Pattern anchor", async () => {
+  const inspected = inspectV4(Array(16).fill(null));
+  const changedSummary = {...summary, patternId: SECOND_PATTERN_ID};
+  const {session, calls} = sessionFixture({
+    inspectProject: async () => inspected,
+    listLocalProjects: async () => [changedSummary],
+  });
+  const view = await refreshProjectProjectionJourney(session, summary);
+  expect(view?.projectId).toBe(PROJECT_ID);
+  expect(view?.patternId).toBe(SECOND_PATTERN_ID);
+  expect(view?.revision).toBe(3);
+  expect(calls).not.toContain("openProject");
 });

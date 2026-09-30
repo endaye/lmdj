@@ -12,6 +12,53 @@ const packet = (direction, value) =>
 const send = value => packet("SEND ►", value);
 const recv = value => packet("◀ RECV", value);
 
+test("the real runner does not retain raw worker protocol stderr before sidecar filtering", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "lmdj-webkit-runner-stderr-"));
+  try {
+    const output = join(temporary, "timeline.jsonl");
+    const config = join(temporary, "config.mjs");
+    const reporter = join(temporary, "reporter.cjs");
+    const playwright = new URL("../node_modules/playwright/", import.meta.url);
+    await writeFile(config, `export default {testDir: ${JSON.stringify(temporary)},
+      workers: 1, retries: 0, reporter: [[${JSON.stringify(reporter)}]],
+      outputDir: ${JSON.stringify(join(temporary, "results"))}};`);
+    await writeFile(reporter, `module.exports = class {
+      onStdErr(chunk) { process.stderr.write(chunk); }
+      onTestEnd(test, result) { console.log(JSON.stringify({
+        retainedChunks: result.stderr.length, status: result.status})); }
+    };`);
+    const lines = [send({id: 2, method: "Runtime.evaluate", params: {expression: "large-payload"}}),
+      send({id: 7, method: "Playwright.navigate", params: {pageProxyId: "5", url: "http://localhost/"}}),
+      recv({id: 7, result: {loaderId: "9"}}), "ordinary proof failure"];
+    await writeFile(join(temporary, "probe.spec.mjs"), `
+      import {test} from ${JSON.stringify(new URL("test.mjs", playwright).href)};
+      test("protocol routing probe", async () => {
+        for (const line of ${JSON.stringify(lines)}) {
+          await new Promise(resolve => process.stderr.write(line + "\\n", resolve));
+        }
+        throw new Error("intentional proof failure");
+      });`);
+    const script = new URL("./webkit_protocol_timeline.mjs", import.meta.url).pathname;
+    const result = spawnSync(process.execPath, [script, output, process.execPath,
+      new URL("cli.js", playwright).pathname, "test", "-c", config], {
+      encoding: "utf8", timeout: 30_000, env: {...process.env, PW_RUNNER_DEBUG: ""}});
+    assert.equal(result.status, 1, result.stderr);
+    const reported = JSON.parse(result.stdout.trim());
+    assert.equal(reported.status, "failed");
+    assert.equal(reported.retainedChunks, 0,
+      "why: runner retains raw protocol before filtering; remedy: inherit worker stderr into the sidecar");
+    assert.match(result.stderr, /ordinary proof failure/);
+    assert.equal(result.stderr.includes("large-payload"), false);
+    const events = (await readFile(output, "utf8")).trim().split("\n").map(JSON.parse);
+    assert.deepEqual(events.map(event => event.event), ["navigate-send", "navigate-reply"]);
+    assert.equal(events[1].id, 7);
+    assert.equal(events[1].pageProxyId, "5");
+    assert.equal(events[1].loaderId, "9");
+  } finally {
+    await rm(temporary, {recursive: true, force: true});
+  }
+});
+
 test("a cancelled WebKit navigation keeps its exact command, target and failed provisional load", () => {
   const timeline = new WebkitProtocolTimeline();
   const lines = [

@@ -1215,10 +1215,47 @@ void test_interrupted_staging_is_recovered() {
 }
 
 
+void test_duplicate_preserves_source_redo_and_does_not_copy_session_history() {
+  TempDirectory temp;
+  const auto workspace = temp.path() / "workspace";
+  const auto source = workspace / "projects" / (std::string{kProjectId} + ".lmdj");
+  const auto target_id = ProjectId{uuid(910)};
+  const auto target = workspace / "projects" / (target_id.value() + ".lmdj");
+  create_project(source);
+  auto platform = lmdj::project_io::make_default_project_storage_platform();
+  auto history = std::make_shared<lmdj::project_io::AuthoringHistory>();
+  ProjectStore store{platform, history};
+  ProjectBundleTransfer transfer{platform, history};
+  const auto session = uuid(911);
+  LMDJ_CHECK(store.open_authoring_history(source, session).has_value());
+  const auto payload = bytes("history-only Artifact");
+  const auto imported = store.import_artifact_bytes(source,
+      {{lmdj::foundation::CommandId{uuid(912)},1},AssetId{uuid(913)},"audio/wav",payload});
+  LMDJ_CHECK(imported.has_value());
+  const auto artifact = imported.value().state.assets.begin()->second.artifact;
+  LMDJ_CHECK(store.restore_authoring_history(source,
+      {lmdj::foundation::CommandId{uuid(914)},2},session,false).has_value());
+  const auto copied = transfer.duplicate(workspace, ProjectId{std::string{kProjectId}}, target_id);
+  LMDJ_CHECK(copied.has_value());
+  LMDJ_CHECK(store.inspect_authoring_history(source).value().redo_count == 1);
+  LMDJ_CHECK(store.read_artifact(source,artifact).value() == payload);
+  const auto restored = store.restore_authoring_history(source,
+      {lmdj::foundation::CommandId{uuid(915)},3},session,true);
+  LMDJ_CHECK(restored.has_value());
+  LMDJ_CHECK(restored.value().state.assets == imported.value().state.assets);
+  ProjectStore other;
+  const auto duplicate_state = other.load(target);
+  LMDJ_CHECK(duplicate_state.has_value());
+  LMDJ_CHECK(duplicate_state.value().revision == 0 && duplicate_state.value().assets.empty());
+  const auto opened = other.open_authoring_history(target, uuid(916));
+  LMDJ_CHECK(opened.has_value() && opened.value().undo_count == 0 && opened.value().redo_count == 0);
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_duplicate_preserves_source_redo_and_does_not_copy_session_history();
     test_streamed_import_is_atomic_discoverable_and_idempotent();
     test_validation_abort_cleanup_collision_and_contention();
     test_unreadable_local_copy_is_named_not_blamed_on_the_bundle();

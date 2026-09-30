@@ -363,7 +363,7 @@ nlohmann::json reopen_sample_cache(
   };
 }
 
-std::optional<nlohmann::json> run_sample_cache_action() {
+[[gnu::noinline]] std::optional<nlohmann::json> run_sample_cache_action() {
   const auto action = query("action");
   if (action != "prepare_sample_cache" &&
       action != "mutate_sample_cache" &&
@@ -452,7 +452,34 @@ nlohmann::json admission_summary(
       {"admission", journal.admission ? encode(*journal.admission) : nlohmann::json(nullptr)}};
 }
 
-std::optional<nlohmann::json> run_admission_action() {
+// Each Project value belongs to one fixture step. Keep the large value-return
+// temporaries out of the dispatcher frame while a different Core step runs.
+[[gnu::noinline]] void prepare_admission_project(
+    lmdj::project_io::ProjectStore& store, const std::filesystem::path& bundle,
+    const lmdj::foundation::ProjectId& project,
+    const lmdj::domain::Pattern& source, const lmdj::domain::Pattern& target) {
+  auto state = value(lmdj::domain::create_project(project, 120), "admission Project state");
+  state.patterns.emplace(source.id, source);
+  state.patterns.emplace(target.id, target);
+  success(store.create(bundle, state), "admission Project create");
+}
+
+[[gnu::noinline]] void commit_admission_flush(
+    lmdj::project_io::ProjectStore& store, const std::filesystem::path& bundle,
+    const lmdj::project_io::SequenceFlushIdentity& identity) {
+  (void)value(store.execute_sequence_flush(bundle, identity), "admission commit canonical flush");
+}
+
+[[gnu::noinline]] nlohmann::json inspect_admission_truth(
+    lmdj::project_io::ProjectStore& store, const std::filesystem::path& bundle,
+    const lmdj::foundation::PatternId& source, const lmdj::foundation::PatternId& target) {
+  const auto truth = value(store.inspect_committed(bundle), "admission committed truth");
+  return {{"project_id", truth.id.value()}, {"revision", truth.revision},
+      {"source_events", admission_events(truth.patterns.at(source).events)},
+      {"target_events", admission_events(truth.patterns.at(target).events)}};
+}
+
+[[gnu::noinline]] std::optional<nlohmann::json> run_admission_action() {
   if (query("action") != "admission") return std::nullopt;
   using namespace lmdj;
   using namespace project_io;
@@ -528,10 +555,7 @@ std::optional<nlohmann::json> run_admission_action() {
     transfer.checkpoint.last_runtime_frame = 2000;
   }
   if (step == "prepare") {
-    auto state = value(domain::create_project(project, 120), "admission Project state");
-    state.patterns.emplace(source_pattern.id, source_pattern);
-    state.patterns.emplace(target_pattern.id, target_pattern);
-    success(store.create(bundle, state), "admission Project create");
+    prepare_admission_project(store, bundle, project, source_pattern, target_pattern);
     success(journal.begin(bundle, session, source_pattern.id, 1,
         sequence_pattern_fingerprint(source_pattern), 0), "admission begin");
     if (query("seed") == "tail") {
@@ -592,8 +616,7 @@ std::optional<nlohmann::json> run_admission_action() {
     const foundation::CommandId command{uuid(target ? "312" : "311")};
     const auto flush = value(journal.append_flush(bundle, session, command,
         pattern.id, target ? 1U : 0U, tail), "admission append canonical flush");
-    (void)value(store.execute_sequence_flush(bundle,
-        {session, flush.flush_seq, command, pattern.id}), "admission commit canonical flush");
+    commit_admission_flush(store, bundle, {session, flush.flush_seq, command, pattern.id});
   } else if (step == "switch") {
     mutation = journal.switch_pattern(bundle, session, target_pattern.id, 1,
         sequence_pattern_fingerprint(target_pattern), 1);
@@ -657,10 +680,7 @@ std::optional<nlohmann::json> run_admission_action() {
     }
   }
   if (step == "flush" || step == "inspect" || step == "recover") {
-    const auto truth = value(store.inspect_committed(bundle), "admission committed truth");
-    result["truth"] = {{"project_id", truth.id.value()}, {"revision", truth.revision},
-        {"source_events", admission_events(truth.patterns.at(source_pattern.id).events)},
-        {"target_events", admission_events(truth.patterns.at(target_pattern.id).events)}};
+    result["truth"] = inspect_admission_truth(store, bundle, source_pattern.id, target_pattern.id);
   }
   return nlohmann::json{{"complete", true}, {"result", result}};
 }
@@ -1075,7 +1095,7 @@ nlohmann::json project_bundle_import(
   };
 }
 
-std::optional<nlohmann::json> run_soundset_store_action() {
+[[gnu::noinline]] std::optional<nlohmann::json> run_soundset_store_action() {
   if (query("action") == "project_bundle_import") {
     auto platform = lmdj::project_io::make_web_project_storage_platform();
     require(platform != nullptr, "Web platform factory returned null");
@@ -1103,10 +1123,123 @@ std::optional<nlohmann::json> run_soundset_store_action() {
   };
 }
 
-nlohmann::json run_suite() {
+[[gnu::noinline]] auto import_history_artifact(
+    lmdj::project_io::ProjectStore& store, const std::filesystem::path& bundle) {
   using namespace lmdj;
+  auto imported = value(store.import_artifact_bytes(bundle,
+      {{foundation::CommandId{uuid("9604")},0},foundation::AssetId{uuid("9605")},"audio/wav",bytes("history audio")}), "history import");
+  return std::move(imported.state.assets);
+}
+
+[[gnu::noinline]] void undo_history_artifact(
+    lmdj::project_io::ProjectStore& store, const std::filesystem::path& bundle,
+    const lmdj::domain::CommandMeta& undo, const std::string& session) {
+  const auto undone = value(store.restore_authoring_history(bundle,undo,session,false), "history Undo");
+  require(undone.state.assets.empty() && undone.state.revision == 2, "history Undo content differs");
+  require(value(store.load(bundle), "history scavenge").assets.empty(), "history scavenge changed Truth");
+}
+
+[[gnu::noinline]] void retry_history_undo(
+    lmdj::project_io::ProjectStore& store, const std::filesystem::path& bundle,
+    const lmdj::domain::CommandMeta& undo, const std::string& session) {
+  const auto retry = value(store.restore_authoring_history(bundle,undo,session,false), "history retry");
+  require(retry.replayed && retry.state.revision == 2, "history retry repeated Undo");
+}
+
+[[gnu::noinline]] void redo_history_artifact(
+    lmdj::project_io::ProjectStore& store, const std::filesystem::path& bundle,
+    const std::string& session,
+    const std::map<lmdj::foundation::AssetId,lmdj::domain::Asset>& imported_assets) {
+  using namespace lmdj;
+  const auto redone = value(store.restore_authoring_history(bundle,
+      {foundation::CommandId{uuid("9607")},2},session,true), "history Redo");
+  require(redone.state.assets == imported_assets && redone.state.revision == 3, "history Redo identities differ");
+  const auto state = value(store.load(bundle), "history persisted readback");
+  require(state == redone.state, "history persisted content differs");
+}
+
+[[gnu::noinline]] std::optional<nlohmann::json> run_history_action() {
+  using namespace lmdj;
+  const auto action = query("action");
+  if (action != "history_roundtrip" && action != "history_reopen") return std::nullopt;
+  auto platform = project_io::make_web_project_storage_platform();
+  const auto bundle = std::filesystem::path{"/lmdj-workspace"} / (query("bundle") + ".lmdj");
+  project_io::ProjectStore store{platform};
+  if (action == "history_reopen") {
+    const auto state = value(store.load(bundle), "history reopen Truth");
+    const auto history = value(store.open_authoring_history(bundle,uuid("9601")), "history reopen session");
+    require(state.revision == 3 && state.assets.size() == 1, "history reopen changed persisted content");
+    require(history.undo_count == 0 && history.redo_count == 0, "history stack survived reopening");
+    const auto artifact = state.assets.begin()->second.artifact;
+    require(text(value(store.read_artifact(bundle,artifact), "history reopen Artifact")) == "history audio", "history reopen bytes changed");
+    return nlohmann::json{{"complete",true},{"result",{{"revision",state.revision},{"undo",history.undo_count},{"redo",history.redo_count}}}};
+  }
+  success(store.create(bundle,value(domain::create_project(foundation::ProjectId{uuid("9602")},120), "history initial Truth")), "history create");
+  const auto opened = value(store.open_authoring_history(bundle,uuid("9603")), "history open");
+  const auto imported_assets = import_history_artifact(store, bundle);
+  const auto artifact = imported_assets.begin()->second.artifact;
+  const domain::CommandMeta undo{foundation::CommandId{uuid("9606")},1};
+  undo_history_artifact(store, bundle, undo, opened.session_id);
+  require(text(value(store.read_artifact(bundle,artifact), "history retained bytes")) == "history audio", "history lost retained bytes");
+  retry_history_undo(store, bundle, undo, opened.session_id);
+  redo_history_artifact(store, bundle, opened.session_id, imported_assets);
+  const auto history = value(store.inspect_authoring_history(bundle), "history final status");
+  require(history.undo_count == 1 && history.redo_count == 0, "history moved more than once");
+  return nlohmann::json{{"complete",true},{"result",{{"revision",3},
+      {"undo",history.undo_count},{"redo",history.redo_count},{"artifact_sha256",artifact.sha256},
+      {"artifact_byte_length",artifact.byte_length},{"artifact_bytes",text(value(store.read_artifact(bundle,artifact), "history final bytes"))}}}};
+}
+
+// Keep -O3 from inlining Project replacement into main: every other action
+// would then inherit its Project temporaries. Run these legs in their own frame.
+// Stacking both fixtures' ProjectState values exceeds the existing 128 KiB
+// worker stack before parse_project can report a result.
+[[gnu::noinline]] std::optional<nlohmann::json> run_project_replacement_action() {
+  using namespace lmdj;
+  const auto action = query("action");
+  if (action != "prepare" && action != "advance" && action != "reopen") {
+    return std::nullopt;
+  }
   auto platform = project_io::make_web_project_storage_platform();
   require(platform != nullptr, "Web platform factory returned null");
+  const auto requested_bundle = query("bundle");
+  require(!requested_bundle.empty(), "fault bundle is missing");
+  const auto fault_bundle = std::filesystem::path{"/lmdj-workspace"} /
+      (requested_bundle + ".lmdj");
+  project_io::ProjectStore fault_store{platform};
+  if (action == "prepare") {
+    const auto present = value(platform->exists(fault_bundle / "manifest.json"), "fault exists");
+    if (!present) {
+      auto initial = value(domain::create_project(
+          foundation::ProjectId{uuid("11")}, 120), "fault create state");
+      success(fault_store.create(fault_bundle, initial), "fault prepare");
+    }
+  } else if (action == "advance") {
+    const auto current = value(fault_store.load(fault_bundle), "fault advance load");
+    domain::CreatePattern command{
+        domain::CommandMeta{foundation::CommandId{uuid("12")}, current.revision},
+        domain::Pattern{foundation::PatternId{uuid("13")}, 1,
+                        {domain::PatternEvent{
+                            domain::PadSlotId{0, 0},
+                            0,
+                            domain::kSixteenthTicks,
+                            100}}}};
+    (void)value(fault_store.execute(fault_bundle, domain::Command{command}),
+                "fault advance execute");
+  } else if (action == "reopen") {
+    auto recovery_lease = value(
+        platform->acquire_writer(fault_bundle), "fault recovery lease");
+    recovery_lease.reset();
+  } else {
+    throw std::runtime_error("unknown fault action");
+  }
+  const auto reopened = value(fault_store.load(fault_bundle), "fault common reopen");
+  return nlohmann::json{{"complete", true}, {"result", {{"revision", reopened.revision},
+                                           {"bundle", requested_bundle}}}};
+}
+
+[[gnu::noinline]] void check_unavailable_storage() {
+  using namespace lmdj;
   auto unavailable =
       project_io::make_web_project_storage_platform_for_test(false);
   require(unavailable != nullptr, "mount failure returned null platform");
@@ -1154,9 +1287,15 @@ nlohmann::json run_suite() {
   require_mount_error(
       unavailable->validate_managed_tree(unavailable_path), "tree validation");
 
+}
+
+[[gnu::noinline]] nlohmann::json run_storage_fault_action() {
+  using namespace lmdj;
+  auto platform = project_io::make_web_project_storage_platform();
+  require(platform != nullptr, "Web platform factory returned null");
   const auto action = query("action");
   const auto requested_bundle = query("bundle");
-  if (!action.empty()) {
+  {
     require(!requested_bundle.empty(), "fault bundle is missing");
     const auto fault_bundle = std::filesystem::path{"/lmdj-workspace"} /
         (requested_bundle + ".lmdj");
@@ -1526,38 +1665,15 @@ nlohmann::json run_suite() {
       };
     }
 
-    project_io::ProjectStore fault_store{platform};
-    if (action == "prepare") {
-      const auto present = value(platform->exists(fault_bundle / "manifest.json"), "fault exists");
-      if (!present) {
-        auto initial = value(domain::create_project(
-            foundation::ProjectId{uuid("11")}, 120), "fault create state");
-        success(fault_store.create(fault_bundle, initial), "fault prepare");
-      }
-    } else if (action == "advance") {
-      const auto current = value(fault_store.load(fault_bundle), "fault advance load");
-      domain::CreatePattern command{
-          domain::CommandMeta{foundation::CommandId{uuid("12")}, current.revision},
-          domain::Pattern{foundation::PatternId{uuid("13")}, 1,
-                          {domain::PatternEvent{
-                              domain::PadSlotId{0, 0},
-                              0,
-                              domain::kSixteenthTicks,
-                              100}}}};
-      (void)value(fault_store.execute(fault_bundle, domain::Command{command}),
-                  "fault advance execute");
-    } else if (action == "reopen") {
-      auto recovery_lease = value(
-          platform->acquire_writer(fault_bundle), "fault recovery lease");
-      recovery_lease.reset();
-    } else {
-      throw std::runtime_error("unknown fault action");
-    }
-    const auto reopened = value(fault_store.load(fault_bundle), "fault common reopen");
-    return {{"complete", true}, {"result", {{"revision", reopened.revision},
-                                             {"bundle", requested_bundle}}}};
+    throw std::runtime_error("unknown fault action");
   }
 
+}
+
+[[gnu::noinline]] nlohmann::json run_storage_parity() {
+  using namespace lmdj;
+  auto platform = project_io::make_web_project_storage_platform();
+  require(platform != nullptr, "Web platform factory returned null");
   const auto sequence = std::chrono::steady_clock::now().time_since_epoch().count();
   const auto bundle = std::filesystem::path{"/lmdj-workspace"} /
       ("parity-" + std::to_string(sequence) + ".lmdj");
@@ -1839,6 +1955,10 @@ nlohmann::json run_suite() {
       }}
   };
 }
+nlohmann::json run_suite() {
+  check_unavailable_storage();
+  return query("action").empty() ? run_storage_parity() : run_storage_fault_action();
+}
 
 }  // namespace
 
@@ -1846,7 +1966,9 @@ int main() {
   nlohmann::json report;
   try {
     report_progress("native-suite-start");
-    auto action = run_admission_action();
+    auto action = run_project_replacement_action();
+    if (!action.has_value()) action = run_history_action();
+    if (!action.has_value()) action = run_admission_action();
     if (!action.has_value()) {
       action = run_soundset_store_action();
     }

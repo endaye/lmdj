@@ -160,7 +160,7 @@
     },
     {
       "title": "Shared runtime",
-      "body": "两个 Host 共用 frame-stamped input、BPM-safe overlay、exact boundary flush、bounded Stop replay 与 fail-closed owner-loss cleanup。 Strict retained-Project routing, explicit permission readback and target plan. Facade prepares transient PCM; Host audition pool reports actual admission and consumes stop. Serialize adoption once; unknown response requires inspection. No Host bundle parsing or automatic retry."
+      "body": "两个 Host 共用 frame-stamped input、BPM-safe overlay、exact boundary flush、bounded Stop replay 与 fail-closed owner-loss cleanup。 Strict retained-Project routing, explicit permission readback and target plan. Facade prepares transient PCM; Host audition pool reports actual admission and consumes stop. Serialize adoption once; unknown response requires inspection. No Host bundle parsing or automatic retry. Session-bound Undo/Redo refresh Project projections and publish derived audio through existing acknowledgement handling. Pattern playback must be stopped."
     },
     {
       "title": "Master tap",

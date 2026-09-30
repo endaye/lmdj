@@ -259,6 +259,61 @@ describe("Creator state", () => {
     expect(next.projectProjectionRefresh).toBeNull();
   });
 
+  test("accepts a changed Pattern anchor after history without reopening the Project", () => {
+    const current = {
+      ...readyState(),
+      audio: {phase: "running"} as const,
+      project: {
+        phase: "ready" as const,
+        projects: [{
+          projectId: project.projectId,
+          patternId: project.patternId,
+          revision: project.revision,
+          bpm: project.bpm,
+          assetCount: project.assetCount,
+          assignedPadCount: project.assignedPadCount,
+          bundleDigest: project.bundleDigest,
+        }],
+        current: project,
+      },
+    };
+    const patternId = "33333333-3333-4333-8333-333333333333";
+    const refreshed: ProjectView = {
+      ...project,
+      patternId,
+      revision: 5,
+      patternSlots: Object.freeze([
+        patternId,
+        ...Array<string | null>(15).fill(null),
+      ]),
+      patterns: [...project.patterns, {patternId, bars: 4}],
+    };
+
+    const token = Object.freeze({
+      id: "refresh-1",
+      projectId: project.projectId,
+      patternId: project.patternId,
+      baseRevision: project.revision,
+    });
+    const refreshing = creatorReducer(current, {
+      type: "project-projection-refresh-started",
+      token,
+    });
+    const next = creatorReducer(refreshing, {
+      type: "project-projection-refreshed",
+      project: refreshed,
+      token,
+    });
+
+    expect(next.project.current).toBe(refreshed);
+    expect(next.project.projects).toHaveLength(1);
+    expect(next.project.projects[0]?.patternId).toBe(patternId);
+    expect(next.project.projects).toContainEqual(expect.objectContaining({revision: 5}));
+    expect(next.audio.phase).toBe("running");
+    expect(next.sample).toBe(current.sample);
+    expect(next.projectProjectionRefresh).toBeNull();
+  });
+
   test("drops stale Project truth when a projection refresh fails", () => {
     const current = {
       ...readyState(),

@@ -167,7 +167,9 @@ async function enterSequenceAndPlay(page) {
 }
 
 const transportStatus = (page, text) =>
-  expect(page.getByRole("status").filter({hasText: text}))
+  expect(page.getByRole("status").filter({
+    has: page.getByTestId("creator-phase"), hasText: text,
+  }))
     .toBeVisible({timeout: 30_000});
 
 test("global Pattern transport plays, overdubs, survives navigation, stops, and reopens with exact truth", async ({page, browserName}) => {

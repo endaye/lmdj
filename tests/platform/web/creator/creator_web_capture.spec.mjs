@@ -387,7 +387,9 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
   // mounts it.
   await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
   await recordKey(page).click();
-  await expect(page.getByRole("status").filter({hasText: "recording"}))
+  await expect(page.getByRole("status").filter({
+    has: page.getByTestId("creator-phase"), hasText: "recording",
+  }))
     .toBeVisible();
 
   const patternId = await page.getByRole("combobox", {name: "Pattern"})
@@ -425,7 +427,9 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
   await expect(page.getByTestId("pad-matrix").getByRole("button", {name: /^Pad A1 — empty/}))
     .toBeVisible({timeout: 30_000});
   await recordKey(page).click();
-  await expect(page.getByRole("status").filter({hasText: "playing"}))
+  await expect(page.getByRole("status").filter({
+    has: page.getByTestId("creator-phase"), hasText: "playing",
+  }))
     .toBeVisible({timeout: 30_000});
 
   // The replacement take commits at the legal point: no open journal, and
@@ -471,14 +475,20 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
   await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
   await recordKey(page).click();
-  await expect(page.getByRole("status").filter({hasText: "recording"}))
+  await expect(page.getByRole("status").filter({
+    has: page.getByTestId("creator-phase"), hasText: "recording",
+  }))
     .toBeVisible({timeout: 30_000});
   await pressRecordedPad(page, "Pad A1 — assigned — Key Q", "KeyQ");
   await recordKey(page).click();
-  await expect(page.getByRole("status").filter({hasText: "playing"}))
+  await expect(page.getByRole("status").filter({
+    has: page.getByTestId("creator-phase"), hasText: "playing",
+  }))
     .toBeVisible({timeout: 30_000});
   await playStopKey(page).click();
-  await expect(page.getByRole("status").filter({hasText: "stopped"}))
+  await expect(page.getByRole("status").filter({
+    has: page.getByTestId("creator-phase"), hasText: "stopped",
+  }))
     .toBeVisible({timeout: 30_000});
 
   // The report's revision pair settles once the Stop's authority refresh has

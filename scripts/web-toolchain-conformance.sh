@@ -334,6 +334,7 @@ case "$command_name" in
     node "$web_test_root/toolchain/playwright_webkit_abort_patch.mjs" check
     node --test "$web_test_root/toolchain/playwright_webkit_abort_patch_test.mjs"
     node --test "$web_test_root/project_io/webkit_cancelled_navigation_test.mjs"
+    node --test "$web_test_root/project_io/webkit_protocol_timeline_test.mjs"
     configure_fixture
     build_fixture
     build_project_io

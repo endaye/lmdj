@@ -189,6 +189,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_foundation_tests
     lmdj_foundation_json_tests
     lmdj_foundation_soundset_manifest_tests
+    lmdj_domain_authoring_delta_tests
     lmdj_domain_project_tests
     lmdj_domain_command_handler_tests
     lmdj_domain_performance_tests
@@ -197,6 +198,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_domain_soundset_install_tests
     lmdj_domain_candidate_adoption_tests
     lmdj_domain_model_sequence_tests
+    lmdj_authoring_history_tests
     lmdj_project_store_tests
     lmdj_project_storage_platform_tests
     lmdj_project_bundle_transfer_tests

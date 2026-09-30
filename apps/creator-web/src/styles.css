@@ -1116,3 +1116,10 @@ button:disabled { color: #737b87; }
 .diagnostics-log li { margin-block: 1rem; }
 .diagnostics-log time, .diagnostics-log strong, .diagnostics-log code { display: block; }
 .diagnostics-log pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Session-wide authoring history stays reachable across Creator modes. */
+.authoring-history { display: flex; align-items: center; gap: 1rem; padding: .6rem 1rem; }
+.authoring-history [role="group"] { display: flex; gap: .4rem; flex-shrink: 0; }
+.authoring-history button { min-width: 4.5rem; min-height: 2.5rem; }
+.authoring-history [role="status"] { font-size: .8rem; opacity: .8; }
+.creator-console-frame { min-width: 0; }

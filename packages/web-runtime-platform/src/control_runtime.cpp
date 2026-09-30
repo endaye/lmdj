@@ -2243,7 +2243,7 @@ struct ControlRuntime::Impl {
 
   SnapshotResult prepare_and_publish(
       std::string_view selected_pattern,
-      bool preserve_saved_truth = false) {
+      bool preserve_saved_truth = false, bool force_pattern = false) {
     const auto reclaimed = engine.reclaim_retired_bank_telemetry();
     if (reclaimed.decoded_pcm_bytes > reserved_live_bytes) {
       throw std::logic_error("runtime Bank reservation underflow");
@@ -2358,7 +2358,7 @@ struct ControlRuntime::Impl {
       };
     }
     const auto current_pattern = engine.current_pattern_id();
-    const auto publish_pattern =
+    const auto publish_pattern = force_pattern ||
         engine.telemetry().state == audio::RealtimeState::stopped ||
         !current_pattern.has_value() ||
         current_pattern->value() != selected_pattern;
@@ -3237,6 +3237,10 @@ Json ControlRuntime::dispatch(
       impl_->writer_lease.emplace(std::move(lease.value()));
       impl_->retained_project_path = path;
       impl_->project_id = project_id;
+      const auto history = impl_->application.command({
+          {"operation", "history.open"}, {"project_path", path.generic_string()},
+          {"session_id", generated_uuid()}});
+      if (!history.value("ok", false)) return normalized_facade_error(history);
       impl_->project_revision = std::uint64_t{0};
       impl_->pattern_id = initial_pattern_id;
       impl_->project_bpm = static_cast<std::uint16_t>(bpm);
@@ -3306,6 +3310,10 @@ Json ControlRuntime::dispatch(
       impl_->writer_lease.emplace(std::move(lease.value()));
       impl_->retained_project_path = path;
       impl_->project_id = selected_id;
+      const auto history = impl_->application.command({
+          {"operation", "history.open"}, {"project_path", path.generic_string()},
+          {"session_id", generated_uuid()}});
+      if (!history.value("ok", false)) return normalized_facade_error(history);
       impl_->project_revision =
           inspected.at("project_revision").get<std::uint64_t>();
       impl_->pattern_id = selected_pattern;
@@ -3325,6 +3333,69 @@ Json ControlRuntime::dispatch(
         return impl_->open_result(selected_pattern, snapshot);
       }
       return impl_->open_result(selected_pattern, snapshot);
+    }
+    if (operation == "history.inspect" || operation == "history.undo" || operation == "history.redo") {
+      const bool inspect = operation == "history.inspect";
+      require(inspect ? exact_keys(payload, {}) :
+          exact_keys(payload, {"session_id", "command_id", "expected_revision"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) return state_error();
+      auto status = impl_->application.query({{"operation", "history.inspect"},
+          {"project_path", impl_->retained_project_path->generic_string()}});
+      if (!status.value("ok", false)) return normalized_facade_error(status);
+      auto& history = status["result"];
+      // General history can remove the selected Pattern. The current Host's
+      // cross-identity publication contract requires stopped Pattern playback;
+      // Undo must never stop or settle a transport on the user's behalf.
+      if (impl_->transport != nullptr) {
+        const auto transport = impl_->transport->controller->inspect();
+        if (transport.playing || transport.recording ||
+            transport.phase != facade::PatternTransportPhase::idle ||
+            transport.error.has_value() || impl_->transport->publish_pending) {
+          history["disabled_reason"] = transport.recording ? "sequence_session_active" : "pattern_transport_busy";
+          history["can_undo"] = false;
+          history["can_redo"] = false;
+        }
+      }
+      if (inspect) return success(history);
+      if (!history.at("disabled_reason").get<std::string>().empty()) return host_error("HOST_STATE_INVALID",
+          "Undo/Redo is unavailable until the current authoring operation settles",
+          {{"reason", history.at("disabled_reason")}});
+      if (impl_->cancel_if_expired()) return timeout_error();
+      auto response = impl_->application.command({{"operation", operation},
+          {"project_path", impl_->retained_project_path->generic_string()},
+          {"session_id", uuid_field(payload, "session_id")},
+          {"command_id", uuid_field(payload, "command_id")},
+          {"expected_revision", unsigned_field(payload, "expected_revision")}});
+      if (!response.value("ok", false)) return normalized_facade_error(response);
+      impl_->project_revision = response.at("project_revision").get<std::uint64_t>();
+      const auto inspected = impl_->application.query({{"operation", "project.inspect"},
+          {"project_path", impl_->retained_project_path->generic_string()}});
+      Impl::SnapshotResult snapshot;
+      if (!inspected.value("ok", false)) {
+        snapshot.error = normalized_facade_error(inspected).at("error");
+      } else {
+        const auto& project = inspected.at("result").at("project");
+        impl_->project_bpm = project.at("bpm").get<std::uint16_t>();
+        const auto& patterns = project.at("patterns");
+        if (!patterns.contains(*impl_->pattern_id) && !patterns.empty()) {
+          impl_->pattern_id = patterns.begin().key();
+          impl_->transport.reset();
+        }
+        snapshot = impl_->prepare_and_publish(*impl_->pattern_id, true, true);
+        if (snapshot.published && snapshot.generation.has_value()) {
+          if (const auto acknowledgement = impl_->await_bank_acknowledgement(*snapshot.generation);
+              acknowledgement.has_value()) {
+            snapshot.published = false;
+            snapshot.error = acknowledgement->at("error");
+          }
+        }
+      }
+      Json result{{"committed_revision", *impl_->project_revision},
+          {"runtime_revision", impl_->runtime_revision.has_value() ? Json(*impl_->runtime_revision) : Json(nullptr)},
+          {"runtime_published", snapshot.published}};
+      if (!snapshot.error.is_null()) result["snapshot_error"] = snapshot.error;
+      return success(std::move(result));
     }
     if (operation == "pattern.create") {
       require(exact_keys(
@@ -4813,6 +4884,7 @@ Json ControlRuntime::dispatch(
       }
       impl_->trigger_admission = false;
       impl_->state = Impl::State::closed;
+      (void)impl_->application.command({{"operation", "history.close"}});
       impl_->writer_lease.reset();
       // The barrier has already settled or failed the engagement by this
       // point; a closed Host reports no transport state.

@@ -1800,3 +1800,18 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   await tornGuard.close();
   await tornController.close();
 });
+
+
+test("authoring history retains original OPFS bytes through Undo, retry, Redo and browser reopen", async ({context}) => {
+  test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
+  const page = await trackedPage(context);
+  const bundle = `authoring-history-${Date.now()}`;
+  await navigate(page, `/project_io/project_io_web_test.html?action=history_roundtrip&bundle=${bundle}`);
+  expect(await waitForResult(page)).toEqual({revision: 3, undo: 1, redo: 0,
+    artifact_sha256: createHash("sha256").update("history audio").digest("hex"),
+    artifact_byte_length: Buffer.byteLength("history audio"), artifact_bytes: "history audio"});
+  await page.close();
+  const reopened = await trackedPage(context);
+  await navigate(reopened, `/project_io/project_io_web_test.html?action=history_reopen&bundle=${bundle}`);
+  expect(await waitForResult(reopened)).toEqual({revision: 3, undo: 0, redo: 0});
+});

@@ -1,3 +1,4 @@
+import {AuthoringHistoryControls} from "./components/authoring_history";
 import {CandidateSurface, isCandidateSession} from "./components/candidate_surface";
 import {
   useCallback,
@@ -265,6 +266,9 @@ function Workspace({
   const [activeMode, setActiveMode] = useState<CreatorMode>("project");
   const [inputControllerEpoch, setInputControllerEpoch] = useState(0);
   const [inputControllerRevision, setInputControllerRevision] = useState(0);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyPerformPhase, setHistoryPerformPhase] = useState("idle");
+  const [capturePhase, setCapturePhase] = useState<CapturePhase>("idle");
   const [armedCaptureSlot, setArmedCaptureSlot] = useState<number | null>(null);
   const [captureStopRequest, setCaptureStopRequest] = useState(0);
   const [midi, setMidi] = useState<MidiStatus | null>(null);
@@ -731,6 +735,13 @@ function Workspace({
     };
   }, [session, runtimePhase, state.project.current?.projectId,
     state.project.current?.patternId, registerRuntimeShutdownBarrier]);
+
+  useEffect(() => {
+    if (performController === null) { setHistoryPerformPhase("idle"); return; }
+    const update = () => setHistoryPerformPhase(performController.getState().recording.phase);
+    update();
+    return performController.subscribe(update);
+  }, [performController]);
 
   const beginProjectAction = (
     kind: "open" | "import" | "create",
@@ -1293,6 +1304,7 @@ function Workspace({
   };
 
   const capturePhaseChanged = useCallback((phase: CapturePhase) => {
+    setCapturePhase(phase);
     if (phase === "trimming" || phase === "commit-error" || phase === "committing") {
       dispatchSequence({type: "trim-overlay"});
       // The legacy overlay gate needs a legacy Sequence session. Under the
@@ -1484,6 +1496,32 @@ function Workspace({
 
   return (
     <div className="hardware-workspace">
+        <AuthoringHistoryControls
+          session={session}
+          projectId={state.project.current?.projectId ?? null}
+          revision={state.project.current?.revision ?? null}
+          refreshKey={`${activeMode}:${sequence.phase}:${transport.status?.phase ?? "idle"}:${playing}:${recording}:${historyPerformPhase}`}
+          disabledReason={state.project.phase !== "ready" ? "Open a Project to use its history." :
+            state.runtime.phase !== "ready" ? "Wait for the audio session to become ready." :
+            state.transfer.phase !== "idle" || state.sample.pendingAction !== null ||
+            state.projectProjectionRefresh !== null ? "Wait for the current Project change to finish." :
+            !["idle", "permission-error"].includes(capturePhase) ? "Finish or discard the sound recording first." :
+            historyPerformPhase !== "idle" ? "Save or discard the Performance recording first." :
+            state.sample.draft !== null ? "Finish the parameter edit first." : ""}
+          onBusy={setHistoryBusy}
+          onChanged={async () => {
+            const project = await refreshPerformProject();
+            sequenceAuthoringRevision.current = project.revision;
+            dispatchTransport({type: "revision", revision: project.revision});
+            if (sequenceRef.current.selectedPatternId !== null &&
+                !project.patterns.some(({patternId}) => patternId === sequenceRef.current.selectedPatternId)) {
+              dispatchSequence({type: "selected", patternId: project.patternId});
+            }
+            dispatch({type: "sample-action", action: {type: "draft-cancelled"}});
+            await refreshSequence();
+          }}
+        />
+        <div inert={historyBusy} className="creator-console-frame">
         <HardwareConsole
           physicalControls={
             <PhysicalControls
@@ -1763,6 +1801,7 @@ function Workspace({
             </>
           }
         />
+        </div>
     </div>
   );
 }

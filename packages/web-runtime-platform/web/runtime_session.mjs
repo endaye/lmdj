@@ -44,6 +44,7 @@ const VOICE_NOTIFICATION_EVENT_LIMIT = 4_096;
 const SAFETY_QUERY_RETRY_LIMIT = 4;
 const SAFETY_INTERRUPTIBLE_HOST_OPERATIONS = new Set([
   "project.inspect",
+  "history.inspect",
   "project.list",
   "sample.inspect",
   "sample.quota",
@@ -512,6 +513,25 @@ function normalizeWaveform(value, request) {
     buckets: Object.freeze(buckets),
     projectRevision: value.project_revision,
   });
+}
+
+function normalizeAuthoringHistory(value) {
+  if (!exactKeys(value, ["session_id", "project_revision", "undo_count", "redo_count",
+      "undo_label", "redo_label", "disabled_reason", "can_undo", "can_redo"]) ||
+      typeof value.session_id !== "string" ||
+      !(UUID_PATTERN.test(value.session_id) || value.session_id === "") ||
+      !isUnsignedInteger(value.project_revision) ||
+      !isUnsignedInteger(value.undo_count, 100) || !isUnsignedInteger(value.redo_count, 100) ||
+      typeof value.undo_label !== "string" || typeof value.redo_label !== "string" ||
+      typeof value.disabled_reason !== "string" ||
+      value.can_undo !== (value.disabled_reason === "" && value.undo_count > 0) ||
+      value.can_redo !== (value.disabled_reason === "" && value.redo_count > 0)) {
+    throw protocolMismatch("Authoring history status is invalid");
+  }
+  return Object.freeze({sessionId: value.session_id, projectRevision: value.project_revision,
+    undoCount: value.undo_count, redoCount: value.redo_count, undoLabel: value.undo_label,
+    redoLabel: value.redo_label, disabledReason: value.disabled_reason,
+    canUndo: value.can_undo, canRedo: value.can_redo});
 }
 
 function normalizeSampleCommit(value) {
@@ -2127,6 +2147,10 @@ function createRuntimeSessionController(options = {}) {
   function beginInterruption(reason) {
     if (
       closing ||
+      // Explicit suspension already owns cleanup and must finish parked.
+      // An adverse browser edge must not start a competing auto-recovery
+      // while its AudioContext.suspend is still pending.
+      safetyReservation?.reason === "audio.suspend" ||
       interruptionReservation !== null ||
       machine.state === "failed" ||
       machine.state === "closed"
@@ -2782,14 +2806,22 @@ function createRuntimeSessionController(options = {}) {
       if (closing || machine.state !== "running") {
         return false;
       }
-      machine.handleOperation("audio.suspend");
-      expectedContextSuspend = true;
       // The Host closes its admission gate by requesting one final
       // AudioWorklet quantum. Suspending the browser context concurrently can
       // remove that quantum and strand Host quiescence until its deadline.
       // Commit Host quiescence first, then park the browser context.
       await boundedRequest("audio.suspend", {});
+      if (closing || machine.state !== "running") {
+        return false;
+      }
+      expectedContextSuspend = true;
       await (audioContext?.suspend?.() ?? Promise.resolve());
+      if (closing || machine.state !== "running") {
+        return false;
+      }
+      // Publishing this state enables reactivation. An earlier transition
+      // lets resume race the still-pending suspend and parks active audio.
+      machine.handleOperation("audio.suspend");
       return true;
     } catch (error) {
       fail(error);
@@ -2928,6 +2960,26 @@ function createRuntimeSessionController(options = {}) {
   async function inspectProject() {
     return recoverableQuery("project.inspect", {});
   }
+
+  async function inspectAuthoringHistory() {
+    return normalizeAuthoringHistory(await recoverableQuery("history.inspect", {}));
+  }
+
+  function restoreAuthoringHistory(operation, request) {
+    if (!exactKeys(request, ["sessionId", "commandId", "expectedRevision"]) ||
+        typeof request.sessionId !== "string" || !UUID_PATTERN.test(request.sessionId) ||
+        typeof request.commandId !== "string" || !UUID_PATTERN.test(request.commandId) ||
+        !isUnsignedInteger(request.expectedRevision)) {
+      return Promise.reject(new TypeError("Authoring history request is invalid"));
+    }
+    const payload = {session_id: request.sessionId, command_id: request.commandId,
+      expected_revision: request.expectedRevision};
+    return serializeProjectAction(async () => normalizeSampleCommit(
+      await boundedRequest(operation, payload)));
+  }
+
+  function undoAuthoring(request) { return restoreAuthoringHistory("history.undo", request); }
+  function redoAuthoring(request) { return restoreAuthoringHistory("history.redo", request); }
 
   function beginSequence(request) {
     if (
@@ -5133,6 +5185,9 @@ function createRuntimeSessionController(options = {}) {
     createProject,
     openProject,
     inspectProject,
+    inspectAuthoringHistory,
+    undoAuthoring,
+    redoAuthoring,
     assignPatternSlot,
     clearPatternSlot,
     movePatternSlot,

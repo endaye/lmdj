@@ -44,6 +44,9 @@ const API = [
   "inspectSoundSet",
   "inspectPerformance",
   "inspectProject",
+  "inspectAuthoringHistory",
+  "undoAuthoring",
+  "redoAuthoring",
   "listPerformanceRecovery",
   "listPerformances",
   "listLocalProjects",
@@ -4166,6 +4169,122 @@ test("explicit suspend keeps the AudioContext rendering until Host quiescence", 
   assert.equal(context.state, "suspended");
 });
 
+test("reactivation waits until both Host and AudioContext suspension commit", async () => {
+  let releaseHostSuspend;
+  let hostSuspendStartedResolve;
+  const hostSuspendStarted = new Promise(resolve => { hostSuspendStartedResolve = resolve; });
+  let releaseContextSuspend;
+  const contextMaySuspend = new Promise(resolve => { releaseContextSuspend = resolve; });
+  let contextSuspendStartedResolve;
+  const contextSuspendStarted = new Promise(resolve => { contextSuspendStartedResolve = resolve; });
+  const {context, session} = fixture({send: async envelope => {
+    if (envelope.operation === "audio.suspend") {
+      hostSuspendStartedResolve();
+      return new Promise(resolve => {
+        releaseHostSuspend = () => resolve(success(envelope, {}));
+      });
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  context.suspend = async () => {
+    contextSuspendStartedResolve();
+    await contextMaySuspend;
+    context.state = "suspended";
+    context.dispatchEvent(new Event("statechange"));
+  };
+  await session.start();
+  assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  const suspending = session.suspendAudio();
+  try {
+    await hostSuspendStarted;
+    assert.equal(session.diagnostics().state, "running");
+    assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), false);
+    releaseHostSuspend();
+    await contextSuspendStarted;
+    assert.equal(context.state, "running");
+    assert.equal(session.diagnostics().state, "running");
+    assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), false);
+    releaseContextSuspend();
+    assert.equal(await suspending, true);
+    assert.equal(context.state, "suspended");
+    assert.equal(session.diagnostics().state, "audio-suspended");
+    assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+    assert.equal(context.state, "running");
+    assert.equal(session.diagnostics().state, "running");
+  } finally {
+    releaseHostSuspend?.();
+    releaseContextSuspend();
+    await suspending;
+    await session.close();
+  }
+});
+
+test("blur during explicit suspension cannot start a competing recovery", async () => {
+  let contextSuspendStartedResolve;
+  const contextSuspendStarted = new Promise(resolve => { contextSuspendStartedResolve = resolve; });
+  let releaseContextSuspend;
+  const contextMaySuspend = new Promise(resolve => { releaseContextSuspend = resolve; });
+  const browserWindow = new EventTarget();
+  const operations = [];
+  const {context, session} = fixture({browserWindow, send: async envelope => {
+    operations.push(envelope.operation);
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  operations.length = 0;
+  context.suspend = async () => {
+    contextSuspendStartedResolve();
+    await contextMaySuspend;
+    context.state = "suspended";
+    context.dispatchEvent(new Event("statechange"));
+  };
+  const suspending = session.suspendAudio();
+  try {
+    await contextSuspendStarted;
+    browserWindow.dispatchEvent(new Event("blur"));
+    await drainTasks();
+    releaseContextSuspend();
+    assert.equal(await suspending, true);
+    await drainTasks();
+    assert.deepEqual(operations, ["sample.stop", "audio.suspend"]);
+    assert.equal(session.diagnostics().state, "audio-suspended");
+    assert.equal(context.state, "suspended");
+    assert.equal(session.diagnostics().recovery_probe_ready, false);
+  } finally {
+    releaseContextSuspend();
+    await suspending;
+    await session.close();
+  }
+});
+
+test("close during Host suspension keeps the late result from changing closed state", async () => {
+  let releaseHostSuspend;
+  let hostSuspendStartedResolve;
+  const hostSuspendStarted = new Promise(resolve => { hostSuspendStartedResolve = resolve; });
+  const {context, session} = fixture({send: async envelope => {
+    if (envelope.operation === "audio.suspend") {
+      hostSuspendStartedResolve();
+      return new Promise(resolve => {
+        releaseHostSuspend = () => resolve(success(envelope, {}));
+      });
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  let contextSuspensions = 0;
+  context.suspend = async () => { contextSuspensions++; };
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  const suspending = session.suspendAudio();
+  await hostSuspendStarted;
+  const closing = session.close();
+  releaseHostSuspend();
+  assert.equal(await suspending, false);
+  assert.equal(await closing, true);
+  assert.equal(contextSuspensions, 0);
+  assert.equal(session.diagnostics().state, "closed");
+});
+
 test("visibility cleanup is once per adverse edge and repeats after a later edge", async () => {
   const browserWindow = new EventTarget();
   const browserDocument = new EventTarget();
@@ -5778,5 +5897,61 @@ test("Pattern transport busy and retained-error surfaces propagate typed", async
   assert.equal(observed.phase, "error");
   assert.equal(observed.error.code, "IO_ERROR");
   assert.deepEqual(observed.error.details, {reason: "storage_failure"});
+  await session.close();
+});
+
+const HISTORY_STATUS = Object.freeze({session_id: "20000000-0000-4000-8000-000000000001",
+  project_revision: 4, undo_count: 1, redo_count: 0, undo_label: "Edit Pad", redo_label: "",
+  disabled_reason: "", can_undo: true, can_redo: false});
+const HISTORY_REQUEST = Object.freeze({sessionId: HISTORY_STATUS.session_id,
+  commandId: "20000000-0000-4000-8000-000000000002", expectedRevision: 4});
+
+test("authoring history validates status and carries exact session, revision and command identity", async () => {
+  const seen = [];
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation === "history.inspect") return success(envelope, HISTORY_STATUS);
+    if (["history.undo", "history.redo"].includes(envelope.operation)) {
+      seen.push([envelope.operation, structuredClone(envelope.payload)]);
+      return success(envelope, {committed_revision: 5, runtime_revision: 5, runtime_published: true});
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  const status = await session.inspectAuthoringHistory();
+  assert.equal(status.sessionId, HISTORY_REQUEST.sessionId);
+  assert.equal(status.canUndo, true);
+  assert.equal(status.canRedo, false);
+  assert.equal(status.projectRevision, 4);
+  assert.ok(Object.isFrozen(status));
+  assert.equal((await session.undoAuthoring(HISTORY_REQUEST)).committedRevision, 5);
+  await session.redoAuthoring(HISTORY_REQUEST);
+  assert.deepEqual(seen, ["history.undo", "history.redo"].map((operation) => [operation,
+    {session_id: HISTORY_REQUEST.sessionId, command_id: HISTORY_REQUEST.commandId, expected_revision: 4}]));
+  await session.close();
+});
+
+test("authoring history fails closed for inconsistent status and malformed command identity", async () => {
+  for (const change of [{undo_count: 101}, {can_redo: true}, {disabled_reason: "sequence_session_active"},
+    {session_id: "foreign"}, {project_revision: -1}]) {
+    const {session} = fixture({send: async (envelope) => success(envelope,
+      envelope.operation === "history.inspect" ? {...HISTORY_STATUS, ...change} : defaultResult(envelope.operation))});
+    await session.start();
+    await assert.rejects(session.inspectAuthoringHistory(), {code: "HOST_PROTOCOL_MISMATCH"});
+    await assert.rejects(session.undoAuthoring({...HISTORY_REQUEST, expectedRevision: -1}), TypeError);
+    await assert.rejects(session.redoAuthoring({...HISTORY_REQUEST, commandId: "other"}), TypeError);
+    await session.close();
+  }
+});
+
+test("history never automatically repeats an unknown mutation after inspection", async () => {
+  let submissions = 0;
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation === "history.undo") {submissions++; throw Object.assign(new Error("lost receipt"), {code: "HOST_TIMEOUT"});}
+    return success(envelope, envelope.operation === "history.inspect" ? HISTORY_STATUS : defaultResult(envelope.operation));
+  }});
+  await session.start();
+  await assert.rejects(session.undoAuthoring(HISTORY_REQUEST), {code: "HOST_TIMEOUT"});
+  await session.inspectAuthoringHistory();
+  assert.equal(submissions, 1);
   await session.close();
 });

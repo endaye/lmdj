@@ -194,6 +194,11 @@ const std::map<std::string, OperationKind>& operations() {
       {"performance.save", OperationKind::command},
       {"project.create", OperationKind::command},
       {"project.inspect", OperationKind::query},
+      {"history.open", OperationKind::command},
+      {"history.close", OperationKind::command},
+      {"history.inspect", OperationKind::query},
+      {"history.undo", OperationKind::command},
+      {"history.redo", OperationKind::command},
       {"provider.list", OperationKind::query},
       {"provider.permissions.configure", OperationKind::command},
       {"provider.run", OperationKind::command},
@@ -2263,9 +2268,10 @@ struct Application::Impl {
                 kDefaultSoundSetStoreLimits)),
         soundset_sets(workspace_root, soundset_limits, storage_platform),
         candidates(workspace_root, storage_platform),
-        projects(storage_platform),
+        authoring_history(std::make_shared<project_io::AuthoringHistory>()),
+        projects(storage_platform, authoring_history),
         sequence_journals(storage_platform),
-        bundle_transfers(storage_platform),
+        bundle_transfers(storage_platform, authoring_history),
         waveform_cache(
             workspace_root / ".lmdj-host/workspace-cache",
             storage_platform),
@@ -3072,6 +3078,7 @@ struct Application::Impl {
       const auto committed_pattern_id = runtime.pattern_id;
       const auto replayed = execution.has_value() &&
                             execution->outcome.replayed;
+      projects.seal_authoring_history_group(request.project_path);
       sequence_sessions.erase(found);
       SequenceStatus status;
       status.expected_revision = revision;
@@ -3099,6 +3106,7 @@ struct Application::Impl {
         return foundation::Result<SequenceMutationResult>::failure(
             switched.error());
       }
+      projects.seal_authoring_history_group(request.project_path);
     } else if (was_switching) {
       auto switching = sequence_journals.set_state(
           request.project_path,
@@ -3920,6 +3928,7 @@ struct Application::Impl {
         registered->second == requested_kind,
         "operation was sent to the wrong Application method");
 
+    if (operation.starts_with("history.")) return history_operation(request, operation);
     if (operation == "project.create") {
       return project_create(request);
     }
@@ -5580,6 +5589,50 @@ struct Application::Impl {
         project_revision);
   }
 
+  nlohmann::json history_operation(const nlohmann::json& request, const std::string& operation) {
+    if (operation == "history.close") {
+      require(exact_keys(request, {"operation"}), "history.close request shape is invalid");
+      projects.close_authoring_history();
+      return success_envelope({{"closed", true}}, std::nullopt);
+    }
+    const bool open = operation == "history.open";
+    const bool inspect = operation == "history.inspect";
+    require(open ? exact_keys(request, {"operation", "project_path", "session_id"}) :
+        inspect ? exact_keys(request, {"operation", "project_path"}) :
+        exact_keys(request, {"operation", "project_path", "session_id", "command_id", "expected_revision"}),
+        "history request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    std::lock_guard sequence_lock(sequence_mutex);
+    std::lock_guard sample_lock(sample_mutex);
+    auto status = open ? projects.open_authoring_history(path, uuid_field(request, "session_id"))
+                       : projects.inspect_authoring_history(path);
+    if (!status.has_value()) return error_envelope(status.error());
+    auto& current = status.value();
+    if (sequence_sessions.contains(sequence_key(path))) current.disabled_reason = "sequence_session_active";
+    if (performance_sessions.contains(sequence_key(path))) current.disabled_reason = "performance_session_active";
+    for (const auto& [token, pending] : sample_imports) {
+      (void)token;
+      if (pending.request.project_path == path) current.disabled_reason = "sample_import_pending";
+    }
+    if (!open && !inspect) {
+      if (!current.disabled_reason.empty()) return error_envelope(Error{
+          ErrorCode::invalid_argument, "Undo/Redo is unavailable",
+          {{"reason", current.disabled_reason}}});
+      const auto restored = projects.restore_authoring_history(path,
+          {foundation::CommandId{uuid_field(request, "command_id")}, unsigned_field(request, "expected_revision")},
+          uuid_field(request, "session_id"), operation == "history.redo");
+      if (!restored.has_value()) return error_envelope(restored.error());
+      return success_envelope({{"committed_revision", restored.value().state.revision},
+          {"replayed", restored.value().replayed}, {"runtime_prepare_required", true}}, restored.value().state.revision);
+    }
+    return success_envelope({{"session_id", current.session_id}, {"project_revision", current.revision},
+        {"undo_count", current.undo_count}, {"redo_count", current.redo_count},
+        {"undo_label", current.undo_label}, {"redo_label", current.redo_label},
+        {"disabled_reason", current.disabled_reason},
+        {"can_undo", current.disabled_reason.empty() && current.undo_count != 0},
+        {"can_redo", current.disabled_reason.empty() && current.redo_count != 0}}, current.revision);
+  }
+
   nlohmann::json project_create(const nlohmann::json& request) {
     require(
         exact_keys(request,
@@ -6132,6 +6185,7 @@ struct Application::Impl {
     if (!saved.has_value()) {
       return error_envelope(saved.error());
     }
+    projects.seal_authoring_history_group(path);
     return success_envelope(performance_lifecycle_json(saved.value()),
                             saved.value().committed_revision);
   }
@@ -6149,6 +6203,7 @@ struct Application::Impl {
     if (!discarded.has_value()) {
       return error_envelope(discarded.error());
     }
+    projects.seal_authoring_history_group(path);
     return success_envelope(performance_lifecycle_json(discarded.value()),
                             discarded.value().committed_revision);
   }
@@ -6256,6 +6311,7 @@ struct Application::Impl {
     if (!deleted.has_value()) {
       return error_envelope(deleted.error());
     }
+    projects.seal_authoring_history_group(path);
     project_io::PerformanceLifecycleReceipt receipt{
         id, deleted.value().state.revision, deleted.value().replayed};
     return success_envelope(performance_lifecycle_json(receipt),
@@ -9115,6 +9171,7 @@ struct Application::Impl {
   project_io::SoundSetStoreLimits soundset_limits;
   project_io::SoundSetStore soundset_sets;
   detail::CandidateStore candidates;
+  std::shared_ptr<project_io::AuthoringHistory> authoring_history;
   project_io::ProjectStore projects;
   project_io::SequenceJournal sequence_journals;
   project_io::ProjectBundleTransfer bundle_transfers;
@@ -9332,6 +9389,7 @@ Application::make_pattern_transport_controller(
       audio,
       std::move(config),
       impl_->storage_platform,
+      impl_->authoring_history,
       // The registry is shared state, so a controller destroyed after its
       // Application observes an expired weak reference and stops cleanly
       // instead of dereferencing a freed Impl.

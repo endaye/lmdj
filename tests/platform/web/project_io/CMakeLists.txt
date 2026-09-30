@@ -61,6 +61,8 @@ target_link_options(
     -sASYNCIFY=1
     -sEXIT_RUNTIME=0
     -sASSERTIONS=1
+    # Fail at the overflowing frame instead of corrupting locks or Project data.
+    -sSTACK_OVERFLOW_CHECK=2
     -sENVIRONMENT=web,worker
     -sEXPORTED_RUNTIME_METHODS=UTF8ToString
 )

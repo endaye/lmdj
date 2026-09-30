@@ -7,6 +7,7 @@
 
 namespace lmdj::project_io {
 class ProjectStoragePlatform;
+class AuthoringHistory;
 }
 
 namespace lmdj::facade::detail {
@@ -26,6 +27,7 @@ class PatternTransportControllerInternalFactory {
       lmdj::facade::PatternTransportAudioPort& audio,
       PatternTransportControllerConfig config,
       std::shared_ptr<project_io::ProjectStoragePlatform> platform,
+      std::shared_ptr<project_io::AuthoringHistory> history = {},
       std::function<void()> on_destroy = {});
 };
 

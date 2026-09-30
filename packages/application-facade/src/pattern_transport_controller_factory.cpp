@@ -59,13 +59,14 @@ class AudioPortBridge final : public detail::PatternTransportAudioPort {
 struct PatternTransportController::Impl {
   Impl(PatternTransportAudioPort& audio, PatternTransportControllerConfig config,
        std::shared_ptr<project_io::ProjectStoragePlatform> platform,
+       std::shared_ptr<project_io::AuthoringHistory> history,
        std::function<void()> on_destroy)
       : bridge(audio),
         // A null platform default-constructs inside both collaborators, which
         // is exactly the free-function behavior; a caller-owned instance makes
         // the writer-lease registry shared.
         journals(platform),
-        store(std::move(platform)),
+        store(std::move(platform), std::move(history)),
         coordinator(bridge, journals, store, std::move(config.bundle),
                     config.session, std::move(config.project),
                     std::move(config.pattern), config.runtime_generation),
@@ -156,13 +157,14 @@ detail::PatternTransportControllerInternalFactory::make(
     lmdj::facade::PatternTransportAudioPort& audio,
     PatternTransportControllerConfig config,
     std::shared_ptr<project_io::ProjectStoragePlatform> platform,
+    std::shared_ptr<project_io::AuthoringHistory> history,
     std::function<void()> on_destroy) {
   return std::unique_ptr<PatternTransportController>(
       new PatternTransportController(
           std::unique_ptr<PatternTransportController::Impl>(
               new PatternTransportController::Impl(
                   audio, std::move(config), std::move(platform),
-                  std::move(on_destroy)))));
+                  std::move(history), std::move(on_destroy)))));
 }
 
 std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
