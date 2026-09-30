@@ -269,11 +269,23 @@ class ChangelogCommit:
         before_write()
         self._git("-c", "user.name=" + self.author["author_name"],
                   "-c", "user.email=" + self.author["author_email"],
-                  "commit", "-m",
-                  f"docs(release): bind {self.spec['product_build']} canary changelog")
+                  "commit", "-m", commit_subject(self.spec["product_build"]))
         head = self._git("rev-parse", "HEAD").decode().strip()
         tree = self._git("rev-parse", "HEAD^{tree}").decode().strip()
         return head, tree
+
+
+def commit_subject(product_build):
+    return f"docs(release): bind {product_build} canary changelog"
+
+
+def recorded_base(root, identity):
+    """The base this changelog step's worktree was created on, or None."""
+    from .publication_workspace import PublicationWorkspaceError, worktree_base
+    try:
+        return worktree_base(root, commit_subject(identity["product_build"]))
+    except PublicationWorkspaceError as error:
+        _fail(f"worktree base is unavailable: {error}")
 
 
 class ChangelogBranch(PublicationBranch):

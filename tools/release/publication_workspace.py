@@ -31,6 +31,27 @@ def require(value, reason):
             f"why: publication workspace {reason}; remedy: retain the original operation and reconcile its dedicated worktree; do not overwrite drift or bypass verification")
 
 
+def worktree_base(root, subject):
+    """The canonical main commit a docs step's durable worktree was created on.
+
+    None before the worktree exists. The step owns exactly one commit on top
+    of that base with a fixed `subject`: at that commit the base is its single
+    parent; before the commit exists the worktree still sits on the base.
+    Recovery binds this, never the live main tip, which moves past the base
+    as soon as the step's own squash merge (or any other) lands.
+    """
+    root = Path(root)
+    if not root.exists():
+        return None
+    workspace = PublicationWorkspace(root)
+    head = workspace.git("rev-parse", "HEAD").decode().strip()
+    if workspace.git("log", "-1", "--format=%s", "HEAD").decode().strip() != subject:
+        return head
+    parents = workspace.git("rev-list", "--parents", "-n", "1", "HEAD").decode().split()
+    require(len(parents) == 2, "the step commit does not sit directly on one recorded base")
+    return parents[1]
+
+
 class PublicationWorkspace:
     JOURNAL_NAME = "lmdj-publication-workspace"
     VERIFY_LABEL = "publication"

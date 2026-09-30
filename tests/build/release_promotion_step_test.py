@@ -127,6 +127,34 @@ class CommitTest(unittest.TestCase):
         self.assertEqual((head, tree), (resumed_head, resumed_tree))
 
 
+    def test_a_completed_commit_survives_main_moving_past_its_base(self):
+        from tools.release.promotion_step import recorded_base
+        plan = type("P", (), {"tag": "lmdj-v1.0.57.0", "identity": "1.0.57.0",
+                              "target_revision": TARGET, "profile": "web-hosts",
+                              "from_channel": "canary", "to_channel": "dev",
+                              "promoted_at": "2026-09-15T00:00:00Z",
+                              "attestation": "verified", "deployment_runs": (
+            type("R", (), {"host": "runtime", "run_id": 111,
+                           "evidence_sha256": "a" * 64})(),
+            type("R", (), {"host": "creator", "run_id": 222,
+                           "evidence_sha256": "b" * 64})()),
+                              "evidence_paths": ("docs/release-evidence/"
+                                                 "lmdj-v1.0.57.0-dev-promotion.md",),
+                              "evidence_document":
+                              "docs/release-evidence/lmdj-v1.0.57.0-dev-promotion.md"})()
+
+        def commit_with(main_tip):
+            return PromotionCommit(self.worktree, self.repository,
+                                   spec=spec(base_revision=self.base), plan=plan,
+                                   main_tip=lambda: main_tip, author_name="Fixture",
+                                   author_email="fixture@example.invalid")
+        head, tree = commit_with(self.base).commit(before_write=lambda: None)
+        identity = {"tag": "lmdj-v1.0.57.0", "to_channel": "dev"}
+        self.assertEqual(recorded_base(self.worktree, identity), self.base)
+        # The step's own squash merge moved main: the completed commit is
+        # still this operation's, not a stale base to refuse.
+        self.assertEqual(commit_with("e" * 40).commit(before_write=lambda: None), (head, tree))
+
     def test_stale_base_revision_is_refused_before_any_write(self):
         plan = type("P", (), {"tag": "lmdj-v1.0.57.0", "identity": "1.0.57.0",
                               "target_revision": TARGET, "profile": "web-hosts",

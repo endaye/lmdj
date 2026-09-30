@@ -133,6 +133,20 @@ class ChangelogCommitTest(unittest.TestCase):
         arguments.update(changes)
         return ChangelogCommit(**arguments)
 
+    def test_recovery_binds_the_worktree_base_not_the_live_main_tip(self):
+        from tools.release.changelog_step import recorded_base
+        identity = {"product_build": "1.0.57.0"}
+        self.assertIsNone(recorded_base(self.worktree, identity))
+        subprocess.run(["git", "-C", str(self.repository), "worktree", "add", "--detach",
+                        str(self.worktree), self.base], check=True, capture_output=True)
+        # Created but not yet committed: the worktree still sits on its base.
+        self.assertEqual(recorded_base(self.worktree, identity), self.base)
+        head, _ = self.new_commit().commit(before_write=lambda: None)
+        # After the commit (and after main moves past it on the step's own
+        # squash merge) the base is still the commit's single parent.
+        self.assertEqual(recorded_base(self.worktree, identity), self.base)
+        self.assertEqual(self.new_commit().completed_head(), head)
+
     def test_commit_binds_changelog_into_the_ledger_and_adds_notes(self):
         commit = self.new_commit()
         calls = []

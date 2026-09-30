@@ -665,6 +665,8 @@ def compose_carriers(context, policy, request):
     clock = lambda: int(time.time())
     path = os.environ.get("PATH", "")
     candidate_root = operations / "candidate-transition"
+    from .changelog_step import recorded_base as changelog_recorded_base
+    from .promotion_step import recorded_base as promotion_recorded_base
 
     def release_by_tag(tag):
         release = github.get_release_by_tag("endaye/lmdj", tag)
@@ -829,6 +831,8 @@ def compose_carriers(context, policy, request):
                       sequence_for=intent_sequence_for),
         enroll_changelog(candidate_root=candidate_root, repository_id=repository_id,
                          ledger=ledger, main_revision=observe_main,
+                         recorded_base=lambda identity: changelog_recorded_base(
+                             worktrees / "changelog", identity),
                          changelog_binding=changelog_binding,
                          commit_for=changelog_commit_for,
                          sequence_for=changelog_sequence_for),
@@ -889,6 +893,8 @@ def compose_carriers(context, policy, request):
         enroll_promotion(candidate_root=candidate_root,
                          repository_id=repository_id, ledger=ledger,
                          main_revision=observe_main,
+                         recorded_base=lambda identity: promotion_recorded_base(
+                             worktrees / "promotion", identity),
                          promotion_binding=_reviewed_promotion_binding(
                              context, policy, request, ledger, root, git),
                          commit_for=promotion_commit_for,
