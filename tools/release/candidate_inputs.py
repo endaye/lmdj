@@ -8,6 +8,7 @@ from .dispatch_receipt import unique
 from .model import canonical_json, canonical_sha256
 from .publication_workspace import PublicationWorkspace
 import json
+from copy import deepcopy
 
 VERSION = "products/lmdj/version.json"
 
@@ -28,8 +29,17 @@ def documentation_only(filename):
                                 "apps/docs-site/static/diagrams/"))
 
 
+# One process (one release run) projects each exact commit once. A commit is
+# content-addressed, so its projection cannot change within the run; a
+# candidate re-proof otherwise re-projected the same few revisions hundreds of
+# times. Repository state (complete history, the commit and every input blob
+# present) is still checked on every call, and the next run starts empty.
+_PROJECTIONS = {}
+
+
 class CandidateInputs:
     def __init__(self, root):
+        self.root = Path(root).resolve()
         self.git = PublicationWorkspace(root).git
 
     def freeze(self, revision):
@@ -39,6 +49,23 @@ class CandidateInputs:
                     "history is shallow")
             require(self.git("cat-file", "-t", revision).strip() == b"commit",
                     "revision is not a commit")
+            key = (self.root, revision)
+            if key not in _PROJECTIONS:
+                _PROJECTIONS[key] = self._project(revision)
+            document, blobs = _PROJECTIONS[key]
+            checked = self.git("cat-file", "--batch-check=%(objecttype) %(objectname)",
+                               data=("\n".join(blobs) + "\n").encode()).decode().splitlines()
+            require(checked == ["blob " + oid for oid in blobs],
+                    "tracked input blobs are missing or have the wrong type")
+            return deepcopy(document)
+        except CandidateInputError:
+            raise
+        except Exception:
+            raise CandidateInputError("why: candidate input objects are missing or invalid; remedy: restore exact trusted history and manifests without changing the request baseline") from None
+
+    def _project(self, revision):
+        """The commit's input projection and the blobs it depends on."""
+        try:
             tree = self.git("rev-parse", revision + "^{tree}").decode().strip()
             require(sha(tree), "tree identity is invalid")
             inventory = {}
@@ -98,11 +125,8 @@ class CandidateInputs:
             require(version_oid is not None, "Product version is missing")
             entries.sort(key=lambda entry:entry["path"])
             require(len({e["path"] for e in entries}) == len(entries), "tracked inventory is duplicated")
+            # Blob presence is repository state: `freeze` checks it on every call.
             blobs = sorted({e["object"] for e in entries if e["mode"] != "160000"})
-            checked = self.git("cat-file", "--batch-check=%(objecttype) %(objectname)",
-                               data=("\n".join(blobs) + "\n").encode()).decode().splitlines()
-            require(checked == ["blob " + oid for oid in blobs],
-                    "tracked input blobs are missing or have the wrong type")
             require(0 < int(self.git("cat-file", "-s", version_oid)) <= 65536,
                     "Product version exceeds its bound")
             version_raw = self.git("cat-file", "blob", version_oid)
@@ -112,9 +136,9 @@ class CandidateInputs:
                 version_file = Path(directory) / "version.json"
                 version_file.write_bytes(canonical_json(document))
                 version = str(load_version(version_file))
-            return {"schema":"lmdj.candidate-inputs.v1", "base_revision":revision,
-                    "base_tree":tree, "product_build":version, "entries":entries,
-                    "projection_sha256":canonical_sha256(entries)}
+            return ({"schema":"lmdj.candidate-inputs.v1", "base_revision":revision,
+                     "base_tree":tree, "product_build":version, "entries":entries,
+                     "projection_sha256":canonical_sha256(entries)}, blobs)
         except CandidateInputError:
             raise
         except Exception:

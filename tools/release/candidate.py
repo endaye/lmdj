@@ -10,12 +10,20 @@ from pathlib import Path
 import tempfile
 
 from scripts.version import ProductVersion, load_version
+from .batch_reference import sha
 from .candidate_inputs import CandidateInputs, VERSION
 from .model import canonical_json, canonical_sha256
 from .orchestration import RequestJournal, validate_request, _keys, _pairs, _fail
 
 CATALOG = "build-reservations"
 MAX_BYTES = 1024 * 1024
+# Per-process reuse of immutable commit reads (see candidate_inputs): the
+# Product version an exact commit carries and its full-history BUILD floor
+# cannot change within one release run. Every call still proves that each
+# manifest blob they were read from is present in the live object store, so
+# a lost historical object is refused on resume exactly as before.
+_VERSIONS = {}
+_FLOORS = {}
 
 
 class CandidateReservations:
@@ -23,9 +31,32 @@ class CandidateReservations:
         self.inputs = CandidateInputs(repository_root)
         self.state_root = Path(state_root)
 
-    def _version(self, revision, versions=None):
-        if versions is not None and revision in versions:
-            return versions[revision]
+    def _version(self, revision):
+        return self._version_and_oid(revision)[0]
+
+    def _version_and_oid(self, revision):
+        """(ProductVersion, manifest blob) of one revision, reused within this run."""
+        if not sha(revision):
+            # A symbolic revision can move: never reuse its read.
+            return self._read_version(revision)
+        key = (self.inputs.root, revision)
+        if key not in _VERSIONS:
+            _VERSIONS[key] = self._read_version(revision)
+        self._require_present((_VERSIONS[key][1],))
+        return _VERSIONS[key]
+
+    def _require_present(self, oids):
+        """Every manifest blob a reused read depends on is still in the object store."""
+        try:
+            checked = self.inputs.git("cat-file", "--batch-check=%(objecttype) %(objectname)",
+                                      data=("\n".join(oids) + "\n").encode()).decode().splitlines()
+        except (ValueError, TypeError, UnicodeError):
+            checked = None
+        if checked != ["blob " + oid for oid in oids]:
+            _fail("historical Product version is malformed or unavailable")
+
+    def _read_version(self, revision):
+        """(ProductVersion, manifest blob id) for one revision, read from Git."""
         try:
             metadata, name = self.inputs.git("ls-tree", revision, "--", VERSION).decode().rstrip("\n").split("\t")
             mode, kind, oid = metadata.split(" ")
@@ -39,9 +70,7 @@ class CandidateReservations:
                 filename = Path(directory) / "version.json"
                 filename.write_bytes(canonical_json(document))
                 version = load_version(filename)
-            if versions is not None:
-                versions[revision] = version
-            return version
+            return version, oid
         except (ValueError, TypeError, UnicodeError):
             _fail("historical Product version is malformed or unavailable")
 
@@ -49,18 +78,31 @@ class CandidateReservations:
         """The Product version one exact revision carries (read from Git)."""
         return self._version(revision)
 
-    def _history_floor(self, revision, versions=None):
+    def _history_floor(self, revision):
+        if not sha(revision):
+            return self._read_history_floor(revision)[0]
+        key = (self.inputs.root, revision)
+        if key not in _FLOORS:
+            _FLOORS[key] = self._read_history_floor(revision)
+        floor, oids = _FLOORS[key]
+        self._require_present(oids)
+        return floor
+
+    def _read_history_floor(self, revision):
+        """(BUILD floor, manifest blobs it was read from) along full history."""
         # Full history, not first-parent/path-simplified history: a higher BUILD
         # allocated then reverted or merged away still consumes its number.
         revisions = self.inputs.git("rev-list", "--full-history", revision,
                                     "--", VERSION).decode().splitlines()
-        versions = {} if versions is None else versions
-        builds = [self._version(revision, versions).build]
+        version, oid = self._version_and_oid(revision)
+        builds, oids = [version.build], {oid}
         for commit in revisions:
             row = self.inputs.git("ls-tree", commit, "--", VERSION)
             if row:  # A deletion commit has no manifest; its ancestors remain.
-                builds.append(self._version(commit, versions).build)
-        return max(builds)
+                version, oid = self._version_and_oid(commit)
+                builds.append(version.build)
+                oids.add(oid)
+        return max(builds), tuple(sorted(oids))
 
     def _read(self, journal):
         journal._active()
@@ -195,13 +237,12 @@ class CandidateReservations:
             if catalogue["repository"] != request["repository"]:
                 _fail("BUILD catalogue belongs to another repository")
             self.inputs.verify(frozen, main_revision)
-            # Per-observation reuse only: immutable commits are parsed once in
-            # this call, but every resume reads the real object store again.
-            versions = {}
-            floor = self._history_floor(request["base_revision"], versions)
-            if main_revision != request["base_revision"] and self._history_floor(main_revision, versions) != floor:
+            # Immutable commits are parsed once per run; every reuse still
+            # proves its manifest blobs against the real object store.
+            floor = self._history_floor(request["base_revision"])
+            if main_revision != request["base_revision"] and self._history_floor(main_revision) != floor:
                 _fail("candidate-changed: BUILD allocation history advanced after the original baseline")
-            current = self._version(request["base_revision"], versions)
+            current = self._version(request["base_revision"])
             records = catalogue["reservations"]
             for record in records:
                 if record["request"]["id"] == request["id"]:
