@@ -19,14 +19,20 @@
 - **Execution environment.**
   - Every PR starts from the latest `origin/main` in its own `.worktrees/<task>` created with `git worktree add --no-track`. Never start from a stale local `main` (`.agents/pitfalls/stale-premise-gets-implemented.md`).
   - Run `gh auth switch --user endaye` and list open PRs before creating one.
-- **Neutral means identical.** With every new field at its default, Project Truth bytes, Runtime Snapshot values, realtime output, offline output and the golden `tests/fixtures/golden/one_bar_120bpm.{wav,sha256}` stay unchanged. No existing exact-value assertion may be edited to make a Task green.
+- **Neutral means identical.** With every new field at its default, the following stay unchanged:
+  - Project Truth bytes;
+  - the value of every existing `ResolvedPlayback` field;
+  - every serialized form, including the `lmdj.runtime-content.v1` encoding and `runtime-content-v1.hex`;
+  - realtime output, offline output and the golden `tests/fixtures/golden/one_bar_120bpm.{wav,sha256}`.
+
+  The in-memory `ResolvedPlayback` does gain a trailing all-zero `dsp` block. As of `3105cebb`, no code serializes, hashes or `memcmp`s `ResolvedPlayback` or `PreparedPatternEvent` as raw bytes: the runtime-content codec (`runtime_content.cpp:346-355`) writes explicit fields. Task 4 re-proves this. No existing exact-value assertion may be edited to make a Task green.
 - **Realtime safety.** The audio thread stays allocation-free, lock-free, non-blocking and `noexcept`. Coefficients are designed once per trigger, not per sample. No deadline, timeout, coverage floor or stress budget is widened.
 - **Host boundary.** Creator and the Web Host use Web Runtime Platform and Application Facade only. They must not parse Project JSON or duplicate cooker math. The existing duplicate in `resolve_preview_playback` is removed, not copied.
 - **Cardputer.** `lmdj.runtime-content.v1` is unchanged. Its encoder refuses any non-neutral `ResolvedVoiceDsp`; it never drops one silently.
 - **Contract cut.**
   - The Project Contract schema digest is pinned by `products/lmdj/assembly.lock.json`, so a schema edit is inseparable from its Assembly and Product Build allocation.
   - Each Contract cut is therefore its own PR, following precedent [#761](https://github.com/endaye/lmdj/pull/761). The immutable Portal snapshot goes in the same PR (`.agents/pitfalls/portal-snapshot-not-deferrable.md`).
-  - Feature PRs keep module manifests unchanged. Module SemVer is settled by a `chore(version)` PR, following precedent [#1637](https://github.com/endaye/lmdj/pull/1637).
+  - Feature PRs keep module manifests unchanged. Module SemVer is settled only in the dedicated version-settle PRs (PR 4 and PR 7, precedent [#1637](https://github.com/endaye/lmdj/pull/1637)). PR 4 deliberately combines the #1666 settle with the `5.2.0` cut, so that both identity changes share one Build.
 - **Test binaries.**
   - New Facade scenarios go into a new test binary, not into the budget-bound `tests/core/facade/sample_surface_test.cpp` (`.agents/pitfalls/facade-surface-test-budget-headroom.md`).
   - Every new instrumented test target joins `lmdj_coverage_targets` (`.agents/pitfalls/coverage-target-list-omits-new-test.md`).
@@ -284,6 +290,7 @@ Branch prefixes are limited to `feat/`, `fix/` and `docs/` (`docs/governance/git
 
 - [ ] Add `ResolvedVoiceDsp` (all-zero neutral) and `static_assert` its size and trivial copyability. Make `PreparedPatternEvent::operator==` compare it. The engine's `enqueue_control` validation rejects non-neutral values until Task 6. The runtime-content encoder refuses non-neutral values.
 - [ ] Tests: a Pattern event differing only in `dsp` compares unequal; a non-neutral press counts `invalid_events`; runtime-content encode of a non-neutral Pad fails with a typed error; `runtime-content-v1.hex` stays byte-identical.
+- [ ] Re-prove at this Task's base that nothing serializes, hashes or `memcmp`s `ResolvedPlayback`/`PreparedPatternEvent` as raw bytes. The probe must be able to fire: first confirm that the same grep finds the known field-wise encoder in `runtime_content.cpp` (`.agents/pitfalls/blind-search-reads-as-absence.md`). Any byte-level consumer found must be made field-wise in this Task.
 - [ ] Commit: `feat(cooker): carry a neutral voice DSP block in resolved playback`
 
 ### Task 5: Add the shared voice DSP kernel (read head, pan)
