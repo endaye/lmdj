@@ -267,11 +267,12 @@ def commit_subject(tag, to_channel):
     return f"docs(release): record {tag} {to_channel} promotion"
 
 
-def recorded_base(root, identity):
+def recorded_base(root, identity, main_tip):
     """The base this promotion step's worktree was created on, or None."""
     from .publication_workspace import PublicationWorkspaceError, worktree_base
     try:
-        return worktree_base(root, commit_subject(identity["tag"], identity["to_channel"]))
+        return worktree_base(root, commit_subject(identity["tag"], identity["to_channel"]),
+                             main_tip)
     except PublicationWorkspaceError as error:
         _fail(f"worktree base is unavailable: {error}")
 

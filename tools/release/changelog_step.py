@@ -279,11 +279,11 @@ def commit_subject(product_build):
     return f"docs(release): bind {product_build} canary changelog"
 
 
-def recorded_base(root, identity):
+def recorded_base(root, identity, main_tip):
     """The base this changelog step's worktree was created on, or None."""
     from .publication_workspace import PublicationWorkspaceError, worktree_base
     try:
-        return worktree_base(root, commit_subject(identity["product_build"]))
+        return worktree_base(root, commit_subject(identity["product_build"]), main_tip)
     except PublicationWorkspaceError as error:
         _fail(f"worktree base is unavailable: {error}")
 

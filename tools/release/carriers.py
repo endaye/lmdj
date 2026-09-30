@@ -676,7 +676,9 @@ def enroll_changelog(*, candidate_root, repository_id, ledger, main_revision,
             return None
         # The durable worktree's base once it exists; the live main tip only
         # before the step has created anything.
-        base = recorded_base(fields) or main_revision()
+        base = recorded_base(fields)
+        if base is None:
+            base = main_revision()
         if type(base) is not str or _SHA.fullmatch(base) is None:
             _fail("the canonical main revision is unavailable")
         bound = changelog_binding()
@@ -772,7 +774,9 @@ def enroll_promotion(*, candidate_root, repository_id, ledger, main_revision,
                 _fail("the reviewed promotion binding carries no valid digests")
         # The durable worktree's base once it exists; the live main tip only
         # before the step has created anything.
-        base = recorded_base(dict(fields, to_channel=to_channel)) or main_revision()
+        base = recorded_base(dict(fields, to_channel=to_channel))
+        if base is None:
+            base = main_revision()
         if type(base) is not str or _SHA.fullmatch(base) is None:
             _fail("the canonical main revision is unavailable")
         placeholder = canonical_sha256({"request": fields["request_sha256"],

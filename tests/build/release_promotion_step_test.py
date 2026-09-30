@@ -150,7 +150,7 @@ class CommitTest(unittest.TestCase):
                                    author_email="fixture@example.invalid")
         head, tree = commit_with(self.base).commit(before_write=lambda: None)
         identity = {"tag": "lmdj-v1.0.57.0", "to_channel": "dev"}
-        self.assertEqual(recorded_base(self.worktree, identity), self.base)
+        self.assertEqual(recorded_base(self.worktree, identity, self.base), self.base)
         # The step's own squash merge moved main: the completed commit is
         # still this operation's, not a stale base to refuse.
         self.assertEqual(commit_with("e" * 40).commit(before_write=lambda: None), (head, tree))

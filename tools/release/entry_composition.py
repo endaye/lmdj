@@ -832,7 +832,7 @@ def compose_carriers(context, policy, request):
         enroll_changelog(candidate_root=candidate_root, repository_id=repository_id,
                          ledger=ledger, main_revision=observe_main,
                          recorded_base=lambda identity: changelog_recorded_base(
-                             worktrees / "changelog", identity),
+                             worktrees / "changelog", identity, observe_main()),
                          changelog_binding=changelog_binding,
                          commit_for=changelog_commit_for,
                          sequence_for=changelog_sequence_for),
@@ -894,7 +894,7 @@ def compose_carriers(context, policy, request):
                          repository_id=repository_id, ledger=ledger,
                          main_revision=observe_main,
                          recorded_base=lambda identity: promotion_recorded_base(
-                             worktrees / "promotion", identity),
+                             worktrees / "promotion", identity, observe_main()),
                          promotion_binding=_reviewed_promotion_binding(
                              context, policy, request, ledger, root, git),
                          commit_for=promotion_commit_for,
