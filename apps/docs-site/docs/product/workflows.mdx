@@ -4,6 +4,7 @@ area: product
 status: partial
 owners: [product, core]
 source_paths:
+  - docs/prd/decisions/2026-09-30-creator-undo-redo-semantics.md
   - docs/design/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md
   - docs/plans/2026-08-29-lmdj-stage9-switch-boundary-flush.md
   - docs/quality/2026-08-27-stage9-sequence-recording-review.md
@@ -21,6 +22,15 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 ## 创作与保存
 
 Host 向 Application Facade 发出命令；Authoring Domain 更新 Project Truth；Project I/O 负责事务式存取和录音会话 Journal。Host 不解析 Project bundle。
+
+## Creator Undo/Redo（已决策，尚未实现）
+
+[2026-09-30 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-09-30-creator-undo-redo-semantics.md)解决 #1655，替代 S8-D4 对后续 Creator 的通用 Undo/Redo 限制；引擎与控件仍由 #1659 实现。
+历史属于本设备当前工程打开会话，Sample、Sequence、Perform 共用；一次用户创作动作一条记录，覆盖成功提交的 Pad、参数、Pattern、录音、安装及处理结果采纳。拖动、批量编辑与录制结算段整体撤销；播放、导航、实时 FX、设备设置、任务进度及未提交缓冲不入栈。
+
+Undo/Redo 恢复创作内容并生成新的递增 revision，不回写旧 revision。Pad 清空保留 Pattern 事件；任务取消本身不入栈，Undo 不重新启动下载或 Provider。Redo 复用原产物，历史引用的素材必须保留。未结算录音或待恢复事务期间禁用并解释原因。保存和切页保留历史，关闭、刷新、重开、切换工程、接管或外部替换后清空；工程内容仍持久化。
+
+历史由 Application Facade/Core 拥有，Host 只发请求和展示状态，Runtime Snapshot 仍是派生状态。首版不持久化历史或实现跨设备撤销；未来协作须遵守“只撤销自己本设备的操作”。这项决策不授予 AI 自动改工程的权限，#536 继续开放；具体操作矩阵、失败恢复与验收场景见决策文件。
 
 ## Sequence 录音
 
