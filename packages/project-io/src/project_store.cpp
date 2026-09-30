@@ -88,7 +88,17 @@ struct BindPerformanceRecording {
   foundation::ArtifactRef artifact;
 };
 
+// History commands persist a checked content delta, never a session stack.
+// The portable bundle exporter still emits only the current Project Truth.
+struct HistoryRestore {
+  domain::CommandMeta meta;
+  std::string history_session_id;
+  bool redo{};
+  domain::AuthoringDelta delta;
+};
+
 using PersistedCommand = std::variant<
+    HistoryRestore,
     domain::ImportAsset,
     domain::AssignPad,
     domain::CreatePattern,
@@ -1289,6 +1299,152 @@ nlohmann::json meta_json(const domain::CommandMeta& meta) {
   };
 }
 
+nlohmann::json history_asset_json(const domain::Asset& asset) {
+  return {{"id", asset.id.value()}, {"artifact", asset.artifact},
+          {"lineage", asset.lineage ? domain::asset_lineage_json(*asset.lineage) : nlohmann::json(nullptr)}};
+}
+nlohmann::json history_pad_json(const domain::PadSlot& pad) {
+  return {{"slot", slot_json(pad.id)},
+          {"asset_id", pad.asset_id ? nlohmann::json(pad.asset_id->value()) : nlohmann::json(nullptr)},
+          {"playback", playback_json(pad.playback)}};
+}
+nlohmann::json history_performance_json(const domain::Performance& performance) {
+  auto result = performance_value_json(performance);
+  result["performance_id"] = performance.id.value();
+  return result;
+}
+template<class T, class Encode>
+nlohmann::json history_change_json(const domain::AuthoringChange<T>& change, Encode encode) {
+  return {{"before", encode(change.before)}, {"after", encode(change.after)}};
+}
+template<class T>
+nlohmann::json history_scalar_json(const std::optional<domain::AuthoringChange<T>>& change) {
+  return change ? history_change_json(*change, [](const auto& v) { return nlohmann::json(v); }) : nlohmann::json(nullptr);
+}
+template<class K, class T, class Encode>
+nlohmann::json history_map_json(const std::map<K, domain::AuthoringChange<std::optional<T>>>& changes, Encode encode) {
+  auto result = nlohmann::json::object();
+  for (const auto& [key, change] : changes) {
+    result[key.value()] = history_change_json(change, [&](const auto& value) {
+      return value ? encode(*value) : nlohmann::json(nullptr);
+    });
+  }
+  return result;
+}
+nlohmann::json authoring_delta_json(const domain::AuthoringDelta& delta) {
+  auto pads = nlohmann::json::array();
+  for (const auto& change : delta.pads) pads.push_back(history_change_json(change, history_pad_json));
+  auto slots = nlohmann::json::array();
+  for (const auto& [slot, change] : delta.pattern_slots) {
+    auto encoded = history_change_json(change, [](const auto& value) {
+      return value ? nlohmann::json(value->value()) : nlohmann::json(nullptr);
+    });
+    encoded["slot"] = slot;
+    slots.push_back(std::move(encoded));
+  }
+  return {{"project_id", delta.project_id.value()}, {"bpm", history_scalar_json(delta.bpm)},
+      {"quantize_enabled", history_scalar_json(delta.quantize_enabled)},
+      {"swing_percent", history_scalar_json(delta.swing_percent)}, {"pads", std::move(pads)},
+      {"assets", history_map_json(delta.assets, history_asset_json)},
+      {"patterns", history_map_json(delta.patterns, pattern_json)},
+      {"performances", history_map_json(delta.performances, history_performance_json)},
+      {"pattern_slots", std::move(slots)}};
+}
+void history_require(bool value) {
+  if (!value) throw std::runtime_error("Authoring history command shape is invalid");
+}
+template<class T> T history_parsed(foundation::Result<T> result) {
+  if (!result.has_value()) throw std::runtime_error(result.error().message);
+  return std::move(result.value());
+}
+template<class T, class Decode>
+domain::AuthoringChange<T> history_change(const nlohmann::json& value, Decode decode) {
+  history_require(exact_object_keys(value, {"before", "after"}));
+  return {decode(value.at("before")), decode(value.at("after"))};
+}
+template<class T> T history_integer(const nlohmann::json& value) {
+  const auto number = unsigned_integer_value(value);
+  history_require(number && *number <= std::numeric_limits<T>::max());
+  return static_cast<T>(*number);
+}
+template<class T> std::optional<domain::AuthoringChange<T>> history_scalar(const nlohmann::json& value) {
+  if (value.is_null()) return std::nullopt;
+  return history_change<T>(value, [](const auto& v) -> T {
+    if constexpr (std::is_same_v<T, bool>) {
+      history_require(v.is_boolean()); return v.template get<bool>();
+    } else return history_integer<T>(v);
+  });
+}
+template<class K, class T, class Decode>
+auto history_map(const nlohmann::json& value, Decode decode) {
+  history_require(value.is_object());
+  std::map<K, domain::AuthoringChange<std::optional<T>>> result;
+  for (auto it = value.begin(); it != value.end(); ++it) {
+    history_require(domain::is_valid_uuid(it.key()));
+    const auto key = K{it.key()};
+    result.emplace(key, history_change<std::optional<T>>(it.value(), [&](const auto& v) -> std::optional<T> {
+      if (v.is_null()) return std::nullopt;
+      auto object = decode(v);
+      history_require(object.id == key);
+      return object;
+    }));
+  }
+  return result;
+}
+domain::AuthoringDelta parse_authoring_delta(const nlohmann::json& input, const std::filesystem::path& path) {
+  history_require(exact_object_keys(input, {"project_id", "bpm", "quantize_enabled", "swing_percent", "pads", "assets", "patterns", "performances", "pattern_slots"}));
+  const auto id = input.at("project_id").get<std::string>();
+  history_require(domain::is_valid_uuid(id) && input.at("pads").is_array() && input.at("pattern_slots").is_array());
+  domain::AuthoringDelta result{foundation::ProjectId{id}, history_scalar<std::uint16_t>(input.at("bpm")),
+      history_scalar<bool>(input.at("quantize_enabled")), history_scalar<std::uint8_t>(input.at("swing_percent")), {}, {}, {}, {}, {}};
+  for (const auto& encoded : input.at("pads")) {
+    result.pads.push_back(history_change<domain::PadSlot>(encoded, [&](const auto& value) {
+      history_require(exact_object_keys(value, {"slot", "asset_id", "playback"}));
+      std::optional<foundation::AssetId> asset;
+      if (!value.at("asset_id").is_null()) {
+        asset = foundation::AssetId{value.at("asset_id").template get<std::string>()};
+        history_require(domain::is_valid_uuid(asset->value()));
+      }
+      return domain::PadSlot{history_parsed(parse_slot(value.at("slot"), path)), asset,
+                            history_parsed(parse_playback(value.at("playback"), path))};
+    }));
+  }
+  result.assets = history_map<foundation::AssetId, domain::Asset>(input.at("assets"), [&](const auto& value) {
+    history_require(exact_object_keys(value, {"id", "artifact", "lineage"}));
+    std::optional<domain::AssetLineage> lineage;
+    if (!value.at("lineage").is_null()) lineage = history_parsed(domain::asset_lineage_from_json(value.at("lineage")));
+    return domain::Asset{foundation::AssetId{value.at("id").template get<std::string>()},
+                        value.at("artifact").template get<foundation::ArtifactRef>(), std::move(lineage)};
+  });
+  result.patterns = history_map<foundation::PatternId, domain::Pattern>(input.at("patterns"), [&](const auto& value) {
+    return history_parsed(parse_pattern(value, path));
+  });
+  result.performances = history_map<domain::PerformanceId, domain::Performance>(input.at("performances"), [&](const auto& value) {
+    return history_parsed(parse_performance(value, path));
+  });
+  for (const auto& encoded : input.at("pattern_slots")) {
+    history_require(exact_object_keys(encoded, {"slot", "before", "after"}));
+    const auto slot = history_integer<std::uint8_t>(encoded.at("slot"));
+    history_require(slot < domain::kPatternSlotCount);
+    auto change = encoded;
+    change.erase("slot");
+    const auto decoded = history_change<std::optional<foundation::PatternId>>(change, [](const auto& value) -> std::optional<foundation::PatternId> {
+      if (value.is_null()) return std::nullopt;
+      const auto id_value = value.template get<std::string>();
+      history_require(domain::is_valid_uuid(id_value));
+      return foundation::PatternId{id_value};
+    });
+    history_require(result.pattern_slots.emplace(slot, decoded).second);
+  }
+  // This catches duplicate Pad targets and noncanonical/no-op deltas on replay
+  // through Domain::apply; the codec additionally requires its exact round trip.
+  history_require(authoring_delta_json(result) == input && !result.empty());
+  return result;
+}
+std::string authoring_fingerprint(const domain::ProjectState& state) {
+  return picosha2::hash256_hex_string(foundation::canonical_json(project_json(state)));
+}
+
 const domain::CommandMeta& command_meta(const PersistedCommand& command) {
   return std::visit(
       [](const auto& value) -> const domain::CommandMeta& {
@@ -1301,7 +1457,11 @@ nlohmann::json command_json(const PersistedCommand& command) {
   return std::visit(
       [](const auto& value) -> nlohmann::json {
         using Type = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<Type, domain::ImportAsset>) {
+        if constexpr (std::is_same_v<Type, HistoryRestore>) {
+          return {{"type", "ApplyAuthoringDelta"}, {"meta", meta_json(value.meta)},
+                  {"history_session_id", value.history_session_id}, {"redo", value.redo},
+                  {"delta", authoring_delta_json(value.delta)}};
+        } else if constexpr (std::is_same_v<Type, domain::ImportAsset>) {
           return {
               {"asset",
                {
@@ -1571,6 +1731,14 @@ foundation::Result<PersistedCommand> parse_command(
           std::move(lineage),
       });
     };
+    if (type == "ApplyAuthoringDelta") {
+      history_require(exact_object_keys(input, {"type", "meta", "history_session_id", "redo", "delta"}));
+      const auto session = input.at("history_session_id").get<std::string>();
+      history_require(domain::is_valid_uuid(session) && input.at("redo").is_boolean());
+      return foundation::Result<PersistedCommand>::success(HistoryRestore{
+          std::move(meta.value()), session, input.at("redo").get<bool>(),
+          parse_authoring_delta(input.at("delta"), path)});
+    }
     if (type == "ImportAsset") {
       const auto& encoded = input.at("asset");
       if (!exact_object_keys(input, {"asset", "meta", "type"})) {
@@ -2104,7 +2272,9 @@ foundation::Result<domain::AppliedCommand> apply_command(
   return std::visit(
       [&state, &receipts](const auto& value) {
         using Type = std::decay_t<decltype(value)>;
-        if constexpr (
+        if constexpr (std::is_same_v<Type, HistoryRestore>) {
+          return domain::apply(state, domain::ApplyAuthoringDelta{value.meta, value.delta}, receipts);
+        } else if constexpr (
             std::is_same_v<Type, PerformanceMutation> ||
             std::is_same_v<Type, CreatePerformance> ||
             std::is_same_v<Type, RenamePerformance> ||
@@ -2309,6 +2479,7 @@ foundation::Result<domain::Command> legacy_command(
       [](const auto& value) -> foundation::Result<domain::Command> {
         using Type = std::decay_t<decltype(value)>;
         if constexpr (
+            std::is_same_v<Type, HistoryRestore> ||
             std::is_same_v<Type, domain::ImportAssignSample> ||
             std::is_same_v<Type, domain::InstallSoundSet> ||
             std::is_same_v<Type, domain::AdoptCandidates> ||
@@ -2954,9 +3125,11 @@ foundation::Result<void> recover_initial_create_residue(
 
 foundation::Result<void> recover_uncommitted(
     ProjectStoragePlatform& platform,
+    const std::shared_ptr<AuthoringHistory>& history,
     const std::filesystem::path& bundle,
     const LoadedProject& loaded,
     std::optional<std::string_view> retained_artifact_sha = std::nullopt) {
+  history->reconcile(bundle, loaded.state, authoring_fingerprint(loaded.state));
   const auto checkpoints = bundle / "history/checkpoints";
   const auto transactions = bundle / "history/transactions";
   const auto assets = bundle / "assets";
@@ -2998,7 +3171,7 @@ foundation::Result<void> recover_uncommitted(
     }
   }
 
-  std::set<std::string> referenced_assets;
+  auto referenced_assets = history->retained_artifacts(bundle);
   for (const auto& [asset_id, asset] : loaded.state.assets) {
     (void)asset_id;
     referenced_assets.insert(asset.artifact.sha256);
@@ -3117,8 +3290,32 @@ foundation::Result<bool> publish_artifact(
              : foundation::Result<bool>::failure(created.error());
 }
 
+std::pair<std::string, std::string> history_description(
+    const PersistedCommand& command, const std::optional<SequenceFlushIdentity>& sequence,
+    const std::string& performance_group) {
+  if (sequence) return {"Record Pattern", "sequence:" + sequence->session_id.value() + ":" + sequence->pattern_id.value()};
+  return std::visit([&](const auto& value) -> std::pair<std::string, std::string> {
+    using T = std::decay_t<decltype(value)>;
+    if constexpr (std::is_same_v<T, domain::ImportAsset> || std::is_same_v<T, domain::ImportAssignSample>) return {"Import or record sound", ""};
+    else if constexpr (std::is_same_v<T, domain::AssignPad>) return {value.asset_id ? "Assign Pad" : "Clear Pad", ""};
+    else if constexpr (std::is_same_v<T, domain::UpdatePadPlayback>) return {"Edit Pad", ""};
+    else if constexpr (std::is_same_v<T, domain::ResetPadPlayback>) return {"Reset Pad", ""};
+    else if constexpr (std::is_same_v<T, domain::InstallSoundSet>) return {"Install Sound Set", ""};
+    else if constexpr (std::is_same_v<T, domain::AdoptCandidates>) return {"Adopt results", ""};
+    else if constexpr (std::is_same_v<T, domain::UpdateSequenceSettings>) return {"Edit Sequence settings", ""};
+    else if constexpr (std::is_same_v<T, domain::CreatePattern>) return {"Create Pattern", ""};
+    else if constexpr (std::is_same_v<T, domain::AssignPatternSlot> || std::is_same_v<T, domain::ClearPatternSlot> || std::is_same_v<T, domain::MovePatternSlot>) return {"Edit Pattern slots", ""};
+    else if constexpr (std::is_same_v<T, domain::MergePatternEvents>) return {"Edit Pattern", ""};
+    else if constexpr (std::is_same_v<T, CreatePerformance> || std::is_same_v<T, PerformanceMutation> || std::is_same_v<T, FinalizePerformanceDraft> || std::is_same_v<T, DeletePerformance>) return {"Record or edit Performance", performance_group};
+    else if constexpr (std::is_same_v<T, RenamePerformance>) return {"Rename Performance", ""};
+    else if constexpr (std::is_same_v<T, BindPerformanceRecording>) return {"Bind Performance recording", ""};
+    else return {"Authoring history", ""};
+  }, command);
+}
+
 foundation::Result<domain::AppliedCommand> commit_loaded(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
+    const std::shared_ptr<AuthoringHistory>& history,
     const std::filesystem::path& bundle,
     LoadedProject loaded,
     const PersistedCommand& command,
@@ -3207,6 +3404,50 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
             ErrorCode::invalid_argument,
             "command result cannot be persisted as valid Project Truth",
         });
+  }
+
+  std::string performance_group;
+  const auto performance_target = std::visit([](const auto& value) -> std::optional<domain::PerformanceId> {
+    using T = std::decay_t<decltype(value)>;
+    if constexpr (std::is_same_v<T, CreatePerformance> || std::is_same_v<T, PerformanceMutation> ||
+        std::is_same_v<T, FinalizePerformanceDraft> || std::is_same_v<T, DeletePerformance>) return value.performance_id;
+    return std::nullopt;
+  }, command);
+  if (performance_target) {
+    const auto draft = SequenceJournal{platform}.read_active_performance(bundle);
+    if (draft.has_value() && draft.value().performance_id == *performance_target)
+      performance_group = "performance:" + draft.value().session_id.value() + ":" + performance_target->value();
+    else if (!draft.has_value() && draft.error().code != ErrorCode::not_found)
+      return foundation::Result<domain::AppliedCommand>::failure(draft.error());
+  }
+  const auto [history_label, history_group] = history_description(command, sequence_flush_identity, performance_group);
+  const auto* history_restore = std::get_if<HistoryRestore>(&command);
+  auto history_prepared = history->prepare(
+      bundle, loaded.state, committed.state, authoring_fingerprint(loaded.state),
+      authoring_fingerprint(committed.state), history_label, history_group,
+      history_restore ? std::optional<bool>{history_restore->redo} : std::nullopt);
+  if (!history_prepared.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(history_prepared.error());
+  }
+  if (history_restore != nullptr) {
+    // Redo never reruns a producer; its retained bytes must still have the
+    // complete immutable identity before the new manifest can be published.
+    std::vector<foundation::ArtifactRef> artifacts;
+    for (const auto& [id, asset] : committed.state.assets) {
+      (void)id; artifacts.push_back(asset.artifact);
+    }
+    for (const auto& [id, performance] : committed.state.performances) {
+      (void)id;
+      if (performance.recording_artifact) artifacts.push_back(*performance.recording_artifact);
+    }
+    for (const auto& artifact : artifacts) {
+      const auto described = describe_artifact(*platform, bundle / "assets" / (artifact.sha256 + ".wav"), artifact.media_type);
+      if (!described.has_value() || described.value() != artifact) {
+        return foundation::Result<domain::AppliedCommand>::failure(Error{
+            ErrorCode::missing_asset, "Undo/Redo requires the original retained audio bytes",
+            {{"reason", "authoring_history_artifact_missing"}}});
+      }
+    }
   }
 
   std::vector<ArtifactStage> stages;
@@ -3448,6 +3689,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     }
   }
 #endif
+  history_prepared.value().begin();
   written = platform->replace_complete(
       bundle / "manifest.json", byte_span(manifest_bytes));
   if (!written.has_value()) {
@@ -3455,6 +3697,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     return foundation::Result<domain::AppliedCommand>::failure(
         written.error());
   }
+  history_prepared.value().confirm();
   detail::commit_publish();
 
   if (staged_artifact_commit) {
@@ -3620,6 +3863,7 @@ foundation::Result<void> admit_performance_sample_class(
 
 foundation::Result<domain::AppliedCommand> execute_persisted(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
+    const std::shared_ptr<AuthoringHistory>& history,
     const std::filesystem::path& bundle,
     const PersistedCommand& command) {
   auto tree = validate_managed_bundle_tree(*platform, bundle);
@@ -3642,7 +3886,7 @@ foundation::Result<domain::AppliedCommand> execute_persisted(
     return foundation::Result<domain::AppliedCommand>::failure(
         loaded.error());
   }
-  const auto recovered = recover_uncommitted(*platform, bundle, loaded.value());
+  const auto recovered = recover_uncommitted(*platform, history, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
@@ -3710,7 +3954,7 @@ foundation::Result<domain::AppliedCommand> execute_persisted(
         admitted.error());
   }
   return commit_loaded(
-      platform,
+      platform, history,
       bundle,
       std::move(loaded.value()),
       command,
@@ -3785,6 +4029,31 @@ foundation::Result<std::vector<std::byte>> read_verified_artifact(
       std::move(bytes));
 }
 
+foundation::Result<AuthoringHistoryStatus> history_status_locked(
+    const std::shared_ptr<ProjectStoragePlatform>& platform,
+    const std::shared_ptr<AuthoringHistory>& history,
+    const std::filesystem::path& bundle, const domain::ProjectState& current) {
+  using Result = foundation::Result<AuthoringHistoryStatus>;
+  history->reconcile(bundle, current, authoring_fingerprint(current));
+  auto status = history->status(bundle);
+  status.revision = current.revision;
+  if (!status.disabled_reason.empty()) return Result::success(std::move(status));
+  SequenceJournal journal{platform};
+  const auto sequence = journal.read_active(bundle);
+  if (sequence.has_value()) status.disabled_reason = "sequence_session_active";
+  else if (sequence.error().code != ErrorCode::not_found) return Result::failure(sequence.error());
+  const auto performance = journal.read_active_performance(bundle);
+  if (performance.has_value()) status.disabled_reason = "performance_session_active";
+  else if (performance.error().code != ErrorCode::not_found) return Result::failure(performance.error());
+  const auto sequence_recovery = journal.list_recoverable(bundle);
+  if (!sequence_recovery.has_value()) return Result::failure(sequence_recovery.error());
+  if (!sequence_recovery.value().empty()) status.disabled_reason = "sequence_recovery_pending";
+  const auto performance_recovery = journal.list_performance_recoverable(bundle);
+  if (!performance_recovery.has_value()) return Result::failure(performance_recovery.error());
+  if (!performance_recovery.value().empty()) status.disabled_reason = "performance_recovery_pending";
+  return Result::success(std::move(status));
+}
+
 }  // namespace
 
 struct PerformanceOwnerLock::Impl {
@@ -3821,15 +4090,99 @@ ProjectStore::ProjectStore()
     : ProjectStore(make_default_project_storage_platform()) {}
 
 ProjectStore::ProjectStore(std::shared_ptr<ProjectStoragePlatform> platform)
+    : ProjectStore(std::move(platform), std::make_shared<AuthoringHistory>()) {}
+
+ProjectStore::ProjectStore(std::shared_ptr<ProjectStoragePlatform> platform,
+                           std::shared_ptr<AuthoringHistory> history)
     : platform_(platform != nullptr
                     ? std::move(platform)
                     : make_default_project_storage_platform()),
+      history_(history ? std::move(history) : std::make_shared<AuthoringHistory>()),
       performance_owner_locks_(
           std::make_shared<PerformanceOwnerLocks>()) {}
+
+foundation::Result<AuthoringHistoryStatus> ProjectStore::open_authoring_history(
+    const std::filesystem::path& bundle, std::string session_id) {
+  auto guard = history_->acquire();
+  using Result = foundation::Result<AuthoringHistoryStatus>;
+  if (!domain::is_valid_uuid(session_id)) return Result::failure(Error{
+      ErrorCode::invalid_argument, "Authoring history session id is invalid"});
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) return Result::failure(lease.error());
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) return Result::failure(tree.error());
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) return Result::failure(loaded.error());
+  auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
+  if (!recovered.has_value()) return Result::failure(recovered.error());
+  history_->start(bundle, std::move(session_id), loaded.value().state, authoring_fingerprint(loaded.value().state));
+  return history_status_locked(platform_, history_, bundle, loaded.value().state);
+}
+
+foundation::Result<AuthoringHistoryStatus> ProjectStore::inspect_authoring_history(
+    const std::filesystem::path& bundle) const {
+  auto guard = history_->acquire();
+  using Result = foundation::Result<AuthoringHistoryStatus>;
+  auto current = inspect_committed(bundle);
+  if (!current.has_value()) {
+    if (current.error().details.value("storage_condition", std::string{}) == kStorageConditionProjectBusy) {
+      history_->invalidate(bundle, "authoring_history_owner_lost");
+      return Result::success(history_->status(bundle));
+    }
+    return Result::failure(current.error());
+  }
+  return history_status_locked(platform_, history_, bundle, current.value());
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::restore_authoring_history(
+    const std::filesystem::path& bundle, const domain::CommandMeta& meta,
+    const std::string& session_id, bool redo) {
+  auto guard = history_->acquire();
+  using Result = foundation::Result<domain::AppliedCommand>;
+  if (!domain::is_valid_uuid(meta.command_id.value()) || !domain::is_valid_uuid(session_id))
+    return Result::failure(Error{ErrorCode::invalid_argument, "Undo/Redo identity is invalid"});
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    if (lease.error().details.value("storage_condition", std::string{}) == kStorageConditionProjectBusy)
+      history_->invalidate(bundle, "authoring_history_owner_lost");
+    return Result::failure(lease.error());
+  }
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) return Result::failure(tree.error());
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) return Result::failure(loaded.error());
+  const auto status = history_status_locked(platform_, history_, bundle, loaded.value().state);
+  if (!status.has_value()) return Result::failure(status.error());
+  if (status.value().session_id != session_id || !status.value().disabled_reason.empty()) {
+    return Result::failure(Error{ErrorCode::invalid_argument, "Undo/Redo is unavailable",
+        {{"reason", status.value().session_id != session_id ? "authoring_history_session_mismatch" : status.value().disabled_reason}}});
+  }
+  const auto existing = loaded.value().commands.find(meta.command_id);
+  if (existing != loaded.value().commands.end()) {
+    const auto* original = std::get_if<HistoryRestore>(&existing->second);
+    if (!original || original->meta.expected_revision != meta.expected_revision ||
+        original->history_session_id != session_id || original->redo != redo) {
+      return Result::failure(Error{ErrorCode::invalid_argument,
+          "Undo/Redo command id is already bound to another operation"});
+    }
+    const auto retained = existing->second;
+    return commit_loaded(platform_, history_, bundle, std::move(loaded.value()), retained, std::nullopt, nullptr);
+  }
+  auto selected = history_->selected(bundle, session_id, redo);
+  if (!selected.has_value()) return Result::failure(selected.error());
+  return commit_loaded(platform_, history_, bundle, std::move(loaded.value()),
+      HistoryRestore{meta, session_id, redo, std::move(selected.value())}, std::nullopt, nullptr);
+}
+
+void ProjectStore::close_authoring_history() { history_->close(); }
+void ProjectStore::seal_authoring_history_group(const std::filesystem::path& bundle) {
+  history_->seal_group(bundle);
+}
 
 void ProjectStore::release_performance_owner_lock(
     const std::filesystem::path& bundle) noexcept {
   try {
+    auto history_guard = history_->acquire();
     const auto key = bundle.lexically_normal().generic_string();
     std::lock_guard lock(performance_owner_locks_->mutex);
     performance_owner_locks_->entries.erase(key);
@@ -3841,6 +4194,7 @@ foundation::Result<std::unique_ptr<PerformanceOwnerLock>>
 ProjectStore::acquire_performance_owner_lock_file(
     const std::filesystem::path& bundle,
     const foundation::SequenceSessionId& session_id) {
+  auto history_guard = history_->acquire();
   if (!domain::is_valid_uuid(session_id.value())) {
     return foundation::Result<
         std::unique_ptr<PerformanceOwnerLock>>::failure(Error{
@@ -3905,6 +4259,7 @@ foundation::Result<std::unique_ptr<PerformanceOwnerLock>>
 ProjectStore::acquire_performance_owner_lock(
     const std::filesystem::path& bundle,
     const foundation::SequenceSessionId& session_id) {
+  auto history_guard = history_->acquire();
   auto acquired = acquire_performance_owner_lock_file(bundle, session_id);
   if (!acquired.has_value()) {
     return acquired;
@@ -3937,6 +4292,7 @@ ProjectStore::acquire_performance_owner_lock(
 foundation::Result<void> ProjectStore::create(
     const std::filesystem::path& bundle,
     const domain::ProjectState& initial) {
+  auto history_guard = history_->acquire();
   if (bundle.extension() != ".lmdj" || initial.revision != 0) {
     return foundation::Result<void>::failure(
         Error{
@@ -4065,6 +4421,7 @@ foundation::Result<void> ProjectStore::create(
 
 foundation::Result<domain::ProjectState> ProjectStore::load(
     const std::filesystem::path& bundle) const {
+  auto history_guard = history_->acquire();
   auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<domain::ProjectState>::failure(tree.error());
@@ -4093,7 +4450,7 @@ foundation::Result<domain::ProjectState> ProjectStore::load(
   }
   if (lock != nullptr) {
     const auto recovered =
-        recover_uncommitted(*platform_, bundle, loaded.value());
+        recover_uncommitted(*platform_, history_, bundle, loaded.value());
     if (!recovered.has_value()) {
       return foundation::Result<domain::ProjectState>::failure(
           recovered.error());
@@ -4111,6 +4468,7 @@ foundation::Result<domain::ProjectState> ProjectStore::load(
 foundation::Result<CommandExecution> ProjectStore::execute_with_identity(
     const std::filesystem::path& bundle,
     const domain::Command& command) {
+  auto history_guard = history_->acquire();
   auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<CommandExecution>::failure(tree.error());
@@ -4131,7 +4489,7 @@ foundation::Result<CommandExecution> ProjectStore::execute_with_identity(
     return foundation::Result<CommandExecution>::failure(
         loaded.error());
   }
-  const auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+  const auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<CommandExecution>::failure(
         recovered.error());
@@ -4193,7 +4551,7 @@ foundation::Result<CommandExecution> ProjectStore::execute_with_identity(
         admitted.error());
   }
   auto outcome = commit_loaded(
-      platform_,
+      platform_, history_,
       bundle,
       std::move(loaded.value()),
       persisted_identity,
@@ -4231,6 +4589,7 @@ foundation::Result<CommandExecution> ProjectStore::execute_with_identity(
 foundation::Result<domain::AppliedCommand> ProjectStore::execute(
     const std::filesystem::path& bundle,
     const domain::Command& command) {
+  auto history_guard = history_->acquire();
   auto executed = execute_with_identity(bundle, command);
   if (!executed.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
@@ -4243,31 +4602,36 @@ foundation::Result<domain::AppliedCommand> ProjectStore::execute(
 foundation::Result<domain::AppliedCommand> ProjectStore::execute(
     const std::filesystem::path& bundle,
     const domain::UpdatePadPlayback& command) {
-  return execute_persisted(platform_, bundle, PersistedCommand{command});
+  auto history_guard = history_->acquire();
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::execute(
     const std::filesystem::path& bundle,
     const domain::ResetPadPlayback& command) {
-  return execute_persisted(platform_, bundle, PersistedCommand{command});
+  auto history_guard = history_->acquire();
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::create_performance(
     const std::filesystem::path& bundle,
     const CreatePerformance& command) {
-  return execute_persisted(platform_, bundle, PersistedCommand{command});
+  auto history_guard = history_->acquire();
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::rename_performance(
     const std::filesystem::path& bundle,
     const RenamePerformance& command) {
-  return execute_persisted(platform_, bundle, PersistedCommand{command});
+  auto history_guard = history_->acquire();
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::delete_performance(
     const std::filesystem::path& bundle,
     const DeletePerformance& command) {
-  return execute_persisted(platform_, bundle, PersistedCommand{command});
+  auto history_guard = history_->acquire();
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
 }
 
 foundation::Result<PerformanceLifecycleReceipt>
@@ -4276,6 +4640,7 @@ ProjectStore::begin_performance_draft(
     const domain::CommandMeta& meta,
     const foundation::SequenceSessionId& session_id,
     const domain::PerformanceId& performance_id) {
+  auto history_guard = history_->acquire();
   return begin_performance_draft(
       bundle, BeginPerformanceDraftRequest{meta, session_id, performance_id});
 }
@@ -4284,6 +4649,7 @@ foundation::Result<PerformanceLifecycleReceipt>
 ProjectStore::begin_performance_draft(
     const std::filesystem::path& bundle,
     const BeginPerformanceDraftRequest& request) {
+  auto history_guard = history_->acquire();
   if (!domain::is_valid_uuid(request.meta.command_id.value()) ||
       !domain::is_valid_uuid(request.session_id.value()) ||
       !domain::is_valid_uuid(request.performance_id.value())) {
@@ -4361,7 +4727,7 @@ ProjectStore::begin_performance_draft(
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         loaded.error());
   }
-  auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+  auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         recovered.error());
@@ -4459,7 +4825,7 @@ ProjectStore::begin_performance_draft(
   }
 
   auto outcome = commit_loaded(
-      platform_, bundle, std::move(loaded.value()),
+      platform_, history_, bundle, std::move(loaded.value()),
       PersistedCommand{command}, std::nullopt, nullptr);
   if (!outcome.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
@@ -4518,6 +4884,7 @@ ProjectStore::stop_performance_session(
     const std::filesystem::path& bundle,
     const foundation::SequenceSessionId& session_id,
     const foundation::CommandId& request_id) {
+  auto history_guard = history_->acquire();
   auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<PerformanceStopReceipt>::failure(tree.error());
@@ -4562,6 +4929,7 @@ ProjectStore::save_performance_draft(
     const domain::PerformanceId& performance_id,
     std::string name,
     std::optional<foundation::ArtifactRef> artifact) {
+  auto history_guard = history_->acquire();
   auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
@@ -4580,7 +4948,7 @@ ProjectStore::save_performance_draft(
         loaded.error());
   }
   auto recovered = recover_uncommitted(
-      *platform_,
+      *platform_, history_,
       bundle,
       loaded.value(),
       artifact.has_value()
@@ -4653,7 +5021,7 @@ ProjectStore::save_performance_draft(
           : std::move(tail),
   };
   auto outcome = commit_loaded(
-      platform_, bundle, std::move(loaded.value()),
+      platform_, history_, bundle, std::move(loaded.value()),
       PersistedCommand{command}, std::nullopt, nullptr);
   if (!outcome.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
@@ -4668,6 +5036,7 @@ ProjectStore::save_performance_draft(
     }
   }
   release_performance_owner_lock(bundle);
+  history_->seal_group(bundle);
   return foundation::Result<PerformanceLifecycleReceipt>::success(
       {performance_id,
        outcome.value().state.revision,
@@ -4679,6 +5048,7 @@ ProjectStore::discard_performance_draft(
     const std::filesystem::path& bundle,
     const domain::CommandMeta& meta,
     const domain::PerformanceId& performance_id) {
+  auto history_guard = history_->acquire();
   auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
@@ -4696,7 +5066,7 @@ ProjectStore::discard_performance_draft(
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         loaded.error());
   }
-  auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+  auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         recovered.error());
@@ -4740,7 +5110,7 @@ ProjectStore::discard_performance_draft(
     });
   }
   auto outcome = commit_loaded(
-      platform_, bundle, std::move(loaded.value()),
+      platform_, history_, bundle, std::move(loaded.value()),
       PersistedCommand{command}, std::nullopt, nullptr);
   if (!outcome.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
@@ -4755,6 +5125,7 @@ ProjectStore::discard_performance_draft(
     }
   }
   release_performance_owner_lock(bundle);
+  history_->seal_group(bundle);
   return foundation::Result<PerformanceLifecycleReceipt>::success(
       {performance_id,
        outcome.value().state.revision,
@@ -4766,6 +5137,7 @@ ProjectStore::apply_performance_recovery(
     const std::filesystem::path& bundle,
     const domain::CommandMeta& meta,
     const foundation::SequenceSessionId& session_id) {
+  auto history_guard = history_->acquire();
   auto reconciled = reconcile_performance_recovery(bundle);
   if (!reconciled.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
@@ -4788,7 +5160,7 @@ ProjectStore::apply_performance_recovery(
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         loaded.error());
   }
-  auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+  auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         recovered.error());
@@ -4938,7 +5310,7 @@ ProjectStore::apply_performance_recovery(
     });
   }
   auto outcome = commit_loaded(
-      platform_, bundle, std::move(loaded.value()),
+      platform_, history_, bundle, std::move(loaded.value()),
       PersistedCommand{mutation}, std::nullopt, nullptr);
   if (!outcome.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
@@ -4973,6 +5345,7 @@ ProjectStore::discard_performance_recovery(
     const std::filesystem::path& bundle,
     const foundation::SequenceSessionId& session_id,
     const foundation::CommandId& request_id) {
+  auto history_guard = history_->acquire();
   auto reconciled = reconcile_performance_recovery(bundle);
   if (!reconciled.has_value()) {
     return foundation::Result<PerformanceStopReceipt>::failure(
@@ -5095,6 +5468,7 @@ ProjectStore::bind_performance_recording(
     const domain::CommandMeta& meta,
     const domain::PerformanceId& performance_id,
     const foundation::ArtifactRef& artifact) {
+  auto history_guard = history_->acquire();
   auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
@@ -5113,7 +5487,7 @@ ProjectStore::bind_performance_recording(
         loaded.error());
   }
   auto recovered = recover_uncommitted(
-      *platform_, bundle, loaded.value(), artifact.sha256);
+      *platform_, history_, bundle, loaded.value(), artifact.sha256);
   if (!recovered.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         recovered.error());
@@ -5178,7 +5552,7 @@ ProjectStore::bind_performance_recording(
   }
   const BindPerformanceRecording command{meta, performance_id, artifact};
   auto outcome = commit_loaded(
-      platform_, bundle, std::move(loaded.value()),
+      platform_, history_, bundle, std::move(loaded.value()),
       PersistedCommand{command}, std::nullopt, nullptr);
   if (!outcome.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
@@ -5195,6 +5569,7 @@ ProjectStore::execute_performance_rebase(
     const std::filesystem::path& bundle,
     const foundation::SequenceSessionId& session_id,
     const domain::UpdateSequenceSettings& command) {
+  auto history_guard = history_->acquire();
   auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<CommandExecution>::failure(tree.error());
@@ -5209,7 +5584,7 @@ ProjectStore::execute_performance_rebase(
   if (!loaded.has_value()) {
     return foundation::Result<CommandExecution>::failure(loaded.error());
   }
-  auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+  auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<CommandExecution>::failure(recovered.error());
   }
@@ -5269,7 +5644,7 @@ ProjectStore::execute_performance_rebase(
     }
   } else if (existing->completed) {
     auto outcome = commit_loaded(
-        platform_, bundle, std::move(loaded.value()), persisted,
+        platform_, history_, bundle, std::move(loaded.value()), persisted,
         std::nullopt, nullptr);
     if (!outcome.has_value()) {
       return foundation::Result<CommandExecution>::failure(outcome.error());
@@ -5279,7 +5654,7 @@ ProjectStore::execute_performance_rebase(
   }
 
   auto outcome = commit_loaded(
-      platform_, bundle, std::move(loaded.value()), persisted,
+      platform_, history_, bundle, std::move(loaded.value()), persisted,
       std::nullopt, nullptr);
   if (!outcome.has_value()) {
     return foundation::Result<CommandExecution>::failure(outcome.error());
@@ -5312,6 +5687,7 @@ foundation::Result<std::optional<SequenceFlushExecution>>
 ProjectStore::replay_sequence_flush(
     const std::filesystem::path& bundle,
     const SequenceFlushIdentity& identity) {
+  auto history_guard = history_->acquire();
   if (!domain::is_valid_uuid(identity.session_id.value()) ||
       !domain::is_valid_uuid(identity.command_id.value()) ||
       !domain::is_valid_uuid(identity.pattern_id.value())) {
@@ -5339,7 +5715,7 @@ ProjectStore::replay_sequence_flush(
     return foundation::Result<
         std::optional<SequenceFlushExecution>>::failure(loaded.error());
   }
-  const auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+  const auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<
         std::optional<SequenceFlushExecution>>::failure(recovered.error());
@@ -5390,6 +5766,7 @@ ProjectStore::replay_sequence_flush(
     const std::filesystem::path& bundle,
     const foundation::SequenceSessionId& session_id,
     const foundation::CommandId& command_id) {
+  auto history_guard = history_->acquire();
   if (!domain::is_valid_uuid(session_id.value()) ||
       !domain::is_valid_uuid(command_id.value())) {
     return foundation::Result<
@@ -5417,7 +5794,7 @@ ProjectStore::replay_sequence_flush(
           std::optional<SequenceFlushExecution>>::failure(loaded.error());
     }
     const auto recovered =
-        recover_uncommitted(*platform_, bundle, loaded.value());
+        recover_uncommitted(*platform_, history_, bundle, loaded.value());
     if (!recovered.has_value()) {
       return foundation::Result<
           std::optional<SequenceFlushExecution>>::failure(recovered.error());
@@ -5445,6 +5822,7 @@ foundation::Result<SequenceFlushExecution>
 ProjectStore::execute_sequence_flush(
     const std::filesystem::path& bundle,
     const SequenceFlushIdentity& identity) {
+  auto history_guard = history_->acquire();
   SequenceJournal journal{platform_};
   auto active = journal.read_active(bundle);
   if (!active.has_value()) {
@@ -5493,7 +5871,7 @@ ProjectStore::execute_sequence_flush(
       return foundation::Result<domain::AppliedCommand>::failure(
           loaded.error());
     }
-    auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+    auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
     if (!recovered.has_value()) {
       return foundation::Result<domain::AppliedCommand>::failure(
           recovered.error());
@@ -5539,7 +5917,7 @@ ProjectStore::execute_sequence_flush(
     }
     auto persisted = PersistedCommand{command};
     return commit_loaded(
-        platform_, bundle, std::move(loaded.value()), persisted,
+        platform_, history_, bundle, std::move(loaded.value()), persisted,
         std::nullopt, nullptr, identity);
   }();
   if (!committed.has_value()) {
@@ -5595,6 +5973,7 @@ foundation::Result<std::optional<PerformanceFlushExecution>>
 ProjectStore::replay_performance_flush(
     const std::filesystem::path& bundle,
     const PerformanceFlushIdentity& identity) {
+  auto history_guard = history_->acquire();
   if (!domain::is_valid_uuid(identity.session_id.value()) ||
       !domain::is_valid_uuid(identity.command_id.value()) ||
       !domain::is_valid_uuid(identity.performance_id.value())) {
@@ -5621,7 +6000,7 @@ ProjectStore::replay_performance_flush(
     return foundation::Result<
         std::optional<PerformanceFlushExecution>>::failure(loaded.error());
   }
-  auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+  auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<
         std::optional<PerformanceFlushExecution>>::failure(
@@ -5669,6 +6048,7 @@ ProjectStore::replay_performance_flush(
     const std::filesystem::path& bundle,
     const foundation::SequenceSessionId& session_id,
     const foundation::CommandId& command_id) {
+  auto history_guard = history_->acquire();
   if (!domain::is_valid_uuid(session_id.value()) ||
       !domain::is_valid_uuid(command_id.value())) {
     return foundation::Result<
@@ -5728,7 +6108,7 @@ ProjectStore::replay_performance_flush(
       return foundation::Result<
           std::optional<PerformanceFlushExecution>>::failure(loaded.error());
     }
-    auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+    auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
     if (!recovered.has_value()) {
       return foundation::Result<
           std::optional<PerformanceFlushExecution>>::failure(
@@ -5765,6 +6145,7 @@ foundation::Result<PerformanceFlushExecution>
 ProjectStore::execute_performance_flush(
     const std::filesystem::path& bundle,
     const PerformanceFlushIdentity& identity) {
+  auto history_guard = history_->acquire();
   SequenceJournal journal{platform_};
   auto active = journal.read_active_performance(bundle);
   if (!active.has_value()) {
@@ -5830,7 +6211,7 @@ ProjectStore::execute_performance_flush(
       return foundation::Result<domain::AppliedCommand>::failure(
           loaded.error());
     }
-    auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+    auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
     if (!recovered.has_value()) {
       return foundation::Result<domain::AppliedCommand>::failure(
           recovered.error());
@@ -5893,7 +6274,7 @@ ProjectStore::execute_performance_flush(
       }
     }
     return commit_loaded(
-        platform_,
+        platform_, history_,
         bundle,
         std::move(loaded.value()),
         PersistedCommand{mutation},
@@ -5944,6 +6325,7 @@ ProjectStore::execute_performance_flush(
 foundation::Result<std::vector<PerformanceRecoveryCandidate>>
 ProjectStore::list_performance_recovery(
     const std::filesystem::path& bundle) const {
+  auto history_guard = history_->acquire();
   SequenceJournal journal{platform_};
   auto candidates = journal.list_performance_recoverable(bundle);
   if (!candidates.has_value()) {
@@ -5995,6 +6377,7 @@ ProjectStore::list_performance_recovery(
 foundation::Result<std::vector<PerformanceRecoveryCandidate>>
 ProjectStore::reconcile_performance_recovery(
     const std::filesystem::path& bundle) {
+  auto history_guard = history_->acquire();
   SequenceJournal journal{platform_};
   auto active = journal.read_active_performance(bundle);
   if (!active.has_value()) {
@@ -6106,6 +6489,7 @@ ProjectStore::disarm_sequence_capture(
     const std::filesystem::path& bundle,
     const foundation::SequenceSessionId& session_id,
     domain::PadSlotId slot) {
+  auto history_guard = history_->acquire();
   SequenceJournal journal{platform_};
   return journal.resolve_capture_disarm(
       bundle, session_id, slot,
@@ -6127,7 +6511,7 @@ ProjectStore::disarm_sequence_capture(
               loaded.error());
         }
         const auto recovered =
-            recover_uncommitted(*platform_, bundle, loaded.value());
+            recover_uncommitted(*platform_, history_, bundle, loaded.value());
         if (!recovered.has_value()) {
           return foundation::Result<std::optional<std::uint64_t>>::failure(
               recovered.error());
@@ -6186,6 +6570,7 @@ ProjectStore::disarm_sequence_capture(
 foundation::Result<std::vector<SequenceRecoveryCandidate>>
 ProjectStore::reconcile_sequence_recovery(
     const std::filesystem::path& bundle) {
+  auto history_guard = history_->acquire();
   SequenceJournal journal{platform_};
   auto active = journal.read_active(bundle);
   if (!active.has_value()) {
@@ -6279,6 +6664,7 @@ foundation::Result<ImportArtifactExecution>
 ProjectStore::import_artifact_with_identity(
     const std::filesystem::path& bundle,
     const ImportArtifactRequest& request) {
+  auto history_guard = history_->acquire();
   if (!domain::is_valid_uuid(request.meta.command_id.value())) {
     return foundation::Result<ImportArtifactExecution>::failure(
         Error{
@@ -6322,7 +6708,7 @@ ProjectStore::import_artifact_with_identity(
     return foundation::Result<ImportArtifactExecution>::failure(
         loaded.error());
   }
-  const auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+  const auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<ImportArtifactExecution>::failure(
         recovered.error());
@@ -6401,7 +6787,7 @@ ProjectStore::import_artifact_with_identity(
   };
   auto persisted_identity = command;
   auto outcome = commit_loaded(
-      platform_,
+      platform_, history_,
       bundle,
       std::move(loaded.value()),
       command,
@@ -6434,6 +6820,7 @@ ProjectStore::import_artifact_with_identity(
 foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact(
     const std::filesystem::path& bundle,
     const ImportArtifactRequest& request) {
+  auto history_guard = history_->acquire();
   auto imported = import_artifact_with_identity(bundle, request);
   if (!imported.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
@@ -6446,6 +6833,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact(
 foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
     const std::filesystem::path& bundle,
     const ImportArtifactBytesRequest& request) {
+  auto history_guard = history_->acquire();
   if (!domain::is_valid_uuid(request.meta.command_id.value())) {
     return foundation::Result<domain::AppliedCommand>::failure(
         Error{
@@ -6503,7 +6891,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
         loaded.error());
   }
   const auto recovered = recover_uncommitted(
-      *platform_, bundle, loaded.value());
+      *platform_, history_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
@@ -6562,7 +6950,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
       domain::Asset{request.asset_id, artifact, std::nullopt},
   };
   auto outcome = commit_loaded(
-      platform_,
+      platform_, history_,
       bundle,
       std::move(loaded.value()),
       command,
@@ -6583,6 +6971,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
 foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
     const std::filesystem::path& bundle,
     const SoundSetInstallRequest& request) {
+  auto history_guard = history_->acquire();
   if (!domain::is_valid_uuid(request.meta.command_id.value())) {
     return foundation::Result<domain::AppliedCommand>::failure(
         Error{
@@ -6682,7 +7071,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
         });
   }
   const auto recovered = recover_uncommitted(
-      *platform_, bundle, loaded.value());
+      *platform_, history_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
@@ -6708,7 +7097,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
   const bool replayed =
       loaded.value().receipts.contains(request.meta.command_id);
   return commit_loaded(
-      platform_,
+      platform_, history_,
       bundle,
       std::move(loaded.value()),
       command,
@@ -6722,6 +7111,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
 foundation::Result<domain::AppliedCommand> ProjectStore::adopt_candidates(
     const std::filesystem::path& bundle,
     const CandidateAdoptionRequest& request) {
+  auto history_guard = history_->acquire();
   if (!domain::is_valid_uuid(request.meta.command_id.value())) {
     return foundation::Result<domain::AppliedCommand>::failure(
         Error{
@@ -6838,7 +7228,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::adopt_candidates(
         ErrorCode::revision_conflict, "Candidate source bytes changed",
         {{"reason", "candidate_source_changed"}}});
   const auto recovered = recover_uncommitted(
-      *platform_, bundle, loaded.value());
+      *platform_, history_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
@@ -6862,7 +7252,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::adopt_candidates(
   // Freshness was checked before the shared full-command identity check.
   // Adoption never serves an old-revision receipt at this public boundary.
   return commit_loaded(
-      platform_,
+      platform_, history_,
       bundle,
       std::move(loaded.value()),
       command,
@@ -6877,6 +7267,7 @@ foundation::Result<domain::AppliedCommand>
 ProjectStore::import_assign_sample_bytes(
     const std::filesystem::path& bundle,
     const ImportAssignSampleBytesRequest& request) {
+  auto history_guard = history_->acquire();
   if (!domain::is_valid_uuid(request.meta.command_id.value())) {
     return foundation::Result<domain::AppliedCommand>::failure(
         Error{
@@ -6957,7 +7348,7 @@ ProjectStore::import_assign_sample_bytes(
     });
   }
   const auto recovered = recover_uncommitted(
-      *platform_, bundle, loaded.value());
+      *platform_, history_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
@@ -7059,7 +7450,7 @@ ProjectStore::import_assign_sample_bytes(
           resumed_staging->payload, capture.artifact, {}, false};
     }
     auto reconciled = commit_loaded(
-        platform_, bundle, std::move(loaded.value()), persisted,
+        platform_, history_, bundle, std::move(loaded.value()), persisted,
         std::move(stage), nullptr);
     if (resumed_staging.has_value()) {
       const auto cleanup = platform_->remove_tree(resumed_staging->directory);
@@ -7087,7 +7478,7 @@ ProjectStore::import_assign_sample_bytes(
 
   if (loaded.value().receipts.contains(request.meta.command_id)) {
     auto replayed = commit_loaded(
-        platform_,
+        platform_, history_,
         bundle,
         std::move(loaded.value()),
         command,
@@ -7133,7 +7524,7 @@ ProjectStore::import_assign_sample_bytes(
   }
 
   auto outcome = commit_loaded(
-      platform_,
+      platform_, history_,
       bundle,
       std::move(loaded.value()),
       command,
@@ -7171,6 +7562,7 @@ ProjectStore::import_assign_sample_bytes(
 foundation::Result<std::vector<std::byte>> ProjectStore::read_artifact(
     const std::filesystem::path& bundle,
     const foundation::ArtifactRef& artifact) const {
+  auto history_guard = history_->acquire();
   if (!valid_sha256(artifact.sha256) || artifact.media_type.empty()) {
     return foundation::Result<std::vector<std::byte>>::failure(
         Error{
@@ -7217,6 +7609,7 @@ foundation::Result<std::vector<std::byte>> ProjectStore::read_asset_artifact(
     const foundation::ProjectId& project_id,
     const foundation::AssetId& asset_id,
     const foundation::ArtifactRef& artifact) const {
+  auto history_guard = history_->acquire();
   using BytesResult = foundation::Result<std::vector<std::byte>>;
   if (bundle.extension() != ".lmdj" ||
       !domain::is_valid_uuid(project_id.value()) ||
@@ -7248,6 +7641,7 @@ foundation::Result<std::vector<std::byte>> ProjectStore::read_asset_artifact(
 
 foundation::Result<domain::ProjectState> ProjectStore::inspect_committed(
     const std::filesystem::path& bundle) const {
+  auto history_guard = history_->acquire();
   using Result = foundation::Result<domain::ProjectState>;
   if (bundle.extension() != ".lmdj")
     return Result::failure(invalid_project("project bundle extension is invalid", bundle));

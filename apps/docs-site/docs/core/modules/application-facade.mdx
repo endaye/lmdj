@@ -469,3 +469,23 @@ eligibility 持有期间选择有界 PCM16 区间并准备 48 kHz PCM。返回�
 再次验证源字节与 revision。查询不执行 Project recovery，不写文件、Asset、Pad
 或 revision。CLI/MCP 只用元数据；Native/Web 把类型化 PCM 交给自己的试听池，
 `played` 与停止属于 Host。源过期、丢弃、替换或损坏时拒绝且不改变 Project。
+
+## Session authoring history
+
+The Application owns one shared history for the currently opened Project and passes
+it to its Store, Project inventory/Bundle transfer and Pattern transport controller. `history.open`, `history.close`,
+`history.inspect`, `history.undo` and `history.redo` expose session identity, revision,
+action labels, stack counts and availability. Restore requests bind a session UUID,
+Command ID and expected revision; another session cannot consume the stack.
+
+All existing authoring transactions participate, including import, Sound Set install,
+Candidate adoption, Pad settings, Pattern edits and saved Performances. Sequence
+flushes group by recording session and target Pattern; Record-off, Stop and actual
+target switches seal the group. Performance draft save is one action and discard
+restores the previous history. Active imports, recordings and recovery retain their
+existing admission guards. Playback and live FX are not authoring history.
+
+History lives in Core, not Host snapshots. Closing/reopening, project replacement
+and external ownership changes end it. A restored revision still passes through
+normal projection and immutable Runtime publication; no Runtime Snapshot is saved
+as Project Truth.

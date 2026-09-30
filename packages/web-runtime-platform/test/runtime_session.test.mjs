@@ -44,6 +44,9 @@ const API = [
   "inspectSoundSet",
   "inspectPerformance",
   "inspectProject",
+  "inspectAuthoringHistory",
+  "undoAuthoring",
+  "redoAuthoring",
   "listPerformanceRecovery",
   "listPerformances",
   "listLocalProjects",
@@ -5778,5 +5781,61 @@ test("Pattern transport busy and retained-error surfaces propagate typed", async
   assert.equal(observed.phase, "error");
   assert.equal(observed.error.code, "IO_ERROR");
   assert.deepEqual(observed.error.details, {reason: "storage_failure"});
+  await session.close();
+});
+
+const HISTORY_STATUS = Object.freeze({session_id: "20000000-0000-4000-8000-000000000001",
+  project_revision: 4, undo_count: 1, redo_count: 0, undo_label: "Edit Pad", redo_label: "",
+  disabled_reason: "", can_undo: true, can_redo: false});
+const HISTORY_REQUEST = Object.freeze({sessionId: HISTORY_STATUS.session_id,
+  commandId: "20000000-0000-4000-8000-000000000002", expectedRevision: 4});
+
+test("authoring history validates status and carries exact session, revision and command identity", async () => {
+  const seen = [];
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation === "history.inspect") return success(envelope, HISTORY_STATUS);
+    if (["history.undo", "history.redo"].includes(envelope.operation)) {
+      seen.push([envelope.operation, structuredClone(envelope.payload)]);
+      return success(envelope, {committed_revision: 5, runtime_revision: 5, runtime_published: true});
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  const status = await session.inspectAuthoringHistory();
+  assert.equal(status.sessionId, HISTORY_REQUEST.sessionId);
+  assert.equal(status.canUndo, true);
+  assert.equal(status.canRedo, false);
+  assert.equal(status.projectRevision, 4);
+  assert.ok(Object.isFrozen(status));
+  assert.equal((await session.undoAuthoring(HISTORY_REQUEST)).committedRevision, 5);
+  await session.redoAuthoring(HISTORY_REQUEST);
+  assert.deepEqual(seen, ["history.undo", "history.redo"].map((operation) => [operation,
+    {session_id: HISTORY_REQUEST.sessionId, command_id: HISTORY_REQUEST.commandId, expected_revision: 4}]));
+  await session.close();
+});
+
+test("authoring history fails closed for inconsistent status and malformed command identity", async () => {
+  for (const change of [{undo_count: 101}, {can_redo: true}, {disabled_reason: "sequence_session_active"},
+    {session_id: "foreign"}, {project_revision: -1}]) {
+    const {session} = fixture({send: async (envelope) => success(envelope,
+      envelope.operation === "history.inspect" ? {...HISTORY_STATUS, ...change} : defaultResult(envelope.operation))});
+    await session.start();
+    await assert.rejects(session.inspectAuthoringHistory(), {code: "HOST_PROTOCOL_MISMATCH"});
+    await assert.rejects(session.undoAuthoring({...HISTORY_REQUEST, expectedRevision: -1}), TypeError);
+    await assert.rejects(session.redoAuthoring({...HISTORY_REQUEST, commandId: "other"}), TypeError);
+    await session.close();
+  }
+});
+
+test("history never automatically repeats an unknown mutation after inspection", async () => {
+  let submissions = 0;
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation === "history.undo") {submissions++; throw Object.assign(new Error("lost receipt"), {code: "HOST_TIMEOUT"});}
+    return success(envelope, envelope.operation === "history.inspect" ? HISTORY_STATUS : defaultResult(envelope.operation));
+  }});
+  await session.start();
+  await assert.rejects(session.undoAuthoring(HISTORY_REQUEST), {code: "HOST_TIMEOUT"});
+  await session.inspectAuthoringHistory();
+  assert.equal(submissions, 1);
   await session.close();
 });

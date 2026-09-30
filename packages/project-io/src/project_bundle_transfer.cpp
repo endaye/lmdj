@@ -474,13 +474,16 @@ struct ProjectBundleTransfer::Impl {
     std::unique_ptr<ProjectWriterLease> lease;
   };
 
-  explicit Impl(std::shared_ptr<ProjectStoragePlatform> selected)
+  Impl(std::shared_ptr<ProjectStoragePlatform> selected,
+       std::shared_ptr<AuthoringHistory> history)
       : platform(
             selected != nullptr
                 ? std::move(selected)
-                : make_default_project_storage_platform()) {}
+                : make_default_project_storage_platform()),
+        history(history ? std::move(history) : std::make_shared<AuthoringHistory>()) {}
 
   std::shared_ptr<ProjectStoragePlatform> platform;
+  std::shared_ptr<AuthoringHistory> history;
   mutable std::mutex mutex;
   std::map<std::string, Session> sessions;
   std::set<std::string> used_tokens;
@@ -490,9 +493,10 @@ namespace {
 
 foundation::Result<LocalProjectSummary> summarize_project(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
+    const std::shared_ptr<AuthoringHistory>& history,
     const std::filesystem::path& path,
     std::string_view contract_version = kBundleContractVersion) {
-  ProjectStore store{platform};
+  ProjectStore store{platform, history};
   const auto loaded = store.load(path);
   if (!loaded.has_value()) {
     return foundation::Result<LocalProjectSummary>::failure(
@@ -547,7 +551,12 @@ bool valid_workspace(const std::filesystem::path& path) {
 
 ProjectBundleTransfer::ProjectBundleTransfer(
     std::shared_ptr<ProjectStoragePlatform> platform)
-    : impl_(std::make_unique<Impl>(std::move(platform))) {}
+    : ProjectBundleTransfer(std::move(platform), nullptr) {}
+
+ProjectBundleTransfer::ProjectBundleTransfer(
+    std::shared_ptr<ProjectStoragePlatform> platform,
+    std::shared_ptr<AuthoringHistory> history)
+    : impl_(std::make_unique<Impl>(std::move(platform), std::move(history))) {}
 
 ProjectBundleTransfer::~ProjectBundleTransfer() = default;
 
@@ -581,7 +590,7 @@ ProjectBundleTransfer::list_local_projects(
     if (directory.extension() != ".lmdj") {
       continue;
     }
-    const auto summary = summarize_project(impl_->platform, root / directory);
+    const auto summary = summarize_project(impl_->platform, impl_->history, root / directory);
     if (!summary.has_value()) {
       return foundation::Result<std::vector<LocalProjectSummary>>::failure(
           summary.error());
@@ -824,7 +833,7 @@ foundation::Result<LocalProjectSummary> ProjectBundleTransfer::commit(
     return foundation::Result<LocalProjectSummary>::failure(error);
   }
   auto staged_summary = summarize_project(
-      impl_->platform, session.bundle, session.index->contract_version);
+      impl_->platform, impl_->history, session.bundle, session.index->contract_version);
   if (!staged_summary.has_value()) {
     const auto error = staged_summary.error();
     cleanup();
@@ -864,7 +873,7 @@ foundation::Result<LocalProjectSummary> ProjectBundleTransfer::commit(
   }
   if (present.value()) {
     const auto existing = summarize_project(
-        impl_->platform, destination, session.index->contract_version);
+        impl_->platform, impl_->history, destination, session.index->contract_version);
     if (!existing.has_value()) {
       // The summary described the local copy, not the staged bundle: keep the
       // marker so the refusal names the damaged neighbor instead of the

@@ -16,6 +16,8 @@
 
 namespace lmdj::project_io {
 
+class AuthoringHistory;
+
 inline constexpr std::string_view kProjectBundleConditionResourceLimit =
     "resource_limit";
 
@@ -46,6 +48,8 @@ class ProjectBundleTransfer final {
  public:
   explicit ProjectBundleTransfer(
       std::shared_ptr<ProjectStoragePlatform> platform);
+  ProjectBundleTransfer(std::shared_ptr<ProjectStoragePlatform> platform,
+                        std::shared_ptr<AuthoringHistory> history);
   ~ProjectBundleTransfer();
 
   ProjectBundleTransfer(const ProjectBundleTransfer&) = delete;

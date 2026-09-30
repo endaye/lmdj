@@ -2375,6 +2375,84 @@ void test_sequence_switch_supersedes_a_near_boundary_recording_overlay() {
   LMDJ_CHECK(!runtime->failed());
 }
 
+void test_authoring_history_import_roundtrip_and_reopen() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  check_success(runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  const auto status = [&] { return runtime->dispatch("history.inspect", Json::object(), {}).at("result"); };
+  const auto initial = status();
+  LMDJ_CHECK(initial.at("undo_count") == 0);
+  const auto session = initial.at("session_id");
+  const auto wav = mono_pcm16_wav(240);
+  check_success(runtime->dispatch("sample.import.begin", sample_begin_payload(9501,9502,0,kAssetId,wav.size()), {}));
+  LMDJ_CHECK(status().at("disabled_reason") == "sample_import_pending");
+  check_error(runtime->dispatch("history.undo", {{"session_id",session},{"command_id",uuid(9503)},{"expected_revision",0}}, {}), "HOST_STATE_INVALID");
+  check_success(runtime->dispatch("sample.import.abort", {{"import_token",uuid(9501)}}, {}));
+  LMDJ_CHECK(status() == initial);
+  check_success(runtime->dispatch("sample.import.begin", sample_begin_payload(9504,9505,0,kAssetId,wav.size()), {}));
+  check_success(runtime->dispatch("sample.import.chunk", sample_chunk_payload(9504,0,true,wav), wav));
+  check_success(runtime->dispatch("sample.import.commit", {{"import_token",uuid(9504)}}, {}));
+  LMDJ_CHECK(status().at("undo_count") == 1);
+  const auto imported = runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
+  const auto undo_payload = Json{{"session_id",session},{"command_id",uuid(9506)},{"expected_revision",1}};
+  const auto undone = runtime->dispatch("history.undo", undo_payload, {});
+  check_success(undone);
+  LMDJ_CHECK(undone.at("result").at("committed_revision") == 2);
+  LMDJ_CHECK(undone.at("result").at("runtime_revision") == 2);
+  LMDJ_CHECK(undone.at("result").at("runtime_published") == true);
+  const auto after_undo = runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
+  LMDJ_CHECK(after_undo.at("assets").empty());
+  LMDJ_CHECK(after_undo.at("banks").at(0).at("pads").at(0).at("asset_id").is_null());
+  // Creator refreshes the local inventory after every authoring change. Its
+  // separate summary Store must preserve the session-only Redo artifacts.
+  check_success(runtime->dispatch("project.list", Json::object(), {}));
+  LMDJ_CHECK(status().at("redo_count") == 1);
+  check_success(runtime->dispatch("history.undo", undo_payload, {}));
+  LMDJ_CHECK(status().at("project_revision") == 2);
+  LMDJ_CHECK(status().at("redo_count") == 1);
+  const auto redone = runtime->dispatch("history.redo", {{"session_id",session},{"command_id",uuid(9507)},{"expected_revision",2}}, {});
+  check_success(redone);
+  LMDJ_CHECK(redone.at("result").at("runtime_revision") == 3);
+  const auto after_redo = runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
+  LMDJ_CHECK(after_redo.at("assets") == imported.at("assets"));
+  LMDJ_CHECK(after_redo.at("banks") == imported.at("banks"));
+  LMDJ_CHECK(after_redo.at("revision") == 3);
+  check_success(runtime->dispatch("host.close", Json::object(), {}));
+  runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.open", {{"project_id",kProjectId},{"pattern_id",kPatternId}}, {}));
+  const auto reopened = status();
+  LMDJ_CHECK(reopened.at("session_id") != session);
+  LMDJ_CHECK(reopened.at("undo_count") == 0 && reopened.at("redo_count") == 0);
+  LMDJ_CHECK(reopened.at("project_revision") == 3);
+  LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project") == after_redo);
+  check_error(runtime->dispatch("history.undo", undo_payload, {}), "INVALID_ARGUMENT");
+}
+
+void test_authoring_history_restores_pattern_and_parameters() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto status = runtime->dispatch("history.inspect", Json::object(), {}).at("result");
+  check_success(runtime->dispatch("pattern.create", {{"command_id",uuid(9520)}, {"expected_revision",0},
+      {"pattern_id",uuid(9521)}, {"bars",4}}, {}));
+  check_success(runtime->dispatch("snapshot.reload", {{"pattern_id",uuid(9521)}}, {}));
+  check_success(runtime->dispatch("history.undo", {{"session_id",status.at("session_id")},
+      {"command_id",uuid(9522)},{"expected_revision",1}}, {}));
+  auto project = runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
+  LMDJ_CHECK(project.at("patterns").size() == 1 && !project.at("patterns").contains(uuid(9521)));
+  LMDJ_CHECK(runtime->engine().current_pattern_id()->value() == kPatternId);
+  check_success(runtime->dispatch("sequence.settings.update", {{"command_id",uuid(9523)}, {"expected_revision",2},
+      {"session_id",nullptr},{"bpm",99},{"quantize_enabled",false},{"swing_percent",64}}, {}));
+  LMDJ_CHECK(runtime->dispatch("history.inspect", Json::object(), {}).at("result").at("redo_count") == 0);
+  check_success(runtime->dispatch("history.undo", {{"session_id",status.at("session_id")},
+      {"command_id",uuid(9524)},{"expected_revision",3}}, {}));
+  project = runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
+  LMDJ_CHECK(project.at("bpm") == 120);
+  LMDJ_CHECK(project.at("sequence_settings").at("swing_percent") == 50);
+  LMDJ_CHECK(project.at("sequence_settings").at("quantize_enabled") == true);
+}
+
 void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
   TempDirectory temp;
   {
@@ -6558,6 +6636,11 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
   LMDJ_CHECK(recording.at("playing") == true);
   LMDJ_CHECK(recording.at("recording") == true);
   LMDJ_CHECK(recording.at("command_id") == uuid(775));
+  const auto recording_history = runtime->dispatch("history.inspect", Json::object(), {}).at("result");
+  LMDJ_CHECK(recording_history.at("disabled_reason") == "sequence_session_active");
+  check_error(runtime->dispatch("history.undo", {{"session_id",recording_history.at("session_id")},
+      {"command_id",uuid(9540)}, {"expected_revision",2}}, {}), "HOST_STATE_INVALID");
+
 
   // A global-enabled session rejects conflicting direct legacy writes; the
   // coordinator is the single journal owner.
@@ -6694,6 +6777,17 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
   check_exact_success(
       runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}),
       {"accepted"});
+  const auto recorded_history = runtime->dispatch("history.inspect", Json::object(), {}).at("result");
+  LMDJ_CHECK(recorded_history.at("undo_count") == 3); // import, assign, one recorded segment
+  LMDJ_CHECK(recorded_history.at("can_undo") == true);
+  check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
+  check_success(runtime->dispatch("history.undo", {{"session_id",recorded_history.at("session_id")},
+      {"command_id",uuid(9541)}, {"expected_revision",recorded_history.at("project_revision")}}, {}));
+  const auto after_undo = runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
+  LMDJ_CHECK(after_undo.at("patterns").at(kPatternId).at("events").empty());
+  LMDJ_CHECK(after_undo.at("assets") == truth.at("result").at("project").at("assets"));
+  LMDJ_CHECK(after_undo.at("banks") == truth.at("result").at("project").at("banks"));
+
 }
 
 void test_pattern_transport_suspend_barrier_settles_recording() {
@@ -7385,6 +7479,8 @@ int main() {
     test_bpm_publication_then_switch_flushes_old_events_at_exact_boundary();
     test_sequence_switch_prepares_before_selecting_bar_boundary();
     test_sequence_switch_supersedes_a_near_boundary_recording_overlay();
+    test_authoring_history_import_roundtrip_and_reopen();
+    test_authoring_history_restores_pattern_and_parameters();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
     test_sample_import_prevents_current_project_switch_until_terminal();
     test_sample_import_protocol_failure_aborts_staging();

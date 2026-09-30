@@ -14,6 +14,7 @@
 #include <lmdj/domain/command_handler.hpp>
 #include <lmdj/foundation/artifact.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
+#include <lmdj/project_io/authoring_history.hpp>
 #include <lmdj/project_io/storage_platform.hpp>
 
 namespace lmdj::project_io {
@@ -139,6 +140,19 @@ class ProjectStore {
  public:
   ProjectStore();
   explicit ProjectStore(std::shared_ptr<ProjectStoragePlatform> platform);
+  ProjectStore(std::shared_ptr<ProjectStoragePlatform> platform,
+               std::shared_ptr<AuthoringHistory> history);
+
+  foundation::Result<AuthoringHistoryStatus> open_authoring_history(
+      const std::filesystem::path& bundle, std::string session_id);
+  foundation::Result<AuthoringHistoryStatus> inspect_authoring_history(
+      const std::filesystem::path& bundle) const;
+  foundation::Result<domain::AppliedCommand> restore_authoring_history(
+      const std::filesystem::path& bundle, const domain::CommandMeta& meta,
+      const std::string& session_id, bool redo);
+  void close_authoring_history();
+  void seal_authoring_history_group(const std::filesystem::path& bundle);
+
 
   struct ImportArtifactRequest {
     domain::CommandMeta meta;
@@ -362,6 +376,7 @@ class ProjectStore {
       const std::filesystem::path& bundle) noexcept;
 
   std::shared_ptr<ProjectStoragePlatform> platform_;
+  std::shared_ptr<AuthoringHistory> history_;
   std::shared_ptr<PerformanceOwnerLocks> performance_owner_locks_;
 };
 

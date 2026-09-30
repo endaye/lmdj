@@ -144,7 +144,7 @@ Vitest 覆盖播放头的 normal/loop 时间推进、44.1/48 kHz source-frame �
 
 ## 非能力
 
-当前不宣称离线安装/PWA、云同步、协作、素材智能、生产部署已执行、`beta`/`stable` 或未执行的物理设备体验已完成。Sequence recording 已交付，但通用 Sequence event editor、Undo/redo、持久化 Asset DSP 与自动 slicing 仍不在当前能力内。Perform surface 已进入 `1.0.42.0` 源码，但 Stage 10 尚无任何物理验收：没有 Perform 的实体听感、实体输入或延迟结论，自动化只证明状态机、authority 归属与分发身份边界。同样不宣称当前 Product Build `1.0.44.0` 已获得 tag、Release、部署或 Channel promotion——匹配该 Build 的不可变门户快照随分配在同一 Pull Request 内冻结，而 tag、Release、部署与 Channel promotion 各自仍是独立的后续授权与验证边界。历史 `1.0.42.0` 自身的 tag、Release、快照、部署与 `dev` 晋级证据不自动升级为当前 Build 的结论。
+当前不宣称离线安装/PWA、云同步、协作、素材智能、生产部署已执行、`beta`/`stable` 或未执行的物理设备体验已完成。Sequence recording 已交付，但通用 Sequence event editor、持久化 Asset DSP 与自动 slicing 仍不在当前能力内。Perform surface 已进入 `1.0.42.0` 源码，但 Stage 10 尚无任何物理验收：没有 Perform 的实体听感、实体输入或延迟结论，自动化只证明状态机、authority 归属与分发身份边界。同样不宣称当前 Product Build `1.0.44.0` 已获得 tag、Release、部署或 Channel promotion——匹配该 Build 的不可变门户快照随分配在同一 Pull Request 内冻结，而 tag、Release、部署与 Channel promotion 各自仍是独立的后续授权与验证边界。历史 `1.0.42.0` 自身的 tag、Release、快照、部署与 `dev` 晋级证据不自动升级为当前 Build 的结论。
 
 ## Cloudflare 隔离恢复验证
 
@@ -202,3 +202,20 @@ Pad，重复目标被拒绝。采用以当前 revision 和新命令提交一次�
 源素材和已有 Pattern 保留。响应不确定时先检查 Project，
 不自动重发采用。Job 使用 Project/源 Asset 派生的稳定 ID，重新打开可检查
 历史与当前 Set；取消和丢弃显式进行，已采用素材不随 Set 丢弃而删除。
+
+## Project Undo and Redo
+
+The global history controls are shared by Sample, Sequence and Perform. They show
+the next action and explain disabled states, including unfinished recording, import,
+recovery and Pattern playback. One drag commits at its existing gesture boundary.
+The toolbar requests Facade history; it keeps no Project snapshot or audio copy.
+A failed request retains its exact identity for an explicit retry, and successful
+restoration refreshes the current Project, Pattern and Sample projections.
+
+Navigation and committed saves retain history. Closing, refreshing, reopening,
+switching Project or losing ownership starts a fresh history; saved Truth remains.
+New edits clear Redo, while refused, failed, cancelled and no-op operations preserve
+it. Precommit CaptureBuffer crop remains outside Project Undo. Upcoming hold-record,
+Pad-management and grid-editing interactions remain in their own implementation Tasks.
+Automation verifies state and persistence only; no physical-device listening or
+lifecycle acceptance is claimed by this change.

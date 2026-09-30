@@ -45,3 +45,14 @@ copying state. All assignments create independent Assets, reset target playback,
 retain source Assets and increment one revision in the current Project Contract.
 Source lineage retains the analysis revision. This command has no public receipt
 replay semantics; a stale revision remains a conflict.
+
+## Session authoring deltas
+
+`AuthoringDelta` records typed before/after values for Pad slots, Assets and lineage,
+Patterns, Pattern Slots, Performances, BPM, Quantize and Swing. Applying a delta
+checks its prior values and the resulting domain invariants atomically. Undo uses
+the inverse; Redo uses the same original delta. Both generate a new increasing
+revision and preserve Project identity and Contract. Composition folds internal
+recording commits into one user action. Domain owns no history stack or audio bytes.
+`domain.authoring_delta` verifies round trips, changed-value conflicts, composition,
+object coverage and refusal without partial mutation.

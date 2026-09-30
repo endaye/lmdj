@@ -4,6 +4,7 @@ add_library(
     src/project.cpp
     src/migration.cpp
     src/command_handler.cpp
+    src/authoring_delta.cpp
 )
 add_library(lmdj::authoring_domain ALIAS lmdj_authoring_domain)
 
@@ -21,6 +22,12 @@ lmdj_target_warnings(lmdj_authoring_domain)
 lmdj_target_sanitizers(lmdj_authoring_domain)
 
 if(BUILD_TESTING)
+  add_executable(lmdj_domain_authoring_delta_tests "${CMAKE_SOURCE_DIR}/tests/core/domain/authoring_delta_test.cpp")
+  target_include_directories(lmdj_domain_authoring_delta_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_domain_authoring_delta_tests PRIVATE lmdj::authoring_domain)
+  lmdj_target_warnings(lmdj_domain_authoring_delta_tests)
+  lmdj_target_sanitizers(lmdj_domain_authoring_delta_tests)
+  lmdj_add_test(NAME domain.authoring_delta TIER unit COMMAND lmdj_domain_authoring_delta_tests)
   add_executable(
     lmdj_domain_project_tests
     "${CMAKE_SOURCE_DIR}/tests/core/domain/project_test.cpp"

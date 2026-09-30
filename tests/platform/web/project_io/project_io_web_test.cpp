@@ -1103,6 +1103,46 @@ std::optional<nlohmann::json> run_soundset_store_action() {
   };
 }
 
+std::optional<nlohmann::json> run_history_action() {
+  using namespace lmdj;
+  const auto action = query("action");
+  if (action != "history_roundtrip" && action != "history_reopen") return std::nullopt;
+  auto platform = project_io::make_web_project_storage_platform();
+  const auto bundle = std::filesystem::path{"/lmdj-workspace"} / (query("bundle") + ".lmdj");
+  project_io::ProjectStore store{platform};
+  if (action == "history_reopen") {
+    const auto state = value(store.load(bundle), "history reopen Truth");
+    const auto history = value(store.open_authoring_history(bundle,uuid("9601")), "history reopen session");
+    require(state.revision == 3 && state.assets.size() == 1, "history reopen changed persisted content");
+    require(history.undo_count == 0 && history.redo_count == 0, "history stack survived reopening");
+    const auto artifact = state.assets.begin()->second.artifact;
+    require(text(value(store.read_artifact(bundle,artifact), "history reopen Artifact")) == "history audio", "history reopen bytes changed");
+    return nlohmann::json{{"complete",true},{"result",{{"revision",state.revision},{"undo",history.undo_count},{"redo",history.redo_count}}}};
+  }
+  success(store.create(bundle,value(domain::create_project(foundation::ProjectId{uuid("9602")},120), "history initial Truth")), "history create");
+  const auto opened = value(store.open_authoring_history(bundle,uuid("9603")), "history open");
+  const auto imported = value(store.import_artifact_bytes(bundle,
+      {{foundation::CommandId{uuid("9604")},0},foundation::AssetId{uuid("9605")},"audio/wav",bytes("history audio")}), "history import");
+  const auto artifact = imported.state.assets.begin()->second.artifact;
+  const domain::CommandMeta undo{foundation::CommandId{uuid("9606")},1};
+  const auto undone = value(store.restore_authoring_history(bundle,undo,opened.session_id,false), "history Undo");
+  require(undone.state.assets.empty() && undone.state.revision == 2, "history Undo content differs");
+  require(value(store.load(bundle), "history scavenge").assets.empty(), "history scavenge changed Truth");
+  require(text(value(store.read_artifact(bundle,artifact), "history retained bytes")) == "history audio", "history lost retained bytes");
+  const auto retry = value(store.restore_authoring_history(bundle,undo,opened.session_id,false), "history retry");
+  require(retry.replayed && retry.state.revision == 2, "history retry repeated Undo");
+  const auto redone = value(store.restore_authoring_history(bundle,
+      {foundation::CommandId{uuid("9607")},2},opened.session_id,true), "history Redo");
+  require(redone.state.assets == imported.state.assets && redone.state.revision == 3, "history Redo identities differ");
+  const auto state = value(store.load(bundle), "history persisted readback");
+  require(state == redone.state, "history persisted content differs");
+  const auto history = value(store.inspect_authoring_history(bundle), "history final status");
+  require(history.undo_count == 1 && history.redo_count == 0, "history moved more than once");
+  return nlohmann::json{{"complete",true},{"result",{{"revision",state.revision},
+      {"undo",history.undo_count},{"redo",history.redo_count},{"artifact_sha256",artifact.sha256},
+      {"artifact_byte_length",artifact.byte_length},{"artifact_bytes",text(value(store.read_artifact(bundle,artifact), "history final bytes"))}}}};
+}
+
 nlohmann::json run_suite() {
   using namespace lmdj;
   auto platform = project_io::make_web_project_storage_platform();
@@ -1846,7 +1886,8 @@ int main() {
   nlohmann::json report;
   try {
     report_progress("native-suite-start");
-    auto action = run_admission_action();
+    auto action = run_history_action();
+    if (!action.has_value()) action = run_admission_action();
     if (!action.has_value()) {
       action = run_soundset_store_action();
     }

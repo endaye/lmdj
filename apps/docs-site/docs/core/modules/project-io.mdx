@@ -171,3 +171,32 @@ retains exactly the committed revision. `candidate_adoption_test.cpp` exercises
 multi-artifact failure points, pre/post-publication crashes, source checks and
 persisted identity tampering. Workspace eligibility remains the Facade owner's
 responsibility and must span this call.
+
+## Authoring history publication and retention
+
+Every Store sharing a Facade uses its session `AuthoringHistory`. The commit path
+prepares a typed delta, retains both possible outcomes before manifest publication,
+and moves history only after publication. An unknown response is reconciled against
+the committed revision and fingerprint before another action. Exact command retries
+reuse their receipt; failed, replayed and content-identical writes add no entry.
+
+Undo/Redo are durable `HistoryRestore` transactions using the normal journal,
+checkpoint and manifest path. They persist restored Truth, never the session stacks.
+This new private transaction command requires the updated Project I/O reader;
+portable Project Bundle and Project Truth schemas are unchanged. A transferred
+managed Project may contain these durable transaction commands and therefore also
+requires the updated reader. The session stack itself is never exported.
+
+The session keeps at most 100 user actions. Active multi-commit recording retains
+the displaced Redo branch and, at capacity, one displaced oldest action until the
+group is saved or cancelled. Cancellation restores those entries. All retained
+history and unresolved publication outcomes protect original Artifact hashes from
+unreferenced-file scavenging. Redo verifies the complete Artifact identity and
+reuses those bytes; it does not rerun a Provider or import.
+
+Active recording journals and unresolved recovery disable restoration. A different
+committed revision/fingerprint or lost writer ownership invalidates the session.
+`project_io.authoring_history` covers publication faults, unknown outcomes, retries,
+no-op/fork, retained bytes, reopen, external changes, capacity, Pad clearing and
+Performance draft cancellation/save. The real OPFS authoring-history fixture covers
+import, Undo, scavenging, exact retry, byte-identical Redo and a fresh-page reopen.

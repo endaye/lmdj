@@ -23,14 +23,14 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 Host 向 Application Facade 发出命令；Authoring Domain 更新 Project Truth；Project I/O 负责事务式存取和录音会话 Journal。Host 不解析 Project bundle。
 
-## Creator Undo/Redo（已决策，尚未实现）
+## Creator Undo/Redo（会话内历史）
 
-[2026-09-30 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-09-30-creator-undo-redo-semantics.md)解决 #1655，替代 S8-D4 对后续 Creator 的通用 Undo/Redo 限制；引擎与控件仍由 #1659 实现。
+[2026-09-30 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-09-30-creator-undo-redo-semantics.md)解决 #1655，替代 S8-D4 对后续 Creator 的通用 Undo/Redo 限制；引擎与全局控件由 #1659 接入。
 历史属于本设备当前工程打开会话，Sample、Sequence、Perform 共用；一次用户创作动作一条记录，覆盖成功提交的 Pad、参数、Pattern、录音、安装及处理结果采纳。拖动、批量编辑与录制结算段整体撤销；播放、导航、实时 FX、设备设置、任务进度及未提交缓冲不入栈。
 
 Undo/Redo 恢复创作内容并生成新的递增 revision，不回写旧 revision。Pad 清空保留 Pattern 事件；任务取消本身不入栈，Undo 不重新启动下载或 Provider。Redo 复用原产物，历史引用的素材必须保留。未结算录音或待恢复事务期间禁用并解释原因。保存和切页保留历史，关闭、刷新、重开、切换工程、接管或外部替换后清空；工程内容仍持久化。
 
-历史由 Application Facade/Core 拥有，Host 只发请求和展示状态，Runtime Snapshot 仍是派生状态。首版不持久化历史或实现跨设备撤销；未来协作须遵守“只撤销自己本设备的操作”。这项决策不授予 AI 自动改工程的权限，#536 继续开放；具体操作矩阵、失败恢复与验收场景见决策文件。
+历史由 Application Facade/Core 拥有，Host 只发请求和展示状态，Runtime Snapshot 仍是派生状态。首版不持久化历史或实现跨设备撤销；未来协作须遵守“只撤销自己本设备的操作”。这项决策不授予 AI 自动改工程的权限，#536 继续开放；具体操作矩阵、失败恢复与验收场景见决策文件。当前最多保留 100 个动作；未结束录制分组暂留被替换的 Redo 和一个可能被挤出的旧动作，以便取消恢复。Pattern 播放期间要求先显式 Stop，撤销不会隐式停止。后续长按录音、Pad 管理和网格编辑的新交互仍由各自 Task 实现。
 
 ## Sequence 录音
 
@@ -38,7 +38,7 @@ Undo/Redo 恢复创作内容并生成新的递增 revision，不回写旧 revisi
 
 ## Pad Capture pre-commit 编辑
 
-Creator 的录音会话是视口锚定的模态面板：固定几何（宽度 `min(44rem, calc(100vw - 2rem))`，最大高度 `calc(100dvh - 2rem)` 内部滚动），Header、固定高度波形/电平区与底部操作行三个固定区域，进入 recording 只换内容、不改变外框；打开时焦点落在当前阶段主操作，阶段切换若卸载被聚焦控件则焦点迁往新阶段主操作，Escape 在任意阶段关闭并先停止进行中的录音，关闭后焦点恢复发起按钮。录音后可在 Host-local ephemeral `CaptureBuffer` 里选择严格子区间并执行 **Crop to selection**。Crop 先准备精确 PCM、chunk 索引与增量 block peaks，再原子发布归零的新 buffer revision；缓存同时失效。它可重复执行，且 Commit 继续沿用原有 buffer + selection 接口。Project Truth 只在现有 Commit 成功后变化；当前没有 Undo、持久化 Asset 编辑、自动 silence trimming、fade、normalize 或其他 DSP。
+Creator 的录音会话是视口锚定的模态面板：固定几何（宽度 `min(44rem, calc(100vw - 2rem))`，最大高度 `calc(100dvh - 2rem)` 内部滚动），Header、固定高度波形/电平区与底部操作行三个固定区域，进入 recording 只换内容、不改变外框；打开时焦点落在当前阶段主操作，阶段切换若卸载被聚焦控件则焦点迁往新阶段主操作，Escape 在任意阶段关闭并先停止进行中的录音，关闭后焦点恢复发起按钮。录音后可在 Host-local ephemeral `CaptureBuffer` 里选择严格子区间并执行 **Crop to selection**。Crop 先准备精确 PCM、chunk 索引与增量 block peaks，再原子发布归零的新 buffer revision；缓存同时失效。它可重复执行，且 Commit 继续沿用原有 buffer + selection 接口。Project Truth 只在现有 Commit 成功后变化；预提交 Crop 没有 Undo；当前没有持久化 Asset 编辑、自动 silence trimming、fade、normalize 或其他 DSP。
 
 ## 长素材摄入与选区提交
 

@@ -106,3 +106,18 @@ SDK 的标准文件系统 workspace 与 Project I/O adapter 映射同一 OPFS �
 类型化 audition PCM 进入现有引擎试听池，`played` 仅表示 voice admission；
 Host-only stop 排入真实停止事件。Provider 列表包含当前 session grants，
 Creator 的显式 Slice 授权保留其他权限。成功结果回传 Facade 验证的 Project revision。
+
+## Authoring history control
+
+`history.inspect`, `history.undo` and `history.redo` address only the open Project.
+The JS session validates status and serializes restore requests with other Project
+actions. A caller supplies the session UUID, Command ID and expected revision;
+there is no automatic retry with a new identity.
+
+Restoration reads back the committed projection and rebuilds/publishes the Runtime
+bank and selected Pattern through existing acknowledgement handling. If publication
+fails after durable commit, the response preserves the committed revision and
+reports the sound-update failure. The current Pattern transport must be stopped
+before Undo/Redo; controls never implicitly stop recording or playback.
+Native control-runtime tests cover import identity, exact retry, reopen isolation,
+parameters, Pattern restoration, recording refusal and grouped recorded events.

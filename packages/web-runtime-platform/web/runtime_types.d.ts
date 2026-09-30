@@ -544,3 +544,31 @@ export interface CandidateRuntimeSession {
   stopCandidateAudition(): Promise<{accepted: true}>;
   adoptCandidates(request: CandidateAdoptRequest): Promise<CandidateAdoptResult>;
 }
+
+export interface AuthoringHistoryStatus {
+  readonly sessionId: string;
+  readonly projectRevision: number;
+  readonly undoCount: number;
+  readonly redoCount: number;
+  readonly undoLabel: string;
+  readonly redoLabel: string;
+  readonly disabledReason: string;
+  readonly canUndo: boolean;
+  readonly canRedo: boolean;
+}
+export interface AuthoringHistoryRequest {
+  readonly sessionId: string;
+  readonly commandId: string;
+  readonly expectedRevision: number;
+}
+export interface AuthoringHistoryMutation {
+  readonly committedRevision: number;
+  readonly runtimeRevision: number | null;
+  readonly runtimePublished: boolean;
+  readonly snapshotError: Readonly<{code: string; message: string; details: Readonly<Record<string, unknown>>}> | null;
+}
+export interface AuthoringHistoryRuntimeSession {
+  inspectAuthoringHistory(): Promise<Readonly<AuthoringHistoryStatus>>;
+  undoAuthoring(request: AuthoringHistoryRequest): Promise<Readonly<AuthoringHistoryMutation>>;
+  redoAuthoring(request: AuthoringHistoryRequest): Promise<Readonly<AuthoringHistoryMutation>>;
+}

@@ -205,7 +205,7 @@ Json bridge_query_cancelled_error() {
 }
 
 bool safety_interruptible_query(std::string_view operation) {
-  return operation == "project.inspect" || operation == "project.list" ||
+  return operation == "project.inspect" || operation == "history.inspect" || operation == "project.list" ||
          operation == "sample.inspect" || operation == "sample.quota" ||
          operation == "sample.waveform";
 }
@@ -224,11 +224,14 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 88> operations{
+  static constexpr std::array<std::string_view, 91> operations{
       "host.status",
       "project.create",
       "project.open",
       "project.inspect",
+      "history.inspect",
+      "history.undo",
+      "history.redo",
       "project.list",
       "project.import.begin",
       "project.import.index",
@@ -319,10 +322,12 @@ bool supported_operation(std::string_view operation) {
 }
 
 bool snapshot_notification_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 6> operations{
+  static constexpr std::array<std::string_view, 8> operations{
       "project.open",
       "snapshot.reload",
       "snapshot.retry",
+      "history.undo",
+      "history.redo",
       "sample.import.commit",
       "sample.update_pad",
       "sample.reset_pad",
@@ -1286,7 +1291,8 @@ struct ControlBridge::Impl {
           const auto sample_mutation =
               operation == "sample.import.commit" ||
               operation == "sample.update_pad" ||
-              operation == "sample.reset_pad";
+              operation == "sample.reset_pad" ||
+              operation == "history.undo" || operation == "history.redo";
           const auto& result = has_result ? response.at("result") : Json{};
           const auto snapshot_truth =
               sample_mutation && has_result

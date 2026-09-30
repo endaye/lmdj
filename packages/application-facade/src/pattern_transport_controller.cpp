@@ -301,6 +301,7 @@ foundation::Result<void> PatternTransportCoordinator::finish_close() {
         derive_command(pending_->command_id, 2, 'b'));
     if (!settled.has_value()) return settled;
   }
+  store_.seal_authoring_history_group(bundle_);
   recording_ = false;
   close_pending_ = false;
   close_applied_switch_ = false;
