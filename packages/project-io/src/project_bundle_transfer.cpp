@@ -19,7 +19,9 @@
 #include <lmdj/domain/project.hpp>
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/project_store.hpp>
+#include <lmdj/project_io/sequence_journal.hpp>
 
+#include "publish_token.hpp"
 #include "storage_error.hpp"
 
 namespace lmdj::project_io {
@@ -972,6 +974,261 @@ foundation::Result<void> ProjectBundleTransfer::cleanup_incomplete(
     }
   }
   return foundation::Result<void>::success();
+}
+
+foundation::Result<LocalProjectSummary> ProjectBundleTransfer::duplicate(
+    const std::filesystem::path& workspace_root,
+    const foundation::ProjectId& source_project_id,
+    const foundation::ProjectId& project_id) {
+  using Outcome = foundation::Result<LocalProjectSummary>;
+  std::lock_guard lock(impl_->mutex);
+  if (!valid_workspace(workspace_root) ||
+      !domain::is_valid_uuid(source_project_id.value()) ||
+      !domain::is_valid_uuid(project_id.value()) ||
+      source_project_id == project_id) {
+    return Outcome::failure(
+        invalid_argument("Project duplicate identity is invalid"));
+  }
+  auto& platform = *impl_->platform;
+  const auto destination_root = projects_root(workspace_root);
+  const auto source =
+      destination_root / (source_project_id.value() + ".lmdj");
+  const auto destination =
+      destination_root / (project_id.value() + ".lmdj");
+
+  // Held until return: no other process or tab can commit to the source while
+  // its Truth and Artifacts are read.
+  auto source_lease = platform.acquire_writer(source);
+  if (!source_lease.has_value()) {
+    return Outcome::failure(
+        sanitized_storage_error(
+            source_lease.error(), "Source Project writer is busy"));
+  }
+  const auto source_present = platform.directory_exists(source);
+  if (!source_present.has_value()) {
+    return Outcome::failure(
+        sanitized_storage_error(
+            source_present.error(), "Source Project could not be inspected"));
+  }
+  if (!source_present.value()) {
+    return Outcome::failure(
+        Error{ErrorCode::not_found, "Source Project was not found"});
+  }
+  const auto destination_present = platform.directory_exists(destination);
+  if (!destination_present.has_value()) {
+    return Outcome::failure(
+        sanitized_storage_error(
+            destination_present.error(),
+            "Local Project destination could not be inspected"));
+  }
+  if (destination_present.value()) {
+    return Outcome::failure(
+        Error{
+            ErrorCode::duplicate_id,
+            "A local Project already uses this Project ID",
+        });
+  }
+
+  // An active recording owns uncommitted takes that are not yet Project
+  // Truth; copying around it would silently drop them.
+  const SequenceJournal journal{impl_->platform};
+  const auto sequence = journal.read_active(source);
+  if (sequence.has_value()) {
+    return Outcome::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Project duplicate is blocked by the active Sequence Journal",
+            {{"reason", "sequence_session_active"},
+             {"session_id", sequence.value().session_id.value()}},
+        });
+  }
+  if (sequence.error().code != ErrorCode::not_found) {
+    return Outcome::failure(
+        sanitized_storage_error(
+            sequence.error(), "Source Sequence Journal could not be read"));
+  }
+  const auto performance = journal.read_active_performance(source);
+  if (performance.has_value()) {
+    return Outcome::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Project duplicate is blocked by the active Performance Journal",
+            {{"reason", "performance_session_active"},
+             {"session_id", performance.value().session_id.value()}},
+        });
+  }
+  if (performance.error().code != ErrorCode::not_found) {
+    return Outcome::failure(
+        sanitized_storage_error(
+            performance.error(),
+            "Source Performance Journal could not be read"));
+  }
+
+  ProjectStore store{impl_->platform};
+  const auto committed = store.inspect_committed(source);
+  if (!committed.has_value()) {
+    return Outcome::failure(
+        sanitized_storage_error(
+            committed.error(), "Source Project could not be validated"));
+  }
+  if (committed.value().id != source_project_id) {
+    return Outcome::failure(
+        invalid_bundle("Local Project directory identity is invalid"));
+  }
+
+  const auto root =
+      staging_root(workspace_root) / ("duplicate-" + project_id.value());
+  auto staging_lease = platform.acquire_writer(root);
+  if (!staging_lease.has_value()) {
+    return Outcome::failure(
+        sanitized_storage_error(
+            staging_lease.error(), "Project duplicate staging writer is busy"));
+  }
+  const auto cleanup = [&]() {
+    staging_lease.value().reset();
+    (void)platform.remove_tree(root);
+  };
+  // A crash can leave this token's staging behind until startup cleanup.
+  const auto residue = platform.remove_tree(root);
+  if (!residue.has_value()) {
+    return Outcome::failure(
+        sanitized_storage_error(
+            residue.error(), "Project duplicate staging could not be reset"));
+  }
+  const auto bundle = root / "project.lmdj";
+  for (const auto& directory : {root, bundle, bundle / "assets"}) {
+    const auto ensured = platform.ensure_directory(directory);
+    if (!ensured.has_value()) {
+      cleanup();
+      return Outcome::failure(
+          sanitized_storage_error(
+              ensured.error(), "Project duplicate staging could not be created"));
+    }
+  }
+
+  std::set<foundation::ArtifactRef> artifacts;
+  for (const auto& [asset_id, asset] : committed.value().assets) {
+    (void)asset_id;
+    artifacts.insert(asset.artifact);
+  }
+  for (const auto& [performance_id, recorded] :
+       committed.value().performances) {
+    (void)performance_id;
+    if (recorded.recording_artifact.has_value()) {
+      artifacts.insert(*recorded.recording_artifact);
+    }
+  }
+  std::set<std::string> copied;
+  std::uint64_t total = 0;
+  for (const auto& artifact : artifacts) {
+    if (!copied.insert(artifact.sha256).second) {
+      continue;
+    }
+    const auto name = artifact.sha256 + ".wav";
+    if (artifact.byte_length > kMaximumEntryBytes) {
+      cleanup();
+      return Outcome::failure(
+          resource_limit("Project duplicate Artifact exceeds 64 MiB"));
+    }
+    total += artifact.byte_length;
+    if (total > kMaximumPayloadBytes) {
+      cleanup();
+      return Outcome::failure(
+          resource_limit("Project duplicate exceeds 512 MiB"));
+    }
+    const auto content = platform.read_complete(source / "assets" / name);
+    if (!content.has_value()) {
+      cleanup();
+      return Outcome::failure(
+          sanitized_storage_error(
+              content.error(), "Source Project Artifact could not be read"));
+    }
+    if (content.value().size() != artifact.byte_length ||
+        sha256(content.value()) != artifact.sha256) {
+      cleanup();
+      return Outcome::failure(
+          invalid_bundle("Source Project Artifact is corrupt"));
+    }
+    const auto written =
+        platform.create_immutable(bundle / "assets" / name, content.value());
+    if (!written.has_value()) {
+      cleanup();
+      return Outcome::failure(
+          sanitized_storage_error(
+              written.error(), "Project duplicate Artifact could not be staged"));
+    }
+  }
+
+  auto initial = committed.value();
+  initial.id = project_id;
+  initial.revision = 0;
+  {
+    // The staged Project is private to this call; only the directory
+    // publication below is the caller's publication.
+    const detail::PublishToken unobserved{};
+    const detail::PublishTokenScope scope{unobserved};
+    const auto created = store.create(bundle, initial);
+    if (!created.has_value()) {
+      cleanup();
+      return Outcome::failure(
+          sanitized_storage_error(
+              created.error(), "Project duplicate could not be staged"));
+    }
+  }
+  auto staged_summary = summarize_project(impl_->platform, bundle);
+  if (!staged_summary.has_value()) {
+    const auto error = staged_summary.error();
+    cleanup();
+    return Outcome::failure(error);
+  }
+
+  auto destination_lease = platform.acquire_writer(destination);
+  if (!destination_lease.has_value()) {
+    const auto error = sanitized_storage_error(
+        destination_lease.error(), "Local Project writer is busy");
+    cleanup();
+    return Outcome::failure(error);
+  }
+  if (!detail::claim_publish()) {
+    cleanup();
+    return Outcome::failure(
+        Error{
+            ErrorCode::internal_error,
+            "Project duplicate was cancelled before publication",
+        });
+  }
+  if (detail::force_publish_failure()) {
+    detail::abort_publish();
+    cleanup();
+    return Outcome::failure(
+        Error{
+            ErrorCode::io_error,
+            "Project duplicate publication failed",
+            {{"stage", "directory_publication"}},
+        });
+  }
+  staging_lease.value().reset();
+  const auto published =
+      platform.publish_directory_if_absent(bundle, destination);
+  if (!published.has_value()) {
+    detail::abort_publish();
+    const auto error = published.error().details.is_object() &&
+                               published.error().details.value(
+                                   "storage_condition", std::string{}) ==
+                                   kStorageConditionAlreadyExists
+                           ? Error{
+                                 ErrorCode::duplicate_id,
+                                 "A local Project already uses this Project ID",
+                             }
+                           : sanitized_storage_error(
+                                 published.error(),
+                                 "Project duplicate could not be published atomically");
+    (void)platform.remove_tree(root);
+    return Outcome::failure(error);
+  }
+  detail::commit_publish();
+  (void)platform.remove_tree(root);
+  return Outcome::success(staged_summary.value());
 }
 
 }  // namespace lmdj::project_io

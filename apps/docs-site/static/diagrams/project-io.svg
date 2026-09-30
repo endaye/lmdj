@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="a867e544f3f5a291a46683585c1cbc7377ce5e159a2ec1743f322aab02fec0f3">
-  <title id="title">Project I/O Module</title><desc id="description">Project Store、portable Bundle、session-kind journal 与 journaled atomic publication</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="eade008f2e9242b5e7b823a8d3bd336dfa81bd92280ab4eb6a6b7669756ec97f">
+  <title id="title">Project I/O Module</title><desc id="description">Project Store、portable Bundle、Project duplicate、session-kind journal 与 journaled atomic publication</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
     :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
@@ -9,7 +9,7 @@
     svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
     .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
   </style>
-  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Project I/O Module</text><text class="page-summary" x="40" y="68">Project Store、portable Bundle、session-kind journal 与 journaled atomic publication</text>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Project I/O Module</text><text class="page-summary" x="40" y="68">Project Store、portable Bundle、Project duplicate、session-kind journal 与 journaled atomic publication</text>
 
   <g class="connection"><path class="edge-mask" d="M 270 198 H 330 V 318 H 390"/><path class="edge" d="M 270 198 H 330 V 318 H 390" marker-end="url(#arrow)"/><text x="330" y="249">save/export</text></g>
 <g class="connection"><path class="edge-mask" d="M 270 438 H 330 V 318 H 390"/><path class="edge" d="M 270 438 H 330 V 318 H 390" marker-end="url(#arrow)"/><text x="330" y="369">stream import</text></g>
@@ -18,6 +18,7 @@
 <g class="connection"><path class="edge-mask" d="M 1010 318 H 1075 V 438 H 1140"/><path class="edge" d="M 1010 318 H 1075 V 438 H 1140" marker-end="url(#arrow)"/><text x="1075" y="369">canonical pack</text></g>
 <g class="connection"><path class="edge-mask" d="M 640 318 H 705 V 478 H 770"/><path class="edge" d="M 640 318 H 705 V 478 H 770" marker-end="url(#arrow)"/><text x="705" y="389">performance session</text></g>
 <g class="connection"><path class="edge-mask" d="M 1010 478 H 1075 V 198 H 1140"/><path class="edge" d="M 1010 478 H 1075 V 198 H 1140" marker-end="url(#arrow)"/><text x="1075" y="329">save or discard</text></g>
+<g class="connection"><path class="edge-mask" d="M 1360 198 H 1394 V 372 H 356 V 318 H 390"/><path class="edge" d="M 1360 198 H 1394 V 372 H 356 V 318 H 390" marker-end="url(#arrow)"/><text x="875" y="249">duplicate · new id</text></g>
 
     <g class="component kind-host">
       <rect class="node-mask" x="46" y="146" width="228" height="104" rx="18"/>
