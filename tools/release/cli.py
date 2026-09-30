@@ -32,6 +32,7 @@ from tools.release.model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, ReleaseM
 from tools.release.publication import PublicationError, collect_publication  # noqa: E402
 from tools.release.publication_evidence import collect_publication_patch  # noqa: E402
 from tools.release.changelog import ChangelogError  # noqa: E402
+from tools.release.changelog_editorial import EditorialError  # noqa: E402
 from tools.release.openpgp import OpenPgpError, OpenPgpVerifier  # noqa: E402
 from tools.release.orchestration import (  # noqa: E402
     JournalError,
@@ -146,6 +147,12 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     superseded.add_argument(
         "--superseded-by-build", metavar="BUILD",
         help="later Product Build now allocated on main; this request's own Build was never tagged",
+    )
+    editorial = commands.add_parser("editorial")
+    editorial.add_argument("request_id")
+    editorial.add_argument(
+        "file", type=Path,
+        help='Owner-approved {"changes": [...], "exclusions": [...]} for this release',
     )
     reported = commands.add_parser("status")
     reported.add_argument("request_id", nargs="?")
@@ -531,6 +538,48 @@ def _verify_audit_trust_anchors(root: Path, policy, verifier: OpenPgpVerifier) -
             )
 
 
+def _record_editorial(root: Path, request_id: str, file: Path) -> int:
+    """Hand the Owner-approved changelog editorial to one running request.
+
+    The pair is frozen against the request's own releasable intent before it
+    is recorded, so an editorial that misses or duplicates a source commit is
+    refused here rather than at the changelog step's write boundary.
+    """
+    from tools.release import changelog, changelog_editorial
+    from tools.release.candidate import CATALOG, CandidateReservations
+    from tools.release.model import Disposition
+
+    directory = release_journal_root(root, GitRepository(root))
+    with RequestJournal(directory, writable=False) as journal:
+        state = journal.read(request_id)
+    if state is None:
+        raise JournalError("why: request is missing; remedy: use a request ID listed by `status`")
+    request = state["request"]
+    if request["mode"] == "tag":
+        tag = request["requested_tag"]
+    else:
+        reserved = CandidateReservations(root, directory / CATALOG).recorded(request)
+        if reserved is None:
+            raise CommandError("request has reserved no Build yet", detail=request_id)
+        tag = f"lmdj-v{reserved}"
+    context = build_context(root)
+    intent = context.ledger.intent_for_tag(tag)
+    if intent is None or intent.disposition is not Disposition.RELEASABLE:
+        raise CommandError("the ledger on main has no releasable intent for this request", detail=tag)
+    changes, exclusions = changelog_editorial.load_pair(file if file.is_absolute() else Path.cwd() / file)
+    document = changelog.freeze(root, intent, context.ledger, changes, exclusions)
+    bound = changelog.binding(document)
+    path = changelog_editorial.record(
+        directory / "operations" / request_id, request_id=request_id, tag=tag,
+        changes=changes, exclusions=exclusions, binding=bound)
+    print(f"[ok] {tag}: editorial covers all {len(document['commits'])} source commits "
+          f"since {document['baseline']['tag'] if document['baseline'] else 'the first commit'}")
+    print(f"changelog sha256: {bound['sha256']}")
+    print(f"notes sha256: {bound['notes_sha256']}")
+    print(f"editorial recorded: {path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         options = parse_arguments(argv if argv is not None else sys.argv[1:])
@@ -577,6 +626,8 @@ def main(argv: list[str] | None = None) -> int:
             if options.superseded_by_build is not None:
                 return _retire_unreleased_request(root, options.request_id, options.superseded_by_build)
             return _retire_request(root, options.request_id, options.superseded_by)
+        if options.command == "editorial":
+            return _record_editorial(root, options.request_id, options.file)
         if options.command == "status":
             print(format_request_status(root, GitRepository(root), options.request_id), end="")
             return 0
@@ -658,7 +709,7 @@ def main(argv: list[str] | None = None) -> int:
         CommandError, GitHubApiError, GitRepositoryError, HydrateError, JournalError,
         OpenPgpError, OrchestrationPolicyError,
         PrepareError, ProfileError, PromotionError, RehearsalError, ReleaseModelError,
-        TransitionError, PublicationError, ChangelogError, OSError,
+        TransitionError, PublicationError, ChangelogError, EditorialError, OSError,
     ) as error:
         detail = error.detail if isinstance(error, (CommandError, HydrateError)) else ""
         suffix = f": {detail}" if detail else ""

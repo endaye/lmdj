@@ -11,10 +11,9 @@ request or drive. The `scripts/ci` modules use bare sibling imports by design
 the same self-registration pattern `cli.py` and `tag_verifier.py` use for the
 repository root.
 
-One composition input has no production channel yet and stays a named,
-fail-closed seam rather than an invention: the reviewed changelog editorial
-input. While it is undefined that step honestly stays `pending`; the wiring
-itself is complete and needs no change once the channel lands.
+The reviewed changelog editorial arrives through its own channel
+(`changelog_editorial`, recorded by `scripts/release.sh editorial`); until the
+Owner-approved editorial is recorded for a request, that step stays `pending`.
 """
 
 import json
@@ -140,15 +139,19 @@ def site_fetch(url):
         return error.code, error.read(_FETCH_LIMIT).decode("utf-8", errors="replace")
 
 
-def reviewed_changelog_editorial():
-    """The reviewed editorial input channel is not defined yet.
+def reviewed_changelog_editorial(operations, request_id):
+    """The request's recorded, Owner-approved changelog editorial, or None.
 
-    The changelog step binds a *reviewed* (changes, exclusions) pair and no
-    production channel supplies one. Naming the seam keeps the step honestly
-    `pending`; inventing an editorial default would settle an open product
-    question inside tooling, which this composition must not do.
+    Returns (pair, binding): the (changes, exclusions) the changelog commit
+    re-freezes, and the frozen document's binding the spec is bound to. Both
+    come from the one record, so they cannot describe different editorials.
     """
-    return None
+    from .changelog_editorial import read
+
+    document = read(operations, request_id=request_id)
+    if document is None:
+        return None
+    return (document["changes"], document["exclusions"]), document["binding"]
 
 
 _HOST_TOOLS = ROOT / "apps/web-runtime-host/tools"
@@ -738,11 +741,21 @@ def compose_carriers(context, policy, request):
         return pr_sequence(IntentPrSequence, IntentBranch, IntentPullRequest,
                            operations / "intent-sequence", "intent")
 
+    def changelog_binding():
+        recorded = reviewed_changelog_editorial(operations, request["id"])
+        return None if recorded is None else recorded[1]
+
     def changelog_commit_for(spec):
         from .changelog_step import ChangelogCommit
 
+        def editorial():
+            recorded = reviewed_changelog_editorial(operations, request["id"])
+            if recorded is None:
+                _fail("the reviewed changelog editorial is not recorded")
+            return recorded[0]
+
         return ChangelogCommit(worktrees / "changelog", root, spec=spec,
-                               editorial=reviewed_changelog_editorial,
+                               editorial=editorial,
                                author_name=author[0], author_email=author[1])
 
     def changelog_sequence_for(spec):
@@ -815,7 +828,7 @@ def compose_carriers(context, policy, request):
                       sequence_for=intent_sequence_for),
         enroll_changelog(candidate_root=candidate_root, repository_id=repository_id,
                          ledger=ledger, main_revision=observe_main,
-                         changelog_binding=lambda: reviewed_changelog_editorial(),
+                         changelog_binding=changelog_binding,
                          commit_for=changelog_commit_for,
                          sequence_for=changelog_sequence_for),
         enroll_prepared(root=root, candidate_root=candidate_root,

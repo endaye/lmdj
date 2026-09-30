@@ -1397,11 +1397,18 @@ class ChangelogEnrollmentTest(unittest.TestCase):
     def test_an_unavailable_base_or_binding_fails_closed(self):
         with self.assertRaises(JournalError):
             self.step(main_revision=lambda: "not-a-sha").observe(state(), self.operation())
-        for bound in (None, {"sha256": CHANGELOG_DIGEST},
+        for bound in ({"sha256": CHANGELOG_DIGEST},
                       {"sha256": "short", "notes_sha256": NOTES_DIGEST}):
             with self.assertRaises(JournalError):
                 self.step(changelog_binding=lambda: bound).observe(state(),
                                                                    self.operation())
+        self.assertEqual(self.commit_specs, [])
+
+    def test_an_unrecorded_editorial_is_pending_input(self):
+        # No Owner-approved editorial recorded yet: the step waits for it,
+        # neither failing as an outage nor inventing a default.
+        step = self.step(changelog_binding=lambda: None)
+        self.assertEqual(step.observe(state(), self.operation()).status, "pending")
         self.assertEqual(self.commit_specs, [])
 
     def test_a_pending_step_writes_nothing_when_asked_to_advance(self):
