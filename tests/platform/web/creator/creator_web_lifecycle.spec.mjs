@@ -1,12 +1,11 @@
 import {readFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
+import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
-const MAX_OPEN_ATTEMPTS = 8;
-const BUSY_RETRY_INTERVAL_MS = 500;
 // openProjectJourney owns three independently bounded 30-second Project
 // operations: open, inspect, and snapshot reload. The UI hang detector covers
 // their 90-second protocol ceiling plus bounded runner/render settling time.
@@ -16,46 +15,6 @@ const OPEN_TRANSITION_TIMEOUT_MS = 3 * 30_000 + 35_000;
 // only within that bound plus bounded render settling. Playwright's 5-second
 // default is tighter than anything the product guarantees.
 const AUDIO_TRANSITION_TIMEOUT_MS = 30_000 + 5_000;
-
-async function projectOpenOutcome(heading, open, retry) {
-  if (await heading.isVisible()) return "ready";
-  if (await retry.isVisible()) return "busy";
-  if (await open.isVisible() && await open.isEnabled()) return "open";
-  return "pending";
-}
-
-async function waitForProjectOpenOutcome(heading, open, retry) {
-  let outcome = "pending";
-  await expect.poll(async () => {
-    outcome = await projectOpenOutcome(heading, open, retry);
-    return outcome;
-  }, {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("pending");
-  return outcome;
-}
-
-async function waitForOpenActionTransition(heading, open, retry) {
-  await expect.poll(async () =>
-    await projectOpenOutcome(heading, open, retry),
-  {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("open");
-}
-
-async function waitForProjectInventory(page) {
-  const open = page.getByRole("button", {name: "Open Project 00000000"});
-  const retry = page.getByRole("button", {name: "Retry project"});
-  const alert = page.getByRole("alert");
-  for (let attempt = 0; attempt < MAX_OPEN_ATTEMPTS; attempt += 1) {
-    await expect.poll(async () =>
-      await open.isVisible() ? "open" : await retry.isVisible() ? "retry" : "",
-    {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("");
-    if (await open.isVisible()) return open;
-    await expect(alert).toContainText(
-      "The local Project is busy in another tab or process.",
-    );
-    await retry.click();
-  }
-  await expect(open).toBeVisible();
-  return open;
-}
 
 async function installPackagedRecoveryProbe(page) {
   await page.addInitScript(() => {
@@ -291,9 +250,7 @@ async function installPackagedRecoveryProbe(page) {
 }
 
 async function importAndActivate(page) {
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
-    timeout: 30_000,
-  });
+  await openProjectPageAfterBoot(page);
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();
   await (await chooserPromise).setFiles(bundle);
@@ -327,7 +284,7 @@ async function recoverFromLifecycleEdge(page) {
 }
 
 async function enterLoopToggleSample(page) {
-  await page.getByRole("button", {name: "Sample"}).click();
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
   await expect(page.getByText(/^Asset /)).toBeVisible({timeout: 30_000});
   const loop = page.getByRole("button", {name: "Loop"});
@@ -383,44 +340,6 @@ async function latchLoopToggle(page) {
   await page.keyboard.up("Enter");
 }
 
-async function reopenWithVisibleBusyRetry(page) {
-  const heading = page.getByRole("heading", {name: "Project 00000000"});
-  const open = page.getByRole("button", {
-    name: "Open Project 00000000",
-  });
-  const alert = page.getByRole("alert");
-  const retry = page.getByRole("button", {name: "Retry project"});
-  let actionKind = "open";
-  let action = open;
-  for (let attempt = 0; attempt < MAX_OPEN_ATTEMPTS; attempt += 1) {
-    await action.click();
-    if (actionKind === "open") {
-      await waitForOpenActionTransition(heading, open, retry);
-    }
-    const outcome = await waitForProjectOpenOutcome(heading, open, retry);
-    if (outcome === "ready") break;
-    if (outcome === "busy") {
-      await expect(alert).toContainText(
-        "The local Project is busy in another tab or process.",
-      );
-      // A reload can briefly overlap the previous document's asynchronous
-      // writer release. Model a deliberate user retry instead of hammering the
-      // visible action fast enough to exhaust the bounded attempt budget.
-      await page.waitForTimeout(BUSY_RETRY_INTERVAL_MS);
-      actionKind = "busy";
-      action = retry;
-    } else {
-      // A timed-out request may be followed by the one allowed automatic
-      // Runtime replacement. The replacement intentionally requires another
-      // explicit Open gesture instead of silently resuming the Project.
-      actionKind = "open";
-      action = open;
-    }
-  }
-  await expect(heading).toBeVisible();
-  await expect(alert).toHaveCount(0);
-}
-
 test("suspend, restart, and reopen clear an active loop toggle before reactivation", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(360_000);
@@ -442,9 +361,9 @@ test("suspend, restart, and reopen clear an active loop toggle before reactivati
   await latchLoopToggle(page);
 
   await page.reload();
-  await waitForProjectInventory(page);
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
-  await reopenWithVisibleBusyRetry(page);
+  // The imported Project is remembered, so the reload reopens it by itself,
+  // with any writer-release PROJECT_BUSY retried as a user would.
+  await waitForProjectReopen(page, "00000000", {timeout: OPEN_TRANSITION_TIMEOUT_MS});
   await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {

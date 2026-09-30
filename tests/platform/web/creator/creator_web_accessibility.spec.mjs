@@ -5,6 +5,7 @@ import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 
 import {WEB_RUNTIME_IDENTITY} from
   "../../../../products/lmdj/generated/web-runtime-identity.mjs";
+import {openProjectPageAfterBoot, overviewProjectId, waitForBootProject} from "./fixtures/creator_boot.mjs";
 
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
@@ -16,61 +17,35 @@ const BUSY_RETRY_INTERVAL_MS = 500;
 // their 90-second protocol ceiling plus bounded runner/render settling time.
 const OPEN_TRANSITION_TIMEOUT_MS = 3 * 30_000 + 35_000;
 
-async function projectOpenOutcome(heading, open, retry) {
-  if (await heading.isVisible()) return "ready";
-  if (await retry.isVisible()) return "busy";
-  if (await open.isVisible() && await open.isEnabled()) return "open";
-  return "pending";
-}
-
-async function waitForProjectOpenOutcome(heading, open, retry) {
-  let outcome = "pending";
-  await expect.poll(async () => {
-    outcome = await projectOpenOutcome(heading, open, retry);
-    return outcome;
-  }, {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("pending");
-  return outcome;
-}
-
-async function waitForOpenActionTransition(heading, open, retry) {
-  await expect.poll(async () =>
-    await projectOpenOutcome(heading, open, retry),
-  {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("open");
-}
-
 async function pressProjectAction(page, action) {
   await action.focus();
   await expect(action).toBeFocused();
   await page.keyboard.press("Enter");
 }
 
-async function waitForKeyboardProjectInventory(page) {
-  const open = page.getByRole("button", {name: "Open Project 00000000"});
+async function waitForKeyboardReopen(page, shortId) {
+  const reopened = overviewProjectId(page).filter({hasText: new RegExp(`^${shortId}$`)});
   const retry = page.getByRole("button", {name: "Retry project"});
   const alert = page.getByRole("alert");
-  for (let attempt = 0; attempt < MAX_OPEN_ATTEMPTS; attempt += 1) {
-    await expect.poll(async () =>
-      await open.isVisible() ? "open" : await retry.isVisible() ? "retry" : "",
-    {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("");
-    if (await open.isVisible()) return open;
-    await expect(alert).toContainText(
-      "The local Project is busy in another tab or process.",
-    );
-    await retry.focus();
-    await expect(retry).toBeFocused();
-    await page.keyboard.press("Enter");
+  for (let attempt = 0; attempt < MAX_OPEN_ATTEMPTS && !(await reopened.isVisible()); attempt += 1) {
+    await expect(reopened.or(retry)).toBeVisible({timeout: OPEN_TRANSITION_TIMEOUT_MS});
+    if (await retry.isVisible()) {
+      await expect(alert).toContainText(
+        "The local Project is busy in another tab or process.",
+      );
+      await page.waitForTimeout(BUSY_RETRY_INTERVAL_MS);
+      await pressProjectAction(page, retry);
+    }
   }
-  await expect(open).toBeVisible();
-  return open;
+  await expect(reopened).toBeVisible({timeout: OPEN_TRANSITION_TIMEOUT_MS});
+  await expect(alert).toHaveCount(0);
 }
 
 test("keyboard-only Project and Bank journey preserves native activation", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(360_000);
   await page.goto("/index.html");
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
-    timeout: 30_000,
-  });
+  await openProjectPageAfterBoot(page);
 
   const importButton = page.getByRole("button", {name: "Import .lmdj"});
   await importButton.focus();
@@ -81,40 +56,26 @@ test("keyboard-only Project and Bank journey preserves native activation", async
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
 
+  // The imported Project is remembered, so the reload reopens it by itself;
+  // a writer-release PROJECT_BUSY is retried from the keyboard.
   await page.reload();
+  await waitForKeyboardReopen(page, "00000000");
+
+  // Open is still a native button: open the boot-created Project and then the
+  // imported one again, each with Enter, each landing on its own heading.
+  await pressProjectAction(page, page.getByTestId("physical-controls")
+    .getByRole("button", {name: "Project", exact: true}));
+  await pressProjectAction(page, page.getByRole("button", {name: "Open local", exact: true}));
+  const other = page.getByRole("button", {name: /^Open Project (?!00000000$)[0-9a-f]{8}$/});
+  await expect(other).toHaveCount(1);
+  const otherId = (await other.getAttribute("aria-label"))?.replace("Open Project ", "");
+  await pressProjectAction(page, other);
+  await expect(page.getByRole("heading", {name: `Project ${otherId}`}))
+    .toBeVisible({timeout: OPEN_TRANSITION_TIMEOUT_MS});
+  await pressProjectAction(page, page.getByRole("button", {name: "Open local", exact: true}));
+  await pressProjectAction(page, page.getByRole("button", {name: "Open Project 00000000", exact: true}));
   const heading = page.getByRole("heading", {name: "Project 00000000"});
-  const openButton = await waitForKeyboardProjectInventory(page);
-  const retry = page.getByRole("button", {name: "Retry project"});
-  let actionKind = "open";
-  let action = openButton;
-  for (let attempt = 0; attempt < MAX_OPEN_ATTEMPTS; attempt += 1) {
-    await pressProjectAction(page, action);
-    if (actionKind === "open") {
-      await waitForOpenActionTransition(heading, openButton, retry);
-    }
-    const outcome = await waitForProjectOpenOutcome(
-      heading, openButton, retry,
-    );
-    if (outcome === "ready") break;
-    if (outcome === "busy") {
-      await expect(page.getByRole("alert")).toContainText(
-        "The local Project is busy in another tab or process.",
-      );
-      // A reload can briefly overlap the previous document's asynchronous
-      // writer release. Model a deliberate user retry instead of hammering the
-      // visible action fast enough to exhaust the bounded attempt budget.
-      await page.waitForTimeout(BUSY_RETRY_INTERVAL_MS);
-      actionKind = "busy";
-      action = retry;
-    } else {
-      // A timed-out request may be followed by the one allowed automatic
-      // Runtime replacement. The replacement intentionally requires another
-      // explicit Open gesture instead of silently resuming the Project.
-      actionKind = "open";
-      action = openButton;
-    }
-  }
-  await expect(heading).toBeVisible();
+  await expect(heading).toBeVisible({timeout: OPEN_TRANSITION_TIMEOUT_MS});
 
   // The physical Bank keys are the keyboard's Bank control now; they mark
   // the active Bank with aria-current rather than aria-pressed.
@@ -186,9 +147,7 @@ for (const viewport of [
     test.setTimeout(120_000);
     await page.setViewportSize(viewport);
     await page.goto("/index.html");
-    await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
-      timeout: 30_000,
-    });
+    await waitForBootProject(page);
     await expect(page.getByRole("button", {name: /^Pad A\d+ — empty — Key [QWERTYUIASDFGHJK]$/}))
       .toHaveCount(16);
     expect(await page.evaluate(() =>
@@ -199,6 +158,7 @@ for (const viewport of [
       fullPage: true,
     });
 
+    await page.getByRole("button", {name: "Project", exact: true}).click();
     const chooserPromise = page.waitForEvent("filechooser");
     await page.getByRole("button", {name: "Import .lmdj"}).click();
     await (await chooserPromise).setFiles(bundle);

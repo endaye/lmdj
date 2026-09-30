@@ -88,6 +88,7 @@ import {
   selectCreatorPhase,
   type CreatorState,
 } from "./state/creator_state";
+import {readLastProjectId, writeLastProjectId} from "./state/last_project";
 import {initialSequenceState, reduceSequence} from "./state/sequence_state";
 import {
   initialPatternTransportState,
@@ -329,6 +330,10 @@ function Workspace({
   // The workspace shell and its stored layout preference are gone; clear the
   // stale key once so no browser keeps a value nothing reads.
   useEffect(() => { retireCreatorLayoutPreference(); }, []);
+  const currentProjectId = state.project.current?.projectId ?? null;
+  useEffect(() => {
+    if (currentProjectId !== null) writeLastProjectId(currentProjectId);
+  }, [currentProjectId]);
 
   useEffect(() => {
     const project = state.project.current;
@@ -541,7 +546,49 @@ function Workspace({
         setBusyRetry(null);
         dispatch({type: "projects-loaded", projects});
         const retained = stateRef.current.project.current;
-        if (!retained) return;
+        if (!retained) {
+          // Boot: reopen the Project this device used last, or start a new
+          // one when none is stored. A remembered Project that is gone while
+          // others exist leaves the user in the library to choose.
+          const lastId = readLastProjectId();
+          const last = lastId === null ? undefined :
+            projects.find(({projectId}) => projectId === lastId);
+          if (last === undefined && projects.length > 0) return;
+          const token = beginProjectAction(last ? "open" : "create", false);
+          if (!token) return;
+          dispatch({type: "project-opening"});
+          try {
+            const project = last
+              ? await openProjectJourney(token.session, last)
+              : await createProjectJourney(token.session);
+            if (active && ownsProjectAction(token)) {
+              dispatch({type: "project-ready", project});
+              setActiveMode("sample");
+            }
+          } catch (error) {
+            if (!active || !ownsProjectAction(token)) return;
+            reportProjectError(
+              error,
+              last ? {kind: "open", project: last} : null,
+              last ? "Open Project" : "Create Project",
+            );
+            // As with New Project: the Host may have stored the Project before
+            // a later read failed, so list it rather than leave it unreachable.
+            if (!last) {
+              try {
+                const listed = await listLocalProjectsJourney(token.session);
+                if (active && ownsProjectAction(token)) {
+                  dispatch({type: "project-inventory-updated", projects: listed});
+                }
+              } catch {
+                // The reported creation failure stays the visible outcome.
+              }
+            }
+          } finally {
+            finishProjectAction(token);
+          }
+          return;
+        }
         const token = beginProjectAction("open", false);
         if (!token) return;
         dispatch({type: "project-opening"});

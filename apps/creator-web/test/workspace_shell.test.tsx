@@ -2079,14 +2079,16 @@ test("presents Project busy with an explicit retry", async () => {
       if (attempts === 1) {
         throw Object.assign(new Error("busy"), {code: "PROJECT_BUSY"});
       }
-      return [];
+      // Listed but not remembered: boot stays in the library, so this test
+      // observes only the retried listing, not an automatic open or create.
+      return [listedSummary];
     },
   });
   render(<App runtimeFactory={() => fixture.session} />);
   expect((await screen.findByRole("alert")).textContent)
     .toContain("The local Project is busy in another tab or process.");
   await user.click(screen.getByRole("button", {name: "Retry project"}));
-  await screen.findByText("No local Project is open.");
+  await screen.findByRole("button", {name: "Open Project 11111111"});
   expect(attempts).toBe(2);
 });
 

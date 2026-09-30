@@ -10,6 +10,7 @@ import {chromium, expect, test} from "@playwright/test";
 
 import {WEB_RUNTIME_IDENTITY} from
   "../../../../products/lmdj/generated/web-runtime-identity.mjs";
+import {waitForBootProject, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
@@ -455,9 +456,7 @@ async function openCandidate(page, scenario = "none") {
   await page.goto(candidate.routed
     ? `${candidate.origin}/index.html`
     : new URL("/index.html", process.env.LMDJ_CREATOR_WEB_BASE_URL).href);
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
-    timeout: 30_000,
-  });
+  await waitForBootProject(page);
   expect(candidate.candidateManifest.resource_limits).toMatchObject({
     perform_recording_frames: RECORDING_FRAMES,
     perform_recording_queue_batches: RECORDING_QUEUE_BATCHES,
@@ -485,6 +484,7 @@ async function openCandidate(page, scenario = "none") {
 }
 
 async function importProject(page) {
+  await page.getByRole("button", {name: "Project", exact: true}).click();
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();
   await (await chooser).setFiles(bundle);
@@ -493,20 +493,11 @@ async function importProject(page) {
 }
 
 async function openLocalProject(page) {
-  const heading = page.getByRole("heading", {name: "Project 00000000"});
-  if (await heading.isVisible()) return;
-  const open = page.getByRole("button", {name: "Open Project 00000000"});
-  const retry = page.getByRole("button", {name: "Retry project"});
-  await expect.poll(async () =>
-    await heading.isVisible() ? "ready" :
-      await open.isVisible() ? "open" : await retry.isVisible() ? "retry" : "",
-  {timeout: PROJECT_TRANSITION_TIMEOUT_MS}).not.toBe("");
-  if (await heading.isVisible()) return;
-  if (await retry.isVisible()) {
-    await retry.click();
-    await expect(open).toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  }
-  await open.click();
+  // The imported Project is remembered, so a successor or reloaded document
+  // reopens it by itself; a previous owner's writer release shows as a
+  // retryable PROJECT_BUSY.
+  await waitForProjectReopen(page, "00000000", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await page.getByRole("button", {name: "Project", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
 }
@@ -555,6 +546,18 @@ async function openProjectSuccessor(context, url) {
   return successor;
 }
 
+// A relaunch on a profile whose previous browser was killed restores that
+// session's tabs. A restored Creator tab boots, reopens the remembered Project
+// and owns its writer, so the successor this journey drives would be a second
+// tab that is correctly refused. Remove the session-restore state so the
+// relaunch opens only the page the journey asks for.
+async function discardRestorableSession(userDataDir) {
+  const profile = join(userDataDir, "Default");
+  for (const entry of ["Sessions", "Current Session", "Current Tabs", "Last Session", "Last Tabs"]) {
+    await rm(join(profile, entry), {recursive: true, force: true});
+  }
+}
+
 function killProcessGroup(child) {
   try {
     process.kill(-child.pid, "SIGKILL");
@@ -572,6 +575,7 @@ async function removeProfile(userDataDir) {
 async function launchCrashableCreatorContext(userDataDir) {
   const activePortPath = join(userDataDir, "DevToolsActivePort");
   await rm(activePortPath, {force: true});
+  await discardRestorableSession(userDataDir);
   // Own process group: Chromium's renderer, GPU and utility children are
   // separate processes that keep writing `<profile>/Default/` for a moment
   // after the browser process dies. Killing only the parent races the

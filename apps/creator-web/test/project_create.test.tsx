@@ -1,11 +1,12 @@
 import {render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import {expect, test} from "vitest";
+import {afterEach, expect, test, vi} from "vitest";
 
 import {App} from "../src/app";
 import type {
   CreatorRuntimeSession,
   LocalProjectSummary,
+  RuntimeHostState,
 } from "../src/runtime/runtime_types";
 
 const LISTED: LocalProjectSummary = {
@@ -18,6 +19,26 @@ const LISTED: LocalProjectSummary = {
   bundleDigest: "a".repeat(64),
 };
 
+const OTHER: LocalProjectSummary = {
+  ...LISTED,
+  projectId: "66666666-6666-4666-8666-666666666666",
+  patternId: "77777777-7777-4777-8777-777777777777",
+};
+const LAST_PROJECT_KEY = "lmdj.creator.last-project.v1";
+
+function memoryStorage(initial: Record<string, string> = {}) {
+  const values = new Map(Object.entries(initial));
+  return {
+    values,
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+    clear: () => { values.clear(); },
+  };
+}
+
+afterEach(() => { vi.unstubAllGlobals(); });
+
 // An empty Project truth for whichever identity the session last opened or
 // created, so opening and creating run through the real journeys.
 function projectFixture(
@@ -25,6 +46,7 @@ function projectFixture(
   overrides: Partial<CreatorRuntimeSession> = {},
 ) {
   const calls: string[] = [];
+  const hostListeners = new Set<(state: RuntimeHostState) => void>();
   let inventory = [...initial];
   let current: LocalProjectSummary | null = null;
   const session: CreatorRuntimeSession = {
@@ -65,7 +87,10 @@ function projectFixture(
     trigger: async () => false,
     requestMidi: async () => true,
     subscribeDiagnostics: () => () => {},
-    subscribeHostState: () => () => {},
+    subscribeHostState: (listener) => {
+      hostListeners.add(listener);
+      return () => { hostListeners.delete(listener); };
+    },
     subscribeRuntimeOutcome: () => () => {},
     diagnostics: () => ({
       state: "audio-suspended",
@@ -87,7 +112,14 @@ function projectFixture(
     }),
     ...overrides,
   };
-  return {calls, session};
+  const emit = (state: RuntimeHostState) => {
+    for (const listener of hostListeners) listener(state);
+  };
+  return {calls, emit, session};
+}
+
+function refusal(code: string): Error & {code: string} {
+  return Object.assign(new Error(code), {code});
 }
 
 function sampleKeyIsCurrent(): boolean {
@@ -121,3 +153,134 @@ test("a create whose read fails keeps the error and lists the stored Project", a
   expect(screen.getByRole("alert")).toBeTruthy();
   expect(fixture.calls.filter((call) => call === "createProject")).toHaveLength(1);
 });
+
+test("boot on a device with no Project creates one and lands on Sample", async () => {
+  vi.stubGlobal("localStorage", memoryStorage());
+  const fixture = projectFixture([]);
+  render(<App runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(sampleKeyIsCurrent()).toBe(true));
+  expect(fixture.calls.filter((call) => call === "createProject")).toHaveLength(1);
+  expect(fixture.calls.some((call) => call.startsWith("openProject"))).toBe(false);
+});
+
+test("boot reopens the remembered Project", async () => {
+  vi.stubGlobal("localStorage", memoryStorage({[LAST_PROJECT_KEY]: OTHER.projectId}));
+  const fixture = projectFixture([LISTED, OTHER]);
+  render(<App runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain(`openProject:${OTHER.projectId}`));
+  expect(fixture.calls).not.toContain("createProject");
+});
+
+test("boot with stored Projects but none remembered stays in the library", async () => {
+  vi.stubGlobal("localStorage", memoryStorage());
+  const fixture = projectFixture([LISTED]);
+  render(<App runtimeFactory={() => fixture.session} />);
+  await screen.findByRole("button", {name: "Open Project 11111111"});
+  expect(fixture.calls).not.toContain("createProject");
+  expect(fixture.calls.some((call) => call.startsWith("openProject"))).toBe(false);
+});
+
+test("an opened Project is remembered for the next boot", async () => {
+  const storage = memoryStorage();
+  vi.stubGlobal("localStorage", storage);
+  const fixture = projectFixture([LISTED]);
+  render(<App runtimeFactory={() => fixture.session} />);
+  await userEvent.click(await screen.findByRole("button", {name: "Open Project 11111111"}));
+  await waitFor(() => expect(storage.values.get(LAST_PROJECT_KEY)).toBe(LISTED.projectId));
+});
+
+test("boot shows a busy remembered Project as retryable and creates nothing", async () => {
+  vi.stubGlobal("localStorage", memoryStorage({[LAST_PROJECT_KEY]: LISTED.projectId}));
+  const fixture = projectFixture([LISTED], {
+    openProject: async () => { throw refusal("PROJECT_BUSY"); },
+  });
+  render(<App runtimeFactory={() => fixture.session} />);
+  await screen.findByText("The local Project is busy in another tab or process.");
+  expect(screen.getByRole("button", {name: "Retry project"})).toBeTruthy();
+  expect(fixture.calls).not.toContain("createProject");
+});
+
+test("a failed boot reopen reports the error instead of creating a Project", async () => {
+  vi.stubGlobal("localStorage", memoryStorage({[LAST_PROJECT_KEY]: LISTED.projectId}));
+  const fixture = projectFixture([LISTED], {
+    openProject: async () => { throw refusal("LOCAL_PROJECT_UNREADABLE"); },
+  });
+  render(<App runtimeFactory={() => fixture.session} />);
+  await screen.findByText(/could not be read/);
+  expect(fixture.calls).not.toContain("createProject");
+});
+
+test("a failed first-run create reports the error and remembers no Project", async () => {
+  const storage = memoryStorage();
+  vi.stubGlobal("localStorage", storage);
+  let creates = 0;
+  const fixture = projectFixture([], {
+    createProject: async () => { creates += 1; throw refusal("IO_ERROR"); },
+  });
+  render(<App runtimeFactory={() => fixture.session} />);
+  await screen.findByRole("alert");
+  expect(creates).toBe(1);
+  expect(sampleKeyIsCurrent()).toBe(false);
+  expect(storage.values.has(LAST_PROJECT_KEY)).toBe(false);
+});
+
+test("a first-run create whose read fails keeps the error and lists the stored Project", async () => {
+  vi.stubGlobal("localStorage", memoryStorage());
+  const fixture = projectFixture([], {
+    inspectProject: async () => { throw refusal("IO_ERROR"); },
+  });
+  render(<App runtimeFactory={() => fixture.session} />);
+  await screen.findByRole("alert");
+  await waitFor(() =>
+    expect(screen.getAllByRole("button", {name: /^Open Project /})).toHaveLength(1));
+  expect(screen.getByRole("alert")).toBeTruthy();
+  expect(fixture.calls.filter((call) => call === "createProject")).toHaveLength(1);
+});
+
+test("a Runtime replaced during boot discards the retired session's late reopen", async () => {
+  vi.stubGlobal("localStorage", memoryStorage({[LAST_PROJECT_KEY]: LISTED.projectId}));
+  let release: (() => void) | undefined;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const retired = projectFixture([LISTED], {
+    openProject: async () => { await pending; return {}; },
+  });
+  // The retired session reports a later revision, so its reopen landing
+  // would be visible in the overview.
+  const inspect = retired.session.inspectProject;
+  retired.session.inspectProject = async () => {
+    retired.calls.push("inspectProject");
+    const result = await inspect() as {project: Record<string, unknown>};
+    return {
+      ...result,
+      project_revision: 9,
+      project: {
+        ...result.project,
+        project_id: LISTED.projectId,
+        revision: 9,
+        patterns: {[LISTED.patternId]: {bars: 1, events: []}},
+      },
+    };
+  };
+  const replacement = projectFixture([LISTED]);
+  const sessions = [retired, replacement];
+  let creations = 0;
+  render(<App runtimeFactory={() => sessions[creations++]!.session} />);
+  await waitFor(() => expect(creations).toBe(1));
+  retired.emit({state: "restart-required", errorCode: "HOST_RESTART_REQUIRED", errorDetails: {}});
+  await waitFor(() => expect(overviewRevision()).toBe("0"));
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  release?.();
+  await waitFor(() => expect(retired.calls).toContain("inspectProject"));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  // Neither the retired Project nor its landing navigation reaches the page.
+  expect(overviewRevision()).toBe("0");
+  expect(screen.getByRole("button", {name: "Project"}).getAttribute("aria-current"))
+    .toBe("page");
+});
+
+function overviewRevision(): string | null {
+  const facts = screen.getByRole("region", {name: "Overview display"})
+    .querySelectorAll(".overview-facts div");
+  const rev = [...facts].find((fact) => fact.querySelector("dt")?.textContent === "Rev");
+  return rev?.querySelector("dd")?.textContent ?? null;
+}

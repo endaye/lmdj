@@ -16,3 +16,13 @@ import {afterEach} from "vitest";
 configure({asyncUtilTimeout: 5_000});
 
 afterEach(() => cleanup());
+
+// The Creator remembers the last opened Project in localStorage. Clearing it
+// keeps one test's open from turning the next test's boot into a reopen.
+afterEach(() => {
+  try {
+    globalThis.localStorage?.clear();
+  } catch {
+    // An environment without usable storage has nothing to leak.
+  }
+});

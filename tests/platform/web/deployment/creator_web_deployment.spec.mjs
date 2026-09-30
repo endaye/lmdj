@@ -3,6 +3,7 @@ import {readFile} from "node:fs/promises";
 import {expect, test} from "@playwright/test";
 
 import {creatorProjectBundle} from "./creator_project_fixture.mjs";
+import {openProjectPageAfterBoot, overviewProjectId, waitForProjectReopen} from "../creator/fixtures/creator_boot.mjs";
 
 const expectedProductBuild = process.env.LMDJ_CREATOR_WEB_EXPECTED_PRODUCT_BUILD;
 const expectedHostVersion = process.env.LMDJ_CREATOR_WEB_EXPECTED_VERSION;
@@ -38,9 +39,9 @@ function pcm16Wav({frames = 4_800, sampleRate = 48_000} = {}) {
 
 
 async function importProject(page) {
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
-    timeout: 60_000,
-  });
+  await openProjectPageAfterBoot(page);
+  // Boot opened its own Project; the import is done when a different one is open.
+  const booted = (await overviewProjectId(page).textContent())?.trim();
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();
   await (await chooserPromise).setFiles({
@@ -48,8 +49,10 @@ async function importProject(page) {
     mimeType: "application/vnd.lmdj.project-bundle",
     buffer: creatorProjectBundle(),
   });
+  await expect(overviewProjectId(page)).not.toHaveText(booted, {timeout: 120_000});
   await expect(page.getByRole("heading", {name: /^Project /}))
     .toBeVisible({timeout: 120_000});
+  return (await overviewProjectId(page).textContent())?.trim();
 }
 
 
@@ -85,7 +88,7 @@ test("published Creator completes authoring, playback, and durable reload", asyn
     sharedArrayBuffer: true,
   });
 
-  await importProject(page);
+  const imported = await importProject(page);
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: 30_000,
@@ -126,11 +129,10 @@ test("published Creator completes authoring, playback, and durable reload", asyn
   await expect(page.getByTestId("creator-phase")).toHaveText("ready", {
     timeout: 120_000,
   });
-  await expect(page.getByRole("heading", {name: "Local Projects"})).toBeVisible();
-  const open = page.getByRole("button", {name: /^Open Project /}).first();
-  await expect(open).toBeEnabled({timeout: 30_000});
-  await open.click();
-  await expect(page.getByRole("heading", {name: /^Project /}))
+  // The imported Project is remembered, so the reload reopens it by itself.
+  await waitForProjectReopen(page, imported, {timeout: 120_000});
+  await page.getByRole("button", {name: "Project", exact: true}).click();
+  await expect(page.getByRole("heading", {name: `Project ${imported}`}))
     .toBeVisible({timeout: 120_000});
   await expect(page.getByText("64 / 64")).toBeVisible();
 });
