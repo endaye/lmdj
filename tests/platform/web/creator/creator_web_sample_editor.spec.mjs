@@ -839,3 +839,46 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   await expect(redo).toBeDisabled();
   noErrors();
 });
+
+test("Pattern history keeps the Project open when its inventory anchor changes", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(180_000);
+  const noErrors = recordPageErrors(page);
+  await installHostProofRecorder(page);
+  await page.goto("/index.html");
+  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {timeout: 30_000});
+  await page.getByRole("button", {name: "New Project"}).click();
+  await expect(page.getByTestId("creator-phase")).toHaveText("ready", {timeout: 60_000});
+  const initial = (await rawRequest(page, "project.inspect", {})).result.project;
+  const history = (await rawRequest(page, "history.inspect", {})).result;
+  const originalPatternId = Object.keys(initial.patterns)[0];
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  // Choose unique UUIDs for this gesture; Runtime and storage still run normally.
+  // Other gesture IDs can precede the Pattern ID, so inspect the committed ID.
+  await page.evaluate(() => {
+    window.__restoreHistoryProofUuid = crypto.randomUUID.bind(crypto);
+    let next = 100;
+    crypto.randomUUID = () => `00000000-0000-4000-8000-${String(next++).padStart(12, "0")}`;
+  });
+  await page.getByRole("button", {name: "Create Pattern", exact: true}).click();
+  await expectProjectRevision(page, 1);
+  await page.evaluate(() => { crypto.randomUUID = window.__restoreHistoryProofUuid; });
+  const created = (await rawRequest(page, "project.inspect", {})).result.project;
+  const earlierPatternId = Object.keys(created.patterns).find((id) => id !== originalPatternId);
+  expect(earlierPatternId).toBeDefined();
+  expect(earlierPatternId < originalPatternId).toBe(true);
+  const undo = page.getByRole("button", {name: "Undo", exact: true});
+  const redo = page.getByRole("button", {name: "Redo", exact: true});
+  await undo.click();
+  await expectProjectRevision(page, 2);
+  expect((await rawRequest(page, "project.inspect", {})).result.project.patterns).toEqual(initial.patterns);
+  await redo.click();
+  await expectProjectRevision(page, 3);
+  await expect(page.getByTestId("creator-phase")).toHaveText("ready");
+  await expect(page.getByRole("combobox", {name: "Pattern"}).locator("option")).toHaveCount(2);
+  expect((await rawRequest(page, "history.inspect", {})).result.session_id).toBe(history.session_id);
+  await undo.click();
+  await expectProjectRevision(page, 4);
+  expect((await rawRequest(page, "project.inspect", {})).result.project.patterns).toEqual(initial.patterns);
+  noErrors();
+});
