@@ -2661,6 +2661,13 @@ function createRuntimeSessionController(options = {}) {
     try {
       if (audioContext === null) {
         audioContext = createAudioContext({ sampleRate: 48_000 });
+        // A context created inside the gesture is already running, and
+        // Chromium restarts a running destination as soon as an AudioWorklet
+        // module becomes ready. That second output-device start then lands
+        // inside the activation budget; a cold Bluetooth start alone can take
+        // most of it (#1696). Park the context while the graph loads so the
+        // resume edge below starts the device once.
+        await audioContext.suspend();
         lastContextState = audioContext.state;
         listen(audioContext, "statechange", observeContextState);
         contextHandle = runtime.registerAudioContext(audioContext);

@@ -758,6 +758,53 @@ test("constructs and registers the tap before starting the engine", async () => 
   unsubscribe();
 });
 
+test("loads both AudioWorklet modules on a parked context so the device starts once, at the resume edge", async () => {
+  const order = [];
+  const destinationNode = new EventTarget();
+  destinationNode.disconnect = () => {};
+  const tapController = {
+    destinationNode,
+    async start() { return {stop: async () => {}}; },
+    failProcessor() {},
+    async close() {},
+  };
+  const {context, session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "https://example.test/assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => {
+      order.push(["tap", context.state]);
+      return tapController;
+    },
+    startAudioWorklet: async () => {
+      order.push(["engine", context.state]);
+      return {ok: true};
+    },
+  });
+  // A context created inside the activation gesture is already running.
+  // Chromium restarts a running destination when a Worklet module becomes
+  // ready, which costs a second output-device start inside the budget.
+  context.state = "running";
+  const resume = context.resume;
+  context.resume = async function () {
+    order.push(["resume", this.state]);
+    return resume.call(this);
+  };
+  await session.start();
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.deepEqual(order, [
+    ["tap", "suspended"],
+    ["engine", "suspended"],
+    ["resume", "suspended"],
+  ]);
+});
+
 test("tap initialization failure preserves direct live audio and publishes unavailable", async () => {
   const destinations = [];
   const {session} = fixture({
@@ -4187,14 +4234,16 @@ test("reactivation waits until both Host and AudioContext suspension commit", as
     }
     return success(envelope, defaultResult(envelope.operation));
   }});
+  await session.start();
+  assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  // Gate only the explicit suspension; the first activation parks its new
+  // context with the fixture's own suspend.
   context.suspend = async () => {
     contextSuspendStartedResolve();
     await contextMaySuspend;
     context.state = "suspended";
     context.dispatchEvent(new Event("statechange"));
   };
-  await session.start();
-  assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), true);
   const suspending = session.suspendAudio();
   try {
     await hostSuspendStarted;
@@ -4272,10 +4321,12 @@ test("close during Host suspension keeps the late result from changing closed st
     }
     return success(envelope, defaultResult(envelope.operation));
   }});
-  let contextSuspensions = 0;
-  context.suspend = async () => { contextSuspensions++; };
   await session.start();
   await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  // Count only suspensions after activation; the first activation parks its
+  // new context once before the Worklet loads.
+  let contextSuspensions = 0;
+  context.suspend = async () => { contextSuspensions++; };
   const suspending = session.suspendAudio();
   await hostSuspendStarted;
   const closing = session.close();

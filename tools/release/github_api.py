@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import time
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError
 from urllib.parse import parse_qsl, quote, urlencode, urlparse
@@ -225,8 +226,10 @@ class GitHubClient:
         http_transport: HttpTransport | None = None,
         token: str | None = None,
         page_cap: int = 100,
+        retry_pause: Callable[[float], None] | None = None,
     ) -> None:
         self._http_transport = http_transport or _http_request
+        self._retry_pause = retry_pause or time.sleep
         self._token = token if token is not None else os.environ.get("GITHUB_TOKEN")
         if type(page_cap) is not int or page_cap <= 0:
             raise GitHubApiError("GitHub pagination page cap is invalid")
@@ -1078,15 +1081,31 @@ class GitHubClient:
             headers["Authorization"] = f"Bearer {self._token}"
         if content_type is not None:
             headers["Content-Type"] = content_type
-        try:
-            response = self._http_transport(method, url, headers, body)
-        except GitHubApiError:
-            raise
-        except Exception:
-            raise GitHubApiError("GitHub release request is unavailable") from None
-        if not isinstance(response, HttpResponse):
-            raise GitHubApiError("GitHub release response is invalid")
-        return response
+        # A read is retried after bounded pauses on a transport failure or a
+        # server error: it has no side effect, and one transient 502 used to
+        # fail a whole release resume. A write is never retried here, because
+        # its outcome would be unknown.
+        pauses = _READ_RETRY_PAUSES if method == "GET" else ()
+        for pause in (*pauses, None):
+            try:
+                response = self._http_transport(method, url, headers, body)
+            except Exception as error:
+                if pause is None:
+                    if isinstance(error, GitHubApiError):
+                        raise
+                    raise GitHubApiError("GitHub release request is unavailable") from None
+                self._retry_pause(pause)
+                continue
+            if not isinstance(response, HttpResponse):
+                raise GitHubApiError("GitHub release response is invalid")
+            if pause is not None and response.status in _TRANSIENT_STATUSES:
+                self._retry_pause(pause)
+                continue
+            return response
+
+
+_READ_RETRY_PAUSES = (2, 6)
+_TRANSIENT_STATUSES = frozenset({500, 502, 503, 504})
 
 
 def _http_request(method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> HttpResponse:
