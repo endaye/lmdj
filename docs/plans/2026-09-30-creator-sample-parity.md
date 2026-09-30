@@ -83,11 +83,14 @@ struct PadPlayback {
 ```
 
 - The #1667 fields and `PadEq` land in Task 12, not with the #1666 fields.
+- A looping voice's first pass always starts at `trim_start_frame` (its reverse mirror when `reverse` is set). Only later passes wrap to `loop_start_frame`. `nullopt` makes the two points coincide.
 - Every out-of-range value, and `ping_pong` with a non-zero crossfade, is refused with `invalid_argument` and leaves state unchanged, as the existing gain and trim refusals do.
 
 ### Wire and persisted JSON
 
-The existing five snake_case keys stay required. Each new key is optional and omitted when it holds its default:
+The existing five snake_case keys stay required. Each new key is optional and omitted when it holds its default.
+
+`lmdj.project.v5` `5.1.0` (Task 1, #1666) adds:
 
 - `reverse`
 - `pitch_cents`
@@ -95,10 +98,15 @@ The existing five snake_case keys stay required. Each new key is optional and om
 - `loop_mode` (`"forward" | "ping_pong"`)
 - `loop_start_frame`
 - `loop_crossfade_frames`
+
+`lmdj.project.v5` `5.2.0` (Task 12, #1667) adds:
+
 - `attack_ms`
 - `release_ms`
 - `tone`
 - `eq` (`{low, mid, high}`, with the band shapes from the decision)
+
+A `5.1.0` reader rejects a Project carrying any `5.2.0` key.
 
 Unknown keys stay rejected. A reader treats a missing key as its default. A writer never emits a default-valued key.
 
@@ -121,10 +129,13 @@ Unknown keys stay rejected. A reader treats a missing key as its default. A writ
     | Ping-pong | Reflection at the loop boundaries |
     | Crossfade | Equal-power, quarter-sine table |
     | Pan | Equal-power |
-    | Envelope | max(user, 96 frames) |
+    | Envelope | max(user, 96 output frames) |
     | Tone and EQ | Four RBJ biquads (TDF-II) with a per-block denormal flush |
 
 - Stage mask 0 reproduces today's `sample * gain * ramp` exactly.
+- **Frame units.** Every envelope, ramp and end-fade length is counted in engine output frames at the fixed 48 kHz rate the engine, Bank and Content codec accept (`prepared_sample_bank.cpp:462`). The 2 ms floor is therefore always 96 frames, whatever the source rate.
+  - The cooker converts `attack_ms`/`release_ms` to 48 kHz output frames.
+  - Source-frame fields (`loop_start_frame`, `loop_crossfade_frames`) are rescaled from the source rate to 48 kHz exactly as trim is. The floor is applied after that rescale.
 
 ## File Structure
 
@@ -177,20 +188,22 @@ Canonical policy: `docs/governance/version-management.md`. All targets below are
   - prove the Build is unoccupied the way #761 did;
   - revise this table if any identity was consumed.
 
-| Identity | Baseline | Target | Carried by | Reason |
-| --- | --- | --- | --- | --- |
-| Product Build | `1.0.66.0` | next free BUILD per cut/settle PR | PR 1, PR 4, PR 7 | Contract and Module identity changes |
-| `lmdj.project.v5` | `5.0.0` | `5.1.0` → `5.2.0` | PR 1, PR 4 | Backward-compatible optional fields, Contract MINOR (§7; precedent `lmdj.project.v4` `4.1.0`) |
-| `lmdj.runtime-content.v1` | `1.0.0` | unchanged | — | Encoder refuses non-neutral DSP |
-| `authoring-domain` | `4.1.0` | `4.2.0` → `4.3.0` | PR 4, PR 7 | New playback fields and refusals |
-| `project-io` | `4.2.1` | `4.3.0` → `4.4.0` | PR 4, PR 7 | Optional-key read/write |
-| `project-cooker` | `1.2.0` | `1.3.0` → `1.4.0` | PR 4, PR 7 | `ResolvedVoiceDsp` resolution |
-| `audio-runtime` | `5.0.0` | `5.1.0` → `5.2.0` | PR 4, PR 7 | Shared kernel and new stages |
-| `application-facade` | `6.2.1` | `6.3.0` → `6.4.0` | PR 4, PR 7 | Typed surface accepts new fields |
-| `web-runtime-platform` | `5.3.3` | `5.4.0` → `5.5.0` | PR 4, PR 7 | Transport of new fields |
-| `creator-web` | `4.5.1` | `4.6.0` → `4.7.0` | PR 4, PR 7 | New editor controls |
-| `core-mcp` | `3.4.3` | `3.5.0` → `3.6.0` | PR 4, PR 7 | Tool schema accepts new fields |
-| `core-cli`, `native-host`, `web-runtime-host`, `cardputer-host` | current | dependency-propagation PATCH | PR 4, PR 7 | Exact dependency pins only |
+Each allocating PR writes exactly one column of the table below. Each Build is proved unoccupied separately, at that PR's own tip.
+
+| Identity | Baseline | PR 1 (5.1.0 cut) | PR 4 (#1666 settle + 5.2.0 cut) | PR 7 (#1667 settle) | Reason |
+| --- | --- | --- | --- | --- | --- |
+| Product Build | `1.0.66.0` | next free BUILD | next free BUILD | next free BUILD | Contract and Module identity changes |
+| `lmdj.project.v5` | `5.0.0` | `5.1.0` | `5.2.0` | unchanged | Backward-compatible optional fields, Contract MINOR (§7; precedent `lmdj.project.v4` `4.1.0`) |
+| `lmdj.runtime-content.v1` | `1.0.0` | unchanged | unchanged | unchanged | Encoder refuses non-neutral DSP |
+| `authoring-domain` | `4.1.0` | unchanged | `4.2.0` | `4.3.0` | New playback fields and refusals |
+| `project-io` | `4.2.1` | unchanged | `4.3.0` | `4.4.0` | Optional-key read/write |
+| `project-cooker` | `1.2.0` | unchanged | `1.3.0` | `1.4.0` | `ResolvedVoiceDsp` resolution |
+| `audio-runtime` | `5.0.0` | unchanged | `5.1.0` | `5.2.0` | Shared kernel and new stages |
+| `application-facade` | `6.2.1` | unchanged | `6.3.0` | `6.4.0` | Typed surface accepts new fields |
+| `web-runtime-platform` | `5.3.3` | unchanged | `5.4.0` | `5.5.0` | Transport of new fields |
+| `creator-web` | `4.5.1` | unchanged | `4.6.0` | `4.7.0` | New editor controls |
+| `core-mcp` | `3.4.3` | unchanged | `3.5.0` | `3.6.0` | Tool schema accepts new fields |
+| `core-cli`, `native-host`, `web-runtime-host`, `cardputer-host` | current | unchanged | dependency-propagation PATCH | dependency-propagation PATCH | Exact dependency pins only |
 
 - **Compatibility.**
   - A `5.0.0` reader rejects a Project that uses a new key, by design.
@@ -285,10 +298,14 @@ Branch prefixes are limited to `feat/`, `fix/` and `docs/` (`docs/governance/git
   4. Pitch 0 in reverse returns exact source values.
   5. Hermite is exact at integer positions and reproduces a linear ramp.
   6. Ping-pong yields …e−2, e−1, e−2… and …ls+1, ls, ls+1…
-  7. The second loop pass starts at `loop_start`.
+  7. The first loop pass starts at `start_frame`, and the second pass starts at `loop_start`.
   8. Crossfade satisfies g_in² + g_out² = 1 ± 1e-4 across the window.
   9. Pan −100 gives R == 0.0F; +100 gives L == 0.0F; 0 is passthrough.
   10. Under pitch, the last 96 output frames ramp to 0.
+- [ ] In `apps/docs-site/docs/core/modules/audio-runtime.mdx`:
+  - describe the kernel;
+  - replace the hand-entered "Audio Runtime `3.1.0`" in §2 with the Portal's derived identity;
+  - run `scripts/docs-site.sh check`.
 - [ ] Commit: `feat(audio): add the shared voice DSP kernel`
 
 ### Task 6: Render realtime voices through the kernel
