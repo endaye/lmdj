@@ -17,6 +17,28 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 Project I/O 可读取 v1/v2/v3/v4，并在第一次成功 mutation 持久化时完成确定性迁移；writer 永远只发出 v5。v4→v5 保留全部旧字段与 lineage，只改变 Contract 身份；单纯打开不回写旧文件。v3→v4 迁移要求来源精确声明 v3、不得携带 v4 字段、Asset 必须是精确的旧形状；迁移把每个 Asset 的 `lineage` 置为 `null`、写入 16 个 `null` 的 `pattern_slots` 并给出空 `performances`。
 Project Contract v1–v4 的 schema 定义已随 2026-09-15 的 Bundle 当前级别决策退役（`docs/prd/decisions/2026-09-15-project-bundle-current-level-only.md`）：它们不再是独立可分发的 Contract，只剩 loader 手写结构校验下的迁移读取入口，也不能再被命名或打包进 Project Bundle。
 
+## Pad 回放对齐参数（`5.1.0`）
+
+`5.1.0` 是向后兼容的追加：Pad `playback` 在原有五个必填键（`trim_start_frame`、`trim_end_frame`、
+`trigger_mode`、`gain_millidb`、`muted`）之外新增六个**可选**键，缺省即旧行为。writer 省略取缺省值的键，
+所以不使用新参数的 Project 字节不变。
+
+| 键 | 取值 | 缺省 |
+| --- | --- | --- |
+| `reverse` | boolean | `false` |
+| `pitch_cents` | 整数 −2400..+2400（varispeed，时长随音高变化） | `0` |
+| `pan` | 整数 −100..+100 | `0` |
+| `loop_mode` | `forward` \| `ping_pong` | `forward` |
+| `loop_start_frame` | 源帧整数 ≥ 0，或 `null`（等于 `trim_start_frame`） | `null` |
+| `loop_crossfade_frames` | 源帧整数 ≥ 0 | `0` |
+
+Schema 固定每个键的形状与上下界，并拒绝 `loop_mode: ping_pong` 与非零 `loop_crossfade_frames` 同时出现；
+跨字段的帧区间规则（循环点位于 trim 区间内、crossfade 不超过循环长度一半）与 trim 区间一样由 Domain 校验。
+`5.0.0` reader 按设计拒绝携带新键的 Project。取值与语义的权威是
+2026-09-30 回放与音色对齐决策（`docs/prd/decisions/2026-09-30-sample-playback-and-tone-parity.md`）。
+本 Contract 版本先于实现：Authoring Domain、Project I/O、Cooker 与 Audio Runtime 读写并播放这些键属于后续 Task，
+在此之前当前 Project I/O 仍按精确五键拒绝它们。
+
 ## Slice 采纳 Lineage
 
 新增的 `derivation.kind: capability_adoption` 只支持 Slice，必须搭配现有

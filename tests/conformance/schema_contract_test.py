@@ -64,7 +64,7 @@ schemas = {name: load_json(path) for name, path in schema_paths.items()}
 
 contract_versions = {
     name: (
-        "5.0.0" if name == "project_v5" else
+        "5.1.0" if name == "project_v5" else
         "2.0.0"
         if name in {"project_bundle", "assembly", "capability_v2"}
         else (
@@ -1043,6 +1043,65 @@ print(
 # L3: the successor schema admits only the approved closed Slice evidence.
 valid_project_v5 = load_json(repo_root / "tests/fixtures/contracts/project-v5-valid.json")
 json_schema.check(valid_project_v5, project_v5, "project-v5-valid")
+
+# 5.1.0 (decision 2026-09-30): Pad playback gains six optional parity keys.
+# The five 5.0.0 keys stay required, so every legal 5.0.0 Project remains
+# legal; a new key is bounded exactly as the decision fixes it.
+playback_v5 = project_v5["$defs"]["playback"]
+assert playback_v5["required"] == [
+    "trim_start_frame", "trim_end_frame", "trigger_mode", "gain_millidb", "muted",
+], "why: a 5.1.0 key became required; remedy: new playback keys stay optional"
+assert {
+    key: playback_v5["properties"][key]
+    for key in ("reverse", "pitch_cents", "pan", "loop_mode",
+                "loop_start_frame", "loop_crossfade_frames")
+} == {
+    "reverse": {"type": "boolean"},
+    "pitch_cents": {"type": "integer", "minimum": -2400, "maximum": 2400},
+    "pan": {"type": "integer", "minimum": -100, "maximum": 100},
+    "loop_mode": {"enum": ["forward", "ping_pong"]},
+    "loop_start_frame": {"type": ["integer", "null"], "minimum": 0},
+    "loop_crossfade_frames": {"type": "integer", "minimum": 0},
+}
+assert playback_v5["additionalProperties"] is False
+assert playback_v5["if"] == {
+    "properties": {"loop_mode": {"const": "ping_pong"}},
+    "required": ["loop_mode"],
+}
+assert playback_v5["then"] == {
+    "properties": {"loop_crossfade_frames": {"const": 0}},
+}
+
+parity_project_v5 = load_json(
+    repo_root / "tests/fixtures/contracts/project-v5-playback-parity-valid.json"
+)
+json_schema.check(parity_project_v5, project_v5, "project-v5-playback-parity-valid")
+parity_pad = ["banks", 0, "pads", 0, "playback"]
+parity_ping_pong_pad = ["banks", 0, "pads", 1, "playback"]
+for pointer, key, bad in [
+    (parity_pad, "pitch_cents", 2401),
+    (parity_pad, "pitch_cents", -2401),
+    (parity_pad, "pitch_cents", 1.5),
+    (parity_pad, "pan", 101),
+    (parity_pad, "pan", -101),
+    (parity_pad, "reverse", "true"),
+    (parity_pad, "loop_mode", "reverse"),
+    (parity_pad, "loop_start_frame", -1),
+    (parity_pad, "loop_crossfade_frames", -1),
+    (parity_ping_pong_pad, "loop_crossfade_frames", 1),
+    (parity_pad, "time_stretch", True),
+]:
+    node = parity_project_v5
+    for token in pointer:
+        node = node[token]
+    assert node.get(key, _DELETE) != bad, (
+        "why: the mutation equals the fixture value, so it tests nothing; "
+        f"remedy: choose another invalid value for {key}"
+    )
+    changed = mutated(parity_project_v5, pointer + [key], bad)
+    assert json_schema.validate(changed, project_v5), (pointer, key, bad)
+explicit_zero = mutated(parity_project_v5, parity_ping_pong_pad + ["loop_crossfade_frames"], 0)
+json_schema.check(explicit_zero, project_v5, "ping-pong with an explicit zero crossfade")
 lineage_v5 = valid_project_v5["assets"][0]["lineage"]
 for path in ((), ("source",), ("derivation",), ("derivation", "capability"),
              ("derivation", "provider"), ("derivation", "output_artifact"),

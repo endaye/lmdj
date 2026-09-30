@@ -14,15 +14,31 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 当前 Product Build 以上方从 active manifests 生成的 Build Identity 为准；各组件页面的身份也从同一份 manifest/Assembly Lock 事实生成，不以以下历史分配记录替代当前版本。
 
-当前分配的 Product Build `1.0.65.0` 带入 Project I/O `4.2.1`：它修复了 Performance draft begin 的一个竞态。
-一个注定被 revision 冲突拒绝的 begin，过去会先写入活动 Journal 再失败，留下一个指向从未提交的
-Performance 的活动 Journal；现在它在写入任何 Journal 之前就返回同样的拒绝。Application Facade
-`6.2.1`、Web Runtime Platform `5.3.3` 与各 Host 只跟随依赖做 PATCH。`1.0.64.0` 的候选因为这个竞态没有通过
-完整批次，从未发布。它不是公共 Release、部署或 Channel 晋级。
+当前分配的 Product Build `2.0.70.0` 在 `2.0.69.0` 之上只推进 Contract 身份：`lmdj.project.v5` 由 `5.0.0` 升到 `5.1.0`，
+Contract ID 不变。Pad `playback` 新增六个可选键——`reverse`、`pitch_cents`、`pan`、`loop_mode`、
+`loop_start_frame` 与 `loop_crossfade_frames`，取值依据
+2026-09-30 回放与音色对齐决策（`docs/prd/decisions/2026-09-30-sample-playback-and-tone-parity.md`）。
+原有五个键仍为必填，所以每个合法的 `5.0.0` Project 仍是合法的 `5.1.0` Project；`5.0.0` reader 按设计拒绝
+携带新键的 Project。Module、Host、Provider 与其余 Contract 身份在该 Build 全部不变：读写这些键的
+Authoring Domain、Project I/O 与 Cooker 实现属于后续 Task，在它们合入之前，当前 Project I/O 仍拒绝携带新键的
+Project。它不是公共 Release、部署或 Channel 晋级。
 
 ## 历史分配记录
 
 以下描述各次分配当时的变化，不声明当前组件版本或发布状态。
+
+Product Build `2.0.69.0` 是 Milestone 2 的首个 Build：按 `docs/governance/version-management.md`，M1 以 `1.0.66.0` 收官，
+M2 的 `2.0.*.*` 列车对应 Web Creator 四区工作流（Umbrella #1207 / #1658），`BUILD` 序列继续单调递增。它带入 Creator 会话级 Undo/Redo：
+Project I/O 升到 `5.0.0`，Authoring Domain 升到 `4.2.0`，Application Facade 升到 `6.3.0`，Web Runtime Platform 升到 `5.4.0`，
+Creator Web 升到 `4.6.0`；Audio Runtime `5.0.1`、Project Cooker `1.2.1` 与其余 Host 做 PATCH。
+
+Product Build `1.0.66.0` 是发布流水线为与 `1.0.65.0` 相同的组件身份分配的候选 Build，只改变 Product 版本。
+
+Product Build `1.0.65.0` 曾带入 Project I/O `4.2.1`：它修复了 Performance draft begin 的一个竞态。
+一个注定被 revision 冲突拒绝的 begin，过去会先写入活动 Journal 再失败，留下一个指向从未提交的
+Performance 的活动 Journal；现在它在写入任何 Journal 之前就返回同样的拒绝。Application Facade
+`6.2.1`、Web Runtime Platform `5.3.3` 与各 Host 只跟随依赖做 PATCH。`1.0.64.0` 的候选因为这个竞态没有通过
+完整批次，从未发布。
 
 Product Build `1.0.62.0` 曾补齐 `1.0.61.0` 之后已合入、但当时未升版本的模块身份：Application Facade
 `6.2.0`、Project I/O `4.2.0`、Creator Web `4.5.0`，Web Runtime Platform `5.3.2` 与各 Host 跟随依赖做 PATCH。

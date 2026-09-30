@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://lmdj.dev/contracts/project/lmdj.project.v5.schema.json",
-  "x-lmdj-contract-version": "5.0.0",
+  "x-lmdj-contract-version": "5.1.0",
   "title": "LMDJ Project Truth v5",
   "type": "object",
   "required": [
@@ -387,6 +387,53 @@
         },
         "muted": {
           "type": "boolean"
+        },
+        "reverse": {
+          "type": "boolean"
+        },
+        "pitch_cents": {
+          "type": "integer",
+          "minimum": -2400,
+          "maximum": 2400
+        },
+        "pan": {
+          "type": "integer",
+          "minimum": -100,
+          "maximum": 100
+        },
+        "loop_mode": {
+          "enum": [
+            "forward",
+            "ping_pong"
+          ]
+        },
+        "loop_start_frame": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "loop_crossfade_frames": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "if": {
+        "properties": {
+          "loop_mode": {
+            "const": "ping_pong"
+          }
+        },
+        "required": [
+          "loop_mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "loop_crossfade_frames": {
+            "const": 0
+          }
         }
       },
       "additionalProperties": false
