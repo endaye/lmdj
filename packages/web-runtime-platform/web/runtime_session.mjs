@@ -2147,6 +2147,10 @@ function createRuntimeSessionController(options = {}) {
   function beginInterruption(reason) {
     if (
       closing ||
+      // Explicit suspension already owns cleanup and must finish parked.
+      // An adverse browser edge must not start a competing auto-recovery
+      // while its AudioContext.suspend is still pending.
+      safetyReservation?.reason === "audio.suspend" ||
       interruptionReservation !== null ||
       machine.state === "failed" ||
       machine.state === "closed"

@@ -4219,6 +4219,72 @@ test("reactivation waits until both Host and AudioContext suspension commit", as
   }
 });
 
+test("blur during explicit suspension cannot start a competing recovery", async () => {
+  let contextSuspendStartedResolve;
+  const contextSuspendStarted = new Promise(resolve => { contextSuspendStartedResolve = resolve; });
+  let releaseContextSuspend;
+  const contextMaySuspend = new Promise(resolve => { releaseContextSuspend = resolve; });
+  const browserWindow = new EventTarget();
+  const operations = [];
+  const {context, session} = fixture({browserWindow, send: async envelope => {
+    operations.push(envelope.operation);
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  operations.length = 0;
+  context.suspend = async () => {
+    contextSuspendStartedResolve();
+    await contextMaySuspend;
+    context.state = "suspended";
+    context.dispatchEvent(new Event("statechange"));
+  };
+  const suspending = session.suspendAudio();
+  try {
+    await contextSuspendStarted;
+    browserWindow.dispatchEvent(new Event("blur"));
+    await drainTasks();
+    releaseContextSuspend();
+    assert.equal(await suspending, true);
+    await drainTasks();
+    assert.deepEqual(operations, ["sample.stop", "audio.suspend"]);
+    assert.equal(session.diagnostics().state, "audio-suspended");
+    assert.equal(context.state, "suspended");
+    assert.equal(session.diagnostics().recovery_probe_ready, false);
+  } finally {
+    releaseContextSuspend();
+    await suspending;
+    await session.close();
+  }
+});
+
+test("close during Host suspension keeps the late result from changing closed state", async () => {
+  let releaseHostSuspend;
+  let hostSuspendStartedResolve;
+  const hostSuspendStarted = new Promise(resolve => { hostSuspendStartedResolve = resolve; });
+  const {context, session} = fixture({send: async envelope => {
+    if (envelope.operation === "audio.suspend") {
+      hostSuspendStartedResolve();
+      return new Promise(resolve => {
+        releaseHostSuspend = () => resolve(success(envelope, {}));
+      });
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  let contextSuspensions = 0;
+  context.suspend = async () => { contextSuspensions++; };
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  const suspending = session.suspendAudio();
+  await hostSuspendStarted;
+  const closing = session.close();
+  releaseHostSuspend();
+  assert.equal(await suspending, false);
+  assert.equal(await closing, true);
+  assert.equal(contextSuspensions, 0);
+  assert.equal(session.diagnostics().state, "closed");
+});
+
 test("visibility cleanup is once per adverse edge and repeats after a later edge", async () => {
   const browserWindow = new EventTarget();
   const browserDocument = new EventTarget();
