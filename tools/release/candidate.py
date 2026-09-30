@@ -31,20 +31,19 @@ class CandidateReservations:
         self.inputs = CandidateInputs(repository_root)
         self.state_root = Path(state_root)
 
-    def _version(self, revision, versions=None):
-        if versions is not None and revision in versions:
-            return versions[revision]
+    def _version(self, revision):
+        return self._version_and_oid(revision)[0]
+
+    def _version_and_oid(self, revision):
+        """(ProductVersion, manifest blob) of one revision, reused within this run."""
         if not sha(revision):
             # A symbolic revision can move: never reuse its read.
-            return self._read_version(revision)[0]
+            return self._read_version(revision)
         key = (self.inputs.root, revision)
         if key not in _VERSIONS:
             _VERSIONS[key] = self._read_version(revision)
-        version, oid = _VERSIONS[key]
-        self._require_present((oid,))
-        if versions is not None:
-            versions[revision] = version
-        return version
+        self._require_present((_VERSIONS[key][1],))
+        return _VERSIONS[key]
 
     def _require_present(self, oids):
         """Every manifest blob a reused read depends on is still in the object store."""
@@ -79,29 +78,30 @@ class CandidateReservations:
         """The Product version one exact revision carries (read from Git)."""
         return self._version(revision)
 
-    def _history_floor(self, revision, versions=None):
+    def _history_floor(self, revision):
         if not sha(revision):
-            return self._read_history_floor(revision, versions)[0]
+            return self._read_history_floor(revision)[0]
         key = (self.inputs.root, revision)
         if key not in _FLOORS:
-            _FLOORS[key] = self._read_history_floor(revision, versions)
+            _FLOORS[key] = self._read_history_floor(revision)
         floor, oids = _FLOORS[key]
         self._require_present(oids)
         return floor
 
-    def _read_history_floor(self, revision, versions=None):
+    def _read_history_floor(self, revision):
+        """(BUILD floor, manifest blobs it was read from) along full history."""
         # Full history, not first-parent/path-simplified history: a higher BUILD
         # allocated then reverted or merged away still consumes its number.
         revisions = self.inputs.git("rev-list", "--full-history", revision,
                                     "--", VERSION).decode().splitlines()
-        versions = {} if versions is None else versions
-        builds = [self._version(revision, versions).build]
-        oids = {_VERSIONS[(self.inputs.root, revision)][1]} if sha(revision) else set()
+        version, oid = self._version_and_oid(revision)
+        builds, oids = [version.build], {oid}
         for commit in revisions:
             row = self.inputs.git("ls-tree", commit, "--", VERSION)
             if row:  # A deletion commit has no manifest; its ancestors remain.
-                builds.append(self._version(commit, versions).build)
-                oids.add(_VERSIONS[(self.inputs.root, commit)][1])
+                version, oid = self._version_and_oid(commit)
+                builds.append(version.build)
+                oids.add(oid)
         return max(builds), tuple(sorted(oids))
 
     def _read(self, journal):
@@ -237,13 +237,12 @@ class CandidateReservations:
             if catalogue["repository"] != request["repository"]:
                 _fail("BUILD catalogue belongs to another repository")
             self.inputs.verify(frozen, main_revision)
-            # Per-observation reuse only: immutable commits are parsed once in
-            # this call, but every resume reads the real object store again.
-            versions = {}
-            floor = self._history_floor(request["base_revision"], versions)
-            if main_revision != request["base_revision"] and self._history_floor(main_revision, versions) != floor:
+            # Immutable commits are parsed once per run; every reuse still
+            # proves its manifest blobs against the real object store.
+            floor = self._history_floor(request["base_revision"])
+            if main_revision != request["base_revision"] and self._history_floor(main_revision) != floor:
                 _fail("candidate-changed: BUILD allocation history advanced after the original baseline")
-            current = self._version(request["base_revision"], versions)
+            current = self._version(request["base_revision"])
             records = catalogue["reservations"]
             for record in records:
                 if record["request"]["id"] == request["id"]:
