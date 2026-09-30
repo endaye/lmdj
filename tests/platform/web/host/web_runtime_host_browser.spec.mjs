@@ -2657,51 +2657,46 @@ test("Stage 9 Chromium records across an acknowledged switch, reloads, and expos
   await page.evaluate(() => {
     window.__sequenceBoundaries = [];
   });
-  await page.evaluate(async ({sessionId, nextPatternId}) => {
-    await window.lmdjWebRuntimeController.recordSequenceEvent({
+  const {queuedSwitch, rejectedBpm, cancelledStopAttempt} = await page.evaluate(async ({
+    sessionId, nextPatternId, expectedRevision, commandId,
+  }) => {
+    const controller = window.lmdjWebRuntimeController;
+    await controller.recordSequenceEvent({
       sessionId, slot: 3, velocity: 80, pressed: true,
     });
-    await window.lmdjWebRuntimeController.recordSequenceEvent({
+    await controller.recordSequenceEvent({
       sessionId, slot: 3, velocity: 0, pressed: false,
     });
-    return window.lmdjWebRuntimeController.requestPatternSwitch({
-      sessionId, nextPatternId,
-    });
-  }, {sessionId: cancelledSessionId, nextPatternId: descriptor.pattern_id});
-  const rejectedBpm = await page.evaluate(async ({
-    sessionId, expectedRevision,
-  }) => {
-    try {
-      await window.lmdjWebRuntimeController.updateSequenceSettings({
-        expectedRevision,
-        sessionId,
-        bpm: 90,
-        quantizeEnabled: null,
-        swingPercent: null,
-      });
-      return null;
-    } catch (error) {
-      return {code: error.code, message: error.message};
-    }
+    // Enqueue all three actions synchronously. Awaiting the settings refusal
+    // before submitting Stop would let the boundary flush and notify first,
+    // turning this cancellation leg into another crossed-boundary journey.
+    const switching = controller.requestPatternSwitch({sessionId, nextPatternId});
+    const settings = controller.updateSequenceSettings({
+      expectedRevision,
+      sessionId,
+      bpm: 90,
+      quantizeEnabled: null,
+      swingPercent: null,
+    }).then(() => null, (error) => ({code: error.code, message: error.message}));
+    const stopping = controller.stopSequence({sessionId, commandId}).then(
+      (result) => ({result, error: null}),
+      (error) => ({result: null, error: {code: error.code, message: error.message}}),
+    );
+    const [queuedSwitch, rejectedBpm, cancelledStopAttempt] =
+      await Promise.all([switching, settings, stopping]);
+    return {queuedSwitch, rejectedBpm, cancelledStopAttempt};
   }, {
     sessionId: cancelledSessionId,
+    nextPatternId: descriptor.pattern_id,
     expectedRevision: switchedStop.committedRevision,
+    commandId: cancelledCommandId,
+  });
+  expect(queuedSwitch).toMatchObject({
+    state: "switching",
+    sessionId: cancelledSessionId,
+    pendingPatternId: descriptor.pattern_id,
   });
   expect(rejectedBpm).toMatchObject({code: "INVALID_ARGUMENT"});
-  const cancelledStopAttempt = await page.evaluate(async ({
-    sessionId, commandId,
-  }) => {
-    try {
-      return {
-        result: await window.lmdjWebRuntimeController.stopSequence({
-          sessionId, commandId,
-        }),
-        error: null,
-      };
-    } catch (error) {
-      return {result: null, error: {code: error.code, message: error.message}};
-    }
-  }, {sessionId: cancelledSessionId, commandId: cancelledCommandId});
   let cancelledStop = cancelledStopAttempt.result;
   if (cancelledStopAttempt.error !== null) {
     // The realtime Pattern boundary may win the Stop linearization race. The
