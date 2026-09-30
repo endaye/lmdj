@@ -536,7 +536,16 @@ async function importActivateAndPerform(page, scenario = "none") {
 }
 
 async function openProjectSuccessor(context, url) {
-  const successor = await context.newPage();
+  // Chromium may restore the crashed Project tab alongside about:blank.
+  // Keep one successor page so that an unintended restored tab cannot acquire
+  // the Project's writer while this recovery journey opens the same bundle.
+  const existing = context.pages();
+  const successor = existing.find(page => page.url() === "about:blank")
+    ?? await context.newPage();
+  await Promise.all(existing.filter(page => page !== successor)
+    .map(page => page.close()));
+  expect(context.pages()).toHaveLength(1);
+  expect(context.pages()[0]).toBe(successor);
   await installDependencyScenario(successor);
   await routeCandidateIdentity(successor);
   await successor.goto(url);
