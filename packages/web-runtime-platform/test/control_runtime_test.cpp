@@ -1375,6 +1375,152 @@ void test_host_close_aborts_active_project_bundle_import() {
   LMDJ_CHECK(!std::filesystem::exists(staging));
 }
 
+std::filesystem::path host_project(
+    const std::filesystem::path& root, std::string_view project_id) {
+  return root / "projects" / (std::string(project_id) + ".lmdj");
+}
+
+Json duplicate_payload(std::string_view project_id) {
+  return {{"source_project_id", kProjectId}, {"project_id", project_id}};
+}
+
+void test_project_duplicate_lists_the_copy_and_keeps_the_open_project() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto copy_id = uuid(1701);
+  const auto copied = check_locked_success_result(
+      runtime->dispatch("project.duplicate", duplicate_payload(copy_id), {}));
+  check_exact_keys(
+      copied,
+      {"project_id", "pattern_id", "revision", "bpm", "asset_count",
+       "assigned_pad_count", "bundle_digest"});
+  LMDJ_CHECK(copied.at("project_id") == copy_id);
+  LMDJ_CHECK(copied.at("pattern_id") == kPatternId);
+  LMDJ_CHECK(copied.at("revision") == 0);
+  const auto listed = check_locked_success_result(
+      runtime->dispatch("project.list", Json::object(), {}));
+  LMDJ_CHECK(listed.at("projects").size() == 2);
+  const auto status = check_locked_success_result(
+      runtime->dispatch("host.status", Json::object(), {}));
+  LMDJ_CHECK(status.at("project_id") == kProjectId);
+}
+
+void test_project_duplicate_refuses_a_source_owned_by_another_tab() {
+  TempDirectory temp;
+  auto owner = make_runtime(temp.path());
+  check_success(owner->dispatch("project.create", create_payload(), {}));
+  auto competitor = make_runtime(temp.path());
+  const auto copy_id = uuid(1702);
+  check_error(
+      competitor->dispatch(
+          "project.duplicate", duplicate_payload(copy_id), {}),
+      "PROJECT_BUSY");
+  LMDJ_CHECK(!std::filesystem::exists(host_project(temp.path(), copy_id)));
+}
+
+// A crashed owner leaves its Journal active; the Host names the refusal
+// instead of letting the sanitizer reduce it to a malformed request.
+void test_project_duplicate_names_an_unfinished_recording() {
+  TempDirectory temp;
+  {
+    auto builder = make_runtime(temp.path());
+    check_success(builder->dispatch("project.create", create_payload(), {}));
+  }
+  const lmdj::domain::Pattern pattern{
+      lmdj::foundation::PatternId{std::string(kPatternId)}, 1, {}};
+  LMDJ_CHECK(lmdj::project_io::SequenceJournal{}
+                 .begin(
+                     host_project(temp.path(), kProjectId),
+                     lmdj::foundation::SequenceSessionId{uuid(1703)},
+                     pattern.id,
+                     pattern.bars,
+                     lmdj::project_io::sequence_pattern_fingerprint(pattern),
+                     0)
+                 .has_value());
+  auto runtime = make_runtime(temp.path());
+  const auto copy_id = uuid(1704);
+  const auto error = check_error(
+      runtime->dispatch("project.duplicate", duplicate_payload(copy_id), {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(
+      error.at("message") == "source Project has an unfinished recording");
+  LMDJ_CHECK(!std::filesystem::exists(host_project(temp.path(), copy_id)));
+}
+
+void test_project_duplicate_refuses_an_identity_already_in_use() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto copy_id = uuid(1705);
+  check_success(
+      runtime->dispatch("project.duplicate", duplicate_payload(copy_id), {}));
+  check_error(
+      runtime->dispatch("project.duplicate", duplicate_payload(copy_id), {}),
+      "DUPLICATE_ID");
+}
+
+struct RefusedPublicationClaim final {
+  static bool claim(void*) noexcept { return false; }
+  static void commit(void*) noexcept {}
+  static void abort(void*) noexcept {}
+  static bool force_failure(void*) noexcept { return false; }
+
+  lmdj::facade::detail::MutationPublishToken token() noexcept {
+    return {this, &claim, &commit, &abort, &force_failure};
+  }
+};
+
+void test_project_duplicate_cancelled_before_publication_leaves_no_copy() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto copy_id = uuid(1706);
+  RefusedPublicationClaim refused;
+  Json response;
+  {
+    const lmdj::facade::detail::MutationPublishScope publish_scope(
+        refused.token());
+    response =
+        runtime->dispatch("project.duplicate", duplicate_payload(copy_id), {});
+  }
+  LMDJ_CHECK(response.at("ok") == false);
+  LMDJ_CHECK(!std::filesystem::exists(host_project(temp.path(), copy_id)));
+  LMDJ_CHECK(
+      !std::filesystem::exists(
+          temp.path() / ".lmdj-host/import-staging" / ("duplicate-" + copy_id)));
+}
+
+void test_project_duplicate_waits_for_a_pending_sample_import() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(1707, 1708, 0, kAssetId, 64),
+      {}));
+  const auto copy_id = uuid(1709);
+  check_error(
+      runtime->dispatch("project.duplicate", duplicate_payload(copy_id), {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(!std::filesystem::exists(host_project(temp.path(), copy_id)));
+}
+
+void test_project_duplicate_payload_is_exact() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  auto extra = duplicate_payload(uuid(1710));
+  extra["project_path"] = "/forbidden/path.lmdj";
+  check_error(
+      runtime->dispatch("project.duplicate", extra, {}),
+      "HOST_PROTOCOL_MISMATCH");
+  check_error(
+      runtime->dispatch(
+          "project.duplicate", {{"project_id", uuid(1711)}}, {}),
+      "HOST_PROTOCOL_MISMATCH");
+}
+
 void test_runtime_cancellation_precedes_project_mutation() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -7469,6 +7615,13 @@ int main() {
     test_project_bundle_stream_delegates_to_facade_and_lists_summary();
     test_host_close_aborts_active_project_bundle_import();
     test_runtime_cancellation_precedes_project_mutation();
+    test_project_duplicate_lists_the_copy_and_keeps_the_open_project();
+    test_project_duplicate_refuses_a_source_owned_by_another_tab();
+    test_project_duplicate_names_an_unfinished_recording();
+    test_project_duplicate_refuses_an_identity_already_in_use();
+    test_project_duplicate_cancelled_before_publication_leaves_no_copy();
+    test_project_duplicate_waits_for_a_pending_sample_import();
+    test_project_duplicate_payload_is_exact();
     test_exact_payloads_and_facade_owned_project_journey();
     test_sequence_observer_busy_and_owner_loss_recovery();
     test_owner_loss_cleanup_failure_stops_and_clears_the_overlay();

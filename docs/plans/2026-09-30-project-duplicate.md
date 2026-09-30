@@ -99,9 +99,54 @@ that is open in another tab or recording, and must never publish a partial copy.
      live Sequence refusal; crashed owner's active Journal refused and not
      sealed; invalid identities) and `facade.failure_contracts` (an unexpected
      throw becomes the public envelope).
-3. **web-runtime-platform** (after #1660 Task 2): Host `project.duplicate` and
-   Runtime Session `duplicateProject`, plus an OPFS case, because OPFS
-   publication is copy → verify → commit.
+3. **web-runtime-platform** (`feat/1684-web-duplicate`). It does not depend
+   on #1660 Task 2: it touches no Creator boot logic or browser spec.
+   - Host operation `project.duplicate {source_project_id, project_id}` returns
+     the copy's Local Project summary. It only copies: the open Project, its
+     writer lease and the Runtime are untouched, and the caller opens the copy.
+   - Like `project.create`, it refuses with `HOST_STATE_INVALID` while running,
+     with an active Sequence, or with a pending Sample import.
+   - Facade refusals map as follows:
+     - `project_busy` → `PROJECT_BUSY`;
+     - `duplicate_id` → `DUPLICATE_ID`;
+     - an unfinished recording (`sequence_session_active` /
+       `performance_session_active`) → `HOST_STATE_INVALID` with "source
+       Project has an unfinished recording". The generic sanitizer would
+       otherwise reduce it to a malformed request.
+   - A deadline that passes before publication refuses the claim, so nothing is
+     published and the bridge reports `HOST_TIMEOUT`.
+   - Runtime Session `duplicateProject({sourceProjectId, projectId})` runs on
+     the serial Project action lane, refuses an invalid or identical identity
+     before any Host request, and accepts only the new identity at revision 0.
+   - The operation joins `bridge.cpp`'s allow-list and `HOST_OPERATIONS`.
+     `source_boundary_test.py` keeps the two in agreement.
+   - An OPFS conformance case (Chromium) duplicates a Project with an Asset and
+     reopens the copy and the source from a second Core instance.
+   - Declared files:
+     - `packages/web-runtime-platform/src/control_runtime.cpp`
+     - `packages/web-runtime-platform/src/bridge.cpp`
+     - `packages/web-runtime-platform/web/protocol.mjs`
+     - `packages/web-runtime-platform/web/runtime_session.mjs`
+     - `packages/web-runtime-platform/test/control_runtime_test.cpp`
+     - `packages/web-runtime-platform/test/protocol.test.mjs`
+     - `packages/web-runtime-platform/test/runtime_session.test.mjs`
+     - `tests/platform/web/project_io/project_io_web_test.cpp`
+     - `tests/platform/web/project_io/project_io_web_conformance.spec.mjs`
+     - `apps/docs-site/docs/core/modules/web-runtime-platform.mdx`
+     - `apps/docs-site/docs/platform/web-runtime.mdx`
+     - this plan
+   - Lowest-tier tests:
+     - `host.web_control_runtime`: copy listed with the open Project kept;
+       another tab → `PROJECT_BUSY`; unfinished recording named; identity in
+       use → `DUPLICATE_ID`; refused publication claim → no copy; pending Sample
+       import refused; exact payload;
+     - `runtime_session.test.mjs`: payload; result; invalid requests; not
+       started; wrong identity; wrong revision;
+     - `protocol.test.mjs`;
+     - the OPFS conformance case.
+   - A C++ change under `packages/web-runtime-platform/src` selects the core,
+     creator and web-runtime families, so this Task runs in full mode: every
+     batch-only lane runs on the exact head before merge.
 4. **creator-web** (after #1660 Task 2): Project library Duplicate action. It
    opens the copy and decides how the copy is named. Browser journeys cover the
    normal, refused, failed, cancelled and reopened paths. #1684 closes here.
@@ -141,7 +186,7 @@ Owed MINOR bumps:
 |---|---|---|---|
 | `project-io` | 4.2.1 | 4.3.0 | Task 1 |
 | `application-facade` | 6.2.1 | 6.3.0 | Task 2 (typed `duplicate_project`) |
-| `web-runtime-platform` | 5.3.3 | 5.4.0 | Task 3 |
+| `web-runtime-platform` | 5.3.3 | 5.4.0 | Task 3 (`project.duplicate`, `duplicateProject`) |
 | `creator-web` | 4.5.1 | 4.6.0 | Task 4 |
 
 Each is a backward-compatible public capability. Under the owed-version

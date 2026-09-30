@@ -2957,6 +2957,42 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  // Copies a local Project under a new identity without changing the open
+  // Project; the caller opens the copy. The caller chooses the identity; the
+  // Core refuses a busy or recording source and an identity already in use,
+  // and publishes nothing unless the whole copy is.
+  function duplicateProject(request, requestOptions = {}) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["sourceProjectId", "projectId"]) ||
+      !UUID_PATTERN.test(request.sourceProjectId) ||
+      !UUID_PATTERN.test(request.projectId) ||
+      request.sourceProjectId === request.projectId
+    ) {
+      throw new TypeError("Project duplicate request is invalid");
+    }
+    return serializeProjectAction(async () => {
+      if (closing || !started) {
+        throw typedError("HOST_STATE_INVALID", "Project duplicate is unavailable");
+      }
+      const result = await boundedRequest("project.duplicate", {
+        source_project_id: request.sourceProjectId,
+        project_id: request.projectId,
+      }, requestOptions);
+      const summary = normalizeLocalProjectSummary(result, {
+        projectId: request.projectId,
+      });
+      if (summary.revision !== 0) {
+        throw typedError(
+          "HOST_PROTOCOL_MISMATCH",
+          "Project duplicate result is invalid",
+        );
+      }
+      return summary;
+    });
+  }
+
   async function inspectProject() {
     return recoverableQuery("project.inspect", {});
   }
@@ -5183,6 +5219,7 @@ function createRuntimeSessionController(options = {}) {
     importProject,
     importAssignSample,
     createProject,
+    duplicateProject,
     openProject,
     inspectProject,
     inspectAuthoringHistory,

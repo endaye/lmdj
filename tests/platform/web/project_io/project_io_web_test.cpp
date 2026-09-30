@@ -1095,6 +1095,114 @@ nlohmann::json project_bundle_import(
   };
 }
 
+// Duplicate stages a copy and publishes it with the same OPFS directory
+// publication a Bundle import uses, which on this platform is copy -> verify
+// -> commit rather than an atomic rename. The reopen page is a second Core
+// instance over the same persistent OPFS, the shape `project.open` takes.
+[[gnu::noinline]] nlohmann::json project_duplicate(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
+    bool duplicate_phase) {
+  using namespace lmdj;
+  const std::filesystem::path workspace{"/lmdj-workspace"};
+  const auto source_id = uuid("981");
+  const auto copy_id = uuid("982");
+  const auto projects_root = workspace / "projects";
+  const auto source = projects_root / (source_id + ".lmdj");
+  const auto destination = projects_root / (copy_id + ".lmdj");
+
+  project_io::ProjectBundleTransfer transfer{platform};
+  std::optional<Result<project_io::LocalProjectSummary>> duplicated;
+  if (duplicate_phase) {
+    project_io::ProjectStore store{platform};
+    auto initial = value(
+        domain::create_project(foundation::ProjectId{source_id}, 120),
+        "duplicate source Project state");
+    success(store.create(source, initial), "duplicate source Project create");
+    const domain::CreatePattern create_pattern{
+        domain::CommandMeta{foundation::CommandId{uuid("983")}, 0},
+        domain::Pattern{foundation::PatternId{uuid("984")}, 1, {}},
+    };
+    require(
+        store.execute(source, domain::Command{create_pattern}).has_value(),
+        "duplicate source Pattern create");
+    require(
+        store
+            .import_artifact_bytes(
+                source,
+                {{foundation::CommandId{uuid("985")}, 1},
+                 foundation::AssetId{uuid("986")},
+                 "audio/wav",
+                 bytes("duplicate source audio")})
+            .has_value(),
+        "duplicate source Asset import");
+    duplicated = transfer.duplicate(
+        workspace,
+        foundation::ProjectId{source_id},
+        foundation::ProjectId{copy_id});
+  }
+
+  const auto listed = transfer.list_local_projects(workspace);
+  auto reopen_lease = platform->acquire_writer(destination);
+  project_io::ProjectStore reopen_store{platform};
+  const auto reopened = reopen_store.load(destination);
+  if (reopen_lease.has_value()) {
+    reopen_lease.value().reset();
+  }
+  auto source_lease = platform->acquire_writer(source);
+  const auto source_loaded = reopen_store.load(source);
+  if (source_lease.has_value()) {
+    source_lease.value().reset();
+  }
+  return {
+      {"duplicate",
+       duplicated.has_value()
+           ? mutation_result(*duplicated)
+           : nlohmann::json{{"status", "skipped"}, {"errorCode", ""},
+                            {"storageCondition", ""}}},
+      {"duplicateProjectId",
+       duplicated.has_value() && duplicated->has_value()
+           ? nlohmann::json(duplicated->value().project_id.value())
+           : nlohmann::json(nullptr)},
+      {"projectsRootDirectories",
+       value(platform->list_directories(projects_root), "Project root inventory")},
+      {"destinationManifestPresent",
+       value(
+           platform->exists(destination / "manifest.json"),
+           "destination manifest presence")},
+      {"stagingPresent",
+       value(
+           platform->directory_exists(
+               workspace / ".lmdj-host/import-staging" / ("duplicate-" + copy_id)),
+           "duplicate staging presence")},
+      {"storageIntents", storage_intent_inventory(*platform)},
+      {"listedProjectIds",
+       [&]() {
+         auto ids = nlohmann::json::array();
+         if (listed.has_value()) {
+           for (const auto& summary : listed.value()) {
+             ids.push_back(summary.project_id.value());
+           }
+         }
+         return ids;
+       }()},
+      {"reopen", mutation_result(reopened)},
+      {"reopenProjectId",
+       reopened.has_value() ? nlohmann::json(reopened.value().id.value())
+                            : nlohmann::json(nullptr)},
+      {"reopenRevision",
+       reopened.has_value() ? nlohmann::json(reopened.value().revision)
+                            : nlohmann::json(nullptr)},
+      {"reopenAssetCount",
+       reopened.has_value() ? nlohmann::json(reopened.value().assets.size())
+                            : nlohmann::json(nullptr)},
+      {"sourceReopen", mutation_result(source_loaded)},
+      {"sourceRevision",
+       source_loaded.has_value()
+           ? nlohmann::json(source_loaded.value().revision)
+           : nlohmann::json(nullptr)},
+  };
+}
+
 [[gnu::noinline]] std::optional<nlohmann::json> run_soundset_store_action() {
   if (query("action") == "project_bundle_import") {
     auto platform = lmdj::project_io::make_web_project_storage_platform();
@@ -1102,6 +1210,14 @@ nlohmann::json project_bundle_import(
     return nlohmann::json{
         {"complete", true},
         {"result", project_bundle_import(platform, query("phase") != "reopen")},
+    };
+  }
+  if (query("action") == "project_duplicate") {
+    auto platform = lmdj::project_io::make_web_project_storage_platform();
+    require(platform != nullptr, "Web platform factory returned null");
+    return nlohmann::json{
+        {"complete", true},
+        {"result", project_duplicate(platform, query("phase") != "reopen")},
     };
   }
   if (query("action") == "publication_lease_scope") {

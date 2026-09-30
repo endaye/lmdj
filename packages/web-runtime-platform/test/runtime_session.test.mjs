@@ -37,6 +37,7 @@ const API = [
   "disarmSequenceCapture",
   "flushSequence",
   "createProject",
+  "duplicateProject",
   "importProject",
   "installSoundSet",
   "importAssignSample",
@@ -5734,6 +5735,136 @@ test("Project creation rejects a Host result naming another Project", async () =
   await session.start();
   await assert.rejects(
     session.createProject(CREATE_REQUEST),
+    (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+  );
+  await session.close();
+});
+
+const DUPLICATE_SOURCE_ID = "00000000-0000-4000-8000-0000000000d1";
+const DUPLICATE_COPY_ID = "00000000-0000-4000-8000-0000000000d2";
+
+const DUPLICATE_REQUEST = Object.freeze({
+  sourceProjectId: DUPLICATE_SOURCE_ID,
+  projectId: DUPLICATE_COPY_ID,
+});
+
+function duplicatedProject(overrides = {}) {
+  return {
+    project_id: DUPLICATE_COPY_ID,
+    pattern_id: TRANSPORT_PATTERN_ID,
+    revision: 0,
+    bpm: 120,
+    asset_count: 1,
+    assigned_pad_count: 1,
+    bundle_digest: "a".repeat(64),
+    ...overrides,
+  };
+}
+
+test("Project duplicate sends the source and the chosen identity", async () => {
+  const duplicates = [];
+  const {session} = fixture({
+    send: async (envelope) => {
+      if (envelope.operation === "project.duplicate") {
+        duplicates.push(envelope.payload);
+        return success(envelope, duplicatedProject());
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.duplicateProject(DUPLICATE_REQUEST);
+  assert.deepEqual(duplicates, [{
+    source_project_id: DUPLICATE_SOURCE_ID,
+    project_id: DUPLICATE_COPY_ID,
+  }]);
+  await session.close();
+});
+
+test("Project duplicate returns the copy's library summary at revision 0", async () => {
+  const {session} = fixture({
+    send: async (envelope) => envelope.operation === "project.duplicate"
+      ? success(envelope, duplicatedProject())
+      : success(envelope, defaultResult(envelope.operation)),
+  });
+  await session.start();
+  assert.deepEqual(await session.duplicateProject(DUPLICATE_REQUEST), {
+    projectId: DUPLICATE_COPY_ID,
+    patternId: TRANSPORT_PATTERN_ID,
+    revision: 0,
+    bpm: 120,
+    assetCount: 1,
+    assignedPadCount: 1,
+    bundleDigest: "a".repeat(64),
+  });
+  await session.close();
+});
+
+test("Project duplicate refuses an invalid request before any Host request", async () => {
+  const operations = [];
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  const before = operations.length;
+  for (const request of [
+    null,
+    {...DUPLICATE_REQUEST, sourceProjectId: "not-a-uuid"},
+    {...DUPLICATE_REQUEST, projectId: "not-a-uuid"},
+    {...DUPLICATE_REQUEST, projectId: DUPLICATE_SOURCE_ID},
+    {...DUPLICATE_REQUEST, extra: true},
+    {projectId: DUPLICATE_COPY_ID},
+  ]) {
+    assert.throws(
+      () => session.duplicateProject(request),
+      /Project duplicate request is invalid/,
+    );
+  }
+  assert.equal(operations.length, before);
+  await session.close();
+});
+
+test("Project duplicate is unavailable before the session starts", async () => {
+  const operations = [];
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await assert.rejects(
+    session.duplicateProject(DUPLICATE_REQUEST),
+    (error) => error.code === "HOST_STATE_INVALID",
+  );
+  assert.equal(operations.includes("project.duplicate"), false);
+});
+
+test("Project duplicate rejects a Host result naming another Project", async () => {
+  const {session} = fixture({
+    send: async (envelope) => envelope.operation === "project.duplicate"
+      ? success(envelope, duplicatedProject({project_id: DUPLICATE_SOURCE_ID}))
+      : success(envelope, defaultResult(envelope.operation)),
+  });
+  await session.start();
+  await assert.rejects(
+    session.duplicateProject(DUPLICATE_REQUEST),
+    (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+  );
+  await session.close();
+});
+
+test("Project duplicate rejects a Host result that is not at revision 0", async () => {
+  const {session} = fixture({
+    send: async (envelope) => envelope.operation === "project.duplicate"
+      ? success(envelope, duplicatedProject({revision: 3}))
+      : success(envelope, defaultResult(envelope.operation)),
+  });
+  await session.start();
+  await assert.rejects(
+    session.duplicateProject(DUPLICATE_REQUEST),
     (error) => error.code === "HOST_PROTOCOL_MISMATCH",
   );
   await session.close();
