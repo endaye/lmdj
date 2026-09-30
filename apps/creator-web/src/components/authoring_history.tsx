@@ -114,6 +114,12 @@ export function AuthoringHistoryControls(props: Props) {
         setError(`Change saved; sound update failed: ${mutation.snapshotError.message}`);
       }
     } catch (failure) {
+      // The Core checks an existing receipt before revision validation, so an
+      // explicit conflict proves this request did not commit. The next click
+      // can target the newly inspected revision instead of retrying forever.
+      if (failure instanceof Error && "code" in failure && failure.code === "REVISION_CONFLICT") {
+        retained.current = null;
+      }
       if (stillCurrent()) setError(failure instanceof Error ? failure.message : "History change failed.");
     } finally {
       if (stillCurrent()) {

@@ -121,3 +121,22 @@ test("lost acknowledgement replays the original command after the source stack b
   expect(vi.mocked(history.undoAuthoring).mock.calls[1]).toEqual(vi.mocked(history.undoAuthoring).mock.calls[0]);
   expect(vi.mocked(history.undoAuthoring).mock.calls[1]![0].expectedRevision).toBe(1);
 });
+
+test("a definite revision refusal allows a new Undo at the observed revision", async () => {
+  const {props, history} = fixture();
+  vi.mocked(history.undoAuthoring).mockImplementationOnce(async () => {
+    vi.mocked(history.inspectAuthoringHistory).mockResolvedValue({...status, projectRevision: 2});
+    throw Object.assign(new Error("Project changed before Undo"), {code: "REVISION_CONFLICT"});
+  });
+  render(<AuthoringHistoryControls {...props} />);
+  await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
+  await userEvent.click(screen.getByRole("button", {name: "Undo"}));
+  await screen.findByText("Project changed before Undo");
+  await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
+  expect(props.onChanged).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", {name: "Undo"}));
+  await waitFor(() => expect(history.undoAuthoring).toHaveBeenCalledTimes(2));
+  const [first, second] = vi.mocked(history.undoAuthoring).mock.calls;
+  expect(second![0].expectedRevision).toBe(2);
+  expect(second![0].commandId).not.toBe(first![0].commandId);
+});
