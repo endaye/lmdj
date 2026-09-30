@@ -373,15 +373,28 @@ def _producer_revision(root, git, workflow, control_revision):
     return result
 
 
-def _batch_journal_load(root, token):
+_JOURNAL_READ_PAUSES = (10, 30)
+
+
+def _batch_journal_load(root, token, *, pause=time.sleep):
     """The authenticated batch journal reader over the pinned CI storage.
 
     Lazy: the transport and its pinned configuration are assembled on the
     first actual read, so carrier assembly itself touches nothing.
+
+    One committed snapshot per release run: every step that consults the
+    journal in this process reuses the first complete read. The journal is
+    append-only and a committed batch result never changes, so a single
+    snapshot is sound, and it replaces several full paginated reads per run,
+    each of which failed the whole run on any transient GitHub error. A read
+    that fails is retried after bounded pauses; the reader has no side
+    effects, so a retry can only succeed or report the same refusal.
     """
     held = {}
 
     def journal_load():
+        if "events" in held:
+            return held["events"]
         if "load" not in held:
             from batch_github_journal import GitHubJournalTransport
             from incremental_batch_journal import IssueBodyAnchor, Journal
@@ -410,12 +423,19 @@ def _batch_journal_load(root, token):
             # it reads committed history only and never writes the journal.
             held["load"] = Journal(config["issue_number"], transport, anchor,
                                    transport.authenticate, lambda: False).read_committed
-        return held["load"]()
+        for delay in _JOURNAL_READ_PAUSES:
+            try:
+                held["events"] = held["load"]()
+                return held["events"]
+            except Exception:
+                pause(delay)
+        held["events"] = held["load"]()
+        return held["events"]
 
     return journal_load
 
 
-def _batch_reference_for(root, token, consumer):
+def _batch_reference_for(load, consumer):
     """The release batch reference for one witness revision's terminal result.
 
     The journal records the batch verdict; the release reference is assembled
@@ -424,7 +444,6 @@ def _batch_reference_for(root, token, consumer):
     """
     from .verification import release_reference
 
-    load = _batch_journal_load(root, token)
 
     def batch_reference_for(witness):
         events = load()
@@ -816,17 +835,19 @@ def compose_carriers(context, policy, request):
     evidence_consumer = batch_evidence_consumer(api_get=github.get_batch_evidence,
                                                 git_root=root,
                                                 policy=context.policy)
+    # One committed journal snapshot shared by every step in this run.
+    batch_journal = _batch_journal_load(root, token)
     carriers = (
         DeferredCandidate(candidate_enroll),
         enroll_verification(
             candidate_root=candidate_root,
-            journal_load=_batch_journal_load(root, token),
+            journal_load=batch_journal,
             consumer=evidence_consumer,
             fresh_receipts=_fresh_candidate_receipts(candidate_enroll,
                                                      verify_merged)),
         enroll_intent(candidate_root=candidate_root,
                       repository_id=repository_id,
-                      batch_reference_for=_batch_reference_for(root, token, evidence_consumer),
+                      batch_reference_for=_batch_reference_for(batch_journal, evidence_consumer),
                       commit_for=intent_commit_for,
                       sequence_for=intent_sequence_for),
         enroll_changelog(candidate_root=candidate_root, repository_id=repository_id,

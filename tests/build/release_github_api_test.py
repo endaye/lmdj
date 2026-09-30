@@ -626,6 +626,43 @@ class ReleaseGitHubApiTest(unittest.TestCase):
         self.assertNotIn("fixture outage", str(captured.exception))
 
 
+class ReadRetryTest(unittest.TestCase):
+    """A read survives a transient failure; a write is never repeated."""
+
+    URL = "/repos/endaye/lmdj/branches/main"
+
+    def setUp(self) -> None:
+        self.transport = FakeTransport()
+        self.pauses: list[float] = []
+        self.client = GitHubClient(http_transport=self.transport, token=TOKEN,
+                                   retry_pause=self.pauses.append)
+
+    def test_a_read_is_retried_after_a_server_error(self):
+        self.transport.route(self.URL, HttpResponse(502, {}, b""),
+                             HttpResponse(200, {}, b"{}"))
+        self.assertEqual(self.client._request("GET", self.URL).status, 200)
+        self.assertEqual((len(self.transport.requests), self.pauses), (2, [2]))
+
+    def test_a_persistent_read_failure_is_reported_after_bounded_retries(self):
+        self.transport.failures[self.URL] = OSError("handshake timed out")
+        with self.assertRaises(GitHubApiError):
+            self.client._request("GET", self.URL)
+        self.assertEqual((len(self.transport.requests), self.pauses), (3, [2, 6]))
+
+    def test_a_persistent_server_error_is_returned_to_the_caller(self):
+        self.transport.route(self.URL, HttpResponse(503, {}, b""))
+        self.assertEqual(self.client._request("GET", self.URL).status, 503)
+        self.assertEqual(len(self.transport.requests), 3)
+
+    def test_a_write_is_never_retried(self):
+        self.transport.route(self.URL, HttpResponse(502, {}, b""))
+        self.assertEqual(self.client._request("POST", self.URL, b"{}").status, 502)
+        self.transport.failures[self.URL] = OSError("reset")
+        with self.assertRaises(GitHubApiError):
+            self.client._request("PATCH", self.URL, b"{}")
+        self.assertEqual((len(self.transport.requests), self.pauses), (2, []))
+
+
 class SelfTestGitHubApiTest(unittest.TestCase):
     def setUp(self):
         self.transport = FakeTransport()

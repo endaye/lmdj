@@ -1883,6 +1883,60 @@ class BatchJournalReaderCompositionTest(unittest.TestCase):
         self.assertEqual(calls, ["read_committed"])
         self.assertEqual(locks, [False, False, False])
 
+    def reader(self, outcomes):
+        """A fake journal whose successive committed reads follow `outcomes`."""
+        import sys
+        import types
+        from unittest.mock import patch
+        reads = []
+
+        class Transport:
+            def __init__(self, **kwargs):
+                self.authenticate = lambda *a: True
+
+        class Journal:
+            def __init__(self, *args):
+                pass
+
+            def read_committed(self):
+                reads.append(True)
+                outcome = outcomes[len(reads) - 1]
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+
+        modules = {"batch_github_journal": types.SimpleNamespace(GitHubJournalTransport=Transport),
+                   "incremental_batch_journal": types.SimpleNamespace(
+                       IssueBodyAnchor=lambda *a: None, Journal=Journal)}
+        return reads, patch.dict(sys.modules, modules)
+
+    def test_one_run_reads_the_committed_journal_once(self):
+        from tools.release.entry_composition import _batch_journal_load
+        reads, modules = self.reader([[{"type": "result"}]])
+        with modules:
+            load = _batch_journal_load(ROOT, "FIXTURE-NOT-A-SECRET", pause=lambda s: None)
+            self.assertEqual(load(), [{"type": "result"}])
+            self.assertEqual(load(), [{"type": "result"}])
+        self.assertEqual(len(reads), 1)
+
+    def test_a_transient_read_failure_is_retried_after_a_pause(self):
+        from tools.release.entry_composition import _batch_journal_load
+        pauses = []
+        reads, modules = self.reader([OSError("502 Bad Gateway"), [{"type": "result"}]])
+        with modules:
+            events = _batch_journal_load(ROOT, "FIXTURE-NOT-A-SECRET",
+                                         pause=pauses.append)()
+        self.assertEqual(events, [{"type": "result"}])
+        self.assertEqual((len(reads), pauses), (2, [10]))
+
+    def test_a_persistent_read_failure_is_reported_after_bounded_retries(self):
+        from tools.release.entry_composition import _batch_journal_load
+        pauses = []
+        reads, modules = self.reader([OSError("down")] * 3)
+        with modules, self.assertRaises(OSError):
+            _batch_journal_load(ROOT, "FIXTURE-NOT-A-SECRET", pause=pauses.append)()
+        self.assertEqual((len(reads), pauses), (3, [10, 30]))
+
 
 class RecoveredDispatchTest(unittest.TestCase):
     """The managed dispatch wrapper: pending until derivable, never self-driving."""
