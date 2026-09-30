@@ -54,6 +54,16 @@ class EditorialChannelTest(unittest.TestCase):
             self.record(exclusions=[])
         self.assertEqual(read(self.operations, request_id=REQUEST)["exclusions"], EXCLUSIONS)
 
+    def test_a_writer_touches_only_its_own_temporary(self):
+        # Another writer's in-flight temporary must survive this record intact.
+        self.operations.mkdir(parents=True)
+        other = self.operations / (EDITORIAL_FILE + ".tmp")
+        other.write_bytes(b"another writer's payload")
+        self.record()
+        self.assertEqual(other.read_bytes(), b"another writer's payload")
+        self.assertEqual(sorted(p.name for p in self.operations.iterdir()),
+                         sorted([EDITORIAL_FILE, other.name]))
+
     def test_another_requests_record_is_refused(self):
         self.record()
         with self.assertRaisesRegex(EditorialError, "belongs to another request"):

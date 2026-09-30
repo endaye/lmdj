@@ -19,6 +19,7 @@ import json
 import os
 from pathlib import Path
 import re
+import tempfile
 
 from .model import canonical_json
 
@@ -89,17 +90,19 @@ def record(operations, *, request_id, tag, changes, exclusions, binding):
         if existing != document:
             _fail("differs from the editorial already recorded for this request")
         return path
-    temporary = operations / (EDITORIAL_FILE + ".tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, "wb") as stream:
-        stream.write(payload)
-        stream.flush()
-        os.fsync(stream.fileno())
-    # Linking refuses an existing name, so a concurrent record cannot be replaced.
+    # A unique temporary per writer: a concurrent record can neither truncate
+    # nor unlink this one, and this writer removes only the file it created.
+    descriptor, temporary = tempfile.mkstemp(prefix=EDITORIAL_FILE + ".", dir=operations)
     try:
-        os.link(temporary, path)
-    except FileExistsError:
-        _fail("was recorded concurrently; re-run to compare")
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Linking refuses an existing name, so a concurrent record cannot be replaced.
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            _fail("was recorded concurrently; re-run to compare")
     finally:
         os.unlink(temporary)
     return path
