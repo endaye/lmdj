@@ -1,4 +1,5 @@
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
+import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
@@ -90,19 +91,20 @@ async function installTransportProofRecorder(page) {
 }
 
 async function importProject(page) {
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {timeout: 30_000});
+  await openProjectPageAfterBoot(page);
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();
   await (await chooserPromise).setFiles(bundle);
-  await expect(page.getByRole("heading", {name: /^Project /}))
+  // Boot already shows its own Project; wait for the imported one by name.
+  await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
 }
 
 async function reopenProject(page) {
   await page.reload();
-  await expect(page.getByRole("button", {name: "Open Project 00000000"}))
-    .toBeVisible({timeout: 60_000});
-  await page.getByRole("button", {name: "Open Project 00000000"}).click();
+  // The imported Project is the remembered one, so the reload reopens it.
+  await waitForProjectReopen(page, "00000000", {timeout: 120_000});
+  await page.getByRole("button", {name: "Project", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
 }

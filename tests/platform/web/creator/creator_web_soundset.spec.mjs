@@ -64,6 +64,7 @@ import {dirname, resolve} from "node:path";
 import {fileURLToPath} from "node:url";
 
 import {expect, test} from "@playwright/test";
+import {openProjectPageAfterBoot} from "./fixtures/creator_boot.mjs";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
@@ -272,10 +273,9 @@ async function installProjectTap(page, catalogEndpoint) {
 // here has to say what refused rather than time out on a heading that will
 // never appear.
 async function importProject(page) {
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
-    timeout: 30_000,
-  });
-  const heading = page.getByRole("heading", {name: /^Project /});
+  await openProjectPageAfterBoot(page);
+  // Boot already shows its own Project; wait for the imported one by name.
+  const heading = page.getByRole("heading", {name: "Project 00000000"});
   const alert = page.getByRole("alert");
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();

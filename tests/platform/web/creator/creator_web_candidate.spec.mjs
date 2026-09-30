@@ -1,5 +1,6 @@
 import {createHash, randomUUID} from "node:crypto";
 import {expect, test} from "@playwright/test";
+import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_CANDIDATE_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_CANDIDATE_BUNDLE is required");
@@ -79,7 +80,7 @@ async function addSource(page, assetId, silent = false) {
 async function start(page, silent = false) {
   await observe(page);
   await page.goto("/index.html");
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty");
+  await openProjectPageAfterBoot(page);
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();
   await (await chooser).setFiles(bundle);
@@ -168,7 +169,9 @@ async function restoreSource(page, originalFiles, sha256) {
 }
 async function reopen(page) {
   await page.reload();
-  await page.getByRole("button", {name: "Open Project 00000000"}).click();
+  // The imported Project is the remembered one, so the reload reopens it.
+  await waitForProjectReopen(page, "00000000");
+  await page.getByRole("button", {name: "Project", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Project 00000000"})).toBeVisible();
 }
 

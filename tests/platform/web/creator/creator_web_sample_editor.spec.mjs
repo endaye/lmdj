@@ -1,6 +1,11 @@
 import {readFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
+import {
+  openProjectPageAfterBoot,
+  waitForBootProject,
+  waitForProjectReopen,
+} from "./fixtures/creator_boot.mjs";
 
 
 const sampleBundle = process.env.LMDJ_CREATOR_WEB_SAMPLE_BUNDLE;
@@ -160,9 +165,7 @@ async function importV1SampleProject(page) {
   if (!sampleBundle) {
     throw new Error("LMDJ_CREATOR_WEB_SAMPLE_BUNDLE is required");
   }
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
-    timeout: 30_000,
-  });
+  await openProjectPageAfterBoot(page);
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();
   await (await chooserPromise).setFiles(sampleBundle);
@@ -585,9 +588,9 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   expect(recoveredReport.sample.runtime_revision).toBe(60);
 
   await page.reload();
-  await expect(page.getByRole("button", {name: "Open Project 00000000"}))
-    .toBeVisible({timeout: 60_000});
-  await page.getByRole("button", {name: "Open Project 00000000"}).click();
+  // The imported Project is remembered, so the reload reopens it by itself.
+  await waitForProjectReopen(page, "00000000");
+  await page.getByRole("button", {name: "Project", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
   await expect(page.locator(".overview-display > .overview-facts")).toContainText("Rev60");
@@ -755,10 +758,9 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   test.setTimeout(300_000);
   const noErrors = recordPageErrors(page);
   await installHostProofRecorder(page);
+  // A fresh store boots into a newly created, empty Project (#1660).
   await page.goto("/index.html");
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {timeout: 30_000});
-  await page.getByRole("button", {name: "New Project"}).click();
-  await expect(page.getByTestId("creator-phase")).toHaveText("ready", {timeout: 60_000});
+  await waitForBootProject(page);
   const undo = page.getByRole("button", {name: "Undo", exact: true});
   const redo = page.getByRole("button", {name: "Redo", exact: true});
   await expect(undo).toBeDisabled();
@@ -819,17 +821,9 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   const saved = (await rawRequest(page, "project.inspect", {})).result.project;
   await page.getByRole("button", {name: "Project", exact: true}).click();
   expect((await rawRequest(page, "history.inspect", {})).result.undo_count).toBeGreaterThan(0);
+  // The reload reopens the remembered Project with no user action (#1660).
   await page.reload();
-  const open = page.getByRole("button", {name: /^Open Project [0-9a-f]{8}$/});
-  await expect(open).toHaveCount(1, {timeout: 30_000});
-  await open.click();
-  const heading = page.getByRole("heading", {name: /^Project [0-9a-f]{8}$/});
-  const retry = page.getByRole("button", {name: "Retry project"});
-  for (let i = 0; i < 5 && !(await heading.isVisible()); ++i) {
-    await expect(heading.or(retry)).toBeVisible({timeout: 60_000});
-    if (await retry.isVisible()) { await page.waitForTimeout(1000); await retry.click(); }
-  }
-  await expect(heading).toBeVisible({timeout: 60_000});
+  await waitForProjectReopen(page, saved.project_id.slice(0, 8));
   expect((await rawRequest(page, "project.inspect", {})).result.project).toEqual(saved);
   const reopened = (await rawRequest(page, "history.inspect", {})).result;
   expect(reopened.session_id).not.toBe(retained.session_id);
@@ -845,10 +839,9 @@ test("Pattern history keeps the Project open when its inventory anchor changes",
   test.setTimeout(180_000);
   const noErrors = recordPageErrors(page);
   await installHostProofRecorder(page);
+  // A fresh store boots into a newly created, empty Project (#1660).
   await page.goto("/index.html");
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {timeout: 30_000});
-  await page.getByRole("button", {name: "New Project"}).click();
-  await expect(page.getByTestId("creator-phase")).toHaveText("ready", {timeout: 60_000});
+  await waitForBootProject(page);
   const initial = (await rawRequest(page, "project.inspect", {})).result.project;
   const history = (await rawRequest(page, "history.inspect", {})).result;
   const originalPatternId = Object.keys(initial.patterns)[0];

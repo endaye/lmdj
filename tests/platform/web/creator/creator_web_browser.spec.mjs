@@ -1,15 +1,19 @@
 import {readFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
+import {
+  openProjectPageAfterBoot,
+  overviewProjectId,
+  waitForBootProject,
+  waitForProjectReopen,
+} from "./fixtures/creator_boot.mjs";
 
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
 
 async function importProject(page) {
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
-    timeout: 30_000,
-  });
+  await openProjectPageAfterBoot(page);
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();
   const chooser = await chooserPromise;
@@ -90,9 +94,7 @@ test("visible Creator journey imports, activates, and admits all 64 unique Pad a
   // of the Chromium group.
   test.setTimeout(240_000);
   await page.goto("/index.html");
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
-    timeout: 30_000,
-  });
+  await waitForBootProject(page);
   await importProject(page);
   await activate(page);
 
@@ -207,38 +209,34 @@ test("ready active Runtime survives portrait and landscape resize", async ({page
   }
 });
 
-test("New Project creates a stored empty Project that reopens after a reload", async ({page}) => {
+test("boot creates a stored Project, New Project adds one, and a reload reopens the last", async ({page}) => {
   test.setTimeout(180_000);
+  const emptyPads = page.getByRole("button", {name: /^Pad A\d+ — empty — Key [QWERTYUIASDFGHJK]$/});
+  const sampleKey = page.getByRole("button", {name: "Sample", exact: true});
+
+  // A fresh store boots into an automatically created, empty Project on Sample.
   await page.goto("/index.html");
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
-    timeout: 30_000,
-  });
+  await waitForBootProject(page);
+  await expect(sampleKey).toHaveAttribute("aria-current", "page");
+  await expect(emptyPads).toHaveCount(16);
+  const first = (await overviewProjectId(page).textContent())?.trim();
+  expect(first).toMatch(/^[0-9a-f]{8}$/);
 
-  // Creation opens the new Project on the Sample page with every Pad empty.
+  // New Project opens a second, different Project, again on Sample.
+  await page.getByRole("button", {name: "Project", exact: true}).click();
   await page.getByRole("button", {name: "New Project"}).click();
-  await expect(page.getByRole("button", {name: "Sample", exact: true}))
-    .toHaveAttribute("aria-current", "page", {timeout: 60_000});
-  await expect(page.getByTestId("creator-phase")).toHaveText("ready");
-  await expect(page.getByRole("button", {name: /^Pad A\d+ — empty — Key [QWERTYUIASDFGHJK]$/}))
-    .toHaveCount(16);
+  await expect(overviewProjectId(page)).not.toHaveText(first, {timeout: 60_000});
+  await expect(sampleKey).toHaveAttribute("aria-current", "page");
+  const second = (await overviewProjectId(page).textContent())?.trim();
+  expect(second).toMatch(/^[0-9a-f]{8}$/);
 
-  // The far side of creation is storage: a fresh document lists exactly the
-  // created Project and opens it. A reload can overlap the previous document's
-  // writer release, which surfaces as a visible, retryable PROJECT_BUSY.
+  // The far side of both creations is storage, and the far side of "last
+  // opened" is the next boot: a fresh document reopens the second Project and
+  // lists both. A reload can overlap the previous document's writer release,
+  // which surfaces as a visible, retryable PROJECT_BUSY.
   await page.reload();
-  const open = page.getByRole("button", {name: /^Open Project [0-9a-f]{8}$/});
-  await expect(open).toHaveCount(1, {timeout: 30_000});
-  await open.click();
-  const heading = page.getByRole("heading", {name: /^Project [0-9a-f]{8}$/});
-  const retry = page.getByRole("button", {name: "Retry project"});
-  for (let attempt = 0; attempt < 5 && !(await heading.isVisible()); attempt += 1) {
-    await expect(heading.or(retry)).toBeVisible({timeout: 60_000});
-    if (await retry.isVisible()) {
-      await page.waitForTimeout(1_000);
-      await retry.click();
-    }
-  }
-  await expect(heading).toBeVisible({timeout: 60_000});
-  await expect(page.getByRole("button", {name: /^Pad A\d+ — empty — Key [QWERTYUIASDFGHJK]$/}))
-    .toHaveCount(16);
+  await waitForProjectReopen(page, second);
+  await page.getByRole("button", {name: "Project", exact: true}).click();
+  await page.getByRole("button", {name: "Open local"}).click();
+  await expect(page.getByRole("button", {name: /^Open Project [0-9a-f]{8}$/})).toHaveCount(2);
 });

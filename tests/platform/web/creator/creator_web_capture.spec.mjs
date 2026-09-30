@@ -3,6 +3,7 @@ import {readFile} from "node:fs/promises";
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 
 import {CAPTURE_FIXTURE_SECONDS} from "./fixtures/make_capture_fixture.mjs";
+import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 
 // Play/Stop and Record are the console's physical keys. Their accessible
 // names carry their state ("Play/Stop — Pattern is playing", "Record — stop
@@ -124,9 +125,7 @@ async function importV1SampleProject(page) {
   if (!sampleBundle) {
     throw new Error("LMDJ_CREATOR_WEB_SAMPLE_BUNDLE is required");
   }
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
-    timeout: 30_000,
-  });
+  await openProjectPageAfterBoot(page);
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();
   await (await chooserPromise).setFiles(sampleBundle);
@@ -504,9 +503,9 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
   expect(evidence.sequence.pending_event_count).toBe(0);
 
   await page.reload();
-  await expect(page.getByRole("button", {name: "Open Project 00000000"}))
-    .toBeVisible({timeout: 60_000});
-  await page.getByRole("button", {name: "Open Project 00000000"}).click();
+  // The imported Project is remembered, so the reload reopens it by itself.
+  await waitForProjectReopen(page, "00000000");
+  await page.getByRole("button", {name: "Project", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
   const persisted = await inspectProjectTruth(page);

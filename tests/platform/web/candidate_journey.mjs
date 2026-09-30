@@ -1,6 +1,8 @@
 import {createHash} from "node:crypto";
 import {expect, test} from "@playwright/test";
 
+import {openProjectFromLibrary, waitForBootSettled} from "./creator/fixtures/creator_boot.mjs";
+
 const projectId = "00000000-0000-4000-8000-000000000001";
 const patternId = "00000000-0000-4000-8000-000000000002";
 const assetId = "00000000-0000-4000-8000-000000000004";
@@ -17,9 +19,13 @@ function wav(silent = false) {
   if (!silent) for (let frame = 1; frame < frames; frame++) bytes.writeInt16LE(5000, 44 + frame * 2);
   return bytes;
 }
-async function start(page) {
+async function start(page, host) {
   await page.goto("/index.html");
   await page.waitForFunction(() => Boolean(window.lmdjWebRuntimeHost?.candidates));
+  // Creator boot opens or creates its own Project (#1660). Raw transport
+  // commands must wait for it, or the boot creation lands after them and
+  // replaces the Project they just opened.
+  if (host === "Creator Web") await waitForBootSettled(page);
 }
 async function send(page, operation, payload = {}, bytes) {
   return page.evaluate(async ({operation, payload, bytes}) =>
@@ -63,7 +69,7 @@ async function files(page, corrupt = false) {
   }, {projectId, corrupt});
 }
 async function setup(page, silent = false, host) {
-  await start(page);
+  await start(page, host);
   if (host === "Web Runtime Host") {
     expect(await page.evaluate(() => window.lmdjWebRuntimeController.loadDiagnosticProject())).toBe(true);
     await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
@@ -81,9 +87,11 @@ async function setup(page, silent = false, host) {
     expected_revision: 1, slot: {bank: 0, pad: 0}, asset_id: assetId}));
   if (host === "Creator Web") {
     success(await send(page, "host.close"));
-    await start(page);
-    await page.getByRole("button", {name: "Open local", exact: true}).click();
-    await page.getByRole("button", {name: "Open Project 00000000", exact: true}).click();
+    await start(page, host);
+    // Project 00000000 was created over the transport, not opened by the
+    // Creator, so boot reopens its own remembered Project; open 00000000
+    // explicitly from the library as before.
+    await openProjectFromLibrary(page, "00000000");
     try {
       await expect(page.getByRole("heading", {name: "Project 00000000", exact: true})).toBeVisible();
     } catch (error) {
@@ -178,7 +186,7 @@ export function registerCandidateJourneys(host) {
     if (host === "Creator Web") await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended");
     else await expect(page.locator("#host-state")).toHaveText("audio-suspended");
     success(await send(page, "host.close"));
-    await start(page);
+    await start(page, host);
     const restored = success(await candidate(page, "inspectCandidateJob", "browser-slice"));
     expect(restored.sets.find(value => value.set_id === set.set_id).status).toBe("discarded");
     success(await send(page, "project.open", {project_id: projectId, pattern_id: patternId}));
@@ -194,7 +202,7 @@ export function registerCandidateJourneys(host) {
     expect(await files(page)).toEqual(before);
     expect(success(await send(page, "project.inspect"))).toEqual(truth);
     success(await send(page, "host.close"));
-    await start(page);
+    await start(page, host);
     expect(success(await candidate(page, "inspectCandidateJob", "browser-slice"))).toEqual(job);
     success(await send(page, "project.open", {project_id: projectId, pattern_id: patternId}));
     expect(success(await send(page, "project.inspect"))).toEqual(truth);
@@ -220,7 +228,7 @@ export function registerCandidateJourneys(host) {
         expect({ok: current.ok, result: current.result, error: current.error}).toEqual({ok: truth.ok, result: truth.result, error: truth.error});
       }
       success(await send(page, "host.close"));
-      await start(page);
+      await start(page, host);
       expect(await files(page)).toEqual(before);
       expect(success(await candidate(page, "inspectCandidateJob", "browser-slice")).sets).toHaveLength(refusal === "superseded" ? 2 : 1);
       success(await send(page, "host.close"));

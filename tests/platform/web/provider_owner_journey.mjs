@@ -1,6 +1,8 @@
 import {createHash} from "node:crypto";
 import {expect, test} from "@playwright/test";
 
+import {waitForBootSettled} from "./creator/fixtures/creator_boot.mjs";
+
 const projectId = "00000000-0000-4000-8000-000000000001";
 const patternId = "00000000-0000-4000-8000-000000000002";
 const assetId = "00000000-0000-4000-8000-000000000004";
@@ -16,9 +18,13 @@ function wav() {
   bytes.writeInt16LE(5000, 46); bytes.writeInt16LE(8000, 50);
   return bytes;
 }
-async function start(page) {
+async function start(page, host) {
   await page.goto("/index.html");
   await page.waitForFunction(() => Boolean(window.lmdjWebRuntimeHost?.providers));
+  // Creator boot opens or creates its own Project (#1660). Raw transport
+  // commands must wait for it, or the boot creation lands after them and
+  // replaces the Project they just opened.
+  if (host === "Creator Web") await waitForBootSettled(page);
 }
 async function send(page, operation, payload = {}, bytes) {
   return page.evaluate(async ({operation, payload, bytes}) => {
@@ -72,11 +78,11 @@ async function outputBytes(page, attemptId, sha256) {
 
 export function registerProviderOwnerJourneys(host) {
   test(`${host}: competing Project owner rejects admission without an Attempt`, async ({page, context}) => {
-    await start(page);
+    await start(page, host);
     success(await send(page, "project.create", {project_id: projectId, bpm: 120,
       initial_pattern: {pattern_id: patternId, bars: 1, events: []}}));
     const observer = await context.newPage();
-    await start(observer);
+    await start(observer, host);
     success(await provider(observer, "selectProvider", "sample.slice.v1", "local.sample.slice"));
     const refused = await send(observer, "project.open", {project_id: projectId, pattern_id: patternId});
     expect(refused.ok).toBe(false);
@@ -91,7 +97,7 @@ export function registerProviderOwnerJourneys(host) {
   for (const mode of ["success", "permission", "missing-owner", "wrong-project", "wrong-asset",
     "wrong-reference", "corrupt", "changed-length", "missing-file", "malformed-owner"]) {
     test(`${host}: Provider owner ${mode} survives a real Host restart`, async ({page}) => {
-      await start(page);
+      await start(page, host);
       expect(success(await provider(page, "listProviders")).providers).toHaveLength(3);
       success(await send(page, "project.create", {project_id: projectId, bpm: 120,
         initial_pattern: {pattern_id: patternId, bars: 1, events: []}}));
@@ -167,7 +173,7 @@ export function registerProviderOwnerJourneys(host) {
         expect(JSON.stringify(state)).not.toContain("project_path");
       }
       success(await send(page, "host.close"));
-      await start(page);
+      await start(page, host);
       expect(await provider(page, "inspectAttempt", request.attempt_id)).toEqual(terminal);
       expect(await projectFiles(page)).toEqual(files);
       if (damaged) {

@@ -1,4 +1,5 @@
 import {expect, test} from "@playwright/test";
+import {waitForBootProject, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
@@ -15,9 +16,7 @@ function rounded(box) {
 test("renders the 880×592 hardware shell and keeps the overview read-only", async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});
   await page.goto("/");
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
-    timeout: 30_000,
-  });
+  await waitForBootProject(page);
   await expect(page.getByRole("button", {name: "Activate audio"})).toBeVisible();
 
   const consoleBox = rounded(await page.getByTestId("hardware-console").boundingBox());
@@ -79,8 +78,9 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   }
   await expect(keys.getByRole("button", {name: "Project", exact: true})).toBeVisible();
   await expect(keys.getByRole("button", {name: "Sample", exact: true})).toBeVisible();
-  await expect(keys.getByRole("button", {name: "Sequence — open a playable Project first"}))
-    .toBeVisible();
+  // Boot opens a playable Project (#1660), so Sequence is reachable at once.
+  await expect(keys.getByRole("button", {name: "Sequence", exact: true}))
+    .toBeEnabled();
   await expect(keys.getByRole("button", {name: /^Perform/})).toBeVisible();
   // V1 replaced the transport glyphs with the Desktop Final icon exports, so
   // these keys carry no text at all now; the accessible name is what V1
@@ -109,7 +109,7 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   await page.getByRole("button", {name: "Activate audio"}).scrollIntoViewIfNeeded();
   await expect(page.getByRole("button", {name: "Activate audio"})).toBeVisible();
   await expect(page.getByTestId("overview-display").locator("button")).toHaveCount(0);
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty");
+  await expect(page.getByTestId("creator-phase")).toHaveText("ready");
 });
 
 const PROJECT_TRANSITION_TIMEOUT_MS = 125_000;
@@ -119,6 +119,7 @@ const projectHeading = (page) =>
   page.getByRole("heading", {name: "Project 00000000"});
 
 async function importAndOpenProject(page) {
+  await page.getByRole("button", {name: "Project", exact: true}).click();
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();
   await (await chooser).setFiles(bundle);
@@ -136,17 +137,10 @@ async function importAndOpenProject(page) {
 // local list. Importing it a second time would be a DUPLICATE_ID, which is a
 // different journey than the one this drill is asserting.
 async function reopenLocalProject(page) {
-  if (await projectHeading(page).isVisible()) return;
-  const open = page.getByRole("button", {name: "Open Project 00000000"});
-  if (!await open.isVisible()) {
-    await page.getByRole("button", {name: "Open local"})
-      .click({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-    // That read was a point in time. Wait for the row by name, so a list that
-    // never renders it fails as a missing Project row rather than as a click
-    // timing out somewhere inside the reload leg.
-    await expect(open).toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  }
-  await open.click({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  // The imported Project is the remembered one, so the reload reopens it by
+  // itself; the Project page then names it.
+  await waitForProjectReopen(page, "00000000", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await page.getByRole("button", {name: "Project", exact: true}).click();
   await expect(projectHeading(page))
     .toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
 }
@@ -168,9 +162,7 @@ async function committedBpm(page) {
 test("keeps Project Truth across an unapplied draft and a reload", async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});
   await page.goto("/");
-  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
-    timeout: 30_000,
-  });
+  await waitForBootProject(page);
 
   await importAndOpenProject(page);
   await page.getByRole("button", {name: "Activate audio"}).click();
