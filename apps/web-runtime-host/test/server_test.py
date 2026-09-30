@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -290,6 +291,37 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(body, b"")
         self.assertEqual(headers["content-security-policy"], EXPECTED_CSP)
         self.assertEqual(headers["cache-control"], "no-store")
+
+    def test_a_connection_burst_waits_in_the_backlog_instead_of_being_reset(self) -> None:
+        # A page load opens its whole module graph at once. Connect the burst
+        # before the server accepts anything, so every connection must be
+        # held by the listen backlog; a small backlog resets or drops them.
+        server = self.module.make_server(self.root, "127.0.0.1", 0)
+        host, port = server.server_address
+        clients = []
+        thread = None
+        try:
+            for _ in range(32):
+                clients.append(socket.create_connection((host, port), timeout=2))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            statuses = []
+            for client in clients:
+                client.sendall(
+                    f"GET /index.html HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                    "Connection: close\r\n\r\n".encode()
+                )
+                response = b""
+                while chunk := client.recv(65536):
+                    response += chunk
+                statuses.append(response.split(b" ", 2)[1])
+            self.assertEqual(statuses, [b"200"] * 32)
+        finally:
+            for client in clients:
+                client.close()
+            if thread is not None:
+                server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":

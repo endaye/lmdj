@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
 from socketserver import TCPServer
 import stat
 import sys
@@ -398,6 +399,11 @@ def read_file_no_follow(root: Path, relative: str) -> bytes | None:
 class ProofServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    # A page load opens its module graph as one parallel burst. The
+    # socketserver default backlog of 5 overflows under host load, and the
+    # kernel then resets the excess connections, so a module import fails
+    # and the Host never leaves `cold`.
+    request_queue_size = socket.SOMAXCONN
 
     def server_bind(self) -> None:
         TCPServer.server_bind(self)
