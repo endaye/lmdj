@@ -1287,6 +1287,52 @@ test("Web Project I/O publishes an imported Project Bundle into the Workspace", 
   expect(afterReload.reopenPatternCount).toBe(1);
 });
 
+// #1684: a Project duplicate publishes through the same OPFS directory
+// publication, which on the Web is copy -> verify -> commit rather than an
+// atomic rename; the native platform tests cannot answer for it.
+test("Web Project I/O publishes a duplicated Project under its new identity", async ({context, browserName}) => {
+  test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
+  const sourceId = "00000000-0000-4000-8000-000000000981";
+  const copyId = "00000000-0000-4000-8000-000000000982";
+  const duplicated = await trackedPage(context);
+  await navigate(duplicated,
+      "/project_io/project_io_web_test.html?action=project_duplicate");
+  const afterDuplicate = await waitForResult(duplicated);
+  await duplicated.close();
+
+  expect(afterDuplicate.duplicate).toEqual(STORAGE_SUCCEEDED);
+  expect(afterDuplicate.duplicateProjectId).toBe(copyId);
+  expect([...afterDuplicate.projectsRootDirectories].sort())
+      .toEqual([`${sourceId}.lmdj`, `${copyId}.lmdj`]);
+  expect(afterDuplicate.destinationManifestPresent).toBe(true);
+  // Published, not merely staged.
+  expect(afterDuplicate.stagingPresent).toBe(false);
+  expect(afterDuplicate.storageIntents.filter(([, record]) => record !== ""))
+      .toEqual([]);
+  expect(afterDuplicate.listedProjectIds).toEqual([sourceId, copyId]);
+  expect(afterDuplicate.reopen).toEqual(STORAGE_SUCCEEDED);
+  expect(afterDuplicate.reopenProjectId).toBe(copyId);
+  expect(afterDuplicate.reopenRevision).toBe(0);
+  expect(afterDuplicate.reopenAssetCount).toBe(1);
+  expect(afterDuplicate.sourceReopen).toEqual(STORAGE_SUCCEEDED);
+  expect(afterDuplicate.sourceRevision).toBe(2);
+
+  const reopened = await trackedPage(context);
+  await navigate(reopened,
+      "/project_io/project_io_web_test.html" +
+      "?action=project_duplicate&phase=reopen");
+  const afterReload = await waitForResult(reopened);
+  await reopened.close();
+
+  expect(afterReload.duplicate.status).toBe("skipped");
+  expect(afterReload.listedProjectIds).toEqual([sourceId, copyId]);
+  expect(afterReload.reopen).toEqual(STORAGE_SUCCEEDED);
+  expect(afterReload.reopenProjectId).toBe(copyId);
+  expect(afterReload.reopenRevision).toBe(0);
+  expect(afterReload.reopenAssetCount).toBe(1);
+  expect(afterReload.sourceRevision).toBe(2);
+});
+
 const SOUNDSET_PUBLISHED = Object.freeze({
   status: "succeeded",
   errorCode: "",

@@ -107,6 +107,7 @@ test("exports the locked protocol constants, operations, and notifications", () 
   assert.deepEqual(HOST_OPERATIONS, [
     "host.status",
     "project.create",
+    "project.duplicate",
     "project.open",
     "project.inspect",
     "history.inspect",

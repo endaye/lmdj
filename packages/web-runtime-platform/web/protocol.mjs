@@ -11,6 +11,7 @@ export const DEADLINES_MS = Object.freeze({
 export const HOST_OPERATIONS = Object.freeze([
   "host.status",
   "project.create",
+  "project.duplicate",
   "project.open",
   "project.inspect",
   "history.inspect",

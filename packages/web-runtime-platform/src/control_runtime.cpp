@@ -3255,6 +3255,44 @@ Json ControlRuntime::dispatch(
           {"runtime_ready", false},
       });
     }
+    if (operation == "project.duplicate") {
+      // Copies a local Project under a new identity. The open Project, its
+      // writer lease and the Runtime are untouched; the caller opens the copy.
+      // A Project owned by another tab is refused as PROJECT_BUSY, and a
+      // refusal, failure or cancellation publishes nothing.
+      require(exact_keys(payload, {"source_project_id", "project_id"}));
+      require(sidecar.empty());
+      if (impl_->state == Impl::State::running ||
+          impl_->active_sequence.has_value() ||
+          !impl_->sample_import_tokens.empty()) {
+        return state_error();
+      }
+      const auto source_project_id = uuid_field(payload, "source_project_id");
+      const auto project_id = uuid_field(payload, "project_id");
+      const auto duplicated = impl_->application.duplicate_project(
+          facade::ProjectDuplicateRequest{
+              foundation::ProjectId{source_project_id},
+              foundation::ProjectId{project_id},
+          });
+      if (!duplicated.has_value()) {
+        // The generic sanitizer drops the Facade's scalar `reason`, which
+        // would leave an unfinished recording indistinguishable from a
+        // malformed request.
+        const auto& details = duplicated.error().details;
+        const auto reason = details.is_object()
+                                ? details.value("reason", std::string{})
+                                : std::string{};
+        if (reason == "sequence_session_active" ||
+            reason == "performance_session_active") {
+          return state_error("source Project has an unfinished recording");
+        }
+        return normalized_error(duplicated.error());
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      return success(local_project_summary(duplicated.value()));
+    }
     if (operation == "project.open") {
       require(
           exact_keys(payload, {"project_id", "pattern_id"}) ||
