@@ -2,10 +2,12 @@
 """The reviewed changelog editorial channel stores one approved pair per request."""
 
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -63,6 +65,33 @@ class EditorialChannelTest(unittest.TestCase):
         self.assertEqual(other.read_bytes(), b"another writer's payload")
         self.assertEqual(sorted(p.name for p in self.operations.iterdir()),
                          sorted([EDITORIAL_FILE, other.name]))
+
+    def racing_link(self, winner_changes):
+        # A concurrent writer publishes its record just before this one links.
+        real_link, raced = os.link, []
+
+        def link(source, target):
+            if not raced:
+                raced.append(True)
+                record(self.operations, request_id=REQUEST, tag=TAG, changes=winner_changes,
+                       exclusions=EXCLUSIONS, binding=BINDING)
+            return real_link(source, target)
+        return link
+
+    def test_a_concurrent_identical_record_is_a_no_op(self):
+        with patch("tools.release.changelog_editorial.os.link", side_effect=self.racing_link(CHANGES)):
+            self.record()
+        self.assertEqual(read(self.operations, request_id=REQUEST)["changes"], CHANGES)
+
+    def test_a_concurrent_different_record_is_refused(self):
+        with patch("tools.release.changelog_editorial.os.link", side_effect=self.racing_link([])):
+            with self.assertRaisesRegex(EditorialError, "recorded concurrently"):
+                self.record()
+        self.assertEqual(read(self.operations, request_id=REQUEST)["changes"], [])
+
+    def test_a_non_canonical_product_tag_is_refused(self):
+        with self.assertRaises(EditorialError):
+            self.record(tag="lmdj-v01.0.66.0")
 
     def test_another_requests_record_is_refused(self):
         self.record()

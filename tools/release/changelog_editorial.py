@@ -21,13 +21,13 @@ from pathlib import Path
 import re
 import tempfile
 
+from .intent import _TAG
 from .model import canonical_json
 
 EDITORIAL_FILE = "changelog-editorial.json"
 SCHEMA = "lmdj.release-changelog-editorial.v1"
 _KEYS = {"schema", "request_id", "tag", "changes", "exclusions", "binding"}
 _DIGEST = re.compile(r"[0-9a-f]{64}")
-_TAG = re.compile(r"lmdj-v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+")
 _MAX_BYTES = 4 * 1024 * 1024
 
 
@@ -102,7 +102,10 @@ def record(operations, *, request_id, tag, changes, exclusions, binding):
         try:
             os.link(temporary, path)
         except FileExistsError:
-            _fail("was recorded concurrently; re-run to compare")
+            # A concurrent writer won: identical content is the same no-op
+            # as a re-record, anything else is refused.
+            if read(operations, request_id=request_id) != document:
+                _fail("differs from the editorial recorded concurrently for this request")
     finally:
         os.unlink(temporary)
     return path

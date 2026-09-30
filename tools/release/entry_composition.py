@@ -144,7 +144,8 @@ def reviewed_changelog_editorial(operations, request_id):
 
     Returns (pair, binding): the (changes, exclusions) the changelog commit
     re-freezes, and the frozen document's binding the spec is bound to. Both
-    come from the one record, so they cannot describe different editorials.
+    come from the one write-once record, and the commit recomputes the freeze
+    from the pair and refuses any divergence from the bound digests.
     """
     from .changelog_editorial import read
 
