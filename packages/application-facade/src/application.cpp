@@ -2442,8 +2442,12 @@ struct Application::Impl {
     std::unique_lock<std::mutex> lock;
   };
 
+  // `reconcile_owner_loss` seals an orphaned recording Journal before
+  // admission. A reader that must refuse, rather than settle, an unrecovered
+  // take passes false and keeps the Journal active.
   foundation::Result<SequenceAuthoringAdmission>
-  admit_non_sequence_authoring(const std::filesystem::path& path) {
+  admit_non_sequence_authoring(
+      const std::filesystem::path& path, bool reconcile_owner_loss = true) {
     std::unique_lock lock(sequence_mutex);
     const auto found = sequence_sessions.find(sequence_key(path));
     if (found != sequence_sessions.end()) {
@@ -2503,10 +2507,12 @@ struct Application::Impl {
                {"remedy",
                 "stop the active Performance session before retrying"}}));
     }
-    auto reconciled = projects.reconcile_sequence_recovery(path);
-    if (!reconciled.has_value()) {
-      return foundation::Result<SequenceAuthoringAdmission>::failure(
-          reconciled.error());
+    if (reconcile_owner_loss) {
+      auto reconciled = projects.reconcile_sequence_recovery(path);
+      if (!reconciled.has_value()) {
+        return foundation::Result<SequenceAuthoringAdmission>::failure(
+            reconciled.error());
+      }
     }
     testing::invoke_sequence_authoring_admission_hook();
     return foundation::Result<SequenceAuthoringAdmission>::success(
@@ -4124,6 +4130,47 @@ struct Application::Impl {
     }
     return foundation::Result<std::vector<LocalProjectSummary>>::success(
         std::move(summaries));
+  }
+
+  foundation::Result<LocalProjectSummary> duplicate_project(
+      const ProjectDuplicateRequest& request) {
+    if (!domain::is_valid_uuid(request.source_project_id.value()) ||
+        !domain::is_valid_uuid(request.project_id.value())) {
+      return foundation::Result<LocalProjectSummary>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "Project duplicate identity is invalid",
+          });
+    }
+    // The admission lock is held through the copy, so no in-process authoring
+    // mutation commits to the source while it is read. An orphaned Journal is
+    // not reconciled here: Project I/O refuses it, and the take is recovered
+    // by reopening the source, never dropped from a copy.
+    auto admitted = admit_non_sequence_authoring(
+        workspace_root / "projects" /
+            (request.source_project_id.value() + ".lmdj"),
+        false);
+    if (!admitted.has_value()) {
+      return foundation::Result<LocalProjectSummary>::failure(
+          admitted.error());
+    }
+    const auto duplicated = bundle_transfers.duplicate(
+        workspace_root, request.source_project_id, request.project_id);
+    if (!duplicated.has_value()) {
+      return foundation::Result<LocalProjectSummary>::failure(
+          duplicated.error());
+    }
+    const auto& item = duplicated.value();
+    return foundation::Result<LocalProjectSummary>::success(
+        LocalProjectSummary{
+            item.project_id,
+            item.pattern_id,
+            item.revision,
+            item.bpm,
+            item.asset_count,
+            item.assigned_pad_count,
+            item.bundle_digest,
+        });
   }
 
   foundation::Result<ProjectBundleImportSession>
@@ -9397,6 +9444,20 @@ foundation::Result<void> Application::append_project_bundle_entry(
         token, entry_index, offset, bytes, final);
   } catch (...) {
     return foundation::Result<void>::failure(
+        Error{
+            ErrorCode::internal_error,
+            "unexpected Application Facade Host API failure",
+        });
+  }
+}
+
+foundation::Result<LocalProjectSummary>
+Application::duplicate_project(const ProjectDuplicateRequest& request) {
+  try {
+    testing::invoke_api_entry_hook();
+    return impl_->duplicate_project(request);
+  } catch (...) {
+    return foundation::Result<LocalProjectSummary>::failure(
         Error{
             ErrorCode::internal_error,
             "unexpected Application Facade Host API failure",

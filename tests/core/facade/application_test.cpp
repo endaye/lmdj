@@ -27,6 +27,8 @@
 #include <lmdj/facade/application.hpp>
 #include <lmdj/foundation/artifact.hpp>
 #include <lmdj/foundation/json.hpp>
+#include <lmdj/project_io/project_store.hpp>
+#include <lmdj/project_io/sequence_journal.hpp>
 #include <lmdj/project_io/storage_platform.hpp>
 #include <lmdj/project_io/workspace_cache.hpp>
 #include <lmdj/providers/local_proof_failure/factory.hpp>
@@ -42,6 +44,7 @@ using lmdj::facade::Application;
 using lmdj::facade::ApplicationConfig;
 using lmdj::facade::ArtifactBytesImportRequest;
 using lmdj::facade::InitialProjectRequest;
+using lmdj::facade::ProjectDuplicateRequest;
 using lmdj::facade::RuntimeProjectWriterLease;
 using lmdj::facade::RuntimeSnapshotRequest;
 using lmdj::facade::SampleImportBeginRequest;
@@ -1527,6 +1530,123 @@ void test_typed_sequence_host_api_prepares_records_and_recovers() {
   LMDJ_CHECK(recovered.value().committed_revision == 4);
 }
 
+std::filesystem::path workspace_project(
+    const std::filesystem::path& workspace, std::string_view project_id) {
+  return workspace / "projects" / (std::string{project_id} + ".lmdj");
+}
+
+nlohmann::json inspected_project(
+    Application& application, const std::filesystem::path& project) {
+  const auto response = application.query(
+      {
+          {"operation", "project.inspect"},
+          {"project_path", project.generic_string()},
+      });
+  LMDJ_CHECK(response.at("ok") == true);
+  return response.at("result").at("project");
+}
+
+void test_typed_duplicate_publishes_a_listed_copy_with_the_same_truth() {
+  TempDirectory temp;
+  Application application(config(temp.path()));
+  const auto source = workspace_project(temp.path(), kProjectId);
+  create_single_asset_project(
+      application, source, mono_pcm16_wav(16), 1700, uuid(1701), uuid(1702));
+  const auto copy_id = uuid(1703);
+  const auto copied = application.duplicate_project(
+      ProjectDuplicateRequest{
+          ProjectId{std::string{kProjectId}}, ProjectId{copy_id}});
+  LMDJ_CHECK(copied.has_value());
+  LMDJ_CHECK(copied.value().project_id.value() == copy_id);
+  LMDJ_CHECK(copied.value().revision == 0);
+  const auto listed = application.list_local_projects();
+  LMDJ_CHECK(listed.has_value());
+  LMDJ_CHECK(listed.value().size() == 2);
+  LMDJ_CHECK(listed.value().at(1) == copied.value());
+
+  auto expected = inspected_project(application, source);
+  auto actual = inspected_project(
+      application, workspace_project(temp.path(), copy_id));
+  LMDJ_CHECK(actual.at("project_id") == copy_id);
+  LMDJ_CHECK(actual.at("revision") == 0);
+  for (auto* project : {&expected, &actual}) {
+    project->erase("project_id");
+    project->erase("revision");
+  }
+  LMDJ_CHECK(actual == expected);
+}
+
+void test_typed_duplicate_refuses_a_live_sequence_session() {
+  TempDirectory temp;
+  Application application(config(temp.path()));
+  const auto source = workspace_project(temp.path(), kProjectId);
+  create_single_asset_project(
+      application, source, mono_pcm16_wav(16), 1710, uuid(1711), uuid(1712));
+  LMDJ_CHECK(application
+                 .begin_sequence(
+                     {source,
+                      lmdj::foundation::SequenceSessionId{uuid(1713)},
+                      PatternId{uuid(1712)},
+                      3,
+                      0})
+                 .has_value());
+  const auto copy_id = uuid(1714);
+  const auto refused = application.duplicate_project(
+      ProjectDuplicateRequest{
+          ProjectId{std::string{kProjectId}}, ProjectId{copy_id}});
+  LMDJ_CHECK(!refused.has_value());
+  LMDJ_CHECK(
+      refused.error().details.at("reason") == "sequence_session_active");
+  LMDJ_CHECK(
+      !std::filesystem::exists(workspace_project(temp.path(), copy_id)));
+}
+
+// A crashed owner leaves its Journal active; an orderly Application shutdown
+// seals it as owner_lost instead, so the residue is written directly here.
+void test_typed_duplicate_refuses_a_crashed_owners_take_without_sealing_it() {
+  TempDirectory temp;
+  Application application(config(temp.path()));
+  const auto source = workspace_project(temp.path(), kProjectId);
+  create_single_asset_project(
+      application, source, mono_pcm16_wav(16), 1720, uuid(1721), uuid(1722));
+  const auto state = lmdj::project_io::ProjectStore{}.load(source);
+  LMDJ_CHECK(state.has_value());
+  const auto& pattern = state.value().patterns.at(PatternId{uuid(1722)});
+  LMDJ_CHECK(lmdj::project_io::SequenceJournal{}
+                 .begin(
+                     source,
+                     lmdj::foundation::SequenceSessionId{uuid(1723)},
+                     pattern.id,
+                     pattern.bars,
+                     lmdj::project_io::sequence_pattern_fingerprint(pattern),
+                     state.value().revision)
+                 .has_value());
+  const auto copy_id = uuid(1724);
+  const auto refused = application.duplicate_project(
+      ProjectDuplicateRequest{
+          ProjectId{std::string{kProjectId}}, ProjectId{copy_id}});
+  LMDJ_CHECK(!refused.has_value());
+  LMDJ_CHECK(
+      refused.error().details.at("reason") == "sequence_session_active");
+  LMDJ_CHECK(
+      !std::filesystem::exists(workspace_project(temp.path(), copy_id)));
+  LMDJ_CHECK(
+      std::filesystem::exists(source / "recovery/active/sequence.jsonl"));
+}
+
+void test_typed_duplicate_refuses_invalid_identities() {
+  TempDirectory temp;
+  Application application(config(temp.path()));
+  for (const auto& [source, copy] :
+       {std::pair{std::string{"../escape"}, uuid(1730)},
+        std::pair{std::string{kProjectId}, std::string{"copy"}}}) {
+    const auto refused = application.duplicate_project(
+        ProjectDuplicateRequest{ProjectId{source}, ProjectId{copy}});
+    LMDJ_CHECK(!refused.has_value());
+    LMDJ_CHECK(refused.error().code == ErrorCode::invalid_argument);
+  }
+}
+
 void test_typed_initial_project_creation_persists_one_pattern_at_revision_zero() {
   TempDirectory temp;
   const auto project = temp.path() / "initial-pattern.lmdj";
@@ -2136,6 +2256,10 @@ int main() {
     test_render_recooks_after_restart_and_publishes_golden_atomically();
     test_typed_sequence_host_api_prepares_records_and_recovers();
     test_typed_initial_project_creation_persists_one_pattern_at_revision_zero();
+    test_typed_duplicate_publishes_a_listed_copy_with_the_same_truth();
+    test_typed_duplicate_refuses_a_live_sequence_session();
+    test_typed_duplicate_refuses_a_crashed_owners_take_without_sealing_it();
+    test_typed_duplicate_refuses_invalid_identities();
     test_byte_import_and_opaque_writer_lease_share_one_storage_platform();
     test_render_rejects_symlinked_parent_and_never_reuses_crash_residue();
     test_asset_and_pad_replay_identity_is_enforced();
