@@ -339,6 +339,69 @@ class ReleaseEntryPointTest(unittest.TestCase):
                              "--superseded-by-build", build])
         return code, output.getvalue(), calls
 
+    def editorial(self, request_id, pair, *, disposition="releasable", freeze_error=None):
+        import tools.release.changelog as changelog_module
+        from tools.release.candidate import CandidateReservations
+        from tools.release.model import Disposition
+        from scripts.version import ProductVersion
+        intent = type("Intent", (), {"tag": "lmdj-v1.0.66.0",
+                                     "disposition": Disposition(disposition)})()
+        ledger = type("Ledger", (), {"intent_for_tag": lambda self, tag: intent
+                                     if tag == intent.tag else None})()
+        context = type("Context", (), {"ledger": ledger})()
+        frozen = {"commits": ["a" * 40, "b" * 40],
+                  "baseline": {"tag": "lmdj-v1.0.61.0", "target_revision": "c" * 40}}
+
+        def freeze(root, selected, selected_ledger, changes, exclusions):
+            if freeze_error is not None:
+                raise changelog_module.ChangelogError(freeze_error)
+            return dict(frozen, changes=changes, exclusions=exclusions)
+
+        source = self.root / "editorial.json"
+        source.write_text(json.dumps(pair))
+        output = io.StringIO()
+        with patch.object(CandidateReservations, "recorded",
+                          return_value=ProductVersion(1, 0, 66, 0)), \
+                patch.object(cli, "build_context", return_value=context), \
+                patch.object(changelog_module, "freeze", side_effect=freeze), \
+                patch.object(changelog_module, "binding", return_value={
+                    "schema": "lmdj.release-changelog.v1", "sha256": "1" * 64,
+                    "notes_sha256": "2" * 64}), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = cli.main(["--repo-root", str(self.root), "editorial", request_id, str(source)])
+        return code, output.getvalue()
+
+    def recorded_editorial(self, request_id):
+        from tools.release.changelog_editorial import read
+        return read(self.journal() / "operations" / request_id, request_id=request_id)
+
+    def test_editorial_is_frozen_then_recorded_once_for_the_request(self):
+        request_id = self.unfinished_request()
+        pair = {"changes": [], "exclusions": [{"commit": "a" * 40, "reason": "documentation only"}]}
+        code, report = self.editorial(request_id, pair)
+        self.assertEqual(code, 0, report)
+        self.assertIn("covers all 2 source commits since lmdj-v1.0.61.0", report)
+        recorded = self.recorded_editorial(request_id)
+        self.assertEqual((recorded["tag"], recorded["exclusions"]), ("lmdj-v1.0.66.0", pair["exclusions"]))
+        self.assertEqual(recorded["binding"]["sha256"], "1" * 64)
+        # Re-recording the identical editorial is a no-op; a different one is refused.
+        self.assertEqual(self.editorial(request_id, pair)[0], 0)
+        code, report = self.editorial(request_id, dict(pair, changes=[{"category": "fix"}]))
+        self.assertEqual(code, 2, report)
+        self.assertIn("differs from the editorial already recorded", report)
+        self.assertEqual(self.recorded_editorial(request_id)["changes"], [])
+
+    def test_editorial_without_complete_coverage_or_releasable_intent_is_not_recorded(self):
+        request_id = self.unfinished_request()
+        pair = {"changes": [], "exclusions": []}
+        code, report = self.editorial(request_id, pair, freeze_error="source commit is not covered")
+        self.assertEqual(code, 2, report)
+        self.assertIn("source commit is not covered", report)
+        code, report = self.editorial(request_id, pair, disposition="published")
+        self.assertEqual(code, 2, report)
+        self.assertIn("no releasable intent", report)
+        self.assertIsNone(self.recorded_editorial(request_id))
+
     def test_retire_unreleased_candidate_superseded_by_a_later_build(self):
         request_id = self.unfinished_request()
         code, report, calls = self.retire_unreleased(request_id, "1.0.65.0")

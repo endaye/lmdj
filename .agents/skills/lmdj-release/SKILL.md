@@ -65,6 +65,14 @@ outstanding intent or a completed request, keeps the full original state in a
 `.retired` record, and mutates nothing remote. Never delete or edit journal
 files by hand.
 
+The changelog step stays `pending` until the Owner-approved editorial is
+recorded. Draft the `{"changes": [...], "exclusions": [...]}` pair from the
+exact baseline-to-target range, get the Owner's approval of that content, then
+run `scripts/release.sh editorial REQUEST_ID FILE`. It freezes the pair against
+the request's releasable intent, refuses incomplete coverage, and records it
+once; a different editorial for the same request is refused. Never invent an
+editorial or record one the Owner has not approved.
+
 Use `scripts/release.sh prepare TAG`, `scripts/release.sh push-tag TAG`, and
 `scripts/release.sh create-draft TAG` in order when covered and admissible.
 Use `scripts/release.sh verify-draft TAG RELEASE_ID PLAN_SHA256` only for

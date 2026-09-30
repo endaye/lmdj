@@ -400,6 +400,11 @@ changelog 步骤的执行载体已接入：在 intent 合并后的 canonical mai
 冻结 changelog 绑入该 release 的 `release-intents.json` 行并追加渲染后的 notes 证据
 文档，暂存仅限这两个声明路径，提交树与两个摘要都按 spec 复核后才恢复；经既有
 witness 传输开一个受审文档 PR。观察不执行、不冻结、不写账本。
+审查过的 editorial（`changes` 与 `exclusions`）经唯一受支持的通道交给驱动：
+Owner 批准后运行 `scripts/release.sh editorial REQUEST_ID FILE`，它按该请求自己的
+`releasable` intent 冻结一次、证明全部源提交都被覆盖，再把这一对与冻结文档的两个摘要
+一次性写入该请求的 operations 目录；相同内容重录为 no-op，不同内容拒绝。未录入前
+changelog 步骤保持 `pending`，不会自行生成或默认任何 editorial。
 
 prepared 步骤的执行载体已接入：观察即对本地持久状态（plan 文档字节与记录摘要、
 本地签名 tag 的 object/target/签名者身份）的读回校验；执行在驱动器持久写护栏下

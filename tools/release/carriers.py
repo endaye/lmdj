@@ -677,6 +677,10 @@ def enroll_changelog(*, candidate_root, repository_id, ledger, main_revision,
         if type(base) is not str or _SHA.fullmatch(base) is None:
             _fail("the canonical main revision is unavailable")
         bound = changelog_binding()
+        if bound is None:
+            # The Owner-approved editorial is not recorded yet: pending input,
+            # never an outage and never an invented default.
+            return None
         digests = {key: bound.get(key) if type(bound) is dict else None
                    for key in ("sha256", "notes_sha256")}
         if any(type(value) is not str or _DIGEST.fullmatch(value) is None
