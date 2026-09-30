@@ -17,9 +17,11 @@ from .orchestration import RequestJournal, validate_request, _keys, _pairs, _fai
 
 CATALOG = "build-reservations"
 MAX_BYTES = 1024 * 1024
-# Per-process reuse of immutable commit reads (see candidate_inputs._FROZEN):
-# the Product version an exact commit carries and its full-history BUILD
-# floor cannot change within one release run.
+# Per-process reuse of immutable commit reads (see candidate_inputs): the
+# Product version an exact commit carries and its full-history BUILD floor
+# cannot change within one release run. Every call still proves that each
+# manifest blob they were read from is present in the live object store, so
+# a lost historical object is refused on resume exactly as before.
 _VERSIONS = {}
 _FLOORS = {}
 
@@ -34,15 +36,28 @@ class CandidateReservations:
             return versions[revision]
         if not sha(revision):
             # A symbolic revision can move: never reuse its read.
-            return self._read_version(revision)
+            return self._read_version(revision)[0]
         key = (self.inputs.root, revision)
         if key not in _VERSIONS:
             _VERSIONS[key] = self._read_version(revision)
+        version, oid = _VERSIONS[key]
+        self._require_present((oid,))
         if versions is not None:
-            versions[revision] = _VERSIONS[key]
-        return _VERSIONS[key]
+            versions[revision] = version
+        return version
+
+    def _require_present(self, oids):
+        """Every manifest blob a reused read depends on is still in the object store."""
+        try:
+            checked = self.inputs.git("cat-file", "--batch-check=%(objecttype) %(objectname)",
+                                      data=("\n".join(oids) + "\n").encode()).decode().splitlines()
+        except (ValueError, TypeError, UnicodeError):
+            checked = None
+        if checked != ["blob " + oid for oid in oids]:
+            _fail("historical Product version is malformed or unavailable")
 
     def _read_version(self, revision):
+        """(ProductVersion, manifest blob id) for one revision, read from Git."""
         try:
             metadata, name = self.inputs.git("ls-tree", revision, "--", VERSION).decode().rstrip("\n").split("\t")
             mode, kind, oid = metadata.split(" ")
@@ -56,7 +71,7 @@ class CandidateReservations:
                 filename = Path(directory) / "version.json"
                 filename.write_bytes(canonical_json(document))
                 version = load_version(filename)
-            return version
+            return version, oid
         except (ValueError, TypeError, UnicodeError):
             _fail("historical Product version is malformed or unavailable")
 
@@ -66,11 +81,13 @@ class CandidateReservations:
 
     def _history_floor(self, revision, versions=None):
         if not sha(revision):
-            return self._read_history_floor(revision, versions)
+            return self._read_history_floor(revision, versions)[0]
         key = (self.inputs.root, revision)
         if key not in _FLOORS:
             _FLOORS[key] = self._read_history_floor(revision, versions)
-        return _FLOORS[key]
+        floor, oids = _FLOORS[key]
+        self._require_present(oids)
+        return floor
 
     def _read_history_floor(self, revision, versions=None):
         # Full history, not first-parent/path-simplified history: a higher BUILD
@@ -79,11 +96,13 @@ class CandidateReservations:
                                     "--", VERSION).decode().splitlines()
         versions = {} if versions is None else versions
         builds = [self._version(revision, versions).build]
+        oids = {_VERSIONS[(self.inputs.root, revision)][1]} if sha(revision) else set()
         for commit in revisions:
             row = self.inputs.git("ls-tree", commit, "--", VERSION)
             if row:  # A deletion commit has no manifest; its ancestors remain.
                 builds.append(self._version(commit, versions).build)
-        return max(builds)
+                oids.add(_VERSIONS[(self.inputs.root, commit)][1])
+        return max(builds), tuple(sorted(oids))
 
     def _read(self, journal):
         journal._active()
