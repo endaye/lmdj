@@ -22,6 +22,7 @@
 - 流程经验：`.agents/pitfalls/web-proofs-share-destructive-build-root.md` 记录同一工作树 Web proof 的共享清理边界；不改变测试门禁。
 - 覆盖率登记：根 `CMakeLists.txt` 将新增 Domain 与 Project I/O 测试登记到既有 coverage target inventory，保持完整收集与原有阈值。
 - Web 测试夹具：`tests/platform/web/project_io/CMakeLists.txt` 启用栈越界检查，捕获固定栈预算内的内存覆盖；替换／重开及其他分发动作使用禁止内联的独立函数，历史步骤仅保留后续断言所需内容，避免优化编译把大型状态帧叠加到其他路径，保留所有故障点与远端断言。
+- Web 验证诊断：`tests/platform/web/project_io/webkit_protocol_timeline{,_test}.mjs`、`scripts/web-toolchain-conformance.sh` 与 `.agents/pitfalls/playwright-retains-protocol-before-sidecar.md` 修复完整验证暴露的 runner 原始协议 stderr 无界保留；真实 runner 回归固定零保留、完整导航诊断与失败状态，不增加堆预算或减少浏览器案例。
 
 每个测试固定一个缺陷；用户旅程每次转换之后立即断言。验证至少包含 A→B→Undo A→Redo B 的内容与递增 revision、Redo 分叉、重复请求、无变化、清空 Pad 保留事件、同一产物重做、Sequence 分组、录制／恢复守卫、保存与重开、所有权变化、素材保留及持久化故障。
 运行相关 CTest unit/component、Web 平台与 Creator 单元测试、Creator/Web proof、文档检查和最终 lane 分类要求的验证；并发路径变更补充对应 stress/ASan 验证。真实设备听感与生命周期只记录实际执行结果，不以自动化替代。

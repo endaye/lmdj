@@ -155,7 +155,11 @@ export async function runWithProtocolTimeline(outputPath, command, args) {
   let hasClosed = false;
   let streamError = null;
   try {
-    const environment = {...process.env,
+    // The locked Playwright runner otherwise retains every worker stderr
+    // chunk in TestResult before this sidecar can filter it (about 2 GiB).
+    // Inherit worker stderr directly into this pipe; ordinary stderr still
+    // reaches the proof log, but is no longer attached to each test/trace.
+    const environment = {...process.env, PW_RUNNER_DEBUG: "1",
       DEBUG: [process.env.DEBUG, "pw:protocol"].filter(Boolean).join(",")};
     // The debug package already writes to stderr. Reopening /dev/stderr as a
     // DEBUG_FILE fails with ENXIO when the child inherits a captured pipe.
