@@ -635,7 +635,7 @@ def enroll_intent(*, candidate_root, repository_id, batch_reference_for,
 
 
 def enroll_changelog(*, candidate_root, repository_id, ledger, main_revision,
-                     changelog_binding, commit_for, sequence_for):
+                     recorded_base, changelog_binding, commit_for, sequence_for):
     """The `changelog` step: bind the reviewed frozen changelog via a docs PR.
 
     This step drives its own write — the owned docs commit on canonical main
@@ -660,6 +660,7 @@ def enroll_changelog(*, candidate_root, repository_id, ledger, main_revision,
     from .model import canonical_sha256
 
     for name, factory in (("main_revision", main_revision),
+                          ("recorded_base", recorded_base),
                           ("changelog_binding", changelog_binding),
                           ("commit_for", commit_for),
                           ("sequence_for", sequence_for)):
@@ -673,7 +674,11 @@ def enroll_changelog(*, candidate_root, repository_id, ledger, main_revision,
                                fields=_SITE_FIELDS)
         if fields is None:
             return None
-        base = main_revision()
+        # The durable worktree's base once it exists; the live main tip only
+        # before the step has created anything.
+        base = recorded_base(fields)
+        if base is None:
+            base = main_revision()
         if type(base) is not str or _SHA.fullmatch(base) is None:
             _fail("the canonical main revision is unavailable")
         bound = changelog_binding()
@@ -701,7 +706,7 @@ def enroll_changelog(*, candidate_root, repository_id, ledger, main_revision,
 
 
 def enroll_promotion(*, candidate_root, repository_id, ledger, main_revision,
-                     promotion_binding, commit_for, sequence_for):
+                     recorded_base, promotion_binding, commit_for, sequence_for):
     """The `promotion` step: record the reviewed dev promotion via a docs PR.
 
     This step drives its own write — the owned docs commit on canonical main
@@ -728,6 +733,7 @@ def enroll_promotion(*, candidate_root, repository_id, ledger, main_revision,
     )
 
     for name, factory in (("main_revision", main_revision),
+                          ("recorded_base", recorded_base),
                           ("promotion_binding", promotion_binding),
                           ("commit_for", commit_for),
                           ("sequence_for", sequence_for)):
@@ -741,9 +747,6 @@ def enroll_promotion(*, candidate_root, repository_id, ledger, main_revision,
                                fields=_DRAFT_FIELDS + ("channel",))
         if fields is None:
             return None
-        base = main_revision()
-        if type(base) is not str or _SHA.fullmatch(base) is None:
-            _fail("the canonical main revision is unavailable")
         bound = promotion_binding()
         if bound is None:
             # The deployment evidence this promotion attests does not exist
@@ -769,6 +772,13 @@ def enroll_promotion(*, candidate_root, repository_id, ledger, main_revision,
         for key in ("deployment_runs_sha256", "attestation_sha256"):
             if type(bound[key]) is not str or _DIGEST.fullmatch(bound[key]) is None:
                 _fail("the reviewed promotion binding carries no valid digests")
+        # The durable worktree's base once it exists; the live main tip only
+        # before the step has created anything.
+        base = recorded_base(dict(fields, to_channel=to_channel))
+        if base is None:
+            base = main_revision()
+        if type(base) is not str or _SHA.fullmatch(base) is None:
+            _fail("the canonical main revision is unavailable")
         placeholder = canonical_sha256({"request": fields["request_sha256"],
                                         "step": "promotion", "placeholder": "head"})
         placeholder_tree = canonical_sha256({"request": fields["request_sha256"],

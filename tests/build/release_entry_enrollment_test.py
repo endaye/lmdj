@@ -1354,7 +1354,7 @@ class ChangelogEnrollmentTest(unittest.TestCase):
     def step(self, **overrides):
         arguments = dict(
             candidate_root=self.root, repository_id=12, ledger=Ledger(),
-            main_revision=lambda: MAIN_TIP,
+            main_revision=lambda: MAIN_TIP, recorded_base=lambda identity: None,
             changelog_binding=lambda: {"schema": "lmdj.release-changelog.v1",
                                        "sha256": CHANGELOG_DIGEST,
                                        "notes_sha256": NOTES_DIGEST},
@@ -1403,6 +1403,13 @@ class ChangelogEnrollmentTest(unittest.TestCase):
                 self.step(changelog_binding=lambda: bound).observe(state(),
                                                                    self.operation())
         self.assertEqual(self.commit_specs, [])
+
+    def test_the_worktree_base_is_bound_over_the_live_main_tip(self):
+        seen = []
+        step = self.step(recorded_base=lambda identity: seen.append(identity) or "4" * 40)
+        step.observe(state(), self.operation())
+        self.assertEqual(self.commit_specs[0]["base_revision"], "4" * 40)
+        self.assertEqual(seen[0]["product_build"], BUILD)
 
     def test_an_unrecorded_editorial_is_pending_input(self):
         # No Owner-approved editorial recorded yet: the step waits for it,
@@ -1509,7 +1516,7 @@ class PromotionEnrollmentTest(unittest.TestCase):
     def step(self, **overrides):
         arguments = dict(
             candidate_root=self.root, repository_id=12, ledger=self.canary_ledger(),
-            main_revision=lambda: MAIN_TIP,
+            main_revision=lambda: MAIN_TIP, recorded_base=lambda identity: None,
             promotion_binding=lambda: self.bound,
             commit_for=self.commit_for, sequence_for=self.sequence_for)
         arguments.update(overrides)
@@ -1576,6 +1583,15 @@ class PromotionEnrollmentTest(unittest.TestCase):
                      before_write=lambda: written.append(True))
         self.assertEqual(written, [])
         self.assertEqual(self.commit_specs, [])
+
+    def test_the_worktree_base_is_bound_over_the_live_main_tip(self):
+        self.bound = _deployment_binding()
+        seen = []
+        step = self.step(recorded_base=lambda identity: seen.append(identity) or "4" * 40)
+        step.observe(state(), self.operation())
+        self.assertEqual(self.commit_specs[0]["base_revision"], "4" * 40)
+        self.assertEqual((seen[0]["tag"], seen[0]["to_channel"]),
+                         (self.commit_specs[0]["tag"], self.commit_specs[0]["to_channel"]))
 
     def test_the_step_delegates_to_the_real_promotion_carrier(self):
         self.bound = _deployment_binding()

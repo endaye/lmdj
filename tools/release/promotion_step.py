@@ -232,15 +232,17 @@ class PromotionCommit:
         """
         if not callable(before_write) or not callable(self.main_tip):
             _fail("requires the driver's durable write guard and the main reader")
+        if self.root.exists():
+            completed = self._completed()
+            if completed is not None:
+                # A completed commit stays this operation's even after main
+                # moves past its base; only a new commit needs the live tip.
+                tree = self._git("rev-parse", "HEAD^{tree}").decode().strip()
+                return completed, tree
         main_tip = self.main_tip()
         if main_tip != self.spec["base_revision"]:
             _fail("base revision is not the current canonical main tip; "
                   "re-spec the operation against the merged main")
-        if self.root.exists():
-            completed = self._completed()
-            if completed is not None:
-                tree = self._git("rev-parse", "HEAD^{tree}").decode().strip()
-                return completed, tree
         before_write()
         if not self.root.exists():
             self._repository_git("worktree", "add", "--detach", str(self.root),
@@ -255,11 +257,24 @@ class PromotionCommit:
         self._stage_declared()
         self._git("-c", "user.name=" + self.author["author_name"],
                   "-c", "user.email=" + self.author["author_email"],
-                  "commit", "-m",
-                  f"docs(release): record {self.spec['tag']} {self.spec['to_channel']} promotion")
+                  "commit", "-m", commit_subject(self.spec["tag"], self.spec["to_channel"]))
         head = self._git("rev-parse", "HEAD").decode().strip()
         tree = self._git("rev-parse", "HEAD^{tree}").decode().strip()
         return head, tree
+
+
+def commit_subject(tag, to_channel):
+    return f"docs(release): record {tag} {to_channel} promotion"
+
+
+def recorded_base(root, identity, main_tip):
+    """The base this promotion step's worktree was created on, or None."""
+    from .publication_workspace import PublicationWorkspaceError, worktree_base
+    try:
+        return worktree_base(root, commit_subject(identity["tag"], identity["to_channel"]),
+                             main_tip)
+    except PublicationWorkspaceError as error:
+        _fail(f"worktree base is unavailable: {error}")
 
 
 class PromotionBranch(PublicationBranch):

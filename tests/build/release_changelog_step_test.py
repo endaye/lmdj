@@ -133,6 +133,38 @@ class ChangelogCommitTest(unittest.TestCase):
         arguments.update(changes)
         return ChangelogCommit(**arguments)
 
+    def test_recovery_binds_the_worktree_base_not_the_live_main_tip(self):
+        from tools.release.changelog_step import recorded_base
+        identity = {"product_build": "1.0.57.0"}
+        self.assertIsNone(recorded_base(self.worktree, identity, self.base))
+        subprocess.run(["git", "-C", str(self.repository), "worktree", "add", "--detach",
+                        str(self.worktree), self.base], check=True, capture_output=True)
+        # Created but not yet committed: the worktree still sits on its base.
+        self.assertEqual(recorded_base(self.worktree, identity, self.base), self.base)
+        head, _ = self.new_commit().commit(before_write=lambda: None)
+        # Main moves past the base, as the step's own squash merge does: the
+        # base is still the commit's single parent.
+        moved = self.advance_main()
+        self.assertEqual(recorded_base(self.worktree, identity, moved), self.base)
+        self.assertEqual(self.new_commit().completed_head(), head)
+
+    def test_a_worktree_drifted_off_canonical_main_is_refused(self):
+        from tools.release.changelog_step import recorded_base
+        subprocess.run(["git", "-C", str(self.repository), "worktree", "add", "--detach",
+                        str(self.worktree), self.base], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(self.worktree), "-c", "user.name=F", "-c",
+                        "user.email=f@e.invalid", "commit", "-q", "--allow-empty", "-m",
+                        "foreign"], check=True, capture_output=True)
+        with self.assertRaises(ChangelogStepError):
+            recorded_base(self.worktree, {"product_build": "1.0.57.0"}, self.base)
+
+    def advance_main(self):
+        subprocess.run(["git", "-C", str(self.repository), "-c", "user.name=F", "-c",
+                        "user.email=f@e.invalid", "commit", "-q", "--allow-empty", "-m",
+                        "later main"], check=True, capture_output=True)
+        return subprocess.run(["git", "-C", str(self.repository), "rev-parse", "HEAD"],
+                              capture_output=True, check=True).stdout.decode().strip()
+
     def test_commit_binds_changelog_into_the_ledger_and_adds_notes(self):
         commit = self.new_commit()
         calls = []
