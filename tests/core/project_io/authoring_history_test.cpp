@@ -1,6 +1,8 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <fstream>
+#include <functional>
 #include <lmdj/project_io/project_store.hpp>
 #include "packages/project-io/src/testing_hooks.hpp"
 #include "tests/core/support/candidate_adoption.hpp"
@@ -293,9 +295,56 @@ void grouped_cancel_restores_redo_and_capacity() {
   LMDJ_CHECK(history.status("project.lmdj").undo_count == AuthoringHistory::kMaximumActions);
 
 }
+std::string read_bytes(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+}
+void persisted_history_rejects_malformed_commands_atomically() {
+  using Json = nlohmann::json;
+  const std::vector<std::function<void(Json&)>> cases{
+    [](auto& c) { c["redo"] = 1; },
+    [](auto& c) { c["history_session_id"] = "invalid"; },
+    [](auto& c) { c["unexpected"] = true; },
+    [](auto& c) { c["delta"]["unexpected"] = true; },
+    [](auto& c) { c["delta"]["bpm"] = {{"before",120},{"after",120.5}}; },
+    [](auto& c) { c["delta"]["swing_percent"] = {{"before",50},{"after",256}}; },
+    [](auto& c) { c["delta"]["quantize_enabled"] = {{"before",true},{"after",0}}; },
+    [](auto& c) { c["delta"]["pads"][0]["before"]["asset_id"] = "invalid"; },
+    [](auto& c) { c["delta"]["pads"].push_back(c["delta"]["pads"][0]); },
+    [](auto& c) { c["delta"]["assets"][uuid(2)] = {{"before",nullptr},{"after",{{"id",uuid(3)},{"artifact",source_artifact()},{"lineage",nullptr}}}}; },
+    [](auto& c) { c["delta"]["pattern_slots"] = Json::array({{{"slot",0},{"before",nullptr},{"after",uuid(90)}},{{"slot",0},{"before",nullptr},{"after",uuid(90)}}}); },
+    [](auto& c) { c["delta"]["pattern_slots"] = Json::array({{{"slot",16},{"before",nullptr},{"after",uuid(90)}}}); },
+  };
+  for (const auto& mutate : cases) {
+    Fixture f; f.edit(-200); f.restore();
+    const auto committed = f.state();
+    const auto manifest = read_bytes(f.root / "manifest.json");
+    std::filesystem::path transaction;
+    Json encoded;
+    for (const auto& entry : std::filesystem::directory_iterator(f.root / "history/transactions")) {
+      auto candidate = Json::parse(read_bytes(entry.path()));
+      if (candidate.at("command").at("type") == "ApplyAuthoringDelta") {
+        transaction = entry.path(); encoded = std::move(candidate); break;
+      }
+    }
+    LMDJ_CHECK(!transaction.empty());
+    const auto pristine = read_bytes(transaction);
+    mutate(encoded["command"]);
+    { std::ofstream output(transaction); output << encoded.dump(); }
+    ProjectStore reader;
+    const auto result = reader.load(f.root);
+    LMDJ_CHECK(!result.has_value());
+    LMDJ_CHECK(result.error().code == ErrorCode::invalid_project);
+    LMDJ_CHECK(read_bytes(f.root / "manifest.json") == manifest);
+    { std::ofstream output(transaction); output << pristine; }
+    LMDJ_CHECK(reader.load(f.root).value() == committed);
+  }
+}
+
 }
 int main() {
   try {
+    persisted_history_rejects_malformed_commands_atomically();
     edit_restore_and_persist(); retry_noop_and_fork(); import_retains_original_bytes();
     failed_publication_keeps_stack(); external_changes_and_sessions_invalidate();
     adoption_is_one_action_and_reuses_every_original_artifact();

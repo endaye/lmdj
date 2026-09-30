@@ -228,7 +228,6 @@ export function isCreatorActionAllowed(
         action.token.patternId === state.project.current?.patternId &&
         action.token.baseRevision === state.project.current?.revision &&
         action.project.projectId === state.project.current?.projectId &&
-        action.project.patternId === state.project.current?.patternId &&
         action.project.revision >= action.token.baseRevision;
     case "project-projection-refresh-failed":
       return state.runtime.phase === "ready" && hasReadyProject(state) &&
@@ -372,8 +371,7 @@ function replaceProjectSummary(
   const summary = projectSummary(project);
   let replaced = false;
   const next = projects.map((candidate) => {
-    if (candidate.projectId !== summary.projectId ||
-        candidate.patternId !== summary.patternId) return candidate;
+    if (candidate.projectId !== summary.projectId) return candidate;
     replaced = true;
     return summary;
   });

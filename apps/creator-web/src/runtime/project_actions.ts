@@ -249,8 +249,10 @@ export async function refreshProjectProjectionJourney(
   for (let attempt = 0; attempt < PROJECTION_READ_ATTEMPTS; ++attempt) {
     const inspected = await session.inspectProject();
     const projects = await listLocalProjectsJourney(session);
-    const summary = projects.find(({projectId, patternId}) =>
-      projectId === identity.projectId && patternId === identity.patternId,
+    // The inventory anchor is derived from the current Pattern set and may
+    // change after Undo/Redo. Project identity owns this open session.
+    const summary = projects.find(({projectId}) =>
+      projectId === identity.projectId,
     );
     if (summary === undefined) {
       throw Object.assign(new Error("Current Project is not listed"), {
