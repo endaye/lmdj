@@ -175,6 +175,21 @@ class CandidateTest(unittest.TestCase):
         main = self.commit()
         with self.assertRaises(CandidateInputError): self.reader.freeze(main)
 
+    def test_one_run_projects_a_commit_once_but_checks_the_repository_every_time(self):
+        # setUp already froze the base in this process, so it is projected.
+        calls = []
+        git = self.reader.git
+
+        def counting(*args, **kwargs):
+            calls.append(args[0])
+            return git(*args, **kwargs)
+        self.reader.git = counting
+        self.assertEqual(self.reader.freeze(self.base), self.frozen)
+        # No tree parse again; history, commit type and blob presence are
+        # still checked against the live repository.
+        self.assertNotIn("ls-tree", calls)
+        self.assertEqual(calls, ["rev-parse", "cat-file", "cat-file"])
+
     def test_missing_blob_is_not_hydrated_or_accepted(self):
         oid = self.git("rev-parse", self.base + ":packages/core/src/a.cpp")
         filename = self.root / ".git/objects" / oid[:2] / oid[2:]

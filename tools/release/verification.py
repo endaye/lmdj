@@ -208,8 +208,12 @@ class BatchVerification:
             return Observation("conflict")
         try:
             self.consumer.verify_run(document, run_id=executor_id, target_revision=witness)
-        except BatchEvidenceError:
-            return Observation("conflict")
+        except BatchEvidenceError as error:
+            # Only evidence that contradicts the candidate is a conflict. Evidence
+            # that cannot be proven here (a main commit this checkout has not
+            # fetched yet, an unreadable run) is unknown: never verified, but
+            # retryable once the local or remote state is complete.
+            return Observation("conflict" if error.code == "conflict" else "unknown")
         except Exception:
             return Observation("unknown")
         return Observation("verified", {

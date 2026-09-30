@@ -10,12 +10,18 @@ from pathlib import Path
 import tempfile
 
 from scripts.version import ProductVersion, load_version
+from .batch_reference import sha
 from .candidate_inputs import CandidateInputs, VERSION
 from .model import canonical_json, canonical_sha256
 from .orchestration import RequestJournal, validate_request, _keys, _pairs, _fail
 
 CATALOG = "build-reservations"
 MAX_BYTES = 1024 * 1024
+# Per-process reuse of immutable commit reads (see candidate_inputs._FROZEN):
+# the Product version an exact commit carries and its full-history BUILD
+# floor cannot change within one release run.
+_VERSIONS = {}
+_FLOORS = {}
 
 
 class CandidateReservations:
@@ -26,6 +32,17 @@ class CandidateReservations:
     def _version(self, revision, versions=None):
         if versions is not None and revision in versions:
             return versions[revision]
+        if not sha(revision):
+            # A symbolic revision can move: never reuse its read.
+            return self._read_version(revision)
+        key = (self.inputs.root, revision)
+        if key not in _VERSIONS:
+            _VERSIONS[key] = self._read_version(revision)
+        if versions is not None:
+            versions[revision] = _VERSIONS[key]
+        return _VERSIONS[key]
+
+    def _read_version(self, revision):
         try:
             metadata, name = self.inputs.git("ls-tree", revision, "--", VERSION).decode().rstrip("\n").split("\t")
             mode, kind, oid = metadata.split(" ")
@@ -39,8 +56,6 @@ class CandidateReservations:
                 filename = Path(directory) / "version.json"
                 filename.write_bytes(canonical_json(document))
                 version = load_version(filename)
-            if versions is not None:
-                versions[revision] = version
             return version
         except (ValueError, TypeError, UnicodeError):
             _fail("historical Product version is malformed or unavailable")
@@ -50,6 +65,14 @@ class CandidateReservations:
         return self._version(revision)
 
     def _history_floor(self, revision, versions=None):
+        if not sha(revision):
+            return self._read_history_floor(revision, versions)
+        key = (self.inputs.root, revision)
+        if key not in _FLOORS:
+            _FLOORS[key] = self._read_history_floor(revision, versions)
+        return _FLOORS[key]
+
+    def _read_history_floor(self, revision, versions=None):
         # Full history, not first-parent/path-simplified history: a higher BUILD
         # allocated then reverted or merged away still consumes its number.
         revisions = self.inputs.git("rev-list", "--full-history", revision,

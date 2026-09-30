@@ -278,6 +278,18 @@ class BatchVerificationTest(unittest.TestCase):
         self.assertEqual(self.carrier.observe({}, {}).status, "conflict")
         self.assertIsNone(self.consumer.verified)
 
+    def test_contradicting_evidence_conflicts_and_unprovable_evidence_is_unknown(self):
+        self.journal.append(self.result_event())
+        self.consumer.accept = False
+        self.assertEqual(self.carrier.observe({}, {}).status, "conflict")
+        for code in ("unverifiable", "external-error"):
+            def refuse(reference, *, run_id, target_revision, published=False, code=code):
+                raise BatchEvidenceError(code, "local Git provenance cannot be verified")
+            self.consumer.verify_run = refuse
+            # A main commit this checkout has not fetched yet is not a
+            # contradiction: never verified, but retryable.
+            self.assertEqual(self.carrier.observe({}, {}).status, "unknown", code)
+
     def test_duplicate_results_for_one_target_are_refused(self):
         self.journal.append(self.result_event(run_id=4242))
         self.journal.append(self.result_event(run_id=4243))
