@@ -1151,6 +1151,37 @@ void test_cancelled_publication_leaves_no_copy() {
   LMDJ_CHECK(!f.staged(kCopyId));
 }
 
+void test_cancelled_duplicate_releases_both_leases_for_a_retry() {
+  Fixture f;
+  ProjectBundleTransfer transfer{f.platform};
+  {
+    RecordingToken recorder;
+    recorder.refuse_claim = true;
+    const auto token = recorder.token();
+    const lmdj::project_io::detail::PublishTokenScope scope{token};
+    LMDJ_CHECK(!duplicate(transfer, f.workspace).has_value());
+  }
+  auto other = lmdj::project_io::make_native_project_storage_platform(f.leases);
+  LMDJ_CHECK(
+      other->acquire_writer(project_path(f.workspace, kCopyId)).has_value());
+  LMDJ_CHECK(
+      other->acquire_writer(project_path(f.workspace, kSourceId)).has_value());
+}
+
+void test_destination_owned_by_another_writer_is_refused_before_staging() {
+  Fixture f;
+  auto other = lmdj::project_io::make_native_project_storage_platform(f.leases);
+  auto held = other->acquire_writer(project_path(f.workspace, kCopyId));
+  LMDJ_CHECK(held.has_value());
+  ProjectBundleTransfer transfer{f.platform};
+  const auto refused = duplicate(transfer, f.workspace);
+  LMDJ_CHECK(!refused.has_value());
+  LMDJ_CHECK(
+      refused.error().details.at("storage_condition") == "project_busy");
+  LMDJ_CHECK(refused.error().message == "Local Project writer is busy");
+  LMDJ_CHECK(!f.staged(kCopyId));
+}
+
 void test_forced_publication_failure_aborts_and_leaves_no_copy() {
   Fixture f;
   ProjectBundleTransfer transfer{f.platform};
@@ -1211,6 +1242,8 @@ int main() {
     test_quota_exhaustion_keeps_its_storage_condition();
     test_success_claims_and_commits_exactly_one_publication();
     test_cancelled_publication_leaves_no_copy();
+    test_cancelled_duplicate_releases_both_leases_for_a_retry();
+    test_destination_owned_by_another_writer_is_refused_before_staging();
     test_forced_publication_failure_aborts_and_leaves_no_copy();
     test_interrupted_staging_is_recovered();
   } catch (const std::exception& error) {

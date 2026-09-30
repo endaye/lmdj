@@ -22,7 +22,7 @@ Project I/O 的 Store、Sequence Journal、streaming Bundle parser/packer、旧 
 依赖 Foundation 与 Authoring Domain；平台适配不能改变领域语义。
 ## 4. 架构与数据流
 Facade 提交 Project、Bundle stream、bounded Sample bytes 或 Sequence flush；Project I/O 在 writer lease 下验证 journal overlay 和 authoring admission，原子发布当前 Project revision，再完成 receipt。Store 只暴露已提交 Project Truth；未提交 overlay、owner-loss recovery artifact、waveform cache 与不可变 Runtime Snapshot 生命周期彼此独立。active journal 的拒绝错误携带 session identity 和 stop-or-reconcile remedy，不允许调用者从无锁内存观察推断 authority。
-`ProjectBundleTransfer::duplicate` 在调用方提供的新 Project ID 下复制一个本地 Project：全程持有源 writer lease（其他进程或标签页持有时返回 `project_busy`），源有 active Sequence 或 Performance Journal 时以 `sequence_session_active` / `performance_session_active` 拒绝；随后读取已提交 Project Truth，把每个被引用的 Asset 与 Performance 录音 Artifact 按 SHA-256 与长度校验后复制到 staging，以 revision 0 写出全新 history 并完整重载验证，最后在目标 lease 下 `publish_directory_if_absent`。副本不携带源 history、sealed recovery 或未引用 blob；Lineage 中的源 revision 原样保留为溯源。拒绝、失败或取消都不发布任何目录，staging 由同一次调用或启动清理删除。
+`ProjectBundleTransfer::duplicate` 在调用方提供的新 Project ID 下复制一个本地 Project：全程持有源与目标 writer lease（其他进程或标签页持有任一方时返回 `project_busy`），源有 active Sequence 或 Performance Journal 时以 `sequence_session_active` / `performance_session_active` 拒绝；随后读取已提交 Project Truth，把每个被引用的 Asset 与 Performance 录音 Artifact 按 SHA-256 与长度校验后复制到 staging，以 revision 0 写出全新 history 并完整重载验证，最后在同一目标 lease 下 `publish_directory_if_absent`。副本不携带源 history、sealed recovery 或未引用 blob；Lineage 中的源 revision 原样保留为溯源。拒绝、失败或取消都不发布任何目录，staging 由同一次调用或启动清理删除。
 ## 5. API 与 Artifact 边界
 只持久化 Project Truth 与原始 WAV Artifact；`lmdj.project-bundle.v1` 只定义 transfer envelope；Workspace waveform cache 可丢弃重建，Runtime Snapshot 明确禁止持久化为创作真相。
 ## 6. 状态、错误与生命周期

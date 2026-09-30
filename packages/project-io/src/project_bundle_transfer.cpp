@@ -1014,6 +1014,15 @@ foundation::Result<LocalProjectSummary> ProjectBundleTransfer::duplicate(
     return Outcome::failure(
         Error{ErrorCode::not_found, "Source Project was not found"});
   }
+  // Held until return, so the absence checked here is still true at
+  // publication, and a concurrent duplicate into the same Project ID is
+  // refused on the destination rather than on its staging.
+  auto destination_lease = platform.acquire_writer(destination);
+  if (!destination_lease.has_value()) {
+    return Outcome::failure(
+        sanitized_storage_error(
+            destination_lease.error(), "Local Project writer is busy"));
+  }
   const auto destination_present = platform.directory_exists(destination);
   if (!destination_present.has_value()) {
     return Outcome::failure(
@@ -1182,13 +1191,6 @@ foundation::Result<LocalProjectSummary> ProjectBundleTransfer::duplicate(
     return Outcome::failure(error);
   }
 
-  auto destination_lease = platform.acquire_writer(destination);
-  if (!destination_lease.has_value()) {
-    const auto error = sanitized_storage_error(
-        destination_lease.error(), "Local Project writer is busy");
-    cleanup();
-    return Outcome::failure(error);
-  }
   if (!detail::claim_publish()) {
     cleanup();
     return Outcome::failure(
