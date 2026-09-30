@@ -65,6 +65,14 @@ the defect. Three habits follow:
   input that shows it, print both sides of the failing assertion, and write
   the test from that reproduction. A fix written before the cause is verified
   fixes a guess.
+- **Proof against the rebuilt artifact.** A revert or mutation proof shows a
+  test is load-bearing only if the run used the code under proof. Restore a
+  perturbed file with `git checkout --`, or follow any other restore with
+  `touch`, so the build sees it as newer than its products; clear matching
+  `__pycache__`. Read the rebuild's exit status instead of discarding its
+  output, and confirm the failure line sits inside the test under proof. A
+  failure anywhere else means a stale binary, not a second defect; see
+  [`revert-proof-rebuild-skipped`](../../.agents/pitfalls/revert-proof-rebuild-skipped.md).
 
 Select the lowest tier that reaches the behavior through its public boundary,
 as the Test Selection Rule in `docs/quality/core-test-policy.md` requires; a

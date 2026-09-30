@@ -140,7 +140,10 @@ must never shrink:
   advisory. Conservative lane selection stays fail-closed.
 - **Tests** minimize the reasons a test can fail, never its strictness. One
   test fixes one fact; reduce a defect before fixing it; acceptance journeys
-  keep every leg with a far-side assertion per transition.
+  keep every leg with a far-side assertion per transition. A revert or
+  mutation proof counts only against a rebuilt artifact: restore with a fresh
+  mtime, read the rebuild's exit status, and confirm the failure line sits in
+  the test under proof.
 - **Changes** minimize the distance from a red gate to its cause, never the
   Task's declared scope. One Task is one commit of declared files; a plan
   Task names its files, its lowest-tier tests, and the defect any new gate

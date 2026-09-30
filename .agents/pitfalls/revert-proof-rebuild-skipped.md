@@ -84,5 +84,9 @@ suite still failed on the normal-path assertion of the first test while `cmp`
 showed the source intact; a `touch` and a rebuild with its output read made it
 pass. The failure line being outside the test under proof is what exposed it.
 The discipline above was in force, but it lives in `issue-done` §1, which the
-agent read only when it started shipping, after the proofs had run. The exit is
-kept; the gap is that the rule is not read at the moment a proof is made.
+agent read only when it started shipping, after the proofs had run.
+
+Repair: the rule now also sits where a proof is made. It is a habit in
+`docs/governance/minimization-principle.md` §2 (Tests) and a clause in the Tests
+summary of `AGENTS.md` / `CLAUDE.md`, which every session loads before any work
+begins. The `issue-done` exit keeps the full procedure for shipping.
