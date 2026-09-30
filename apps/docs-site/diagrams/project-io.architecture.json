@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "meta": {"title": "Project I/O Module", "summary": "Project Store、portable Bundle、session-kind journal 与 journaled atomic publication"},
+  "meta": {"title": "Project I/O Module", "summary": "Project Store、portable Bundle、Project duplicate、session-kind journal 与 journaled atomic publication"},
   "boundaries": [],
   "components": [
     {"id": "project", "label": "Project Truth", "detail": "legacy read · current Contract write", "kind": "host", "x": 50, "y": 150, "width": 220, "height": 96},
@@ -18,7 +18,8 @@
     {"from": "stage", "to": "store", "label": "atomic publish"},
     {"from": "stage", "to": "bundle-out", "label": "canonical pack"},
     {"from": "io", "to": "draft", "label": "performance session"},
-    {"from": "draft", "to": "store", "label": "save or discard"}
+    {"from": "draft", "to": "store", "label": "save or discard"},
+    {"from": "store", "to": "io", "label": "duplicate · new id"}
   ],
   "cards": [
     {"title": "Dependencies", "body": "Foundation + Authoring Domain. Committed inspection acquires the owner lease without authoring recovery or scavenging."},
