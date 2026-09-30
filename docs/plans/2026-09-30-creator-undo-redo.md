@@ -21,7 +21,7 @@
 - 文档及身份：本计划、受影响模块／Host 清单及依赖、Assembly 及 Runtime identity 生成物、当前门户页面和架构源图、Host package 身份、version/module graph/Host boundary 身份清单测试；身份变更按下节执行，不改历史决策。
 - 流程经验：`.agents/pitfalls/web-proofs-share-destructive-build-root.md` 记录同一工作树 Web proof 的共享清理边界；不改变测试门禁。
 - 覆盖率登记：根 `CMakeLists.txt` 将新增 Domain 与 Project I/O 测试登记到既有 coverage target inventory，保持完整收集与原有阈值。
-- Web 测试夹具：`tests/platform/web/project_io/CMakeLists.txt` 启用栈越界检查，捕获固定栈预算内的内存覆盖；替换／重开动作使用独立函数，避免叠加 common-parity 夹具的大型状态帧，保留所有故障点与远端断言。
+- Web 测试夹具：`tests/platform/web/project_io/CMakeLists.txt` 启用栈越界检查，捕获固定栈预算内的内存覆盖；替换／重开及其他分发动作使用禁止内联的独立函数，历史步骤仅保留后续断言所需内容，避免优化编译把大型状态帧叠加到其他路径，保留所有故障点与远端断言。
 
 每个测试固定一个缺陷；用户旅程每次转换之后立即断言。验证至少包含 A→B→Undo A→Redo B 的内容与递增 revision、Redo 分叉、重复请求、无变化、清空 Pad 保留事件、同一产物重做、Sequence 分组、录制／恢复守卫、保存与重开、所有权变化、素材保留及持久化故障。
 运行相关 CTest unit/component、Web 平台与 Creator 单元测试、Creator/Web proof、文档检查和最终 lane 分类要求的验证；并发路径变更补充对应 stress/ASan 验证。真实设备听感与生命周期只记录实际执行结果，不以自动化替代。
@@ -29,7 +29,7 @@
 ## Version Management
 
 新增向后兼容能力分配 Authoring Domain 4.2.0、Application Facade 6.3.0、Web Runtime Platform 5.4.0 与 Creator Host 4.6.0；Project I/O 新增旧 reader 无法识别的私有 journal 命令，按持久化兼容性边界分配 5.0.0。精确依赖消费者同步 PATCH。Project Truth 与便携 bundle schema 不加入历史栈。
-已核对最新 main 为 1.0.66.0，全部本地和 origin 分支显示另一个并行 Task 已分配 1.0.67.0；本次配套 Assembly 使用尚未占用的 1.0.68.0。版本及精确依赖从 manifests 推导，使用 `scripts/version.py lock` 生成 Assembly，分配下一个可用 Product Build，同步 current 门户并按 `scripts/docs-site.sh version PRODUCT_BUILD canary` 冻结不可变说明书。最终数值及已执行证据在交付时回填，禁止猜测或复用冲突身份。
+本 Task 最初分配 1.0.68.0，避开并行 Task 已保留的 1.0.67.0。随后 main 的 #1700 正式启用 M2 / 2.0 四区工作流能力列车，因此整合 #1694 的 Project duplicate 后分配下一个未占用 Build 2.0.69.0；旧 1.0.68.0 快照完整保留在原候选提交 4478667c 中，并非 Release 或部署；本 PR 最终仅引入匹配合并树的 2.0.69.0 快照。版本及精确依赖从 manifests 推导，使用 `scripts/version.py lock` 生成 Assembly，同步 current 门户并按 `scripts/docs-site.sh version PRODUCT_BUILD canary` 冻结本次说明书。最终验证以 PR 的输入绑定证据为准。
 版本与快照是独立验证边界；本任务不授权 tag、Release、Runtime 部署或 Channel 晋级。
 
 ## Documentation Impact

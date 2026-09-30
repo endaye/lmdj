@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-09
     occurrence: https://github.com/endaye/lmdj/issues/1058
     observed_by: Claude Code (Opus 5)
+  - date: 2026-09-30
+    occurrence: https://github.com/endaye/lmdj/issues/1684
+    observed_by: Claude Code (Opus 5.5)
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -72,3 +75,14 @@ method, not a derivable product invariant, so no gate qualifies. `issue-done`
 (current mtime, never a timestamp-preserving `cp`/`tar` rollback without a
 follow-up `touch` and `__pycache__` clear), capture the proof rebuild's exit
 status, and confirm the failure line sits inside the test under proof.
+
+## Third occurrence, 2026-09-30: the rule was read after the proof
+
+A mutation matrix for `ProjectBundleTransfer::duplicate` restored the source
+with `cp` and sent each proof rebuild to `/dev/null`. After one restore the
+suite still failed on the normal-path assertion of the first test while `cmp`
+showed the source intact; a `touch` and a rebuild with its output read made it
+pass. The failure line being outside the test under proof is what exposed it.
+The discipline above was in force, but it lives in `issue-done` §1, which the
+agent read only when it started shipping, after the proofs had run. The exit is
+kept; the gap is that the rule is not read at the moment a proof is made.

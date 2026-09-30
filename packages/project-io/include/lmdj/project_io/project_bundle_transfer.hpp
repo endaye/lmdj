@@ -79,6 +79,18 @@ class ProjectBundleTransfer final {
   foundation::Result<void> abort(std::string_view token);
   foundation::Result<void> cleanup_incomplete(
       const std::filesystem::path& workspace_root);
+  // Publishes an independent copy of a local Project's committed Project Truth
+  // and every Artifact it references under the caller-supplied `project_id`.
+  // The copy starts a fresh history at revision zero. The source writer lease
+  // is held throughout, so a source owned by another process or tab is refused
+  // as project_busy, and a source with an active Sequence or Performance
+  // Journal is refused before anything is staged. The copy is staged and
+  // validated before it is published; a refusal, failure or cancellation
+  // publishes nothing.
+  foundation::Result<LocalProjectSummary> duplicate(
+      const std::filesystem::path& workspace_root,
+      const foundation::ProjectId& source_project_id,
+      const foundation::ProjectId& project_id);
 
  private:
   struct Impl;
