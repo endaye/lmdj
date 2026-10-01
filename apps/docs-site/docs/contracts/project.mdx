@@ -44,6 +44,32 @@ crossfade 是循环与自身的重叠：每一遍的最后 X 帧与循环开头�
 `lmdj.sample.update_pad`、Web Runtime Platform 的 `sample.update_pad`/`sample.preview.set` 与 Creator Sample Editor
 暴露同一组键：请求可省略任一可选键，回读只输出非缺省键，循环点与 crossfade 另按已分配 WAV 的源帧数校验。
 
+## Pad 音色对齐参数（`5.2.0`）
+
+`5.2.0` 同样是向后兼容的追加（#1667）：Pad `playback` 再新增四个**可选**键，缺省即旁通、即旧行为，
+writer 同样省略取缺省值的键。
+
+| 键 | 取值 | 缺省 |
+| --- | --- | --- |
+| `attack_ms` | 整数 0..2000（实际淡入取 max(用户值, 2 ms)） | `0` |
+| `release_ms` | 整数 0..4000（实际淡出取 max(用户值, 2 ms)） | `0` |
+| `tone` | 整数 −100..+100（负值低通、正值高通，\|tone\| ≤ 2 旁通） | `0` |
+| `eq` | 对象，含可选的 `low`、`mid`、`high` 三段 | 三段全部旁通 |
+
+`eq` 的每一段缺席即旁通；出现的一段必须带齐自己的全部字段，Schema 拒绝多余键与未知频段：
+
+| 频段 | 字段 |
+| --- | --- |
+| `low` | `kind`（`shelf` 低架 \| `cut` 高通）、`freq_hz` 20..2000、`gain_millidb` −18000..+18000 |
+| `mid` | `freq_hz` 100..10000、`gain_millidb` −18000..+18000、`q_milli` 100..10000（钟形） |
+| `high` | `kind`（`shelf` 高架 \| `cut` 低通）、`freq_hz` 1000..20000、`gain_millidb` −18000..+18000 |
+
+`kind: cut` 的一段同样携带 `gain_millidb`：DSP 忽略它，但它留在 Project Truth 里，所以从 cut 拖回 shelf 时保留原增益。
+Koala 的"低架拖到底变高通、高架拖到底变低通"用显式的 `kind: cut` 表达，不用魔法增益值。
+`5.1.0` reader 按设计拒绝携带这些键的 Project。取值与语义的权威仍是同一份 2026-09-30 决策。
+本 Build 只推进 Contract：读写这些键的 Domain、Project I/O、Cooker 与 Audio Runtime 实现是 #1667 的后续 Core Task，
+在它合入之前 Project I/O 仍拒绝这些键。
+
 ## Slice 采纳 Lineage
 
 新增的 `derivation.kind: capability_adoption` 只支持 Slice，必须搭配现有
