@@ -2,6 +2,7 @@ import {readFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 import {
+  openProjectFromLibrary,
   openProjectPageAfterBoot,
   overviewProjectId,
   waitForBootProject,
@@ -21,6 +22,22 @@ async function importProject(page) {
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
   await expect(page.getByText("64 / 64")).toBeVisible();
+}
+
+async function inspectProject(page) {
+  const response = await page.evaluate(() => window.lmdjWebRuntimeHost.transport.send({
+    protocol_version: 1,
+    request_id: crypto.randomUUID(),
+    operation: "project.inspect",
+    payload: {},
+  }));
+  expect(response.ok, JSON.stringify(response.error ?? null)).toBe(true);
+  return response.result;
+}
+
+// Project Truth without the fields a copy must change.
+function withoutIdentity({project_id: _id, revision: _revision, ...truth}) {
+  return truth;
 }
 
 async function activate(page) {
@@ -239,4 +256,45 @@ test("boot creates a stored Project, New Project adds one, and a reload reopens 
   await page.getByRole("button", {name: "Project", exact: true}).click();
   await page.getByRole("button", {name: "Open local"}).click();
   await expect(page.getByRole("button", {name: /^Open Project [0-9a-f]{8}$/})).toHaveCount(2);
+});
+
+test("Duplicate copies the open Project under a new identity, keeps edits apart, and a reload reopens the copy", async ({page}) => {
+  test.setTimeout(300_000);
+  await page.goto("/index.html");
+  await waitForBootProject(page);
+  await importProject(page);
+  const source = await inspectProject(page);
+
+  // The copy opens with identical Pads, Patterns and settings and a new identity.
+  await page.getByRole("button", {name: "Duplicate Project"}).click();
+  await expect(overviewProjectId(page)).not.toHaveText("00000000", {timeout: 120_000});
+  const copyShort = (await overviewProjectId(page).textContent())?.trim();
+  expect(copyShort).toMatch(/^[0-9a-f]{8}$/);
+  await expect(page.getByRole("heading", {name: `Project ${copyShort}`})).toBeVisible();
+  const copy = await inspectProject(page);
+  expect(copy.project.project_id).not.toBe(source.project.project_id);
+  expect(copy.project.project_id.slice(0, 8)).toBe(copyShort);
+  expect(copy.project_revision).toBe(0);
+  expect(withoutIdentity(copy.project)).toEqual(withoutIdentity(source.project));
+
+  // An edit commits to the copy.
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await page.getByRole("button", {name: "Create Pattern", exact: true}).click();
+  await expect.poll(async () => (await inspectProject(page)).project_revision,
+    {timeout: 60_000}).toBe(1);
+  const edited = await inspectProject(page);
+  expect(Object.keys(edited.project.patterns))
+    .toHaveLength(Object.keys(copy.project.patterns).length + 1);
+
+  // The copy is now the remembered Project: a reload reopens it, edit included.
+  await page.reload();
+  await waitForProjectReopen(page, copyShort);
+  expect((await inspectProject(page)).project).toEqual(edited.project);
+
+  // The source never saw the copy's edit.
+  await openProjectFromLibrary(page, "00000000");
+  await expect(overviewProjectId(page)).toHaveText("00000000", {timeout: 120_000});
+  const reopenedSource = await inspectProject(page);
+  expect(reopenedSource.project_revision).toBe(source.project_revision);
+  expect(reopenedSource.project).toEqual(source.project);
 });

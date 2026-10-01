@@ -38,6 +38,7 @@ import {
 import {
   createProjectActionLane,
   createProjectJourney,
+  duplicateProjectJourney,
   importProjectJourney,
   listLocalProjectsJourney,
   openProjectJourney,
@@ -83,13 +84,18 @@ import {
   initialCreatorState,
   selectCanActivateAudio,
   selectCanCreateProject,
+  selectCanDuplicateProject,
   selectCanImportProject,
   selectCanOpenProject,
   selectCreatorPhase,
   type CreatorState,
 } from "./state/creator_state";
 import {readLastProjectId, writeLastProjectId} from "./state/last_project";
-import {initialSequenceState, reduceSequence} from "./state/sequence_state";
+import {
+  initialSequenceState,
+  reduceSequence,
+  type SequenceState,
+} from "./state/sequence_state";
 import {
   initialPatternTransportState,
   reducePatternTransport,
@@ -288,6 +294,10 @@ function Workspace({
   const sequenceAuthoringTail = useRef<Promise<void>>(Promise.resolve());
   const sequenceAuthoringRevision = useRef(0);
   const sequenceAuthoringProjectId = useRef<string | null>(null);
+  // The Sequence status object current when the open Project last changed.
+  // Until a Sequence action replaces it, it still describes that previous
+  // Project, so its revision must not reach the new Project's authoring.
+  const sequenceStatusAtProjectChange = useRef<SequenceState["status"]>(null);
   const sampleRetryAction = useRef<SampleRetryToken | null>(null);
   const inputController = useRef<ReturnType<typeof createCreatorInputController> | null>(null);
   const inputAdverseState = useRef<string | null>(null);
@@ -320,11 +330,15 @@ function Workspace({
   if (sequenceAuthoringProjectId.current !== (state.project.current?.projectId ?? null)) {
     sequenceAuthoringProjectId.current = state.project.current?.projectId ?? null;
     sequenceAuthoringRevision.current = state.project.current?.revision ?? 0;
+    sequenceStatusAtProjectChange.current = sequence.status;
   } else {
+    const currentStatus = sequence.status === sequenceStatusAtProjectChange.current
+      ? null
+      : sequence.status;
     sequenceAuthoringRevision.current = reconcileSequenceAuthoringRevision(
       sequenceAuthoringRevision.current,
       state.project.current?.revision ?? 0,
-      sequence.status?.expectedRevision ?? 0,
+      currentStatus?.expectedRevision ?? 0,
     );
   }
 
@@ -335,6 +349,9 @@ function Workspace({
   useEffect(() => {
     if (currentProjectId !== null) writeLastProjectId(currentProjectId);
   }, [currentProjectId]);
+  // A refused Duplicate describes the Project it was asked to copy.
+  const [duplicateRefusal, setDuplicateRefusal] = useState<string | null>(null);
+  useEffect(() => { setDuplicateRefusal(null); }, [currentProjectId]);
 
   useEffect(() => {
     const project = state.project.current;
@@ -792,7 +809,7 @@ function Workspace({
   }, [performController]);
 
   const beginProjectAction = (
-    kind: "open" | "import" | "create",
+    kind: "open" | "import" | "create" | "duplicate",
     requireSelector = true,
   ): ProjectActionToken | null => {
     if (!session || projectActions.busy ||
@@ -803,7 +820,9 @@ function Workspace({
         ? selectCanOpenProject(stateRef.current)
         : kind === "create"
           ? selectCanCreateProject(stateRef.current)
-          : selectCanImportProject(stateRef.current);
+          : kind === "duplicate"
+            ? selectCanDuplicateProject(stateRef.current)
+            : selectCanImportProject(stateRef.current);
       if (!allowed) return null;
     }
     return projectActions.claim(session);
@@ -869,6 +888,75 @@ function Workspace({
         }
       } catch {
         // The reported creation failure stays the visible outcome.
+      }
+      return false;
+    } finally {
+      finishProjectAction(token);
+    }
+  };
+
+  const duplicateProject = async () => {
+    const source = stateRef.current.project.current;
+    if (source === null) return false;
+    const token = beginProjectAction("duplicate");
+    if (!token) return false;
+    setDuplicateRefusal(null);
+    let copy: LocalProjectSummary;
+    try {
+      copy = await duplicateProjectJourney(token.session, source.projectId);
+    } catch (error) {
+      if (ownsProjectAction(token)) {
+        const code = reportFailure("Duplicate Project", error);
+        if (code === "HOST_RESTART_REQUIRED" || code === "HOST_TIMEOUT") {
+          dispatch({
+            type: "runtime-changed",
+            phase: "restart-required",
+            errorCode: code,
+            errorDetails: errorDetails(error),
+          });
+        } else {
+          // The open Project is untouched, so the failure is shown beside the
+          // action instead of as a Project error.
+          setDuplicateRefusal(code);
+          // A refusal copies nothing, but a failure after the Host stored the
+          // copy (an invalid summary) must not hide it: list, as New Project
+          // does.
+          try {
+            const projects = await listLocalProjectsJourney(token.session);
+            if (ownsProjectAction(token)) {
+              dispatch({type: "project-inventory-updated", projects});
+            }
+          } catch {
+            // The reported Duplicate failure stays the visible outcome.
+          }
+        }
+      }
+      finishProjectAction(token);
+      return false;
+    }
+    try {
+      if (!ownsProjectAction(token)) return false;
+      dispatch({type: "project-opening"});
+      resetInputForAdverseLifecycle();
+      // Same as open: opening the copy replaces the Project session.
+      dispatchTransport({type: "disengaged"});
+      const project = await openProjectJourney(token.session, copy);
+      if (!ownsProjectAction(token)) return false;
+      dispatch({type: "project-ready", project});
+      setShowLocalProjects(false);
+      return true;
+    } catch (error) {
+      if (!ownsProjectAction(token)) return false;
+      reportProjectError(error, {kind: "open", project: copy});
+      // The copy is stored even though it did not open; list it so it can be
+      // opened rather than duplicated again.
+      try {
+        const projects = await listLocalProjectsJourney(token.session);
+        if (ownsProjectAction(token)) {
+          dispatch({type: "project-inventory-updated", projects});
+        }
+      } catch {
+        // The reported open failure stays the visible outcome.
       }
       return false;
     } finally {
@@ -1085,6 +1173,8 @@ function Workspace({
         inspected.project_revision >= 0
           ? inspected.project_revision
           : null;
+      // A refresh that outlived its Project describes the previous one.
+      if (stateRef.current.project.current?.projectId !== project.projectId) return;
       const committedRevision = Math.max(
         authority.status.expectedRevision,
         inspectedRevision ?? 0,
@@ -1464,6 +1554,11 @@ function Workspace({
     sampleRetryAction.current === null &&
     state.sample.pendingAction === null &&
     selectCanCreateProject(state);
+  const canDuplicateProject = session !== undefined &&
+    !projectActions.busy &&
+    sampleRetryAction.current === null &&
+    state.sample.pendingAction === null &&
+    selectCanDuplicateProject(state);
   const staleSampleRuntime = state.sample.lastError?.code === "COOK_FAILED" &&
     state.sample.lastError.retryPrepare && state.sample.savedRevision !== null &&
     state.sample.runtimeRevision !== state.sample.savedRevision;
@@ -1681,12 +1776,15 @@ function Workspace({
                   canOpen={canOpenProject}
                   canImport={canImportProject}
                   canCreate={canCreateProject}
+                  canDuplicate={canDuplicateProject}
+                  duplicateRefusal={duplicateRefusal}
                   showLocalProjects={showLocalProjects}
                   onShowLocal={() => setShowLocalProjects(true)}
                   onHideLocal={() => setShowLocalProjects(false)}
                   onOpen={(summary) => { void openProject(summary); }}
                   onImport={(file) => { void importProject(file); }}
                   onCreate={() => { void createProject(); }}
+                  onDuplicate={() => { void duplicateProject(); }}
                 />
               ) : activeMode === "sample" ? (
                 <>

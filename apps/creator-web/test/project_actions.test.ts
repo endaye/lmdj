@@ -4,6 +4,7 @@ import * as projectActions from "../src/runtime/project_actions";
 import {
   createProjectActionLane,
   createProjectJourney,
+  duplicateProjectJourney,
   importProjectJourney,
   listLocalProjectsJourney,
   openProjectJourney,
@@ -83,6 +84,7 @@ function sessionFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
       calls.push("importProject");
       return summary;
     },
+    duplicateProject: async () => { throw new Error("duplicate is not expected"); },
     createProject: async () => {
       calls.push("createProject");
       return {};
@@ -336,4 +338,31 @@ test("Project action module has no New, Save As, or Project export journey", () 
   expect(view?.patternId).toBe(SECOND_PATTERN_ID);
   expect(view?.revision).toBe(3);
   expect(calls).not.toContain("openProject");
+});
+
+const COPY_ID = "66666666-6666-4666-8666-666666666666";
+
+test("duplicateProjectJourney copies under a new identity and does not open the copy", async () => {
+  const requests: unknown[] = [];
+  const {session, calls} = sessionFixture({
+    duplicateProject: async (request) => {
+      requests.push(request);
+      return {...summary, projectId: COPY_ID, revision: 0};
+    },
+  });
+  const copy = await duplicateProjectJourney(session, PROJECT_ID, () => COPY_ID);
+  expect(requests).toEqual([{sourceProjectId: PROJECT_ID, projectId: COPY_ID}]);
+  expect(copy.projectId).toBe(COPY_ID);
+  expect(calls).not.toContain("openProject");
+});
+
+test("a duplicate summary for another identity or a later revision is a protocol mismatch", async () => {
+  for (const returned of [
+    {...summary, projectId: PROJECT_ID, revision: 0},
+    {...summary, projectId: COPY_ID, revision: 1},
+  ]) {
+    const {session} = sessionFixture({duplicateProject: async () => returned});
+    await expect(duplicateProjectJourney(session, PROJECT_ID, () => COPY_ID))
+      .rejects.toMatchObject({code: "HOST_PROTOCOL_MISMATCH"});
+  }
 });
