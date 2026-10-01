@@ -138,3 +138,5 @@ publication failure. Other Pad imports and their revision guards remain intact.
 ## 分 Pad Sound Set 获取
 
 Host 支持 `soundset.catalog.describe`、`soundset.slot.acquire` 与 `soundset.slot.install`。资产获取只解析 Core 给出的 object_kind/sha256 地址，使用独立获取队列，网络等待不占用 Project mutation queue；完整 Set 浏览和 slot 获取共享该队列，避免 pending/supply 交错。安装仍串行提交；Runtime publication 由现有 snapshot 路径完成。
+Creator 离线分发清单按 Host 主版本区分资产集合：主版本 5 起必须带一个离线 worker，
+之前的已发布清单保留原有集合。清单门禁拒绝漏项，不把 OPFS 的素材持久化等同于离线启动。

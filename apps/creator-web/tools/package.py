@@ -179,7 +179,7 @@ def write_hashed_asset(
     payload: bytes,
     role: str,
 ) -> dict:
-    if role not in EMITTED_ASSET_ROLES:
+    if role not in ROLES.CREATOR_WEB_POSSIBLE_ASSET_ROLES:
         raise PackageError(
             "why: this packager emitted the manifest asset role "
             f"{role!r}, which is not in the Creator inventory "
@@ -353,6 +353,26 @@ def build_distribution(
             ROLES.RUNTIME_SCRIPT,
         )
         entries = [main_entry, runtime_entry, wasm_entry, style_entry, worklet_entry, tap_entry]
+        offline_declared = any(asset["role"] == ROLES.OFFLINE_WORKER
+                               for asset in host_identity["expected_assets"])
+        if offline_declared:
+            if int(host_identity["version"].split(".")[0]) < 5:
+                raise PackageError("offline worker inventory requires Creator Host MAJOR settlement")
+            offline_graph = {
+                "assets": entries,
+                "host_version": host_identity["version"],
+                "product_build": active_product_build,
+            }
+            offline_source = require_file(
+                repo_root / "apps/creator-web/offline/worker.mjs", "Creator offline worker"
+            ).read_bytes()
+            offline_entry = write_hashed_asset(
+                assets_root, "offline-worker", ".js",
+                b"globalThis.LMDJ_CREATOR_OFFLINE_GRAPH=" + canonical_json(offline_graph)
+                + b";\n" + offline_source,
+                ROLES.OFFLINE_WORKER,
+            )
+            entries = [*entries, offline_entry]
         manifest = {
             "assets": entries,
             "compatible_hosts": host_identity["compatible_hosts"],

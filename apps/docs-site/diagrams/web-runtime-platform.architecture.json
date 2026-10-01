@@ -104,6 +104,16 @@
       "y": 255,
       "width": 220,
       "height": 92
+    },
+    {
+      "id": "offline",
+      "label": "Creator offline shell",
+      "detail": "complete build · waiting update",
+      "kind": "host",
+      "x": 40,
+      "y": 260,
+      "width": 210,
+      "height": 80
     }
   ],
   "connections": [
@@ -151,12 +161,17 @@
       "from": "session",
       "to": "capture",
       "label": "capture status"
+    },
+    {
+      "from": "creator",
+      "to": "offline",
+      "label": "verified build cache"
     }
   ],
   "cards": [
     {
       "title": "Product identity",
-      "body": "Product CMake 注入 Product Build、Platform version 与精确 Host triple。"
+      "body": "Product CMake 注入 Product Build、Platform version 与精确 Host triple。 Creator owns a complete verified shell cache. Publish readiness only after manifest, immutable assets and isolation headers pass; partial updates preserve the prior build. Activation waits for existing documents to close. Project assets remain Facade-owned OPFS. Offline inventory activation requires coordinated Creator Host MAJOR settlement."
     },
     {
       "title": "Shared runtime",
