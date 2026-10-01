@@ -69,15 +69,16 @@ std::int16_t wav_sample(const std::vector<std::byte>& bytes, std::size_t index) 
 
 // One mono non-neutral voice rendered live and offline agrees within one
 // PCM16 step on every frame of both channels: both run the shared kernel.
-void mono_kernel_voice_matches_between_realtime_and_offline() {
+// The offline event and the replay press both last one beat, 24 000 frames,
+// so a looping voice also crosses its gate release at the same frame.
+void expect_kernel_voice_matches_between_realtime_and_offline(
+    const ResolvedPlayback& playback,
+    std::size_t rendered_frames) {
   std::vector<std::int16_t> pcm(kSourceFrames);
   for (std::size_t frame = 0; frame < pcm.size(); ++frame) {
     pcm[frame] = static_cast<std::int16_t>(
         12'000.0 * std::sin(static_cast<double>(frame) * 0.031));
   }
-  ResolvedPlayback playback{0, kSourceFrames, TriggerMode::one_shot, 0.8F, false};
-  playback.dsp = ResolvedVoiceDsp{
-      0, 0, 300, 40, ResolvedVoiceDsp::kReverse};
 
   // Offline: one event at tick 0 of a one-bar pattern.
   const auto sample = std::make_shared<const PcmSample>(PcmSample{48'000, 1, pcm});
@@ -116,8 +117,8 @@ void mono_kernel_voice_matches_between_realtime_and_offline() {
                  PadControlOrigin::performance_replay, 24'000,
                  PreparedSampleMaterialView{pcm.data(), kSourceFrames, 1}}) ==
              EnqueueResult::accepted);
-  std::vector<float> left(kSourceFrames + 512);
-  std::vector<float> right(kSourceFrames + 512);
+  std::vector<float> left(rendered_frames);
+  std::vector<float> right(rendered_frames);
   for (std::size_t done = 0; done < left.size(); done += 128) {
     const auto frames =
         static_cast<std::uint32_t>(std::min<std::size_t>(128, left.size() - done));
@@ -136,11 +137,43 @@ void mono_kernel_voice_matches_between_realtime_and_offline() {
   LMDJ_CHECK(compared > 1'000);
 }
 
+ResolvedPlayback kernel_playback(TriggerMode mode, ResolvedVoiceDsp dsp) {
+  ResolvedPlayback playback{0, kSourceFrames, mode, 0.8F, false};
+  playback.dsp = dsp;
+  return playback;
+}
+
+void reversed_pitched_one_shot_matches_between_realtime_and_offline() {
+  expect_kernel_voice_matches_between_realtime_and_offline(
+      kernel_playback(TriggerMode::one_shot,
+                      ResolvedVoiceDsp{0, 0, 300, 40, ResolvedVoiceDsp::kReverse}),
+      kSourceFrames + 512);
+}
+
+// Many passes of a crossfaded forward loop, then the gate release tail.
+void crossfaded_loop_and_release_match_between_realtime_and_offline() {
+  expect_kernel_voice_matches_between_realtime_and_offline(
+      kernel_playback(TriggerMode::loop_gate,
+                      ResolvedVoiceDsp{500, 200, -700, -30, 0}),
+      24'000 + 512);
+}
+
+void reversed_ping_pong_loop_matches_between_realtime_and_offline() {
+  expect_kernel_voice_matches_between_realtime_and_offline(
+      kernel_playback(
+          TriggerMode::loop_gate,
+          ResolvedVoiceDsp{300, 0, 500, 0,
+                           ResolvedVoiceDsp::kReverse | ResolvedVoiceDsp::kPingPong}),
+      24'000 + 512);
+}
+
 }  // namespace
 
 int main() {
   try {
-    mono_kernel_voice_matches_between_realtime_and_offline();
+    reversed_pitched_one_shot_matches_between_realtime_and_offline();
+    crossfaded_loop_and_release_match_between_realtime_and_offline();
+    reversed_ping_pong_loop_matches_between_realtime_and_offline();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

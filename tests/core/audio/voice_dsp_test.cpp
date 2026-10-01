@@ -159,6 +159,22 @@ void later_loop_passes_resume_at_the_loop_point() {
   LMDJ_CHECK(output == expected);
 }
 
+// Reverse mirrors the whole trimmed region, loop point included: the first
+// pass starts at the mirror of the trim start, and later passes wrap to the
+// mirror of the loop point, so a null loop point (offset 0) still loops the
+// whole region.
+void reverse_mirrors_the_loop_point_with_the_region() {
+  const auto source = index_source(32);
+  const auto output = render(
+      prepared(playback(0, 8, TriggerMode::loop_toggle,
+                        {2, 0, 0, 0, ResolvedVoiceDsp::kReverse}),
+               source.size()),
+      source, 20);
+  const std::vector<float> expected{
+      7, 6, 5, 4, 3, 2, 1, 0, 5, 4, 3, 2, 1, 0, 5, 4, 3, 2, 1, 0};
+  LMDJ_CHECK(output == expected);
+}
+
 void crossfade_gains_hold_constant_power() {
   for (int step = 0; step <= 1000; ++step) {
     const float t = static_cast<float>(step) / 1000.0F;
@@ -185,6 +201,27 @@ void crossfade_overlaps_the_loop_head_and_shortens_the_cycle() {
   // The next pass resumes after the blended head, so the cycle is 12 frames.
   LMDJ_CHECK(output[16] == source[4]);
   LMDJ_CHECK(output[28] == source[4]);
+}
+
+// Every frame of the window is tail * sin((1 - t) pi / 2) + head * sin(t pi / 2),
+// with distinct non-zero tail and head values so neither gain can hide.
+void crossfade_blends_tail_and_head_with_complementary_gains() {
+  std::vector<float> source(16);
+  for (std::size_t index = 0; index < source.size(); ++index) {
+    source[index] = static_cast<float>(index + 1);
+  }
+  const auto output = render(
+      prepared(playback(0, 16, TriggerMode::loop_gate, {0, 4, 0, 0, 0}),
+               source.size()),
+      source, 16);
+  for (std::size_t into = 0; into < 4; ++into) {
+    const float t = static_cast<float>(into) / 4.0F;
+    const float expected =
+        source[12 + into] * lmdj::audio::detail::quarter_sine(1.0F - t) +
+        source[into] * lmdj::audio::detail::quarter_sine(t);
+    LMDJ_CHECK(std::abs(output[12 + into] - expected) < 1e-5F);
+  }
+  LMDJ_CHECK(output[12] == source[12]);
 }
 
 void hard_pan_silences_the_far_side_exactly() {
@@ -244,8 +281,10 @@ int main() {
     hermite_is_exact_on_frames_and_linear_on_a_ramp();
     ping_pong_reflects_without_repeating_a_boundary_frame();
     later_loop_passes_resume_at_the_loop_point();
+    reverse_mirrors_the_loop_point_with_the_region();
     crossfade_gains_hold_constant_power();
     crossfade_overlaps_the_loop_head_and_shortens_the_cycle();
+    crossfade_blends_tail_and_head_with_complementary_gains();
     hard_pan_silences_the_far_side_exactly();
     pitched_voice_fades_over_its_last_96_output_frames();
     reversed_voice_publishes_descending_source_frames();
