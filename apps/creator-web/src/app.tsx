@@ -13,6 +13,7 @@ import {
   appendDiagnostic, diagnosticRecord, DiagnosticsLog, type DiagnosticRecord,
 } from "./components/diagnostics_log";
 import {ErrorPanel} from "./components/error_panel";
+import {RecoveryPrompt, type RecoveryCounts} from "./components/recovery_prompt";
 import {
   TakenOverPanel,
   TakeoverPending,
@@ -87,6 +88,7 @@ import type {
   LocalProjectSummary,
   RuntimeSessionFactory,
   TypedRuntimeError,
+  SequenceRecoveryCandidate,
 } from "./runtime/runtime_types";
 import {
   creatorReducer,
@@ -117,6 +119,7 @@ import {
 import {
   createPerformController,
   type PerformController,
+  type PerformanceRecoverySummary,
 } from "./state/perform_state";
 import type {CapturePhase} from "./state/capture_state";
 
@@ -1226,6 +1229,103 @@ function Workspace({
     URL.revokeObjectURL(url);
   };
 
+  // #1680: each time a Project opens in a Runtime Session, ask once about
+  // recordings an earlier owner left unfinished. The pair, not the revision,
+  // identifies an open, so in-session changes never ask again.
+  const recoveryOfferFor = useRef<Readonly<{session: unknown; projectId: string}> | null>(null);
+  const [recoveryOffer, setRecoveryOffer] = useState<Readonly<{
+    projectId: string;
+    sequence: readonly SequenceRecoveryCandidate[];
+    performance: readonly PerformanceRecoverySummary[];
+  }> | null>(null);
+  const openProjectId = runtimePhase === "ready" && state.project.phase === "ready"
+    ? state.project.current?.projectId ?? null
+    : null;
+  useEffect(() => {
+    if (session === undefined || openProjectId === null) return;
+    const last = recoveryOfferFor.current;
+    if (last !== null && last.session === session && last.projectId === openProjectId) return;
+    const owner = Object.freeze({session, projectId: openProjectId});
+    recoveryOfferFor.current = owner;
+    setRecoveryOffer(null);
+    void listInterruptedRecordings(openProjectId).then(({sequence, performance}) => {
+      if (recoveryOfferFor.current !== owner) return;
+      if (sequence.length + performance.length > 0) {
+        setRecoveryOffer(Object.freeze({projectId: openProjectId, sequence, performance}));
+      }
+    });
+    // Effects keep no cancellation: the owner check discards a stale reply,
+    // and a phase change within the same open must not lose the offer.
+  }, [session, openProjectId]);
+
+  const listInterruptedRecordings = async (projectId: string) => {
+    const [sequence, performance] = await Promise.all([
+      isSequenceSession(session)
+        ? session.listSequenceRecovery(projectId).catch((error: unknown) => {
+            reportFailure("List interrupted Sequence recordings", error);
+            return [] as readonly SequenceRecoveryCandidate[];
+          })
+        : Promise.resolve([] as readonly SequenceRecoveryCandidate[]),
+      isPerformanceSession(session)
+        ? (session.listPerformanceRecovery() as Promise<readonly PerformanceRecoverySummary[]>)
+          .catch((error: unknown) => {
+            reportFailure("List interrupted Performance recordings", error);
+            return [] as readonly PerformanceRecoverySummary[];
+          })
+        : Promise.resolve([] as readonly PerformanceRecoverySummary[]),
+    ]);
+    return {sequence, performance};
+  };
+
+  const remainingRecordings = async (projectId: string): Promise<RecoveryCounts> => {
+    const {sequence, performance} = await listInterruptedRecordings(projectId);
+    await refreshSequence();
+    await performControllerRef.current?.refreshRecovery().catch(() => {});
+    return {sequence: sequence.length, performance: performance.length};
+  };
+
+  // Keep restores each recording to where it was made; one the Core refuses
+  // stays in its list and is counted as remaining.
+  const keepInterruptedRecordings = async (): Promise<RecoveryCounts> => {
+    const offer = recoveryOffer;
+    if (offer === null) return {sequence: 0, performance: 0};
+    for (const candidate of offer.sequence) {
+      if (!isSequenceSession(session)) break;
+      try {
+        const status = await session.applySequenceRecovery({
+          sessionId: candidate.sessionId,
+          destinationPatternId: null,
+        });
+        if (status.committedRevision !== null) {
+          dispatch({type: "project-revision-updated", revision: status.committedRevision});
+        }
+      } catch (error) {
+        reportFailure("Keep interrupted Sequence recording", error);
+      }
+    }
+    for (const candidate of offer.performance) {
+      await performControllerRef.current?.applyRecovery(candidate.sessionId);
+    }
+    return remainingRecordings(offer.projectId);
+  };
+
+  const discardInterruptedRecordings = async (): Promise<RecoveryCounts> => {
+    const offer = recoveryOffer;
+    if (offer === null) return {sequence: 0, performance: 0};
+    for (const candidate of offer.sequence) {
+      if (!isSequenceSession(session)) break;
+      try {
+        await session.discardSequenceRecovery(candidate.sessionId);
+      } catch (error) {
+        reportFailure("Discard interrupted Sequence recording", error);
+      }
+    }
+    for (const candidate of offer.performance) {
+      await performControllerRef.current?.discardRecovery(candidate.sessionId);
+    }
+    return remainingRecordings(offer.projectId);
+  };
+
   const sequenceFailure = (operation: string, error: unknown) => {
     dispatchSequence({type: "failed", errorCode: reportFailure(operation, error)});
   };
@@ -1991,6 +2091,23 @@ function Workspace({
                 />
               </div>
               ) : null}
+              {recoveryOffer !== null &&
+                recoveryOffer.projectId === state.project.current?.projectId && (
+                <RecoveryPrompt
+                  key={recoveryOffer.projectId}
+                  counts={{
+                    sequence: recoveryOffer.sequence.length,
+                    performance: recoveryOffer.performance.length,
+                  }}
+                  onKeep={keepInterruptedRecordings}
+                  onDiscard={discardInterruptedRecordings}
+                  onOpen={(mode) => {
+                    setActiveMode(mode);
+                    setRecoveryOffer(null);
+                  }}
+                  onClose={() => setRecoveryOffer(null)}
+                />
+              )}
               <DiagnosticsLog records={diagnostics} />
               <ErrorPanel
                 code={state.runtime.errorCode}
