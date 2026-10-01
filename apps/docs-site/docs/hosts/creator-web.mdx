@@ -271,10 +271,15 @@ Performance recording while playback may continue. Interrupted and capped takes
 require Save or Discard; leading digital zero alone is trimmed. Saved Performance
 replay remains available; internal playback capture replaces manual resample frames.
 
+麦克风采集在实际 Pad 按下时独立尝试唤醒自己的 AudioContext，不因播放音频暂停而
+等待其激活。是否允许启动由浏览器决定；拒绝或尚未完成的启动在松手、取消时完整
+释放资源，不把零帧录音提交为素材。内部回放采集仍等待播放 Context 可用。这些源路径
+不代替 Safari、iPad 或实体麦克风验收。
+
 Capture 通过 Continue in Sequence 继续录音时，Pattern 播放仍可运行；停止录音后的裁剪/保存对话框由 Host 显示，不要求同时存在 Pattern 录音 journal。
 
 Capture 持有录音或待处理素材时，默认素材的网络下载可继续，但其 Project 安装/发布等待录音提交或丢弃，避免背景初始化改变录音目标的 revision。
 
 ## 首次触屏唤醒
 
-首次触屏启动音频遵循浏览器用户激活事件：音频尚未启动时，touch／pen Pad 按下保留本次输入，在同一指针的真实 pointerup 中唤醒；在 Pad 外松手也沿用原手势身份。取消、失焦或销毁不唤醒、不迟发输入。一个手指仍按住 Pad 时，不阻塞另一个先松手的 Pad。首个 one-shot 松手后仍只演奏一次，已松手的 gate／loop gate 不迟发；音频已经运行时，触屏仍按下即演奏。该源路径和自动化验证不替代 iPad／Safari 实机听感验收。
+首次触屏启动播放音频遵循浏览器用户激活事件：音频尚未启动时，touch／pen Pad 按下保留本次输入，在同一指针的真实 pointerup 中唤醒；在 Pad 外松手也沿用原手势身份。取消、失焦或销毁不唤醒、不迟发输入。一个合法主指针仍按住时，不阻塞另一种指针（如 pen）先松手的 Pad；非主指针不准入。首个 one-shot 松手后仍只演奏一次，已松手的 gate／loop gate 不迟发；音频已经运行时，触屏仍按下即演奏。该源路径和自动化验证不替代 iPad／Safari 实机听感验收。

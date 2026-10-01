@@ -17,8 +17,7 @@ export function createPadCaptureSources() {
     },
     start(source: PadCaptureSource, session: CreatorPerformanceRuntimeSession | null,
       activation: Promise<boolean> | null, batch: (channels: Float32Array[]) => void,
-      failed: (message: string) => void, signal?: AbortSignal,
-      waitForActivation = false): Promise<PadCaptureHandle> {
+      failed: (message: string) => void, signal?: AbortSignal): Promise<PadCaptureHandle> {
       return (async () => {
         let context: AudioContext | null = null;
         let controller: CaptureController | null = null;
@@ -41,9 +40,10 @@ export function createPadCaptureSources() {
         signal?.addEventListener("abort", onAbort, {once: true});
         try {
           if (signal?.aborted) throw new DOMException("Recording cancelled.", "AbortError");
-          // Cold touch waits for its owned, legal release activation. No second
-          // microphone context is created under a non-activating pointerdown.
-          if ((source === "master" || waitForActivation) && activation !== null &&
+          // Microphone capture attempts its own native resume synchronously;
+          // the browser decides whether it may start. Only master capture
+          // depends on the playback Context becoming available.
+          if (source === "master" && activation !== null &&
               !await Promise.race([activation, aborted])) {
             throw new Error("Playback audio is unavailable. Try again.");
           }

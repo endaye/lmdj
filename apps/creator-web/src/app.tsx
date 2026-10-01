@@ -298,7 +298,6 @@ function Workspace({
   const [padCaptureState, setPadCaptureState] = useState<PadCaptureState | null>(null);
   const padCapture = useRef<ReturnType<typeof createPadCapture> | null>(null);
   const padCaptureWake = useRef<Promise<boolean> | null>(null);
-  const padCaptureWaitForActivation = useRef(false);
   const capturePhaseRef = useRef(capturePhase);
   capturePhaseRef.current = capturePhase;
   const [armedCaptureSlot, setArmedCaptureSlot] = useState<number | null>(null);
@@ -534,8 +533,7 @@ function Workspace({
     const controller = createPadCapture({
       ...sources,
       start: (chosen, batch, failed, signal) => sources.start(chosen,
-        isPerformanceSession(session) ? session : null, padCaptureWake.current, batch, failed, signal,
-        padCaptureWaitForActivation.current),
+        isPerformanceSession(session) ? session : null, padCaptureWake.current, batch, failed, signal),
       canStart: target => {
         const current = stateRef.current;
         return sessionRef.current === session && current.project.phase === "ready" &&
@@ -605,13 +603,12 @@ function Workspace({
       },
       activateAudioForGesture: (event: {isTrusted: boolean}) => gestureActivation.current(event),
       onEmptyPadPress: (slot: number, key: object, source: import("./runtime/runtime_types").RuntimeTriggerSource,
-        activation: Promise<boolean> | null, waitForActivation: boolean) => {
+        activation: Promise<boolean> | null) => {
         if (padCapture.current === null) return false;
         if (source === "midi") return true;
         const project = stateRef.current.project.current;
         if (project !== null) {
           padCaptureWake.current = activation;
-          padCaptureWaitForActivation.current = waitForActivation;
           padCapture.current.press({projectId: project.projectId, slot, revision: project.revision}, key);
         }
         return true;
