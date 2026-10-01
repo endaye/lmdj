@@ -1,3 +1,4 @@
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 
@@ -151,10 +152,11 @@ async function transportRequests(page) {
 // proves admission on its own. One-shot Pads send no release operation, so
 // only presses are gated here.
 async function awaitAdmittedPresses(page, count) {
+  const wakeAdmissions = await page.evaluate(() => window.__wakeAudioAdmissionCount ?? 0);
   await expect.poll(() => page.evaluate(() =>
     (window.__patternTransportTriggerProof ?? [])
       .filter(({payload, ok}) => ok === true && payload?.velocity !== undefined)
-      .length), {timeout: 30_000}).toBe(count);
+      .length), {timeout: 30_000}).toBe(count + wakeAdmissions);
 }
 
 async function enterSequenceAndPlay(page) {
@@ -163,7 +165,7 @@ async function enterSequenceAndPlay(page) {
   // "Sequence editor"; that region is the destination, whichever shell
   // mounts it.
   await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state"))
     .toHaveText("Audio running", {timeout: 30_000});
 }
@@ -289,12 +291,11 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   const authored = await inspectTruth(page);
   expect(authored.revision).toBe(imported.revision + 1);
 
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  // The first Record click must wake audio and start this same intent once.
+  await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
+  await recordKey(page).click();
   await expect(page.getByTestId("audio-state"))
     .toHaveText("Audio running", {timeout: 30_000});
-
-  // stopped → Record: start at the Pattern beginning, playing and recording.
-  await recordKey(page).click();
   await transportStatus(page, "recording");
   await page.keyboard.press("KeyQ");
   await awaitAdmittedPresses(page, 1);
@@ -480,7 +481,7 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
     .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100, duration_tick: 240});
 
   // A fresh recording on the same session opens a new journal and commits.
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state"))
     .toHaveText("Audio running", {timeout: 30_000});
   await recordKey(page).click();

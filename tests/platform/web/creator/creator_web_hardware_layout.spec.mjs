@@ -1,3 +1,4 @@
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {expect, test} from "@playwright/test";
 import {waitForBootProject, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 
@@ -17,7 +18,7 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   await page.setViewportSize({width: 1440, height: 900});
   await page.goto("/");
   await waitForBootProject(page);
-  await expect(page.getByRole("button", {name: "Activate audio"})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
 
   const consoleBox = rounded(await page.getByTestId("hardware-console").boundingBox());
   const physical = rounded(await page.getByTestId("physical-controls").boundingBox());
@@ -90,7 +91,7 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   await expect(record.locator("svg")).toHaveCount(1);
   await expect(record).toHaveText("");
   const playStop = keys.getByRole("button", {
-    name: "Play/Stop — needs a playable Project and running audio",
+    name: "Play/Stop",
     exact: true,
   });
   await expect(playStop).toHaveClass(/\bhas-icon\b/);
@@ -103,11 +104,11 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
 
   await expect(page.getByTestId("overview-display").locator("button")).toHaveCount(0);
   await expect(page.getByRole("button", {name: "Existing workspace"})).toHaveCount(0);
-  await expect(page.getByRole("button", {name: "Activate audio"})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
 
   await page.setViewportSize({width: 768, height: 600});
-  await page.getByRole("button", {name: "Activate audio"}).scrollIntoViewIfNeeded();
-  await expect(page.getByRole("button", {name: "Activate audio"})).toBeVisible();
+  await page.getByTestId("touch-workspace").scrollIntoViewIfNeeded();
+  await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
   await expect(page.getByTestId("overview-display").locator("button")).toHaveCount(0);
   await expect(page.getByTestId("creator-phase")).toHaveText("ready");
 });
@@ -165,7 +166,7 @@ test("keeps Project Truth across an unapplied draft and a reload", async ({page}
   await waitForBootProject(page);
 
   await importAndOpenProject(page);
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });

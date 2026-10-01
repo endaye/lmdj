@@ -1,3 +1,4 @@
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
@@ -256,7 +257,7 @@ async function importAndActivate(page) {
   await (await chooserPromise).setFiles(bundle);
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });
@@ -273,8 +274,7 @@ async function report(page) {
 // asks only for the one probe Trigger; the Host never parks at
 // `audio-suspended` and therefore never needs an Activate gesture here. The
 // Runtime accepts an Activate gesture only while parked at `audio-suspended`,
-// and the Creator disables "Activate audio" in every other Host state, so the
-// surface never offers a gesture that is guaranteed to be refused. "Audio
+// and musical gestures request activation only while parked there. "Audio
 // suspended" is published as soon as the Host reaches `interrupted`, which is
 // where the interruption starts; wait for the guaranteed recovery instead.
 async function recoverFromLifecycleEdge(page) {
@@ -354,7 +354,7 @@ test("suspend, restart, and reopen clear an active loop toggle before reactivati
   await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });
@@ -365,7 +365,7 @@ test("suspend, restart, and reopen clear an active loop toggle before reactivati
   // with any writer-release PROJECT_BUSY retried as a user would.
   await waitForProjectReopen(page, "00000000", {timeout: OPEN_TRANSITION_TIMEOUT_MS});
   await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });
@@ -456,7 +456,7 @@ test("persisted page lifecycle retains the Project and live input surface", asyn
     value.state,
     value.trigger_admitted_count,
     value.trigger_outcome_count,
-  ]).toEqual(["running", 1, 1]);
+  ]).toEqual(["running", 2, 2]);
   await page.keyboard.up("KeyQ");
 });
 
@@ -509,7 +509,8 @@ test("packaged recovery timeout cleans one generation before automatic replaceme
         window_lifecycle_listeners: 0,
       },
       2: {
-        audio_contexts: 0,
+        // Enable MIDI is now an explicit audio wake gesture.
+        audio_contexts: 1,
         broadcast_channels: initial.generations[1].broadcast_channels,
         midi_listeners: initial.generations[1].midi_listeners,
         window_lifecycle_listeners:
@@ -528,7 +529,7 @@ test("packaged recovery timeout cleans one generation before automatic replaceme
   expect(secondBoundary.before.generations[1].audio_contexts).toBe(0);
   expect(secondBoundary.before.generations[1].broadcast_channels).toBe(0);
 
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: 30_000,
   });
@@ -579,7 +580,7 @@ test.describe("synthetic Web MIDI", () => {
     await expect.poll(async () => {
       const value = await report(page);
       return [value.trigger_admitted_count, value.trigger_outcome_count];
-    }, {timeout: 30_000}).toEqual([16, 16]);
+    }, {timeout: 30_000}).toEqual([17, 17]);
     await page.evaluate(() => {
       window.dispatchEvent(new PageTransitionEvent("pagehide"));
     });
@@ -606,5 +607,5 @@ test("a denied MIDI permission does not mutate Runtime state or Trigger counts",
     value.trigger_admitted_count,
     value.trigger_outcome_count,
     value.trigger_rejected_count,
-  ]).toEqual(["running", 0, 0, 0]);
+  ]).toEqual(["running", 1, 1, 0]);
 });
