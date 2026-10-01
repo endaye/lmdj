@@ -1037,6 +1037,38 @@ test("Pattern history keeps the Project open when its inventory anchor changes",
   noErrors();
 });
 
+test("Pad Delete commits while audio is inactive after a reopen", async ({page, browserName}) => {
+  // #1724: Delete used to require a Runtime stop that is refused unless audio
+  // runs, so a freshly reopened Project could not delete a Pad.
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  const noErrors = recordPageErrors(page);
+  await page.goto("/index.html");
+  await waitForBootProject(page);
+  await activateAudio(page);
+  await chooseSampleFile(page, "Add Sample to Pad A1", "inactive-delete.wav", pcm16Wav({frames: 4800}));
+  await commitLongSourceSelection(page);
+  await expectProjectRevision(page, 1);
+  const before = (await rawRequest(page, "project.inspect", {})).result.project;
+  expect(before.banks[0].pads[0].asset_id).not.toBeNull();
+
+  await page.reload();
+  await waitForProjectReopen(page, before.project_id.slice(0, 8));
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
+  await enterSampleEditor(page);
+  await expect(page.getByRole("button", {name: "Delete Pad A1", exact: true})).toBeEnabled();
+  await page.getByRole("button", {name: "Delete Pad A1", exact: true}).click();
+  await expectProjectRevision(page, 2);
+  await expect(page.getByRole("button", {name: "Pad A1 — empty — Key Q", exact: true})).toBeVisible();
+  await expect(page.getByText("Sample operation is unavailable")).toHaveCount(0);
+  const deleted = (await rawRequest(page, "project.inspect", {})).result.project;
+  expect(deleted.banks[0].pads[0].asset_id).toBeNull();
+  expect(deleted.patterns).toEqual(before.patterns);
+  expect(deleted.assets).toEqual(before.assets);
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
+  noErrors();
+});
+
 test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and reopen", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(300_000);
