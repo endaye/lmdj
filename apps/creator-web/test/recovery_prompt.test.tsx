@@ -116,3 +116,8 @@ test("Decide later closes without keeping or discarding", async () => {
   expect(handlers.onKeep).not.toHaveBeenCalled();
   expect(handlers.onDiscard).not.toHaveBeenCalled();
 });
+
+test("offers no More options when nothing is waiting", () => {
+  renderPrompt({sequence: 0, performance: 0});
+  expect(screen.queryByRole("button", {name: "More options"})).toBeNull();
+});

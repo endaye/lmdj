@@ -2774,6 +2774,66 @@ test("an interrupted Performance take is kept through the Perform controller", a
     .toBeTruthy();
 });
 
+test("a Keep overtaken by a Runtime replacement sends none of its remaining commands", async () => {
+  const first = mutableSampleRuntimeFixture();
+  let hostListener: ((state: RuntimeHostState) => void) | undefined;
+  first.session.subscribeHostState = (listener) => {
+    hostListener = listener;
+    return () => {};
+  };
+  const firstApply = deferred<ReturnType<typeof sequenceStatusStub> & {committedRevision: number}>();
+  const listed = [
+    INTERRUPTED,
+    {...INTERRUPTED, sessionId: "second-interrupted-session"},
+  ];
+  const apply = vi.fn(() => firstApply.promise);
+  const firstSession = Object.assign(first.session, sequenceSessionStubs(), {
+    listSequenceRecovery: async () => [...listed],
+    applySequenceRecovery: apply,
+  });
+  const second = mutableSampleRuntimeFixture();
+  const sessions = [firstSession, interruptedSequenceSession(second).session];
+  let created = 0;
+  render(<App initialState={ready} runtimeFactory={() => sessions[created++]!} />);
+  const region = await interruptedRegion();
+  expect(region.textContent).toContain("2 recordings");
+  await userEvent.click(within(region).getByRole("button", {name: "Keep recording"}));
+  await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+  await act(async () => hostListener?.({
+    state: "restart-required", errorCode: "HOST_RESTART_REQUIRED", errorDetails: {},
+  }));
+  await waitFor(() => expect(created).toBe(2));
+  await act(async () => firstApply.resolve({...sequenceStatusStub(), committedRevision: 4}));
+  await flushAsyncTurns();
+  expect(apply).toHaveBeenCalledTimes(1);
+});
+
+test("Keep reports the remainder the Sequence list was refreshed with", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  // The Core's list changes between reads: the first read after Keep is
+  // empty, and any later read would still show the recording. The reported
+  // remainder must be the read the Sequence list projected.
+  let applied = false;
+  let readsAfterApply = 0;
+  const list = vi.fn(async () => {
+    if (!applied) return [INTERRUPTED];
+    readsAfterApply += 1;
+    return readsAfterApply === 1 ? [] : [INTERRUPTED];
+  });
+  const apply = vi.fn(async () => {
+    applied = true;
+    return {...sequenceStatusStub(), committedRevision: 4};
+  });
+  const {session} = interruptedSequenceSession(fixture, {
+    listSequenceRecovery: list, applySequenceRecovery: apply,
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  await userEvent.click(within(region).getByRole("button", {name: "Keep recording"}));
+  expect(await within(region).findByText("The interrupted recording is back in this Project."))
+    .toBeTruthy();
+});
+
 test("a replacement Runtime Session asks again for the same Project", async () => {
   const first = mutableSampleRuntimeFixture();
   const second = mutableSampleRuntimeFixture();

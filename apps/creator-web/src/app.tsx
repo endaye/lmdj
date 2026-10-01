@@ -1234,6 +1234,7 @@ function Workspace({
   // identifies an open, so in-session changes never ask again.
   const recoveryOfferFor = useRef<Readonly<{session: unknown; projectId: string}> | null>(null);
   const [recoveryOffer, setRecoveryOffer] = useState<Readonly<{
+    owner: Readonly<{session: unknown; projectId: string}>;
     projectId: string;
     sequence: readonly SequenceRecoveryCandidate[];
     performance: readonly PerformanceRecoverySummary[];
@@ -1251,7 +1252,7 @@ function Workspace({
     void listInterruptedRecordings(openProjectId).then(({sequence, performance}) => {
       if (recoveryOfferFor.current !== owner) return;
       if (sequence.length + performance.length > 0) {
-        setRecoveryOffer(Object.freeze({projectId: openProjectId, sequence, performance}));
+        setRecoveryOffer(Object.freeze({owner, projectId: openProjectId, sequence, performance}));
       }
     });
     // Effects keep no cancellation: the owner check discards a stale reply,
@@ -1277,12 +1278,29 @@ function Workspace({
     return {sequence, performance};
   };
 
+  // The remainder is read from the same refresh that the Sequence and
+  // Perform lists project, so the counts the prompt reports are what the
+  // Open buttons then show. A list that could not be refreshed is read once.
   const remainingRecordings = async (projectId: string): Promise<RecoveryCounts> => {
-    const {sequence, performance} = await listInterruptedRecordings(projectId);
-    await refreshSequence();
-    await performControllerRef.current?.refreshRecovery().catch(() => {});
-    return {sequence: sequence.length, performance: performance.length};
+    const sequence = await refreshSequence();
+    const controller = performControllerRef.current;
+    const performanceRefreshed = controller === null ? false
+      : await controller.refreshRecovery().then(() => true, () => false);
+    const fallback = sequence === null || !performanceRefreshed
+      ? await listInterruptedRecordings(projectId)
+      : null;
+    return {
+      sequence: (sequence ?? fallback!.sequence).length,
+      performance: performanceRefreshed
+        ? controller!.getState().recovery.length
+        : fallback!.performance.length,
+    };
   };
+
+  // An offer acts only while its (Session, Project) open is current, so a
+  // Runtime replacement mid-Keep never sends the old list's commands.
+  const offerIsCurrent = (offer: NonNullable<typeof recoveryOffer>) =>
+    recoveryOfferFor.current === offer.owner;
 
   // Keep restores each recording to where it was made; one the Core refuses
   // stays in its list and is counted as remaining.
@@ -1290,7 +1308,7 @@ function Workspace({
     const offer = recoveryOffer;
     if (offer === null) return {sequence: 0, performance: 0};
     for (const candidate of offer.sequence) {
-      if (!isSequenceSession(session)) break;
+      if (!isSequenceSession(session) || !offerIsCurrent(offer)) break;
       try {
         const status = await session.applySequenceRecovery({
           sessionId: candidate.sessionId,
@@ -1304,7 +1322,12 @@ function Workspace({
       }
     }
     for (const candidate of offer.performance) {
-      await performControllerRef.current?.applyRecovery(candidate.sessionId);
+      if (!offerIsCurrent(offer)) break;
+      try {
+        await performControllerRef.current?.applyRecovery(candidate.sessionId);
+      } catch (error) {
+        reportFailure("Keep interrupted Performance recording", error);
+      }
     }
     return remainingRecordings(offer.projectId);
   };
@@ -1313,7 +1336,7 @@ function Workspace({
     const offer = recoveryOffer;
     if (offer === null) return {sequence: 0, performance: 0};
     for (const candidate of offer.sequence) {
-      if (!isSequenceSession(session)) break;
+      if (!isSequenceSession(session) || !offerIsCurrent(offer)) break;
       try {
         await session.discardSequenceRecovery(candidate.sessionId);
       } catch (error) {
@@ -1321,7 +1344,12 @@ function Workspace({
       }
     }
     for (const candidate of offer.performance) {
-      await performControllerRef.current?.discardRecovery(candidate.sessionId);
+      if (!offerIsCurrent(offer)) break;
+      try {
+        await performControllerRef.current?.discardRecovery(candidate.sessionId);
+      } catch (error) {
+        reportFailure("Discard interrupted Performance recording", error);
+      }
     }
     return remainingRecordings(offer.projectId);
   };
@@ -1330,9 +1358,10 @@ function Workspace({
     dispatchSequence({type: "failed", errorCode: reportFailure(operation, error)});
   };
 
-  const refreshSequence = async () => {
+  // Resolves the recovery list it projected, or null when none was read.
+  const refreshSequence = async (): Promise<readonly SequenceRecoveryCandidate[] | null> => {
     const project = stateRef.current.project.current;
-    if (!isSequenceSession(session) || project === null) return;
+    if (!isSequenceSession(session) || project === null) return null;
     try {
       const authority = await refreshSequenceJourney(session, project.projectId);
       // The transport commits through its own coordinator, so the legacy
@@ -1348,7 +1377,7 @@ function Workspace({
           ? inspected.project_revision
           : null;
       // A refresh that outlived its Project describes the previous one.
-      if (stateRef.current.project.current?.projectId !== project.projectId) return;
+      if (stateRef.current.project.current?.projectId !== project.projectId) return null;
       const committedRevision = Math.max(
         authority.status.expectedRevision,
         inspectedRevision ?? 0,
@@ -1383,8 +1412,10 @@ function Workspace({
         }
       }
       dispatchSequence({type: "recovery", candidates: authority.recovery});
+      return authority.recovery;
     } catch (error) {
       sequenceFailure("Refresh Sequence authority", error);
+      return null;
     }
   };
 

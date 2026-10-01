@@ -67,9 +67,11 @@ export function RecoveryPrompt({counts, onKeep, onDiscard, onOpen, onClose}: Rec
         <button type="button" onClick={() => setPhase({kind: "confirm-discard"})}>
           Discard…
         </button>
-        <button type="button" onClick={() => onOpen(counts.sequence > 0 ? "sequence" : "perform")}>
-          More options
-        </button>
+        {total > 0 && (
+          <button type="button" onClick={() => onOpen(counts.sequence > 0 ? "sequence" : "perform")}>
+            More options
+          </button>
+        )}
         <button type="button" onClick={onClose}>Decide later</button>
       </div>
     </>;
