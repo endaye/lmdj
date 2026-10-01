@@ -205,6 +205,8 @@ Canonical policy: `docs/governance/version-management.md`. All targets below are
 
 Each allocating PR writes exactly one column of the table below. Each Build is proved unoccupied separately, at that PR's own tip.
 
+**Revised 2026-10-01.** The table below is the original plan from `1.0.66.0`. #1699 and the M2 train consumed its predicted identities. The PR 4 column was settled as PR 4a at Product Build `2.0.71.0`, on top of the bumps #1699 had already taken: authoring-domain `4.3.0`, project-io `6.0.0` (MAJOR), project-cooker `2.0.0` (MAJOR), audio-runtime `5.1.0`, application-facade `6.4.0`, web-runtime-platform `5.5.0`, creator-web `4.7.0` and core-mcp `3.5.0`. core-cli, native-host, cardputer-host and web-runtime-host each took a PATCH. `lmdj.project.v5` stays `5.1.0` until PR 4b. Re-derive the PR 7 column from live `origin/main` when it is written.
+
 | Identity | Baseline (`2.0.70.0`) | PR 4 (#1666 settle + 5.2.0 cut) | PR 7 (#1667 settle) | Reason |
 | --- | --- | --- | --- | --- |
 | Product Build | `2.0.70.0` | next free `2.0.*` BUILD | next free `2.0.*` BUILD | Contract and Module identity changes |
@@ -237,7 +239,8 @@ Each allocating PR writes exactly one column of the table below. Each Build is p
 | 1 | `feat/project-v5-playback-parity-cut` | 1 | — |
 | 2 | `feat/sample-playback-parity-core` | 2–8 | relates #1666 |
 | 3 | `feat/sample-playback-parity-creator` | 9–11 | fixes #1666 |
-| 4 | `feat/project-v5-tone-parity-cut` | 12 | — |
+| 4a | `feat/settle-module-versions-2-0-71` | 12 (settle) | — |
+| 4b | `feat/project-v5-tone-parity-cut` | 12 (5.2.0 cut, after #1720) | — |
 | 5 | `feat/sample-tone-parity-core` | 13–16 | relates #1667 |
 | 6 | `feat/sample-tone-parity-creator` | 17–19 | fixes #1667 |
 | 7 | `feat/sample-tone-parity-settle` | 20 | — |
@@ -410,9 +413,14 @@ Branch prefixes are limited to `feat/`, `fix/` and `docs/` (`docs/governance/git
 
 ### Task 12: Settle #1666 and cut `lmdj.project.v5` 5.2.0
 
-**Files:** as Task 1, plus the #1666 module manifests and pins listed in Version Management, `tests/fixtures/contracts/project-v5-tone-parity-{valid,invalid}.json`
+**Revised 2026-10-01 (owner order: settle, then #1720, then #1667).** Task 12 is split:
 
-- [ ] Settle the #1666 Module SemVer.
+- The settle lands alone as PR 4a, `feat/settle-module-versions-2-0-71`, Product Build `2.0.71.0`. It settles every Module identity owed since `2.0.69.0`: #1666's (#1717, #1735) and the concurrent Creator workflow PRs' (#1707, #1708, #1711, #1714, #1716, #1727, #1734). The owner chose MAJOR for project-io (`6.0.0`, the #1699 persistence precedent) and for project-cooker (`2.0.0`, `ResolvedPlayback` lost aggregate initialisation).
+- The `5.2.0` cut moves to PR 4b, opened only after #1720. #1667's Pad fields grow wasm32 `ProjectState` again, so its Web stack budget must be fixed or re-measured first (pitfall `web-project-io-stack-scales-with-project-state`).
+
+**Files (4b):** as Task 1, plus `tests/fixtures/contracts/project-v5-tone-parity-{valid,invalid}.json`
+
+- [x] Settle the #1666 Module SemVer (PR 4a, `2.0.71.0`).
 - [ ] Add the #1667 optional keys to the schema: `attack_ms`, `release_ms`, `tone`, `eq` with `kind`, `freq_hz`, `gain_millidb` and `q_milli`.
 - [ ] Allocate one Product Build and freeze its snapshot as a separate commit.
 
