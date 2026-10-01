@@ -45,9 +45,9 @@ Undo/Redo 恢复创作内容并生成新的递增 revision，不回写旧 revisi
 - **播放与录音。** 只播放时可以编辑：被编辑的若是正在播放的 Pattern，提交后立即原位替换它的 Runtime 视图，播放位置不变、发声中的音不被打断，播放头之后、本圈尚未播放的新音符本圈就能听到（[2026-10-02 勘误](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-02-sequence-grid-live-edit.md)替代原先的"下一小节生效"）；停止时编辑当前 Pattern 同样立即替换，下一次 Play 不会被待生效的发布挡住；编辑不是 Runtime 当前 Pattern 的 Pattern 只改 Project Truth。引擎 Pattern 槽位占满时编辑照常提交（deferred），Runtime 在槽位空出后按 Truth 自动补上原位替换——它与其他编辑一样是已提交的 Truth，界面不单独标记。transport 命令进行中（含待结算的排期发布）时编辑在提交前被拒绝并由 Host 自动重试，不显示为冲突。录音中编辑被禁用并给出原因；冲突或拒绝会从 Truth 恢复投影并显示原因。撤销与重做沿用现有的仅限停止状态的历史控件。
 - **Contract。** 编辑在 `lmdj.project.v5` 现有的 `duration_tick` 与事件键规则内表达，未改 Contract。DICE 概率、Legato/Reverse/Stretch/Repeat/Double Up 与复制粘贴由后续 Task 处理。
 
-## Tempo/Swing 直接调节与节拍器（已确认，尚未实现）
+## Tempo/Swing 直接调节与节拍器
 
-[2026-10-02 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-02-creator-tempo-metronome.md)确定了 #1672 的行为，实施计划见 `docs/plans/2026-10-02-creator-tempo-metronome.md`；当前 Creator 的 Tempo/Swing 仍是数值加显式 Apply，没有节拍器。
+[2026-10-02 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-02-creator-tempo-metronome.md)确定了 #1672 的行为，实施计划见 `docs/plans/2026-10-02-creator-tempo-metronome.md`；直接调节经 #1765 交付，音频时钟与节拍器经 #1672 的 T2–T4 交付，验收台账见 `docs/quality/2026-10-02-creator-tempo-metronome-acceptance.md`。
 
 - **直接调节。** 拖动只预览、手势结束提交一次；另有 ±1 步进与 Tap Tempo（最近至多 4 个间隔的中位数，夹取 40–240）。一次手势或步进是一条撤销记录，拖回原值不提交。
 - **生效边界。** 停止态立即生效；播放中改 BPM 从下一小节生效；Swing/Quantize 沿用 2026-08-23 决策，录入时烘焙进之后的新事件，不改变已录事件的播放。录音中 Tempo/Swing/Quantize 沿用现有拒绝。
