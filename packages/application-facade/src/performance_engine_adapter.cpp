@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <lmdj/audio/prepared_sample_bank.hpp>
+#include <lmdj/audio/detail/voice_dsp.hpp>
 #include <lmdj/domain/project.hpp>
 #include <lmdj/facade/performance_engine_adapter.hpp>
 
@@ -67,9 +68,7 @@ bool valid_playback(const cooker::ResolvedPlayback& playback,
          playback.end_frame <= frame_count &&
          valid_trigger_mode(playback.trigger_mode) &&
          std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F &&
-         // Replay carries the voice DSP block once the engine renders it; until
-         // then a non-neutral block is refused rather than replayed as neutral.
-         cooker::is_neutral(playback.dsp);
+         audio::detail::voice_dsp_fits(playback, frame_count);
 }
 
 class EnginePerformanceClock final : public PerformanceClock {

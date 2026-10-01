@@ -49,6 +49,18 @@ bool prepare_voice_dsp(
     std::size_t material_frames,
     VoiceDspState& state) noexcept;
 
+// True when a playback's DSP block fits its playback and material. A neutral
+// block always fits: it never enters the kernel.
+inline bool voice_dsp_fits(
+    const cooker::ResolvedPlayback& playback,
+    std::size_t material_frames) noexcept {
+  if (cooker::is_neutral(playback.dsp)) {
+    return true;
+  }
+  VoiceDspState state{};
+  return prepare_voice_dsp(playback, material_frames, state);
+}
+
 // Equal-power crossfade gain for t in [0, 1]: sin(t * pi / 2).
 float quarter_sine(float t) noexcept;
 

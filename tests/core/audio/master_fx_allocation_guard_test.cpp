@@ -101,6 +101,10 @@ void check_no_lock(const std::string& source, const char* boundary) {
 
 void lock_syntax_is_confined_to_non_realtime_observers() {
   check_no_lock(read_code("packages/audio-runtime/src/master_fx.cpp"), "Master FX");
+  check_no_lock(read_code("packages/audio-runtime/src/voice_dsp.cpp"), "voice DSP kernel");
+  check_no_lock(
+      read_code("packages/audio-runtime/include/lmdj/audio/detail/voice_dsp.hpp"),
+      "voice DSP kernel header");
   check_no_lock(without_observation_methods(read_code(
       "packages/audio-runtime/src/realtime_engine.cpp")), "Engine writer paths");
   check_no_lock(read_code("packages/audio-runtime/src/realtime_engine_audio_access.hpp"),

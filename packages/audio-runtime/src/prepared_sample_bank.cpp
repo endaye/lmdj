@@ -1,4 +1,5 @@
 #include <lmdj/audio/prepared_sample_bank.hpp>
+#include <lmdj/audio/detail/voice_dsp.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -118,9 +119,7 @@ bool valid_playback(
          playback.end_frame <= frame_count &&
          valid_trigger_mode(playback.trigger_mode) &&
          std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F &&
-         // The voice DSP kernel is not wired yet; until it is, a non-neutral
-         // block is refused rather than rendered as if it were neutral.
-         cooker::is_neutral(playback.dsp);
+         detail::voice_dsp_fits(playback, frame_count);
 }
 
 foundation::Error invalid_timing(std::string message) {

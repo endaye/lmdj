@@ -1,4 +1,5 @@
 #include <lmdj/audio/realtime_engine.hpp>
+#include <lmdj/audio/detail/voice_dsp.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -154,9 +155,7 @@ bool valid_playback(
          playback.end_frame <= frame_count &&
          valid_trigger_mode(playback.trigger_mode) &&
          std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F &&
-         // The voice DSP kernel is not wired yet; until it is, a non-neutral
-         // block is refused rather than rendered as if it were neutral.
-         cooker::is_neutral(playback.dsp);
+         detail::voice_dsp_fits(playback, frame_count);
 }
 
 bool is_default_playback_sentinel(
@@ -170,6 +169,18 @@ bool is_default_playback_sentinel(
 bool is_looping(domain::TriggerMode mode) noexcept {
   return mode == domain::TriggerMode::loop_gate ||
          mode == domain::TriggerMode::loop_toggle;
+}
+
+// Prepares the kernel for a non-neutral voice. A neutral block leaves the
+// state inactive; false means the block does not fit and the event is refused.
+bool prepare_voice_kernel(
+    const cooker::ResolvedPlayback& playback,
+    std::size_t material_frames,
+    bool& active,
+    detail::VoiceDspState& state) noexcept {
+  active = !cooker::is_neutral(playback.dsp);
+  return !active ||
+         detail::prepare_voice_dsp(playback, material_frames, state);
 }
 
 bool valid_material(PreparedSampleMaterialView material) noexcept {
@@ -509,6 +520,13 @@ void RealtimeEngine::start_pattern_voice(
   if (playback.muted) {
     return;
   }
+  bool dsp_active = false;
+  detail::VoiceDspState dsp{};
+  if (!prepare_voice_kernel(
+          playback, event.material.frame_count, dsp_active, dsp)) {
+    audio_invalid_events_ += 1;
+    return;
+  }
   auto voice = std::find_if(
       voices_.begin(), voices_.end(), [](const Voice& candidate) {
         return !candidate.active;
@@ -518,6 +536,8 @@ void RealtimeEngine::start_pattern_voice(
     return;
   }
   *voice = Voice{};
+  voice->dsp_active = dsp_active;
+  voice->dsp = dsp;
   voice->slot = slot;
   voice->material = event.material;
   voice->frame_count = event.material.frame_count;
@@ -594,7 +614,8 @@ void RealtimeEngine::stop_voice(
         voice,
         RuntimeVoiceState::stopped,
         runtime_frame,
-        voice.cursor));
+        voice.dsp_active ? detail::voice_dsp_source_frame(voice.dsp)
+                         : voice.cursor));
   }
   // The voice keeps rendering a kRealtimeRampFrames tail to avoid a step
   // discontinuity; the logical stop (publication) has already happened.
@@ -2140,6 +2161,12 @@ void RealtimeEngine::render(
     if (playback.muted) {
       continue;
     }
+    bool dsp_active = false;
+    detail::VoiceDspState dsp{};
+    if (!prepare_voice_kernel(playback, sample.frame_count, dsp_active, dsp)) {
+      audio_invalid_events_ += 1;
+      continue;
+    }
     if (!replay && voice_state_stream_state_.load(std::memory_order_relaxed) ==
         RuntimeVoiceStateStreamState::corrupted) {
       voice_drops_ += 1;
@@ -2178,6 +2205,8 @@ void RealtimeEngine::render(
         : replay ? kLegacyBankSlot
                  : current_bank_slot_.load(std::memory_order_relaxed);
     *voice = Voice{};
+    voice->dsp_active = dsp_active;
+    voice->dsp = dsp;
     voice->sequence = event.sequence;
     voice->slot = event.slot;
     voice->samples = sample.samples;
@@ -2200,7 +2229,8 @@ void RealtimeEngine::render(
             *voice,
             RuntimeVoiceState::started,
             absolute_start_frame,
-            playback.start_frame)) {
+            dsp_active ? detail::voice_dsp_source_frame(dsp)
+                       : playback.start_frame)) {
       *voice = Voice{};
       voice_drops_ += 1;
       continue;
@@ -2278,7 +2308,11 @@ void RealtimeEngine::render(
                 kRealtimeRampScale;
         --voice.attack_frames_remaining;
       }
-      if (!is_looping(voice.trigger_mode)) {
+      if (voice.dsp_active) {
+        // The kernel's end fade is measured in output frames, so a pitched
+        // voice still fades over its last 96 frames.
+        ramp *= detail::voice_dsp_end_fade(voice.dsp);
+      } else if (!is_looping(voice.trigger_mode)) {
         const auto boundary_remaining = voice.end_frame - voice.cursor;
         if (boundary_remaining < kRealtimeRampFrames) {
           ramp *=
@@ -2291,14 +2325,30 @@ void RealtimeEngine::render(
             static_cast<float>(voice.release_frames_remaining) *
             kRealtimeRampScale;
       }
-      const auto sample = voice.material.interleaved != nullptr
-                              ? prepared_material_sample(
-                                    voice.material, voice.cursor)
-                              : voice.samples[voice.cursor];
-      const auto value = sample * voice.gain * ramp;
-      left[frame] += value;
-      right[frame] += value;
-      ++voice.cursor;
+      if (voice.dsp_active) {
+        const auto& material = voice.material;
+        const float* const samples = voice.samples;
+        const auto value =
+            detail::voice_dsp_read(
+                voice.dsp,
+                [&material, samples](std::uint32_t source_frame) {
+                  return material.interleaved != nullptr
+                             ? prepared_material_sample(material, source_frame)
+                             : samples[source_frame];
+                }) *
+            voice.gain * ramp;
+        left[frame] += value * voice.dsp.pan_left;
+        right[frame] += value * voice.dsp.pan_right;
+      } else {
+        const auto sample = voice.material.interleaved != nullptr
+                                ? prepared_material_sample(
+                                      voice.material, voice.cursor)
+                                : voice.samples[voice.cursor];
+        const auto value = sample * voice.gain * ramp;
+        left[frame] += value;
+        right[frame] += value;
+        ++voice.cursor;
+      }
       if (voice.releasing &&
           --voice.release_frames_remaining == 0) {
         // The release tail ends at exact zero gain; deactivate immediately
@@ -2306,12 +2356,20 @@ void RealtimeEngine::render(
         deactivate_voice(voice);
         continue;
       }
-      if (voice.cursor != voice.end_frame) {
-        continue;
-      }
-      if (is_looping(voice.trigger_mode)) {
-        voice.cursor = voice.start_frame;
-        continue;
+      if (voice.dsp_active) {
+        // The kernel wraps loops and reflects ping-pong itself; it reports
+        // only that a non-looping voice passed its last frame.
+        if (detail::voice_dsp_advance(voice.dsp)) {
+          continue;
+        }
+      } else {
+        if (voice.cursor != voice.end_frame) {
+          continue;
+        }
+        if (is_looping(voice.trigger_mode)) {
+          voice.cursor = voice.start_frame;
+          continue;
+        }
       }
       if (voice.releasing) {
         // The tail reached end_frame: the terminal state was already
@@ -2331,11 +2389,13 @@ void RealtimeEngine::render(
       if (!voice.pattern_voice &&
           !is_audition_bank_slot(voice.bank_slot) &&
           voice.origin == PadControlOrigin::host_input) {
+        // A reversed voice completes at its trim start.
         static_cast<void>(publish_voice_state(
             voice,
             RuntimeVoiceState::completed,
             runtime_frame + 1,
-            voice.end_frame));
+            voice.dsp_active && voice.dsp.reverse ? voice.start_frame
+                                                  : voice.end_frame));
       }
       voice.active = false;
       trim_voice_scan_extent();

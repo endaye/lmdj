@@ -15,6 +15,7 @@
 #include <lmdj/audio/detail/fixed_spsc_queue.hpp>
 #include <lmdj/audio/detail/runtime_spsc_storage.hpp>
 #include <lmdj/audio/detail/value_channel.hpp>
+#include <lmdj/audio/detail/voice_dsp.hpp>
 #include <lmdj/audio/master_fx.hpp>
 #include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/foundation/error.hpp>
@@ -735,6 +736,11 @@ class RealtimeEngine final {
     bool pattern_voice = false;
     PadControlOrigin origin = PadControlOrigin::host_input;
     std::uint8_t pattern_slot = kNoPatternSlot;
+    // A voice whose playback carries a non-neutral DSP block renders through
+    // the shared kernel; every other voice keeps the original path, whose
+    // output is unchanged.
+    bool dsp_active = false;
+    detail::VoiceDspState dsp{};
   };
 
   std::uint64_t legacy_availability_mask() const noexcept;
