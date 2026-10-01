@@ -1650,6 +1650,176 @@ test("activation waits for a resumed AudioWorklet callback within its original b
   assert.equal(activations.length, 3);
 });
 
+test("a slow output-device start does not consume the Control activation budget", async () => {
+  let monotonicTime = 0;
+  let resumed = false;
+  const activations = [];
+  const {context, session} = fixture({
+    now: () => monotonicTime,
+    // The first callback arrives 900 ms after the resume edge.
+    audioCallbackHeartbeat: () => {
+      if (!resumed) return 0;
+      monotonicTime += 300;
+      return monotonicTime >= 900 ? 1 : 0;
+    },
+    send: async (envelope, options) => {
+      if (envelope.operation === "audio.activate") {
+        activations.push(options.deadlineMs);
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  const resume = context.resume;
+  context.resume = async function () {
+    resumed = true;
+    return resume.call(this);
+  };
+  await session.start();
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.deepEqual(activations, [1_000]);
+});
+
+test("an output device that does not start within its bound refuses activation without sealing the Runtime", async () => {
+  let monotonicTime = 0;
+  let deviceStarts = false;
+  let beats = 0;
+  const operations = [];
+  const {context, session} = fixture({
+    now: () => monotonicTime,
+    audioCallbackHeartbeat: () => {
+      monotonicTime += 1_000;
+      return deviceStarts ? ++beats : beats;
+    },
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  operations.length = 0;
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), false);
+  assert.equal(session.diagnostics().state, "audio-suspended");
+  assert.equal(session.diagnostics().error_code, null);
+  assert.equal(session.diagnostics().activation_refusal, "audio_output_start_timeout");
+  assert.equal(operations.includes("audio.activate"), false);
+  assert.equal(context.state, "suspended");
+
+  // The next gesture retries normally once the device starts.
+  deviceStarts = true;
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.equal(session.diagnostics().state, "running");
+  assert.equal(session.diagnostics().activation_refusal, null);
+});
+
+test("a resume that never settles is refused within the device bound and withdrawn", async () => {
+  let monotonicTime = 0;
+  let resumeSettles = false;
+  const operations = [];
+  const {context, session} = fixture({
+    // Time passes only while the attempt waits on its pending resume().
+    now: () => (resumeSettles ? monotonicTime : (monotonicTime += 250)),
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  const resume = context.resume;
+  let suspendsAfterResume = 0;
+  let resumeRequested = false;
+  context.resume = function () {
+    resumeRequested = true;
+    return resumeSettles ? resume.call(this) : new Promise(() => {});
+  };
+  const suspend = context.suspend;
+  context.suspend = function () {
+    if (resumeRequested) suspendsAfterResume += 1;
+    return suspend.call(this);
+  };
+  await session.start();
+  operations.length = 0;
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), false);
+  assert.equal(session.diagnostics().state, "audio-suspended");
+  assert.equal(session.diagnostics().error_code, null);
+  assert.equal(session.diagnostics().activation_refusal, "audio_output_start_timeout");
+  assert.equal(operations.includes("audio.activate"), false);
+  assert.equal(suspendsAfterResume, 1);
+
+  resumeSettles = true;
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.equal(session.diagnostics().state, "running");
+});
+
+test("withdrawing a pending resume leaves a later context suspension observable", async () => {
+  let monotonicTime = 0;
+  let resumeSettles = false;
+  const {context, session} = fixture({
+    now: () => (resumeSettles ? monotonicTime : (monotonicTime += 250)),
+  });
+  const resume = context.resume;
+  context.resume = function () {
+    return resumeSettles ? resume.call(this) : new Promise(() => {});
+  };
+  await session.start();
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), false);
+  resumeSettles = true;
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.equal(session.diagnostics().state, "running");
+
+  // The withdrawal changed no state, so it must not absorb this one.
+  context.dispatchEvent(new Event("statechange"));
+  context.state = "suspended";
+  context.dispatchEvent(new Event("statechange"));
+  await drainTasks();
+  await drainTasks();
+  assert.equal(session.diagnostics().state, "audio-suspended");
+});
+
+test("automatic recovery gives the output device its own bound before the Control budget", async () => {
+  const browserWindow = new EventTarget();
+  let monotonicTime = 0;
+  let heartbeat = 0;
+  let slowDevice = false;
+  let slowSince = null;
+  const activations = [];
+  const runtime = fixture({
+    browserWindow,
+    now: () => monotonicTime,
+    // During recovery the device calls back 1.5 s after the first read.
+    audioCallbackHeartbeat: () => {
+      if (!slowDevice) return ++heartbeat;
+      monotonicTime += 500;
+      slowSince ??= monotonicTime;
+      return monotonicTime - slowSince >= 1_500 ? ++heartbeat : heartbeat;
+    },
+    send: async (envelope, options) => {
+      if (envelope.operation === "audio.activate") {
+        activations.push(options.deadlineMs);
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await runtime.session.start();
+  assert.equal(await runtime.session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  slowDevice = true;
+  activations.length = 0;
+  browserWindow.dispatchEvent(browserEvent("pagehide", {persisted: true}));
+  for (let attempt = 0; attempt < 50; ++attempt) {
+    if (runtime.session.diagnostics().recovery_probe_ready === true) break;
+    await drainTasks();
+  }
+  assert.equal(runtime.session.diagnostics().state, "recovering");
+  assert.equal(runtime.session.diagnostics().recovery_probe_ready, true);
+  assert.deepEqual(activations, [1_000]);
+});
+
 test("foreground loss while recovery waits for heartbeat invalidates the old gesture", async () => {
   const browserDocument = new EventTarget();
   browserDocument.visibilityState = "visible";
