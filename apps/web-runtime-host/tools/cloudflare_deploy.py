@@ -543,26 +543,40 @@ def real_http_verification():
     return verify
 
 
-def release_browser_root(path, tag):
-    """A checkout of the deployed tag's own target, for its browser smoke.
+def release_browser_root(path, tag, revision=None):
+    """A checkout whose deployment spec judges the deployed tag.
 
-    The deployment spec belongs to the release being deployed: main's copy can
-    expect behaviour the release predates. The checkout must sit exactly on
-    the commit the signed tag names, or it is refused.
+    By default the spec is the release's own: the checkout must sit exactly on
+    the commit the signed tag names. A reviewed later spec may be named
+    instead when the release's own spec is stale; that `revision` must descend
+    from the tag's target and be on protected main, and the checkout must sit
+    exactly on it. Anything else is refused.
     """
     path = Path(path)
     if not path.is_absolute() or not path.is_dir():
         raise CloudflareDeployError("the release browser root is not an absolute directory")
 
-    def revision(*arguments):
+    def git_revision(*arguments):
         result = subprocess.run(["git", *arguments], capture_output=True, text=True,
                                 check=False, timeout=60)
         return result.stdout.strip() if result.returncode == 0 else None
 
-    target = revision("-C", str(ROOT), "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}")
-    head = revision("-C", str(path), "rev-parse", "--verify", "HEAD^{commit}")
-    if target is None or head != target:
-        raise CloudflareDeployError("the release browser root is not the deployed tag's target")
+    def ancestor(older, newer):
+        return subprocess.run(["git", "-C", str(ROOT), "merge-base", "--is-ancestor", older, newer],
+                              capture_output=True, check=False, timeout=60).returncode == 0
+
+    target = git_revision("-C", str(ROOT), "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}")
+    head = git_revision("-C", str(path), "rev-parse", "--verify", "HEAD^{commit}")
+    if target is None:
+        raise CloudflareDeployError("the deployed tag's target is unavailable")
+    expected = target if revision in (None, target) else revision
+    if expected != target and not (re.fullmatch(r"[0-9a-f]{40}", expected)
+                                   and ancestor(target, expected)
+                                   and ancestor(expected, "refs/remotes/origin/main")):
+        raise CloudflareDeployError(
+            "the smoke revision is not a protected-main commit descending from the tag's target")
+    if head != expected:
+        raise CloudflareDeployError("the release browser root is not the selected smoke revision")
     return path
 
 
@@ -645,6 +659,9 @@ def main(argv=None):
     parser.add_argument(
         "--browser-root", type=Path,
         help="checkout of the deployed tag's target whose deployment spec runs")
+    parser.add_argument(
+        "--smoke-revision",
+        help="the commit --browser-root sits on, if not the tag's own target")
     arguments = parser.parse_args(argv)
     # Beside this run's own state, not beside the evidence: a failed run must
     # not create anything at or around the output path a caller checks for.
@@ -658,7 +675,8 @@ def main(argv=None):
             # and then shared by nothing.
             raise CloudflareDeployError("state root does not exist")
         browser_root = (ROOT if arguments.browser_root is None
-                        else release_browser_root(arguments.browser_root, arguments.tag))
+                        else release_browser_root(arguments.browser_root, arguments.tag,
+                                                  arguments.smoke_revision))
         written = deploy(
             host=arguments.target, tag=arguments.tag, run_id=arguments.run_id,
             state_root=arguments.state_root, output=arguments.output,
