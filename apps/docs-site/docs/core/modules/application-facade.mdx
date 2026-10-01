@@ -489,3 +489,20 @@ History lives in Core, not Host snapshots. Closing/reopening, project replacemen
 and external ownership changes end it. A restored revision still passes through
 normal projection and immutable Runtime publication; no Runtime Snapshot is saved
 as Project Truth.
+
+
+## Pad deletion
+
+`delete_sample_pad(SampleDeleteRequest)` and `pad.delete` clear one Pad through
+the Store and require a new Runtime projection even though the resulting Pad is
+empty. Recording/recovery and revision admission run before cancellation. Only a
+new successful deletion cancels matching staged imports; an exact retry or refused
+command cannot cancel a later import. `SampleDeleteResult` includes the exact
+cancelled tokens for Host bookkeeping. Other Pads retain import ownership. Cancelled tokens
+cannot commit late. Another Pad's retained import still follows the ordinary
+expected-revision check after deletion; it never silently rebases. Cancellation
+is transient and is not restored by Undo. No Asset garbage collection occurs.
+
+Cancelled staging directories use the same best-effort disposal as ordinary import
+cleanup. A removal failure cannot turn a committed deletion into an unsaved result;
+the directory has no live token and is reclaimed by the existing aging sweep.

@@ -395,9 +395,9 @@ foundation::Result<std::shared_ptr<const RuntimeSnapshot>> cook(
   for (const auto& event : pattern->second.events) {
     const auto sample = pad_samples.find(event.slot);
     if (sample == pad_samples.end()) {
-      return failure(
-          foundation::ErrorCode::missing_asset,
-          "pattern event references an unassigned pad slot");
+      // Empty Pads retain their authored rhythm. They contribute no sound
+      // until assigned again; broken assigned Assets were rejected above.
+      continue;
     }
     events.push_back(ResolvedEvent{
         event.slot,

@@ -695,6 +695,7 @@ test("lifecycle matrix clears fresh loop toggles without duplicate Session stop 
     importAssignSample: async () => { throw new Error("unused"); },
     updatePad: async () => { throw new Error("unused"); },
     resetPad: async () => { throw new Error("unused"); },
+    deletePad: async () => { throw new Error("unused"); },
     setSamplePreview: async () => true,
     clearSamplePreview: async () => true,
     release: async () => true,

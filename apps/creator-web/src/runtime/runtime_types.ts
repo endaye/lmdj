@@ -161,6 +161,11 @@ export interface SampleResetRequest {
   expectedRevision: number;
 }
 
+export interface SampleDeleteRequest {
+  slot: number;
+  expectedRevision: number;
+}
+
 export interface SnapshotPublication {
   projectId: string;
   projectRevision: number;
@@ -265,6 +270,7 @@ export interface CreatorSampleRuntimeSession extends CreatorRuntimeSession {
   ): Promise<SampleCommit>;
   updatePad(request: SampleUpdateRequest): Promise<SampleCommit>;
   resetPad(request: SampleResetRequest): Promise<SampleCommit>;
+  deletePad(request: SampleDeleteRequest): Promise<SampleCommit>;
   setSamplePreview(slot: number, playback: PadPlayback): Promise<boolean>;
   clearSamplePreview(slot: number): Promise<boolean>;
   release(slot: number, source: RuntimeTriggerSource): Promise<boolean>;

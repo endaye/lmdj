@@ -56,3 +56,11 @@ revision and preserve Project identity and Contract. Composition folds internal
 recording commits into one user action. Domain owns no history stack or audio bytes.
 `domain.authoring_delta` verifies round trips, changed-value conflicts, composition,
 object coverage and refusal without partial mutation.
+
+
+## Pad deletion
+
+`DeletePad` clears one Pad binding and restores default playback through the same
+checked command semantics as `AssignPad` with a null Asset. Patterns continue to
+reference the same Pad Slot; Assets and Artifact identities are retained. Invalid
+slots, stale revisions and command collisions keep their existing refusal rules.

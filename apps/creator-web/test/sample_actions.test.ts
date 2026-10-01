@@ -10,6 +10,7 @@ import {
   previewSampleDraftJourney,
   queryWaveformJourney,
   resetSampleJourney,
+  deleteSampleJourney,
   retryPrepareJourney,
   reloadPrepareJourney,
   updateSampleJourney,
@@ -146,6 +147,10 @@ function fixture() {
     },
     async resetPad(request) {
       calls.push({method: "resetPad", arguments: [request]});
+      return published;
+    },
+    async deletePad(request) {
+      calls.push({method: "deletePad", arguments: [request]});
       return published;
     },
     async setSamplePreview(slot, value) {
@@ -894,4 +899,18 @@ describe("reloadPrepareJourney", () => {
     const session = {reloadSnapshot: async () => ({...response, ...patch})};
     await expectProtocolMismatch(reloadPrepareJourney(session, patternId));
   });
+});
+
+
+test("Delete resolves the empty Pad from authoritative inspection", async () => {
+  const {session, calls} = fixture();
+  const empty = {...inspect, projectRevision: 43, assetId: null, metadata: null,
+    waveformCacheIdentity: null, playback: {trimStartFrame: 0, trimEndFrame: null,
+      triggerMode: "one_shot" as const, gainMillidb: 0, muted: false}};
+  session.inspectSample = async () => empty;
+  const result = await deleteSampleJourney(session, {slot: 17, expectedRevision: 42});
+  expect(calls.some(({method, arguments: args}) => method === "deletePad" &&
+    JSON.stringify(args) === JSON.stringify([{slot: 17, expectedRevision: 42}]))).toBe(true);
+  expect(result.kind).toBe("committed");
+  expect(result).toMatchObject({inspect: empty});
 });

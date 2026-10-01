@@ -130,6 +130,14 @@ button:disabled { color: #737b87; }
   background: #171b21;
 }
 .selected-sample button { grid-column: 1 / -1; justify-self: end; }
+.selected-pad-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+}
+.selected-pad-actions small { flex-basis: 100%; }
 .waveform-editor, .sample-controls, .empty-sample {
   border: 1px solid #353b45;
   border-radius: .85rem;

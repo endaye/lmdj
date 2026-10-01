@@ -64,3 +64,12 @@ selection API retains its original restriction. Runtime preparation can subseque
 resample using the existing rules; materialization itself does not resample or write
 Project state. The WAV selection unit test covers both profile rates/channel counts,
 exact PCM intervals, the byte bound and malformed/range refusal.
+
+
+## Empty Pad events
+
+A valid Pattern event targeting an empty Pad remains in Project Truth but is
+omitted from the derived audible events. Reassigning that Pad makes the existing
+rhythm resolve against the new binding. An assigned Pad with a missing Asset,
+corrupt bytes or invalid playback still fails Cook; silence is specific to an
+unassigned Slot, not a fallback for damaged references.

@@ -121,3 +121,14 @@ reports the sound-update failure. The current Pattern transport must be stopped
 before Undo/Redo; controls never implicitly stop recording or playback.
 Native control-runtime tests cover import identity, exact retry, reopen isolation,
 parameters, Pattern restoration, recording refusal and grouped recorded events.
+
+
+## Pad deletion and cancellation
+
+`RuntimeSession.deletePad({slot, expectedRevision})` cancels queued and active
+imports for that slot before entering the shared Project action queue. A cancelled
+Blob read no longer holds that queue; its eventual bytes are discarded. Control
+stops the Pad and clears preview, delegates `pad.delete` to the Facade, removes
+cancelled import handles and publishes the new Bank through exact-generation
+acknowledgement. Responses retain the committed revision separately from Runtime
+publication failure. Other Pad imports and their revision guards remain intact.

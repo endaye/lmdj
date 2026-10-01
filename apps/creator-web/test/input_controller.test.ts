@@ -231,6 +231,7 @@ function sampleFixture(options: SampleFixtureOptions = {}) {
     importAssignSample: async () => { throw new Error("unused"); },
     updatePad: async () => { throw new Error("unused"); },
     resetPad: async () => { throw new Error("unused"); },
+    deletePad: async () => { throw new Error("unused"); },
     setSamplePreview: async (_slot: number, _playback: PadPlayback) => true,
     clearSamplePreview: async () => true,
     async release(slot, source) {

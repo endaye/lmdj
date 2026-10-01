@@ -212,6 +212,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"sample.inspect", OperationKind::query},
       {"sample.quota", OperationKind::query},
       {"sample.reset_pad", OperationKind::command},
+      {"pad.delete", OperationKind::command},
       {"sample.update_pad", OperationKind::command},
       {"sample.waveform", OperationKind::query},
       {"snapshot.cook", OperationKind::query},
@@ -4016,6 +4017,9 @@ struct Application::Impl {
     if (operation == "sample.reset_pad") {
       return sample_reset_pad(request);
     }
+    if (operation == "pad.delete") {
+      return sample_delete_pad(request);
+    }
     if (operation == "asset.import") {
       return asset_import(request);
     }
@@ -5344,6 +5348,55 @@ struct Application::Impl {
         });
   }
 
+  foundation::Result<SampleDeleteResult> delete_sample_pad(
+      const SampleDeleteRequest& request,
+      std::uint64_t* project_revision = nullptr) {
+    if (!valid_host_project_path(request.project_path) ||
+        !domain::is_valid_uuid(request.meta.command_id.value()) ||
+        !domain::is_valid_slot(request.slot)) {
+      return foundation::Result<SampleDeleteResult>::failure(
+          invalid_sample_request("Pad delete request is invalid"));
+    }
+    auto admitted = admit_non_sequence_authoring(request.project_path);
+    if (!admitted.has_value()) {
+      return foundation::Result<SampleDeleteResult>::failure(admitted.error());
+    }
+    // Hold both admissions through commit and cancellation. A claimed import
+    // outside this map cannot cross the same authoring/revision boundary.
+    std::lock_guard sample_lock(sample_mutex);
+    std::vector<std::string> cancelled;
+    for (const auto& [token, state] : sample_imports) {
+      if (state.request.project_path == request.project_path && state.request.slot == request.slot) {
+        cancelled.push_back(token);
+      }
+    }
+    const auto deleted = projects.execute(
+        request.project_path, domain::DeletePad{request.meta, request.slot});
+    if (!deleted.has_value()) {
+      return foundation::Result<SampleDeleteResult>::failure(deleted.error());
+    }
+    if (deleted.value().replayed) {
+      // Retrying an old command cannot cancel an import started afterwards.
+      cancelled.clear();
+    }
+    for (const auto& token : cancelled) {
+      auto found = sample_imports.find(token);
+      found->second.lease.reset();
+      // Match SampleStagingCleanup's best-effort disposal. Truth is committed;
+      // a leftover directory has no token authority and ages out via startup
+      // cleanup. Its removal failure must not report the deletion as unsaved.
+      (void)remove_sample_staging(storage_platform, found->second.directory);
+      sample_imports.erase(found);
+    }
+    if (project_revision != nullptr) {
+      *project_revision = deleted.value().state.revision;
+    }
+    return foundation::Result<SampleDeleteResult>::success(SampleDeleteResult{
+        SampleMutationResult{deleted.value().event.at("revision").get<std::uint64_t>(), true},
+        std::move(cancelled),
+    });
+  }
+
   nlohmann::json sample_inspect(const nlohmann::json& request) const {
     require(
         exact_keys(request, {"operation", "project_path", "slot"}),
@@ -5572,6 +5625,36 @@ struct Application::Impl {
     std::uint64_t project_revision = 0;
     const auto reset = reset_sample_pad(
         SampleResetRequest{
+            absolute_path_field(request, "project_path"),
+            domain::CommandMeta{
+                foundation::CommandId{uuid_field(request, "command_id")},
+                unsigned_field(request, "expected_revision"),
+            },
+            slot_value(request.at("slot")),
+        },
+        &project_revision);
+    if (!reset.has_value()) {
+      return sample_error_envelope(reset.error());
+    }
+    return success_envelope(
+        {{"committed_revision", reset.value().committed_revision},
+         {"runtime_prepare_required", reset.value().runtime_prepare_required}},
+        project_revision);
+  }
+
+  nlohmann::json sample_delete_pad(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation",
+             "project_path",
+             "command_id",
+             "expected_revision",
+             "slot"}),
+        "pad.delete request shape is invalid");
+    std::uint64_t project_revision = 0;
+    const auto reset = delete_sample_pad(
+        SampleDeleteRequest{
             absolute_path_field(request, "project_path"),
             domain::CommandMeta{
                 foundation::CommandId{uuid_field(request, "command_id")},
@@ -9690,6 +9773,19 @@ foundation::Result<SampleMutationResult> Application::reset_sample_pad(
     return impl_->reset_sample_pad(request);
   } catch (...) {
     return foundation::Result<SampleMutationResult>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
+foundation::Result<SampleDeleteResult> Application::delete_sample_pad(
+    const SampleDeleteRequest& request) {
+  try {
+    testing::invoke_api_entry_hook();
+    return impl_->delete_sample_pad(request);
+  } catch (...) {
+    return foundation::Result<SampleDeleteResult>::failure(Error{
         ErrorCode::internal_error,
         "unexpected Application Facade Host API failure",
     });

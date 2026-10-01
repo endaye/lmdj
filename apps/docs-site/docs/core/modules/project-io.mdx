@@ -201,3 +201,13 @@ committed revision/fingerprint or lost writer ownership invalidates the session.
 no-op/fork, retained bytes, reopen, external changes, capacity, Pad clearing and
 Performance draft cancellation/save. The real OPFS authoring-history fixture covers
 import, Undo, scavenging, exact retry, byte-identical Redo and a fresh-page reopen.
+
+
+## Pad deletion and retained history
+
+`ProjectStore::execute(DeletePad)` persists canonical null-`AssignPad` commands,
+so deletion needs no new transaction dialect. A changed binding/playback is one
+`Clear Pad` history action; an already empty/default Pad adds no history action.
+Undo restores the complete Pad contents, Redo clears them again, and both preserve
+Pattern events and retained Asset bytes. Revision and writer/journal admission
+still run at the durable boundary.

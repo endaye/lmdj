@@ -591,6 +591,13 @@ void test_every_public_entry_converts_an_unexpected_throw_to_its_envelope() {
         PadSlotId{0, 0},
     });
   });
+  check_typed("delete_sample_pad", [&] {
+    return application.delete_sample_pad(lmdj::facade::SampleDeleteRequest{
+        project,
+        CommandMeta{CommandId{uuid(788)}, 0},
+        PadSlotId{0, 0},
+    });
+  });
   check_typed("acquire_project_writer", [&] {
     return application.acquire_project_writer(project);
   });
