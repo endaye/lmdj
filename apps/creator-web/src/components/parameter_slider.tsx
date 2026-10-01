@@ -3,9 +3,15 @@ import {useEffect, useRef, useState} from "react";
 import type {PadPlayback} from "../runtime/runtime_types";
 
 // One numeric Pad playback field edited by a range input. A gesture previews
-// every move, commits once on release (pointer up, Arrow key up, or a window
-// pointerup) when the value changed, and cancels on Escape or pointercancel.
+// every move, commits once on release (pointer up, a window pointerup, the
+// release of any key a range input moves on, or blur) when the value changed,
+// and cancels on Escape or pointercancel.
 export type ParameterField = "gainMillidb" | "pitchCents" | "pan";
+
+const MOVE_KEYS = new Set([
+  "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown",
+  "Home", "End", "PageUp", "PageDown",
+]);
 
 interface ParameterSliderProps {
   label: string;
@@ -160,8 +166,9 @@ export function ParameterSlider({
           }
         }}
         onKeyUp={(event) => {
-          if (event.key.startsWith("Arrow")) commit();
+          if (MOVE_KEYS.has(event.key)) commit();
         }}
+        onBlur={commit}
       />
       <output>{format(shown)}</output>
     </label>

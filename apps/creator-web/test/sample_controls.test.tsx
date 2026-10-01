@@ -304,6 +304,32 @@ test("Pitch previews every move and commits once in cents", () => {
   expect(onCommit).toHaveBeenLastCalledWith({...playback, pitchCents: 350});
 });
 
+// Home, End and Page keys move a range input as Arrow keys do, so their
+// release must commit too, or the preview plays a value Truth never gets.
+test.each(["Home", "End", "PageUp", "PageDown"])(
+  "a %s key gesture commits on release",
+  (key) => {
+    const {onPreview, onCommit} = renderControls();
+    const pitch = screen.getByRole("slider", {name: "Pad A1 Pitch"});
+    fireEvent.keyDown(pitch, {key});
+    fireEvent.change(pitch, {target: {value: "24"}});
+    expect(onPreview).toHaveBeenLastCalledWith({...playback, pitchCents: 2_400});
+    fireEvent.keyUp(pitch, {key});
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenLastCalledWith({...playback, pitchCents: 2_400});
+  },
+);
+
+test("leaving a slider commits its pending keyboard gesture once", () => {
+  const {onCommit} = renderControls();
+  const pan = screen.getByRole("slider", {name: "Pad A1 Pan"});
+  fireEvent.change(pan, {target: {value: "30"}});
+  fireEvent.blur(pan);
+  fireEvent.blur(pan);
+  expect(onCommit).toHaveBeenCalledTimes(1);
+  expect(onCommit).toHaveBeenLastCalledWith({...playback, pan: 30});
+});
+
 test("Pan previews every move and Escape cancels it", () => {
   const onCancel = vi.fn();
   const {onPreview, onCommit} = renderControls({onCancel});
