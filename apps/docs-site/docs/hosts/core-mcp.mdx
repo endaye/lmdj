@@ -18,6 +18,8 @@ Host 管理 initialize、工具 schema、structured content 与 JSON-RPC 错误�
 ## 安全与状态
 输入按请求验证，Host 不持久化 Runtime Snapshot 为 Project Truth。MCP 自身不构造 Performance runtime：它经 Facade C API 进入同一个 headless Performance runtime bridge（steady time source 提供 clock、input sequencer、launch acknowledger 与 replay controller），由 Facade 在请求边界推进；Performance 草稿的生命周期由 Facade 与 Project I/O 的 session-kind journal 拥有，MCP 只观察 `record.status` 返回的 authority。
 ## 测试与证据
+`lmdj.sample.update_pad` 的 `playback` input schema 在五个必填键之外声明 `lmdj.project.v5` `5.1.0` 的六个可选回放对齐键及其上下界；MCP 只转发，跨字段帧区间仍由 Facade 判定。
+
 stdio 与 Facade parity 测试覆盖工具形状、字节协议、Sample quota 与错误映射。
 ## 限制
 MCP 可用性不代表产品 UI 或远程多租户服务已交付。Performance 工具面的可用性只证明控制面与状态边界，不构成物理演奏、听感或延迟验收，也不表示 tag、Release、部署或 Channel promotion 已发生。
