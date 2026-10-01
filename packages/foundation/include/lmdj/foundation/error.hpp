@@ -72,12 +72,19 @@ struct Error {
 template <typename T>
 class Result {
  public:
-  static Result success(T value) {
-    return Result(std::move(value));
+  // By reference, not by value: a by-value T is a caller-frame temporary, so
+  // every Result<ProjectState>-sized success used to cost an extra copy of T
+  // on the stack of whoever returned it (#1720).
+  static Result success(T&& value) {
+    return Result(std::in_place_index<0>, std::move(value));
+  }
+
+  static Result success(const T& value) {
+    return Result(std::in_place_index<0>, value);
   }
 
   static Result failure(Error error) {
-    return Result(std::move(error));
+    return Result(std::in_place_index<1>, std::move(error));
   }
 
   bool has_value() const noexcept {
@@ -89,8 +96,9 @@ class Result {
   const Error& error() const { return std::get<Error>(storage_); }
 
  private:
-  explicit Result(T value) : storage_(std::move(value)) {}
-  explicit Result(Error error) : storage_(std::move(error)) {}
+  template <std::size_t Index, typename Value>
+  Result(std::in_place_index_t<Index> index, Value&& value)
+      : storage_(index, std::forward<Value>(value)) {}
 
   std::variant<T, Error> storage_;
 };
