@@ -87,7 +87,14 @@ active reread、sealed snapshot/list 和 owner-loss reconciliation 都保留 adm
 不猜测 Pattern/origin/switch 结果，也不自动启动 playback。只读失败保留不支持的旧格式、
 未知格式和 torn suffix 的原始字节；没有 migration reader 或自动删除路径。
 
-Web 构建的栈是 256 KiB（`-sSTACK_SIZE=262144`）。`ProjectState` 把 64 个 Pad 内联存放，load/flush/recover 这些深路径在 `-O3` 下每帧持有多份副本，所以栈需求随 Pad 大小线性增长：`5.1.0` 的回放对齐键把 wasm32 上的 `ProjectState` 从 4 424 B 加到 6 472 B，超出了原来的 128 KiB。减少这些副本由 [#1720](https://github.com/endaye/lmdj/issues/1720) 跟踪。
+Web 构建的栈是 256 KiB（`-sSTACK_SIZE=262144`）。`ProjectState` 把 64 个 Pad 内联存放，所以 load/flush/recover 这些深路径的栈需求随 Pad 大小增长：`5.1.0` 的回放对齐键把 wasm32 上的 `ProjectState` 从 4 424 B 加到 6 472 B，曾经超出原来的 128 KiB。[#1720](https://github.com/endaye/lmdj/issues/1720) 让这些路径少持有副本：
+
+- `load_project` 在堆上返回已加载的 Project，`commit_loaded` 接收它的所有权；
+- checkpoint 读取、每条交易的重放和 head checkpoint 比对各自放在短帧里；
+- `foundation::Result::success` 按引用接收值，不再在调用方帧里留一份副本；
+- `describe_artifact` 的 64 KiB 读缓冲改到堆上。
+
+实测最深路径的栈高水位从 175 624 B 降到 98 208 B。Project I/O Web 一致性测试在每个原生动作结束时报告栈高水位，任何动作超过栈的一半都会失败，并写明原因与补救。
 
 ### Real OPFS evidence and remaining gaps
 

@@ -50,9 +50,10 @@ if(EMSCRIPTEN)
       "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/src/web/library_opfs_storage.js"
       -sASYNCIFY=1
       "-sASYNCIFY_IMPORTS=${lmdj_project_io_async_imports}"
-      # ProjectState holds 64 Pads inline and the deep load/flush/recover
-      # paths keep several copies per frame, so the stack scales with a Pad:
-      # 5.1.0's PadPlayback (40 -> 72 B on wasm32) overflowed 128 KiB (#1720).
+      # ProjectState holds 64 Pads inline, so deep load/flush/recover frames
+      # scale with a Pad: 5.1.0's PadPlayback overflowed 128 KiB (#1717).
+      # #1720 cut the deepest measured path from 175 624 to 98 208 bytes; the
+      # Project I/O Web conformance fails any action over half this stack.
       -sSTACK_SIZE=262144
       -sWASMFS
   )

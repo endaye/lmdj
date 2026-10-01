@@ -1121,7 +1121,9 @@ foundation::Result<domain::ProjectState> parse_project(
       return foundation::Result<domain::ProjectState>::failure(
           invalid_project("project metadata is invalid", path));
     }
-    auto state = std::move(created.value());
+    // Fill the created state in place: a second ProjectState here would cost
+    // another 6 KiB of Web stack on every checkpoint parse.
+    auto& state = created.value();
     state.contract = is_v5 ? domain::ProjectContract::v5
                            : is_v4 ? domain::ProjectContract::v4
                            : domain::ProjectContract::v3;
@@ -2649,21 +2651,179 @@ bool safe_relative_path(
   return iterator != relative.end();
 }
 
-foundation::Result<LoadedProject> load_project(
+// Parses one checkpoint straight onto the heap, so its Result<ProjectState>
+// lives only in this short frame, never in load_project's (#1720).
+[[gnu::noinline]] foundation::Result<std::unique_ptr<domain::ProjectState>>
+read_checkpoint(
+    const ProjectStoragePlatform& platform,
+    const std::filesystem::path& path,
+    nlohmann::json* json_out = nullptr) {
+  auto json = read_json(platform, path);
+  if (!json.has_value()) {
+    return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
+        json.error());
+  }
+  auto parsed = parse_project(json.value(), path);
+  if (!parsed.has_value()) {
+    return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
+        parsed.error());
+  }
+  if (json_out != nullptr) {
+    *json_out = std::move(json.value());
+  }
+  return foundation::Result<std::unique_ptr<domain::ProjectState>>::success(
+      std::make_unique<domain::ProjectState>(std::move(parsed.value())));
+}
+
+// Replays one recorded transaction onto the loaded Project. Its JSON, command
+// and applied state live only in this frame, not across load_project's (#1720).
+[[gnu::noinline]] foundation::Result<void> replay_transaction(
+    const ProjectStoragePlatform& platform,
+    const std::filesystem::path& bundle,
+    const std::filesystem::path& manifest_path,
+    const nlohmann::json& encoded_path,
+    std::unique_ptr<LoadedProject>& loaded) {
+  const auto relative =
+      std::filesystem::path{encoded_path.get<std::string>()};
+  if (!safe_relative_path(relative, "history/transactions")) {
+    return foundation::Result<void>::failure(
+        invalid_project("project transaction path is invalid", manifest_path));
+  }
+  auto transaction = read_json(platform, bundle / relative);
+  if (!transaction.has_value()) {
+    return foundation::Result<void>::failure(
+        transaction.error());
+  }
+  auto command =
+      parse_command(transaction.value().at("command"), bundle / relative);
+  if (!command.has_value()) {
+    return foundation::Result<void>::failure(command.error());
+  }
+  auto applied =
+      apply_command(loaded->state, command.value(), loaded->receipts);
+  if (!applied.has_value() || applied.value().replayed) {
+    return foundation::Result<void>::failure(
+        invalid_project(
+            "project transaction could not be replayed",
+            bundle / relative));
+  }
+  const auto revision =
+      transaction.value().at("revision").get<std::uint64_t>();
+  if (revision != applied.value().state.revision ||
+      transaction.value().at("event") != applied.value().event) {
+    return foundation::Result<void>::failure(
+        invalid_project(
+            "project transaction receipt does not match replay",
+            bundle / relative));
+  }
+  const auto& meta = command_meta(command.value());
+  loaded->commands.emplace(meta.command_id, command.value());
+  loaded->receipts.emplace(
+      meta.command_id,
+      domain::CommandReceipt{revision, applied.value().event});
+  if (transaction.value().contains("sequence_flush")) {
+    try {
+      const auto& encoded = transaction.value().at("sequence_flush");
+      SequenceFlushIdentity identity{
+          foundation::SequenceSessionId{
+              encoded.at("session_id").get<std::string>()},
+          encoded.at("flush_seq").get<std::uint64_t>(),
+          foundation::CommandId{
+              encoded.at("command_id").get<std::string>()},
+          foundation::PatternId{
+              encoded.at("pattern_id").get<std::string>()},
+      };
+      const auto* merge =
+          std::get_if<domain::MergePatternEvents>(&command.value());
+      if (merge == nullptr ||
+          !domain::is_valid_uuid(identity.session_id.value()) ||
+          identity.command_id != meta.command_id ||
+          identity.pattern_id != merge->pattern_id) {
+        return foundation::Result<void>::failure(
+            invalid_project(
+                "project transaction Sequence flush identity is invalid",
+                bundle / relative));
+      }
+      loaded->sequence_flush_identities.emplace(
+          meta.command_id, std::move(identity));
+    } catch (const std::exception& exception) {
+      return foundation::Result<void>::failure(
+          invalid_project(
+              "project transaction Sequence flush identity is invalid",
+              bundle / relative,
+              exception.what()));
+    }
+  }
+  if (transaction.value().contains("performance_flush")) {
+    try {
+      const auto& encoded = transaction.value().at("performance_flush");
+      PerformanceFlushIdentity identity{
+          foundation::SequenceSessionId{
+              encoded.at("session_id").get<std::string>()},
+          encoded.at("flush_seq").get<std::uint64_t>(),
+          foundation::CommandId{
+              encoded.at("command_id").get<std::string>()},
+          domain::PerformanceId{
+              encoded.at("performance_id").get<std::string>()},
+      };
+      const auto* mutation =
+          std::get_if<PerformanceMutation>(&command.value());
+      if (mutation == nullptr ||
+          !domain::is_valid_uuid(identity.session_id.value()) ||
+          identity.command_id != meta.command_id ||
+          identity.performance_id != mutation->performance_id) {
+        return foundation::Result<void>::failure(
+            invalid_project(
+                "project transaction Performance flush identity is "
+                "invalid",
+                bundle / relative));
+      }
+      loaded->performance_flush_identities.emplace(
+          meta.command_id, std::move(identity));
+    } catch (const std::exception& exception) {
+      return foundation::Result<void>::failure(
+          invalid_project(
+              "project transaction Performance flush identity is invalid",
+              bundle / relative,
+              exception.what()));
+    }
+  }
+  loaded->state = std::move(applied.value().state);
+  loaded->transactions.push_back(relative.generic_string());
+  return foundation::Result<void>::success();
+}
+
+// The replayed Project's projection and canonical JSON are built only in this
+// frame, so their temporaries never sit in load_project's (#1720).
+[[gnu::noinline]] bool checkpoint_matches_replay(
+    const domain::ProjectState& checkpoint,
+    bool checkpoint_is_current,
+    const nlohmann::json& checkpoint_json,
+    const domain::ProjectState& replayed) {
+  return checkpoint == canonical_projection(replayed) &&
+         (!checkpoint_is_current ||
+          foundation::canonical_json(checkpoint_json) ==
+              foundation::canonical_json(project_json(replayed)));
+}
+
+// The loaded Project lives on the heap: callers keep it across several
+// ProjectState-sized locals, and a by-value LoadedProject in every caller's
+// frame was a large share of Project I/O's Web stack (#1720).
+foundation::Result<std::unique_ptr<LoadedProject>> load_project(
     const ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle,
     bool verify_asset_bytes = true) {
   const auto manifest_path = bundle / "manifest.json";
   auto manifest_result = read_json(platform, manifest_path);
   if (!manifest_result.has_value()) {
-    return foundation::Result<LoadedProject>::failure(
+    return foundation::Result<std::unique_ptr<LoadedProject>>::failure(
         manifest_result.error());
   }
 
   try {
     const auto& manifest = manifest_result.value();
     if (manifest.at("contract") != "lmdj.project.manifest.v1") {
-      return foundation::Result<LoadedProject>::failure(
+      return foundation::Result<std::unique_ptr<LoadedProject>>::failure(
           invalid_project("project manifest contract is invalid", manifest_path));
     }
     const auto head_revision =
@@ -2677,175 +2837,65 @@ foundation::Result<LoadedProject> load_project(
     if (head_checkpoint != expected_head ||
         !safe_relative_path(
             head_checkpoint, "history/checkpoints")) {
-      return foundation::Result<LoadedProject>::failure(
+      return foundation::Result<std::unique_ptr<LoadedProject>>::failure(
           invalid_project("project manifest checkpoint path is invalid", manifest_path));
     }
 
-    auto initial_json =
-        read_json(platform, bundle / "history/checkpoints/0.json");
-    if (!initial_json.has_value()) {
-      return foundation::Result<LoadedProject>::failure(initial_json.error());
-    }
-    auto initial = parse_project(
-        initial_json.value(), bundle / "history/checkpoints/0.json");
+    auto initial =
+        read_checkpoint(platform, bundle / "history/checkpoints/0.json");
     if (!initial.has_value()) {
-      return foundation::Result<LoadedProject>::failure(initial.error());
+      return foundation::Result<std::unique_ptr<LoadedProject>>::failure(initial.error());
     }
-    if (initial.value().revision != 0) {
-      return foundation::Result<LoadedProject>::failure(
+    if (initial.value()->revision != 0) {
+      return foundation::Result<std::unique_ptr<LoadedProject>>::failure(
           invalid_project(
               "initial checkpoint revision is not zero",
               bundle / "history/checkpoints/0.json"));
     }
-    auto checkpoint_json = read_json(platform, bundle / head_checkpoint);
-    if (!checkpoint_json.has_value()) {
-      return foundation::Result<LoadedProject>::failure(
-          checkpoint_json.error());
-    }
+    nlohmann::json checkpoint_json;
     auto checkpoint =
-        parse_project(checkpoint_json.value(), bundle / head_checkpoint);
+        read_checkpoint(platform, bundle / head_checkpoint, &checkpoint_json);
     if (!checkpoint.has_value()) {
-      return foundation::Result<LoadedProject>::failure(checkpoint.error());
+      return foundation::Result<std::unique_ptr<LoadedProject>>::failure(checkpoint.error());
     }
     const bool checkpoint_is_current =
-        checkpoint_json.value().at("contract") == "lmdj.project.v3" ||
-        checkpoint_json.value().at("contract") == "lmdj.project.v4" ||
-        checkpoint_json.value().at("contract") == "lmdj.project.v5";
+        checkpoint_json.at("contract") == "lmdj.project.v3" ||
+        checkpoint_json.at("contract") == "lmdj.project.v4" ||
+        checkpoint_json.at("contract") == "lmdj.project.v5";
 
-    LoadedProject loaded{
-        std::move(initial.value()),
+    // Aggregate-initialised in place on the heap, so no LoadedProject
+    // temporary ever occupies this frame.
+    auto loaded = std::unique_ptr<LoadedProject>(new LoadedProject{
+        std::move(*initial.value()),
         {},
         {},
         {},
         {},
         {},
-    };
+    });
     // The head checkpoint, not the replayed command history, states a
     // Project's Contract level: a Project promoted to v4 by an earlier persist
     // still replays from a v3 checkpoint zero, and a v4-only command in that
     // history has to replay against v4 Project Truth.
-    loaded.state.contract = checkpoint.value().contract;
+    loaded->state.contract = checkpoint.value()->contract;
     for (const auto& encoded_path : manifest.at("transactions")) {
-      const auto relative =
-          std::filesystem::path{encoded_path.get<std::string>()};
-      if (!safe_relative_path(relative, "history/transactions")) {
-        return foundation::Result<LoadedProject>::failure(
-            invalid_project("project transaction path is invalid", manifest_path));
+      const auto replayed =
+          replay_transaction(platform, bundle, manifest_path, encoded_path, loaded);
+      if (!replayed.has_value()) {
+        return foundation::Result<std::unique_ptr<LoadedProject>>::failure(replayed.error());
       }
-      auto transaction = read_json(platform, bundle / relative);
-      if (!transaction.has_value()) {
-        return foundation::Result<LoadedProject>::failure(
-            transaction.error());
-      }
-      auto command =
-          parse_command(transaction.value().at("command"), bundle / relative);
-      if (!command.has_value()) {
-        return foundation::Result<LoadedProject>::failure(command.error());
-      }
-      auto applied =
-          apply_command(loaded.state, command.value(), loaded.receipts);
-      if (!applied.has_value() || applied.value().replayed) {
-        return foundation::Result<LoadedProject>::failure(
-            invalid_project(
-                "project transaction could not be replayed",
-                bundle / relative));
-      }
-      const auto revision =
-          transaction.value().at("revision").get<std::uint64_t>();
-      if (revision != applied.value().state.revision ||
-          transaction.value().at("event") != applied.value().event) {
-        return foundation::Result<LoadedProject>::failure(
-            invalid_project(
-                "project transaction receipt does not match replay",
-                bundle / relative));
-      }
-      const auto& meta = command_meta(command.value());
-      loaded.commands.emplace(meta.command_id, command.value());
-      loaded.receipts.emplace(
-          meta.command_id,
-          domain::CommandReceipt{revision, applied.value().event});
-      if (transaction.value().contains("sequence_flush")) {
-        try {
-          const auto& encoded = transaction.value().at("sequence_flush");
-          SequenceFlushIdentity identity{
-              foundation::SequenceSessionId{
-                  encoded.at("session_id").get<std::string>()},
-              encoded.at("flush_seq").get<std::uint64_t>(),
-              foundation::CommandId{
-                  encoded.at("command_id").get<std::string>()},
-              foundation::PatternId{
-                  encoded.at("pattern_id").get<std::string>()},
-          };
-          const auto* merge =
-              std::get_if<domain::MergePatternEvents>(&command.value());
-          if (merge == nullptr ||
-              !domain::is_valid_uuid(identity.session_id.value()) ||
-              identity.command_id != meta.command_id ||
-              identity.pattern_id != merge->pattern_id) {
-            return foundation::Result<LoadedProject>::failure(
-                invalid_project(
-                    "project transaction Sequence flush identity is invalid",
-                    bundle / relative));
-          }
-          loaded.sequence_flush_identities.emplace(
-              meta.command_id, std::move(identity));
-        } catch (const std::exception& exception) {
-          return foundation::Result<LoadedProject>::failure(
-              invalid_project(
-                  "project transaction Sequence flush identity is invalid",
-                  bundle / relative,
-                  exception.what()));
-        }
-      }
-      if (transaction.value().contains("performance_flush")) {
-        try {
-          const auto& encoded = transaction.value().at("performance_flush");
-          PerformanceFlushIdentity identity{
-              foundation::SequenceSessionId{
-                  encoded.at("session_id").get<std::string>()},
-              encoded.at("flush_seq").get<std::uint64_t>(),
-              foundation::CommandId{
-                  encoded.at("command_id").get<std::string>()},
-              domain::PerformanceId{
-                  encoded.at("performance_id").get<std::string>()},
-          };
-          const auto* mutation =
-              std::get_if<PerformanceMutation>(&command.value());
-          if (mutation == nullptr ||
-              !domain::is_valid_uuid(identity.session_id.value()) ||
-              identity.command_id != meta.command_id ||
-              identity.performance_id != mutation->performance_id) {
-            return foundation::Result<LoadedProject>::failure(
-                invalid_project(
-                    "project transaction Performance flush identity is "
-                    "invalid",
-                    bundle / relative));
-          }
-          loaded.performance_flush_identities.emplace(
-              meta.command_id, std::move(identity));
-        } catch (const std::exception& exception) {
-          return foundation::Result<LoadedProject>::failure(
-              invalid_project(
-                  "project transaction Performance flush identity is invalid",
-                  bundle / relative,
-                  exception.what()));
-        }
-      }
-      loaded.state = applied.value().state;
-      loaded.transactions.push_back(relative.generic_string());
     }
-    if (loaded.state.revision != head_revision) {
-      return foundation::Result<LoadedProject>::failure(
+    if (loaded->state.revision != head_revision) {
+      return foundation::Result<std::unique_ptr<LoadedProject>>::failure(
           invalid_project(
               "project manifest head does not match transaction replay",
               manifest_path));
     }
 
-    if (checkpoint.value() != canonical_projection(loaded.state) ||
-        (checkpoint_is_current &&
-         foundation::canonical_json(checkpoint_json.value()) !=
-             foundation::canonical_json(project_json(loaded.state)))) {
-      return foundation::Result<LoadedProject>::failure(
+    if (!checkpoint_matches_replay(
+            *checkpoint.value(), checkpoint_is_current, checkpoint_json,
+            loaded->state)) {
+      return foundation::Result<std::unique_ptr<LoadedProject>>::failure(
           invalid_project(
               "project checkpoint does not match transaction replay",
               bundle / head_checkpoint));
@@ -2854,9 +2904,9 @@ foundation::Result<LoadedProject> load_project(
     // Owner resolution verifies only its selected Artifact after checking
     // ownership. Every authoring load keeps the complete asset verification.
     if (!verify_asset_bytes) {
-      return foundation::Result<LoadedProject>::success(std::move(loaded));
+      return foundation::Result<std::unique_ptr<LoadedProject>>::success(std::move(loaded));
     }
-    for (const auto& [asset_id, asset] : loaded.state.assets) {
+    for (const auto& [asset_id, asset] : loaded->state.assets) {
       (void)asset_id;
       const auto blob =
           bundle / "assets" / (asset.artifact.sha256 + ".wav");
@@ -2864,15 +2914,15 @@ foundation::Result<LoadedProject> load_project(
           describe_artifact(platform, blob, asset.artifact.media_type);
       if (!described.has_value() ||
           described.value() != asset.artifact) {
-        return foundation::Result<LoadedProject>::failure(
+        return foundation::Result<std::unique_ptr<LoadedProject>>::failure(
             invalid_project(
                 "project asset blob is missing or corrupt",
                 blob));
       }
     }
-    return foundation::Result<LoadedProject>::success(std::move(loaded));
+    return foundation::Result<std::unique_ptr<LoadedProject>>::success(std::move(loaded));
   } catch (const std::exception& exception) {
-    return foundation::Result<LoadedProject>::failure(
+    return foundation::Result<std::unique_ptr<LoadedProject>>::failure(
         invalid_project(
             "project manifest could not be validated",
             manifest_path,
@@ -3440,11 +3490,22 @@ std::pair<std::string, std::string> history_description(
   }, command);
 }
 
+// Promotes the state being committed to the persisted Contract level and
+// proves it round-trips as Project Truth. The projection and the re-parsed
+// copy live only in this frame, not across commit_loaded's (#1720).
+[[gnu::noinline]] bool promote_for_persist(
+    domain::ProjectState& state,
+    const std::filesystem::path& manifest_path) {
+  state = persisted_projection(state);
+  const auto validated = parse_project(project_json(state), manifest_path);
+  return validated.has_value() && validated.value() == state;
+}
+
 foundation::Result<domain::AppliedCommand> commit_loaded(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
     const std::shared_ptr<AuthoringHistory>& history,
     const std::filesystem::path& bundle,
-    LoadedProject loaded,
+    std::unique_ptr<LoadedProject> loaded_project,
     const PersistedCommand& command,
     const std::optional<ArtifactStage>& artifact_stage,
     PersistedCommand* persisted_identity,
@@ -3456,6 +3517,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     // revision, so the rollback ledger below is a vector: a partial multi-blob
     // publish must be undone completely or the commit is not atomic.
     const std::vector<ArtifactStage>& artifact_stages = {}) {
+  auto& loaded = *loaded_project;
   const auto& meta = command_meta(command);
   if (!domain::is_valid_uuid(meta.command_id.value())) {
     return foundation::Result<domain::AppliedCommand>::failure(
@@ -3488,7 +3550,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   } else if (persisted_identity != nullptr) {
     *persisted_identity = command;
   }
-  const auto applied =
+  auto applied =
       apply_command(loaded.state, command, loaded.receipts);
   if (!applied.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
@@ -3519,13 +3581,8 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   // existing v3 Project is promoted on its first persist. Promote the state
   // being committed, not just the bytes, so the checkpoint on disk, the state
   // returned to the caller, and the next load all agree on the Contract level.
-  auto committed = applied.value();
-  committed.state = persisted_projection(committed.state);
-  const auto encoded_state = project_json(committed.state);
-  const auto validated_state =
-      parse_project(encoded_state, bundle / "manifest.json");
-  if (!validated_state.has_value() ||
-      validated_state.value() != committed.state) {
+  auto& committed = applied.value();
+  if (!promote_for_persist(committed.state, bundle / "manifest.json")) {
     return foundation::Result<domain::AppliedCommand>::failure(
         Error{
             ErrorCode::invalid_argument,
@@ -4013,7 +4070,7 @@ foundation::Result<domain::AppliedCommand> execute_persisted(
     return foundation::Result<domain::AppliedCommand>::failure(
         loaded.error());
   }
-  const auto recovered = recover_uncommitted(*platform, history, bundle, loaded.value());
+  const auto recovered = recover_uncommitted(*platform, history, bundle, *loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
@@ -4240,10 +4297,10 @@ foundation::Result<AuthoringHistoryStatus> ProjectStore::open_authoring_history(
   if (!tree.has_value()) return Result::failure(tree.error());
   auto loaded = load_project(*platform_, bundle);
   if (!loaded.has_value()) return Result::failure(loaded.error());
-  auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
+  auto recovered = recover_uncommitted(*platform_, history_, bundle, *loaded.value());
   if (!recovered.has_value()) return Result::failure(recovered.error());
-  history_->start(bundle, std::move(session_id), loaded.value().state, authoring_fingerprint(loaded.value().state));
-  return history_status_locked(platform_, history_, bundle, loaded.value().state);
+  history_->start(bundle, std::move(session_id), loaded.value()->state, authoring_fingerprint(loaded.value()->state));
+  return history_status_locked(platform_, history_, bundle, loaded.value()->state);
 }
 
 foundation::Result<AuthoringHistoryStatus> ProjectStore::inspect_authoring_history(
@@ -4278,14 +4335,14 @@ foundation::Result<domain::AppliedCommand> ProjectStore::restore_authoring_histo
   if (!tree.has_value()) return Result::failure(tree.error());
   auto loaded = load_project(*platform_, bundle);
   if (!loaded.has_value()) return Result::failure(loaded.error());
-  const auto status = history_status_locked(platform_, history_, bundle, loaded.value().state);
+  const auto status = history_status_locked(platform_, history_, bundle, loaded.value()->state);
   if (!status.has_value()) return Result::failure(status.error());
   if (status.value().session_id != session_id || !status.value().disabled_reason.empty()) {
     return Result::failure(Error{ErrorCode::invalid_argument, "Undo/Redo is unavailable",
         {{"reason", status.value().session_id != session_id ? "authoring_history_session_mismatch" : status.value().disabled_reason}}});
   }
-  const auto existing = loaded.value().commands.find(meta.command_id);
-  if (existing != loaded.value().commands.end()) {
+  const auto existing = loaded.value()->commands.find(meta.command_id);
+  if (existing != loaded.value()->commands.end()) {
     const auto* original = std::get_if<HistoryRestore>(&existing->second);
     if (!original || original->meta.expected_revision != meta.expected_revision ||
         original->history_session_id != session_id || original->redo != redo) {
@@ -4577,7 +4634,7 @@ foundation::Result<domain::ProjectState> ProjectStore::load(
   }
   if (lock != nullptr) {
     const auto recovered =
-        recover_uncommitted(*platform_, history_, bundle, loaded.value());
+        recover_uncommitted(*platform_, history_, bundle, *loaded.value());
     if (!recovered.has_value()) {
       return foundation::Result<domain::ProjectState>::failure(
           recovered.error());
@@ -4589,7 +4646,7 @@ foundation::Result<domain::ProjectState> ProjectStore::load(
     }
   }
   return foundation::Result<domain::ProjectState>::success(
-      std::move(loaded.value().state));
+      std::move(loaded.value()->state));
 }
 
 foundation::Result<CommandExecution> ProjectStore::execute_with_identity(
@@ -4616,7 +4673,7 @@ foundation::Result<CommandExecution> ProjectStore::execute_with_identity(
     return foundation::Result<CommandExecution>::failure(
         loaded.error());
   }
-  const auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
+  const auto recovered = recover_uncommitted(*platform_, history_, bundle, *loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<CommandExecution>::failure(
         recovered.error());
@@ -4860,7 +4917,7 @@ ProjectStore::begin_performance_draft(
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         loaded.error());
   }
-  auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
+  auto recovered = recover_uncommitted(*platform_, history_, bundle, *loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         recovered.error());
@@ -4873,7 +4930,7 @@ ProjectStore::begin_performance_draft(
   const domain::Performance intended{
       request.performance_id,
       command.name,
-      loaded.value().state.bpm,
+      loaded.value()->state.bpm,
       request.meta.expected_revision,
       std::nullopt,
       {},
@@ -4924,10 +4981,10 @@ ProjectStore::begin_performance_draft(
     // the pure command application. Replays and unknown outcomes are
     // unchanged.
     const PersistedCommand persisted{command};
-    if (loaded.value().receipts.contains(request.meta.command_id)) {
+    if (loaded.value()->receipts.contains(request.meta.command_id)) {
       const auto original =
-          loaded.value().commands.find(request.meta.command_id);
-      if (original == loaded.value().commands.end() ||
+          loaded.value()->commands.find(request.meta.command_id);
+      if (original == loaded.value()->commands.end() ||
           command_json(original->second) != command_json(persisted)) {
         return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
             ErrorCode::invalid_argument,
@@ -4936,7 +4993,7 @@ ProjectStore::begin_performance_draft(
       }
     }
     auto admitted = apply_command(
-        loaded.value().state, persisted, loaded.value().receipts);
+        loaded.value()->state, persisted, loaded.value()->receipts);
     if (!admitted.has_value()) {
       return foundation::Result<PerformanceLifecycleReceipt>::failure(
           admitted.error());
@@ -5083,7 +5140,7 @@ ProjectStore::save_performance_draft(
   auto recovered = recover_uncommitted(
       *platform_, history_,
       bundle,
-      loaded.value(),
+      *loaded.value(),
       artifact.has_value()
           ? std::optional<std::string_view>{artifact->sha256}
           : std::nullopt);
@@ -5123,8 +5180,8 @@ ProjectStore::save_performance_draft(
         active.error());
   }
 
-  const auto existing = loaded.value().commands.find(meta.command_id);
-  if (existing != loaded.value().commands.end()) {
+  const auto existing = loaded.value()->commands.find(meta.command_id);
+  if (existing != loaded.value()->commands.end()) {
     const auto* saved = std::get_if<FinalizePerformanceDraft>(&existing->second);
     if (saved == nullptr || saved->performance_id != performance_id ||
         saved->name != name || saved->artifact != artifact ||
@@ -5149,7 +5206,7 @@ ProjectStore::save_performance_draft(
       performance_id,
       std::move(name),
       std::move(artifact),
-      existing != loaded.value().commands.end()
+      existing != loaded.value()->commands.end()
           ? std::get<FinalizePerformanceDraft>(existing->second).events
           : std::move(tail),
   };
@@ -5199,7 +5256,7 @@ ProjectStore::discard_performance_draft(
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         loaded.error());
   }
-  auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
+  auto recovered = recover_uncommitted(*platform_, history_, bundle, *loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         recovered.error());
@@ -5224,8 +5281,8 @@ ProjectStore::discard_performance_draft(
         active.error());
   }
   const DeletePerformance command{meta, performance_id};
-  const auto existing = loaded.value().commands.find(meta.command_id);
-  if (existing != loaded.value().commands.end() &&
+  const auto existing = loaded.value()->commands.find(meta.command_id);
+  if (existing != loaded.value()->commands.end() &&
       command_json(existing->second) !=
           command_json(PersistedCommand{command})) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
@@ -5236,7 +5293,7 @@ ProjectStore::discard_performance_draft(
           "retry the exact original discard identity or issue a new command id"}},
     });
   }
-  if (!active.has_value() && existing == loaded.value().commands.end()) {
+  if (!active.has_value() && existing == loaded.value()->commands.end()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
         ErrorCode::not_found,
         "stopped Performance draft Journal does not exist",
@@ -5293,7 +5350,7 @@ ProjectStore::apply_performance_recovery(
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         loaded.error());
   }
-  auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
+  auto recovered = recover_uncommitted(*platform_, history_, bundle, *loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         recovered.error());
@@ -5307,13 +5364,13 @@ ProjectStore::apply_performance_recovery(
   auto active = journal.read_active_performance(bundle);
   if (active.has_value() && active.value().session_id == session_id &&
       active.value().state == SequenceSessionState::stopped) {
-    const auto command = loaded.value().commands.find(meta.command_id);
+    const auto command = loaded.value()->commands.find(meta.command_id);
     const auto* mutation =
-        command != loaded.value().commands.end()
+        command != loaded.value()->commands.end()
             ? std::get_if<PerformanceMutation>(&command->second)
             : nullptr;
-    const auto receipt = loaded.value().receipts.find(meta.command_id);
-    if (mutation != nullptr && receipt != loaded.value().receipts.end() &&
+    const auto receipt = loaded.value()->receipts.find(meta.command_id);
+    if (mutation != nullptr && receipt != loaded.value()->receipts.end() &&
         mutation->performance_id == active.value().performance_id) {
       const auto candidate = std::find_if(
           candidates.value().begin(), candidates.value().end(),
@@ -5321,9 +5378,9 @@ ProjectStore::apply_performance_recovery(
             return value.journal.session_id == session_id;
           });
       if (candidate != candidates.value().end()) {
-        const auto target = loaded.value().state.performances.find(
+        const auto target = loaded.value()->state.performances.find(
             active.value().performance_id);
-        if (target == loaded.value().state.performances.end()) {
+        if (target == loaded.value()->state.performances.end()) {
           return foundation::Result<PerformanceLifecycleReceipt>::failure(
               invalid_project(
                   "recovered Performance draft is missing",
@@ -5332,7 +5389,7 @@ ProjectStore::apply_performance_recovery(
         auto cleaned = journal.restore_stopped_performance_locked(
             bundle,
             *candidate,
-            loaded.value().state.revision,
+            loaded.value()->state.revision,
             performance_fingerprint(target->second),
             meta.command_id);
         if (!cleaned.has_value()) {
@@ -5389,8 +5446,8 @@ ProjectStore::apply_performance_recovery(
       candidate->journal.pending_events,
   };
   const auto existing_command =
-      loaded.value().commands.find(meta.command_id);
-  if (existing_command != loaded.value().commands.end() &&
+      loaded.value()->commands.find(meta.command_id);
+  if (existing_command != loaded.value()->commands.end() &&
       command_json(existing_command->second) !=
           command_json(PersistedCommand{mutation})) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
@@ -5402,11 +5459,11 @@ ProjectStore::apply_performance_recovery(
           "retry the exact original recovery payload or use a new command id"}},
     });
   }
-  const auto existing_receipt = loaded.value().receipts.find(meta.command_id);
-  if (existing_receipt != loaded.value().receipts.end()) {
-    const auto updated = loaded.value().state.performances.find(
+  const auto existing_receipt = loaded.value()->receipts.find(meta.command_id);
+  if (existing_receipt != loaded.value()->receipts.end()) {
+    const auto updated = loaded.value()->state.performances.find(
         candidate->journal.performance_id);
-    if (updated == loaded.value().state.performances.end()) {
+    if (updated == loaded.value()->state.performances.end()) {
       return foundation::Result<PerformanceLifecycleReceipt>::failure(
           invalid_project(
               "committed Performance recovery target is missing",
@@ -5415,7 +5472,7 @@ ProjectStore::apply_performance_recovery(
     auto restored = journal.restore_stopped_performance_locked(
         bundle,
         *candidate,
-        loaded.value().state.revision,
+        loaded.value()->state.revision,
         performance_fingerprint(updated->second),
         meta.command_id);
     if (!restored.has_value()) {
@@ -5427,12 +5484,12 @@ ProjectStore::apply_performance_recovery(
          existing_receipt->second.committed_revision,
          true});
   }
-  const auto target = loaded.value().state.performances.find(
+  const auto target = loaded.value()->state.performances.find(
       candidate->journal.performance_id);
-  if (target == loaded.value().state.performances.end() ||
+  if (target == loaded.value()->state.performances.end() ||
       performance_fingerprint(target->second) !=
           candidate->journal.performance_fingerprint ||
-      loaded.value().state.revision != candidate->journal.expected_revision) {
+      loaded.value()->state.revision != candidate->journal.expected_revision) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
         ErrorCode::invalid_project,
         "Performance recovery draft fingerprint does not match Project Truth",
@@ -5515,9 +5572,9 @@ ProjectStore::discard_performance_recovery(
             return value.journal.session_id == session_id;
           });
       if (candidate != candidates.value().end()) {
-        const auto target = loaded.value().state.performances.find(
+        const auto target = loaded.value()->state.performances.find(
             active.value().performance_id);
-        if (target == loaded.value().state.performances.end()) {
+        if (target == loaded.value()->state.performances.end()) {
           return foundation::Result<PerformanceStopReceipt>::failure(
               invalid_project(
                   "recovered Performance draft is missing",
@@ -5526,7 +5583,7 @@ ProjectStore::discard_performance_recovery(
         auto cleaned = journal.restore_stopped_performance_locked(
             bundle,
             *candidate,
-            loaded.value().state.revision,
+            loaded.value()->state.revision,
             performance_fingerprint(target->second),
             request_id);
         if (!cleaned.has_value()) {
@@ -5564,9 +5621,9 @@ ProjectStore::discard_performance_recovery(
         "Performance recovery candidate does not exist",
     });
   }
-  const auto target = loaded.value().state.performances.find(
+  const auto target = loaded.value()->state.performances.find(
       candidate->journal.performance_id);
-  if (target == loaded.value().state.performances.end()) {
+  if (target == loaded.value()->state.performances.end()) {
     return foundation::Result<PerformanceStopReceipt>::failure(Error{
         ErrorCode::invalid_project,
         "Performance recovery draft no longer exists",
@@ -5579,7 +5636,7 @@ ProjectStore::discard_performance_recovery(
   auto restored = journal.restore_stopped_performance_locked(
       bundle,
       *candidate,
-      loaded.value().state.revision,
+      loaded.value()->state.revision,
       performance_fingerprint(target->second),
       request_id);
   if (!restored.has_value()) {
@@ -5620,7 +5677,7 @@ ProjectStore::bind_performance_recording(
         loaded.error());
   }
   auto recovered = recover_uncommitted(
-      *platform_, history_, bundle, loaded.value(), artifact.sha256);
+      *platform_, history_, bundle, *loaded.value(), artifact.sha256);
   if (!recovered.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         recovered.error());
@@ -5663,8 +5720,8 @@ ProjectStore::bind_performance_recording(
           "apply or discard the recoverable Performance tail before binding a recording"}},
     });
   }
-  const auto target = loaded.value().state.performances.find(performance_id);
-  if (target == loaded.value().state.performances.end()) {
+  const auto target = loaded.value()->state.performances.find(performance_id);
+  if (target == loaded.value()->state.performances.end()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
         ErrorCode::not_found,
         "Performance recording bind target does not exist",
@@ -5673,7 +5730,7 @@ ProjectStore::bind_performance_recording(
   if (target->second.recording_artifact.has_value()) {
     if (*target->second.recording_artifact == artifact) {
       return foundation::Result<PerformanceLifecycleReceipt>::success(
-          {performance_id, loaded.value().state.revision, true});
+          {performance_id, loaded.value()->state.revision, true});
     }
     return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
         ErrorCode::invalid_argument,
@@ -5717,7 +5774,7 @@ ProjectStore::execute_performance_rebase(
   if (!loaded.has_value()) {
     return foundation::Result<CommandExecution>::failure(loaded.error());
   }
-  auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
+  auto recovered = recover_uncommitted(*platform_, history_, bundle, *loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<CommandExecution>::failure(recovered.error());
   }
@@ -5848,21 +5905,21 @@ ProjectStore::replay_sequence_flush(
     return foundation::Result<
         std::optional<SequenceFlushExecution>>::failure(loaded.error());
   }
-  const auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
+  const auto recovered = recover_uncommitted(*platform_, history_, bundle, *loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<
         std::optional<SequenceFlushExecution>>::failure(recovered.error());
   }
-  const auto original = loaded.value().commands.find(identity.command_id);
-  if (original == loaded.value().commands.end()) {
+  const auto original = loaded.value()->commands.find(identity.command_id);
+  if (original == loaded.value()->commands.end()) {
     return foundation::Result<
         std::optional<SequenceFlushExecution>>::success(std::nullopt);
   }
   const auto stored_identity =
-      loaded.value().sequence_flush_identities.find(identity.command_id);
+      loaded.value()->sequence_flush_identities.find(identity.command_id);
   const auto* merge =
       std::get_if<domain::MergePatternEvents>(&original->second);
-  if (stored_identity == loaded.value().sequence_flush_identities.end() ||
+  if (stored_identity == loaded.value()->sequence_flush_identities.end() ||
       stored_identity->second != identity || merge == nullptr ||
       merge->pattern_id != identity.pattern_id) {
     return foundation::Result<
@@ -5872,8 +5929,8 @@ ProjectStore::replay_sequence_flush(
             "Sequence flush identity does not match the persisted command",
         });
   }
-  const auto receipt = loaded.value().receipts.find(identity.command_id);
-  if (receipt == loaded.value().receipts.end()) {
+  const auto receipt = loaded.value()->receipts.find(identity.command_id);
+  if (receipt == loaded.value()->receipts.end()) {
     return foundation::Result<
         std::optional<SequenceFlushExecution>>::failure(
         invalid_project(
@@ -5887,7 +5944,7 @@ ProjectStore::replay_sequence_flush(
           *merge,
           receipt->second.committed_revision,
           domain::AppliedCommand{
-              std::move(loaded.value().state),
+              std::move(loaded.value()->state),
               receipt->second.event,
               true,
           },
@@ -5927,18 +5984,18 @@ ProjectStore::replay_sequence_flush(
           std::optional<SequenceFlushExecution>>::failure(loaded.error());
     }
     const auto recovered =
-        recover_uncommitted(*platform_, history_, bundle, loaded.value());
+        recover_uncommitted(*platform_, history_, bundle, *loaded.value());
     if (!recovered.has_value()) {
       return foundation::Result<
           std::optional<SequenceFlushExecution>>::failure(recovered.error());
     }
-    if (!loaded.value().commands.contains(command_id)) {
+    if (!loaded.value()->commands.contains(command_id)) {
       return foundation::Result<
           std::optional<SequenceFlushExecution>>::success(std::nullopt);
     }
     const auto stored =
-        loaded.value().sequence_flush_identities.find(command_id);
-    if (stored == loaded.value().sequence_flush_identities.end() ||
+        loaded.value()->sequence_flush_identities.find(command_id);
+    if (stored == loaded.value()->sequence_flush_identities.end() ||
         stored->second.session_id != session_id) {
       return foundation::Result<
           std::optional<SequenceFlushExecution>>::failure(Error{
@@ -6004,7 +6061,7 @@ ProjectStore::execute_sequence_flush(
       return foundation::Result<domain::AppliedCommand>::failure(
           loaded.error());
     }
-    auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
+    auto recovered = recover_uncommitted(*platform_, history_, bundle, *loaded.value());
     if (!recovered.has_value()) {
       return foundation::Result<domain::AppliedCommand>::failure(
           recovered.error());
@@ -6038,9 +6095,9 @@ ProjectStore::execute_sequence_flush(
           });
     }
     const auto existing =
-        loaded.value().sequence_flush_identities.find(identity.command_id);
-    if (loaded.value().receipts.contains(identity.command_id) &&
-        (existing == loaded.value().sequence_flush_identities.end() ||
+        loaded.value()->sequence_flush_identities.find(identity.command_id);
+    if (loaded.value()->receipts.contains(identity.command_id) &&
+        (existing == loaded.value()->sequence_flush_identities.end() ||
          existing->second != identity)) {
       return foundation::Result<domain::AppliedCommand>::failure(
           Error{
@@ -6133,22 +6190,22 @@ ProjectStore::replay_performance_flush(
     return foundation::Result<
         std::optional<PerformanceFlushExecution>>::failure(loaded.error());
   }
-  auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
+  auto recovered = recover_uncommitted(*platform_, history_, bundle, *loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<
         std::optional<PerformanceFlushExecution>>::failure(
         recovered.error());
   }
-  const auto command = loaded.value().commands.find(identity.command_id);
-  if (command == loaded.value().commands.end()) {
+  const auto command = loaded.value()->commands.find(identity.command_id);
+  if (command == loaded.value()->commands.end()) {
     return foundation::Result<
         std::optional<PerformanceFlushExecution>>::success(std::nullopt);
   }
   const auto stored =
-      loaded.value().performance_flush_identities.find(identity.command_id);
+      loaded.value()->performance_flush_identities.find(identity.command_id);
   const auto* mutation =
       std::get_if<PerformanceMutation>(&command->second);
-  if (stored == loaded.value().performance_flush_identities.end() ||
+  if (stored == loaded.value()->performance_flush_identities.end() ||
       stored->second != identity || mutation == nullptr ||
       mutation->performance_id != identity.performance_id) {
     return foundation::Result<
@@ -6157,8 +6214,8 @@ ProjectStore::replay_performance_flush(
         "Performance flush identity does not match the persisted mutation",
     });
   }
-  const auto receipt = loaded.value().receipts.find(identity.command_id);
-  if (receipt == loaded.value().receipts.end()) {
+  const auto receipt = loaded.value()->receipts.find(identity.command_id);
+  if (receipt == loaded.value()->receipts.end()) {
     return foundation::Result<
         std::optional<PerformanceFlushExecution>>::failure(
         invalid_project(
@@ -6171,7 +6228,7 @@ ProjectStore::replay_performance_flush(
           identity,
           *mutation,
           PerformanceMutationReceipt{receipt->second.committed_revision},
-          std::move(loaded.value().state),
+          std::move(loaded.value()->state),
           true,
       });
 }
@@ -6241,16 +6298,16 @@ ProjectStore::replay_performance_flush(
       return foundation::Result<
           std::optional<PerformanceFlushExecution>>::failure(loaded.error());
     }
-    auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
+    auto recovered = recover_uncommitted(*platform_, history_, bundle, *loaded.value());
     if (!recovered.has_value()) {
       return foundation::Result<
           std::optional<PerformanceFlushExecution>>::failure(
           recovered.error());
     }
     const auto stored =
-        loaded.value().performance_flush_identities.find(command_id);
-    if (stored == loaded.value().performance_flush_identities.end()) {
-      if (loaded.value().commands.contains(command_id)) {
+        loaded.value()->performance_flush_identities.find(command_id);
+    if (stored == loaded.value()->performance_flush_identities.end()) {
+      if (loaded.value()->commands.contains(command_id)) {
         return foundation::Result<
             std::optional<PerformanceFlushExecution>>::failure(Error{
             ErrorCode::invalid_argument,
@@ -6344,7 +6401,7 @@ ProjectStore::execute_performance_flush(
       return foundation::Result<domain::AppliedCommand>::failure(
           loaded.error());
     }
-    auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
+    auto recovered = recover_uncommitted(*platform_, history_, bundle, *loaded.value());
     if (!recovered.has_value()) {
       return foundation::Result<domain::AppliedCommand>::failure(
           recovered.error());
@@ -6378,11 +6435,11 @@ ProjectStore::execute_performance_flush(
       });
     }
     const auto existing =
-        loaded.value().performance_flush_identities.find(identity.command_id);
+        loaded.value()->performance_flush_identities.find(identity.command_id);
     const bool has_receipt =
-        loaded.value().receipts.contains(identity.command_id);
+        loaded.value()->receipts.contains(identity.command_id);
     if (has_receipt &&
-        (existing == loaded.value().performance_flush_identities.end() ||
+        (existing == loaded.value()->performance_flush_identities.end() ||
          existing->second != identity)) {
       return foundation::Result<domain::AppliedCommand>::failure(Error{
           ErrorCode::invalid_argument,
@@ -6391,8 +6448,8 @@ ProjectStore::execute_performance_flush(
     }
     if (!has_receipt) {
       const auto target =
-          loaded.value().state.performances.find(identity.performance_id);
-      if (target == loaded.value().state.performances.end() ||
+          loaded.value()->state.performances.find(identity.performance_id);
+      if (target == loaded.value()->state.performances.end() ||
           performance_fingerprint(target->second) !=
               locked_active.value().performance_fingerprint) {
         return foundation::Result<domain::AppliedCommand>::failure(Error{
@@ -6644,18 +6701,18 @@ ProjectStore::disarm_sequence_capture(
               loaded.error());
         }
         const auto recovered =
-            recover_uncommitted(*platform_, history_, bundle, loaded.value());
+            recover_uncommitted(*platform_, history_, bundle, *loaded.value());
         if (!recovered.has_value()) {
           return foundation::Result<std::optional<std::uint64_t>>::failure(
               recovered.error());
         }
-        const auto receipt = loaded.value().receipts.find(capture.command_id);
-        if (receipt == loaded.value().receipts.end()) {
-          if (loaded.value().state.revision != capture.expected_revision ||
-              loaded.value().commands.contains(capture.command_id) ||
-              loaded.value().state.assets.contains(capture.asset_id) ||
+        const auto receipt = loaded.value()->receipts.find(capture.command_id);
+        if (receipt == loaded.value()->receipts.end()) {
+          if (loaded.value()->state.revision != capture.expected_revision ||
+              loaded.value()->commands.contains(capture.command_id) ||
+              loaded.value()->state.assets.contains(capture.asset_id) ||
               loaded.value()
-                  .state.banks.at(capture.slot.bank)
+                  ->state.banks.at(capture.slot.bank)
                   .at(capture.slot.pad)
                   .asset_id.has_value()) {
             return conflict(
@@ -6665,12 +6722,12 @@ ProjectStore::disarm_sequence_capture(
               std::nullopt);
         }
 
-        const auto recorded = loaded.value().commands.find(capture.command_id);
+        const auto recorded = loaded.value()->commands.find(capture.command_id);
         const auto* sample =
-            recorded != loaded.value().commands.end()
+            recorded != loaded.value()->commands.end()
                 ? std::get_if<domain::ImportAssignSample>(&recorded->second)
                 : nullptr;
-        const auto asset = loaded.value().state.assets.find(capture.asset_id);
+        const auto asset = loaded.value()->state.assets.find(capture.asset_id);
         const auto expected_event = nlohmann::json{
             {"command_id", capture.command_id.value()},
             {"revision", capture.expected_revision + 1},
@@ -6685,11 +6742,11 @@ ProjectStore::disarm_sequence_capture(
             receipt->second.committed_revision !=
                 capture.expected_revision + 1 ||
             receipt->second.event != expected_event ||
-            loaded.value().state.revision != capture.expected_revision + 1 ||
-            asset == loaded.value().state.assets.end() ||
+            loaded.value()->state.revision != capture.expected_revision + 1 ||
+            asset == loaded.value()->state.assets.end() ||
             asset->second != sample->asset ||
             loaded.value()
-                    .state.banks.at(capture.slot.bank)
+                    ->state.banks.at(capture.slot.bank)
                     .at(capture.slot.pad)
                     .asset_id != capture.asset_id) {
           return conflict(
@@ -6841,7 +6898,7 @@ ProjectStore::import_artifact_with_identity(
     return foundation::Result<ImportArtifactExecution>::failure(
         loaded.error());
   }
-  const auto recovered = recover_uncommitted(*platform_, history_, bundle, loaded.value());
+  const auto recovered = recover_uncommitted(*platform_, history_, bundle, *loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<ImportArtifactExecution>::failure(
         recovered.error());
@@ -6859,8 +6916,8 @@ ProjectStore::import_artifact_with_identity(
   }
 
   const auto original =
-      loaded.value().commands.find(request.meta.command_id);
-  if (original != loaded.value().commands.end()) {
+      loaded.value()->commands.find(request.meta.command_id);
+  if (original != loaded.value()->commands.end()) {
     const auto* import =
         std::get_if<domain::ImportAsset>(&original->second);
     if (import == nullptr) {
@@ -6891,8 +6948,8 @@ ProjectStore::import_artifact_with_identity(
           });
     }
     const auto receipt =
-        loaded.value().receipts.find(request.meta.command_id);
-    if (receipt == loaded.value().receipts.end()) {
+        loaded.value()->receipts.find(request.meta.command_id);
+    if (receipt == loaded.value()->receipts.end()) {
       return foundation::Result<ImportArtifactExecution>::failure(
           invalid_project(
               "persisted ImportAsset receipt is missing",
@@ -6902,7 +6959,7 @@ ProjectStore::import_artifact_with_identity(
         ImportArtifactExecution{
             *import,
             domain::AppliedCommand{
-                std::move(loaded.value().state),
+                std::move(loaded.value()->state),
                 receipt->second.event,
                 true,
             },
@@ -7024,7 +7081,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
         loaded.error());
   }
   const auto recovered = recover_uncommitted(
-      *platform_, history_, bundle, loaded.value());
+      *platform_, history_, bundle, *loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
@@ -7042,8 +7099,8 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
   }
 
   const auto original =
-      loaded.value().commands.find(request.meta.command_id);
-  if (original != loaded.value().commands.end()) {
+      loaded.value()->commands.find(request.meta.command_id);
+  if (original != loaded.value()->commands.end()) {
     const auto* import =
         std::get_if<domain::ImportAsset>(&original->second);
     if (import == nullptr) {
@@ -7063,8 +7120,8 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
           });
     }
     const auto receipt =
-        loaded.value().receipts.find(request.meta.command_id);
-    if (receipt == loaded.value().receipts.end()) {
+        loaded.value()->receipts.find(request.meta.command_id);
+    if (receipt == loaded.value()->receipts.end()) {
       return foundation::Result<domain::AppliedCommand>::failure(
           invalid_project(
               "persisted ImportAsset receipt is missing",
@@ -7072,7 +7129,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
     }
     return foundation::Result<domain::AppliedCommand>::success(
         domain::AppliedCommand{
-            std::move(loaded.value().state),
+            std::move(loaded.value()->state),
             receipt->second.event,
             true,
         });
@@ -7196,7 +7253,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
     return foundation::Result<domain::AppliedCommand>::failure(
         loaded.error());
   }
-  if (loaded.value().state.contract < domain::ProjectContract::v4) {
+  if (loaded.value()->state.contract < domain::ProjectContract::v4) {
     return foundation::Result<domain::AppliedCommand>::failure(
         Error{
             ErrorCode::invalid_argument,
@@ -7204,7 +7261,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
         });
   }
   const auto recovered = recover_uncommitted(
-      *platform_, history_, bundle, loaded.value());
+      *platform_, history_, bundle, *loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
@@ -7228,7 +7285,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
   // A replayed command id publishes nothing: commit_loaded serves the stored
   // receipt after the identity cross-check.
   const bool replayed =
-      loaded.value().receipts.contains(request.meta.command_id);
+      loaded.value()->receipts.contains(request.meta.command_id);
   return commit_loaded(
       platform_, history_,
       bundle,
@@ -7338,7 +7395,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::adopt_candidates(
     return foundation::Result<domain::AppliedCommand>::failure(
         loaded.error());
   }
-  const auto fresh = domain::validate_candidate_source(loaded.value().state,
+  const auto fresh = domain::validate_candidate_source(loaded.value()->state,
       request.project_id, request.meta.expected_revision,
       request.source_asset_id, request.source_artifact);
   if (!fresh.has_value())
@@ -7361,7 +7418,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::adopt_candidates(
         ErrorCode::revision_conflict, "Candidate source bytes changed",
         {{"reason", "candidate_source_changed"}}});
   const auto recovered = recover_uncommitted(
-      *platform_, history_, bundle, loaded.value());
+      *platform_, history_, bundle, *loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
@@ -7474,14 +7531,14 @@ ProjectStore::import_assign_sample_bytes(
         loaded.error());
   }
   if (request.lineage.has_value() &&
-      loaded.value().state.contract < domain::ProjectContract::v4) {
+      loaded.value()->state.contract < domain::ProjectContract::v4) {
     return foundation::Result<domain::AppliedCommand>::failure(Error{
         ErrorCode::invalid_argument,
         "Asset Lineage requires lmdj.project.v4 Project Truth",
     });
   }
   const auto recovered = recover_uncommitted(
-      *platform_, history_, bundle, loaded.value());
+      *platform_, history_, bundle, *loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
@@ -7531,11 +7588,11 @@ ProjectStore::import_assign_sample_bytes(
         capture.slot,
     };
     const PersistedCommand persisted = durable_command;
-    const auto receipt = loaded.value().receipts.find(capture.command_id);
-    if (receipt != loaded.value().receipts.end()) {
-      const auto recorded = loaded.value().commands.find(capture.command_id);
+    const auto receipt = loaded.value()->receipts.find(capture.command_id);
+    if (receipt != loaded.value()->receipts.end()) {
+      const auto recorded = loaded.value()->commands.find(capture.command_id);
       const auto* recorded_sample =
-          recorded != loaded.value().commands.end()
+          recorded != loaded.value()->commands.end()
               ? std::get_if<domain::ImportAssignSample>(&recorded->second)
               : nullptr;
       const auto expected_event = nlohmann::json{
@@ -7543,7 +7600,7 @@ ProjectStore::import_assign_sample_bytes(
           {"revision", capture.expected_revision + 1},
           {"type", "sample.imported_assigned"},
       };
-      const auto asset = loaded.value().state.assets.find(capture.asset_id);
+      const auto asset = loaded.value()->state.assets.find(capture.asset_id);
       if (recorded_sample == nullptr ||
           recorded_sample->meta.command_id != capture.command_id ||
           recorded_sample->meta.expected_revision !=
@@ -7553,25 +7610,25 @@ ProjectStore::import_assign_sample_bytes(
           recorded_sample->slot != capture.slot ||
           receipt->second.committed_revision != capture.expected_revision + 1 ||
           receipt->second.event != expected_event ||
-          loaded.value().state.revision != capture.expected_revision + 1 ||
-          asset == loaded.value().state.assets.end() ||
+          loaded.value()->state.revision != capture.expected_revision + 1 ||
+          asset == loaded.value()->state.assets.end() ||
           asset->second != durable_command.asset ||
           loaded.value()
-                  .state.banks.at(capture.slot.bank)
+                  ->state.banks.at(capture.slot.bank)
                   .at(capture.slot.pad)
                   .asset_id != capture.asset_id) {
         return recovery_conflict(
             "durable armed Capture receipt does not match Project Truth");
       }
-    } else if (loaded.value().state.revision != capture.expected_revision ||
-               loaded.value().commands.contains(capture.command_id)) {
+    } else if (loaded.value()->state.revision != capture.expected_revision ||
+               loaded.value()->commands.contains(capture.command_id)) {
       return recovery_conflict(
           "durable armed Capture precommit does not match Project Truth");
     }
 
     std::optional<ArtifactStage> stage;
     std::optional<StagedSample> resumed_staging;
-    if (receipt == loaded.value().receipts.end()) {
+    if (receipt == loaded.value()->receipts.end()) {
       auto staged = stage_sample(
           *platform_, bundle, capture.command_id.value(), request.bytes);
       if (!staged.has_value()) {
@@ -7609,7 +7666,7 @@ ProjectStore::import_assign_sample_bytes(
     return reconciled;
   }
 
-  if (loaded.value().receipts.contains(request.meta.command_id)) {
+  if (loaded.value()->receipts.contains(request.meta.command_id)) {
     auto replayed = commit_loaded(
         platform_, history_,
         bundle,
@@ -7762,7 +7819,7 @@ foundation::Result<std::vector<std::byte>> ProjectStore::read_asset_artifact(
   // recovers/scavenges authoring state, which owner resolution must not do.
   const auto loaded = load_project(*platform_, bundle, false);
   if (!loaded.has_value()) return BytesResult::failure(loaded.error());
-  const auto& state = loaded.value().state;
+  const auto& state = loaded.value()->state;
   const auto owner = state.assets.find(asset_id);
   if (state.id != project_id || owner == state.assets.end() ||
       owner->second.artifact != artifact) {
@@ -7786,7 +7843,7 @@ foundation::Result<domain::ProjectState> ProjectStore::inspect_committed(
   if (!tree.has_value()) return Result::failure(tree.error());
   auto loaded = load_project(*platform_, bundle, false);
   if (!loaded.has_value()) return Result::failure(loaded.error());
-  return Result::success(std::move(loaded.value().state));
+  return Result::success(std::move(loaded.value()->state));
 }
 
 }  // namespace lmdj::project_io
