@@ -200,6 +200,7 @@ function deferred<T>() {
 }
 
 interface SampleFixtureOptions {
+  canUsePad?: (slot: number) => boolean;
   activateAudioForGesture?: (event: {isTrusted: boolean}) => Promise<boolean> | null;
   isAssigned?: (slot: number) => boolean;
   isAvailable?: (slot: number) => boolean;
@@ -1732,4 +1733,20 @@ describe("Creator input controller", () => {
     expect(value.triggers).toEqual([]);
     controller.dispose();
   });
+});
+
+
+test("an unavailable streaming Pad neither wakes audio nor opens the empty-Pad picker", () => {
+  const value = fixture();
+  let activations = 0;
+  const controller = createCreatorInputController({
+    session: value.session, dispatch: value.dispatch,
+    getActiveBank: () => 0, isAssigned: () => true,
+    canUsePad: slot => slot !== 0,
+    activateAudioForGesture: () => {activations++; return Promise.resolve(true);},
+  });
+  controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+  expect(value.triggers).toHaveLength(0);
+  expect(activations).toBe(0);
+  controller.dispose();
 });
