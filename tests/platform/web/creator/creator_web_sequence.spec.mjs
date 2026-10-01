@@ -450,12 +450,16 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
 
   await recordKey(page).click();
   await transportStatus(page, "recording");
-  await page.keyboard.press("KeyQ");
+  // Leave the press open: owner-loss recovery finalizes an interrupted held
+  // one-shot with its attack tail. A completed press/release records its real
+  // duration and cannot establish this precondition.
+  await page.keyboard.down("KeyQ");
   // The admission must be durable before the reload, or the recovery
   // assertion would be testing an empty journal instead of owner loss.
   await awaitAdmittedPresses(page, 1);
 
   await reopenProject(page);
+  await page.keyboard.up("KeyQ");
   const lostTruth = await inspectTruth(page);
   // Nothing was committed: the unresolved admission never reaches truth.
   expect(lostTruth.revision).toBe(imported.revision);
