@@ -147,9 +147,40 @@ that is open in another tab or recording, and must never publish a partial copy.
    - A C++ change under `packages/web-runtime-platform/src` selects the core,
      creator and web-runtime families, so this Task runs in full mode: every
      batch-only lane runs on the exact head before merge.
-4. **creator-web** (after #1660 Task 2): Project library Duplicate action. It
-   opens the copy and decides how the copy is named. Browser journeys cover the
-   normal, refused, failed, cancelled and reopened paths. #1684 closes here.
+4. **creator-web** — delivered by #1714 (after #1711 landed #1660 Task 2),
+   which closed #1684.
+   - One **Duplicate Project** action beside New Project copies the open
+     Project under a fresh identity (`duplicateProjectJourney` checks that the
+     returned summary names the requested identity at revision 0), then opens
+     the copy. The copy becomes the Project this device remembers, so a reload
+     reopens it.
+   - The Project display is unchanged: no Project names are added, because
+     `lmdj.project.v5` has no name field and adding one would be a Contract
+     decision.
+   - Duplicate shares the serial Project action lane and is unavailable while
+     audio runs, matching the Host's refusal while running.
+   - A refused or failed copy leaves the open Project untouched and is shown
+     beside the action (`duplicateRefusalMessage`), not as a Project error:
+     - `PROJECT_BUSY` names another tab or process;
+     - `HOST_STATE_INVALID` asks the user to stop playback and finish or
+       recover any unfinished recording;
+     - `HOST_TIMEOUT` / `HOST_RESTART_REQUIRED` take the Runtime restart path.
+   - A copy stored but failing to open is reported as an open error with the
+     copy as its retry target, and the library is re-listed so the copy is
+     opened rather than duplicated again.
+   - #1718 implemented the same Task in parallel (Duplicate on every library
+     card) and was closed unmerged once #1714 landed.
+
+#1684 acceptance, by path:
+
+| Path | Evidence |
+|---|---|
+| Normal | identical Truth and Artifacts under a new identity (project-io, #1694); copy listed with the open Project kept (Host, #1708); browser: the copy opens with identical Pads, Patterns and settings under a new identity (#1714) |
+| Independent | editing either Project never changes the other (project-io, both directions); browser: an edit to the copy never reaches the source (#1714) |
+| Refused | another tab or process (project-io, Host `PROJECT_BUSY`, Creator); an active or crashed recording Journal (project-io, Facade, Host, Creator message); unavailable while audio runs (Creator); identity in use; invalid identities |
+| Failed | corrupt Artifact, publication failure, quota (project-io); a stored copy that fails to open (Creator) |
+| Cancelled | a refused publication claim publishes nothing (project-io, Host); a deadline before publication becomes `HOST_TIMEOUT` (bridge) |
+| Reopened | a new process loads and edits the copy (project-io); a second Core instance over OPFS (web, #1708); browser reload reopens the copy with its edit (#1714) |
 
 ## Verification (Task 1)
 
@@ -178,21 +209,19 @@ acceptance.
 
 ## Version Management
 
-Version impact: none in this Pull Request.
+Version impact: none in each Task's Pull Request.
 
-Owed MINOR bumps:
-
-| Module | From | To | Task |
-|---|---|---|---|
-| `project-io` | 4.2.1 | 4.3.0 | Task 1 |
-| `application-facade` | 6.2.1 | 6.3.0 | Task 2 (typed `duplicate_project`) |
-| `web-runtime-platform` | 5.3.3 | 5.4.0 | Task 3 (`project.duplicate`, `duplicateProject`) |
-| `creator-web` | 4.5.1 | 4.6.0 | Task 4 |
-
-Each is a backward-compatible public capability. Under the owed-version
+Each Task adds a backward-compatible public capability. Under the owed-version
 convention (#1550, settled by #1621), Assembly pins forbid folding a module
-identity change into a feature Pull Request, so each bump is deferred to the
-next version cut. Bumps already owed by #1686 are combined, not stacked.
+identity change into a feature Pull Request, so each MINOR is owed to a version
+cut rather than taken in its own Pull Request.
+
+| Module | Task (merge) | Settled by |
+|---|---|---|
+| `project-io` | Task 1 (#1694) | the 2.0.70.0 cut (#1697), which set `project-io` 5.0.0 |
+| `application-facade` | Task 2 (#1702) | the 2.0.70.0 cut (#1697), which set 6.3.0 |
+| `web-runtime-platform` | Task 3 (#1708) | owed to the next cut: #1697 set 5.4.0 before #1708 merged |
+| `creator-web` | Task 4 (#1714) | owed to the next cut: `main` is at 4.6.0 |
 
 No Contract change: the copy is written in the unchanged `lmdj.project.v5`
 Project format and manifest format, so no migration is needed. No tag, release,
