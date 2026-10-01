@@ -228,6 +228,9 @@ const std::map<std::string, OperationKind>& operations() {
       {"sequence.recovery.discard", OperationKind::command},
       {"soundset.audition", OperationKind::query},
       {"soundset.catalog.list", OperationKind::query},
+      {"soundset.catalog.describe", OperationKind::query},
+      {"soundset.slot.acquire", OperationKind::query},
+      {"soundset.slot.install", OperationKind::command},
       {"soundset.inspect", OperationKind::query},
       {"soundset.install", OperationKind::command},
       {"soundset.map.preview", OperationKind::query},
@@ -4104,9 +4107,10 @@ struct Application::Impl {
     if (operation == "soundset.audition") {
       return soundset_audition(request);
     }
-    if (operation == "soundset.catalog.list") {
-      return soundset_catalog_list(request);
-    }
+    if (operation == "soundset.catalog.list") return soundset_catalog_list(request);
+    if (operation == "soundset.catalog.describe") return soundset_catalog_describe(request);
+    if (operation == "soundset.slot.acquire") return soundset_slot_acquire(request);
+    if (operation == "soundset.slot.install") return soundset_install(request);
     if (operation == "soundset.inspect") {
       return soundset_inspect(request);
     }
@@ -8609,16 +8613,18 @@ struct Application::Impl {
   foundation::Result<DecodedSoundSetAudio>
   decode_soundset_audio(
       const project_io::StoredSoundSet& stored,
-      std::string_view manifest_sha256) const {
+      std::string_view manifest_sha256,
+      std::optional<std::uint8_t> selected_slot = std::nullopt) const {
     using Decoded = DecodedSoundSetAudio;
     Decoded decoded;
     for (const auto& slot : stored.manifest.slots) {
-      if (!slot.occupied.has_value()) {
+      if (!slot.occupied.has_value() || (selected_slot.has_value() && slot.index != *selected_slot)) {
         continue;
       }
       const auto index = static_cast<std::uint8_t>(slot.index);
-      auto bytes = soundset_sets.read_artifact(
-          manifest_sha256, slot.occupied->artifact.sha256);
+      auto bytes = selected_slot.has_value()
+        ? soundset_sets.read_slot_artifact(manifest_sha256, *selected_slot)
+        : soundset_sets.read_artifact(manifest_sha256, slot.occupied->artifact.sha256);
       if (!bytes.has_value()) {
         return foundation::Result<Decoded>::failure(
             soundset_artifact_error(bytes.error()));
@@ -8633,7 +8639,7 @@ struct Application::Impl {
     }
     // S11-D5's set-level demo is under the same S8-D6 constraint. It is not a
     // slot, so its refusal carries no slot_index.
-    if (stored.manifest.demo.has_value()) {
+    if (!selected_slot.has_value() && stored.manifest.demo.has_value()) {
       const auto bytes = soundset_sets.read_artifact(
           manifest_sha256, stored.manifest.demo->sha256);
       if (!bytes.has_value()) {
@@ -8699,7 +8705,8 @@ struct Application::Impl {
   // PERMISSION_DENIED; unreachable Catalog leaves the cached manifest as the
   // sole authority.
   foundation::Result<ResolvedSoundSet> resolve_soundset(
-      const nlohmann::json& request) const {
+      const nlohmann::json& request,
+      std::optional<std::uint8_t> selected_slot = std::nullopt) const {
     const auto set_id = uuid_field(request, "set_id");
     const auto version = string_field(request, "version");
     require(semver_string(version), "version must be a SemVer string");
@@ -8707,7 +8714,9 @@ struct Application::Impl {
     require(
         lowercase_sha256(manifest_sha256),
         "manifest_sha256 must be 64 lowercase hex characters");
-    auto stored = soundset_sets.read(set_id, version, manifest_sha256);
+    auto stored = selected_slot.has_value()
+      ? soundset_sets.read_slot(set_id, version, manifest_sha256, *selected_slot)
+      : soundset_sets.read(set_id, version, manifest_sha256);
     if (!stored.has_value()) {
       return foundation::Result<ResolvedSoundSet>::failure(stored.error());
     }
@@ -8720,6 +8729,44 @@ struct Application::Impl {
     }
     return foundation::Result<ResolvedSoundSet>::success(
         ResolvedSoundSet{std::move(stored.value()), manifest_sha256});
+  }
+
+  nlohmann::json soundset_catalog_describe(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation"}), "soundset.catalog.describe request shape is invalid");
+    const auto entries = read_catalog_entries();
+    auto sets = nlohmann::json::array();
+    if (entries.has_value()) for (const auto& entry : *entries) {
+      sets.push_back({{"set_id", entry.set_id}, {"version", entry.version},
+        {"manifest_sha256", entry.manifest_sha256}, {"total_bytes", entry.total_bytes}});
+    }
+    return success_envelope({{"catalog_available", entries.has_value()}, {"sets", std::move(sets)}}, std::nullopt);
+  }
+
+  nlohmann::json soundset_slot_acquire(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "set_id", "version", "manifest_sha256", "slot_index"}),
+      "soundset.slot.acquire request shape is invalid");
+    const auto slot = static_cast<std::uint8_t>(unsigned_field(request, "slot_index", 15));
+    const auto set_id = uuid_field(request, "set_id");
+    const auto version = string_field(request, "version");
+    require(semver_string(version), "version must be a SemVer string");
+    const auto hash = string_field(request, "manifest_sha256");
+    require(lowercase_sha256(hash), "manifest_sha256 must be 64 lowercase hex characters");
+    const auto entries = read_catalog_entries();
+    if (entries.has_value()) for (const auto& entry : *entries) {
+      if (entry.set_id != set_id || entry.version != version || entry.manifest_sha256 != hash) continue;
+      if (!soundset_transport) return error_envelope(Error{ErrorCode::io_error, "Catalog transport is unavailable"});
+      const auto acquired = soundset_sets.acquire_slot(*soundset_transport, entry, slot);
+      if (!acquired.has_value()) return error_envelope(acquired.error());
+      break;
+    }
+    auto resolved = resolve_soundset(request, slot);
+    if (!resolved.has_value()) return error_envelope(resolved.error());
+    const auto decoded = decode_soundset_audio(resolved.value().stored, hash, slot);
+    if (!decoded.has_value()) return error_envelope(decoded.error());
+    auto selected = resolved.value().stored;
+    for (auto& item : selected.manifest.slots) if (item.index != slot) item.occupied.reset();
+    return success_envelope({{"set_id", set_id}, {"version", version}, {"manifest_sha256", hash},
+      {"slot_index", slot}, {"slots", soundset_slots_json(selected, decoded.value().slots)}}, std::nullopt);
   }
 
   nlohmann::json soundset_catalog_list(const nlohmann::json& request) {
@@ -9027,16 +9074,21 @@ struct Application::Impl {
   }
 
   nlohmann::json soundset_install(const nlohmann::json& request) {
+    const auto selected_slot = request.at("operation") == "soundset.slot.install"
+      ? std::optional<std::uint8_t>{static_cast<std::uint8_t>(unsigned_field(request, "slot_index", 15))}
+      : std::nullopt;
+    auto shape = request;
+    if (selected_slot.has_value()) shape.erase("slot_index");
     require(
         exact_keys(
-            request,
+            shape,
             {"operation", "project_path", "command_id", "expected_revision",
              "bank_id", "set_id", "version", "manifest_sha256"}) ||
-            exact_keys(
-                request,
+            (!selected_slot.has_value() && exact_keys(
+                shape,
                 {"operation", "project_path", "command_id",
                  "expected_revision", "bank_id", "set_id", "version",
-                 "manifest_sha256", "occupied_pad_policy"}),
+                 "manifest_sha256", "occupied_pad_policy"})),
         "soundset.install request shape is invalid");
     const auto project_path = absolute_path_field(request, "project_path");
     const auto command_id = uuid_field(request, "command_id");
@@ -9052,7 +9104,7 @@ struct Application::Impl {
       policy = value == "keep" ? domain::OccupiedPadPolicy::keep
                                : domain::OccupiedPadPolicy::replace;
     }
-    auto resolved = resolve_soundset(request);
+    auto resolved = resolve_soundset(request, selected_slot);
     if (!resolved.has_value()) {
       return error_envelope(resolved.error());
     }
@@ -9064,7 +9116,7 @@ struct Application::Impl {
     // once. Nothing has been written at this point, or below it until the
     // single commit.
     const auto decoded = decode_soundset_audio(
-        resolved.value().stored, resolved.value().manifest_sha256);
+        resolved.value().stored, resolved.value().manifest_sha256, selected_slot);
     if (!decoded.has_value()) {
       return error_envelope(decoded.error());
     }
@@ -9072,10 +9124,15 @@ struct Application::Impl {
     if (!loaded.has_value()) {
       return error_envelope(loaded.error());
     }
-    const auto mapping = domain::map_soundset(
-        resolved.value().stored.manifest, loaded.value().banks.at(bank));
+    auto selected_manifest = resolved.value().stored.manifest;
+    if (selected_slot.has_value()) for (auto& slot : selected_manifest.slots) {
+      if (slot.index != *selected_slot) slot.occupied.reset();
+    }
+    const auto mapping = domain::map_soundset(selected_manifest, loaded.value().banks.at(bank));
     const auto write_set =
-        domain::resolve_soundset_write_set(mapping, policy);
+        domain::resolve_soundset_write_set(mapping, selected_slot.has_value()
+            ? std::optional<domain::OccupiedPadPolicy>{domain::OccupiedPadPolicy::replace}
+            : policy);
     if (!write_set.has_value()) {
       // Carries the complete collisions list and soundset_occupied_conflict,
       // and nothing has been read, decoded or written at this point.
@@ -9203,6 +9260,7 @@ struct Application::Impl {
             domain::CommandMeta{
                 foundation::CommandId{command_id}, expected_revision},
             std::move(slots),
+            selected_slot.has_value(),
         });
     if (!committed.has_value()) {
       return error_envelope(committed.error());

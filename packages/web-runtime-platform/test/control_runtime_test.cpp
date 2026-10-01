@@ -4971,6 +4971,27 @@ void test_host_supplied_catalog_resolves_only_addressed_objects() {
           "soundset.catalog.index", {{"available", true}}, index_bytes),
       {"staged"});
 
+  const auto description = check_locked_success_result(
+      runtime->dispatch("soundset.catalog.describe", Json::object(), {}));
+  LMDJ_CHECK(description.at("catalog_available") == true);
+  LMDJ_CHECK(!description.at("sets").empty());
+  LMDJ_CHECK(check_locked_success_result(
+      runtime->dispatch("soundset.catalog.pending", Json::object(), {}))
+          .at("objects").empty());
+  const Json slot_identity{{"set_id", "11111111-1111-4111-8111-111111111111"},
+      {"version", "1.0.0"},
+      {"manifest_sha256", "33175f66912a9add3e4e551d19d85072adcd1f0331fcc9fed80ab0bc18dd9111"},
+      {"slot_index", 0}};
+  auto bad_slot = slot_identity;
+  bad_slot["slot_index"] = 16;
+  check_error(runtime->dispatch("soundset.slot.acquire", bad_slot, {}), "HOST_PROTOCOL_MISMATCH");
+  // A first acquisition requests the original manifest, not host-selected bytes.
+  check_error(runtime->dispatch("soundset.slot.acquire", slot_identity, {}), "IO_ERROR");
+  const auto slot_pending = check_locked_success_result(
+      runtime->dispatch("soundset.catalog.pending", Json::object(), {}));
+  LMDJ_CHECK(slot_pending.at("objects").size() == 1);
+  LMDJ_CHECK(slot_pending.at("objects").at(0).at("object_kind") == "manifest");
+
   // Every address Core asks for is one basename under one object kind, and
   // one pass of the loop below stages exactly the addresses of the last pass.
   Json listed;
@@ -5275,6 +5296,23 @@ void test_soundset_audition_reports_whether_a_voice_started() {
   LMDJ_CHECK(
       inspect_project(temp.path(), kProjectId).at("project_revision") ==
       committed);
+}
+
+void test_bridge_routes_catalog_description_without_a_project() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto request_id = uuid(987);
+  const auto envelope = encode(request(
+      request_id, "soundset.catalog.describe", Json::object()));
+  LMDJ_CHECK(bridge->submit(envelope, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  LMDJ_CHECK(response.at("ok") == true);
+  LMDJ_CHECK(response.at("result").at("catalog_available") == false);
+  LMDJ_CHECK(response.at("result").at("sets").empty());
 }
 
 void test_bridge_routes_sample_operations_without_a_project_path() {
@@ -7788,6 +7826,7 @@ int main() {
     test_host_supplied_catalog_resolves_only_addressed_objects();
     test_host_catalog_operations_need_a_wired_transport();
     test_soundset_audition_reports_whether_a_voice_started();
+    test_bridge_routes_catalog_description_without_a_project();
     test_bridge_routes_sample_operations_without_a_project_path();
     test_bridge_defers_parse_dispatch_and_copies_fixed_slots();
     test_bridge_rejects_duplicates_until_response_consumption();

@@ -7229,6 +7229,22 @@ foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
   // receipt after the identity cross-check.
   const bool replayed =
       loaded.value().receipts.contains(request.meta.command_id);
+  if (!replayed && request.require_empty_targets) {
+    std::vector<std::uint8_t> collisions;
+    for (const auto& assignment : request.slots) {
+      if (loaded.value().state.banks.at(assignment.slot.bank)
+              .at(assignment.slot.pad).asset_id.has_value()) {
+        collisions.push_back(assignment.slot.pad);
+      }
+    }
+    if (!collisions.empty()) {
+      return foundation::Result<domain::AppliedCommand>::failure(Error{
+          ErrorCode::invalid_argument,
+          "default Sound Set installation requires empty Pads",
+          {{"collisions", collisions}, {"reason", "soundset_occupied_conflict"}},
+      });
+    }
+  }
   return commit_loaded(
       platform_, history_,
       bundle,

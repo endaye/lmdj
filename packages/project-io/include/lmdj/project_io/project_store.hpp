@@ -210,6 +210,8 @@ class ProjectStore {
   struct SoundSetInstallRequest {
     domain::CommandMeta meta;
     std::vector<SoundSetInstallSlotRequest> slots;
+    // Checked under the writer lease after exact receipt replay recognition.
+    bool require_empty_targets{false};
   };
 
   struct CandidateAdoptionSlotRequest {
