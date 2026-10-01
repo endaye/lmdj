@@ -66,3 +66,24 @@ object coverage and refusal without partial mutation.
 checked command semantics as `AssignPad` with a null Asset. Patterns continue to
 reference the same Pad Slot; Assets and Artifact identities are retained. Invalid
 slots, stale revisions and command collisions keep their existing refusal rules.
+
+## Pattern event editing
+
+`EditPatternEvents {pattern_id, remove, put}` is the Sequence grid's atomic edit
+(#1671). One checked command removes every keyed event, then inserts or replaces
+each `put` event by key, and canonicalises the Pattern. The key is
+`(bank, pad, onset_tick)` (SR-D26).
+
+- A move is a removal plus a put at the new key.
+- A length or velocity change is a put at the same key.
+- Notes at different onsets may overlap.
+
+It refuses, without changing Truth:
+
+- an unknown Pattern (`pattern_not_found`);
+- a removed key that does not exist (`pattern_event_missing`);
+- a key repeated within `remove` or within `put` (`pattern_edit_duplicate_key`);
+- an empty edit (`pattern_edit_empty`);
+- an event outside the Pattern or across its loop seam;
+- an edit whose result equals the current Pattern (`pattern_edit_unchanged`), so
+  a no-op never becomes a revision.

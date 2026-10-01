@@ -134,3 +134,26 @@ stops the Pad and clears preview, delegates `pad.delete` to the Facade, removes
 cancelled import handles and publishes the new Bank through exact-generation
 acknowledgement. Responses retain the committed revision separately from Runtime
 publication failure. Other Pad imports and their revision guards remain intact.
+
+`RuntimeSession.editPatternEvents({patternId, expectedRevision, remove, put})`
+sends flat-slot keys and events as `pattern.events.edit` through the shared
+Project action queue.
+
+Control refuses the edit before commit while the Pattern transport:
+
+- records (`sequence_session_active`);
+- has a command or publication in flight (`pattern_transport_busy`).
+
+Otherwise it delegates to the Facade. When the edited Pattern is the Runtime's
+current one, Control then republishes only the Pattern view, without a Bank:
+
+- **Stopped:** the view is replaced immediately (`publication: "published"`),
+  so the next Play is not refused for a pending publication.
+- **Playing:** the view is swapped in place with
+  `publish_pattern_view_preserving_phase` (`"live"`). This keeps the origin and
+  any sounding voices, so playback neither restarts nor waits for a bar, and new
+  notes ahead of the playhead sound in the current loop.
+
+An edit of another Pattern publishes nothing (`"none"`); that Pattern is
+prepared from Truth when it is selected. A failed swap after commit returns the
+committed revision with `snapshot_error`.

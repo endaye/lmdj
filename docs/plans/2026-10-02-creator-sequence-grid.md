@@ -40,7 +40,7 @@ Checked on `dc0e5c2b`.
 - **Concurrency.**
   - While the transport journal is open (recording), `admit_non_sequence_authoring` (`application.cpp`) already refuses non-Sequence authoring.
   - Playback alone is admitted, but `prepare_and_publish` does not republish the playing Pattern.
-  - `sequence.settings.update` publishes a BPM change during playback through `publish_project_pattern`, which returns the `activation_frame` of the swap (`control_runtime.cpp`).
+  - `sequence.settings.update` publishes a BPM change during playback through `publish_project_pattern`, which returns the `activation_frame` of the swap (`control_runtime.cpp`). That scheduled swap stops Pattern voices and resets the Pattern origin, so it is not used for grid edits; see the [live-edit erratum](../prd/decisions/2026-10-02-sequence-grid-live-edit.md).
   - Undo and Redo are refused while the transport plays (`pattern_transport_busy`).
 - **Creator.**
   - `projectView` (`project_actions.ts`) drops `events`, so `ProjectView.patterns` holds only `{patternId, bars}`.
@@ -69,10 +69,11 @@ Checked on `dc0e5c2b`.
 - **An edit whose result equals the current Pattern** records no history entry. T1 pins the exact Store outcome (refused or accepted without a revision change) in a test, consistent with the existing no-op behaviour.
 - **Persistence and history.** Project I/O persists the command in its internal command log, which is not a Contract, following the `ApplyAuthoringDelta` precedent. History labels it "Edit Pattern".
 - **Host operation `pattern.events.edit`** carries `{pattern_id, remove, put, expected_revision, command_id}`.
-  - **Recording:** the existing Facade guard refuses it.
-  - **Stopped, or a non-playing Pattern:** commit, then publish as other authoring commits do.
-  - **Playing the edited Pattern:** commit, then publish through `publish_project_pattern`, as BPM does. The response returns `{generation, activation_frame}`, and T1 pins that frame to the next bar boundary.
-  - **A failed publication after commit** reports `runtime_published=false` with a typed `snapshot_error`. It never misreports a committed edit.
+  - **Recording, or a transport command or publication in flight:** refused before commit (`sequence_session_active`, `pattern_transport_busy`); the Facade guard also refuses recording.
+  - **Another Pattern than the Runtime's current one:** commit only (`publication: "none"`).
+  - **Stopped, current Pattern:** commit, then replace the Pattern view immediately (`"published"`), so the next Play is not refused for a pending publication.
+  - **Playing the current Pattern:** commit, then swap the view in place with `publish_pattern_view_preserving_phase` (`"live"`), per the [live-edit erratum](../prd/decisions/2026-10-02-sequence-grid-live-edit.md). The response returns `pattern_publication: {generation, activation_frame}`.
+  - **A failed swap after commit** returns the committed revision with a typed `snapshot_error`. It never misreports a committed edit.
 - **Session.** The Runtime Session gains `editPatternEvents`. Its `command_id` is minted per call, and a retry reuses the same identity.
 
 **Declared files.**
@@ -89,10 +90,10 @@ Checked on `dc0e5c2b`.
 - Store: one history entry per edit; Undo restores exactly; Redo; the no-op outcome; reopen.
 - Facade: refused while recording; admitted while playing.
 - Host:
-  - stopped publish;
-  - playing publish whose `activation_frame` is the next bar;
-  - non-playing Pattern;
-  - publication failure after commit.
+  - stopped publish applied by the next quantum, so the next Play sounds the edit;
+  - playing publish that keeps the origin and plays a new note ahead of the playhead in the same loop;
+  - another Pattern publishes nothing;
+  - refusals: recording, and a Facade refusal's code.
 - Protocol and Session payload validation.
 
 **Gate defect caught.** Any edit that does not round-trip exactly through Truth, history and publication.
@@ -149,7 +150,7 @@ Checked on `dc0e5c2b`.
   - its velocity is the last velocity set in the grid, starting at 100.
 - **Disabled and refused states:**
   - while recording, editing is disabled, with the reason given;
-  - while playing, edits commit, and an "applies from next bar" mark lasts until the reported `activation_frame`;
+  - while playing, edits commit and are heard in place from the next not-yet-played note;
   - a conflict or refusal restores the projection from Truth and shows the reason.
 - **Undo and Redo.** The existing controls apply. They stay stop-only, per the 2026-09-30 decision.
 

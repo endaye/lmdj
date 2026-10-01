@@ -1579,6 +1579,34 @@ struct ControlRuntime::Impl {
         std::move(replacement_authority));
   }
 
+  // A grid edit changes only the current Pattern's events, so its view is
+  // republished without a Bank. While the transport plays, the view swaps in
+  // place: same origin, so playback neither restarts nor waits for a bar,
+  // voices keep sounding and the cursor resumes at the first event not yet
+  // scheduled. While stopped nothing plays, so it applies immediately and
+  // leaves no pending publication to refuse the next Play.
+  foundation::Result<audio::PatternPublication> publish_edited_pattern(
+      const foundation::PatternId& selected_pattern, bool playing) {
+    auto pattern = prepare_project_pattern(selected_pattern);
+    if (!pattern.has_value()) {
+      return foundation::Result<audio::PatternPublication>::failure(
+          pattern.error());
+    }
+    static_cast<void>(engine.reclaim_retired_patterns());
+    const auto publication = playing
+        ? engine.publish_pattern_view_preserving_phase(
+              std::move(pattern.value()),
+              engine.pattern_telemetry().current_generation)
+        : engine.publish_pattern_view_immediate(std::move(pattern.value()));
+    if (publication.result != audio::PatternPublishResult::accepted) {
+      return foundation::Result<audio::PatternPublication>::failure(Error{
+          ErrorCode::invalid_argument,
+          "runtime Pattern publication is unavailable",
+          {{"reason", "pattern_publication_unavailable"}}});
+    }
+    return foundation::Result<audio::PatternPublication>::success(publication);
+  }
+
   std::optional<audio::PatternReplacementAuthority>
   pending_pattern_authority() const {
     const auto telemetry = engine.pattern_telemetry();
@@ -3450,6 +3478,74 @@ Json ControlRuntime::dispatch(
           response.at("project_revision").get<std::uint64_t>();
       auto result = response.at("result");
       result["project_revision"] = response.at("project_revision");
+      return success(std::move(result));
+    }
+    if (operation == "pattern.events.edit") {
+      require(exact_keys(
+          payload,
+          {"command_id", "expected_revision", "pattern_id", "remove", "put"}));
+      require(sidecar.empty());
+      if (!impl_->session_available() || impl_->active_sequence.has_value()) {
+        return state_error();
+      }
+      const auto edited_pattern = uuid_field(payload, "pattern_id");
+      bool playing = false;
+      if (impl_->transport != nullptr) {
+        // Recording keeps the admission fence it retained, and a transport
+        // command in flight owns the next publication; refuse before commit.
+        const auto transport = impl_->transport->controller->inspect();
+        if (transport.recording) {
+          return host_error("HOST_STATE_INVALID",
+              "Pattern events cannot change during Pattern transport recording",
+              {{"reason", "sequence_session_active"}});
+        }
+        if (transport.phase != facade::PatternTransportPhase::idle ||
+            transport.error.has_value() || impl_->transport->publish_pending) {
+          return host_error("HOST_STATE_INVALID",
+              "Pattern events can change once the Pattern transport settles",
+              {{"reason", "pattern_transport_busy"}});
+        }
+        playing = transport.playing;
+      }
+      if (impl_->cancel_if_expired()) return timeout_error();
+      auto response = impl_->application.command({
+          {"operation", "pattern.events.edit"},
+          {"project_path", impl_->retained_project_path->generic_string()},
+          {"command_id", uuid_field(payload, "command_id")},
+          {"expected_revision", unsigned_field(payload, "expected_revision")},
+          {"pattern_id", edited_pattern},
+          {"remove", payload.at("remove")},
+          {"put", payload.at("put")},
+      });
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
+      }
+      impl_->project_revision =
+          response.at("project_revision").get<std::uint64_t>();
+      Json result{{"committed_revision", *impl_->project_revision},
+                  {"project_revision", *impl_->project_revision},
+                  {"pattern_id", edited_pattern},
+                  {"replayed", response.at("result").at("replayed")}};
+      // The Runtime holds only its current Pattern; another Pattern is
+      // prepared from Truth whenever it is selected.
+      if (!impl_->pattern_id.has_value() || *impl_->pattern_id != edited_pattern) {
+        result["publication"] = "none";
+        return success(std::move(result));
+      }
+      auto published = impl_->publish_edited_pattern(
+          foundation::PatternId{edited_pattern}, playing);
+      result["publication"] = playing ? "live" : "published";
+      if (!published.has_value()) {
+        // The edit is committed; only its Runtime view failed to swap.
+        result["pattern_publication"] = nullptr;
+        result["snapshot_error"] =
+            normalized_error(published.error()).at("error");
+      } else {
+        result["pattern_publication"] = {
+            {"generation", published.value().generation},
+            {"activation_frame", published.value().activation_frame},
+        };
+      }
       return success(std::move(result));
     }
     if (operation == "project.inspect") {

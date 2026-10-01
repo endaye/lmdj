@@ -435,6 +435,75 @@ foundation::Result<AppliedCommand> apply_new_command(
           ProjectContract::v4));
 }
 
+foundation::Result<AppliedCommand> edit_refused(
+    foundation::ErrorCode code, std::string_view message,
+    std::string_view reason) {
+  return foundation::Result<AppliedCommand>::failure(
+      foundation::Error{code, std::string(message), {{"reason", reason}}});
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
+    const EditPatternEvents& command) {
+  using foundation::ErrorCode;
+  if (!is_valid_uuid(command.pattern_id.value())) {
+    return invalid("pattern id must be a lowercase UUID");
+  }
+  const auto found = state.patterns.find(command.pattern_id);
+  if (found == state.patterns.end()) {
+    return edit_refused(
+        ErrorCode::not_found, "pattern does not exist", "pattern_not_found");
+  }
+  std::set<PatternEventKey> removed;
+  for (const auto& key : command.remove) {
+    if (!is_valid_slot(key.slot)) {
+      return invalid("pattern event key is invalid");
+    }
+    if (!removed.insert(key).second) {
+      return edit_refused(ErrorCode::invalid_argument,
+          "pattern edit removes an event twice", "pattern_edit_duplicate_key");
+    }
+  }
+  std::set<PatternEventKey> put;
+  for (const auto& event : command.put) {
+    if (!put.insert(PatternEventKey{event.slot, event.onset_tick}).second) {
+      return edit_refused(ErrorCode::invalid_argument,
+          "pattern edit puts an event twice", "pattern_edit_duplicate_key");
+    }
+  }
+  if (removed.empty() && put.empty()) {
+    return edit_refused(ErrorCode::invalid_argument,
+        "pattern edit is empty", "pattern_edit_empty");
+  }
+  const auto validation = validate_pattern(
+      Pattern{command.pattern_id, found->second.bars, command.put});
+  if (!validation.has_value()) {
+    return foundation::Result<AppliedCommand>::failure(validation.error());
+  }
+  std::vector<PatternEvent> kept;
+  std::size_t matched = 0;
+  for (const auto& event : found->second.events) {
+    if (removed.contains(PatternEventKey{event.slot, event.onset_tick})) {
+      ++matched;
+    } else {
+      kept.push_back(event);
+    }
+  }
+  if (matched != removed.size()) {
+    return edit_refused(ErrorCode::not_found,
+        "pattern event to remove does not exist", "pattern_event_missing");
+  }
+  auto events = merge_pattern_events(kept, command.put);
+  if (events == found->second.events) {
+    return edit_refused(ErrorCode::invalid_argument,
+        "pattern edit changes nothing", "pattern_edit_unchanged");
+  }
+  auto copy = state;
+  copy.patterns.at(command.pattern_id).events = std::move(events);
+  return foundation::Result<AppliedCommand>::success(
+      applied(std::move(copy), "pattern.events_edited", command.meta));
+}
+
 foundation::Result<AppliedCommand> apply_new_command(
     const ProjectState& state,
     const UpdatePadPlayback& command) {
@@ -666,6 +735,12 @@ foundation::Result<AppliedCommand> apply(
     const ProjectState& state, const DeletePad& command,
     const std::map<foundation::CommandId, CommandReceipt>& receipts) {
   return apply(state, Command{command.assignment()}, receipts);
+}
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state, const EditPatternEvents& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts) {
+  return apply_checked(state, command, receipts);
 }
 
 foundation::Result<AppliedCommand> apply(

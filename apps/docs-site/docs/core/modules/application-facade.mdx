@@ -505,6 +505,22 @@ cannot commit late. Another Pad's retained import still follows the ordinary
 expected-revision check after deletion; it never silently rebases. Cancellation
 is transient and is not restored by Undo. No Asset garbage collection occurs.
 
+## Pattern event editing
+
+`pattern.events.edit` takes:
+
+- `project_path`, `command_id`, `expected_revision`;
+- `pattern_id`;
+- `remove`, an array of `{slot, onset_tick}` keys;
+- `put`, an array of `{slot, onset_tick, duration_tick, velocity}` events.
+
+The Facade bounds every value to the widest, 8-bar Pattern and leaves exact
+validation against the edited Pattern to the Domain. It runs
+`admit_non_sequence_authoring`, so an open Sequence session, transport journal
+or Performance session refuses the edit (`sequence_session_active` or
+`performance_session_active`). The result is
+`{committed_revision, pattern_id, replayed}`.
+
 Cancelled staging directories use the same best-effort disposal as ordinary import
 cleanup. A removal failure cannot turn a committed deletion into an unsaved result;
 the directory has no live token and is reclaimed by the existing aging sweep.

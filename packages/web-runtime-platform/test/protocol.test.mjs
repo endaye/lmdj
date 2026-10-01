@@ -123,6 +123,7 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "asset.import",
     "pad.assign",
     "pattern.create",
+    "pattern.events.edit",
     "pattern.slot.assign",
     "pattern.slot.clear",
     "pattern.slot.move",
@@ -214,6 +215,43 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "sequence.bar_boundary",
     "capture.sealed",
   ]);
+});
+
+test("accepts only exact Pattern event edit payloads", () => {
+  const valid = {
+    command_id: requestIdFor(201),
+    expected_revision: 4,
+    pattern_id: requestIdFor(202),
+    remove: [{slot: {bank: 0, pad: 1}, onset_tick: 240}],
+    put: [{slot: {bank: 3, pad: 15}, onset_tick: 30_719, duration_tick: 1, velocity: 127}],
+  };
+  assert.equal(createRequestEnvelope({
+    operation: "pattern.events.edit",
+    payload: valid,
+    crypto: {randomUUID: () => REQUEST_ID},
+  }).operation, "pattern.events.edit");
+  const event = valid.put[0];
+  const invalid = [
+    {...valid, project_path: "/forbidden/project.lmdj"},
+    {...valid, put: {}},
+    {...valid, remove: [{slot: {bank: 0, pad: 1}}]},
+    {...valid, put: [{...event, velocity: 0}]},
+    {...valid, put: [{...event, velocity: 128}]},
+    {...valid, put: [{...event, duration_tick: 0}]},
+    {...valid, put: [{...event, onset_tick: 30_720}]},
+    {...valid, put: [{...event, slot: {bank: 4, pad: 0}}]},
+    {...valid, put: [{...event, asset_id: requestIdFor(203)}]},
+  ];
+  for (const payload of invalid) {
+    assert.throws(
+      () => createRequestEnvelope({
+        operation: "pattern.events.edit",
+        payload,
+        crypto: {randomUUID: () => REQUEST_ID},
+      }),
+      expectCode("HOST_PROTOCOL_MISMATCH"),
+    );
+  }
 });
 
 test("accepts only exact privacy-safe Sample operation payloads", () => {

@@ -106,6 +106,7 @@ using PersistedCommand = std::variant<
     domain::ClearPatternSlot,
     domain::MovePatternSlot,
     domain::MergePatternEvents,
+    domain::EditPatternEvents,
     domain::UpdateSequenceSettings,
     domain::ImportAssignSample,
     domain::InstallSoundSet,
@@ -1655,6 +1656,24 @@ nlohmann::json command_json(const PersistedCommand& command) {
               {"type", "MergePatternEvents"},
           };
         } else if constexpr (
+            std::is_same_v<Type, domain::EditPatternEvents>) {
+          auto remove = nlohmann::json::array();
+          for (const auto& key : value.remove) {
+            remove.push_back({{"onset_tick", key.onset_tick},
+                              {"slot", slot_json(key.slot)}});
+          }
+          auto put = nlohmann::json::array();
+          for (const auto& event : value.put) {
+            put.push_back(pattern_event_json(event));
+          }
+          return {
+              {"meta", meta_json(value.meta)},
+              {"pattern_id", value.pattern_id.value()},
+              {"put", std::move(put)},
+              {"remove", std::move(remove)},
+              {"type", "EditPatternEvents"},
+          };
+        } else if constexpr (
             std::is_same_v<Type, domain::UpdateSequenceSettings>) {
           return {
               {"bpm",
@@ -2017,6 +2036,59 @@ foundation::Result<PersistedCommand> parse_command(
           PersistedCommand{domain::MergePatternEvents{
               std::move(meta.value()),
               foundation::PatternId{pattern_id},
+              std::move(parsed.value().events),
+          }});
+    }
+    if (type == "EditPatternEvents") {
+      if (!exact_object_keys(
+              input, {"meta", "pattern_id", "put", "remove", "type"}) ||
+          !input.at("pattern_id").is_string() ||
+          !input.at("put").is_array() || !input.at("remove").is_array()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "EditPatternEvents transaction shape is invalid", path));
+      }
+      const auto pattern_id = input.at("pattern_id").get<std::string>();
+      if (!domain::is_valid_uuid(pattern_id)) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "EditPatternEvents pattern id is invalid", path));
+      }
+      std::vector<domain::PatternEventKey> remove;
+      for (const auto& encoded : input.at("remove")) {
+        if (!exact_object_keys(encoded, {"onset_tick", "slot"})) {
+          return foundation::Result<PersistedCommand>::failure(
+              invalid_project(
+                  "EditPatternEvents removal shape is invalid", path));
+        }
+        const auto onset = unsigned_integer_value(encoded.at("onset_tick"));
+        auto slot = parse_slot(encoded.at("slot"), path);
+        if (!slot.has_value()) {
+          return foundation::Result<PersistedCommand>::failure(slot.error());
+        }
+        if (!onset.has_value() ||
+            *onset >= domain::pattern_length_ticks(8)) {
+          return foundation::Result<PersistedCommand>::failure(
+              invalid_project(
+                  "EditPatternEvents removal is invalid", path));
+        }
+        remove.push_back(domain::PatternEventKey{
+            slot.value(), static_cast<std::uint32_t>(*onset)});
+      }
+      // The persisted put list is canonical and unique (see
+      // ProjectStore::execute), so parsing it as a Pattern round-trips it.
+      auto parsed = parse_pattern(
+          nlohmann::json{{"bars", 8}, {"events", input.at("put")},
+                         {"id", pattern_id}},
+          path);
+      if (!parsed.has_value()) {
+        return foundation::Result<PersistedCommand>::failure(parsed.error());
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::EditPatternEvents{
+              std::move(meta.value()),
+              foundation::PatternId{pattern_id},
+              std::move(remove),
               std::move(parsed.value().events),
           }});
     }
@@ -2575,7 +2647,8 @@ foundation::Result<domain::AppliedCommand> apply_command(
             std::is_same_v<Type, domain::InstallSoundSet> ||
             std::is_same_v<Type, domain::AdoptCandidates> ||
             std::is_same_v<Type, domain::UpdatePadPlayback> ||
-            std::is_same_v<Type, domain::ResetPadPlayback>) {
+            std::is_same_v<Type, domain::ResetPadPlayback> ||
+            std::is_same_v<Type, domain::EditPatternEvents>) {
           return domain::apply(state, value, receipts);
         } else {
           return domain::apply(state, domain::Command{value}, receipts);
@@ -2614,6 +2687,7 @@ foundation::Result<domain::Command> legacy_command(
             std::is_same_v<Type, domain::AdoptCandidates> ||
             std::is_same_v<Type, domain::UpdatePadPlayback> ||
             std::is_same_v<Type, domain::ResetPadPlayback> ||
+            std::is_same_v<Type, domain::EditPatternEvents> ||
             std::is_same_v<Type, PerformanceMutation> ||
             std::is_same_v<Type, CreatePerformance> ||
             std::is_same_v<Type, RenamePerformance> ||
@@ -3482,7 +3556,7 @@ std::pair<std::string, std::string> history_description(
     else if constexpr (std::is_same_v<T, domain::UpdateSequenceSettings>) return {"Edit Sequence settings", ""};
     else if constexpr (std::is_same_v<T, domain::CreatePattern>) return {"Create Pattern", ""};
     else if constexpr (std::is_same_v<T, domain::AssignPatternSlot> || std::is_same_v<T, domain::ClearPatternSlot> || std::is_same_v<T, domain::MovePatternSlot>) return {"Edit Pattern slots", ""};
-    else if constexpr (std::is_same_v<T, domain::MergePatternEvents>) return {"Edit Pattern", ""};
+    else if constexpr (std::is_same_v<T, domain::MergePatternEvents> || std::is_same_v<T, domain::EditPatternEvents>) return {"Edit Pattern", ""};
     else if constexpr (std::is_same_v<T, CreatePerformance> || std::is_same_v<T, PerformanceMutation> || std::is_same_v<T, FinalizePerformanceDraft> || std::is_same_v<T, DeletePerformance>) return {"Record or edit Performance", performance_group};
     else if constexpr (std::is_same_v<T, RenamePerformance>) return {"Rename Performance", ""};
     else if constexpr (std::is_same_v<T, BindPerformanceRecording>) return {"Bind Performance recording", ""};
@@ -4795,6 +4869,25 @@ foundation::Result<domain::AppliedCommand> ProjectStore::execute(
     const domain::ResetPadPlayback& command) {
   auto history_guard = history_->acquire();
   return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::execute(
+    const std::filesystem::path& bundle,
+    const domain::EditPatternEvents& command) {
+  // Persist a canonical order so the encoded identity survives a reload,
+  // whose Pattern parser sorts events. Only reorder: a repeated key must
+  // still reach the Domain, which refuses it.
+  auto normalized = command;
+  std::ranges::sort(normalized.remove, {}, [](const auto& key) {
+    return std::tuple{key.onset_tick, key.slot.bank, key.slot.pad};
+  });
+  std::ranges::sort(normalized.put, {}, [](const domain::PatternEvent& event) {
+    return std::tuple{event.onset_tick, event.slot.bank, event.slot.pad,
+                      event.duration_tick, event.velocity};
+  });
+  auto history_guard = history_->acquire();
+  return execute_persisted(
+      platform_, history_, bundle, PersistedCommand{std::move(normalized)});
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::execute(

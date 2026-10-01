@@ -83,6 +83,24 @@ struct MergePatternEvents {
   std::vector<PatternEvent> events;
 };
 
+// The identity of a Pattern event: its Pad and onset, the SR-D26 merge key.
+struct PatternEventKey {
+  PadSlotId slot;
+  std::uint32_t onset_tick;
+
+  auto operator<=>(const PatternEventKey&) const = default;
+};
+
+// Grid editing (#1671). One commit removes every keyed event, then inserts or
+// replaces each put event by key. A move is a removal plus a put at the new
+// key; a length or velocity change is a put at the same key.
+struct EditPatternEvents {
+  CommandMeta meta;
+  foundation::PatternId pattern_id;
+  std::vector<PatternEventKey> remove;
+  std::vector<PatternEvent> put;
+};
+
 struct UpdateSequenceSettings {
   CommandMeta meta;
   std::optional<std::uint16_t> bpm;
@@ -177,6 +195,10 @@ struct CommandReceipt;
 
 foundation::Result<AppliedCommand> apply(
     const ProjectState& state, const DeletePad& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts);
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state, const EditPatternEvents& command,
     const std::map<foundation::CommandId, CommandReceipt>& receipts);
 
 foundation::Result<AppliedCommand> apply(

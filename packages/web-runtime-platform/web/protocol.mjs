@@ -26,6 +26,7 @@ export const HOST_OPERATIONS = Object.freeze([
   "asset.import",
   "pad.assign",
   "pattern.create",
+  "pattern.events.edit",
   "pattern.slot.assign",
   "pattern.slot.clear",
   "pattern.slot.move",
@@ -205,6 +206,30 @@ function validSlot(value) {
     hasExactKeys(value, ["bank", "pad"]) &&
     isUnsignedInteger(value.bank, 3) &&
     isUnsignedInteger(value.pad, 15)
+  );
+}
+
+// The widest Pattern is 8 bars of 3840 ticks; Core checks each event against
+// the edited Pattern's own length.
+const PATTERN_MAX_TICKS = 8 * 3840;
+
+function validPatternEventKey(value) {
+  return (
+    hasExactKeys(value, ["slot", "onset_tick"]) &&
+    validSlot(value.slot) &&
+    isUnsignedInteger(value.onset_tick, PATTERN_MAX_TICKS - 1)
+  );
+}
+
+function validPatternEvent(value) {
+  return (
+    hasExactKeys(value, ["slot", "onset_tick", "duration_tick", "velocity"]) &&
+    validSlot(value.slot) &&
+    isUnsignedInteger(value.onset_tick, PATTERN_MAX_TICKS - 1) &&
+    isUnsignedInteger(value.duration_tick, PATTERN_MAX_TICKS) &&
+    value.duration_tick >= 1 &&
+    isUnsignedInteger(value.velocity, 127) &&
+    value.velocity >= 1
   );
 }
 
@@ -688,6 +713,23 @@ function requireSampleOperationPayload(operation, payload) {
         isUnsignedInteger(payload.expected_revision) &&
         validSlot(payload.slot) &&
         validPlayback(payload.playback);
+      break;
+    case "pattern.events.edit":
+      valid =
+        hasExactKeys(payload, [
+          "command_id",
+          "expected_revision",
+          "pattern_id",
+          "remove",
+          "put",
+        ]) &&
+        UUID_PATTERN.test(payload.command_id) &&
+        isUnsignedInteger(payload.expected_revision) &&
+        UUID_PATTERN.test(payload.pattern_id) &&
+        Array.isArray(payload.remove) &&
+        payload.remove.every(validPatternEventKey) &&
+        Array.isArray(payload.put) &&
+        payload.put.every(validPatternEvent);
       break;
     case "sample.reset_pad":
     case "pad.delete":

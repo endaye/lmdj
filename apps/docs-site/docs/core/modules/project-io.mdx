@@ -221,3 +221,15 @@ so deletion needs no new transaction dialect. A changed binding/playback is one
 Undo restores the complete Pad contents, Redo clears them again, and both preserve
 Pattern events and retained Asset bytes. Revision and writer/journal admission
 still run at the durable boundary.
+
+## Pattern event edits
+
+`ProjectStore::execute(EditPatternEvents)` persists an internal
+`EditPatternEvents` transaction; the command log is not a Contract. Before
+persisting, the Store sorts `remove` and `put` into canonical order. It only
+reorders: a repeated key still reaches the Domain, which refuses it. Because a
+reload's Pattern parser sorts events, this keeps the encoded command identity
+stable, so a retry after reopen still replays.
+
+Each edit is one `Edit Pattern` history action, and Undo and Redo restore its
+events exactly.
