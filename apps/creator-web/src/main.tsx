@@ -11,6 +11,7 @@ import {WEB_RUNTIME_IDENTITY} from
   "../../../products/lmdj/generated/web-runtime-identity.mjs";
 
 import {App} from "./app";
+import {createRetainedAudioContext} from "./runtime/audio_clock";
 import {
   announceBuildIdentity,
   creatorBuildIdentity,
@@ -107,6 +108,10 @@ function createCreatorRuntimeSession(): CreatorRuntimeSession {
     patternTransport: true,
     soundsetCatalog: createSoundSetCatalog(),
     seams: {
+      // The session owns the AudioContext; the factory retains a reference
+      // so the Host audio clock converts engine frames on the same device
+      // clock the engine renders to.
+      createAudioContext: createRetainedAudioContext,
       createPerformanceMasterTap,
       ...seams,
     },
