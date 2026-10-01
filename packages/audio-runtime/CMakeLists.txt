@@ -170,6 +170,25 @@ if(BUILD_TESTING)
   )
 
   add_executable(
+    lmdj_audio_voice_dsp_parity_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/voice_dsp_parity_test.cpp"
+  )
+  target_include_directories(
+    lmdj_audio_voice_dsp_parity_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_audio_voice_dsp_parity_tests PRIVATE lmdj::audio_runtime
+  )
+  lmdj_target_warnings(lmdj_audio_voice_dsp_parity_tests)
+  lmdj_target_sanitizers(lmdj_audio_voice_dsp_parity_tests)
+  lmdj_add_test(
+    NAME audio.voice_dsp_parity
+    TIER component
+    COMMAND lmdj_audio_voice_dsp_parity_tests
+    LABELS audio
+  )
+
+  add_executable(
     lmdj_audio_value_channel_tests
     "${CMAKE_SOURCE_DIR}/tests/core/audio/value_channel_test.cpp"
   )

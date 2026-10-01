@@ -6,6 +6,7 @@
 #include <lmdj/domain/command_handler.hpp>
 #include <lmdj/foundation/artifact.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -463,6 +464,42 @@ void test_render_matches_independent_golden_audio_sha() {
       rendered.value().artifact == independently_described.value());
 }
 
+// A non-neutral Pad renders through the kernel while every neutral event keeps
+// the integer path: panning only the snare leaves the golden bytes before the
+// first snare untouched and changes the bytes after it.
+void test_non_neutral_snare_leaves_the_kick_only_frames_golden() {
+  TempDirectory temp;
+  const auto kick = fixture_sample("kick.wav");
+  const auto snare = fixture_sample("snare.wav");
+  auto changed = *snapshot({
+      {PadSlotId{0, 0}, 0, 240, 127, kick},
+      {PadSlotId{0, 1}, 960, 240, 127, snare},
+      {PadSlotId{0, 0}, 1'920, 240, 127, kick},
+      {PadSlotId{0, 1}, 2'880, 240, 127, snare},
+  });
+  bool panned = false;
+  for (auto& pad : changed.pads) {
+    if (pad.slot == PadSlotId{0, 1}) {
+      pad.playback.dsp.pan = -100;
+      panned = true;
+    }
+  }
+  LMDJ_CHECK(panned);
+  const auto output_path = temp.path() / "panned_snare.wav";
+  const auto rendered = render_offline(OfflineRenderRequest{
+      std::make_shared<const RuntimeSnapshot>(std::move(changed)), output_path});
+  LMDJ_CHECK(rendered.has_value());
+  const auto actual = read_bytes(output_path);
+  const auto golden = read_bytes("tests/fixtures/golden/one_bar_120bpm.wav");
+  LMDJ_CHECK(actual.size() == golden.size());
+  // The first snare starts at tick 960, frame 24000 at 120 BPM.
+  constexpr std::size_t kFirstSnareFrame = 24'000;
+  const auto boundary = 44 + kFirstSnareFrame * kChannels * 2;
+  LMDJ_CHECK(std::equal(actual.begin(), actual.begin() + boundary, golden.begin()));
+  LMDJ_CHECK(!std::equal(actual.begin() + boundary, actual.end(),
+                         golden.begin() + boundary));
+}
+
 void test_authoring_project_cooks_directly_into_golden_render() {
   constexpr auto kProjectIdValue =
       "00000000-0000-4000-8000-000000000011";
@@ -695,6 +732,7 @@ int main() {
     test_render_does_not_mutate_the_input_snapshot();
     test_render_matches_independent_golden_audio_sha();
     test_authoring_project_cooks_directly_into_golden_render();
+    test_non_neutral_snare_leaves_the_kick_only_frames_golden();
     test_render_rejects_a_missing_snapshot();
     test_render_rejects_snapshot_invariants_before_allocating();
     test_render_accepts_the_largest_task5_snapshot_shape();

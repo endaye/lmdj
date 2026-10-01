@@ -1,5 +1,6 @@
 #include <lmdj/audio/offline_renderer.hpp>
 
+#include <lmdj/audio/detail/voice_dsp.hpp>
 #include <lmdj/audio/mix_math.hpp>
 #include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/audio/wav_writer.hpp>
@@ -14,6 +15,88 @@
 
 namespace lmdj::audio {
 namespace {
+
+constexpr float kKernelRampScale =
+    1.0F / static_cast<float>(detail::kVoiceDspRampFrames);
+
+// The inverse of prepared_pcm16_to_float, rounding to the nearest step.
+std::int16_t quantize_pcm16(float value) noexcept {
+  const float scaled = value < 0.0F ? value * 32768.0F : value * 32767.0F;
+  const auto rounded = std::lround(scaled);
+  return static_cast<std::int16_t>(std::clamp<long>(rounded, -32768, 32767));
+}
+
+// Renders one non-neutral voice exactly as the realtime engine does: the
+// shared kernel, the 2 ms attack, the kernel's end fade and, for a releasing
+// mode, the 2 ms release tail that starts at the event's release frame, in
+// the engine's operation order. Each output sample is quantized and then
+// saturated into the mix in snapshot order, as a neutral event is.
+void render_kernel_voice(
+    std::vector<std::int16_t>& output,
+    const cooker::PcmSample& source,
+    detail::VoiceDspState state,
+    const cooker::ResolvedPlayback& playback,
+    std::uint8_t velocity,
+    std::uint64_t start_frame,
+    std::uint64_t release_frame,
+    std::uint64_t frame_count) {
+  constexpr std::size_t kChannels = 2;
+  const float gain =
+      (static_cast<float>(velocity) / 127.0F) * playback.linear_gain;
+  const bool releases =
+      playback.trigger_mode != domain::TriggerMode::one_shot;
+  const auto release_at = release_frame - start_frame;
+  bool releasing = false;
+  std::uint32_t release_remaining = 0;
+  const auto channels = source.channels;
+  const auto fetch_channel = [&source, channels](std::uint16_t channel) {
+    return [&source, channels, channel](std::uint32_t frame) {
+      return prepared_pcm16_to_float(
+          source.interleaved[static_cast<std::size_t>(frame) * channels +
+                             channel]);
+    };
+  };
+  for (std::uint64_t relative = 0; start_frame + relative < frame_count;
+       ++relative) {
+    if (releases && !releasing && relative >= release_at) {
+      releasing = true;
+      release_remaining = detail::kVoiceDspRampFrames;
+    }
+    float ramp = 1.0F;
+    if (relative < detail::kVoiceDspRampFrames) {
+      ramp *= static_cast<float>(relative) * kKernelRampScale;
+    }
+    ramp *= detail::voice_dsp_end_fade(state);
+    if (releasing && release_remaining < detail::kVoiceDspRampFrames) {
+      ramp *= static_cast<float>(release_remaining) * kKernelRampScale;
+    }
+    float left = 0.0F;
+    float right = 0.0F;
+    if (channels == 1) {
+      const auto value =
+          detail::voice_dsp_read(state, fetch_channel(0)) * gain * ramp;
+      left = value * state.pan_left;
+      right = value * state.pan_right;
+    } else {
+      left = detail::voice_dsp_read(state, fetch_channel(0)) * gain * ramp *
+             state.pan_left;
+      right = detail::voice_dsp_read(state, fetch_channel(1)) * gain * ramp *
+              state.pan_right;
+    }
+    const auto offset =
+        static_cast<std::size_t>(start_frame + relative) * kChannels;
+    output[offset] = detail::saturating_add(output[offset], quantize_pcm16(left));
+    output[offset + 1] =
+        detail::saturating_add(output[offset + 1], quantize_pcm16(right));
+    if (releasing && --release_remaining == 0) {
+      return;
+    }
+    if (!detail::voice_dsp_advance(state)) {
+      return;
+    }
+  }
+}
+
 
 constexpr std::uint32_t kSampleRate = 48'000;
 constexpr std::uint16_t kOutputChannels = 2;
@@ -203,13 +286,20 @@ foundation::Result<OfflineRenderResult> render_offline(
         playback.end_frame > source_frames ||
         !valid_trigger_mode(playback.trigger_mode) ||
         !std::isfinite(playback.linear_gain) ||
-        playback.linear_gain < 0.0F ||
-        // Offline rendering of the voice DSP kernel is not wired yet; until it
-        // is, a non-neutral block is refused rather than rendered as neutral.
-        !cooker::is_neutral(playback.dsp)) {
+        playback.linear_gain < 0.0F) {
       return invalid_request("offline render Pad playback is invalid");
     }
     if (playback.muted) {
+      continue;
+    }
+    if (!cooker::is_neutral(playback.dsp)) {
+      detail::VoiceDspState state{};
+      if (!detail::prepare_voice_dsp(playback, source_frames, state)) {
+        return invalid_request("offline render Pad playback is invalid");
+      }
+      render_kernel_voice(
+          output, source, state, playback, event.velocity, start_frame,
+          release_frame, frame_count);
       continue;
     }
     const auto playback_frames =
