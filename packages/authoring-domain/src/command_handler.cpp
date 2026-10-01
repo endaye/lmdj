@@ -513,6 +513,67 @@ foundation::Result<AppliedCommand> apply_new_command(
 
 foundation::Result<AppliedCommand> apply_new_command(
     const ProjectState& state,
+    const EditPatternEvents& command) {
+  if (!is_valid_uuid(command.pattern_id.value())) {
+    return invalid("pattern id must be a lowercase UUID");
+  }
+  const auto found = state.patterns.find(command.pattern_id);
+  if (found == state.patterns.end()) {
+    return foundation::Result<AppliedCommand>::failure(
+        foundation::Error{
+            foundation::ErrorCode::invalid_argument,
+            "pattern does not exist",
+        });
+  }
+  std::set<EventKey> removed;
+  for (const auto& key : command.remove) {
+    if (!is_valid_slot(key.slot)) {
+      return invalid("removed pattern event key is invalid");
+    }
+    if (!removed.insert(key).second) {
+      return invalid("pattern events edit repeats a removed key");
+    }
+  }
+  std::set<EventKey> written;
+  for (const auto& event : command.put) {
+    if (!written.insert(EventKey{event.slot, event.onset_tick}).second) {
+      return invalid("pattern events edit repeats a written key");
+    }
+  }
+  Pattern incoming{command.pattern_id, found->second.bars, command.put};
+  const auto validation = validate_pattern(incoming);
+  if (!validation.has_value()) {
+    return foundation::Result<AppliedCommand>::failure(validation.error());
+  }
+  std::set<EventKey> existing;
+  for (const auto& event : found->second.events) {
+    existing.insert(EventKey{event.slot, event.onset_tick});
+  }
+  for (const auto& key : removed) {
+    if (!existing.contains(key)) {
+      return foundation::Result<AppliedCommand>::failure(
+          foundation::Error{
+              foundation::ErrorCode::invalid_argument,
+              "removed pattern event does not exist",
+          });
+    }
+  }
+  std::vector<PatternEvent> remaining;
+  remaining.reserve(found->second.events.size());
+  for (const auto& event : found->second.events) {
+    if (!removed.contains(EventKey{event.slot, event.onset_tick})) {
+      remaining.push_back(event);
+    }
+  }
+  auto copy = state;
+  copy.patterns.at(command.pattern_id).events =
+      merge_pattern_events(remaining, command.put);
+  return foundation::Result<AppliedCommand>::success(
+      applied(std::move(copy), "pattern.events_edited", command.meta));
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
     const UpdateSequenceSettings& command) {
   if (!command.bpm.has_value() && !command.quantize_enabled.has_value() &&
       !command.swing_percent.has_value()) {

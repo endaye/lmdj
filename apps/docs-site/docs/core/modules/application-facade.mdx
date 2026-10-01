@@ -508,3 +508,20 @@ is transient and is not restored by Undo. No Asset garbage collection occurs.
 Cancelled staging directories use the same best-effort disposal as ordinary import
 cleanup. A removal failure cannot turn a committed deletion into an unsaved result;
 the directory has no live token and is reclaimed by the existing aging sweep.
+
+## Pattern event editing
+
+`pattern.events.edit` is the Host-neutral grid edit operation. Its request carries
+exactly `command_id`, `expected_revision`, `pattern_id`, `remove` (event keys of
+`slot` plus `onset_tick`) and `put` (full events), in addition to `operation` and
+`project_path`. The existing non-Sequence authoring admission guard applies
+unchanged: an active Sequence session or an open Pattern transport journal
+refuses it with `sequence_session_active`, while playback alone is admitted, so
+a playing Pattern can be edited live. The commit runs through the Store with the
+usual writer lease, idempotent receipt and `expected_revision` check; the result
+returns the Pattern identity, committed revision and replay flag. Domain
+refusals — unknown Pattern, missing removed key, invalid `put` event, repeated
+key — propagate typed and change nothing. `facade.pattern_events_edit` covers
+the recording refusal and the playing admission through a Facade-vended
+transport controller, and the operation is pinned in the Facade operation
+contract test.

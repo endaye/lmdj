@@ -123,6 +123,7 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "asset.import",
     "pad.assign",
     "pattern.create",
+    "pattern.events.edit",
     "pattern.slot.assign",
     "pattern.slot.clear",
     "pattern.slot.move",
@@ -351,6 +352,76 @@ test("Sample playback payloads admit every parity key and refuse the rest", () =
     {...forward, loop_crossfade_frames: 1.5},
   ]) {
     assert.throws(() => update(invalid), expectCode("HOST_PROTOCOL_MISMATCH"));
+  }
+});
+
+test("Pattern events edit payloads and results are exact", () => {
+  const patternId = requestIdFor(210);
+  const edit = (payload) => createRequestEnvelope({
+    operation: "pattern.events.edit",
+    payload,
+    crypto: {randomUUID: () => REQUEST_ID},
+  });
+  const validPayload = {
+    command_id: requestIdFor(211),
+    expected_revision: 2,
+    pattern_id: patternId,
+    remove: [{slot: {bank: 0, pad: 1}, onset_tick: 480}],
+    put: [
+      {slot: {bank: 0, pad: 1}, onset_tick: 480, duration_tick: 240, velocity: 127},
+      {slot: {bank: 3, pad: 15}, onset_tick: 0, duration_tick: 1, velocity: 1},
+    ],
+  };
+  assert.equal(edit(validPayload).operation, "pattern.events.edit");
+  assert.equal(edit({...validPayload, remove: [], put: []}).operation,
+    "pattern.events.edit");
+  for (const payload of [
+    {...validPayload, runtime_frame: 1},
+    {...validPayload, remove: [{slot: {bank: 4, pad: 0}, onset_tick: 0}]},
+    {...validPayload, remove: [{slot: {bank: 0, pad: 1}}]},
+    {...validPayload, remove: [{slot: {bank: 0, pad: 1}, onset_tick: -1}]},
+    {...validPayload, put: [{slot: {bank: 0, pad: 1}, onset_tick: 0, duration_tick: 0, velocity: 100}]},
+    {...validPayload, put: [{slot: {bank: 0, pad: 1}, onset_tick: 0, duration_tick: 240, velocity: 0}]},
+    {...validPayload, put: [{slot: {bank: 0, pad: 1}, onset_tick: 0, duration_tick: 240, velocity: 128}]},
+    {...validPayload, put: [{slot: {bank: 0, pad: 1, flat: 1}, onset_tick: 0, duration_tick: 240, velocity: 100}]},
+    {...validPayload, put: [{slot: {bank: 0, pad: 1}, onset_tick: 0, duration_tick: 240, velocity: 100, swing: 50}]},
+  ]) {
+    assert.throws(() => edit(payload), expectCode("HOST_PROTOCOL_MISMATCH"));
+  }
+
+  const result = {
+    pattern_id: patternId,
+    committed_revision: 3,
+    replayed: false,
+    project_revision: 3,
+    runtime_published: true,
+    pattern_publication: {generation: 2, activation_frame: 96_000},
+  };
+  const respond = (value) => validateResponseEnvelope({
+    protocol_version: PROTOCOL_VERSION,
+    request_id: REQUEST_ID,
+    ok: true,
+    result: value,
+  }, "pattern.events.edit");
+  assert.equal(respond(result).result, result);
+  assert.equal(respond({...result, pattern_publication: null}).ok, true);
+  const failed = {
+    ...result,
+    runtime_published: false,
+    pattern_publication: null,
+    snapshot_error: {code: "INTERNAL_ERROR", message: "publication failed", details: {}},
+  };
+  assert.equal(respond(failed).ok, true);
+  for (const value of [
+    {...result, pattern_id: "not-a-uuid"},
+    {...result, project_revision: 2},
+    {...result, runtime_published: "yes"},
+    {...result, pattern_publication: {generation: 0, activation_frame: 96_000}},
+    {...result, runtime_frame: 1},
+    {...failed, runtime_published: true},
+    {...failed, pattern_publication: {generation: 2, activation_frame: 96_000}},
+  ]) {
+    assert.throws(() => respond(value), expectCode("HOST_PROTOCOL_MISMATCH"));
   }
 });
 

@@ -58,6 +58,7 @@ const API = [
   "openProject",
   "performanceMasterCaptureStatus",
   "movePatternSlot",
+  "editPatternEvents",
   "previewSoundSetMap",
   "stopSoundSetAudition",
   "queryPerformanceRecordingStatus",
@@ -2972,6 +2973,114 @@ test("Sample mutations preserve committed and stale Runtime truth after Cook fai
       slot: {bank: 0, pad: 0},
     },
   });
+});
+
+test("Pattern events edit mints one command identity per call and a retry reuses it", async () => {
+  const operations = [];
+  const patternId = "33333333-3333-4333-8333-333333333333";
+  const snapshotError = {
+    code: "INTERNAL_ERROR",
+    message: "Pattern publication failed",
+    details: {},
+  };
+  let edits = 0;
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push({operation: envelope.operation, payload: envelope.payload});
+      if (envelope.operation === "pattern.events.edit") {
+        edits += 1;
+        if (edits === 1) {
+          return success(envelope, {
+            pattern_id: patternId,
+            committed_revision: 3,
+            replayed: false,
+            project_revision: 3,
+            runtime_published: true,
+            pattern_publication: {generation: 2, activation_frame: 96_000},
+          });
+        }
+        return success(envelope, {
+          pattern_id: patternId,
+          committed_revision: 3,
+          replayed: true,
+          project_revision: 3,
+          runtime_published: false,
+          pattern_publication: null,
+          snapshot_error: snapshotError,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  const request = {
+    expectedRevision: 2,
+    patternId,
+    remove: [{bank: 0, pad: 1, onsetTick: 480}],
+    put: [{bank: 0, pad: 1, onsetTick: 480, durationTick: 240, velocity: 127}],
+  };
+  const first = await session.editPatternEvents(request);
+  assert.match(first.commandId,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.deepEqual(first, {
+    patternId,
+    commandId: first.commandId,
+    committedRevision: 3,
+    replayed: false,
+    projectRevision: 3,
+    runtimePublished: true,
+    patternPublication: {generation: 2, activationFrame: 96_000},
+    snapshotError: null,
+  });
+  const retried = await session.editPatternEvents(
+    {...request, expectedRevision: 3, commandId: first.commandId});
+  assert.equal(retried.commandId, first.commandId);
+  assert.equal(retried.replayed, true);
+  assert.equal(retried.runtimePublished, false);
+  assert.equal(retried.patternPublication, null);
+  assert.deepEqual(retried.snapshotError, snapshotError);
+  assert.deepEqual(operations.map(({operation}) => operation), [
+    "pattern.events.edit",
+    "pattern.events.edit",
+  ]);
+  assert.deepEqual(operations[0].payload, {
+    command_id: first.commandId,
+    expected_revision: 2,
+    pattern_id: patternId,
+    remove: [{slot: {bank: 0, pad: 1}, onset_tick: 480}],
+    put: [{slot: {bank: 0, pad: 1}, onset_tick: 480, duration_tick: 240, velocity: 127}],
+  });
+  assert.deepEqual(operations[1].payload, {
+    ...operations[0].payload,
+    expected_revision: 3,
+  });
+});
+
+test("Pattern events edit rejects malformed requests before the Host", async () => {
+  const sent = [];
+  const patternId = "33333333-3333-4333-8333-333333333333";
+  const {session} = fixture({
+    send: async (envelope) => {
+      sent.push(envelope);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  const valid = {expectedRevision: 2, patternId, remove: [], put: []};
+  for (const request of [
+    {...valid, runtimeFrame: 1},
+    {...valid, patternId: "not-a-uuid"},
+    {...valid, commandId: "not-a-uuid"},
+    {...valid, expectedRevision: -1},
+    {...valid, remove: [{bank: 4, pad: 0, onsetTick: 0}]},
+    {...valid, remove: [{bank: 0, pad: 1}]},
+    {...valid, put: [{bank: 0, pad: 1, onsetTick: 0, durationTick: 0, velocity: 100}]},
+    {...valid, put: [{bank: 0, pad: 1, onsetTick: 0, durationTick: 240, velocity: 0}]},
+    {...valid, put: [{bank: 0, pad: 1, onsetTick: 0, durationTick: 240, velocity: 100, swing: 50}]},
+  ]) {
+    await assert.rejects(session.editPatternEvents(request), TypeError);
+  }
+  assert.deepEqual(sent, []);
 });
 
 test("unassigned Pad mutations accept unpublished truth without a Cook error", async () => {

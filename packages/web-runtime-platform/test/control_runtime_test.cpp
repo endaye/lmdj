@@ -2599,6 +2599,84 @@ void test_authoring_history_restores_pattern_and_parameters() {
   LMDJ_CHECK(project.at("sequence_settings").at("quantize_enabled") == true);
 }
 
+Json pattern_event_key_json(
+    std::uint32_t bank, std::uint32_t pad, std::uint32_t onset) {
+  return {{"slot", slot(bank, pad)}, {"onset_tick", onset}};
+}
+
+Json pattern_event_json(
+    std::uint32_t bank, std::uint32_t pad, std::uint32_t onset,
+    std::uint32_t duration, std::uint32_t velocity) {
+  return {
+      {"slot", slot(bank, pad)},
+      {"onset_tick", onset},
+      {"duration_tick", duration},
+      {"velocity", velocity},
+  };
+}
+
+Json pattern_events_edit_payload(
+    std::uint32_t command, std::uint64_t revision,
+    std::string_view pattern_id, Json remove, Json put) {
+  return {
+      {"command_id", uuid(command)},
+      {"expected_revision", revision},
+      {"pattern_id", pattern_id},
+      {"remove", std::move(remove)},
+      {"put", std::move(put)},
+  };
+}
+
+Json pattern_events_truth(ControlRuntime& runtime, std::string_view pattern_id) {
+  const auto truth = runtime.dispatch("project.inspect", Json::object(), {});
+  check_success(truth);
+  return truth.at("result").at("project").at("patterns").at(pattern_id).at("events");
+}
+
+void test_pattern_events_edit_commits_and_publishes_while_stopped() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  auto initial = create_payload();
+  initial["initial_pattern"]["events"] = Json::array({
+      pattern_event_json(0, 0, 0, 240, 100),
+      pattern_event_json(0, 1, 480, 120, 90)});
+  check_success(runtime->dispatch("project.create", initial, {}));
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+
+  const auto& edited = check_exact_success(
+      runtime->dispatch(
+          "pattern.events.edit",
+          pattern_events_edit_payload(
+              9600, 0, kPatternId,
+              Json::array({pattern_event_key_json(0, 1, 480)}),
+              Json::array({pattern_event_json(0, 1, 480, 240, 127)})),
+          {}),
+      {"pattern_id", "committed_revision", "replayed", "project_revision",
+       "runtime_published", "pattern_publication"});
+  LMDJ_CHECK(edited.at("committed_revision") == 1);
+  LMDJ_CHECK(edited.at("replayed") == false);
+  LMDJ_CHECK(edited.at("runtime_published") == true);
+  LMDJ_CHECK(edited.at("pattern_publication").is_null());
+  const auto events = pattern_events_truth(*runtime, kPatternId);
+  LMDJ_CHECK(events.size() == 2);
+  LMDJ_CHECK(events.at(1).at("duration_tick") == 240);
+  LMDJ_CHECK(events.at(1).at("velocity") == 127);
+  const auto history =
+      runtime->dispatch("history.inspect", Json::object(), {}).at("result");
+  LMDJ_CHECK(history.at("undo_count") == 1);
+  LMDJ_CHECK(history.at("undo_label") == "Edit Pattern");
+  check_error(
+      runtime->dispatch(
+          "pattern.events.edit",
+          pattern_events_edit_payload(
+              9601, 1, kPatternId,
+              Json::array({pattern_event_key_json(0, 2, 0)}),
+              Json::array()),
+          {}),
+      "INVALID_ARGUMENT");
+}
+
 void test_pad_delete_stops_voice_preserves_rhythm_and_roundtrips_history() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -7182,6 +7260,179 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
 
 }
 
+void test_pattern_events_edit_publishes_the_playing_pattern_at_the_next_bar() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  auto initial = create_opted_in_project();
+  initial["initial_pattern"]["events"] =
+      Json::array({pattern_event_json(0, 0, 0, 240, 100)});
+  check_success(runtime->dispatch("project.create", initial, {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 9610, 9611, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  OneShotAudioDriver audio(runtime->engine());
+
+  check_exact_success(
+      runtime->dispatch(
+          "pattern.transport.request",
+          pattern_transport_request_payload(
+              kSequenceSessionId, 9612, 1, "play_stop"),
+          {}),
+      {"session_id", "command_id", "submit", "status"});
+  const auto playing =
+      settle_pattern_transport(*runtime, audio, kSequenceSessionId);
+  LMDJ_CHECK(playing.at("playing") == true);
+
+  const auto& edited = check_exact_success(
+      runtime->dispatch(
+          "pattern.events.edit",
+          pattern_events_edit_payload(
+              9613, 2, kPatternId,
+              Json::array({pattern_event_key_json(0, 0, 0)}),
+              Json::array({pattern_event_json(0, 0, 0, 480, 90)})),
+          {}),
+      {"pattern_id", "committed_revision", "replayed", "project_revision",
+       "runtime_published", "pattern_publication"});
+  LMDJ_CHECK(edited.at("committed_revision") == 3);
+  LMDJ_CHECK(edited.at("runtime_published") == true);
+  const auto& publication = edited.at("pattern_publication");
+  LMDJ_CHECK(publication.is_object());
+  // 120 BPM at 48 kHz: one 4/4 bar is 96,000 frames. Playback has rendered far
+  // less than one bar, so the edit activates at the first bar boundary.
+  LMDJ_CHECK(publication.at("activation_frame") == 96'000);
+  LMDJ_CHECK(runtime->engine().telemetry().rendered_frames < 96'000);
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().pending_activation_frame ==
+             96'000);
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().pending_generation ==
+             publication.at("generation"));
+  const auto events = pattern_events_truth(*runtime, kPatternId);
+  LMDJ_CHECK(events.size() == 1);
+  LMDJ_CHECK(events.at(0).at("duration_tick") == 480);
+  LMDJ_CHECK(events.at(0).at("velocity") == 90);
+}
+
+void test_pattern_events_edit_commits_a_non_playing_pattern() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  auto initial = create_opted_in_project();
+  initial["initial_pattern"]["events"] =
+      Json::array({pattern_event_json(0, 0, 0, 240, 100)});
+  check_success(runtime->dispatch("project.create", initial, {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 9620, 9621, 0);
+  check_success(runtime->dispatch(
+      "pattern.create",
+      {{"command_id", uuid(9622)},
+       {"expected_revision", 2},
+       {"pattern_id", kNextPatternId},
+       {"bars", 1}},
+      {}));
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  coordinator.engine = &runtime->engine();
+  coordinator.observe_engine_generation = true;
+  OneShotAudioDriver audio(runtime->engine());
+
+  check_exact_success(
+      runtime->dispatch(
+          "pattern.transport.request",
+          pattern_transport_request_payload(
+              kSequenceSessionId, 9623, 1, "play_stop"),
+          {}),
+      {"session_id", "command_id", "submit", "status"});
+  const auto playing =
+      settle_pattern_transport(*runtime, audio, kSequenceSessionId);
+  LMDJ_CHECK(playing.at("playing") == true);
+
+  // A real Worklet keeps rendering while the control thread prepares and
+  // publishes the refreshed snapshot, letting the new Bank generation apply.
+  ContinuousAudioDriver driving(runtime->engine());
+  const auto& edited = check_exact_success(
+      runtime->dispatch(
+          "pattern.events.edit",
+          pattern_events_edit_payload(
+              9624, 3, kNextPatternId,
+              Json::array(),
+              Json::array({pattern_event_json(0, 3, 960, 240, 80)})),
+          {}),
+      {"pattern_id", "committed_revision", "replayed", "project_revision",
+       "runtime_published", "pattern_publication"});
+  driving.stop();
+  LMDJ_CHECK(edited.at("pattern_id") == kNextPatternId);
+  LMDJ_CHECK(edited.at("committed_revision") == 4);
+  LMDJ_CHECK(edited.at("runtime_published") == true);
+  LMDJ_CHECK(edited.at("pattern_publication").is_null());
+  const auto events = pattern_events_truth(*runtime, kNextPatternId);
+  LMDJ_CHECK(events.size() == 1);
+  LMDJ_CHECK(events.at(0).at("onset_tick") == 960);
+  LMDJ_CHECK(
+      pattern_transport_inspect(*runtime, kSequenceSessionId).at("playing") ==
+      true);
+}
+
+void test_pattern_events_edit_reports_a_failed_publication_after_commit() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  auto initial = create_opted_in_project();
+  initial["initial_pattern"]["events"] =
+      Json::array({pattern_event_json(0, 0, 0, 240, 100)});
+  check_success(runtime->dispatch("project.create", initial, {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 9630, 9631, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  OneShotAudioDriver audio(runtime->engine());
+
+  check_exact_success(
+      runtime->dispatch(
+          "pattern.transport.request",
+          pattern_transport_request_payload(
+              kSequenceSessionId, 9632, 1, "play_stop"),
+          {}),
+      {"session_id", "command_id", "submit", "status"});
+  const auto playing =
+      settle_pattern_transport(*runtime, audio, kSequenceSessionId);
+  LMDJ_CHECK(playing.at("playing") == true);
+
+  check_exact_success(
+      runtime->dispatch(
+          "__testing.fail-next-pattern-publication", Json::object(), {}),
+      {"armed"});
+  const auto& edited = check_exact_success(
+      runtime->dispatch(
+          "pattern.events.edit",
+          pattern_events_edit_payload(
+              9633, 2, kPatternId,
+              Json::array({pattern_event_key_json(0, 0, 0)}),
+              Json::array({pattern_event_json(0, 0, 0, 480, 90)})),
+          {}),
+      {"pattern_id", "committed_revision", "replayed", "project_revision",
+       "runtime_published", "pattern_publication", "snapshot_error"});
+  LMDJ_CHECK(edited.at("committed_revision") == 3);
+  LMDJ_CHECK(edited.at("runtime_published") == false);
+  LMDJ_CHECK(edited.at("pattern_publication").is_null());
+  LMDJ_CHECK(edited.at("snapshot_error").at("code") == "INVALID_ARGUMENT");
+  const auto events = pattern_events_truth(*runtime, kPatternId);
+  LMDJ_CHECK(events.size() == 1);
+  LMDJ_CHECK(events.at(0).at("duration_tick") == 480);
+}
+
 void test_pattern_transport_suspend_barrier_settles_recording() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -7880,6 +8131,10 @@ int main() {
     test_sequence_switch_supersedes_a_near_boundary_recording_overlay();
     test_authoring_history_import_roundtrip_and_reopen();
     test_authoring_history_restores_pattern_and_parameters();
+    test_pattern_events_edit_commits_and_publishes_while_stopped();
+    test_pattern_events_edit_publishes_the_playing_pattern_at_the_next_bar();
+    test_pattern_events_edit_commits_a_non_playing_pattern();
+    test_pattern_events_edit_reports_a_failed_publication_after_commit();
     test_pad_delete_stops_voice_preserves_rhythm_and_roundtrips_history();
     test_pad_delete_cancels_staged_host_import_and_releases_history();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();

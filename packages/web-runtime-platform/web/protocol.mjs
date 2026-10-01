@@ -26,6 +26,7 @@ export const HOST_OPERATIONS = Object.freeze([
   "asset.import",
   "pad.assign",
   "pattern.create",
+  "pattern.events.edit",
   "pattern.slot.assign",
   "pattern.slot.clear",
   "pattern.slot.move",
@@ -292,6 +293,36 @@ function validPatternSlot(value) {
   return isUnsignedInteger(value, 15);
 }
 
+function validPatternEventKey(value) {
+  return (
+    hasExactKeys(value, ["slot", "onset_tick"]) &&
+    validSlot(value.slot) &&
+    isUnsignedInteger(value.onset_tick)
+  );
+}
+
+function validPatternEvent(value) {
+  return (
+    hasExactKeys(value, ["slot", "onset_tick", "duration_tick", "velocity"]) &&
+    validSlot(value.slot) &&
+    isUnsignedInteger(value.onset_tick) &&
+    isUnsignedInteger(value.duration_tick) &&
+    value.duration_tick > 0 &&
+    isUnsignedInteger(value.velocity, 127) &&
+    value.velocity > 0
+  );
+}
+
+function validPatternPublication(value) {
+  return (
+    value === null ||
+    (hasExactKeys(value, ["generation", "activation_frame"]) &&
+      isUnsignedInteger(value.generation) &&
+      value.generation > 0 &&
+      isUnsignedInteger(value.activation_frame))
+  );
+}
+
 function validPerformanceName(value) {
   if (typeof value !== "string") {
     return false;
@@ -522,6 +553,12 @@ function requirePerformanceOperationPayload(
     case "pattern.slot.move":
       valid = commandIdentity(["command_id", "expected_revision", "from_slot", "to_slot"]) &&
         validPatternSlot(payload.from_slot) && validPatternSlot(payload.to_slot);
+      break;
+    case "pattern.events.edit":
+      valid = commandIdentity(["command_id", "expected_revision", "pattern_id", "remove", "put"]) &&
+        validUuid(payload.pattern_id) &&
+        Array.isArray(payload.remove) && payload.remove.every(validPatternEventKey) &&
+        Array.isArray(payload.put) && payload.put.every(validPatternEvent);
       break;
     case "performance.list":
     case "performance.record.status":
@@ -1057,6 +1094,19 @@ function validPerformanceResult(operation, value) {
         validPatternSlot(value.from_slot) && validPatternSlot(value.to_slot) && validUuid(value.pattern_id) &&
         isUnsignedInteger(value.committed_revision) && typeof value.replayed === "boolean" &&
         value.project_revision === value.committed_revision;
+    case "pattern.events.edit": {
+      const keys = ["pattern_id", "committed_revision", "replayed", "project_revision", "runtime_published", "pattern_publication"];
+      const withError = hasExactKeys(value, [...keys, "snapshot_error"]);
+      return (hasExactKeys(value, keys) || withError) &&
+        validUuid(value.pattern_id) &&
+        isUnsignedInteger(value.committed_revision) &&
+        typeof value.replayed === "boolean" &&
+        value.project_revision === value.committed_revision &&
+        typeof value.runtime_published === "boolean" &&
+        validPatternPublication(value.pattern_publication) &&
+        (value.runtime_published || value.pattern_publication === null) &&
+        (!withError || (isPlainObject(value.snapshot_error) && !value.runtime_published));
+    }
     case "performance.list":
       return hasExactKeys(value, ["performances", "project_revision"]) &&
         Array.isArray(value.performances) && value.performances.every(validPerformanceSummary) &&

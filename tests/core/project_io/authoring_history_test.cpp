@@ -367,6 +367,52 @@ void persisted_history_rejects_malformed_commands_atomically() {
     LMDJ_CHECK(reader.load(f.root).value() == committed);
   }
 }
+void pattern_edit_is_one_history_action_and_restores_exactly() {
+  Fixture f;
+  const auto pattern_id = PatternId{uuid(3)};
+  LMDJ_CHECK(f.store.execute(f.root, CreatePattern{f.meta(),
+      Pattern{pattern_id,1,{{{0,0},0,240,100},{{0,1},480,120,90}}}}).has_value());
+  const auto before = f.state();
+  const auto count = f.status().undo_count;
+  const EditPatternEvents edit{f.meta(), pattern_id, {{{0,1},480}},
+      {{{0,1},480,240,127},{{1,0},960,240,80}}};
+  LMDJ_CHECK(f.store.execute(f.root, edit).has_value());
+  LMDJ_CHECK(f.status().undo_count == count + 1);
+  LMDJ_CHECK(f.status().undo_label == "Edit Pattern");
+  const auto edited = f.state();
+  LMDJ_CHECK(edited.patterns.at(pattern_id).events.size() == 3);
+  LMDJ_CHECK(f.store.execute(f.root, edit).value().replayed);
+  LMDJ_CHECK(f.status().undo_count == count + 1);
+  const auto undone = f.restore().state;
+  LMDJ_CHECK(undone.patterns == before.patterns);
+  const auto redone = f.restore(true).state;
+  LMDJ_CHECK(redone.patterns == edited.patterns);
+  ProjectStore reopened;
+  LMDJ_CHECK(reopened.load(f.root).value() == redone);
+}
+void pattern_edit_noop_records_no_history_entry() {
+  Fixture f;
+  const auto pattern_id = PatternId{uuid(3)};
+  LMDJ_CHECK(f.store.execute(f.root, CreatePattern{f.meta(),
+      Pattern{pattern_id,1,{}}}).has_value());
+  const EditPatternEvents add{f.meta(), pattern_id, {}, {{{0,0},0,240,100}}};
+  LMDJ_CHECK(f.store.execute(f.root, add).has_value());
+  const auto edited = f.state();
+  f.restore();
+  LMDJ_CHECK(f.status().redo_count == 1 && f.status().undo_count == 1);
+  const auto before = f.state();
+  // A result identical to the current Pattern is accepted with a new
+  // revision but adds no history entry; the Redo stack survives it, exactly
+  // like a content-identical Pad playback write.
+  const EditPatternEvents noop{f.meta(), pattern_id, {}, {}};
+  const auto result = f.store.execute(f.root, noop);
+  LMDJ_CHECK(result.has_value() && !result.value().replayed);
+  LMDJ_CHECK(f.state().revision == before.revision + 1);
+  LMDJ_CHECK(f.state().patterns == before.patterns);
+  LMDJ_CHECK(f.status().redo_count == 1 && f.status().undo_count == 1);
+  LMDJ_CHECK(f.status().undo_label == "Create Pattern");
+  LMDJ_CHECK(f.restore(true).state.patterns == edited.patterns);
+}
 
 }
 int main() {
@@ -378,6 +424,7 @@ int main() {
     grouped_cancel_restores_redo_and_capacity();
     unknown_commit_reconciles_exactly_once(); missing_redo_bytes_refuses_without_moving_history();
     clear_pad_preserves_pattern_events_and_restores_binding(); performance_draft_save_and_cancel_are_single_actions();
+    pattern_edit_is_one_history_action_and_restores_exactly(); pattern_edit_noop_records_no_history_entry();
     return 0;
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

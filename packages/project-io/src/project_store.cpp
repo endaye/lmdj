@@ -106,6 +106,7 @@ using PersistedCommand = std::variant<
     domain::ClearPatternSlot,
     domain::MovePatternSlot,
     domain::MergePatternEvents,
+    domain::EditPatternEvents,
     domain::UpdateSequenceSettings,
     domain::ImportAssignSample,
     domain::InstallSoundSet,
@@ -1655,6 +1656,26 @@ nlohmann::json command_json(const PersistedCommand& command) {
               {"type", "MergePatternEvents"},
           };
         } else if constexpr (
+            std::is_same_v<Type, domain::EditPatternEvents>) {
+          auto remove = nlohmann::json::array();
+          for (const auto& key : value.remove) {
+            remove.push_back({
+                {"onset_tick", key.onset_tick},
+                {"slot", slot_json(key.slot)},
+            });
+          }
+          auto put = nlohmann::json::array();
+          for (const auto& event : value.put) {
+            put.push_back(pattern_event_json(event));
+          }
+          return {
+              {"meta", meta_json(value.meta)},
+              {"pattern_id", value.pattern_id.value()},
+              {"put", std::move(put)},
+              {"remove", std::move(remove)},
+              {"type", "EditPatternEvents"},
+          };
+        } else if constexpr (
             std::is_same_v<Type, domain::UpdateSequenceSettings>) {
           return {
               {"bpm",
@@ -2017,6 +2038,62 @@ foundation::Result<PersistedCommand> parse_command(
           PersistedCommand{domain::MergePatternEvents{
               std::move(meta.value()),
               foundation::PatternId{pattern_id},
+              std::move(parsed.value().events),
+          }});
+    }
+    if (type == "EditPatternEvents") {
+      if (!exact_object_keys(
+              input, {"meta", "pattern_id", "put", "remove", "type"}) ||
+          !input.at("pattern_id").is_string() ||
+          !input.at("remove").is_array() ||
+          !input.at("put").is_array()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "EditPatternEvents transaction shape is invalid", path));
+      }
+      const auto pattern_id =
+          input.at("pattern_id").get<std::string>();
+      if (!domain::is_valid_uuid(pattern_id)) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "EditPatternEvents pattern id is invalid", path));
+      }
+      std::vector<domain::EventKey> remove;
+      for (const auto& encoded : input.at("remove")) {
+        if (!exact_object_keys(encoded, {"onset_tick", "slot"}) ||
+            !nonnegative_integer(encoded.at("onset_tick"))) {
+          return foundation::Result<PersistedCommand>::failure(
+              invalid_project(
+                  "EditPatternEvents remove key shape is invalid", path));
+        }
+        auto slot = parse_slot(encoded.at("slot"), path);
+        if (!slot.has_value()) {
+          return foundation::Result<PersistedCommand>::failure(slot.error());
+        }
+        const auto onset = unsigned_integer_value(encoded.at("onset_tick"));
+        if (!onset.has_value() ||
+            *onset > std::numeric_limits<std::uint32_t>::max()) {
+          return foundation::Result<PersistedCommand>::failure(
+              invalid_project(
+                  "EditPatternEvents remove key is invalid", path));
+        }
+        remove.push_back(domain::EventKey{
+            slot.value(), static_cast<std::uint32_t>(*onset)});
+      }
+      auto encoded_pattern = nlohmann::json{
+          {"bars", 8},
+          {"events", input.at("put")},
+          {"id", pattern_id},
+      };
+      auto parsed = parse_pattern(encoded_pattern, path);
+      if (!parsed.has_value()) {
+        return foundation::Result<PersistedCommand>::failure(parsed.error());
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::EditPatternEvents{
+              std::move(meta.value()),
+              foundation::PatternId{pattern_id},
+              std::move(remove),
               std::move(parsed.value().events),
           }});
     }
@@ -3482,7 +3559,7 @@ std::pair<std::string, std::string> history_description(
     else if constexpr (std::is_same_v<T, domain::UpdateSequenceSettings>) return {"Edit Sequence settings", ""};
     else if constexpr (std::is_same_v<T, domain::CreatePattern>) return {"Create Pattern", ""};
     else if constexpr (std::is_same_v<T, domain::AssignPatternSlot> || std::is_same_v<T, domain::ClearPatternSlot> || std::is_same_v<T, domain::MovePatternSlot>) return {"Edit Pattern slots", ""};
-    else if constexpr (std::is_same_v<T, domain::MergePatternEvents>) return {"Edit Pattern", ""};
+    else if constexpr (std::is_same_v<T, domain::MergePatternEvents> || std::is_same_v<T, domain::EditPatternEvents>) return {"Edit Pattern", ""};
     else if constexpr (std::is_same_v<T, CreatePerformance> || std::is_same_v<T, PerformanceMutation> || std::is_same_v<T, FinalizePerformanceDraft> || std::is_same_v<T, DeletePerformance>) return {"Record or edit Performance", performance_group};
     else if constexpr (std::is_same_v<T, RenamePerformance>) return {"Rename Performance", ""};
     else if constexpr (std::is_same_v<T, BindPerformanceRecording>) return {"Bind Performance recording", ""};

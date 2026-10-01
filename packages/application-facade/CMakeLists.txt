@@ -149,6 +149,14 @@ if(BUILD_TESTING)
   lmdj_target_sanitizers(lmdj_pattern_transport_executor_tests)
   lmdj_add_test(NAME facade.pattern_transport_executor TIER component
     COMMAND lmdj_pattern_transport_executor_tests LABELS concurrency)
+  add_executable(lmdj_facade_pattern_events_edit_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_events_edit_test.cpp")
+  target_include_directories(lmdj_facade_pattern_events_edit_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_facade_pattern_events_edit_tests PRIVATE lmdj::application)
+  lmdj_target_warnings(lmdj_facade_pattern_events_edit_tests)
+  lmdj_target_sanitizers(lmdj_facade_pattern_events_edit_tests)
+  lmdj_add_test(NAME facade.pattern_events_edit TIER component
+    COMMAND lmdj_facade_pattern_events_edit_tests)
   if(UNIX AND NOT EMSCRIPTEN)
     add_executable(lmdj_facade_candidate_store_tests
       "${CMAKE_SOURCE_DIR}/tests/core/facade/candidate_store_test.cpp")

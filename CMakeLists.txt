@@ -238,6 +238,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_pattern_transport_tests
     lmdj_pattern_transport_controller_tests
     lmdj_pattern_transport_executor_tests
+    lmdj_facade_pattern_events_edit_tests
     lmdj_facade_candidate_store_tests
     lmdj_facade_pad_delete_tests
     lmdj_facade_candidate_job_tests

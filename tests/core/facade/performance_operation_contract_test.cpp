@@ -73,6 +73,7 @@ void test_locked_task4_operations_are_registered_with_exact_kinds() {
            "pattern.slot.assign",
            "pattern.slot.clear",
            "pattern.slot.move",
+           "pattern.events.edit",
            "performance.record.begin",
            "performance.record.event",
            "performance.record.launch-request",

@@ -3649,6 +3649,117 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  function patternEventKeyIdentity(value) {
+    if (
+      value === null || typeof value !== "object" ||
+      !exactKeys(value, ["bank", "pad", "onsetTick"]) ||
+      !isUnsignedInteger(value.bank, 3) ||
+      !isUnsignedInteger(value.pad, 15) ||
+      !isUnsignedInteger(value.onsetTick)
+    ) {
+      throw new TypeError("Pattern event key is invalid");
+    }
+    return {
+      slot: {bank: value.bank, pad: value.pad},
+      onset_tick: value.onsetTick,
+    };
+  }
+
+  function patternEventIdentity(value) {
+    if (
+      value === null || typeof value !== "object" ||
+      !exactKeys(value, ["bank", "pad", "onsetTick", "durationTick", "velocity"]) ||
+      !isUnsignedInteger(value.bank, 3) ||
+      !isUnsignedInteger(value.pad, 15) ||
+      !isUnsignedInteger(value.onsetTick) ||
+      !isUnsignedInteger(value.durationTick) ||
+      value.durationTick === 0 ||
+      !isUnsignedInteger(value.velocity, 127) ||
+      value.velocity === 0
+    ) {
+      throw new TypeError("Pattern event is invalid");
+    }
+    return {
+      slot: {bank: value.bank, pad: value.pad},
+      onset_tick: value.onsetTick,
+      duration_tick: value.durationTick,
+      velocity: value.velocity,
+    };
+  }
+
+  function editPatternEvents(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !(exactKeys(request, ["expectedRevision", "patternId", "remove", "put"]) ||
+        exactKeys(request, ["expectedRevision", "patternId", "remove", "put", "commandId"])) ||
+      !isUnsignedInteger(request.expectedRevision) ||
+      !Array.isArray(request.remove) ||
+      !Array.isArray(request.put)
+    ) {
+      return Promise.reject(new TypeError("Pattern events edit request is invalid"));
+    }
+    // command_id is minted per call; a retry passes the identity the first
+    // call minted so the Host answers from the command receipt instead of
+    // committing the same edit twice.
+    let patternId;
+    let commandId;
+    let remove;
+    let put;
+    try {
+      patternId = requireSequenceIdentity(request.patternId, "patternId");
+      commandId = Object.hasOwn(request, "commandId")
+        ? requireSequenceIdentity(request.commandId, "commandId")
+        : crypto.randomUUID();
+      remove = request.remove.map(patternEventKeyIdentity);
+      put = request.put.map(patternEventIdentity);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest("pattern.events.edit", {
+        command_id: commandId,
+        expected_revision: request.expectedRevision,
+        pattern_id: patternId,
+        remove,
+        put,
+      });
+      const keys = [
+        "pattern_id",
+        "committed_revision",
+        "replayed",
+        "project_revision",
+        "runtime_published",
+        "pattern_publication",
+      ];
+      const hasSnapshotError = Object.hasOwn(value ?? {}, "snapshot_error");
+      if (
+        !exactKeys(value, hasSnapshotError ? [...keys, "snapshot_error"] : keys) ||
+        value.pattern_id !== patternId ||
+        !isUnsignedInteger(value.committed_revision) ||
+        typeof value.replayed !== "boolean" ||
+        value.project_revision !== value.committed_revision ||
+        typeof value.runtime_published !== "boolean" ||
+        (value.runtime_published && hasSnapshotError) ||
+        (!value.runtime_published && value.pattern_publication !== null)
+      ) {
+        throw protocolMismatch("Pattern events edit result is invalid");
+      }
+      return Object.freeze({
+        patternId: value.pattern_id,
+        commandId,
+        committedRevision: value.committed_revision,
+        replayed: value.replayed,
+        projectRevision: value.project_revision,
+        runtimePublished: value.runtime_published,
+        patternPublication: normalizePatternPublication(value.pattern_publication),
+        snapshotError: hasSnapshotError
+          ? normalizeSnapshotError(value.snapshot_error)
+          : null,
+      });
+    });
+  }
+
   async function querySequenceStatus(projectId = null) {
     const payload = projectId === null
       ? {}
@@ -5434,6 +5545,7 @@ function createRuntimeSessionController(options = {}) {
     inspectPatternTransport,
     createPattern,
     updateSequenceSettings,
+    editPatternEvents,
     querySequenceStatus,
     listSequenceRecovery,
     applySequenceRecovery,

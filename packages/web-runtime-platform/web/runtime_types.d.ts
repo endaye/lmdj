@@ -50,6 +50,32 @@ export interface SequenceSwitchResult extends SequenceMutation {
   readonly patternPublication: SequencePatternPublication;
 }
 
+export interface PatternEventKeyInput {
+  readonly bank: number;
+  readonly pad: number;
+  readonly onsetTick: number;
+}
+
+export interface PatternEventInput extends PatternEventKeyInput {
+  readonly durationTick: number;
+  readonly velocity: number;
+}
+
+export interface PatternEventsEditResult {
+  readonly patternId: string;
+  readonly commandId: string;
+  readonly committedRevision: number;
+  readonly replayed: boolean;
+  readonly projectRevision: number;
+  readonly runtimePublished: boolean;
+  readonly patternPublication: SequencePatternPublication | null;
+  readonly snapshotError: Readonly<{
+    code: string;
+    message: string;
+    details: Readonly<Record<string, unknown>>;
+  }> | null;
+}
+
 export interface SequenceRecoveryCandidate {
   readonly sessionId: string;
   readonly patternId: string;
@@ -135,6 +161,13 @@ export interface SequenceRuntimeSession {
     patternPublication: SequencePatternPublication | null;
     projectRevision: number;
   }>>;
+  editPatternEvents(request: {
+    readonly expectedRevision: number;
+    readonly patternId: string;
+    readonly remove: readonly PatternEventKeyInput[];
+    readonly put: readonly PatternEventInput[];
+    readonly commandId?: string;
+  }): Promise<Readonly<PatternEventsEditResult>>;
   subscribeSequenceBarBoundary(
     listener: (event: Readonly<{
       sessionId: string;

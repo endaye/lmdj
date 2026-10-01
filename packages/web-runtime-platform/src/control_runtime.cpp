@@ -3452,6 +3452,98 @@ Json ControlRuntime::dispatch(
       result["project_revision"] = response.at("project_revision");
       return success(std::move(result));
     }
+    if (operation == "pattern.events.edit") {
+      require(exact_keys(
+          payload,
+          {"command_id", "expected_revision", "pattern_id", "remove",
+           "put"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      const auto pattern_id = uuid_field(payload, "pattern_id");
+      constexpr std::uint64_t tick_limit =
+          static_cast<std::uint64_t>(domain::kBarTicks4x4) * 8U;
+      const auto& remove = payload.at("remove");
+      const auto& put = payload.at("put");
+      require(remove.is_array() && put.is_array());
+      for (const auto& key : remove) {
+        require(exact_keys(key, {"slot", "onset_tick"}));
+        (void)slot_value(key.at("slot"));
+        (void)unsigned_field(key, "onset_tick", tick_limit - 1U);
+      }
+      for (const auto& event : put) {
+        require(exact_keys(
+            event, {"slot", "onset_tick", "duration_tick", "velocity"}));
+        (void)slot_value(event.at("slot"));
+        (void)unsigned_field(event, "onset_tick", tick_limit - 1U);
+        const auto duration =
+            unsigned_field(event, "duration_tick", tick_limit);
+        const auto velocity = unsigned_field(event, "velocity", 127);
+        require(duration > 0 && velocity > 0);
+      }
+      auto response = impl_->application.command({
+          {"operation", "pattern.events.edit"},
+          {"project_path", impl_->retained_project_path->generic_string()},
+          {"command_id", uuid_field(payload, "command_id")},
+          {"expected_revision", unsigned_field(payload, "expected_revision")},
+          {"pattern_id", pattern_id},
+          {"remove", payload.at("remove")},
+          {"put", payload.at("put")},
+      });
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
+      }
+      impl_->project_revision =
+          response.at("project_revision").get<std::uint64_t>();
+      // An edit to the Pattern the transport is playing publishes through the
+      // Pattern swap path so it activates on the next bar boundary; anything
+      // else republishes the selected snapshot as other authoring commits do.
+      // A failed publication never misreports the committed edit: the result
+      // carries runtime_published=false with a typed snapshot_error instead.
+      const bool playing_edited = impl_->transport != nullptr &&
+          *impl_->transport->pattern ==
+              foundation::PatternId{pattern_id} &&
+          impl_->transport->controller->inspect().playing;
+      Json pattern_publication = nullptr;
+      bool runtime_published = false;
+      Json snapshot_error = nullptr;
+      if (playing_edited) {
+        auto published = impl_->publish_project_pattern(
+            foundation::PatternId{pattern_id});
+        if (published.has_value()) {
+          runtime_published = true;
+          pattern_publication = {
+              {"generation", published.value().generation},
+              {"activation_frame", published.value().activation_frame},
+          };
+        } else {
+          snapshot_error = normalized_error(published.error()).at("error");
+        }
+      } else {
+        auto snapshot = impl_->prepare_and_publish(*impl_->pattern_id, true, true);
+        runtime_published = snapshot.published;
+        if (!snapshot.error.is_null()) {
+          snapshot_error = snapshot.error;
+        }
+        if (runtime_published && snapshot.generation.has_value()) {
+          if (const auto acknowledgement =
+                  impl_->await_bank_acknowledgement(*snapshot.generation);
+              acknowledgement.has_value()) {
+            runtime_published = false;
+            snapshot_error = acknowledgement->at("error");
+          }
+        }
+      }
+      auto result = response.at("result");
+      result["project_revision"] = response.at("project_revision");
+      result["runtime_published"] = runtime_published;
+      result["pattern_publication"] = std::move(pattern_publication);
+      if (!snapshot_error.is_null()) {
+        result["snapshot_error"] = std::move(snapshot_error);
+      }
+      return success(std::move(result));
+    }
     if (operation == "project.inspect") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());

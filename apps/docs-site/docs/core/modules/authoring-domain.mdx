@@ -66,3 +66,24 @@ object coverage and refusal without partial mutation.
 checked command semantics as `AssignPad` with a null Asset. Patterns continue to
 reference the same Pad Slot; Assets and Artifact identities are retained. Invalid
 slots, stale revisions and command collisions keep their existing refusal rules.
+
+## Pattern event editing
+
+`EditPatternEvents {meta, pattern_id, remove, put}` is one atomic grid edit in
+the existing `Command` variant. It removes every event keyed by
+`(bank, pad, onset_tick)`, then inserts or replaces every `put` event by the
+same key rule, and canonicalises the result in a single checked commit: one
+revision, one receipt identity. A move is a remove plus a put at the new key, a
+length or velocity change is a same-key put, and a batch is one command.
+
+Refusals are typed and change nothing: the Pattern is unknown, a removed key
+does not exist, a `put` event fails the same `validate_pattern` rules as
+creation (valid slot, velocity 1..127, and `duration ≤ L − onset` where
+`L = bars × 3840`, so no note crosses the loop seam), or a key repeats inside
+`remove` or `put`. `expected_revision` and `command_id` keep the `apply_checked`
+semantics: a replay returns the original receipt and a stale revision conflicts.
+An edit whose result equals the current Pattern applies with a new revision but
+records no history entry, matching the existing content-identical write rule.
+Events at different onsets may overlap; the canonical order is unchanged.
+`command_handler_test.cpp` pins apply, each refusal, replay, stale conflict,
+canonical order and overlap.

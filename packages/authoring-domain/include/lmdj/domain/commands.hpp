@@ -83,6 +83,24 @@ struct MergePatternEvents {
   std::vector<PatternEvent> events;
 };
 
+// One Pattern event's identity: Pad Slot and onset tick. A later write to the
+// same key replaces the earlier event.
+struct EventKey {
+  PadSlotId slot;
+  std::uint32_t onset_tick;
+
+  auto operator<=>(const EventKey&) const = default;
+};
+
+// One atomic grid edit: remove every keyed event, then insert or replace
+// every `put` event by key, as a single checked commit.
+struct EditPatternEvents {
+  CommandMeta meta;
+  foundation::PatternId pattern_id;
+  std::vector<EventKey> remove;
+  std::vector<PatternEvent> put;
+};
+
 struct UpdateSequenceSettings {
   CommandMeta meta;
   std::optional<std::uint16_t> bpm;
@@ -170,6 +188,7 @@ using Command = std::variant<
     ClearPatternSlot,
     MovePatternSlot,
     MergePatternEvents,
+    EditPatternEvents,
     UpdateSequenceSettings>;
 
 struct AppliedCommand;

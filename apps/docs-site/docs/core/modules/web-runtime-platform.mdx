@@ -134,3 +134,24 @@ stops the Pad and clears preview, delegates `pad.delete` to the Facade, removes
 cancelled import handles and publishes the new Bank through exact-generation
 acknowledgement. Responses retain the committed revision separately from Runtime
 publication failure. Other Pad imports and their revision guards remain intact.
+
+## Pattern event editing
+
+The Host operation `pattern.events.edit` carries `{pattern_id, remove, put,
+expected_revision, command_id}` through the strict protocol, and the Runtime
+Session exposes it as `editPatternEvents`. The Session mints one `command_id`
+per call and returns it; a retry passes the same identity back so the Host
+answers from the command receipt instead of committing twice. Recording refuses
+the edit through the existing Facade guard; playback is admitted.
+
+Publication follows the edited Pattern's state. Stopped, or when the edit names
+a Pattern the transport is not playing, the commit republishes the selected
+snapshot as other authoring commits do. When the transport is playing the edited
+Pattern, the Host publishes through the same Pattern swap path a BPM change
+uses, and the response's `pattern_publication` reports the `generation` and the
+`activation_frame` of the next bar boundary the new content takes effect at. A
+failed publication after a durable commit never misreports the edit: the
+response keeps the committed revision and carries `runtime_published=false`
+with a typed `snapshot_error`. Control-runtime tests cover the stopped publish,
+the next-bar `activation_frame` while playing, the non-playing Pattern and the
+post-commit publication failure.

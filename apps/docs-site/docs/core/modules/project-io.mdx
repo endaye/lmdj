@@ -221,3 +221,16 @@ so deletion needs no new transaction dialect. A changed binding/playback is one
 Undo restores the complete Pad contents, Redo clears them again, and both preserve
 Pattern events and retained Asset bytes. Revision and writer/journal admission
 still run at the durable boundary.
+
+## Pattern event editing persistence
+
+`EditPatternEvents` persists in the internal command log as its own transaction
+type, following the same checked codec, receipt replay and exact-identity rules
+as `MergePatternEvents`; it is not a Contract and the portable Project Bundle
+and Project Truth schemas are unchanged. Each edit is one `Edit Pattern` history
+action, the same label recording merges use. Undo restores the exact prior
+events, Redo reapplies them, and an edit whose result equals the current Pattern
+commits with a new revision but adds no history entry and leaves the Redo stack
+intact, matching the content-identical write rule. `authoring_history_test.cpp`
+covers the single history entry per edit, exact Undo/Redo restoration, the no-op
+outcome and reopen.

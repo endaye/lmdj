@@ -173,6 +173,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"pattern.slot.clear", OperationKind::command},
       {"pattern.slot.move", OperationKind::command},
       {"pattern.create", OperationKind::command},
+      {"pattern.events.edit", OperationKind::command},
       {"performance.delete", OperationKind::command},
       {"performance.discard", OperationKind::command},
       {"performance.inspect", OperationKind::query},
@@ -3986,6 +3987,9 @@ struct Application::Impl {
     if (operation == "pattern.create") {
       return pattern_create(request);
     }
+    if (operation == "pattern.events.edit") {
+      return pattern_events_edit(request);
+    }
     if (operation == "pattern.slot.assign") {
       return pattern_slot_assign(request);
     }
@@ -5836,6 +5840,81 @@ struct Application::Impl {
          {"bars", bars},
          {"replayed", created.value().outcome.replayed}},
         created.value().outcome.state.revision);
+  }
+
+  nlohmann::json pattern_events_edit(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "command_id", "expected_revision",
+             "pattern_id", "remove", "put"}),
+        "pattern.events.edit request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto command_id = uuid_field(request, "command_id");
+    const auto revision = unsigned_field(request, "expected_revision");
+    const auto pattern_id = uuid_field(request, "pattern_id");
+    const auto tick_limit =
+        static_cast<std::uint64_t>(domain::kBarTicks4x4) * 8U;
+    const auto& remove_keys = request.at("remove");
+    const auto& put_events = request.at("put");
+    require(remove_keys.is_array() && put_events.is_array(),
+            "pattern events edit lists must be arrays");
+    std::vector<domain::EventKey> remove;
+    remove.reserve(remove_keys.size());
+    for (const auto& key : remove_keys) {
+      require(exact_keys(key, {"slot", "onset_tick"}),
+              "pattern event key shape is invalid");
+      const auto onset =
+          unsigned_field(key, "onset_tick", tick_limit - 1U);
+      remove.push_back(domain::EventKey{
+          slot_value(key.at("slot")),
+          static_cast<std::uint32_t>(onset)});
+    }
+    std::vector<domain::PatternEvent> put;
+    put.reserve(put_events.size());
+    for (const auto& event : put_events) {
+      require(
+          exact_keys(
+              event,
+              {"slot", "onset_tick", "duration_tick", "velocity"}),
+          "pattern event shape is invalid");
+      const auto onset =
+          unsigned_field(event, "onset_tick", tick_limit - 1U);
+      const auto duration =
+          unsigned_field(event, "duration_tick", tick_limit);
+      const auto velocity = unsigned_field(event, "velocity", 127);
+      require(velocity > 0 && duration > 0,
+              "pattern event is outside tick bounds");
+      put.push_back(
+          domain::PatternEvent{
+              slot_value(event.at("slot")),
+              static_cast<std::uint32_t>(onset),
+              static_cast<std::uint32_t>(duration),
+              static_cast<std::uint8_t>(velocity),
+          });
+    }
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) {
+      return error_envelope(admitted.error());
+    }
+    const auto edited = projects.execute_with_identity(
+        path,
+        domain::Command{domain::EditPatternEvents{
+            domain::CommandMeta{
+                foundation::CommandId{command_id}, revision},
+            foundation::PatternId{pattern_id},
+            std::move(remove),
+            std::move(put),
+        }});
+    if (!edited.has_value()) {
+      return error_envelope(edited.error());
+    }
+    const auto& outcome = edited.value().outcome;
+    return success_envelope(
+        {{"pattern_id", pattern_id},
+         {"committed_revision", outcome.state.revision},
+         {"replayed", outcome.replayed}},
+        outcome.state.revision);
   }
 
   nlohmann::json pattern_slot_assign(const nlohmann::json &request) {

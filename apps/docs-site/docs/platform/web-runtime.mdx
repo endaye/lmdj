@@ -26,7 +26,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 ## 当前组成
 
-Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Product Assembly。正式产品路径由 Web Runtime Platform `4.1.0`、Diagnostic Web Runtime Host `4.1.0` 与 Creator Web Host `4.1.0` 组成，并锁入 Product Build `1.0.45.0`。共享 Runtime Session 桥接 revision-bound Sample quota、manifest-bound Sample import total、多 chunk sidecar、Sequence recording、settings、next-Bar switch、receipt 与 recovery；Stage 10 起还桥接 Perform master tap 的 capture 状态与录制批次。Host 只呈现 authority state。
+Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Product Assembly。正式产品路径由 Web Runtime Platform `4.1.0`、Diagnostic Web Runtime Host `4.1.0` 与 Creator Web Host `4.1.0` 组成，并锁入 Product Build `1.0.45.0`。共享 Runtime Session 桥接 revision-bound Sample quota、manifest-bound Sample import total、多 chunk sidecar、Sequence recording、settings、next-Bar switch、receipt 与 recovery；Stage 10 起还桥接 Perform master tap 的 capture 状态与录制批次。当前 source 追加 Pattern 事件网格编辑：Host 操作 `pattern.events.edit` 与 Session 方法 `editPatternEvents` 以一次原子提交按事件键 `(bank, pad, onset_tick)` 删除并放入 Pattern 事件；录音中沿用既有 Facade 守卫拒绝，播放中提交照常，被编辑的正是播放中的 Pattern 时经 Pattern swap 路径发布并从下一小节生效，response 报告该次发布的 `generation` 与 `activation_frame`；提交后的发布失败以 `runtime_published=false` 与类型化 `snapshot_error` 表达，绝不误报已提交的编辑。该 surface 的 Module 版本分配留待后续协调版本切点。Host 只呈现 authority state。
 
 ## 共享 Platform
 

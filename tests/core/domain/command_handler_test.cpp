@@ -21,6 +21,8 @@ using lmdj::domain::Command;
 using lmdj::domain::CommandMeta;
 using lmdj::domain::CommandReceipt;
 using lmdj::domain::CreatePattern;
+using lmdj::domain::EditPatternEvents;
+using lmdj::domain::EventKey;
 using lmdj::domain::ImportAsset;
 using lmdj::domain::ImportAssignSample;
 using lmdj::domain::LoopMode;
@@ -63,6 +65,8 @@ constexpr auto kMovePatternSlotCommand =
     "10000000-0000-4000-8000-00000000000e";
 constexpr auto kClearPatternSlotCommand =
     "10000000-0000-4000-8000-00000000000f";
+constexpr auto kEditEventsCommand1 = "10000000-0000-4000-8000-000000000010";
+constexpr auto kEditEventsCommand2 = "10000000-0000-4000-8000-000000000011";
 constexpr auto kAsset1 = "20000000-0000-4000-8000-000000000001";
 constexpr auto kAsset2 = "20000000-0000-4000-8000-000000000002";
 constexpr auto kPattern1 = "30000000-0000-4000-8000-000000000001";
@@ -932,6 +936,189 @@ void test_pattern_slot_commands_enforce_ownership_and_receipts() {
   LMDJ_CHECK(cleared.state.pattern_slots.at(1) == pattern2);
 }
 
+lmdj::domain::ProjectState seeded_pattern_state() {
+  return apply_or_throw(
+             new_project(),
+             Command{CreatePattern{
+                 meta(kPatternCommand, 0),
+                 {PatternId{kPattern1},
+                  1,
+                  {
+                      {PadSlotId{0, 0}, 0, 240, 100},
+                      {PadSlotId{0, 1}, 480, 120, 90},
+                  }},
+             }})
+      .state;
+}
+
+void test_edit_pattern_events_removes_and_puts_as_one_commit() {
+  const auto state = seeded_pattern_state();
+  const auto edited = lmdj::domain::apply(
+      state,
+      Command{EditPatternEvents{
+          meta(kEditEventsCommand1, 1),
+          PatternId{kPattern1},
+          {{PadSlotId{0, 1}, 480}},
+          {
+              {PadSlotId{0, 1}, 480, 240, 127},
+              {PadSlotId{1, 0}, 960, 240, 80},
+          },
+      }},
+      {});
+
+  LMDJ_CHECK(edited.has_value());
+  LMDJ_CHECK(!edited.value().replayed);
+  LMDJ_CHECK(edited.value().state.revision == 2);
+  LMDJ_CHECK(
+      edited.value().event.at("type") == "pattern.events_edited");
+  const auto& events =
+      edited.value().state.patterns.at(PatternId{kPattern1}).events;
+  LMDJ_CHECK(events.size() == 3);
+  LMDJ_CHECK((events[0].slot == PadSlotId{0, 0}));
+  LMDJ_CHECK(events[0].onset_tick == 0);
+  LMDJ_CHECK(events[0].duration_tick == 240);
+  LMDJ_CHECK(events[0].velocity == 100);
+  LMDJ_CHECK((events[1].slot == PadSlotId{0, 1}));
+  LMDJ_CHECK(events[1].onset_tick == 480);
+  LMDJ_CHECK(events[1].duration_tick == 240);
+  LMDJ_CHECK(events[1].velocity == 127);
+  LMDJ_CHECK((events[2].slot == PadSlotId{1, 0}));
+  LMDJ_CHECK(events[2].onset_tick == 960);
+}
+
+void test_edit_pattern_events_rejects_unknown_pattern() {
+  check_invalid_without_state_change(
+      new_project(),
+      Command{EditPatternEvents{
+          meta(kEditEventsCommand1, 0), PatternId{kPattern1}, {}, {}}});
+}
+
+void test_edit_pattern_events_rejects_a_missing_removed_key() {
+  const auto state = seeded_pattern_state();
+  check_invalid_without_state_change(
+      state,
+      Command{EditPatternEvents{
+          meta(kEditEventsCommand1, 1),
+          PatternId{kPattern1},
+          {{PadSlotId{0, 1}, 240}},
+          {}}});
+}
+
+void test_edit_pattern_events_rejects_repeated_keys() {
+  const auto state = seeded_pattern_state();
+  check_invalid_without_state_change(
+      state,
+      Command{EditPatternEvents{
+          meta(kEditEventsCommand1, 1),
+          PatternId{kPattern1},
+          {{PadSlotId{0, 1}, 480}, {PadSlotId{0, 1}, 480}},
+          {}}});
+  check_invalid_without_state_change(
+      state,
+      Command{EditPatternEvents{
+          meta(kEditEventsCommand1, 1),
+          PatternId{kPattern1},
+          {},
+          {
+              {PadSlotId{1, 0}, 0, 240, 90},
+              {PadSlotId{1, 0}, 0, 120, 100},
+          }}});
+}
+
+void test_edit_pattern_events_rejects_an_invalid_put_event() {
+  const auto state = seeded_pattern_state();
+  for (const PatternEvent invalid : {
+           PatternEvent{PadSlotId{4, 0}, 0, 240, 100},
+           PatternEvent{PadSlotId{0, 2}, 0, 240, 0},
+           PatternEvent{PadSlotId{0, 2}, 0, 0, 100},
+       }) {
+    check_invalid_without_state_change(
+        state,
+        Command{EditPatternEvents{
+            meta(kEditEventsCommand1, 1),
+            PatternId{kPattern1},
+            {},
+            {invalid}}});
+  }
+}
+
+void test_edit_pattern_events_rejects_a_put_crossing_the_loop_seam() {
+  const auto state = seeded_pattern_state();
+  for (const PatternEvent invalid : {
+           PatternEvent{PadSlotId{0, 2}, 3840, 1, 100},
+           PatternEvent{PadSlotId{0, 2}, 3839, 2, 100},
+       }) {
+    check_invalid_without_state_change(
+        state,
+        Command{EditPatternEvents{
+            meta(kEditEventsCommand1, 1),
+            PatternId{kPattern1},
+            {},
+            {invalid}}});
+  }
+}
+
+void test_edit_pattern_events_replays_receipt_and_conflicts_stale_revision() {
+  const auto state = seeded_pattern_state();
+  const Command edit{EditPatternEvents{
+      meta(kEditEventsCommand1, 1),
+      PatternId{kPattern1},
+      {{PadSlotId{0, 1}, 480}},
+      {}}};
+  const auto committed = lmdj::domain::apply(state, edit, {});
+  LMDJ_CHECK(committed.has_value());
+
+  const std::map<CommandId, CommandReceipt> receipts{
+      {CommandId{kEditEventsCommand1},
+       {committed.value().state.revision, committed.value().event}},
+  };
+  const auto replay =
+      lmdj::domain::apply(committed.value().state, edit, receipts);
+  LMDJ_CHECK(replay.has_value());
+  LMDJ_CHECK(replay.value().replayed);
+  LMDJ_CHECK(replay.value().state == committed.value().state);
+  LMDJ_CHECK(replay.value().event == committed.value().event);
+
+  const auto stale = lmdj::domain::apply(
+      committed.value().state,
+      Command{EditPatternEvents{
+          meta(kEditEventsCommand2, 1), PatternId{kPattern1}, {}, {}}},
+      {});
+  LMDJ_CHECK(!stale.has_value());
+  LMDJ_CHECK(stale.error().code == ErrorCode::revision_conflict);
+}
+
+void test_edit_pattern_events_orders_canonically_and_allows_overlap() {
+  const auto state = seeded_pattern_state();
+  const auto edited = lmdj::domain::apply(
+      state,
+      Command{EditPatternEvents{
+          meta(kEditEventsCommand1, 1),
+          PatternId{kPattern1},
+          {},
+          {
+              {PadSlotId{1, 0}, 120, 480, 80},
+              {PadSlotId{0, 2}, 240, 480, 90},
+              {PadSlotId{0, 2}, 0, 480, 100},
+          }}},
+      {});
+
+  LMDJ_CHECK(edited.has_value());
+  const auto& events =
+      edited.value().state.patterns.at(PatternId{kPattern1}).events;
+  LMDJ_CHECK(events.size() == 5);
+  LMDJ_CHECK((events[0].slot == PadSlotId{0, 0}));
+  LMDJ_CHECK(events[0].onset_tick == 0);
+  LMDJ_CHECK((events[1].slot == PadSlotId{0, 2}));
+  LMDJ_CHECK(events[1].onset_tick == 0);
+  LMDJ_CHECK((events[2].slot == PadSlotId{1, 0}));
+  LMDJ_CHECK(events[2].onset_tick == 120);
+  LMDJ_CHECK((events[3].slot == PadSlotId{0, 2}));
+  LMDJ_CHECK(events[3].onset_tick == 240);
+  LMDJ_CHECK((events[4].slot == PadSlotId{0, 1}));
+  LMDJ_CHECK(events[4].onset_tick == 480);
+}
+
 void test_v4_authoring_commands_preserve_pattern_slot_truth() {
   auto initial = new_project();
   initial.contract = lmdj::domain::ProjectContract::v4;
@@ -988,6 +1175,14 @@ int main() {
     test_tick_pattern_validation_enforces_loop_remainder();
     test_sequence_settings_update_enforces_locked_ranges();
     test_pattern_slot_commands_enforce_ownership_and_receipts();
+    test_edit_pattern_events_removes_and_puts_as_one_commit();
+    test_edit_pattern_events_rejects_unknown_pattern();
+    test_edit_pattern_events_rejects_a_missing_removed_key();
+    test_edit_pattern_events_rejects_repeated_keys();
+    test_edit_pattern_events_rejects_an_invalid_put_event();
+    test_edit_pattern_events_rejects_a_put_crossing_the_loop_seam();
+    test_edit_pattern_events_replays_receipt_and_conflicts_stale_revision();
+    test_edit_pattern_events_orders_canonically_and_allows_overlap();
     test_v4_authoring_commands_preserve_pattern_slot_truth();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
