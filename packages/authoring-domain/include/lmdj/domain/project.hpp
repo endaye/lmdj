@@ -40,6 +40,10 @@ inline constexpr std::uint8_t kPatternSlotMax = 15;
 inline constexpr std::uint16_t kFxValueMin = 0;
 inline constexpr std::uint16_t kFxValueMax = 1000;
 inline constexpr std::uint8_t kFxCount = 8;
+inline constexpr std::int32_t kPadPitchCentsMin = -2400;
+inline constexpr std::int32_t kPadPitchCentsMax = 2400;
+inline constexpr std::int32_t kPadPanMin = -100;
+inline constexpr std::int32_t kPadPanMax = 100;
 
 enum class TriggerMode : std::uint8_t {
   one_shot,
@@ -48,12 +52,41 @@ enum class TriggerMode : std::uint8_t {
   loop_toggle,
 };
 
+enum class LoopMode : std::uint8_t {
+  forward,
+  ping_pong,
+};
+
+// Every field after `muted` is optional Project Truth (lmdj.project.v5 5.1.0)
+// whose default reproduces the playback that predates it. The constructor
+// keeps the five-value form every existing caller uses, so no caller relies on
+// partially initializing an aggregate.
 struct PadPlayback {
+  PadPlayback() = default;
+  PadPlayback(
+      std::uint64_t trim_start_frame_value,
+      std::optional<std::uint64_t> trim_end_frame_value,
+      TriggerMode trigger_mode_value,
+      std::int32_t gain_millidb_value,
+      bool muted_value) noexcept
+      : trim_start_frame(trim_start_frame_value),
+        trim_end_frame(trim_end_frame_value),
+        trigger_mode(trigger_mode_value),
+        gain_millidb(gain_millidb_value),
+        muted(muted_value) {}
+
   std::uint64_t trim_start_frame{0};
   std::optional<std::uint64_t> trim_end_frame;
   TriggerMode trigger_mode{TriggerMode::one_shot};
   std::int32_t gain_millidb{0};
   bool muted{false};
+  bool reverse{false};
+  std::int32_t pitch_cents{0};
+  std::int32_t pan{0};
+  LoopMode loop_mode{LoopMode::forward};
+  // Source frame where later loop passes resume; nullopt is the trim start.
+  std::optional<std::uint64_t> loop_start_frame;
+  std::uint64_t loop_crossfade_frames{0};
 
   bool operator==(const PadPlayback&) const = default;
 };
@@ -333,6 +366,10 @@ foundation::Result<ProjectState> create_project(
 
 bool is_valid_uuid(std::string_view value) noexcept;
 bool is_valid_slot(PadSlotId slot) noexcept;
+// The source-length-independent playback rules. A rule that needs the
+// sample's frame count (an open trim end) is checked where that count is
+// known.
+bool is_valid_playback(const PadPlayback& playback) noexcept;
 std::optional<Asset> resolve_slot_asset(
     const ProjectState& state,
     PadSlotId slot);

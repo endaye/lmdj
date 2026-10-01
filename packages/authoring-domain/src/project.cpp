@@ -242,6 +242,51 @@ bool is_valid_slot(PadSlotId slot) noexcept {
   return slot.bank < 4 && slot.pad < 16;
 }
 
+bool is_valid_playback(const PadPlayback& playback) noexcept {
+  switch (playback.trigger_mode) {
+    case TriggerMode::one_shot:
+    case TriggerMode::gate:
+    case TriggerMode::loop_gate:
+    case TriggerMode::loop_toggle:
+      break;
+    default:
+      return false;
+  }
+  switch (playback.loop_mode) {
+    case LoopMode::forward:
+    case LoopMode::ping_pong:
+      break;
+    default:
+      return false;
+  }
+  if (playback.gain_millidb < -60000 || playback.gain_millidb > 6000 ||
+      playback.pitch_cents < kPadPitchCentsMin ||
+      playback.pitch_cents > kPadPitchCentsMax ||
+      playback.pan < kPadPanMin || playback.pan > kPadPanMax) {
+    return false;
+  }
+  if (playback.trim_end_frame.has_value() &&
+      *playback.trim_end_frame <= playback.trim_start_frame) {
+    return false;
+  }
+  const auto loop_start =
+      playback.loop_start_frame.value_or(playback.trim_start_frame);
+  if (loop_start < playback.trim_start_frame ||
+      (playback.trim_end_frame.has_value() &&
+       loop_start >= *playback.trim_end_frame)) {
+    return false;
+  }
+  // A ping-pong loop has no seam to blend; a forward loop blends at most half
+  // of itself, so a pass always keeps an unblended remainder.
+  if (playback.loop_mode == LoopMode::ping_pong &&
+      playback.loop_crossfade_frames != 0) {
+    return false;
+  }
+  return !playback.trim_end_frame.has_value() ||
+         playback.loop_crossfade_frames <=
+             (*playback.trim_end_frame - loop_start) / 2;
+}
+
 std::optional<Asset> resolve_slot_asset(
     const ProjectState& state,
     PadSlotId slot) {

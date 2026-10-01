@@ -143,6 +143,22 @@ void test_pad_playback_defaults_are_project_v2_contract_values() {
   LMDJ_CHECK(!playback.muted);
 }
 
+// The 5.1.0 parity fields default to the playback that predates them, both
+// for a default value and for the five-value form every older caller uses.
+void test_pad_playback_parity_fields_default_to_prior_behaviour() {
+  for (const lmdj::domain::PadPlayback& playback :
+       {lmdj::domain::PadPlayback{},
+        lmdj::domain::PadPlayback{
+            7, 90, lmdj::domain::TriggerMode::loop_gate, -1200, true}}) {
+    LMDJ_CHECK(!playback.reverse);
+    LMDJ_CHECK(playback.pitch_cents == 0);
+    LMDJ_CHECK(playback.pan == 0);
+    LMDJ_CHECK(playback.loop_mode == lmdj::domain::LoopMode::forward);
+    LMDJ_CHECK(!playback.loop_start_frame.has_value());
+    LMDJ_CHECK(playback.loop_crossfade_frames == 0);
+  }
+}
+
 void test_project_factory_accepts_only_supported_bpm_range() {
   LMDJ_CHECK(
       lmdj::domain::create_project(
@@ -201,6 +217,7 @@ int main() {
     test_tick_helpers_follow_locked_quantize_swing_and_duration_rules();
     test_pattern_merge_is_last_write_wins_and_canonically_ordered();
     test_pad_playback_defaults_are_project_v2_contract_values();
+    test_pad_playback_parity_fields_default_to_prior_behaviour();
     test_project_factory_accepts_only_supported_bpm_range();
     test_project_factory_rejects_non_contract_project_ids();
     test_sequence_session_id_is_a_distinct_strong_identity();
