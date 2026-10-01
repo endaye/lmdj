@@ -14,7 +14,7 @@ export interface PadCaptureDeps {
   microphoneGranted(): boolean;
   prepareMicrophone(): Promise<void>;
   start(source: PadCaptureSource, batch: (channels: Float32Array[]) => void,
-    failed: (message: string) => void): Promise<PadCaptureHandle>;
+    failed: (message: string) => void, signal: AbortSignal): Promise<PadCaptureHandle>;
   canStart(target: PadCaptureTarget): boolean;
   commit(target: PadCaptureTarget, buffer: CaptureBuffer,
     selection: {startFrame: number; frameCount: number}, retry: boolean): Promise<void>;
@@ -35,6 +35,7 @@ export function createPadCapture(deps: PadCaptureDeps, source: PadCaptureSource)
   let buffer: CaptureBuffer | null = null;
   let owner: object | null = null;
   let startup: Promise<PadCaptureHandle> | null = null;
+  let startupAbort: AbortController | null = null;
   let stopping: Promise<void> | null = null;
   let automatic = false;
   let generation = 0;
@@ -55,6 +56,7 @@ export function createPadCapture(deps: PadCaptureDeps, source: PadCaptureSource)
   }
   function seal(commit: boolean, message: string | null = null) {
     if (!["starting", "recording", "stopping"].includes(state.phase)) return Promise.resolve();
+    if (state.phase === "starting") startupAbort?.abort();
     if (!commit) automatic = false;
     else if (state.phase !== "stopping") automatic = true;
     owner = null;
@@ -65,7 +67,7 @@ export function createPadCapture(deps: PadCaptureDeps, source: PadCaptureSource)
       await Promise.resolve(); // A synchronous first batch may seal during start.
       try {await (await startup)?.stop();}
       catch (error) {automatic = false; publish({message: error instanceof Error ? error.message : "Recording stopped."});}
-      finally {startup = null; stopping = null; publish({phase: "review"});}
+      finally {startup = null; startupAbort = null; stopping = null; publish({phase: "review"});}
       if (automatic) await save(false);
     })();
     return stopping;
@@ -91,6 +93,7 @@ export function createPadCapture(deps: PadCaptureDeps, source: PadCaptureSource)
       owner = gesture; automatic = false;
       buffer = new CaptureBuffer(state.source === "master" ? 2 : 1);
       publish({phase: "starting", target: {...target}, frames: 0, message: null});
+      startupAbort = new AbortController();
       try {
         startup = deps.start(state.source, channels => {
           if (buffer === null || !["starting", "recording", "stopping"].includes(state.phase)) return;
@@ -98,7 +101,7 @@ export function createPadCapture(deps: PadCaptureDeps, source: PadCaptureSource)
             buffer.append(channels); publish({frames: buffer.frameCount});
             if (buffer.atCapacity) void seal(false, "60-second limit reached. Save or discard this take.");
           } catch {void seal(false, "Recording input changed. Save or discard this take.");}
-        }, message => {void seal(false, message);});
+        }, message => {void seal(false, message);}, startupAbort.signal);
         void startup.then(() => {
           if (state.phase === "starting") publish({phase: "recording"});
         }, error => {void seal(false, error instanceof Error ? error.message : "Recording unavailable.");});
