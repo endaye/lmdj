@@ -61,6 +61,9 @@ async function installProjectInspectProbe(page) {
         const nativeTransport = nativeHost.transport;
         nativeHost.transport = Object.freeze({
           send(...arguments_) {
+            if (arguments_[0]?.operation === "pattern.transport.request") {
+              window.__captureTransportSession = arguments_[0].payload.session_id;
+            }
             return nativeTransport.send(...arguments_);
           },
           subscribe(...arguments_) {
@@ -142,15 +145,17 @@ async function importV1SampleProject(page) {
 }
 
 async function inspectTransportProjection(page) {
+  await expect.poll(() => page.evaluate(() => window.__captureTransportSession))
+    .toMatch(/^[0-9a-f-]{36}$/);
   const response = await page.evaluate(() =>
     window.lmdjWebRuntimeHost.transport.send({
       protocol_version: 1,
       request_id: crypto.randomUUID(),
-      operation: "host.status",
-      payload: {},
+      operation: "pattern.transport.inspect",
+      payload: {session_id: window.__captureTransportSession},
     }));
   expect(response.ok).toBe(true);
-  return response.result.pattern_transport;
+  return response.result;
 }
 
 async function enterSampleEditor(page) {

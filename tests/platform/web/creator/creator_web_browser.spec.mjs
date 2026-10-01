@@ -233,19 +233,31 @@ test("boot creates a stored Project, New Project adds one, and a reload reopens 
   const emptyPads = page.getByRole("button", {name: /^Pad A\d+ — empty — Key [QWERTYUIASDFGHJK]$/});
   const sampleKey = page.getByRole("button", {name: "Sample", exact: true});
 
-  // A fresh store boots into an automatically created, empty Project on Sample.
+  // This proof server has no default Catalog upstream. Auto-creation still
+  // opens a writable Project: unavailable downloads change Pad availability,
+  // never Project Truth. Successful progressive seeding has its own journey.
   await page.goto("/index.html");
   await waitForBootProject(page);
   await expect(sampleKey).toHaveAttribute("aria-current", "page");
-  await expect(emptyPads).toHaveCount(16);
+  await expect(page.getByRole("button", {name: /^Pad A\d+ — failed — Key [QWERTYUIASDFGHJK]$/})).toHaveCount(16);
+  const initial = await inspectProject(page);
+  expect(initial.project.revision).toBe(0);
+  expect(initial.project.assets).toEqual({});
+  expect(initial.project.banks[0].pads.every(pad => pad.asset_id === null)).toBe(true);
   const first = (await overviewProjectId(page).textContent())?.trim();
   expect(first).toMatch(/^[0-9a-f]{8}$/);
 
-  // New Project opens a second, different Project, again on Sample.
+  // New Project opens a second, different Project, again on Sample, without
+  // adopting the one-time bootstrap downloads or their failure state.
   await page.getByRole("button", {name: "Project", exact: true}).click();
   await page.getByRole("button", {name: "New Project"}).click();
   await expect(overviewProjectId(page)).not.toHaveText(first, {timeout: 60_000});
   await expect(sampleKey).toHaveAttribute("aria-current", "page");
+  await expect(emptyPads).toHaveCount(16);
+  const manual = await inspectProject(page);
+  expect(manual.project.revision).toBe(0);
+  expect(manual.project.assets).toEqual({});
+  expect(manual.project.banks[0].pads.every(pad => pad.asset_id === null)).toBe(true);
   const second = (await overviewProjectId(page).textContent())?.trim();
   expect(second).toMatch(/^[0-9a-f]{8}$/);
 
@@ -255,6 +267,8 @@ test("boot creates a stored Project, New Project adds one, and a reload reopens 
   // which surfaces as a visible, retryable PROJECT_BUSY.
   await page.reload();
   await waitForProjectReopen(page, second);
+  const reopened = await inspectProject(page);
+  expect(reopened.project).toEqual(manual.project);
   await page.getByRole("button", {name: "Project", exact: true}).click();
   await page.getByRole("button", {name: "Open local"}).click();
   await expect(page.getByRole("button", {name: /^Open Project [0-9a-f]{8}$/})).toHaveCount(2);

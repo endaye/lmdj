@@ -105,7 +105,7 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   // ships same-origin for the same reason as capture_worklet.
   expect(manifest.assets.map(({role}) => role)).toEqual([
     "host_main", "runtime_script", "runtime_wasm", "host_style", "capture_worklet",
-    "perform_master_tap_worklet",
+    "perform_master_tap_worklet", "offline_worker",
   ]);
   const index = await (await request.get(`${baseURL}/index.html`)).text();
   expect(index).toContain(createHash("sha256").update(manifestBytes).digest("hex"));

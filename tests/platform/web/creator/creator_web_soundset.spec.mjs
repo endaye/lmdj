@@ -350,6 +350,11 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   const targets = recordCatalogTraffic(page, origin);
   await installProjectTap(page, `${origin}${CATALOG_PREFIX}/`);
   await page.goto("/index.html");
+  // This historical Catalog has no P1 default identity. Settle its bootstrap
+  // refusals before measuring the two explicit listings below; their exact
+  // index counts and once-only object authentication remain unchanged.
+  await expect(page.getByRole("button", {name: /^Pad A\d+ — failed — Key [QWERTYUIASDFGHJK]$/})).toHaveCount(16);
+  targets.length = 0;
   await importProject(page);
   await openSoundSets(page);
 
@@ -764,6 +769,11 @@ test("Sound Set listing reaches a Catalog through the same-origin forward", asyn
   const targets = recordCatalogTraffic(page, origin);
   await installProjectTap(page, `${origin}${CATALOG_PREFIX}/`);
   await page.goto("/index.html");
+  // This historical Catalog has no P1 default identity. Settle its bootstrap
+  // refusals before measuring the two explicit listings below; their exact
+  // index counts and once-only object authentication remain unchanged.
+  await expect(page.getByRole("button", {name: /^Pad A\d+ — failed — Key [QWERTYUIASDFGHJK]$/})).toHaveCount(16);
+  targets.length = 0;
   await importProject(page);
   await openSoundSets(page);
   await page.getByRole("button", {name: "Refresh Catalog"}).click();
