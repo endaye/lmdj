@@ -9,7 +9,9 @@ trusted create_draft controller exactly once under the driver's durable write
 guard. Nothing here publishes, deploys or promotes.
 """
 
+from collections import namedtuple
 from copy import deepcopy
+import json
 import re
 
 from .model import canonical_sha256
@@ -28,6 +30,29 @@ def _fail(reason):
 
 
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_PLAN_MARKER = re.compile(r"<!-- lmdj\.release-plan-marker\.v[1-9][0-9]* (\{[^\r\n]*\}) -->")
+
+ReleaseProjection = namedtuple("ReleaseProjection", ("id", "draft", "tag", "plan_sha256"))
+
+
+def release_projection(release):
+    """The projection `read_back` compares, from one GitHub Release (or None).
+
+    The plan digest is taken from the Release body's single plan marker. A
+    body without exactly one well-formed marker projects no digest, so
+    `read_back` refuses it as differing from the prepared plan.
+    """
+    if release is None:
+        return None
+    markers = _PLAN_MARKER.findall(release.body or "")
+    digest = None
+    if len(markers) == 1:
+        try:
+            value = json.loads(markers[0]).get("plan_sha256")
+        except (ValueError, AttributeError):
+            value = None
+        digest = value if isinstance(value, str) and _DIGEST.fullmatch(value) else None
+    return ReleaseProjection(release.id, release.draft, release.tag_name, digest)
 _TAG = re.compile(r"lmdj-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\."
                   r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
 _OP_STEP = "draft"
