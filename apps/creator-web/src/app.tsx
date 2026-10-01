@@ -1233,7 +1233,9 @@ function Workspace({
   // recordings an earlier owner left unfinished. The pair, not the revision,
   // identifies an open, so in-session changes never ask again.
   const recoveryOfferFor = useRef<Readonly<{session: unknown; projectId: string}> | null>(null);
+  const recoveryOfferId = useRef(0);
   const [recoveryOffer, setRecoveryOffer] = useState<Readonly<{
+    id: number;
     owner: Readonly<{session: unknown; projectId: string}>;
     projectId: string;
     sequence: readonly SequenceRecoveryCandidate[];
@@ -1252,7 +1254,10 @@ function Workspace({
     void listInterruptedRecordings(openProjectId).then(({sequence, performance}) => {
       if (recoveryOfferFor.current !== owner) return;
       if (sequence.length + performance.length > 0) {
-        setRecoveryOffer(Object.freeze({owner, projectId: openProjectId, sequence, performance}));
+        recoveryOfferId.current += 1;
+        setRecoveryOffer(Object.freeze({
+          id: recoveryOfferId.current, owner, projectId: openProjectId, sequence, performance,
+        }));
       }
     });
     // Effects keep no cancellation: the owner check discards a stale reply,
@@ -1301,6 +1306,9 @@ function Workspace({
   // Runtime replacement mid-Keep never sends the old list's commands.
   const offerIsCurrent = (offer: NonNullable<typeof recoveryOffer>) =>
     recoveryOfferFor.current === offer.owner;
+  const untouched = (offer: NonNullable<typeof recoveryOffer>): RecoveryCounts => ({
+    sequence: offer.sequence.length, performance: offer.performance.length,
+  });
 
   // Keep restores each recording to where it was made; one the Core refuses
   // stays in its list and is counted as remaining.
@@ -1329,6 +1337,9 @@ function Workspace({
         reportFailure("Keep interrupted Performance recording", error);
       }
     }
+    // An open replaced mid-Keep claims nothing: its prompt is gone and the
+    // new open asks again about whatever is still waiting.
+    if (!offerIsCurrent(offer)) return untouched(offer);
     return remainingRecordings(offer.projectId);
   };
 
@@ -1351,6 +1362,7 @@ function Workspace({
         reportFailure("Discard interrupted Performance recording", error);
       }
     }
+    if (!offerIsCurrent(offer)) return untouched(offer);
     return remainingRecordings(offer.projectId);
   };
 
@@ -2125,7 +2137,7 @@ function Workspace({
               {recoveryOffer !== null &&
                 recoveryOffer.projectId === state.project.current?.projectId && (
                 <RecoveryPrompt
-                  key={recoveryOffer.projectId}
+                  key={recoveryOffer.id}
                   counts={{
                     sequence: recoveryOffer.sequence.length,
                     performance: recoveryOffer.performance.length,

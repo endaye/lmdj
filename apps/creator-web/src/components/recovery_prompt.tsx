@@ -79,7 +79,9 @@ export function RecoveryPrompt({counts, onKeep, onDiscard, onOpen, onClose}: Rec
     body = <>
       <p>Discard the interrupted {total === 1 ? "recording" : "recordings"}? This cannot be undone.</p>
       <div className="recovery-prompt-actions">
-        <button type="button" onClick={() => run("discard")}>Discard recording</button>
+        <button type="button" onClick={() => run("discard")}>
+          {total === 1 ? "Discard recording" : `Discard ${total} recordings`}
+        </button>
         <button type="button" onClick={() => setPhase({kind: "asking"})}>Cancel</button>
       </div>
     </>;
@@ -91,8 +93,12 @@ export function RecoveryPrompt({counts, onKeep, onDiscard, onOpen, onClose}: Rec
       <p role="status">
         {left === 0
           ? (phase.action === "keep"
-            ? "The interrupted recording is back in this Project."
-            : "The interrupted recording was discarded.")
+            ? (total === 1
+              ? "The interrupted recording is back in this Project."
+              : `The ${total} interrupted recordings are back in this Project.`)
+            : (total === 1
+              ? "The interrupted recording was discarded."
+              : `The ${total} interrupted recordings were discarded.`))
           : `Some of it could not be ${phase.action === "keep" ? "kept" : "discarded"} here
             (${describe(phase.remaining)}). Open it to keep or discard it there.`}
       </p>

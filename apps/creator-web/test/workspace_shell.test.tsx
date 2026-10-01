@@ -2806,6 +2806,10 @@ test("a Keep overtaken by a Runtime replacement sends none of its remaining comm
   await act(async () => firstApply.resolve({...sequenceStatusStub(), committedRevision: 4}));
   await flushAsyncTurns();
   expect(apply).toHaveBeenCalledTimes(1);
+  // The new open asks afresh; the abandoned Keep claims no result.
+  const fresh = await interruptedRegion();
+  expect(within(fresh).getByRole("button", {name: "Keep recording"})).toBeTruthy();
+  expect(within(fresh).queryByText(/back in this Project/)).toBeNull();
 });
 
 test("Keep reports the remainder the Sequence list was refreshed with", async () => {

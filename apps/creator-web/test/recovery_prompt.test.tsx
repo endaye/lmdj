@@ -121,3 +121,16 @@ test("offers no More options when nothing is waiting", () => {
   renderPrompt({sequence: 0, performance: 0});
   expect(screen.queryByRole("button", {name: "More options"})).toBeNull();
 });
+
+test("discarding several recordings names how many in the button and the result", async () => {
+  renderPrompt({sequence: 2, performance: 1});
+  await userEvent.click(screen.getByRole("button", {name: "Discard…"}));
+  await userEvent.click(screen.getByRole("button", {name: "Discard 3 recordings"}));
+  expect(await screen.findByText("The 3 interrupted recordings were discarded.")).toBeTruthy();
+});
+
+test("keeping several recordings names how many came back", async () => {
+  renderPrompt({sequence: 1, performance: 1});
+  await userEvent.click(screen.getByRole("button", {name: "Keep recording"}));
+  expect(await screen.findByText("The 2 interrupted recordings are back in this Project.")).toBeTruthy();
+});
