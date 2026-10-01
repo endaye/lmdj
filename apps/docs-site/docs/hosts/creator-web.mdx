@@ -236,3 +236,32 @@ Pattern events and Asset bytes remain; assigning another sound reuses the rhythm
 One changed Pad is one action in the current Project session's shared Undo/Redo
 history. Future default-Set streaming and per-Pad processing producers must join
 the same cancellation boundary; this control does not implement those producers.
+
+## Continue in another tab
+
+A Project has one writer at a time: the tab holding it owns an exclusive OPFS
+writer lease that no other tab can take away. When another tab opens the same
+Project and is refused as busy, the refusal offers **Continue here** next to
+Retry. Continue here asks the holding tab, over a same-origin Creator channel,
+to hand the Project over. The exchange belongs to the Creator Host. It changes
+no Host operation, Facade capability, lease semantics or Contract.
+
+The holding tab treats the request as a Project change. It applies the same
+guard as opening another Project, and also requires capture and Pattern
+transport to be idle. While it is playing, recording, capturing, saving or running
+another Project action, it refuses, and the requesting tab explains why. When it
+accepts, it closes its Runtime through the same barrier as closing the page:
+pending Performance saves finish, then `host.close` commits and releases the writer.
+It then shows that the Project is open in another tab, with its own Continue
+here to take it back; its controls stay unavailable until then.
+
+The requesting tab waits a bounded time for an answer and for the release, and
+can cancel the wait. A holder that is gone, frozen or does not answer counts as
+unanswered. After a release, an unanswered request or a release that did not
+finish, the requesting tab opens the Project once in the ordinary way. If it is
+still busy, the refusal returns with a note naming that outcome. The new holder
+reads only committed Project Truth and starts with an empty Undo/Redo history.
+The previous holder cannot undo afterwards.
+Automation covers the hand-over, refusal, take-back and reopen with two pages
+sharing one browser context. It is not real multi-window, frozen-tab or device
+lifecycle acceptance, and no listening acceptance is claimed.
