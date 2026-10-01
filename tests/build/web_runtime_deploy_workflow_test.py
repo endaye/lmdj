@@ -434,11 +434,26 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         deploy = self.job_block(self.workflow_source(), "deploy")
         checkout = self.step_named(deploy, "Check out the release's own browser smoke tests")
         self.assertIn('git rev-parse --verify "refs/tags/$LMDJ_RELEASE_TAG^{commit}"', checkout)
-        self.assertIn('git worktree add --detach "$RUNNER_TEMP/release-source" "$target"', checkout)
+        # The default smoke source is the tag's own target.
+        self.assertIn('smoke="$target"', checkout)
+        self.assertIn('git worktree add --detach "$RUNNER_TEMP/release-source" "$smoke"', checkout)
         self.assertIn("LMDJ_RELEASE_TAG: ${{ needs.preflight.outputs.tag }}", checkout)
         self.assertLess(deploy.index("Check out the release's own browser smoke tests"),
                         deploy.index("Install browser smoke dependencies"))
         self.assertIn('--browser-root "$RUNNER_TEMP/release-source"', deploy)
+        self.assertIn('--smoke-revision "$LMDJ_SMOKE_SOURCE"', deploy)
+
+    def test_a_reviewed_smoke_revision_is_validated_before_checkout(self) -> None:
+        source = self.workflow_source()
+        self.assertIn("      smoke_revision:", source)
+        checkout = self.step_named(self.job_block(source, "deploy"),
+                                   "Check out the release's own browser smoke tests")
+        self.assertIn("LMDJ_SMOKE_REVISION: ${{ inputs.smoke_revision }}", checkout)
+        for check in ('=~ ^[0-9a-f]{40}$',
+                      'git merge-base --is-ancestor "$target" "$LMDJ_SMOKE_REVISION"',
+                      'git merge-base --is-ancestor "$LMDJ_SMOKE_REVISION" refs/remotes/origin/main'):
+            self.assertIn(check, checkout)
+            self.assertLess(checkout.index(check), checkout.index("git worktree add"))
 
     def test_workflow_scopes_secrets_and_always_uploads_evidence(self) -> None:
         source = self.workflow_source()

@@ -13,6 +13,11 @@ on:
         required: false
         default: ""
         type: string
+      smoke_revision:
+        description: Optional protected-main commit, descending from the tag's target, whose deployment spec judges this release (default the tag's own target)
+        required: false
+        default: ""
+        type: string
       tag:
         description: Exact signed Product tag
         required: true
@@ -161,13 +166,27 @@ jobs:
         shell: bash
         env:
           LMDJ_RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          LMDJ_SMOKE_REVISION: ${{ inputs.smoke_revision }}
         run: |
           set -euo pipefail
           # The smoke judges the deployed release by that release's own tests.
           # main's tests can expect behaviour the release predates (#1711),
           # and the deploy tooling itself still runs from protected main.
           target="$(git rev-parse --verify "refs/tags/$LMDJ_RELEASE_TAG^{commit}")"
-          git worktree add --detach "$RUNNER_TEMP/release-source" "$target"
+          smoke="$target"
+          if [[ -n "$LMDJ_SMOKE_REVISION" ]]; then
+            # A later reviewed spec may judge a release whose own spec is
+            # stale: only a protected-main commit that descends from the target.
+            [[ "$LMDJ_SMOKE_REVISION" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "smoke_revision is not an exact commit SHA" >&2; exit 64; }
+            git merge-base --is-ancestor "$target" "$LMDJ_SMOKE_REVISION" || {
+              echo "smoke_revision does not descend from the tag's target" >&2; exit 64; }
+            git merge-base --is-ancestor "$LMDJ_SMOKE_REVISION" refs/remotes/origin/main || {
+              echo "smoke_revision is not on protected main" >&2; exit 64; }
+            smoke="$LMDJ_SMOKE_REVISION"
+          fi
+          git worktree add --detach "$RUNNER_TEMP/release-source" "$smoke"
+          printf 'LMDJ_SMOKE_SOURCE=%s\n' "$smoke" >> "$GITHUB_ENV"
 
       - name: Install browser smoke dependencies
         timeout-minutes: 5
@@ -203,6 +222,7 @@ jobs:
               --output build/deploy/web-runtime-host/evidence.json \
               --run-id "$GITHUB_RUN_ID" \
               --browser-root "$RUNNER_TEMP/release-source" \
+              --smoke-revision "$LMDJ_SMOKE_SOURCE" \
               --node "$LMDJ_UPLOAD_NODE" \
               --wrangler "$RUNNER_TEMP/host-wrangler-$GITHUB_RUN_ID/node_modules/wrangler/bin/wrangler.js" \
             2>&1 | tee build/deploy/web-runtime-host/deployment.log
