@@ -252,6 +252,17 @@ export type PerformanceRawEvent =
     }>
   | Readonly<{kind: "hold_on" | "hold_off"}>;
 
+// Session-free live FX gesture (#1674): the FX subset of PerformanceRawEvent
+// without the journal's gesture identity. Applied to the master bus only.
+export type PerformanceFxGesture =
+  | Readonly<{
+      kind: "fx_engage" | "fx_move";
+      fx: PerformanceFx;
+      value: number;
+    }>
+  | Readonly<{kind: "fx_release"; fx: PerformanceFx}>
+  | Readonly<{kind: "hold_on" | "hold_off"}>;
+
 export interface PerformanceArtifact {
   readonly sha256: string;
   readonly mediaType: "audio/wav";
@@ -363,6 +374,9 @@ export interface PerformanceRuntimeSession {
     coalesced: boolean;
     replayed: boolean;
     projectRevision: null;
+  }>>;
+  applyFxGesture(event: PerformanceFxGesture): Promise<Readonly<{
+    applied: true;
   }>>;
   requestPerformancePatternLaunch(request: Readonly<{
     sessionId: string;
