@@ -3147,3 +3147,39 @@ test("System preserves the creative page and playing transport, then restores en
   await waitFor(() => expect(document.activeElement).toBe(entry));
   expect(transportPhase()).toBe("playing");expect(request).not.toHaveBeenCalled();
 });
+
+test("recovery More options leaves System and opens its Sequence destination", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const {session, apply, discard} = interruptedSequenceSession(fixture);
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  await userEvent.click(screen.getByRole("button", {name: "System"}));
+  expect(screen.getByRole("button", {name: "Back to music"})).toBeTruthy();
+  expect(screen.queryByRole("region", {name: "Sequence editor"})).toBeNull();
+  await userEvent.click(within(region).getByRole("button", {name: "More options"}));
+  expect(screen.queryByRole("button", {name: "Back to music"})).toBeNull();
+  expect(screen.getByRole("region", {name: "Sequence editor"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Sequence"}).getAttribute("aria-current")).toBe("page");
+  expect(apply).not.toHaveBeenCalled();
+  expect(discard).not.toHaveBeenCalled();
+});
+
+test("recovery Open Sequence after a refused Keep leaves System with the take retained", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const refusal = Object.assign(new Error("Sequence admission is unresolved"), {
+    code: "INVALID_ARGUMENT",
+    details: {reason: "sequence_admission_unresolved", journal_retained: true},
+  });
+  const apply = vi.fn().mockRejectedValue(refusal);
+  const {session, discard} = interruptedSequenceSession(fixture, {applySequenceRecovery: apply});
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  await userEvent.click(screen.getByRole("button", {name: "System"}));
+  await userEvent.click(within(region).getByRole("button", {name: "Keep recording"}));
+  await userEvent.click(await within(region).findByRole("button", {name: "Open Sequence"}));
+  expect(screen.queryByRole("button", {name: "Back to music"})).toBeNull();
+  expect(screen.getByRole("region", {name: "Sequence editor"})).toBeTruthy();
+  expect(await screen.findByRole("button", {name: "Recover original Pattern"})).toBeTruthy();
+  expect(apply).toHaveBeenCalledExactlyOnceWith({sessionId: "interrupted-session", destinationPatternId: null});
+  expect(discard).not.toHaveBeenCalled();
+});

@@ -2419,7 +2419,7 @@ function Workspace({
                   onKeep={keepInterruptedRecordings}
                   onDiscard={discardInterruptedRecordings}
                   onOpen={(mode) => {
-                    setActiveMode(mode);
+                    selectMode(mode);
                     setRecoveryOffer(null);
                   }}
                   onClose={() => setRecoveryOffer(null)}
