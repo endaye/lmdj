@@ -565,6 +565,9 @@ button:disabled { color: #737b87; }
 
 .error-panel { position: fixed; z-index: 12; inset: auto 1rem 1rem auto; display: grid; gap: .5rem; max-width: min(28rem, calc(100vw - 2rem)); padding: 1rem; border: 1px solid #ff7777; border-radius: .75rem; background: #2a1719; box-shadow: 0 1rem 3rem rgb(0 0 0 / 55%); }
 .error-panel button { justify-self: start; }
+.takeover-panel { position: fixed; z-index: 12; inset: auto 1rem 1rem auto; display: grid; gap: .5rem; max-width: min(28rem, calc(100vw - 2rem)); padding: 1rem; border: 1px solid #7fa7ff; border-radius: .75rem; background: #17202a; box-shadow: 0 1rem 3rem rgb(0 0 0 / 55%); }
+.takeover-panel button { justify-self: start; }
+.takeover-note { color: #d6dbe4; font-size: .9em; }
 
 @media (max-width: 900px) {
   .project-summary { grid-template-columns: repeat(2, minmax(8rem, 1fr)); }
