@@ -87,6 +87,8 @@ active reread、sealed snapshot/list 和 owner-loss reconciliation 都保留 adm
 不猜测 Pattern/origin/switch 结果，也不自动启动 playback。只读失败保留不支持的旧格式、
 未知格式和 torn suffix 的原始字节；没有 migration reader 或自动删除路径。
 
+Web 构建的栈是 256 KiB（`-sSTACK_SIZE=262144`）。`ProjectState` 把 64 个 Pad 内联存放，load/flush/recover 这些深路径在 `-O3` 下每帧持有多份副本，所以栈需求随 Pad 大小线性增长：`5.1.0` 的回放对齐键把 wasm32 上的 `ProjectState` 从 4 424 B 加到 6 472 B，超出了原来的 128 KiB。减少这些副本由 [#1720](https://github.com/endaye/lmdj/issues/1720) 跟踪。
+
 ### Real OPFS evidence and remaining gaps
 
 `project_io_web_conformance.spec.mjs` 的 S2 fixture 调用实际 C++ journal API，
