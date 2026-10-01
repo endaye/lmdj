@@ -554,8 +554,8 @@ function Workspace({
     try {if (localStorage.getItem("lmdj.creator.pad-capture-source.v1") === "master") source = "master";} catch {}
     const controller = createPadCapture({
       ...sources,
-      start: (chosen, batch, failed) => sources.start(chosen,
-        isPerformanceSession(session) ? session : null, padCaptureWake.current, batch, failed),
+      start: (chosen, batch, failed, signal) => sources.start(chosen,
+        isPerformanceSession(session) ? session : null, padCaptureWake.current, batch, failed, signal),
       canStart: target => {
         const current = stateRef.current;
         return sessionRef.current === session && current.project.phase === "ready" &&
