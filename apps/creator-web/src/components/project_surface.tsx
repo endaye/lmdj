@@ -11,6 +11,10 @@ interface ProjectSurfaceProps {
   canOpen?: boolean;
   canImport?: boolean;
   canCreate?: boolean;
+  canDuplicate?: boolean;
+  // The code of a Duplicate refused before any copy existed; the open
+  // Project is untouched.
+  duplicateRefusal?: string | null;
   showLocalProjects?: boolean;
   hideSummary?: boolean;
   onShowLocal?: () => void;
@@ -18,6 +22,7 @@ interface ProjectSurfaceProps {
   onOpen?: (project: LocalProjectSummary) => void;
   onImport?: (file: File) => void;
   onCreate?: () => void;
+  onDuplicate?: () => void;
 }
 
 export function formatBytes(bytes: number): string {
@@ -27,11 +32,30 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
+export function duplicateRefusalMessage(code: string): string {
+  switch (code) {
+    case "PROJECT_BUSY":
+      return "Duplicate refused: this Project is open in another tab or process.";
+    case "HOST_STATE_INVALID":
+      // The Host gives this one code for playback, a pending import and an
+      // unfinished recording alike.
+      return "Duplicate refused: stop playback and finish or recover any unfinished recording, then try again.";
+    case "DUPLICATE_ID":
+      return "Duplicate refused: the new identity is already in use. Try again.";
+    case "IO_ERROR":
+      return "Duplicate failed: local storage could not hold the copy.";
+    default:
+      return `Duplicate failed (${/^[A-Z0-9_]{1,64}$/.test(code) ? code : "UNKNOWN_ERROR"}).`;
+  }
+}
+
 export function ProjectSurface({
   state,
   canOpen = false,
   canImport = false,
   canCreate = false,
+  canDuplicate = false,
+  duplicateRefusal = null,
   showLocalProjects = false,
   hideSummary = false,
   onShowLocal,
@@ -39,6 +63,7 @@ export function ProjectSurface({
   onOpen,
   onImport,
   onCreate,
+  onDuplicate,
 }: ProjectSurfaceProps) {
   const project = state.project.current;
   const showChooser = project === null || showLocalProjects;
@@ -76,6 +101,13 @@ export function ProjectSurface({
           </button>
           <button
             type="button"
+            disabled={!canDuplicate}
+            onClick={onDuplicate}
+          >
+            Duplicate Project
+          </button>
+          <button
+            type="button"
             aria-controls="local-projects"
             disabled={!canOpen}
             onClick={onShowLocal}
@@ -100,6 +132,11 @@ export function ProjectSurface({
           />
         </div>
       </div>
+      {duplicateRefusal !== null ? (
+        <p className="project-action-error" role="alert">
+          {duplicateRefusalMessage(duplicateRefusal)}
+        </p>
+      ) : null}
       {importing ? (
         <section className="import-progress" aria-label="Import progress">
           <p role="status">

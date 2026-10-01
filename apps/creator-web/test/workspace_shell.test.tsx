@@ -508,6 +508,7 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
       onProgress({completedBytes: 6, totalBytes: 6});
       return listedSummary;
     },
+    duplicateProject: async () => { throw new Error("duplicate is not expected"); },
     createProject: async () => { calls.push("createProject"); return {}; },
     openProject: async () => { calls.push("openProject"); return {}; },
     inspectProject: async () => {

@@ -776,6 +776,13 @@ export function selectCanCreateProject(state: CreatorState): boolean {
   return selectCanChangeProject(state);
 }
 
+// Duplicating copies the open Project, so one must be open and settled.
+export function selectCanDuplicateProject(state: CreatorState): boolean {
+  return selectCanChangeProject(state) &&
+    state.project.phase === "ready" &&
+    state.project.current !== null;
+}
+
 export function selectCanTrigger(state: CreatorState): boolean {
   return state.runtime.phase === "ready" &&
     state.project.phase === "ready" &&

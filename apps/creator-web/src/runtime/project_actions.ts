@@ -242,6 +242,22 @@ export async function createProjectJourney(
   return readOpenedProject(session, summary);
 }
 
+// Duplicate replaces Save As under autosave (2026-09-29 workflow decision,
+// item 4). The Host only copies; opening the copy is a separate step so a
+// refused copy leaves the open Project exactly as it was.
+export async function duplicateProjectJourney(
+  session: CreatorRuntimeSession,
+  sourceProjectId: string,
+  newId: () => string = () => crypto.randomUUID(),
+): Promise<LocalProjectSummary> {
+  const projectId = newId();
+  const copy = await session.duplicateProject({sourceProjectId, projectId});
+  if (copy.projectId !== projectId || copy.revision !== 0) {
+    throw protocolMismatch("Duplicated Project summary is invalid");
+  }
+  return copy;
+}
+
 export async function refreshProjectProjectionJourney(
   session: CreatorRuntimeSession,
   identity: Readonly<Pick<LocalProjectSummary, "projectId" | "patternId">>,

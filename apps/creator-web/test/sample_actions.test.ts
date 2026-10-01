@@ -87,6 +87,7 @@ function fixture() {
     close: async () => true,
     listLocalProjects: async () => [],
     importProject: async () => { throw new Error("unused"); },
+    duplicateProject: async () => { throw new Error("duplicate is not expected"); },
     createProject: async () => ({}),
     openProject: async () => ({}),
     inspectProject: async () => ({}),

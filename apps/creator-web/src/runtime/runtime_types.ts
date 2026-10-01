@@ -234,6 +234,12 @@ export interface CreatorRuntimeSession {
     bpm: number;
     bars: 1 | 2 | 4 | 8;
   }): Promise<unknown>;
+  // Copies a stored Project under a new identity. The open Project, its
+  // writer and the Runtime are untouched; the caller opens the copy.
+  duplicateProject(request: {
+    sourceProjectId: string;
+    projectId: string;
+  }): Promise<LocalProjectSummary>;
   openProject(
     projectId: string,
     patternId: string,
