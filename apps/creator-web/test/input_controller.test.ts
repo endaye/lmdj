@@ -200,6 +200,10 @@ function deferred<T>() {
 }
 
 interface SampleFixtureOptions {
+  onEmptyPadPress?: (slot: number, key: object, source: import("../src/runtime/runtime_types").RuntimeTriggerSource,
+    activation: Promise<boolean> | null) => boolean;
+  onEmptyPadRelease?: (key: object) => void;
+  onEmptyPadCancel?: () => void;
   canUsePad?: (slot: number) => boolean;
   activateAudioForGesture?: (event: {isTrusted: boolean}) => Promise<boolean> | null;
   isAssigned?: (slot: number) => boolean;
@@ -263,6 +267,9 @@ function sampleFixture(options: SampleFixtureOptions = {}) {
   };
   const controller = createCreatorInputController({
     session,
+    ...(options.onEmptyPadPress === undefined ? {} : {onEmptyPadPress: options.onEmptyPadPress}),
+    ...(options.onEmptyPadRelease === undefined ? {} : {onEmptyPadRelease: options.onEmptyPadRelease}),
+    ...(options.onEmptyPadCancel === undefined ? {} : {onEmptyPadCancel: options.onEmptyPadCancel}),
     ...(options.activateAudioForGesture === undefined ? {} : {activateAudioForGesture: options.activateAudioForGesture}),
     getActiveBank: () => 0,
     isAssigned: options.isAssigned ?? (() => true),
@@ -1749,4 +1756,22 @@ test("an unavailable streaming Pad neither wakes audio nor opens the empty-Pad p
   expect(value.triggers).toHaveLength(0);
   expect(activations).toBe(0);
   controller.dispose();
+});
+
+test("empty Pad capture consumes pointer release and cancellation without a file picker", () => {
+  const presses: object[] = []; const releases: object[] = [];
+  let cancels = 0;
+  const value = sampleFixture({isAssigned: () => false,
+    onEmptyPadPress: (_slot, key) => {presses.push(key); return true;},
+    onEmptyPadRelease: key => releases.push(key), onEmptyPadCancel: () => {cancels++;}});
+  const target = document.createElement("button");
+  const event = {type:"pointerdown",isPrimary:true,button:0,pointerId:77,clientX:1,clientY:1,target};
+  value.controller.pointerDown(event, 3);
+  value.controller.pointerUp({...event,type:"pointerup"},3);
+  expect(presses).toHaveLength(1);expect(releases).toEqual(presses);
+  expect(value.filePickIntents).toEqual([]);expect(value.triggers).toEqual([]);
+  value.controller.pointerDown({...event,pointerId:78},3);
+  value.controller.clearPressed();expect(cancels).toBe(1);
+  expect(releases).toHaveLength(1);
+  value.controller.dispose();
 });

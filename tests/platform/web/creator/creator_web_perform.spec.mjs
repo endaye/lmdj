@@ -58,6 +58,14 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+async function inspectProjectTruth(page) {
+  const response = await page.evaluate(() => window.lmdjWebRuntimeHost.transport.send({
+    protocol_version: 1, request_id: crypto.randomUUID(), operation: "project.inspect", payload: {},
+  }));
+  expect(response.ok).toBe(true);
+  return response.result;
+}
+
 function canonicalJson(value) {
   if (Array.isArray(value)) {
     return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
@@ -990,7 +998,7 @@ async function recordShortPerformance(
   await savePerformanceWithBusyRetry(page, name);
 }
 
-test("complete Perform journey persists projection, gestures, WAV, save, replay and resample", async ({page, browserName}) => {
+test("complete Perform journey persists projection, gestures, WAV, save, replay and empty Pad master capture", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(420_000);
   await importActivateAndPerform(page);
@@ -1109,13 +1117,27 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await expect(replayStatus).toContainText(
     new RegExp(`resolved revision\\s*[:·]\\s*${revision}`, "i"),
   );
-  await page.getByRole("spinbutton", {name: "Resample start frame"}).fill("0");
-  await page.getByRole("spinbutton", {name: "Resample end frame"}).fill("4800");
-  await page.getByRole("spinbutton", {name: "Resample target Pad"}).fill("16");
-  await page.getByRole("button", {name: "Resample selection"}).click();
+  await page.getByRole("combobox", {name: "Pad recording source"}).selectOption("master");
+  await page.getByRole("button", {name: "Stop Replay"}).click();
+  await page.getByRole("button", {name: "Bank B", exact: true}).first().click();
+  const empty = page.getByRole("button", {name: /^Pad B1 — empty/});
+  await empty.focus();
+  await page.keyboard.down("KeyQ");
+  await expect(page.getByRole("region", {name: "Pad recording"})).toContainText("recording");
+  await page.getByRole("button", {name: "Replay Night Set"}).click();
+  await page.waitForTimeout(250);
+  await page.keyboard.up("KeyQ");
   await expectRevisionAfter(page, revision);
-  await expect(page.getByRole("status", {name: "Resample status"}))
-    .toContainText(/committed.*Pad B1/i);
+  await expect(page.getByRole("button", {name: /^Pad B1 — assigned/})).toBeVisible();
+  const captured = await inspectProjectTruth(page);
+  const capturedId = captured.project.banks[1].pads[0].asset_id;
+  expect(captured.project.assets[capturedId].artifact).toMatchObject({
+    byte_length: expect.any(Number), media_type: "audio/wav", sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+  });
+  expect(captured.project.assets[capturedId].artifact.byte_length).toBeGreaterThan(44);
+  await page.reload(); await openLocalProject(page);
+  const reopened = await inspectProjectTruth(page);
+  expect(reopened.project.assets[capturedId].artifact).toEqual(captured.project.assets[capturedId].artifact);
 });
 
 test("discard deletes its temporary WAV and owner-loss recovery applies or discards durable truth", async ({browserName}) => {

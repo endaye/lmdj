@@ -363,7 +363,7 @@ test("ordinary Sample focus loss keeps the retained trim dialog visible", async 
   await expect(panel.getByRole("button", {name: "Record into Pad A1"})).toBeVisible();
 });
 
-test("armed Pad capture commit is guarded by the open transport journal and never stops playback", async ({page}, testInfo) => {
+test("armed Pad capture excludes the transport journal and never stops playback", async ({page}, testInfo) => {
   test.skip(testInfo.project.name !== GRANTED);
   // Two full capture cycles (the refused take and the committed replacement)
   // plus two Record cycles: the budget grows with the journey, not to hide a
@@ -386,51 +386,25 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
   // "Sequence editor"; that region is the destination, whichever shell
   // mounts it.
   await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
-  await recordKey(page).click();
-  await expect(page.getByRole("status").filter({
-    has: page.getByTestId("creator-phase"), hasText: "recording",
-  }))
-    .toBeVisible();
-
-  const patternId = await page.getByRole("combobox", {name: "Pattern"})
-    .inputValue();
-  const initialEvents = structuredClone(
-    initialTruth.project.patterns[patternId].events,
-  );
-
-  // A distinct non-armed Pad is ordinary Sequence input before the Capture
-  // stop gesture. This event must survive the Capture commit boundary.
-  await pressRecordedPad(page, "Pad A2 — assigned — Key W", "KeyW");
-
-  // The armed Pad stops only its capture. The global Pattern transport keeps
-  // playing beneath the trim overlay and the armed hit itself is not recorded.
+  // Capture and Pattern recording have exclusive owners in P1. Playback
+  // remains available, while a recording attempt is refused before a journal.
+  await expect(recordKey(page)).toBeDisabled();
+  await playStopKey(page).click();
+  await expect.poll(async () => (await inspectTransportProjection(page)).playing).toBe(true);
+  const patternId = await page.getByRole("combobox", {name: "Pattern"}).inputValue();
+  const initialEvents = structuredClone(initialTruth.project.patterns[patternId].events);
   await page.keyboard.press("KeyQ");
-  await expect(panel.getByRole("slider", {name: /^Pad A1 End —/}))
-    .toBeVisible({timeout: 30_000});
-
-  // While the transport journal is open, the Sample-class commit keeps the
-  // legacy busy guard (#1363): the refusal is honest, the take is retained,
-  // and the panel keeps its controls.
-  await panel.getByRole("button", {name: "Commit"}).click();
-  await expect(panel.getByRole("alert"))
-    .toContainText("Sample operation failed", {timeout: 30_000});
-  await expect(panel.getByRole("button", {name: "Commit"})).toBeVisible();
-  await expect(panel.getByRole("slider", {name: /^Pad A1 End —/}))
-    .toBeVisible();
-
-  // The take cannot commit while the journal is open; Discard is the explicit
-  // user escape, and Record-off then settles the journal without stopping
-  // playback.
+  await expect(panel.getByRole("slider", {name: /^Pad A1 End —/})).toBeVisible({timeout: 30_000});
+  await expect(recordKey(page)).toBeDisabled();
   await panel.getByRole("button", {name: "Discard"}).click();
-  // Sequence mode shows no Sample picker; the console matrix is where the
-  // discarded Pad reads as empty again.
   await expect(page.getByTestId("pad-matrix").getByRole("button", {name: /^Pad A1 — empty/}))
     .toBeVisible({timeout: 30_000});
+  await expect(recordKey(page)).toBeEnabled();
   await recordKey(page).click();
-  await expect(page.getByRole("status").filter({
-    has: page.getByTestId("creator-phase"), hasText: "playing",
-  }))
-    .toBeVisible({timeout: 30_000});
+  await expect(page.getByRole("status").filter({has: page.getByTestId("creator-phase"), hasText: "recording"})).toBeVisible();
+  await pressRecordedPad(page, "Pad A2 — assigned — Key W", "KeyW");
+  await recordKey(page).click();
+  await expect.poll(async () => (await inspectTransportProjection(page)).playing).toBe(true);
 
   // The replacement take commits at the legal point: no open journal, and
   // playback never stopped. Sample mode mounts no transport widget, so the
@@ -643,4 +617,38 @@ test("capture never leaks device identity or filesystem paths", async ({page}, t
   expect(text).not.toContain("/Users/");
   expect(text).not.toContain("/home/");
   expect(text).not.toMatch(/deviceId|groupId|Default - |Fake Audio/i);
+});
+
+test("empty Pad microphone press commits one Artifact on release and reopens exact bytes", async ({page}, testInfo) => {
+  test.skip(testInfo.project.name !== GRANTED);
+  test.setTimeout(180_000);
+  await page.goto("/index.html");
+  await importV1SampleProject(page);
+  const before = await inspectProjectTruth(page);
+  await page.getByRole("combobox", {name: "Pad recording source"}).selectOption("microphone");
+  const pad = page.getByRole("button", {name: /^Pad A1 — empty/});
+  const status = page.getByRole("region", {name: "Pad recording"});
+  await pad.focus();await page.keyboard.down("KeyQ");
+  // Safari permission-query support varies. A preparation press has no take;
+  // the next native press is the sole recording owner.
+  if ((await status.textContent()).includes("permission")) {
+    await page.keyboard.up("KeyQ");
+    await expect(status).toContainText("Microphone ready");
+    await pad.focus();await page.keyboard.down("KeyQ");
+  }
+  await expect(status).toContainText("recording");
+  await expect.poll(async () => Number(/· ([\d.]+) s/.exec(await status.textContent())?.[1] ?? 0)).toBeGreaterThan(.2);
+  await expect(recordKey(page)).toBeDisabled();
+  await page.keyboard.up("KeyQ");
+  await expect(page.getByRole("button", {name: /^Pad A1 — assigned/})).toBeVisible({timeout:120_000});
+  const after = await inspectProjectTruth(page);
+  expect(after.project.revision).toBe(before.project.revision + 1);
+  const assetId = after.project.banks[0].pads[0].asset_id;
+  const artifact = after.project.assets[assetId].artifact;
+  expect(artifact).toEqual({byte_length:expect.any(Number),media_type:"audio/wav",sha256:expect.stringMatching(/^[0-9a-f]{64}$/)});
+  expect(artifact.byte_length).toBeGreaterThan(44);
+  await page.reload();await waitForProjectReopen(page,"00000000-0000-4000-8000-000000000002");
+  const reopened = await inspectProjectTruth(page);
+  expect(reopened.project.assets[assetId].artifact).toEqual(artifact);
+  expect(reopened.project.banks[0].pads[0].asset_id).toBe(assetId);
 });
