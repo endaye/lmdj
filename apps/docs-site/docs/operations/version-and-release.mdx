@@ -322,6 +322,9 @@ Release、签名资产、完整 notes 与冻结候选，并在前后重新认证
 run / attempt、成功的 preflight / deploy 与证据上传，并核对唯一 artifact 来源与摘要。
 复用受信本地 Host 校验器，匹配冻结的 tag、target、Build、Site、发布文件与 exact prior；
 返回前复查关联、库存和期限。recovery 记录不代替成功，未知或失败不重复部署或晋级。
+生产版本或路由变更不会同时到达所有边缘节点：promote 与 recovery 在变更后对稳定 URL 的
+精确字节校验在有界窗口内（90 秒）等待期望字节出现，从不接受其他内容；失败与恢复失败
+的底层原因都写入 run store 事件和保留的 adapter 日志。
 这些保留证据检查本身不证明当前生产别名或线上内容。Cloudflare `LiveDeploymentEffect`
 将它们与新鲜的 `LiveHostVerifier` 组合：复用 `cloudflare_host.py inspect` 的 deployment /
 route 解析器，固定 account / Worker API 只允许读取 deployments 和 subdomain，禁止写入、
@@ -777,6 +780,17 @@ Creator Host 的部署 job 同构切换，目标 `https://creator.lmdj.workers.d
 Host 部署证据文档的第 2 版；两个 Host 共用同一个受管 adapter 与同一条序列，只在 target、
 Worker 与浏览器 spec 上不同。生产路径上不再有任何 Netlify API 调用或 `*.netlify.app` URL，
 两个 workflow 的契约测试各自钉住这一点；Netlify 源码作为历史工具的退役见 #1473。
+
+浏览器腿运行的是**被部署 tag 自己的**部署 spec：部署 job 把签名 tag 指向的精确 commit
+检出到 `$RUNNER_TEMP/release-source`，在那里安装浏览器依赖，并以 `--browser-root` 交给
+adapter；adapter 拒绝任何不在该 tag target 上的检出。部署工具、凭据与浏览器环境变量
+白名单仍来自受保护 main。发版总是在 main 继续前进之后部署，main 上的 spec 可能期望该
+Release 尚不具备的行为（例如 #1711 之后 Creator 启动即打开 Project），用它判定旧 Release
+会把正确的产物误判为失败。若某个 Release 自带的 spec 本身已过时，可用部署 workflow 的
+`smoke_revision` 输入指定一个受保护 main 上、以该 tag target 为祖先的已审查 commit，由它的
+spec 判定；workflow 与 adapter 都在检出前后独立校验这两条祖先关系，缺省仍是 tag 自身。
+Creator 的部署 spec 按启动后的稳定状态区分两种启动：启动即打开 Project 的 Host 与停在空
+Project 库的较早 Host 各走完整旅程，误判只会让旅程失败，不会放过失败。
 Core Release 的资产集自 2026-08-24 起为四资产（#286）：除 ZIP、checksum 和受信
 signature 外，`build-manifest.json` 不再打进归档，而是作为并列 detached 资产
 `<archive-stem>.build-manifest.json` 发布（决策

@@ -19,14 +19,17 @@ event-only Pattern data with no Take product object.
 
 - Designed: full new product/core architecture.
 - Implemented: Headless Core Proof, the Formal Native Host, Creator Web Host
-  `2.0.0`, Formal Web Runtime Host `2.0.0`, and Web Runtime Platform
-  `1.0.0`, including Project Truth v3 and Stage 9 Sequence recording.
+  `4.7.0`, Formal Web Runtime Host `4.3.5`, and Web Runtime Platform
+  `5.5.0`, including Project Truth v5 and Stage 9 Sequence recording.
   Browser Hosts depend only on that Platform; Product Assembly owns exact Host
-  identities and Provider catalog wiring.
+  identities and Provider catalog wiring. Both Web Hosts deploy to Cloudflare.
 - Not implemented: installable/offline PWA behavior, Sample intelligence,
-  general Pattern event editing/Undo, production Providers, or cloud deployment.
-  Web automation and physical Touch/MIDI/audio acceptance remain distinct; all
-  five required Web physical rows are `deferred / unverified`.
+  general Pattern event editing/Undo, or production Providers.
+  Web automation and physical Touch/MIDI/audio acceptance remain distinct; the
+  five required Web physical rows (L1–L5) `PASS` for their exact tested
+  revisions of Product Builds `1.0.36.0`/`1.0.40.0` only, and the Creator
+  acceptance report's physical rows remain `deferred / unverified` until
+  performed.
 
 Run the complete Proof from the repository root:
 
