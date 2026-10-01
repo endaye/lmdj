@@ -214,19 +214,33 @@ def merged_gate(*, git):
     return verify_merged
 
 
-def batch_evidence_consumer(*, api_get, git_root, policy):
+def batch_evidence_consumer(*, api_get, git_root, policy, refresh_main=None):
     """The batch evidence consumer bound to the reviewed policy source.
 
     Repository/workflow identities and the producer pin come only from the
     pinned policy's `batch_evidence_source` — never from a candidate
     reference. A policy without one fails closed.
+
+    `refresh_main`, when given, is the trusted canonical-main fetch. It runs
+    immediately before each `verify_run`, which reads the live protected main
+    tip and requires that commit in local Git: a release run re-verifies for
+    many minutes, and main moving in that time made the proof unverifiable.
     """
     from .batch_evidence import BatchEvidenceConsumer
 
     source = policy.batch_evidence_source
     if source is None:
         _fail("the pinned policy has no batch evidence source")
-    return BatchEvidenceConsumer(
+    if refresh_main is not None and not callable(refresh_main):
+        _fail("the canonical main refresh is not callable")
+
+    class Consumer(BatchEvidenceConsumer):
+        def verify_run(self, reference, **kwargs):
+            if refresh_main is not None:
+                refresh_main()
+            return super().verify_run(reference, **kwargs)
+
+    return Consumer(
         api_get=api_get, git_root=git_root, repository="endaye/lmdj",
         repository_id=source["repository_id"], workflow_id=source["workflow_id"],
         producer_revision=source["producer_revision"])

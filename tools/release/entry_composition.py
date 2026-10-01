@@ -838,9 +838,10 @@ def compose_carriers(context, policy, request):
                  control_revision=request["control_revision"]),
             github, token, spec_authorize, review, verify_merged, author, path)
 
-    evidence_consumer = batch_evidence_consumer(api_get=github.get_batch_evidence,
-                                                git_root=root,
-                                                policy=context.policy)
+    evidence_consumer = batch_evidence_consumer(
+        api_get=github.get_batch_evidence, git_root=root, policy=context.policy,
+        refresh_main=lambda: git.fetch_authority(context.policy.repository,
+                                                 context.policy.branch))
     # One committed journal snapshot shared by every step in this run.
     batch_journal = _batch_journal_load(root, token)
     carriers = (
