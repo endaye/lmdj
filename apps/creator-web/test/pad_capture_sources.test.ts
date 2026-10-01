@@ -47,19 +47,20 @@ test.each(["release", "cancel"])("%s closes microphone resources even while resu
   expect(commit).not.toHaveBeenCalled();
 });
 
-test("cold touch activation does not create microphone resources before its legal release", async () => {
+test("blocked microphone resume is cleaned without waiting for cold playback activation", async () => {
   const sources = createPadCaptureSources();
   const controller = new AbortController();
   const wake = new Promise<boolean>(() => {});
-  const started = sources.start("microphone", null, wake, () => {}, () => {}, controller.signal, true);
+  const started = sources.start("microphone", null, wake, () => {}, () => {}, controller.signal);
   const refused = expect(started).rejects.toMatchObject({name: "AbortError"});
+  expect(resumed).toHaveBeenCalledOnce();
   await settle();
-  expect(resumed).not.toHaveBeenCalled();
-  expect(resources.started).not.toHaveBeenCalled();
+  expect(resources.started).toHaveBeenCalledOnce();
   controller.abort();
   await refused;
-  expect(resumed).not.toHaveBeenCalled();
   expect(resources.live).toBe(false);
+  expect(resources.stopped).toHaveBeenCalledOnce();
+  expect(closed).toHaveBeenCalledOnce();
 });
 
 test.each(["pending", "refused"])("legal native microphone press resumes synchronously with %s Runtime activation", async activation => {
