@@ -389,6 +389,17 @@ test("a repeated Host notification of one Runtime error is recorded once", async
   expect(log.getAllByText("INTERNAL_ERROR").length).toBeGreaterThan(0);
 });
 
+test("a Runtime error with unserializable details is still shown and recorded", async () => {
+  const failed = sessionFixture("failed");
+  failed.session.start = async () => false;
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID", errorDetails: cyclic});
+  render(<App runtimeFactory={() => failed.session} />);
+  expect((await screen.findByRole("alert")).textContent).toContain("That can't be done right now.");
+  expect(await screen.findByText("Developer diagnostics (1)")).toBeTruthy();
+});
+
 test("the overview error row names no code but keeps it for support", async () => {
   const failed = sessionFixture("failed");
   failed.session.start = async () => false;

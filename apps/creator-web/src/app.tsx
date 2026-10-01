@@ -147,6 +147,16 @@ interface WorkspaceProps {
   ) => () => void;
 }
 
+// Protocol details are JSON, but a malformed exception must not break error
+// handling, as in diagnosticRecord: unserializable details key as the code.
+function runtimeErrorDetailsKey(details: Readonly<Record<string, unknown>> | undefined): string {
+  try {
+    return JSON.stringify(details ?? {});
+  } catch {
+    return "";
+  }
+}
+
 type BusyRetry =
   | {kind: "list"}
   | {kind: "open"; project: LocalProjectSummary};
@@ -571,7 +581,7 @@ function Workspace({
   // notification carries a fresh details object, so an error is identified
   // by its code and details content and recorded once until it changes.
   const runtimeErrorKey = runtimeErrorCode
-    ? `${runtimeErrorCode}:${JSON.stringify(runtimeErrorDetails ?? {})}`
+    ? `${runtimeErrorCode}:${runtimeErrorDetailsKey(runtimeErrorDetails)}`
     : null;
   const reportedRuntimeError = useRef<string | null>(null);
   useEffect(() => {
