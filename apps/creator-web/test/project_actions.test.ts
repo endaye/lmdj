@@ -362,3 +362,13 @@ test("duplicateProjectJourney copies under the new identity and opens the copy",
   expect(opened).toEqual([`${copyId}/${summary.patternId}`]);
   expect(view.projectId).toBe(copyId);
 });
+
+test("duplicateProjectJourney refuses a summary that names another Project", async () => {
+  const {calls, session} = sessionFixture({
+    duplicateProject: async () => summary,
+  });
+  await expect(duplicateProjectJourney(
+    session, summary, () => "99999999-9999-4999-8999-999999999999",
+  )).rejects.toMatchObject({code: "HOST_PROTOCOL_MISMATCH"});
+  expect(calls).not.toContain("openProject");
+});

@@ -249,10 +249,14 @@ export async function duplicateProjectJourney(
   source: Readonly<Pick<LocalProjectSummary, "projectId">>,
   newId: () => string = () => crypto.randomUUID(),
 ): Promise<ProjectView> {
+  const projectId = newId();
   const summary = await session.duplicateProject({
     sourceProjectId: source.projectId,
-    projectId: newId(),
+    projectId,
   });
+  if (summary.projectId !== projectId) {
+    throw protocolMismatch("Duplicated Project identity is invalid");
+  }
   return openProjectJourney(session, summary);
 }
 

@@ -322,6 +322,10 @@ test("a Duplicate refused by Host state names the refusal and opens nothing", as
     await screen.findByRole("button", {name: "Duplicate Project 11111111"}));
   await screen.findByText(/cannot be duplicated right now/);
   expect(fixture.calls.some((call) => call.startsWith("openProject"))).toBe(false);
+  // The refusal leaves the library reachable for another attempt.
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  const retry = await screen.findByRole("button", {name: "Duplicate Project 11111111"});
+  expect(retry.hasAttribute("disabled")).toBe(false);
 });
 
 test("a Duplicate of a Project busy in another tab reports it as busy", async () => {

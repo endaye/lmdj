@@ -42,7 +42,7 @@ function messageFor(
     case "PROJECT_BUSY":
       return "The local Project is busy in another tab or process.";
     case "PROJECT_DUPLICATE_REFUSED":
-      return "This Project cannot be duplicated right now. If it has an unfinished recording, open it to recover the take, then duplicate it.";
+      return "This Project cannot be duplicated right now. Try again shortly; an unfinished recording, if any, is recovered by opening the Project first.";
     case "WEB_RUNTIME_RESOURCE_LIMIT":
       return `${safeName(details.resource, "resource")}: observed ${
         safeCount(details.observed)
