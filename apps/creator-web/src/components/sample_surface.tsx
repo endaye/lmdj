@@ -526,11 +526,20 @@ export function SampleSurface({
       state.project.current?.pads[slot]?.assetId !== undefined) ||
     (inspect?.slot === slot && inspect.assetId !== null);
 
+  // The Host refuses `sample.stop` unless the Runtime is running, and then no
+  // voice is playing; the mutation itself stops the voice whenever the Runtime
+  // runs. A refused stop outside `running` is therefore not a failure (#1724).
   const stopBeforeMutation = async (slot: number) => {
     if (session === undefined) return;
-    if (await session.stopPad(slot) !== true) {
-      throw Object.assign(new Error("Sample stop failed"), {code: "HOST_STATE_INVALID"});
+    let stopped: boolean;
+    try {
+      stopped = await session.stopPad(slot) === true;
+    } catch (error) {
+      if (session.diagnostics().state === "running") throw error;
+      return;
     }
+    if (stopped || session.diagnostics().state !== "running") return;
+    throw Object.assign(new Error("Sample stop failed"), {code: "HOST_STATE_INVALID"});
   };
 
   const performUpdate = async (playback: Readonly<PadPlayback>) => {

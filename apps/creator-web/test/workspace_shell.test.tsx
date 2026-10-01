@@ -1808,6 +1808,108 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
   expect(revisionCell()?.textContent).toBe("3");
 });
 
+type PadMutationKind = "mute" | "reset" | "replace" | "delete";
+
+// Records each Sample mutation in `order` and commits it at revision 4.
+function installOrderedPadMutations(
+  fixture: ReturnType<typeof mutableSampleRuntimeFixture>,
+  order: string[],
+) {
+  fixture.session.updatePad = async (request) => {
+    order.push(`mute:${request.slot}`);
+    fixture.playbacks.set(request.slot, Object.freeze({...request.playback}));
+    fixture.revision = 4;
+    return {
+      committedRevision: 4,
+      runtimeRevision: 4,
+      runtimePublished: true,
+      snapshotError: null,
+    };
+  };
+  fixture.session.resetPad = async (request) => {
+    order.push(`reset:${request.slot}`);
+    fixture.playbacks.set(request.slot, Object.freeze({
+      trimStartFrame: 0,
+      trimEndFrame: 8,
+      triggerMode: "one_shot",
+      gainMillidb: 0,
+      muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
+    }));
+    fixture.revision = 4;
+    return {
+      committedRevision: 4,
+      runtimeRevision: 4,
+      runtimePublished: true,
+      snapshotError: null,
+    };
+  };
+  fixture.session.deletePad = async (request) => {
+    order.push(`delete:${request.slot}`);
+    fixture.assigned.delete(request.slot);
+    fixture.playbacks.delete(request.slot);
+    fixture.revision = 4;
+    return {committedRevision: 4, runtimeRevision: 4, runtimePublished: true, snapshotError: null};
+  };
+  fixture.session.importAssignSample = async (_file, options) => {
+    order.push(`replace:${options.slot}`);
+    fixture.assigned.set(options.slot, "44444444-4444-4444-8444-444444444444");
+    fixture.playbacks.set(options.slot, Object.freeze({
+      trimStartFrame: 0,
+      trimEndFrame: 8,
+      triggerMode: "one_shot",
+      gainMillidb: 0,
+      muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
+    }));
+    fixture.revision = 4;
+    return {
+      committedRevision: 4,
+      runtimeRevision: 4,
+      runtimePublished: true,
+      snapshotError: null,
+    };
+  };
+}
+
+async function performPadMutation(kind: PadMutationKind, container: HTMLElement) {
+  if (kind === "mute") {
+    await userEvent.click(screen.getByRole("button", {name: "Mute"}));
+  } else if (kind === "reset") {
+    await userEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
+    await userEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
+  } else if (kind === "delete") {
+    await userEvent.click(screen.getByRole("button", {name: "Delete Pad A1"}));
+  } else {
+    await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
+    const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
+    await userEvent.upload(input, wavFile("replace.wav"));
+    await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
+    await commitLongSourceSelection();
+  }
+
+}
+
+async function expectPadMutationCommitted(kind: PadMutationKind, order: string[], fixture: ReturnType<typeof mutableSampleRuntimeFixture>) {
+  await waitFor(() => expect(order).toEqual([`stop:0`, `${kind}:0`]));
+  expect(fixture.revision).toBe(4);
+  if (kind === "delete") {
+    await screen.findByRole("button", {name: "Pad A1 — empty — Key Q"});
+    expect(screen.queryByText("Asset 33333333")).toBeNull();
+    expect(screen.queryByRole("slider", {name: "Pad A1 Volume"})).toBeNull();
+  }
+}
+
 test.each(["mute", "reset", "replace", "delete"] as const)(
   "%s stops an admitted Pad before mutation without waiting for Voice projection",
   async (kind) => {
@@ -1822,71 +1924,7 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
       order.push(`stop:${slot}`);
       return true;
     };
-    fixture.session.updatePad = async (request) => {
-      order.push(`mute:${request.slot}`);
-      fixture.playbacks.set(request.slot, Object.freeze({...request.playback}));
-      fixture.revision = 4;
-      return {
-        committedRevision: 4,
-        runtimeRevision: 4,
-        runtimePublished: true,
-        snapshotError: null,
-      };
-    };
-    fixture.session.resetPad = async (request) => {
-      order.push(`reset:${request.slot}`);
-      fixture.playbacks.set(request.slot, Object.freeze({
-        trimStartFrame: 0,
-        trimEndFrame: 8,
-        triggerMode: "one_shot",
-        gainMillidb: 0,
-        muted: false,
-        reverse: false,
-        pitchCents: 0,
-        pan: 0,
-        loopMode: "forward" as const,
-        loopStartFrame: null,
-        loopCrossfadeFrames: 0,
-      }));
-      fixture.revision = 4;
-      return {
-        committedRevision: 4,
-        runtimeRevision: 4,
-        runtimePublished: true,
-        snapshotError: null,
-      };
-    };
-    fixture.session.deletePad = async (request) => {
-      order.push(`delete:${request.slot}`);
-      fixture.assigned.delete(request.slot);
-      fixture.playbacks.delete(request.slot);
-      fixture.revision = 4;
-      return {committedRevision: 4, runtimeRevision: 4, runtimePublished: true, snapshotError: null};
-    };
-    fixture.session.importAssignSample = async (_file, options) => {
-      order.push(`replace:${options.slot}`);
-      fixture.assigned.set(options.slot, "44444444-4444-4444-8444-444444444444");
-      fixture.playbacks.set(options.slot, Object.freeze({
-        trimStartFrame: 0,
-        trimEndFrame: 8,
-        triggerMode: "one_shot",
-        gainMillidb: 0,
-        muted: false,
-        reverse: false,
-        pitchCents: 0,
-        pan: 0,
-        loopMode: "forward" as const,
-        loopStartFrame: null,
-        loopCrossfadeFrames: 0,
-      }));
-      fixture.revision = 4;
-      return {
-        committedRevision: 4,
-        runtimeRevision: 4,
-        runtimePublished: true,
-        snapshotError: null,
-      };
-    };
+    installOrderedPadMutations(fixture, order);
     const {container} = render(
       <App initialState={ready} runtimeFactory={() => fixture.session} />,
     );
@@ -1900,28 +1938,35 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
     });
     await waitFor(() => expect(triggerCount).toBe(1));
 
-    if (kind === "mute") {
-      await userEvent.click(screen.getByRole("button", {name: "Mute"}));
-    } else if (kind === "reset") {
-      await userEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
-      await userEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
-    } else if (kind === "delete") {
-      await userEvent.click(screen.getByRole("button", {name: "Delete Pad A1"}));
-    } else {
-      await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
-      const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
-      await userEvent.upload(input, wavFile("replace.wav"));
-      await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
-      await commitLongSourceSelection();
-    }
+    await performPadMutation(kind, container);
+    await expectPadMutationCommitted(kind, order, fixture);
+  },
+);
 
-    await waitFor(() => expect(order).toEqual([`stop:0`, `${kind}:0`]));
-    expect(fixture.revision).toBe(4);
-    if (kind === "delete") {
-      await screen.findByRole("button", {name: "Pad A1 — empty — Key Q"});
-      expect(screen.queryByText("Asset 33333333")).toBeNull();
-      expect(screen.queryByRole("slider", {name: "Pad A1 Volume"})).toBeNull();
-    }
+// #1724: with audio inactive the Host refuses `sample.stop`, as the Runtime
+// is not running and no voice plays. The mutation must still commit.
+test.each(["mute", "reset", "replace", "delete"] as const)(
+  "%s commits with audio inactive although the Host refuses the pre-stop",
+  async (kind) => {
+    const fixture = mutableSampleRuntimeFixture();
+    const order: string[] = [];
+    fixture.session.stopPad = async (slot) => {
+      order.push(`stop:${slot}`);
+      throw Object.assign(new Error("runtime control is unavailable"), {
+        code: "HOST_STATE_INVALID",
+      });
+    };
+    installOrderedPadMutations(fixture, order);
+    expect(fixture.session.diagnostics().state).toBe("audio-suspended");
+    const {container} = render(
+      <App initialState={ready} runtimeFactory={() => fixture.session} />,
+    );
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    await screen.findByText("Asset 33333333");
+
+    await performPadMutation(kind, container);
+    await expectPadMutationCommitted(kind, order, fixture);
   },
 );
 

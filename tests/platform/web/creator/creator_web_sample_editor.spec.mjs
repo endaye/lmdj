@@ -1131,3 +1131,39 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   expect(reopened.redo_count).toBe(0);
   noErrors();
 });
+
+// #1724: before audio is activated the Runtime is not running, so the Host
+// refuses `sample.stop`, and no voice is playing. Delete must still commit,
+// because `pad.delete` owns stopping the voice whenever the Runtime runs.
+test("Pad Delete commits while audio is inactive and the Host refuses the pre-stop", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(180_000);
+  const noErrors = recordPageErrors(page);
+  await installHostProofRecorder(page);
+  await page.goto("/index.html");
+  await waitForBootProject(page);
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
+  await chooseSampleFile(page, "Add Sample to Pad A1", "inactive-delete.wav", pcm16Wav({frames: 4800}));
+  await commitLongSourceSelection(page);
+  await expectProjectRevision(page, 1);
+  expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.asset_id)
+    .not.toBeNull();
+
+  const offset = await page.evaluate(() => window.__sampleProofResponses.length);
+  await page.getByRole("button", {name: "Delete Pad A1", exact: true}).click();
+  await expectProjectRevision(page, 2);
+  await expect(page.getByRole("button", {name: "Pad A1 — empty — Key Q", exact: true}))
+    .toBeVisible();
+  expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.asset_id)
+    .toBeNull();
+  const exchanged = await page.evaluate((from) => window.__sampleProofResponses.slice(from)
+    .filter((entry) => entry.operation === "sample.stop" || entry.operation === "pad.delete")
+    .map((entry) => ({operation: entry.operation, ok: entry.ok})), offset);
+  expect(exchanged).toEqual([
+    {operation: "sample.stop", ok: false},
+    {operation: "pad.delete", ok: true},
+  ]);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
+  noErrors();
+});
