@@ -1,4 +1,4 @@
-import type {ReactNode} from "react";
+import type {ReactNode, MouseEvent} from "react";
 
 import type {CreatorMode} from "./creator_mode";
 import type {Bank} from "../state/creator_state";
@@ -24,10 +24,10 @@ interface PhysicalControlsProps {
   performEnabled?: boolean;
   onSelectMode: (mode: CreatorMode) => void;
   onSelectBank: (bank: Bank) => void;
-  onRecord?: () => void;
+  onRecord?: (event: MouseEvent<HTMLButtonElement>) => void;
   recordEnabled?: boolean;
   recording?: boolean;
-  onPlayStop?: () => void;
+  onPlayStop?: (event: MouseEvent<HTMLButtonElement>) => void;
   playEnabled?: boolean;
   playing?: boolean;
 }
@@ -38,7 +38,7 @@ interface PhysicalKeyProps {
   current?: boolean;
   disabled?: boolean;
   icon?: ReactNode;
-  onClick?: () => void;
+  onClick?: (event: MouseEvent<HTMLButtonElement>) => void;
 }
 
 function PhysicalKey({

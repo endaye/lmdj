@@ -183,15 +183,14 @@ for (const viewport of [
     await expect(page.getByRole("button", {name: /^Perform/})).toBeEnabled();
     // The physical column is the rail now. Its keys are icons, so the walk
     // reads each stop's accessible name. Audio is not running in this case,
-    // so Record and Play/Stop are disabled and must be skipped along with the
-    // unassigned encoder and direction keys, and Pads are played from the
-    // letter keys rather than tabbed to; landing on the touch workspace's
-    // first System action right after Bank D is what proves all of that.
+    // and the first transport/Pad gesture wakes it. Only unassigned encoder
+    // and direction keys are skipped; landing on the
+    // first Pad after the transport keys proves the complete physical rail.
     await page.getByTestId("physical-controls")
       .getByRole("button", {name: "Project", exact: true}).focus();
     const expectedFocusOrder = [
       "Sample", "Sequence", "Perform", "Bank A", "Bank B", "Bank C", "Bank D",
-      "Activate audio",
+      "Record", "Play/Stop", "Pad A1 — assigned — Key Q",
     ];
     const focusOrder = [];
     for (let index = 0; index < expectedFocusOrder.length; index += 1) {
@@ -239,6 +238,6 @@ test("WebKit capability boundary remains unsupported and is not physical accepta
     timeout: 30_000,
   });
   await expect(page.getByRole("alert")).toContainText("UNSUPPORTED_WEB_RUNTIME");
-  await expect(page.getByRole("button", {name: "Activate audio"})).toBeDisabled();
+  await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
   await expect(page.getByRole("button", {name: "Export report"})).toBeDisabled();
 });

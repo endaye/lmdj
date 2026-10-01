@@ -53,6 +53,7 @@ interface SampleSurfaceProps {
   captureStopRequest?: number;
   onCaptureSlotChange?(slot: number | null): void;
   onCapturePhaseChange?(phase: CapturePhase): void;
+  onCaptureGesture?(event: {isTrusted: boolean}): void;
   onContinueCaptureInSequence?(): void;
   closeCaptureAfterResolution?: boolean;
   captureBackgrounded?: boolean;
@@ -202,6 +203,7 @@ export function SampleSurface({
   captureStopRequest = 0,
   onCaptureSlotChange,
   onCapturePhaseChange,
+  onCaptureGesture,
   onContinueCaptureInSequence,
   closeCaptureAfterResolution = false,
   captureBackgrounded = false,
@@ -1048,6 +1050,7 @@ export function SampleSurface({
       )}
       {captureTarget === null ? null : (
         <CapturePanel
+          {...(onCaptureGesture === undefined ? {} : {onRecordGesture: onCaptureGesture})}
           padLabel={`Pad ${padAddress({slot: captureTarget.slot, assetId: null})}`}
           onCommit={(buffer, selection) =>
             performCaptureCommit(captureTarget, buffer, selection)}
