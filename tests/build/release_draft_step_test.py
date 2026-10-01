@@ -41,6 +41,36 @@ class FakeRelease:
 DRAFT = FakeRelease(RELEASE_ID, True, "lmdj-v1.0.57.0", PLAN)
 
 
+def github_release(body, *, draft=True, tag="lmdj-v1.0.57.0"):
+    from tools.release.github_api import GitHubRelease
+    return GitHubRelease(id=RELEASE_ID, tag_name=tag, name="LMDJ", body=body, draft=draft,
+                         prerelease=False, make_latest=None, html_url="", upload_url="",
+                         assets=(), target_commitish="main")
+
+
+def marker(plan=PLAN, schema="lmdj.release-plan-marker.v4"):
+    return f'<!-- {schema} {{"plan_sha256":"{plan}","tag":"lmdj-v1.0.57.0"}} -->'
+
+
+class ReleaseProjectionTest(unittest.TestCase):
+    """The production reader projects a real GitHubRelease for read_back."""
+
+    def test_a_draft_with_its_plan_marker_verifies(self):
+        from tools.release.draft_step import release_projection
+        projected = release_projection(github_release("Notes.\n\n" + marker()))
+        self.assertEqual(read_back(projected, spec())["status"], "verified")
+
+    def test_no_release_is_pending(self):
+        from tools.release.draft_step import release_projection
+        self.assertEqual(read_back(release_projection(None), spec()), "pending")
+
+    def test_a_body_without_exactly_one_marker_fails_closed(self):
+        from tools.release.draft_step import release_projection
+        for body in ("Notes only.", marker() + "\n" + marker(), marker(plan="short")):
+            with self.assertRaises(DraftStepError, msg=body):
+                read_back(release_projection(github_release(body)), spec())
+
+
 class ReadBackTest(unittest.TestCase):
     def test_pending_while_no_release_exists(self):
         self.assertEqual(read_back(None, spec()), "pending")

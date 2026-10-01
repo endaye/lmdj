@@ -693,6 +693,12 @@ def compose_carriers(context, policy, request):
             return None
         return {"draft": release.draft, "id": release.id}
 
+    def draft_release_by_tag(tag):
+        # The draft step compares the Release's tag and plan digest, not just
+        # the {draft, id} the publication and final steps read.
+        from .draft_step import release_projection
+        return release_projection(github.get_release_by_tag("endaye/lmdj", tag))
+
     def ledger_row(tag):
         intent = ledger.intent_for_tag(tag)
         if intent is None:
@@ -871,7 +877,7 @@ def compose_carriers(context, policy, request):
         enroll_draft(root=root, candidate_root=candidate_root,
                      repository_id=repository_id, ledger=ledger,
                      create_draft=_create_draft(context),
-                     release_by_tag=release_by_tag),
+                     release_by_tag=draft_release_by_tag),
         enroll_publication(root=root, candidate_root=candidate_root,
                            repository_id=repository_id, ledger=ledger,
                            workflow_id=_workflow_id(github,
