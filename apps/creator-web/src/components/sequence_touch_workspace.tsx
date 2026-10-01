@@ -1,4 +1,4 @@
-import {useRef, useState} from "react";
+import {useEffect, useRef, useState} from "react";
 
 import {ValueSlider} from "./value_slider";
 import {createTapTempo, type TapTempo} from "../runtime/tap_tempo";
@@ -36,15 +36,41 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   const [bars, setBars] = useState<1 | 2 | 4 | 8>(1);
   const [recoveryTargets, setRecoveryTargets] = useState<Readonly<Record<string, string>>>({});
   const tapTempoRef = useRef<TapTempo | null>(null);
+  // Step/TAP commits round-trip through the Host before the committed props
+  // catch up. Deriving each step from the last requested value instead of the
+  // committed prop keeps rapid clicks from collapsing into one increment; a
+  // failed commit resyncs the base to the committed truth.
+  const requestedBpmRef = useRef<number | null>(null);
+  const requestedSwingRef = useRef<number | null>(null);
   const disabled = selectTransportBusy(transport) || selectTransportRecording(transport);
   const selectedPatternId = state.selectedPatternId ?? project.patternId;
   const patternIndex = project.patterns.findIndex((item) => item.patternId === selectedPatternId) + 1;
   const bpm = project.bpm;
   const swing = project.sequenceSettings.swingPercent;
+  useEffect(() => {
+    if (requestedBpmRef.current === project.bpm) requestedBpmRef.current = null;
+  }, [project.bpm]);
+  useEffect(() => {
+    if (requestedSwingRef.current === swing) requestedSwingRef.current = null;
+  }, [swing]);
+  useEffect(() => {
+    if (state.errorCode !== null) {
+      requestedBpmRef.current = null;
+      requestedSwingRef.current = null;
+    }
+  }, [state.errorCode]);
+  const requestBpm = (next: number) => {
+    requestedBpmRef.current = next;
+    props.onSettingsChange({bpm: next});
+  };
+  const requestSwing = (next: number) => {
+    requestedSwingRef.current = next;
+    props.onSettingsChange({swingPercent: next});
+  };
   const tapTempo = () => {
     tapTempoRef.current ??= createTapTempo(() => performance.now());
     const tapped = tapTempoRef.current.tap();
-    if (tapped !== null) props.onSettingsChange({bpm: tapped});
+    if (tapped !== null) requestBpm(tapped);
   };
   return (
     <section className="sequence-touch-workspace" aria-label="Sequence editor">
@@ -92,19 +118,19 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
               format={(value) => `${value} BPM`}
               disabled={disabled}
               onPreview={NOOP}
-              onCommit={(next) => props.onSettingsChange({bpm: next})}
+              onCommit={requestBpm}
               onCancel={NOOP}
             />
             <div className="sequence-param-actions" role="group" aria-label="Tempo actions">
               <button type="button" aria-label="Decrease BPM"
-                disabled={disabled || bpm <= 40}
-                onClick={() => props.onSettingsChange({bpm: bpm - 1})}>−</button>
+                disabled={disabled || (requestedBpmRef.current ?? bpm) <= 40}
+                onClick={() => requestBpm((requestedBpmRef.current ?? bpm) - 1)}>−</button>
               <button type="button" aria-label="Tap Tempo"
                 disabled={disabled}
                 onClick={tapTempo}>TAP</button>
               <button type="button" aria-label="Increase BPM"
-                disabled={disabled || bpm >= 240}
-                onClick={() => props.onSettingsChange({bpm: bpm + 1})}>+</button>
+                disabled={disabled || (requestedBpmRef.current ?? bpm) >= 240}
+                onClick={() => requestBpm((requestedBpmRef.current ?? bpm) + 1)}>+</button>
             </div>
           </div>
           <div className="sequence-param-card sequence-param-swing">
@@ -119,16 +145,16 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
               format={(value) => `${value}%`}
               disabled={disabled}
               onPreview={NOOP}
-              onCommit={(next) => props.onSettingsChange({swingPercent: next})}
+              onCommit={requestSwing}
               onCancel={NOOP}
             />
             <div className="sequence-param-actions" role="group" aria-label="Swing actions">
               <button type="button" aria-label="Decrease Swing"
-                disabled={disabled || swing <= 50}
-                onClick={() => props.onSettingsChange({swingPercent: swing - 1})}>−</button>
+                disabled={disabled || (requestedSwingRef.current ?? swing) <= 50}
+                onClick={() => requestSwing((requestedSwingRef.current ?? swing) - 1)}>−</button>
               <button type="button" aria-label="Increase Swing"
-                disabled={disabled || swing >= 75}
-                onClick={() => props.onSettingsChange({swingPercent: swing + 1})}>+</button>
+                disabled={disabled || (requestedSwingRef.current ?? swing) >= 75}
+                onClick={() => requestSwing((requestedSwingRef.current ?? swing) + 1)}>+</button>
             </div>
           </div>
         </div>

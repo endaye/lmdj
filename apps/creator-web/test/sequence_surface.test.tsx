@@ -112,8 +112,10 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
   fireEvent.pointerUp(swingSlider, {pointerId: 1});
   expect(onSettingsChange).toHaveBeenCalledTimes(2);
   expect(onSettingsChange).toHaveBeenLastCalledWith({swingPercent: 62});
+  // A step right after the slider's commit continues from the value that
+  // commit requested; the committed prop has not caught up yet.
   fireEvent.click(within(touch).getByRole("button", {name: "Increase Swing"}));
-  expect(onSettingsChange).toHaveBeenLastCalledWith({swingPercent: 51});
+  expect(onSettingsChange).toHaveBeenLastCalledWith({swingPercent: 63});
   fireEvent.click(within(touch).getByRole("button", {name: "Decrease BPM"}));
   expect(onSettingsChange).toHaveBeenLastCalledWith({bpm: 119});
   expect(onSettingsChange).toHaveBeenCalledTimes(4);
@@ -156,6 +158,60 @@ test("a preview never commits and a failed commit restores the committed readout
   // The commit path owns the outcome: until Truth moves, the readout falls
   // back to the committed value, not the abandoned preview.
   expect(screen.getByText("120 BPM")).toBeTruthy();
+});
+
+test("rapid step clicks accumulate from the last requested value until Truth catches up", () => {
+  const onSettingsChange = vi.fn();
+  const props = {
+    transport: initialPatternTransportState,
+    state: {...initialSequenceState, phase: "stopped" as const},
+    onRefresh: () => {}, onSwitch: () => {},
+    onCreatePattern: () => {}, onSettingsChange,
+    onRecover: () => {}, onDiscard: () => {},
+  };
+  const view = render(<SequenceTouchWorkspace project={project} {...props} />);
+  // Each click commits through the Host; until the committed prop catches up,
+  // the next click must step from the last requested value, not the stale
+  // committed one.
+  fireEvent.click(screen.getByRole("button", {name: "Increase BPM"}));
+  fireEvent.click(screen.getByRole("button", {name: "Increase BPM"}));
+  expect(onSettingsChange).toHaveBeenNthCalledWith(1, {bpm: 121});
+  expect(onSettingsChange).toHaveBeenNthCalledWith(2, {bpm: 122});
+  fireEvent.click(screen.getByRole("button", {name: "Increase Swing"}));
+  fireEvent.click(screen.getByRole("button", {name: "Increase Swing"}));
+  expect(onSettingsChange).toHaveBeenNthCalledWith(3, {swingPercent: 51});
+  expect(onSettingsChange).toHaveBeenNthCalledWith(4, {swingPercent: 52});
+  // Once Truth lands on the requested value, stepping continues from it.
+  view.rerender(<SequenceTouchWorkspace
+    project={{
+      ...project, bpm: 122,
+      sequenceSettings: {quantizeEnabled: true, swingPercent: 52},
+    }} {...props} />);
+  fireEvent.click(screen.getByRole("button", {name: "Increase BPM"}));
+  expect(onSettingsChange).toHaveBeenNthCalledWith(5, {bpm: 123});
+  fireEvent.click(screen.getByRole("button", {name: "Decrease Swing"}));
+  expect(onSettingsChange).toHaveBeenNthCalledWith(6, {swingPercent: 51});
+});
+
+test("a failed settings commit resyncs the step base to the committed truth", () => {
+  const onSettingsChange = vi.fn();
+  const props = {
+    transport: initialPatternTransportState,
+    onRefresh: () => {}, onSwitch: () => {},
+    onCreatePattern: () => {}, onSettingsChange,
+    onRecover: () => {}, onDiscard: () => {},
+  };
+  const view = render(<SequenceTouchWorkspace project={project}
+    state={{...initialSequenceState, phase: "stopped"}} {...props} />);
+  fireEvent.click(screen.getByRole("button", {name: "Increase BPM"}));
+  expect(onSettingsChange).toHaveBeenNthCalledWith(1, {bpm: 121});
+  // The commit failed: the requested value never landed, so the next step
+  // derives from the committed truth again, not from the failed request.
+  view.rerender(<SequenceTouchWorkspace project={project}
+    state={{...initialSequenceState, phase: "stopped", errorCode: "HOST_TIMEOUT"}}
+    {...props} />);
+  fireEvent.click(screen.getByRole("button", {name: "Increase BPM"}));
+  expect(onSettingsChange).toHaveBeenNthCalledWith(2, {bpm: 121});
 });
 
 test("locks every Tempo and Swing control while recording and says why", () => {
