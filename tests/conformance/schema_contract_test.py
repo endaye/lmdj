@@ -1108,6 +1108,11 @@ json_schema.check(explicit_zero, project_v5, "ping-pong with an explicit zero cr
 # bypassed. A present band carries every field, including a cut band's
 # gain, which the DSP ignores, so a cut band dragged back to a shelf keeps it.
 gain_bounds = {"type": "integer", "minimum": -18000, "maximum": 18000}
+assert list(playback_v5["properties"]) == [
+    "trim_start_frame", "trim_end_frame", "trigger_mode", "gain_millidb", "muted",
+    "reverse", "pitch_cents", "pan", "loop_mode", "loop_start_frame",
+    "loop_crossfade_frames", "attack_ms", "release_ms", "tone", "eq",
+], "why: a playback key was added or dropped outside a Contract cut; remedy: pin it here with its bounds"
 assert {
     key: playback_v5["properties"][key]
     for key in ("attack_ms", "release_ms", "tone", "eq")
@@ -1152,40 +1157,43 @@ tone_project_v5 = load_json(
     repo_root / "tests/fixtures/contracts/project-v5-tone-parity-valid.json"
 )
 json_schema.check(tone_project_v5, project_v5, "project-v5-tone-parity-valid")
-tone_max_pad = ["banks", 0, "pads", 0, "playback"]
-tone_min_pad = ["banks", 0, "pads", 1, "playback"]
+# Pad 0: attack/release at their maxima, tone -100, the low band's lowest
+# shelf, the mid band's lowest frequency and Q, the high band's highest cut.
+# Pad 1: attack/release of 1, tone +100 and the opposite band extremes.
+tone_pad0 = ["banks", 0, "pads", 0, "playback"]
+tone_pad1 = ["banks", 0, "pads", 1, "playback"]
 for pointer, key, bad in [
-    (tone_max_pad, "attack_ms", 2001),
-    (tone_min_pad, "attack_ms", -1),
-    (tone_max_pad, "release_ms", 4001),
-    (tone_min_pad, "release_ms", -1),
-    (tone_min_pad, "tone", 101),
-    (tone_max_pad, "tone", -101),
-    (tone_max_pad, "tone", 1.5),
-    (tone_max_pad, "eq", []),
-    (tone_max_pad + ["eq"], "shelf", {}),
-    (tone_max_pad + ["eq", "low"], "freq_hz", 19),
-    (tone_min_pad + ["eq", "low"], "freq_hz", 2001),
-    (tone_max_pad + ["eq", "low"], "gain_millidb", -18001),
-    (tone_min_pad + ["eq", "low"], "gain_millidb", 18001),
-    (tone_max_pad + ["eq", "low"], "kind", "bell"),
-    (tone_max_pad + ["eq", "low"], "q_milli", 1000),
-    (tone_max_pad + ["eq", "low"], "kind", _DELETE),
-    (tone_max_pad + ["eq", "low"], "gain_millidb", _DELETE),
-    (tone_max_pad + ["eq", "mid"], "freq_hz", 99),
-    (tone_min_pad + ["eq", "mid"], "freq_hz", 10001),
-    (tone_max_pad + ["eq", "mid"], "q_milli", 99),
-    (tone_min_pad + ["eq", "mid"], "q_milli", 10001),
-    (tone_min_pad + ["eq", "mid"], "gain_millidb", -18001),
-    (tone_max_pad + ["eq", "mid"], "gain_millidb", 18001),
-    (tone_max_pad + ["eq", "mid"], "kind", "shelf"),
-    (tone_max_pad + ["eq", "mid"], "q_milli", _DELETE),
-    (tone_min_pad + ["eq", "high"], "freq_hz", 999),
-    (tone_max_pad + ["eq", "high"], "freq_hz", 20001),
-    (tone_min_pad + ["eq", "high"], "gain_millidb", -18001),
-    (tone_max_pad + ["eq", "high"], "gain_millidb", 18001),
-    (tone_max_pad + ["eq", "high"], "kind", "notch"),
-    (tone_max_pad + ["eq", "high"], "freq_hz", _DELETE),
+    (tone_pad0, "attack_ms", 2001),
+    (tone_pad1, "attack_ms", -1),
+    (tone_pad0, "release_ms", 4001),
+    (tone_pad1, "release_ms", -1),
+    (tone_pad1, "tone", 101),
+    (tone_pad0, "tone", -101),
+    (tone_pad0, "tone", 1.5),
+    (tone_pad0, "eq", []),
+    (tone_pad0 + ["eq"], "shelf", {}),
+    (tone_pad0 + ["eq", "low"], "freq_hz", 19),
+    (tone_pad1 + ["eq", "low"], "freq_hz", 2001),
+    (tone_pad0 + ["eq", "low"], "gain_millidb", -18001),
+    (tone_pad1 + ["eq", "low"], "gain_millidb", 18001),
+    (tone_pad0 + ["eq", "low"], "kind", "bell"),
+    (tone_pad0 + ["eq", "low"], "q_milli", 1000),
+    (tone_pad0 + ["eq", "low"], "kind", _DELETE),
+    (tone_pad0 + ["eq", "low"], "gain_millidb", _DELETE),
+    (tone_pad0 + ["eq", "mid"], "freq_hz", 99),
+    (tone_pad1 + ["eq", "mid"], "freq_hz", 10001),
+    (tone_pad0 + ["eq", "mid"], "q_milli", 99),
+    (tone_pad1 + ["eq", "mid"], "q_milli", 10001),
+    (tone_pad1 + ["eq", "mid"], "gain_millidb", -18001),
+    (tone_pad0 + ["eq", "mid"], "gain_millidb", 18001),
+    (tone_pad0 + ["eq", "mid"], "kind", "shelf"),
+    (tone_pad0 + ["eq", "mid"], "q_milli", _DELETE),
+    (tone_pad1 + ["eq", "high"], "freq_hz", 999),
+    (tone_pad0 + ["eq", "high"], "freq_hz", 20001),
+    (tone_pad1 + ["eq", "high"], "gain_millidb", -18001),
+    (tone_pad0 + ["eq", "high"], "gain_millidb", 18001),
+    (tone_pad0 + ["eq", "high"], "kind", "notch"),
+    (tone_pad0 + ["eq", "high"], "freq_hz", _DELETE),
 ]:
     node = tone_project_v5
     for token in pointer:
@@ -1197,9 +1205,9 @@ for pointer, key, bad in [
     changed = mutated(tone_project_v5, pointer + [key], bad)
     assert json_schema.validate(changed, project_v5), (pointer, key, bad)
 for pointer, key, value, why in [
-    (tone_max_pad, "eq", {}, "an explicit all-bypassed EQ"),
-    (tone_max_pad, "attack_ms", 0, "an explicit zero attack"),
-    (tone_max_pad + ["eq", "low"], "kind", "cut", "a low cut keeps its ignored gain"),
+    (tone_pad0, "eq", {}, "an explicit all-bypassed EQ"),
+    (tone_pad0, "attack_ms", 0, "an explicit zero attack"),
+    (tone_pad0 + ["eq", "low"], "kind", "cut", "a low cut keeps its ignored gain"),
 ]:
     json_schema.check(mutated(tone_project_v5, pointer + [key], value), project_v5, why)
 lineage_v5 = valid_project_v5["assets"][0]["lineage"]
