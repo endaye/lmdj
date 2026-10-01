@@ -133,12 +133,16 @@ Unknown keys stay rejected. A reader treats a missing key as its default. A writ
     | Interpolation | 4-point Hermite, only when the step has a fraction |
     | Reverse | Mirrored fetch |
     | Ping-pong | Reflection at the loop boundaries |
-    | Crossfade | Equal-power, quarter-sine table |
+    | Crossfade | Equal-power overlap, quarter-sine table (see below) |
     | Pan | Equal-power |
     | Envelope | max(user, 96 output frames) |
     | Tone and EQ | Four RBJ biquads (TDF-II) with a per-block denormal flush |
 
 - Stage mask 0 reproduces today's `sample * gain * ramp` exactly.
+- **Crossfade is an overlap of the loop with itself.** During the last `X = loop_crossfade_frames` frames of each pass, the tail is blended equal-power with the first `X` frames of the loop, and the next pass resumes at `loop_start + X`. So a looping cycle is `loop length − X` frames long.
+  - It needs no material before the loop point, so it works when the loop starts at the sample's first frame.
+  - It is why the decision bounds `X` to half the loop.
+  - The first pass still starts at the trim start.
 - **Frame units.** Every envelope, ramp and end-fade length is counted in engine output frames at the fixed 48 kHz rate the engine, Bank and Content codec accept (`prepared_sample_bank.cpp:462`). The 2 ms floor is therefore always 96 frames, whatever the source rate.
   - The cooker converts `attack_ms`/`release_ms` to 48 kHz output frames.
   - Source-frame fields (`loop_start_frame`, `loop_crossfade_frames`) are rescaled from the source rate to 48 kHz exactly as trim is. The floor is applied after that rescale.
@@ -187,29 +191,34 @@ Every later PR declares `Documentation impact: required`:
 
 ## Version Management
 
-Canonical policy: `docs/governance/version-management.md`. All targets below are expected values, based on live `origin/main` at `3105cebb` (Product Build `1.0.66.0`).
+Canonical policy: `docs/governance/version-management.md`. All targets below are expected values. They were revised on 2026-10-01 against live `origin/main` at `722ccb80` (Product Build `2.0.70.0`).
 
+- **Why the table was revised.**
+  - #1700 closed Milestone 1 at `1.0.66.0`. This train, Web Creator 4-Zone Workflow (#1207 / #1658), is `2.0.*.*`.
+  - PR 1 merged as #1697: `lmdj.project.v5` `5.1.0`, Product Build `2.0.70.0`.
+  - #1699 consumed several Module identities this table had predicted for the #1666 settle.
 - **Before writing any identity:**
   - re-read merged `origin/main`, `products/lmdj/version.json` and every affected manifest;
   - prove the Build is unoccupied the way #761 did;
-  - revise this table if any identity was consumed.
+  - revise this table if any identity was consumed;
+  - re-check `products/lmdj/version.json` on `origin/main` immediately before merging. Another Build landed twice while #1697 was in verification.
 
 Each allocating PR writes exactly one column of the table below. Each Build is proved unoccupied separately, at that PR's own tip.
 
-| Identity | Baseline | PR 1 (5.1.0 cut) | PR 4 (#1666 settle + 5.2.0 cut) | PR 7 (#1667 settle) | Reason |
-| --- | --- | --- | --- | --- | --- |
-| Product Build | `1.0.66.0` | next free BUILD | next free BUILD | next free BUILD | Contract and Module identity changes |
-| `lmdj.project.v5` | `5.0.0` | `5.1.0` | `5.2.0` | unchanged | Backward-compatible optional fields, Contract MINOR (§7; precedent `lmdj.project.v4` `4.1.0`) |
-| `lmdj.runtime-content.v1` | `1.0.0` | unchanged | unchanged | unchanged | Encoder refuses non-neutral DSP |
-| `authoring-domain` | `4.1.0` | unchanged | `4.2.0` | `4.3.0` | New playback fields and refusals |
-| `project-io` | `4.2.1` | unchanged | `4.3.0` | `4.4.0` | Optional-key read/write |
-| `project-cooker` | `1.2.0` | unchanged | `1.3.0` | `1.4.0` | `ResolvedVoiceDsp` resolution |
-| `audio-runtime` | `5.0.0` | unchanged | `5.1.0` | `5.2.0` | Shared kernel and new stages |
-| `application-facade` | `6.2.1` | unchanged | `6.3.0` | `6.4.0` | Typed surface accepts new fields |
-| `web-runtime-platform` | `5.3.3` | unchanged | `5.4.0` | `5.5.0` | Transport of new fields |
-| `creator-web` | `4.5.1` | unchanged | `4.6.0` | `4.7.0` | New editor controls |
-| `core-mcp` | `3.4.3` | unchanged | `3.5.0` | `3.6.0` | Tool schema accepts new fields |
-| `core-cli`, `native-host`, `web-runtime-host`, `cardputer-host` | current | unchanged | dependency-propagation PATCH | dependency-propagation PATCH | Exact dependency pins only |
+| Identity | Baseline (`2.0.70.0`) | PR 4 (#1666 settle + 5.2.0 cut) | PR 7 (#1667 settle) | Reason |
+| --- | --- | --- | --- | --- |
+| Product Build | `2.0.70.0` | next free `2.0.*` BUILD | next free `2.0.*` BUILD | Contract and Module identity changes |
+| `lmdj.project.v5` | `5.1.0` | `5.2.0` | unchanged | Backward-compatible optional fields, Contract MINOR (§7; precedent `lmdj.project.v4` `4.1.0`) |
+| `lmdj.runtime-content.v1` | `1.0.0` | unchanged | unchanged | Encoder refuses non-neutral DSP |
+| `authoring-domain` | `4.2.0` | `4.3.0` | `4.4.0` | New playback fields and refusals |
+| `project-io` | `5.0.0` | `5.1.0` | `5.2.0` | Optional-key read/write |
+| `project-cooker` | `1.2.1` | `1.3.0` | `1.4.0` | `ResolvedVoiceDsp` resolution |
+| `audio-runtime` | `5.0.1` | `5.1.0` | `5.2.0` | Shared kernel and new stages |
+| `application-facade` | `6.3.0` | `6.4.0` | `6.5.0` | Typed surface accepts new fields |
+| `web-runtime-platform` | `5.4.0` | `5.5.0` | `5.6.0` | Transport of new fields |
+| `creator-web` | `4.6.0` | `4.7.0` | `4.8.0` | New editor controls |
+| `core-mcp` | `3.4.4` | `3.5.0` | `3.6.0` | Tool schema accepts new fields |
+| `core-cli`, `native-host`, `web-runtime-host`, `cardputer-host` | current | dependency-propagation PATCH | dependency-propagation PATCH | Exact dependency pins only |
 
 - **Compatibility.**
   - A `5.0.0` reader rejects a Project that uses a new key, by design.
@@ -217,7 +226,7 @@ Each allocating PR writes exactly one column of the table below. Each Build is p
   - No migration is needed, because every legal `5.0.0` file is a legal `5.1.0`/`5.2.0` file.
 - **Regeneration.** Regenerate `products/lmdj/assembly.lock.json`, `products/lmdj/src/compiled_assembly.cpp` and `products/lmdj/generated/web-runtime-identity.{json,mjs}` only with their tools, never by hand.
 - **Snapshot.** Freeze each allocated Build with `scripts/docs-site.sh version <BUILD> canary`, in the same PR as a separate commit.
-- **Tag.** The future tag would be `lmdj-v1.0.<BUILD>.0`. No tag, Release, publication, deployment or Channel promotion is authorized by this plan.
+- **Tag.** The future tag would be `lmdj-v2.0.<BUILD>.0`. No tag, Release, publication, deployment or Channel promotion is authorized by this plan.
 - **Rollback.** Ship a forward corrective Build that keeps the `5.1.0`/`5.2.0` readers. Never downgrade Project Truth or overwrite a workspace with an older artifact.
 
 ## Pull Requests
