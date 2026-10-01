@@ -119,7 +119,9 @@ void mono_kernel_voice_matches_between_realtime_and_offline() {
   std::vector<float> left(kSourceFrames + 512);
   std::vector<float> right(kSourceFrames + 512);
   for (std::size_t done = 0; done < left.size(); done += 128) {
-    engine.render(left.data() + done, right.data() + done, 128);
+    const auto frames =
+        static_cast<std::uint32_t>(std::min<std::size_t>(128, left.size() - done));
+    engine.render(left.data() + done, right.data() + done, frames);
   }
 
   std::size_t compared = 0;
