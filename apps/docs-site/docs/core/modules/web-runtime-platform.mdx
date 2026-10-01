@@ -134,3 +134,7 @@ stops the Pad and clears preview, delegates `pad.delete` to the Facade, removes
 cancelled import handles and publishes the new Bank through exact-generation
 acknowledgement. Responses retain the committed revision separately from Runtime
 publication failure. Other Pad imports and their revision guards remain intact.
+
+## 分 Pad Sound Set 获取
+
+Host 支持 `soundset.catalog.describe`、`soundset.slot.acquire` 与 `soundset.slot.install`。资产获取只解析 Core 给出的 object_kind/sha256 地址，使用独立获取队列，网络等待不占用 Project mutation queue；完整 Set 浏览和 slot 获取共享该队列，避免 pending/supply 交错。安装仍串行提交；Runtime publication 由现有 snapshot 路径完成。

@@ -55,6 +55,9 @@ const API = [
   "listSequenceRecovery",
   "auditionSoundSet",
   "listSoundSets",
+  "describeSoundSetCatalog",
+  "acquireSoundSetSlot",
+  "installSoundSetSlot",
   "openProject",
   "performanceMasterCaptureStatus",
   "movePatternSlot",
@@ -6459,4 +6462,63 @@ test("Pad delete rejects invalid slot and request shape", async () => {
     {slot: 0, expectedRevision: 0, extra: true}]) {
     await assert.rejects(session.deletePad(request), TypeError);
   }
+});
+
+
+test("slot acquisition supplies only Core addresses without holding the Project action queue", async () => {
+  let releaseObject;
+  const objectReady = new Promise(resolve => {releaseObject = resolve;});
+  let requested;
+  let supplied = false;
+  const catalog = {readIndex: async () => new Uint8Array(4),
+    readObject: async object => {requested = object; await objectReady; return new Uint8Array(8);}};
+  const {session} = fixture({soundsetCatalog: catalog, send(envelope) {
+    const operation = envelope.operation;
+    if (operation === "pad.delete") return success(envelope, {committed_revision: 1, runtime_revision: 1, runtime_published: true});
+    if (operation === "soundset.catalog.index") return success(envelope, {staged: true});
+    if (operation === "soundset.catalog.pending") return success(envelope, {
+      objects: [{object_kind: "blob", sha256: BLOB_SHA}], index: false});
+    if (operation === "soundset.catalog.supply") {supplied = true; return success(envelope, {staged: true});}
+    if (operation === "soundset.slot.acquire") {
+      if (!supplied) {const error = new Error("object missing"); error.code = "IO_ERROR";
+        // Actual Web normalization removes internal reason strings.
+        error.details = {}; throw error;}
+      return success(envelope, {set_id: SET_ID, version: "1.0.0", manifest_sha256: MANIFEST_SHA,
+        slot_index: 3, slots: Array.from({length: 16}, (_, slot) => slot === 3 ? {
+          slot, occupied: true, role: "snare", name: "Snare", artifact: {sha256: BLOB_SHA, byte_length: 8, media_type: "audio/wav"},
+          audio: {sample_rate: 48000, channels: 1, source_frames: 4, prepared_bytes: 16, prepared_frames: 4},
+        } : {slot, occupied: false, artifact: null})});
+    }
+    return success(envelope, defaultResult(operation));
+  }});
+  assert.equal(await session.start(), true);
+  const pending = session.acquireSoundSetSlot({setId: SET_ID, version: "1.0.0", manifestSha256: MANIFEST_SHA, slotIndex: 3});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(requested, {object_kind: "blob", sha256: BLOB_SHA});
+  // A real authoring operation must finish while the asset request is blocked.
+  await session.deletePad({slot: 7, expectedRevision: 0});
+  releaseObject();
+  const acquired = await pending;
+  assert.equal(acquired.slot.slot, 3);
+  assert.equal(acquired.slot.artifact.sha256, BLOB_SHA);
+});
+
+test("slot installation never forwards a replacement policy", async () => {
+  const installs = [];
+  const {session} = fixture({soundsetCatalog: null, send(envelope) {
+    if (envelope.operation === "soundset.slot.install") {
+      installs.push(envelope.payload);
+      return success(envelope, {bank_id: 0, set_id: SET_ID, version: "1.0.0", manifest_sha256: MANIFEST_SHA,
+        installed: [{slot_index: 3, pad: 3}], collisions: [], kept: [], project_revision: 1, replayed: false});
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  assert.equal(await session.start(), true);
+  const request = {setId: SET_ID, version: "1.0.0", manifestSha256: MANIFEST_SHA,
+    bankId: 0, slotIndex: 3, commandId: "00000000-0000-4000-8000-000000000941", expectedRevision: 0};
+  const receipt = await session.installSoundSetSlot(request);
+  assert.deepEqual(receipt.installed, [{slotIndex: 3, pad: 3}]);
+  assert.equal(installs[0].slot_index, 3);
+  await assert.rejects(session.installSoundSetSlot({...request, occupiedPadPolicy: "replace"}), error => error.code === "INVALID_ARGUMENT");
+  assert.equal(installs.length, 1);
 });

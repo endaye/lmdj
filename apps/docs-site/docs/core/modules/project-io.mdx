@@ -214,3 +214,7 @@ so deletion needs no new transaction dialect. A changed binding/playback is one
 Undo restores the complete Pad contents, Redo clears them again, and both preserve
 Pattern events and retained Asset bytes. Revision and writer/journal admission
 still run at the durable boundary.
+
+## 分 Pad Sound Set 获取
+
+Sound Set 的 `acquire_slot` 校验完整原始 manifest、许可、总字节声明与所有 descriptor，仅获取指定槽的 Artifact，并在独立不可变 slot cache 原子发布。该缓存不出现在完整 Set 的 list/read 中；缓存重开仍校验内容哈希。`install_soundset` 的空目标前置条件在 writer lease 内、精确 receipt 重放识别后检查，拒绝覆盖已有素材。
