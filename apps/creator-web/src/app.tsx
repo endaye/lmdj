@@ -1,3 +1,4 @@
+import {SystemSurface, ProviderSettings} from "./components/system_surface";
 import {CREATOR_DEFAULT_SOUND_SET} from "../../../products/lmdj/creator-defaults.mjs";
 import {claimDefaultSeed, readDefaultSeed, type DefaultSeed} from "./state/default_seed";
 import {createDefaultSeedController} from "./runtime/default_seed_controller";
@@ -290,6 +291,8 @@ function Workspace({
   const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
   const [showLocalProjects, setShowLocalProjects] = useState(false);
   const [activeMode, setActiveMode] = useState<CreatorMode>("project");
+  const [systemOpen, setSystemOpen] = useState(false);
+  const systemEntry = useRef<HTMLButtonElement>(null);
   const [inputControllerEpoch, setInputControllerEpoch] = useState(0);
   const [inputControllerRevision, setInputControllerRevision] = useState(0);
   const [historyBusy, setHistoryBusy] = useState(false);
@@ -1792,6 +1795,7 @@ function Workspace({
     setActiveMode(mode);
   };
   const selectMode = (mode: CreatorMode) => {
+    setSystemOpen(false);
     inputController.current?.clearPressed();
     // Normal navigation never stops the global Pattern transport; only the
     // separately owned performance recording leaves with its mode.
@@ -1846,43 +1850,6 @@ function Workspace({
 
   return (
     <div className="hardware-workspace">
-      {padCaptureState !== null && (
-        <section aria-label="Pad recording">
-          <label>Pad recording source
-            <select aria-label="Pad recording source" value={padCaptureState.source}
-              disabled={padCaptureState.phase !== "idle"}
-              onChange={event => {
-                const source = event.currentTarget.value as PadCaptureSource;
-                padCapture.current?.setSource(source);
-                try {localStorage.setItem("lmdj.creator.pad-capture-source.v1", source);} catch {}
-              }}>
-              <option value="microphone">Microphone</option>
-              <option value="master">Internal playback</option>
-            </select>
-          </label>
-          <output role="status">{padCaptureState.phase}{padCaptureState.target === null ? "" :
-            ` · Pad ${padCaptureState.target.slot + 1}`} · {(padCaptureState.frames / 48_000).toFixed(2)} s</output>
-          {padCaptureState.message !== null && <p role="status">{padCaptureState.message}</p>}
-          {padCaptureState.phase === "review" && <>
-            <button type="button" onClick={() => {void padCapture.current?.save();}}>Save Pad recording</button>
-            <button type="button" onClick={() => padCapture.current?.discard()}>Discard Pad recording</button>
-          </>}
-        </section>
-      )}
-      {defaultSeedError !== null && <p role="status">{defaultSeedError}</p>}
-      {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "failed") &&
-        <button type="button" onClick={() => {defaultSeed.slots.forEach((slot, index) => {
-          if (slot.phase === "failed") void defaultSeedController.current?.retry(index);
-        });}}>Retry default sounds</button>}
-      {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "saved-unavailable") &&
-        <div><p role="status">Sounds saved; prepare playback to use them.</p>
-          <button type="button" onClick={() => {
-            const project = stateRef.current.project.current;
-            if (project === null || !isSampleSession(session)) return;
-            void retryPrepareJourney(session, project.patternId).then(
-              publication => defaultSeedController.current?.acceptPublication(publication),
-              error => reportFailure("Prepare default sounds", error));
-          }}>Prepare default sounds</button></div>}
         <AuthoringHistoryControls
           session={session}
           projectId={state.project.current?.projectId ?? null}
@@ -1970,7 +1937,64 @@ function Workspace({
           pads={padSurface}
           touchWorkspace={
             <>
-              <section className="touch-system" aria-label="System">
+      {padCaptureState !== null && (
+        <section aria-label="Pad recording">
+          <label>Pad recording source
+            <select aria-label="Pad recording source" value={padCaptureState.source}
+              disabled={padCaptureState.phase !== "idle"}
+              onChange={event => {
+                const source = event.currentTarget.value as PadCaptureSource;
+                padCapture.current?.setSource(source);
+                try {localStorage.setItem("lmdj.creator.pad-capture-source.v1", source);} catch {}
+              }}>
+              <option value="microphone">Microphone</option>
+              <option value="master">Internal playback</option>
+            </select>
+          </label>
+          <output role="status">{padCaptureState.phase}{padCaptureState.target === null ? "" :
+            ` · Pad ${padCaptureState.target.slot + 1}`} · {(padCaptureState.frames / 48_000).toFixed(2)} s</output>
+          {padCaptureState.message !== null && <p role="status">{padCaptureState.message}</p>}
+          {padCaptureState.phase === "review" && <>
+            <button type="button" onClick={() => {void padCapture.current?.save();}}>Save Pad recording</button>
+            <button type="button" onClick={() => padCapture.current?.discard()}>Discard Pad recording</button>
+          </>}
+        </section>
+      )}
+      {defaultSeedError !== null && <p role="status">{defaultSeedError}</p>}
+      {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "failed") &&
+        <button type="button" onClick={() => {defaultSeed.slots.forEach((slot, index) => {
+          if (slot.phase === "failed") void defaultSeedController.current?.retry(index);
+        });}}>Retry default sounds</button>}
+      {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "saved-unavailable") &&
+        <div><p role="status">Sounds saved; prepare playback to use them.</p>
+          <button type="button" onClick={() => {
+            const project = stateRef.current.project.current;
+            if (project === null || !isSampleSession(session)) return;
+            void retryPrepareJourney(session, project.patternId).then(
+              publication => defaultSeedController.current?.acceptPublication(publication),
+              error => reportFailure("Prepare default sounds", error));
+          }}>Prepare default sounds</button></div>}
+
+              <nav className="touch-navigation" aria-label="Workspace navigation">
+                <button type="button" ref={systemEntry} aria-expanded={systemOpen}
+                  onClick={() => {
+                    inputController.current?.clearPressed();
+                    void padCapture.current?.cancel();
+                    setSystemOpen(true);
+                  }}>System</button>
+                {activeMode === "project" && <button type="button" disabled={!soundSetEnabled}
+                  onClick={() => selectMode("soundset")}>Sound Sets</button>}
+                {activeMode === "sample" && <button type="button" disabled={!sliceEnabled}
+                  onClick={() => selectMode("slice")}>Slice</button>}
+                {(activeMode === "soundset" || activeMode === "slice") &&
+                  <button type="button" onClick={() => selectMode(activeMode === "slice" ? "sample" : "project")}>
+                    Back to {activeMode === "slice" ? "Sample" : "Project"}
+                  </button>}
+              </nav>
+              {systemOpen && <SystemSurface onBack={() => {
+                setSystemOpen(false); requestAnimationFrame(() => systemEntry.current?.focus());
+              }}>
+              <section className="touch-system" aria-label="Audio and MIDI settings">
                 <button
                   type="button"
                   disabled={state.audio.phase !== "running" ||
@@ -1997,27 +2021,11 @@ function Workspace({
                 >
                   Export report
                 </button>
-                <button
-                  type="button"
-                  disabled={!sliceEnabled}
-                  aria-label={sliceEnabled
-                    ? "Slice"
-                    : "Slice — open a Project with candidate support"}
-                  onClick={() => selectMode("slice")}
-                >
-                  Slice
-                </button>
-                <button
-                  type="button"
-                  disabled={!soundSetEnabled}
-                  aria-label={soundSetEnabled
-                    ? "Sound Sets"
-                    : "Sound Sets — wait for the Runtime to start"}
-                  onClick={() => selectMode("soundset")}
-                >
-                  Sound Sets
-                </button>
               </section>
+                {isCandidateSession(session) && <ProviderSettings session={session} />}
+                <DiagnosticsLog records={diagnostics} />
+              </SystemSurface>}
+              <div hidden={systemOpen}>
               {candidateAudio !== null && candidateAudio.projectId === state.project.current?.projectId &&
                 (candidateAudio.preparing || state.sample.savedRevision !== state.sample.runtimeRevision) ? (
                 <section className="sample-runtime-stale" aria-label="Project audio status">
@@ -2182,7 +2190,7 @@ function Workspace({
                 />
               </div>
               ) : null}
-              <DiagnosticsLog records={diagnostics} />
+              </div>
               <ErrorPanel
                 code={state.runtime.errorCode}
                 details={state.runtime.errorDetails}

@@ -1,3 +1,4 @@
+import {openCreatorSystem} from "./fixtures/creator_navigation.mjs";
 import {createHash} from "node:crypto";
 import {readFile} from "node:fs/promises";
 
@@ -175,8 +176,8 @@ for (const viewport of [
     }
     await expect(page.getByRole("button", {name: "Sample"})).toBeEnabled();
     await expect(page.getByRole("button", {name: "Sequence"})).toBeEnabled();
-    await expect(page.getByRole("button", {name: "Slice", exact: true})).toBeEnabled();
-    // Slice and Sound Sets live in the touch workspace's System group, not on
+    await expect(page.getByRole("button", {name: "Slice", exact: true})).toHaveCount(0);
+    // Project owns Sound Sets; Sample owns Slice. Both stay off
     // the physical column, so they are asserted enabled here and walked
     // separately from the rail below. Without this line a regression that
     // disables one would surface as an off-by-one tab-order diff -- the very
@@ -241,5 +242,6 @@ test("WebKit capability boundary remains unsupported and is not physical accepta
   });
   await expect(page.getByRole("alert")).toContainText("UNSUPPORTED_WEB_RUNTIME");
   await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
+  await openCreatorSystem(page);
   await expect(page.getByRole("button", {name: "Export report"})).toBeDisabled();
 });

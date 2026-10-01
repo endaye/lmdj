@@ -109,8 +109,7 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
   const sampleMode = screen.getByRole("button", {name: "Sample"});
   expect(sampleMode.hasAttribute("disabled")).toBe(false);
   expect(sampleMode.tabIndex).toBe(0);
-  expect(screen.getByRole("button", {name: "Slice — open a Project with candidate support"})
-    .hasAttribute("disabled")).toBe(true);
+  expect(screen.queryByRole("button", {name: "Slice"})).toBeNull();
   const sequenceMode = screen.getByRole("button", {
     name: "Sequence — open a playable Project first",
   });
@@ -850,6 +849,7 @@ async function candidatePlaybackFixture(runningAudio = false) {
   if (runningAudio) setRunningAudioFixture(session);
   render(<App initialState={ready} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await userEvent.click(screen.getByRole("button", {name: "Slice"}));
   await screen.findByRole("option", {name: /Source 1/});
   await userEvent.selectOptions(screen.getByRole("combobox", {name: "Slice source"}), sourceId);
@@ -901,7 +901,11 @@ test.each(["pointer", "keyboard", "midi"])("Candidate preparation blocks %s Pad 
     const original = Object.getOwnPropertyDescriptor(navigator, "requestMIDIAccess");
     Object.defineProperty(navigator, "requestMIDIAccess", {configurable: true,
       value: async () => ({inputs: new Map([["candidate-test", midiInput]])})});
-    try { await userEvent.click(screen.getByRole("button", {name: "Enable MIDI"})); }
+    try {
+      await userEvent.click(screen.getByRole("button", {name: "System"}));
+      await userEvent.click(screen.getByRole("button", {name: "Enable MIDI"}));
+      await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
+    }
     finally {
       if (original) Object.defineProperty(navigator, "requestMIDIAccess", original);
       else Reflect.deleteProperty(navigator, "requestMIDIAccess");
@@ -2296,8 +2300,12 @@ test("hardware Project keeps list/import/open, offers New Project in touch and o
   expect(within(touch).getByRole("button", {name: "Open local"})).toBeTruthy();
   expect(within(touch).getByRole("button", {name: "Import .lmdj"})).toBeTruthy();
   expect(within(touch).queryByRole("button", {name: "Activate audio"})).toBeNull();
+  expect(within(touch).queryByRole("button", {name: "Enable MIDI"})).toBeNull();
+  expect(within(touch).queryByRole("button", {name: "Export report"})).toBeNull();
+  await userEvent.click(within(touch).getByRole("button", {name: "System"}));
   expect(within(touch).getByRole("button", {name: "Enable MIDI"})).toBeTruthy();
   expect(within(touch).getByRole("button", {name: "Export report"})).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
   expect(within(touch).getByRole("button", {name: "New Project"})).toBeTruthy();
   expect(within(touch).queryByRole("button", {name: "Save As"})).toBeNull();
   expect(within(touch).queryByRole("button", {name: "Export project"})).toBeNull();
@@ -2398,7 +2406,10 @@ test("hardware Slice and Sound Sets stay in the touch workspace without extra ph
   const touch = screen.getByRole("region", {name: "Touch workspace"});
   expect(within(physical).queryByRole("button", {name: /^Slice/})).toBeNull();
   expect(within(physical).queryByRole("button", {name: /^Sound Sets/})).toBeNull();
+  expect(within(touch).queryByRole("button", {name: /Slice/})).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   expect(within(touch).getByRole("button", {name: /Slice/})).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
   expect(within(touch).getByRole("button", {name: /Sound Sets/})).toBeTruthy();
   expect(screen.getByTestId("hardware-console")).toBeTruthy();
 });
@@ -2574,6 +2585,7 @@ test("recovery refusal retains its full diagnostic envelope across mode navigati
   expect(apply).toHaveBeenCalledExactlyOnceWith({
     sessionId: "retained-session", destinationPatternId: null,
   });
+  await userEvent.click(screen.getByRole("button", {name: "System"}));
   await userEvent.click(screen.getByText("Developer diagnostics (1)"));
   const log = screen.getByRole("region", {name: "Developer diagnostics"});
   expect(within(log).getByText("Recover Sequence Pattern")).toBeTruthy();
@@ -2583,6 +2595,8 @@ test("recovery refusal retains its full diagnostic envelope across mode navigati
     .toContain('"reason": "sequence_admission_unresolved"');
   for (const mode of ["Sample", "Project", "Sequence"]) {
     await userEvent.click(screen.getByRole("button", {name: mode}));
+    await userEvent.click(screen.getByRole("button", {name: "System"}));
+    await userEvent.click(screen.getByText("Developer diagnostics (1)"));
     expect(within(screen.getByRole("region", {name: "Developer diagnostics"}))
       .getByText(message)).toBeTruthy();
   }
@@ -2706,4 +2720,25 @@ test("Delete waits for the selected Pad inspection to match the current Project 
   expect(remove.hasAttribute("disabled")).toBe(false);
   await userEvent.click(remove);
   await waitFor(() => expect(deletion).toHaveBeenCalledExactlyOnceWith({slot: 0, expectedRevision: 4}));
+});
+
+test("System preserves the creative page and playing transport, then restores entry focus", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const request = vi.fn(async () => {throw new Error("System must not command transport");});
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    requestPatternTransport: request, inspectPatternTransport: async () => engagedTransportStatus(),
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name:"Sequence"}));
+  await waitFor(() => expect(transportPhase()).toBe("playing"));
+  const entry = screen.getByRole("button", {name:"System"});
+  await userEvent.click(entry);
+  expect(screen.queryByRole("region", {name:"Sequence editor"})).toBeNull();
+  expect(screen.getByRole("button", {name:"Enable MIDI"})).toBeTruthy();
+  expect(transportPhase()).toBe("playing");expect(request).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", {name:"Back to music"}));
+  expect(screen.getByRole("region", {name:"Sequence editor"})).toBeTruthy();
+  await waitFor(() => expect(document.activeElement).toBe(entry));
+  expect(transportPhase()).toBe("playing");expect(request).not.toHaveBeenCalled();
 });

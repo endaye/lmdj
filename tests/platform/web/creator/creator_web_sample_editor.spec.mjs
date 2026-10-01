@@ -1,3 +1,4 @@
+import {clickCreatorSystemAction, openCreatorSystem} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
@@ -157,7 +158,7 @@ async function expectProjectRevision(page, expectedRevision) {
 
 async function downloadReport(page) {
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", {name: "Export report"}).click();
+  await clickCreatorSystemAction(page, "Export report");
   const download = await downloadPromise;
   return JSON.parse(await readFile(await download.path(), "utf8"));
 }
@@ -570,7 +571,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   expect(await page.evaluate(() => window.__sampleProofObservedResourceFailure)).toBe(true);
   await expectProjectRevision(page, 60);
 
-  await page.getByRole("button", {name: "Suspend audio"}).click();
+  await clickCreatorSystemAction(page, "Suspend audio");
   // An explicit Suspend publishes "Audio suspended" only after the Runtime has
   // committed the suspend, so the Activate gesture that follows is guaranteed
   // to be accepted. Both gestures own one independently bounded 30-second
@@ -701,6 +702,7 @@ test("Sample Editor WebKit capability boundary is explicit, private, and non-phy
   expect(publicText).not.toMatch(/HOST_PROTOCOL_MISMATCH|\/Users\/|file:\/\/|\.lmdj|\.wav/i);
   expect(await page.evaluate(() => window.lmdjWebRuntimeHost === undefined)).toBe(true);
   await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
+  await openCreatorSystem(page);
   await expect(page.getByRole("button", {name: "Export report"})).toBeDisabled();
 });
 
@@ -730,7 +732,7 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
   // Re-importing the original bundle is refused as DUPLICATE_ID: the local
   // copy of the same Project has newer changes. The refusal must present as
   // a recoverable situation, not as "Creator unavailable".
-  await page.getByRole("button", {name: "Suspend audio"}).click();
+  await clickCreatorSystemAction(page, "Suspend audio");
   await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });

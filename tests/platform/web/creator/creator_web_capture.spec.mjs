@@ -1,3 +1,4 @@
+import {clickCreatorSystemAction} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
@@ -24,7 +25,7 @@ const DENIED = "creator-capture-denied-chromium";
 // cannot verify a commit made from the Sample surface.
 async function expectProjectRevision(page, expectedRevision) {
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", {name: "Export report"}).click();
+  await clickCreatorSystemAction(page, "Export report");
   const report = JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
   expect(report.sample.project_revision).toBe(expectedRevision);
 }
@@ -35,11 +36,15 @@ async function report(page, options = {}) {
     // While the capture dialog is modal the rest of the shell is inert, so a
     // role query cannot see the button; a CSS locator still can, and a
     // programmatic click is exactly what `force` means here.
+    await page.getByTestId("touch-workspace").locator("button").filter({hasText: /^System$/})
+      .evaluate(element => element.click());
     await page.getByTestId("touch-workspace").locator("button")
       .filter({hasText: "Export report"})
       .evaluate((element) => element.click());
+    await page.getByTestId("touch-workspace").locator("button").filter({hasText: "Back to music"})
+      .evaluate(element => element.click());
   } else {
-    await page.getByRole("button", {name: "Export report"}).click();
+    await clickCreatorSystemAction(page, "Export report");
   }
   return JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
 }
