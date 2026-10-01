@@ -67,7 +67,7 @@ interface CreatorInputControllerCommonOptions {
   onEmptyPadPress?: (slot: number, key: object, source: RuntimeTriggerSource,
     activation: Promise<boolean> | null, waitForActivation: boolean) => boolean;
   onEmptyPadRelease?: (key: object) => void;
-  onEmptyPadCancel?: () => void;
+  onEmptyPadCancel?: (key?: object) => void;
   activateAudioForGesture?: (event: {isTrusted: boolean}) => Promise<boolean> | null;
   getActiveBank: () => Bank;
   dispatch: (action: CreatorAction) => void;
@@ -426,7 +426,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     pendingTouchWakes.get(gestureKey)?.(false);
     pendingTouchWakes.delete(gestureKey);
     if (captureGestures.delete(gestureKey)) {
-      options.onEmptyPadCancel?.();
+      options.onEmptyPadCancel?.(gestureKey);
       dispatch({type: "pad-released", slot});
       return;
     }

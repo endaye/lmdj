@@ -74,6 +74,44 @@ test("another recording owner refuses the press before acquiring any resource", 
   const f = fixture({canStart: () => false});
   expect(f.controller.press(target,{})).toBe(false);expect(f.start).not.toHaveBeenCalled();
 });
+test("a refused gesture cannot cancel the recording owner's take", async () => {
+  const f = fixture(); const owner = {}; const refused = {};
+  f.controller.press(target, owner); f.batch(); await settle();
+  expect(f.controller.press({...target, slot: 18}, refused)).toBe(false);
+  await f.controller.cancel(refused);
+  expect(f.controller.getState().phase).toBe("recording");
+  expect(f.stop).not.toHaveBeenCalled();
+  f.controller.release(owner); await settle();
+  expect(f.stop).toHaveBeenCalledOnce(); expect(f.commit).toHaveBeenCalledOnce();
+  expect(f.commit.mock.calls[0]?.[0]).toEqual(target);
+});
+test("a refused gesture cannot abort the starting owner's source", async () => {
+  let ready!: (handle: {stop(): Promise<void>}) => void;
+  let signal!: AbortSignal;
+  const f = fixture({start: (_source, _batch, _failed, ownedSignal) => {
+    signal = ownedSignal; return new Promise(resolve => {ready = resolve;});
+  }});
+  const owner = {}; f.controller.press(target, owner);
+  const cancelled = f.controller.cancel({});
+  expect(signal.aborted).toBe(false);
+  expect(f.controller.getState().phase).toBe("starting");
+  ready({stop: f.stop}); await cancelled; await settle();
+  await f.controller.cancel(owner);
+  expect(f.stop).toHaveBeenCalledOnce(); expect(f.commit).not.toHaveBeenCalled();
+});
+test("permission cancellation belongs to the gesture that requested it", async () => {
+  let granted!: () => void;
+  const f = fixture({microphoneGranted: () => false,
+    prepareMicrophone: () => new Promise(resolve => {granted = resolve;})});
+  const owner = {}; f.controller.press(target, owner);
+  await f.controller.cancel({});
+  expect(f.controller.getState().phase).toBe("permission");
+  await f.controller.cancel(owner);
+  expect(f.controller.getState().phase).toBe("idle");
+  granted(); await settle();
+  expect(f.controller.getState().message).not.toBe("Microphone ready. Press an empty Pad to record.");
+  expect(f.start).not.toHaveBeenCalled();
+});
 test("revision refusal preserves exact take and explicit retry", async () => {
   const f = fixture(); f.commit.mockRejectedValueOnce(new Error("Project changed"));
   const key = {};f.controller.press(target,key);f.batch();f.controller.release(key);await settle();

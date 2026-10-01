@@ -80,17 +80,24 @@ export function createPadCapture(deps: PadCaptureDeps, source: PadCaptureSource)
     },
     press(target: PadCaptureTarget, gesture: object) {
       if (state.phase !== "idle" || !deps.canStart(target)) return false;
+      owner = gesture;
       if (state.source === "microphone" && !deps.microphoneGranted()) {
         const token = ++generation;
         publish({phase: "permission", message: "Allow microphone access, then press an empty Pad again."});
         void deps.prepareMicrophone().then(() => {
-          if (token === generation) publish({phase: "idle", message: "Microphone ready. Press an empty Pad to record."});
+          if (token === generation) {
+            owner = null;
+            publish({phase: "idle", message: "Microphone ready. Press an empty Pad to record."});
+          }
         }, error => {
-          if (token === generation) publish({phase: "idle", message: error instanceof Error ? error.message : "Microphone unavailable."});
+          if (token === generation) {
+            owner = null;
+            publish({phase: "idle", message: error instanceof Error ? error.message : "Microphone unavailable."});
+          }
         });
         return true;
       }
-      owner = gesture; automatic = false;
+      automatic = false;
       buffer = new CaptureBuffer(state.source === "master" ? 2 : 1);
       publish({phase: "starting", target: {...target}, frames: 0, message: null});
       startupAbort = new AbortController();
@@ -112,8 +119,9 @@ export function createPadCapture(deps: PadCaptureDeps, source: PadCaptureSource)
       return true;
     },
     release(gesture: object) {if (owner === gesture) void seal(true);},
-    cancel() {
-      if (state.phase === "permission") {generation++; publish({phase: "idle"});}
+    cancel(gesture?: object) {
+      if (gesture !== undefined && owner !== gesture) return Promise.resolve();
+      if (state.phase === "permission") {generation++; owner = null; publish({phase: "idle"});}
       return seal(false, "Recording interrupted. Save or discard this take.");
     },
     save,

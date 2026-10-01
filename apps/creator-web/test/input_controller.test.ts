@@ -197,7 +197,7 @@ interface SampleFixtureOptions {
   onEmptyPadPress?: (slot: number, key: object, source: import("../src/runtime/runtime_types").RuntimeTriggerSource,
     activation: Promise<boolean> | null, waitForActivation: boolean) => boolean;
   onEmptyPadRelease?: (key: object) => void;
-  onEmptyPadCancel?: () => void;
+  onEmptyPadCancel?: (key?: object) => void;
   canUsePad?: (slot: number) => boolean;
   audioState?: "audio-suspended" | "running";
   windowTarget?: Window;
@@ -1949,5 +1949,24 @@ test("empty Pad capture consumes pointer release and cancellation without a file
   value.controller.pointerDown({...event,pointerId:78},3);
   value.controller.clearPressed();expect(cancels).toBe(1);
   expect(releases).toHaveLength(1);
+  value.controller.dispose();
+});
+
+test("a busy primary pointer cancellation carries its own key while lifecycle cancellation is global", () => {
+  const presses: object[] = []; const cancels: Array<object | undefined> = [];
+  const value = sampleFixture({isAssigned: () => false,
+    onEmptyPadPress: (_slot, key) => {presses.push(key); return true;},
+    onEmptyPadCancel: key => {cancels.push(key);}});
+  value.controller.keyDown({type: "keydown", code: "KeyQ", repeat: false, target: document.body});
+  const event = {type: "pointerdown", pointerType: "mouse", isPrimary: true,
+    button: 0, pointerId: 77, target: document.createElement("button")};
+  value.controller.pointerDown(event, 1);
+  expect(presses).toHaveLength(2);
+  value.controller.pointerCancel({...event, type: "pointercancel"}, 1);
+  expect(cancels).toEqual([presses[1]]);
+  expect(value.filePickIntents).toEqual([]);
+  expect(value.triggers).toEqual([]);
+  value.controller.clearPressed();
+  expect(cancels).toEqual([presses[1], undefined]);
   value.controller.dispose();
 });
