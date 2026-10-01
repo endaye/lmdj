@@ -526,7 +526,7 @@ async function importActivateAndPerform(page, scenario = "none") {
   return candidate;
 }
 
-async function openProjectSuccessor(context, url) {
+async function navigateSuccessor(context, url) {
   // Chromium may restore the crashed Project tab alongside about:blank.
   // Keep one successor page so that an unintended restored tab cannot acquire
   // the Project's writer while this recovery journey opens the same bundle.
@@ -540,6 +540,11 @@ async function openProjectSuccessor(context, url) {
   await installDependencyScenario(successor);
   await routeCandidateIdentity(successor);
   await successor.goto(url);
+  return successor;
+}
+
+async function openProjectSuccessor(context, url) {
+  const successor = await navigateSuccessor(context, url);
   await openLocalProject(successor);
   await activateAudio(successor);
   await openPerform(successor);
@@ -1312,6 +1317,42 @@ test("an active recording receives an empty-slot acknowledgement and interruptio
     .toContainText("sealed", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await expect(page.getByRole("button", {name: "Stop Performance"}))
     .toBeDisabled();
+});
+
+// #1726: an opened Project is remembered durably at once. Chromium commits
+// localStorage lazily and rate-limits it, so a crash within about a minute of
+// an import lost the write and the next boot reopened the boot-created Project.
+test("a crash just after an import reopens the imported Project at the next boot", async ({browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(240_000);
+  const profile = await mkdtemp(join(tmpdir(), "lmdj-perform-remembered-"));
+  let ownerProcess = null;
+  let successorProcess = null;
+  try {
+    ownerProcess = await launchCrashableCreatorContext(profile);
+    const ownerPage = ownerProcess.page;
+    const candidate = await openCandidate(ownerPage);
+    const candidateUrl = candidate.routed
+      ? `${candidate.origin}/index.html`
+      : ownerPage.url();
+    // Let the boot-created Project's write commit first: the import's write
+    // then falls in the rate-limited window in which #1726 lost it.
+    await ownerPage.waitForTimeout(6_000);
+    await importProject(ownerPage);
+    // An IndexedDB commit takes milliseconds; two seconds stays far inside
+    // the minute that a rate-limited localStorage commit could wait.
+    await ownerPage.waitForTimeout(2_000);
+    await ownerProcess.kill();
+    ownerProcess = null;
+
+    successorProcess = await launchCrashableCreatorContext(profile);
+    const successor = await navigateSuccessor(successorProcess.context, candidateUrl);
+    await waitForProjectReopen(successor, "00000000", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  } finally {
+    await ownerProcess?.kill().catch(() => {});
+    await successorProcess?.kill().catch(() => {});
+    await removeProfile(profile);
+  }
 });
 
 test("owner process loss leaves one recoverable recording and no second capture owner", async ({browserName}) => {
