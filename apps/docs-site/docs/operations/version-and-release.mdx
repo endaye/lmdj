@@ -322,6 +322,9 @@ Release、签名资产、完整 notes 与冻结候选，并在前后重新认证
 run / attempt、成功的 preflight / deploy 与证据上传，并核对唯一 artifact 来源与摘要。
 复用受信本地 Host 校验器，匹配冻结的 tag、target、Build、Site、发布文件与 exact prior；
 返回前复查关联、库存和期限。recovery 记录不代替成功，未知或失败不重复部署或晋级。
+生产版本或路由变更不会同时到达所有边缘节点：promote 与 recovery 在变更后对稳定 URL 的
+精确字节校验在有界窗口内（90 秒）等待期望字节出现，从不接受其他内容；失败与恢复失败
+的底层原因都写入 run store 事件和保留的 adapter 日志。
 这些保留证据检查本身不证明当前生产别名或线上内容。Cloudflare `LiveDeploymentEffect`
 将它们与新鲜的 `LiveHostVerifier` 组合：复用 `cloudflare_host.py inspect` 的 deployment /
 route 解析器，固定 account / Worker API 只允许读取 deployments 和 subdomain，禁止写入、
