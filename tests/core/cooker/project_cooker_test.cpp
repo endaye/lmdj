@@ -88,7 +88,8 @@ using RuntimeSnapshotMemberTypes = decltype([] {
 }());
 
 using ResolvedPlaybackMemberTypes = decltype([] {
-  [[maybe_unused]] auto [start_frame, end_frame, trigger_mode, linear_gain, muted] =
+  [[maybe_unused]] auto [start_frame, end_frame, trigger_mode, linear_gain, muted,
+                         dsp] =
       ResolvedPlayback{0, 1, TriggerMode::one_shot, 1.0F, false};
   return std::tuple{
       std::type_identity<decltype(start_frame)>{},
@@ -96,11 +97,15 @@ using ResolvedPlaybackMemberTypes = decltype([] {
       std::type_identity<decltype(trigger_mode)>{},
       std::type_identity<decltype(linear_gain)>{},
       std::type_identity<decltype(muted)>{},
+      std::type_identity<decltype(dsp)>{},
   };
 }());
 
 static_assert(std::is_aggregate_v<RuntimeSnapshot>);
-static_assert(std::is_aggregate_v<ResolvedPlayback>);
+// ResolvedPlayback keeps a five-value constructor so existing positional
+// callers compile without partially initializing an aggregate under
+// -Wextra -Werror; it remains plain, trivially copyable data.
+static_assert(std::is_trivially_copyable_v<ResolvedPlayback>);
 static_assert(std::is_same_v<
               CookResult,
               Result<std::shared_ptr<const RuntimeSnapshot>>>);
@@ -129,7 +134,8 @@ static_assert(std::is_same_v<
                   std::type_identity<std::uint32_t>,
                   std::type_identity<TriggerMode>,
                   std::type_identity<float>,
-                  std::type_identity<bool>>>);
+                  std::type_identity<bool>,
+                  std::type_identity<lmdj::cooker::ResolvedVoiceDsp>>>);
 
 std::vector<std::byte> fixture_bytes(const std::string& name) {
   const auto path = std::filesystem::path{"tests/fixtures/audio"} / name;

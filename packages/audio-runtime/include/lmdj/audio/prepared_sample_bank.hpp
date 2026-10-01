@@ -117,7 +117,8 @@ struct PreparedPatternEvent {
            playback.end_frame == other.playback.end_frame &&
            playback.trigger_mode == other.playback.trigger_mode &&
            playback.linear_gain == other.playback.linear_gain &&
-           playback.muted == other.playback.muted;
+           playback.muted == other.playback.muted &&
+           playback.dsp == other.playback.dsp;
   }
 };
 

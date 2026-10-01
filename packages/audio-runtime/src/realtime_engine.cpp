@@ -153,14 +153,18 @@ bool valid_playback(
   return playback.start_frame < playback.end_frame &&
          playback.end_frame <= frame_count &&
          valid_trigger_mode(playback.trigger_mode) &&
-         std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F;
+         std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F &&
+         // The voice DSP kernel is not wired yet; until it is, a non-neutral
+         // block is refused rather than rendered as if it were neutral.
+         cooker::is_neutral(playback.dsp);
 }
 
 bool is_default_playback_sentinel(
     const cooker::ResolvedPlayback& playback) noexcept {
   return playback.start_frame == 0 && playback.end_frame == 0 &&
          playback.trigger_mode == domain::TriggerMode::one_shot &&
-         playback.linear_gain == 0.0F && !playback.muted;
+         playback.linear_gain == 0.0F && !playback.muted &&
+         cooker::is_neutral(playback.dsp);
 }
 
 bool is_looping(domain::TriggerMode mode) noexcept {

@@ -203,7 +203,10 @@ foundation::Result<OfflineRenderResult> render_offline(
         playback.end_frame > source_frames ||
         !valid_trigger_mode(playback.trigger_mode) ||
         !std::isfinite(playback.linear_gain) ||
-        playback.linear_gain < 0.0F) {
+        playback.linear_gain < 0.0F ||
+        // Offline rendering of the voice DSP kernel is not wired yet; until it
+        // is, a non-neutral block is refused rather than rendered as neutral.
+        !cooker::is_neutral(playback.dsp)) {
       return invalid_request("offline render Pad playback is invalid");
     }
     if (playback.muted) {

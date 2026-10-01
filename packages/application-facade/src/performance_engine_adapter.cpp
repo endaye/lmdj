@@ -66,7 +66,10 @@ bool valid_playback(const cooker::ResolvedPlayback& playback,
   return playback.start_frame < playback.end_frame &&
          playback.end_frame <= frame_count &&
          valid_trigger_mode(playback.trigger_mode) &&
-         std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F;
+         std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F &&
+         // Replay carries the voice DSP block once the engine renders it; until
+         // then a non-neutral block is refused rather than replayed as neutral.
+         cooker::is_neutral(playback.dsp);
 }
 
 class EnginePerformanceClock final : public PerformanceClock {
