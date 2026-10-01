@@ -72,7 +72,7 @@ const undoDepth = async (page) => (await rawRequest(page, "history.inspect")).un
 
 async function downloadReport(page) {
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", {name: "Export report"}).click();
+  await clickCreatorSystemAction(page, "Export report");
   return JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
 }
 
@@ -161,6 +161,12 @@ test("a second tab takes over the open Project and the first takes it back", asy
   const secondWrite = await projectTruth(second);
   expect(secondWrite.banks[0].pads[0].asset_id).toBeNull();
   expect(secondWrite.assets).toEqual(holderWrite.assets);
+
+  // Keep main's inactive-audio Delete leg, then make the original suspended
+  // handoff precondition real with a trusted activation gesture. This is an
+  // empty Project, so the helper uses the explicit MIDI permission click.
+  await wakeAudioWithPad(second);
+  expect(await projectTruth(second)).toEqual(secondWrite);
 
   // Leg 6 (taken back): once the new holder is suspended, the first tab's
   // Continue here takes the Project back. It reopens the second tab's write

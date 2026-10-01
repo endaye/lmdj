@@ -8,6 +8,15 @@ import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 const root = resolve(import.meta.dirname, "../../../../products/lmdj/assets/default-kit");
 const upstreamFile = process.env.LMDJ_SOUNDSET_CATALOG_UPSTREAM_FILE;
 
+async function projectIdentity(page) {
+  const response = await page.evaluate(() => window.lmdjWebRuntimeHost.transport.send({
+    protocol_version: 1, request_id: crypto.randomUUID(), operation: "project.inspect", payload: {},
+  }));
+  expect(response, JSON.stringify(response)).toHaveProperty("ok", true);
+  expect(response.result.project.project_id).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/);
+  return response.result.project.project_id;
+}
+
 test("default Bank A plays a verified first slot while the next object waits, and never seeds manual Projects", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(180_000);
@@ -65,18 +74,26 @@ test("default Bank A plays a verified first slot while the next object waits, an
     release();
     await expect(page.getByRole("button", {name:/^Pad A16 — assigned/})).toBeEnabled({timeout:120_000});
     expect(new Set(blobs).size).toBe(16);
-    const ownedId = await page.evaluate(() => localStorage.getItem("lmdj.creator.last-project.v1"));
+    const ownedId = await projectIdentity(page);
     await page.reload();
     await waitForBootProject(page);
     await expect(page.getByRole("button", {name:/^Pad A16 — assigned/})).toBeEnabled({timeout:60_000});
+    expect(await projectIdentity(page)).toBe(ownedId);
     expect(blobs).toHaveLength(16);
     await page.getByRole("button", {name:"Project",exact:true}).click();
     await page.getByRole("button", {name:"New Project",exact:true}).click();
     await waitForBootProject(page);
     await expect(page.getByRole("button", {name:/^Pad A1 — empty/})).toBeVisible();
-    const manualId = await page.evaluate(() => localStorage.getItem("lmdj.creator.last-project.v1"));
+    const manualId = await projectIdentity(page);
     expect(manualId).not.toBe(ownedId);
     expect(JSON.parse(await page.evaluate(() => localStorage.getItem("lmdj.creator.default-seed.v1"))).projectId).toBe(ownedId);
+    expect(blobs).toHaveLength(16);
+    // The native identity, rather than a volatile legacy cache, owns the
+    // remembered Project. Reload the manual Project and assert its far side.
+    await page.reload();
+    await waitForBootProject(page);
+    expect(await projectIdentity(page)).toBe(manualId);
+    await expect(page.getByRole("button", {name:/^Pad A1 — empty/})).toBeVisible();
     expect(blobs).toHaveLength(16);
   } finally {
     release(); await writeFile(upstreamFile, "");
