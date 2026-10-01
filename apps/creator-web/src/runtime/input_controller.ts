@@ -30,8 +30,9 @@ const SAMPLE_TRIGGER_MODES = new Set<SampleTriggerMode>([
 ]);
 interface PointerInput {
   isTrusted?: boolean;
-  nativeEvent?: {isTrusted: boolean};
+  nativeEvent?: {isTrusted: boolean; type?: string; pointerType?: string};
   type?: string;
+  pointerType?: string;
   isPrimary?: boolean;
   button?: number;
   pointerId?: number;
@@ -44,6 +45,7 @@ interface KeyboardInput {
   isTrusted?: boolean;
   nativeEvent?: {isTrusted: boolean};
   code?: string;
+  type?: string;
   repeat?: boolean;
   target?: EventTarget | null;
 }
@@ -110,6 +112,7 @@ interface AdmissionRecord {
 
 interface SampleGestureToken {
   released: boolean;
+  gestureKey: object;
 }
 
 function inputErrorAction(error: unknown): CreatorAction {
@@ -165,12 +168,16 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   const performanceGestureIds = new Map<object, string>();
   let sampleTriggerTail: Promise<void> | null = null;
   let disposed = false;
-  let inputEvent: {isTrusted: boolean} | null = null;
+  let inputEvent: {isTrusted: boolean; type?: string; pointerType?: string} | null = null;
   let inputGeneration = 0;
+  const pendingTouchWakes = new Map<object, (ready: boolean) => void>();
 
   function withInputEvent<T>(event: PointerInput | KeyboardInput, action: () => T): T {
     const previous = inputEvent;
-    inputEvent = event.nativeEvent ?? {isTrusted: event.isTrusted === true};
+    inputEvent = event.nativeEvent ?? {isTrusted: event.isTrusted === true,
+      ...(event.type === undefined ? {} : {type: event.type}),
+      ...("pointerType" in event && event.pointerType !== undefined
+        ? {pointerType: event.pointerType} : {})};
     try { return action(); } finally { inputEvent = previous; }
   }
 
@@ -349,10 +356,23 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     source: RuntimeTriggerSource,
     gestureKey: object,
   ) {
+    const wake = pendingTouchWakes.get(gestureKey);
+    if (wake !== undefined) {
+      pendingTouchWakes.delete(gestureKey);
+      // Non-mouse pointerup grants browser activation; invoke the wake inside
+      // this native event stack, before awaiting any Sample inspection.
+      if (inputEvent?.type === "pointerup" && inputEvent.isTrusted) {
+        try {
+          const activation = options.activateAudioForGesture?.(inputEvent) ?? null;
+          if (activation === null) wake(true);
+          else void activation.then(wake, () => wake(false));
+        } catch { wake(false); }
+      } else wake(false);
+    }
     const currentGesture = gesture(source, slot);
     observePerformanceRelease(gestureKey, slot, source);
     const mode = gestureModes.get(currentGesture);
-    const sampleToken = currentSampleToken(currentGesture);
+    const sampleToken = sampleGestureTokens.get(currentGesture)?.find(token => token.gestureKey === gestureKey);
     if (sampleOptions !== null) {
       if (runtimeAgnosticGestures.has(currentGesture)) {
         const wasActive = activeGestures.delete(currentGesture);
@@ -392,6 +412,8 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     source: RuntimeTriggerSource,
     gestureKey: object,
   ) {
+    pendingTouchWakes.get(gestureKey)?.(false);
+    pendingTouchWakes.delete(gestureKey);
     const currentGesture = gesture(source, slot);
     observePerformanceRelease(gestureKey, slot, source);
     const mode = gestureModes.get(currentGesture);
@@ -400,7 +422,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
         mode === "gate" || mode === "loop_gate");
     activeGestures.delete(currentGesture);
     gestureModes.delete(currentGesture);
-    const sampleToken = currentSampleToken(currentGesture);
+    const sampleToken = sampleGestureTokens.get(currentGesture)?.find(token => token.gestureKey === gestureKey);
     if (sampleToken !== undefined) {
       removeSampleToken(currentGesture, sampleToken);
     }
@@ -602,8 +624,13 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     const currentGesture = gesture(source, slot);
     // Called synchronously by the adapter, while the native musical event is
     // still active. Ignored keys and compatibility mouse events never get here.
-    const activation = inputEvent === null
-      ? null : options.activateAudioForGesture?.(inputEvent) ?? null;
+    const deferTouchWake = inputEvent?.type === "pointerdown" &&
+      inputEvent.pointerType !== undefined && inputEvent.pointerType !== "mouse" &&
+      options.activateAudioForGesture !== undefined &&
+      session.diagnostics().state === "audio-suspended";
+    const activation = deferTouchWake
+      ? new Promise<boolean>(resolve => pendingTouchWakes.set(gestureKey, resolve))
+      : inputEvent === null ? null : options.activateAudioForGesture?.(inputEvent) ?? null;
     const generation = inputGeneration;
     observePerformancePress(gestureKey, slot, velocity, source);
     const armedCaptureSlot = getArmedCaptureSlot();
@@ -643,7 +670,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     }
     if (!sampleOptions.isAvailable(slot)) return;
 
-    const sampleToken: SampleGestureToken = {released: false};
+    const sampleToken: SampleGestureToken = {released: false, gestureKey};
     activeGestures.add(currentGesture);
     addSampleToken(currentGesture, sampleToken);
     if (activation === null && !sampleOptions.isRuntimeCurrent()) {
@@ -659,7 +686,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       return;
     }
     const action = async () => {
-      if (disposed || !hasSampleToken(currentGesture, sampleToken)) {
+      if (disposed || generation !== inputGeneration || !hasSampleToken(currentGesture, sampleToken)) {
         return;
       }
       if (stopAcceptedLoopToggle(slot)) {
@@ -667,12 +694,6 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
         return;
       }
       try {
-        if (activation !== null && !(await activation)) {
-          if (clearSampleAttempt(currentGesture, sampleToken)) {
-            dispatch({type: "pad-released", slot});
-          }
-          return;
-        }
         if (disposed || generation !== inputGeneration ||
             !hasSampleToken(currentGesture, sampleToken)) return;
         const inspect = await inspectSampleJourney(sampleOptions.session, slot);
@@ -761,16 +782,33 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
         dispatch(inputErrorAction(error));
       }
     };
-    const journey = sampleTriggerTail === null
-      ? action()
-      : sampleTriggerTail.then(action);
-    const completion = journey.then(
-      () => undefined,
-      () => undefined,
-    );
-    sampleTriggerTail = completion;
-    void completion.then(() => {
-      if (sampleTriggerTail === completion) sampleTriggerTail = null;
+    const enqueue = () => {
+      const journey = sampleTriggerTail === null
+        ? action()
+        : sampleTriggerTail.then(action);
+      const completion = journey.then(
+        () => undefined,
+        () => undefined,
+      );
+      sampleTriggerTail = completion;
+      void completion.then(() => {
+        if (sampleTriggerTail === completion) sampleTriggerTail = null;
+      });
+    };
+    // A held cold touch must not occupy the Sample queue before it has a
+    // legal activation. Ready gestures retain serialized Sample inspection.
+    if (activation === null) enqueue();
+    else void activation.then(ready => {
+      if (ready) enqueue();
+      else if (clearSampleAttempt(currentGesture, sampleToken)) {
+        dispatch({type: "pad-released", slot});
+      }
+    }, error => {
+      if (disposed || !hasSampleToken(currentGesture, sampleToken)) return;
+      if (clearSampleAttempt(currentGesture, sampleToken)) {
+        dispatch({type: "pad-released", slot});
+      }
+      dispatch(inputErrorAction(error));
     });
   }
 
@@ -820,7 +858,9 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     withInputEvent(event, () => keyboard.keyDown(event));
   };
   const onKeyUp = (event: KeyboardEvent) => { keyboard.keyUp(event); };
-  const onPointerUp = (event: PointerEvent) => { pointer.releasePointer(event); };
+  const onPointerUp = (event: PointerEvent) => {
+    withInputEvent(event, () => pointer.releasePointer(event));
+  };
   const onPointerCancel = (event: PointerEvent) => { pointer.pointerCancel(event); };
   const onMouseUp = (event: MouseEvent) => { pointer.releaseMouse(event); };
   const onPageHide = (event: PageTransitionEvent) => {
@@ -843,6 +883,8 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   documentTarget.addEventListener("visibilitychange", onVisibility);
 
   function clearPressed() {
+    for (const wake of pendingTouchWakes.values()) wake(false);
+    pendingTouchWakes.clear();
     pointer.clearPressed();
     keyboard.clearPressed();
     midi.clearPressed();
@@ -863,6 +905,8 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
 
   function clearAdversePressed() {
     inputGeneration += 1;
+    for (const wake of pendingTouchWakes.values()) wake(false);
+    pendingTouchWakes.clear();
     options.onAdverseLifecycle?.();
     activeGestures.clear();
     gestureModes.clear();
@@ -910,10 +954,9 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
         : pointer.pointerDown(event, slot));
     },
     pointerUp(event: PointerInput, slot: number) {
-      if (event.type === "mouseup") {
-        return pointer.releaseMouse(event) || pointer.pointerUp(event, slot);
-      }
-      return pointer.releasePointer(event) || pointer.pointerUp(event, slot);
+      return withInputEvent(event, () => event.type === "mouseup"
+        ? pointer.releaseMouse(event) || pointer.pointerUp(event, slot)
+        : pointer.releasePointer(event) || pointer.pointerUp(event, slot));
     },
     pointerCancel(event: PointerInput, slot?: number) {
       const released = pointer.pointerCancel(event);

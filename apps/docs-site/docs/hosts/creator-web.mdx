@@ -277,3 +277,7 @@ The previous holder cannot undo afterwards.
 Automation covers the hand-over, refusal, take-back and reopen with two pages
 sharing one browser context. It is not real multi-window, frozen-tab or device
 lifecycle acceptance, and no listening acceptance is claimed.
+
+## 首次触屏唤醒
+
+首次触屏启动音频遵循浏览器用户激活事件：音频尚未启动时，touch／pen Pad 按下保留本次输入，在同一指针的真实 pointerup 中唤醒；在 Pad 外松手也沿用原手势身份。取消、失焦或销毁不唤醒、不迟发输入。一个手指仍按住 Pad 时，不阻塞另一个先松手的 Pad。首个 one-shot 松手后仍只演奏一次，已松手的 gate／loop gate 不迟发；音频已经运行时，触屏仍按下即演奏。该源路径和自动化验证不替代 iPad／Safari 实机听感验收。
