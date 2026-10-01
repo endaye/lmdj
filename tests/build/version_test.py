@@ -115,7 +115,7 @@ expected_modules = {
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "5.0.3",
+        "5.0.4",
         2,
         {"web-runtime-platform": "5.6.0"},
     ),

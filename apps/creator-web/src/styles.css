@@ -1,14 +1,80 @@
 :root {
   color: #f4f5f7;
-  background: #101216;
+  background: #0a0b09;
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   font-synthesis: none;
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 768px; }
+body {
+  margin: 0;
+  min-width: 768px;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  /* Dark-stage shell: a lime house-light pool behind the console, a faint
+     cool wash in the top corner, a floor vignette and a scanline grain.
+     Pure gradients keep the shell inside `style-src 'self'` with no image
+     or font fetches -- the distribution CSP admits neither. */
+  background:
+    radial-gradient(64% 52% at 50% 38%, rgb(221 244 120 / 7.5%), transparent 72%),
+    radial-gradient(42% 36% at 8% -4%, rgb(158 201 245 / 5%), transparent 70%),
+    radial-gradient(130% 95% at 50% 118%, rgb(0 0 0 / 60%), transparent 62%),
+    repeating-linear-gradient(0deg, rgb(255 255 255 / 1.5%) 0 1px, transparent 1px 3px),
+    #0a0b09;
+}
+#root {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
 button { font: inherit; }
 .eyebrow { color: #9da6b4; }
+
+.site-header {
+  flex: none;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-inline: clamp(1rem, 3vw, 2rem);
+  border-bottom: 1px solid rgb(221 244 120 / 12%);
+  background: rgb(10 11 9 / 72%);
+  backdrop-filter: blur(14px);
+}
+.site-brand {
+  display: flex;
+  align-items: baseline;
+  gap: .6rem;
+}
+.site-wordmark {
+  color: #f1f2e9;
+  font-size: .95rem;
+  font-weight: 800;
+  letter-spacing: .22em;
+}
+.site-product {
+  color: #ddf478;
+  font-size: .66rem;
+  letter-spacing: .3em;
+  text-transform: uppercase;
+}
+.site-footer {
+  flex: none;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-inline: clamp(1rem, 3vw, 2rem);
+  border-top: 1px solid rgb(255 255 255 / 6%);
+  color: #6f7887;
+  font-size: .72rem;
+  letter-spacing: .06em;
+  font-variant-numeric: tabular-nums;
+}
 
 button {
   min-height: 44px;
@@ -609,10 +675,13 @@ button:disabled { color: #737b87; }
 .candidate-surface .candidate-classification { display: flex; align-items: center; gap: .6rem; }
 
 .hardware-workspace {
-  min-height: 100dvh;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   color: #e8eadf;
-  background: #1c1e1a;
+  /* The stage light lives on <body>; the workspace stays transparent so the
+     console floats in it. */
+  background: transparent;
 }
 .hardware-console {
   position: relative;
@@ -621,6 +690,15 @@ button:disabled { color: #737b87; }
   margin: 24px auto;
   background: #22241f;
   flex-shrink: 0;
+  /* Stage elevation: the hardware_layout journey asserts this box is exactly
+     880×592, so the dressing is radius/outline/shadow only -- never border. */
+  border-radius: 14px;
+  outline: 1px solid rgb(221 244 120 / 9%);
+  box-shadow:
+    0 2px 6px rgb(0 0 0 / 50%),
+    0 28px 56px rgb(0 0 0 / 55%),
+    0 90px 160px rgb(0 0 0 / 45%),
+    0 64px 140px rgb(221 244 120 / 6%);
 }
 .hardware-console > [aria-label="Physical controls"] {
   position: absolute;
@@ -1137,7 +1215,17 @@ button:disabled { color: #737b87; }
 .diagnostics-log pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* Session-wide authoring history stays reachable across Creator modes. */
-.authoring-history { display: flex; align-items: center; gap: 1rem; padding: .6rem 1rem; }
+.authoring-history {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  width: 880px;
+  margin: 12px auto 0;
+  padding: .6rem 1rem;
+  border-radius: 10px;
+  outline: 1px solid rgb(221 244 120 / 7%);
+  background: rgb(34 36 31 / 55%);
+}
 .authoring-history [role="group"] { display: flex; gap: .4rem; flex-shrink: 0; }
 .authoring-history button { min-width: 4.5rem; min-height: 2.5rem; }
 .authoring-history [role="status"] { font-size: .8rem; opacity: .8; }
@@ -1146,3 +1234,27 @@ button:disabled { color: #737b87; }
 .touch-navigation { display: flex; flex-wrap: wrap; gap: .5rem; padding-block: .5rem; border-bottom: 1px solid var(--border, #777); }
 .system-surface header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .system-surface h2:focus { outline: 2px solid currentColor; outline-offset: 4px; }
+
+/* Narrow portrait stage: the console keeps its fixed 880×592 hardware
+   geometry, so a portrait phone shows the stage rotated 90°
+   counter-clockwise -- the device reads as landscape while the header and
+   footer stay upright. The media query only pins the stage; main.tsx
+   measures it and sets the workspace's width/height/transform, because CSS
+   cannot divide two lengths to derive the fit scale. The transform makes
+   the workspace the containing block for the fixed dialogs inside it, so
+   modals stay centred in the rotated stage. Landscape and desktop never
+   match: the hardware_layout journey's 768×600 leg must keep the unrotated,
+   scrollable stage it asserts. */
+@media (max-width: 959px) and (orientation: portrait) {
+  body { min-width: 0; }
+  #root {
+    display: grid;
+    place-items: start;
+    overflow: hidden;
+    min-height: 0;
+  }
+  .hardware-workspace {
+    flex: none;
+    overflow: hidden;
+  }
+}

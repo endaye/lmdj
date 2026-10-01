@@ -13,7 +13,7 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
   using lmdj::facade::CompiledProvider;
   return lmdj::facade::CompiledAssemblyCatalog{
       "lmdj",
-      "2.0.75.0",
+      "2.0.76.0",
       "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
       {
           CompiledComponent{"foundation", "0.4.0"},
@@ -31,7 +31,7 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
           CompiledComponent{"native-host", "3.4.6"},
           CompiledComponent{"cardputer-host", "1.0.6"},
           CompiledComponent{"web-runtime-host", "4.3.6"},
-          CompiledComponent{"creator-web", "5.0.3"},
+          CompiledComponent{"creator-web", "5.0.4"},
       },
       {
           CompiledComponent{"lmdj.project.v5", "5.1.0"},
