@@ -37,3 +37,17 @@ Product/Host identity debt is settled in P1 T8. Existing Contract IDs unchanged.
 Documentation impact: required
 Affected portal route: /hosts/creator-web/
 Reason: default content provenance and independent Catalog hosting.
+
+## Current-main conflict reconciliation
+
+Refresh against protected main and retain its current identities, immutable Build
+snapshot, takeover, IndexedDB and Sample playback source. The sole textual
+conflict is two independently appended Creator portal sections: keep both the
+asset provenance/service section and Continue in another tab. The reconciliation
+owns this plan and the Creator portal page, in addition to the unchanged imported
+main merge inventory; asset corpus, Worker and deployment behavior are unchanged.
+Run the full asset validator/Worker suite, scope ownership tests, and full portal
+check before committing. Recompute every selected batch input key on the clean
+new head; old-head proof is reusable only for identical lane inputs. A binary
+review collector refusal remains missing independent review, never approval.
+No asset deployment or Product Build is created by reconciliation.

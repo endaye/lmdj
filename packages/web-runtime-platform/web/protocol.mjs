@@ -211,15 +211,59 @@ function validSlot(value) {
   );
 }
 
+const PLAYBACK_BASE_KEYS = Object.freeze([
+  "trim_start_frame",
+  "trim_end_frame",
+  "trigger_mode",
+  "gain_millidb",
+  "muted",
+]);
+// lmdj.project.v5 5.1.0: optional on the wire; an omitted key is its default.
+const PLAYBACK_PARITY_KEYS = Object.freeze([
+  "reverse",
+  "pitch_cents",
+  "pan",
+  "loop_mode",
+  "loop_start_frame",
+  "loop_crossfade_frames",
+]);
+
+function hasPlaybackKeys(value) {
+  return (
+    isPlainObject(value) &&
+    PLAYBACK_BASE_KEYS.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every(
+      (key) =>
+        PLAYBACK_BASE_KEYS.includes(key) || PLAYBACK_PARITY_KEYS.includes(key),
+    )
+  );
+}
+
+function validPlaybackParity(value) {
+  return (
+    (value.reverse === undefined || typeof value.reverse === "boolean") &&
+    (value.pitch_cents === undefined ||
+      (Number.isSafeInteger(value.pitch_cents) &&
+        value.pitch_cents >= -2_400 &&
+        value.pitch_cents <= 2_400)) &&
+    (value.pan === undefined ||
+      (Number.isSafeInteger(value.pan) &&
+        value.pan >= -100 &&
+        value.pan <= 100)) &&
+    (value.loop_mode === undefined ||
+      ["forward", "ping_pong"].includes(value.loop_mode)) &&
+    (value.loop_start_frame === undefined ||
+      value.loop_start_frame === null ||
+      isUnsignedInteger(value.loop_start_frame)) &&
+    (value.loop_crossfade_frames === undefined ||
+      isUnsignedInteger(value.loop_crossfade_frames))
+  );
+}
+
 function validPlayback(value) {
   return (
-    hasExactKeys(value, [
-      "trim_start_frame",
-      "trim_end_frame",
-      "trigger_mode",
-      "gain_millidb",
-      "muted",
-    ]) &&
+    hasPlaybackKeys(value) &&
+    validPlaybackParity(value) &&
     isUnsignedInteger(value.trim_start_frame) &&
     (value.trim_end_frame === null ||
       (isUnsignedInteger(value.trim_end_frame) &&

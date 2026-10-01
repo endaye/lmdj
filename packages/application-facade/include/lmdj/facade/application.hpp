@@ -672,4 +672,10 @@ class Application {
   std::unique_ptr<Impl> impl_;
 };
 
+// Resolves a Sample preview's playback, including its voice DSP block, for the
+// inspected Pad without reading PCM, exactly as cooking would resolve it.
+foundation::Result<cooker::ResolvedPlayback> resolve_sample_preview_playback(
+    const SampleInspectResult& inspected,
+    const domain::PadPlayback& playback);
+
 }  // namespace lmdj::facade

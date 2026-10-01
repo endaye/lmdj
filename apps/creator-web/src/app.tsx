@@ -18,6 +18,11 @@ import {
 } from "./components/diagnostics_log";
 import {ErrorPanel} from "./components/error_panel";
 import {
+  TakenOverPanel,
+  TakeoverPending,
+  takeoverNote,
+} from "./components/takeover_panel";
+import {
   HardwareConsole,
   retireCreatorLayoutPreference,
 } from "./components/hardware_console";
@@ -50,6 +55,10 @@ import {
   type ProjectActionToken,
 } from "./runtime/project_actions";
 import type {CreatorBuildIdentity} from "./runtime/build_identity";
+import type {
+  ProjectTakeoverCoordinator,
+  TakeoverOutcome,
+} from "./runtime/project_takeover";
 import {
   createCreatorInputController,
   type PerformancePadInputEvent,
@@ -119,6 +128,7 @@ interface AppProps {
   initialState?: CreatorState;
   runtimeFactory?: RuntimeSessionFactory;
   buildIdentity?: CreatorBuildIdentity;
+  projectTakeover?: ProjectTakeoverCoordinator | null;
 }
 
 interface WorkspaceProps {
@@ -131,6 +141,8 @@ interface WorkspaceProps {
   runtimeHostState?: string;
   runtimeRecoveryProbeReady?: boolean;
   onRetryRuntime?: () => void;
+  onYieldRuntime?: () => Promise<boolean>;
+  projectTakeover?: ProjectTakeoverCoordinator | null;
   registerRuntimeShutdownBarrier?: (
     barrier: () => Promise<unknown>,
   ) => () => void;
@@ -265,6 +277,8 @@ function Workspace({
   runtimeHostState,
   runtimeRecoveryProbeReady,
   onRetryRuntime,
+  onYieldRuntime,
+  projectTakeover = null,
   registerRuntimeShutdownBarrier,
 }: WorkspaceProps) {
   const [state, dispatch] = useReducer(creatorReducer, initialState);
@@ -286,6 +300,11 @@ function Workspace({
   const [defaultSeedError, setDefaultSeedError] = useState<string | null>(null);
   const [listAttempt, setListAttempt] = useState(0);
   const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
+  // #1679: this tab handed its Project to another tab, a Continue here is
+  // waiting for the holder, and why the last one did not end here.
+  const [yieldedProject, setYieldedProject] = useState<string | null>(null);
+  const [takeoverRequest, setTakeoverRequest] = useState<AbortController | null>(null);
+  const [takeoverOutcome, setTakeoverOutcome] = useState<TakeoverOutcome | null>(null);
   const [showLocalProjects, setShowLocalProjects] = useState(false);
   const [activeMode, setActiveMode] = useState<CreatorMode>("project");
   const [inputControllerEpoch, setInputControllerEpoch] = useState(0);
@@ -293,6 +312,8 @@ function Workspace({
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyPerformPhase, setHistoryPerformPhase] = useState("idle");
   const [capturePhase, setCapturePhase] = useState<CapturePhase>("idle");
+  const capturePhaseRef = useRef(capturePhase);
+  capturePhaseRef.current = capturePhase;
   const [armedCaptureSlot, setArmedCaptureSlot] = useState<number | null>(null);
   const [captureStopRequest, setCaptureStopRequest] = useState(0);
   const [midi, setMidi] = useState<MidiStatus | null>(null);
@@ -368,7 +389,7 @@ function Workspace({
   useEffect(() => { retireCreatorLayoutPreference(); }, []);
   const currentProjectId = state.project.current?.projectId ?? null;
   useEffect(() => {
-    if (currentProjectId !== null) writeLastProjectId(currentProjectId);
+    if (currentProjectId !== null) void writeLastProjectId(currentProjectId);
   }, [currentProjectId]);
   // A refused Duplicate describes the Project it was asked to copy.
   const [duplicateRefusal, setDuplicateRefusal] = useState<string | null>(null);
@@ -644,8 +665,12 @@ function Workspace({
     if (runtimePhase !== "ready") return;
     let active = true;
     dispatch({type: "projects-listing"});
+    // Read alongside the listing, so the library never shows while it waits.
+    const remembered = readLastProjectId();
     void listLocalProjectsJourney(session).then(
       async (projects) => {
+        if (!active) return;
+        const lastId = await remembered;
         if (!active) return;
         setBusyRetry(null);
         dispatch({type: "projects-loaded", projects});
@@ -654,7 +679,6 @@ function Workspace({
           // Boot: reopen the Project this device used last, or start a new
           // one when none is stored. A remembered Project that is gone while
           // others exist leaves the user in the library to choose.
-          const lastId = readLastProjectId();
           const last = lastId === null ? undefined :
             projects.find(({projectId}) => projectId === lastId);
           if (last === undefined && projects.length > 0) return;
@@ -929,6 +953,56 @@ function Workspace({
 
   const finishProjectAction = (token: ProjectActionToken) => {
     if (ownsProjectAction(token)) projectActions.finish(token);
+  };
+
+  // Holder side of #1679. A takeover is a Project change in this tab, so it
+  // obeys the same guard as opening another Project, plus idle capture and
+  // transport; otherwise it is refused and nothing changes. Accepting closes
+  // this Runtime through the pagehide barrier, which commits every
+  // acknowledged write before the writer lease is released.
+  const heldProjectId = runtimePhase === "ready"
+    ? state.project.current?.projectId ?? null
+    : null;
+  useEffect(() => {
+    if (projectTakeover === null || !onYieldRuntime || heldProjectId === null) return;
+    return projectTakeover.serve(heldProjectId, () => {
+      const current = transportRef.current;
+      if (capturePhaseRef.current !== "idle" || selectTransportBusy(current) ||
+        selectTransportPlaying(current) || selectTransportRecording(current)) {
+        return {accepted: false};
+      }
+      const token = beginProjectAction("open");
+      if (!token) return {accepted: false};
+      setYieldedProject(heldProjectId);
+      setTakeoverOutcome(null);
+      resetInputForAdverseLifecycle();
+      dispatchTransport({type: "disengaged"});
+      const released = onYieldRuntime().finally(() => finishProjectAction(token));
+      return {accepted: true, released};
+    });
+    // The guard reads refs and the current action lane, so only a change of
+    // holder identity re-registers.
+  }, [projectTakeover, onYieldRuntime, heldProjectId]);
+
+  // A note explains why a Continue here did not end with this tab holding
+  // the Project, so it lasts until an open replaces the Project view. A fresh
+  // Runtime reaching ready is not enough: a take-back reopen can still be busy.
+  useEffect(() => {
+    setTakeoverOutcome(null);
+  }, [state.project.current]);
+
+  // Requester side: ask the holder, then open as usual. Only a refusal or a
+  // cancel skips the open; any other outcome may have freed the writer.
+  const continueHere = async (projectId: string, open: () => unknown) => {
+    if (projectTakeover === null || takeoverRequest !== null) return;
+    const abort = new AbortController();
+    setTakeoverRequest(abort);
+    setTakeoverOutcome(null);
+    const outcome = await projectTakeover.request(projectId, {signal: abort.signal});
+    setTakeoverRequest((pending) => pending === abort ? null : pending);
+    if (outcome === "cancelled") return;
+    setTakeoverOutcome(outcome);
+    if (outcome !== "refused") open();
   };
 
   const openProject = async (summary: LocalProjectSummary) => {
@@ -2087,7 +2161,8 @@ function Workspace({
                       setListAttempt((attempt) => attempt + 1);
                     }}
                   : {})}
-                {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry
+                {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry &&
+                  takeoverRequest === null
                   ? {onRetryProject: () => {
                       if (busyRetry.kind === "list") {
                         setListAttempt((attempt) => attempt + 1);
@@ -2095,6 +2170,17 @@ function Workspace({
                         void openProject(busyRetry.project);
                       }
                     }}
+                  : {})}
+                {...(session && state.runtime.errorCode === "PROJECT_BUSY" &&
+                  busyRetry?.kind === "open" && projectTakeover !== null &&
+                  takeoverRequest === null
+                  ? {onContinueHere: () => {
+                      const project = busyRetry.project;
+                      void continueHere(project.projectId, () => openProject(project));
+                    }}
+                  : {})}
+                {...(state.runtime.errorCode === "PROJECT_BUSY" && takeoverOutcome !== null
+                  ? {note: takeoverNote(takeoverOutcome)}
                   : {})}
                 {...(state.runtime.errorCode === "HOST_RESTART_REQUIRED" ||
                   state.runtime.errorCode === "HOST_TIMEOUT") && onRetryRuntime
@@ -2104,6 +2190,23 @@ function Workspace({
                   ? {onDismiss: () => dispatch({type: "runtime-error-dismissed"})}
                   : {})}
               />
+              {yieldedProject !== null && runtimePhase === "closed" && (
+                <TakenOverPanel
+                  note={takeoverOutcome === null ? null : takeoverNote(takeoverOutcome)}
+                  {...(takeoverRequest === null && onRetryRuntime
+                    ? {onContinueHere: () => {
+                        void continueHere(yieldedProject, () => {
+                          setYieldedProject(null);
+                          // The fresh Runtime's boot reopens the retained Project.
+                          onRetryRuntime();
+                        });
+                      }}
+                    : {})}
+                />
+              )}
+              {takeoverRequest !== null && (
+                <TakeoverPending onCancel={() => takeoverRequest.abort()} />
+              )}
             </>
           }
         />
@@ -2115,7 +2218,12 @@ function Workspace({
 function ManagedWorkspace({
   initialState,
   buildIdentity,
-}: {initialState: CreatorState; buildIdentity?: CreatorBuildIdentity}) {
+  projectTakeover,
+}: {
+  initialState: CreatorState;
+  buildIdentity?: CreatorBuildIdentity;
+  projectTakeover: ProjectTakeoverCoordinator | null;
+}) {
   const runtime = useRuntime();
   return (
     <Workspace
@@ -2128,6 +2236,8 @@ function ManagedWorkspace({
       runtimeHostState={runtime.hostState}
       runtimeRecoveryProbeReady={runtime.recoveryProbeReady}
       onRetryRuntime={runtime.retryRuntime}
+      onYieldRuntime={runtime.yieldRuntime}
+      projectTakeover={projectTakeover}
       registerRuntimeShutdownBarrier={runtime.registerShutdownBarrier}
     />
   );
@@ -2137,12 +2247,17 @@ export function App({
   initialState = initialCreatorState,
   runtimeFactory,
   buildIdentity,
+  projectTakeover = null,
 }: AppProps) {
   const identity = buildIdentity ? {buildIdentity} : {};
   if (runtimeFactory) {
     return (
       <RuntimeProvider factory={runtimeFactory}>
-        <ManagedWorkspace initialState={initialState} {...identity} />
+        <ManagedWorkspace
+          initialState={initialState}
+          projectTakeover={projectTakeover}
+          {...identity}
+        />
       </RuntimeProvider>
     );
   }

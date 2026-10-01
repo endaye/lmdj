@@ -526,6 +526,12 @@ if(BUILD_TESTING)
     COMMAND lmdj_facade_sample_surface_tests --shard=projection
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
+  lmdj_add_test(
+    NAME facade.sample_surface.playback_parity
+    TIER component
+    COMMAND lmdj_facade_sample_surface_tests --shard=playback-parity
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
 
   add_executable(
     lmdj_facade_web_runtime_limit_tests

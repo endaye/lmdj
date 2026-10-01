@@ -62,6 +62,18 @@ async function installHostProofRecorder(page) {
               const [request] = arguments_;
               window.__sampleProofOperations ??= [];
               window.__sampleProofOperations.push(request?.operation ?? null);
+              // A manufactured failure never reaches the Runtime, so the
+              // Project cannot change; only the Creator's handling is proven.
+              if (request?.operation === "sample.update_pad" &&
+                  window.__failNextSampleUpdate === true) {
+                window.__failNextSampleUpdate = false;
+                return {
+                  protocol_version: 1,
+                  request_id: request.request_id,
+                  ok: false,
+                  error: {code: "INTERNAL_ERROR", message: "Sample update failed", details: {}},
+                };
+              }
               const response = await nativeTransport.send(...arguments_);
               window.__sampleProofResponses ??= [];
               window.__sampleProofResponses.push({
@@ -842,6 +854,155 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   noErrors();
 });
 
+async function slideAndRelease(slider, value) {
+  const pointerId = ++pointerSequence;
+  await slider.dispatchEvent("pointerdown", {pointerId, isPrimary: true, button: 0});
+  await slider.fill(value);
+  await slider.dispatchEvent("pointerup", {pointerId, isPrimary: true, button: 0});
+}
+
+async function editValueCard(input, value) {
+  await input.fill(value);
+  await input.blur();
+}
+
+async function inspectedPlayback(page) {
+  return (await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback;
+}
+
+test("Sample playback parity commits, cancels, refuses, fails and reopens through the real Runtime", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  const noErrors = recordPageErrors(page);
+  await installHostProofRecorder(page);
+  await page.goto("/index.html");
+  await waitForBootProject(page);
+  await activateAudio(page);
+  // 4 800 frames at 48 kHz: 0.1 s, so the loop point and crossfade stay
+  // well inside one loop.
+  await chooseSampleFile(page, "Add Sample to Pad A1", "parity.wav", pcm16Wav({frames: 4800}));
+  await commitLongSourceSelection(page);
+  await expectProjectRevision(page, 1);
+  const base = await inspectedPlayback(page);
+  expect(Object.keys(base).sort()).toEqual(
+    ["gain_millidb", "muted", "trigger_mode", "trim_end_frame", "trim_start_frame"]);
+
+  // normal: every parity control commits one revision.
+  await page.getByRole("button", {name: "Reverse", exact: true}).click();
+  await expectProjectRevision(page, 2);
+  await slideAndRelease(page.getByRole("slider", {name: "Pad A1 Pitch"}), "3.5");
+  await expectProjectRevision(page, 3);
+  await slideAndRelease(page.getByRole("slider", {name: "Pad A1 Pan"}), "-100");
+  await expectProjectRevision(page, 4);
+  await page.getByRole("button", {name: "Loop", exact: true}).click();
+  await expectProjectRevision(page, 5);
+  // Reverse is on, so the card edits the mirrored boundary: 0.025 s is frame
+  // 1 200 from Start, stored as 0 + 4 800 - 1 200 = 3 600.
+  await editValueCard(
+    page.getByRole("spinbutton", {name: "Pad A1 Loop start time (seconds)"}), "0.025");
+  await expectProjectRevision(page, 6);
+  await editValueCard(
+    page.getByRole("spinbutton", {name: "Pad A1 Loop crossfade (milliseconds)"}), "5");
+  await expectProjectRevision(page, 7);
+  expect(await inspectedPlayback(page)).toEqual({
+    ...base,
+    trigger_mode: "loop_toggle",
+    reverse: true,
+    pitch_cents: 350,
+    pan: -100,
+    loop_start_frame: 3_600,
+    loop_crossfade_frames: 240,
+  });
+  // Ping-pong has no seam to blend, so choosing it clears the crossfade.
+  await page.getByRole("button", {name: "Ping-pong", exact: true}).click();
+  await expectProjectRevision(page, 8);
+  const committed = {
+    ...base,
+    trigger_mode: "loop_toggle",
+    reverse: true,
+    pitch_cents: 350,
+    pan: -100,
+    loop_mode: "ping_pong",
+    loop_start_frame: 3_600,
+  };
+  expect(await inspectedPlayback(page)).toEqual(committed);
+  await expect(page.getByRole("spinbutton", {name: "Pad A1 Loop crossfade (milliseconds)"}))
+    .toHaveCount(0);
+
+  // cancelled: Escape mid-gesture previews, then restores without a commit.
+  const pan = page.getByRole("slider", {name: "Pad A1 Pan"});
+  const panReadout = page.locator(".pan-control output");
+  const cancelOffset = await page.evaluate(() => window.__sampleProofOperations.length);
+  const pointerId = ++pointerSequence;
+  await pan.dispatchEvent("pointerdown", {pointerId, isPrimary: true, button: 0});
+  await pan.fill("40");
+  await expect(panReadout).toHaveText("R40");
+  await pan.press("Escape");
+  await expect(panReadout).toHaveText("L100");
+  await pan.dispatchEvent("pointerup", {pointerId, isPrimary: true, button: 0});
+  await expect.poll(() => page.evaluate((offset) =>
+    window.__sampleProofOperations.slice(offset), cancelOffset))
+    .toEqual(expect.arrayContaining(["sample.preview.set", "sample.preview.clear"]));
+  expect(await page.evaluate((offset) =>
+    window.__sampleProofOperations.slice(offset), cancelOffset)).not.toContain("sample.update_pad");
+  await expectProjectRevision(page, 8);
+  expect(await inspectedPlayback(page)).toEqual(committed);
+
+  // refused: an out-of-range value and a stale revision change nothing.
+  const outOfRange = await rawRequest(page, "sample.update_pad", {
+    command_id: crypto.randomUUID(),
+    expected_revision: 8,
+    slot: SLOT_A1,
+    playback: {...committed, pan: 101},
+  });
+  expect(outOfRange).toEqual(expect.objectContaining({
+    ok: false,
+    error: expect.objectContaining({code: "HOST_PROTOCOL_MISMATCH"}),
+  }));
+  const stale = await rawRequest(page, "sample.update_pad", {
+    command_id: crypto.randomUUID(),
+    expected_revision: 7,
+    slot: SLOT_A1,
+    playback: {...committed, pan: 0},
+  });
+  expect(stale).toEqual(expect.objectContaining({
+    ok: false,
+    error: expect.objectContaining({
+      code: "REVISION_CONFLICT",
+      details: {actual_revision: 8, expected_revision: 7},
+    }),
+  }));
+  await expectProjectRevision(page, 8);
+  expect(await inspectedPlayback(page)).toEqual(committed);
+
+  // failed: a failed commit reports, and the control keeps committed truth.
+  const reverse = page.getByRole("button", {name: "Reverse", exact: true});
+  await page.evaluate(() => { window.__failNextSampleUpdate = true; });
+  await reverse.click();
+  await expect(page.getByRole("alert")).toContainText("Sample operation failed");
+  await expect(reverse).toHaveAttribute("aria-pressed", "true");
+  expect(await page.evaluate(() => window.__failNextSampleUpdate)).toBe(false);
+  await expectProjectRevision(page, 8);
+  expect(await inspectedPlayback(page)).toEqual(committed);
+
+  // reopened: the reload restores the same truth and the same controls.
+  const projectId = (await rawRequest(page, "project.inspect", {})).result.project.project_id;
+  await page.reload();
+  await waitForProjectReopen(page, projectId.slice(0, 8));
+  expect(await inspectedPlayback(page)).toEqual(committed);
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await selectPadWithoutPress(page, "Pad A1 — assigned — Key Q");
+  await expect(page.getByRole("button", {name: "Reverse", exact: true}))
+    .toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".pitch-control output")).toHaveText("+3.5 st");
+  await expect(page.locator(".pan-control output")).toHaveText("L100");
+  await expect(page.getByRole("button", {name: "Ping-pong", exact: true}))
+    .toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("spinbutton", {name: "Pad A1 Loop start time (seconds)"}))
+    .toHaveValue("0.025");
+  noErrors();
+});
+
 test("Pattern history keeps the Project open when its inventory anchor changes", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(180_000);
@@ -881,6 +1042,41 @@ test("Pattern history keeps the Project open when its inventory anchor changes",
   await undo.click();
   await expectProjectRevision(page, 4);
   expect((await rawRequest(page, "project.inspect", {})).result.project.patterns).toEqual(initial.patterns);
+  noErrors();
+});
+
+test("Pad Delete commits while audio is inactive after a reopen", async ({page, browserName}) => {
+  // #1724: Delete used to require a Runtime stop that is refused unless audio
+  // runs, so a freshly reopened Project could not delete a Pad.
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  const noErrors = recordPageErrors(page);
+  await page.goto("/index.html");
+  await waitForBootProject(page);
+  await activateAudio(page);
+  await chooseSampleFile(page, "Add Sample to Pad A1", "inactive-delete.wav", pcm16Wav({frames: 4800}));
+  await commitLongSourceSelection(page);
+  await expectProjectRevision(page, 1);
+  const before = (await rawRequest(page, "project.inspect", {})).result.project;
+  expect(before.banks[0].pads[0].asset_id).not.toBeNull();
+
+  await page.reload();
+  await waitForProjectReopen(page, before.project_id.slice(0, 8));
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
+  // Boot lands on Sample, where "Replace Sample" and "Record Sample" also
+  // match a loose name, so the mode key is named exactly.
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Delete Pad A1", exact: true})).toBeEnabled();
+  await page.getByRole("button", {name: "Delete Pad A1", exact: true}).click();
+  await expectProjectRevision(page, 2);
+  await expect(page.getByRole("button", {name: "Pad A1 — empty — Key Q", exact: true})).toBeVisible();
+  await expect(page.getByText("Sample operation is unavailable")).toHaveCount(0);
+  const deleted = (await rawRequest(page, "project.inspect", {})).result.project;
+  expect(deleted.banks[0].pads[0].asset_id).toBeNull();
+  expect(deleted.patterns).toEqual(before.patterns);
+  expect(deleted.assets).toEqual(before.assets);
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
   noErrors();
 });
 

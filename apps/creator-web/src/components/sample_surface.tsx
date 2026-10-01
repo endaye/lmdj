@@ -528,8 +528,11 @@ export function SampleSurface({
       state.project.current?.pads[slot]?.assetId !== undefined) ||
     (inspect?.slot === slot && inspect.assetId !== null);
 
+  // A voice can sound only while audio runs, and the Runtime refuses
+  // `sample.stop` otherwise (#1724). The Host's own mutation also stops the
+  // voice when audio runs, so with audio stopped there is nothing to stop.
   const stopBeforeMutation = async (slot: number) => {
-    if (session === undefined) return;
+    if (session === undefined || audioSuspended) return;
     if (await session.stopPad(slot) !== true) {
       throw Object.assign(new Error("Sample stop failed"), {code: "HOST_STATE_INVALID"});
     }

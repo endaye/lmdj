@@ -186,6 +186,12 @@ test("keeps Sample editing in touch and one Bank row and Pad matrix on the rail"
           triggerMode: "one_shot",
           gainMillidb: 0,
           muted: false,
+          reverse: false,
+          pitchCents: 0,
+          pan: 0,
+          loopMode: "forward" as const,
+          loopStartFrame: null,
+          loopCrossfadeFrames: 0,
         },
         metadata: {sampleRate: 48_000, channels: 1, sourceFrames: 8},
         waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/2`,
@@ -260,6 +266,12 @@ test("advances the selected Sample playhead on the render clock and cancels it a
       triggerMode: "one_shot" as const,
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     },
     metadata: {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 48_000},
     waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/94`,
@@ -298,6 +310,11 @@ test("advances the selected Sample playhead on the render clock and cancels it a
         trimStartFrame: 0,
         trimEndFrame: 48_000,
         triggerMode: "one_shot",
+        reverse: false,
+        pitchCents: 0,
+        loopMode: "forward",
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       },
       savedRevision: 4,
       runtimeRevision: 4,
@@ -585,6 +602,12 @@ function sampleRuntimeFixture(
       triggerMode: "gate" as const,
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     },
     metadata: {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 8},
     waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/1`,
@@ -702,6 +725,12 @@ function mutableSampleRuntimeFixture() {
       triggerMode: "gate",
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     })],
   ]);
   let revision = 3;
@@ -721,6 +750,12 @@ function mutableSampleRuntimeFixture() {
       triggerMode: "one_shot" as const,
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     };
     return {
       projectRevision: revision,
@@ -1090,6 +1125,12 @@ test.each(["update", "reset"] as const)(
         triggerMode: "one_shot",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       }));
     }
     fixture.revision = 4;
@@ -1359,6 +1400,12 @@ test.each(["update", "reset"] as const)(
         triggerMode: "one_shot",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       }));
       return commit();
     };
@@ -1542,6 +1589,12 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
       triggerMode: "gate" as const,
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     },
     metadata: assigned.has(slot)
       ? {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 8}
@@ -1766,6 +1819,13 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
     const fixture = mutableSampleRuntimeFixture();
     const order: string[] = [];
     let triggerCount = 0;
+    // A Pad can sound only while audio runs, so the Host admits the press
+    // only then; the stop-first order applies to that state (#1724).
+    let hostListener: ((state: RuntimeHostState) => void) | undefined;
+    fixture.session.subscribeHostState = (listener) => {
+      hostListener = listener;
+      return () => {};
+    };
     fixture.session.trigger = async (slot, velocity, source) => {
       triggerCount += 1;
       return {sequence: triggerCount, slot, velocity, source};
@@ -1793,6 +1853,12 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
         triggerMode: "one_shot",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       }));
       fixture.revision = 4;
       return {
@@ -1818,6 +1884,12 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
         triggerMode: "one_shot",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       }));
       fixture.revision = 4;
       return {
@@ -1827,11 +1899,13 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
         snapshotError: null,
       };
     };
-    setRunningAudioFixture(fixture.session);
     const {container} = render(
       <App initialState={ready} runtimeFactory={() => fixture.session} />,
     );
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await act(async () => hostListener?.({state: "running", errorCode: null, errorDetails: {}}));
+    await screen.findByText("Audio running");
+    setRunningAudioFixture(fixture.session);
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
     await screen.findByText("Asset 33333333");
     fireEvent.keyDown(screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"}), {
@@ -2634,6 +2708,87 @@ test("Delete failure remains visible and does not project an empty Pad", async (
   expect(screen.getByText("Asset 33333333")).toBeTruthy();
   expect(screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"})).toBeTruthy();
   expect(fixture.revision).toBe(3);
+});
+
+
+// #1724: the Runtime refuses `sample.stop` unless audio runs, and each Host
+// mutation stops the voice itself when it does. A Pad mutation must therefore
+// not depend on a separate stop while audio is stopped, and must keep its
+// stop-first order while audio runs.
+const PRE_STOP_MUTATIONS = ["delete", "reset", "mute", "replace"] as const;
+type PreStopMutation = typeof PRE_STOP_MUTATIONS[number];
+
+function preStopFixture(order: string[]) {
+  const fixture = sampleRuntimeFixture();
+  let hostListener: ((state: RuntimeHostState) => void) | undefined;
+  let audioRunning = false;
+  fixture.session.subscribeHostState = (listener) => {
+    hostListener = listener;
+    return () => {};
+  };
+  fixture.session.stopPad = async () => {
+    order.push("stop");
+    if (!audioRunning) {
+      throw Object.assign(new Error("runtime control is unavailable"), {
+        code: "HOST_STATE_INVALID", details: {},
+      });
+    }
+    return true;
+  };
+  const commit = (kind: PreStopMutation) => async () => {
+    order.push(kind);
+    return {committedRevision: 4, runtimeRevision: 4, runtimePublished: true, snapshotError: null};
+  };
+  fixture.session.deletePad = commit("delete");
+  fixture.session.resetPad = commit("reset");
+  fixture.session.updatePad = commit("mute");
+  fixture.session.importAssignSample = commit("replace");
+  const runAudio = async () => {
+    audioRunning = true;
+    await act(async () => hostListener?.({state: "running", errorCode: null, errorDetails: {}}));
+    await screen.findByText("Audio running");
+  };
+  return {fixture, runAudio};
+}
+
+async function performPadMutation(kind: PreStopMutation, container: HTMLElement) {
+  if (kind === "delete") {
+    await userEvent.click(screen.getByRole("button", {name: "Delete Pad A1"}));
+  } else if (kind === "reset") {
+    await userEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
+    await userEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
+  } else if (kind === "mute") {
+    await userEvent.click(screen.getByRole("button", {name: "Mute"}));
+  } else {
+    await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
+    await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("replace.wav"));
+    await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
+    await commitLongSourceSelection();
+  }
+}
+
+test.each(PRE_STOP_MUTATIONS)("%s with audio stopped commits without a Runtime stop", async (kind) => {
+  const order: string[] = [];
+  const {fixture} = preStopFixture(order);
+  const {container} = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  await performPadMutation(kind, container);
+  await waitFor(() => expect(order).toEqual([kind]));
+  expect(screen.queryByText("Sample operation is unavailable")).toBeNull();
+});
+
+test.each(PRE_STOP_MUTATIONS)("%s with audio running stops the voice before committing", async (kind) => {
+  const order: string[] = [];
+  const {fixture, runAudio} = preStopFixture(order);
+  const {container} = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await runAudio();
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  await performPadMutation(kind, container);
+  await waitFor(() => expect(order).toEqual(["stop", kind]));
 });
 
 

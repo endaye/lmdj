@@ -55,6 +55,15 @@ SOUNDSET_OPERATIONS = {
     "soundset.map.preview": "query",
 }
 assert len(SOUNDSET_OPERATIONS) == 5
+# Slot acquisition is a Facade/Bridge surface. The Native instrument's complete
+# Sound Set inventory remains separate and unchanged.
+FACADE_SOUNDSET_OPERATIONS = {
+    **SOUNDSET_OPERATIONS,
+    "soundset.catalog.describe": "query",
+    "soundset.slot.acquire": "query",
+    "soundset.slot.install": "command",
+}
+assert len(FACADE_SOUNDSET_OPERATIONS) == 8
 
 
 def registered_facade_performance_operations() -> dict[str, str]:
@@ -265,7 +274,7 @@ def cli_operation_kind_contract(
 ) -> None:
     assert registered_facade_performance_operations() == PERFORMANCE_OPERATIONS
     assert registered_native_performance_operations() == PERFORMANCE_OPERATIONS
-    assert registered_facade_soundset_operations() == SOUNDSET_OPERATIONS
+    assert registered_facade_soundset_operations() == FACADE_SOUNDSET_OPERATIONS
     assert registered_native_soundset_operations() == SOUNDSET_OPERATIONS
     for operation, surface in PERFORMANCE_OPERATIONS.items():
         request = {"operation": operation}

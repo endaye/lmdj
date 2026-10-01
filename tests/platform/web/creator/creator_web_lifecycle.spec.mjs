@@ -114,6 +114,10 @@ async function installPackagedRecoveryProbe(page) {
     window.BroadcastChannel = new Proxy(NativeBroadcastChannel, {
       construct(target, argumentsList) {
         const channel = Reflect.construct(target, argumentsList, target);
+        // The Creator's tab-takeover channel (#1679) lives as long as the
+        // page, not a Runtime generation; the Session-owned channels are what
+        // this probe accounts for.
+        if (argumentsList[0] === "lmdj.creator.project-takeover.v1") return channel;
         broadcastOwners.set(channel, currentGeneration);
         generationRecord(currentGeneration).broadcastChannels.add(channel);
         return channel;
