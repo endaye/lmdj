@@ -368,7 +368,7 @@ function Workspace({
   useEffect(() => { retireCreatorLayoutPreference(); }, []);
   const currentProjectId = state.project.current?.projectId ?? null;
   useEffect(() => {
-    if (currentProjectId !== null) writeLastProjectId(currentProjectId);
+    if (currentProjectId !== null) void writeLastProjectId(currentProjectId);
   }, [currentProjectId]);
   // A refused Duplicate describes the Project it was asked to copy.
   const [duplicateRefusal, setDuplicateRefusal] = useState<string | null>(null);
@@ -579,8 +579,12 @@ function Workspace({
     if (runtimePhase !== "ready") return;
     let active = true;
     dispatch({type: "projects-listing"});
+    // Read alongside the listing, so the library never shows while it waits.
+    const remembered = readLastProjectId();
     void listLocalProjectsJourney(session).then(
       async (projects) => {
+        if (!active) return;
+        const lastId = await remembered;
         if (!active) return;
         setBusyRetry(null);
         dispatch({type: "projects-loaded", projects});
@@ -589,7 +593,6 @@ function Workspace({
           // Boot: reopen the Project this device used last, or start a new
           // one when none is stored. A remembered Project that is gone while
           // others exist leaves the user in the library to choose.
-          const lastId = readLastProjectId();
           const last = lastId === null ? undefined :
             projects.find(({projectId}) => projectId === lastId);
           if (last === undefined && projects.length > 0) return;

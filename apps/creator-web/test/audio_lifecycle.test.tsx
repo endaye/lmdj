@@ -338,7 +338,10 @@ test("Runtime replacement cannot leave an aborted import permanently visible", a
     "import-second:list",
   ]));
 
-  expect(screen.getByTestId("creator-phase").textContent).toBe("ready");
+  // The listing settles after the remembered-Project read, so ready follows it.
+  await waitFor(() =>
+    expect(screen.getByTestId("creator-phase").textContent).toBe("ready"));
+  expect(second.calls).toEqual(["import-second:start", "import-second:list"]);
   expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
     .toBe(false);
   expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))

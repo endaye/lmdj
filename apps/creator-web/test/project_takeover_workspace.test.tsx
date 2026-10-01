@@ -1,6 +1,6 @@
 import {act, render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import {afterEach, beforeEach, expect, test, vi} from "vitest";
+import {beforeEach, expect, test} from "vitest";
 
 import {App} from "../src/app";
 import type {
@@ -13,6 +13,7 @@ import type {
   LocalProjectSummary,
   RuntimeHostState,
 } from "../src/runtime/runtime_types";
+import {writeLastProjectId} from "../src/state/last_project";
 
 const LISTED: LocalProjectSummary = {
   projectId: "11111111-1111-4111-8111-111111111111",
@@ -23,23 +24,12 @@ const LISTED: LocalProjectSummary = {
   assignedPadCount: 0,
   bundleDigest: "a".repeat(64),
 };
-const LAST_PROJECT_KEY = "lmdj.creator.last-project.v1";
 const BUSY = "The local Project is busy in another tab or process.";
 
-function memoryStorage(initial: Record<string, string>) {
-  const values = new Map(Object.entries(initial));
-  return {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => { values.set(key, value); },
-    removeItem: (key: string) => { values.delete(key); },
-    clear: () => { values.clear(); },
-  };
-}
-
-beforeEach(() => {
-  vi.stubGlobal("localStorage", memoryStorage({[LAST_PROJECT_KEY]: LISTED.projectId}));
+// Every test boots into the remembered Project.
+beforeEach(async () => {
+  await writeLastProjectId(LISTED.projectId);
 });
-afterEach(() => { vi.unstubAllGlobals(); });
 
 function refusal(code: string): Error & {code: string} {
   return Object.assign(new Error(code), {code});
