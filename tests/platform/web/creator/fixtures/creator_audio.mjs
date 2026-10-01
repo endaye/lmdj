@@ -33,8 +33,7 @@ export async function wakeAudioWithPad(page, {padAddress} = {}) {
       const unsubscribe = transport.subscribe(message => {
         if (message.event === "runtime.voice_state") window.__firstMusicalVoiceEvents.push(...message.payload.events);
       });
-      window.__restoreMusicalGestureTransport = () => {unsubscribe(); host.transport = transport;};
-      host.transport = new Proxy({}, {get(_target, key) {
+      const proxy = new Proxy({}, {get(_target, key) {
         const target = transport;
         if (key !== "send") return Reflect.get(target, key);
         return async (...args) => {
@@ -43,6 +42,11 @@ export async function wakeAudioWithPad(page, {padAddress} = {}) {
           return result;
         };
       }});
+      window.__restoreMusicalGestureTransport = () => {
+        unsubscribe();
+        if (host.transport === proxy) host.transport = transport;
+      };
+      host.transport = proxy;
     });
     try {
       await pad.focus();
