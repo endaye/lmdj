@@ -1134,3 +1134,7 @@ button:disabled { color: #737b87; }
 .authoring-history button { min-width: 4.5rem; min-height: 2.5rem; }
 .authoring-history [role="status"] { font-size: .8rem; opacity: .8; }
 .creator-console-frame { min-width: 0; }
+
+.touch-navigation { display: flex; flex-wrap: wrap; gap: .5rem; padding-block: .5rem; border-bottom: 1px solid var(--border, #777); }
+.system-surface header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.system-surface h2:focus { outline: 2px solid currentColor; outline-offset: 4px; }

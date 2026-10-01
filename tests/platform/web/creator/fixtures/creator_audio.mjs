@@ -1,3 +1,4 @@
+import {clickCreatorSystemAction} from "./creator_navigation.mjs";
 import {expect} from "@playwright/test";
 
 // A real accepted Pad gesture owns activation. Require its far-side admission
@@ -76,7 +77,7 @@ export async function wakeAudioWithPad(page, {padAddress} = {}) {
   } else {
     // An unassigned Project has no sound to play; its explicit MIDI permission
     // click is still a genuine UI activation gesture, independent of Note data.
-    await page.getByRole("button", {name: "Enable MIDI", exact: true}).click();
+    await clickCreatorSystemAction(page, "Enable MIDI");
   }
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {timeout: 30_000});
 }
