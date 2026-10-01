@@ -178,6 +178,7 @@ package_creator() {
 test_creator() {
   activate_toolchain
   require_dependencies
+  "$repo_root/scripts/asset-server.sh" check
   npm --prefix "$creator_root" test -- --run
   python3 "$creator_root/test/package_test.py"
   python3 "$creator_root/test/server_test.py"
