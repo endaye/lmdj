@@ -157,6 +157,8 @@ button:disabled { color: #737b87; }
 .waveform-canvas line[data-handle] { stroke: #c5a5f4; stroke-width: 2; }
 .waveform-canvas line[data-playhead] { stroke: #ffb36b; stroke-width: 2; }
 .waveform-canvas rect[data-selection-mask] { fill: rgb(20 16 26 / 72%); }
+.waveform-canvas line[data-handle="loop"] { stroke: #b7ffc5; stroke-dasharray: 4 3; }
+.waveform-canvas rect[data-crossfade] { fill: rgb(183 255 197 / 18%); }
 .waveform-unavailable { display: grid; min-height: 12rem; margin: 0; place-items: center; color: #9da6b4; }
 .waveform-grip-zone {
   position: absolute;
