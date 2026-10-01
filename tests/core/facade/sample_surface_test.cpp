@@ -1879,6 +1879,146 @@ void test_sample_delayed_replays_report_original_committed_revision() {
   LMDJ_CHECK(replayed_reset.value().committed_revision == 5);
 }
 
+// --- Sample playback parity (lmdj.project.v5 5.1.0) ---
+
+// A Project whose Pad 0 of Bank 0 holds the 8-frame 44.1 kHz fixture, at
+// revision 1.
+std::filesystem::path parity_project(
+    Application& application,
+    const TempDirectory& temp,
+    std::uint32_t base) {
+  const auto project = temp.path() / "playback-parity.lmdj";
+  const auto source = file_bytes("tests/fixtures/audio/mono-44100.wav");
+  LMDJ_CHECK(application
+                 .create_initial_project(
+                     {project, ProjectId{uuid(base)}, 120,
+                      Pattern{PatternId{uuid(base + 1)}, 1, {}}})
+                 .has_value());
+  const auto token = uuid(base + 2);
+  check_success(
+      application.command({
+          {"operation", "sample.import.begin"},
+          {"import_token", token},
+          {"project_path", project.generic_string()},
+          {"command_id", uuid(base + 3)},
+          {"expected_revision", 0},
+          {"slot", slot(0, 0)},
+          {"asset_id", uuid(base + 4)},
+          {"byte_length", source.size()},
+      }),
+      nullptr);
+  LMDJ_CHECK(application.append_sample_import(token, 0, source, true).has_value());
+  check_success(
+      application.command({{"operation", "sample.import.commit"},
+                           {"import_token", token}}),
+      1);
+  return project;
+}
+
+// The one shape every PadPlayback copy is held to
+// (.agents/pitfalls/parity-check-between-agreeing-copies.md).
+nlohmann::json parity_playback_json(std::string_view variant = "forward") {
+  return nlohmann::json::parse(
+             read_bytes("tests/fixtures/contracts/pad-playback-full.json"))
+      .at(std::string(variant));
+}
+
+nlohmann::json inspected_playback(
+    Application& application,
+    const std::filesystem::path& project) {
+  const auto response = application.query({
+      {"operation", "sample.inspect"},
+      {"project_path", project.generic_string()},
+      {"slot", slot(0, 0)},
+  });
+  LMDJ_CHECK(response.at("ok") == true);
+  return response.at("result").at("playback");
+}
+
+// A parity update round-trips through JSON inspect, which echoes exactly the
+// keys that differ from their defaults.
+void test_parity_playback_json_round_trips_through_inspect() {
+  TempDirectory temp;
+  Application application(sample_config(temp.path()));
+  const auto project = parity_project(application, temp, 900);
+  LMDJ_CHECK(inspected_playback(application, project).size() == 5);
+  std::uint64_t revision = 1;
+  for (const auto variant : {"forward", "ping_pong"}) {
+    check_success(
+        application.command({
+            {"operation", "sample.update_pad"},
+            {"project_path", project.generic_string()},
+            {"command_id", uuid(910 + static_cast<std::uint32_t>(revision))},
+            {"expected_revision", revision},
+            {"slot", slot(0, 0)},
+            {"playback", parity_playback_json(variant)},
+        }),
+        revision + 1);
+    ++revision;
+    LMDJ_CHECK(inspected_playback(application, project) ==
+               parity_playback_json(variant));
+  }
+}
+
+void test_parity_playback_refuses_an_unknown_key() {
+  TempDirectory temp;
+  Application application(sample_config(temp.path()));
+  const auto project = parity_project(application, temp, 920);
+  auto playback = parity_playback_json();
+  playback["time_stretch"] = true;
+  const auto response = application.command({
+      {"operation", "sample.update_pad"},
+      {"project_path", project.generic_string()},
+      {"command_id", uuid(930)},
+      {"expected_revision", 1},
+      {"slot", slot(0, 0)},
+      {"playback", playback},
+  });
+  LMDJ_CHECK(response.at("ok") == false);
+  LMDJ_CHECK(response.at("error").at("code") == "INVALID_ARGUMENT");
+}
+
+// With an open trim end only the source length bounds the loop point.
+void test_parity_playback_refuses_a_loop_point_past_the_source() {
+  TempDirectory temp;
+  Application application(sample_config(temp.path()));
+  const auto project = parity_project(application, temp, 940);
+  PadPlayback playback{0, std::nullopt, TriggerMode::loop_toggle, 0, false};
+  playback.loop_start_frame = 8;
+  const auto refused = application.update_sample_pad(SampleUpdateRequest{
+      project, CommandMeta{CommandId{uuid(950)}, 1}, PadSlotId{0, 0}, playback});
+  LMDJ_CHECK(!refused.has_value());
+  LMDJ_CHECK(refused.error().code == ErrorCode::invalid_argument);
+  playback.loop_start_frame = 7;
+  LMDJ_CHECK(application
+                 .update_sample_pad(SampleUpdateRequest{
+                     project, CommandMeta{CommandId{uuid(951)}, 1},
+                     PadSlotId{0, 0}, playback})
+                 .has_value());
+}
+
+// A Sample preview resolves the voice DSP block exactly as cooking does.
+void test_preview_resolution_carries_the_voice_dsp_block() {
+  TempDirectory temp;
+  Application application(sample_config(temp.path()));
+  const auto project = parity_project(application, temp, 960);
+  const auto inspected =
+      application.inspect_sample(SampleInspectRequest{project, {0, 0}});
+  LMDJ_CHECK(inspected.has_value());
+  PadPlayback playback{1, 7, TriggerMode::loop_gate, 0, false};
+  playback.reverse = true;
+  playback.pitch_cents = 700;
+  playback.pan = -30;
+  playback.loop_start_frame = 4;
+  playback.loop_crossfade_frames = 1;
+  const auto resolved =
+      lmdj::facade::resolve_sample_preview_playback(inspected.value(), playback);
+  LMDJ_CHECK(resolved.has_value());
+  LMDJ_CHECK((resolved.value().dsp ==
+              lmdj::cooker::ResolvedVoiceDsp{
+                  3, 1, 700, -30, lmdj::cooker::ResolvedVoiceDsp::kReverse}));
+}
+
 void test_sample_json_delayed_replays_report_current_project_revision() {
   TempDirectory temp;
   const auto project = temp.path() / "sample-json-delayed-replay.lmdj";
@@ -2186,10 +2326,18 @@ struct Shard {
   std::span<const Scenario> scenarios;
 };
 
-constexpr std::array<Shard, 3> kShards{
+constexpr std::array<Scenario, 4> kPlaybackParityScenarios{
+    test_parity_playback_json_round_trips_through_inspect,
+    test_parity_playback_refuses_an_unknown_key,
+    test_parity_playback_refuses_a_loop_point_past_the_source,
+    test_preview_resolution_carries_the_voice_dsp_block,
+};
+
+constexpr std::array<Shard, 4> kShards{
     Shard{"mutation", kMutationScenarios},
     Shard{"quota-replay", kQuotaReplayScenarios},
     Shard{"projection", kProjectionScenarios},
+    Shard{"playback-parity", kPlaybackParityScenarios},
 };
 
 void run(std::span<const Scenario> scenarios) {

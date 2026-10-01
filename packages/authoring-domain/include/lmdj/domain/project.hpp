@@ -370,6 +370,12 @@ bool is_valid_slot(PadSlotId slot) noexcept;
 // sample's frame count (an open trim end) is checked where that count is
 // known.
 bool is_valid_playback(const PadPlayback& playback) noexcept;
+// is_valid_playback plus the rules that need the sample's source length: the
+// trim lies inside the source and, when the trim end is open, the loop point
+// and the crossfade fit the loop that ends at the source's last frame.
+bool is_valid_playback_for_source(
+    const PadPlayback& playback,
+    std::uint64_t source_frames) noexcept;
 std::optional<Asset> resolve_slot_asset(
     const ProjectState& state,
     PadSlotId slot);

@@ -162,6 +162,16 @@ def expected_schemas() -> dict[str, dict]:
                 "maximum": 6000,
             },
             "muted": {"type": "boolean"},
+            "reverse": {"type": "boolean"},
+            "pitch_cents": {
+                "type": "integer",
+                "minimum": -2400,
+                "maximum": 2400,
+            },
+            "pan": {"type": "integer", "minimum": -100, "maximum": 100},
+            "loop_mode": {"type": "string", "enum": ["forward", "ping_pong"]},
+            "loop_start_frame": {"oneOf": [uint, {"type": "null"}]},
+            "loop_crossfade_frames": uint,
         },
         [
             "trim_start_frame",

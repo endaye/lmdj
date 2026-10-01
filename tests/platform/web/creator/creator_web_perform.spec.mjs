@@ -1381,3 +1381,51 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
   await expect(page.getByRole("button", {name: "Launch Pattern 2"}))
     .toHaveAttribute("data-launch", "idle");
 });
+
+async function inspectedPadA1Pan(page) {
+  return page.evaluate(async () => {
+    const response = await window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "sample.inspect",
+      payload: {slot: {bank: 0, pad: 0}},
+    });
+    return response.ok ? (response.result.playback.pan ?? 0) : response.error.code;
+  });
+}
+
+test("a hard-left Pad pan silences the right channel of the recorded master output", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  await importActivateAndPerform(page);
+  await installPerformWitnessSample(page);
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
+  await page.getByRole("button", {name: /^Pad A1 — assigned — Key Q$/})
+    .evaluate((element) => element.click());
+  expect(await inspectedPadA1Pan(page)).toBe(0);
+  const pan = page.getByRole("slider", {name: "Pad A1 Pan"});
+  await pan.dispatchEvent("pointerdown", {pointerId: 81, isPrimary: true, button: 0});
+  await pan.fill("-100");
+  await pan.dispatchEvent("pointerup", {pointerId: 81, isPrimary: true, button: 0});
+  await expect.poll(() => inspectedPadA1Pan(page), {
+    timeout: PROJECT_TRANSITION_TIMEOUT_MS,
+  }).toBe(-100);
+  await expect(pan).toBeEnabled({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await openPerform(page);
+
+  await beginRecording(page);
+  const pad = page.getByRole("button", {name: /^Pad A1\b/});
+  await pad.dispatchEvent("pointerdown", {button: 0, isPrimary: true, pointerId: 82});
+  await page.waitForTimeout(120);
+  await pad.dispatchEvent("pointerup", {button: 0, isPrimary: true, pointerId: 82});
+  await stopRecording(page);
+  const wav = parsePcm16StereoWav(await exportPerformanceWav(page));
+
+  // pan -100 is gL = sqrt(2), gR = sin(0) = 0: the far channel is exact
+  // silence across the whole capture, while the near one carries the hit.
+  const start = firstSignalFrame(wav.left);
+  const hit = wav.left.slice(start, start + 4_800);
+  expect(hit.filter((sample) => Math.abs(sample) > 256).length).toBeGreaterThan(2_400);
+  expect(wav.right.filter((sample) => sample !== 0)).toEqual([]);
+});
