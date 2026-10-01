@@ -51,7 +51,7 @@ test("cold touch activation does not create microphone resources before its lega
   const sources = createPadCaptureSources();
   const controller = new AbortController();
   const wake = new Promise<boolean>(() => {});
-  const started = sources.start("microphone", null, wake, () => {}, () => {}, controller.signal);
+  const started = sources.start("microphone", null, wake, () => {}, () => {}, controller.signal, true);
   const refused = expect(started).rejects.toMatchObject({name: "AbortError"});
   await settle();
   expect(resumed).not.toHaveBeenCalled();
@@ -59,6 +59,19 @@ test("cold touch activation does not create microphone resources before its lega
   controller.abort();
   await refused;
   expect(resumed).not.toHaveBeenCalled();
+  expect(resources.live).toBe(false);
+});
+
+test.each(["pending", "refused"])("legal native microphone press resumes synchronously with %s Runtime activation", async activation => {
+  const sources = createPadCaptureSources();
+  const runtime = activation === "pending" ? new Promise<boolean>(() => {}) : Promise.resolve(false);
+  resumed.mockResolvedValueOnce(undefined);
+  const started = sources.start("microphone", null, runtime, () => {}, () => {});
+  // Check the same call stack, before any microtask or permission await.
+  expect(resumed).toHaveBeenCalledOnce();
+  const handle = await started;
+  expect(resources.live).toBe(true);
+  await handle.stop();
   expect(resources.live).toBe(false);
 });
 

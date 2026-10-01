@@ -201,7 +201,7 @@ function deferred<T>() {
 
 interface SampleFixtureOptions {
   onEmptyPadPress?: (slot: number, key: object, source: import("../src/runtime/runtime_types").RuntimeTriggerSource,
-    activation: Promise<boolean> | null) => boolean;
+    activation: Promise<boolean> | null, waitForActivation: boolean) => boolean;
   onEmptyPadRelease?: (key: object) => void;
   onEmptyPadCancel?: () => void;
   canUsePad?: (slot: number) => boolean;
@@ -312,6 +312,23 @@ async function settle() {
 }
 
 describe("Creator input controller", () => {
+  test.each(["mouse", "touch", "pen"])("empty %s Pad passes its actual native activation boundary to capture", pointerType => {
+    const boundaries: boolean[] = [];
+    let wakes = 0;
+    const value = sampleFixture({audioState: "audio-suspended", isAssigned: () => false,
+      activateAudioForGesture: async () => {wakes++; return true;},
+      onEmptyPadPress: (_slot, _key, _source, _activation, wait) => {boundaries.push(wait); return true;},
+    });
+    const event = {type: "pointerdown", pointerType, pointerId: 18,
+      isPrimary: true, button: 0, isTrusted: true};
+    value.controller.pointerDown(event, 0);
+    expect(boundaries).toEqual([pointerType !== "mouse"]);
+    expect(wakes).toBe(pointerType === "mouse" ? 1 : 0);
+    value.controller.pointerUp({...event, type: "pointerup"}, 0);
+    expect(wakes).toBe(1);
+    value.controller.dispose();
+  });
+
   test("waits for native activation and retains the first released one-shot", async () => {
     const activation = deferred<boolean>();
     const events: Array<{isTrusted: boolean}> = [];
