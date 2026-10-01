@@ -647,7 +647,9 @@ main 历史内可到达，重复运行同一 scope 幂等。`status` 只读该�
 满足这些条件后，journal 先写入保留完整原始状态的 `REQUEST_ID.retired` 记录，再把该请求移出准入。
 从未发布的候选（例如完整批次变红）改用 `--superseded-by-build BUILD` 退役：canonical main 必须已经带着同一产品线上
 更新的这个 BUILD，而该请求自己预留的 Build 在远端没有 tag，台账里也不是 `releasable` 或 `published`。
-带未决 intent 或已完成的请求一律拒绝；operation 历史和 worktree 原样保留为证据，不修改任何远端状态。
+已完成的请求一律拒绝；带未决 intent 的请求只有在以已发布 tag 退役时才接受（该 tag 已证明是请求自己的 Build、
+精确 tag 远端审计通过且 intent 为 `published`，未决 intent 原样保留在退役记录里），以未发布 Build 退役时仍须
+先对账；operation 历史和 worktree 原样保留为证据，不修改任何远端状态。
 
 各步仍由该步自己的 far-side 验证器确认；尚未接入某一步 carrier 时，`run`/`resume` 在创建请求前
 拒绝启动并逐项列出缺失步骤，不用 fixture、空结果或 completed 标记代替真实验收。
