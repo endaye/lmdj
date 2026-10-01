@@ -102,16 +102,9 @@ bool valid_content(const ProjectState& state) {
   for (std::size_t b = 0; b < state.banks.size(); ++b) {
     for (std::size_t p = 0; p < state.banks[b].size(); ++p) {
       const auto& pad = state.banks[b][p];
-      const auto& playback = pad.playback;
       if (pad.id.bank != b || pad.id.pad != p ||
           (pad.asset_id && !state.assets.contains(*pad.asset_id)) ||
-          playback.gain_millidb < -60000 || playback.gain_millidb > 6000 ||
-          (playback.trim_end_frame && *playback.trim_end_frame <= playback.trim_start_frame)) return false;
-      switch (playback.trigger_mode) {
-        case TriggerMode::one_shot: case TriggerMode::gate:
-        case TriggerMode::loop_gate: case TriggerMode::loop_toggle: break;
-        default: return false;
-      }
+          !is_valid_playback(pad.playback)) return false;
     }
   }
   for (const auto& [id, pattern] : state.patterns) {

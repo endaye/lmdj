@@ -12,6 +12,7 @@ target_sources(
     src/master_fx.cpp
     src/prepared_sample_bank.cpp
     src/realtime_engine.cpp
+    src/voice_dsp.cpp
 )
 
 if(EMSCRIPTEN)
@@ -47,6 +48,7 @@ if(BUILD_TESTING)
       src/master_fx.cpp
       src/prepared_sample_bank.cpp
       src/realtime_engine.cpp
+      src/voice_dsp.cpp
   )
   target_include_directories(
     lmdj_audio_runtime_testable
@@ -146,6 +148,44 @@ if(BUILD_TESTING)
     TIER unit
     COMMAND lmdj_audio_realtime_queue_tests
     LABELS audio concurrency
+  )
+
+  add_executable(
+    lmdj_audio_voice_dsp_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/voice_dsp_test.cpp"
+  )
+  target_include_directories(
+    lmdj_audio_voice_dsp_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_audio_voice_dsp_tests PRIVATE lmdj::audio_runtime
+  )
+  lmdj_target_warnings(lmdj_audio_voice_dsp_tests)
+  lmdj_target_sanitizers(lmdj_audio_voice_dsp_tests)
+  lmdj_add_test(
+    NAME audio.voice_dsp
+    TIER unit
+    COMMAND lmdj_audio_voice_dsp_tests
+    LABELS audio
+  )
+
+  add_executable(
+    lmdj_audio_voice_dsp_parity_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/voice_dsp_parity_test.cpp"
+  )
+  target_include_directories(
+    lmdj_audio_voice_dsp_parity_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_audio_voice_dsp_parity_tests PRIVATE lmdj::audio_runtime
+  )
+  lmdj_target_warnings(lmdj_audio_voice_dsp_parity_tests)
+  lmdj_target_sanitizers(lmdj_audio_voice_dsp_parity_tests)
+  lmdj_add_test(
+    NAME audio.voice_dsp_parity
+    TIER component
+    COMMAND lmdj_audio_voice_dsp_parity_tests
+    LABELS audio
   )
 
   add_executable(

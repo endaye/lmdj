@@ -36,8 +36,12 @@ Schema 固定每个键的形状与上下界，并拒绝 `loop_mode: ping_pong` �
 跨字段的帧区间规则（循环点位于 trim 区间内、crossfade 不超过循环长度一半）与 trim 区间一样由 Domain 校验。
 `5.0.0` reader 按设计拒绝携带新键的 Project。取值与语义的权威是
 2026-09-30 回放与音色对齐决策（`docs/prd/decisions/2026-09-30-sample-playback-and-tone-parity.md`）。
-本 Contract 版本先于实现：Authoring Domain、Project I/O、Cooker 与 Audio Runtime 读写并播放这些键属于后续 Task，
-在此之前当前 Project I/O 仍按精确五键拒绝它们。
+Core 已实现这些键：Authoring Domain 以单一 `is_valid_playback` 校验它们；Project I/O 只写出非缺省键，
+`lmdj.project.v5` checkpoint 接受它们、更早级别的 checkpoint 拒绝它们，交易日志与撤销历史始终携带它们；
+Cooker 把循环点与 crossfade 换算为 48 kHz 帧；Audio Runtime 的实时与离线渲染经同一个逐 voice 内核播放。
+crossfade 是循环与自身的重叠：每一遍的最后 X 帧与循环开头的 X 帧等功率叠化，下一遍从循环点之后 X 帧继续，
+所以循环点位于样本首帧时同样有效。Application Facade、MCP、Web Runtime Platform 与 Creator 尚未暴露这些键，
+属于后续 Task。
 
 ## Slice 采纳 Lineage
 

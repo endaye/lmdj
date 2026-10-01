@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <atomic>
 
@@ -8,6 +9,7 @@
 #include <limits>
 #include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/audio/realtime_engine.hpp>
+#include <lmdj/audio/detail/voice_dsp.hpp>
 #include <memory>
 #include <new>
 #include <span>
@@ -3504,6 +3506,211 @@ void start_epoch_overflow_fails_before_mutating_engine_state() {
   LMDJ_CHECK(after.callback_count == before.callback_count);
 }
 
+// --- Voice DSP kernel (Sample parity, lmdj.project.v5 5.1.0) ---
+
+// A ramp whose value at frame i is i / 1000, so every output frame names the
+// source frame it read.
+std::vector<float> dsp_source(std::size_t frames) {
+  std::vector<float> source(frames);
+  for (std::size_t index = 0; index < frames; ++index) {
+    source[index] = static_cast<float>(index) * 0.001F;
+  }
+  return source;
+}
+
+ResolvedPlayback dsp_playback(
+    std::uint32_t start,
+    std::uint32_t end,
+    TriggerMode mode,
+    lmdj::cooker::ResolvedVoiceDsp dsp) {
+  ResolvedPlayback playback{start, end, mode, 1.0F, false};
+  playback.dsp = dsp;
+  return playback;
+}
+
+struct RenderedChannels {
+  std::vector<float> left;
+  std::vector<float> right;
+};
+
+RenderedChannels render_channels(RealtimeEngine& engine, std::uint32_t frames) {
+  RenderedChannels out{std::vector<float>(frames), std::vector<float>(frames)};
+  std::uint32_t done = 0;
+  while (done < frames) {
+    const auto block = std::min<std::uint32_t>(frames - done, 128);
+    engine.render(out.left.data() + done, out.right.data() + done, block);
+    done += block;
+  }
+  return out;
+}
+
+constexpr lmdj::cooker::ResolvedVoiceDsp kReverseDsp{
+    0, 0, 0, 0, lmdj::cooker::ResolvedVoiceDsp::kReverse};
+constexpr lmdj::cooker::ResolvedVoiceDsp kHardLeftDsp{0, 0, 0, -100, 0};
+
+void reversed_press_plays_backwards_and_publishes_physical_frames() {
+  RealtimeEngine engine;
+  const auto sample = dsp_source(300);
+  LMDJ_CHECK(engine.publish_sample_bank(bank_with_playback(
+                 1, sample,
+                 dsp_playback(0, 300, TriggerMode::one_shot, kReverseDsp))) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue_control(control(20, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  const auto out = render_channels(engine, 300);
+  // Between the attack and the end fade, frame k is the source frame 299-k.
+  for (std::size_t frame = 96; frame < 204; ++frame) {
+    LMDJ_CHECK(out.left[frame] == sample[299 - frame]);
+  }
+  LMDJ_CHECK(out.right == out.left);
+  const auto states = drain_voice_states(engine, 2);
+  LMDJ_CHECK(states.at(0).state == RuntimeVoiceState::started);
+  LMDJ_CHECK(states.at(0).source_frame == 299);
+  LMDJ_CHECK(states.at(1).state == RuntimeVoiceState::completed);
+  LMDJ_CHECK(states.at(1).runtime_frame == 300);
+  LMDJ_CHECK(states.at(1).source_frame == 0);
+}
+
+void hard_left_press_leaves_the_right_channel_silent() {
+  RealtimeEngine engine;
+  const auto sample = dsp_source(300);
+  const auto playback =
+      dsp_playback(0, 300, TriggerMode::one_shot, kHardLeftDsp);
+  LMDJ_CHECK(engine.publish_sample_bank(bank_with_playback(1, sample, playback)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue_control(control(21, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  const auto out = render_channels(engine, 300);
+  lmdj::audio::detail::VoiceDspState expected{};
+  LMDJ_CHECK(lmdj::audio::detail::prepare_voice_dsp(playback, sample.size(), expected));
+  LMDJ_CHECK(out.left[150] == sample[150] * expected.pan_left);
+  for (const float value : out.right) {
+    LMDJ_CHECK(value == 0.0F);
+  }
+}
+
+void preview_dsp_block_shapes_a_later_press() {
+  RealtimeEngine engine;
+  const auto sample = dsp_source(300);
+  LMDJ_CHECK(engine.publish_sample_bank(bank_with_playback(
+                 1, sample, ResolvedPlayback{0, 300, TriggerMode::one_shot, 1.0F, false})) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue_control(control(
+                 22, 0, PadControlKind::preview_set, 0,
+                 dsp_playback(0, 300, TriggerMode::one_shot, kReverseDsp))) ==
+             EnqueueResult::accepted);
+  LMDJ_CHECK(engine.enqueue_control(control(23, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  const auto out = render_channels(engine, 300);
+  LMDJ_CHECK(out.left[150] == sample[149]);
+}
+
+void out_of_range_dsp_block_is_refused_at_enqueue() {
+  RealtimeEngine engine;
+  const auto sample = dsp_source(300);
+  LMDJ_CHECK(engine.publish_sample_bank(bank_with_sample(1, sample)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  auto playback = dsp_playback(0, 300, TriggerMode::one_shot, {0, 0, 2401, 0, 0});
+  LMDJ_CHECK(engine.enqueue_control(control(
+                 24, 0, PadControlKind::preview_set, 0, playback)) !=
+             EnqueueResult::accepted);
+  LMDJ_CHECK(engine.telemetry().invalid_events == 1);
+}
+
+void pattern_voice_renders_its_pad_dsp_block() {
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.publish_sample_bank(
+                 PreparedSampleBank::empty(ProjectId{kProjectId}, 1)) ==
+             PublishResult::accepted);
+  auto snapshot = pattern_snapshot(kPatternA, PadSlotId{0, 0}, 127, 120, 12'000);
+  snapshot.pads.at(0).playback.dsp = kHardLeftDsp;
+  auto view = PreparedPatternView::from_snapshot(snapshot);
+  LMDJ_CHECK(view.has_value());
+  LMDJ_CHECK(engine.publish_pattern_view(std::move(view.value())).result ==
+             lmdj::audio::PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  const auto out = render_channels(engine, 512);
+  LMDJ_CHECK(*std::max_element(out.left.begin(), out.left.end()) > 0.0F);
+  for (const float value : out.right) {
+    LMDJ_CHECK(value == 0.0F);
+  }
+}
+
+void replay_voice_renders_its_dsp_block() {
+  RealtimeEngine engine;
+  const auto sample = dsp_source(300);
+  std::vector<std::int16_t> replay_sample(300, 8'000);
+  LMDJ_CHECK(engine.publish_sample_bank(bank_with_sample(1, sample)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  render_frames(engine, 1);
+  LMDJ_CHECK(engine.enqueue_control(PadControlEvent{
+                 0,
+                 0,
+                 127,
+                 PadControlKind::press,
+                 dsp_playback(0, 300, TriggerMode::one_shot, kHardLeftDsp),
+                 PadControlOrigin::performance_replay,
+                 300,
+                 PreparedSampleMaterialView{
+                     replay_sample.data(),
+                     static_cast<std::uint32_t>(replay_sample.size()), 1},
+             }) == EnqueueResult::accepted);
+  const auto out = render_channels(engine, 300);
+  LMDJ_CHECK(out.left[150] > 0.0F);
+  for (const float value : out.right) {
+    LMDJ_CHECK(value == 0.0F);
+  }
+}
+
+void starting_kernel_voices_does_not_allocate() {
+  RealtimeEngine engine;
+  const auto sample = dsp_source(512);
+  // Two slots: a second press on a latched loop_toggle slot would stop it.
+  auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+  LMDJ_CHECK(bank.set_sample(0, sample).has_value());
+  LMDJ_CHECK(bank.set_sample(1, sample).has_value());
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  render_frames(engine, 1);
+  // Every #1666 stage at once: reverse, a fractional pitch, pan, and a
+  // ping-pong loop from a loop point; plus a crossfaded forward loop.
+  const auto ping_pong = dsp_playback(
+      0, 512, TriggerMode::loop_toggle,
+      {100, 0, 700, 40,
+       lmdj::cooker::ResolvedVoiceDsp::kReverse |
+           lmdj::cooker::ResolvedVoiceDsp::kPingPong});
+  const auto crossfaded = dsp_playback(
+      0, 512, TriggerMode::loop_gate, {64, 128, -300, -60, 0});
+  LMDJ_CHECK(engine.enqueue_control(control(
+                 30, 0, PadControlKind::preview_set, 0, ping_pong)) ==
+             EnqueueResult::accepted);
+  LMDJ_CHECK(engine.enqueue_control(control(31, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  LMDJ_CHECK(engine.enqueue_control(control(
+                 32, 1, PadControlKind::preview_set, 0, crossfaded)) ==
+             EnqueueResult::accepted);
+  LMDJ_CHECK(engine.enqueue_control(control(33, 1, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  std::array<float, 256> left{};
+  std::array<float, 256> right{};
+  g_allocations.store(0, std::memory_order_relaxed);
+  g_deallocations.store(0, std::memory_order_relaxed);
+  g_track_allocations.store(true, std::memory_order_relaxed);
+  // The presses are dequeued, and their kernels prepared, inside the window.
+  engine.render(left.data(), right.data(), 256);
+  engine.render(left.data(), right.data(), 256);
+  g_track_allocations.store(false, std::memory_order_relaxed);
+  LMDJ_CHECK(g_allocations.load(std::memory_order_relaxed) == 0);
+  LMDJ_CHECK(g_deallocations.load(std::memory_order_relaxed) == 0);
+  LMDJ_CHECK(engine.telemetry().active_voices == 2);
+}
+
 void render_does_not_allocate_or_deallocate() {
   RealtimeEngine engine;
   const std::array<float, 2> old_sample{0.25F, 0.5F};
@@ -4864,6 +5071,13 @@ int main() {
   restart_resets_counters_retains_samples_and_replays_no_event();
   start_epoch_overflow_fails_before_mutating_engine_state();
   render_does_not_allocate_or_deallocate();
+  reversed_press_plays_backwards_and_publishes_physical_frames();
+  hard_left_press_leaves_the_right_channel_silent();
+  preview_dsp_block_shapes_a_later_press();
+  out_of_range_dsp_block_is_refused_at_enqueue();
+  pattern_voice_renders_its_pad_dsp_block();
+  replay_voice_renders_its_dsp_block();
+  starting_kernel_voices_does_not_allocate();
   attack_ramps_to_full_gain_over_exactly_the_ramp_frames();
   non_loop_boundary_fades_to_exact_zero_at_end_frame();
   stop_voice_renders_a_full_ramp_tail_then_deactivates();

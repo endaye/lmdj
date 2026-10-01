@@ -1,6 +1,8 @@
 #include <lmdj/audio/master_fx.hpp>
+#include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/audio/realtime_engine.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -344,11 +346,130 @@ void all_eight_effects_sustain_maximum_gesture_rate_without_underruns() {
   LMDJ_CHECK(realtime.completed_voices == 1);
 }
 
+// The Sample parity worst case (decision 2026-09-30): every voice slot runs the
+// shared kernel with every #1666 stage on while all eight master FX run at
+// maximum. All 128 triggers land in one callback, so kernel preparation is
+// inside the measured window. The gate is the same deadline and the same zero
+// unattributed overruns; it is never raised to make this pass.
+void full_voice_pool_with_every_kernel_stage_holds_the_deadline() {
+  using lmdj::audio::EnqueueResult;
+  using lmdj::audio::PadControlEvent;
+  using lmdj::audio::PadControlKind;
+  using lmdj::audio::PreparedSampleBank;
+  using lmdj::audio::PublishResult;
+  using lmdj::cooker::ResolvedPlayback;
+  using lmdj::cooker::ResolvedVoiceDsp;
+  constexpr std::uint32_t kFramesPerQuantum = 128;
+  constexpr std::uint32_t kSimulatedSeconds = 5;
+  constexpr std::uint32_t kQuanta =
+      (48'000U * kSimulatedSeconds) / kFramesPerQuantum;
+  constexpr auto kCallbackDeadline = std::chrono::nanoseconds{
+      1'000'000'000ULL * kFramesPerQuantum / 48'000U};
+  constexpr std::uint32_t kSampleFrames = 24'000;
+  constexpr std::uint8_t kSlots = 64;
+
+  std::vector<float> sample(kSampleFrames);
+  for (std::size_t frame = 0; frame < sample.size(); ++frame) {
+    sample[frame] = 0.004F * std::sin(static_cast<float>(frame) * 0.013F);
+  }
+  auto bank = PreparedSampleBank::empty(
+      lmdj::foundation::ProjectId{"00000000-0000-4000-8000-000000000001"}, 1);
+  for (std::uint8_t slot = 0; slot < kSlots; ++slot) {
+    LMDJ_CHECK(bank.set_sample(slot, sample).has_value());
+  }
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) == PublishResult::accepted);
+  LMDJ_CHECK(engine.prepare_master_fx(173).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  for (const auto fx : lmdj::audio::kFxChainOrder) {
+    LMDJ_CHECK(engine.enqueue_fx_gesture(
+                   FxGesture{FxGestureKind::engage, fx, 1'000}) ==
+               FxEnqueueResult::accepted);
+  }
+  for (std::uint8_t slot = 0; slot < kSlots; ++slot) {
+    ResolvedPlayback playback{0, kSampleFrames, lmdj::domain::TriggerMode::loop_gate,
+                              1.0F, false};
+    const bool ping_pong = slot % 2 == 1;
+    playback.dsp = ResolvedVoiceDsp{
+        kSampleFrames / 4,
+        ping_pong ? 0U : kSampleFrames / 8,
+        static_cast<std::int16_t>(-1100 + slot * 37),
+        static_cast<std::int8_t>(slot % 3 == 0 ? -60 : 45),
+        static_cast<std::uint8_t>(
+            (slot % 4 < 2 ? ResolvedVoiceDsp::kReverse : 0) |
+            (ping_pong ? ResolvedVoiceDsp::kPingPong : 0))};
+    LMDJ_CHECK(engine.enqueue_control(PadControlEvent{
+                   slot, slot, 0, PadControlKind::preview_set, playback}) ==
+               EnqueueResult::accepted);
+    for (std::uint8_t press = 0; press < 2; ++press) {
+      LMDJ_CHECK(engine.enqueue_control(PadControlEvent{
+                     1'000U + slot * 2U + press, slot, 127,
+                     PadControlKind::press, ResolvedPlayback{}}) ==
+                 EnqueueResult::accepted);
+    }
+  }
+
+  std::uint64_t overruns = 0;
+  std::uint64_t attributed = 0;
+  std::uint64_t worst_ns = 0;
+  std::uint64_t total_ns = 0;
+  std::uint32_t full_pool_quanta = 0;
+  bool finite = true;
+  std::array<float, kFramesPerQuantum> left{};
+  std::array<float, kFramesPerQuantum> right{};
+  for (std::uint32_t quantum = 0; quantum < kQuanta; ++quantum) {
+    const auto started = kVerifyRealtimeDeadline
+                             ? current_thread_cpu_time()
+                             : std::chrono::nanoseconds::zero();
+    const auto host_before = kVerifyRealtimeDeadline ? host_accounting_sample()
+                                                     : HostAccountingSample{};
+    engine.render(left.data(), right.data(), left.size());
+    if (kVerifyRealtimeDeadline) {
+      const auto elapsed = current_thread_cpu_time() - started;
+      const auto host_after = host_accounting_sample();
+      const auto observed_ns = static_cast<std::uint64_t>(elapsed.count());
+      worst_ns = std::max(worst_ns, observed_ns);
+      total_ns += observed_ns;
+      if (elapsed > kCallbackDeadline) {
+        if (host_accounting_delta(host_before, host_after).total() > 0) {
+          ++attributed;
+        } else {
+          ++overruns;
+        }
+      }
+    }
+    for (std::size_t frame = 0; frame < left.size(); ++frame) {
+      finite = finite && std::isfinite(left[frame]) && std::isfinite(right[frame]);
+    }
+    if (engine.telemetry().active_voices == 128) {
+      ++full_pool_quanta;
+    }
+  }
+  engine.stop();
+  if (overruns != 0) {
+    std::cerr << "why: " << overruns << " of " << kQuanta
+              << " callbacks with 128 kernel voices and all eight FX exceeded "
+              << kCallbackDeadline.count()
+              << " ns of thread CPU time with no host accounting attribution; "
+                 "mean "
+              << total_ns / kQuanta << " ns, worst " << worst_ns << " ns ("
+              << attributed << " further overruns were attributed, #666).\n"
+              << "remedy: the voice DSP kernel or its trigger-time preparation "
+                 "regressed; profile the kernel path and never raise the "
+                 "deadline to make this pass.\n";
+  }
+  LMDJ_CHECK(finite);
+  LMDJ_CHECK(overruns == 0);
+  LMDJ_CHECK(engine.telemetry().started_voices == 128);
+  LMDJ_CHECK(full_pool_quanta == kQuanta);
+}
+
 }  // namespace
 
 int main() {
   try {
     all_eight_effects_sustain_maximum_gesture_rate_without_underruns();
+    full_voice_pool_with_every_kernel_stage_holds_the_deadline();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

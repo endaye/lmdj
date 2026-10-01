@@ -207,6 +207,11 @@ void validate_playback(const ResolvedPlayback& playback, std::uint32_t frames) {
               playback.end_frame <= frames && std::isfinite(playback.linear_gain) &&
               !std::signbit(playback.linear_gain) && playback.linear_gain <= 2.0F,
           "playback", "runtime content playback range or gain is invalid");
+  // lmdj.runtime-content.v1 has no field for the voice DSP block. Refusing a
+  // non-neutral block keeps a device from silently playing a Pad differently
+  // from the desktop that exported it.
+  require(is_neutral(playback.dsp), "voice_dsp",
+          "runtime content v1 cannot carry Pad reverse, pitch, pan or loop settings");
 }
 
 auto event_key(const ResolvedEvent& event) {

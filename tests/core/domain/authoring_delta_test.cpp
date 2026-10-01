@@ -119,6 +119,7 @@ void rejects_invalid_result_content() {
     [](auto& s) { s.banks[0][0].playback.gain_millidb = 6001; },
     [](auto& s) { s.banks[0][0].playback.trim_end_frame = 0; },
     [](auto& s) { s.banks[0][0].playback.trigger_mode = static_cast<TriggerMode>(99); },
+    [](auto& s) { s.banks[0][0].playback.pitch_cents = 2401; },
     [](auto& s) { auto& p = s.patterns.begin()->second; p.id = PatternId{uuid(99)}; },
     [](auto& s) { s.patterns.begin()->second.bars = 3; },
     [](auto& s) { s.patterns.begin()->second.events.front().slot = {4,0}; },

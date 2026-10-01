@@ -44,25 +44,6 @@ bool valid_artifact(const foundation::ArtifactRef& artifact) {
   return valid_sha256(artifact.sha256) && !artifact.media_type.empty();
 }
 
-bool valid_trigger_mode(TriggerMode trigger_mode) {
-  switch (trigger_mode) {
-    case TriggerMode::one_shot:
-    case TriggerMode::gate:
-    case TriggerMode::loop_gate:
-    case TriggerMode::loop_toggle:
-      return true;
-  }
-  return false;
-}
-
-bool valid_playback(const PadPlayback& playback) {
-  return playback.gain_millidb >= -60000 &&
-         playback.gain_millidb <= 6000 &&
-         valid_trigger_mode(playback.trigger_mode) &&
-         (!playback.trim_end_frame.has_value() ||
-          *playback.trim_end_frame > playback.trim_start_frame);
-}
-
 foundation::Result<void> validate_pattern(const Pattern& pattern) {
   if (!is_valid_uuid(pattern.id.value())) {
     return foundation::Result<void>::failure(
@@ -460,7 +441,7 @@ foundation::Result<AppliedCommand> apply_new_command(
   if (!is_valid_slot(command.slot)) {
     return invalid("pad slot is invalid");
   }
-  if (!valid_playback(command.playback)) {
+  if (!is_valid_playback(command.playback)) {
     return invalid("pad playback is invalid");
   }
   auto copy = state;

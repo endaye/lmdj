@@ -1,4 +1,5 @@
 #include <lmdj/audio/prepared_sample_bank.hpp>
+#include <lmdj/audio/detail/voice_dsp.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -117,7 +118,8 @@ bool valid_playback(
   return playback.start_frame < playback.end_frame &&
          playback.end_frame <= frame_count &&
          valid_trigger_mode(playback.trigger_mode) &&
-         std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F;
+         std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F &&
+         detail::voice_dsp_fits(playback, frame_count);
 }
 
 foundation::Error invalid_timing(std::string message) {

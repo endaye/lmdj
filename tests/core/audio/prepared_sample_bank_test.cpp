@@ -467,6 +467,17 @@ void prepares_immutable_pattern_overlay_and_integer_timing() {
       4'894'080);
 }
 
+// A DSP-only change must not compare equal, or an edit that only changes a
+// Pad's reverse, pitch, pan or loop settings would be treated as no change.
+void pattern_event_equality_includes_the_voice_dsp_block() {
+  lmdj::audio::PreparedPatternEvent first{};
+  first.playback = ResolvedPlayback{0, 4, TriggerMode::gate, 1.0F, false};
+  auto second = first;
+  LMDJ_CHECK(first == second);
+  second.playback.dsp.pan = -100;
+  LMDJ_CHECK(!(first == second));
+}
+
 void bounded_preparation_rejects_before_allocation_and_retains_prior_bank() {
   auto prior = PreparedSampleBank::empty(ProjectId{kProjectId}, 6);
   const std::array<float, 2> prior_pcm{0.25F, 0.25F};
@@ -636,4 +647,5 @@ int main() {
   bounded_preparation_rejects_before_allocation_and_retains_prior_bank();
   admits_decided_boundaries_and_rejects_one_mono_frame_over();
   prepares_immutable_pattern_overlay_and_integer_timing();
+  pattern_event_equality_includes_the_voice_dsp_block();
 }

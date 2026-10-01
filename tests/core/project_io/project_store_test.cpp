@@ -988,6 +988,130 @@ void test_v2_checkpoint_rejects_extra_playback_keys() {
   LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
 }
 
+PadPlayback parity_playback() {
+  PadPlayback playback{5, 25, TriggerMode::loop_toggle, -300, false};
+  playback.reverse = true;
+  playback.pitch_cents = 700;
+  playback.pan = -40;
+  playback.loop_start_frame = 9;
+  playback.loop_crossfade_frames = 3;
+  return playback;
+}
+
+void test_parity_playback_round_trips_with_only_non_default_keys() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "parity-playback.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto committed = store.execute(
+      bundle,
+      UpdatePadPlayback{meta("parity-playback", 0), PadSlotId{0, 0},
+                        parity_playback()});
+  LMDJ_CHECK(committed.has_value());
+
+  const auto checkpoint = read_json(bundle / "history/checkpoints/1.json");
+  const auto& playback =
+      checkpoint.at("banks").at(0).at("pads").at(0).at("playback");
+  std::vector<std::string> keys;
+  for (const auto& [key, value] : playback.items()) {
+    (void)value;
+    keys.push_back(key);
+  }
+  // loop_mode is forward, its default, so it is not written.
+  const std::vector<std::string> expected_keys{
+      "gain_millidb", "loop_crossfade_frames", "loop_start_frame", "muted",
+      "pan", "pitch_cents", "reverse", "trigger_mode", "trim_end_frame",
+      "trim_start_frame"};
+  LMDJ_CHECK(keys == expected_keys);
+
+  const auto reopened = store.load(bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value() == committed.value().state);
+}
+
+void test_ping_pong_loop_mode_round_trips() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "ping-pong.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  PadPlayback playback{0, 40, TriggerMode::loop_gate, 0, false};
+  playback.loop_mode = lmdj::domain::LoopMode::ping_pong;
+  const auto committed = store.execute(
+      bundle,
+      UpdatePadPlayback{meta("ping-pong", 0), PadSlotId{0, 1}, playback});
+  LMDJ_CHECK(committed.has_value());
+  const auto checkpoint = read_json(bundle / "history/checkpoints/1.json");
+  const auto& encoded =
+      checkpoint.at("banks").at(0).at("pads").at(1).at("playback");
+  LMDJ_CHECK(encoded.size() == 6);
+  LMDJ_CHECK(encoded.at("loop_mode") == "ping_pong");
+  const auto reopened = store.load(bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value().banks.at(0).at(1).playback == playback);
+}
+
+void test_pre_v5_checkpoint_refuses_parity_keys() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "v4-parity.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto checkpoint_path = bundle / "history/checkpoints/0.json";
+  auto checkpoint = read_json(checkpoint_path);
+  checkpoint["contract"] = "lmdj.project.v4";
+  write_bytes(
+      checkpoint_path, lmdj::foundation::canonical_json(checkpoint) + "\n");
+  // Control: the relabelled checkpoint alone is a legal v4 Project.
+  LMDJ_CHECK(store.load(bundle).has_value());
+
+  checkpoint["banks"][0]["pads"][0]["playback"]["pitch_cents"] = 100;
+  write_bytes(
+      checkpoint_path, lmdj::foundation::canonical_json(checkpoint) + "\n");
+  const auto rejected = store.load(bundle);
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+}
+
+void test_v5_checkpoint_refuses_invalid_parity_playback() {
+  {
+    // Control: rewriting checkpoint 0 with a valid boundary value loads, so a
+    // refusal below comes from the value, not from the rewrite.
+    TempDirectory temp;
+    const auto bundle = temp.path() / "v5-valid-parity.lmdj";
+    ProjectStore store;
+    LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+    const auto checkpoint_path = bundle / "history/checkpoints/0.json";
+    auto checkpoint = read_json(checkpoint_path);
+    checkpoint["banks"][0]["pads"][0]["playback"]["pitch_cents"] = 2400;
+    write_bytes(
+        checkpoint_path, lmdj::foundation::canonical_json(checkpoint) + "\n");
+    const auto loaded = store.load(bundle);
+    LMDJ_CHECK(loaded.has_value());
+    LMDJ_CHECK(loaded.value().banks.at(0).at(0).playback.pitch_cents == 2400);
+  }
+  for (const auto& [key, value] : std::vector<std::pair<std::string, nlohmann::json>>{
+           {"time_stretch", true},
+           {"pitch_cents", 2401},
+           {"pan", -101},
+           {"loop_mode", "reverse"},
+           {"reverse", "true"},
+           {"loop_crossfade_frames", -1},
+       }) {
+    TempDirectory temp;
+    const auto bundle = temp.path() / "v5-invalid-parity.lmdj";
+    ProjectStore store;
+    LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+    const auto checkpoint_path = bundle / "history/checkpoints/0.json";
+    auto checkpoint = read_json(checkpoint_path);
+    LMDJ_CHECK(checkpoint.at("contract") == "lmdj.project.v5");
+    checkpoint["banks"][0]["pads"][0]["playback"][key] = value;
+    write_bytes(
+        checkpoint_path, lmdj::foundation::canonical_json(checkpoint) + "\n");
+    const auto rejected = store.load(bundle);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+  }
+}
+
 void test_reset_pad_playback_persists_v2_defaults() {
   TempDirectory temp;
   const auto bundle = temp.path() / "reset-playback.lmdj";
@@ -2698,6 +2822,10 @@ int main() {
     test_nonzero_revision_v1_history_opens_without_migration();
     test_v2_checkpoint_rejects_extra_playback_keys();
     test_reset_pad_playback_persists_v2_defaults();
+    test_parity_playback_round_trips_with_only_non_default_keys();
+    test_ping_pong_loop_mode_round_trips();
+    test_pre_v5_checkpoint_refuses_parity_keys();
+    test_v5_checkpoint_refuses_invalid_parity_playback();
     test_persisted_checkpoints_reject_non_contract_shapes();
     test_create_removes_exact_stale_checkpoint_temp();
     test_create_resumes_manifest_after_valid_checkpoint_publish();

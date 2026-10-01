@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <lmdj/audio/prepared_sample_bank.hpp>
+#include <lmdj/audio/detail/voice_dsp.hpp>
 #include <lmdj/domain/project.hpp>
 #include <lmdj/facade/performance_engine_adapter.hpp>
 
@@ -66,7 +67,8 @@ bool valid_playback(const cooker::ResolvedPlayback& playback,
   return playback.start_frame < playback.end_frame &&
          playback.end_frame <= frame_count &&
          valid_trigger_mode(playback.trigger_mode) &&
-         std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F;
+         std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F &&
+         audio::detail::voice_dsp_fits(playback, frame_count);
 }
 
 class EnginePerformanceClock final : public PerformanceClock {

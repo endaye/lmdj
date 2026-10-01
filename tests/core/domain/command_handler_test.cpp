@@ -2,6 +2,7 @@
 #include <exception>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -22,6 +23,7 @@ using lmdj::domain::CommandReceipt;
 using lmdj::domain::CreatePattern;
 using lmdj::domain::ImportAsset;
 using lmdj::domain::ImportAssignSample;
+using lmdj::domain::LoopMode;
 using lmdj::domain::MergePatternEvents;
 using lmdj::domain::MovePatternSlot;
 using lmdj::domain::PadPlayback;
@@ -438,7 +440,7 @@ void test_duplicate_playback_update_replays_without_another_revision() {
 
 void test_update_pad_playback_rejects_invalid_values() {
   const auto initial = new_project();
-  for (const PadPlayback invalid_playback : {
+  for (const PadPlayback& invalid_playback : {
            PadPlayback{0, std::nullopt, TriggerMode::one_shot, -60001, false},
            PadPlayback{0, std::nullopt, TriggerMode::one_shot, 6001, false},
            PadPlayback{10, 10, TriggerMode::gate, 0, false},
@@ -455,6 +457,100 @@ void test_update_pad_playback_rejects_invalid_values() {
             kPlaybackCommand, 0, PadSlotId{0, 0}, invalid_playback));
   }
 
+}
+
+PadPlayback with_parity(
+    PadPlayback playback,
+    bool reverse,
+    std::int32_t pitch_cents,
+    std::int32_t pan,
+    LoopMode loop_mode,
+    std::optional<std::uint64_t> loop_start_frame,
+    std::uint64_t loop_crossfade_frames) {
+  playback.reverse = reverse;
+  playback.pitch_cents = pitch_cents;
+  playback.pan = pan;
+  playback.loop_mode = loop_mode;
+  playback.loop_start_frame = loop_start_frame;
+  playback.loop_crossfade_frames = loop_crossfade_frames;
+  return playback;
+}
+
+void test_update_pad_playback_accepts_parity_bounds() {
+  auto state = apply_or_throw(
+      new_project(),
+      import_assign_sample(
+          kImportAssignCommand, 0, PadSlotId{0, 0}, kAsset1))
+                   .state;
+  const PadPlayback loop{10, 30, TriggerMode::loop_gate, 0, false};
+  const std::array cases{
+      with_parity(loop, true, -2400, -100, LoopMode::forward, std::nullopt, 0),
+      with_parity(loop, false, 2400, 100, LoopMode::ping_pong, 10, 0),
+      with_parity(loop, false, 0, 0, LoopMode::forward, 29, 0),
+      // A 20-frame loop may blend exactly half of itself.
+      with_parity(loop, false, 0, 0, LoopMode::forward, 10, 10),
+      // An open trim end is bounded by the source length, not the domain.
+      with_parity(
+          PadPlayback{0, std::nullopt, TriggerMode::loop_toggle, 0, false},
+          false, 0, 0, LoopMode::forward, 4, 1000),
+  };
+
+  for (const auto& playback : cases) {
+    const auto applied = lmdj::domain::apply(
+        state,
+        update_playback(
+            kPlaybackCommand, state.revision, PadSlotId{0, 0}, playback),
+        {});
+    LMDJ_CHECK(applied.has_value());
+    LMDJ_CHECK(applied.value().state.banks[0][0].playback == playback);
+    state = applied.value().state;
+  }
+}
+
+void test_update_pad_playback_rejects_invalid_parity_values() {
+  const auto initial = new_project();
+  const PadPlayback loop{10, 30, TriggerMode::loop_gate, 0, false};
+  for (const PadPlayback& invalid_playback : {
+           with_parity(loop, false, 2401, 0, LoopMode::forward, std::nullopt, 0),
+           with_parity(loop, false, -2401, 0, LoopMode::forward, std::nullopt, 0),
+           with_parity(loop, false, 0, 101, LoopMode::forward, std::nullopt, 0),
+           with_parity(loop, false, 0, -101, LoopMode::forward, std::nullopt, 0),
+           with_parity(
+               loop, false, 0, 0, static_cast<LoopMode>(255), std::nullopt, 0),
+           with_parity(loop, false, 0, 0, LoopMode::forward, 9, 0),
+           with_parity(loop, false, 0, 0, LoopMode::forward, 30, 0),
+           with_parity(loop, false, 0, 0, LoopMode::ping_pong, std::nullopt, 1),
+           with_parity(loop, false, 0, 0, LoopMode::forward, 10, 11),
+       }) {
+    check_invalid_without_state_change(
+        initial,
+        update_playback(
+            kPlaybackCommand, 0, PadSlotId{0, 0}, invalid_playback));
+  }
+}
+
+void test_explicit_reset_clears_parity_playback() {
+  auto state = apply_or_throw(
+      new_project(),
+      import_assign_sample(
+          kImportAssignCommand, 0, PadSlotId{0, 0}, kAsset1))
+                   .state;
+  state = apply_or_throw(
+              state,
+              update_playback(
+                  kPlaybackCommand,
+                  1,
+                  PadSlotId{0, 0},
+                  with_parity(
+                      PadPlayback{5, 25, TriggerMode::loop_toggle, 0, false},
+                      true, 700, -40, LoopMode::forward, 9, 3)))
+              .state;
+  const auto reset = lmdj::domain::apply(
+      state,
+      ResetPadPlayback{meta(kResetCommand, 2), PadSlotId{0, 0}},
+      {});
+  LMDJ_CHECK(reset.has_value());
+  LMDJ_CHECK(reset.value().state.banks[0][0].playback == PadPlayback{});
 }
 
 void test_assign_pad_rejects_missing_asset() {
@@ -876,6 +972,9 @@ int main() {
     test_explicit_reset_restores_default_playback();
     test_duplicate_playback_update_replays_without_another_revision();
     test_update_pad_playback_rejects_invalid_values();
+    test_update_pad_playback_accepts_parity_bounds();
+    test_update_pad_playback_rejects_invalid_parity_values();
+    test_explicit_reset_clears_parity_playback();
     test_assign_pad_rejects_missing_asset();
     test_update_pad_playback_rejects_stale_revision();
     test_invalid_command_leaves_state_unchanged();
