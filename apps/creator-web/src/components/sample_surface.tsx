@@ -46,6 +46,7 @@ import {padAddress} from "../state/view_model";
 
 interface SampleSurfaceProps {
   state: CreatorState;
+  externalCaptureBusy?: boolean;
   session?: CreatorSampleRuntimeSession;
   padDropIntent?: {current: (slot: number, file: File, target: HTMLElement) => void};
   filePickIntent: {current: (slot: number) => void};
@@ -201,6 +202,7 @@ export function SampleSurface({
   filePickIntent,
   dispatch,
   captureStopRequest = 0,
+  externalCaptureBusy = false,
   onCaptureSlotChange,
   onCapturePhaseChange,
   onCaptureGesture,
@@ -827,7 +829,7 @@ export function SampleSurface({
   );
 
   const openCapture = async (slot: number): Promise<void> => {
-    if (session === undefined) return;
+    if (session === undefined || externalCaptureBusy) return;
     setIngestError(null);
     try {
       const quota = await session.querySampleQuota(slot);
@@ -947,7 +949,7 @@ export function SampleSurface({
             <button
               type="button"
               disabled={session === undefined || projectUnavailable ||
-                sample.pendingAction !== null || captureTarget !== null}
+                sample.pendingAction !== null || captureTarget !== null || externalCaptureBusy}
               onClick={() => {
                 replaceReturnFocus.current = document.activeElement instanceof HTMLElement
                   ? document.activeElement
@@ -1050,6 +1052,7 @@ export function SampleSurface({
       )}
       {captureTarget === null ? null : (
         <CapturePanel
+          recordingBusy={externalCaptureBusy}
           {...(onCaptureGesture === undefined ? {} : {onRecordGesture: onCaptureGesture})}
           padLabel={`Pad ${padAddress({slot: captureTarget.slot, assetId: null})}`}
           onCommit={(buffer, selection) =>

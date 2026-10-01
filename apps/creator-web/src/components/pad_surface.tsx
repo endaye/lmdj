@@ -12,6 +12,7 @@ import type {createCreatorInputController} from "../runtime/input_controller";
 interface PadSurfaceProps {
   state: CreatorState;
   seedSlots?: readonly SeedSlot[];
+  emptyPadCapture?: boolean;
   controller?: ReturnType<typeof createCreatorInputController>;
   armedCaptureSlot?: number | null;
   onSelectSample?: (slot: number) => void;
@@ -33,7 +34,7 @@ const KEYBOARD_KEY_BY_LOCAL_PAD: ReadonlyMap<number, string> = new Map(
 );
 
 export function PadSurface({
-  state, seedSlots, controller, armedCaptureSlot = null, onSelectSample, onChooseSample, onDropSample,
+  state, seedSlots, emptyPadCapture = false, controller, armedCaptureSlot = null, onSelectSample, onChooseSample, onDropSample,
 }: PadSurfaceProps) {
   const canTrigger = selectCanStartGesture(state);
   return (
@@ -60,7 +61,7 @@ export function PadSurface({
             data-outcome={outcome ?? "idle"}
             disabled={blocked || (onSelectSample !== undefined
               ? state.project.phase !== "ready" || state.project.current === null
-              : (!assigned && !capturing) || !canTrigger)}
+              : (!assigned && !capturing && !emptyPadCapture) || !canTrigger)}
             aria-label={`Pad ${address} — ${status?.toLowerCase() ?? (capturing ? "capturing" : assigned ? "assigned" : "empty")} — Key ${keyboardKey}`}
             key={pad.slot}
             onPointerDown={(event) => controller?.pointerDown(event, pad.slot)}
@@ -71,7 +72,7 @@ export function PadSurface({
             onClick={(event) => {
               if (armedCaptureSlot !== null) return;
               onSelectSample?.(pad.slot);
-              if (!assigned && (controller === undefined || event.detail === 0)) {
+              if (!assigned && !emptyPadCapture && (controller === undefined || event.detail === 0)) {
                 onChooseSample?.(pad.slot);
               }
             }}

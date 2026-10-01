@@ -54,7 +54,9 @@ import {
   createCreatorInputController,
   type PerformancePadInputEvent,
 } from "./runtime/input_controller";
-import {reloadPrepareJourney, retryPrepareJourney} from "./runtime/sample_actions";
+import {captureCommitJourney, inspectSampleJourney, reloadPrepareJourney, retryPrepareJourney} from "./runtime/sample_actions";
+import {createPadCapture, type PadCaptureState, type PadCaptureSource} from "./capture/pad_capture";
+import {createPadCaptureSources} from "./capture/pad_capture_sources";
 import {
   disarmSequenceCaptureJourney,
   isSequenceSession,
@@ -293,6 +295,11 @@ function Workspace({
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyPerformPhase, setHistoryPerformPhase] = useState("idle");
   const [capturePhase, setCapturePhase] = useState<CapturePhase>("idle");
+  const [padCaptureState, setPadCaptureState] = useState<PadCaptureState | null>(null);
+  const padCapture = useRef<ReturnType<typeof createPadCapture> | null>(null);
+  const padCaptureWake = useRef<Promise<boolean> | null>(null);
+  const capturePhaseRef = useRef(capturePhase);
+  capturePhaseRef.current = capturePhase;
   const [armedCaptureSlot, setArmedCaptureSlot] = useState<number | null>(null);
   const [captureStopRequest, setCaptureStopRequest] = useState(0);
   const [midi, setMidi] = useState<MidiStatus | null>(null);
@@ -466,6 +473,8 @@ function Workspace({
           if (sessionRef.current !== session || stateRef.current.project.current?.projectId !== seed.projectId ||
               stateRef.current.project.phase !== "ready") return null;
           if (selectTransportRecording(transportRef.current) ||
+              !["idle", "permission-error"].includes(capturePhaseRef.current) ||
+              (padCapture.current !== null && padCapture.current.getState().phase !== "idle") ||
               !["idle", "saved", "discarded"].includes(performControllerRef.current?.getState().recording.phase ?? "idle")) return null;
           const token = beginProjectAction("open", false);
           if (token === null) return null;
@@ -516,6 +525,53 @@ function Workspace({
     }
   };
 
+  useEffect(() => {
+    if (!isSampleSession(session) || runtimePhase !== "ready") return;
+    const sources = createPadCaptureSources();
+    let source: PadCaptureSource = "microphone";
+    try {if (localStorage.getItem("lmdj.creator.pad-capture-source.v1") === "master") source = "master";} catch {}
+    const controller = createPadCapture({
+      ...sources,
+      start: (chosen, batch, failed) => sources.start(chosen,
+        isPerformanceSession(session) ? session : null, padCaptureWake.current, batch, failed),
+      canStart: target => {
+        const current = stateRef.current;
+        return sessionRef.current === session && current.project.phase === "ready" &&
+          current.project.current?.projectId === target.projectId && current.project.current.revision === target.revision &&
+          current.project.current.pads[target.slot]?.assetId === null && current.transfer.phase === "idle" &&
+          current.sample.pendingAction === null && !projectActions.busy &&
+          ["idle", "permission-error"].includes(capturePhaseRef.current) &&
+          !selectTransportRecording(transportRef.current) &&
+          ["idle", "saved", "discarded"].includes(performControllerRef.current?.getState().recording.phase ?? "idle");
+      },
+      commit: async (target, buffer, selection, retry) => {
+        if (sessionRef.current !== session || stateRef.current.project.current?.projectId !== target.projectId)
+          throw new Error("Return to the original Project to save this take.");
+        if (selectTransportRecording(transportRef.current) ||
+          !["idle", "saved", "discarded"].includes(performControllerRef.current?.getState().recording.phase ?? "idle"))
+          throw new Error("Stop the other recording before saving this take.");
+        const token = beginProjectAction("open", false);
+        if (token === null) throw new Error("Another Project operation is still running.");
+        try {
+          const inspect = await inspectSampleJourney(session, target.slot);
+          if (inspect.assetId !== null) throw new Error("This Pad now contains a sound. Keep or discard this take.");
+          const result = await captureCommitJourney(session, buffer, selection,
+            {slot: target.slot, expectedRevision: retry ? inspect.projectRevision : target.revision});
+          if (result.kind !== "committed") throw new Error("Project changed. Review this take and save again.");
+          await refreshPerformProject().catch(error => {reportFailure("Refresh saved Pad recording", error);});
+          dispatch({type: "sample-action", action: {type: "slot-selected", slot: target.slot}});
+          if (!result.commit.runtimePublished) reportFailure("Prepare Pad recording", {code: "COOK_FAILED"});
+        } finally {finishProjectAction(token);}
+      },
+      changed: setPadCaptureState,
+    }, source);
+    padCapture.current = controller;
+    setPadCaptureState(controller.getState());
+    return () => {void controller.cancel(); if (padCapture.current === controller) padCapture.current = null;};
+  }, [session, runtimePhase]);
+
+  useEffect(() => {void padCapture.current?.cancel();}, [currentProjectId]);
+
   useEffect(() => () => {
     projectActions.invalidate();
     setCandidateAudio(null);
@@ -546,6 +602,19 @@ function Workspace({
           ["ready", "retired"].includes(seed!.slots[slot]!.phase);
       },
       activateAudioForGesture: (event: {isTrusted: boolean}) => gestureActivation.current(event),
+      onEmptyPadPress: (slot: number, key: object, source: import("./runtime/runtime_types").RuntimeTriggerSource,
+        activation: Promise<boolean> | null) => {
+        if (padCapture.current === null) return false;
+        if (source === "midi") return true;
+        const project = stateRef.current.project.current;
+        if (project !== null) {
+          padCaptureWake.current = activation;
+          padCapture.current.press({projectId: project.projectId, slot, revision: project.revision}, key);
+        }
+        return true;
+      },
+      onEmptyPadRelease: (key: object) => padCapture.current?.release(key),
+      onEmptyPadCancel: () => {void padCapture.current?.cancel();},
       getArmedCaptureSlot: () => armedCaptureSlotRef.current,
       onArmedCaptureStop: () => armedCaptureStopIntent.current(),
       onPerformancePadEvent: (event: PerformancePadInputEvent) => {
@@ -1413,6 +1482,11 @@ function Workspace({
   };
 
   const submitTransportIntent = async (intent: PatternTransportIntent) => {
+    if (intent === "record" && (
+      (padCapture.current !== null && padCapture.current.getState().phase !== "idle") ||
+      !["idle", "permission-error"].includes(capturePhaseRef.current) ||
+      !["idle", "saved", "discarded"].includes(performControllerRef.current?.getState().recording.phase ?? "idle")
+    )) return;
     const project = stateRef.current.project.current;
     const current = transportRef.current;
     if (!isPatternTransportSession(session) || project === null ||
@@ -1573,14 +1647,14 @@ function Workspace({
     setCapturePhase(phase);
     if (phase === "trimming" || phase === "commit-error" || phase === "committing") {
       dispatchSequence({type: "trim-overlay"});
-      // The legacy overlay gate needs a legacy Sequence session. Under the
-      // global transport the journal has no legacy session, so an armed
-      // Capture trimmed over an active transport recording opens the overlay
-      // through this Host-local flag instead.
+      // Capture owns recording exclusively in P1, while Pattern playback may
+      // continue. Its trim dialog must be visible on Sequence even when no
+      // Pattern journal exists; the Host-local flag carries that review.
       const legacySequenceActive =
         ["recording", "switch-pending"].includes(sequenceRef.current.phase) &&
         sequenceRef.current.sessionId !== null;
-      if (!legacySequenceActive && selectTransportRecording(transportRef.current)) {
+      if (!legacySequenceActive && activeModeRef.current === "sequence" &&
+          armedCaptureSlotRef.current !== null) {
         setCaptureTransportOverlay(true);
       }
     } else if (phase === "idle" || phase === "permission-error") {
@@ -1755,6 +1829,7 @@ function Workspace({
   const padSurface = (
     <PadSurface
       state={state}
+      emptyPadCapture={padCaptureState !== null}
       {...(defaultSeed?.projectId === currentProjectId ? {seedSlots: defaultSeed.slots} : {})}
       armedCaptureSlot={armedCaptureSlot}
       {...(activeMode === "sample" ? {
@@ -1771,6 +1846,29 @@ function Workspace({
 
   return (
     <div className="hardware-workspace">
+      {padCaptureState !== null && (
+        <section aria-label="Pad recording">
+          <label>Pad recording source
+            <select aria-label="Pad recording source" value={padCaptureState.source}
+              disabled={padCaptureState.phase !== "idle"}
+              onChange={event => {
+                const source = event.currentTarget.value as PadCaptureSource;
+                padCapture.current?.setSource(source);
+                try {localStorage.setItem("lmdj.creator.pad-capture-source.v1", source);} catch {}
+              }}>
+              <option value="microphone">Microphone</option>
+              <option value="master">Internal playback</option>
+            </select>
+          </label>
+          <output role="status">{padCaptureState.phase}{padCaptureState.target === null ? "" :
+            ` · Pad ${padCaptureState.target.slot + 1}`} · {(padCaptureState.frames / 48_000).toFixed(2)} s</output>
+          {padCaptureState.message !== null && <p role="status">{padCaptureState.message}</p>}
+          {padCaptureState.phase === "review" && <>
+            <button type="button" onClick={() => {void padCapture.current?.save();}}>Save Pad recording</button>
+            <button type="button" onClick={() => padCapture.current?.discard()}>Discard Pad recording</button>
+          </>}
+        </section>
+      )}
       {defaultSeedError !== null && <p role="status">{defaultSeedError}</p>}
       {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "failed") &&
         <button type="button" onClick={() => {defaultSeed.slots.forEach((slot, index) => {
@@ -1838,7 +1936,10 @@ function Workspace({
                   }
                 });
               }}
-              recordEnabled={transportReady && !transportBusy}
+              recordEnabled={transportReady && !transportBusy &&
+                (padCaptureState === null || padCaptureState.phase === "idle") &&
+                ["idle", "permission-error"].includes(capturePhase) &&
+                ["idle", "saved", "discarded"].includes(historyPerformPhase)}
               recording={recording}
               onPlayStop={(event) => {
                 const project = stateRef.current.project.current;
@@ -2009,6 +2110,8 @@ function Workspace({
                     bank={state.activeBank}
                     onBankChange={selectBank}
                     transport={transport}
+                    recordingBusy={(padCaptureState !== null && padCaptureState.phase !== "idle") ||
+                      !["idle", "permission-error"].includes(capturePhase) || recording}
                   />
                 ) : (
                   <main className="perform-surface" aria-label="Perform">
@@ -2052,6 +2155,8 @@ function Workspace({
                 hidden={activeMode !== "sample" && !trimOverlayOpen}>
                 <SampleSurface
                   state={state}
+                  externalCaptureBusy={(padCaptureState !== null && padCaptureState.phase !== "idle") ||
+                    recording || !["idle", "saved", "discarded"].includes(historyPerformPhase)}
                   dispatch={dispatch}
                   filePickIntent={sampleFilePickIntent}
                   padDropIntent={samplePadDropIntent}

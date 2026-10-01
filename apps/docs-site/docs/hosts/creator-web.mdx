@@ -263,3 +263,14 @@ P1 默认 Bank A 仅属于第一次自动创建的 Project。Host 保留独立�
 提交分离；失败重试仍受原 Project、目标空位、版本和原始素材身份约束。
 
 默认下载失败或仍在下载时，若权威 Project 投影显示用户已给该空 Pad 分配素材，尚未发出安装请求的默认预留会持久退役；迟到的下载不会重新安装，Undo 清空该 Pad 后也不会自动补回。已发出的默认请求仍保留原 command receipt 的恢复身份。
+
+Empty Pads record on a native press and commit on release. The first microphone
+permission request prepares only; press again to record. Choose Microphone or
+Internal playback as a remembered Host preference. Capture excludes Pattern and
+Performance recording while playback may continue. Interrupted and capped takes
+require Save or Discard; leading digital zero alone is trimmed. Saved Performance
+replay remains available; internal playback capture replaces manual resample frames.
+
+Capture 通过 Continue in Sequence 继续录音时，Pattern 播放仍可运行；停止录音后的裁剪/保存对话框由 Host 显示，不要求同时存在 Pattern 录音 journal。
+
+Capture 持有录音或待处理素材时，默认素材的网络下载可继续，但其 Project 安装/发布等待录音提交或丢弃，避免背景初始化改变录音目标的 revision。
