@@ -30,7 +30,9 @@ export function ProjectOverview({state}: ProjectOverviewProps) {
         {state.runtime.errorCode !== null ? (
           <div>
             <dt>Error</dt>
-            <dd>{state.runtime.errorCode}</dd>
+            {/* The alert carries the message and next step; the code is in
+                Developer diagnostics. */}
+            <dd>Needs attention</dd>
           </div>
         ) : null}
       </dl>

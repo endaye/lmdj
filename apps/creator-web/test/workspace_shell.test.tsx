@@ -1290,11 +1290,13 @@ test.each([
       )).toBeTruthy();
       expect(screen.getByText("Creator unavailable")).toBeTruthy();
       expect(screen.getByText(code === "HOST_PROTOCOL_MISMATCH"
-        ? "Creator and Runtime could not verify a compatible protocol."
+        ? "This copy of Creator is out of date."
         : code === "HOST_RESTART_REQUIRED"
-          ? "Runtime must be restarted before continuing."
-          : "Creator cannot continue (NOT_FOUND)."),
+          ? "The audio engine stopped. Your Project is saved and not affected."
+          : "That item is no longer in this Project."),
       ).toBeTruthy();
+      expect(screen.getByText("Creator unavailable").closest("[role=alert]")?.textContent ?? "")
+        .not.toContain(code);
       const pad = screen.getByRole("button", {name: "Pad A1 — empty — Key Q"});
       expect(pad.hasAttribute("disabled")).toBe(true);
       const settledReads = projectReads;
@@ -1354,7 +1356,7 @@ test.each(["project", "sample"] as const)(
       expect(screen.getByText(
         "Sample was saved, but current Project truth could not be refreshed",
       )).toBeTruthy();
-      expect(screen.getByText("Runtime must be restarted before continuing.")).toBeTruthy();
+      expect(screen.getByText(/^The audio engine stopped/)).toBeTruthy();
       expect(fixture.mutationCount).toBe(1);
       expect(fixture.busyCount).toBe(4);
       const settledBusyCount = fixture.busyCount;
@@ -2216,19 +2218,18 @@ test("retries a busy Project open only after the visible Retry action", async ()
 });
 
 test.each([
-  ["INVALID_PROJECT", {}, "The Project Bundle is invalid."],
+  ["INVALID_PROJECT", {}, "This file is not a Project Creator can open."],
   ["DUPLICATE_ID", {},
     "The import was refused because the local copy of this Project has newer changes. Nothing was lost."],
   ["WEB_RUNTIME_RESOURCE_LIMIT", {
     resource: "ingest_decoded_frames", observed: 43200001, limit: 43200000,
-  }, "ingest_decoded_frames: observed 43200001, limit 43200000."],
+  }, "This is more audio than Creator can handle at once on this device."],
   ["IO_ERROR", {storage_condition: "quota_exceeded"},
-    "Storage condition: quota_exceeded."],
-  ["HOST_PROTOCOL_MISMATCH", {},
-    "Creator and Runtime could not verify a compatible protocol."],
-  ["INTERNAL_ERROR", {}, "Creator encountered an internal failure."],
+    "This device has run out of storage space for Creator."],
+  ["HOST_PROTOCOL_MISMATCH", {}, "This copy of Creator is out of date."],
+  ["INTERNAL_ERROR", {}, "Something went wrong in Creator."],
   ["HOST_RESTART_REQUIRED", {terminal_state: "restart-required"},
-    "Runtime must be restarted before continuing."],
+    "The audio engine stopped. Your Project is saved and not affected."],
 ] as const)("presents a safe typed %s import failure without exposing private detail", async (
   code,
   details,
@@ -2250,6 +2251,10 @@ test.each([
 
   expect((await screen.findByRole("alert")).textContent).toContain(visible);
   expect(screen.getByRole("alert").textContent).not.toContain("/Users/private");
+  // #1680: codes and detail tokens stay out of the user-facing text.
+  for (const hidden of [code, ...Object.values(details).map(String)]) {
+    expect(screen.getByRole("alert").textContent).not.toContain(hidden);
+  }
   expect(screen.queryByText("private-name.lmdj")).toBeNull();
   if (code === "HOST_RESTART_REQUIRED") {
     expect(screen.getByTestId("creator-phase").textContent).toBe("restart-required");
@@ -2880,7 +2885,8 @@ test("recovery refusal retains its full diagnostic envelope across mode navigati
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
   await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
   await userEvent.click(await screen.findByRole("button", {name: "Recover original Pattern"}));
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("INVALID_ARGUMENT"));
+  await waitFor(() => expect(screen.getByRole("alert").textContent)
+    .toBe("Creator could not apply that request. Try again. Details are in Developer diagnostics."));
   expect(apply).toHaveBeenCalledExactlyOnceWith({
     sessionId: "retained-session", destinationPatternId: null,
   });

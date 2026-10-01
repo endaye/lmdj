@@ -700,9 +700,13 @@ test("Sample Editor WebKit capability boundary is explicit, private, and non-phy
     timeout: 30_000,
   });
   const alert = page.getByRole("alert");
-  await expect(alert).toContainText("UNSUPPORTED_WEB_RUNTIME");
+  // #1680: user language in the alert; the code is in Developer diagnostics.
+  await expect(alert).toContainText("This browser cannot run Creator.");
   const publicText = await alert.textContent();
-  expect(publicText).not.toMatch(/HOST_PROTOCOL_MISMATCH|\/Users\/|file:\/\/|\.lmdj|\.wav/i);
+  expect(publicText).not.toMatch(/UNSUPPORTED_WEB_RUNTIME|HOST_PROTOCOL_MISMATCH|\/Users\/|file:\/\/|\.lmdj|\.wav/i);
+  await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
+  await expect(page.getByRole("region", {name: "Developer diagnostics"}))
+    .toContainText("UNSUPPORTED_WEB_RUNTIME");
   expect(await page.evaluate(() => window.lmdjWebRuntimeHost === undefined)).toBe(true);
   await expect(page.getByRole("button", {name: "Activate audio"})).toBeDisabled();
   await expect(page.getByRole("button", {name: "Export report"})).toBeDisabled();

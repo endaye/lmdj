@@ -161,6 +161,18 @@ function sessionFixture(name: string) {
   };
 }
 
+
+// #1680: a failure shows user language in its alert and keeps its code in
+// Developer diagnostics.
+async function expectUserLanguageFailure(code: string, message: string) {
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain(message);
+  expect(alert.textContent).not.toContain(code);
+  fireEvent.click(screen.getByText(/^Developer diagnostics \(\d+\)$/));
+  expect(within(screen.getByRole("region", {name: "Developer diagnostics"}))
+    .getAllByText(code).length).toBeGreaterThan(0);
+}
+
 test("suspend stays explicit and restart rebuilds, lists, and reopens without autoplay", async () => {
   const user = userEvent.setup();
   const first = sessionFixture("first");
@@ -353,7 +365,7 @@ test("a failed Runtime Session start never becomes ready", async () => {
   failed.session.start = async () => false;
   failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID"});
   render(<App runtimeFactory={() => failed.session} />);
-  expect((await screen.findByRole("alert")).textContent).toContain("HOST_STATE_INVALID");
+  await expectUserLanguageFailure("HOST_STATE_INVALID", "That can't be done right now.");
   expect(screen.getByTestId("creator-phase").textContent).toBe("failed");
 });
 
@@ -505,8 +517,7 @@ test("a failed activation with Runtime diagnostics restores its prior phase", as
     await screen.findByText("Audio suspended");
 
     await user.click(screen.getByRole("button", {name: "Activate audio"}));
-    expect((await screen.findByRole("alert")).textContent)
-      .toContain("HOST_STATE_INVALID");
+    await expectUserLanguageFailure("HOST_STATE_INVALID", "That can't be done right now.");
     expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
   } finally {
     activationStub.current = null;
@@ -533,8 +544,7 @@ test("a rejected activation restores its prior phase while reporting the error",
     await screen.findByText("Audio suspended");
 
     await user.click(screen.getByRole("button", {name: "Activate audio"}));
-    expect((await screen.findByRole("alert")).textContent)
-      .toContain("HOST_STATE_INVALID");
+    await expectUserLanguageFailure("HOST_STATE_INVALID", "That can't be done right now.");
     expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
   } finally {
     activationStub.current = null;

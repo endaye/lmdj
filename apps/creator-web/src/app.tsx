@@ -566,6 +566,16 @@ function Workspace({
     }
   }, [runtimeHostState, runtimeRecoveryProbeReady]);
 
+  // Runtime boot and Host terminal errors reach the user only as the panel's
+  // message, so their code and details are recorded here (#1680).
+  useEffect(() => {
+    if (!runtimeErrorCode) return;
+    reportFailure("Runtime", Object.assign(new Error(runtimeErrorCode), {
+      code: runtimeErrorCode,
+      details: runtimeErrorDetails ?? {},
+    }));
+  }, [runtimeErrorCode, runtimeErrorDetails, reportFailure]);
+
   useEffect(() => {
     if (!runtimePhase) return;
     dispatch({
