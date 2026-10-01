@@ -1,5 +1,7 @@
-import {useEffect, useState} from "react";
+import {useRef, useState} from "react";
 
+import {ValueSlider} from "./value_slider";
+import {createTapTempo, type TapTempo} from "../runtime/tap_tempo";
 import type {ProjectView, SequenceRecoveryCandidate} from "../runtime/runtime_types";
 import type {SequenceState} from "../state/sequence_state";
 import {
@@ -10,6 +12,7 @@ import {
 } from "../state/pattern_transport_state";
 
 const BAR_COUNTS = [1, 2, 4, 8] as const;
+const NOOP = () => {};
 
 interface SequenceTouchWorkspaceProps {
   project: ProjectView;
@@ -31,16 +34,18 @@ interface SequenceTouchWorkspaceProps {
 export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   const {project, state, transport} = props;
   const [bars, setBars] = useState<1 | 2 | 4 | 8>(1);
-  const [bpm, setBpm] = useState(project.bpm);
-  const [swing, setSwing] = useState(project.sequenceSettings.swingPercent);
   const [recoveryTargets, setRecoveryTargets] = useState<Readonly<Record<string, string>>>({});
+  const tapTempoRef = useRef<TapTempo | null>(null);
   const disabled = selectTransportBusy(transport) || selectTransportRecording(transport);
   const selectedPatternId = state.selectedPatternId ?? project.patternId;
   const patternIndex = project.patterns.findIndex((item) => item.patternId === selectedPatternId) + 1;
-  useEffect(() => { setBpm(project.bpm); }, [project.bpm]);
-  useEffect(() => {
-    setSwing(project.sequenceSettings.swingPercent);
-  }, [project.sequenceSettings.swingPercent]);
+  const bpm = project.bpm;
+  const swing = project.sequenceSettings.swingPercent;
+  const tapTempo = () => {
+    tapTempoRef.current ??= createTapTempo(() => performance.now());
+    const tapped = tapTempoRef.current.tap();
+    if (tapped !== null) props.onSettingsChange({bpm: tapped});
+  };
   return (
     <section className="sequence-touch-workspace" aria-label="Sequence editor">
       <header className="sequence-editor-header">
@@ -75,30 +80,63 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
           </select>
         </label>
         <div className="sequence-param-row">
-          <form className="sequence-param-card sequence-param-tempo" onSubmit={(event) => {
-            event.preventDefault();
-            props.onSettingsChange({bpm});
-          }}>
-            <p>TEMPO</p>
-            <output htmlFor="sequence-tempo">{bpm} BPM</output>
-            <input id="sequence-tempo" type="range" min={40} max={240} step={1}
-              aria-label="BPM" value={bpm} disabled={disabled}
-              onChange={(event) => setBpm(event.currentTarget.valueAsNumber)} />
-            <button type="submit" disabled={disabled || !Number.isInteger(bpm) ||
-              bpm < 40 || bpm > 240}>Apply BPM</button>
-          </form>
-          <form className="sequence-param-card sequence-param-swing" onSubmit={(event) => {
-            event.preventDefault();
-            props.onSettingsChange({swingPercent: swing});
-          }}>
-            <p>SWING</p>
-            <output htmlFor="sequence-swing">{swing}%</output>
-            <input id="sequence-swing" type="range" min={50} max={75} step={1} aria-label="Swing"
-              value={swing} disabled={disabled}
-              onChange={(event) => setSwing(event.currentTarget.valueAsNumber)} />
-            <button type="submit" disabled={disabled}>Apply Swing</button>
-          </form>
+          <div className="sequence-param-card sequence-param-tempo">
+            <ValueSlider
+              label="TEMPO"
+              ariaLabel="BPM"
+              className="sequence-param-slider"
+              value={bpm}
+              min={40}
+              max={240}
+              step={1}
+              format={(value) => `${value} BPM`}
+              disabled={disabled}
+              onPreview={NOOP}
+              onCommit={(next) => props.onSettingsChange({bpm: next})}
+              onCancel={NOOP}
+            />
+            <div className="sequence-param-actions" role="group" aria-label="Tempo actions">
+              <button type="button" aria-label="Decrease BPM"
+                disabled={disabled || bpm <= 40}
+                onClick={() => props.onSettingsChange({bpm: bpm - 1})}>−</button>
+              <button type="button" aria-label="Tap Tempo"
+                disabled={disabled}
+                onClick={tapTempo}>TAP</button>
+              <button type="button" aria-label="Increase BPM"
+                disabled={disabled || bpm >= 240}
+                onClick={() => props.onSettingsChange({bpm: bpm + 1})}>+</button>
+            </div>
+          </div>
+          <div className="sequence-param-card sequence-param-swing">
+            <ValueSlider
+              label="SWING"
+              ariaLabel="Swing"
+              className="sequence-param-slider"
+              value={swing}
+              min={50}
+              max={75}
+              step={1}
+              format={(value) => `${value}%`}
+              disabled={disabled}
+              onPreview={NOOP}
+              onCommit={(next) => props.onSettingsChange({swingPercent: next})}
+              onCancel={NOOP}
+            />
+            <div className="sequence-param-actions" role="group" aria-label="Swing actions">
+              <button type="button" aria-label="Decrease Swing"
+                disabled={disabled || swing <= 50}
+                onClick={() => props.onSettingsChange({swingPercent: swing - 1})}>−</button>
+              <button type="button" aria-label="Increase Swing"
+                disabled={disabled || swing >= 75}
+                onClick={() => props.onSettingsChange({swingPercent: swing + 1})}>+</button>
+            </div>
+          </div>
         </div>
+        {selectTransportRecording(transport) ? (
+          <p className="sequence-settings-hint">
+            Tempo and Swing are locked while recording
+          </p>
+        ) : null}
         <form className="sequence-bars-form" onSubmit={(event) => {
           event.preventDefault();
           props.onCreatePattern(bars);

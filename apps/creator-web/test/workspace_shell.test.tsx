@@ -2383,13 +2383,13 @@ test("gates the hardware Sequence key on the same reachability as the mode rail"
   expect(key.hasAttribute("disabled")).toBe(true);
 
   // The defect this gate catches: an enabled key mounted the full editor, so
-  // Apply BPM, Apply Swing and Create Pattern looked operable while every one
-  // of them hit `if (!isSequenceSession(session)) return` and reported
+  // the Tempo/Swing controls and Create Pattern looked operable while every
+  // one of them hit `if (!isSequenceSession(session)) return` and reported
   // nothing at all.
   const touch = screen.getByRole("region", {name: "Touch workspace"});
   expect(within(touch).queryByRole("region", {name: "Sequence settings"}))
     .toBeNull();
-  expect(within(touch).queryByRole("button", {name: "Apply BPM"})).toBeNull();
+  expect(within(touch).queryByRole("slider", {name: "BPM"})).toBeNull();
 });
 
 test("keeps pad identity and mounts Project Sample Sequence in the hardware touch screen", async () => {

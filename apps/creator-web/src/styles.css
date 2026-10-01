@@ -927,7 +927,8 @@ button:disabled { color: #737b87; }
   border-radius: 10px;
   background: #202321;
 }
-.sequence-param-card p {
+.sequence-param-card p,
+.sequence-param-slider > span {
   margin: 0;
   color: #adb6aa;
   font-size: 10px;
@@ -939,6 +940,24 @@ button:disabled { color: #737b87; }
   font-variant-numeric: tabular-nums;
 }
 .sequence-param-swing output { color: #9ec9f5; }
+.sequence-param-slider {
+  display: grid;
+  gap: 4px;
+}
+.sequence-param-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.sequence-param-swing .sequence-param-actions {
+  grid-template-columns: repeat(2, 1fr);
+}
+.sequence-settings-hint {
+  margin: 0;
+  color: #adb6aa;
+  font-size: 10px;
+  letter-spacing: .06em;
+}
 .sequence-param-card input[type="range"] {
   width: 100%;
   accent-color: #ddf478;
