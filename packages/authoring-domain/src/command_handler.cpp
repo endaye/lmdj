@@ -682,6 +682,12 @@ foundation::Result<AppliedCommand> apply(
 }
 
 foundation::Result<AppliedCommand> apply(
+    const ProjectState& state, const DeletePad& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts) {
+  return apply(state, Command{command.assignment()}, receipts);
+}
+
+foundation::Result<AppliedCommand> apply(
     const ProjectState& state,
     const ImportAssignSample& command,
     const std::map<foundation::CommandId, CommandReceipt>& receipts) {

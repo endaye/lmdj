@@ -6,6 +6,7 @@ import type {
   SampleInspect,
   SampleMetadata,
   SampleResetRequest,
+  SampleDeleteRequest,
   SampleSnapshotError,
   SampleUpdateRequest,
   SnapshotPublication,
@@ -541,6 +542,26 @@ export function resetSampleJourney(
     session,
     request.slot,
     () => session.resetPad(normalized),
+    true,
+  );
+}
+
+export function deleteSampleJourney(
+  session: CreatorSampleRuntimeSession,
+  request: SampleDeleteRequest,
+): Promise<SampleMutationResolution> {
+  if (!exactKeys(request, ["slot", "expectedRevision"]) ||
+    !slotNumber(request.slot) || !unsignedInteger(request.expectedRevision)) {
+    return Promise.reject(new TypeError("Pad delete request is invalid"));
+  }
+  const normalized = Object.freeze({
+    slot: request.slot,
+    expectedRevision: request.expectedRevision,
+  });
+  return resolveMutation(
+    session,
+    request.slot,
+    () => session.deletePad(normalized),
     true,
   );
 }

@@ -60,6 +60,7 @@ export const HOST_OPERATIONS = Object.freeze([
   "sample.import.abort",
   "sample.update_pad",
   "sample.reset_pad",
+  "pad.delete",
   "sample.preview.set",
   "sample.preview.clear",
   "sample.stop",
@@ -645,6 +646,7 @@ function requireSampleOperationPayload(operation, payload) {
         validPlayback(payload.playback);
       break;
     case "sample.reset_pad":
+    case "pad.delete":
       valid =
         hasExactKeys(payload, [
           "command_id",

@@ -3776,6 +3776,42 @@ Json ControlRuntime::dispatch(
       }
       return impl_->sample_mutation_result(reset.value(), selected_slot);
     }
+    if (operation == "pad.delete") {
+      require(exact_keys(
+          payload, {"command_id", "expected_revision", "slot"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      const auto command_id = uuid_field(payload, "command_id");
+      const auto expected_revision =
+          unsigned_field(payload, "expected_revision");
+      const auto selected_slot = slot_value(payload.at("slot"));
+      if (const auto control =
+              impl_->prepare_sample_mutation_controls(selected_slot, true);
+          control.has_value()) {
+        return *control;
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      const auto deleted = impl_->application.delete_sample_pad(
+          facade::SampleDeleteRequest{
+              *impl_->retained_project_path,
+              domain::CommandMeta{
+                  foundation::CommandId{command_id}, expected_revision},
+              selected_slot,
+          });
+      if (!deleted.has_value()) {
+        return normalized_error(deleted.error());
+      }
+      // An exact replay has no cancellation receipt for newer imports.
+      for (const auto& token : deleted.value().cancelled_import_tokens) {
+        impl_->sample_import_tokens.erase(token);
+        impl_->sample_import_slots.erase(token);
+      }
+      return impl_->sample_mutation_result(deleted.value(), selected_slot);
+    }
     if (operation == "sample.preview.set") {
       require(exact_keys(payload, {"slot", "playback"}));
       require(sidecar.empty());

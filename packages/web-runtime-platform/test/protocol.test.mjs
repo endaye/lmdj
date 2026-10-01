@@ -156,6 +156,7 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "sample.import.abort",
     "sample.update_pad",
     "sample.reset_pad",
+    "pad.delete",
     "sample.preview.set",
     "sample.preview.clear",
     "sample.stop",
@@ -260,6 +261,11 @@ test("accepts only exact privacy-safe Sample operation payloads", () => {
       playback,
     }],
     ["sample.reset_pad", {
+      command_id: requestIdFor(105),
+      expected_revision: 7,
+      slot: {bank: 0, pad: 3},
+    }],
+    ["pad.delete", {
       command_id: requestIdFor(105),
       expected_revision: 7,
       slot: {bank: 0, pad: 3},

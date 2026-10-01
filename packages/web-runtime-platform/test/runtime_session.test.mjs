@@ -75,6 +75,7 @@ const API = [
   "requestPatternTransport",
   "inspectPatternTransport",
   "resetPad",
+  "deletePad",
   "retryPrepare",
   "setSamplePreview",
   "sampleIngestLimits",
@@ -3156,8 +3157,8 @@ test("Sample import cancellation before begin is a no-op and after begin aborts 
     "sample.import.chunk",
     "sample.import.abort",
   ]);
-  assert.equal(duringCalls[0].signal, during.signal);
-  assert.equal(duringCalls[1].signal, during.signal);
+  assert.equal(duringCalls[0].signal.aborted, true);
+  assert.equal(duringCalls[1].signal, duringCalls[0].signal);
   assert.equal(duringCalls[2].signal, undefined);
 });
 
@@ -6136,4 +6137,61 @@ test("history never automatically repeats an unknown mutation after inspection",
   await session.inspectAuthoringHistory();
   assert.equal(submissions, 1);
   await session.close();
+});
+
+
+test("Pad delete cancels an unread Blob and queued imports only for its slot", async () => {
+  const operations = [];
+  let completeRead;
+  let startedRead;
+  const reading = new Promise((resolve) => { startedRead = resolve; });
+  const file = {size: 4, slice: () => ({arrayBuffer: () => {
+    startedRead();
+    return new Promise((resolve) => { completeRead = resolve; });
+  }})};
+  const {session} = fixture({send: async (envelope) => {
+    operations.push(envelope);
+    if (envelope.operation === "sample.import.begin") return success(envelope, {
+      token: envelope.payload.import_token, expected_bytes: 4,
+    });
+    if (envelope.operation === "sample.import.abort") return success(envelope, {aborted: true});
+    if (envelope.operation === "sample.import.chunk") return success(envelope, {received_bytes: 4, final: true});
+    if (["sample.import.commit", "pad.delete"].includes(envelope.operation)) return success(envelope, {
+      committed_revision: envelope.operation === "pad.delete" ? 2 : 1,
+      runtime_revision: envelope.operation === "pad.delete" ? 2 : 1,
+      runtime_published: true,
+    });
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  const inFlight = session.importAssignSample(file, {slot: 0, expectedRevision: 0});
+  const inFlightRejected = assert.rejects(inFlight, {name: "AbortError"});
+  await reading;
+  const queued = session.importAssignSample(new Blob([new Uint8Array(4)]), {slot: 0, expectedRevision: 0});
+  const queuedRejected = assert.rejects(queued, {name: "AbortError"});
+  const other = session.importAssignSample(new Blob([new Uint8Array(4)]), {slot: 1, expectedRevision: 0});
+  const deleted = session.deletePad({slot: 0, expectedRevision: 1});
+  await Promise.all([inFlightRejected, queuedRejected, other]);
+  assert.equal((await deleted).committedRevision, 2);
+  assert.deepEqual(operations.map(({operation}) => operation), [
+    "sample.import.begin", "sample.import.abort", "sample.import.begin",
+    "sample.import.chunk", "sample.import.commit", "pad.delete",
+  ]);
+  assert.deepEqual(operations.filter(({operation}) => operation === "sample.import.begin")
+    .map(({payload}) => payload.slot), [{bank: 0, pad: 0}, {bank: 0, pad: 1}]);
+  assert.deepEqual(operations.at(-1).payload.slot, {bank: 0, pad: 0});
+  assert.equal(operations.at(-1).payload.expected_revision, 1);
+  completeRead(new ArrayBuffer(4));
+  await drainTasks();
+  assert.equal(operations.length, 6);
+});
+
+test("Pad delete rejects invalid slot and request shape", async () => {
+  const {session} = fixture();
+  await session.start();
+  await assert.rejects(session.deletePad({slot: 64, expectedRevision: 0}), RangeError);
+  for (const request of [{slot: 0, expectedRevision: -1},
+    {slot: 0, expectedRevision: 0, extra: true}]) {
+    await assert.rejects(session.deletePad(request), TypeError);
+  }
 });

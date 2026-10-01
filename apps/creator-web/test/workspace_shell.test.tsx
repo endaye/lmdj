@@ -644,6 +644,12 @@ function sampleRuntimeFixture(
       runtimePublished: true,
       snapshotError: null,
     }),
+    deletePad: async () => ({
+      committedRevision: 4,
+      runtimeRevision: 4,
+      runtimePublished: true,
+      snapshotError: null,
+    }),
     setSamplePreview: async () => true,
     clearSamplePreview: async () => true,
     release: async () => true,
@@ -1748,7 +1754,7 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
   expect(revisionCell()?.textContent).toBe("3");
 });
 
-test.each(["mute", "reset", "replace"] as const)(
+test.each(["mute", "reset", "replace", "delete"] as const)(
   "%s stops an admitted Pad before mutation without waiting for Voice projection",
   async (kind) => {
     const fixture = mutableSampleRuntimeFixture();
@@ -1790,6 +1796,13 @@ test.each(["mute", "reset", "replace"] as const)(
         snapshotError: null,
       };
     };
+    fixture.session.deletePad = async (request) => {
+      order.push(`delete:${request.slot}`);
+      fixture.assigned.delete(request.slot);
+      fixture.playbacks.delete(request.slot);
+      fixture.revision = 4;
+      return {committedRevision: 4, runtimeRevision: 4, runtimePublished: true, snapshotError: null};
+    };
     fixture.session.importAssignSample = async (_file, options) => {
       order.push(`replace:${options.slot}`);
       fixture.assigned.set(options.slot, "44444444-4444-4444-8444-444444444444");
@@ -1826,6 +1839,8 @@ test.each(["mute", "reset", "replace"] as const)(
     } else if (kind === "reset") {
       await userEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
       await userEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
+    } else if (kind === "delete") {
+      await userEvent.click(screen.getByRole("button", {name: "Delete Pad A1"}));
     } else {
       await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
       const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
@@ -1836,6 +1851,11 @@ test.each(["mute", "reset", "replace"] as const)(
 
     await waitFor(() => expect(order).toEqual([`stop:0`, `${kind}:0`]));
     expect(fixture.revision).toBe(4);
+    if (kind === "delete") {
+      await screen.findByRole("button", {name: "Pad A1 — empty — Key Q"});
+      expect(screen.queryByText("Asset 33333333")).toBeNull();
+      expect(screen.queryByRole("slider", {name: "Pad A1 Volume"})).toBeNull();
+    }
   },
 );
 
@@ -2553,4 +2573,122 @@ test("recovery refusal retains its full diagnostic envelope across mode navigati
       .getByText(message)).toBeTruthy();
   }
   expect(apply).toHaveBeenCalledTimes(1);
+});
+
+
+test("Delete cancels a pending import and ignores its late completion", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  let importSignal: AbortSignal | undefined;
+  const lateImport = deferred<SampleCommit>();
+  fixture.session.importAssignSample = async (_file, options) => {
+    importSignal = options.signal;
+    return lateImport.promise;
+  };
+  const requests: unknown[] = [];
+  fixture.session.deletePad = async (request) => {
+    requests.push(request);
+    expect(importSignal?.aborted).toBe(true);
+    fixture.assigned.delete(request.slot);
+    fixture.playbacks.delete(request.slot);
+    fixture.revision = 4;
+    return {committedRevision: 4, runtimeRevision: 4, runtimePublished: true, snapshotError: null};
+  };
+  const {container} = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
+  await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("pending.wav"));
+  await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
+  await commitLongSourceSelection();
+  await waitFor(() => expect(importSignal).toBeDefined());
+  await userEvent.click(screen.getByRole("button", {name: "Delete Pad A1"}));
+  await screen.findByRole("button", {name: "Pad A1 — empty — Key Q"});
+  expect(requests).toEqual([{slot: 0, expectedRevision: 3}]);
+  await act(async () => lateImport.resolve({committedRevision: 5,
+    runtimeRevision: 5, runtimePublished: true, snapshotError: null}));
+  expect(fixture.revision).toBe(4);
+  expect(screen.queryByText("Asset 33333333")).toBeNull();
+  expect(screen.getByRole("button", {name: "Delete Pad A1"}).hasAttribute("disabled")).toBe(true);
+});
+
+test("Delete failure remains visible and does not project an empty Pad", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  fixture.session.deletePad = async () => {
+    throw Object.assign(new Error("Pad could not be saved"), {code: "IO_ERROR", details: {}});
+  };
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  await userEvent.click(screen.getByRole("button", {name: "Delete Pad A1"}));
+  await screen.findByText("Sample storage operation failed");
+  expect(screen.getByText("Asset 33333333")).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"})).toBeTruthy();
+  expect(fixture.revision).toBe(3);
+});
+
+
+test("Edit beside Delete moves focus into the selected Pad's controls", async () => {
+  const fixture = sampleRuntimeFixture();
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  await userEvent.click(screen.getByRole("button", {name: "Edit Pad A1"}));
+  expect(document.activeElement).toBe(screen.getByRole("spinbutton", {name: "Pad A1 Start time (seconds)"}));
+});
+
+
+test("Delete invalidates a decoding source and discards its eventual result", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const decoded = deferred<AudioBuffer>();
+  const decode = vi.spyOn(OfflineAudioContext.prototype, "decodeAudioData")
+    .mockImplementation(() => decoded.promise);
+  fixture.session.deletePad = async (request) => {
+    fixture.assigned.delete(request.slot);
+    fixture.playbacks.delete(request.slot);
+    fixture.revision = 4;
+    return {committedRevision: 4, runtimeRevision: 4, runtimePublished: true, snapshotError: null};
+  };
+  try {
+    const {container} = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    await screen.findByText("Asset 33333333");
+    await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty — Key W"}));
+    await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("decoding.wav"));
+    await waitFor(() => expect(decode).toHaveBeenCalledTimes(1));
+    await screen.findByText("Decoding long source…");
+    await userEvent.click(screen.getByRole("button", {name: "Delete Pad A2"}));
+    await waitFor(() => expect(fixture.revision).toBe(4));
+    expect(screen.queryByText("Decoding long source…")).toBeNull();
+    await act(async () => decoded.resolve({length: 8, numberOfChannels: 1,
+      sampleRate: 48_000, getChannelData: () => new Float32Array(8)} as unknown as AudioBuffer));
+    expect(screen.queryByRole("dialog", {name: "Pad A2 Long Source"})).toBeNull();
+    expect(screen.getByRole("button", {name: "Pad A2 — empty — Key W"})).toBeTruthy();
+  } finally { decode.mockRestore(); }
+});
+
+
+test("Delete waits for the selected Pad inspection to match the current Project revision", async () => {
+  const fixture = sampleRuntimeFixture();
+  const deletion = vi.spyOn(fixture.session, "deletePad");
+  const state: CreatorState = {
+    ...ready,
+    project: {...ready.project, current: {...ready.project.current!, revision: 4}},
+    sample: {...ready.sample, selectedSlot: 0, inspect: fixture.inspect, savedRevision: 3},
+  };
+  const props = {session: fixture.session, filePickIntent: {current: () => {}}, dispatch: vi.fn()};
+  const view = render(<SampleSurface {...props} state={state} />);
+  const remove = screen.getByRole("button", {name: "Delete Pad A1"});
+  expect(remove.hasAttribute("disabled")).toBe(true);
+  await userEvent.click(remove);
+  expect(deletion).not.toHaveBeenCalled();
+  view.rerender(<SampleSurface {...props} state={{...state,
+    sample: {...state.sample, inspect: {...fixture.inspect, projectRevision: 4}},
+  }} />);
+  expect(remove.hasAttribute("disabled")).toBe(false);
+  await userEvent.click(remove);
+  await waitFor(() => expect(deletion).toHaveBeenCalledExactlyOnceWith({slot: 0, expectedRevision: 4}));
 });

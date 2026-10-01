@@ -875,3 +875,98 @@ test("Pattern history keeps the Project open when its inventory anchor changes",
   expect((await rawRequest(page, "project.inspect", {})).result.project.patterns).toEqual(initial.patterns);
   noErrors();
 });
+
+test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and reopen", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  const noErrors = recordPageErrors(page);
+  await installHostProofRecorder(page);
+  await page.goto("/index.html");
+  await waitForBootProject(page);
+  await activateAudio(page);
+  await chooseSampleFile(page, "Add Sample to Pad A1", "delete-source.wav", pcm16Wav({frames: 4800}));
+  await commitLongSourceSelection(page);
+  await expectProjectRevision(page, 1);
+
+  // Record one actual admitted press, then settle the recording before Delete.
+  const physical = page.getByTestId("physical-controls");
+  const play = physical.getByRole("button", {name: /^Play\/Stop/});
+  const record = physical.getByRole("button", {name: /^Record\b/});
+  const transportStatus = (text) => page.getByRole("status").filter({
+    has: page.getByTestId("creator-phase"), hasText: text,
+  });
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await play.click();
+  await expect(transportStatus("playing")).toBeVisible();
+  await record.click();
+  await expect(transportStatus("recording")).toBeVisible();
+  const triggerOffset = await page.evaluate(() => window.__sampleProofResponses.length);
+  await page.keyboard.press("KeyQ");
+  await expect.poll(() => page.evaluate((offset) =>
+    window.__sampleProofResponses.slice(offset).some((entry) => entry.operation === "trigger" && entry.ok),
+  triggerOffset), {timeout: 30_000}).toBe(true);
+  await record.click();
+  await expect(transportStatus("playing")).toBeVisible();
+  await play.click();
+  await expect(transportStatus("stopped")).toBeVisible();
+  await expectProjectRevision(page, 2);
+  const recorded = (await rawRequest(page, "project.inspect", {})).result.project;
+  expect(Object.values(recorded.patterns).flatMap((pattern) => pattern.events)).toHaveLength(1);
+  await enterSampleEditor(page);
+  // The surface remounts with the prior cached inspect while its authoritative
+  // refresh is pending. Delete stays unavailable until the new revision lands.
+  await expect(page.getByRole("button", {name: "Delete Pad A1", exact: true})).toBeEnabled();
+  await page.getByRole("button", {name: "Loop", exact: true}).click();
+  await expectProjectRevision(page, 3);
+  const before = (await rawRequest(page, "project.inspect", {})).result.project;
+  const oldAsset = before.banks[0].pads[0].asset_id;
+  const oldArtifact = before.assets[oldAsset].artifact;
+  expect(oldArtifact.sha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(oldArtifact.byte_length).toBeGreaterThan(44);
+  const undo = page.getByRole("button", {name: "Undo", exact: true});
+  const redo = page.getByRole("button", {name: "Redo", exact: true});
+
+  await page.getByRole("button", {name: "Delete Pad A1", exact: true}).click();
+  await expectProjectRevision(page, 4);
+  await expect(page.getByRole("button", {name: "Pad A1 — empty — Key Q", exact: true})).toBeVisible();
+  const deleted = (await rawRequest(page, "project.inspect", {})).result.project;
+  expect(deleted.patterns).toEqual(before.patterns);
+  expect(deleted.assets).toEqual(before.assets);
+  const cleared = (await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result;
+  expect(cleared.asset_id).toBeNull();
+  expect(cleared.playback).toEqual({trim_start_frame: 0, trim_end_frame: null,
+    trigger_mode: "one_shot", gain_millidb: 0, muted: false});
+  const deletion = await page.evaluate(() => window.__sampleProofResponses
+    .findLast((entry) => entry.operation === "pad.delete"));
+  expect(deletion).toMatchObject({ok: true, result: {
+    committed_revision: 4, runtime_revision: 4, runtime_published: true,
+  }});
+  // The native host.web_control_runtime companion renders and checks both PCM
+  // channels are exactly silent after deleting an active voice. Publication
+  // here is real Wasm/OPFS/AudioWorklet evidence, not physical listening.
+  await undo.click();
+  await expectProjectRevision(page, 5);
+  const restored = (await rawRequest(page, "project.inspect", {})).result.project;
+  expect(restored.banks).toEqual(before.banks);
+  expect(restored.patterns).toEqual(before.patterns);
+  expect(restored.assets[oldAsset].artifact).toEqual(oldArtifact);
+  await expect(page.getByRole("button", {name: "Loop", exact: true})).toHaveAttribute("aria-pressed", "true");
+  await redo.click();
+  await expectProjectRevision(page, 6);
+  expect((await rawRequest(page, "project.inspect", {})).result.project.banks).toEqual(deleted.banks);
+  await chooseSampleFile(page, "Add Sample to Pad A1", "new-sound.wav", pcm16Wav({frames: 9600, phase: 7}));
+  await commitLongSourceSelection(page);
+  await expectProjectRevision(page, 7);
+  const reassigned = (await rawRequest(page, "project.inspect", {})).result.project;
+  expect(reassigned.patterns).toEqual(before.patterns);
+  expect(reassigned.banks[0].pads[0].asset_id).not.toBe(oldAsset);
+  expect(reassigned.assets[oldAsset].artifact).toEqual(oldArtifact);
+  await expect(redo).toBeDisabled();
+  await page.reload();
+  await waitForProjectReopen(page, reassigned.project_id.slice(0, 8));
+  expect((await rawRequest(page, "project.inspect", {})).result.project).toEqual(reassigned);
+  const reopened = (await rawRequest(page, "history.inspect", {})).result;
+  expect(reopened.undo_count).toBe(0);
+  expect(reopened.redo_count).toBe(0);
+  noErrors();
+});

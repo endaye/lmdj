@@ -195,6 +195,7 @@ function isSampleSession(
     typeof candidate.importAssignSample === "function" &&
     typeof candidate.updatePad === "function" &&
     typeof candidate.resetPad === "function" &&
+    typeof candidate.deletePad === "function" &&
     typeof candidate.setSamplePreview === "function" &&
     typeof candidate.clearSamplePreview === "function" &&
     typeof candidate.release === "function" &&

@@ -28,6 +28,16 @@ struct AssignPad {
   std::optional<foundation::AssetId> asset_id;
 };
 
+// Deletion has the existing null-assignment semantics: reset the binding and
+// playback, retaining Pattern events and Assets. Its canonical durable command
+// remains AssignPad, so old readers and command receipt identity stay valid.
+struct DeletePad {
+  CommandMeta meta;
+  PadSlotId slot;
+
+  AssignPad assignment() const { return {meta, slot, std::nullopt}; }
+};
+
 struct ImportAssignSample {
   CommandMeta meta;
   Asset asset;
@@ -164,6 +174,10 @@ using Command = std::variant<
 
 struct AppliedCommand;
 struct CommandReceipt;
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state, const DeletePad& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts);
 
 foundation::Result<AppliedCommand> apply(
     const ProjectState& state, const AdoptCandidates& command,

@@ -4613,6 +4613,12 @@ foundation::Result<domain::AppliedCommand> ProjectStore::execute(
   return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
 }
 
+foundation::Result<domain::AppliedCommand> ProjectStore::execute(
+    const std::filesystem::path& bundle,
+    const domain::DeletePad& command) {
+  return execute(bundle, domain::Command{command.assignment()});
+}
+
 foundation::Result<domain::AppliedCommand> ProjectStore::create_performance(
     const std::filesystem::path& bundle,
     const CreatePerformance& command) {

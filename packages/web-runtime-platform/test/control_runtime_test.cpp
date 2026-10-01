@@ -2599,6 +2599,127 @@ void test_authoring_history_restores_pattern_and_parameters() {
   LMDJ_CHECK(project.at("sequence_settings").at("quantize_enabled") == true);
 }
 
+void test_pad_delete_stops_voice_preserves_rhythm_and_roundtrips_history() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  auto initial = create_payload();
+  initial["pattern_transport"] = true;
+  initial["initial_pattern"]["events"] = Json::array({
+      {{"slot", slot(0, 0)}, {"onset_tick", 0}, {"duration_tick", 120}, {"velocity", 100}}});
+  check_success(runtime->dispatch("project.create", initial, {}));
+  auto wav = mono_pcm16_wav(2400);
+  for (std::size_t frame = 0; frame < 2400; ++frame) {
+    write_u16(wav, 44 + frame * 2, 8192);
+  }
+  check_success(runtime->dispatch("sample.import.begin", sample_begin_payload(9540,9541,0,kAssetId,wav.size()), {}));
+  check_success(runtime->dispatch("sample.import.chunk", sample_chunk_payload(9540,0,true,wav), wav));
+  check_success(runtime->dispatch("sample.import.commit", {{"import_token",uuid(9540)}}, {}));
+  check_success(runtime->dispatch("sample.update_pad", {{"command_id",uuid(9542)},
+      {"expected_revision",1},{"slot",slot(0,0)},
+      {"playback",playback_payload(10,2000,"loop_gate",-600)}}, {}));
+  const auto truth = [&] { return runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project"); };
+  const auto before = truth();
+  const auto history = runtime->dispatch("history.inspect", Json::object(), {}).at("result");
+  FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement = 2;
+  LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  coordinator.engine = &runtime->engine();
+  coordinator.observe_engine_generation = true;
+  std::array<float,128> left{}, right{};
+  check_success(runtime->dispatch("trigger", {{"slot",0},{"velocity",127}}, {}));
+  runtime->engine().render(left.data(),right.data(),128);
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices > 0);
+  const Json deletion{{"command_id",uuid(9543)},{"expected_revision",2},{"slot",slot(0,0)}};
+  {
+    ContinuousAudioDriver audio(runtime->engine());
+    const auto result = runtime->dispatch("pad.delete", deletion, {});
+    check_success(result);
+    LMDJ_CHECK(result.at("result").at("runtime_published") == true);
+    LMDJ_CHECK(result.at("result").at("runtime_revision") == 3);
+  }
+  runtime->engine().render(left.data(),right.data(),128);
+  runtime->engine().render(left.data(),right.data(),128);
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices == 0);
+  LMDJ_CHECK(std::all_of(left.begin(),left.end(),[](float value) { return value == 0; }));
+  LMDJ_CHECK(std::all_of(right.begin(),right.end(),[](float value) { return value == 0; }));
+  const auto deleted = truth();
+  LMDJ_CHECK(deleted.at("patterns") == before.at("patterns"));
+  LMDJ_CHECK(deleted.at("assets") == before.at("assets"));
+  LMDJ_CHECK(deleted.at("banks").at(0).at("pads").at(0).at("asset_id").is_null());
+  check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
+  check_success(runtime->dispatch("pad.delete", deletion, {}));
+  LMDJ_CHECK(truth() == deleted);
+  const auto after = runtime->dispatch("history.inspect", Json::object(), {}).at("result");
+  LMDJ_CHECK(after.at("undo_count").get<unsigned>() == history.at("undo_count").get<unsigned>() + 1);
+  const auto session = after.at("session_id");
+  check_success(runtime->dispatch("history.undo", {{"session_id",session},
+      {"command_id",uuid(9544)},{"expected_revision",3}}, {}));
+  LMDJ_CHECK(truth().at("banks") == before.at("banks"));
+  LMDJ_CHECK(truth().at("patterns") == before.at("patterns"));
+  check_success(runtime->dispatch("history.redo", {{"session_id",session},
+      {"command_id",uuid(9545)},{"expected_revision",4}}, {}));
+  LMDJ_CHECK(truth().at("banks") == deleted.at("banks"));
+  check_success(runtime->dispatch("pad.assign", assign_payload(9546,5,kAssetId), {}));
+  check_success(runtime->dispatch("snapshot.reload", {{"pattern_id",kPatternId}}, {}));
+  LMDJ_CHECK(truth().at("patterns") == before.at("patterns"));
+  LMDJ_CHECK(truth().at("banks").at(0).at("pads").at(0).at("asset_id") == kAssetId);
+  const auto reassigned = truth();
+  coordinator.begin_acknowledgement = runtime->engine().bank_telemetry().accepted_publications;
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(runtime->dispatch("pattern.transport.request", {
+      {"session_id",uuid(9547)},{"project_id",kProjectId},{"command_id",uuid(9548)},
+      {"expected_epoch",1},{"intent","play_stop"},{"expected_revision",nullptr}}, {}));
+  bool playing = false;
+  for (unsigned step = 0; step < 8; ++step) {
+    runtime->engine().render(left.data(),right.data(),128);
+    const auto status = runtime->dispatch("pattern.transport.inspect", {{"session_id",uuid(9547)}}, {});
+    check_success(status);
+    playing = status.at("result").at("playing");
+    if (playing) break;
+  }
+  LMDJ_CHECK(playing);
+  // No live trigger: the retained Pattern event must play the reassigned Pad
+  // within its complete two-second loop.
+  bool audible = false;
+  for (unsigned callback = 0; callback < 750; ++callback) {
+    runtime->engine().render(left.data(),right.data(),128);
+    audible = audible || std::any_of(left.begin(),left.end(),[](float value) { return value != 0; });
+  }
+  LMDJ_CHECK(audible);
+  check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
+  check_success(runtime->dispatch("host.close", Json::object(), {}));
+  runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.open", {{"project_id",kProjectId},{"pattern_id",kPatternId}}, {}));
+  LMDJ_CHECK(truth() == reassigned);
+  LMDJ_CHECK(runtime->dispatch("history.inspect", Json::object(), {}).at("result").at("undo_count") == 0);
+}
+
+void test_pad_delete_cancels_staged_host_import_and_releases_history() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(32);
+  check_success(runtime->dispatch("sample.import.begin", sample_begin_payload(9550,9551,0,kAssetId,wav.size()), {}));
+  check_success(runtime->dispatch("pad.delete", {{"command_id",uuid(9552)},
+      {"expected_revision",0},{"slot",slot(0,0)}}, {}));
+  check_error(runtime->dispatch("sample.import.commit", {{"import_token",uuid(9550)}}, {}), "INVALID_ARGUMENT");
+  const auto status = runtime->dispatch("history.inspect", Json::object(), {}).at("result");
+  LMDJ_CHECK(status.at("disabled_reason") == "");
+  LMDJ_CHECK(status.at("undo_count") == 0);
+  const auto project = runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
+  LMDJ_CHECK(project.at("assets").empty());
+  check_success(runtime->dispatch("sample.import.begin", sample_begin_payload(9553,9554,1,kAssetId,wav.size()), {}));
+  // An old exact Delete retry cannot remove a newer Host import handle.
+  check_success(runtime->dispatch("pad.delete", {{"command_id",uuid(9552)},
+      {"expected_revision",0},{"slot",slot(0,0)}}, {}));
+  check_success(runtime->dispatch("sample.import.chunk", sample_chunk_payload(9553,0,true,wav), wav));
+  check_success(runtime->dispatch("sample.import.commit", {{"import_token",uuid(9553)}}, {}));
+  const auto assigned = runtime->dispatch("sample.inspect", {{"slot",slot(0,0)}}, {});
+  check_success(assigned);
+  LMDJ_CHECK(assigned.at("result").at("asset_id") == kAssetId);
+}
+
 void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
   TempDirectory temp;
   {
@@ -7634,6 +7755,8 @@ int main() {
     test_sequence_switch_supersedes_a_near_boundary_recording_overlay();
     test_authoring_history_import_roundtrip_and_reopen();
     test_authoring_history_restores_pattern_and_parameters();
+    test_pad_delete_stops_voice_preserves_rhythm_and_roundtrips_history();
+    test_pad_delete_cancels_staged_host_import_and_releases_history();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
     test_sample_import_prevents_current_project_switch_until_terminal();
     test_sample_import_protocol_failure_aborts_staging();

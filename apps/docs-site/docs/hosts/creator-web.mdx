@@ -219,3 +219,20 @@ it. Precommit CaptureBuffer crop remains outside Project Undo. Upcoming hold-rec
 Pad-management and grid-editing interactions remain in their own implementation Tasks.
 Automation verifies state and persistence only; no physical-device listening or
 lifecycle acceptance is claimed by this change.
+
+
+## Delete the selected Pad
+
+The Sample editor places Edit and Delete together for the selected Pad. Edit
+focuses its waveform controls; an empty Pad with no pending work or error disables
+Delete with an explanation.
+The long-source dialog exposes the same action while a selection is committing.
+Delete clears the binding and playback parameters, cancels that Pad's pending
+import and clears failed transient state. Pending browser decode is invalidated;
+its result is released on arrival because browser decode itself has no abort API.
+Late superseded results cannot
+replace the newer projection. Capture must finish or be cancelled first.
+Pattern events and Asset bytes remain; assigning another sound reuses the rhythm.
+One changed Pad is one action in the current Project session's shared Undo/Redo
+history. Future default-Set streaming and per-Pad processing producers must join
+the same cancellation boundary; this control does not implement those producers.

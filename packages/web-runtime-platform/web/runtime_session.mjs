@@ -830,6 +830,19 @@ function throwIfAborted(signal) {
   }
   throw abortError("Sample import was cancelled");
 }
+// A browser Blob read cannot be cancelled, but it must not hold the Project
+// action queue after its Pad has been deleted. Observe and discard late bytes.
+function readSampleBytes(part, signal) {
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(abortError("Sample import was cancelled"));
+    signal.addEventListener("abort", abort, {once: true});
+    Promise.resolve().then(() => part.arrayBuffer()).then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", abort);
+    });
+  });
+}
+
 function metaContent(document, name) {
   return document
     ?.querySelector?.(`meta[name='${name}']`)
@@ -4195,7 +4208,41 @@ function createRuntimeSessionController(options = {}) {
     ));
   }
 
+  const padImports = new Set();
+
+  function deletePad(request) {
+    if (
+      !exactKeys(request, ["slot", "expectedRevision"]) ||
+      !isUnsignedInteger(request.expectedRevision)
+    ) {
+      return Promise.reject(new TypeError("Pad delete request is invalid"));
+    }
+    let slot;
+    try {
+      slot = flatSlotAddress(request.slot);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    for (const pending of padImports) {
+      if (pending.slot === request.slot) pending.controller.abort();
+    }
+    return serializeProjectAction(async () => normalizeSampleCommit(
+      await boundedRequest("pad.delete", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        slot,
+      }),
+    ));
+  }
+
   function importAssignSample(file, importOptions = {}) {
+    const controller = new AbortController();
+    const externalSignal = importOptions?.signal;
+    const abort = () => controller.abort();
+    const pending = {slot: importOptions?.slot, controller};
+    if (externalSignal?.aborted) controller.abort();
+    externalSignal?.addEventListener?.("abort", abort, {once: true});
+    padImports.add(pending);
     return serializeProjectAction(async () => {
       const allowedKeys = [
         "slot", "expectedRevision", "sequenceSessionId", "signal", "onProgress",
@@ -4214,7 +4261,7 @@ function createRuntimeSessionController(options = {}) {
         throw new TypeError("Sample import options are invalid");
       }
       const slot = flatSlotAddress(importOptions.slot);
-      const signal = importOptions.signal;
+      const signal = controller.signal;
       const onProgress = importOptions.onProgress ?? (() => {});
       if (typeof onProgress !== "function") {
         throw new TypeError("Sample import progress observer must be a function");
@@ -4298,7 +4345,7 @@ function createRuntimeSessionController(options = {}) {
           if (typeof part?.arrayBuffer !== "function") {
             throw typedError("UNSUPPORTED_AUDIO", "Sample source cannot be read");
           }
-          const bytes = new Uint8Array(await part.arrayBuffer());
+          const bytes = new Uint8Array(await readSampleBytes(part, signal));
           if (bytes.byteLength !== end - offset) {
             throw typedError("UNSUPPORTED_AUDIO", "Sample source ended unexpectedly");
           }
@@ -4342,6 +4389,9 @@ function createRuntimeSessionController(options = {}) {
         }
         throw error;
       }
+    }).finally(() => {
+      padImports.delete(pending);
+      externalSignal?.removeEventListener?.("abort", abort);
     });
   }
 
@@ -5275,6 +5325,7 @@ function createRuntimeSessionController(options = {}) {
     queryWaveform,
     updatePad,
     resetPad,
+    deletePad,
     setSamplePreview,
     clearSamplePreview,
     reloadSnapshot,

@@ -10,6 +10,7 @@ import {
   previewSampleDraftJourney,
   queryWaveformJourney,
   resetSampleJourney,
+  deleteSampleJourney,
   updateSampleJourney,
   type SampleMutationResolution,
 } from "../runtime/sample_actions";
@@ -207,6 +208,7 @@ export function SampleSurface({
   sequenceCapture,
 }: SampleSurfaceProps) {
   const input = useRef<HTMLInputElement | null>(null);
+  const surface = useRef<HTMLElement | null>(null);
   const fileSlot = useRef<number | null>(null);
   const replaceReturnFocus = useRef<HTMLElement | null>(null);
   const importController = useRef<AbortController | null>(null);
@@ -217,6 +219,7 @@ export function SampleSurface({
   const previewOwner = useRef<PreviewOwner | null>(null);
   const ingestEpoch = useRef(0);
   const ingestOwner = useRef<DecodedLongSource | null>(null);
+  const ingestSlot = useRef<number | null>(null);
   const [pendingFile, setPendingFile] = useState<PendingFile | null>(null);
   const [longSourceDraft, setLongSourceDraft] = useState<LongSourceDraft | null>(null);
   const [ingestPending, setIngestPending] = useState(false);
@@ -275,6 +278,8 @@ export function SampleSurface({
     ingestOwner.current = null;
     source?.release();
     setLongSourceDraft(null);
+    ingestSlot.current = null;
+    setIngestPending(false);
   }, []);
 
   const clearOwnedPreview = useCallback(() => {
@@ -639,6 +644,49 @@ export function SampleSurface({
     }
   };
 
+  const deleteSelectedPad = async () => {
+    if (session === undefined || inspect === null || selectedSlot !== inspect.slot ||
+        state.project.phase !== "ready" ||
+        inspect.projectRevision !== state.project.current?.revision || captureTarget !== null) return;
+    const previous = operationPending.current ?? sample.pendingAction;
+    if (previous !== null && (previous.slot !== inspect.slot ||
+        (previous.kind !== "import" && previous.kind !== "replace"))) return;
+    if (previous !== null) {
+      importController.current?.abort();
+      importController.current = null;
+      importPending.current = null;
+      operationPending.current = null;
+      dispatch({type: "sample-action", action: {type: "operation-cancelled", pending: previous}});
+    }
+    if (ingestSlot.current === inspect.slot || longSourceDraft?.slot === inspect.slot) {
+      releaseLongSource();
+    }
+    if (pendingFile?.slot === inspect.slot) setPendingFile(null);
+    if (pendingCaptureSlot === inspect.slot) setPendingCaptureSlot(null);
+    setIngestError(null);
+    const pending = Object.freeze({
+      kind: "delete" as const, slot: inspect.slot, expectedRevision: inspect.projectRevision,
+    });
+    operationPending.current = pending;
+    dispatch({type: "sample-action", action: {type: "pending-began", pending}});
+    try {
+      await stopBeforeMutation(inspect.slot);
+      if (operationPending.current !== pending) return;
+      const resolution = await deleteSampleJourney(session, {
+        slot: inspect.slot, expectedRevision: inspect.projectRevision,
+      });
+      if (operationPending.current !== pending) return;
+      previewOwner.current = null;
+      dispatchResolution(pending, resolution);
+    } catch (error) {
+      if (operationPending.current !== pending) return;
+      operationPending.current = null;
+      dispatch({type: "sample-action", action: {
+        type: "operation-failed", pending, error: publicOperationError(error),
+      }});
+    }
+  };
+
   // One journey runner for every byte source that assigns a Sample to a Pad.
   // A file pick and a committed capture differ only in how the bytes are
   // produced, so they must share the Replace confirmation, the pre-mutation
@@ -690,8 +738,8 @@ export function SampleSurface({
         ? {kind: "conflict", message: resolution.message}
         : COMMITTED_OUTCOME;
     } catch (error) {
-      clearOwnedPreview();
       if (operationPending.current !== pending) return SUPERSEDED_OUTCOME;
+      clearOwnedPreview();
       operationPending.current = null;
       importPending.current = null;
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -716,11 +764,13 @@ export function SampleSurface({
     if (session === undefined || ingestPending || sample.pendingAction !== null ||
       operationPending.current !== null) return;
     releaseLongSource();
+    ingestSlot.current = slot;
     setIngestPending(true);
     setIngestError(null);
     const epoch = ++ingestEpoch.current;
     try {
       const quota = await session.querySampleQuota(slot);
+      if (ingestEpoch.current !== epoch) return;
       const source = await openLongSource(file, session.sampleIngestLimits());
       if (ingestEpoch.current !== epoch) {
         source.release();
@@ -820,6 +870,19 @@ export function SampleSurface({
     state.project.current === null;
   const actionsDisabled = session === undefined || projectUnavailable || inspect === null ||
     !selectedAssigned || sample.pendingAction !== null;
+  const pendingDeleteAllowed = sample.pendingAction === null ||
+    (sample.pendingAction.slot === selectedSlot &&
+      (sample.pendingAction.kind === "import" || sample.pendingAction.kind === "replace"));
+  const deleteDisabledReason = session === undefined || projectUnavailable || inspect === null
+    ? "Open a Project and select a Pad to delete."
+    : inspect.slot !== selectedSlot || inspect.projectRevision !== state.project.current?.revision
+      ? "Refreshing the selected Pad…"
+    : captureTarget !== null ? "Finish or cancel Capture before deleting a Pad."
+    : !pendingDeleteAllowed ? "Wait for the current edit to finish."
+    : !selectedAssigned && sample.pendingAction === null &&
+      ingestSlot.current !== selectedSlot && longSourceDraft?.slot !== selectedSlot &&
+      sample.lastError === null && ingestError === null ? "This Pad is already empty."
+    : null;
   const inspectedMetadata = inspect?.metadata;
   const queryViewportWaveform = session === undefined || inspect === null ||
       inspectedMetadata === null || inspectedMetadata === undefined ||
@@ -839,7 +902,7 @@ export function SampleSurface({
       };
 
   return (
-    <main className="sample-surface">
+    <main ref={surface} className="sample-surface">
       <header className="sample-heading">
         <div>
           <p className="eyebrow">Sample surface</p>
@@ -860,6 +923,23 @@ export function SampleSurface({
             >
               Replace Sample
             </button>
+          ) : null}
+          {selectedSlot !== null ? (
+            <div className="selected-pad-actions">
+              <button type="button" aria-label={`Edit ${selectedAddress}`}
+                disabled={actionsDisabled}
+                onClick={() => surface.current?.querySelector<HTMLInputElement>(".sample-value-input")?.focus()}>
+                Edit
+              </button>
+              <button type="button" aria-label={`Delete ${selectedAddress}`}
+                disabled={deleteDisabledReason !== null}
+                aria-describedby={deleteDisabledReason === null ? undefined : "pad-delete-reason"}
+                onClick={() => { void deleteSelectedPad(); }}>
+                Delete
+              </button>
+              {deleteDisabledReason === null ? null :
+                <small id="pad-delete-reason">{deleteDisabledReason}</small>}
+            </div>
           ) : null}
           {selectedSlot !== null ? (
             <button
@@ -963,6 +1043,7 @@ export function SampleSurface({
           returnFocus={replaceReturnFocus.current}
           onCommit={(selection) => commitLongSource(longSourceDraft, selection)}
           onCancel={releaseLongSource}
+          onDelete={() => { void deleteSelectedPad(); }}
         />
       )}
       {captureTarget === null ? null : (

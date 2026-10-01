@@ -224,7 +224,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 92> operations{
+  static constexpr std::array<std::string_view, 93> operations{
       "host.status",
       "project.create",
       "project.duplicate",
@@ -253,6 +253,7 @@ bool supported_operation(std::string_view operation) {
       "sample.import.abort",
       "sample.update_pad",
       "sample.reset_pad",
+      "pad.delete",
       "sample.preview.set",
       "sample.preview.clear",
       "sample.stop",
@@ -323,7 +324,7 @@ bool supported_operation(std::string_view operation) {
 }
 
 bool snapshot_notification_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 8> operations{
+  static constexpr std::array<std::string_view, 9> operations{
       "project.open",
       "snapshot.reload",
       "snapshot.retry",
@@ -332,6 +333,7 @@ bool snapshot_notification_operation(std::string_view operation) {
       "sample.import.commit",
       "sample.update_pad",
       "sample.reset_pad",
+      "pad.delete",
   };
   return std::find(operations.begin(), operations.end(), operation) !=
          operations.end();
@@ -1293,6 +1295,7 @@ struct ControlBridge::Impl {
               operation == "sample.import.commit" ||
               operation == "sample.update_pad" ||
               operation == "sample.reset_pad" ||
+              operation == "pad.delete" ||
               operation == "history.undo" || operation == "history.redo";
           const auto& result = has_result ? response.at("result") : Json{};
           const auto snapshot_truth =

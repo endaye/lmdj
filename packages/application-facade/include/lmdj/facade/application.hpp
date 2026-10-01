@@ -387,6 +387,10 @@ struct SampleMutationResult {
   bool runtime_prepare_required;
 };
 
+struct SampleDeleteResult : SampleMutationResult {
+  std::vector<std::string> cancelled_import_tokens;
+};
+
 struct SampleUpdateRequest {
   std::filesystem::path project_path;
   domain::CommandMeta meta;
@@ -395,6 +399,12 @@ struct SampleUpdateRequest {
 };
 
 struct SampleResetRequest {
+  std::filesystem::path project_path;
+  domain::CommandMeta meta;
+  domain::PadSlotId slot;
+};
+
+struct SampleDeleteRequest {
   std::filesystem::path project_path;
   domain::CommandMeta meta;
   domain::PadSlotId slot;
@@ -631,6 +641,8 @@ class Application {
       const SampleUpdateRequest& request);
   foundation::Result<SampleMutationResult> reset_sample_pad(
       const SampleResetRequest& request);
+  foundation::Result<SampleDeleteResult> delete_sample_pad(
+      const SampleDeleteRequest& request);
   foundation::Result<SequenceMutationResult> begin_sequence(
       const SequenceBeginRequest& request);
   foundation::Result<SequenceMutationResult> record_sequence_event(

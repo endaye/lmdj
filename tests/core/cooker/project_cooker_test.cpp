@@ -500,19 +500,32 @@ void test_cooker_rejects_invalid_unused_assigned_pad_artifacts() {
   LMDJ_CHECK(unsupported.error().code == ErrorCode::unsupported_audio);
 }
 
-void test_cooker_rejects_unassigned_slot() {
-  auto project = new_project();
-  project = apply_or_throw(
-      project,
-      Command{CreatePattern{
-          meta(kPatternCommand, project.revision),
-          {PatternId{kPatternId}, 1, {{PadSlotId{0, 1}, 0, 240, 100}}},
-      }});
-  const auto result = lmdj::cooker::cook(
-      project, PatternId{kPatternId}, resolver_for({}));
+void test_cooker_silences_empty_pad_without_erasing_its_rhythm() {
+  const auto artifact = fixture_artifact("kick.wav");
+  auto project = project_with_pattern(artifact);
+  const auto patterns = project.patterns;
+  const auto resolve = resolver_for({{artifact.sha256, fixture_bytes("kick.wav")}});
+  LMDJ_CHECK(lmdj::cooker::cook(project, PatternId{kPatternId}, resolve).value()->events.size() == 1);
+  project.banks[0][0].asset_id.reset();
+  const auto empty = lmdj::cooker::cook(project, PatternId{kPatternId}, resolver_for({}));
+  LMDJ_CHECK(empty.has_value());
+  LMDJ_CHECK(empty.value()->events.empty() && empty.value()->pads.empty());
+  LMDJ_CHECK(project.patterns == patterns);
+  project.banks[0][0].asset_id = AssetId{kAssetKick};
+  const auto restored = lmdj::cooker::cook(project, PatternId{kPatternId}, resolve);
+  LMDJ_CHECK(restored.has_value() && restored.value()->events.size() == 1);
+  LMDJ_CHECK(restored.value()->events[0].slot == PadSlotId(0,0));
+  LMDJ_CHECK(restored.value()->events[0].onset_tick == 0);
+  LMDJ_CHECK(restored.value()->events[0].duration_tick == 240);
+  LMDJ_CHECK(restored.value()->events[0].velocity == 100);
+  LMDJ_CHECK(project.patterns == patterns);
+}
 
-  LMDJ_CHECK(!result.has_value());
-  LMDJ_CHECK(result.error().code == ErrorCode::missing_asset);
+void test_cooker_still_rejects_a_broken_assigned_asset() {
+  auto project = project_with_pattern(fixture_artifact("kick.wav"));
+  project.assets.clear();
+  const auto result = lmdj::cooker::cook(project, PatternId{kPatternId}, resolver_for({}));
+  LMDJ_CHECK(!result.has_value() && result.error().code == ErrorCode::missing_asset);
 }
 
 void test_cooker_rejects_missing_pattern() {
@@ -787,7 +800,8 @@ int main() {
     test_cooker_resolves_events_through_current_pad_slot();
     test_cooker_resolves_every_assigned_pad_in_global_slot_order();
     test_cooker_rejects_invalid_unused_assigned_pad_artifacts();
-    test_cooker_rejects_unassigned_slot();
+    test_cooker_silences_empty_pad_without_erasing_its_rhythm();
+    test_cooker_still_rejects_a_broken_assigned_asset();
     test_cooker_rejects_missing_pattern();
     test_cooker_rejects_artifact_byte_length_or_hash_mismatch();
     test_cooker_rejects_cached_artifact_with_later_wrong_length();

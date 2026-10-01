@@ -226,7 +226,16 @@ void clear_pad_preserves_pattern_events_and_restores_binding() {
   LMDJ_CHECK(f.store.execute(f.root, CreatePattern{f.meta(), Pattern{pattern_id,1,{{{0,0},0,120,100}}}}).has_value());
   f.edit(-400);
   const auto before = f.state();
-  LMDJ_CHECK(f.store.execute(f.root, AssignPad{f.meta(), {0,0}, std::nullopt}).has_value());
+  const auto command = DeletePad{f.meta(), {0,0}};
+  const auto count = f.status().undo_count;
+  LMDJ_CHECK(f.store.execute(f.root, command).has_value());
+  LMDJ_CHECK(f.status().undo_count == count + 1);
+  LMDJ_CHECK(f.store.execute(f.root, command).value().replayed);
+  LMDJ_CHECK(f.status().undo_count == count + 1);
+  LMDJ_CHECK(f.state().banks[0][0].playback == PadPlayback{});
+  LMDJ_CHECK(f.state().assets == before.assets);
+  LMDJ_CHECK(f.store.execute(f.root, DeletePad{f.meta(), {0,0}}).has_value());
+  LMDJ_CHECK(f.status().undo_count == count + 1);
   LMDJ_CHECK(!f.state().banks[0][0].asset_id && f.state().patterns == before.patterns);
   const auto undone = f.restore().state;
   LMDJ_CHECK(undone.banks == before.banks && undone.patterns == before.patterns);

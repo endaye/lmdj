@@ -339,6 +339,28 @@ void test_unassign_resets_playback() {
   LMDJ_CHECK(state.banks[0][0].playback == PadPlayback{});
 }
 
+void test_delete_pad_is_canonical_and_checked() {
+  auto before = apply_or_throw(new_project(),
+      import_assign_sample(kImportAssignCommand, 0, {0, 0}, kAsset1)).state;
+  before.banks[0][0].playback.gain_millidb = -400;
+  before.patterns.emplace(PatternId{kPattern1},
+      Pattern{PatternId{kPattern1}, 1, {{{0, 0}, 0, 120, 100}}});
+  const lmdj::domain::DeletePad command{meta(kResetCommand, 1), {0, 0}};
+  const auto deleted = apply_or_throw(before, command);
+  const auto canonical = apply_or_throw(before, Command{command.assignment()});
+  LMDJ_CHECK(deleted.state == canonical.state);
+  LMDJ_CHECK(deleted.event == canonical.event);
+  LMDJ_CHECK(!deleted.state.banks[0][0].asset_id);
+  LMDJ_CHECK(deleted.state.banks[0][0].playback == PadPlayback{});
+  LMDJ_CHECK(deleted.state.assets == before.assets);
+  LMDJ_CHECK(deleted.state.patterns == before.patterns);
+  const auto stale = lmdj::domain::apply(before,
+      lmdj::domain::DeletePad{meta(kResetCommand, 0), {0, 0}}, {});
+  LMDJ_CHECK(!stale.has_value() && stale.error().code == ErrorCode::revision_conflict);
+  check_invalid_without_state_change(before,
+      lmdj::domain::DeletePad{meta(kResetCommand, 1), {4, 0}});
+}
+
 void test_different_asset_assignment_resets_playback() {
   auto state = apply_or_throw(
       new_project(),
@@ -849,6 +871,7 @@ int main() {
     test_pads_sharing_an_asset_keep_independent_playback();
     test_same_asset_assignment_preserves_playback();
     test_unassign_resets_playback();
+    test_delete_pad_is_canonical_and_checked();
     test_different_asset_assignment_resets_playback();
     test_explicit_reset_restores_default_playback();
     test_duplicate_playback_update_replays_without_another_revision();

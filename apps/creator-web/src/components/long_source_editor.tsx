@@ -16,6 +16,7 @@ interface LongSourceEditorProps {
   readonly returnFocus?: HTMLElement | null;
   onCommit(selection: {startFrame: number; frameCount: number}): Promise<LongSourceCommitOutcome>;
   onCancel(): void;
+  onDelete?(): void;
 }
 
 const WAVEFORM_BINS = 192;
@@ -35,6 +36,7 @@ export function LongSourceEditor({
   returnFocus = null,
   onCommit,
   onCancel,
+  onDelete,
 }: LongSourceEditorProps) {
   const maximumFrames = Math.min(source.frameCount, quota.effectiveRemainingFrames);
   const [selectionStart, setSelectionStart] = useState(0);
@@ -106,7 +108,13 @@ export function LongSourceEditor({
           <p className="eyebrow">Long-source ingest</p>
           <h2>{sourceLabel(source.sourceName)}</h2>
         </div>
-        <button type="button" disabled={committing} onClick={onCancel}>Cancel</button>
+        <div>
+          {onDelete === undefined ? null : (
+            <button type="button" aria-label={`Delete Pad ${padAddress({slot: quota.slot, assetId: null})}`}
+              onClick={onDelete}>Delete Pad</button>
+          )}
+          <button type="button" disabled={committing} onClick={onCancel}>Cancel</button>
+        </div>
       </div>
       <div className="long-source-content">
         <p>

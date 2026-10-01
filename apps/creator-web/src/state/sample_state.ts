@@ -34,6 +34,7 @@ export type SamplePendingKind =
   | "import"
   | "replace"
   | "reset"
+  | "delete"
   | "update"
   | "retry-prepare";
 
@@ -134,6 +135,7 @@ const PENDING_KINDS = new Set<SamplePendingKind>([
   "import",
   "replace",
   "reset",
+  "delete",
   "update",
   "retry-prepare",
 ]);
@@ -141,6 +143,7 @@ const MUTATION_PENDING_KINDS = new Set<SamplePendingKind>([
   "import",
   "replace",
   "reset",
+  "delete",
   "update",
 ]);
 const RETRY_PENDING_KINDS = new Set<SamplePendingKind>(["retry-prepare"]);
