@@ -2086,6 +2086,14 @@ nlohmann::json run_suite() {
 // stack budget before it overflows. The unused stack below this frame is
 // painted once, and the first byte that no longer holds the paint, scanning up
 // from the stack end, marks the high-water mark.
+//
+// It measures written bytes, not the stack pointer. Stack a frame reserves but
+// never writes, or a run of paint-valued bytes at the very bottom of the
+// deepest write, reads as unused, so the mark can be low by that much. A
+// ProjectState copy is always constructed, so the defect the spec gates is
+// always seen. STACK_OVERFLOW_CHECK=2 still aborts on any real overflow of the
+// full stack. An action that never reaches the painted region reports the
+// painted top, which over-states its use rather than under-stating it.
 constexpr unsigned char kStackPaint = 0xA5;
 constexpr std::uintptr_t kPaintMargin = 4096;
 // STACK_OVERFLOW_CHECK keeps its cookie in the lowest stack words; never
