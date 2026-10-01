@@ -1,3 +1,4 @@
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 // Stage 11 Task 7, the Browser leg of the Sound Set acceptance journey.
 //
 // Everything below runs against the real Web Host: the Creator distribution
@@ -512,7 +513,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   // the engine half; this leg is the one that would have caught it, because
   // the defect needs a voice that actually finishes and no in-process test
   // rendered one to completion.
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: REQUEST_TIMEOUT_MS,
   });

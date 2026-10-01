@@ -1,3 +1,4 @@
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
@@ -41,7 +42,7 @@ function withoutIdentity({project_id: _id, revision: _revision, ...truth}) {
 }
 
 async function activate(page) {
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: 30_000,
   });
@@ -139,7 +140,7 @@ test("visible Creator journey imports, activates, and admits all 64 unique Pad a
       report.trigger_outcome_count,
       report.trigger_rejected_count,
     ];
-  }, {timeout: 30_000}).toEqual(["running", 64, 64, 0]);
+  }, {timeout: 30_000}).toEqual(["running", 65, 65, 0]);
 });
 test("physical key order addresses the matching Bank-A Pads and preserves the full Runtime tuple", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
@@ -171,7 +172,7 @@ test("physical key order addresses the matching Bank-A Pads and preserves the fu
       report.trigger_rejected_count,
       report.state,
     ];
-  }, {timeout: 30_000}).toEqual([16, 16, 0, "running"]);
+  }, {timeout: 30_000}).toEqual([17, 17, 0, "running"]);
 });
 
 test("ready active Runtime survives portrait and landscape resize", async ({page, browserName}) => {
@@ -184,7 +185,7 @@ test("ready active Runtime survives portrait and landscape resize", async ({page
   await expect.poll(async () => {
     const value = await downloadReport(page);
     return [value.trigger_admitted_count, value.trigger_outcome_count];
-  }, {timeout: 30_000}).toEqual([1, 1]);
+  }, {timeout: 30_000}).toEqual([2, 2]);
 
   const heading = page.getByRole("heading", {name: "Project 00000000"});
   const revision = page.locator(".overview-facts div").filter({
