@@ -47,3 +47,5 @@ changed and no release or Channel promotion is initiated here.
 Documentation impact: required
 Affected portal pages: /hosts/creator-web/
 Reason: first-project initialization, per-Pad readiness and persistent non-refill ownership.
+
+A user assignment observed in authoritative Project Truth retires a reservation that has not issued an install request. Verify failed reservation retirement, no late installation after an in-flight download, no refill after Undo, and retained recovery identity for an already-issued command. The packaged Pad Delete journey additionally verifies that such a manually assigned Pad remains playable before Delete/Undo/Redo and reopen.

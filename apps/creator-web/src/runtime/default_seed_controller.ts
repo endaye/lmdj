@@ -34,7 +34,7 @@ export function createDefaultSeedController(options: {
       }
       state.phase = "loading"; persist();
       await options.session.acquireSoundSetSlot({...identity, slotIndex: slot});
-      if (!owns()) return;
+      if (!owns() || seed.slots[slot]!.phase === "retired") return;
       state.phase = "processing"; persist();
       // Only short authoring/publication work crosses the Project serial lane.
       for (let attempt = 0; attempt < 4 && owns(); attempt++) {
@@ -74,7 +74,7 @@ export function createDefaultSeedController(options: {
       }
       if (owns()) {state.phase = "failed"; persist();}
     } catch (error) {
-      if (owns()) {
+      if (owns() && seed.slots[slot]!.phase !== "retired") {
         options.failed?.(slot, error);
         state.phase = (error as {details?: {reason?: string}}).details?.reason === "soundset_occupied_conflict"
           ? "retired" : "failed";
@@ -90,6 +90,22 @@ export function createDefaultSeedController(options: {
       }));
     },
     retry: acquire,
+    observeProject(project: ProjectView) {
+      if (!owns() || project.projectId !== seed.projectId) return;
+      let changed = false;
+      for (const pad of project.pads) {
+        if (pad.slot >= 16 || pad.assetId === null) continue;
+        const slot = seed.slots[pad.slot]!;
+        // A saved/replayable default request still owns its receipt. Before
+        // any install request, an authoritative assignment belongs to the user.
+        if (slot.request === null && slot.committedRevision === null &&
+            !["ready", "retired"].includes(slot.phase)) {
+          slot.phase = "retired";
+          changed = true;
+        }
+      }
+      if (changed) persist();
+    },
     acceptPublication(publication: SnapshotPublication) {
       if (!owns() || publication.projectId !== seed.projectId || !publication.runtimeReady ||
           publication.snapshotError !== null || publication.runtimeRevision === null) return;

@@ -36,3 +36,7 @@ allocation. Existing Facade and Platform capture Contracts are reused.
 Documentation impact: required
 Affected portal pages: /hosts/creator-web/
 Reason: immediate recording, remembered sources, owner exclusion and explicit recovery.
+
+The retained Continue-in-Sequence Capture journey must show its trim dialog when recording stops over ordinary Pattern playback, without depending on a concurrently active Pattern journal. Verify existing component lifecycle tests and the complete native Capture/playback/commit/Record/reopen journey at integration.
+
+Default acquisitions may continue outside the Project queue, but their short install/publication steps pause while either legacy Capture or empty-Pad capture owns a take, preserving the recording target revision until commit or discard.

@@ -81,7 +81,10 @@ test("resume reuses the persisted command identity after a commit response was l
   const request={commandId:"44444444-4444-4444-8444-444444444444",expectedRevision:0};
   f.seed.slots[0]!.phase="processing";f.seed.slots[0]!.request=request;
   f.setProject({...f.getProject(),revision:1,pads:f.getProject().pads.map(pad=>pad.slot===0?{...pad,assetId:"committed"}:pad)});
-  await createDefaultSeedController(f.options).start();
+  const controller = createDefaultSeedController(f.options);
+  controller.observeProject(f.getProject());
+  expect(f.seed.slots[0]?.phase).toBe("processing");
+  await controller.start();
   expect(f.commit.mock.calls[0]).toEqual([0,request]);
   expect(f.seed.slots[0]?.phase).toBe("ready");
 });
@@ -93,4 +96,42 @@ test("explicit publication recovery readies saved slots without another install"
     generation:2,runtimeReady:true,snapshotError:null});
   expect(f.seed.slots.every(slot=>slot.phase==="ready")).toBe(true);
   expect(f.commit).not.toHaveBeenCalled();
+});
+
+
+test("a manual assignment retires a failed bootstrap reservation through Undo", async () => {
+  const f = fixture();
+  f.acquire.mockRejectedValue(new Error("offline"));
+  const controller = createDefaultSeedController(f.options);
+  await controller.start();
+  expect(f.seed.slots[0]?.phase).toBe("failed");
+  f.setProject({...f.getProject(), revision: 1, pads: f.getProject().pads.map(pad =>
+    pad.slot === 0 ? {...pad, assetId: "user"} : pad)});
+  controller.observeProject(f.getProject());
+  expect(f.seed.slots[0]?.phase).toBe("retired");
+  expect(JSON.parse(f.options.storage.getItem("")!).slots[0].phase).toBe("retired");
+  f.setProject({...f.getProject(), revision: 2, pads: f.getProject().pads.map(pad =>
+    pad.slot === 0 ? {...pad, assetId: null} : pad)});
+  controller.observeProject(f.getProject());
+  f.acquire.mockClear(); f.commit.mockClear();
+  await controller.retry(0);
+  expect(f.acquire).not.toHaveBeenCalled();
+  expect(f.commit).not.toHaveBeenCalled();
+});
+
+test("a download completing after a manual assignment cannot reclaim its retired slot", async () => {
+  const f = fixture(); const gate = deferred();
+  f.acquire.mockImplementation(async request => {
+    if (request.slotIndex !== 0) throw new Error("offline");
+    await gate.promise; return {};
+  });
+  const controller = createDefaultSeedController(f.options);
+  const finished = controller.start();
+  await vi.waitFor(() => expect(f.seed.slots[0]?.phase).toBe("loading"));
+  f.setProject({...f.getProject(), revision: 1, pads: f.getProject().pads.map(pad =>
+    pad.slot === 0 ? {...pad, assetId: "user"} : pad)});
+  controller.observeProject(f.getProject()); gate.resolve(); await finished;
+  expect(f.seed.slots[0]?.phase).toBe("retired");
+  expect(f.commit).not.toHaveBeenCalled();
+  expect(f.getProject().pads[0]?.assetId).toBe("user");
 });

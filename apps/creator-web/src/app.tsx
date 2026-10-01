@@ -476,6 +476,8 @@ function Workspace({
           if (sessionRef.current !== session || stateRef.current.project.current?.projectId !== seed.projectId ||
               stateRef.current.project.phase !== "ready") return null;
           if (selectTransportRecording(transportRef.current) ||
+              !["idle", "permission-error"].includes(capturePhaseRef.current) ||
+              (padCapture.current !== null && padCapture.current.getState().phase !== "idle") ||
               !["idle", "saved", "discarded"].includes(performControllerRef.current?.getState().recording.phase ?? "idle")) return null;
           const token = beginProjectAction("open", false);
           if (token === null) return null;
@@ -506,6 +508,12 @@ function Workspace({
     });
     return () => {controller.cancel(); if (defaultSeedController.current === controller) defaultSeedController.current = null;};
   }, [session, runtimePhase, currentProjectId]);
+
+  useEffect(() => {
+    if (state.project.phase === "ready" && state.project.current !== null) {
+      defaultSeedController.current?.observeProject(state.project.current);
+    }
+  }, [state.project.phase, state.project.current]);
 
   const resetInputForAdverseLifecycle = () => {
     const current = inputController.current;
@@ -1642,14 +1650,14 @@ function Workspace({
     setCapturePhase(phase);
     if (phase === "trimming" || phase === "commit-error" || phase === "committing") {
       dispatchSequence({type: "trim-overlay"});
-      // The legacy overlay gate needs a legacy Sequence session. Under the
-      // global transport the journal has no legacy session, so an armed
-      // Capture trimmed over an active transport recording opens the overlay
-      // through this Host-local flag instead.
+      // Capture owns recording exclusively in P1, while Pattern playback may
+      // continue. Its trim dialog must be visible on Sequence even when no
+      // Pattern journal exists; the Host-local flag carries that review.
       const legacySequenceActive =
         ["recording", "switch-pending"].includes(sequenceRef.current.phase) &&
         sequenceRef.current.sessionId !== null;
-      if (!legacySequenceActive && selectTransportRecording(transportRef.current)) {
+      if (!legacySequenceActive && activeModeRef.current === "sequence" &&
+          armedCaptureSlotRef.current !== null) {
         setCaptureTransportOverlay(true);
       }
     } else if (phase === "idle" || phase === "permission-error") {
