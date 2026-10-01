@@ -28,7 +28,9 @@ export function resolveOpfsWebkit(repoRoot, selected) {
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Node resolves the main module's symlinks for import.meta.url but not for
+// argv[1]; compare canonical paths so a symlinked checkout still prints.
+if (process.argv[1] && realpathSync(resolve(process.argv[1])) === fileURLToPath(import.meta.url)) {
   const root = fileURLToPath(new URL("../../../..", import.meta.url));
   try {
     console.log(resolveOpfsWebkit(root, process.env.LMDJ_WEBKIT_OPFS_EXECUTABLE));
