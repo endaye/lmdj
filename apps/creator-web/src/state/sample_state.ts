@@ -1228,8 +1228,11 @@ export function samplePlayheadFrameAt(
     if (playhead.loopMode === "ping_pong") {
       const top = length - 1;
       const span = top - loopBegin;
-      if (logical > top) {
-        const phase = span === 0 ? 0 : (logical - top) % (2 * span);
+      if (span === 0) {
+        // A one-frame loop holds its only frame from the first advance.
+        if (logical > initial) logical = top;
+      } else if (logical > top) {
+        const phase = (logical - top) % (2 * span);
         logical = phase <= span ? top - phase : loopBegin + (phase - span);
       }
     } else if (logical >= length) {

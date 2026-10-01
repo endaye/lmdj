@@ -1035,6 +1035,12 @@ describe("Creator Sample state", () => {
       .toBe(97);
     expect(samplePlayheadFrameAt({...voice, loopMode: "ping_pong", loopStartFrame: 90}, 108))
       .toBe(90);
+    // A one-frame ping-pong loop holds its last frame from the first advance,
+    // as the kernel's top <= bottom branch does.
+    expect(samplePlayheadFrameAt({...voice, loopMode: "ping_pong", loopStartFrame: 99}, 1))
+      .toBe(99);
+    expect(samplePlayheadFrameAt(
+      {...reversed, loopMode: "ping_pong", loopStartFrame: 99}, 1)).toBe(0);
   });
 
   test("keeps the newest selected-Pad Voice as deterministic playhead owner", () => {
