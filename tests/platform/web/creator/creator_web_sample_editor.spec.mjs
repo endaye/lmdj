@@ -1055,7 +1055,10 @@ test("Pad Delete commits while audio is inactive after a reopen", async ({page, 
   await page.reload();
   await waitForProjectReopen(page, before.project_id.slice(0, 8));
   await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
-  await enterSampleEditor(page);
+  // Boot lands on Sample, where "Replace Sample" and "Record Sample" also
+  // match a loose name, so the mode key is named exactly.
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
   await expect(page.getByRole("button", {name: "Delete Pad A1", exact: true})).toBeEnabled();
   await page.getByRole("button", {name: "Delete Pad A1", exact: true}).click();
   await expectProjectRevision(page, 2);
