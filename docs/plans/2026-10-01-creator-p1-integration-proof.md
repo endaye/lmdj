@@ -73,3 +73,10 @@ PATCH from the retained manifests. Keep the existing frozen canary snapshot
 immutable and freeze a new snapshot from the clean revised source. All complete
 lane evidence must bind the revised committed candidate; earlier passing lanes
 and failures remain recorded without becoming new-head passes.
+
+The Linux run subsequently caught an omitted MCP Python package/runtime version
+update in the consumer-pin settlement. Align these with the already allocated
+MCP Host manifest and derive the next unused test candidate BUILD. Preserve both
+frozen earlier candidates. Run Linux Core/ASan under the CI default GNU compiler
+and Clang 22 only for coverage; retain the first incompatible mixed-runtime
+failure. Complete Host and batch evidence must bind this final corrected source.

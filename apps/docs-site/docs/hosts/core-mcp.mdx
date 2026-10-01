@@ -44,3 +44,5 @@ MCP 提供 `lmdj.candidate.job.run`、`lmdj.candidate.job.inspect`、`lmdj.candi
 `lmdj.candidate.audition` 只返回 Facade 验证的片段元数据，没有 `played` 或停止 tool。
 采用时显式传入当前 revision 与每个 recipe/Bank/Pad；MCP 不生成隐式目标，
 不自行处理源文件，也不在未知响应后重发采用命令。
+
+Python package 的发行元数据、导入的 `__version__` 与 Host manifest 保持一致；stdio 的 initialize 返回同一 Host 身份。现有 stdio fixture 同时验证这三处身份以及实际工具协议，不以版本清单核验替代 Host 运行验证。
