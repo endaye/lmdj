@@ -712,6 +712,63 @@ void test_cooker_rejects_invalid_trim_gain_and_trigger_values() {
   }
 }
 
+void test_cooker_resolves_default_playback_to_a_neutral_dsp_block() {
+  const auto artifact = fixture_artifact("mono-44100.wav");
+  const auto result = lmdj::cooker::cook(
+      project_with_pattern(artifact),
+      PatternId{kPatternId},
+      resolver_for({{artifact.sha256, fixture_bytes("mono-44100.wav")}}));
+  LMDJ_CHECK(result.has_value());
+  LMDJ_CHECK(lmdj::cooker::is_neutral(result.value()->pads.at(0).playback.dsp));
+}
+
+// Loop point and crossfade are source frames rescaled to 48 kHz exactly as the
+// trim start is; reverse, ping-pong, pitch and pan are carried as given.
+void test_cooker_resolves_parity_fields_into_48_khz_frames() {
+  const auto artifact = fixture_artifact("mono-44100.wav");
+  auto project = project_with_pattern(artifact);
+  auto& playback = project.banks.at(0).at(0).playback;
+  playback = {1, 7, TriggerMode::loop_gate, 0, false};
+  playback.reverse = true;
+  playback.pitch_cents = 700;
+  playback.pan = -30;
+  playback.loop_start_frame = 4;
+  playback.loop_crossfade_frames = 1;
+
+  const auto result = lmdj::cooker::cook(
+      project,
+      PatternId{kPatternId},
+      resolver_for({{artifact.sha256, fixture_bytes("mono-44100.wav")}}));
+  LMDJ_CHECK(result.has_value());
+  const auto& resolved = result.value()->pads.at(0).playback;
+  LMDJ_CHECK(resolved.start_frame == 1);
+  // Source frame 4 at 44.1 kHz is runtime frame 4, three after the start.
+  LMDJ_CHECK((resolved.dsp == lmdj::cooker::ResolvedVoiceDsp{
+                  3, 1, 700, -30, lmdj::cooker::ResolvedVoiceDsp::kReverse}));
+}
+
+// An open trim end leaves the crossfade bound to the source length.
+void test_cooker_rejects_a_crossfade_beyond_half_an_open_loop() {
+  const auto artifact = fixture_artifact("mono-44100.wav");
+  auto project = project_with_pattern(artifact);
+  auto& playback = project.banks.at(0).at(0).playback;
+  playback.trigger_mode = TriggerMode::loop_toggle;
+  // The fixture holds 8 source frames, so half the open loop is 4.
+  playback.loop_crossfade_frames = 5;
+  const auto result = lmdj::cooker::cook(
+      project,
+      PatternId{kPatternId},
+      resolver_for({{artifact.sha256, fixture_bytes("mono-44100.wav")}}));
+  LMDJ_CHECK(!result.has_value());
+  LMDJ_CHECK(result.error().code == ErrorCode::invalid_argument);
+  playback.loop_crossfade_frames = 4;
+  LMDJ_CHECK(lmdj::cooker::cook(
+                 project,
+                 PatternId{kPatternId},
+                 resolver_for({{artifact.sha256, fixture_bytes("mono-44100.wav")}}))
+                 .has_value());
+}
+
 void test_cooker_rejects_invalid_tick_and_duration_bounds() {
   const auto artifact = fixture_artifact("stereo.wav");
   auto onset_at_loop_end = project_with_pattern(artifact);
@@ -801,6 +858,9 @@ int main() {
     test_cooker_prepares_44100_pcm_and_resolves_complete_playback();
     test_cooker_resolves_default_playback_over_the_full_prepared_source();
     test_cooker_rejects_invalid_trim_gain_and_trigger_values();
+    test_cooker_resolves_default_playback_to_a_neutral_dsp_block();
+    test_cooker_resolves_parity_fields_into_48_khz_frames();
+    test_cooker_rejects_a_crossfade_beyond_half_an_open_loop();
     test_cooker_rejects_invalid_tick_and_duration_bounds();
     test_cooker_returns_immutable_deterministic_snapshot_values();
   } catch (const std::exception& error) {

@@ -1,5 +1,6 @@
 #include <lmdj/cooker/project_cooker.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -194,6 +195,51 @@ bool valid_trigger_mode(domain::TriggerMode mode) noexcept {
   return false;
 }
 
+// Resolves the lmdj.project.v5 5.1.0 parity fields into 48 kHz output frames.
+// Source-frame values are rescaled exactly as the trim start is; a rounding
+// overshoot is clamped back inside the resolved loop so the block always fits.
+foundation::Result<ResolvedVoiceDsp> resolve_voice_dsp(
+    const domain::PadPlayback& playback,
+    std::uint32_t source_rate,
+    std::uint64_t source_end,
+    std::uint64_t runtime_start,
+    std::uint64_t runtime_end) {
+  const auto invalid = [](std::string_view message) {
+    return foundation::Result<ResolvedVoiceDsp>::failure(foundation::Error{
+        foundation::ErrorCode::invalid_argument, std::string(message)});
+  };
+  if (!domain::is_valid_playback(playback)) {
+    return invalid("Pad playback reverse, pitch, pan or loop settings are invalid");
+  }
+  const auto loop_start =
+      playback.loop_start_frame.value_or(playback.trim_start_frame);
+  // The domain cannot bound an open trim end; the source length can.
+  if (loop_start >= source_end ||
+      playback.loop_crossfade_frames > (source_end - loop_start) / 2) {
+    return invalid("Pad playback loop point or crossfade is outside the trim");
+  }
+  const auto runtime_loop_start = std::clamp<std::uint64_t>(
+      loop_start * 48'000U / source_rate, runtime_start, runtime_end - 1);
+  const auto runtime_loop_length = runtime_end - runtime_loop_start;
+  const auto runtime_crossfade = std::min<std::uint64_t>(
+      playback.loop_crossfade_frames * 48'000U / source_rate,
+      runtime_loop_length / 2);
+  std::uint8_t flags = 0;
+  if (playback.reverse) {
+    flags |= ResolvedVoiceDsp::kReverse;
+  }
+  if (playback.loop_mode == domain::LoopMode::ping_pong) {
+    flags |= ResolvedVoiceDsp::kPingPong;
+  }
+  return foundation::Result<ResolvedVoiceDsp>::success(ResolvedVoiceDsp{
+      static_cast<std::uint32_t>(runtime_loop_start - runtime_start),
+      static_cast<std::uint32_t>(runtime_crossfade),
+      static_cast<std::int16_t>(playback.pitch_cents),
+      static_cast<std::int8_t>(playback.pan),
+      flags,
+  });
+}
+
 foundation::Result<ResolvedPlayback> resolve_playback(
     const domain::PadPlayback& playback,
     const PcmSample& source,
@@ -251,13 +297,20 @@ foundation::Result<ResolvedPlayback> resolve_playback(
         "Pad playback gain is not finite",
     });
   }
-  return foundation::Result<ResolvedPlayback>::success(ResolvedPlayback{
+  ResolvedPlayback resolved{
       static_cast<std::uint32_t>(runtime_start),
       static_cast<std::uint32_t>(runtime_end),
       playback.trigger_mode,
       gain,
       playback.muted,
-  });
+  };
+  auto dsp = resolve_voice_dsp(
+      playback, source.sample_rate, source_end, runtime_start, runtime_end);
+  if (!dsp.has_value()) {
+    return foundation::Result<ResolvedPlayback>::failure(dsp.error());
+  }
+  resolved.dsp = dsp.value();
+  return foundation::Result<ResolvedPlayback>::success(resolved);
 }
 
 foundation::Result<std::shared_ptr<const RuntimeSnapshot>> failure(
