@@ -405,7 +405,10 @@ test("armed Pad capture excludes the transport journal and never stops playback"
   const initialEvents = structuredClone(initialTruth.project.patterns[patternId].events);
   await page.keyboard.press("KeyQ");
   await expect(panel.getByRole("slider", {name: /^Pad A1 End —/})).toBeVisible({timeout: 30_000});
-  await expect(recordKey(page)).toBeDisabled();
+  // The trim dialog makes the rest of the shell inert; inspect the actual
+  // disabled DOM control without making it accessible through the modal.
+  await expect(page.getByTestId("physical-controls").getByRole("button",
+    {name: /^Record\b/, includeHidden: true})).toBeDisabled();
   await panel.getByRole("button", {name: "Discard"}).click();
   await expect(page.getByTestId("pad-matrix").getByRole("button", {name: /^Pad A1 — empty/}))
     .toBeVisible({timeout: 30_000});
