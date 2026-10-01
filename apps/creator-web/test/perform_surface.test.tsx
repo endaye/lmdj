@@ -1046,8 +1046,7 @@ test("renders authoritative recording, WAV, launch, replay, recovery and resampl
   }).textContent).toMatch(/applied.*closed.*Pad/i));
 
   await fixture.controller.resample(ids.performance, 0, 4_800, 16);
-  expect(screen.getByRole("status", {name: "Resample status"}).textContent)
-    .toContain("committed · Pad B1");
+  expect(fixture.controller.getState().resampleStatus).toContain("committed · Pad B1");
 });
 
 test("blocks a second recording while owner-loss recovery is actionable", async () => {
@@ -1199,7 +1198,7 @@ test("refuses to leave while replay neutral reset remains pending", async () => 
   expect(fixture.controller.getState().replayNeutral).toBe(false);
 });
 
-test("renders named replay and editable resample controls", async () => {
+test("renders saved replay after moving resampling to empty Pad capture", async () => {
   const fixture = controllerFixture();
   (fixture.runtime.session.listPerformances as ReturnType<typeof vi.fn>)
     .mockResolvedValue([{
@@ -1215,16 +1214,9 @@ test("renders named replay and editable resample controls", async () => {
   renderSurface(fixture);
   await userEvent.click(await screen.findByRole("button", {name: "Replay Take 1"}));
   expect(screen.getByRole("status", {name: "Replay status"}).textContent).toContain("playing");
-  await userEvent.clear(screen.getByRole("spinbutton", {name: "Resample start frame"}));
-  await userEvent.type(screen.getByRole("spinbutton", {name: "Resample start frame"}), "120");
-  await userEvent.clear(screen.getByRole("spinbutton", {name: "Resample end frame"}));
-  await userEvent.type(screen.getByRole("spinbutton", {name: "Resample end frame"}), "4800");
-  await userEvent.clear(screen.getByRole("spinbutton", {name: "Resample target Pad"}));
-  await userEvent.type(screen.getByRole("spinbutton", {name: "Resample target Pad"}), "17");
-  await userEvent.click(screen.getByRole("button", {name: "Resample selection"}));
-  await waitFor(() => expect(fixture.runtime.session.commitPerformanceResample)
-    .toHaveBeenCalledWith({expectedRevision: 7, performanceId: ids.performance,
-      sourceStartFrame: 120, sourceEndFrame: 4800, targetSlot: 17}));
+  expect(screen.queryByRole("spinbutton", {name: "Resample start frame"})).toBeNull();
+  expect(screen.queryByRole("button", {name: "Resample selection"})).toBeNull();
+  expect(screen.getByRole("button", {name: "Stop Replay"})).toBeTruthy();
 });
 
 test("discards the stopped WAV through the store and refreshes Project truth", async () => {
@@ -1285,4 +1277,14 @@ test("lists, replays, resamples, and recovers through Facade operations", async 
   expect(Object.values(fixture.controller.getState().fx)).toEqual(Array(8).fill(500));
   expect(fixture.controller.getState().pendingLaunch).toBeNull();
   expect(fixture.controller.getState().lastLaunchAck).toBeNull();
+});
+
+test("another recording owner disables Perform Record before acquiring its master tap", async () => {
+  const fixture = controllerFixture();
+  render(<PerformSurface controller={fixture.controller} project={project} bank={0}
+    onBankChange={() => {}} recordingBusy />);
+  const record = screen.getByRole("button", {name:"Record Performance"});
+  expect((record as HTMLButtonElement).disabled).toBe(true);
+  await userEvent.click(record);
+  expect(fixture.controller.getState().recording.phase).toBe("idle");
 });

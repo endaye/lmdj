@@ -1,3 +1,5 @@
+import {clickCreatorSystemAction} from "./fixtures/creator_navigation.mjs";
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
@@ -41,7 +43,7 @@ function withoutIdentity({project_id: _id, revision: _revision, ...truth}) {
 }
 
 async function activate(page) {
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: 30_000,
   });
@@ -49,7 +51,7 @@ async function activate(page) {
 
 async function downloadReport(page) {
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", {name: "Export report"}).click();
+  await clickCreatorSystemAction(page, "Export report");
   const download = await downloadPromise;
   // The Build lives in the packaged manifest the app already loads; naming it
   // again here made an identity bump cost a CI cycle to discover.
@@ -139,7 +141,7 @@ test("visible Creator journey imports, activates, and admits all 64 unique Pad a
       report.trigger_outcome_count,
       report.trigger_rejected_count,
     ];
-  }, {timeout: 30_000}).toEqual(["running", 64, 64, 0]);
+  }, {timeout: 30_000}).toEqual(["running", 65, 65, 0]);
 });
 test("physical key order addresses the matching Bank-A Pads and preserves the full Runtime tuple", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
@@ -171,7 +173,7 @@ test("physical key order addresses the matching Bank-A Pads and preserves the fu
       report.trigger_rejected_count,
       report.state,
     ];
-  }, {timeout: 30_000}).toEqual([16, 16, 0, "running"]);
+  }, {timeout: 30_000}).toEqual([17, 17, 0, "running"]);
 });
 
 test("ready active Runtime survives portrait and landscape resize", async ({page, browserName}) => {
@@ -184,7 +186,7 @@ test("ready active Runtime survives portrait and landscape resize", async ({page
   await expect.poll(async () => {
     const value = await downloadReport(page);
     return [value.trigger_admitted_count, value.trigger_outcome_count];
-  }, {timeout: 30_000}).toEqual([1, 1]);
+  }, {timeout: 30_000}).toEqual([2, 2]);
 
   const heading = page.getByRole("heading", {name: "Project 00000000"});
   const revision = page.locator(".overview-facts div").filter({
@@ -231,19 +233,31 @@ test("boot creates a stored Project, New Project adds one, and a reload reopens 
   const emptyPads = page.getByRole("button", {name: /^Pad A\d+ — empty — Key [QWERTYUIASDFGHJK]$/});
   const sampleKey = page.getByRole("button", {name: "Sample", exact: true});
 
-  // A fresh store boots into an automatically created, empty Project on Sample.
+  // This proof server has no default Catalog upstream. Auto-creation still
+  // opens a writable Project: unavailable downloads change Pad availability,
+  // never Project Truth. Successful progressive seeding has its own journey.
   await page.goto("/index.html");
   await waitForBootProject(page);
   await expect(sampleKey).toHaveAttribute("aria-current", "page");
-  await expect(emptyPads).toHaveCount(16);
+  await expect(page.getByRole("button", {name: /^Pad A\d+ — failed — Key [QWERTYUIASDFGHJK]$/})).toHaveCount(16);
+  const initial = await inspectProject(page);
+  expect(initial.project.revision).toBe(0);
+  expect(initial.project.assets).toEqual({});
+  expect(initial.project.banks[0].pads.every(pad => pad.asset_id === null)).toBe(true);
   const first = (await overviewProjectId(page).textContent())?.trim();
   expect(first).toMatch(/^[0-9a-f]{8}$/);
 
-  // New Project opens a second, different Project, again on Sample.
+  // New Project opens a second, different Project, again on Sample, without
+  // adopting the one-time bootstrap downloads or their failure state.
   await page.getByRole("button", {name: "Project", exact: true}).click();
   await page.getByRole("button", {name: "New Project"}).click();
   await expect(overviewProjectId(page)).not.toHaveText(first, {timeout: 60_000});
   await expect(sampleKey).toHaveAttribute("aria-current", "page");
+  await expect(emptyPads).toHaveCount(16);
+  const manual = await inspectProject(page);
+  expect(manual.project.revision).toBe(0);
+  expect(manual.project.assets).toEqual({});
+  expect(manual.project.banks[0].pads.every(pad => pad.asset_id === null)).toBe(true);
   const second = (await overviewProjectId(page).textContent())?.trim();
   expect(second).toMatch(/^[0-9a-f]{8}$/);
 
@@ -253,6 +267,8 @@ test("boot creates a stored Project, New Project adds one, and a reload reopens 
   // which surfaces as a visible, retryable PROJECT_BUSY.
   await page.reload();
   await waitForProjectReopen(page, second);
+  const reopened = await inspectProject(page);
+  expect(reopened.project).toEqual(manual.project);
   await page.getByRole("button", {name: "Project", exact: true}).click();
   await page.getByRole("button", {name: "Open local"}).click();
   await expect(page.getByRole("button", {name: /^Open Project [0-9a-f]{8}$/})).toHaveCount(2);

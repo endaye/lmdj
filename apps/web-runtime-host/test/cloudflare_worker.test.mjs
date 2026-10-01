@@ -450,3 +450,33 @@ test("a Catalog path is never served out of the asset store", async () => {
   );
   assert.deepEqual(seen, []);
 });
+
+
+test("default service binding forwards only authenticated object paths without viewer headers", async () => {
+  const requests = [];
+  const env = {ASSETS: assetsBinding([]), DEFAULT_SOUNDSET_CATALOG: {fetch: async request => {
+    requests.push(request);
+    return new Response("kit", {status: 200});
+  }}};
+  const response = await worker.fetch(get(`/soundset-catalog/object/blob/${DIGEST}`, {headers:{Cookie:"private", Authorization:"private"}}), env);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "kit");
+  assert.equal(new URL(requests[0].url).pathname, `/object/blob/${DIGEST}`);
+  assert.equal(requests[0].headers.get("cookie"), null);
+  assert.equal(requests[0].headers.get("authorization"), null);
+  assert.equal(requests[0].redirect, "manual");
+  for (const suffix of ["object/blob/not-a-hash", "catalog/index.json?target=other", "object/other/"+DIGEST]) {
+    assert.equal((await worker.fetch(get("/soundset-catalog/"+suffix),env)).status,404);
+  }
+  assert.equal((await worker.fetch(get("/soundset-catalog/catalog/index.json", {method:"POST"}),env)).status,405);
+  assert.equal(requests.length,1);
+});
+
+test("default binding failure remains a recoverable Catalog failure and invalid explicit upstream refuses fallback", async () => {
+  let calls=0;
+  const binding={fetch:async()=>{calls++;throw Error("offline");}};
+  assert.equal((await worker.fetch(get("/soundset-catalog/catalog/index.json"),{DEFAULT_SOUNDSET_CATALOG:binding})).status,502);
+  assert.equal(calls,1);
+  assert.equal((await worker.fetch(get("/soundset-catalog/catalog/index.json"),{DEFAULT_SOUNDSET_CATALOG:binding,CATALOG_UPSTREAM:"http://bad/"})).status,404);
+  assert.equal(calls,1);
+});

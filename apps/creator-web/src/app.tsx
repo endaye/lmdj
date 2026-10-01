@@ -1,3 +1,8 @@
+import {SystemSurface, ProviderSettings} from "./components/system_surface";
+import {CREATOR_DEFAULT_SOUND_SET} from "../../../products/lmdj/creator-defaults.mjs";
+import {claimDefaultSeed, readDefaultSeed, type DefaultSeed} from "./state/default_seed";
+import {createDefaultSeedController} from "./runtime/default_seed_controller";
+import type {CreatorSlotSoundSetRuntimeSession} from "./runtime/runtime_types";
 import {AuthoringHistoryControls} from "./components/authoring_history";
 import {CandidateSurface, isCandidateSession} from "./components/candidate_surface";
 import {
@@ -59,7 +64,9 @@ import {
   createCreatorInputController,
   type PerformancePadInputEvent,
 } from "./runtime/input_controller";
-import {reloadPrepareJourney, retryPrepareJourney} from "./runtime/sample_actions";
+import {captureCommitJourney, inspectSampleJourney, reloadPrepareJourney, retryPrepareJourney} from "./runtime/sample_actions";
+import {createPadCapture, type PadCaptureState, type PadCaptureSource} from "./capture/pad_capture";
+import {createPadCaptureSources} from "./capture/pad_capture_sources";
 import {
   disarmSequenceCaptureJourney,
   isSequenceSession,
@@ -91,7 +98,7 @@ import type {
 import {
   creatorReducer,
   initialCreatorState,
-  selectCanActivateAudio,
+  selectCanStartGesture,
   selectCanCreateProject,
   selectCanDuplicateProject,
   selectCanImportProject,
@@ -223,6 +230,13 @@ function isSampleSession(
     typeof candidate.subscribeVoiceState === "function";
 }
 
+function isDefaultSeedSession(session: CreatorRuntimeSession | undefined):
+  session is CreatorSlotSoundSetRuntimeSession & CreatorSampleRuntimeSession {
+  const candidate = session as Partial<CreatorSlotSoundSetRuntimeSession> | undefined;
+  return isSampleSession(session) && typeof candidate?.acquireSoundSetSlot === "function" &&
+    typeof candidate?.installSoundSetSlot === "function" && typeof candidate?.describeSoundSetCatalog === "function";
+}
+
 function isPerformanceSession(
   session: CreatorRuntimeSession | undefined,
 ): session is CreatorPerformanceRuntimeSession {
@@ -282,6 +296,11 @@ function Workspace({
     setDiagnostics((records) => appendDiagnostic(records, record));
     return record.code;
   }, []);
+  const [defaultSeed, setDefaultSeed] = useState<DefaultSeed | null>(null);
+  const defaultSeedRef = useRef(defaultSeed);
+  defaultSeedRef.current = defaultSeed;
+  const defaultSeedController = useRef<ReturnType<typeof createDefaultSeedController> | null>(null);
+  const [defaultSeedError, setDefaultSeedError] = useState<string | null>(null);
   const [listAttempt, setListAttempt] = useState(0);
   const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
   // #1679: this tab handed its Project to another tab, a Continue here is
@@ -291,11 +310,16 @@ function Workspace({
   const [takeoverOutcome, setTakeoverOutcome] = useState<TakeoverOutcome | null>(null);
   const [showLocalProjects, setShowLocalProjects] = useState(false);
   const [activeMode, setActiveMode] = useState<CreatorMode>("project");
+  const [systemOpen, setSystemOpen] = useState(false);
+  const systemEntry = useRef<HTMLButtonElement>(null);
   const [inputControllerEpoch, setInputControllerEpoch] = useState(0);
   const [inputControllerRevision, setInputControllerRevision] = useState(0);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyPerformPhase, setHistoryPerformPhase] = useState("idle");
   const [capturePhase, setCapturePhase] = useState<CapturePhase>("idle");
+  const [padCaptureState, setPadCaptureState] = useState<PadCaptureState | null>(null);
+  const padCapture = useRef<ReturnType<typeof createPadCapture> | null>(null);
+  const padCaptureWake = useRef<Promise<boolean> | null>(null);
   const capturePhaseRef = useRef(capturePhase);
   capturePhaseRef.current = capturePhase;
   const [armedCaptureSlot, setArmedCaptureSlot] = useState<number | null>(null);
@@ -334,6 +358,11 @@ function Workspace({
   const samplePadDropIntent = useRef<(slot: number, file: File, target: HTMLElement) => void>(() => {});
   const armedCaptureStopIntent = useRef<() => void>(() => {});
   const stateRef = useRef(state);
+  const gestureEpoch = useRef(0);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const gestureActivation = useRef<(event: {isTrusted: boolean}) => Promise<boolean> | null>(() => null);
+  const activationInFlight = useRef<{session: CreatorRuntimeSession; promise: Promise<boolean>} | null>(null);
   const sequenceRef = useRef(sequence);
   const transportRef = useRef<PatternTransportState>(transport);
   const transportRetriedCommandRef = useRef<Readonly<{
@@ -444,6 +473,67 @@ function Workspace({
     void refreshSequence();
   }, [session, runtimePhase, state.project.current]);
 
+  useEffect(() => {
+    defaultSeedController.current?.cancel();
+    defaultSeedController.current = null;
+    setDefaultSeed(null);
+    if (!isDefaultSeedSession(session) || runtimePhase !== "ready" || currentProjectId === null) return;
+    let seed: DefaultSeed | null;
+    try {seed = readDefaultSeed(localStorage, CREATOR_DEFAULT_SOUND_SET);}
+    catch (error) {setDefaultSeedError("Default sounds unavailable; existing content is preserved"); reportFailure("Read default sounds", error); return;}
+    if (seed === null || seed.projectId !== currentProjectId) return;
+    setDefaultSeed(seed);
+    let mutations = Promise.resolve();
+    const controller = createDefaultSeedController({
+      seed, storage: localStorage, session,
+      current: () => stateRef.current.project.phase === "ready" ? stateRef.current.project.current : null,
+      changed: setDefaultSeed,
+      failed: (_slot, error) => {reportFailure("Acquire default sound", error);},
+      refresh: async () => {if (stateRef.current.project.current?.projectId === seed.projectId) await refreshPerformProject();},
+      commit: (slot, request) => {
+        const result = mutations.then(async () => {
+          if (sessionRef.current !== session || stateRef.current.project.current?.projectId !== seed.projectId ||
+              stateRef.current.project.phase !== "ready") return null;
+          if (selectTransportRecording(transportRef.current) ||
+              !["idle", "permission-error"].includes(capturePhaseRef.current) ||
+              (padCapture.current !== null && padCapture.current.getState().phase !== "idle") ||
+              !["idle", "saved", "discarded"].includes(performControllerRef.current?.getState().recording.phase ?? "idle")) return null;
+          const token = beginProjectAction("open", false);
+          if (token === null) return null;
+          try {
+            const receipt = await session.installSoundSetSlot({...CREATOR_DEFAULT_SOUND_SET,
+              slotIndex: slot, bankId: 0, ...request});
+            // A fulfilled receipt is durable Truth, not Runtime readiness.
+            const project = await refreshPerformProject();
+            try {
+              const publication = await reloadPrepareJourney(session, project.patternId);
+              return {committedRevision: receipt.committedRevision, runtimeRevision: publication.runtimeRevision,
+                published: publication.projectId === seed.projectId && publication.runtimeReady && publication.snapshotError === null};
+            } catch (error) {
+              reportFailure("Publish default sound", error);
+              return {committedRevision: receipt.committedRevision, runtimeRevision: null, published: false};
+            }
+          } finally {finishProjectAction(token);}
+        });
+        mutations = result.then(() => {}, () => {});
+        return result;
+      },
+    });
+    defaultSeedController.current = controller;
+    void controller.start().catch(error => {
+      controller.cancel();
+      setDefaultSeedError("Default sounds unavailable; existing content is preserved");
+      reportFailure("Initialize default sounds", error);
+    });
+    return () => {controller.cancel(); if (defaultSeedController.current === controller) defaultSeedController.current = null;};
+  }, [session, runtimePhase, currentProjectId]);
+
+  useEffect(() => {
+    if (state.project.phase === "ready" && state.project.current !== null) {
+      defaultSeedController.current?.observeProject(state.project.current);
+    }
+  }, [state.project.phase, state.project.current]);
+
   const resetInputForAdverseLifecycle = () => {
     const current = inputController.current;
     if (current !== null) {
@@ -456,6 +546,53 @@ function Workspace({
       dispatch({type: "sample-action", action: {type: "draft-cancelled"}});
     }
   };
+
+  useEffect(() => {
+    if (!isSampleSession(session) || runtimePhase !== "ready") return;
+    const sources = createPadCaptureSources();
+    let source: PadCaptureSource = "microphone";
+    try {if (localStorage.getItem("lmdj.creator.pad-capture-source.v1") === "master") source = "master";} catch {}
+    const controller = createPadCapture({
+      ...sources,
+      start: (chosen, batch, failed) => sources.start(chosen,
+        isPerformanceSession(session) ? session : null, padCaptureWake.current, batch, failed),
+      canStart: target => {
+        const current = stateRef.current;
+        return sessionRef.current === session && current.project.phase === "ready" &&
+          current.project.current?.projectId === target.projectId && current.project.current.revision === target.revision &&
+          current.project.current.pads[target.slot]?.assetId === null && current.transfer.phase === "idle" &&
+          current.sample.pendingAction === null && !projectActions.busy &&
+          ["idle", "permission-error"].includes(capturePhaseRef.current) &&
+          !selectTransportRecording(transportRef.current) &&
+          ["idle", "saved", "discarded"].includes(performControllerRef.current?.getState().recording.phase ?? "idle");
+      },
+      commit: async (target, buffer, selection, retry) => {
+        if (sessionRef.current !== session || stateRef.current.project.current?.projectId !== target.projectId)
+          throw new Error("Return to the original Project to save this take.");
+        if (selectTransportRecording(transportRef.current) ||
+          !["idle", "saved", "discarded"].includes(performControllerRef.current?.getState().recording.phase ?? "idle"))
+          throw new Error("Stop the other recording before saving this take.");
+        const token = beginProjectAction("open", false);
+        if (token === null) throw new Error("Another Project operation is still running.");
+        try {
+          const inspect = await inspectSampleJourney(session, target.slot);
+          if (inspect.assetId !== null) throw new Error("This Pad now contains a sound. Keep or discard this take.");
+          const result = await captureCommitJourney(session, buffer, selection,
+            {slot: target.slot, expectedRevision: retry ? inspect.projectRevision : target.revision});
+          if (result.kind !== "committed") throw new Error("Project changed. Review this take and save again.");
+          await refreshPerformProject().catch(error => {reportFailure("Refresh saved Pad recording", error);});
+          dispatch({type: "sample-action", action: {type: "slot-selected", slot: target.slot}});
+          if (!result.commit.runtimePublished) reportFailure("Prepare Pad recording", {code: "COOK_FAILED"});
+        } finally {finishProjectAction(token);}
+      },
+      changed: setPadCaptureState,
+    }, source);
+    padCapture.current = controller;
+    setPadCaptureState(controller.getState());
+    return () => {void controller.cancel(); if (padCapture.current === controller) padCapture.current = null;};
+  }, [session, runtimePhase]);
+
+  useEffect(() => {void padCapture.current?.cancel();}, [currentProjectId]);
 
   useEffect(() => () => {
     projectActions.invalidate();
@@ -480,6 +617,26 @@ function Workspace({
           stateRef.current.sample.inspect?.assetId !== null &&
           stateRef.current.sample.inspect?.assetId !== undefined),
       dispatch,
+      onAdverseLifecycle: () => { gestureEpoch.current += 1; },
+      canUsePad: (slot: number) => {
+        const seed = defaultSeedRef.current;
+        return seed?.projectId !== stateRef.current.project.current?.projectId || slot >= 16 ||
+          ["ready", "retired"].includes(seed!.slots[slot]!.phase);
+      },
+      activateAudioForGesture: (event: {isTrusted: boolean}) => gestureActivation.current(event),
+      onEmptyPadPress: (slot: number, key: object, source: import("./runtime/runtime_types").RuntimeTriggerSource,
+        activation: Promise<boolean> | null) => {
+        if (padCapture.current === null) return false;
+        if (source === "midi") return true;
+        const project = stateRef.current.project.current;
+        if (project !== null) {
+          padCaptureWake.current = activation;
+          padCapture.current.press({projectId: project.projectId, slot, revision: project.revision}, key);
+        }
+        return true;
+      },
+      onEmptyPadRelease: (key: object) => padCapture.current?.release(key),
+      onEmptyPadCancel: () => {void padCapture.current?.cancel();},
       getArmedCaptureSlot: () => armedCaptureSlotRef.current,
       onArmedCaptureStop: () => armedCaptureStopIntent.current(),
       onPerformancePadEvent: (event: PerformancePadInputEvent) => {
@@ -511,8 +668,7 @@ function Workspace({
       : createCreatorInputController({
           ...common,
           isAssigned: (slot) => common.isAssigned(slot) &&
-            (stateRef.current.audio.phase === "running" ||
-              stateRef.current.audio.phase === "recovering"),
+            selectCanStartGesture(stateRef.current),
         });
     inputController.current = controller;
     // Re-render so handlers detached while the controller was absent are
@@ -604,6 +760,16 @@ function Workspace({
               ? await openProjectJourney(token.session, last)
               : await createProjectJourney(token.session);
             if (active && ownsProjectAction(token)) {
+              if (!last && isDefaultSeedSession(token.session)) {
+                try {
+                  await navigator.locks.request("lmdj.creator.default-seed.claim", () =>
+                    claimDefaultSeed(localStorage, CREATOR_DEFAULT_SOUND_SET, project.projectId));
+                } catch (error) {
+                  setDefaultSeedError("Default sounds unavailable; existing content is preserved");
+                  reportFailure("Claim default sounds", error);
+                }
+              }
+              if (!active || !ownsProjectAction(token)) return;
               dispatch({type: "project-ready", project});
               setActiveMode("sample");
             }
@@ -871,7 +1037,9 @@ function Workspace({
     if (projectTakeover === null || !onYieldRuntime || heldProjectId === null) return;
     return projectTakeover.serve(heldProjectId, () => {
       const current = transportRef.current;
-      if (capturePhaseRef.current !== "idle" || selectTransportBusy(current) ||
+      if (capturePhaseRef.current !== "idle" ||
+        (padCapture.current !== null && padCapture.current.getState().phase !== "idle") ||
+        selectTransportBusy(current) ||
         selectTransportPlaying(current) || selectTransportRecording(current)) {
         return {accepted: false};
       }
@@ -1077,41 +1245,73 @@ function Workspace({
     }
   };
 
-  const activateAudio = async (event: MouseEvent) => {
-    if (!session) return;
+  const reportAudioError = (error: unknown, activeSession: CreatorRuntimeSession) => {
+    const code = reportFailure("Wake audio", error);
+    const hostState = activeSession.diagnostics().state;
+    const phase = hostState === "failed" || hostState === "closed" ||
+      hostState === "unsupported" || hostState === "restart-required"
+      ? hostState : stateRef.current.runtime.phase;
+    // Audio failure must not invalidate a still-open Project. The Runtime
+    // owns terminal status; advisory failures retain the next gesture retry.
+    dispatch({type: "runtime-changed", phase, errorCode: code, errorDetails: errorDetails(error)});
+  };
+
+  const activateAudio = (event: {isTrusted: boolean}): Promise<boolean> | null => {
+    if (!session || runtimePhase !== "ready") return Promise.resolve(false);
+    const pending = activationInFlight.current;
+    if (pending?.session === session) return pending.promise;
+    if (stateRef.current.audio.phase === "running" ||
+        stateRef.current.audio.phase === "recovering") return null;
+    const hostState = session.diagnostics().state;
+    if (hostState === "running" || hostState === "recovering") return null;
+    if (hostState !== "audio-suspended") return Promise.resolve(false);
     const priorPhase = stateRef.current.audio.phase;
-    if (priorPhase !== "inactive" && priorPhase !== "suspended") return;
+    if (priorPhase !== "inactive" && priorPhase !== "suspended") return Promise.resolve(false);
     dispatch({type: "audio-changed", phase: "activating"});
     // A refused activation is a non-destructive no-op: the surface returns
     // to the phase it held before the attempt, unless a Runtime publication
     // already moved it elsewhere.
     const restorePriorPhase = () => {
-      dispatch({type: "audio-activation-restored", phase: priorPhase});
-    };
-    try {
-      const activated = await activateCreatorAudio(session, event);
-      if (!activated) {
-        const diagnostics = session.diagnostics();
-        if (diagnostics.error_code) {
-          reportProjectError(Object.assign(new Error(diagnostics.error_code), {
-            code: diagnostics.error_code,
-            details: diagnostics.error_details,
-          }), null, "Activate audio");
-          restorePriorPhase();
-        } else {
-          restorePriorPhase();
-        }
-      } else if (session.diagnostics().state === "running") {
-        dispatch({type: "audio-changed", phase: "running"});
+      if (sessionRef.current === session) {
+        dispatch({type: "audio-activation-restored", phase: priorPhase});
       }
-    } catch (error) {
-      // An untrusted gesture never reached the Runtime. Other failures remain
-      // visible through normal error reporting, but none may destroy the
-      // pre-attempt audio phase.
-      if (!(error instanceof TypeError)) reportProjectError(error, null, "Activate audio");
-      restorePriorPhase();
-    }
+    };
+    const reservation = {session, promise: Promise.resolve(false)};
+    activationInFlight.current = reservation;
+    reservation.promise = (async () => {
+      try {
+        const activated = await activateCreatorAudio(session, event);
+        if (sessionRef.current !== session) return false;
+        if (!activated) {
+          const diagnostics = session.diagnostics();
+          if (diagnostics.error_code) {
+            reportAudioError(Object.assign(new Error(diagnostics.error_code), {
+              code: diagnostics.error_code,
+              details: diagnostics.error_details,
+            }), session);
+            restorePriorPhase();
+          } else {
+            restorePriorPhase();
+          }
+        } else if (session.diagnostics().state === "running") {
+          dispatch({type: "audio-changed", phase: "running"});
+        }
+        return activated;
+      } catch (error) {
+        if (sessionRef.current !== session) return false;
+        // An untrusted gesture never reached the Runtime. Other failures remain
+        // visible through normal error reporting, but none may destroy the
+        // pre-attempt audio phase.
+        if (!(error instanceof TypeError)) reportAudioError(error, session);
+        restorePriorPhase();
+        return false;
+      } finally {
+        if (activationInFlight.current === reservation) activationInFlight.current = null;
+      }
+    })();
+    return reservation.promise;
   };
+  gestureActivation.current = activateAudio;
 
   const suspendAudio = async () => {
     if (!session || stateRef.current.audio.phase !== "running") return;
@@ -1359,11 +1559,16 @@ function Workspace({
   };
 
   const submitTransportIntent = async (intent: PatternTransportIntent) => {
+    if (intent === "record" && (
+      (padCapture.current !== null && padCapture.current.getState().phase !== "idle") ||
+      !["idle", "permission-error"].includes(capturePhaseRef.current) ||
+      !["idle", "saved", "discarded"].includes(performControllerRef.current?.getState().recording.phase ?? "idle")
+    )) return;
     const project = stateRef.current.project.current;
     const current = transportRef.current;
     if (!isPatternTransportSession(session) || project === null ||
         current.sessionId === null || current.projectId !== project.projectId ||
-        stateRef.current.audio.phase !== "running" ||
+        (stateRef.current.audio.phase !== "running" && session.diagnostics().state !== "running") ||
         selectTransportBusy(current)) {
       return;
     }
@@ -1519,14 +1724,14 @@ function Workspace({
     setCapturePhase(phase);
     if (phase === "trimming" || phase === "commit-error" || phase === "committing") {
       dispatchSequence({type: "trim-overlay"});
-      // The legacy overlay gate needs a legacy Sequence session. Under the
-      // global transport the journal has no legacy session, so an armed
-      // Capture trimmed over an active transport recording opens the overlay
-      // through this Host-local flag instead.
+      // Capture owns recording exclusively in P1, while Pattern playback may
+      // continue. Its trim dialog must be visible on Sequence even when no
+      // Pattern journal exists; the Host-local flag carries that review.
       const legacySequenceActive =
         ["recording", "switch-pending"].includes(sequenceRef.current.phase) &&
         sequenceRef.current.sessionId !== null;
-      if (!legacySequenceActive && selectTransportRecording(transportRef.current)) {
+      if (!legacySequenceActive && activeModeRef.current === "sequence" &&
+          armedCaptureSlotRef.current !== null) {
         setCaptureTransportOverlay(true);
       }
     } else if (phase === "idle" || phase === "permission-error") {
@@ -1649,7 +1854,11 @@ function Workspace({
   const transportReady = isPatternTransportSession(session) &&
     transport.sessionId !== null &&
     state.project.phase === "ready" && state.project.current !== null &&
-    state.audio.phase === "running";
+    selectCanStartGesture(state) && (
+      state.audio.phase === "running" ||
+      (runtimeHostState === "audio-suspended" &&
+        (state.audio.phase === "inactive" || state.audio.phase === "suspended"))
+    );
   const recording = selectTransportRecording(transport);
   const playing = selectTransportPlaying(transport);
   // The armed-Capture trim overlay over an active recording, whether the
@@ -1660,6 +1869,7 @@ function Workspace({
     setActiveMode(mode);
   };
   const selectMode = (mode: CreatorMode) => {
+    setSystemOpen(false);
     inputController.current?.clearPressed();
     // Normal navigation never stops the global Pattern transport; only the
     // separately owned performance recording leaves with its mode.
@@ -1686,18 +1896,19 @@ function Workspace({
   };
   const runtimeActions = session && inputController.current
     ? {
-        audioActivationReady: runtimeHostState === "audio-suspended",
-        onActivateAudio: (event: ReactMouseEvent<HTMLButtonElement>) => {
-          void activateAudio(event.nativeEvent);
-        },
         onSuspendAudio: () => { void suspendAudio(); },
-        onEnableMidi: () => { void inputController.current?.enableMidi(); },
+        onEnableMidi: (event: ReactMouseEvent<HTMLButtonElement>) => {
+          void activateAudio(event.nativeEvent);
+          void inputController.current?.enableMidi();
+        },
         onExportReport: exportReport,
       }
     : {};
   const padSurface = (
     <PadSurface
       state={state}
+      emptyPadCapture={padCaptureState !== null}
+      {...(defaultSeed?.projectId === currentProjectId ? {seedSlots: defaultSeed.slots} : {})}
       armedCaptureSlot={armedCaptureSlot}
       {...(activeMode === "sample" ? {
         onSelectSample: (slot: number) => {
@@ -1754,10 +1965,35 @@ function Workspace({
                 state.project.current !== null}
               onSelectMode={selectMode}
               onSelectBank={selectBank}
-              onRecord={() => { void submitTransportIntent("record"); }}
-              recordEnabled={transportReady && !transportBusy}
+              onRecord={(event) => {
+                const project = stateRef.current.project.current;
+                const epoch = gestureEpoch.current;
+                const activation = activateAudio(event.nativeEvent);
+                if (activation === null) void submitTransportIntent("record");
+                else void activation.then((ready) => {
+                  if (ready && sessionRef.current === session &&
+                      stateRef.current.project.current === project && gestureEpoch.current === epoch) {
+                    void submitTransportIntent("record");
+                  }
+                });
+              }}
+              recordEnabled={transportReady && !transportBusy &&
+                (padCaptureState === null || padCaptureState.phase === "idle") &&
+                ["idle", "permission-error"].includes(capturePhase) &&
+                ["idle", "saved", "discarded"].includes(historyPerformPhase)}
               recording={recording}
-              onPlayStop={() => { void submitTransportIntent("play_stop"); }}
+              onPlayStop={(event) => {
+                const project = stateRef.current.project.current;
+                const epoch = gestureEpoch.current;
+                const activation = activateAudio(event.nativeEvent);
+                if (activation === null) void submitTransportIntent("play_stop");
+                else void activation.then((ready) => {
+                  if (ready && sessionRef.current === session &&
+                      stateRef.current.project.current === project && gestureEpoch.current === epoch) {
+                    void submitTransportIntent("play_stop");
+                  }
+                });
+              }}
               playEnabled={transportReady && !transportBusy}
               playing={playing}
             />
@@ -1775,16 +2011,64 @@ function Workspace({
           pads={padSurface}
           touchWorkspace={
             <>
-              <section className="touch-system" aria-label="System">
-                <button
-                  type="button"
-                  disabled={!selectCanActivateAudio(state) ||
-                    runtimeActions.onActivateAudio === undefined ||
-                    runtimeActions.audioActivationReady !== true}
-                  onClick={runtimeActions.onActivateAudio}
-                >
-                  Activate audio
-                </button>
+      {padCaptureState !== null && (
+        <section aria-label="Pad recording">
+          <label>Pad recording source
+            <select aria-label="Pad recording source" value={padCaptureState.source}
+              disabled={padCaptureState.phase !== "idle"}
+              onChange={event => {
+                const source = event.currentTarget.value as PadCaptureSource;
+                padCapture.current?.setSource(source);
+                try {localStorage.setItem("lmdj.creator.pad-capture-source.v1", source);} catch {}
+              }}>
+              <option value="microphone">Microphone</option>
+              <option value="master">Internal playback</option>
+            </select>
+          </label>
+          <output role="status">{padCaptureState.phase}{padCaptureState.target === null ? "" :
+            ` · Pad ${padCaptureState.target.slot + 1}`} · {(padCaptureState.frames / 48_000).toFixed(2)} s</output>
+          {padCaptureState.message !== null && <p role="status">{padCaptureState.message}</p>}
+          {padCaptureState.phase === "review" && <>
+            <button type="button" onClick={() => {void padCapture.current?.save();}}>Save Pad recording</button>
+            <button type="button" onClick={() => padCapture.current?.discard()}>Discard Pad recording</button>
+          </>}
+        </section>
+      )}
+      {defaultSeedError !== null && <p role="status">{defaultSeedError}</p>}
+      {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "failed") &&
+        <button type="button" onClick={() => {defaultSeed.slots.forEach((slot, index) => {
+          if (slot.phase === "failed") void defaultSeedController.current?.retry(index);
+        });}}>Retry default sounds</button>}
+      {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "saved-unavailable") &&
+        <div><p role="status">Sounds saved; prepare playback to use them.</p>
+          <button type="button" onClick={() => {
+            const project = stateRef.current.project.current;
+            if (project === null || !isSampleSession(session)) return;
+            void retryPrepareJourney(session, project.patternId).then(
+              publication => defaultSeedController.current?.acceptPublication(publication),
+              error => reportFailure("Prepare default sounds", error));
+          }}>Prepare default sounds</button></div>}
+
+              <nav className="touch-navigation" aria-label="Workspace navigation">
+                <button type="button" ref={systemEntry} aria-expanded={systemOpen}
+                  onClick={() => {
+                    inputController.current?.clearPressed();
+                    void padCapture.current?.cancel();
+                    setSystemOpen(true);
+                  }}>System</button>
+                {activeMode === "project" && <button type="button" disabled={!soundSetEnabled}
+                  onClick={() => selectMode("soundset")}>Sound Sets</button>}
+                {activeMode === "sample" && <button type="button" disabled={!sliceEnabled}
+                  onClick={() => selectMode("slice")}>Slice</button>}
+                {(activeMode === "soundset" || activeMode === "slice") &&
+                  <button type="button" onClick={() => selectMode(activeMode === "slice" ? "sample" : "project")}>
+                    Back to {activeMode === "slice" ? "Sample" : "Project"}
+                  </button>}
+              </nav>
+              {systemOpen && <SystemSurface onBack={() => {
+                setSystemOpen(false); requestAnimationFrame(() => systemEntry.current?.focus());
+              }}>
+              <section className="touch-system" aria-label="Audio and MIDI settings">
                 <button
                   type="button"
                   disabled={state.audio.phase !== "running" ||
@@ -1811,27 +2095,11 @@ function Workspace({
                 >
                   Export report
                 </button>
-                <button
-                  type="button"
-                  disabled={!sliceEnabled}
-                  aria-label={sliceEnabled
-                    ? "Slice"
-                    : "Slice — open a Project with candidate support"}
-                  onClick={() => selectMode("slice")}
-                >
-                  Slice
-                </button>
-                <button
-                  type="button"
-                  disabled={!soundSetEnabled}
-                  aria-label={soundSetEnabled
-                    ? "Sound Sets"
-                    : "Sound Sets — wait for the Runtime to start"}
-                  onClick={() => selectMode("soundset")}
-                >
-                  Sound Sets
-                </button>
               </section>
+                {isCandidateSession(session) && <ProviderSettings session={session} />}
+                <DiagnosticsLog records={diagnostics} />
+              </SystemSurface>}
+              <div hidden={systemOpen}>
               {candidateAudio !== null && candidateAudio.projectId === state.project.current?.projectId &&
                 (candidateAudio.preparing || state.sample.savedRevision !== state.sample.runtimeRevision) ? (
                 <section className="sample-runtime-stale" aria-label="Project audio status">
@@ -1924,6 +2192,8 @@ function Workspace({
                     bank={state.activeBank}
                     onBankChange={selectBank}
                     transport={transport}
+                    recordingBusy={(padCaptureState !== null && padCaptureState.phase !== "idle") ||
+                      !["idle", "permission-error"].includes(capturePhase) || recording}
                   />
                 ) : (
                   <main className="perform-surface" aria-label="Perform">
@@ -1967,6 +2237,8 @@ function Workspace({
                 hidden={activeMode !== "sample" && !trimOverlayOpen}>
                 <SampleSurface
                   state={state}
+                  externalCaptureBusy={(padCaptureState !== null && padCaptureState.phase !== "idle") ||
+                    recording || !["idle", "saved", "discarded"].includes(historyPerformPhase)}
                   dispatch={dispatch}
                   filePickIntent={sampleFilePickIntent}
                   padDropIntent={samplePadDropIntent}
@@ -1982,6 +2254,7 @@ function Workspace({
                     : {})}
                   onCaptureSlotChange={setArmedCaptureSlot}
                   onCapturePhaseChange={capturePhaseChanged}
+                  onCaptureGesture={(event) => { void activateAudio(event); }}
                   onContinueCaptureInSequence={() => {
                     if (isSequenceSession(session) && state.project.current !== null) {
                       setActiveMode("sequence");
@@ -1991,7 +2264,7 @@ function Workspace({
                 />
               </div>
               ) : null}
-              <DiagnosticsLog records={diagnostics} />
+              </div>
               <ErrorPanel
                 code={state.runtime.errorCode}
                 details={state.runtime.errorDetails}

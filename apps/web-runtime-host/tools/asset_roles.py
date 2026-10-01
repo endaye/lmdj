@@ -20,6 +20,7 @@ from __future__ import annotations
 
 CAPTURE_WORKLET = "capture_worklet"
 HOST_MAIN = "host_main"
+OFFLINE_WORKER = "offline_worker"
 HOST_MODULE = "host_module"
 HOST_STYLE = "host_style"
 PERFORM_MASTER_TAP_WORKLET = "perform_master_tap_worklet"
@@ -36,6 +37,7 @@ RUNTIME_WASM = "runtime_wasm"
 ALLOWED_ASSET_ROLES = frozenset(
     (
         CAPTURE_WORKLET,
+        OFFLINE_WORKER,
         HOST_MAIN,
         HOST_MODULE,
         HOST_STYLE,
@@ -67,7 +69,7 @@ WEB_RUNTIME_HOST_EMITTED_ASSET_ROLES = frozenset(
         RUNTIME_WASM,
     )
 )
-CREATOR_WEB_EMITTED_ASSET_ROLES = frozenset(
+CREATOR_PRE_OFFLINE_ASSET_ROLES = frozenset(
     (
         CAPTURE_WORKLET,
         HOST_MAIN,
@@ -77,6 +79,8 @@ CREATOR_WEB_EMITTED_ASSET_ROLES = frozenset(
         RUNTIME_WASM,
     )
 )
+CREATOR_WEB_EMITTED_ASSET_ROLES = CREATOR_PRE_OFFLINE_ASSET_ROLES | frozenset((OFFLINE_WORKER,))
+CREATOR_WEB_POSSIBLE_ASSET_ROLES = CREATOR_WEB_EMITTED_ASSET_ROLES
 EMITTED_ASSET_ROLES_BY_HOST_ID = {
     "creator-web": CREATOR_WEB_EMITTED_ASSET_ROLES,
     "web-runtime-host": WEB_RUNTIME_HOST_EMITTED_ASSET_ROLES,
@@ -87,7 +91,8 @@ EMITTED_ASSET_ROLES_BY_HOST_ID = {
 # which the exact-tag deploy still discovers as its rollback identity, must
 # keep the five-role inventory and must not claim the tap.
 CREATOR_CURRENT_ASSET_ROLES = CREATOR_WEB_EMITTED_ASSET_ROLES
-CREATOR_LEGACY_ASSET_ROLES = CREATOR_CURRENT_ASSET_ROLES - frozenset(
+CREATOR_OFFLINE_ASSET_ROLES = CREATOR_PRE_OFFLINE_ASSET_ROLES | frozenset((OFFLINE_WORKER,))
+CREATOR_LEGACY_ASSET_ROLES = CREATOR_PRE_OFFLINE_ASSET_ROLES - frozenset(
     (PERFORM_MASTER_TAP_WORKLET,)
 )
 

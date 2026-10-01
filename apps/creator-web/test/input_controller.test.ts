@@ -200,6 +200,12 @@ function deferred<T>() {
 }
 
 interface SampleFixtureOptions {
+  onEmptyPadPress?: (slot: number, key: object, source: import("../src/runtime/runtime_types").RuntimeTriggerSource,
+    activation: Promise<boolean> | null) => boolean;
+  onEmptyPadRelease?: (key: object) => void;
+  onEmptyPadCancel?: () => void;
+  canUsePad?: (slot: number) => boolean;
+  activateAudioForGesture?: (event: {isTrusted: boolean}) => Promise<boolean> | null;
   isAssigned?: (slot: number) => boolean;
   isAvailable?: (slot: number) => boolean;
   isRuntimeCurrent?: () => boolean;
@@ -261,6 +267,10 @@ function sampleFixture(options: SampleFixtureOptions = {}) {
   };
   const controller = createCreatorInputController({
     session,
+    ...(options.onEmptyPadPress === undefined ? {} : {onEmptyPadPress: options.onEmptyPadPress}),
+    ...(options.onEmptyPadRelease === undefined ? {} : {onEmptyPadRelease: options.onEmptyPadRelease}),
+    ...(options.onEmptyPadCancel === undefined ? {} : {onEmptyPadCancel: options.onEmptyPadCancel}),
+    ...(options.activateAudioForGesture === undefined ? {} : {activateAudioForGesture: options.activateAudioForGesture}),
     getActiveBank: () => 0,
     isAssigned: options.isAssigned ?? (() => true),
     isAvailable: options.isAvailable ?? (() => true),
@@ -298,6 +308,70 @@ async function settle() {
 }
 
 describe("Creator input controller", () => {
+  test("waits for native activation and retains the first released one-shot", async () => {
+    const activation = deferred<boolean>();
+    const events: Array<{isTrusted: boolean}> = [];
+    const value = sampleFixture({activateAudioForGesture: event => {
+      events.push(event);
+      return activation.promise;
+    }});
+    const nativeEvent = {isTrusted: true};
+    value.controller.keyDown({code: "KeyQ", nativeEvent});
+    value.controller.keyUp({code: "KeyQ"});
+    await settle();
+    expect(events).toEqual([nativeEvent]);
+    expect(value.triggers).toEqual([]);
+    activation.resolve(true);
+    await settle();
+    expect(value.triggers).toEqual([{slot: 0, velocity: 100, source: "keyboard"}]);
+    value.controller.dispose();
+  });
+
+  test.each(["gate", "loop_gate"] as const)("a released %s never starts after activation", async mode => {
+    const activation = deferred<boolean>();
+    const value = sampleFixture({
+      activateAudioForGesture: () => activation.promise,
+      inspectSample: async slot => ({...sampleInspect(slot), playback: {
+        ...sampleInspect(slot).playback, triggerMode: mode,
+      }}),
+    });
+    value.controller.keyDown({code: "KeyQ", isTrusted: true});
+    value.controller.keyUp({code: "KeyQ"});
+    activation.resolve(true);
+    await settle();
+    expect(value.triggers).toEqual([]);
+    value.controller.dispose();
+  });
+
+  test.each(["cancel", "blur", "dispose"])("%s retires a pending activation input", async action => {
+    const activation = deferred<boolean>();
+    const value = sampleFixture({activateAudioForGesture: () => activation.promise});
+    const pointer = {type: "pointerdown", pointerId: 8, isPrimary: true, button: 0, isTrusted: true};
+    value.controller.pointerDown(pointer, 0);
+    if (action === "cancel") value.controller.pointerCancel(pointer, 0);
+    else if (action === "blur") window.dispatchEvent(new Event("blur"));
+    else value.controller.dispose();
+    activation.resolve(true);
+    await settle();
+    expect(value.triggers).toEqual([]);
+    value.controller.dispose();
+  });
+
+  test("a refused activation permits a fresh gesture retry", async () => {
+    let attempts = 0;
+    const value = sampleFixture({activateAudioForGesture: async () => ++attempts > 1});
+    value.controller.keyDown({code: "KeyQ", isTrusted: true});
+    value.controller.keyUp({code: "KeyQ"});
+    await settle();
+    expect(value.triggers).toEqual([]);
+    value.controller.keyDown({code: "KeyQ", isTrusted: true});
+    value.controller.keyUp({code: "KeyQ"});
+    await settle();
+    expect(attempts).toBe(2);
+    expect(value.triggers).toHaveLength(1);
+    value.controller.dispose();
+  });
+
   test("observes touch press, cancel, and a later press with exact raw shapes and fresh identities", async () => {
     const value = fixture();
     const gestureIds = [
@@ -1666,4 +1740,38 @@ describe("Creator input controller", () => {
     expect(value.triggers).toEqual([]);
     controller.dispose();
   });
+});
+
+
+test("an unavailable streaming Pad neither wakes audio nor opens the empty-Pad picker", () => {
+  const value = fixture();
+  let activations = 0;
+  const controller = createCreatorInputController({
+    session: value.session, dispatch: value.dispatch,
+    getActiveBank: () => 0, isAssigned: () => true,
+    canUsePad: slot => slot !== 0,
+    activateAudioForGesture: () => {activations++; return Promise.resolve(true);},
+  });
+  controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+  expect(value.triggers).toHaveLength(0);
+  expect(activations).toBe(0);
+  controller.dispose();
+});
+
+test("empty Pad capture consumes pointer release and cancellation without a file picker", () => {
+  const presses: object[] = []; const releases: object[] = [];
+  let cancels = 0;
+  const value = sampleFixture({isAssigned: () => false,
+    onEmptyPadPress: (_slot, key) => {presses.push(key); return true;},
+    onEmptyPadRelease: key => releases.push(key), onEmptyPadCancel: () => {cancels++;}});
+  const target = document.createElement("button");
+  const event = {type:"pointerdown",isPrimary:true,button:0,pointerId:77,clientX:1,clientY:1,target};
+  value.controller.pointerDown(event, 3);
+  value.controller.pointerUp({...event,type:"pointerup"},3);
+  expect(presses).toHaveLength(1);expect(releases).toEqual(presses);
+  expect(value.filePickIntents).toEqual([]);expect(value.triggers).toEqual([]);
+  value.controller.pointerDown({...event,pointerId:78},3);
+  value.controller.clearPressed();expect(cancels).toBe(1);
+  expect(releases).toHaveLength(1);
+  value.controller.dispose();
 });

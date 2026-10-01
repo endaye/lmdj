@@ -576,6 +576,18 @@ export interface CreatorSoundSetRuntimeSession extends CreatorRuntimeSession {
   ): Promise<Readonly<SoundSetInstallReceipt>>;
 }
 
+export interface CreatorSlotSoundSetRuntimeSession extends CreatorSoundSetRuntimeSession {
+  describeSoundSetCatalog(): Promise<Readonly<{
+    catalogAvailable: boolean;
+    sets: readonly Readonly<SoundSetIdentity & {totalBytes: number}>[];
+  }>>;
+  acquireSoundSetSlot(request: Readonly<SoundSetIdentity & {slotIndex: number}>):
+    Promise<Readonly<SoundSetIdentity & {slot: Readonly<SoundSetSlot>}>>;
+  installSoundSetSlot(request: Readonly<SoundSetIdentity & {
+    slotIndex: number; bankId: number; commandId: string; expectedRevision: number;
+  }>): Promise<Readonly<SoundSetInstallReceipt>>;
+}
+
 export interface CandidateRecipe {
   candidate_id: string;
   kind: "slice_interval_v1";

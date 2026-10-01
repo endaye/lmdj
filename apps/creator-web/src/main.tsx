@@ -9,8 +9,11 @@ import performanceMasterTapUrl from
   "@lmdj/web-runtime-platform/performance_master_tap_worklet.js?url&no-inline";
 import {WEB_RUNTIME_IDENTITY} from
   "../../../products/lmdj/generated/web-runtime-identity.mjs";
+import {CREATOR_SOUND_SET_CATALOG_PATH} from
+  "../../../products/lmdj/creator-defaults.mjs";
 
 import {App} from "./app";
+import {registerOfflineShell} from "./runtime/offline_shell";
 import {
   announceBuildIdentity,
   creatorBuildIdentity,
@@ -31,10 +34,8 @@ Object.defineProperty(window, "__LMDJ_CREATOR_BUILD__", {
   writable: false,
 });
 
-// S11-D6: the Catalog endpoint is Workspace/Host settings and never Project
-// Truth, so it is configured on the Host page and nowhere else. A Host that
-// configures none browses whatever its Workspace Set Store already holds; the
-// Creator invents no default endpoint of its own.
+// Product Assembly supplies the same-origin default proxy. Workspace/Host
+// overrides stay outside Project Truth.
 function soundSetCatalogEndpoint(): string | null {
   const injected = (
     window as Window & {__LMDJ_SOUNDSET_CATALOG__?: unknown}
@@ -47,7 +48,7 @@ function soundSetCatalogEndpoint(): string | null {
     ?.getAttribute("content");
   return configured !== null && configured !== undefined && configured !== ""
     ? configured
-    : null;
+    : new URL(CREATOR_SOUND_SET_CATALOG_PATH, document.baseURI).href;
 }
 
 function createSoundSetCatalog(): ReturnType<
@@ -120,3 +121,8 @@ createRoot(root).render(
     projectTakeover={createBrowserProjectTakeover()}
   />,
 );
+
+void registerOfflineShell(document, navigator, crypto, window.fetch.bind(window), phase => {
+  Object.defineProperty(window, "__LMDJ_OFFLINE_SHELL__", {value: phase, configurable: true});
+  window.dispatchEvent(new CustomEvent("lmdj-offline-shell", {detail: phase}));
+});

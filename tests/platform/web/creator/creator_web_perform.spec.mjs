@@ -1,3 +1,4 @@
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {createHash} from "node:crypto";
 import {spawn} from "node:child_process";
 import {once} from "node:events";
@@ -55,6 +56,14 @@ test.afterEach(async ({page}) => {
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function inspectProjectTruth(page) {
+  const response = await page.evaluate(() => window.lmdjWebRuntimeHost.transport.send({
+    protocol_version: 1, request_id: crypto.randomUUID(), operation: "project.inspect", payload: {},
+  }));
+  expect(response.ok).toBe(true);
+  return response.result;
 }
 
 function canonicalJson(value) {
@@ -461,7 +470,7 @@ async function openCandidate(page, scenario = "none") {
     perform_recording_frames: RECORDING_FRAMES,
     perform_recording_queue_batches: RECORDING_QUEUE_BATCHES,
   });
-  expect(candidate.candidateManifest.assets.at(-1)).toEqual(candidate.tapEntry);
+  expect(candidate.candidateManifest.assets.filter(asset => asset.role === "perform_master_tap_worklet")).toEqual([candidate.tapEntry]);
   if (candidate.routed) {
     const {
       perform_recording_frames: _frames,
@@ -503,7 +512,7 @@ async function openLocalProject(page) {
 }
 
 async function activateAudio(page) {
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });
@@ -628,6 +637,15 @@ async function launchCrashableCreatorContext(userDataDir) {
     browser,
     context,
     page,
+    async close() {
+      const client = await browser.newBrowserCDPSession();
+      await client.send("Browser.close").catch(() => {});
+      await expect.poll(() => child.exitCode, {timeout: 30_000}).toBe(0);
+      // The browser acknowledged a clean checkpoint; its detached renderer or
+      // utility children must not retain the profile during the next launch.
+      killProcessGroup(child);
+      await browser.close().catch(() => {});
+    },
     async kill() {
       if (child.exitCode === null) {
         const exited = once(child, "exit");
@@ -637,6 +655,26 @@ async function launchCrashableCreatorContext(userDataDir) {
       await browser.close().catch(() => {});
     },
   });
+}
+
+// Establish the remembered Project on disk before testing a different failure:
+// SIGKILL during an active recording. A clean cross-process reopen is the
+// far-side checkpoint; the later owner loss and automatic reopen stay intact.
+async function launchPersistedCreatorOwner(profile) {
+  let process = await launchCrashableCreatorContext(profile);
+  try {
+    const candidate = await importActivateAndPerform(process.page);
+    const url = candidate.routed ? `${candidate.origin}/index.html` : process.page.url();
+    const before = await inspectProjectTruth(process.page);
+    await process.close();
+    process = await launchCrashableCreatorContext(profile);
+    const page = await openProjectSuccessor(process.context, url);
+    expect((await inspectProjectTruth(page)).project).toEqual(before.project);
+    return {process, page, url};
+  } catch (error) {
+    await process.kill().catch(() => {});
+    throw error;
+  }
 }
 
 function projectRevisionLocator(page) {
@@ -994,7 +1032,7 @@ async function recordShortPerformance(
   await savePerformanceWithBusyRetry(page, name);
 }
 
-test("complete Perform journey persists projection, gestures, WAV, save, replay and resample", async ({page, browserName}) => {
+test("complete Perform journey persists projection, gestures, WAV, save, replay and empty Pad master capture", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(420_000);
   await importActivateAndPerform(page);
@@ -1113,13 +1151,39 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await expect(replayStatus).toContainText(
     new RegExp(`resolved revision\\s*[:·]\\s*${revision}`, "i"),
   );
-  await page.getByRole("spinbutton", {name: "Resample start frame"}).fill("0");
-  await page.getByRole("spinbutton", {name: "Resample end frame"}).fill("4800");
-  await page.getByRole("spinbutton", {name: "Resample target Pad"}).fill("16");
-  await page.getByRole("button", {name: "Resample selection"}).click();
+  await page.getByRole("combobox", {name: "Pad recording source"}).selectOption("master");
+  await page.getByRole("button", {name: "Stop Replay"}).click();
+  // The imported witness assigns every Pad. Establish the empty target through
+  // the actual authoring path, and prove deletion preserved the saved replay.
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await page.getByTestId("physical-controls").getByRole("button", {name: "Bank B", exact: true}).click();
+  await page.getByRole("button", {name: /^Pad B1 — assigned/}).evaluate((element) => element.click());
+  const beforeDelete = await inspectProjectTruth(page);
+  await page.getByRole("button", {name: "Delete Pad B1", exact: true}).click();
+  revision = await expectRevisionAfter(page, revision);
+  const afterDelete = await inspectProjectTruth(page);
+  expect(afterDelete.project.banks[1].pads[0].asset_id).toBeNull();
+  expect(afterDelete.project.performances).toEqual(beforeDelete.project.performances);
+  await openPerform(page);
+  const empty = page.getByRole("button", {name: /^Pad B1 — empty/});
+  await empty.focus();
+  await page.keyboard.down("KeyQ");
+  await expect(page.getByRole("region", {name: "Pad recording"})).toContainText("recording");
+  await page.getByRole("button", {name: "Replay Night Set"}).click();
+  await expect(replayStatus).toContainText("playing", {timeout: LAUNCH_TRANSITION_TIMEOUT_MS});
+  await expect(replayStatus).toContainText("complete", {timeout: LAUNCH_TRANSITION_TIMEOUT_MS});
+  await page.keyboard.up("KeyQ");
   await expectRevisionAfter(page, revision);
-  await expect(page.getByRole("status", {name: "Resample status"}))
-    .toContainText(/committed.*Pad B1/i);
+  await expect(page.getByRole("button", {name: /^Pad B1 — assigned/})).toBeVisible();
+  const captured = await inspectProjectTruth(page);
+  const capturedId = captured.project.banks[1].pads[0].asset_id;
+  expect(captured.project.assets[capturedId].artifact).toMatchObject({
+    byte_length: expect.any(Number), media_type: "audio/wav", sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+  });
+  expect(captured.project.assets[capturedId].artifact.byte_length).toBeGreaterThan(44);
+  await page.reload(); await openLocalProject(page);
+  const reopened = await inspectProjectTruth(page);
+  expect(reopened.project.assets[capturedId].artifact).toEqual(captured.project.assets[capturedId].artifact);
 });
 
 test("discard deletes its temporary WAV and owner-loss recovery applies or discards durable truth", async ({browserName}) => {
@@ -1129,12 +1193,10 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
   let ownerProcess = null;
   let applyingProcess = null;
   try {
-    ownerProcess = await launchCrashableCreatorContext(applyProfile);
-    const ownerPage = ownerProcess.page;
-    const candidate = await importActivateAndPerform(ownerPage);
-    const candidateUrl = candidate.routed
-      ? `${candidate.origin}/index.html`
-      : ownerPage.url();
+    const owner = await launchPersistedCreatorOwner(applyProfile);
+    ownerProcess = owner.process;
+    const ownerPage = owner.page;
+    const candidateUrl = owner.url;
     const baselineWavs = await opfsWavFiles(ownerPage);
 
     await beginRecording(ownerPage);
@@ -1180,12 +1242,10 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
   let discardOwnerProcess = null;
   let discardingProcess = null;
   try {
-    discardOwnerProcess = await launchCrashableCreatorContext(discardProfile);
-    const discardOwnerPage = discardOwnerProcess.page;
-    const candidate = await importActivateAndPerform(discardOwnerPage);
-    const candidateUrl = candidate.routed
-      ? `${candidate.origin}/index.html`
-      : discardOwnerPage.url();
+    const owner = await launchPersistedCreatorOwner(discardProfile);
+    discardOwnerProcess = owner.process;
+    const discardOwnerPage = owner.page;
+    const candidateUrl = owner.url;
     await beginRecording(discardOwnerPage);
     await discardOwnerPage.getByRole("button", {name: /^Pad A2\b/}).dispatchEvent(
       "pointerdown",
@@ -1362,12 +1422,10 @@ test("owner process loss leaves one recoverable recording and no second capture 
   let ownerProcess = null;
   let successorProcess = null;
   try {
-    ownerProcess = await launchCrashableCreatorContext(profile);
-    const ownerPage = ownerProcess.page;
-    const candidate = await importActivateAndPerform(ownerPage);
-    const candidateUrl = candidate.routed
-      ? `${candidate.origin}/index.html`
-      : ownerPage.url();
+    const owner = await launchPersistedCreatorOwner(profile);
+    ownerProcess = owner.process;
+    const ownerPage = owner.page;
+    const candidateUrl = owner.url;
     await beginRecording(ownerPage);
     await ownerPage.getByRole("button", {name: /^Pad A1\b/}).dispatchEvent(
       "pointerdown",

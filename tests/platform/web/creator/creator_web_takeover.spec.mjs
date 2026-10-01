@@ -1,3 +1,5 @@
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
+import {clickCreatorSystemAction} from "./fixtures/creator_navigation.mjs";
 import {readFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
@@ -70,7 +72,7 @@ const undoDepth = async (page) => (await rawRequest(page, "history.inspect")).un
 
 async function downloadReport(page) {
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", {name: "Export report"}).click();
+  await clickCreatorSystemAction(page, "Export report");
   return JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
 }
 
@@ -102,7 +104,7 @@ test("a second tab takes over the open Project and the first takes it back", asy
   await page.goto("/index.html");
   await waitForBootProject(page);
   const shortId = (await overviewProjectId(page).textContent()).trim();
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });
@@ -138,7 +140,7 @@ test("a second tab takes over the open Project and the first takes it back", asy
   // Leg 4 (normal): once the holder is suspended it hands over. The holder's
   // Runtime closes; the second tab opens the holder's committed write with an
   // empty history.
-  await page.getByRole("button", {name: "Suspend audio"}).click();
+  await clickCreatorSystemAction(page, "Suspend audio");
   await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });
@@ -150,7 +152,7 @@ test("a second tab takes over the open Project and the first takes it back", asy
   expect(await projectTruth(second)).toEqual(holderWrite);
   expect(await undoDepth(second)).toBe(0);
 
-  // Leg 5: the new holder commits its own write.
+  // Leg 5: the new holder commits its own write while audio remains inactive.
   await second.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(second.getByRole("button", {name: "Delete Pad A1", exact: true}))
     .toBeEnabled({timeout: 30_000});
@@ -160,8 +162,19 @@ test("a second tab takes over the open Project and the first takes it back", asy
   expect(secondWrite.banks[0].pads[0].asset_id).toBeNull();
   expect(secondWrite.assets).toEqual(holderWrite.assets);
 
-  // Leg 6 (taken back): the first tab's Continue here hands the Project back.
-  // It reopens the second tab's write exactly once, with an empty history.
+  // Keep main's inactive-audio Delete leg, then make the original suspended
+  // handoff precondition real with a trusted activation gesture. This is an
+  // empty Project, so the helper uses the explicit MIDI permission click.
+  await wakeAudioWithPad(second);
+  expect(await projectTruth(second)).toEqual(secondWrite);
+
+  // Leg 6 (taken back): once the new holder is suspended, the first tab's
+  // Continue here takes the Project back. It reopens the second tab's write
+  // exactly once, with an empty history.
+  await clickCreatorSystemAction(second, "Suspend audio");
+  await expect(second.getByTestId("audio-state")).toHaveText("Audio suspended", {
+    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+  });
   await page.getByRole("alert").filter({hasText: TAKEN_OVER})
     .getByRole("button", {name: "Continue here"}).click();
   await expectTakenOver(second);

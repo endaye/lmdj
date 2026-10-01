@@ -180,7 +180,7 @@ function CandidateJob({session, projectId, assetId, revision, analysisReady, unc
     const result = await session.auditionCandidate({project_id: projectId, expected_revision: revision,
       job_id: jobId, set_id: active.set_id, candidate_id: candidateId});
     if (!mounted.current) {await session.stopCandidateAudition(); return;}
-    setMessage(result.played ? "Preview started." : "Preview was not played. Activate audio and try again.");
+    setMessage(result.played ? "Preview started." : "Preview was not played. Tap a Pad to wake audio and try again.");
   });
   const adopt = () => operation(async () => {
     if (!active || plan.error || uncertain) return;

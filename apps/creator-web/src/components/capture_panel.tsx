@@ -52,6 +52,7 @@ function gripZoneStyle(handlePct: number, boundaryPct: number, isStart: boolean)
 
 export interface CapturePanelProps {
   padLabel: string;
+  recordingBusy?: boolean;
   onCommit(
     buffer: CaptureBuffer,
     selection: {startFrame: number; frameCount: number},
@@ -59,6 +60,7 @@ export interface CapturePanelProps {
     {kind: "committed"} | {kind: "conflict"; message: string} | {kind: "failed"; message: string}
   >;
   onClose(): void;
+  onRecordGesture?(event: {isTrusted: boolean}): void;
   // Element focus returns to when the panel closes (P2-D2); the modal dialog
   // owns the restore so there is exactly one restore path.
   returnFocus?: HTMLElement | null;
@@ -94,6 +96,8 @@ export function CapturePanel({
   padLabel,
   onCommit,
   onClose,
+  onRecordGesture,
+  recordingBusy = false,
   returnFocus = null,
   makeController,
   stopRequest = 0,
@@ -289,6 +293,7 @@ export function CapturePanel({
   ]);
 
   const handleRecord = async () => {
+    if (recordingBusy) return;
     // Single-owner lifecycle: the ref (not the reducer phase, which can lag a
     // render behind a rapid double click) is the guard against ever owning
     // two controllers at once.
@@ -729,7 +734,11 @@ export function CapturePanel({
           <button
             ref={primaryRef}
             type="button"
-            onClick={() => void handleRecord()}
+            disabled={recordingBusy}
+            onClick={(event) => {
+              onRecordGesture?.(event.nativeEvent);
+              void handleRecord();
+            }}
           >
             Record into {padLabel}
           </button>

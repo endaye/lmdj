@@ -1,3 +1,5 @@
+import {clickCreatorSystemAction} from "./fixtures/creator_navigation.mjs";
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
@@ -23,7 +25,7 @@ const DENIED = "creator-capture-denied-chromium";
 // cannot verify a commit made from the Sample surface.
 async function expectProjectRevision(page, expectedRevision) {
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", {name: "Export report"}).click();
+  await clickCreatorSystemAction(page, "Export report");
   const report = JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
   expect(report.sample.project_revision).toBe(expectedRevision);
 }
@@ -34,11 +36,15 @@ async function report(page, options = {}) {
     // While the capture dialog is modal the rest of the shell is inert, so a
     // role query cannot see the button; a CSS locator still can, and a
     // programmatic click is exactly what `force` means here.
+    await page.getByTestId("touch-workspace").locator("button").filter({hasText: /^System$/})
+      .evaluate(element => element.click());
     await page.getByTestId("touch-workspace").locator("button")
       .filter({hasText: "Export report"})
       .evaluate((element) => element.click());
+    await page.getByTestId("touch-workspace").locator("button").filter({hasText: "Back to music"})
+      .evaluate(element => element.click());
   } else {
-    await page.getByRole("button", {name: "Export report"}).click();
+    await clickCreatorSystemAction(page, "Export report");
   }
   return JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
 }
@@ -55,6 +61,9 @@ async function installProjectInspectProbe(page) {
         const nativeTransport = nativeHost.transport;
         nativeHost.transport = Object.freeze({
           send(...arguments_) {
+            if (arguments_[0]?.operation === "pattern.transport.request") {
+              window.__captureTransportSession = arguments_[0].payload.session_id;
+            }
             return nativeTransport.send(...arguments_);
           },
           subscribe(...arguments_) {
@@ -136,15 +145,17 @@ async function importV1SampleProject(page) {
 }
 
 async function inspectTransportProjection(page) {
+  await expect.poll(() => page.evaluate(() => window.__captureTransportSession))
+    .toMatch(/^[0-9a-f-]{36}$/);
   const response = await page.evaluate(() =>
     window.lmdjWebRuntimeHost.transport.send({
       protocol_version: 1,
       request_id: crypto.randomUUID(),
-      operation: "host.status",
-      payload: {},
+      operation: "pattern.transport.inspect",
+      payload: {session_id: window.__captureTransportSession},
     }));
   expect(response.ok).toBe(true);
-  return response.result.pattern_transport;
+  return response.result;
 }
 
 async function enterSampleEditor(page) {
@@ -362,7 +373,7 @@ test("ordinary Sample focus loss keeps the retained trim dialog visible", async 
   await expect(panel.getByRole("button", {name: "Record into Pad A1"})).toBeVisible();
 });
 
-test("armed Pad capture commit is guarded by the open transport journal and never stops playback", async ({page}, testInfo) => {
+test("armed Pad capture excludes the transport journal and never stops playback", async ({page}, testInfo) => {
   test.skip(testInfo.project.name !== GRANTED);
   // Two full capture cycles (the refused take and the committed replacement)
   // plus two Record cycles: the budget grows with the journey, not to hide a
@@ -372,7 +383,7 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
   await page.goto("/index.html");
   await importV1SampleProject(page);
   const initialTruth = await inspectProjectTruth(page);
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: 30_000,
   });
@@ -385,51 +396,28 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
   // "Sequence editor"; that region is the destination, whichever shell
   // mounts it.
   await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
-  await recordKey(page).click();
-  await expect(page.getByRole("status").filter({
-    has: page.getByTestId("creator-phase"), hasText: "recording",
-  }))
-    .toBeVisible();
-
-  const patternId = await page.getByRole("combobox", {name: "Pattern"})
-    .inputValue();
-  const initialEvents = structuredClone(
-    initialTruth.project.patterns[patternId].events,
-  );
-
-  // A distinct non-armed Pad is ordinary Sequence input before the Capture
-  // stop gesture. This event must survive the Capture commit boundary.
-  await pressRecordedPad(page, "Pad A2 — assigned — Key W", "KeyW");
-
-  // The armed Pad stops only its capture. The global Pattern transport keeps
-  // playing beneath the trim overlay and the armed hit itself is not recorded.
+  // Capture and Pattern recording have exclusive owners in P1. Playback
+  // remains available, while a recording attempt is refused before a journal.
+  await expect(recordKey(page)).toBeDisabled();
+  await playStopKey(page).click();
+  await expect.poll(async () => (await inspectTransportProjection(page)).playing).toBe(true);
+  const patternId = await page.getByRole("combobox", {name: "Pattern"}).inputValue();
+  const initialEvents = structuredClone(initialTruth.project.patterns[patternId].events);
   await page.keyboard.press("KeyQ");
-  await expect(panel.getByRole("slider", {name: /^Pad A1 End —/}))
-    .toBeVisible({timeout: 30_000});
-
-  // While the transport journal is open, the Sample-class commit keeps the
-  // legacy busy guard (#1363): the refusal is honest, the take is retained,
-  // and the panel keeps its controls.
-  await panel.getByRole("button", {name: "Commit"}).click();
-  await expect(panel.getByRole("alert"))
-    .toContainText("Sample operation failed", {timeout: 30_000});
-  await expect(panel.getByRole("button", {name: "Commit"})).toBeVisible();
-  await expect(panel.getByRole("slider", {name: /^Pad A1 End —/}))
-    .toBeVisible();
-
-  // The take cannot commit while the journal is open; Discard is the explicit
-  // user escape, and Record-off then settles the journal without stopping
-  // playback.
+  await expect(panel.getByRole("slider", {name: /^Pad A1 End —/})).toBeVisible({timeout: 30_000});
+  // The trim dialog makes the rest of the shell inert; inspect the actual
+  // disabled DOM control without making it accessible through the modal.
+  await expect(page.getByTestId("physical-controls").getByRole("button",
+    {name: /^Record\b/, includeHidden: true})).toBeDisabled();
   await panel.getByRole("button", {name: "Discard"}).click();
-  // Sequence mode shows no Sample picker; the console matrix is where the
-  // discarded Pad reads as empty again.
   await expect(page.getByTestId("pad-matrix").getByRole("button", {name: /^Pad A1 — empty/}))
     .toBeVisible({timeout: 30_000});
+  await expect(recordKey(page)).toBeEnabled();
   await recordKey(page).click();
-  await expect(page.getByRole("status").filter({
-    has: page.getByTestId("creator-phase"), hasText: "playing",
-  }))
-    .toBeVisible({timeout: 30_000});
+  await expect(page.getByRole("status").filter({has: page.getByTestId("creator-phase"), hasText: "recording"})).toBeVisible();
+  await pressRecordedPad(page, "Pad A2 — assigned — Key W", "KeyW");
+  await recordKey(page).click();
+  await expect.poll(async () => (await inspectTransportProjection(page)).playing).toBe(true);
 
   // The replacement take commits at the legal point: no open journal, and
   // playback never stopped. Sample mode mounts no transport widget, so the
@@ -642,4 +630,39 @@ test("capture never leaks device identity or filesystem paths", async ({page}, t
   expect(text).not.toContain("/Users/");
   expect(text).not.toContain("/home/");
   expect(text).not.toMatch(/deviceId|groupId|Default - |Fake Audio/i);
+});
+
+test("empty Pad microphone press commits one Artifact on release and reopens exact bytes", async ({page}, testInfo) => {
+  test.skip(testInfo.project.name !== GRANTED);
+  test.setTimeout(180_000);
+  await page.goto("/index.html");
+  await importV1SampleProject(page);
+  const before = await inspectProjectTruth(page);
+  await page.getByRole("combobox", {name: "Pad recording source"}).selectOption("microphone");
+  const pad = page.getByRole("button", {name: /^Pad A1 — empty/});
+  const status = page.getByRole("region", {name: "Pad recording"});
+  await pad.focus();await page.keyboard.down("KeyQ");
+  // Safari permission-query support varies. A preparation press has no take;
+  // the next native press is the sole recording owner.
+  if ((await status.textContent()).includes("permission")) {
+    await page.keyboard.up("KeyQ");
+    await expect(status).toContainText("Microphone ready");
+    await pad.focus();await page.keyboard.down("KeyQ");
+  }
+  await expect(status).toContainText("recording");
+  await expect.poll(async () => Number(/· ([\d.]+) s/.exec(await status.textContent())?.[1] ?? 0)).toBeGreaterThan(.2);
+  await expect(recordKey(page)).toBeDisabled();
+  await page.keyboard.up("KeyQ");
+  await expect(page.getByRole("button", {name: /^Pad A1 — assigned/})).toBeVisible({timeout:120_000});
+  const after = await inspectProjectTruth(page);
+  expect(after.project.revision).toBe(before.project.revision + 1);
+  const assetId = after.project.banks[0].pads[0].asset_id;
+  const artifact = after.project.assets[assetId].artifact;
+  expect(artifact).toEqual({byte_length:expect.any(Number),media_type:"audio/wav",sha256:expect.stringMatching(/^[0-9a-f]{64}$/)});
+  expect(artifact.byte_length).toBeGreaterThan(44);
+  await page.reload();await waitForProjectReopen(page,"00000000");
+  const reopened = await inspectProjectTruth(page);
+  expect(reopened.project.project_id).toBe(before.project.project_id);
+  expect(reopened.project.assets[assetId].artifact).toEqual(artifact);
+  expect(reopened.project.banks[0].pads[0].asset_id).toBe(assetId);
 });

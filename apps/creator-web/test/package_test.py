@@ -88,6 +88,9 @@ class CreatorPackageTest(unittest.TestCase):
             REPO_ROOT / "products/lmdj/generated/web-runtime-identity.json",
             self.repo / "products/lmdj/generated/web-runtime-identity.json",
         )
+        worker = self.repo / "apps/creator-web/offline/worker.mjs"
+        worker.parent.mkdir(parents=True)
+        shutil.copyfile(REPO_ROOT / "apps/creator-web/offline/worker.mjs", worker)
         (self.repo / "tools/web-runtime/emscripten.lock.json").write_text(
             json.dumps(lock), encoding="utf-8"
         )
@@ -155,6 +158,37 @@ class CreatorPackageTest(unittest.TestCase):
             self.repo, self.ui, self.runtime, self.identity, destination
         )
 
+    def test_offline_inventory_requires_major_and_embeds_exact_build_graph(self) -> None:
+        identity_path = self.repo / "products/lmdj/generated/web-runtime-identity.json"
+        identity = json.loads(identity_path.read_text())
+        host = identity["hosts"]["creator-web"]
+        role = self.module.ROLES.OFFLINE_WORKER
+        self.assertEqual(sum(asset["role"] == role for asset in host["expected_assets"]), 1)
+        host["version"] = "4.6.0"
+        identity_path.write_text(json.dumps(identity))
+        worker = self.repo / "apps/creator-web/offline/worker.mjs"
+        worker.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPO_ROOT / "apps/creator-web/offline/worker.mjs", worker)
+        subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "offline fixture"], check=True)
+        with self.assertRaisesRegex(self.module.PackageError, "MAJOR settlement"):
+            self.build(self.root / "refused")
+        host["version"] = "5.0.0"
+        identity_path.write_text(json.dumps(identity))
+        subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "settle fixture major"], check=True)
+        dist = self.root / "offline-dist"
+        self.build(dist)
+        self.module.verify_distribution(dist, self.repo)
+        manifest = json.loads((dist / "host-manifest.json").read_text())
+        workers = [entry for entry in manifest["assets"] if entry["role"] == role]
+        self.assertEqual(len(workers), 1)
+        source = (dist / workers[0]["path"]).read_text()
+        graph = json.loads(source.split("=", 1)[1].split(";\n", 1)[0])
+        self.assertEqual(graph["assets"], [entry for entry in manifest["assets"] if entry["role"] != role])
+        self.assertEqual(graph["product_build"], manifest["product_build"])
+        self.assertEqual(graph["host_version"], "5.0.0")
+
     def test_builds_exact_deterministic_creator_inventory(self) -> None:
         first = self.root / "first-dist"
         second = self.root / "second-dist"
@@ -200,6 +234,7 @@ class CreatorPackageTest(unittest.TestCase):
                 "host_style",
                 "capture_worklet",
                 "perform_master_tap_worklet",
+                "offline_worker",
             ],
         )
         tap = [entry for entry in manifest["assets"] if entry["role"] == "perform_master_tap_worklet"]

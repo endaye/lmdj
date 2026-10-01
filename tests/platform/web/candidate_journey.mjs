@@ -1,3 +1,4 @@
+import {clickCreatorSystemAction} from "./creator/fixtures/creator_navigation.mjs";
 import {createHash} from "node:crypto";
 import {expect, test} from "@playwright/test";
 
@@ -96,7 +97,7 @@ async function setup(page, silent = false, host) {
       await expect(page.getByRole("heading", {name: "Project 00000000", exact: true})).toBeVisible();
     } catch (error) {
       const download = page.waitForEvent("download");
-      await page.getByRole("button", {name: "Export report", exact: true}).click();
+      await clickCreatorSystemAction(page, "Export report");
       const report = await download;
       await report.saveAs(test.info().outputPath("creator-open-report.json"));
       throw error;
@@ -123,7 +124,7 @@ const adoption = set => { const {candidate_id, ...request} = selection(set); ret
 // measurement with headroom, not a target: the journey keeps every leg.
 const CANDIDATE_JOURNEY_TIMEOUT_MS = 60_000;
 
-export function registerCandidateJourneys(host) {
+export function registerCandidateJourneys(host, {wakeCreatorAudio} = {}) {
   test(`${host}: real Candidate preview, explicit adoption and restart preserve source and Pattern`, async ({page}) => {
     test.setTimeout(CANDIDATE_JOURNEY_TIMEOUT_MS);
     const {bytes, imported, truth} = await setup(page, false, host);
@@ -139,7 +140,8 @@ export function registerCandidateJourneys(host) {
     success(await send(page, "project.open", {project_id: projectId, pattern_id: patternId}));
     expect(success(await candidate(page, "auditionCandidate", selection(set))).played).toBe(false);
     if (host === "Creator Web") {
-      await page.getByRole("button", {name: "Activate audio"}).click();
+      if (typeof wakeCreatorAudio !== "function") throw new Error("Creator journey requires a real musical activation gesture");
+      await wakeCreatorAudio(page);
       await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
     } else {
       await page.locator("#audio-activate").click();
@@ -182,7 +184,8 @@ export function registerCandidateJourneys(host) {
     expect(await files(page)).toEqual(committed);
     // Suspend through the owning session so its AudioContext and control lane
     // complete quiescence before the explicit Host close/reopen boundary.
-    await page.getByRole("button", {name: "Suspend audio", exact: true}).click();
+    if (host === "Creator Web") await clickCreatorSystemAction(page, "Suspend audio");
+    else await page.getByRole("button", {name: "Suspend audio", exact: true}).click();
     if (host === "Creator Web") await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended");
     else await expect(page.locator("#host-state")).toHaveText("audio-suspended");
     success(await send(page, "host.close"));

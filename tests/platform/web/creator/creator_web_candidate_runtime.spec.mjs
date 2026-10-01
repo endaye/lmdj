@@ -1,2 +1,3 @@
 import {registerCandidateJourneys} from "../candidate_journey.mjs";
-registerCandidateJourneys("Creator Web");
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
+registerCandidateJourneys("Creator Web", {wakeCreatorAudio: wakeAudioWithPad});

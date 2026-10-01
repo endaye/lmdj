@@ -1,3 +1,5 @@
+import {clickCreatorSystemAction, openCreatorSystem} from "./fixtures/creator_navigation.mjs";
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
@@ -168,7 +170,7 @@ async function expectProjectRevision(page, expectedRevision) {
 
 async function downloadReport(page) {
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", {name: "Export report"}).click();
+  await clickCreatorSystemAction(page, "Export report");
   const download = await downloadPromise;
   return JSON.parse(await readFile(await download.path(), "utf8"));
 }
@@ -189,7 +191,7 @@ async function importV1SampleProject(page) {
 }
 
 async function activateAudio(page) {
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: 30_000,
   });
@@ -198,6 +200,8 @@ async function activateAudio(page) {
 async function enterSampleEditor(page) {
   await page.getByRole("button", {name: "Sample"}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
+  // The wake gesture selects its assigned Pad. This journey edits A1 explicitly.
+  await selectPadWithoutPress(page, await page.getByRole("button", {name: /^Pad A1 —/}).getAttribute("aria-label"));
 }
 
 async function waitForControlMutation(page, control, action, expectedRevision) {
@@ -232,9 +236,10 @@ async function commitLongSourceSelection(page) {
 }
 
 async function selectPadWithoutPress(page, label) {
-  // The Sample picker pad; the console matrix pad shares the prefix and adds
-  // its key hint, so the name is matched exactly.
-  await page.getByRole("button", {name: label, exact: true}).evaluate((element) => element.click());
+  // Select the console Pad without synthesizing a musical press or opening
+  // the empty-Pad file chooser. Actual audio input is proved separately.
+  await page.getByRole("button", {name: label, exact: true}).evaluate((element) =>
+    element.dispatchEvent(new MouseEvent("click", {bubbles: true, detail: 1})));
 }
 
 async function expectDefaultPlaybackUi(page) {
@@ -578,7 +583,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   expect(await page.evaluate(() => window.__sampleProofObservedResourceFailure)).toBe(true);
   await expectProjectRevision(page, 60);
 
-  await page.getByRole("button", {name: "Suspend audio"}).click();
+  await clickCreatorSystemAction(page, "Suspend audio");
   // An explicit Suspend publishes "Audio suspended" only after the Runtime has
   // committed the suspend, so the Activate gesture that follows is guaranteed
   // to be accepted. Both gestures own one independently bounded 30-second
@@ -586,7 +591,11 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  // A1 Truth is unmuted at 60 while retained Runtime 59 still mutes A1.
+  // A5 was not edited: prove the resume gesture against an audible Pad, then
+  // return to the failed A1 preparation without admitting another gesture.
+  await wakeAudioWithPad(page, {padAddress: "A5"});
+  await selectPadWithoutPress(page, "Pad A1 — assigned — Key Q");
   await expect(page.getByTestId("audio-state")).toHaveText(
     /Audio (running|recovering)/,
     {timeout: AUDIO_TRANSITION_TIMEOUT_MS},
@@ -704,7 +713,8 @@ test("Sample Editor WebKit capability boundary is explicit, private, and non-phy
   const publicText = await alert.textContent();
   expect(publicText).not.toMatch(/HOST_PROTOCOL_MISMATCH|\/Users\/|file:\/\/|\.lmdj|\.wav/i);
   expect(await page.evaluate(() => window.lmdjWebRuntimeHost === undefined)).toBe(true);
-  await expect(page.getByRole("button", {name: "Activate audio"})).toBeDisabled();
+  await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
+  await openCreatorSystem(page);
   await expect(page.getByRole("button", {name: "Export report"})).toBeDisabled();
 });
 
@@ -734,7 +744,7 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
   // Re-importing the original bundle is refused as DUPLICATE_ID: the local
   // copy of the same Project has newer changes. The refusal must present as
   // a recoverable situation, not as "Creator unavailable".
-  await page.getByRole("button", {name: "Suspend audio"}).click();
+  await clickCreatorSystemAction(page, "Suspend audio");
   await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });

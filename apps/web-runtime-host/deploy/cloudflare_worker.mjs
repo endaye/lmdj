@@ -208,7 +208,13 @@ async function proxyCatalog(request, env, url) {
   // The transport issues one shape: GET, no query, no fragment.
   if (request.method !== "GET") return new Response(null, { status: 405 });
   if (url.search !== "") return new Response(null, { status: 404 });
-  const base = upstreamBase(env);
+  // A deployment-bound service supplies the original default kit. Its URL is
+  // only a request envelope; Cloudflare routes to the named binding, never to
+  // a caller-provided origin. An explicitly configured Catalog retains priority.
+  const service = env?.CATALOG_UPSTREAM === undefined
+    && typeof env?.DEFAULT_SOUNDSET_CATALOG?.fetch === "function"
+    ? env.DEFAULT_SOUNDSET_CATALOG : null;
+  const base = service ? "https://default-soundset.internal/" : upstreamBase(env);
   if (base === null) return new Response(null, { status: 404 });
   const target = catalogTarget(base, url.pathname.slice(CATALOG_PREFIX.length));
   if (target === null) return new Response(null, { status: 404 });
@@ -217,11 +223,13 @@ async function proxyCatalog(request, env, url) {
     // A fresh request: none of the page's headers, cookies or credentials
     // travel upstream, and `manual` stops a redirecting Catalog from turning
     // one forward into a fetch of some other target.
-    upstream = await fetch(target.url, {
+    const forwarded = new Request(target.url, {
       method: "GET",
       redirect: "manual",
       headers: { Accept: target.contentType },
     });
+    upstream = service ? await service.fetch(forwarded)
+      : await fetch(target.url, {method: "GET", redirect: "manual", headers: {Accept: target.contentType}});
   } catch {
     return new Response(null, { status: 502 });
   }

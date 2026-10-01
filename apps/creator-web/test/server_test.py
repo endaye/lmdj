@@ -75,6 +75,9 @@ class CreatorServerTest(unittest.TestCase):
             REPO_ROOT / "products/lmdj/generated/web-runtime-identity.json",
             self.repo / "products/lmdj/generated/web-runtime-identity.json",
         )
+        worker = self.repo / "apps/creator-web/offline/worker.mjs"
+        worker.parent.mkdir(parents=True)
+        shutil.copyfile(REPO_ROOT / "apps/creator-web/offline/worker.mjs", worker)
         self.repo.joinpath("tools/web-runtime/emscripten.lock.json").write_text(
             json.dumps(lock), encoding="utf-8"
         )
@@ -242,6 +245,18 @@ class CreatorServerTest(unittest.TestCase):
         for method in ["POST", "PUT", "DELETE", "OPTIONS", "PATCH", "TRACE"]:
             with self.subTest(method=method):
                 self.assertEqual(self.request(method, "/index.html")[0], 405)
+
+    def test_offline_worker_retains_isolation_and_allows_creator_scope(self) -> None:
+        manifest = json.loads((self.dist / "host-manifest.json").read_bytes())
+        worker = next(asset for asset in manifest["assets"] if asset["role"] == "offline_worker")
+        status, headers, body = self.request("GET", "/" + worker["path"])
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["service-worker-allowed"], "/")
+        self.assertEqual(headers["cross-origin-opener-policy"], "same-origin")
+        self.assertEqual(headers["cross-origin-embedder-policy"], "require-corp")
+        self.assertEqual(hashlib.sha256(body).hexdigest(), worker["sha256"])
+        _, main_headers, _ = self.request("GET", "/" + self.main_path.relative_to(self.dist).as_posix())
+        self.assertNotIn("service-worker-allowed", main_headers)
 
     def test_tampered_asset_and_non_loopback_bind_are_rejected(self) -> None:
         self.js_path.write_text("replacement\n", encoding="utf-8", newline="\n")

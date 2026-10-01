@@ -1,3 +1,4 @@
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 // Stage 11 Task 7, the Browser leg of the Sound Set acceptance journey.
 //
 // Everything below runs against the real Web Host: the Creator distribution
@@ -349,6 +350,11 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   const targets = recordCatalogTraffic(page, origin);
   await installProjectTap(page, `${origin}${CATALOG_PREFIX}/`);
   await page.goto("/index.html");
+  // This historical Catalog has no P1 default identity. Settle its bootstrap
+  // refusals before measuring the two explicit listings below; their exact
+  // index counts and once-only object authentication remain unchanged.
+  await expect(page.getByRole("button", {name: /^Pad A\d+ — failed — Key [QWERTYUIASDFGHJK]$/})).toHaveCount(16);
+  targets.length = 0;
   await importProject(page);
   await openSoundSets(page);
 
@@ -512,7 +518,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   // the engine half; this leg is the one that would have caught it, because
   // the defect needs a voice that actually finishes and no in-process test
   // rendered one to completion.
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: REQUEST_TIMEOUT_MS,
   });
@@ -763,6 +769,11 @@ test("Sound Set listing reaches a Catalog through the same-origin forward", asyn
   const targets = recordCatalogTraffic(page, origin);
   await installProjectTap(page, `${origin}${CATALOG_PREFIX}/`);
   await page.goto("/index.html");
+  // This historical Catalog has no P1 default identity. Settle its bootstrap
+  // refusals before measuring the two explicit listings below; their exact
+  // index counts and once-only object authentication remain unchanged.
+  await expect(page.getByRole("button", {name: /^Pad A\d+ — failed — Key [QWERTYUIASDFGHJK]$/})).toHaveCount(16);
+  targets.length = 0;
   await importProject(page);
   await openSoundSets(page);
   await page.getByRole("button", {name: "Refresh Catalog"}).click();
