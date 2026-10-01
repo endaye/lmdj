@@ -20,8 +20,9 @@ exit: none
 and recovery paths hold several `ProjectState` values per frame once `-O3`
 inlines their helpers. Every byte added to a Pad therefore costs roughly 64
 bytes per live copy, along call chains that already used about half of the Web
-stack. Native builds have megabytes of stack and never notice. Only the batch-only `web_toolchain`
-conformance has `STACK_OVERFLOW_CHECK`. The Web Runtime Host has none, so there
+stack. Native builds have megabytes of stack and never notice. Only the
+batch-only `web_toolchain` conformance has `STACK_OVERFLOW_CHECK`. The Web
+Runtime Host has none, so there
 an overflow shows up as unrelated `null function` traps across Creator and Host
 journeys.
 
@@ -38,6 +39,7 @@ journeys.
 - Do not bound one test frame with `[[gnu::noinline]]` and move on: the
   product paths share the same budget.
 
-This stays open with `exit: none` until #1720 reduces the copies or lands a
-frame-size gate on the Web build of `packages/project-io`. #1720 is the
+This stays open with `exit: none` until
+[#1720](https://github.com/endaye/lmdj/issues/1720) reduces the copies or lands
+a frame-size gate on the Web build of `packages/project-io`. #1720 is the
 escalation Issue for this second recurrence.
