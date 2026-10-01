@@ -152,12 +152,7 @@ test("a second tab takes over the open Project and the first takes it back", asy
   expect(await projectTruth(second)).toEqual(holderWrite);
   expect(await undoDepth(second)).toBe(0);
 
-  // Leg 5: the new holder commits its own write. Delete needs running audio
-  // until #1724 is fixed, so the new holder activates it first.
-  await wakeAudioWithPad(second);
-  await expect(second.getByTestId("audio-state")).toHaveText("Audio running", {
-    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
-  });
+  // Leg 5: the new holder commits its own write while audio remains inactive.
   await second.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(second.getByRole("button", {name: "Delete Pad A1", exact: true}))
     .toBeEnabled({timeout: 30_000});

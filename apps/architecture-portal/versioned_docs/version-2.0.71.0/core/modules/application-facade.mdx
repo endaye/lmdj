@@ -508,7 +508,3 @@ is transient and is not restored by Undo. No Asset garbage collection occurs.
 Cancelled staging directories use the same best-effort disposal as ordinary import
 cleanup. A removal failure cannot turn a committed deletion into an unsaved result;
 the directory has no live token and is reclaimed by the existing aging sweep.
-
-## 分 Pad Sound Set 获取
-
-`soundset.catalog.describe` 返回经 Core 解析的 Catalog 身份与总字节，不获取整套素材。`soundset.slot.acquire` 校验并缓存一个已占用槽；`soundset.slot.install` 对同编号目标 Pad 提交一个 InstallSoundSet assignment，保留原 manifest 身份、lineage、配额及 revision/receipt 语义，且不允许 replace policy。
