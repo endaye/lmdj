@@ -29,3 +29,5 @@ slash in the streaming boot Task. Creator continues fetching its same-origin
 `/soundset-catalog/` proxy under the existing CSP. This service deployment does not
 deploy Creator or promote a Product Channel. Keep prior immutable object hashes
 available when updating the Catalog so existing cached Set identities can resolve.
+
+Creator binds `DEFAULT_SOUNDSET_CATALOG` to this independent Worker through a Cloudflare HTTP service binding. The browser retains the same-origin `/soundset-catalog/` prefix and `connect-src self`; no workers.dev origin is guessed. An explicitly configured Catalog retains priority. Deploy and authenticate the asset service before any separately authorized Creator deployment.

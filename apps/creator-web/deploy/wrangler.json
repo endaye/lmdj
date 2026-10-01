@@ -15,5 +15,11 @@
     ],
     "html_handling": "none",
     "not_found_handling": "none"
-  }
+  },
+  "services": [
+    {
+      "binding": "DEFAULT_SOUNDSET_CATALOG",
+      "service": "lmdj-default-assets"
+    }
+  ]
 }

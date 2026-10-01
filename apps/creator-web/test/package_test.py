@@ -88,6 +88,9 @@ class CreatorPackageTest(unittest.TestCase):
             REPO_ROOT / "products/lmdj/generated/web-runtime-identity.json",
             self.repo / "products/lmdj/generated/web-runtime-identity.json",
         )
+        worker = self.repo / "apps/creator-web/offline/worker.mjs"
+        worker.parent.mkdir(parents=True)
+        shutil.copyfile(REPO_ROOT / "apps/creator-web/offline/worker.mjs", worker)
         (self.repo / "tools/web-runtime/emscripten.lock.json").write_text(
             json.dumps(lock), encoding="utf-8"
         )
@@ -160,10 +163,11 @@ class CreatorPackageTest(unittest.TestCase):
         identity = json.loads(identity_path.read_text())
         host = identity["hosts"]["creator-web"]
         role = self.module.ROLES.OFFLINE_WORKER
-        host["expected_assets"].append({"role": role, "prefix": "assets/offline-worker.", "suffix": ".js"})
+        self.assertEqual(sum(asset["role"] == role for asset in host["expected_assets"]), 1)
+        host["version"] = "4.6.0"
         identity_path.write_text(json.dumps(identity))
         worker = self.repo / "apps/creator-web/offline/worker.mjs"
-        worker.parent.mkdir(parents=True)
+        worker.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(REPO_ROOT / "apps/creator-web/offline/worker.mjs", worker)
         subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
         subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "offline fixture"], check=True)
@@ -230,6 +234,7 @@ class CreatorPackageTest(unittest.TestCase):
                 "host_style",
                 "capture_worklet",
                 "perform_master_tap_worklet",
+                "offline_worker",
             ],
         )
         tap = [entry for entry in manifest["assets"] if entry["role"] == "perform_master_tap_worklet"]

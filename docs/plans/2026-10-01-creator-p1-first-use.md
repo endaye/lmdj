@@ -145,8 +145,9 @@ Plan Version impact: none — this document allocates no identity. Feature commi
 carry version debt into one explicit settlement Task. Read live manifests at T8;
 IO/Facade/Platform additions require MINOR increments, and the Creator offline
 asset-inventory change requires a Host MAJOR increment with historical compatibility.
-Combine outstanding debt and allocate the next available M2 Product Build through
-`scripts/version.py`; do not hand-enter identities. Any allocated testing Build
+Combine outstanding debt and allocate the next available M2 Product Build from verified live main manifests and the unused reservation inventory, then
+generate the lock with `scripts/version.py lock`; that CLI does not allocate
+numbers. Record the derivation in T8; do not guess identities. Any allocated testing Build
 includes `scripts/docs-site.sh version PRODUCT_BUILD canary` immutable snapshot.
 
 ## Documentation impact

@@ -36,6 +36,11 @@
           "prefix": "assets/perform-master-tap.",
           "role": "perform_master_tap_worklet",
           "suffix": ".js"
+        },
+        {
+          "prefix": "assets/offline-worker.",
+          "role": "offline_worker",
+          "suffix": ".js"
         }
       ]
     },
@@ -124,16 +129,16 @@
   "protocol_version": 1,
   "resource_limits": {
     "decoded_float_pcm_bytes_per_bank": 67108864,
-    "decoded_float_pcm_bytes_total": 134217728,
     "decoded_float_pcm_bytes_resident": 268435456,
-    "ingest_source_bytes": 104857600,
-    "ingest_decoded_frames": 43200000,
-    "ingest_channels": 2,
+    "decoded_float_pcm_bytes_total": 134217728,
     "imported_wav_bytes": 68157440,
-    "maximum_soundset_manifest_bytes": 1048576,
+    "ingest_channels": 2,
+    "ingest_decoded_frames": 43200000,
+    "ingest_source_bytes": 104857600,
     "maximum_soundset_blob_bytes": 68157440,
-    "maximum_soundset_unique_bytes": 268435456,
+    "maximum_soundset_manifest_bytes": 1048576,
     "maximum_soundset_staging_bytes": 536870912,
+    "maximum_soundset_unique_bytes": 268435456,
     "perform_recording_frames": 86400000,
     "perform_recording_queue_batches": 32
   }
