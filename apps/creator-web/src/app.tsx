@@ -885,11 +885,12 @@ function Workspace({
     // holder identity re-registers.
   }, [projectTakeover, onYieldRuntime, heldProjectId]);
 
+  // A note explains why a Continue here did not end with this tab holding
+  // the Project, so it lasts until an open replaces the Project view. A fresh
+  // Runtime reaching ready is not enough: a take-back reopen can still be busy.
   useEffect(() => {
-    if (state.project.phase === "ready" && runtimePhase === "ready") {
-      setTakeoverOutcome(null);
-    }
-  }, [state.project.phase, runtimePhase]);
+    setTakeoverOutcome(null);
+  }, [state.project.current]);
 
   // Requester side: ask the holder, then open as usual. Only a refusal or a
   // cancel skips the open; any other outcome may have freed the writer.

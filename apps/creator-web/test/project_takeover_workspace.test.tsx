@@ -141,9 +141,9 @@ function fakeTakeover() {
   return {coordinator, served, requests, holder};
 }
 
-async function bootHolder() {
+async function bootHolder(secondOpens: Array<"busy" | "open"> = []) {
   const first = sessionFixture();
-  const second = sessionFixture();
+  const second = sessionFixture(secondOpens);
   const sessions = [first.session, second.session];
   let created = 0;
   const takeover = fakeTakeover();
@@ -195,6 +195,20 @@ test("a closed holder's Continue here waits for release, then reopens on a fresh
   await waitFor(() => expect(second.calls).toContain(`openProject:${LISTED.projectId}`));
   expect(created()).toBe(2);
   await waitFor(() => expect(screen.queryByText("Project open in another tab")).toBeNull());
+});
+
+test("a take-back whose fresh reopen is still busy offers Continue here again", async () => {
+  const {second, takeover} = await bootHolder(["busy"]);
+  act(() => { takeover.holder().decide(); });
+  await userEvent.click(await screen.findByRole("button", {name: "Continue here"}));
+  act(() => takeover.requests[0]!.resolve("unanswered"));
+  await waitFor(() => expect(second.calls).toContain(`openProject:${LISTED.projectId}`));
+  // The taken-over panel gives way to the busy refusal, which keeps the
+  // affordance and names why the take-back did not land.
+  const busy = await screen.findByText(BUSY);
+  expect(busy.closest("[role=alert]")?.textContent).toMatch(/did not respond/);
+  expect(screen.getByRole("button", {name: "Continue here"})).toBeTruthy();
+  expect(screen.queryByText("Project open in another tab")).toBeNull();
 });
 
 test("a refused take-back keeps this Runtime closed and says why", async () => {
