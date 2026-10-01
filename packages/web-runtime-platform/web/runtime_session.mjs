@@ -290,15 +290,47 @@ function flatSlotFromAddress(value) {
   return value.bank * 16 + value.pad;
 }
 
+const PLAYBACK_BASE_FIELDS = Object.freeze([
+  "trimStartFrame",
+  "trimEndFrame",
+  "triggerMode",
+  "gainMillidb",
+  "muted",
+]);
+// lmdj.project.v5 5.1.0. The session's playback object always carries every
+// field; the wire carries a parity field only when it differs from its default.
+const PLAYBACK_PARITY_DEFAULTS = Object.freeze({
+  reverse: false,
+  pitchCents: 0,
+  pan: 0,
+  loopMode: "forward",
+  loopStartFrame: null,
+  loopCrossfadeFrames: 0,
+});
+const PLAYBACK_PARITY_WIRE = Object.freeze({
+  reverse: "reverse",
+  pitchCents: "pitch_cents",
+  pan: "pan",
+  loopMode: "loop_mode",
+  loopStartFrame: "loop_start_frame",
+  loopCrossfadeFrames: "loop_crossfade_frames",
+});
+
+function hasFields(value, required, optional) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    required.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every(
+      (key) => required.includes(key) || optional.includes(key),
+    )
+  );
+}
+
 function wirePlayback(value) {
   if (
-    !exactKeys(value, [
-      "trimStartFrame",
-      "trimEndFrame",
-      "triggerMode",
-      "gainMillidb",
-      "muted",
-    ]) ||
+    !hasFields(value, PLAYBACK_BASE_FIELDS, Object.keys(PLAYBACK_PARITY_WIRE)) ||
     !isUnsignedInteger(value.trimStartFrame) ||
     !(
       value.trimEndFrame === null ||
@@ -315,44 +347,70 @@ function wirePlayback(value) {
   ) {
     throw new TypeError("Sample playback is invalid");
   }
-  return Object.freeze({
+  const parity = {...PLAYBACK_PARITY_DEFAULTS};
+  for (const field of Object.keys(PLAYBACK_PARITY_WIRE)) {
+    if (Object.hasOwn(value, field)) {
+      parity[field] = value[field];
+    }
+  }
+  if (
+    typeof parity.reverse !== "boolean" ||
+    !Number.isSafeInteger(parity.pitchCents) ||
+    parity.pitchCents < -2_400 ||
+    parity.pitchCents > 2_400 ||
+    !Number.isSafeInteger(parity.pan) ||
+    parity.pan < -100 ||
+    parity.pan > 100 ||
+    !["forward", "ping_pong"].includes(parity.loopMode) ||
+    !(parity.loopStartFrame === null || isUnsignedInteger(parity.loopStartFrame)) ||
+    !isUnsignedInteger(parity.loopCrossfadeFrames)
+  ) {
+    throw new TypeError("Sample playback is invalid");
+  }
+  const wire = {
     trim_start_frame: value.trimStartFrame,
     trim_end_frame: value.trimEndFrame,
     trigger_mode: value.triggerMode,
     gain_millidb: value.gainMillidb,
     muted: value.muted,
-  });
+  };
+  for (const [field, key] of Object.entries(PLAYBACK_PARITY_WIRE)) {
+    if (parity[field] !== PLAYBACK_PARITY_DEFAULTS[field]) {
+      wire[key] = parity[field];
+    }
+  }
+  return Object.freeze(wire);
 }
 
 function normalizePlayback(value) {
-  if (!exactKeys(value, [
+  const parityKeys = Object.values(PLAYBACK_PARITY_WIRE);
+  if (!hasFields(value, [
     "trim_start_frame",
     "trim_end_frame",
     "trigger_mode",
     "gain_millidb",
     "muted",
-  ])) {
+  ], parityKeys)) {
     throw protocolMismatch("Sample playback result is invalid");
   }
-  let validated;
+  const session = {
+    trimStartFrame: value.trim_start_frame,
+    trimEndFrame: value.trim_end_frame,
+    triggerMode: value.trigger_mode,
+    gainMillidb: value.gain_millidb,
+    muted: value.muted,
+  };
+  for (const [field, key] of Object.entries(PLAYBACK_PARITY_WIRE)) {
+    session[field] = Object.hasOwn(value, key)
+      ? value[key]
+      : PLAYBACK_PARITY_DEFAULTS[field];
+  }
   try {
-    validated = wirePlayback({
-      trimStartFrame: value.trim_start_frame,
-      trimEndFrame: value.trim_end_frame,
-      triggerMode: value.trigger_mode,
-      gainMillidb: value.gain_millidb,
-      muted: value.muted,
-    });
+    wirePlayback(session);
   } catch {
     throw protocolMismatch("Sample playback result is invalid");
   }
-  return Object.freeze({
-    trimStartFrame: validated.trim_start_frame,
-    trimEndFrame: validated.trim_end_frame,
-    triggerMode: validated.trigger_mode,
-    gainMillidb: validated.gain_millidb,
-    muted: validated.muted,
-  });
+  return Object.freeze(session);
 }
 
 function normalizeMetadata(value) {

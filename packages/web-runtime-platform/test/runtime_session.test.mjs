@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {webcrypto} from "node:crypto";
+import {readFileSync} from "node:fs";
 import test from "node:test";
 
 import {createDiagnosticClient} from "../web/diagnostic_client.mjs";
@@ -107,6 +108,42 @@ const PLAYBACK = Object.freeze({
   gainMillidb: -1_200,
   muted: false,
 });
+
+// A session playback always carries every field; parity fields default.
+const SESSION_PLAYBACK = Object.freeze({
+  ...PLAYBACK,
+  reverse: false,
+  pitchCents: 0,
+  pan: 0,
+  loopMode: "forward",
+  loopStartFrame: null,
+  loopCrossfadeFrames: 0,
+});
+
+// lmdj.project.v5 5.1.0: the shared fixture holds every PadPlayback copy to
+// one shape (.agents/pitfalls/parity-check-between-agreeing-copies.md).
+const PAD_PLAYBACK_FULL = JSON.parse(
+  readFileSync(
+    new URL("../../../tests/fixtures/contracts/pad-playback-full.json", import.meta.url),
+    "utf8",
+  ),
+);
+
+function sessionPlaybackFrom(wire) {
+  return {
+    trimStartFrame: wire.trim_start_frame,
+    trimEndFrame: wire.trim_end_frame,
+    triggerMode: wire.trigger_mode,
+    gainMillidb: wire.gain_millidb,
+    muted: wire.muted,
+    reverse: wire.reverse ?? false,
+    pitchCents: wire.pitch_cents ?? 0,
+    pan: wire.pan ?? 0,
+    loopMode: wire.loop_mode ?? "forward",
+    loopStartFrame: wire.loop_start_frame ?? null,
+    loopCrossfadeFrames: wire.loop_crossfade_frames ?? 0,
+  };
+}
 
 const WIRE_PLAYBACK = Object.freeze({
   trim_start_frame: 10,
@@ -2411,7 +2448,7 @@ test("Sample queries bind flat slots to the current Project and validate typed r
     projectRevision: 7,
     slot: 33,
     assetId,
-    playback: PLAYBACK,
+    playback: SESSION_PLAYBACK,
     metadata: {sampleRate: 48_000, channels: 2, sourceFrames: 100},
     waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/1`,
   });
@@ -2645,6 +2682,64 @@ test("Project open and Sample mutations share one lane without conflict retry", 
     slot: {bank: 1, pad: 1},
     playback: WIRE_PLAYBACK,
   });
+});
+
+test("Sample playback crosses the session in both directions as the shared fixture", async () => {
+  const sent = [];
+  const {session} = fixture({
+    send: async (envelope) => {
+      if (envelope.operation === "sample.update_pad") {
+        sent.push(envelope.payload.playback);
+        return success(envelope, {
+          committed_revision: 2,
+          runtime_revision: 2,
+          runtime_published: true,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  for (const wire of Object.values(PAD_PLAYBACK_FULL)) {
+    await session.updatePad({
+      slot: 0,
+      expectedRevision: 1,
+      playback: sessionPlaybackFrom(wire),
+    });
+  }
+  // The wire carries exactly the fixture: every non-default key, no default.
+  assert.deepEqual(sent, Object.values(PAD_PLAYBACK_FULL));
+  await assert.rejects(
+    session.updatePad({
+      slot: 0,
+      expectedRevision: 1,
+      playback: {...sessionPlaybackFrom(PAD_PLAYBACK_FULL.forward), timeStretch: true},
+    }),
+    TypeError,
+  );
+});
+
+test("Sample inspect normalizes every fixture playback to the full session shape", async () => {
+  for (const wire of Object.values(PAD_PLAYBACK_FULL)) {
+    const {session} = fixture({
+      send: async (envelope) => {
+        if (envelope.operation === "sample.inspect") {
+          return success(envelope, {
+            project_revision: 7,
+            slot: {bank: 0, pad: 0},
+            asset_id: "11111111-1111-4111-8111-111111111111",
+            playback: wire,
+            metadata: {sample_rate: 48_000, channels: 1, source_frames: 8},
+            waveform_cache_identity: `${"a".repeat(64)}/1/max-abs-mirror/1`,
+          });
+        }
+        return success(envelope, defaultResult(envelope.operation));
+      },
+    });
+    await session.start();
+    const inspected = await session.inspectSample(0);
+    assert.deepEqual(inspected.playback, sessionPlaybackFrom(wire));
+  }
 });
 
 test("Sample mutations preserve committed and stale Runtime truth after Cook failure", async () => {
