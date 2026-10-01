@@ -639,7 +639,7 @@ function Workspace({
         return true;
       },
       onEmptyPadRelease: (key: object) => padCapture.current?.release(key),
-      onEmptyPadCancel: () => {void padCapture.current?.cancel();},
+      onEmptyPadCancel: (key?: object) => {void padCapture.current?.cancel(key);},
       getArmedCaptureSlot: () => armedCaptureSlotRef.current,
       onArmedCaptureStop: () => armedCaptureStopIntent.current(),
       onPerformancePadEvent: (event: PerformancePadInputEvent) => {
