@@ -21,7 +21,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 ## 创作与保存
 
-Host 向 Application Facade 发出命令；Authoring Domain 更新 Project Truth；Project I/O 负责事务式存取和录音会话 Journal。Host 不解析 Project bundle。
+Host 向 Application Facade 发出命令；Authoring Domain 更新 Project Truth；Project I/O 负责事务式存取和录音会话 Journal。Host 不解析 Project bundle。所有修改自动保存，“另存为”即复制工程：Creator 在 Local Projects 中 Duplicate 一个 Project，Core 以新 Project 身份原子复制已提交的 Project Truth 与其引用的 Artifact（全新 history，revision 0），随后打开副本；两者此后各自独立，源被另一标签页占用或有未完成录制时明确拒绝，绝不发布半份副本。
 
 ## Creator Undo/Redo（会话内历史）
 

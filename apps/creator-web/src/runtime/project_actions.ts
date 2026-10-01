@@ -242,6 +242,20 @@ export async function createProjectJourney(
   return readOpenedProject(session, summary);
 }
 
+// Duplicate replaces Save As: the copy is a new local Project with its own
+// identity, and it is opened like any other library Project.
+export async function duplicateProjectJourney(
+  session: CreatorRuntimeSession,
+  source: Readonly<Pick<LocalProjectSummary, "projectId">>,
+  newId: () => string = () => crypto.randomUUID(),
+): Promise<ProjectView> {
+  const summary = await session.duplicateProject({
+    sourceProjectId: source.projectId,
+    projectId: newId(),
+  });
+  return openProjectJourney(session, summary);
+}
+
 export async function refreshProjectProjectionJourney(
   session: CreatorRuntimeSession,
   identity: Readonly<Pick<LocalProjectSummary, "projectId" | "patternId">>,

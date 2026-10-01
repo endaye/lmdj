@@ -4,6 +4,7 @@ import * as projectActions from "../src/runtime/project_actions";
 import {
   createProjectActionLane,
   createProjectJourney,
+  duplicateProjectJourney,
   importProjectJourney,
   listLocalProjectsJourney,
   openProjectJourney,
@@ -86,6 +87,10 @@ function sessionFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
     createProject: async () => {
       calls.push("createProject");
       return {};
+    },
+    duplicateProject: async (request) => {
+      calls.push(`duplicateProject:${request.sourceProjectId}`);
+      return {...summary, projectId: request.projectId, revision: 0};
     },
     openProject: async () => {
       calls.push("openProject");
@@ -336,4 +341,24 @@ test("Project action module has no New, Save As, or Project export journey", () 
   expect(view?.patternId).toBe(SECOND_PATTERN_ID);
   expect(view?.revision).toBe(3);
   expect(calls).not.toContain("openProject");
+});
+
+test("duplicateProjectJourney copies under the new identity and opens the copy", async () => {
+  const copyId = "99999999-9999-4999-8999-999999999999";
+  const copy = inspectV3(copyId);
+  const {calls, session} = sessionFixture({
+    inspectProject: async () => ({
+      project_revision: 0,
+      project: {...copy.project, revision: 0},
+    }),
+  });
+  const opened: string[] = [];
+  session.openProject = async (projectId, patternId) => {
+    opened.push(`${projectId}/${patternId}`);
+    return {};
+  };
+  const view = await duplicateProjectJourney(session, summary, () => copyId);
+  expect(calls).toContain(`duplicateProject:${summary.projectId}`);
+  expect(opened).toEqual([`${copyId}/${summary.patternId}`]);
+  expect(view.projectId).toBe(copyId);
 });

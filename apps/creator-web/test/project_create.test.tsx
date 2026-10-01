@@ -60,6 +60,15 @@ function projectFixture(
       inventory = [...inventory, current];
       return {};
     },
+    duplicateProject: async (request) => {
+      calls.push(`duplicateProject:${request.sourceProjectId}`);
+      const source = inventory.find((summary) =>
+        summary.projectId === request.sourceProjectId);
+      if (source === undefined) throw refusal("NOT_FOUND");
+      const copy = {...source, projectId: request.projectId, revision: 0};
+      inventory = [...inventory, copy];
+      return copy;
+    },
     openProject: async (projectId) => {
       calls.push(`openProject:${projectId}`);
       current = inventory.find((summary) => summary.projectId === projectId) ?? null;
@@ -284,3 +293,59 @@ function overviewRevision(): string | null {
   const rev = [...facts].find((fact) => fact.querySelector("dt")?.textContent === "Rev");
   return rev?.querySelector("dd")?.textContent ?? null;
 }
+
+test("Duplicate copies a library Project, opens the copy and lists both", async () => {
+  vi.stubGlobal("localStorage", memoryStorage());
+  const fixture = projectFixture([LISTED]);
+  render(<App runtimeFactory={() => fixture.session} />);
+  await userEvent.click(
+    await screen.findByRole("button", {name: "Duplicate Project 11111111"}));
+  await waitFor(() => expect(fixture.calls).toContain(`duplicateProject:${LISTED.projectId}`));
+  const opened = await waitFor(() => {
+    const call = fixture.calls.find((entry) => entry.startsWith("openProject:"));
+    expect(call).toBeDefined();
+    return call!.slice("openProject:".length);
+  });
+  expect(opened).not.toBe(LISTED.projectId);
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  await userEvent.click(screen.getByRole("button", {name: "Open local"}));
+  expect(screen.getAllByRole("button", {name: /^Open Project /})).toHaveLength(2);
+});
+
+test("a Duplicate refused by Host state names the refusal and opens nothing", async () => {
+  vi.stubGlobal("localStorage", memoryStorage());
+  const fixture = projectFixture([LISTED], {
+    duplicateProject: async () => { throw refusal("HOST_STATE_INVALID"); },
+  });
+  render(<App runtimeFactory={() => fixture.session} />);
+  await userEvent.click(
+    await screen.findByRole("button", {name: "Duplicate Project 11111111"}));
+  await screen.findByText(/cannot be duplicated right now/);
+  expect(fixture.calls.some((call) => call.startsWith("openProject"))).toBe(false);
+});
+
+test("a Duplicate of a Project busy in another tab reports it as busy", async () => {
+  vi.stubGlobal("localStorage", memoryStorage());
+  const fixture = projectFixture([LISTED], {
+    duplicateProject: async () => { throw refusal("PROJECT_BUSY"); },
+  });
+  render(<App runtimeFactory={() => fixture.session} />);
+  await userEvent.click(
+    await screen.findByRole("button", {name: "Duplicate Project 11111111"}));
+  await screen.findByText("The local Project is busy in another tab or process.");
+  expect(fixture.calls.some((call) => call.startsWith("openProject"))).toBe(false);
+});
+
+test("a Duplicate whose open fails keeps the error and lists the stored copy", async () => {
+  vi.stubGlobal("localStorage", memoryStorage());
+  const fixture = projectFixture([LISTED], {
+    openProject: async () => { throw refusal("IO_ERROR"); },
+  });
+  render(<App runtimeFactory={() => fixture.session} />);
+  await userEvent.click(
+    await screen.findByRole("button", {name: "Duplicate Project 11111111"}));
+  await screen.findByRole("alert");
+  await waitFor(() =>
+    expect(screen.getAllByRole("button", {name: /^Open Project /})).toHaveLength(2));
+  expect(fixture.calls.filter((call) => call.startsWith("duplicateProject"))).toHaveLength(1);
+});

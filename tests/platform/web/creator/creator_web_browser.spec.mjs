@@ -2,6 +2,7 @@ import {readFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 import {
+  PROJECT_OPEN_TIMEOUT_MS,
   openProjectPageAfterBoot,
   overviewProjectId,
   waitForBootProject,
@@ -239,4 +240,37 @@ test("boot creates a stored Project, New Project adds one, and a reload reopens 
   await page.getByRole("button", {name: "Project", exact: true}).click();
   await page.getByRole("button", {name: "Open local"}).click();
   await expect(page.getByRole("button", {name: /^Open Project [0-9a-f]{8}$/})).toHaveCount(2);
+});
+
+test("Duplicate opens a copy with the same Pads under a new identity that reopens after a reload", async ({page}) => {
+  test.setTimeout(360_000);
+  const assignedPads = page.getByText("64 / 64");
+
+  // A Project with every Pad assigned, so the copy's Pads are observable.
+  await importProject(page);
+  await page.getByRole("button", {name: "Open local"}).click();
+  await page.getByRole("button", {name: "Duplicate Project 00000000", exact: true}).click();
+
+  // The copy is opened under its own identity and carries the source's Pads.
+  await expect(overviewProjectId(page)).not.toHaveText("00000000", {
+    timeout: PROJECT_OPEN_TIMEOUT_MS,
+  });
+  const copy = (await overviewProjectId(page).textContent())?.trim();
+  expect(copy).toMatch(/^[0-9a-f]{8}$/);
+  await expect(page.getByRole("heading", {name: `Project ${copy}`})).toBeVisible();
+  await expect(assignedPads).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+
+  // The far side of the copy is storage and the next boot: a fresh document
+  // reopens the copy as the last opened Project, with the same Pads, and the
+  // library holds the boot Project, the imported source and the copy.
+  await page.reload();
+  await waitForProjectReopen(page, copy);
+  await page.getByRole("button", {name: "Project", exact: true}).click();
+  await expect(page.getByRole("heading", {name: `Project ${copy}`})).toBeVisible();
+  await expect(assignedPads).toBeVisible();
+  await page.getByRole("button", {name: "Open local"}).click();
+  await expect(page.getByRole("button", {name: /^Open Project [0-9a-f]{8}$/})).toHaveCount(3);
+  await expect(page.getByRole("button", {name: "Open Project 00000000", exact: true}))
+    .toBeVisible();
 });

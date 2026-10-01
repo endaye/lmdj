@@ -147,9 +147,61 @@ that is open in another tab or recording, and must never publish a partial copy.
    - A C++ change under `packages/web-runtime-platform/src` selects the core,
      creator and web-runtime families, so this Task runs in full mode: every
      batch-only lane runs on the exact head before merge.
-4. **creator-web** (after #1660 Task 2): Project library Duplicate action. It
-   opens the copy and decides how the copy is named. Browser journeys cover the
-   normal, refused, failed, cancelled and reopened paths. #1684 closes here.
+4. **creator-web** (`feat/1684-creator-duplicate`, after #1711 landed #1660
+   Task 2). The owner chose to keep the current Project display (2026-10-01):
+   no Project names are added, because `lmdj.project.v5` has no name field and
+   adding one would be a Contract decision.
+   - Every Local Projects card gains a Duplicate button.
+     `duplicateProjectJourney` asks the Runtime Session for a copy under a
+     fresh identity and opens it like any other library Project. The copy
+     appears as another short-ID card at revision 0, with the source's BPM, Pad
+     and Asset counts.
+   - Duplicate shares the serial Project action lane and the Open/New gate
+     (`selectCanDuplicateProject` = `selectCanChangeProject`). It is
+     unavailable while audio runs, which matches the Host's refusal while
+     running.
+   - Refusal messages:
+     - `PROJECT_BUSY` keeps the existing "busy in another tab" message.
+     - The session reduces every Host refusal message to its code, so a
+       `HOST_STATE_INVALID` refusal from Duplicate is reported as the
+       Creator-local `PROJECT_DUPLICATE_REFUSED`: "cannot be duplicated right
+       now; open it to recover an unfinished recording".
+   - When the copy is stored but opening it fails, the error stays visible and
+     the library is re-listed, so the user opens the copy instead of
+     duplicating again.
+   - The overview caption no longer says Duplicate is missing.
+   - Declared files:
+     - `apps/creator-web/src/app.tsx`
+     - `apps/creator-web/src/runtime/runtime_types.ts`
+     - `apps/creator-web/src/runtime/project_actions.ts`
+     - `apps/creator-web/src/state/creator_state.ts`
+     - `apps/creator-web/src/components/project_surface.tsx`
+     - `apps/creator-web/src/components/error_panel.tsx`
+     - `apps/creator-web/src/components/project_overview.tsx`
+     - Creator Vitest fakes and `project_create.test.tsx` / `project_actions.test.ts`
+     - `tests/platform/web/creator/creator_web_browser.spec.mjs`
+     - `apps/docs-site/docs/hosts/creator-web.mdx`
+     - `apps/docs-site/docs/product/workflows.mdx`
+     - this plan
+   - Tests:
+     - Vitest: copy opened and listed; Host-state refusal named; busy refusal;
+       open failure keeps the error and lists the copy; the journey opens the
+       copy's identity.
+     - A real-browser journey: import a 64-of-64-Pads bundle, duplicate it, the
+       copy opens with a new identity and the same Pads, and a reload reopens
+       the copy with the same Pads and lists three Projects.
+   - #1684 closes with this Task.
+
+#1684 acceptance, by path:
+
+| Path | Evidence |
+|---|---|
+| Normal | identical Truth and Artifacts under a new identity (project-io); copy listed with the open Project kept (Host); copy opened with the same Pads (browser) |
+| Independent | editing either Project never changes the other (project-io, both directions) |
+| Refused | another tab or process (project-io, Host, Creator); an active or crashed recording Journal (project-io, Facade, Host, Creator message); identity in use; invalid identities |
+| Failed | corrupt Artifact, publication failure, quota (project-io); open failure after a stored copy (Creator) |
+| Cancelled | refused publication claim publishes nothing (project-io, Host); deadline cancellation maps to `HOST_TIMEOUT` (bridge) |
+| Reopened | new process loads and edits the copy (project-io); second Core instance over OPFS (web); browser reload reopens the copy (Creator) |
 
 ## Verification (Task 1)
 
@@ -180,19 +232,17 @@ acceptance.
 
 Version impact: none in this Pull Request.
 
-Owed MINOR bumps:
-
-| Module | From | To | Task |
-|---|---|---|---|
-| `project-io` | 4.2.1 | 4.3.0 | Task 1 |
-| `application-facade` | 6.2.1 | 6.3.0 | Task 2 (typed `duplicate_project`) |
-| `web-runtime-platform` | 5.3.3 | 5.4.0 | Task 3 (`project.duplicate`, `duplicateProject`) |
-| `creator-web` | 4.5.1 | 4.6.0 | Task 4 |
-
-Each is a backward-compatible public capability. Under the owed-version
+Each Task adds a backward-compatible public capability. Under the owed-version
 convention (#1550, settled by #1621), Assembly pins forbid folding a module
-identity change into a feature Pull Request, so each bump is deferred to the
-next version cut. Bumps already owed by #1686 are combined, not stacked.
+identity change into a feature Pull Request, so each MINOR is owed to a version
+cut rather than taken in its own Pull Request.
+
+| Module | Task (merge) | Settled by |
+|---|---|---|
+| `project-io` | Task 1 (#1694) | the 2.0.70.0 cut (#1697), which set `project-io` 5.0.0 |
+| `application-facade` | Task 2 (#1702) | the 2.0.70.0 cut (#1697), which set 6.3.0 |
+| `web-runtime-platform` | Task 3 (#1708) | owed to the next cut: #1697 set 5.4.0 before #1708 merged |
+| `creator-web` | Task 4 | owed to the next cut: `main` is at 4.6.0 |
 
 No Contract change: the copy is written in the unchanged `lmdj.project.v5`
 Project format and manifest format, so no migration is needed. No tag, release,

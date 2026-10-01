@@ -11,6 +11,7 @@ interface ProjectSurfaceProps {
   canOpen?: boolean;
   canImport?: boolean;
   canCreate?: boolean;
+  canDuplicate?: boolean;
   showLocalProjects?: boolean;
   hideSummary?: boolean;
   onShowLocal?: () => void;
@@ -18,6 +19,7 @@ interface ProjectSurfaceProps {
   onOpen?: (project: LocalProjectSummary) => void;
   onImport?: (file: File) => void;
   onCreate?: () => void;
+  onDuplicate?: (project: LocalProjectSummary) => void;
 }
 
 export function formatBytes(bytes: number): string {
@@ -32,6 +34,7 @@ export function ProjectSurface({
   canOpen = false,
   canImport = false,
   canCreate = false,
+  canDuplicate = false,
   showLocalProjects = false,
   hideSummary = false,
   onShowLocal,
@@ -39,6 +42,7 @@ export function ProjectSurface({
   onOpen,
   onImport,
   onCreate,
+  onDuplicate,
 }: ProjectSurfaceProps) {
   const project = state.project.current;
   const showChooser = project === null || showLocalProjects;
@@ -168,6 +172,14 @@ export function ProjectSurface({
                   onClick={() => onOpen?.(summary)}
                 >
                   Open
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Duplicate Project ${id}`}
+                  disabled={!canDuplicate}
+                  onClick={() => onDuplicate?.(summary)}
+                >
+                  Duplicate
                 </button>
               </li>
             );

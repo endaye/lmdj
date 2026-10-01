@@ -38,6 +38,7 @@ import {
 import {
   createProjectActionLane,
   createProjectJourney,
+  duplicateProjectJourney,
   importProjectJourney,
   listLocalProjectsJourney,
   openProjectJourney,
@@ -83,6 +84,7 @@ import {
   initialCreatorState,
   selectCanActivateAudio,
   selectCanCreateProject,
+  selectCanDuplicateProject,
   selectCanImportProject,
   selectCanOpenProject,
   selectCreatorPhase,
@@ -791,7 +793,7 @@ function Workspace({
   }, [performController]);
 
   const beginProjectAction = (
-    kind: "open" | "import" | "create",
+    kind: "open" | "import" | "create" | "duplicate",
     requireSelector = true,
   ): ProjectActionToken | null => {
     if (!session || projectActions.busy ||
@@ -802,7 +804,9 @@ function Workspace({
         ? selectCanOpenProject(stateRef.current)
         : kind === "create"
           ? selectCanCreateProject(stateRef.current)
-          : selectCanImportProject(stateRef.current);
+          : kind === "duplicate"
+            ? selectCanDuplicateProject(stateRef.current)
+            : selectCanImportProject(stateRef.current);
       if (!allowed) return null;
     }
     return projectActions.claim(session);
@@ -868,6 +872,51 @@ function Workspace({
         }
       } catch {
         // The reported creation failure stays the visible outcome.
+      }
+      return false;
+    } finally {
+      finishProjectAction(token);
+    }
+  };
+
+  const duplicateProject = async (source: LocalProjectSummary) => {
+    const token = beginProjectAction("duplicate");
+    if (!token) return false;
+    dispatch({type: "project-opening"});
+    resetInputForAdverseLifecycle();
+    // Same as open: the copy replaces the Project session once it is opened.
+    dispatchTransport({type: "disengaged"});
+    try {
+      const project = await duplicateProjectJourney(token.session, source);
+      if (!ownsProjectAction(token)) return false;
+      dispatch({type: "project-ready", project});
+      setShowLocalProjects(false);
+      return true;
+    } catch (error) {
+      if (!ownsProjectAction(token)) return false;
+      // The session reduces every Host refusal message to its code. With
+      // audio inactive and no transfer, a HOST_STATE_INVALID refusal means
+      // the source cannot be copied now, in practice an unfinished recording.
+      const refused =
+        (error as TypedRuntimeError | null)?.code === "HOST_STATE_INVALID";
+      reportProjectError(
+        refused
+          ? Object.assign(new Error("Project duplicate was refused"), {
+            code: "PROJECT_DUPLICATE_REFUSED",
+          })
+          : error,
+        null,
+        "Duplicate Project",
+      );
+      // The copy may be stored even when opening it failed; listing it lets
+      // the user open it instead of duplicating again.
+      try {
+        const projects = await listLocalProjectsJourney(token.session);
+        if (ownsProjectAction(token)) {
+          dispatch({type: "project-inventory-updated", projects});
+        }
+      } catch {
+        // The reported duplicate failure stays the visible outcome.
       }
       return false;
     } finally {
@@ -1463,6 +1512,11 @@ function Workspace({
     sampleRetryAction.current === null &&
     state.sample.pendingAction === null &&
     selectCanCreateProject(state);
+  const canDuplicateProject = session !== undefined &&
+    !projectActions.busy &&
+    sampleRetryAction.current === null &&
+    state.sample.pendingAction === null &&
+    selectCanDuplicateProject(state);
   const staleSampleRuntime = state.sample.lastError?.code === "COOK_FAILED" &&
     state.sample.lastError.retryPrepare && state.sample.savedRevision !== null &&
     state.sample.runtimeRevision !== state.sample.savedRevision;
@@ -1680,12 +1734,14 @@ function Workspace({
                   canOpen={canOpenProject}
                   canImport={canImportProject}
                   canCreate={canCreateProject}
+                  canDuplicate={canDuplicateProject}
                   showLocalProjects={showLocalProjects}
                   onShowLocal={() => setShowLocalProjects(true)}
                   onHideLocal={() => setShowLocalProjects(false)}
                   onOpen={(summary) => { void openProject(summary); }}
                   onImport={(file) => { void importProject(file); }}
                   onCreate={() => { void createProject(); }}
+                  onDuplicate={(summary) => { void duplicateProject(summary); }}
                 />
               ) : activeMode === "sample" ? (
                 <>

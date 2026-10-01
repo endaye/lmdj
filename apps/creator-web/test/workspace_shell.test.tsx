@@ -509,6 +509,7 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
       return listedSummary;
     },
     createProject: async () => { calls.push("createProject"); return {}; },
+    duplicateProject: async () => { throw new Error("duplicate is not expected"); },
     openProject: async () => { calls.push("openProject"); return {}; },
     inspectProject: async () => {
       calls.push("inspectProject");

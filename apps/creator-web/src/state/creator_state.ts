@@ -776,6 +776,10 @@ export function selectCanCreateProject(state: CreatorState): boolean {
   return selectCanChangeProject(state);
 }
 
+export function selectCanDuplicateProject(state: CreatorState): boolean {
+  return selectCanChangeProject(state);
+}
+
 export function selectCanTrigger(state: CreatorState): boolean {
   return state.runtime.phase === "ready" &&
     state.project.phase === "ready" &&

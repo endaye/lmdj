@@ -234,6 +234,10 @@ export interface CreatorRuntimeSession {
     bpm: number;
     bars: 1 | 2 | 4 | 8;
   }): Promise<unknown>;
+  duplicateProject(request: {
+    sourceProjectId: string;
+    projectId: string;
+  }): Promise<LocalProjectSummary>;
   openProject(
     projectId: string,
     patternId: string,

@@ -91,6 +91,7 @@ function sessionFixture(name: string) {
     },
     importProject: async () => { throw new Error("unused"); },
     createProject: async () => { calls.push(`${name}:create`); return {}; },
+    duplicateProject: async () => { throw new Error("duplicate is not expected"); },
     openProject: async () => { calls.push(`${name}:open`); return {}; },
     inspectProject: async () => { calls.push(`${name}:inspect`); return inspectResult(); },
     reloadSnapshot: async () => { calls.push(`${name}:reload`); return {}; },
