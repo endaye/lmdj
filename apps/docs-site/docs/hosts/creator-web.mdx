@@ -239,6 +239,16 @@ One changed Pad is one action in the current Project session's shared Undo/Redo
 history. Future default-Set streaming and per-Pad processing producers must join
 the same cancellation boundary; this control does not implement those producers.
 
+## 默认素材的来源与资产服务
+
+P1 默认套件是 `products/lmdj/assets/default-kit` 中的十六个原创合成打击乐 WAV，
+许可与来源记录在 RIGHTS.md；它不引用 Sound Set 测试语料。生成器、schema/内容哈希与
+WAV 检查、Worker 路由测试由 `scripts/asset-server.sh check` 执行，并纳入 Creator
+验证入口。独立 Cloudflare Worker 只提供 Catalog、manifest、blob 与 health 路由，
+哈希对象不可变缓存，Catalog 短期重新验证。Creator 通过同源 Catalog proxy 访问。
+服务部署与每个对象的真实 GET/字节核验由独立 workflow 留证；源码验证不表示服务
+已部署。首次 Project 自动分 Pad 安装和完整同构建离线壳由后续 P1 Task 接入。
+
 ## Continue in another tab
 
 A Project has one writer at a time: the tab holding it owns an exclusive OPFS
