@@ -206,7 +206,7 @@ button:disabled { color: #737b87; }
 }
 .waveform-handle:focus { opacity: 1; }
 .waveform-values, .waveform-viewport-actions, .sample-toggle-row,
-.confirmation-actions {
+.sample-loop-mode, .confirmation-actions {
   display: flex;
   flex-wrap: wrap;
   gap: .65rem;
@@ -255,11 +255,12 @@ button:disabled { color: #737b87; }
 }
 .waveform-viewport-actions button { flex: 1 1 7rem; }
 .sample-controls { display: grid; grid-template-columns: 1fr minmax(14rem, 2fr) auto; gap: .75rem 1rem; align-items: center; padding: 1rem; }
-.sample-toggle-row { grid-column: 1 / -1; }
-.sample-toggle-row button[aria-pressed="true"] { color: #101216; background: #b7ffc5; border-color: #b7ffc5; }
-.volume-control { display: grid; grid-template-columns: auto minmax(10rem, 1fr) 5rem; gap: .75rem; align-items: center; grid-column: 1 / 3; }
-.volume-control input { width: 100%; }
-.volume-control output { text-align: right; font-variant-numeric: tabular-nums; }
+.sample-toggle-row, .sample-loop-mode { grid-column: 1 / -1; }
+.sample-toggle-row button[aria-pressed="true"],
+.sample-loop-mode button[aria-pressed="true"] { color: #101216; background: #b7ffc5; border-color: #b7ffc5; }
+.volume-control, .pitch-control, .pan-control { display: grid; grid-template-columns: auto minmax(10rem, 1fr) 5rem; gap: .75rem; align-items: center; grid-column: 1 / 3; }
+.volume-control input, .pitch-control input, .pan-control input { width: 100%; }
+.volume-control output, .pitch-control output, .pan-control output { text-align: right; font-variant-numeric: tabular-nums; }
 .audio-preview-copy { grid-column: 1 / -1; margin: 0; color: #ffcf8f; }
 .reset-sample { grid-column: 3; }
 .empty-sample { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1rem; }
@@ -568,7 +569,7 @@ button:disabled { color: #737b87; }
   .sample-heading { display: grid; }
   .selected-sample { grid-template-columns: 1fr 1fr; }
   .sample-controls { grid-template-columns: 1fr; }
-  .volume-control, .reset-sample { grid-column: 1; }
+  .volume-control, .pitch-control, .pan-control, .reset-sample { grid-column: 1; }
   .perform-pattern-slots { grid-template-columns: repeat(4, minmax(4.5rem, 1fr)); }
   .perform-fx { grid-template-columns: repeat(4, minmax(3.5rem, 1fr)); }
   .soundset-list { grid-template-columns: 1fr; }

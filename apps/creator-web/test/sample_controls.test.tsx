@@ -23,6 +23,12 @@ const playback: Readonly<PadPlayback> = Object.freeze({
   triggerMode: "one_shot",
   gainMillidb: 0,
   muted: false,
+  reverse: false,
+  pitchCents: 0,
+  pan: 0,
+  loopMode: "forward" as const,
+  loopStartFrame: null,
+  loopCrossfadeFrames: 0,
 });
 
 function renderControls(overrides: Partial<React.ComponentProps<typeof SampleControls>> = {}) {
@@ -250,4 +256,63 @@ test("every toggle, value control, and confirmation action has a 44 px target", 
       action.getAttribute("aria-label") ?? action.textContent ?? action.tagName,
     ).toBe("44px");
   }
+});
+
+// --- Sample playback parity (lmdj.project.v5 5.1.0) ---
+
+test("Reverse toggles the Pad's playback direction", async () => {
+  const user = userEvent.setup();
+  const {onCommit} = renderControls();
+  const reverse = screen.getByRole("button", {name: "Reverse"});
+  expect(reverse.getAttribute("aria-pressed")).toBe("false");
+  await user.click(reverse);
+  expect(onCommit).toHaveBeenLastCalledWith({...playback, reverse: true});
+});
+
+test("Loop mode appears only while Loop is on", () => {
+  const plain = renderControls();
+  expect(screen.queryByRole("group", {name: "Pad A1 Loop mode"})).toBeNull();
+  plain.unmount();
+  renderControls({playback: {...playback, triggerMode: "loop_gate"}});
+  expect(screen.getByRole("group", {name: "Pad A1 Loop mode"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Forward"}).getAttribute("aria-pressed"))
+    .toBe("true");
+});
+
+test("Ping-pong clears the crossfade it cannot use", async () => {
+  const user = userEvent.setup();
+  const looped = {...playback, triggerMode: "loop_gate" as const, loopCrossfadeFrames: 480};
+  const {onCommit} = renderControls({playback: looped});
+  await user.click(screen.getByRole("button", {name: "Ping-pong"}));
+  expect(onCommit).toHaveBeenLastCalledWith({
+    ...looped,
+    loopMode: "ping_pong",
+    loopCrossfadeFrames: 0,
+  });
+});
+
+test("Pitch previews every move and commits once in cents", () => {
+  const {onPreview, onCommit} = renderControls();
+  const pitch = screen.getByRole("slider", {name: "Pad A1 Pitch"});
+  fireEvent.pointerDown(pitch, {pointerId: 3});
+  fireEvent.change(pitch, {target: {value: "3.5"}});
+  expect(onPreview).toHaveBeenLastCalledWith({...playback, pitchCents: 350});
+  // The draft shows while previewing; after commit the parent's value shows.
+  expect(screen.getByText("+3.5 st")).toBeTruthy();
+  fireEvent.pointerUp(pitch, {pointerId: 3});
+  expect(onCommit).toHaveBeenCalledTimes(1);
+  expect(onCommit).toHaveBeenLastCalledWith({...playback, pitchCents: 350});
+});
+
+test("Pan previews every move and Escape cancels it", () => {
+  const onCancel = vi.fn();
+  const {onPreview, onCommit} = renderControls({onCancel});
+  const pan = screen.getByRole("slider", {name: "Pad A1 Pan"});
+  fireEvent.pointerDown(pan, {pointerId: 4});
+  fireEvent.change(pan, {target: {value: "-40"}});
+  expect(onPreview).toHaveBeenLastCalledWith({...playback, pan: -40});
+  fireEvent.keyDown(pan, {key: "Escape"});
+  expect(onCancel).toHaveBeenCalledTimes(1);
+  expect(onCommit).not.toHaveBeenCalled();
+  expect(screen.getByText("C")).toBeTruthy();
 });
