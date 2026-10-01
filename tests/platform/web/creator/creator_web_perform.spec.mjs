@@ -470,7 +470,7 @@ async function openCandidate(page, scenario = "none") {
     perform_recording_frames: RECORDING_FRAMES,
     perform_recording_queue_batches: RECORDING_QUEUE_BATCHES,
   });
-  expect(candidate.candidateManifest.assets.at(-1)).toEqual(candidate.tapEntry);
+  expect(candidate.candidateManifest.assets.filter(asset => asset.role === "perform_master_tap_worklet")).toEqual([candidate.tapEntry]);
   if (candidate.routed) {
     const {
       perform_recording_frames: _frames,
@@ -1119,13 +1119,25 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   );
   await page.getByRole("combobox", {name: "Pad recording source"}).selectOption("master");
   await page.getByRole("button", {name: "Stop Replay"}).click();
-  await page.getByRole("button", {name: "Bank B", exact: true}).first().click();
+  // The imported witness assigns every Pad. Establish the empty target through
+  // the actual authoring path, and prove deletion preserved the saved replay.
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await page.getByTestId("physical-controls").getByRole("button", {name: "Bank B", exact: true}).click();
+  await page.getByRole("button", {name: /^Pad B1 — assigned/}).evaluate((element) => element.click());
+  const beforeDelete = await inspectProjectTruth(page);
+  await page.getByRole("button", {name: "Delete Pad B1", exact: true}).click();
+  revision = await expectRevisionAfter(page, revision);
+  const afterDelete = await inspectProjectTruth(page);
+  expect(afterDelete.project.banks[1].pads[0].asset_id).toBeNull();
+  expect(afterDelete.project.performances).toEqual(beforeDelete.project.performances);
+  await openPerform(page);
   const empty = page.getByRole("button", {name: /^Pad B1 — empty/});
   await empty.focus();
   await page.keyboard.down("KeyQ");
   await expect(page.getByRole("region", {name: "Pad recording"})).toContainText("recording");
   await page.getByRole("button", {name: "Replay Night Set"}).click();
-  await page.waitForTimeout(250);
+  await expect(replayStatus).toContainText("playing", {timeout: LAUNCH_TRANSITION_TIMEOUT_MS});
+  await expect(replayStatus).toContainText("complete", {timeout: LAUNCH_TRANSITION_TIMEOUT_MS});
   await page.keyboard.up("KeyQ");
   await expectRevisionAfter(page, revision);
   await expect(page.getByRole("button", {name: /^Pad B1 — assigned/})).toBeVisible();

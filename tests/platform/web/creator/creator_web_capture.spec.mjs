@@ -652,8 +652,9 @@ test("empty Pad microphone press commits one Artifact on release and reopens exa
   const artifact = after.project.assets[assetId].artifact;
   expect(artifact).toEqual({byte_length:expect.any(Number),media_type:"audio/wav",sha256:expect.stringMatching(/^[0-9a-f]{64}$/)});
   expect(artifact.byte_length).toBeGreaterThan(44);
-  await page.reload();await waitForProjectReopen(page,"00000000-0000-4000-8000-000000000002");
+  await page.reload();await waitForProjectReopen(page,"00000000");
   const reopened = await inspectProjectTruth(page);
+  expect(reopened.project.project_id).toBe(before.project.project_id);
   expect(reopened.project.assets[assetId].artifact).toEqual(artifact);
   expect(reopened.project.banks[0].pads[0].asset_id).toBe(assetId);
 });
