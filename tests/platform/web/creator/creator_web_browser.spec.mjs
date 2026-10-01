@@ -247,6 +247,7 @@ test("Duplicate opens a copy with the same Pads under a new identity that reopen
   const assignedPads = page.getByText("64 / 64");
 
   // A Project with every Pad assigned, so the copy's Pads are observable.
+  await page.goto("/index.html");
   await importProject(page);
   await page.getByRole("button", {name: "Open local"}).click();
   await page.getByRole("button", {name: "Duplicate Project 00000000", exact: true}).click();
