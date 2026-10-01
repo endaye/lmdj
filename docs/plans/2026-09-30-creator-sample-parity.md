@@ -205,16 +205,21 @@ Canonical policy: `docs/governance/version-management.md`. All targets below are
 
 Each allocating PR writes exactly one column of the table below. Each Build is proved unoccupied separately, at that PR's own tip.
 
-**Revised 2026-10-01.** The table below is the original plan from `1.0.66.0`. #1699 and the M2 train consumed its predicted identities. The PR 4 column was settled as PR 4a at Product Build `2.0.71.0`, on top of the bumps #1699 had already taken: authoring-domain `4.3.0`, project-io `6.0.0` (MAJOR), project-cooker `2.0.0` (MAJOR), audio-runtime `5.1.0`, application-facade `6.4.0`, web-runtime-platform `5.5.0`, creator-web `4.7.0` and core-mcp `3.5.0`. core-cli, native-host, cardputer-host and web-runtime-host each took a PATCH. `lmdj.project.v5` stays `5.1.0` until PR 4b. Re-derive the PR 7 column from live `origin/main` when it is written.
+**Revised 2026-10-01.** PR 4 is split. Its Module column landed as PR 4a at Product Build `2.0.71.0`, and the `5.2.0` cut follows as PR 4b after #1720. Where 4a differs from the prediction, the owner chose MAJOR:
 
-| Identity | Baseline (`2.0.70.0`) | PR 4 (#1666 settle + 5.2.0 cut) | PR 7 (#1667 settle) | Reason |
+- project-io `6.0.0`, not `5.1.0`: the same persistence break #1699 judged MAJOR;
+- project-cooker `2.0.0`, not `1.3.0`: `ResolvedPlayback` lost aggregate initialisation.
+
+The PR 7 column shifts with them, and is re-derived from live `origin/main` when written.
+
+| Identity | Baseline (`2.0.70.0`) | PR 4 (4a: #1666 settle, `2.0.71.0`; 4b: `5.2.0` cut) | PR 7 (#1667 settle) | Reason |
 | --- | --- | --- | --- | --- |
-| Product Build | `2.0.70.0` | next free `2.0.*` BUILD | next free `2.0.*` BUILD | Contract and Module identity changes |
-| `lmdj.project.v5` | `5.1.0` | `5.2.0` | unchanged | Backward-compatible optional fields, Contract MINOR (§7; precedent `lmdj.project.v4` `4.1.0`) |
+| Product Build | `2.0.70.0` | 4a: `2.0.71.0`; 4b: next free `2.0.*` BUILD | next free `2.0.*` BUILD | Contract and Module identity changes |
+| `lmdj.project.v5` | `5.1.0` | 4b: `5.2.0` | unchanged | Backward-compatible optional fields, Contract MINOR (§7; precedent `lmdj.project.v4` `4.1.0`) |
 | `lmdj.runtime-content.v1` | `1.0.0` | unchanged | unchanged | Encoder refuses non-neutral DSP |
 | `authoring-domain` | `4.2.0` | `4.3.0` | `4.4.0` | New playback fields and refusals |
-| `project-io` | `5.0.0` | `5.1.0` | `5.2.0` | Optional-key read/write |
-| `project-cooker` | `1.2.1` | `1.3.0` | `1.4.0` | `ResolvedVoiceDsp` resolution |
+| `project-io` | `5.0.0` | `6.0.0` (MAJOR) | `6.1.0` | Optional-key read/write |
+| `project-cooker` | `1.2.1` | `2.0.0` (MAJOR) | `2.1.0` | `ResolvedVoiceDsp` resolution |
 | `audio-runtime` | `5.0.1` | `5.1.0` | `5.2.0` | Shared kernel and new stages |
 | `application-facade` | `6.3.0` | `6.4.0` | `6.5.0` | Typed surface accepts new fields |
 | `web-runtime-platform` | `5.4.0` | `5.5.0` | `5.6.0` | Transport of new fields |
