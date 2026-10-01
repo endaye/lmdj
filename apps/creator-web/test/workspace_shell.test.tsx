@@ -189,6 +189,12 @@ test("keeps Sample editing in touch and one Bank row and Pad matrix on the rail"
           triggerMode: "one_shot",
           gainMillidb: 0,
           muted: false,
+          reverse: false,
+          pitchCents: 0,
+          pan: 0,
+          loopMode: "forward" as const,
+          loopStartFrame: null,
+          loopCrossfadeFrames: 0,
         },
         metadata: {sampleRate: 48_000, channels: 1, sourceFrames: 8},
         waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/2`,
@@ -263,6 +269,12 @@ test("advances the selected Sample playhead on the render clock and cancels it a
       triggerMode: "one_shot" as const,
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     },
     metadata: {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 48_000},
     waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/94`,
@@ -301,6 +313,11 @@ test("advances the selected Sample playhead on the render clock and cancels it a
         trimStartFrame: 0,
         trimEndFrame: 48_000,
         triggerMode: "one_shot",
+        reverse: false,
+        pitchCents: 0,
+        loopMode: "forward",
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       },
       savedRevision: 4,
       runtimeRevision: 4,
@@ -581,6 +598,12 @@ function sampleRuntimeFixture(
       triggerMode: "gate" as const,
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     },
     metadata: {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 8},
     waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/1`,
@@ -698,6 +721,12 @@ function mutableSampleRuntimeFixture() {
       triggerMode: "gate",
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     })],
   ]);
   let revision = 3;
@@ -717,6 +746,12 @@ function mutableSampleRuntimeFixture() {
       triggerMode: "one_shot" as const,
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     };
     return {
       projectRevision: revision,
@@ -1086,6 +1121,12 @@ test.each(["update", "reset"] as const)(
         triggerMode: "one_shot",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       }));
     }
     fixture.revision = 4;
@@ -1355,6 +1396,12 @@ test.each(["update", "reset"] as const)(
         triggerMode: "one_shot",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       }));
       return commit();
     };
@@ -1537,6 +1584,12 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
       triggerMode: "gate" as const,
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     },
     metadata: assigned.has(slot)
       ? {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 8}
@@ -1788,6 +1841,12 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
         triggerMode: "one_shot",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       }));
       fixture.revision = 4;
       return {
@@ -1813,6 +1872,12 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
         triggerMode: "one_shot",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       }));
       fixture.revision = 4;
       return {

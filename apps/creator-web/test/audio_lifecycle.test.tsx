@@ -684,6 +684,12 @@ test("lifecycle matrix clears fresh loop toggles without duplicate Session stop 
         triggerMode: "loop_toggle",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       },
       metadata: slot === 0
         ? {sampleRate: 48_000, channels: 1, sourceFrames: 8}
