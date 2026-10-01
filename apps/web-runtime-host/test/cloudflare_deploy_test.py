@@ -539,6 +539,28 @@ class EntryPointTest(unittest.TestCase):
             with self.assertRaises(CloudflareDeployError):
                 cloudflare_deploy.release_browser_root(on_target, "lmdj-v9.9.9.0")
 
+    def test_a_reviewed_smoke_revision_must_descend_from_the_target_on_main(self):
+        repository, target, git = self.tagged_repository()
+        later = git("rev-parse", "main")
+        git("update-ref", "refs/remotes/origin/main", later)
+        git("checkout", "-q", "-b", "side", target)
+        git("commit", "-q", "--allow-empty", "-m", "unreviewed")
+        side = git("rev-parse", "HEAD")
+        git("checkout", "-q", "main")
+        on_later = self.root / "on-later"
+        git("worktree", "add", "-q", "--detach", str(on_later), later)
+        on_side = self.root / "on-side"
+        git("worktree", "add", "-q", "--detach", str(on_side), side)
+        with patch.object(cloudflare_deploy, "ROOT", repository):
+            self.assertEqual(cloudflare_deploy.release_browser_root(on_later, TAG, later), on_later)
+            # The default stays the tag's own target.
+            with self.assertRaises(CloudflareDeployError):
+                cloudflare_deploy.release_browser_root(on_later, TAG)
+            # Not on protected main, not descending, or a checkout elsewhere.
+            for root, revision in ((on_side, side), (on_later, "f" * 40), (on_side, later)):
+                with self.subTest(revision=revision), self.assertRaises(CloudflareDeployError):
+                    cloudflare_deploy.release_browser_root(root, TAG, revision)
+
     def report(self, **stats):
         counts = {"expected": 1, "unexpected": 0, "flaky": 0, "skipped": 0}
         counts.update(stats)

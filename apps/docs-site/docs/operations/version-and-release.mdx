@@ -783,7 +783,11 @@ Worker 与浏览器 spec 上不同。生产路径上不再有任何 Netlify API 
 adapter；adapter 拒绝任何不在该 tag target 上的检出。部署工具、凭据与浏览器环境变量
 白名单仍来自受保护 main。发版总是在 main 继续前进之后部署，main 上的 spec 可能期望该
 Release 尚不具备的行为（例如 #1711 之后 Creator 启动即打开 Project），用它判定旧 Release
-会把正确的产物误判为失败。
+会把正确的产物误判为失败。若某个 Release 自带的 spec 本身已过时，可用部署 workflow 的
+`smoke_revision` 输入指定一个受保护 main 上、以该 tag target 为祖先的已审查 commit，由它的
+spec 判定；workflow 与 adapter 都在检出前后独立校验这两条祖先关系，缺省仍是 tag 自身。
+Creator 的部署 spec 按启动后的稳定状态区分两种启动：启动即打开 Project 的 Host 与停在空
+Project 库的较早 Host 各走完整旅程，误判只会让旅程失败，不会放过失败。
 Core Release 的资产集自 2026-08-24 起为四资产（#286）：除 ZIP、checksum 和受信
 signature 外，`build-manifest.json` 不再打进归档，而是作为并列 detached 资产
 `<archive-stem>.build-manifest.json` 发布（决策
