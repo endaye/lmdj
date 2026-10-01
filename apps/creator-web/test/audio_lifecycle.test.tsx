@@ -369,6 +369,37 @@ test("a failed Runtime Session start never becomes ready", async () => {
   expect(screen.getByTestId("creator-phase").textContent).toBe("failed");
 });
 
+test("a repeated Host notification of one Runtime error is recorded once", async () => {
+  const failed = sessionFixture("failed");
+  failed.session.start = async () => false;
+  failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID"});
+  render(<App runtimeFactory={() => failed.session} />);
+  await screen.findByRole("alert");
+  // Each notification carries a fresh but equal details object.
+  for (let repeat = 0; repeat < 3; repeat += 1) {
+    act(() => failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID", errorDetails: {}}));
+  }
+  await screen.findByText("Developer diagnostics (1)");
+  act(() => failed.emit({state: "failed", errorCode: "INTERNAL_ERROR", errorDetails: {}}));
+  await screen.findByText("Developer diagnostics (2)");
+  fireEvent.click(screen.getByText("Developer diagnostics (2)"));
+  const log = within(screen.getByRole("region", {name: "Developer diagnostics"}));
+  expect(log.getAllByText("Runtime")).toHaveLength(2);
+  expect(log.getAllByText("HOST_STATE_INVALID").length).toBeGreaterThan(0);
+  expect(log.getAllByText("INTERNAL_ERROR").length).toBeGreaterThan(0);
+});
+
+test("the overview error row names no code but keeps it for support", async () => {
+  const failed = sessionFixture("failed");
+  failed.session.start = async () => false;
+  failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID"});
+  render(<App runtimeFactory={() => failed.session} />);
+  await screen.findByRole("alert");
+  await userEvent.click(screen.getByRole("button", {name: /^Project$/}));
+  const row = screen.getByText("Needs attention");
+  expect(row.getAttribute("data-error-code")).toBe("HOST_STATE_INVALID");
+});
+
 test("recovery keeps the Project playable for the required probe Trigger", async () => {
   const user = userEvent.setup();
   const value = sessionFixture("recovery");

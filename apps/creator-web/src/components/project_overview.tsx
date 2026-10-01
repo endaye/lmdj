@@ -32,7 +32,7 @@ export function ProjectOverview({state}: ProjectOverviewProps) {
             <dt>Error</dt>
             {/* The alert carries the message and next step; the code is in
                 Developer diagnostics. */}
-            <dd>Needs attention</dd>
+            <dd data-error-code={state.runtime.errorCode}>Needs attention</dd>
           </div>
         ) : null}
       </dl>

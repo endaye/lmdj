@@ -567,14 +567,23 @@ function Workspace({
   }, [runtimeHostState, runtimeRecoveryProbeReady]);
 
   // Runtime boot and Host terminal errors reach the user only as the panel's
-  // message, so their code and details are recorded here (#1680).
+  // message, so their code and details are recorded here (#1680). Each Host
+  // notification carries a fresh details object, so an error is identified
+  // by its code and details content and recorded once until it changes.
+  const runtimeErrorKey = runtimeErrorCode
+    ? `${runtimeErrorCode}:${JSON.stringify(runtimeErrorDetails ?? {})}`
+    : null;
+  const reportedRuntimeError = useRef<string | null>(null);
   useEffect(() => {
+    if (runtimeErrorKey === reportedRuntimeError.current) return;
+    reportedRuntimeError.current = runtimeErrorKey;
     if (!runtimeErrorCode) return;
     reportFailure("Runtime", Object.assign(new Error(runtimeErrorCode), {
       code: runtimeErrorCode,
       details: runtimeErrorDetails ?? {},
     }));
-  }, [runtimeErrorCode, runtimeErrorDetails, reportFailure]);
+    // The key captures the code and details content.
+  }, [runtimeErrorKey, reportFailure]);
 
   useEffect(() => {
     if (!runtimePhase) return;
