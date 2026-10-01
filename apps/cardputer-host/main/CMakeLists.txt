@@ -30,7 +30,7 @@ cardputer_core(cardputer_cooker project-cooker wav_reader wav_selection sample_a
   project_cooker performance_replay runtime_content)
 target_link_libraries(cardputer_cooker PUBLIC cardputer_domain)
 cardputer_core(cardputer_audio audio-runtime offline_renderer wav_writer master_fx
-  prepared_sample_bank realtime_engine)
+  prepared_sample_bank realtime_engine voice_dsp)
 target_link_libraries(cardputer_audio PUBLIC cardputer_foundation cardputer_cooker)
 cardputer_core(cardputer_facade application-facade runtime_facade)
 target_link_libraries(cardputer_facade PUBLIC cardputer_cooker PRIVATE cardputer_audio)
