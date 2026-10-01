@@ -62,3 +62,14 @@ Documentation impact: required
 Affected portal pages: /hosts/creator-web/ and generated component/version routes.
 Reason: the active distribution inventory, Assembly identity and independent
 Catalog binding change. Historical snapshots stay immutable.
+
+## Revised candidate after complete-proof findings
+
+The complete first-candidate Creator proof exposed a default reservation blocking
+manually assigned sound and an absent trim overlay when Capture continued over
+Pattern playback. Both are corrected; concurrent main takeover and IndexedDB
+crash-reopen changes are retained. Derive the next candidate BUILD and Creator
+PATCH from the retained manifests. Keep the existing frozen canary snapshot
+immutable and freeze a new snapshot from the clean revised source. All complete
+lane evidence must bind the revised committed candidate; earlier passing lanes
+and failures remain recorded without becoming new-head passes.
