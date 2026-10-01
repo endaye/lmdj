@@ -404,6 +404,24 @@ class BatchEvidenceConsumerTest(unittest.TestCase):
                          (source["repository_id"], source["workflow_id"],
                           source["producer_revision"]))
 
+    def test_the_canonical_main_is_refreshed_before_each_verification(self):
+        from unittest.mock import patch
+        from tools.release.batch_evidence import BatchEvidenceConsumer
+        from tools.release.entry_gates import batch_evidence_consumer
+        from tools.release.model import load_policy
+
+        order = []
+        consumer = batch_evidence_consumer(
+            api_get=lambda *a, **k: None, git_root=ROOT,
+            policy=load_policy(ROOT / "tools/release/policy.json"),
+            refresh_main=lambda: order.append("refresh"))
+        self.assertIsInstance(consumer, BatchEvidenceConsumer)
+        with patch.object(BatchEvidenceConsumer, "verify_run",
+                          lambda self, reference, **kw: order.append("verify") or "ok"):
+            for _ in range(2):
+                self.assertEqual(consumer.verify_run({}, run_id=1, target_revision="a" * 40), "ok")
+        self.assertEqual(order, ["refresh", "verify", "refresh", "verify"])
+
     def test_a_policy_without_a_batch_source_fails_closed(self):
         from tools.release.entry_gates import batch_evidence_consumer
 
