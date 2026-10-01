@@ -391,8 +391,11 @@ std::optional<domain::TriggerMode> parse_trigger_mode(std::string_view mode) {
   return std::nullopt;
 }
 
+// The five 5.0.0 keys are always written. A 5.1.0 parity key is written only
+// when it differs from its default, so a Project that uses none of them keeps
+// its 5.0.0 bytes and stays readable by a 5.0.0 reader.
 nlohmann::json playback_json(const domain::PadPlayback& playback) {
-  return {
+  nlohmann::json encoded{
       {"gain_millidb", playback.gain_millidb},
       {"muted", playback.muted},
       {"trigger_mode", trigger_mode_name(playback.trigger_mode)},
@@ -402,6 +405,25 @@ nlohmann::json playback_json(const domain::PadPlayback& playback) {
            : nlohmann::json(nullptr)},
       {"trim_start_frame", playback.trim_start_frame},
   };
+  if (playback.reverse) {
+    encoded["reverse"] = true;
+  }
+  if (playback.pitch_cents != 0) {
+    encoded["pitch_cents"] = playback.pitch_cents;
+  }
+  if (playback.pan != 0) {
+    encoded["pan"] = playback.pan;
+  }
+  if (playback.loop_mode == domain::LoopMode::ping_pong) {
+    encoded["loop_mode"] = "ping_pong";
+  }
+  if (playback.loop_start_frame.has_value()) {
+    encoded["loop_start_frame"] = *playback.loop_start_frame;
+  }
+  if (playback.loop_crossfade_frames != 0) {
+    encoded["loop_crossfade_frames"] = playback.loop_crossfade_frames;
+  }
+  return encoded;
 }
 
 nlohmann::json pattern_event_json(const domain::PatternEvent& event) {
@@ -595,50 +617,151 @@ bool nonnegative_integer(const nlohmann::json& input) {
   return unsigned_integer_value(input).has_value();
 }
 
+// Which optional keys a playback object may carry. A checkpoint below
+// lmdj.project.v5 predates them; the transaction log and the authoring
+// history are written by the current writer and always admit them.
+enum class PlaybackKeys : std::uint8_t {
+  base_only,
+  with_parity,
+};
+
+std::optional<std::int32_t> int32_value(const nlohmann::json& input) {
+  if (!input.is_number_integer()) {
+    return std::nullopt;
+  }
+  if (input.is_number_unsigned()) {
+    const auto value = input.get<std::uint64_t>();
+    if (value > static_cast<std::uint64_t>(
+                    std::numeric_limits<std::int32_t>::max())) {
+      return std::nullopt;
+    }
+    return static_cast<std::int32_t>(value);
+  }
+  const auto value = input.get<std::int64_t>();
+  if (value < std::numeric_limits<std::int32_t>::min() ||
+      value > std::numeric_limits<std::int32_t>::max()) {
+    return std::nullopt;
+  }
+  return static_cast<std::int32_t>(value);
+}
+
+bool playback_keys_admitted(const nlohmann::json& input, PlaybackKeys keys) {
+  static constexpr std::array<std::string_view, 5> base{
+      "gain_millidb", "muted", "trigger_mode", "trim_end_frame",
+      "trim_start_frame"};
+  static constexpr std::array<std::string_view, 6> parity{
+      "loop_crossfade_frames", "loop_mode", "loop_start_frame", "pan",
+      "pitch_cents", "reverse"};
+  if (!input.is_object()) {
+    return false;
+  }
+  for (const auto key : base) {
+    if (!input.contains(std::string(key))) {
+      return false;
+    }
+  }
+  for (const auto& [key, value] : input.items()) {
+    (void)value;
+    const bool is_base =
+        std::find(base.begin(), base.end(), key) != base.end();
+    const bool is_parity =
+        std::find(parity.begin(), parity.end(), key) != parity.end();
+    if (!is_base && !(is_parity && keys == PlaybackKeys::with_parity)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 foundation::Result<domain::PadPlayback> parse_playback(
     const nlohmann::json& input,
-    const std::filesystem::path& path) {
+    const std::filesystem::path& path,
+    PlaybackKeys keys) {
+  const auto shape_invalid = [&path]() {
+    return foundation::Result<domain::PadPlayback>::failure(
+        invalid_project("project Pad playback shape is invalid", path));
+  };
   try {
-    if (!exact_object_keys(
-            input,
-            {"gain_millidb",
-             "muted",
-             "trigger_mode",
-             "trim_end_frame",
-             "trim_start_frame"}) ||
+    if (!playback_keys_admitted(input, keys) ||
         !input.at("gain_millidb").is_number_integer() ||
         !input.at("muted").is_boolean() ||
         !input.at("trigger_mode").is_string() ||
         !nonnegative_integer(input.at("trim_start_frame")) ||
         !(input.at("trim_end_frame").is_null() ||
           nonnegative_integer(input.at("trim_end_frame")))) {
-      return foundation::Result<domain::PadPlayback>::failure(
-          invalid_project("project Pad playback shape is invalid", path));
+      return shape_invalid();
     }
     const auto trigger_mode = parse_trigger_mode(
         input.at("trigger_mode").get<std::string>());
-    const auto gain = input.at("gain_millidb").get<std::int64_t>();
+    const auto gain = int32_value(input.at("gain_millidb"));
     const auto trim_start =
         unsigned_integer_value(input.at("trim_start_frame"));
     std::optional<std::uint64_t> trim_end;
     if (!input.at("trim_end_frame").is_null()) {
       trim_end = unsigned_integer_value(input.at("trim_end_frame"));
     }
-    if (!trigger_mode.has_value() || !trim_start.has_value() ||
-        gain < -60'000 || gain > 6'000 ||
-        (trim_end.has_value() &&
-         (*trim_end == 0 || *trim_end <= *trim_start))) {
+    if (!trigger_mode.has_value() || !gain.has_value() ||
+        !trim_start.has_value()) {
       return foundation::Result<domain::PadPlayback>::failure(
           invalid_project("project Pad playback is invalid", path));
     }
-    return foundation::Result<domain::PadPlayback>::success(
-        domain::PadPlayback{
-            *trim_start,
-            trim_end,
-            *trigger_mode,
-            static_cast<std::int32_t>(gain),
-            input.at("muted").get<bool>(),
-        });
+    domain::PadPlayback playback{
+        *trim_start,
+        trim_end,
+        *trigger_mode,
+        *gain,
+        input.at("muted").get<bool>(),
+    };
+    if (input.contains("reverse")) {
+      if (!input.at("reverse").is_boolean()) {
+        return shape_invalid();
+      }
+      playback.reverse = input.at("reverse").get<bool>();
+    }
+    for (const auto& [key, field] :
+         {std::pair{"pitch_cents", &domain::PadPlayback::pitch_cents},
+          std::pair{"pan", &domain::PadPlayback::pan}}) {
+      if (input.contains(key)) {
+        const auto value = int32_value(input.at(key));
+        if (!value.has_value()) {
+          return shape_invalid();
+        }
+        playback.*field = *value;
+      }
+    }
+    if (input.contains("loop_mode")) {
+      if (!input.at("loop_mode").is_string()) {
+        return shape_invalid();
+      }
+      const auto mode = input.at("loop_mode").get<std::string>();
+      if (mode == "ping_pong") {
+        playback.loop_mode = domain::LoopMode::ping_pong;
+      } else if (mode != "forward") {
+        return foundation::Result<domain::PadPlayback>::failure(
+            invalid_project("project Pad playback is invalid", path));
+      }
+    }
+    if (input.contains("loop_start_frame") &&
+        !input.at("loop_start_frame").is_null()) {
+      const auto value = unsigned_integer_value(input.at("loop_start_frame"));
+      if (!value.has_value()) {
+        return shape_invalid();
+      }
+      playback.loop_start_frame = *value;
+    }
+    if (input.contains("loop_crossfade_frames")) {
+      const auto value =
+          unsigned_integer_value(input.at("loop_crossfade_frames"));
+      if (!value.has_value()) {
+        return shape_invalid();
+      }
+      playback.loop_crossfade_frames = *value;
+    }
+    if (!domain::is_valid_playback(playback)) {
+      return foundation::Result<domain::PadPlayback>::failure(
+          invalid_project("project Pad playback is invalid", path));
+    }
+    return foundation::Result<domain::PadPlayback>::success(playback);
   } catch (const std::exception& exception) {
     return foundation::Result<domain::PadPlayback>::failure(
         invalid_project(
@@ -1081,7 +1204,10 @@ foundation::Result<domain::ProjectState> parse_project(
               foundation::AssetId{asset_id};
         }
         if (!is_v1) {
-          auto playback = parse_playback(encoded_pad.at("playback"), path);
+          auto playback = parse_playback(
+              encoded_pad.at("playback"),
+              path,
+              is_v5 ? PlaybackKeys::with_parity : PlaybackKeys::base_only);
           if (!playback.has_value()) {
             return foundation::Result<domain::ProjectState>::failure(
                 playback.error());
@@ -1406,7 +1532,7 @@ domain::AuthoringDelta parse_authoring_delta(const nlohmann::json& input, const 
         history_require(domain::is_valid_uuid(asset->value()));
       }
       return domain::PadSlot{history_parsed(parse_slot(value.at("slot"), path)), asset,
-                            history_parsed(parse_playback(value.at("playback"), path))};
+                            history_parsed(parse_playback(value.at("playback"), path, PlaybackKeys::with_parity))};
     }));
   }
   result.assets = history_map<foundation::AssetId, domain::Asset>(input.at("assets"), [&](const auto& value) {
@@ -2058,7 +2184,8 @@ foundation::Result<PersistedCommand> parse_command(
                 "UpdatePadPlayback transaction shape is invalid", path));
       }
       auto slot = parse_slot(input.at("slot"), path);
-      auto playback = parse_playback(input.at("playback"), path);
+      auto playback =
+          parse_playback(input.at("playback"), path, PlaybackKeys::with_parity);
       if (!slot.has_value()) {
         return foundation::Result<PersistedCommand>::failure(slot.error());
       }

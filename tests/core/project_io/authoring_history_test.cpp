@@ -74,6 +74,24 @@ struct Fixture {
     if (!result.has_value()) throw std::runtime_error(result.error().message);
   }
 };
+// Undo and redo carry every 5.1.0 parity field through the persisted history.
+void parity_edit_undoes_and_redoes() {
+  Fixture f;
+  const auto before = f.state();
+  auto playback = before.banks[0][0].playback;
+  playback.trim_end_frame = 30;
+  playback.trigger_mode = TriggerMode::loop_gate;
+  playback.reverse = true;
+  playback.pitch_cents = -350;
+  playback.pan = 60;
+  playback.loop_mode = LoopMode::ping_pong;
+  playback.loop_start_frame = 12;
+  LMDJ_CHECK(f.store.execute(f.root, UpdatePadPlayback{f.meta(), {0,0}, playback}).has_value());
+  const auto edited = f.state();
+  LMDJ_CHECK(edited.banks[0][0].playback == playback);
+  LMDJ_CHECK(f.restore().state.banks == before.banks);
+  LMDJ_CHECK(f.restore(true).state.banks == edited.banks);
+}
 void edit_restore_and_persist() {
   Fixture f;
   const auto before = f.state();
@@ -345,7 +363,7 @@ void persisted_history_rejects_malformed_commands_atomically() {
 int main() {
   try {
     persisted_history_rejects_malformed_commands_atomically();
-    edit_restore_and_persist(); retry_noop_and_fork(); import_retains_original_bytes();
+    edit_restore_and_persist(); parity_edit_undoes_and_redoes(); retry_noop_and_fork(); import_retains_original_bytes();
     failed_publication_keeps_stack(); external_changes_and_sessions_invalidate();
     adoption_is_one_action_and_reuses_every_original_artifact();
     grouped_cancel_restores_redo_and_capacity();
