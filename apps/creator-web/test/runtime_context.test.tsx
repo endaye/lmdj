@@ -24,6 +24,21 @@ function Probe() {
   </>;
 }
 
+function YieldProbe() {
+  const runtime = useRuntime();
+  return <>
+    <Probe />
+    <button
+      type="button"
+      onClick={() => {
+        void runtime.yieldRuntime().then((clean) => {
+          document.title = `yield:${clean}`;
+        });
+      }}
+    >Yield runtime</button>
+  </>;
+}
+
 function ShutdownBarrierProbe({barrier}: {
   readonly barrier: () => Promise<void>;
 }) {
@@ -455,4 +470,80 @@ test("closes a restart-required Session once before creating its replacement", a
   rendered.unmount();
   await waitFor(() => expect(second.closes()).toBe(1));
   expect(firstCloseCount).toBe(1);
+});
+
+test("yield awaits shutdown barriers, closes once and reports a clean close", async () => {
+  const fixture = sessionFixture();
+  const order: string[] = [];
+  fixture.session.close = async () => {
+    order.push("session:close");
+    return true;
+  };
+  function YieldWithBarrier() {
+    const runtime = useRuntime();
+    useEffect(() => runtime.registerShutdownBarrier(async () => {
+      order.push("barrier");
+    }), [runtime.registerShutdownBarrier]);
+    return <YieldProbe />;
+  }
+  document.title = "";
+  render(<RuntimeProvider factory={() => fixture.session}><YieldWithBarrier /></RuntimeProvider>);
+  await screen.findByText("ready");
+
+  fireEvent.click(screen.getByRole("button", {name: "Yield runtime"}));
+  await waitFor(() => expect(document.title).toBe("yield:true"));
+  expect(order).toEqual(["barrier", "session:close"]);
+  expect(screen.getByLabelText("phase").textContent).toBe("closed");
+});
+
+test("yield reports an unclean close when the Session refuses to close", async () => {
+  const fixture = sessionFixture();
+  fixture.session.close = async () => false;
+  document.title = "";
+  render(<RuntimeProvider factory={() => fixture.session}><YieldProbe /></RuntimeProvider>);
+  await screen.findByText("ready");
+  fireEvent.click(screen.getByRole("button", {name: "Yield runtime"}));
+  await waitFor(() => expect(document.title).toBe("yield:false"));
+});
+
+test("yield reports an unclean close when closing throws", async () => {
+  const fixture = sessionFixture();
+  fixture.session.close = async () => { throw new Error("close failed"); };
+  document.title = "";
+  render(<RuntimeProvider factory={() => fixture.session}><YieldProbe /></RuntimeProvider>);
+  await screen.findByText("ready");
+  fireEvent.click(screen.getByRole("button", {name: "Yield runtime"}));
+  await waitFor(() => expect(document.title).toBe("yield:false"));
+});
+
+test("a yielded Session's later failure neither relabels the phase nor replaces it", async () => {
+  const fixture = sessionFixture();
+  let creations = 0;
+  render(<RuntimeProvider factory={() => { creations += 1; return fixture.session; }}>
+    <YieldProbe />
+  </RuntimeProvider>);
+  await screen.findByText("ready");
+  fireEvent.click(screen.getByRole("button", {name: "Yield runtime"}));
+  await waitFor(() => expect(fixture.closes()).toBe(1));
+
+  act(() => fixture.emit("restart-required", "HOST_RESTART_REQUIRED"));
+  act(() => fixture.emit("failed", "INTERNAL_ERROR"));
+  expect(screen.getByLabelText("phase").textContent).toBe("closed");
+  expect(creations).toBe(1);
+});
+
+test("retry after a yield starts a fresh Session", async () => {
+  const first = sessionFixture();
+  const second = sessionFixture();
+  const sessions = [first.session, second.session];
+  let creations = 0;
+  render(<RuntimeProvider factory={() => sessions[creations++]!}><YieldProbe /></RuntimeProvider>);
+  await screen.findByText("ready");
+  fireEvent.click(screen.getByRole("button", {name: "Yield runtime"}));
+  await waitFor(() => expect(first.closes()).toBe(1));
+
+  fireEvent.click(screen.getByRole("button", {name: "Retry runtime"}));
+  await waitFor(() => expect(second.starts()).toBe(1));
+  await screen.findByText("ready");
+  expect(first.closes()).toBe(1);
 });

@@ -35,6 +35,9 @@ interface RuntimeContextValue {
   hostState: string;
   recoveryProbeReady: boolean;
   retryRuntime: () => void;
+  // Close this tab's Session so another tab can take its Project (#1679).
+  // Resolves whether the Session closed cleanly; the phase stays "closed".
+  yieldRuntime: () => Promise<boolean>;
   registerShutdownBarrier: (barrier: () => Promise<unknown>) => () => void;
 }
 
@@ -79,7 +82,7 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
     useState<Readonly<Record<string, unknown>>>(EMPTY_DETAILS);
   const [hostState, setHostState] = useState("cold");
   const [recoveryProbeReady, setRecoveryProbeReady] = useState(false);
-  const closePromises = useRef(new WeakMap<CreatorRuntimeSession, Promise<unknown>>());
+  const closePromises = useRef(new WeakMap<CreatorRuntimeSession, Promise<boolean>>());
   const shutdownBarriers = useRef(new WeakMap<
     CreatorRuntimeSession,
     Set<() => Promise<unknown>>
@@ -96,8 +99,8 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
           await Promise.all([...barriers].map((barrier) => barrier()));
           shutdownBarriers.current.delete(target);
         }
-        await target.close();
-      }).catch(() => {});
+        return target.close();
+      }).catch(() => false);
       closePromises.current.set(target, pending);
     }
     return pending;
@@ -137,6 +140,14 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
         setSession(factoryRef.current());
       }
     });
+  }, [closeOnce, session]);
+
+  const yieldRuntime = useCallback(() => {
+    // As on pagehide: retire the generation first so the Session's own
+    // closed/failed transitions cannot replace or relabel this phase.
+    generation.current += 1;
+    setPhase("closed");
+    return closeOnce(session);
   }, [closeOnce, session]);
 
   useEffect(() => {
@@ -284,6 +295,7 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
       hostState,
       recoveryProbeReady,
       retryRuntime,
+      yieldRuntime,
       registerShutdownBarrier,
     }),
     [
@@ -294,6 +306,7 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
       hostState,
       recoveryProbeReady,
       retryRuntime,
+      yieldRuntime,
       registerShutdownBarrier,
     ],
   );

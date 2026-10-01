@@ -15,6 +15,7 @@ import {
   announceBuildIdentity,
   creatorBuildIdentity,
 } from "./runtime/build_identity";
+import {createBrowserProjectTakeover} from "./runtime/project_takeover";
 import type {CreatorRuntimeSession} from "./runtime/runtime_types";
 import "./styles.css";
 
@@ -116,5 +117,6 @@ createRoot(root).render(
   <App
     runtimeFactory={createCreatorRuntimeSession}
     buildIdentity={buildIdentity}
+    projectTakeover={createBrowserProjectTakeover()}
   />,
 );
