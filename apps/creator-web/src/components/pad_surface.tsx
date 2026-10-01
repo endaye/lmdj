@@ -1,7 +1,7 @@
 import {DEFAULT_KEYBOARD_MAPPING} from "@lmdj/web-runtime-platform/input_adapters.mjs";
 
 import {
-  selectCanTrigger,
+  selectCanStartGesture,
   selectVisiblePads,
   type CreatorState,
 } from "../state/creator_state";
@@ -33,7 +33,7 @@ const KEYBOARD_KEY_BY_LOCAL_PAD: ReadonlyMap<number, string> = new Map(
 export function PadSurface({
   state, controller, armedCaptureSlot = null, onSelectSample, onChooseSample, onDropSample,
 }: PadSurfaceProps) {
-  const canTrigger = selectCanTrigger(state);
+  const canTrigger = selectCanStartGesture(state);
   return (
     <div className="pad-grid" aria-label="Playable Pads">
       {selectVisiblePads(state).map((pad) => {
@@ -86,7 +86,8 @@ export function PadSurface({
                 pad.slot - state.activeBank * 16,
               );
               if (code !== undefined) {
-                controller.keyDown({code, repeat: false, target: document.body});
+                controller.keyDown({code, repeat: false, target: document.body,
+                  nativeEvent: event.nativeEvent});
               }
             }}
             onKeyUp={(event) => {

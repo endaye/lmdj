@@ -135,10 +135,7 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
   expect(Array.from(document.querySelectorAll(".pad kbd"), (key) => key.textContent))
     .toEqual(keys);
 
-  // Without a Runtime session the Activate handler is detached, so the
-  // action is disabled instead of offering a gesture that cannot run.
-  expect(screen.getByRole("button", {name: "Activate audio"})
-    .hasAttribute("disabled")).toBe(true);
+  expect(screen.queryByRole("button", {name: "Activate audio"})).toBeNull();
   await user.tab();
   expect(document.activeElement).toBe(projectMode);
   await user.tab();
@@ -233,7 +230,7 @@ test("keeps Sample editing in touch and one Bank row and Pad matrix on the rail"
   expect(screen.getByRole("button", {name: "Replace Sample"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Record Sample"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Reset Pad to Defaults"})).toBeTruthy();
-  expect(screen.getByText("Activate Audio to preview")).toBeTruthy();
+  expect(screen.getByText("Tap a Pad to preview")).toBeTruthy();
   const visiblePads = screen.getAllByRole("button", {
     name: /^Pad A(?:[1-9]|1[0-6]) — (?:assigned|empty) — Key [QWERTYUIASDFGHJK]$/,
   });
@@ -566,6 +563,13 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
   return {calls, session};
 }
 
+// These lifecycle tests use synthetic events and an already-running fixture.
+// Trusted browser activation is covered by the packaged first-gesture journey.
+function setRunningAudioFixture(session: CreatorRuntimeSession) {
+  const diagnostics = session.diagnostics;
+  session.diagnostics = () => ({...diagnostics(), state: "running"});
+}
+
 function sampleRuntimeFixture(
   overrides: Partial<CreatorSampleRuntimeSession> = {},
 ) {
@@ -792,7 +796,7 @@ function mutableSampleRuntimeFixture() {
   };
 }
 
-async function candidatePlaybackFixture() {
+async function candidatePlaybackFixture(runningAudio = false) {
   const fixture = mutableSampleRuntimeFixture();
   const sourceId = "33333333-3333-4333-8333-333333333333";
   const adoptedId = "44444444-4444-4444-8444-444444444444";
@@ -841,6 +845,7 @@ async function candidatePlaybackFixture() {
     },
     trigger,
   });
+  if (runningAudio) setRunningAudioFixture(session);
   render(<App initialState={ready} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Slice"}));
@@ -888,7 +893,7 @@ test("Candidate publication failure retains one commit and retries only preparat
 });
 
 test.each(["pointer", "keyboard", "midi"])("Candidate preparation blocks %s Pad admission until successful retry", async (source) => {
-  const fixture = await candidatePlaybackFixture();
+  const fixture = await candidatePlaybackFixture(true);
   const midiInput = Object.assign(new EventTarget(), {type: "input", state: "connected", id: "candidate-test"});
   if (source === "midi") {
     const original = Object.getOwnPropertyDescriptor(navigator, "requestMIDIAccess");
@@ -905,7 +910,6 @@ test.each(["pointer", "keyboard", "midi"])("Candidate preparation blocks %s Pad 
     Object.defineProperty(event, "data", {value: new Uint8Array([status, 36, 100])});
     midiInput.dispatchEvent(event);
   };
-  await userEvent.click(screen.getByRole("button", {name: "Activate audio"}));
   const pending = deferred<SnapshotPublication>();
   fixture.prepare.mockImplementationOnce(() => pending.promise);
   await userEvent.click(screen.getByRole("button", {name: "Adopt selected slices"}));
@@ -1494,6 +1498,7 @@ test.each([
       return true;
     },
   });
+  setRunningAudioFixture(fixture.session);
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
@@ -1822,6 +1827,7 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
         snapshotError: null,
       };
     };
+    setRunningAudioFixture(fixture.session);
     const {container} = render(
       <App initialState={ready} runtimeFactory={() => fixture.session} />,
     );
@@ -1932,7 +1938,7 @@ test("shows saved and stale Runtime revisions and retries Prepare explicitly", a
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
-  expect(screen.getByText("Activate Audio to preview")).toBeTruthy();
+  expect(screen.getByText("Tap a Pad to preview")).toBeTruthy();
 
   await userEvent.click(screen.getByRole("button", {name: "Mute"}));
   expect(await screen.findByText(
@@ -2256,7 +2262,7 @@ test("renders the hardware shell with a read-only overview and no fallback to a 
   // The workspace shell is gone: there is no fallback control to find.
   expect(within(touch).queryByRole("button", {name: "Existing workspace"})).toBeNull();
   expect(screen.queryByRole("button", {name: "Hardware layout"})).toBeNull();
-  expect(within(touch).getByRole("button", {name: "Activate audio"})).toBeTruthy();
+  expect(within(touch).queryByRole("button", {name: "Activate audio"})).toBeNull();
   expect(within(screen.getByRole("region", {name: "Pad matrix"}))
     .getByRole("button", {name: "Pad A1 — empty — Key Q"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Project"}).getAttribute("aria-current"))
@@ -2283,7 +2289,7 @@ test("hardware Project keeps list/import/open, offers New Project in touch and o
   const touch = screen.getByRole("region", {name: "Touch workspace"});
   expect(within(touch).getByRole("button", {name: "Open local"})).toBeTruthy();
   expect(within(touch).getByRole("button", {name: "Import .lmdj"})).toBeTruthy();
-  expect(within(touch).getByRole("button", {name: "Activate audio"})).toBeTruthy();
+  expect(within(touch).queryByRole("button", {name: "Activate audio"})).toBeNull();
   expect(within(touch).getByRole("button", {name: "Enable MIDI"})).toBeTruthy();
   expect(within(touch).getByRole("button", {name: "Export report"})).toBeTruthy();
   expect(within(touch).getByRole("button", {name: "New Project"})).toBeTruthy();
@@ -2518,6 +2524,7 @@ test.each(["pointerup", "pointercancel"])("Sample rail Pad %s releases a gate vo
     ({sequence: 1, slot, velocity, source}));
   const releases = vi.fn(async () => true);
   const fixture = sampleRuntimeFixture({trigger: triggers, release: releases});
+  setRunningAudioFixture(fixture.session);
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));

@@ -373,7 +373,7 @@ test("recovery keeps the Project playable for the required probe Trigger", async
   value.emit({state: "interrupted", errorCode: null});
   await screen.findByText("Audio suspended");
   const pad = screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"});
-  expect(pad.hasAttribute("disabled")).toBe(true);
+  expect(pad.hasAttribute("disabled")).toBe(false);
 
   value.emit({state: "recovering", errorCode: null});
   expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
@@ -465,9 +465,8 @@ test("a refused activation leaves the surface in its prior phase", async () => {
     await user.click(screen.getByRole("button", {name: "Suspend audio"}));
     await screen.findByText("Audio suspended");
 
-    const activate = screen.getByRole("button", {name: "Activate audio"});
-    expect(activate.hasAttribute("disabled")).toBe(false);
-    await user.click(activate);
+    expect(screen.queryByRole("button", {name: "Activate audio"})).toBeNull();
+    await user.keyboard("q");
     await waitFor(() => expect(value.calls).toContain("refused:activate"));
     expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
 
@@ -501,7 +500,7 @@ test("a failed activation with Runtime diagnostics restores its prior phase", as
     await user.click(screen.getByRole("button", {name: "Suspend audio"}));
     await screen.findByText("Audio suspended");
 
-    await user.click(screen.getByRole("button", {name: "Activate audio"}));
+    await user.keyboard("q");
     expect((await screen.findByRole("alert")).textContent)
       .toContain("HOST_STATE_INVALID");
     expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
@@ -529,10 +528,21 @@ test("a rejected activation restores its prior phase while reporting the error",
     await user.click(screen.getByRole("button", {name: "Suspend audio"}));
     await screen.findByText("Audio suspended");
 
-    await user.click(screen.getByRole("button", {name: "Activate audio"}));
+    await user.keyboard("q");
     expect((await screen.findByRole("alert")).textContent)
       .toContain("HOST_STATE_INVALID");
     expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
+    activationStub.current = async () => {
+      value.emit({state: "running", errorCode: null});
+      return true;
+    };
+    value.session.trigger = async (slot, velocity, source) => {
+      value.calls.push("rejected:retry-trigger");
+      return {sequence: 1, slot, velocity, source};
+    };
+    await user.keyboard("q");
+    await waitFor(() => expect(value.calls).toContain("rejected:retry-trigger"));
+    await screen.findByText("Audio running");
   } finally {
     activationStub.current = null;
   }
@@ -556,7 +566,7 @@ test("a Runtime publication during activation wins over later refusal", async ()
     await user.click(screen.getByRole("button", {name: "Suspend audio"}));
     await screen.findByText("Audio suspended");
 
-    await user.click(screen.getByRole("button", {name: "Activate audio"}));
+    await user.keyboard("q");
     await screen.findByText("Audio activating");
     await act(async () => value.emit({state: "running", errorCode: null}));
     await screen.findByText("Audio running");
@@ -567,50 +577,64 @@ test("a Runtime publication during activation wins over later refusal", async ()
   }
 });
 
-test("hardware layout keeps Activate audio in the touch workspace", async () => {
+test("hardware layout offers Pads without a separate audio activation button", async () => {
   const user = userEvent.setup();
   const value = sessionFixture("gate");
   render(<App runtimeFactory={() => value.session} />);
-  await user.click(await screen.findByRole("button", {
-    name: "Open Project 11111111",
-  }));
+  await user.click(await screen.findByRole("button", {name: "Open Project 11111111"}));
   await screen.findByRole("heading", {name: "Project 11111111"});
-  const touch = screen.getByRole("region", {name: "Touch workspace"});
-  expect(within(touch).getByRole("button", {name: "Activate audio"})).toBeTruthy();
-  expect(within(screen.getByRole("region", {name: "Overview display"}))
-    .queryByRole("button", {name: "Activate audio"})).toBeNull();
+  expect(screen.queryByRole("button", {name: "Activate audio"})).toBeNull();
+  expect(screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"})
+    .hasAttribute("disabled")).toBe(false);
 });
 
-test("Activate audio is disabled unless the Host is parked at audio-suspended", async () => {
+test("a musical gesture only activates a Host parked at audio-suspended", async () => {
   const user = userEvent.setup();
   const value = sessionFixture("gate");
-  render(<App runtimeFactory={() => value.session} />);
+  let activations = 0;
+  activationStub.current = async () => { activations += 1; return false; };
+  try {
+    render(<App runtimeFactory={() => value.session} />);
+    await user.click(await screen.findByRole("button", {name: "Open Project 11111111"}));
+    await screen.findByRole("heading", {name: "Project 11111111"});
+    await user.keyboard("q");
+    expect(activations).toBe(1);
+    await act(async () => value.emit({state: "running", errorCode: null}));
+    await user.keyboard("q");
+    expect(activations).toBe(1);
+    await act(async () => value.emit({state: "interrupted", errorCode: null}));
+    await user.keyboard("q");
+    expect(activations).toBe(1);
+    await act(async () => value.emit({state: "recovering", errorCode: null}));
+    value.setRecoveryProbeReady(true);
+    await user.keyboard("q");
+    expect(activations).toBe(1);
+    await act(async () => value.emit({state: "audio-suspended", errorCode: null}));
+    await user.keyboard("q");
+    expect(activations).toBe(2);
+  } finally { activationStub.current = null; }
+});
 
-  await user.click(await screen.findByRole("button", {
-    name: "Open Project 11111111",
-  }));
-  await screen.findByRole("heading", {name: "Project 11111111"});
-  const activate = screen.getByRole("button", {name: "Activate audio"});
-  expect(activate.hasAttribute("disabled")).toBe(false);
-
-  await act(async () => value.emit({state: "running", errorCode: null}));
-  await screen.findByText("Audio running");
-  expect(activate.hasAttribute("disabled")).toBe(true);
-
-  await act(async () => value.emit({state: "interrupted", errorCode: null}));
-  // The surface still reads "Audio suspended", but the Host is interrupted,
-  // so an Activate gesture would be refused: the action stays disabled.
-  await screen.findByText("Audio suspended");
-  expect(activate.hasAttribute("disabled")).toBe(true);
-
-  await act(async () => value.emit({state: "recovering", errorCode: null}));
-  value.setRecoveryProbeReady(true);
-  await screen.findByText("Audio recovering");
-  expect(activate.hasAttribute("disabled")).toBe(true);
-
-  await act(async () => value.emit({state: "audio-suspended", errorCode: null}));
-  await screen.findByText("Audio suspended");
-  expect(activate.hasAttribute("disabled")).toBe(false);
+test("MIDI permission remains reachable when audio wake is refused", async () => {
+  const value = sessionFixture("midi-refusal");
+  const original = Object.getOwnPropertyDescriptor(navigator, "requestMIDIAccess");
+  let permissionRequests = 0;
+  Object.defineProperty(navigator, "requestMIDIAccess", {configurable: true,
+    value: async () => {permissionRequests += 1; return {inputs: new Map()};}});
+  activationStub.current = async () => false;
+  try {
+    render(<App runtimeFactory={() => value.session} />);
+    await userEvent.click(await screen.findByRole("button", {name: "Open Project 11111111"}));
+    await screen.findByRole("heading", {name: "Project 11111111"});
+    await userEvent.click(screen.getByRole("button", {name: "Enable MIDI"}));
+    await waitFor(() => expect(permissionRequests).toBe(1));
+    await waitFor(() => expect(screen.getByTestId("audio-state").textContent).toBe("Audio inactive"));
+    expect(screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"}).hasAttribute("disabled")).toBe(false);
+  } finally {
+    activationStub.current = null;
+    if (original) Object.defineProperty(navigator, "requestMIDIAccess", original);
+    else Reflect.deleteProperty(navigator, "requestMIDIAccess");
+  }
 });
 
 test("audio activation consumes only an explicit trusted gesture", async () => {
@@ -801,6 +825,7 @@ test("lifecycle matrix clears fresh loop toggles without duplicate Session stop 
   await waitFor(() => expect(
     value.calls.filter((call) => call === "sample:open"),
   ).toHaveLength(3));
+  await act(async () => value.emit({state: "running", errorCode: null}));
   fireEvent.keyDown(window, {code: "KeyQ", repeat: false});
   await waitFor(() => expect(triggerCount).toBe(8));
 

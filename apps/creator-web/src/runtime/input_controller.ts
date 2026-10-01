@@ -29,6 +29,8 @@ const SAMPLE_TRIGGER_MODES = new Set<SampleTriggerMode>([
   "loop_toggle",
 ]);
 interface PointerInput {
+  isTrusted?: boolean;
+  nativeEvent?: {isTrusted: boolean};
   type?: string;
   isPrimary?: boolean;
   button?: number;
@@ -39,6 +41,8 @@ interface PointerInput {
 }
 
 interface KeyboardInput {
+  isTrusted?: boolean;
+  nativeEvent?: {isTrusted: boolean};
   code?: string;
   repeat?: boolean;
   target?: EventTarget | null;
@@ -56,6 +60,8 @@ export type PerformancePadInputEvent = Extract<
 >;
 
 interface CreatorInputControllerCommonOptions {
+  onAdverseLifecycle?: () => void;
+  activateAudioForGesture?: (event: {isTrusted: boolean}) => Promise<boolean> | null;
   getActiveBank: () => Bank;
   dispatch: (action: CreatorAction) => void;
   requestMIDIAccess?: (options: {sysex: false}) => Promise<MidiAccessLike>;
@@ -159,6 +165,14 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   const performanceGestureIds = new Map<object, string>();
   let sampleTriggerTail: Promise<void> | null = null;
   let disposed = false;
+  let inputEvent: {isTrusted: boolean} | null = null;
+  let inputGeneration = 0;
+
+  function withInputEvent<T>(event: PointerInput | KeyboardInput, action: () => T): T {
+    const previous = inputEvent;
+    inputEvent = event.nativeEvent ?? {isTrusted: event.isTrusted === true};
+    try { return action(); } finally { inputEvent = previous; }
+  }
 
   const gesture = (source: RuntimeTriggerSource, slot: number) => `${source}:${slot}`;
 
@@ -586,6 +600,11 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     gestureKey: object,
   ) {
     const currentGesture = gesture(source, slot);
+    // Called synchronously by the adapter, while the native musical event is
+    // still active. Ignored keys and compatibility mouse events never get here.
+    const activation = inputEvent === null
+      ? null : options.activateAudioForGesture?.(inputEvent) ?? null;
+    const generation = inputGeneration;
     observePerformancePress(gestureKey, slot, velocity, source);
     const armedCaptureSlot = getArmedCaptureSlot();
     if (armedCaptureSlot === slot && onArmedCaptureStop !== undefined) {
@@ -594,7 +613,17 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     }
     if (sampleOptions === null) {
       activeGestures.add(currentGesture);
-      sessionTrigger(slot, velocity, source, currentGesture, null);
+      if (activation === null) {
+        sessionTrigger(slot, velocity, source, currentGesture, null);
+      } else {
+        void activation.then((ready) => {
+          if (!disposed && generation === inputGeneration && ready) {
+            return sessionTrigger(slot, velocity, source, currentGesture, null);
+          }
+        }).catch(() => {}).finally(() => {
+          if (generation === inputGeneration) activeGestures.delete(currentGesture);
+        });
+      }
       return;
     }
 
@@ -617,7 +646,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     const sampleToken: SampleGestureToken = {released: false};
     activeGestures.add(currentGesture);
     addSampleToken(currentGesture, sampleToken);
-    if (!sampleOptions.isRuntimeCurrent()) {
+    if (activation === null && !sampleOptions.isRuntimeCurrent()) {
       runtimeAgnosticGestures.add(currentGesture);
       sessionTrigger(
         slot,
@@ -638,8 +667,16 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
         return;
       }
       try {
+        if (activation !== null && !(await activation)) {
+          if (clearSampleAttempt(currentGesture, sampleToken)) {
+            dispatch({type: "pad-released", slot});
+          }
+          return;
+        }
+        if (disposed || generation !== inputGeneration ||
+            !hasSampleToken(currentGesture, sampleToken)) return;
         const inspect = await inspectSampleJourney(sampleOptions.session, slot);
-        if (disposed || !hasSampleToken(currentGesture, sampleToken)) {
+        if (disposed || generation !== inputGeneration || !hasSampleToken(currentGesture, sampleToken)) {
           return;
         }
         if (inspect.assetId === null) {
@@ -779,7 +816,9 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     ? () => {}
     : sampleOptions.session.subscribeVoiceState(observeVoiceState);
   const onBlur = () => clearAdversePressed();
-  const onKeyDown = (event: KeyboardEvent) => { keyboard.keyDown(event); };
+  const onKeyDown = (event: KeyboardEvent) => {
+    withInputEvent(event, () => keyboard.keyDown(event));
+  };
   const onKeyUp = (event: KeyboardEvent) => { keyboard.keyUp(event); };
   const onPointerUp = (event: PointerEvent) => { pointer.releasePointer(event); };
   const onPointerCancel = (event: PointerEvent) => { pointer.pointerCancel(event); };
@@ -823,6 +862,8 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   }
 
   function clearAdversePressed() {
+    inputGeneration += 1;
+    options.onAdverseLifecycle?.();
     activeGestures.clear();
     gestureModes.clear();
     sampleGestureTokens.clear();
@@ -864,9 +905,9 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
 
   return Object.freeze({
     pointerDown(event: PointerInput, slot: number) {
-      return event.type === "mousedown"
+      return withInputEvent(event, () => event.type === "mousedown"
         ? pointer.mouseDown(event, slot)
-        : pointer.pointerDown(event, slot);
+        : pointer.pointerDown(event, slot));
     },
     pointerUp(event: PointerInput, slot: number) {
       if (event.type === "mouseup") {
@@ -879,7 +920,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       return slot === undefined ? released : released || pointer.pointerUp(event, slot);
     },
     keyDown(event: KeyboardInput) {
-      return keyboard.keyDown(event);
+      return withInputEvent(event, () => keyboard.keyDown(event));
     },
     keyUp(event: KeyboardInput) {
       return keyboard.keyUp(event);
