@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync} from "node:fs";
+import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync, symlinkSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {execFileSync} from "node:child_process";
@@ -8,7 +8,9 @@ import {fileURLToPath} from "node:url";
 import {resolveOpfsWebkit} from "./opfs_browser_environment.mjs";
 
 function environment(t, installedVersion = "1.2.3") {
-  const root = mkdtempSync(join(tmpdir(), "lmdj-opfs-env-"));
+  // The resolver returns a canonical path; macOS tmpdir() is a symlink, so the
+  // fixture root must be canonical for its paths to compare equal.
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "lmdj-opfs-env-"));
   t.after(() => rmSync(root, {recursive: true, force: true}));
   const pkg = join(root, "tests/platform/web/opfs-browser");
   const module = join(pkg, "node_modules/playwright");
@@ -57,4 +59,19 @@ test("CLI resolves its repository independently of caller working directory", t 
   const env = {...process.env};
   delete env.LMDJ_WEBKIT_OPFS_EXECUTABLE;
   assert.equal(execFileSync(process.execPath, [script], {cwd: tmpdir(), env, encoding: "utf8"}).trim(), executable);
+});
+
+test("CLI prints the executable when invoked through a symlinked checkout", t => {
+  const {root, executable} = environment(t);
+  const folder = join(root, "tests/platform/web/project_io");
+  mkdirSync(folder, {recursive: true});
+  writeFileSync(join(folder, "opfs_browser_environment.mjs"),
+    readFileSync(fileURLToPath(new URL("./opfs_browser_environment.mjs", import.meta.url))));
+  const link = `${root}-link`;
+  symlinkSync(root, link);
+  t.after(() => rmSync(link, {force: true}));
+  const env = {...process.env};
+  delete env.LMDJ_WEBKIT_OPFS_EXECUTABLE;
+  const script = join(link, "tests/platform/web/project_io/opfs_browser_environment.mjs");
+  assert.equal(execFileSync(process.execPath, [script], {env, encoding: "utf8"}).trim(), executable);
 });
