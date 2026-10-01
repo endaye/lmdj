@@ -49,6 +49,7 @@ Measured with the Web build flags. Frames come from `em++ -O3 -fstack-usage`; hi
 - `tests/platform/web/project_io/project_io_web_conformance.spec.mjs`
 - `apps/docs-site/docs/core/modules/project-io.mdx`
 - `.agents/pitfalls/web-project-io-stack-scales-with-project-state.md` (absorbed by the gate)
+- `.agents/pitfalls/asan-macos-fork-child-stack-depot-boundary.md` (new; escalated to #1752)
 - `docs/plans/2026-10-01-project-io-web-stack.md`
 
 ## Verification
@@ -57,6 +58,10 @@ Measured with the Web build flags. Frames come from `em++ -O3 -fstack-usage`; hi
 - `scripts/web-toolchain-conformance.sh proof` with the gate active passes, and its reports give the high-water marks above.
 - Gate mutation proof: lowering the gate fraction to `0.3` made 9 conformance tests fail with the `why … remedy` message, and restoring `0.5` passes. The baseline high-water mark (175 624 B, above 131 072 B) is the failure the gate would have reported on `52747713`.
 - All batch-only lanes run locally on the committed head.
+- `core_macos` hit a test-harness hazard. With `TMPDIR=/private/tmp/lmdjt`, the fork-based crash tests `project_io.candidate_adoption` and `facade.candidate_store_recovery` lost their children to SIGKILL inside `fork()`.
+  - Cause: the heap allocation sites added here moved those binaries' ASan stack depot within a few ids of a growth boundary. libSystem's fork child handlers then allocate into a lock the child cannot own.
+  - Rates under the same `TMPDIR`: 0/16 on `main`, 11/16 on this head.
+  - Product code does not fork. The owner chose to run `core_macos` under the macOS default `TMPDIR`, which `ci.yml` leaves unset as well, and to fix the hazard in #1752 (pitfall `asan-macos-fork-child-stack-depot-boundary`).
 
 ## Version Management
 
