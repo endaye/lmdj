@@ -437,6 +437,52 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
 // seals it as owner_lost (#1367). No terminal transfer can arrive any more, so
 // Apply recovers the heard take into the Pattern (#1515), and a fresh
 // recording then opens a new journal.
+test("reopening after owner loss asks once and keeps the heard take", async ({page, browserName}) => {
+  // #1680: the reopen prompt over the same recovery candidate the Sequence
+  // list shows; Keep restores it to its original Pattern.
+  test.skip(browserName !== "chromium");
+  test.setTimeout(240_000);
+  await installTransportProofRecorder(page);
+  await page.goto("/index.html");
+  await importProject(page);
+  const imported = await inspectTruth(page);
+  await enterSequenceAndPlay(page);
+  const patternId = await page.getByRole("combobox", {name: "Pattern"}).inputValue();
+  await recordKey(page).click();
+  await transportStatus(page, "recording");
+  await page.keyboard.press("KeyQ");
+  await awaitAdmittedPresses(page, 1);
+
+  await reopenProject(page);
+  const prompt = page.getByRole("region", {name: "Interrupted recording"});
+  await expect(prompt).toContainText("A recording stopped before it was saved (1 in Sequence)",
+    {timeout: 60_000});
+  const lostTruth = await inspectTruth(page);
+  expect(lostTruth.revision).toBe(imported.revision);
+  expect(lostTruth.patterns[patternId].events).toHaveLength(0);
+
+  await prompt.getByRole("button", {name: "Keep recording"}).click();
+  await expect(prompt).toContainText("The interrupted recording is back in this Project.",
+    {timeout: 60_000});
+  const kept = await inspectTruth(page);
+  expect(kept.revision).toBe(imported.revision + 1);
+  expect(kept.patterns[patternId].events).toHaveLength(1);
+  expect(kept.patterns[patternId].events[0])
+    .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100, duration_tick: 240});
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await expect(page.getByRole("region", {name: "Sequence recovery"})).toHaveCount(0);
+
+  // Nothing is left to ask about, and the kept take is persisted.
+  await reopenProject(page);
+  expect(await inspectTruth(page)).toEqual(kept);
+  const remaining = await page.evaluate(() => window.lmdjWebRuntimeHost.transport.send({
+    protocol_version: 1, request_id: crypto.randomUUID(),
+    operation: "sequence.recovery.list", payload: {},
+  }));
+  expect(remaining).toMatchObject({ok: true, result: {candidates: []}});
+  await expect(page.getByRole("region", {name: "Interrupted recording"})).toHaveCount(0);
+});
+
 test("owner loss surfaces the interrupted recording and recovers the heard take", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(240_000);
