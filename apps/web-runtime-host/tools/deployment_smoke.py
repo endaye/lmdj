@@ -492,8 +492,10 @@ def _creator_required_roles(host_version: str) -> frozenset[str]:
     major, _, _ = host_version.partition(".")
     if not major.isdigit():
         raise SmokeError("Host version is invalid")
+    if int(major) >= 5:
+        return _ASSET_ROLES.CREATOR_OFFLINE_ASSET_ROLES
     if int(major) >= 3:
-        return CREATOR_CURRENT_ASSET_ROLES
+        return _ASSET_ROLES.CREATOR_PRE_OFFLINE_ASSET_ROLES
     return CREATOR_LEGACY_ASSET_ROLES
 
 

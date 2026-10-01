@@ -11,6 +11,7 @@ import {WEB_RUNTIME_IDENTITY} from
   "../../../products/lmdj/generated/web-runtime-identity.mjs";
 
 import {App} from "./app";
+import {registerOfflineShell} from "./runtime/offline_shell";
 import {
   announceBuildIdentity,
   creatorBuildIdentity,
@@ -118,3 +119,8 @@ createRoot(root).render(
     buildIdentity={buildIdentity}
   />,
 );
+
+void registerOfflineShell(document, navigator, crypto, window.fetch.bind(window), phase => {
+  Object.defineProperty(window, "__LMDJ_OFFLINE_SHELL__", {value: phase, configurable: true});
+  window.dispatchEvent(new CustomEvent("lmdj-offline-shell", {detail: phase}));
+});
