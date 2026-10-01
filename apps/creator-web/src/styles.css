@@ -1208,6 +1208,18 @@ button:disabled { color: #737b87; }
   stroke-width: 2px;
   vector-effect: non-scaling-stroke;
 }
+.sequence-metronome {
+  min-height: 44px;
+  border-radius: 8px;
+  background: #343a34;
+  color: #f1f2e9;
+  border: 0;
+  letter-spacing: .06em;
+}
+.sequence-metronome[aria-pressed="true"] {
+  background: #ddf478;
+  color: #202321;
+}
 .hardware-workspace .sequence-touch-workspace h1 { font-size: 16px; }
 
 /* D04 Perform. The pictured MASTER fader, LP/HP/BP filter type, MUTE/SOLO and

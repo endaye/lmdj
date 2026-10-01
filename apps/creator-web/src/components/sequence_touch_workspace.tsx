@@ -36,6 +36,8 @@ interface SequenceTouchWorkspaceProps {
   // True while the projection is being re-read from Truth after a commit; the
   // grid's model can be behind Truth in that window, so no gesture starts.
   projectionRefreshing: boolean;
+  metronomeOn: boolean;
+  onToggleMetronome(): void;
   showRefresh?: boolean;
   onRefresh(): void;
   onSwitch(patternId: string): void;
@@ -219,6 +221,14 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
                 quantizeEnabled: event.currentTarget.checked,
               })} />
           </label>
+          {/* The metronome is a monitoring switch, not a Transport setting:
+              it must stay toggleable while recording. */}
+          <button type="button" className="sequence-metronome"
+            aria-label="Metronome"
+            aria-pressed={props.metronomeOn}
+            onClick={props.onToggleMetronome}>
+            METRONOME
+          </button>
           <button type="submit" aria-label="Create Pattern"
             disabled={disabled || selectTransportPlaying(transport)}>
             + NEW
