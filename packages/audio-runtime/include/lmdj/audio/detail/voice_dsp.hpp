@@ -13,7 +13,8 @@
 // renderer's original path, which is why default output is unchanged.
 //
 // Everything here is noexcept, allocation-free and lock-free. Positions are
-// Q32.32 frames; nothing uses double on the audio thread.
+// Q32.32 frames and the per-frame functions use no double; prepare_voice_dsp
+// derives the pitch step in double once per trigger, on the audio thread.
 namespace lmdj::audio::detail {
 
 inline constexpr std::uint32_t kVoiceDspRampFrames = 96;
