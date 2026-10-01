@@ -65,7 +65,7 @@ interface CreatorInputControllerCommonOptions {
   onAdverseLifecycle?: () => void;
   canUsePad?: (slot: number) => boolean;
   onEmptyPadPress?: (slot: number, key: object, source: RuntimeTriggerSource,
-    activation: Promise<boolean> | null) => boolean;
+    activation: Promise<boolean> | null, waitForActivation: boolean) => boolean;
   onEmptyPadRelease?: (key: object) => void;
   onEmptyPadCancel?: () => void;
   activateAudioForGesture?: (event: {isTrusted: boolean}) => Promise<boolean> | null;
@@ -682,7 +682,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     }
     if (stopAcceptedLoopToggle(slot)) return;
     if (!sampleOptions.isAssigned(slot)) {
-      if (options.onEmptyPadPress?.(slot, gestureKey, source, activation)) {
+      if (options.onEmptyPadPress?.(slot, gestureKey, source, activation, deferTouchWake)) {
         captureGestures.add(gestureKey);
         dispatch({type: "pad-pressed", slot, outcome: "admitted"});
         return;
