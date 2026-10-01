@@ -543,8 +543,31 @@ def real_http_verification():
     return verify
 
 
-def real_browser(host, diagnostics, *, timeout=900):
-    """The Host's existing Playwright deployment spec, against one base URL."""
+def release_browser_root(path, tag):
+    """A checkout of the deployed tag's own target, for its browser smoke.
+
+    The deployment spec belongs to the release being deployed: main's copy can
+    expect behaviour the release predates. The checkout must sit exactly on
+    the commit the signed tag names, or it is refused.
+    """
+    path = Path(path)
+    if not path.is_absolute() or not path.is_dir():
+        raise CloudflareDeployError("the release browser root is not an absolute directory")
+
+    def revision(*arguments):
+        result = subprocess.run(["git", *arguments], capture_output=True, text=True,
+                                check=False, timeout=60)
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    target = revision("-C", str(ROOT), "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}")
+    head = revision("-C", str(path), "rev-parse", "--verify", "HEAD^{commit}")
+    if target is None or head != target:
+        raise CloudflareDeployError("the release browser root is not the deployed tag's target")
+    return path
+
+
+def real_browser(host, diagnostics, *, timeout=900, root=ROOT):
+    """The Host's Playwright deployment spec from `root`, against one base URL."""
     project, spec, prefix = BROWSER[host]
 
     def check(url, product_build, host_version):
@@ -558,10 +581,10 @@ def real_browser(host, diagnostics, *, timeout=900):
         result = _completed(
             # --silent: npm's run banner shares stdout with the JSON report,
             # and a banner-prefixed report is not parseable.
-            ["npm", "--silent", "--prefix", str(ROOT / "tests/platform/web"),
+            ["npm", "--silent", "--prefix", str(root / "tests/platform/web"),
              "test", "--",
              f"--project={project}", "--reporter=json", spec],
-            cwd=ROOT, timeout=timeout, environment=environment)
+            cwd=root, timeout=timeout, environment=environment)
         if result.returncode or not _browser_ran(result.stdout):
             path = _diagnostic(diagnostics,
                                _log_name("browser", urlsplit(url).hostname),
@@ -619,6 +642,9 @@ def main(argv=None):
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--node", required=True)
     parser.add_argument("--wrangler", required=True)
+    parser.add_argument(
+        "--browser-root", type=Path,
+        help="checkout of the deployed tag's target whose deployment spec runs")
     arguments = parser.parse_args(argv)
     # Beside this run's own state, not beside the evidence: a failed run must
     # not create anything at or around the output path a caller checks for.
@@ -631,13 +657,15 @@ def main(argv=None):
             # A mistyped root should be refused, not conjured by a failure path
             # and then shared by nothing.
             raise CloudflareDeployError("state root does not exist")
+        browser_root = (ROOT if arguments.browser_root is None
+                        else release_browser_root(arguments.browser_root, arguments.tag))
         written = deploy(
             host=arguments.target, tag=arguments.tag, run_id=arguments.run_id,
             state_root=arguments.state_root, output=arguments.output,
             node=arguments.node, wrangler=arguments.wrangler,
             adapter=real_adapter(diagnostics),
             verify_http=real_http_verification(),
-            browser=real_browser(arguments.target, diagnostics),
+            browser=real_browser(arguments.target, diagnostics, root=browser_root),
             read_site=real_site_reader(), clock=_clock)
     except CloudflareDeployError as error:
         print(str(error), file=sys.stderr)

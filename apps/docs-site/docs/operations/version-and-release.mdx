@@ -777,6 +777,13 @@ Creator Host 的部署 job 同构切换，目标 `https://creator.lmdj.workers.d
 Host 部署证据文档的第 2 版；两个 Host 共用同一个受管 adapter 与同一条序列，只在 target、
 Worker 与浏览器 spec 上不同。生产路径上不再有任何 Netlify API 调用或 `*.netlify.app` URL，
 两个 workflow 的契约测试各自钉住这一点；Netlify 源码作为历史工具的退役见 #1473。
+
+浏览器腿运行的是**被部署 tag 自己的**部署 spec：部署 job 把签名 tag 指向的精确 commit
+检出到 `$RUNNER_TEMP/release-source`，在那里安装浏览器依赖，并以 `--browser-root` 交给
+adapter；adapter 拒绝任何不在该 tag target 上的检出。部署工具、凭据与浏览器环境变量
+白名单仍来自受保护 main。发版总是在 main 继续前进之后部署，main 上的 spec 可能期望该
+Release 尚不具备的行为（例如 #1711 之后 Creator 启动即打开 Project），用它判定旧 Release
+会把正确的产物误判为失败。
 Core Release 的资产集自 2026-08-24 起为四资产（#286）：除 ZIP、checksum 和受信
 signature 外，`build-manifest.json` 不再打进归档，而是作为并列 detached 资产
 `<archive-stem>.build-manifest.json` 发布（决策

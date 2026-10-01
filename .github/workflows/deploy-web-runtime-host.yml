@@ -156,14 +156,27 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/host-wrangler-$GITHUB_RUN_ID" \
             --no-audit --no-fund wrangler@4.129.1
 
+      - name: Check out the release's own browser smoke tests
+        timeout-minutes: 1
+        shell: bash
+        env:
+          LMDJ_RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # The smoke judges the deployed release by that release's own tests.
+          # main's tests can expect behaviour the release predates (#1711),
+          # and the deploy tooling itself still runs from protected main.
+          target="$(git rev-parse --verify "refs/tags/$LMDJ_RELEASE_TAG^{commit}")"
+          git worktree add --detach "$RUNNER_TEMP/release-source" "$target"
+
       - name: Install browser smoke dependencies
         timeout-minutes: 5
-        working-directory: tests/platform/web
+        working-directory: ${{ runner.temp }}/release-source/tests/platform/web
         run: npm ci
 
       - name: Install Chromium
         timeout-minutes: 10
-        working-directory: tests/platform/web
+        working-directory: ${{ runner.temp }}/release-source/tests/platform/web
         run: npx --no-install playwright install --with-deps chromium
 
       - name: Deploy signed Runtime Host release to Cloudflare
@@ -189,6 +202,7 @@ jobs:
               --state-root "$state" \
               --output build/deploy/web-runtime-host/evidence.json \
               --run-id "$GITHUB_RUN_ID" \
+              --browser-root "$RUNNER_TEMP/release-source" \
               --node "$LMDJ_UPLOAD_NODE" \
               --wrangler "$RUNNER_TEMP/host-wrangler-$GITHUB_RUN_ID/node_modules/wrangler/bin/wrangler.js" \
             2>&1 | tee build/deploy/web-runtime-host/deployment.log
