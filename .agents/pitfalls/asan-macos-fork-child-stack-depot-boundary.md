@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-10-01
     occurrence: https://github.com/endaye/lmdj/pull/1749
     observed_by: Claude Opus 5.5
+  - date: 2026-10-01
+    occurrence: https://github.com/endaye/lmdj/pull/1756
+    observed_by: Claude Opus 5.5
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/1752
 ---
@@ -31,4 +34,6 @@ Whether a binary sits in that window depends on how many allocation call sites t
   - do not treat the failure as a product defect.
 - **Record it.** Add the recurrence here, state the `TMPDIR` the `core_macos` evidence ran under, and link #1752.
 
-The exit is #1752: the crash children re-exec the test binary instead of continuing after a bare `fork()`, and a deterministic source check keeps new bare forks out. No eligible mechanism exists until then, because no test-side call can tell how close the depot is to its next boundary.
+Second recurrence (#1756). The child died in the same place: `libSystem_atfork_child` → `_objc_atfork_child` → `free` → ASan `StackDepot` `TwoLevelMap::Create`. It happened under `TMPDIR=/private/tmp/lmdjt`, in a PR that changes no allocation site. `lmdj_project_io_candidate_adoption_tests` links only Project I/O, so its binary is the one `main` builds since #1749. So a fork-child SIGKILL in `core_macos` says nothing about the PR under test, only about where the depot count landed in that build.
+
+The exit is [#1752](https://github.com/endaye/lmdj/issues/1752), its escalation Issue: the crash children re-exec the test binary instead of continuing after a bare `fork()`, and a deterministic source check keeps new bare forks out. No eligible mechanism exists until then, because no test-side call can tell how close the depot is to its next boundary.
