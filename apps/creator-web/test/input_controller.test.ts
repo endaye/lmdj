@@ -461,15 +461,16 @@ describe("Creator input controller", () => {
     value.controller.dispose();
   });
 
-  test("a released touch plays while an earlier touch remains held", async () => {
+  test("a released primary pen plays while a primary touch remains held", async () => {
     let wakes = 0;
     const value = sampleFixture({audioState: "audio-suspended",
       activateAudioForGesture: async () => {wakes++; return true;}});
     const event = {type: "pointerdown", pointerType: "touch", pointerId: 18,
       isPrimary: true, button: 0, isTrusted: true};
     value.controller.pointerDown(event, 0);
-    value.controller.pointerDown({...event, pointerId: 19}, 1);
-    value.controller.pointerUp({...event, type: "pointerup", pointerId: 19}, 1);
+    const pen = {...event, pointerType: "pen", pointerId: 19};
+    value.controller.pointerDown(pen, 1);
+    value.controller.pointerUp({...pen, type: "pointerup"}, 1);
     await settle();
     expect(wakes).toBe(1);
     expect(value.triggers.map(trigger => trigger.slot)).toEqual([1]);
@@ -502,7 +503,7 @@ describe("Creator input controller", () => {
     value.controller.dispose();
   });
 
-  test("two cold touch releases on the same gate Pad do not admit a late voice", async () => {
+  test("cold touch and pen releases on the same gate Pad do not admit a late voice", async () => {
     let wakes = 0;
     const value = sampleFixture({audioState: "audio-suspended",
       activateAudioForGesture: async () => {wakes++; return true;},
@@ -510,26 +511,28 @@ describe("Creator input controller", () => {
     const event = {type: "pointerdown", pointerType: "touch", pointerId: 18,
       isPrimary: true, button: 0, isTrusted: true};
     value.controller.pointerDown(event, 0);
-    value.controller.pointerDown({...event, pointerId: 19}, 0);
+    const pen = {...event, pointerType: "pen", pointerId: 19};
+    value.controller.pointerDown(pen, 0);
     value.controller.pointerUp({...event, type: "pointerup"}, 0);
-    value.controller.pointerUp({...event, type: "pointerup", pointerId: 19}, 0);
+    value.controller.pointerUp({...pen, type: "pointerup"}, 0);
     await settle();
     expect(wakes).toBe(2);
     expect(value.triggers).toEqual([]);
     value.controller.dispose();
   });
 
-  test("cancelled touch cannot steal another touch's audio wake on the same Pad", async () => {
+  test("cancelled primary pen cannot steal a primary touch's audio wake on the same Pad", async () => {
     let wakes = 0;
     const value = sampleFixture({audioState: "audio-suspended",
       activateAudioForGesture: async () => {wakes++; return true;}});
     const event = {type: "pointerdown", pointerType: "touch", pointerId: 18,
       isPrimary: true, button: 0, isTrusted: true};
     value.controller.pointerDown(event, 0);
-    value.controller.pointerDown({...event, pointerId: 19}, 0);
-    value.controller.pointerCancel({...event, type: "pointercancel", pointerId: 19}, 0);
+    const pen = {...event, pointerType: "pen", pointerId: 19};
+    value.controller.pointerDown(pen, 0);
+    value.controller.pointerCancel({...pen, type: "pointercancel"}, 0);
     value.controller.pointerUp({...event, type: "pointerup"}, 0);
-    value.controller.pointerUp({...event, type: "pointerup", pointerId: 19}, 0);
+    value.controller.pointerUp({...pen, type: "pointerup"}, 0);
     await settle();
     expect(wakes).toBe(1);
     expect(value.triggers).toHaveLength(1);
