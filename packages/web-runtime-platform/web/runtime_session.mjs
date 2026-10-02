@@ -482,7 +482,15 @@ function normalizePlayback(value) {
       : PLAYBACK_PARITY_DEFAULTS[field];
   }
   const eq = Object.hasOwn(value, "eq") ? value.eq : {};
-  if (!hasFields(eq, [], ["low", "mid", "high"])) {
+  // Each present band has exactly its own keys; a null or extended band is
+  // a protocol mismatch, never silently trimmed.
+  const bandKeys = {
+    low: ["kind", "freq_hz", "gain_millidb"],
+    mid: ["freq_hz", "gain_millidb", "q_milli"],
+    high: ["kind", "freq_hz", "gain_millidb"],
+  };
+  if (!hasFields(eq, [], ["low", "mid", "high"]) ||
+    Object.entries(eq).some(([band, encoded]) => !hasFields(encoded, bandKeys[band], []))) {
     throw protocolMismatch("Sample playback result is invalid");
   }
   session.eq = Object.freeze({

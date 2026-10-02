@@ -3034,6 +3034,35 @@ test("Sample playback crosses the session in both directions as the shared fixtu
   );
 });
 
+// Review of #1799: an inspect result whose EQ band is null or carries an extra
+// key is a protocol mismatch, not a silently trimmed band.
+test("Sample inspect refuses a malformed EQ band", async () => {
+  for (const eq of [
+    {...PAD_PLAYBACK_FULL.tone.eq, low: null},
+    {...PAD_PLAYBACK_FULL.tone.eq, mid: {...PAD_PLAYBACK_FULL.tone.eq.mid, kind: "shelf"}},
+  ]) {
+    const {session} = fixture({
+      send: async (envelope) => {
+        if (envelope.operation === "sample.inspect") {
+          return success(envelope, {
+            project_revision: 7,
+            slot: {bank: 0, pad: 0},
+            asset_id: "11111111-1111-4111-8111-111111111111",
+            playback: {...PAD_PLAYBACK_FULL.tone, eq},
+            metadata: {sample_rate: 48_000, channels: 1, source_frames: 8},
+            waveform_cache_identity: `${"a".repeat(64)}/1/max-abs-mirror/1`,
+          });
+        }
+        return success(envelope, defaultResult(envelope.operation));
+      },
+    });
+    await session.start();
+    await assert.rejects(session.inspectSample(0), (error) =>
+      error.code === "HOST_PROTOCOL_MISMATCH" &&
+      error.message === "Sample playback result is invalid");
+  }
+});
+
 // lmdj.project.v5 5.2.0: every tone field is range-checked before it reaches
 // the wire, and the EQ object always names all three bands.
 test("Sample playback refuses out-of-range tone parity fields", async () => {

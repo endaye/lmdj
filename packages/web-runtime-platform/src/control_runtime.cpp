@@ -181,6 +181,11 @@ std::int32_t signed_field(
     std::int32_t maximum) {
   const auto& field = value.at(std::string(key));
   require(field.is_number_integer());
+  // An unsigned number above INT64_MAX would wrap in get<std::int64_t>() and
+  // could land back in range, so it is refused by its own magnitude first.
+  require(!field.is_number_unsigned() ||
+          field.get<std::uint64_t>() <=
+              static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()));
   const auto result = field.get<std::int64_t>();
   require(result >= minimum && result <= maximum);
   return static_cast<std::int32_t>(result);

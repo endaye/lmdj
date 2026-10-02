@@ -3039,6 +3039,13 @@ void test_sample_parity_playback_crosses_the_fixed_control_wire() {
   invalid_tone[4]["eq"]["low"]["kind"] = "bell";
   invalid_tone[5]["eq"]["high"]["freq_hz"] = 999;
   invalid_tone[6]["eq"]["mid"]["q_milli"] = 10'001;
+  // Review of #1799: unsigned values above INT64_MAX that would wrap to -50
+  // and -600 if read as int64.
+  invalid_tone.push_back(tone);
+  invalid_tone.back()["tone"] = std::uint64_t{18'446'744'073'709'551'566ULL};
+  invalid_tone.push_back(tone);
+  invalid_tone.back()["eq"]["mid"]["gain_millidb"] =
+      std::uint64_t{18'446'744'073'709'551'016ULL};
   for (const auto& invalid : invalid_tone) {
     check_error(update(invalid), "HOST_PROTOCOL_MISMATCH");
   }
