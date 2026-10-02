@@ -60,6 +60,18 @@ inline std::vector<VoiceDspNeutralityCase> voice_dsp_neutrality_cases() {
        44'100, false},
       {"attack", with([](PadPlayback& p) { p.attack_ms = 1; }), 44'100, false},
       {"release", with([](PadPlayback& p) { p.release_ms = 1; }), 44'100, false},
+      // The extremes Project Truth admits: each still resolves, and no
+      // conversion to frames or narrower fields wraps to zero.
+      {"longest attack", with([](PadPlayback& p) { p.attack_ms = 2'000; }), 44'100,
+       false},
+      {"longest release", with([](PadPlayback& p) { p.release_ms = 4'000; }), 44'100,
+       false},
+      {"lowest pitch", with([](PadPlayback& p) { p.pitch_cents = -2'400; }), 44'100,
+       false},
+      {"highest pitch", with([](PadPlayback& p) { p.pitch_cents = 2'400; }), 44'100,
+       false},
+      {"hard left", with([](PadPlayback& p) { p.pan = -100; }), 44'100, false},
+      {"lowest tone", with([](PadPlayback& p) { p.tone = -100; }), 44'100, false},
       {"tone below the deadband", with([](PadPlayback& p) { p.tone = -3; }), 44'100,
        false},
       {"tone above the deadband", with([](PadPlayback& p) { p.tone = 3; }), 44'100,
