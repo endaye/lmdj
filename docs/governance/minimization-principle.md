@@ -69,7 +69,9 @@ the defect. Three habits follow:
   test is load-bearing only if the run used the code under proof. Restore a
   perturbed file with `git checkout --`, or follow any other restore with
   `touch`, so the build sees it as newer than its products; clear matching
-  `__pycache__`. Read the rebuild's exit status instead of discarding its
+  `__pycache__`. Newer means strictly: a build that compares whole seconds
+  skips a restore stamped in the mutant's second, so wait at least a second
+  first and confirm the rebuild compiled the restored file. Read the rebuild's exit status instead of discarding its
   output, and confirm the failure line sits inside the test under proof. A
   failure anywhere else means a stale binary, not a second defect; see
   [`revert-proof-rebuild-skipped`](../../.agents/pitfalls/revert-proof-rebuild-skipped.md).

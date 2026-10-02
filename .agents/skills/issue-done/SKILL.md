@@ -58,7 +58,11 @@ Before starting the shipping pipeline:
    "fixed" run still fails — or worse, the "broken" run passes against stale
    artifacts and a proof that proves nothing enters the report. If a
    snapshot restore is unavoidable, follow it with `touch` on the restored
-   files and clear the matching `__pycache__`. Never send a proof rebuild to
+   files and clear the matching `__pycache__`. A fresh mtime must also be
+   strictly newer than the mutant's build products. GNU Make 3.81 on macOS
+   compares whole seconds, so a restore written in the same second as the
+   mutant's compile is skipped. Wait at least one second before the restore,
+   and confirm the rebuild log compiles the restored file. Never send a proof rebuild to
    `/dev/null`: capture its exit status and read it. Confirm the observed
    failure line sits inside the test under proof; a failure at a line the
    current `main()` no longer calls means a stale artifact, not a second
