@@ -13,6 +13,7 @@
 - `tests/core/provider/attempt_output_read_test.cpp`
 - `tests/core/provider/execution_crash_test.cpp`
 - `tests/core/provider/callback_stress_test.cpp`
+- `.agents/pitfalls/batch-key-omits-executed-host-test.md`（实测的 lane 输入遗漏；本 Task 不修改 CI 控制面）
 - 本施工单 `docs/plans/2026-10-03-provider-shared-output-bindings.md`
 
 复用现有物理文件去重、锁、独立输出 buffer/lease 和逐 binding validator；
