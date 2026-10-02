@@ -17,6 +17,20 @@ import type {EncoderPosition} from "./hardware_icons";
 
 const ENCODER_POSITIONS: readonly EncoderPosition[] = [1, 2, 3, 4];
 
+// Session-history chord on the direction row, EP-133 style: SHIFT is the
+// modifier, ← / → step back/forward through authoring history, and each key's
+// lamp lights while its direction is available instead of greying a button.
+export interface RailHistoryChord {
+  shifted: boolean;
+  onToggleShift: () => void;
+  undoAvailable: boolean;
+  redoAvailable: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  undoTitle: string;
+  redoTitle: string;
+}
+
 interface PhysicalControlsProps {
   activeMode: CreatorMode;
   activeBank: Bank;
@@ -30,32 +44,43 @@ interface PhysicalControlsProps {
   onPlayStop?: (event: MouseEvent<HTMLButtonElement>) => void;
   playEnabled?: boolean;
   playing?: boolean;
+  history?: RailHistoryChord;
 }
 
 interface PhysicalKeyProps {
   label: string;
   ariaLabel?: string;
+  className?: string;
   current?: boolean;
   disabled?: boolean;
   icon?: ReactNode;
+  lit?: boolean;
+  pressed?: boolean;
+  title?: string;
   onClick?: (event: MouseEvent<HTMLButtonElement>) => void;
 }
 
 function PhysicalKey({
   label,
   ariaLabel,
+  className = "",
   current = false,
   disabled = false,
   icon,
+  lit = false,
+  pressed,
+  title,
   onClick,
 }: PhysicalKeyProps) {
   return (
     <button
       type="button"
-      className={`physical-key${current ? " is-active" : ""}${icon === undefined ? "" : " has-icon"}`}
+      className={`physical-key${className}${current ? " is-active" : ""}${lit ? " is-lit" : ""}${icon === undefined ? "" : " has-icon"}`}
       aria-current={current ? "page" : undefined}
+      {...(pressed === undefined ? {} : {"aria-pressed": pressed})}
       aria-label={ariaLabel ?? label}
       disabled={disabled}
+      {...(title === undefined ? {} : {title})}
       {...(onClick === undefined ? {} : {onClick})}
     >
       {icon === undefined ? label : icon}
@@ -85,6 +110,7 @@ export function PhysicalControls({
   onPlayStop,
   playEnabled = false,
   playing = false,
+  history,
 }: PhysicalControlsProps) {
   return (
     <div className="physical-controls">
@@ -144,12 +170,32 @@ export function PhysicalControls({
             onClick={() => onSelectBank(bank as Bank)}
           />
         ))}
-        <PhysicalKey label="−" ariaLabel="Decrease — unassigned until encoder mapping is approved" disabled />
-        <PhysicalKey label="+" ariaLabel="Increase — unassigned until encoder mapping is approved" disabled />
         <PhysicalKey label="↑" ariaLabel="Up — unassigned until direction mapping is approved" disabled />
         <PhysicalKey label="↓" ariaLabel="Down — unassigned until direction mapping is approved" disabled />
-        <PhysicalKey label="←" ariaLabel="Left — unassigned until direction mapping is approved" disabled />
-        <PhysicalKey label="→" ariaLabel="Right — unassigned until direction mapping is approved" disabled />
+        <PhysicalKey
+          label="←"
+          ariaLabel="Undo — SHIFT + ←"
+          lit={history?.undoAvailable ?? false}
+          disabled={history === undefined || !(history.shifted && history.undoAvailable)}
+          {...(history === undefined ? {} : {title: history.undoTitle, onClick: history.onUndo})}
+        />
+        <PhysicalKey
+          label="→"
+          ariaLabel="Redo — SHIFT + →"
+          lit={history?.redoAvailable ?? false}
+          disabled={history === undefined || !(history.shifted && history.redoAvailable)}
+          {...(history === undefined ? {} : {title: history.redoTitle, onClick: history.onRedo})}
+        />
+        <PhysicalKey
+          label="SHIFT"
+          className=" is-shift"
+          ariaLabel={history === undefined
+            ? "SHIFT — history layer unavailable"
+            : "SHIFT — engage the Undo/Redo layer"}
+          pressed={history?.shifted ?? false}
+          disabled={history === undefined}
+          {...(history === undefined ? {} : {onClick: history.onToggleShift})}
+        />
         <PhysicalKey
           label="●"
           icon={<RecordIcon />}

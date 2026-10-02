@@ -217,10 +217,16 @@ Pad，重复目标被拒绝。采用以当前 revision 和新命令提交一次�
 
 ## Project Undo and Redo
 
-The global history controls are shared by Sample, Sequence and Perform. They show
-the next action and explain disabled states, including unfinished recording, import,
-recovery and Pattern playback. One drag commits at its existing gesture boundary.
-The toolbar requests Facade history; it keeps no Project snapshot or audio copy.
+The global history controls are shared by Sample, Sequence and Perform. They
+live on the rail as a shifted chord, not as a software toolbar: the full-width
+SHIFT key above the record/play row engages the modifier, ← / → step back and
+forward through the session, and each direction key's lamp lights while its
+direction is available instead of showing a greyed button pair. Desktop parity
+adds Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z, leaving native text undo to editable
+fields. The chord explains disabled states, including unfinished recording,
+import, recovery and Pattern playback. One drag commits at its existing
+gesture boundary.
+The rail requests Facade history; it keeps no Project snapshot or audio copy.
 A failed request retains its exact identity for an explicit retry, and successful
 restoration refreshes the current Project, Pattern and Sample projections.
 
@@ -369,3 +375,5 @@ that fails is recorded in Developer diagnostics with its code and details.
 Creator keeps a single set of accepted public codes, so a code accepted at one
 boundary is never rejected at the next. Candidate, Sound Set, Perform and Undo
 history messages move to the catalogue in the last step of #1680.
+
+P1 预览被播放音频暂停拒绝时，下一步提示为先演奏 Pad 启动音频，再重试预览；没有单独的音频激活按钮。
