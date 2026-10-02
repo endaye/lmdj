@@ -555,6 +555,36 @@ void phase_retired_generations_stop_with_transport_and_true_switch() {
   }
 }
 
+// #1789: editing a Pad during a Performance replay stops only its live voice.
+// The replay's press and the Pattern voices it launched keep sounding.
+void live_pad_stop_keeps_replay_and_pattern_voices() {
+  using namespace lmdj::audio;
+  PatternTransportFixture f(ramped_pattern_snapshot());
+  fill_sustained_pattern_pool(f);
+  std::array<float, 128> sample{};
+  sample.fill(0.25F);
+  LMDJ_CHECK(f.engine.publish_sample_bank(bank_with_playback(
+      2, sample, {0, 128, TriggerMode::loop_gate, 1.0F, false})) == PublishResult::accepted);
+  render_frames(f.engine, 1);
+  std::array<std::int16_t, 128> replay_pcm{};
+  replay_pcm.fill(12'000);
+  const PadControlEvent live{50, 0, 127, PadControlKind::press,
+      {0, 128, TriggerMode::loop_gate, 1.0F, false}};
+  PadControlEvent replayed{51, 0, 127, PadControlKind::press,
+      {0, 128, TriggerMode::loop_gate, 1.0F, false}, PadControlOrigin::performance_replay};
+  replayed.duration_frames = 4096;
+  replayed.material = {replay_pcm.data(), 128, 1};
+  LMDJ_CHECK(f.engine.enqueue_control(live) == EnqueueResult::accepted);
+  LMDJ_CHECK(f.engine.enqueue_control(replayed) == EnqueueResult::accepted);
+  render_frames(f.engine, 128);
+  // Four sustained Pattern voices on Pad 0, plus the live and replay presses.
+  LMDJ_CHECK(f.engine.telemetry().active_voices == 6);
+  LMDJ_CHECK(f.engine.enqueue_control(
+      {52, 0, 0, PadControlKind::stop_slot_live, {}}) == EnqueueResult::accepted);
+  render_frames(f.engine, 128);
+  LMDJ_CHECK(f.engine.telemetry().active_voices == 5);
+}
+
 void phase_stop_preserves_live_and_replay_after_multiple_overlays() {
   using namespace lmdj::audio;
   for (const auto origin : {PadControlOrigin::host_input, PadControlOrigin::performance_replay}) {
@@ -5431,6 +5461,7 @@ int main() {
   phase_pool_exhaustion_preserves_samples_and_retries_after_release();
   phase_retired_generations_stop_with_transport_and_true_switch();
   phase_stop_preserves_live_and_replay_after_multiple_overlays();
+  live_pad_stop_keeps_replay_and_pattern_voices();
   phase_late_claim_uses_actual_frame_relative_to_nonzero_origin();
   bank_generation_precedes_admission_readiness();
   audition_start_uses_latest_publication_before_first_callback();

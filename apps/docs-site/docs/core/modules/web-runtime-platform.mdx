@@ -187,3 +187,36 @@ committed revision with `"failed"` and `snapshot_error`. Because a grid edit
 changes no Bank, a Runtime that was current before the edit, so that a
 Bank-bound `sample.preview.set` is admitted, stays current after a successful
 or deferred swap or an edit of another Pattern.
+
+## Performance replay authoring
+
+Edits during a Performance replay follow the
+[2026-10-02 decision](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-02-performance-replay-authoring.md)
+and its [2026-10-03 erratum](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-03-performance-replay-authoring-erratum.md)
+(#1789). Control tracks a replay this Host began from the
+`performance.replay.begin`, `stop` and `status` results it forwards. Each
+service cadence queries its status once; any state other than `playing`, or a
+failed query, ends it. A switch to another Project drops the tracking without a
+restore, because opening that Project publishes its own view.
+
+While the replay plays, edits commit to Truth as usual, but no Pattern view is
+published over the replay's:
+
+- `pattern.events.edit` of the current Pattern returns `publication: "deferred"`;
+- a BPM or Swing change returns `pattern_publication: null`;
+- Undo/Redo, a Pad edit's re-preparation and a reload publish the Bank only;
+- a slot-full deferral from before the replay does not swap its view in.
+
+Replay hits and the Pattern voices a replay launches carry their own material
+and never read the engine Bank, so the Bank still publishes and live presses and
+previews hear Truth at once. A Pad edit stops the Pad with `stop_slot_live`,
+which ends only that Pad's live voices; the replay's voices keep sounding.
+
+Once the replay ends, the service cadence restores the Host's selected Pattern
+from Truth: at the next bar while the transport plays, as a Pattern switch does,
+otherwise immediately. The restore waits while a transport command is in flight,
+a recording is open, the transport reports an error or a publication is pending.
+A failed immediate restore clears `runtime_revision`.
+
+Transport commands during a replay (Play/Stop, Record) still replace the
+replay's Pattern view; they are outside this change and tracked in #1801.
