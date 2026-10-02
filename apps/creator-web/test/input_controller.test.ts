@@ -1,4 +1,7 @@
 import {describe, expect, test} from "vitest";
+import {createElement, type PointerEvent as ReactPointerEvent,
+  type MouseEvent as ReactMouseEvent} from "react";
+import {fireEvent, render} from "@testing-library/react";
 import {DEFAULT_KEYBOARD_MAPPING} from "@lmdj/web-runtime-platform/input_adapters.mjs";
 
 import {
@@ -1713,6 +1716,40 @@ describe("Creator input controller", () => {
     value.outcome({sequence: 1, outcome: "voice_started", runtimeFrame: 128});
     expect(value.state().pressed.has(0)).toBe(false);
     controller.dispose();
+  });
+
+  test("rejects post-touch compatibility mouse through React nativeEvent", async () => {
+    const value = fixture();
+    let clock = 0;
+    const controller = createCreatorInputController({
+      session: value.session, getActiveBank: () => 0, isAssigned: (slot) => slot === 0,
+      dispatch: value.dispatch, now: () => clock,
+    });
+    const view = render(createElement("button", {
+      onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => controller.pointerDown(event, 0),
+      onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => controller.pointerUp(event, 0),
+      onMouseDown: (event: ReactMouseEvent<HTMLButtonElement>) => controller.pointerDown(event, 0),
+    }, "Pad"));
+    try {
+      const pad = view.getByRole("button", {name: "Pad"});
+      for (const type of ["pointerdown", "pointerup"]) {
+        const event = new MouseEvent(type, {bubbles: true, button: 0, clientX: 20, clientY: 30});
+        Object.defineProperties(event, {
+          isPrimary: {value: true}, pointerId: {value: 7}, pointerType: {value: "touch"},
+        });
+        fireEvent(pad, event);
+      }
+      clock = 1000;
+      const mouse = new MouseEvent("mousedown", {bubbles: true, button: 0, clientX: 20, clientY: 30});
+      Object.defineProperty(mouse, "sourceCapabilities", {value: {firesTouchEvents: true}});
+      // React carries this browser metadata only on nativeEvent.
+      fireEvent(pad, mouse);
+      await settle();
+      expect(value.triggers).toHaveLength(1);
+    } finally {
+      controller.dispose();
+      view.unmount();
+    }
   });
 
   test("maps MIDI 36..51 on every channel to the selected Bank and removes listeners", async () => {
