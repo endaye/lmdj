@@ -15,5 +15,8 @@
     ],
     "html_handling": "none",
     "not_found_handling": "none"
+  },
+  "vars": {
+    "CATALOG_UPSTREAM": "https://lmdj-default-assets.lmdj.workers.dev/"
   }
 }
