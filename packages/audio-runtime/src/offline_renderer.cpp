@@ -44,6 +44,8 @@ void render_kernel_voice(
   const bool releases =
       playback.trigger_mode != domain::TriggerMode::one_shot;
   const auto envelope = detail::voice_envelope(playback);
+  // Tone and EQ memory per source channel: an offline render keeps stereo.
+  detail::VoiceDspFilterMemory memory[2]{};
   const auto release_at = release_frame - start_frame;
   bool releasing = false;
   std::uint32_t release_remaining = 0;
@@ -72,15 +74,31 @@ void render_kernel_voice(
     float left = 0.0F;
     float right = 0.0F;
     if (channels == 1) {
-      const auto value =
+      auto value =
           detail::voice_dsp_read(state, fetch_channel(0)) * gain * ramp;
+      if (state.filter_count != 0) {
+        value = detail::voice_dsp_filter(state, memory[0], value);
+      }
       left = value * state.pan_left;
       right = value * state.pan_right;
     } else {
-      left = detail::voice_dsp_read(state, fetch_channel(0)) * gain * ramp *
-             state.pan_left;
-      right = detail::voice_dsp_read(state, fetch_channel(1)) * gain * ramp *
-              state.pan_right;
+      auto left_value =
+          detail::voice_dsp_read(state, fetch_channel(0)) * gain * ramp;
+      auto right_value =
+          detail::voice_dsp_read(state, fetch_channel(1)) * gain * ramp;
+      if (state.filter_count != 0) {
+        left_value = detail::voice_dsp_filter(state, memory[0], left_value);
+        right_value = detail::voice_dsp_filter(state, memory[1], right_value);
+      }
+      left = left_value * state.pan_left;
+      right = right_value * state.pan_right;
+    }
+    // The engine flushes filter memory once per render block of at most 128
+    // frames. The flushed words are far below one PCM16 step, so neither
+    // render's cadence changes its output.
+    if (state.filter_count != 0 && (relative & 127U) == 127U) {
+      detail::voice_dsp_flush_filters(state, memory[0]);
+      detail::voice_dsp_flush_filters(state, memory[1]);
     }
     const auto offset =
         static_cast<std::size_t>(start_frame + relative) * kChannels;

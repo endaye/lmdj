@@ -24,6 +24,12 @@ struct PcmSample {
 struct ResolvedVoiceDsp {
   static constexpr std::uint8_t kReverse = 0x01;
   static constexpr std::uint8_t kPingPong = 0x02;
+  // eq_flags: which EQ bands are present, and whether a shelf band is a cut.
+  static constexpr std::uint8_t kEqLow = 0x01;
+  static constexpr std::uint8_t kEqLowCut = 0x02;
+  static constexpr std::uint8_t kEqMid = 0x04;
+  static constexpr std::uint8_t kEqHigh = 0x08;
+  static constexpr std::uint8_t kEqHighCut = 0x10;
 
   // Frames from start_frame to where later loop passes resume.
   std::uint32_t loop_start_offset;
@@ -36,6 +42,18 @@ struct ResolvedVoiceDsp {
   // initializers keep the 5.1.0 positional form compiling unchanged.
   std::uint32_t attack_frames = 0;
   std::uint32_t release_frames = 0;
+  // Tone (-100..100; |tone| <= 2 is bypassed) and the 3-band EQ
+  // (lmdj.project.v5 5.2.0), in Project Truth's own units. A band's fields
+  // mean nothing unless eq_flags marks it present.
+  std::int8_t tone = 0;
+  std::uint8_t eq_flags = 0;
+  std::uint16_t eq_low_freq_hz = 0;
+  std::int16_t eq_low_gain_millidb = 0;
+  std::uint16_t eq_mid_freq_hz = 0;
+  std::int16_t eq_mid_gain_millidb = 0;
+  std::uint16_t eq_mid_q_milli = 0;
+  std::uint16_t eq_high_freq_hz = 0;
+  std::int16_t eq_high_gain_millidb = 0;
 
   bool operator==(const ResolvedVoiceDsp&) const = default;
 };
@@ -70,7 +88,7 @@ struct ResolvedPlayback {
   ResolvedVoiceDsp dsp;
 };
 
-static_assert(sizeof(ResolvedVoiceDsp) == 20);
+static_assert(sizeof(ResolvedVoiceDsp) == 36);
 static_assert(std::is_trivially_copyable_v<ResolvedVoiceDsp>);
 static_assert(std::is_trivially_copyable_v<ResolvedPlayback>);
 

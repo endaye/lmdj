@@ -6,7 +6,8 @@
 
 #include <lmdj/cooker/runtime_snapshot.hpp>
 
-// The shared per-voice DSP kernel (decision 2026-09-30, lmdj.project.v5 5.1.0).
+// The shared per-voice DSP kernel (decision 2026-09-30, lmdj.project.v5 5.1.0
+// and 5.2.0).
 // The realtime engine and the offline renderer run every non-neutral voice
 // through these functions, so live playback and an export of the same voice
 // execute the same code. A neutral voice never enters the kernel: it keeps the
@@ -52,6 +53,27 @@ inline VoiceEnvelope voice_envelope(
   };
 }
 
+// One biquad stage's coefficients, normalized by a0 (RBJ Audio EQ Cookbook).
+struct VoiceDspBiquad {
+  float b0;
+  float b1;
+  float b2;
+  float a1;
+  float a2;
+};
+
+// Tone, then the low, mid and high EQ bands.
+inline constexpr std::size_t kVoiceDspMaxFilters = 4;
+
+// A voice's filter memory: two transposed direct form II state words per
+// stage. The realtime engine keeps one, because it mixes a voice to mono;
+// the offline renderer keeps one per source channel.
+struct VoiceDspFilterMemory {
+  float z[kVoiceDspMaxFilters][2];
+};
+
+static_assert(std::is_trivially_copyable_v<VoiceDspFilterMemory>);
+
 struct VoiceDspState {
   // Logical read position from the voice's start frame, and its per-output-
   // frame step (1 << 32 is the source rate).
@@ -72,6 +94,10 @@ struct VoiceDspState {
   bool looping;
   bool ping_pong;
   bool backwards;
+  // The enabled tone and EQ stages, in that order. A bypassed stage is not
+  // stored, so it costs nothing per frame; with none, the filter is skipped.
+  std::uint8_t filter_count;
+  VoiceDspBiquad filters[kVoiceDspMaxFilters];
 };
 
 static_assert(std::is_trivially_copyable_v<VoiceDspState>);
@@ -175,6 +201,38 @@ inline float voice_dsp_end_fade(const VoiceDspState& state) noexcept {
     return 1.0F;
   }
   return static_cast<float>(remaining) * state.inverse_fade_span;
+}
+
+// Runs one sample through the voice's tone and EQ stages (transposed direct
+// form II). Callers skip it when filter_count is zero.
+inline float voice_dsp_filter(
+    const VoiceDspState& state,
+    VoiceDspFilterMemory& memory,
+    float sample) noexcept {
+  for (std::uint8_t stage = 0; stage < state.filter_count; ++stage) {
+    const auto& filter = state.filters[stage];
+    auto& z = memory.z[stage];
+    const float output = filter.b0 * sample + z[0];
+    z[0] = filter.b1 * sample - filter.a1 * output + z[1];
+    z[1] = filter.b2 * sample - filter.a2 * output;
+    sample = output;
+  }
+  return sample;
+}
+
+// Sets filter memory that has decayed below any audible level to exact zero,
+// so a silent tail never runs on denormals. Called once per rendered block;
+// the change is far below one PCM16 step.
+inline void voice_dsp_flush_filters(
+    const VoiceDspState& state, VoiceDspFilterMemory& memory) noexcept {
+  constexpr float kFloor = 1e-20F;
+  for (std::uint8_t stage = 0; stage < state.filter_count; ++stage) {
+    for (auto& word : memory.z[stage]) {
+      if (word < kFloor && word > -kFloor) {
+        word = 0.0F;
+      }
+    }
+  }
 }
 
 // Advances one output frame. Returns false once a non-looping voice has

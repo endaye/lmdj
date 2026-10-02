@@ -177,6 +177,24 @@ void user_envelope_matches_between_realtime_and_offline() {
       kernel_playback(TriggerMode::loop_gate, dsp), 24'000 + 9'600 + 512);
 }
 
+// Tone and every EQ band on a gated loop, with a release: the same filter
+// stages in realtime and offline, through the release tail's end.
+void tone_and_eq_match_between_realtime_and_offline() {
+  ResolvedVoiceDsp dsp{};
+  dsp.release_frames = 4'800;
+  dsp.tone = -40;
+  dsp.eq_flags = ResolvedVoiceDsp::kEqLow | ResolvedVoiceDsp::kEqMid |
+                 ResolvedVoiceDsp::kEqHigh | ResolvedVoiceDsp::kEqHighCut;
+  dsp.eq_low_freq_hz = 150;
+  dsp.eq_low_gain_millidb = 6'000;
+  dsp.eq_mid_freq_hz = 1'200;
+  dsp.eq_mid_gain_millidb = -9'000;
+  dsp.eq_mid_q_milli = 2'000;
+  dsp.eq_high_freq_hz = 6'000;
+  expect_kernel_voice_matches_between_realtime_and_offline(
+      kernel_playback(TriggerMode::loop_gate, dsp), 24'000 + 4'800 + 512);
+}
+
 }  // namespace
 
 int main() {
@@ -185,6 +203,7 @@ int main() {
     crossfaded_loop_and_release_match_between_realtime_and_offline();
     reversed_ping_pong_loop_matches_between_realtime_and_offline();
     user_envelope_matches_between_realtime_and_offline();
+    tone_and_eq_match_between_realtime_and_offline();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

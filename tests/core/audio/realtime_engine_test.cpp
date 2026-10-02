@@ -2,6 +2,7 @@
 #include <array>
 #include <atomic>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -3884,6 +3885,34 @@ void second_stop_during_a_long_release_fades_over_the_declick() {
   LMDJ_CHECK(engine.telemetry().active_voices == 0);
 }
 
+// A voice's tone runs in the engine: tone -100 (a 100 Hz low-pass) leaves a
+// 10 kHz sine at least 40 dB down, while the same voice without it does not.
+void toned_voice_is_filtered_in_the_engine() {
+  std::vector<float> sine(48'000);
+  for (std::size_t frame = 0; frame < sine.size(); ++frame) {
+    sine[frame] = static_cast<float>(
+        0.5 * std::sin(6.28318530717958647692 * 10'000.0 * frame / 48'000.0));
+  }
+  const auto rms_db = [&](std::int8_t tone_value) {
+    RealtimeEngine engine;
+    auto dsp = envelope_dsp(0, 0);
+    dsp.pan = 1;  // keeps the untoned voice on the kernel path too
+    dsp.tone = tone_value;
+    start_with_playback(
+        engine, sine, dsp_playback(0, 48'000, TriggerMode::gate, dsp));
+    LMDJ_CHECK(engine.enqueue_control(control(80, 0, PadControlKind::press, 127)) ==
+               EnqueueResult::accepted);
+    const auto out = render_channels(engine, 24'000);
+    double energy = 0.0;
+    for (std::size_t frame = 12'000; frame < 24'000; ++frame) {
+      energy += static_cast<double>(out.left[frame]) * out.left[frame];
+    }
+    return 10.0 * std::log10(energy / 12'000.0 / 0.125);
+  };
+  LMDJ_CHECK(rms_db(0) > -1.0);
+  LMDJ_CHECK(rms_db(-100) < -40.0);
+}
+
 // A voice in its release tail still holds its voice slot: with every slot
 // releasing, the next press reports voice_capacity.
 void releasing_voices_keep_occupying_voice_capacity() {
@@ -5284,6 +5313,7 @@ int main() {
   toggle_press_during_a_release_tail_restarts_the_pad();
   second_stop_during_a_long_release_fades_over_the_declick();
   releasing_voices_keep_occupying_voice_capacity();
+  toned_voice_is_filtered_in_the_engine();
   attack_ramps_to_full_gain_over_exactly_the_ramp_frames();
   non_loop_boundary_fades_to_exact_zero_at_end_frame();
   stop_voice_renders_a_full_ramp_tail_then_deactivates();

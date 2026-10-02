@@ -748,6 +748,9 @@ class RealtimeEngine final {
     // output is unchanged.
     bool dsp_active = false;
     detail::VoiceDspState dsp{};
+    // The tone and EQ stages' memory; the voice mixes to mono, so one is
+    // enough.
+    detail::VoiceDspFilterMemory filter_memory{};
   };
 
   std::uint64_t legacy_availability_mask() const noexcept;

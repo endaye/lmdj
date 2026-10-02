@@ -2363,7 +2363,7 @@ void RealtimeEngine::render(
       if (voice.dsp_active) {
         const auto& material = voice.material;
         const float* const samples = voice.samples;
-        const auto value =
+        auto value =
             detail::voice_dsp_read(
                 voice.dsp,
                 [&material, samples](std::uint32_t source_frame) {
@@ -2372,6 +2372,12 @@ void RealtimeEngine::render(
                              : samples[source_frame];
                 }) *
             voice.gain * ramp;
+        // Tone and EQ follow the envelope. They are linear and the gain is
+        // constant, so filtering after it equals the decision's order.
+        if (voice.dsp.filter_count != 0) {
+          value = detail::voice_dsp_filter(
+              voice.dsp, voice.filter_memory, value);
+        }
         left[frame] += value * voice.dsp.pan_left;
         right[frame] += value * voice.dsp.pan_right;
       } else {
@@ -2442,6 +2448,15 @@ void RealtimeEngine::render(
     }
     left[frame] = std::clamp(left[frame], -1.0F, 1.0F);
     right[frame] = std::clamp(right[frame], -1.0F, 1.0F);
+  }
+
+  // A fading or silent voice's filter memory decays toward denormals; flush
+  // it to exact zero once per block.
+  for (std::size_t index = 0; index < voice_scan_extent_; ++index) {
+    auto& voice = voices_[index];
+    if (voice.active && voice.dsp_active && voice.dsp.filter_count != 0) {
+      detail::voice_dsp_flush_filters(voice.dsp, voice.filter_memory);
+    }
   }
 
   if (master_fx_.prepared()) {
