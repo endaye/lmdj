@@ -31,9 +31,9 @@ Each path names the test that owns it and the far-side fact it asserts.
 
 | Path | Owner | Far-side assertion |
 | --- | --- | --- |
-| normal | `creator_web_sample_editor.spec.mjs` tone journey | Attack, Release, Tone, a held EQ key run on the high band, a 37-step key run that makes the low band a cut, and a pointer drag on the mid band each commit exactly one revision; `sample.inspect` returns the exact playback |
-| cancelled | same journey | Escape mid-drag on Tone, and Escape during an EQ key step, send `sample.preview.set` then `sample.preview.clear` and no `sample.update_pad`; the readouts return to the committed values; revision and playback unchanged |
-| refused | same journey; `control_runtime_test.cpp`; `sample_surface_test.cpp`; `protocol.test.mjs`; `runtime_session.test.mjs` | a mid `q_milli` of 10 001 → `HOST_PROTOCOL_MISMATCH`; a stale revision → `REVISION_CONFLICT` with exact details; every envelope, tone and band bound is refused at each layer, including 64-bit values that would wrap to valid ones if narrowed first; revision unchanged in every case |
+| normal | `creator_web_sample_editor.spec.mjs` tone journey | Attack, Release, Tone, a held EQ key run on the high band, a 37-step key run that makes the low band a cut, and a real mouse drag on the mid band each commit exactly one revision; `sample.inspect` returns the exact playback for every key and band except the dragged mid band, whose frequency and gain are asserted only to have risen and whose Q is exactly 0.707 |
+| cancelled | same journey | Escape mid-drag on Tone, Escape during an EQ key step, and Escape during a real mouse drag of an EQ pole (the pole never has focus, so the browser delivers Escape elsewhere) send `sample.preview.set` then `sample.preview.clear` and no `sample.update_pad`; the readouts return to the committed values; revision and playback unchanged |
+| refused | same journey; `control_runtime_test.cpp`; `sample_surface_test.cpp`; `protocol.test.mjs`; `runtime_session.test.mjs` | a mid `q_milli` of 10 001 → `HOST_PROTOCOL_MISMATCH`; a stale revision → `REVISION_CONFLICT` with exact details; every envelope, tone and band bound is refused at each layer; the Facade and the control runtime also refuse 64-bit values that would wrap to valid ones (`protocol.mjs` admits only safe integers); revision unchanged in every case |
 | failed | same journey | a commit failure manufactured at the transport seam shows `Creator could not change this sound.`, and Attack keeps its committed `120 ms`; the Runtime never receives that request, so this proves only the Creator's handling |
 | reopened | same journey | after reload the remembered Project reopens, `sample.inspect` equals the committed playback, and the controls read `120 ms`, `900 ms`, `LP 40`, a low cut at 100 Hz and a high shelf at 8.00 kHz +1.0 dB |
 
@@ -41,7 +41,7 @@ Signal-level rows:
 
 | Fact | Owner |
 | --- | --- |
-| tone −100 leaves a ~495 Hz sawtooth hit in the recorded master output at least 20 dB below the same sample on an untouched Pad, and still sounding | `creator_web_perform.spec.mjs` tone −100 test |
+| tone −100 leaves a ~495 Hz sawtooth hit in the recorded master output at least 20 dB below the same sample on an untouched Pad, and still sounding. This does not tell a low-pass from a high-pass; the sign is pinned by the Facade inspect and the kernel tests | `creator_web_perform.spec.mjs` tone −100 test |
 | a filtered voice ends without a step, at a release and at its sample's end | `realtime_engine_test.cpp` (PR #1780) |
 | realtime and offline renders of the envelope, tone and EQ agree within one PCM16 step, including different filter flush cadences | `voice_dsp_parity_test.cpp` (PR #1780) |
 | tone, shelf, cut and bell responses, and flushing to exact zero | `voice_dsp_test.cpp` (PR #1780) |

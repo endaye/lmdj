@@ -76,11 +76,12 @@ Sample 控件在 Volume 之外新增 Pitch（±24 半音，0.1 半音步进，�
 
 #1667 在同一列控件中加入 Attack（0–2000 ms）、Release（0–4000 ms）与 Tone（−100…+100），同样用 `ParameterSlider`：不超过 2 ms 的斜坡显示为 `2 ms`，即实际渲染的 declick；Tone 在中点以下显示 `LP n`、以上显示 `HP n`，±2 死区内显示 `Off`；one-shot 从不播放 release，所以此时 Release 不可用。其下的 EQ 编辑器（`eq_editor.tsx`）把三段 EQ 画成一张图上的三个极点：横轴是 20 Hz–20 kHz 的对数频率，纵轴是 −18…+18 dB 增益。
 
-- 拖动极点设定频率（限于该段范围）与增益（0.1 dB 步进，±0.5 dB 内吸附到 0）。把低段或高段架式拖到底线以下的 Cut 区就变成 cut。
+- 拖动极点时，极点按指针的位移移动，与按在命中圆的哪个位置无关；没有位移的按压不改变任何值。频率限于该段范围，增益 0.1 dB 步进，±0.5 dB 内吸附到 0。把低段或高段架式拖到底线以下的 Cut 区就变成 cut，cut 保留该段原有的增益。
 - 双击中段极点后上下拖动设定 Q。
 - 回到 0 dB 的架式或钟形被旁通，所以平直的 EQ 不让 Pad 变成非中性；极点仍停在原频率。
-- 键盘：上下键 0.5 dB，越过底线变为 cut；左右键一个半音；Shift 加上下键调中段 Q；Delete/Backspace 旁通该段；键抬起时提交。
-- 拖动经 `sample.preview.set` 试听、pointer up 时只提交一次，Escape、pointercancel 或音频挂起取消。每个极点是带频段描述的 slider；22 单位的命中圆所在的图不会窄于 320 单位的 viewBox，所以目标不小于 44 px。
+- 键盘：上下键 0.5 dB，最多到底线，在底线再按一次变为 cut；从 cut 按上键恢复它保留的增益；左右键一个半音；Shift 加上下键调中段 Q；Delete/Backspace 旁通该段；松开这些步进键时提交，松开其他键不提交。
+- 拖动经 `sample.preview.set` 试听、pointer up 时只提交一次。指针按压不会让极点获得焦点，所以编辑器在 window 上监听 Escape：拖动中按 Escape、pointercancel、音频挂起或切换 Pad（编辑器卸载）都会取消并清除试听。
+- 每个极点是带频段描述的 slider。图的边距大于 22 单位的命中半径，所以极点在任一边缘都保有完整命中圆；图不会窄于 320 单位的 viewBox，所以目标不小于 44 px。
 
 Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform surface 由 Pattern launch strip、FX slider bank、HOLD、Pad surface、录制面板与回放面板组成。
 
