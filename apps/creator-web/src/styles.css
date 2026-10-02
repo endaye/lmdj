@@ -820,6 +820,20 @@ button:disabled { color: #737b87; }
   display: grid;
   place-items: center;
 }
+/* SHIFT is one full-width row spanning both 32px cells plus the inter-column
+   gap, so the 8-row 368px key-block geometry is preserved. */
+.physical-key.is-shift {
+  grid-column: 1 / -1;
+  width: 80px;
+  font-size: 10px;
+  letter-spacing: .08em;
+}
+/* TE-style availability lamp: the key lights while its shifted action is
+   possible instead of greying a button pair. */
+.physical-key.is-lit {
+  border: 1.5px solid #ddf478;
+  box-shadow: 0 0 6px rgb(221 244 120 / 55%);
+}
 .overview-display {
   display: grid;
   gap: 8px;
@@ -1242,26 +1256,26 @@ button:disabled { color: #737b87; }
 .diagnostics-log time, .diagnostics-log strong, .diagnostics-log code { display: block; }
 .diagnostics-log pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* Session-wide authoring history stays reachable across Creator modes. */
-.authoring-history {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  width: 880px;
-  margin: 12px auto 0;
-  padding: .6rem 1rem;
-  border-radius: 10px;
-  outline: 1px solid rgb(221 244 120 / 7%);
-  background: rgb(34 36 31 / 55%);
-}
-.authoring-history [role="group"] { display: flex; gap: .4rem; flex-shrink: 0; }
-.authoring-history button { min-width: 4.5rem; min-height: 2.5rem; }
-.authoring-history [role="status"] { font-size: .8rem; opacity: .8; }
 .creator-console-frame { min-width: 0; }
 
 .touch-navigation { display: flex; flex-wrap: wrap; gap: .5rem; padding-block: .5rem; border-bottom: 1px solid var(--border, #777); }
 .system-surface header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .system-surface h2:focus { outline: 2px solid currentColor; outline-offset: 4px; }
+/* Session-wide authoring history is the rail's SHIFT chord: the status line
+   stays in the accessibility tree without reintroducing a software toolbar. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+
 /* Narrow portrait stage: the console keeps its fixed 880×592 hardware
    geometry, so a portrait phone shows the stage rotated 90°
    counter-clockwise -- the device reads as landscape while the header and

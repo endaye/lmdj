@@ -77,6 +77,26 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
     const box = rounded(await keys.getByRole("button", {name: bank, exact: true}).boundingBox());
     expect(box).toMatchObject({width: 32, height: 32});
   }
+  // #1770: the −/+ placeholder row is gone and SHIFT holds its row as one
+  // full-width key (both 32px cells plus the 16px gap) directly above the
+  // record/play row, keeping the 8-row 368px key block. Rows step 48px
+  // (32px key + 16px gap), so SHIFT's row starts 6 steps into the block.
+  const shift = rounded(await keys.getByRole("button", {name: /^SHIFT/}).boundingBox());
+  expect(shift).toMatchObject({
+    x: physical.x,
+    y: keyBlock.y + 6 * 48,
+    width: 80,
+    height: 32,
+  });
+  // Undo/Redo is the SHIFT + ← / → chord on the direction row; the lamp, not
+  // a greyed button pair, reports availability, and nothing sits outside the
+  // console frame.
+  const undoKey = keys.getByRole("button", {name: "Undo — SHIFT + ←", exact: true});
+  await expect(undoKey).toBeDisabled();
+  await expect(undoKey).not.toHaveClass(/\bis-lit\b/);
+  await expect(keys.getByRole("button", {name: "Redo — SHIFT + →", exact: true}))
+    .toBeDisabled();
+  await expect(page.getByTestId("authoring-history")).toHaveCount(0);
   await expect(keys.getByRole("button", {name: "Project", exact: true})).toBeVisible();
   await expect(keys.getByRole("button", {name: "Sample", exact: true})).toBeVisible();
   // Boot opens a playable Project (#1660), so Sequence is reachable at once.
