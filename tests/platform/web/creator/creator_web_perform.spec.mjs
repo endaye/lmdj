@@ -57,6 +57,14 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+async function inspectProjectTruth(page) {
+  const response = await page.evaluate(() => window.lmdjWebRuntimeHost.transport.send({
+    protocol_version: 1, request_id: crypto.randomUUID(), operation: "project.inspect", payload: {},
+  }));
+  expect(response.ok).toBe(true);
+  return response.result;
+}
+
 function canonicalJson(value) {
   if (Array.isArray(value)) {
     return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
@@ -628,6 +636,13 @@ async function launchCrashableCreatorContext(userDataDir) {
     browser,
     context,
     page,
+    async close() {
+      const client = await browser.newBrowserCDPSession();
+      await client.send("Browser.close").catch(() => {});
+      await expect.poll(() => child.exitCode, {timeout: 30_000}).toBe(0);
+      killProcessGroup(child);
+      await browser.close().catch(() => {});
+    },
     async kill() {
       if (child.exitCode === null) {
         const exited = once(child, "exit");
@@ -637,6 +652,26 @@ async function launchCrashableCreatorContext(userDataDir) {
       await browser.close().catch(() => {});
     },
   });
+}
+
+// Confirm the remembered identity on disk before the separate owner-loss leg.
+// A clean cross-process reopen is the checkpoint, then SIGKILL still exercises
+// an active recording and automatic recovery on a new process.
+async function launchPersistedCreatorOwner(profile) {
+  let process = await launchCrashableCreatorContext(profile);
+  try {
+    const candidate = await importActivateAndPerform(process.page);
+    const url = candidate.routed ? `${candidate.origin}/index.html` : process.page.url();
+    const before = await inspectProjectTruth(process.page);
+    await process.close();
+    process = await launchCrashableCreatorContext(profile);
+    const page = await openProjectSuccessor(process.context, url);
+    expect((await inspectProjectTruth(page)).project).toEqual(before.project);
+    return {process, page, url};
+  } catch (error) {
+    await process.kill().catch(() => {});
+    throw error;
+  }
 }
 
 function projectRevisionLocator(page) {
@@ -1129,12 +1164,10 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
   let ownerProcess = null;
   let applyingProcess = null;
   try {
-    ownerProcess = await launchCrashableCreatorContext(applyProfile);
-    const ownerPage = ownerProcess.page;
-    const candidate = await importActivateAndPerform(ownerPage);
-    const candidateUrl = candidate.routed
-      ? `${candidate.origin}/index.html`
-      : ownerPage.url();
+    const owner = await launchPersistedCreatorOwner(applyProfile);
+    ownerProcess = owner.process;
+    const ownerPage = owner.page;
+    const candidateUrl = owner.url;
     const baselineWavs = await opfsWavFiles(ownerPage);
 
     await beginRecording(ownerPage);
@@ -1180,12 +1213,10 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
   let discardOwnerProcess = null;
   let discardingProcess = null;
   try {
-    discardOwnerProcess = await launchCrashableCreatorContext(discardProfile);
-    const discardOwnerPage = discardOwnerProcess.page;
-    const candidate = await importActivateAndPerform(discardOwnerPage);
-    const candidateUrl = candidate.routed
-      ? `${candidate.origin}/index.html`
-      : discardOwnerPage.url();
+    const owner = await launchPersistedCreatorOwner(discardProfile);
+    discardOwnerProcess = owner.process;
+    const discardOwnerPage = owner.page;
+    const candidateUrl = owner.url;
     await beginRecording(discardOwnerPage);
     await discardOwnerPage.getByRole("button", {name: /^Pad A2\b/}).dispatchEvent(
       "pointerdown",
@@ -1362,12 +1393,10 @@ test("owner process loss leaves one recoverable recording and no second capture 
   let ownerProcess = null;
   let successorProcess = null;
   try {
-    ownerProcess = await launchCrashableCreatorContext(profile);
-    const ownerPage = ownerProcess.page;
-    const candidate = await importActivateAndPerform(ownerPage);
-    const candidateUrl = candidate.routed
-      ? `${candidate.origin}/index.html`
-      : ownerPage.url();
+    const owner = await launchPersistedCreatorOwner(profile);
+    ownerProcess = owner.process;
+    const ownerPage = owner.page;
+    const candidateUrl = owner.url;
     await beginRecording(ownerPage);
     await ownerPage.getByRole("button", {name: /^Pad A1\b/}).dispatchEvent(
       "pointerdown",
