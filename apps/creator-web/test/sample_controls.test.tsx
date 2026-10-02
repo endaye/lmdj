@@ -29,6 +29,10 @@ const playback: Readonly<PadPlayback> = Object.freeze({
   loopMode: "forward" as const,
   loopStartFrame: null,
   loopCrossfadeFrames: 0,
+  attackMs: 0,
+  releaseMs: 0,
+  tone: 0,
+  eq: {low: null, mid: null, high: null},
 });
 
 function renderControls(overrides: Partial<React.ComponentProps<typeof SampleControls>> = {}) {
