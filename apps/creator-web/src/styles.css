@@ -687,6 +687,12 @@ button:disabled { color: #737b87; }
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  /* The console frame centres itself with auto margins (see
+     .creator-console-frame). Auto margins, not grid/justify-content
+     centering: on an overflowing stage they collapse to 0, so a short
+     viewport keeps the console's top edge reachable instead of clipping it. */
+  display: flex;
+  flex-direction: column;
   color: #e8eadf;
   /* The stage light lives on <body>; the workspace stays transparent so the
      console floats in it. */
@@ -1256,7 +1262,17 @@ button:disabled { color: #737b87; }
 .diagnostics-log time, .diagnostics-log strong, .diagnostics-log code { display: block; }
 .diagnostics-log pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.creator-console-frame { min-width: 0; }
+.creator-console-frame {
+  min-width: 0;
+  /* The device floats in the middle of the stage on both axes whenever the
+     stage has spare room. flex: none keeps the frame at console size on a
+     short stage, where the auto margins collapse to 0 and the workspace
+     scrolls from the top (the hardware_layout 768×600 leg). The console's
+     own 24px vertical margins are symmetric, so the device's visual centre
+     stays the frame's centre. */
+  flex: none;
+  margin: auto;
+}
 
 /* Session-wide authoring history is the rail's SHIFT chord: the status line
    stays in the accessibility tree without reintroducing a software toolbar. */

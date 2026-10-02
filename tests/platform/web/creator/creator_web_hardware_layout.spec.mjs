@@ -26,6 +26,14 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   const touch = rounded(await page.getByTestId("touch-workspace").boundingBox());
 
   expect(consoleBox).toMatchObject({width: 880, height: 592});
+  // The device floats in the middle of the stage on both axes. Old shell
+  // code only centred it horizontally (fixed 24px top margin), so the
+  // vertical leg is the one that proves the fix.
+  const stage = rounded(await page.locator(".hardware-workspace").boundingBox());
+  const centreDelta = (outer, inner) =>
+    Math.abs((outer.x + outer.width / 2) - (inner.x + inner.width / 2)) +
+    Math.abs((outer.y + outer.height / 2) - (inner.y + inner.height / 2));
+  expect(centreDelta(stage, consoleBox)).toBeLessThanOrEqual(2);
   expect(physical).toMatchObject({
     x: consoleBox.x + 16,
     y: consoleBox.y + 16,
