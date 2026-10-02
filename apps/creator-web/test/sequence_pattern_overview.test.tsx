@@ -62,6 +62,7 @@ function renderOverview(
       bank={0}
       snap="1/16"
       viewport={null}
+      selection={[]}
       {...overrides}
     />,
   );
@@ -125,6 +126,7 @@ test("a playhead frame that outlives its effect never reschedules", () => {
         bank={0}
         snap="1/16"
         viewport={null}
+        selection={[]}
       />,
     );
     expect(cancelAnimationFrame).toHaveBeenCalledWith(71);
@@ -166,6 +168,7 @@ test("advances the playhead on the render clock while the transport plays", () =
         bank={0}
         snap="1/16"
         viewport={null}
+        selection={[]}
       />,
     );
     expect(playhead()).toBeNull();
@@ -175,4 +178,30 @@ test("advances the playhead on the render clock while the transport plays", () =
     cancelAnimationFrame.mockRestore();
     now.mockRestore();
   }
+});
+
+test("the selection facts follow the touch grid's live selection", () => {
+  const overview = () => screen.getByTestId("sequence-overview");
+  const fact = (name: string) =>
+    within(overview()).getByText(name).nextElementSibling?.textContent;
+  const view = renderOverview({selection: [
+    {bank: 0, pad: 0, onsetTick: 0},
+  ]});
+  expect(fact("Selected")).toBe("1");
+  expect(fact("Velocity")).toBe("100");
+  view.rerender(
+    <SequenceOverview
+      project={project}
+      state={initialSequenceState}
+      bank={0}
+      snap="1/16"
+      viewport={null}
+      selection={[
+        {bank: 0, pad: 0, onsetTick: 0},
+        {bank: 2, pad: 5, onsetTick: 480},
+      ]}
+    />,
+  );
+  expect(fact("Selected")).toBe("2");
+  expect(fact("Velocity")).toBe("mixed");
 });

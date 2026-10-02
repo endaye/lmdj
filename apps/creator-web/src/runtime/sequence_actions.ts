@@ -1,5 +1,10 @@
 import type {
+  PatternEventKeyRequest,
+  PatternEventRequest,
+} from "@lmdj/web-runtime-platform/runtime_types";
+import type {
   CreatorSequenceRuntimeSession,
+  PatternEventsEditMutation,
   SequenceMutation,
   SequenceRecoveryCandidate,
   SequenceStatus,
@@ -12,6 +17,7 @@ export function isSequenceSession(value: unknown): value is CreatorSequenceRunti
     typeof session.flushSequence === "function" &&
     typeof session.createPattern === "function" &&
     typeof session.updateSequenceSettings === "function" &&
+    typeof session.editPatternEvents === "function" &&
     typeof session.disarmSequenceCapture === "function" &&
     typeof session.stopSequence === "function" &&
     typeof session.requestPatternSwitch === "function" &&
@@ -67,4 +73,18 @@ export async function refreshSequenceJourney(
     session.listSequenceRecovery(projectId),
   ]);
   return Object.freeze({status, recovery});
+}
+
+// One grid gesture, committed at gesture end. Slots are flat 0..63, as for
+// deletePad and trigger; the Session mints the command identity per call.
+export async function editPatternEventsJourney(
+  session: CreatorSequenceRuntimeSession,
+  request: {
+    patternId: string;
+    expectedRevision: number;
+    remove: readonly PatternEventKeyRequest[];
+    put: readonly PatternEventRequest[];
+  },
+): Promise<Readonly<PatternEventsEditMutation>> {
+  return session.editPatternEvents(request);
 }

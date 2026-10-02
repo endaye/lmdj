@@ -6,7 +6,13 @@ import {createTapTempo, type TapTempo} from "../runtime/tap_tempo";
 import type {ProjectView, SequenceRecoveryCandidate} from "../runtime/runtime_types";
 import type {Bank} from "../state/creator_state";
 import type {SequenceState} from "../state/sequence_state";
-import type {SequenceGridSnap, SequenceGridViewport} from "../state/sequence_grid_model";
+import type {
+  SequenceGridEdit,
+  SequenceGridEditMode,
+  SequenceGridEventKey,
+  SequenceGridSnap,
+  SequenceGridViewport,
+} from "../state/sequence_grid_model";
 import {
   selectTransportBusy,
   selectTransportPlaying,
@@ -24,12 +30,22 @@ interface SequenceTouchWorkspaceProps {
   transport: PatternTransportState;
   bank: Bank;
   snap: SequenceGridSnap;
+  editMode: SequenceGridEditMode;
+  selection: readonly SequenceGridEventKey[];
+  defaultVelocity: number;
+  // True while the projection is being re-read from Truth after a commit; the
+  // grid's model can be behind Truth in that window, so no gesture starts.
+  projectionRefreshing: boolean;
   showRefresh?: boolean;
   onRefresh(): void;
   onSwitch(patternId: string): void;
   onCreatePattern(bars: 1 | 2 | 4 | 8): void;
   onSnapChange(snap: SequenceGridSnap): void;
+  onEditModeChange(mode: SequenceGridEditMode): void;
   onViewportChange(viewport: SequenceGridViewport): void;
+  onEdit(edit: SequenceGridEdit): void;
+  onSelectionChange(selection: readonly SequenceGridEventKey[]): void;
+  onVelocityChange(velocity: number): void;
   onSettingsChange(changes: Readonly<{
     bpm?: number;
     quantizeEnabled?: boolean;
@@ -51,6 +67,11 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   const requestedBpmRef = useRef<number | null>(null);
   const requestedSwingRef = useRef<number | null>(null);
   const disabled = selectTransportBusy(transport) || selectTransportRecording(transport);
+  // Grid editing is refused while the transport records (the Core refuses it
+  // too); a busy transport holds the commit instead, and the app retries it.
+  const editReason = selectTransportRecording(transport)
+    ? "Recording — stop recording to edit the grid."
+    : null;
   const selectedPatternId = state.selectedPatternId ?? project.patternId;
   const selectedPattern = project.patterns.find(
     (item) => item.patternId === selectedPatternId);
@@ -209,8 +230,19 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
           pattern={selectedPattern}
           bank={props.bank}
           snap={props.snap}
+          editMode={props.editMode}
+          editing={{
+            enabled: editReason === null && !props.projectionRefreshing,
+            reason: editReason,
+          }}
+          selection={props.selection}
+          defaultVelocity={props.defaultVelocity}
           onSnapChange={props.onSnapChange}
+          onEditModeChange={props.onEditModeChange}
           onViewportChange={props.onViewportChange}
+          onEdit={props.onEdit}
+          onSelectionChange={props.onSelectionChange}
+          onVelocityChange={props.onVelocityChange}
         />
       )}
       {state.recovery.length > 0 ? (

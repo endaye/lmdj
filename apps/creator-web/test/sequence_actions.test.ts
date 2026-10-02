@@ -3,6 +3,7 @@ import {expect, test, vi} from "vitest";
 import {
   beginSequenceJourney,
   disarmSequenceCaptureJourney,
+  editPatternEventsJourney,
   isSequenceSession,
   reconcileSequenceAuthoringRevision,
   refreshSequenceJourney,
@@ -48,16 +49,40 @@ test("Sequence journeys preserve typed command identities and query both authori
 test("Sequence capability detection includes settings and Pattern authoring", () => {
   const value = Object.fromEntries([
     "beginSequence", "flushSequence", "createPattern", "updateSequenceSettings", "stopSequence",
-    "disarmSequenceCapture",
+    "editPatternEvents", "disarmSequenceCapture",
     "requestPatternSwitch", "querySequenceStatus", "listSequenceRecovery",
     "applySequenceRecovery", "discardSequenceRecovery", "subscribeSequenceBarBoundary",
   ].map((name) => [name, () => {}]));
   expect(isSequenceSession(value)).toBe(true);
   expect(isSequenceSession({...value, flushSequence: undefined})).toBe(false);
   expect(isSequenceSession({...value, updateSequenceSettings: undefined})).toBe(false);
+  expect(isSequenceSession({...value, editPatternEvents: undefined})).toBe(false);
   expect(isSequenceSession({...value, createPattern: undefined})).toBe(false);
   expect(isSequenceSession({...value, applySequenceRecovery: undefined})).toBe(false);
   expect(isSequenceSession({...value, discardSequenceRecovery: undefined})).toBe(false);
+});
+
+test("the Pattern events edit journey delegates one gesture's command verbatim", async () => {
+  const result = {
+    patternId: "pattern-1",
+    committedRevision: 5,
+    replayed: false,
+    projectRevision: 5,
+    publication: "live" as const,
+    patternPublication: {generation: 7, activationFrame: 192_000},
+    snapshotError: null,
+  };
+  const session = {
+    editPatternEvents: vi.fn(async () => result),
+  } as unknown as CreatorSequenceRuntimeSession;
+  const request = {
+    patternId: "pattern-1",
+    expectedRevision: 4,
+    remove: [{slot: 1, onsetTick: 240}],
+    put: [{slot: 1, onsetTick: 480, durationTick: 240, velocity: 100}],
+  };
+  await expect(editPatternEventsJourney(session, request)).resolves.toBe(result);
+  expect(session.editPatternEvents).toHaveBeenCalledWith(request);
 });
 
 test("a stale journal refresh cannot lower the committed authoring revision", () => {

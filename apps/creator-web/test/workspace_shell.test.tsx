@@ -2498,6 +2498,7 @@ const sequenceSessionStubs = () => ({
   flushSequence: async () => sequenceStatusStub(),
   createPattern: async () => sequenceStatusStub(),
   updateSequenceSettings: async () => sequenceStatusStub(),
+  editPatternEvents: async () => sequenceStatusStub(),
   disarmSequenceCapture: async () => sequenceStatusStub(),
   stopSequence: async () => sequenceStatusStub(),
   requestPatternSwitch: async () => sequenceStatusStub(),

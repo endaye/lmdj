@@ -6,7 +6,9 @@ import type {Bank} from "../state/creator_state";
 import type {SequenceState} from "../state/sequence_state";
 import {
   createSequenceGridThumbnail,
+  sequenceGridSelectionVelocity,
   sequencePlayheadTick,
+  type SequenceGridEventKey,
   type SequenceGridSnap,
   type SequenceGridViewport,
 } from "../state/sequence_grid_model";
@@ -20,6 +22,7 @@ interface SequenceOverviewProps {
   bank: Bank;
   snap: SequenceGridSnap;
   viewport: SequenceGridViewport | null;
+  selection: readonly SequenceGridEventKey[];
 }
 
 // The Runtime advances 48 frames per millisecond at its fixed 48 kHz.
@@ -32,6 +35,7 @@ export function SequenceOverview({
   bank,
   snap,
   viewport,
+  selection,
 }: SequenceOverviewProps) {
   const selectedPatternId = state.selectedPatternId ?? project?.patternId ?? null;
   const pattern = selectedPatternId === null
@@ -42,6 +46,9 @@ export function SequenceOverview({
     ? state.phase
     : transportStatusLabel(transport);
   const thumbnail = pattern === undefined ? null : createSequenceGridThumbnail(pattern);
+  const selectionVelocity = pattern === undefined
+    ? null
+    : sequenceGridSelectionVelocity(pattern, selection);
   const bpm = project?.bpm ?? null;
   const status = transport?.status ?? null;
   const playing = status !== null && status.playing === true &&
@@ -148,7 +155,7 @@ export function SequenceOverview({
         </div>
         <div>
           <dt>Selected</dt>
-          <dd>0</dd>
+          <dd>{selection.length}</dd>
         </div>
         <div>
           <dt>Snap</dt>
@@ -156,7 +163,7 @@ export function SequenceOverview({
         </div>
         <div>
           <dt>Velocity</dt>
-          <dd>—</dd>
+          <dd>{selectionVelocity === null ? "—" : selectionVelocity}</dd>
         </div>
         {pendingPatternId !== null ? (
           <div>

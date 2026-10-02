@@ -65,6 +65,7 @@ import {
 import {reloadPrepareJourney, retryPrepareJourney} from "./runtime/sample_actions";
 import {
   disarmSequenceCaptureJourney,
+  editPatternEventsJourney,
   isSequenceSession,
   reconcileSequenceAuthoringRevision,
   refreshSequenceJourney,
@@ -88,6 +89,7 @@ import type {
   CreatorPerformanceRuntimeSession,
   CreatorSampleRuntimeSession,
   LocalProjectSummary,
+  PatternEventsEditMutation,
   RuntimeSessionFactory,
   TypedRuntimeError,
   SequenceRecoveryCandidate,
@@ -111,6 +113,10 @@ import {
 } from "./state/sequence_state";
 import {
   DEFAULT_SEQUENCE_GRID_SNAP,
+  sequenceGridFlatSlot,
+  type SequenceGridEdit,
+  type SequenceGridEditMode,
+  type SequenceGridEventKey,
   type SequenceGridSnap,
   type SequenceGridViewport,
 } from "./state/sequence_grid_model";
@@ -303,6 +309,12 @@ function Workspace({
     useState<SequenceGridSnap>(DEFAULT_SEQUENCE_GRID_SNAP);
   const [sequenceGridViewport, setSequenceGridViewport] =
     useState<SequenceGridViewport | null>(null);
+  const [sequenceGridMode, setSequenceGridMode] =
+    useState<SequenceGridEditMode>("note");
+  const [sequenceGridSelection, setSequenceGridSelection] =
+    useState<readonly SequenceGridEventKey[]>([]);
+  // A new note takes the last velocity the grid set; the grid starts at 100.
+  const [sequenceGridVelocity, setSequenceGridVelocity] = useState(100);
   const [performController, setPerformController] =
     useState<PerformController | null>(null);
   const [performCaptureConfigured, setPerformCaptureConfigured] = useState(false);
@@ -387,6 +399,11 @@ function Workspace({
           ({patternId}) => patternId === sequence.selectedPatternId)) return;
     dispatchSequence({type: "selected", patternId: project.patternId});
   }, [state.project.current, sequence.selectedPatternId]);
+
+  // The box selection belongs to the Pattern and Bank it was drawn on.
+  useEffect(() => {
+    setSequenceGridSelection([]);
+  }, [sequence.selectedPatternId, state.activeBank, state.project.current?.projectId]);
 
   useEffect(() => {
     setMidi(null);
@@ -1620,6 +1637,120 @@ function Workspace({
   };
   armedCaptureStopIntent.current = () => { void stopArmedCapture(); };
 
+  // One grid gesture commits one atomic edit at gesture end. The command goes
+  // through the Runtime Session with flat Pad slots; a live or stopped edit of
+  // the current Pattern swaps in place immediately, a deferred one is
+  // committed Truth like any other, and only a failed swap is surfaced. A
+  // transport-busy or publication-pending refusal lands before the commit, so
+  // it is retried, never shown as a conflict; any other conflict or refusal
+  // restores the grid from Truth and shows the reason.
+  const editSequenceGridEvents = (edit: SequenceGridEdit): Promise<void> => {
+    const operation = sequenceAuthoringTail.current.then(async () => {
+      const project = stateRef.current.project.current;
+      if (!isSequenceSession(session) || project === null) return;
+      if (selectTransportRecording(transportRef.current)) {
+        // The grid is disabled while recording; a gesture that raced the
+        // transition is refused here as the Core would refuse it.
+        return;
+      }
+      const patternId = sequenceRef.current.selectedPatternId ?? project.patternId;
+      const request = {
+        patternId,
+        remove: edit.remove.map((key) => ({
+          slot: sequenceGridFlatSlot(key.bank, key.pad),
+          onsetTick: key.onsetTick,
+        })),
+        put: edit.put.map((event) => ({
+          slot: sequenceGridFlatSlot(event.bank, event.pad),
+          onsetTick: event.onsetTick,
+          durationTick: event.durationTick,
+          velocity: event.velocity,
+        })),
+      };
+      try {
+        let result: PatternEventsEditMutation | null = null;
+        // A pending bar-boundary publication can hold the admission for a
+        // bar; the bounded retry never reissues a committed edit because the
+        // refusal happens before the commit. Each attempt is a fresh domain
+        // command (the Session mints the command identity per call) naming
+        // the current revision: the busy window is exactly when a settle can
+        // land an intervening commit, so a frozen revision would die as a
+        // conflict.
+        for (let attempt = 0; attempt < 32; attempt += 1) {
+          try {
+            result = await editPatternEventsJourney(session, {
+              ...request,
+              expectedRevision: sequenceAuthoringRevision.current,
+            });
+            break;
+          } catch (error) {
+            const reason = errorDetails(error).reason;
+            if ((reason !== "pattern_transport_busy" &&
+                reason !== "pattern_publication_pending") ||
+                attempt === 31) {
+              throw error;
+            }
+            await new Promise((resolve) => {
+              window.setTimeout(resolve, 250);
+            });
+            if (stateRef.current.project.current?.projectId !== project.projectId) {
+              return;
+            }
+            // Re-read the revision the next attempt names, reconciled the
+            // way refreshSequence does — without its dispatches, which would
+            // put the project reducer ahead of this journey's own projection
+            // refresh token.
+            const inspected = await session.inspectProject();
+            const inspectedRevision =
+              inspected !== null && typeof inspected === "object" &&
+              "project_revision" in inspected &&
+              typeof inspected.project_revision === "number" &&
+              Number.isInteger(inspected.project_revision) &&
+              inspected.project_revision >= 0
+                ? inspected.project_revision
+                : null;
+            if (inspectedRevision !== null) {
+              sequenceAuthoringRevision.current =
+                reconcileSequenceAuthoringRevision(
+                  sequenceAuthoringRevision.current,
+                  stateRef.current.project.current?.revision ?? 0,
+                  inspectedRevision,
+                );
+            }
+          }
+        }
+        if (result === null) return;
+        sequenceAuthoringRevision.current = result.committedRevision;
+        dispatchTransport({type: "revision", revision: result.committedRevision});
+        try {
+          await refreshPerformProject();
+        } catch {
+          dispatch({
+            type: "project-revision-updated",
+            revision: result.committedRevision,
+          });
+        }
+        if (result.snapshotError !== null) {
+          // The edit committed; only the in-place swap failed. Say so
+          // instead of letting the grid look unheard.
+          dispatchSequence({
+            type: "failed",
+            errorCode: result.snapshotError.code,
+          });
+        }
+      } catch (error) {
+        try {
+          await refreshPerformProject();
+        } catch (refreshError) {
+          reportFailure("Restore Sequence grid projection", refreshError);
+        }
+        sequenceFailure("Edit Pattern events", error);
+      }
+    });
+    sequenceAuthoringTail.current = operation;
+    return operation;
+  };
+
   const updateSequenceSettings = (changes: Readonly<{
     bpm?: number;
     quantizeEnabled?: boolean;
@@ -1979,6 +2110,7 @@ function Workspace({
               sequence={sequence}
               snap={sequenceGridSnap}
               viewport={sequenceGridViewport}
+              selection={sequenceGridSelection}
               transport={transport}
               midi={midi}
               {...(buildIdentity ? {buildIdentity} : {})}
@@ -2105,8 +2237,16 @@ function Workspace({
                 transport={transport}
                 bank={state.activeBank}
                 snap={sequenceGridSnap}
+                editMode={sequenceGridMode}
+                selection={sequenceGridSelection}
+                defaultVelocity={sequenceGridVelocity}
+                projectionRefreshing={state.projectProjectionRefresh !== null}
                 onSnapChange={setSequenceGridSnap}
+                onEditModeChange={setSequenceGridMode}
                 onViewportChange={setSequenceGridViewport}
+                onEdit={(edit) => { void editSequenceGridEvents(edit); }}
+                onSelectionChange={setSequenceGridSelection}
+                onVelocityChange={setSequenceGridVelocity}
                 onRefresh={() => {
                   void refreshSequence();
                   void reconcileTransport();
