@@ -292,10 +292,13 @@ export function EqEditor({
     }
     const freqHz = xToFreq(x, band);
     if (y > EQ_VIEW.floor + EQ_VIEW.cutThreshold) {
-      // A cut keeps the gain the band already carried (lmdj.project.v5 5.2.0
-      // keeps it in Project Truth), so leaving the cut by keyboard restores it.
-      const current = gesture.current!.latest[band] as PadEqShelf | null;
-      return shelfBand("cut", freqHz, current?.gainMillidb ?? -GAIN_LIMIT);
+      // A cut keeps the gain the band carried when the gesture began
+      // (lmdj.project.v5 5.2.0 keeps it in Project Truth), whatever the
+      // pointer passed through on the way, so how a drag was sampled never
+      // changes what is stored. A bypassed band keeps the floor. Leaving the
+      // cut by keyboard restores this gain.
+      const began = gesture.current!.base[band] as PadEqShelf | null;
+      return shelfBand("cut", freqHz, began?.gainMillidb ?? -GAIN_LIMIT);
     }
     return shelfBand("shelf", freqHz, yToGain(y));
   };

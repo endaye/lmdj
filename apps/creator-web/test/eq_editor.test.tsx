@@ -342,3 +342,25 @@ test("a press that does not travel commits nothing", () => {
   expect(onPreview).not.toHaveBeenCalled();
   expect(onCommit).not.toHaveBeenCalled();
 });
+
+// Second review of #1799: a cut's kept gain is the band's gain when the drag
+// began, however finely the browser sampled the drag on the way down.
+test("a dragged cut keeps the band's starting gain however the drag was sampled", () => {
+  const shelved = {...playback, eq: {low: {kind: "shelf" as const, freqHz: 100, gainMillidb: 6_000}, mid: null, high: null}};
+  const start = {x: freqToX(100), y: gainToY(6_000)};
+  const into = {x: freqToX(100), y: EQ_VIEW.floor + EQ_VIEW.cutThreshold + 6};
+  for (const steps of [1, 10]) {
+    const {onCommit, unmount} = renderEditor({playback: shelved});
+    const path = [start, ...Array.from({length: steps}, (_, index) => ({
+      x: start.x,
+      y: start.y + ((into.y - start.y) * (index + 1)) / steps,
+    }))];
+    drag(pole("Low"), path);
+    fireEvent.pointerUp(pole("Low"), {pointerId: 1});
+    expect(onCommit).toHaveBeenLastCalledWith({
+      ...shelved,
+      eq: {...shelved.eq, low: {kind: "cut", freqHz: 100, gainMillidb: 6_000}},
+    });
+    unmount();
+  }
+});
