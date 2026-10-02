@@ -5264,7 +5264,69 @@ function createRuntimeSessionController(options = {}) {
     return recoverableQuery("soundset.catalog.list", {});
   }
 
-  async function listSoundSets() {
+  let soundSetAcquisitionTail = Promise.resolve();
+  function serializeSoundSetAcquisition(action) {
+    const result = soundSetAcquisitionTail.then(action);
+    soundSetAcquisitionTail = result.catch(() => {});
+    return result;
+  }
+
+  function listSoundSets() {
+    return serializeSoundSetAcquisition(listSoundSetsNow);
+  }
+
+  async function describeSoundSetCatalog() {
+    return serializeSoundSetAcquisition(async () => {
+      if (soundsetCatalog !== null) await refreshSoundSetCatalogIndex();
+      const result = await recoverableQuery("soundset.catalog.describe", {});
+      if (!isPlainRecord(result) || typeof result.catalog_available !== "boolean" || !Array.isArray(result.sets)) {
+        throw typedError("HOST_PROTOCOL_MISMATCH", "Sound Set catalog description is invalid");
+      }
+      return Object.freeze({catalogAvailable: result.catalog_available,
+        sets: Object.freeze(result.sets.map(value => {
+          const identity = {setId: value.set_id, version: value.version, manifestSha256: value.manifest_sha256};
+          soundsetIdentity(identity);
+          if (!isUnsignedInteger(value.total_bytes)) throw typedError("HOST_PROTOCOL_MISMATCH", "Sound Set size is invalid");
+          return Object.freeze({...identity, totalBytes: value.total_bytes});
+        }))});
+    });
+  }
+
+  function acquireSoundSetSlot(request) {
+    return serializeSoundSetAcquisition(async () => {
+      const payload = soundsetIdentity(request, ["slotIndex"]);
+      if (!isUnsignedInteger(request.slotIndex, 15)) throw typedError("INVALID_ARGUMENT", "Sound Set slot is invalid");
+      payload.slot_index = request.slotIndex;
+      if (soundsetCatalog !== null) await refreshSoundSetCatalogIndex();
+      for (let round = 0; round <= SOUNDSET_ACQUISITION_ROUNDS; ++round) {
+        try {
+          const result = await recoverableQuery("soundset.slot.acquire", payload);
+          if (!isPlainRecord(result) || result.set_id !== request.setId || result.version !== request.version ||
+              result.manifest_sha256 !== request.manifestSha256 || result.slot_index !== request.slotIndex ||
+              !Array.isArray(result.slots) || result.slots.length !== 16) {
+            throw typedError("HOST_PROTOCOL_MISMATCH", "Sound Set slot acquisition is invalid");
+          }
+          const slot = normalizeSoundSetSlot(result.slots[request.slotIndex]);
+          if (slot.slot !== request.slotIndex || slot.artifact === null) {
+            throw typedError("HOST_PROTOCOL_MISMATCH", "acquired Sound Set slot is empty");
+          }
+          return Object.freeze({setId: request.setId, version: request.version,
+            manifestSha256: request.manifestSha256, slot});
+        } catch (error) {
+          if (soundsetCatalog === null || round === SOUNDSET_ACQUISITION_ROUNDS ||
+              errorCode(error) !== "IO_ERROR") throw error;
+          // The Web error boundary deliberately strips internal reason strings.
+          // Only Core's authenticated pending addresses authorize another fetch;
+          // an IO refusal without pending objects stays the original refusal.
+          const pending = await boundedRequest("soundset.catalog.pending", {});
+          if (!Array.isArray(pending?.objects) || pending.objects.length === 0) throw error;
+          for (const object of pending.objects) await supplySoundSetObject(object);
+        }
+      }
+    });
+  }
+
+  async function listSoundSetsNow() {
     if (closing || !started) {
       throw typedError("HOST_STATE_INVALID", "Sound Set browsing is unavailable");
     }
@@ -5412,19 +5474,29 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
-  function installSoundSet(request) {
+  function installSoundSetSlot(request) {
+    return installSoundSet(request, true);
+  }
+
+  function installSoundSet(request, selectedSlot = false) {
     return serializeProjectAction(async () => {
       const optional = Object.hasOwn(request ?? {}, "occupiedPadPolicy")
         ? ["occupiedPadPolicy"]
         : [];
       const payload = soundsetIdentity(
-        request, ["bankId", "commandId", "expectedRevision", ...optional]);
+        request, ["bankId", "commandId", "expectedRevision", ...(selectedSlot ? ["slotIndex"] : []), ...optional]);
       if (
         !isUnsignedInteger(request.bankId, 3) ||
         !UUID_PATTERN.test(request.commandId) ||
         !isUnsignedInteger(request.expectedRevision)
       ) {
         throw typedError("INVALID_ARGUMENT", "Sound Set install is invalid");
+      }
+      if (selectedSlot) {
+        if (!isUnsignedInteger(request.slotIndex, 15) || optional.length !== 0) {
+          throw typedError("INVALID_ARGUMENT", "default Sound Set slot install is invalid");
+        }
+        payload.slot_index = request.slotIndex;
       }
       payload.bank_id = request.bankId;
       payload.command_id = request.commandId;
@@ -5438,7 +5510,7 @@ function createRuntimeSessionController(options = {}) {
         }
         payload.occupied_pad_policy = request.occupiedPadPolicy;
       }
-      const result = await boundedRequest("soundset.install", payload);
+      const result = await boundedRequest(selectedSlot ? "soundset.slot.install" : "soundset.install", payload);
       if (!isPlainRecord(result) || !Array.isArray(result.installed)) {
         throw typedError("HOST_PROTOCOL_MISMATCH", "Sound Set install is invalid");
       }
@@ -5611,6 +5683,9 @@ function createRuntimeSessionController(options = {}) {
     reloadSnapshot,
     retryPrepare,
     listSoundSets,
+    describeSoundSetCatalog,
+    acquireSoundSetSlot,
+    installSoundSetSlot,
     inspectSoundSet,
     auditionSoundSet,
     stopSoundSetAudition,

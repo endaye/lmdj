@@ -105,7 +105,7 @@ export function SampleControls({
   return (
     <section className="sample-controls" aria-label={`${padLabel} Sample controls`}>
       {audioSuspended ? (
-        <p className="audio-preview-copy" role="status">Activate Audio to preview</p>
+        <p className="audio-preview-copy" role="status">Tap a Pad to preview</p>
       ) : null}
       <div className="sample-toggle-row">
         <button
