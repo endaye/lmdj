@@ -18,6 +18,7 @@ const API = [
   "runProvider",
   "inspectAttempt",
   "activateAudio",
+  "applyFxGesture",
   "applyPerformanceRecovery",
   "applySequenceRecovery",
   "assignPatternSlot",
@@ -1641,6 +1642,62 @@ test("bridges raw Performance identities and values without Host timing authorit
     source_end_frame: 48_000,
     target_slot: {bank: 1, pad: 2},
   });
+});
+
+test("applyFxGesture wires session-free FX gestures without recording identity", async () => {
+  const operations = [];
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push(envelope);
+      if (envelope.operation === "performance.fx.gesture") {
+        return success(envelope, {applied: true, project_revision: null});
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  assert.deepEqual(
+    await session.applyFxGesture({kind: "fx_engage", fx: "filter", value: 500}),
+    {applied: true},
+  );
+  assert.deepEqual(
+    await session.applyFxGesture({kind: "fx_move", fx: "filter", value: 630}),
+    {applied: true},
+  );
+  assert.deepEqual(await session.applyFxGesture({kind: "hold_on"}), {applied: true});
+  assert.deepEqual(await session.applyFxGesture({kind: "hold_off"}), {applied: true});
+  assert.deepEqual(
+    await session.applyFxGesture({kind: "fx_release", fx: "filter"}),
+    {applied: true},
+  );
+
+  const wired = operations.map(({operation, payload}) => ({operation, payload}));
+  assert.deepEqual(wired, [
+    {operation: "performance.fx.gesture",
+     payload: {event: {kind: "fx_engage", fx: "filter", value: 500}}},
+    {operation: "performance.fx.gesture",
+     payload: {event: {kind: "fx_move", fx: "filter", value: 630}}},
+    {operation: "performance.fx.gesture", payload: {event: {kind: "hold_on"}}},
+    {operation: "performance.fx.gesture", payload: {event: {kind: "hold_off"}}},
+    {operation: "performance.fx.gesture",
+     payload: {event: {kind: "fx_release", fx: "filter"}}},
+  ]);
+  for (const forbidden of ["gesture_id", "session_id", "event_id", "tick"]) {
+    assert.equal(JSON.stringify(wired).includes(forbidden), false);
+  }
+
+  await assert.rejects(
+    session.applyFxGesture({kind: "fx_engage", fx: "filter", value: 1001}),
+    TypeError,
+  );
+  await assert.rejects(
+    session.applyFxGesture({kind: "fx_engage", gestureId: "x", fx: "filter", value: 500}),
+    TypeError,
+  );
+  await assert.rejects(session.applyFxGesture({kind: "fx_release"}), TypeError);
+  await assert.rejects(session.applyFxGesture({kind: "pad_press"}), TypeError);
+  assert.equal(operations.length, 5);
 });
 
 test("activation waits for a resumed AudioWorklet callback within its original budget", async () => {

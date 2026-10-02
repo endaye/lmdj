@@ -13,6 +13,8 @@ import {
   appendDiagnostic, diagnosticRecord, DiagnosticsLog, type DiagnosticRecord,
 } from "./components/diagnostics_log";
 import {ErrorPanel} from "./components/error_panel";
+import {DiagnosticsProvider} from "./runtime/diagnostics_context";
+import {PUBLIC_ERROR_CODES, sampleMessage} from "./state/error_messages";
 import {RecoveryPrompt, type RecoveryCounts} from "./components/recovery_prompt";
 import {
   TakenOverPanel,
@@ -147,6 +149,16 @@ interface WorkspaceProps {
   ) => () => void;
 }
 
+// Protocol details are JSON, but a malformed exception must not break error
+// handling, as in diagnosticRecord: unserializable details key as the code.
+function runtimeErrorDetailsKey(details: Readonly<Record<string, unknown>> | undefined): string {
+  try {
+    return JSON.stringify(details ?? {});
+  } catch {
+    return "";
+  }
+}
+
 type BusyRetry =
   | {kind: "list"}
   | {kind: "open"; project: LocalProjectSummary};
@@ -160,31 +172,6 @@ interface SampleRetryToken {
   }>;
 }
 
-const SAMPLE_ERROR_CODES = new Set([
-  "INVALID_ARGUMENT",
-  "NOT_FOUND",
-  "REVISION_CONFLICT",
-  "DUPLICATE_ID",
-  "UNSUPPORTED_AUDIO",
-  "MISSING_ASSET",
-  "INVALID_PROJECT",
-  "COOK_FAILED",
-  "BANK_QUOTA_EXHAUSTED",
-  "PROJECT_QUOTA_EXHAUSTED",
-  "PROVIDER_NOT_FOUND",
-  "PROVIDER_FAILED",
-  "PERMISSION_DENIED",
-  "IO_ERROR",
-  "INTERNAL_ERROR",
-  "UNSUPPORTED_WEB_RUNTIME",
-  "PROJECT_BUSY",
-  "WEB_RUNTIME_RESOURCE_LIMIT",
-  "HOST_STATE_INVALID",
-  "HOST_TIMEOUT",
-  "HOST_RESTART_REQUIRED",
-  "HOST_PROTOCOL_MISMATCH",
-  "LOCAL_PROJECT_UNREADABLE",
-]);
 function errorDetails(error: unknown): Readonly<Record<string, unknown>> {
   const details = (error as TypedRuntimeError | null)?.details;
   return details !== null && typeof details === "object" && !Array.isArray(details)
@@ -571,6 +558,25 @@ function Workspace({
       }
     }
   }, [runtimeHostState, runtimeRecoveryProbeReady]);
+
+  // Runtime boot and Host terminal errors reach the user only as the panel's
+  // message, so their code and details are recorded here (#1680). Each Host
+  // notification carries a fresh details object, so an error is identified
+  // by its code and details content and recorded once until it changes.
+  const runtimeErrorKey = runtimeErrorCode
+    ? `${runtimeErrorCode}:${runtimeErrorDetailsKey(runtimeErrorDetails)}`
+    : null;
+  const reportedRuntimeError = useRef<string | null>(null);
+  useEffect(() => {
+    if (runtimeErrorKey === reportedRuntimeError.current) return;
+    reportedRuntimeError.current = runtimeErrorKey;
+    if (!runtimeErrorCode) return;
+    reportFailure("Runtime", Object.assign(new Error(runtimeErrorCode), {
+      code: runtimeErrorCode,
+      details: runtimeErrorDetails ?? {},
+    }));
+    // The key captures the code and details content.
+  }, [runtimeErrorKey, reportFailure]);
 
   useEffect(() => {
     if (!runtimePhase) return;
@@ -1206,13 +1212,13 @@ function Workspace({
     } catch (error) {
       if (sampleRetryAction.current === token) {
         const candidate = reportFailure("Retry Sample preparation", error);
-        const code = SAMPLE_ERROR_CODES.has(candidate) ? candidate : "INTERNAL_ERROR";
+        const code = PUBLIC_ERROR_CODES.has(candidate) ? candidate : "INTERNAL_ERROR";
         dispatch({
           type: "sample-action",
           action: {
             type: "operation-failed",
             pending,
-            error: {code, message: "Sample operation failed"},
+            error: {code, message: sampleMessage(code).message},
           },
         });
       }
@@ -1896,6 +1902,7 @@ function Workspace({
   );
 
   return (
+    <DiagnosticsProvider value={reportFailure}>
     <div className="hardware-workspace">
         <AuthoringHistoryControls
           session={session}
@@ -2267,6 +2274,7 @@ function Workspace({
         />
         </div>
     </div>
+    </DiagnosticsProvider>
   );
 }
 

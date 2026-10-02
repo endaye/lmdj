@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-10-01
     occurrence: https://github.com/endaye/lmdj/pull/1749
     observed_by: Claude Opus 5.5
+  - date: 2026-10-01
+    occurrence: https://github.com/endaye/lmdj/pull/1756
+    observed_by: Claude Opus 5.5
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/1752
 ---
@@ -22,7 +25,7 @@ Whether a binary sits in that window depends on how many allocation call sites t
 
 - **Recognise it.** A fork-based test fails `core_macos` with a child that did not exit (`WIFEXITED` false), and passes on Linux `core_asan`.
   - Open the newest `~/Library/Logs/DiagnosticReports/<test binary>-*.ips`.
-  - It is this pitfall when the report says `crashed on child side of fork pre-exec`, and its stack runs `libSystem_atfork_child` → `calloc` → ASan `StackDepot`/`StackStore` `Create` → `_os_unfair_lock_lock_slow`.
+  - It is this pitfall when the report says `crashed on child side of fork pre-exec` and `os_unfair_lock is corrupt`, and its stack runs from `libSystem_atfork_child`, through any one of its child handlers (`_notify_fork_child`, `_libcoreservices_fork_child`, `_objc_atfork_child`, …) and an ASan-intercepted allocation or free (`calloc`, `free`, …), into an ASan `StackDepot`/`StackStore` `Create`, then `_os_unfair_lock_lock_slow`. Which handler and which call appear varies between runs.
 - **Confirm it.** Call `__asan_print_accumulated_stats()` (from `<sanitizer/asan_interface.h>`) just before the `fork()`. The depot's id count should sit a few ids below a multiple of 65 536. Then compare the failure rate of `main`'s binary and the head's binary under the same `TMPDIR`.
 - **Do not hide it:**
   - do not reorder or remove allocations to move the count;
@@ -31,4 +34,6 @@ Whether a binary sits in that window depends on how many allocation call sites t
   - do not treat the failure as a product defect.
 - **Record it.** Add the recurrence here, state the `TMPDIR` the `core_macos` evidence ran under, and link #1752.
 
-The exit is #1752: the crash children re-exec the test binary instead of continuing after a bare `fork()`, and a deterministic source check keeps new bare forks out. No eligible mechanism exists until then, because no test-side call can tell how close the depot is to its next boundary.
+Second recurrence (#1756). Same mechanism, a different handler: `libSystem_atfork_child` → `_objc_atfork_child` → `free` → ASan `StackDepot` `TwoLevelMap::Create`. It happened under `TMPDIR=/private/tmp/lmdjt`, in a PR that changes no allocation site. `lmdj_project_io_candidate_adoption_tests` links only Project I/O and its dependencies (Authoring Domain, Foundation, picosha2, nlohmann_json). The PR changed none of them, so its binary is the one `main` builds since #1749. So a fork-child SIGKILL in `core_macos` says nothing about the PR under test, only about where the depot count landed in that build.
+
+The exit is [#1752](https://github.com/endaye/lmdj/issues/1752), its escalation Issue: the crash children re-exec the test binary instead of continuing after a bare `fork()`, and a deterministic source check keeps new bare forks out. No eligible mechanism exists until then, because no test-side call can tell how close the depot is to its next boundary.
