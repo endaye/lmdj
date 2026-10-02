@@ -1112,6 +1112,172 @@ void test_v5_checkpoint_refuses_invalid_parity_playback() {
   }
 }
 
+PadPlayback tone_playback() {
+  PadPlayback playback{5, 25, TriggerMode::gate, 0, false};
+  playback.attack_ms = 300;
+  playback.release_ms = 900;
+  playback.tone = -40;
+  // A present band carries its gain even as a cut, which ignores it.
+  playback.eq.low = lmdj::domain::PadEqShelf{lmdj::domain::EqBandKind::cut, 80, 0};
+  playback.eq.mid = lmdj::domain::PadEqBell{1000, 1200, 707};
+  return playback;
+}
+
+std::vector<std::string> object_keys(const nlohmann::json& object) {
+  std::vector<std::string> keys;
+  for (const auto& [key, value] : object.items()) {
+    (void)value;
+    keys.push_back(key);
+  }
+  return keys;
+}
+
+void test_tone_playback_round_trips_with_only_present_bands() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "tone-playback.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto committed = store.execute(
+      bundle,
+      UpdatePadPlayback{meta("tone-playback", 0), PadSlotId{0, 0},
+                        tone_playback()});
+  LMDJ_CHECK(committed.has_value());
+
+  const auto checkpoint = read_json(bundle / "history/checkpoints/1.json");
+  const auto& playback =
+      checkpoint.at("banks").at(0).at("pads").at(0).at("playback");
+  const std::vector<std::string> expected_keys{
+      "attack_ms", "eq", "gain_millidb", "muted", "release_ms", "tone",
+      "trigger_mode", "trim_end_frame", "trim_start_frame"};
+  LMDJ_CHECK(object_keys(playback) == expected_keys);
+  // The bypassed high band is not written.
+  LMDJ_CHECK(object_keys(playback.at("eq")) ==
+             (std::vector<std::string>{"low", "mid"}));
+  LMDJ_CHECK(playback.at("eq").at("low") ==
+             (nlohmann::json{{"freq_hz", 80}, {"gain_millidb", 0}, {"kind", "cut"}}));
+  LMDJ_CHECK(playback.at("eq").at("mid") ==
+             (nlohmann::json{{"freq_hz", 1000}, {"gain_millidb", 1200}, {"q_milli", 707}}));
+
+  const auto reopened = store.load(bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value() == committed.value().state);
+}
+
+void test_pre_v5_checkpoint_refuses_tone_keys() {
+  for (const auto& [key, value] : std::vector<std::pair<std::string, nlohmann::json>>{
+           {"attack_ms", 10},
+           {"eq", nlohmann::json::object()},
+       }) {
+    TempDirectory temp;
+    const auto bundle = temp.path() / "v4-tone.lmdj";
+    ProjectStore store;
+    LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+    const auto checkpoint_path = bundle / "history/checkpoints/0.json";
+    auto checkpoint = read_json(checkpoint_path);
+    checkpoint["contract"] = "lmdj.project.v4";
+    checkpoint["banks"][0]["pads"][0]["playback"][key] = value;
+    write_bytes(
+        checkpoint_path, lmdj::foundation::canonical_json(checkpoint) + "\n");
+    const auto rejected = store.load(bundle);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+  }
+}
+
+// The Contract accepts an explicit all-bypassed `eq: {}`, but the writer never
+// emits a default, and a current-level checkpoint must be the writer's
+// canonical bytes. The shape parses; the canonical comparison refuses it.
+void test_v5_checkpoint_refuses_explicit_default_eq_as_noncanonical() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "v5-empty-eq.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto checkpoint_path = bundle / "history/checkpoints/0.json";
+  auto checkpoint = read_json(checkpoint_path);
+  checkpoint["banks"][0]["pads"][0]["playback"]["eq"] = nlohmann::json::object();
+  write_bytes(
+      checkpoint_path, lmdj::foundation::canonical_json(checkpoint) + "\n");
+  const auto rejected = store.load(bundle);
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(rejected.error().message ==
+             "project checkpoint does not match transaction replay");
+}
+
+void test_v5_checkpoint_refuses_invalid_tone_playback() {
+  {
+    // Control: valid boundary values load, so a refusal below comes from the
+    // value, not from the rewrite.
+    TempDirectory temp;
+    const auto bundle = temp.path() / "v5-valid-tone.lmdj";
+    ProjectStore store;
+    LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+    const auto checkpoint_path = bundle / "history/checkpoints/0.json";
+    auto checkpoint = read_json(checkpoint_path);
+    auto& playback = checkpoint["banks"][0]["pads"][0]["playback"];
+    playback["attack_ms"] = 2000;
+    playback["release_ms"] = 4000;
+    playback["tone"] = 100;
+    playback["eq"] = {
+        {"high", {{"kind", "shelf"}, {"freq_hz", 20000}, {"gain_millidb", -18000}}},
+        {"mid", {{"freq_hz", 100}, {"gain_millidb", 18000}, {"q_milli", 10000}}}};
+    write_bytes(
+        checkpoint_path, lmdj::foundation::canonical_json(checkpoint) + "\n");
+    const auto loaded = store.load(bundle);
+    LMDJ_CHECK(loaded.has_value());
+    const auto& eq = loaded.value().banks.at(0).at(0).playback.eq;
+    LMDJ_CHECK(!eq.low.has_value());
+    LMDJ_CHECK(eq.high == (lmdj::domain::PadEqShelf{
+                              lmdj::domain::EqBandKind::shelf, 20000, -18000}));
+    LMDJ_CHECK(eq.mid == (lmdj::domain::PadEqBell{100, 18000, 10000}));
+  }
+  const nlohmann::json shelf{{"kind", "shelf"}, {"freq_hz", 100}, {"gain_millidb", 0}};
+  const nlohmann::json bell{{"freq_hz", 1000}, {"gain_millidb", 0}, {"q_milli", 707}};
+  auto with = [](nlohmann::json band, const std::string& key, nlohmann::json value) {
+    band[key] = std::move(value);
+    return band;
+  };
+  auto without = [](nlohmann::json band, const std::string& key) {
+    band.erase(key);
+    return band;
+  };
+  for (const auto& [key, value] : std::vector<std::pair<std::string, nlohmann::json>>{
+           {"attack_ms", 2001},
+           {"release_ms", -1},
+           {"tone", 1.5},
+           {"tone", -101},
+           {"eq", nlohmann::json::array()},
+           {"eq", {{"band4", bell}}},
+           {"eq", {{"low", with(shelf, "kind", "bell")}}},
+           {"eq", {{"low", with(shelf, "kind", 1)}}},
+           {"eq", {{"low", without(shelf, "gain_millidb")}}},
+           {"eq", {{"low", with(shelf, "q_milli", 707)}}},
+           {"eq", {{"low", with(shelf, "freq_hz", 19)}}},
+           {"eq", {{"mid", with(bell, "kind", "shelf")}}},
+           {"eq", {{"mid", without(bell, "q_milli")}}},
+           {"eq", {{"mid", with(bell, "q_milli", 99)}}},
+           {"eq", {{"high", with(with(shelf, "kind", "cut"), "freq_hz", 999)}}},
+           {"eq", {{"high", nullptr}}},
+       }) {
+    TempDirectory temp;
+    const auto bundle = temp.path() / "v5-invalid-tone.lmdj";
+    ProjectStore store;
+    LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+    const auto checkpoint_path = bundle / "history/checkpoints/0.json";
+    auto checkpoint = read_json(checkpoint_path);
+    checkpoint["banks"][0]["pads"][0]["playback"][key] = value;
+    write_bytes(
+        checkpoint_path, lmdj::foundation::canonical_json(checkpoint) + "\n");
+    const auto rejected = store.load(bundle);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+    // The playback parser refuses it, not the later canonical comparison,
+    // which would also refuse a value the parser silently dropped.
+    LMDJ_CHECK(rejected.error().message == "project Pad playback shape is invalid" ||
+               rejected.error().message == "project Pad playback is invalid");
+  }
+}
+
 void test_reset_pad_playback_persists_v2_defaults() {
   TempDirectory temp;
   const auto bundle = temp.path() / "reset-playback.lmdj";
@@ -2826,6 +2992,10 @@ int main() {
     test_ping_pong_loop_mode_round_trips();
     test_pre_v5_checkpoint_refuses_parity_keys();
     test_v5_checkpoint_refuses_invalid_parity_playback();
+    test_tone_playback_round_trips_with_only_present_bands();
+    test_pre_v5_checkpoint_refuses_tone_keys();
+    test_v5_checkpoint_refuses_explicit_default_eq_as_noncanonical();
+    test_v5_checkpoint_refuses_invalid_tone_playback();
     test_persisted_checkpoints_reject_non_contract_shapes();
     test_create_removes_exact_stale_checkpoint_temp();
     test_create_resumes_manifest_after_valid_checkpoint_publish();

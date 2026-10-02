@@ -1445,6 +1445,25 @@ struct ControlRuntime::Impl {
     bool notified = false;
   };
 
+  // A committed grid edit whose swap found every Pattern slot still held by
+  // retiring views that are sounding (#1671). It waits for reclaim to free a
+  // slot; any other publication since was prepared from Truth after the
+  // edit, so a changed generation supersedes it.
+  struct DeferredPatternEdit {
+    std::string project_id;
+    foundation::PatternId pattern_id;
+    std::uint64_t expected_generation;
+    std::uint64_t reclaimed_patterns;
+    // The revision runtime_revision advanced to when the swap was deferred.
+    std::optional<std::uint64_t> runtime_revision;
+  };
+
+  // Exactly one of: swapped in, deferred (neither set), or failed.
+  struct EditedPatternPublication {
+    std::optional<audio::PatternPublication> publication;
+    std::optional<Json> error;
+  };
+
   static facade::Application compose_application(
       audio::RealtimeEngine& engine,
       facade::ApplicationConfig config,
@@ -1618,6 +1637,92 @@ struct ControlRuntime::Impl {
         std::move(pattern.value()),
         activation_frame,
         std::move(replacement_authority));
+  }
+
+  // A grid edit changes only the current Pattern's events, so its view is
+  // republished without a Bank. While the transport plays, the view swaps in
+  // place: same origin, so playback neither restarts nor waits for a bar,
+  // voices keep sounding and the cursor resumes at the first event not yet
+  // scheduled. While stopped nothing plays, so it applies immediately and
+  // leaves no pending publication to refuse the next Play. Each swap takes a
+  // fresh Pattern slot; when every slot is held, the swap is deferred until
+  // reclaim frees one, which only the transport service cadence can retry.
+  EditedPatternPublication publish_edited_pattern(
+      const foundation::PatternId& selected_pattern, bool playing) {
+    deferred_pattern_edit.reset();
+    auto pattern = prepare_project_pattern(selected_pattern);
+    if (!pattern.has_value()) {
+      return {std::nullopt, normalized_error(pattern.error()).at("error")};
+    }
+    static_cast<void>(engine.reclaim_retired_patterns());
+    const auto telemetry = engine.pattern_telemetry();
+    bool injected_rejection = false;
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+    // Stands in for an engine rejection other than full slots.
+    injected_rejection = std::exchange(fail_next_pattern_publication, false);
+#endif
+    const auto publication = injected_rejection
+        ? audio::PatternPublication{
+              audio::PatternPublishResult::publish_queue_full, 0, 0}
+        : playing
+        ? engine.publish_pattern_view_preserving_phase(
+              std::move(pattern.value()), telemetry.current_generation)
+        : engine.publish_pattern_view_immediate(std::move(pattern.value()));
+    if (publication.result == audio::PatternPublishResult::accepted) {
+      return {publication, std::nullopt};
+    }
+    if (publication.result == audio::PatternPublishResult::pattern_slots_full &&
+        transport != nullptr && project_id.has_value()) {
+      deferred_pattern_edit = DeferredPatternEdit{
+          *project_id, selected_pattern, telemetry.current_generation,
+          telemetry.reclaimed_patterns, std::nullopt};
+      return {std::nullopt, std::nullopt};
+    }
+    return {std::nullopt, host_error("HOST_STATE_INVALID",
+        "runtime Pattern publication is unavailable",
+        {{"reason", "pattern_publication_unavailable"}}).at("error")};
+  }
+
+  // Service cadence. Waits while the transport owns the next publication
+  // and drops a deferral that another publication has superseded.
+  void retry_deferred_pattern_edit() {
+    if (!deferred_pattern_edit.has_value()) {
+      return;
+    }
+    const auto deferred = *deferred_pattern_edit;
+    const auto telemetry = engine.pattern_telemetry();
+    const auto current = engine.current_pattern_id();
+    if (!session_available() || project_id != deferred.project_id ||
+        pattern_id != deferred.pattern_id.value() || !current.has_value() ||
+        *current != deferred.pattern_id ||
+        telemetry.current_generation != deferred.expected_generation ||
+        telemetry.pending_generation != 0) {
+      deferred_pattern_edit.reset();
+      return;
+    }
+    bool playing = false;
+    if (transport != nullptr) {
+      const auto status = transport->controller->inspect();
+      if (status.recording ||
+          status.phase != facade::PatternTransportPhase::idle ||
+          status.error.has_value() || transport->publish_pending) {
+        return;
+      }
+      playing = status.playing;
+    }
+    static_cast<void>(engine.reclaim_retired_patterns());
+    if (engine.pattern_telemetry().reclaimed_patterns ==
+        deferred.reclaimed_patterns) {
+      return;
+    }
+    const auto published = publish_edited_pattern(deferred.pattern_id, playing);
+    if (deferred_pattern_edit.has_value()) {
+      deferred_pattern_edit->runtime_revision = deferred.runtime_revision;
+    } else if (published.error.has_value() &&
+               runtime_revision == deferred.runtime_revision) {
+      // The Runtime no longer reflects the revision it claimed.
+      runtime_revision.reset();
+    }
   }
 
   std::optional<audio::PatternReplacementAuthority>
@@ -2662,6 +2767,7 @@ struct ControlRuntime::Impl {
   std::optional<std::uint16_t> project_bpm;
   std::optional<std::string> runtime_bank_project_id;
   std::optional<std::uint64_t> runtime_revision;
+  std::optional<DeferredPatternEdit> deferred_pattern_edit;
   std::optional<SequenceSession> active_sequence;
   std::optional<PendingSequenceBoundary> pending_sequence_boundary;
   // Global Pattern transport engagement; present once a session has opted in
@@ -3507,6 +3613,109 @@ Json ControlRuntime::dispatch(
           response.at("project_revision").get<std::uint64_t>();
       auto result = response.at("result");
       result["project_revision"] = response.at("project_revision");
+      return success(std::move(result));
+    }
+    if (operation == "pattern.events.edit") {
+      require(exact_keys(
+          payload,
+          {"command_id", "expected_revision", "pattern_id", "remove", "put"}));
+      require(sidecar.empty());
+      if (!impl_->session_available() || impl_->active_sequence.has_value()) {
+        return state_error();
+      }
+      const auto edited_pattern = uuid_field(payload, "pattern_id");
+      bool playing = false;
+      if (impl_->transport != nullptr) {
+        // Recording keeps the admission fence it retained, and a transport
+        // command in flight owns the next publication; refuse before commit.
+        const auto transport = impl_->transport->controller->inspect();
+        if (transport.recording) {
+          return host_error("HOST_STATE_INVALID",
+              "Pattern events cannot change during Pattern transport recording",
+              {{"reason", "sequence_session_active"}});
+        }
+        if (transport.phase != facade::PatternTransportPhase::idle ||
+            transport.error.has_value() || impl_->transport->publish_pending) {
+          return host_error("HOST_STATE_INVALID",
+              "Pattern events can change once the Pattern transport settles",
+              {{"reason", "pattern_transport_busy"}});
+        }
+        playing = transport.playing;
+      }
+      // A scheduled publication (a BPM change, an Undo, a Pad edit or a
+      // reload) was prepared before this edit. An in-place swap cannot
+      // supersede it, and a view of another Pattern would apply stale at its
+      // boundary; refuse those before commit, as for a transport command. A
+      // stopped edit of the current Pattern publishes immediately, which
+      // supersedes or follows it.
+      const auto edits_current = impl_->pattern_id == edited_pattern;
+      const auto pending_pattern = impl_->engine.pending_pattern_id();
+      if (impl_->engine.pattern_telemetry().pending_generation != 0 &&
+          (edits_current ? playing
+                         : pending_pattern.has_value() &&
+                               pending_pattern->value() == edited_pattern)) {
+        return host_error("HOST_STATE_INVALID",
+            "Pattern events can change once the pending Pattern publication applies",
+            {{"reason", "pattern_publication_pending"}});
+      }
+      // A grid edit changes no Bank: a Runtime current before it stays
+      // current once the edited view is in place.
+      const auto runtime_was_current = impl_->project_revision.has_value() &&
+          impl_->runtime_revision == impl_->project_revision;
+      if (impl_->cancel_if_expired()) return timeout_error();
+      auto response = impl_->application.command({
+          {"operation", "pattern.events.edit"},
+          {"project_path", impl_->retained_project_path->generic_string()},
+          {"command_id", uuid_field(payload, "command_id")},
+          {"expected_revision", unsigned_field(payload, "expected_revision")},
+          {"pattern_id", edited_pattern},
+          {"remove", payload.at("remove")},
+          {"put", payload.at("put")},
+      });
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
+      }
+      impl_->project_revision =
+          response.at("project_revision").get<std::uint64_t>();
+      Json result{{"committed_revision", *impl_->project_revision},
+                  {"project_revision", *impl_->project_revision},
+                  {"pattern_id", edited_pattern},
+                  {"replayed", response.at("result").at("replayed")}};
+      const auto advance_runtime_revision = [&] {
+        if (!runtime_was_current) {
+          return;
+        }
+        impl_->runtime_revision = impl_->project_revision;
+        if (impl_->deferred_pattern_edit.has_value()) {
+          impl_->deferred_pattern_edit->runtime_revision = impl_->runtime_revision;
+        }
+      };
+      // The Runtime holds only its current Pattern; another Pattern is
+      // prepared from Truth whenever it is selected.
+      if (!edits_current) {
+        advance_runtime_revision();
+        result["publication"] = "none";
+        return success(std::move(result));
+      }
+      const auto published = impl_->publish_edited_pattern(
+          foundation::PatternId{edited_pattern}, playing);
+      result["pattern_publication"] = nullptr;
+      if (published.publication.has_value()) {
+        advance_runtime_revision();
+        result["publication"] = playing ? "live" : "published";
+        result["pattern_publication"] = {
+            {"generation", published.publication->generation},
+            {"activation_frame", published.publication->activation_frame},
+        };
+      } else if (!published.error.has_value()) {
+        // Swaps by itself once a sounding retiring view frees its slot.
+        advance_runtime_revision();
+        result["publication"] = "deferred";
+      } else {
+        // The edit is committed; only its Runtime view failed to swap.
+        result["publication"] = "failed";
+        result["snapshot_error"] = *published.error;
+      }
       return success(std::move(result));
     }
     if (operation == "project.inspect") {
@@ -5076,8 +5285,12 @@ ControlRuntime::drain_sequence_bar_boundary() {
 
 void ControlRuntime::service_pattern_transport() noexcept {
   try {
-    if (impl_->transport == nullptr ||
-        impl_->state != Impl::State::running) {
+    if (impl_->state != Impl::State::running) {
+      return;
+    }
+    // An audio interruption retires the engagement but not a deferral.
+    impl_->retry_deferred_pattern_edit();
+    if (impl_->transport == nullptr) {
       return;
     }
     const auto status = impl_->transport->controller->inspect();

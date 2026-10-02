@@ -16,13 +16,31 @@ struct PcmSample {
   std::vector<std::int16_t> interleaved;
 };
 
-// The resolved per-voice DSP settings of a Pad (lmdj.project.v5 5.1.0). It is
+// LMDJ_VOICE_DSP selects whether a Pad's playback carries the voice DSP
+// block. A Host whose runtime content cannot carry the block (the Cardputer:
+// lmdj.runtime-content.v1, decision 2026-09-30 point 9) builds every target
+// that includes this header with LMDJ_VOICE_DSP=0. The block is then empty and
+// occupies no bytes, the cooker refuses a Pad whose settings need it, and the
+// Audio Runtime compiles its voice kernel out.
+#ifndef LMDJ_VOICE_DSP
+#define LMDJ_VOICE_DSP 1
+#endif
+
+#if LMDJ_VOICE_DSP
+// The resolved per-voice DSP settings of a Pad (lmdj.project.v5 5.1.0 and
+// 5.2.0). It is
 // integer-only and trivially copyable so it rides every realtime control
 // message, and all-zero is neutral: a neutral block renders exactly as the
 // playback that predates it. Frame values are 48 kHz output frames.
 struct ResolvedVoiceDsp {
   static constexpr std::uint8_t kReverse = 0x01;
   static constexpr std::uint8_t kPingPong = 0x02;
+  // eq_flags: which EQ bands are present, and whether a shelf band is a cut.
+  static constexpr std::uint8_t kEqLow = 0x01;
+  static constexpr std::uint8_t kEqLowCut = 0x02;
+  static constexpr std::uint8_t kEqMid = 0x04;
+  static constexpr std::uint8_t kEqHigh = 0x08;
+  static constexpr std::uint8_t kEqHighCut = 0x10;
 
   // Frames from start_frame to where later loop passes resume.
   std::uint32_t loop_start_offset;
@@ -30,9 +48,36 @@ struct ResolvedVoiceDsp {
   std::int16_t pitch_cents;
   std::int8_t pan;
   std::uint8_t flags;
+  // Envelope ramp lengths (lmdj.project.v5 5.2.0). Zero, or anything shorter
+  // than the 96-frame declick, renders as the declick. The default member
+  // initializers keep the 5.1.0 positional form compiling unchanged.
+  std::uint32_t attack_frames = 0;
+  std::uint32_t release_frames = 0;
+  // Tone (-100..100; |tone| <= 2 is bypassed) and the 3-band EQ
+  // (lmdj.project.v5 5.2.0), in Project Truth's own units. A band's fields
+  // mean nothing unless eq_flags marks it present.
+  std::int8_t tone = 0;
+  std::uint8_t eq_flags = 0;
+  std::uint16_t eq_low_freq_hz = 0;
+  std::int16_t eq_low_gain_millidb = 0;
+  std::uint16_t eq_mid_freq_hz = 0;
+  std::int16_t eq_mid_gain_millidb = 0;
+  std::uint16_t eq_mid_q_milli = 0;
+  std::uint16_t eq_high_freq_hz = 0;
+  std::int16_t eq_high_gain_millidb = 0;
 
   bool operator==(const ResolvedVoiceDsp&) const = default;
 };
+
+static_assert(sizeof(ResolvedVoiceDsp) == 36);
+#else
+// Built without the voice DSP: every block is the neutral one.
+struct ResolvedVoiceDsp {
+  bool operator==(const ResolvedVoiceDsp&) const = default;
+};
+
+static_assert(std::is_empty_v<ResolvedVoiceDsp>);
+#endif
 
 constexpr bool is_neutral(const ResolvedVoiceDsp& dsp) noexcept {
   return dsp == ResolvedVoiceDsp{};
@@ -61,10 +106,10 @@ struct ResolvedPlayback {
   domain::TriggerMode trigger_mode;
   float linear_gain;
   bool muted;
-  ResolvedVoiceDsp dsp;
+  // Empty, and therefore free, when built without the voice DSP.
+  [[no_unique_address]] ResolvedVoiceDsp dsp;
 };
 
-static_assert(sizeof(ResolvedVoiceDsp) == 12);
 static_assert(std::is_trivially_copyable_v<ResolvedVoiceDsp>);
 static_assert(std::is_trivially_copyable_v<ResolvedPlayback>);
 

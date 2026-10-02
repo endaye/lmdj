@@ -1205,9 +1205,13 @@ class InputAndPolicyTests(unittest.TestCase):
             config_identity = adapter._file_identity(config_path)
             adapter_identity = adapter._file_identity(source / "pr_agent_review.py")
         self.assertEqual(witness["schema"], adapter.WITNESS_SCHEMA)
-        self.assertEqual(witness["provider_order"], ["deepseek"])
+        self.assertEqual(witness["provider_order"], ["deepseek", "glm"])
         self.assertTrue(witness["providers"]["deepseek"]["enabled"])
         self.assertEqual(witness["providers"]["deepseek"]["model"], "deepseek/deepseek-flash")
+        self.assertTrue(witness["providers"]["glm"]["enabled"])
+        self.assertEqual(witness["providers"]["glm"]["model"], "zai/glm-5.3-flash")
+        self.assertEqual(witness["providers"]["glm"]["endpoint"], "https://open.bigmodel.cn/api/paas/v4")
+        self.assertEqual(witness["providers"]["glm"]["credential_ref"], "PR_AGENT_ZAI_API_KEY")
         self.assertEqual(witness["engine"]["name"], "pr-agent")
         self.assertEqual(witness["engine"]["source_commit"], adapter.UPSTREAM_COMMIT)
         self.assertEqual(witness["engine"]["runtime_config"], config_identity)
@@ -2378,6 +2382,27 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(result["attempts"][0]["provider_warnings"], ["quota_exhausted"])
         self.assertNotIn("provider_warnings", result["attempts"][1])
         self.assertEqual(calls, ["fixture-deepseek-model", "fixture-deepseek-model", "fixture-glm-model"])
+
+    def test_glm_request_pins_light_reasoning_effort_and_keeps_deepseek_plain(self):
+        self.config_path.write_text(self.with_glm_fallback(self.config_path.read_text()))
+        calls = []
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text()
+
+        async def fake(**kwargs):
+            calls.append(kwargs)
+            if kwargs["model"] != "fixture-glm-model":
+                raise ProviderResponseError(429, {"code": "quota_exhausted"})
+            return FakeCompletion({"model": "fixture-glm-served",
+                "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+
+        result, _, _ = self.run_with_fake(fake)
+        self.assertEqual(result["status"], "reviewed")
+        # GLM-5.3 cannot disable thinking and reasoning tokens share the output
+        # cap with the verdict, so the engine pins the lightest effort; DeepSeek
+        # keeps its non-thinking request and never receives the GLM knob.
+        self.assertEqual(calls[-1]["extra_body"], {"reasoning_effort": "low"})
+        self.assertEqual(calls[0]["extra_body"], {"thinking": {"type": "disabled"}})
 
     def test_limit_warning_survives_total_deadline_after_first_refusal(self):
         self.config_path.write_text(self.config_path.read_text().replace("engine_deadline_seconds = 600", "engine_deadline_seconds = 1"))

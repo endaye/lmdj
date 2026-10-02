@@ -3,6 +3,7 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -24,12 +25,14 @@ using lmdj::domain::CreatePattern;
 using lmdj::domain::ImportAsset;
 using lmdj::domain::ImportAssignSample;
 using lmdj::domain::LoopMode;
+using lmdj::domain::EditPatternEvents;
 using lmdj::domain::MergePatternEvents;
 using lmdj::domain::MovePatternSlot;
 using lmdj::domain::PadPlayback;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
+using lmdj::domain::PatternEventKey;
 using lmdj::domain::ResetPadPlayback;
 using lmdj::domain::TriggerMode;
 using lmdj::domain::UpdatePadPlayback;
@@ -63,6 +66,8 @@ constexpr auto kMovePatternSlotCommand =
     "10000000-0000-4000-8000-00000000000e";
 constexpr auto kClearPatternSlotCommand =
     "10000000-0000-4000-8000-00000000000f";
+constexpr auto kEditCommand1 = "10000000-0000-4000-8000-000000000010";
+constexpr auto kEditCommand2 = "10000000-0000-4000-8000-000000000011";
 constexpr auto kAsset1 = "20000000-0000-4000-8000-000000000001";
 constexpr auto kAsset2 = "20000000-0000-4000-8000-000000000002";
 constexpr auto kPattern1 = "30000000-0000-4000-8000-000000000001";
@@ -529,6 +534,107 @@ void test_update_pad_playback_rejects_invalid_parity_values() {
   }
 }
 
+PadPlayback with_tone(
+    PadPlayback playback,
+    std::int32_t attack_ms,
+    std::int32_t release_ms,
+    std::int32_t tone,
+    lmdj::domain::PadEq eq) {
+  playback.attack_ms = attack_ms;
+  playback.release_ms = release_ms;
+  playback.tone = tone;
+  playback.eq = eq;
+  return playback;
+}
+
+lmdj::domain::PadEq full_eq(
+    lmdj::domain::PadEqShelf low,
+    lmdj::domain::PadEqBell mid,
+    lmdj::domain::PadEqShelf high) {
+  return lmdj::domain::PadEq{low, mid, high};
+}
+
+void test_update_pad_playback_accepts_tone_bounds() {
+  using lmdj::domain::EqBandKind;
+  auto state = apply_or_throw(
+      new_project(),
+      import_assign_sample(
+          kImportAssignCommand, 0, PadSlotId{0, 0}, kAsset1))
+                   .state;
+  const PadPlayback gate{10, 30, TriggerMode::gate, 0, false};
+  const std::array cases{
+      with_tone(gate, 2000, 4000, -100,
+                full_eq({EqBandKind::shelf, 20, -18000},
+                        {100, 18000, 100},
+                        {EqBandKind::cut, 20000, 18000})),
+      with_tone(gate, 1, 1, 100,
+                full_eq({EqBandKind::cut, 2000, 18000},
+                        {10000, -18000, 10000},
+                        {EqBandKind::shelf, 1000, -18000})),
+      // Every band is independent: one present band leaves the others bypassed.
+      with_tone(gate, 0, 0, 0,
+                lmdj::domain::PadEq{std::nullopt, lmdj::domain::PadEqBell{1000, 0, 707},
+                                    std::nullopt}),
+  };
+
+  for (const auto& playback : cases) {
+    const auto applied = lmdj::domain::apply(
+        state,
+        update_playback(
+            kPlaybackCommand, state.revision, PadSlotId{0, 0}, playback),
+        {});
+    LMDJ_CHECK(applied.has_value());
+    LMDJ_CHECK(applied.value().state.banks[0][0].playback == playback);
+    state = applied.value().state;
+  }
+}
+
+void test_update_pad_playback_rejects_invalid_tone_values() {
+  using lmdj::domain::EqBandKind;
+  using lmdj::domain::PadEq;
+  using lmdj::domain::PadEqBell;
+  using lmdj::domain::PadEqShelf;
+  const auto initial = new_project();
+  const PadPlayback gate{10, 30, TriggerMode::gate, 0, false};
+  const auto low = [&](PadEqShelf band) {
+    return with_tone(gate, 0, 0, 0, PadEq{band, std::nullopt, std::nullopt});
+  };
+  const auto mid = [&](PadEqBell band) {
+    return with_tone(gate, 0, 0, 0, PadEq{std::nullopt, band, std::nullopt});
+  };
+  const auto high = [&](PadEqShelf band) {
+    return with_tone(gate, 0, 0, 0, PadEq{std::nullopt, std::nullopt, band});
+  };
+  for (const PadPlayback& invalid_playback : {
+           with_tone(gate, 2001, 0, 0, {}),
+           with_tone(gate, -1, 0, 0, {}),
+           with_tone(gate, 0, 4001, 0, {}),
+           with_tone(gate, 0, -1, 0, {}),
+           with_tone(gate, 0, 0, 101, {}),
+           with_tone(gate, 0, 0, -101, {}),
+           low({EqBandKind::shelf, 19, 0}),
+           low({EqBandKind::shelf, 2001, 0}),
+           low({EqBandKind::shelf, 100, 18001}),
+           low({EqBandKind::cut, 100, -18001}),
+           low({static_cast<EqBandKind>(255), 100, 0}),
+           mid({99, 0, 707}),
+           mid({10001, 0, 707}),
+           mid({1000, 18001, 707}),
+           mid({1000, -18001, 707}),
+           mid({1000, 0, 99}),
+           mid({1000, 0, 10001}),
+           high({EqBandKind::shelf, 999, 0}),
+           high({EqBandKind::shelf, 20001, 0}),
+           high({EqBandKind::cut, 5000, 18001}),
+           high({static_cast<EqBandKind>(2), 5000, 0}),
+       }) {
+    check_invalid_without_state_change(
+        initial,
+        update_playback(
+            kPlaybackCommand, 0, PadSlotId{0, 0}, invalid_playback));
+  }
+}
+
 void test_explicit_reset_clears_parity_playback() {
   auto state = apply_or_throw(
       new_project(),
@@ -542,7 +648,13 @@ void test_explicit_reset_clears_parity_playback() {
                   1,
                   PadSlotId{0, 0},
                   with_parity(
-                      PadPlayback{5, 25, TriggerMode::loop_toggle, 0, false},
+                      with_tone(
+                          PadPlayback{5, 25, TriggerMode::loop_toggle, 0, false},
+                          300, 900, -40,
+                          lmdj::domain::PadEq{
+                              lmdj::domain::PadEqShelf{
+                                  lmdj::domain::EqBandKind::cut, 80, 0},
+                              std::nullopt, std::nullopt}),
                       true, 700, -40, LoopMode::forward, 9, 3)))
               .state;
   const auto reset = lmdj::domain::apply(
@@ -787,6 +899,155 @@ void test_merge_pattern_events_replaces_duplicates_and_orders_canonically() {
   LMDJ_CHECK(events[2].velocity == 127);
 }
 
+// A one-bar Pattern with A1 at 0 and A2 at 240, at revision 1.
+lmdj::domain::ProjectState project_with_grid_pattern() {
+  return apply_or_throw(
+             new_project(),
+             Command{CreatePattern{
+                 meta(kPatternCommand, 0),
+                 {PatternId{kPattern1},
+                  1,
+                  {
+                      {PadSlotId{0, 0}, 0, 240, 100},
+                      {PadSlotId{0, 1}, 240, 240, 100},
+                  }},
+             }})
+      .state;
+}
+
+EditPatternEvents edit_pattern(
+    std::string command_id, std::uint64_t revision,
+    std::vector<PatternEventKey> remove, std::vector<PatternEvent> put,
+    std::string pattern_id = kPattern1) {
+  return EditPatternEvents{meta(std::move(command_id), revision),
+                           PatternId{std::move(pattern_id)},
+                           std::move(remove), std::move(put)};
+}
+
+// The refusal's exact code and reason, so each caller fails at its own line.
+std::optional<std::pair<ErrorCode, std::string>> edit_refusal(
+    const lmdj::domain::ProjectState& state, const EditPatternEvents& command) {
+  const auto before = state;
+  const auto result = lmdj::domain::apply(state, command, {});
+  if (!(state == before)) {
+    throw std::runtime_error("a refused edit changed the state");
+  }
+  if (result.has_value()) {
+    return std::nullopt;
+  }
+  return std::pair{result.error().code,
+                   result.error().details.value("reason", std::string{})};
+}
+
+std::optional<std::pair<ErrorCode, std::string>> refused(
+    ErrorCode code, std::string reason) {
+  return std::pair{code, std::move(reason)};
+}
+
+void test_edit_pattern_events_moves_resizes_and_adds_in_one_revision() {
+  const auto state = project_with_grid_pattern();
+  const auto edited = apply_or_throw(
+      state,
+      edit_pattern(kEditCommand1, 1,
+                   {{PadSlotId{0, 0}, 0}},
+                   {{PadSlotId{0, 0}, 480, 240, 100},
+                    {PadSlotId{0, 1}, 240, 720, 64},
+                    {PadSlotId{0, 2}, 0, 120, 100}}));
+  LMDJ_CHECK(edited.state.revision == state.revision + 1);
+  LMDJ_CHECK(!edited.replayed);
+  LMDJ_CHECK(edited.event.at("type") == "pattern.events_edited");
+  const auto& events = edited.state.patterns.at(PatternId{kPattern1}).events;
+  LMDJ_CHECK((events == std::vector<PatternEvent>{
+      {PadSlotId{0, 2}, 0, 120, 100},
+      {PadSlotId{0, 1}, 240, 720, 64},
+      {PadSlotId{0, 0}, 480, 240, 100}}));
+}
+
+void test_edit_pattern_events_put_replaces_by_key_and_keeps_overlap() {
+  const auto edited = apply_or_throw(
+      project_with_grid_pattern(),
+      edit_pattern(kEditCommand1, 1, {},
+                   {{PadSlotId{0, 1}, 240, 60, 30},
+                    {PadSlotId{0, 1}, 120, 480, 90}}));
+  const auto& events = edited.state.patterns.at(PatternId{kPattern1}).events;
+  // The put at A2/240 replaced the stored note; the new A2/120 note overlaps
+  // it, which is allowed at a different onset.
+  LMDJ_CHECK((events == std::vector<PatternEvent>{
+      {PadSlotId{0, 0}, 0, 240, 100},
+      {PadSlotId{0, 1}, 120, 480, 90},
+      {PadSlotId{0, 1}, 240, 60, 30}}));
+}
+
+void test_edit_pattern_events_refuses_a_missing_removal() {
+  LMDJ_CHECK(edit_refusal(project_with_grid_pattern(),
+                          edit_pattern(kEditCommand1, 1,
+                                       {{PadSlotId{0, 0}, 0}, {PadSlotId{0, 3}, 0}},
+                                       {})) ==
+             refused(ErrorCode::not_found, "pattern_event_missing"));
+}
+
+void test_edit_pattern_events_refuses_repeated_keys() {
+  const auto state = project_with_grid_pattern();
+  LMDJ_CHECK(edit_refusal(state,
+                          edit_pattern(kEditCommand1, 1,
+                                       {{PadSlotId{0, 0}, 0}, {PadSlotId{0, 0}, 0}},
+                                       {})) ==
+             refused(ErrorCode::invalid_argument, "pattern_edit_duplicate_key"));
+  LMDJ_CHECK(edit_refusal(state,
+                          edit_pattern(kEditCommand1, 1, {},
+                                       {{PadSlotId{0, 2}, 0, 120, 100},
+                                        {PadSlotId{0, 2}, 0, 240, 90}})) ==
+             refused(ErrorCode::invalid_argument, "pattern_edit_duplicate_key"));
+}
+
+void test_edit_pattern_events_refuses_an_empty_or_unchanging_edit() {
+  const auto state = project_with_grid_pattern();
+  LMDJ_CHECK(edit_refusal(state, edit_pattern(kEditCommand1, 1, {}, {})) ==
+             refused(ErrorCode::invalid_argument, "pattern_edit_empty"));
+  // Removing a note and putting it back unchanged is a no-op, so it must not
+  // become a revision or an Undo entry.
+  LMDJ_CHECK(edit_refusal(state,
+                          edit_pattern(kEditCommand1, 1, {{PadSlotId{0, 0}, 0}},
+                                       {{PadSlotId{0, 0}, 0, 240, 100}})) ==
+             refused(ErrorCode::invalid_argument, "pattern_edit_unchanged"));
+}
+
+void test_edit_pattern_events_refuses_a_note_across_the_loop_seam() {
+  // One bar is 3840 ticks: a 480-tick note at 3600 would cross the seam.
+  check_invalid_without_state_change(
+      project_with_grid_pattern(),
+      edit_pattern(kEditCommand1, 1, {}, {{PadSlotId{0, 2}, 3600, 480, 100}}));
+}
+
+void test_edit_pattern_events_refuses_an_unknown_pattern() {
+  LMDJ_CHECK(edit_refusal(project_with_grid_pattern(),
+                          edit_pattern(kEditCommand1, 1, {},
+                                       {{PadSlotId{0, 2}, 0, 120, 100}},
+                                       kPattern2)) ==
+             refused(ErrorCode::not_found, "pattern_not_found"));
+}
+
+void test_edit_pattern_events_is_revision_checked_and_replays() {
+  const auto state = project_with_grid_pattern();
+  const auto stale = lmdj::domain::apply(
+      state,
+      edit_pattern(kEditCommand1, 0, {}, {{PadSlotId{0, 2}, 0, 120, 100}}),
+      {});
+  LMDJ_CHECK(!stale.has_value());
+  LMDJ_CHECK(stale.error().code == ErrorCode::revision_conflict);
+
+  const auto command =
+      edit_pattern(kEditCommand2, 1, {}, {{PadSlotId{0, 2}, 0, 120, 100}});
+  const auto first = apply_or_throw(state, command);
+  const std::map<CommandId, CommandReceipt> receipts{
+      {CommandId{kEditCommand2}, {first.state.revision, first.event}}};
+  const auto replayed = lmdj::domain::apply(first.state, command, receipts);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().replayed);
+  LMDJ_CHECK(replayed.value().state == first.state);
+  LMDJ_CHECK(replayed.value().event == first.event);
+}
+
 void test_tick_pattern_validation_enforces_loop_remainder() {
   const auto initial = new_project();
   for (const PatternEvent invalid : {
@@ -974,6 +1235,8 @@ int main() {
     test_update_pad_playback_rejects_invalid_values();
     test_update_pad_playback_accepts_parity_bounds();
     test_update_pad_playback_rejects_invalid_parity_values();
+    test_update_pad_playback_accepts_tone_bounds();
+    test_update_pad_playback_rejects_invalid_tone_values();
     test_explicit_reset_clears_parity_playback();
     test_assign_pad_rejects_missing_asset();
     test_update_pad_playback_rejects_stale_revision();
@@ -985,6 +1248,14 @@ int main() {
     test_pattern_validation_enforces_velocity_bars_and_tick_bounds();
     test_create_pattern_rejects_invalid_pattern_id();
     test_merge_pattern_events_replaces_duplicates_and_orders_canonically();
+    test_edit_pattern_events_moves_resizes_and_adds_in_one_revision();
+    test_edit_pattern_events_put_replaces_by_key_and_keeps_overlap();
+    test_edit_pattern_events_refuses_a_missing_removal();
+    test_edit_pattern_events_refuses_repeated_keys();
+    test_edit_pattern_events_refuses_an_empty_or_unchanging_edit();
+    test_edit_pattern_events_refuses_a_note_across_the_loop_seam();
+    test_edit_pattern_events_refuses_an_unknown_pattern();
+    test_edit_pattern_events_is_revision_checked_and_replays();
     test_tick_pattern_validation_enforces_loop_remainder();
     test_sequence_settings_update_enforces_locked_ranges();
     test_pattern_slot_commands_enforce_ownership_and_receipts();

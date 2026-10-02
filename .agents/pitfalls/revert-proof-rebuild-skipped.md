@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-09-30
     occurrence: https://github.com/endaye/lmdj/issues/1684
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-02
+    occurrence: https://github.com/endaye/lmdj/pull/1766
+    observed_by: Claude Code (Opus 5.5)
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -90,3 +93,20 @@ Repair: the rule now also sits where a proof is made. It is a habit in
 `docs/governance/minimization-principle.md` §2 (Tests) and a clause in the Tests
 summary of `AGENTS.md` / `CLAUDE.md`, which every session loads before any work
 begins. The `issue-done` exit keeps the full procedure for shipping.
+
+## Fourth occurrence, 2026-10-02: a fresh mtime in the same second
+
+A mutation script for #1766 restored each source by writing it back and
+stamping `time.time()` as its mtime, then rebuilt and read the exit status. For
+a small target, the mutant's compile, its 0.3 s test run and the restore all
+fell in the same second. GNU Make 3.81, the macOS `/usr/bin/make` behind the
+dev preset's Unix Makefiles generator, compares whole seconds. It judged the
+object up to date, so the "restored" binary was still the mutant and failed at
+the mutated assertion. `stat` showed the source and its object at the identical
+second.
+
+Repair: a fresh mtime must be strictly newer than the mutant's products. Wait
+at least one second (two to be safe) before writing or touching the restored
+file. Then confirm the rebuild log names the restored translation unit as
+compiled before the run counts. `issue-done` §1 and the Minimization
+principle's Tests habit now say so.

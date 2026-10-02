@@ -21,7 +21,9 @@ Project Cooker 可从 Project v5 tick-native Pattern、Pad playback 与 PCM16 Ar
 ## 3. 所有权与依赖
 依赖 Foundation 与 Authoring Domain，不依赖 Host 或 Product Assembly。
 ## 4. 架构与数据流
-resolved playback 同时填充 voice DSP 块：循环点与 crossfade 以与 trim 起点相同的向下取整换算到 48 kHz，舍入溢出被夹回解析后的循环之内，reverse 与 ping-pong 成为标志，pitch 与 pan 原样携带；trim 末端开放时，crossfade 被限制为以源末帧结束的循环的一半。
+resolved playback 同时填充 voice DSP 块：循环点与 crossfade 以与 trim 起点相同的向下取整换算到 48 kHz，舍入溢出被夹回解析后的循环之内，reverse 与 ping-pong 成为标志，pitch 与 pan 原样携带；trim 末端开放时，crossfade 被限制为以源末帧结束的循环的一半。#1667 的 attack/release 毫秒乘 48 成为输出帧（one_shot 从不播放 release，其 release 解析为 0），tone 在 ±2 死区内解析为 0，EQ 保持 Project Truth 的单位，并以存在位与 cut 位标记各段。
+
+不带 voice DSP 构建时（`LMDJ_VOICE_DSP=0`，即 Cardputer），块为空。Cooker 恰好接受解析为中性块的设置，其余以 `Pad playback voice settings are not supported by this build` 拒绝；无效设置仍先报告为无效。`project_cooker_test` 与 `audio.voice_dsp_disabled` 共用同一张中性表，保证两种构建对同一 Pad 的判断一致。Runtime Content v1 encoder 的 `voice_dsp` 拒绝同样覆盖包络、tone 与 EQ。
 
 验证 Slot/Asset/playback 引用和 source-frame admission，读取不可变 WAV Artifact，生成多层 peak envelope 与 48 kHz PCM，输出不可变 prepared snapshot。replay 投影走同一条确定性路径：以 Project Truth 中的 Performance 与 `pattern_slots` 为输入，逐 Pad Slot 解析 playback、逐 Pattern Slot 生成 Runtime Snapshot，并把 Performance event 展开为带 `offset_tick` 的 boundary 序列。
 ## 5. API 与 Artifact 边界

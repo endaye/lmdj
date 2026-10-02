@@ -26,6 +26,7 @@ class DurableTest(unittest.TestCase):
         self.spec={"request_sha256":"b"*64,"operation_id":f.inputs["request_id"],"repository_id":10,"actor_id":20,
             "workflow":f.workflow,"workflow_id":50,"control_revision":f.source,"producer_revision":f.source,"inputs":deepcopy(f.inputs)}
         self.posts=[];self.mode="accept";self.authorized=True;self.prepared=True;self.guard_hook=None
+        self.run_head=None
         self.client=GitHubClient(http_transport=self.transport)
         f.consumer.api=self.client.get_dispatch_evidence
         self.controller=self.new_controller()
@@ -48,7 +49,7 @@ class DurableTest(unittest.TestCase):
             self.assertEqual(json.loads(body),{"ref":"main","inputs":self.spec["inputs"]})
             self.posts.append(url)
             if self.mode=="drop":raise TimeoutError("private-sentinel")
-            self.fixture.another_run(41)
+            self.fixture.another_run(41,control=self.run_head)
             if self.mode=="accepted-timeout":raise TimeoutError("private-sentinel")
             if self.mode=="crash":
                 (self.root.parent/"remote-accepted").write_text("41")
@@ -56,9 +57,59 @@ class DurableTest(unittest.TestCase):
             return HttpResponse(204,{},b"")
         if url=="/user":return HttpResponse(200,{},json.dumps({"id":20}).encode())
         if url=="/repos/endaye/lmdj":return HttpResponse(200,{},json.dumps({"id":10,"full_name":"endaye/lmdj"}).encode())
-        if self.guard_hook and url.endswith("/branches/main"):
+        # The hook models the pre-POST read, after the intent is durable.
+        if self.guard_hook and url.endswith("/branches/main") and self.intent_recorded():
             hook=self.guard_hook;self.guard_hook=None;hook()
         return self.fixture.transport(method,url,headers,body)
+
+    def intent_recorded(self):
+        path=self.root/"dispatch.json"
+        return path.exists() and json.loads(path.read_bytes())["post_intent"]
+
+    def commit(self,path=None):
+        f=self.fixture
+        if path is not None:
+            (f.root/path).parent.mkdir(parents=True,exist_ok=True)
+            (f.root/path).write_text(path+str(len(f.git("log","--format=%H").split()))+"\n")
+            f.git("add",path)
+        f.git("-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","--allow-empty","-qm","main moved")
+        revision=f.git("rev-parse","HEAD")
+        f.routes["/branches/main"]["commit"]["sha"]=revision
+        return revision
+
+    def test_dispatch_from_main_that_moved_past_unchanged_workflow_is_correlated(self):
+        newer=self.commit("tools/release/newer_tooling.py")
+        self.run_head=newer
+        result=self.controller.start(self.spec)
+        self.assertEqual(result["status"],"correlated")
+        self.assertEqual((result["binding"]["control_revision"],result["binding"]["dispatch_revision"]),
+                         (self.fixture.source,newer))
+        self.assertEqual(len(self.posts),1)
+
+    def test_main_with_changed_workflow_records_no_intent_and_never_posts(self):
+        self.commit(".github/workflows/"+self.fixture.workflow)
+        with self.assertRaisesRegex(DurableDispatchError,"not dispatchable"):self.controller.start(self.spec)
+        self.assertFalse(json.loads((self.root/"dispatch.json").read_bytes())["post_intent"])
+        self.assertEqual(self.posts,[])
+
+    def test_unreadable_main_records_no_intent_and_a_later_resume_posts_once(self):
+        self.fixture.routes["/branches/main"]["commit"]["sha"]="f"*40
+        with self.assertRaisesRegex(DurableDispatchError,"not dispatchable"):self.controller.start(self.spec)
+        self.assertFalse(json.loads((self.root/"dispatch.json").read_bytes())["post_intent"])
+        self.fixture.routes["/branches/main"]["commit"]["sha"]=self.fixture.source
+        self.assertEqual(self.new_controller().resume(self.spec)["status"],"correlated")
+        self.assertEqual(len(self.posts),1)
+
+    def test_scope_tells_an_unreadable_history_from_a_changed_workflow(self):
+        from tools.release.github_api import GitHubApiError
+        def unreadable(revision):raise ValueError("private-sentinel")
+        with self.assertRaisesRegex(GitHubApiError,"history is unreadable") as caught:
+            self.client.dispatch_scope(self.spec,dispatchable=unreadable)
+        self.assertNotIn("private-sentinel",str(caught.exception))
+        self.assertNotIn("workflow definition",str(caught.exception))
+        with self.assertRaisesRegex(GitHubApiError,"no longer runs the frozen workflow definition") as caught:
+            self.client.dispatch_scope(self.spec,dispatchable=lambda revision:False)
+        self.assertNotIn("unreadable",str(caught.exception))
 
     def test_successful_dispatch_is_correlated_and_resume_never_reposts(self):
         result=self.controller.start(self.spec)

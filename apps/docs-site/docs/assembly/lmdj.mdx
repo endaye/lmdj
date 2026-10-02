@@ -17,8 +17,8 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 当前分配的 Product Build `2.0.75.0` 在 `2.0.71.0` 之上只推进 Contract 身份：`lmdj.project.v5` 由 `5.1.0` 升到 `5.2.0`，
 Contract ID 不变，Pad `playback` 新增 #1667 的四个可选键：`attack_ms`（0..2000）、`release_ms`（0..4000）、`tone`（−100..+100）
 与 `eq`。`eq` 含可选的 `low`、`mid`、`high` 三段，缺席的一段即旁通；`low`/`high` 为 `{kind: shelf | cut, freq_hz, gain_millidb}`，
-`mid` 为 `{freq_hz, gain_millidb, q_milli}`。Module、Host 与 Provider 身份全部不变：读写这些键的实现是 #1667 的后续 Core Task，
-在它合入之前 Project I/O 仍拒绝这些键。Cardputer profile 同步到当前 Build 与 Assembly 摘要。
+`mid` 为 `{freq_hz, gain_millidb, q_milli}`。Module、Host 与 Provider 身份全部不变：读写这些键的 Core 实现随后由 #1667 的 Core PR 合入，
+Module 身份留待下一次结算；Facade、Web Runtime 与 MCP 的支持由 #1667 的 Host PR 合入，在那之前它们仍拒绝这些键。Cardputer profile 同步到当前 Build 与 Assembly 摘要。
 `2.0.72.0`–`2.0.74.0` 已被尚未合入的 #1741 占用，所以本次分配跳过这三个号。
 
 它不是公共 Release、部署或 Channel 晋级。
@@ -37,7 +37,7 @@ Contract 身份不变（`lmdj.project.v5` 仍为 `5.1.0`）：
 - Project Cooker 升到 `2.0.0`：公开类型 `ResolvedPlayback` 增加 voice DSP 块后不再是 aggregate，
   designated initializer 写法不再编译，所以是 MAJOR。
 - CLI `3.3.10`、Native Host `3.4.5`、Cardputer Host `1.0.5` 与 Web Runtime Host `4.3.5` 只跟随依赖做 PATCH。
-  Cardputer profile 自 `1.0.65.0` 起没有随后续 Build 更新，本次同步到当前 Build 与 Assembly 摘要。
+  Cardputer profile 自 `1.0.65.0` 起没有随后续 Build 更新，该次分配把它同步到 `2.0.71.0` 与当时的 Assembly 摘要。
 
 Product Build `2.0.70.0` 曾在 `2.0.69.0` 之上只推进 Contract 身份：`lmdj.project.v5` 由 `5.0.0` 升到 `5.1.0`，Contract ID 不变，Pad `playback` 新增六个可选键（`reverse`、`pitch_cents`、`pan`、`loop_mode`、`loop_start_frame` 与 `loop_crossfade_frames`）。Module、Host 与 Provider 身份在该 Build 全部不变；读写这些键的实现随后由 #1717 与 #1735 合入，版本在 `2.0.71.0` 结算。
 

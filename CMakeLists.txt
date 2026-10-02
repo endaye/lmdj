@@ -214,6 +214,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_audio_realtime_queue_tests
     lmdj_audio_voice_dsp_tests
     lmdj_audio_voice_dsp_parity_tests
+    lmdj_audio_voice_dsp_disabled_tests
     lmdj_audio_value_channel_tests
     lmdj_snapshot_publication_invariant_tests
     lmdj_master_fx_tests
@@ -240,6 +241,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_pattern_transport_executor_tests
     lmdj_facade_candidate_store_tests
     lmdj_facade_pad_delete_tests
+    lmdj_facade_pattern_events_edit_tests
     lmdj_facade_candidate_job_tests
     lmdj_facade_candidate_audition_tests
     lmdj_facade_candidate_adoption_tests

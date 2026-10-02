@@ -15,8 +15,8 @@ const project = {
   bundleDigest: "a".repeat(64), key: "—" as const,
   pads: Array.from({length: 64}, (_, slot) => ({slot, assetId: null})),
   patterns: [
-    {patternId: "22222222-2222-4222-8222-222222222222", bars: 1 as const},
-    {patternId: "33333333-3333-4333-8333-333333333333", bars: 4 as const},
+    {patternId: "22222222-2222-4222-8222-222222222222", bars: 1 as const, events: []},
+    {patternId: "33333333-3333-4333-8333-333333333333", bars: 4 as const, events: []},
   ],
   patternSlots: Object.freeze(Array<string | null>(16).fill(null)),
   sequenceSettings: {quantizeEnabled: true, swingPercent: 50},
@@ -30,9 +30,11 @@ function renderSurface(recovery = false) {
     onRefresh: vi.fn(), onSwitch: vi.fn(),
     onCreatePattern: vi.fn(), onSettingsChange: vi.fn(),
     onRecover: vi.fn(), onDiscard: vi.fn(),
+    onSnapChange: vi.fn(), onViewportChange: vi.fn(),
   };
   render(<SequenceTouchWorkspace project={project}
     transport={initialPatternTransportState}
+    bank={0} snap="1/16"
     state={{
       ...initialSequenceState,
       recovery: recovery ? [{sessionId: "session-1", patternId: project.patternId,
@@ -51,6 +53,8 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
   const onRecover = vi.fn();
   const onDiscard = vi.fn();
   const onRefresh = vi.fn();
+  const onSnapChange = vi.fn();
+  const onViewportChange = vi.fn();
   const sequenceState = {
     ...initialSequenceState,
     recovery: [{
@@ -72,11 +76,14 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
     overview={<SequenceOverview
       project={project} state={sequenceState}
       transport={initialPatternTransportState}
+      bank={0} snap="1/16" viewport={null}
     />}
     pads={<span>pads</span>}
     touchWorkspace={<SequenceTouchWorkspace
       project={project} state={sequenceState}
       transport={initialPatternTransportState}
+      bank={0} snap="1/16"
+      onSnapChange={onSnapChange} onViewportChange={onViewportChange}
       onRefresh={onRefresh} onSwitch={onSwitch}
       onCreatePattern={onCreatePattern} onSettingsChange={onSettingsChange}
       onRecover={onRecover} onDiscard={onDiscard}
@@ -165,6 +172,8 @@ test("rapid step clicks accumulate from the last requested value until Truth cat
   const props = {
     transport: initialPatternTransportState,
     state: {...initialSequenceState, phase: "stopped" as const},
+    bank: 0 as const, snap: "1/16" as const,
+    onSnapChange: () => {}, onViewportChange: () => {},
     onRefresh: () => {}, onSwitch: () => {},
     onCreatePattern: () => {}, onSettingsChange,
     onRecover: () => {}, onDiscard: () => {},
@@ -197,6 +206,8 @@ test("a failed settings commit resyncs the step base to the committed truth", ()
   const onSettingsChange = vi.fn();
   const props = {
     transport: initialPatternTransportState,
+    bank: 0 as const, snap: "1/16" as const,
+    onSnapChange: () => {}, onViewportChange: () => {},
     onRefresh: () => {}, onSwitch: () => {},
     onCreatePattern: () => {}, onSettingsChange,
     onRecover: () => {}, onDiscard: () => {},
@@ -226,6 +237,8 @@ test("locks every Tempo and Swing control while recording and says why", () => {
       },
     }}
     state={initialSequenceState}
+    bank={0} snap="1/16"
+    onSnapChange={() => {}} onViewportChange={() => {}}
     onRefresh={() => {}} onSwitch={() => {}}
     onCreatePattern={() => {}} onSettingsChange={() => {}}
     onRecover={() => {}} onDiscard={() => {}} />);

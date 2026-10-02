@@ -626,6 +626,20 @@ a pass -- was a sub-tick stall the counters cannot see, while the identical
 Release build passed 20/20 repetitions on the M1. The deadline and the
 zero-unattributed-overruns bound are unchanged; only the host is.
 
+`master_fx_stress` times its two Sample parity scenarios differently. The
+#1666 scenario, 128 kernel voices with every #1666 stage under all eight master
+FX, is timed in every build without a sanitizer, as the master FX scenario is.
+The #1667 scenario adds a user envelope, a tone and all three EQ bands to every
+voice. It is timed only in an optimized build (Release, RelWithDebInfo or
+MinSizeRel), which is the build this Release stress lane runs; in Debug it
+still checks finite output, voice accounting and a full pool on every callback.
+Owner decision, 2026-10-02: at -O0 its four filter stages per voice raise the
+mean callback from 0.68 to 1.1 ms. That is under the 2.67 ms deadline on a
+performance core but over it on an efficiency core, where the #1666 scenario
+already fails in Debug, so a Debug overrun says nothing about the shipped
+kernel. In Release the same scenario measured a 0.2 ms worst case, and 1.23 ms
+when forced onto efficiency cores.
+
 ## Sanitizer Selection
 
 ASan/UBSan `full` runs the complete non-stress suite and `stress` runs the

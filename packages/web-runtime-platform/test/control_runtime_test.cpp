@@ -7019,6 +7019,466 @@ Json create_opted_in_project() {
   return payload;
 }
 
+// #1671 grid editing. A loud one-bar Project with A1 assigned and audio
+// running; its current Pattern starts empty at revision 2.
+std::unique_ptr<ControlRuntime> grid_edit_runtime(
+    TempDirectory& temp, FakeCoordinator& coordinator,
+    std::uint32_t sample_frames = 2'400) {
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_opted_in_project(), {}));
+  auto wav = mono_pcm16_wav(sample_frames);
+  for (std::size_t frame = 0; frame < sample_frames; ++frame) {
+    write_u16(wav, 44 + frame * 2, 8192);
+  }
+  import_and_assign(*runtime, wav, kAssetId, 9600, 9601, 0);
+  check_success(runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  coordinator.engine = &runtime->engine();
+  coordinator.observe_engine_generation = true;
+  return runtime;
+}
+
+Json grid_note(unsigned pad, unsigned onset) {
+  return {{"slot", slot(0, pad)}, {"onset_tick", onset},
+          {"duration_tick", 240}, {"velocity", 100}};
+}
+
+Json grid_edit(std::uint32_t command, std::uint64_t revision, Json remove,
+               Json put, std::string_view pattern_id = kPatternId) {
+  return {{"command_id", uuid(command)}, {"expected_revision", revision},
+          {"pattern_id", pattern_id}, {"remove", std::move(remove)},
+          {"put", std::move(put)}};
+}
+
+void play_grid_transport(ControlRuntime& runtime, std::uint32_t command) {
+  check_success(runtime.dispatch("pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, command, 1, "play_stop"), {}));
+  std::array<float, 128> left{}, right{};
+  for (unsigned step = 0; step < 8; ++step) {
+    runtime.engine().render(left.data(), right.data(), 128);
+    const auto status = pattern_transport_inspect(runtime, kSequenceSessionId);
+    if (status.at("playing") == true && status.at("phase") == "idle") return;
+  }
+  throw std::runtime_error("Pattern transport did not start playing");
+}
+
+// Renders callbacks until `frames` frames have passed; reports any sound.
+bool render_grid_frames(RealtimeEngine& engine, std::uint64_t frames) {
+  std::array<float, 128> left{}, right{};
+  bool audible = false;
+  for (std::uint64_t rendered = 0; rendered < frames; rendered += 128) {
+    engine.render(left.data(), right.data(), 128);
+    audible = audible || std::any_of(left.begin(), left.end(),
+        [](float value) { return value != 0; });
+  }
+  return audible;
+}
+
+void test_pattern_events_edit_while_stopped_reaches_the_next_play() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  const auto response = runtime->dispatch("pattern.events.edit",
+      grid_edit(9602, 2, Json::array(), Json::array({grid_note(0, 0)})), {});
+  check_success(response);
+  const auto& result = response.at("result");
+  LMDJ_CHECK(result.at("publication") == "published");
+  LMDJ_CHECK(result.at("pattern_publication").is_object());
+  LMDJ_CHECK(result.at("committed_revision") == 3);
+  // Applied by the next quantum, not at a bar boundary, so nothing is left
+  // pending to refuse the next Play.
+  LMDJ_CHECK(!render_grid_frames(runtime->engine(), 128));
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().pending_generation == 0);
+  play_grid_transport(*runtime, 9603);
+  // The only note is the edited A1 note at the downbeat.
+  LMDJ_CHECK(render_grid_frames(runtime->engine(), 4'800));
+}
+
+void test_pattern_events_edit_while_playing_swaps_the_pattern_in_place() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  play_grid_transport(*runtime, 9604);
+  auto& engine = runtime->engine();
+  const auto origin = engine.current_pattern_origin_frame();
+  const auto generation = engine.pattern_telemetry().current_generation;
+  LMDJ_CHECK(origin.has_value() && generation != 0);
+  LMDJ_CHECK(!render_grid_frames(engine, 1'280));
+  // Half a bar at 120 BPM is 48000 frames: ahead of the playhead.
+  const auto response = runtime->dispatch("pattern.events.edit",
+      grid_edit(9605, 2, Json::array(), Json::array({grid_note(0, 1'920)})), {});
+  check_success(response);
+  const auto& result = response.at("result");
+  LMDJ_CHECK(result.at("publication") == "live");
+  LMDJ_CHECK(result.at("pattern_publication").is_object());
+  LMDJ_CHECK(!result.contains("runtime_published"));
+  LMDJ_CHECK(!render_grid_frames(engine, 128));
+  // Swapped in place: same origin, so playback did not restart, and a newer
+  // generation now plays.
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == origin);
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation > generation);
+  const auto played = engine.telemetry().rendered_frames - *origin;
+  LMDJ_CHECK(played < 48'000);
+  LMDJ_CHECK(!render_grid_frames(engine, 48'000 - played - 256));
+  LMDJ_CHECK(render_grid_frames(engine, 4'800));
+}
+
+void test_pattern_events_edit_of_another_pattern_publishes_nothing() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  check_success(runtime->dispatch("pattern.create", {{"command_id", uuid(9606)},
+      {"expected_revision", 2}, {"pattern_id", uuid(9607)}, {"bars", 1}}, {}));
+  const auto banks = runtime->engine().bank_telemetry().accepted_publications;
+  const auto patterns = runtime->engine().pattern_telemetry().accepted_publications;
+  const auto response = runtime->dispatch("pattern.events.edit",
+      grid_edit(9608, 3, Json::array(), Json::array({grid_note(0, 0)}), uuid(9607)), {});
+  check_success(response);
+  LMDJ_CHECK(response.at("result").at("publication") == "none");
+  LMDJ_CHECK(response.at("result").at("committed_revision") == 4);
+  LMDJ_CHECK(runtime->engine().bank_telemetry().accepted_publications == banks);
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().accepted_publications == patterns);
+}
+
+void test_pattern_events_edit_refusals_keep_truth() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  const auto truth = [&] {
+    return runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
+  };
+  const auto before = truth();
+  // The Host keeps the Facade's code; its detail reasons stay Core-side.
+  check_error(runtime->dispatch("pattern.events.edit",
+      grid_edit(9609, 2, Json::array({{{"slot", slot(0, 3)}, {"onset_tick", 0}}}),
+                Json::array()), {}), "NOT_FOUND");
+  check_success(runtime->dispatch("pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9610, 1, "record"), {}));
+  std::array<float, 128> left{}, right{};
+  bool recording = false;
+  for (unsigned step = 0; step < 8 && !recording; ++step) {
+    runtime->engine().render(left.data(), right.data(), 128);
+    const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
+    recording = status.at("recording") == true && status.at("phase") == "idle";
+  }
+  LMDJ_CHECK(recording);
+  const auto refused = check_error(runtime->dispatch("pattern.events.edit",
+      grid_edit(9611, 2, Json::array(), Json::array({grid_note(0, 0)})), {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(refused.at("details").at("reason") == "sequence_session_active");
+  LMDJ_CHECK(truth() == before);
+}
+
+std::size_t grid_truth_events(ControlRuntime& runtime) {
+  return runtime.dispatch("project.inspect", Json::object(), {})
+      .at("result").at("project").at("patterns").at(kPatternId).at("events")
+      .size();
+}
+
+void test_pattern_events_edit_refuses_while_the_transport_settles() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  check_success(runtime->dispatch("pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9612, 1, "play_stop"), {}));
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("phase") != "idle");
+  const auto response = runtime->dispatch("pattern.events.edit",
+      grid_edit(9613, 2, Json::array(), Json::array({grid_note(0, 0)})), {});
+  LMDJ_CHECK(grid_truth_events(*runtime) == 0);
+  const auto& refused = response.at("error");
+  LMDJ_CHECK(refused.at("code") == "HOST_STATE_INVALID");
+  LMDJ_CHECK(refused.at("message") ==
+             "Pattern events can change once the Pattern transport settles");
+  LMDJ_CHECK(refused.at("details").at("reason") == "pattern_transport_busy");
+}
+
+void test_pattern_events_edit_refuses_a_pending_publication() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  play_grid_transport(*runtime, 9614);
+  // A playing BPM change swaps its view in at the next bar.
+  check_success(runtime->dispatch("sequence.settings.update",
+      {{"command_id", uuid(9615)}, {"expected_revision", 2}, {"session_id", nullptr},
+       {"bpm", 100}, {"quantize_enabled", nullptr}, {"swing_percent", nullptr}}, {}));
+  auto& engine = runtime->engine();
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation != 0);
+  const auto response = runtime->dispatch("pattern.events.edit",
+      grid_edit(9616, 3, Json::array(), Json::array({grid_note(0, 1'920)})), {});
+  LMDJ_CHECK(grid_truth_events(*runtime) == 0);
+  const auto& refused = response.at("error");
+  LMDJ_CHECK(refused.at("code") == "HOST_STATE_INVALID");
+  LMDJ_CHECK(refused.at("message") ==
+             "Pattern events can change once the pending Pattern publication applies");
+  LMDJ_CHECK(refused.at("details").at("reason") == "pattern_publication_pending");
+  // Retryable: once the bar applies the BPM view, the same edit goes live.
+  static_cast<void>(render_grid_frames(engine, 96'000));
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  const auto retried = runtime->dispatch("pattern.events.edit",
+      grid_edit(9616, 3, Json::array(), Json::array({grid_note(0, 1'920)})), {});
+  check_success(retried);
+  LMDJ_CHECK(retried.at("result").at("publication") == "live");
+  LMDJ_CHECK(grid_truth_events(*runtime) == 1);
+}
+
+void test_pattern_events_edit_refuses_a_legacy_sequence_session() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  check_success(runtime->dispatch("sequence.record.begin",
+      {{"session_id", kSequenceSessionId}, {"pattern_id", kPatternId},
+       {"expected_revision", 2}}, {}));
+  const auto response = runtime->dispatch("pattern.events.edit",
+      grid_edit(9617, 2, Json::array(), Json::array({grid_note(0, 0)})), {});
+  LMDJ_CHECK(grid_truth_events(*runtime) == 0);
+  // The Host's own refusal, not the Facade's Sequence-session guard.
+  const auto& refused = response.at("error");
+  LMDJ_CHECK(refused.at("code") == "HOST_STATE_INVALID");
+  LMDJ_CHECK(refused.at("message") == "operation is unavailable");
+  LMDJ_CHECK(refused.at("details") == Json::object());
+}
+
+void test_pattern_events_edit_keeps_a_current_runtime_current() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  check_success(runtime->dispatch("pattern.events.edit",
+      grid_edit(9618, 2, Json::array(), Json::array({grid_note(0, 0)})), {}));
+  // The edit changed no Bank, so a Bank-bound preview is still admitted.
+  check_exact_success(runtime->dispatch("sample.preview.set",
+      {{"slot", slot(0, 0)}, {"playback", playback_payload(0, std::nullopt)}}, {}),
+      {"accepted"});
+}
+
+void test_pattern_events_edit_reports_a_failed_swap() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  check_success(lmdj::web_runtime::testing::fail_next_pattern_publication(*runtime));
+  const auto patterns = runtime->engine().pattern_telemetry().accepted_publications;
+  const auto response = runtime->dispatch("pattern.events.edit",
+      grid_edit(9619, 2, Json::array(), Json::array({grid_note(0, 0)})), {});
+  check_success(response);
+  const auto& result = response.at("result");
+  LMDJ_CHECK(result.at("publication") == "failed");
+  LMDJ_CHECK(result.at("pattern_publication").is_null());
+  LMDJ_CHECK(result.at("snapshot_error").at("code") == "HOST_STATE_INVALID");
+  LMDJ_CHECK(result.at("snapshot_error").at("details").at("reason") ==
+             "pattern_publication_unavailable");
+  LMDJ_CHECK(result.at("committed_revision") == 3);
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().accepted_publications == patterns);
+  LMDJ_CHECK(grid_truth_events(*runtime) == 1);
+}
+
+void test_pattern_events_edit_after_stop_publishes_immediately() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  play_grid_transport(*runtime, 9620);
+  check_success(runtime->dispatch("pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9621, 2, "play_stop"), {}));
+  auto& engine = runtime->engine();
+  for (unsigned step = 0; step < 8; ++step) {
+    static_cast<void>(render_grid_frames(engine, 128));
+    const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
+    if (status.at("playing") == false && status.at("phase") == "idle") break;
+  }
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("playing") == false);
+  const auto generation = engine.pattern_telemetry().current_generation;
+  const auto response = runtime->dispatch("pattern.events.edit",
+      grid_edit(9622, 2, Json::array(), Json::array({grid_note(0, 0)})), {});
+  check_success(response);
+  LMDJ_CHECK(response.at("result").at("publication") == "published");
+  static_cast<void>(render_grid_frames(engine, 128));
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation > generation);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+}
+
+void test_pattern_events_edit_stopped_supersedes_a_pending_publication() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  auto& engine = runtime->engine();
+  // Stopped with audio running, a BPM change still schedules its view.
+  check_success(runtime->dispatch("sequence.settings.update",
+      {{"command_id", uuid(9629)}, {"expected_revision", 2}, {"session_id", nullptr},
+       {"bpm", 100}, {"quantize_enabled", nullptr}, {"swing_percent", nullptr}}, {}));
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation != 0);
+  const auto response = runtime->dispatch("pattern.events.edit",
+      grid_edit(9630, 3, Json::array(), Json::array({grid_note(0, 0)})), {});
+  check_success(response);
+  LMDJ_CHECK(response.at("result").at("publication") == "published");
+  LMDJ_CHECK(!render_grid_frames(engine, 128));
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  play_grid_transport(*runtime, 9631);
+  LMDJ_CHECK(render_grid_frames(engine, 4'800));
+}
+
+// Four live edits whose notes each sound under their own view, then a fifth
+// edit that finds every slot held. 4 s one-shots outlive the 2 s bar.
+struct GridDeferral {
+  std::uint64_t origin;
+  std::uint64_t generation;
+};
+
+GridDeferral defer_a_grid_edit(ControlRuntime& runtime, std::uint32_t command) {
+  auto& engine = runtime.engine();
+  play_grid_transport(runtime, command);
+  const auto origin = engine.current_pattern_origin_frame();
+  LMDJ_CHECK(origin.has_value());
+  std::uint64_t revision = 2;
+  const auto edit_at = [&](std::uint32_t suffix, unsigned onset) {
+    auto response = runtime.dispatch("pattern.events.edit",
+        grid_edit(suffix, revision, Json::array(), Json::array({grid_note(0, onset)})), {});
+    check_success(response);
+    ++revision;
+    return response.at("result").at("publication").get<std::string>();
+  };
+  const auto render_to = [&](std::uint64_t frame) {
+    static_cast<void>(render_grid_frames(
+        engine, *origin + frame - engine.telemetry().rendered_frames));
+  };
+  LMDJ_CHECK(edit_at(command + 1, 480) == "live");
+  render_to(12'000 + 1'000);
+  LMDJ_CHECK(edit_at(command + 2, 960) == "live");
+  render_to(24'000 + 1'000);
+  LMDJ_CHECK(edit_at(command + 3, 1'920) == "live");
+  render_to(48'000 + 1'000);
+  LMDJ_CHECK(edit_at(command + 4, 2'880) == "live");
+  render_to(72'000 + 1'000);
+  const auto generation = engine.pattern_telemetry().current_generation;
+  const auto deferred = runtime.dispatch("pattern.events.edit",
+      grid_edit(command + 5, revision, Json::array(), Json::array({grid_note(0, 240)})), {});
+  check_success(deferred);
+  LMDJ_CHECK(deferred.at("result").at("publication") == "deferred");
+  return {*origin, generation};
+}
+
+// Service ticks for up to `frames`, until the current generation changes.
+std::uint64_t serve_until_swapped(ControlRuntime& runtime, std::uint64_t generation,
+                                  std::uint64_t frames) {
+  std::uint64_t waited = 0;
+  while (runtime.engine().pattern_telemetry().current_generation == generation &&
+         waited < frames) {
+    static_cast<void>(render_grid_frames(runtime.engine(), 128));
+    runtime.service_pattern_transport();
+    waited += 128;
+  }
+  return waited;
+}
+
+// Whether a voice starts within 256 frames of `frame`.
+bool grid_voice_starts_at(RealtimeEngine& engine, std::uint64_t frame) {
+  static_cast<void>(render_grid_frames(engine, frame - 256 - engine.telemetry().rendered_frames));
+  const auto voices = engine.telemetry().active_voices;
+  static_cast<void>(render_grid_frames(engine, 512));
+  return engine.telemetry().active_voices == voices + 1;
+}
+
+void test_pattern_events_edit_defers_a_swap_until_a_slot_frees() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator, 192'000);
+  auto& engine = runtime->engine();
+  const auto deferral = defer_a_grid_edit(*runtime, 9623);
+  LMDJ_CHECK(grid_truth_events(*runtime) == 5);
+  // While every slot is held, a tick neither swaps nor prepares and retries.
+  const auto rejections = engine.pattern_telemetry().publication_rejections;
+  for (unsigned tick = 0; tick < 8; ++tick) {
+    static_cast<void>(render_grid_frames(engine, 128));
+    runtime->service_pattern_transport();
+  }
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation == deferral.generation);
+  LMDJ_CHECK(engine.pattern_telemetry().publication_rejections == rejections);
+  // The service cadence swaps it in place once the first voice ends.
+  static_cast<void>(serve_until_swapped(*runtime, deferral.generation, 192'000));
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation > deferral.generation);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == deferral.origin);
+  // The deferred note at tick 240 (frame 6000) starts the only voice there.
+  const auto loop = (engine.telemetry().rendered_frames - deferral.origin) / 96'000 + 1;
+  LMDJ_CHECK(grid_voice_starts_at(engine, deferral.origin + loop * 96'000 + 6'000));
+}
+
+void test_pattern_events_edit_superseded_deferral_publishes_nothing_more() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator, 192'000);
+  auto& engine = runtime->engine();
+  const auto deferral = defer_a_grid_edit(*runtime, 9632);
+  // Without service ticks: the first voice ends, a playing BPM change takes
+  // the freed slot, and its view, prepared from Truth, applies at the bar.
+  static_cast<void>(render_grid_frames(
+      engine, deferral.origin + 210'000 - engine.telemetry().rendered_frames));
+  check_success(runtime->dispatch("sequence.settings.update",
+      {{"command_id", uuid(9638)}, {"expected_revision", 7}, {"session_id", nullptr},
+       {"bpm", 100}, {"quantize_enabled", nullptr}, {"swing_percent", nullptr}}, {}));
+  static_cast<void>(render_grid_frames(
+      engine, deferral.origin + 290'000 - engine.telemetry().rendered_frames));
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation > deferral.generation);
+  const auto accepted = engine.pattern_telemetry().accepted_publications;
+  static_cast<void>(serve_until_swapped(
+      *runtime, engine.pattern_telemetry().current_generation, 192'000));
+  LMDJ_CHECK(engine.pattern_telemetry().accepted_publications == accepted);
+  // The BPM view carries the deferred note: tick 240 is frame 7200 of a
+  // 115200-frame bar, after every voice from before the switch has ended.
+  const auto origin = *engine.current_pattern_origin_frame();
+  const auto loop = (deferral.origin + 480'000 - origin) / 115'200 + 1;
+  LMDJ_CHECK(grid_voice_starts_at(engine, origin + loop * 115'200 + 7'200));
+}
+
+void test_pattern_events_edit_deferral_waits_out_a_recording() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator, 192'000);
+  auto& engine = runtime->engine();
+  const auto deferral = defer_a_grid_edit(*runtime, 9639);
+  const auto record = [&](std::uint32_t command, std::uint64_t epoch, bool recording) {
+    check_success(runtime->dispatch("pattern.transport.request",
+        pattern_transport_request_payload(kSequenceSessionId, command, epoch, "record"), {}));
+    for (unsigned step = 0; step < 64; ++step) {
+      static_cast<void>(render_grid_frames(engine, 128));
+      runtime->service_pattern_transport();
+      const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
+      if (status.at("recording") == recording && status.at("phase") == "idle" &&
+          status.at("publication_pending") == false) {
+        return;
+      }
+    }
+    throw std::runtime_error("Pattern transport recording did not settle");
+  };
+  record(9645, 2, true);
+  // The recording owns its publications: past the first voice's end, the
+  // deferred swap still waits.
+  static_cast<void>(serve_until_swapped(*runtime, deferral.generation, 192'000));
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation == deferral.generation);
+  record(9646, 3, false);
+  static_cast<void>(serve_until_swapped(*runtime, deferral.generation, 96'000));
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation > deferral.generation);
+  // The first loop after the swap: no earlier tick-240 voice can end there.
+  const auto origin = *engine.current_pattern_origin_frame();
+  const auto loop = (engine.telemetry().rendered_frames - origin) / 96'000 + 1;
+  LMDJ_CHECK(grid_voice_starts_at(engine, origin + loop * 96'000 + 6'000));
+}
+
+void test_pattern_events_edit_deferral_survives_an_audio_interruption() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator, 192'000);
+  auto& engine = runtime->engine();
+  const auto deferral = defer_a_grid_edit(*runtime, 9647);
+  check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  // The interruption retires the transport engagement; the swap still lands
+  // without a Play.
+  static_cast<void>(serve_until_swapped(*runtime, deferral.generation, 9'600));
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation > deferral.generation);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+}
+
 void test_pattern_transport_requires_opt_in_and_preserves_legacy() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -7972,6 +8432,21 @@ int main() {
     test_authoring_history_import_roundtrip_and_reopen();
     test_authoring_history_restores_pattern_and_parameters();
     test_pad_delete_stops_voice_preserves_rhythm_and_roundtrips_history();
+    test_pattern_events_edit_while_stopped_reaches_the_next_play();
+    test_pattern_events_edit_while_playing_swaps_the_pattern_in_place();
+    test_pattern_events_edit_of_another_pattern_publishes_nothing();
+    test_pattern_events_edit_refusals_keep_truth();
+    test_pattern_events_edit_refuses_while_the_transport_settles();
+    test_pattern_events_edit_refuses_a_pending_publication();
+    test_pattern_events_edit_refuses_a_legacy_sequence_session();
+    test_pattern_events_edit_keeps_a_current_runtime_current();
+    test_pattern_events_edit_reports_a_failed_swap();
+    test_pattern_events_edit_after_stop_publishes_immediately();
+    test_pattern_events_edit_stopped_supersedes_a_pending_publication();
+    test_pattern_events_edit_defers_a_swap_until_a_slot_frees();
+    test_pattern_events_edit_superseded_deferral_publishes_nothing_more();
+    test_pattern_events_edit_deferral_waits_out_a_recording();
+    test_pattern_events_edit_deferral_survives_an_audio_interruption();
     test_pad_delete_cancels_staged_host_import_and_releases_history();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
     test_sample_parity_playback_crosses_the_fixed_control_wire();

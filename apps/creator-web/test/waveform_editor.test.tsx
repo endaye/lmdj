@@ -169,7 +169,7 @@ test("refuses to draw a waveform from a non-integer peak bucket", () => {
   } as WaveformEnvelope;
   const {container} = renderEditor({envelope: malformed});
   expect(container.querySelector("path[data-waveform]")).toBeNull();
-  expect(screen.getByText("Waveform unavailable")).toBeTruthy();
+  expect(screen.getByText("The waveform could not be shown. Choose the Pad again to reload it.")).toBeTruthy();
 });
 
 test("exposes Pad and time labels on focusable handles and numeric inputs", () => {

@@ -76,6 +76,16 @@ class DurableDispatch:
         except Exception:
             require(False,"effect prerequisites are unavailable")
 
+    def _dispatchable(self,spec):
+        """Whether a live main revision may run this dispatch for the frozen control."""
+        return lambda revision:self.consumer.equivalent(spec["control_revision"],revision)
+
+    def _scope(self,spec):
+        try:
+            self.client.dispatch_scope(deepcopy(spec),dispatchable=self._dispatchable(spec))
+        except Exception:
+            require(False,"scope is not dispatchable from live main")
+
     @staticmethod
     def _read(journal,spec):
         journal._active()
@@ -169,6 +179,9 @@ class DurableDispatch:
                 return {"status":"unknown","binding":None}
             self._authorize(spec)
             self._ready(spec)
+            # A scope the POST would refuse must not leave an intent behind:
+            # that intent could never correlate and would block every resume.
+            self._scope(spec)
             state.update(baseline=baseline,post_intent=True)
             self._save(journal,state)
             journal._active()
@@ -179,7 +192,8 @@ class DurableDispatch:
                 if before_post is not None:before_post()
                 journal._active()
             try:
-                self.client.dispatch_release(deepcopy(spec),before_post=write_guard)
+                self.client.dispatch_release(deepcopy(spec),before_post=write_guard,
+                                             dispatchable=self._dispatchable(spec))
             except Exception:
                 # Includes timeouts and explicit API refusal. The durable
                 # intent cannot be erased or used to justify another POST.

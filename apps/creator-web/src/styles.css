@@ -687,6 +687,12 @@ button:disabled { color: #737b87; }
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  /* The console frame centres itself with auto margins (see
+     .creator-console-frame). Auto margins, not grid/justify-content
+     centering: on an overflowing stage they collapse to 0, so a short
+     viewport keeps the console's top edge reachable instead of clipping it. */
+  display: flex;
+  flex-direction: column;
   color: #e8eadf;
   /* The stage light lives on <body>; the workspace stays transparent so the
      console floats in it. */
@@ -819,6 +825,20 @@ button:disabled { color: #737b87; }
 .physical-key.has-icon {
   display: grid;
   place-items: center;
+}
+/* SHIFT is one full-width row spanning both 32px cells plus the inter-column
+   gap, so the 8-row 368px key-block geometry is preserved. */
+.physical-key.is-shift {
+  grid-column: 1 / -1;
+  width: 80px;
+  font-size: 10px;
+  letter-spacing: .08em;
+}
+/* TE-style availability lamp: the key lights while its shifted action is
+   possible instead of greying a button pair. */
+.physical-key.is-lit {
+  border: 1.5px solid #ddf478;
+  box-shadow: 0 0 6px rgb(221 244 120 / 55%);
 }
 .overview-display {
   display: grid;
@@ -1085,6 +1105,59 @@ button:disabled { color: #737b87; }
   font-size: 10px;
   letter-spacing: .04em;
 }
+.sequence-grid {
+  display: grid;
+  gap: 8px;
+}
+.sequence-grid .sequence-segment { grid-template-columns: 48px repeat(5, 1fr); }
+.sequence-grid-scroll { overflow-x: auto; }
+.sequence-grid-body {
+  display: grid;
+  gap: 2px;
+}
+.sequence-grid-row {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 8px;
+  align-items: stretch;
+}
+.sequence-grid-pad {
+  align-self: center;
+  color: #adb6aa;
+  font-size: 10px;
+}
+.sequence-grid-lane {
+  position: relative;
+  height: 20px;
+  border-radius: 4px;
+  background-color: #171b21;
+}
+.sequence-grid-note {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 3px;
+  background: #ddf478;
+}
+.sequence-overview-thumbnail {
+  display: block;
+  width: 100%;
+  height: 64px;
+  border-radius: 4px;
+  background: #171b21;
+}
+.sequence-overview-note { fill: #ddf478; }
+.sequence-overview-frame {
+  fill: none;
+  stroke: #9ec9f5;
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+.sequence-overview-playhead {
+  stroke: #ffb36b;
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
 .hardware-workspace .sequence-touch-workspace h1 { font-size: 16px; }
 
 /* D04 Perform. The pictured MASTER fader, LP/HP/BP filter type, MUTE/SOLO and
@@ -1242,22 +1315,31 @@ button:disabled { color: #737b87; }
 .diagnostics-log time, .diagnostics-log strong, .diagnostics-log code { display: block; }
 .diagnostics-log pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* Session-wide authoring history stays reachable across Creator modes. */
-.authoring-history {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  width: 880px;
-  margin: 12px auto 0;
-  padding: .6rem 1rem;
-  border-radius: 10px;
-  outline: 1px solid rgb(221 244 120 / 7%);
-  background: rgb(34 36 31 / 55%);
+.creator-console-frame {
+  min-width: 0;
+  /* The device floats in the middle of the stage on both axes whenever the
+     stage has spare room. flex: none keeps the frame at console size on a
+     short stage, where the auto margins collapse to 0 and the workspace
+     scrolls from the top (the hardware_layout 768×600 leg). The console's
+     own 24px vertical margins are symmetric, so the device's visual centre
+     stays the frame's centre. */
+  flex: none;
+  margin: auto;
 }
-.authoring-history [role="group"] { display: flex; gap: .4rem; flex-shrink: 0; }
-.authoring-history button { min-width: 4.5rem; min-height: 2.5rem; }
-.authoring-history [role="status"] { font-size: .8rem; opacity: .8; }
-.creator-console-frame { min-width: 0; }
+
+/* Session-wide authoring history is the rail's SHIFT chord: the status line
+   stays in the accessibility tree without reintroducing a software toolbar. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 /* Narrow portrait stage: the console keeps its fixed 880×592 hardware
    geometry, so a portrait phone shows the stage rotated 90°

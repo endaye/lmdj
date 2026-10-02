@@ -12,19 +12,25 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 ## PR-Agent 评审引擎（生产路径）
 
-`pr-review.yml` 的 `Review fallback` job 现在只有一个模型后端：固定版本
-PR-Agent `0.45.0`（source commit `53072488`）经 LiteLLM `1.100.0` 调用
-DeepSeek-V4.1-Flash（API 模型名 `deepseek-flash`），运行在 Netcup 主机
-`netcup01` 上已安装的 release 内。步骤顺序固定为 `collect-t2`（完整可信输入：
+`pr-review.yml` 的 `Review fallback` job 运行一个模型步骤：固定版本
+PR-Agent `0.45.0`（source commit `53072488`）经 LiteLLM `1.100.0`，主后端
+DeepSeek-V4.1-Flash（API 模型名 `deepseek-flash`），引擎内后备
+GLM-5.3-Flash（智谱国内开放平台按量计费端点，API 模型名 `glm-5.3-flash`），
+运行在 Netcup 主机 `netcup01` 上已安装的 release 内。供应商 fallback 由引擎
+在单次运行内拥有（`provider_order = ["deepseek", "glm"]`），workflow 不加
+第二个模型步骤。步骤顺序固定为 `collect-t2`（完整可信输入：
 base/head 全量字节与精确 diff）→ `run-engine.sh --witness`（读回安装的引擎、
 bundle 与 `runtime.toml` 身份）→ `run-engine.sh --input`（引擎，`flock` 单槽位）→
 `capture --backend deepseek` → `finalize`；随后由独立 publisher 发布，merged-PR scope map 不变。
-引擎进程只拿到 `PR_AGENT_DEEPSEEK_API_KEY`，没有 GitHub token；每次请求显式
-`thinking: disabled`，`max_tokens` 4096，单请求 60 秒、单次评审 600 秒上限。
+`capture` 的 backend 记录链起点（deepseek）；引擎后备到 GLM 产出的评审
+与该步骤不冲突，attempts 仍按可信 provider 顺序校验。
+引擎进程只拿到 `PR_AGENT_DEEPSEEK_API_KEY` 与 `PR_AGENT_ZAI_API_KEY`，没有
+GitHub token；DeepSeek 请求显式 `thinking: disabled`，GLM-5.3 思考不可关闭，
+按请求固定 `reasoning_effort: low` 以免推理 token 挤占输出上限；
+`max_tokens` 4096，单请求 60 秒、单次评审 600 秒上限。
 预算由引擎内的 append-only ledger 强制：每 PR USD 1、试点累计与每月
 USD 100（2026-09-17 由 USD 20 上调），按 1M context 峰值价预留、按实际 usage 结算。
-当前不启用任何供应商后备；GLM、Kimi 和 Grok 仅保留为历史兼容身份，
-不会被此 workflow 注入凭据或自动调用。
+Kimi 和 Grok 仅保留为历史兼容身份，不会被此 workflow 注入凭据或自动调用。
 
 模型结果按完整 YAML 文档校验，兼容单个包住整个文档的 Markdown YAML 围栏；
 围栏外说明、多文档、重复键、alias、未知字段和无效 diff 行号仍拒绝。
@@ -192,8 +198,9 @@ session、实际 scope、findings/disposition 和 limitations。共享 GitHub lo
 head 明确重新采纳，不能自动升级成可信记录；编辑旧 comment、旧 SHA 或 `review:skipped`
 label 都不能替代新记录。等待有界，超时仍为 pending；新 push 必须重新审查。
 
-`pr-review.yml` 只运行一次 PR-Agent/DeepSeek 引擎评审；获得一次有效 findings 即停止，
-发现代码问题不触发换模型。引擎失败时保留真实失败并让 job 变红，不能伪造 clean。
+`pr-review.yml` 只运行一次 PR-Agent 引擎评审（引擎内 DeepSeek → GLM 后备算同一次
+运行）；获得一次有效 findings 即停止，发现代码问题不触发换模型。引擎失败时保留真实
+失败并让 job 变红，不能伪造 clean。
 模型只读取可信控制代码与作为数据的完整 PR 输入，不 checkout 或执行 PR head，也没有
 PR 写权限。短 publisher 校验结构化结果及当前 head，用固定 `commit_id` 发布 COMMENT
 review；模型不生成合并授权。可信发布器绑定 repository、PR、head、run、attempt 和 backend。

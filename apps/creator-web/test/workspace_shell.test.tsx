@@ -86,6 +86,7 @@ const ready: CreatorState = {
       patterns: [{
         patternId: "22222222-2222-4222-8222-222222222222",
         bars: 1,
+        events: [],
       }],
       patternSlots: Object.freeze(Array<string | null>(16).fill(null)),
       sequenceSettings: {quantizeEnabled: true, swingPercent: 50},
@@ -2578,6 +2579,90 @@ test("re-engages the Pattern transport with a fresh identity when an open replac
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
   await waitFor(() => expect(transportPhase()).toBe("recording"));
 });
+
+test("a settled transport commit shows its revision even when the projection re-read never completes", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  // Truth is already ahead of the view (revision 5 vs 4), as a committed
+  // Record-off leaves it; the first settled observation catches the view up.
+  fixture.revision = 5;
+  let hostListener: ((state: RuntimeHostState) => void) | undefined;
+  fixture.session.subscribeHostState = (listener) => {
+    hostListener = listener;
+    return () => {};
+  };
+  let reReadStalled = false;
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectPatternTransport: async () => engagedTransportStatus({playing: false}),
+    requestPatternTransport: async () => ({
+      sessionId: "session-1",
+      commandId: "command-1",
+      submit: "accepted" as const,
+      status: engagedTransportStatus({playing: false, transportEpoch: 2}),
+    }),
+    listLocalProjects: async () => reReadStalled
+      ? new Promise<never>(() => {})
+      : [fixture.summary()],
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await waitFor(() => expect(revisionCell()?.textContent).toBe("5"));
+  await act(async () => hostListener?.({
+    state: "running", errorCode: null, errorDetails: {},
+  }));
+  await screen.findByText("Audio running");
+
+  // A second commit lands (revision 6), but this projection re-read can never
+  // complete: the inventory read hangs. The revision display must still
+  // follow the commit instead of waiting on the re-read.
+  fixture.revision = 6;
+  reReadStalled = true;
+  await userEvent.click(screen.getByRole("button", {name: "Play/Stop"}));
+  await waitFor(() => expect(revisionCell()?.textContent).toBe("6"));
+});
+
+test("a settled transport commit's completed re-read lands its events on the grid", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  // Truth is already ahead of the view (revision 5 vs 4), as a committed
+  // Record-off leaves it, and the committed Pattern carries the new event.
+  fixture.revision = 5;
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectPatternTransport: async () => engagedTransportStatus({playing: false}),
+    requestPatternTransport: async () => {
+      throw new Error("no transport command is submitted in this test");
+    },
+    inspectProject: async () => ({
+      ...fixture.inspectProject(),
+      project: {
+        ...fixture.inspectProject().project,
+        patterns: {
+          [listedSummary.patternId]: {
+            bars: 1,
+            events: [{
+              slot: {bank: 0, pad: 0},
+              onset_tick: 240, duration_tick: 240, velocity: 100,
+            }],
+          },
+        },
+      },
+    }),
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+
+  // The revision update lands before the re-read starts, so the refresh must
+  // not be rejected for naming the pre-commit revision: the refreshed
+  // projection carries the committed event all the way onto the grid.
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  const note = await waitFor(() => {
+    const found = document.querySelector(
+      ".sequence-grid-row[data-pad='0'] [data-testid='sequence-grid-note']");
+    expect(found).not.toBeNull();
+    return found!;
+  });
+  expect(note.getAttribute("data-onset-tick")).toBe("240");
+  expect(revisionCell()?.textContent).toBe("5");
+});
+
 
 test("rail Bank changes select the corresponding Sample slot in the only Pad matrix", async () => {
   render(<App initialState={{...ready, sample: {...ready.sample, selectedSlot: 2}}} />);

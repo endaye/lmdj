@@ -267,3 +267,16 @@ export function sampleNextStep(failure: Readonly<{
 
 export const NO_ROOM_MESSAGE =
   "There is no room left for more sound in this Bank. Free a Pad or use another Bank.";
+
+// Why Performance recording is unavailable, by the platform's capture code.
+export function performCaptureUnavailableMessage(code: string): string {
+  switch (code) {
+    case "capture-unsupported":
+      return "This browser cannot record a Performance. Use a current version of another browser.";
+    case "tap-initialization-failed":
+    case "tap-processor-failed":
+      return "Performance recording could not start. Reload the page and activate audio again, then record.";
+    default:
+      return "Performance recording is not available. Reload the page, then try again.";
+  }
+}

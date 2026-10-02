@@ -1,6 +1,7 @@
 import type {
   LocalProjectSummary,
   ProjectPadView,
+  ProjectPatternView,
   ProjectView,
   SampleCommit,
   SampleInspect,
@@ -134,7 +135,7 @@ export type CreatorAction =
   | {
       type: "project-pattern-created";
       revision: number;
-      pattern: Readonly<{patternId: string; bars: 1 | 2 | 4 | 8}>;
+      pattern: ProjectPatternView;
     }
   | {
       type: "project-error";

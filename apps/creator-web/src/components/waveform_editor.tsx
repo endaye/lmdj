@@ -498,7 +498,7 @@ export function WaveformEditor({
               />
             )}
           </svg>
-        ) : <p className="waveform-unavailable">Waveform unavailable</p>}
+        ) : <p className="waveform-unavailable">The waveform could not be shown. Choose the Pad again to reload it.</p>}
         {envelopeIsValid && visibleBuckets.length > 0 ? (
           <>
             {gripsInteractive ? (

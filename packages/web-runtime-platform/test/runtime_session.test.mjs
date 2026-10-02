@@ -31,6 +31,7 @@ const API = [
   "close",
   "commitPerformanceResample",
   "createPattern",
+  "editPatternEvents",
   "deletePerformance",
   "diagnostics",
   "discardPerformance",
@@ -6464,6 +6465,101 @@ test("history never automatically repeats an unknown mutation after inspection",
   await session.close();
 });
 
+
+test("a Pattern event edit sends flat slots as Bank and Pad and returns its publication", async () => {
+  const sent = [];
+  const patternId = "30000000-0000-4000-8000-000000000001";
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation !== "pattern.events.edit") {
+      return success(envelope, defaultResult(envelope.operation));
+    }
+    sent.push(envelope.payload);
+    return success(envelope, {
+      committed_revision: 5, project_revision: 5, pattern_id: patternId,
+      replayed: false, publication: "live",
+      pattern_publication: {generation: 7, activation_frame: 960},
+    });
+  }});
+  await session.start();
+  const edited = await session.editPatternEvents({
+    patternId, expectedRevision: 4,
+    remove: [{slot: 18, onsetTick: 0}],
+    put: [{slot: 18, onsetTick: 480, durationTick: 240, velocity: 90}],
+  });
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].command_id, /^[0-9a-f-]{36}$/);
+  assert.deepEqual({...sent[0], command_id: null}, {
+    command_id: null, expected_revision: 4, pattern_id: patternId,
+    remove: [{slot: {bank: 1, pad: 2}, onset_tick: 0}],
+    put: [{slot: {bank: 1, pad: 2}, onset_tick: 480, duration_tick: 240, velocity: 90}],
+  });
+  assert.deepEqual(edited, {
+    committedRevision: 5, projectRevision: 5, patternId, replayed: false,
+    publication: "live", patternPublication: {generation: 7, activationFrame: 960},
+    snapshotError: null,
+  });
+});
+
+test("a Pattern event edit result must match its publication shape", async () => {
+  const patternId = "30000000-0000-4000-8000-000000000001";
+  const base = {committed_revision: 5, project_revision: 5, pattern_id: patternId, replayed: false};
+  const results = [];
+  const {session} = fixture({send: async (envelope) => envelope.operation === "pattern.events.edit"
+    ? success(envelope, results.shift())
+    : success(envelope, defaultResult(envelope.operation))});
+  await session.start();
+  const request = {patternId, expectedRevision: 4, remove: [], put: [
+    {slot: 0, onsetTick: 0, durationTick: 240, velocity: 100}]};
+  results.push({...base, publication: "none"});
+  assert.equal((await session.editPatternEvents(request)).patternPublication, null);
+  results.push({...base, publication: "deferred", pattern_publication: null});
+  const deferred = await session.editPatternEvents(request);
+  assert.equal(deferred.publication, "deferred");
+  assert.equal(deferred.patternPublication, null);
+  assert.equal(deferred.snapshotError, null);
+  results.push({...base, publication: "failed", pattern_publication: null,
+    snapshot_error: {code: "HOST_STATE_INVALID", message: "unavailable",
+      details: {reason: "pattern_publication_unavailable"}}});
+  const failed = await session.editPatternEvents(request);
+  assert.equal(failed.patternPublication, null);
+  assert.equal(failed.snapshotError.code, "HOST_STATE_INVALID");
+  assert.equal(failed.snapshotError.details.reason, "pattern_publication_unavailable");
+  for (const result of [
+    {...base, publication: "published"},
+    {...base, publication: "live", pattern_publication: null,
+      snapshot_error: {code: "HOST_STATE_INVALID", message: "unavailable", details: {}}},
+    {...base, publication: "deferred", pattern_publication: {generation: 1, activation_frame: 0}},
+    {...base, publication: "failed", pattern_publication: null},
+    {...base, publication: "none", pattern_publication: {generation: 1, activation_frame: 0}},
+    {...base, publication: "later"},
+    {...base, project_revision: 6, publication: "none"},
+  ]) {
+    results.push(result);
+    await assert.rejects(session.editPatternEvents(request), {code: "HOST_PROTOCOL_MISMATCH"});
+  }
+});
+
+test("an invalid Pattern event edit request is refused before it is sent", async () => {
+  const operations = [];
+  const {session} = fixture({send: async (envelope) => {
+    operations.push(envelope.operation);
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  operations.length = 0;
+  const patternId = "30000000-0000-4000-8000-000000000001";
+  await assert.rejects(session.editPatternEvents({patternId, expectedRevision: 0,
+    remove: [{slot: 64, onsetTick: 0}], put: []}), RangeError);
+  for (const request of [
+    {patternId: "not-a-uuid", expectedRevision: 0, remove: [], put: []},
+    {patternId, expectedRevision: -1, remove: [], put: []},
+    {patternId, expectedRevision: 0, remove: [{slot: 0}], put: []},
+    {patternId, expectedRevision: 0, remove: [], put: [{slot: 0, onsetTick: 0}]},
+  ]) {
+    await assert.rejects(session.editPatternEvents(request), TypeError);
+  }
+  assert.deepEqual(operations, []);
+});
 
 test("Pad delete cancels an unread Blob and queued imports only for its slot", async () => {
   const operations = [];

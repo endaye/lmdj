@@ -10,6 +10,12 @@ if(CMAKE_BUILD_EARLY_EXPANSION)
   return()
 endif()
 
+# lmdj.runtime-content.v1 cannot carry the voice DSP block (decision
+# 2026-09-30 point 9), and its per-voice state does not fit the device's
+# memory. Every target here, the Host's own sources included, must agree on
+# the block's layout, so the definition is directory-wide.
+add_compile_definitions(LMDJ_VOICE_DSP=0)
+
 function(cardputer_core target module)
   set(sources)
   foreach(source IN LISTS ARGN)

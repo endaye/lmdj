@@ -452,6 +452,17 @@ Task 13 through Task 16 mirror Tasks 2–8 for the #1667 fields. Each keeps the 
 - **Task 16:** `feat(cooker): resolve envelope, tone and EQ settings`, then `test(audio): extend the stress and allocation tests to every voice stage`.
   - Record `sizeof(RealtimeEngine)` on the Cardputer target ABI against the measured 26 281 B headroom.
   - If it exceeds the headroom, switch each voice to a `const` coefficient pointer into Bank-owned tables in this Task. Do not cut Cardputer voices or relax the check.
+  - **Outcome, 2026-10-02 (owner decisions):**
+    - Cardputer:
+      - On the Xtensa ABI, #1667 grows `sizeof(RealtimeEngine)` from 54 848 to 83 008 B. That takes admission to about 352 KB, past the device's 328 664 B. Bank-owned coefficient tables would save only about 5 KB net.
+      - The owner chose instead to compile the voice DSP and its block out of the Cardputer build: `LMDJ_VOICE_DSP=0`, in `feat(cardputer): build the Core without the voice DSP`. No Cardputer voice is cut.
+      - Every size the admission model reads returns to its pre-#1666 value. Admission is 304 239 B, 24 425 B under the cap.
+      - `audio.voice_dsp_disabled` builds that configuration on the host.
+    - Stress:
+      - The #1666 every-stage scenario is unchanged.
+      - The #1667 scenario is separate and timed only in an optimized build, the build the Release stress lane runs. In Debug it still checks finite output, voice accounting and a full pool.
+      - Why: at -O0 its four filter stages raise the mean callback from 0.68 to 1.1 ms, and on an efficiency core even the #1666 scenario overruns in Debug. In Release its worst callback is 0.2 ms, or 1.23 ms on efficiency cores.
+      - The deadline itself is unchanged (`docs/quality/core-test-policy.md`).
 
 ### Tasks 17–19: #1667 Host and Creator
 

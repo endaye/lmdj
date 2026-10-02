@@ -443,6 +443,72 @@ class PipelineTests(unittest.TestCase):
         self.assertIsNone(review_scope.next_backend(test_scope.load_policy(ROOT), history, identity=identity,
                                                     coverages=inventory, changed_paths=paths))
 
+    def t2_fallback_fixture(self):
+        """DeepSeek refused, then the in-engine GLM fallback reviewed the head."""
+        result, identity, paths, collector, _ = self.t2_warning_fixture()
+        source = json.loads((ROOT / "tests/fixtures/ci/pr-agent/complete-input.json").read_text())
+        authenticated = t2.authenticate_input(source)
+        engine = {"name": "pr-agent", "source_commit": "1" * 40, "version": "0.45.0",
+                  "bundle": {"archive_sha256": "2" * 64, "archive_byte_length": 7,
+                             "manifest_sha256": "3" * 64, "adapter_sha256": "4" * 64,
+                             "default_config_sha256": "5" * 64, "requirements_lock_sha256": "6" * 64,
+                             "stock_tokenizer_asset_sha256": "7" * 64},
+                  "runtime_config": {"sha256": "8" * 64, "byte_length": 7}}
+
+        def attempt(provider, model, status):
+            coverage = t2._validate_coverage_receipt(t2._make_coverage(
+                authenticated, provider=provider,
+                model={"requested": model, "actual": model + "-served",
+                       "response_version": "fixture-v1", "pricing_revision": "fixture-v1"},
+                prompt=t2.render_prompt_input(authenticated), usage=None, engine=engine))
+            if status == "reviewed":
+                return {"status": "reviewed", "error_class": None, "error": None,
+                        "provider": provider, "model": coverage["model"], "engine": engine,
+                        "review": {"summary": "Reviewed.", "findings": []}, "native_review": {},
+                        "coverage": coverage, "usage": coverage["usage"], "duration_ms": 1}
+            return {"status": "not-reviewed", "error_class": "rate_limited", "error": "bounded",
+                    "provider": provider, "model": coverage["model"], "engine": engine,
+                    "review": None, "native_review": None, "coverage": coverage,
+                    "usage": coverage["usage"], "duration_ms": 1}
+
+        result["status"], result["error_class"] = "reviewed", None
+        result["selected_attempt"] = 1
+        result["engine"] = engine
+        result["attempts"] = [attempt("deepseek", "fixture-model", "not-reviewed"),
+                              attempt("glm", "fixture-glm-model", "reviewed")]
+        result["skipped_providers"] = [{"provider": provider, "status": "disabled"}
+                                       for provider in ("xai", "kimi")]
+        trusted = {"schema": review_scope.TRUSTED_CONFIG_SCHEMA, "provider_order": ["deepseek", "glm"],
+                   "providers": {"deepseek": {"enabled": True, "model": "fixture-model"},
+                                 "glm": {"enabled": True, "model": "fixture-glm-model"},
+                                 "xai": {"enabled": False}, "kimi": {"enabled": False}},
+                   "engine": engine}
+        return result, identity, paths, collector, trusted
+
+    def test_capture_binds_the_chain_start_not_the_fallback_provider(self):
+        # The engine owns provider fallback inside one run, so the workflow's
+        # single capture step names where the chain STARTED; a review the glm
+        # fallback produced is not a disagreement with the deepseek step.
+        result, identity, paths, collector, trusted = self.t2_fallback_fixture()
+        pipeline.save(self.directory / "context.json", {"identity": identity, "changed_paths": paths})
+        pipeline.save(self.directory / "t2-result.json", result)
+        (self.directory / "t2-input.json").write_text(
+            (ROOT / "tests/fixtures/ci/pr-agent/complete-input.json").read_text(encoding="utf-8"), encoding="utf-8")
+        with mock.patch.object(pipeline, "trusted_collector", return_value=collector), \
+                mock.patch.object(pipeline, "trusted_config", return_value=trusted):
+            with self.assertRaisesRegex(review_scope.ReviewScopeError, "chain start"):
+                self.capture("glm")
+            self.capture("deepseek")
+        history = pipeline.read(self.directory / "history.json")
+        self.assertEqual([(a["backend"], a["status"]) for a in history["attempts"]],
+                         [("deepseek", "failed"), ("glm", "reviewed")])
+        self.assertEqual(pipeline.read(self.directory / "review.json")["summary"], "Reviewed.")
+        # The fallback-produced history must close the chain for finalize.
+        self.assertIsNone(review_scope.next_backend(
+            test_scope.load_policy(ROOT), history, identity=identity,
+            coverages=pipeline.coverage_inventory(self.directory), changed_paths=paths,
+            collector=collector, trusted_config=trusted))
+
     def test_capture_provider_warnings_show_finite_categories_and_exact_attempt(self):
         result, identity, paths, collector, trusted = self.t2_warning_fixture()
         result["attempts"][0]["provider_warnings"] = sorted(t2.PROVIDER_WARNING_CATEGORIES)

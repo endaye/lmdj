@@ -184,13 +184,15 @@ for (const viewport of [
     // The physical column is the rail now. Its keys are icons, so the walk
     // reads each stop's accessible name. Audio is not running in this case,
     // so Record and Play/Stop are disabled and must be skipped along with the
-    // unassigned encoder and direction keys, and Pads are played from the
+    // unassigned encoder keys and the direction row (its ← / → history chord
+    // stays inert until SHIFT is held, #1770), and Pads are played from the
     // letter keys rather than tabbed to; landing on the touch workspace's
-    // first System action right after Bank D is what proves all of that.
+    // first System action right after SHIFT is what proves all of that.
     await page.getByTestId("physical-controls")
       .getByRole("button", {name: "Project", exact: true}).focus();
     const expectedFocusOrder = [
       "Sample", "Sequence", "Perform", "Bank A", "Bank B", "Bank C", "Bank D",
+      "SHIFT — engage the Undo/Redo layer",
       "Activate audio",
     ];
     const focusOrder = [];

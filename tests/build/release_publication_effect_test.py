@@ -63,6 +63,17 @@ class PublicationEffectTest(unittest.TestCase):
         self.assertEqual(m.new_driver().resume(m.request["id"]),result)
         self.assertEqual(self.writes(),self.original);self.assertEqual(len(m.child.posts),1)
 
+    def test_run_on_main_that_moved_past_unchanged_workflow_completes_publication(self):
+        c=self.managed.child;c.run_head=c.commit("tools/release/newer_tooling.py")
+        result=self.drive()
+        self.assertEqual((result.status,result.step),("pending","published_record"))
+        self.assertEqual(c.controller.observe(c.spec)["binding"]["dispatch_revision"],c.run_head)
+
+    def test_publish_job_on_another_revision_than_its_run_is_not_accepted(self):
+        c=self.managed.child;c.run_head=c.commit("tools/release/newer_tooling.py")
+        self.job_mutation=lambda inventory:inventory["jobs"][1].update(head_sha=c.fixture.source)
+        self.assertEqual(self.drive().status,"conflict")
+
     def test_pending_run_is_not_release_acceptance(self):
         self.managed.child.fixture.run.update(status="in_progress",conclusion=None)
         result=self.drive()

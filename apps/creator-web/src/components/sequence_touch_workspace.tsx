@@ -4,13 +4,16 @@ import {useEffect, useRef, useState} from "react";
 import {ValueSlider} from "./value_slider";
 import {createTapTempo, type TapTempo} from "../runtime/tap_tempo";
 import type {ProjectView, SequenceRecoveryCandidate} from "../runtime/runtime_types";
+import type {Bank} from "../state/creator_state";
 import type {SequenceState} from "../state/sequence_state";
+import type {SequenceGridSnap, SequenceGridViewport} from "../state/sequence_grid_model";
 import {
   selectTransportBusy,
   selectTransportPlaying,
   selectTransportRecording,
   type PatternTransportState,
 } from "../state/pattern_transport_state";
+import {SequenceGrid} from "./sequence_grid";
 
 const BAR_COUNTS = [1, 2, 4, 8] as const;
 const NOOP = () => {};
@@ -19,10 +22,14 @@ interface SequenceTouchWorkspaceProps {
   project: ProjectView;
   state: SequenceState;
   transport: PatternTransportState;
+  bank: Bank;
+  snap: SequenceGridSnap;
   showRefresh?: boolean;
   onRefresh(): void;
   onSwitch(patternId: string): void;
   onCreatePattern(bars: 1 | 2 | 4 | 8): void;
+  onSnapChange(snap: SequenceGridSnap): void;
+  onViewportChange(viewport: SequenceGridViewport): void;
   onSettingsChange(changes: Readonly<{
     bpm?: number;
     quantizeEnabled?: boolean;
@@ -45,6 +52,8 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   const requestedSwingRef = useRef<number | null>(null);
   const disabled = selectTransportBusy(transport) || selectTransportRecording(transport);
   const selectedPatternId = state.selectedPatternId ?? project.patternId;
+  const selectedPattern = project.patterns.find(
+    (item) => item.patternId === selectedPatternId);
   const patternIndex = project.patterns.findIndex((item) => item.patternId === selectedPatternId) + 1;
   const bpm = project.bpm;
   const swing = project.sequenceSettings.swingPercent;
@@ -195,6 +204,15 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
           </button>
         </form>
       </section>
+      {selectedPattern === undefined ? null : (
+        <SequenceGrid
+          pattern={selectedPattern}
+          bank={props.bank}
+          snap={props.snap}
+          onSnapChange={props.onSnapChange}
+          onViewportChange={props.onViewportChange}
+        />
+      )}
       {state.recovery.length > 0 ? (
         <section aria-label="Sequence recovery">
           <h2>Recovery</h2>

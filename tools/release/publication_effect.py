@@ -54,7 +54,7 @@ class PublicationEffect:
             if (len(jobs) != 2 or {job.get("name") for job in jobs} != {"preflight","publish"}
                     or any(type(job.get("run_id")) is not int or job["run_id"] != binding["run_id"]
                         or type(job.get("run_attempt")) is not int or job["run_attempt"] != 1
-                        or job.get("head_sha") != self.spec["control_revision"]
+                        or job.get("head_sha") != binding["dispatch_revision"]
                         or job.get("status") != "completed" or job.get("conclusion") != "success"
                         for job in jobs)):
                 return "conflict"

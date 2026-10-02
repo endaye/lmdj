@@ -5,6 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 
+// Built without the voice DSP (LMDJ_VOICE_DSP=0), the header supplies inline
+// stand-ins and this translation unit is empty.
+#if LMDJ_VOICE_DSP
 namespace lmdj::audio::detail {
 namespace {
 
@@ -31,6 +34,143 @@ const std::array<float, kQuarterSineSegments + 1> kQuarterSine =
 bool is_looping(domain::TriggerMode mode) noexcept {
   return mode == domain::TriggerMode::loop_gate ||
          mode == domain::TriggerMode::loop_toggle;
+}
+
+// Biquad design for the 48 kHz engine rate, after the RBJ Audio EQ Cookbook.
+// Coefficients are derived in double once per trigger and stored as float.
+constexpr double kSampleRate = 48'000.0;
+constexpr double kTwoPi = 6.28318530717958647692;
+constexpr double kButterworthQ = 0.70710678118654752440;
+
+VoiceDspBiquad normalized(
+    double b0, double b1, double b2, double a0, double a1, double a2) noexcept {
+  return VoiceDspBiquad{
+      static_cast<float>(b0 / a0), static_cast<float>(b1 / a0),
+      static_cast<float>(b2 / a0), static_cast<float>(a1 / a0),
+      static_cast<float>(a2 / a0)};
+}
+
+struct Angle {
+  double cosine;
+  double alpha;
+};
+
+Angle angle(double hz, double q) noexcept {
+  const double w0 = kTwoPi * hz / kSampleRate;
+  return Angle{std::cos(w0), std::sin(w0) / (2.0 * q)};
+}
+
+// A 12 dB/oct Butterworth low-pass or high-pass.
+VoiceDspBiquad pass(double hz, bool high) noexcept {
+  const auto [c, alpha] = angle(hz, kButterworthQ);
+  const double side = high ? (1.0 + c) / 2.0 : (1.0 - c) / 2.0;
+  return normalized(
+      side, high ? -(1.0 + c) : 1.0 - c, side, 1.0 + alpha, -2.0 * c,
+      1.0 - alpha);
+}
+
+VoiceDspBiquad bell(double hz, double gain_db, double q) noexcept {
+  const double a = std::pow(10.0, gain_db / 40.0);
+  const auto [c, alpha] = angle(hz, q);
+  return normalized(
+      1.0 + alpha * a, -2.0 * c, 1.0 - alpha * a, 1.0 + alpha / a, -2.0 * c,
+      1.0 - alpha / a);
+}
+
+// A shelf with slope S = 1.
+VoiceDspBiquad shelf(double hz, double gain_db, bool high) noexcept {
+  const double a = std::pow(10.0, gain_db / 40.0);
+  const auto [c, alpha_q] = angle(hz, kButterworthQ);
+  const double root = 2.0 * std::sqrt(a) * alpha_q;
+  const double sign = high ? -1.0 : 1.0;
+  const double b0 = a * ((a + 1.0) - sign * (a - 1.0) * c + root);
+  const double b1 = sign * 2.0 * a * ((a - 1.0) - sign * (a + 1.0) * c);
+  const double b2 = a * ((a + 1.0) - sign * (a - 1.0) * c - root);
+  const double a0 = (a + 1.0) + sign * (a - 1.0) * c + root;
+  const double a1 = -sign * 2.0 * ((a - 1.0) + sign * (a + 1.0) * c);
+  const double a2 = (a + 1.0) + sign * (a - 1.0) * c - root;
+  return normalized(b0, b1, b2, a0, a1, a2);
+}
+
+// The tone stage, when |tone| is outside the +/-2 deadband. A negative tone is
+// a low-pass whose cutoff sweeps logarithmically from 20 kHz to 100 Hz at
+// -100; a positive one a high-pass from 20 Hz to 8 kHz at +100.
+VoiceDspBiquad tone_stage(std::int8_t tone) noexcept {
+  if (tone < 0) {
+    return pass(
+        20'000.0 * std::pow(100.0 / 20'000.0, -static_cast<double>(tone) / 100.0),
+        false);
+  }
+  return pass(
+      20.0 * std::pow(8'000.0 / 20.0, static_cast<double>(tone) / 100.0), true);
+}
+
+bool in_range(std::int32_t value, std::int32_t low, std::int32_t high) noexcept {
+  return value >= low && value <= high;
+}
+
+// The tone and EQ bounds Project Truth admits; anything else is refused.
+bool tone_fits(const cooker::ResolvedVoiceDsp& dsp) noexcept {
+  using Dsp = cooker::ResolvedVoiceDsp;
+  constexpr std::uint8_t kKnownEq =
+      Dsp::kEqLow | Dsp::kEqLowCut | Dsp::kEqMid | Dsp::kEqHigh | Dsp::kEqHighCut;
+  const auto flags = dsp.eq_flags;
+  const auto gain = [](std::int16_t value) {
+    return in_range(value, domain::kPadEqGainMillidbMin, domain::kPadEqGainMillidbMax);
+  };
+  if ((flags & static_cast<std::uint8_t>(~kKnownEq)) != 0 ||
+      ((flags & Dsp::kEqLowCut) != 0 && (flags & Dsp::kEqLow) == 0) ||
+      ((flags & Dsp::kEqHighCut) != 0 && (flags & Dsp::kEqHigh) == 0) ||
+      !in_range(dsp.tone, domain::kPadToneMin, domain::kPadToneMax)) {
+    return false;
+  }
+  if ((flags & Dsp::kEqLow) != 0 &&
+      (!in_range(dsp.eq_low_freq_hz, domain::kPadEqLowFreqHzMin,
+                 domain::kPadEqLowFreqHzMax) ||
+       !gain(dsp.eq_low_gain_millidb))) {
+    return false;
+  }
+  if ((flags & Dsp::kEqMid) != 0 &&
+      (!in_range(dsp.eq_mid_freq_hz, domain::kPadEqMidFreqHzMin,
+                 domain::kPadEqMidFreqHzMax) ||
+       !gain(dsp.eq_mid_gain_millidb) ||
+       !in_range(dsp.eq_mid_q_milli, domain::kPadEqMidQMilliMin,
+                 domain::kPadEqMidQMilliMax))) {
+    return false;
+  }
+  return (flags & Dsp::kEqHigh) == 0 ||
+         (in_range(dsp.eq_high_freq_hz, domain::kPadEqHighFreqHzMin,
+                   domain::kPadEqHighFreqHzMax) &&
+          gain(dsp.eq_high_gain_millidb));
+}
+
+// Fills the enabled stages in order: tone, low, mid, high.
+void prepare_filters(
+    const cooker::ResolvedVoiceDsp& dsp, VoiceDspState& state) noexcept {
+  using Dsp = cooker::ResolvedVoiceDsp;
+  const auto add = [&state](VoiceDspBiquad stage) {
+    state.filters[state.filter_count++] = stage;
+  };
+  if (dsp.tone < -2 || dsp.tone > 2) {
+    add(tone_stage(dsp.tone));
+  }
+  const auto db = [](std::int16_t millidb) {
+    return static_cast<double>(millidb) / 1'000.0;
+  };
+  if ((dsp.eq_flags & Dsp::kEqLow) != 0) {
+    add((dsp.eq_flags & Dsp::kEqLowCut) != 0
+            ? pass(dsp.eq_low_freq_hz, true)
+            : shelf(dsp.eq_low_freq_hz, db(dsp.eq_low_gain_millidb), false));
+  }
+  if ((dsp.eq_flags & Dsp::kEqMid) != 0) {
+    add(bell(dsp.eq_mid_freq_hz, db(dsp.eq_mid_gain_millidb),
+             static_cast<double>(dsp.eq_mid_q_milli) / 1'000.0));
+  }
+  if ((dsp.eq_flags & Dsp::kEqHigh) != 0) {
+    add((dsp.eq_flags & Dsp::kEqHighCut) != 0
+            ? pass(dsp.eq_high_freq_hz, false)
+            : shelf(dsp.eq_high_freq_hz, db(dsp.eq_high_gain_millidb), true));
+  }
 }
 
 }  // namespace
@@ -61,7 +201,9 @@ bool prepare_voice_dsp(
       (dsp.flags & static_cast<std::uint8_t>(~kKnownFlags)) != 0 ||
       dsp.pitch_cents < domain::kPadPitchCentsMin ||
       dsp.pitch_cents > domain::kPadPitchCentsMax ||
-      dsp.pan < domain::kPadPanMin || dsp.pan > domain::kPadPanMax) {
+      dsp.pan < domain::kPadPanMin || dsp.pan > domain::kPadPanMax ||
+      dsp.attack_frames > kVoiceDspMaxAttackFrames ||
+      dsp.release_frames > kVoiceDspMaxReleaseFrames || !tone_fits(dsp)) {
     return false;
   }
   const auto length = playback.end_frame - playback.start_frame;
@@ -96,6 +238,8 @@ bool prepare_voice_dsp(
   state.fade_span = state.step * kVoiceDspRampFrames;
   state.inverse_fade_span = 1.0F / static_cast<float>(state.fade_span);
 
+  prepare_filters(dsp, state);
+
   // Equal-power pan with unity at the centre; a hard pan is exact silence on
   // the far side because sin(0) is exactly zero.
   if (dsp.pan == 0) {
@@ -113,3 +257,4 @@ bool prepare_voice_dsp(
 }
 
 }  // namespace lmdj::audio::detail
+#endif

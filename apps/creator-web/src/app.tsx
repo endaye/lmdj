@@ -1,4 +1,4 @@
-import {AuthoringHistoryControls} from "./components/authoring_history";
+import {useAuthoringHistory} from "./components/authoring_history";
 import {CandidateSurface, isCandidateSession} from "./components/candidate_surface";
 import {
   useCallback,
@@ -109,6 +109,11 @@ import {
   reduceSequence,
   type SequenceState,
 } from "./state/sequence_state";
+import {
+  DEFAULT_SEQUENCE_GRID_SNAP,
+  type SequenceGridSnap,
+  type SequenceGridViewport,
+} from "./state/sequence_grid_model";
 import {
   initialPatternTransportState,
   reducePatternTransport,
@@ -285,12 +290,19 @@ function Workspace({
   const [inputControllerRevision, setInputControllerRevision] = useState(0);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyPerformPhase, setHistoryPerformPhase] = useState("idle");
+  // The rail's SHIFT modifier: toggled by its key, consumed by the ← / →
+  // history chord or by any other rail action.
+  const [railShift, setRailShift] = useState(false);
   const [capturePhase, setCapturePhase] = useState<CapturePhase>("idle");
   const capturePhaseRef = useRef(capturePhase);
   capturePhaseRef.current = capturePhase;
   const [armedCaptureSlot, setArmedCaptureSlot] = useState<number | null>(null);
   const [captureStopRequest, setCaptureStopRequest] = useState(0);
   const [midi, setMidi] = useState<MidiStatus | null>(null);
+  const [sequenceGridSnap, setSequenceGridSnap] =
+    useState<SequenceGridSnap>(DEFAULT_SEQUENCE_GRID_SNAP);
+  const [sequenceGridViewport, setSequenceGridViewport] =
+    useState<SequenceGridViewport | null>(null);
   const [performController, setPerformController] =
     useState<PerformController | null>(null);
   const [performCaptureConfigured, setPerformCaptureConfigured] = useState(false);
@@ -366,7 +378,13 @@ function Workspace({
 
   useEffect(() => {
     const project = state.project.current;
-    if (project === null || sequence.selectedPatternId !== null) return;
+    if (project === null) return;
+    // The selection belongs to the open Project: a Project that opens while
+    // another's selection is still held — boot, import, library open — moves
+    // the selection to its own anchor Pattern, so every Pattern view resolves.
+    if (sequence.selectedPatternId !== null &&
+        project.patterns.some(
+          ({patternId}) => patternId === sequence.selectedPatternId)) return;
     dispatchSequence({type: "selected", patternId: project.patternId});
   }, [state.project.current, sequence.selectedPatternId]);
 
@@ -720,7 +738,12 @@ function Workspace({
     dispatch({type: "project-error", errorCode: code, errorDetails: details});
   };
 
-  const refreshPerformProject = async () => {
+  // `settledRevision` is the authoritative revision the caller already
+  // dispatched ahead of this refresh; the token must name it, because the
+  // reducer sees that revision by the time the refresh actions land — a token
+  // minted from the still-stale ref would be rejected and the refreshed
+  // projection, Pattern events included, silently dropped.
+  const refreshPerformProject = async (settledRevision?: number) => {
     if (!session) throw new Error("Runtime session is unavailable");
     const current = stateRef.current.project.current;
     if (current === null) throw new Error("Current Project is unavailable");
@@ -731,7 +754,7 @@ function Workspace({
       id: crypto.randomUUID(),
       projectId: current.projectId,
       patternId: current.patternId,
-      baseRevision: current.revision,
+      baseRevision: settledRevision ?? current.revision,
     });
     projectProjectionRefreshRef.current = token;
     dispatch({type: "project-projection-refresh-started", token});
@@ -813,6 +836,7 @@ function Workspace({
     }
     const controller = createPerformController({
       session,
+      reportFailure,
       getCreatorState: () => stateRef.current,
       refreshProject: refreshPerformProject,
       opfsAvailable: () => session.diagnostics().capabilities.opfs === true &&
@@ -1421,12 +1445,18 @@ function Workspace({
           });
         }
         if (committedRevision > project.revision) {
-          // A transport commit advanced Project Truth; the revision display
-          // follows the commit.
+          // A transport commit advanced Project Truth. The revision display
+          // follows the commit first: a failed re-read clears the Project
+          // phase, which would reject this update and strand the revision.
+          // Then the whole projection — Pattern events included — is re-read
+          // so every view follows; the re-read reports its own failure. Its
+          // token must name the committed revision just dispatched, not the
+          // older one the ref still holds.
           dispatch({
             type: "project-revision-updated",
             revision: committedRevision,
           });
+          await refreshPerformProject(committedRevision).catch(() => {});
         }
       }
       dispatchSequence({type: "recovery", candidates: authority.recovery});
@@ -1651,7 +1681,7 @@ function Workspace({
       dispatch({
         type: "project-pattern-created",
         revision: result.committedRevision,
-        pattern: {patternId: result.patternId, bars: result.bars},
+        pattern: {patternId: result.patternId, bars: result.bars, events: []},
       });
       if (currentTransport.sessionId !== null &&
           isPatternTransportSession(session)) {
@@ -1810,6 +1840,7 @@ function Workspace({
   };
   const selectMode = (mode: CreatorMode) => {
     inputController.current?.clearPressed();
+    setRailShift(false);
     // Normal navigation never stops the global Pattern transport; only the
     // separately owned performance recording leaves with its mode.
     if (activeModeRef.current === "perform" && mode !== "perform" &&
@@ -1824,6 +1855,7 @@ function Workspace({
   };
   const selectBank = (bank: typeof state.activeBank) => {
     inputController.current?.clearPressed();
+    setRailShift(false);
     dispatch({type: "bank-selected", bank});
     const current = stateRef.current;
     if (activeMode === "sample" && armedCaptureSlot === null &&
@@ -1860,34 +1892,40 @@ function Workspace({
     />
   );
 
+  const history = useAuthoringHistory({
+    session,
+    projectId: state.project.current?.projectId ?? null,
+    revision: state.project.current?.revision ?? null,
+    refreshKey: `${activeMode}:${sequence.phase}:${transport.status?.phase ?? "idle"}:${playing}:${recording}:${historyPerformPhase}`,
+    disabledReason: state.project.phase !== "ready" ? "Open a Project to use its history." :
+      state.runtime.phase !== "ready" ? "Wait for the audio session to become ready." :
+      state.transfer.phase !== "idle" || state.sample.pendingAction !== null ||
+      state.projectProjectionRefresh !== null ? "Wait for the current Project change to finish." :
+      !["idle", "permission-error"].includes(capturePhase) ? "Finish or discard the sound recording first." :
+      historyPerformPhase !== "idle" ? "Save or discard the Performance recording first." :
+      state.sample.draft !== null ? "Finish the parameter edit first." : "",
+    onBusy: setHistoryBusy,
+    onChanged: async () => {
+      const project = await refreshPerformProject();
+      sequenceAuthoringRevision.current = project.revision;
+      dispatchTransport({type: "revision", revision: project.revision});
+      if (sequenceRef.current.selectedPatternId !== null &&
+          !project.patterns.some(({patternId}) => patternId === sequenceRef.current.selectedPatternId)) {
+        dispatchSequence({type: "selected", patternId: project.patternId});
+      }
+      dispatch({type: "sample-action", action: {type: "draft-cancelled"}});
+      await refreshSequence();
+    },
+  });
+
   return (
     <DiagnosticsProvider value={reportFailure}>
     <div className="hardware-workspace">
-        <AuthoringHistoryControls
-          session={session}
-          projectId={state.project.current?.projectId ?? null}
-          revision={state.project.current?.revision ?? null}
-          refreshKey={`${activeMode}:${sequence.phase}:${transport.status?.phase ?? "idle"}:${playing}:${recording}:${historyPerformPhase}`}
-          disabledReason={state.project.phase !== "ready" ? "Open a Project to use its history." :
-            state.runtime.phase !== "ready" ? "Wait for the audio session to become ready." :
-            state.transfer.phase !== "idle" || state.sample.pendingAction !== null ||
-            state.projectProjectionRefresh !== null ? "Wait for the current Project change to finish." :
-            !["idle", "permission-error"].includes(capturePhase) ? "Finish or discard the sound recording first." :
-            historyPerformPhase !== "idle" ? "Save or discard the Performance recording first." :
-            state.sample.draft !== null ? "Finish the parameter edit first." : ""}
-          onBusy={setHistoryBusy}
-          onChanged={async () => {
-            const project = await refreshPerformProject();
-            sequenceAuthoringRevision.current = project.revision;
-            dispatchTransport({type: "revision", revision: project.revision});
-            if (sequenceRef.current.selectedPatternId !== null &&
-                !project.patterns.some(({patternId}) => patternId === sequenceRef.current.selectedPatternId)) {
-              dispatchSequence({type: "selected", patternId: project.patternId});
-            }
-            dispatch({type: "sample-action", action: {type: "draft-cancelled"}});
-            await refreshSequence();
-          }}
-        />
+        {/* History status stays in the accessibility tree; the rail lamps carry
+            the visual state, so no software toolbar sits above the device. */}
+        <div role="status" className="visually-hidden" data-testid="authoring-history-status">
+          {history.statusText}
+        </div>
         <div inert={historyBusy} className="creator-console-frame">
         <HardwareConsole
           physicalControls={
@@ -1904,12 +1942,34 @@ function Workspace({
                 state.project.current !== null}
               onSelectMode={selectMode}
               onSelectBank={selectBank}
-              onRecord={() => { void submitTransportIntent("record"); }}
+              onRecord={() => {
+                setRailShift(false);
+                void submitTransportIntent("record");
+              }}
               recordEnabled={transportReady && !transportBusy}
               recording={recording}
-              onPlayStop={() => { void submitTransportIntent("play_stop"); }}
+              onPlayStop={() => {
+                setRailShift(false);
+                void submitTransportIntent("play_stop");
+              }}
               playEnabled={transportReady && !transportBusy}
               playing={playing}
+              history={{
+                shifted: railShift,
+                onToggleShift: () => setRailShift((value) => !value),
+                undoAvailable: history.undoAvailable,
+                redoAvailable: history.redoAvailable,
+                onUndo: () => {
+                  setRailShift(false);
+                  history.undo();
+                },
+                onRedo: () => {
+                  setRailShift(false);
+                  history.redo();
+                },
+                undoTitle: history.undoTitle,
+                redoTitle: history.redoTitle,
+              }}
             />
           }
           overview={
@@ -1917,6 +1977,8 @@ function Workspace({
               state={state}
               activeMode={activeMode}
               sequence={sequence}
+              snap={sequenceGridSnap}
+              viewport={sequenceGridViewport}
               transport={transport}
               midi={midi}
               {...(buildIdentity ? {buildIdentity} : {})}
@@ -2041,6 +2103,10 @@ function Workspace({
                 project={state.project.current}
                 state={sequence}
                 transport={transport}
+                bank={state.activeBank}
+                snap={sequenceGridSnap}
+                onSnapChange={setSequenceGridSnap}
+                onViewportChange={setSequenceGridViewport}
                 onRefresh={() => {
                   void refreshSequence();
                   void reconcileTransport();

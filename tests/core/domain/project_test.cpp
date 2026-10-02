@@ -160,6 +160,20 @@ void test_pad_playback_parity_fields_default_to_prior_behaviour() {
   }
 }
 
+// The 5.2.0 tone fields default to the bypassed playback that predates them.
+void test_pad_playback_tone_fields_default_to_bypass() {
+  for (const lmdj::domain::PadPlayback& playback :
+       {lmdj::domain::PadPlayback{},
+        lmdj::domain::PadPlayback{
+            7, 90, lmdj::domain::TriggerMode::loop_gate, -1200, true}}) {
+    LMDJ_CHECK(playback.attack_ms == 0);
+    LMDJ_CHECK(playback.release_ms == 0);
+    LMDJ_CHECK(playback.tone == 0);
+    LMDJ_CHECK(playback.eq == lmdj::domain::PadEq{});
+    LMDJ_CHECK(!playback.eq.low && !playback.eq.mid && !playback.eq.high);
+  }
+}
+
 // Against an 8-frame source, the loop point must lie before the resolved end:
 // an open trim end resolves to the source length.
 void test_playback_for_source_bounds_the_loop_point_by_the_resolved_end() {
@@ -247,6 +261,7 @@ int main() {
     test_pattern_merge_is_last_write_wins_and_canonically_ordered();
     test_pad_playback_defaults_are_project_v2_contract_values();
     test_pad_playback_parity_fields_default_to_prior_behaviour();
+    test_pad_playback_tone_fields_default_to_bypass();
     test_playback_for_source_bounds_the_loop_point_by_the_resolved_end();
     test_playback_for_source_bounds_the_crossfade_by_half_the_loop();
     test_project_factory_accepts_only_supported_bpm_range();

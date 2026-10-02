@@ -79,7 +79,15 @@ The inventory's remaining surfaces are split into two reviewable PRs.
   `long_source_editor.tsx`, `capture_panel.tsx`, `creator_state.ts`
   (projection-refresh copy), `long_source_ingest.ts`, their tests, the two
   browser specs that pinned old Sample copy, and portal `/hosts/creator-web/`.
-- **3b (closes #1680):** Candidate, Sound Set, Perform and Authoring History.
+- **3b (completes #1680):** Candidate, Sound Set, Perform, Authoring History
+  and the waveform placeholder. Declared files:
+  - the five components and `perform_state.ts`;
+  - `performCaptureUnavailableMessage` in `error_messages.ts`;
+  - `app.tsx`, which passes `reportFailure` to the Perform controller;
+  - their tests;
+  - the Perform and Sound Set browser specs. The Sound Set parity check reads
+    `data-code`/`data-reason` instead of parsing the visible row;
+  - portal `/hosts/creator-web/`.
 
 ## Task 3 — Remaining surfaces (original scope)
 

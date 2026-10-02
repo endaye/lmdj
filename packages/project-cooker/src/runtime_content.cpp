@@ -211,7 +211,8 @@ void validate_playback(const ResolvedPlayback& playback, std::uint32_t frames) {
   // non-neutral block keeps a device from silently playing a Pad differently
   // from the desktop that exported it.
   require(is_neutral(playback.dsp), "voice_dsp",
-          "runtime content v1 cannot carry Pad reverse, pitch, pan or loop settings");
+          "runtime content v1 cannot carry Pad reverse, pitch, pan, loop, envelope, "
+          "tone or EQ settings");
 }
 
 auto event_key(const ResolvedEvent& event) {

@@ -13,10 +13,25 @@ export interface ProjectPadView {
   assetId: string | null;
 }
 
+// The lmdj.project.v5 `pattern_event` shape the Facade emits for every
+// Contract level it accepts: older levels are migrated before inspection.
+export interface PatternEventView {
+  readonly slot: Readonly<{bank: number; pad: number}>;
+  readonly onsetTick: number;
+  readonly durationTick: number;
+  readonly velocity: number;
+}
+
+export interface ProjectPatternView {
+  readonly patternId: string;
+  readonly bars: 1 | 2 | 4 | 8;
+  readonly events: readonly PatternEventView[];
+}
+
 export interface ProjectView extends LocalProjectSummary {
   key: "—";
   pads: readonly ProjectPadView[];
-  patterns: readonly Readonly<{patternId: string; bars: 1 | 2 | 4 | 8}>[];
+  patterns: readonly ProjectPatternView[];
   readonly patternSlots: readonly (string | null)[];
   sequenceSettings: Readonly<{
     quantizeEnabled: boolean;

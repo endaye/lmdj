@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/issues/799
     observed_by: Claude Code (Opus 5)
+  - date: 2026-10-02
+    occurrence: https://github.com/endaye/lmdj/pull/1780
+    observed_by: Claude Code (Opus 5.5)
 exit: none
 ---
 
@@ -64,6 +67,16 @@ definition to compare against.
   import cannot drift; a gate over three copies is the fallback for when the
   copies are in three languages, as they are here (C++ allowlist, JS frozen
   array, C++ served table).
+- The two copies can be two implementations of one behaviour. #1780's
+  realtime engine and offline renderer run one voice kernel, and
+  `audio.voice_dsp_parity` requires their renders to agree within one PCM16
+  step. Both ended a filtered voice on the same frame while its filter still
+  rang, a step from about -2 dB to silence. Both also let a release that
+  started during a user attack swell by 26 dB. The suite stayed green
+  throughout, because agreement was exactly what both renders did. Pair every
+  parity test with an assertion against an independent oracle: a closed-form
+  expectation, or an absolute property of one path's output (no step at a
+  voice's end, no rise after a release), as #1780's new realtime tests do.
 - Do not read a green suite for the served operation as evidence it is
   reachable. Ask which layer that suite enters at. `control_runtime_test.cpp`
   enters below the bridge, so no amount of coverage there can observe a bridge
@@ -81,3 +94,8 @@ definition to compare against.
 table only. It is a partial mechanism, not this class's exit, because the
 general invariant — every served operation is reachable — is not yet
 mechanically decidable while most operations are served from `if` branches.
+
+Recurrence 2 (#1780) escalates to
+[#1787](https://github.com/endaye/lmdj/issues/1787): a skill section that asks
+every parity test to name its blind spot and to land an assertion against an
+independent oracle. The entry stays `open` until that mechanism lands.
