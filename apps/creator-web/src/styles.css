@@ -1099,6 +1099,59 @@ button:disabled { color: #737b87; }
   font-size: 10px;
   letter-spacing: .04em;
 }
+.sequence-grid {
+  display: grid;
+  gap: 8px;
+}
+.sequence-grid .sequence-segment { grid-template-columns: 48px repeat(5, 1fr); }
+.sequence-grid-scroll { overflow-x: auto; }
+.sequence-grid-body {
+  display: grid;
+  gap: 2px;
+}
+.sequence-grid-row {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 8px;
+  align-items: stretch;
+}
+.sequence-grid-pad {
+  align-self: center;
+  color: #adb6aa;
+  font-size: 10px;
+}
+.sequence-grid-lane {
+  position: relative;
+  height: 20px;
+  border-radius: 4px;
+  background-color: #171b21;
+}
+.sequence-grid-note {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 3px;
+  background: #ddf478;
+}
+.sequence-overview-thumbnail {
+  display: block;
+  width: 100%;
+  height: 64px;
+  border-radius: 4px;
+  background: #171b21;
+}
+.sequence-overview-note { fill: #ddf478; }
+.sequence-overview-frame {
+  fill: none;
+  stroke: #9ec9f5;
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+.sequence-overview-playhead {
+  stroke: #ffb36b;
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
 .hardware-workspace .sequence-touch-workspace h1 { font-size: 16px; }
 
 /* D04 Perform. The pictured MASTER fader, LP/HP/BP filter type, MUTE/SOLO and
