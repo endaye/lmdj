@@ -142,14 +142,16 @@ class CardputerBuildCommandTest(unittest.TestCase):
         self.assertEqual(calls, [['cmake', '--preset', 'dev']])
 
 
-
 class CardputerVoiceDspConfigurationTest(unittest.TestCase):
     def test_main_component_builds_without_the_voice_dsp(self):
         # CI never builds the firmware, so nothing else notices if the
         # definition goes: the firmware would build with the voice DSP and
         # fail only at memory admission on the device.
+        # The file indents every block body, so requiring the exact,
+        # unindented line keeps it out of a conditional block that could
+        # leave it unevaluated.
         cmake = REPO / 'apps/cardputer-host/main/CMakeLists.txt'
-        lines = [line.strip() for line in cmake.read_text().splitlines()]
+        lines = cmake.read_text().splitlines()
         self.assertIn(
             'add_compile_definitions(LMDJ_VOICE_DSP=0)', lines,
             'why: the Cardputer main component must define LMDJ_VOICE_DSP=0 '
