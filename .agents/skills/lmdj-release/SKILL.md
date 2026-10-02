@@ -60,9 +60,12 @@ the request's own reserved Build (for a tag-mode request, its requested tag),
 published and passing its exact-tag remote audit. A candidate that was never published, for example one whose complete
 batch went red, is retired with `--superseded-by-build BUILD` once main
 carries that later BUILD on the same product line. Its own reserved Build must
-have no remote tag and no releasable or published intent. Retirement refuses an
-outstanding intent or a completed request, keeps the full original state in a
-`.retired` record, and mutates nothing remote. Never delete or edit journal
+have no remote tag and no releasable or published intent. Retirement refuses a
+completed request. An outstanding intent is refused for the never-published form
+(`--superseded-by-build`); the published form (`--superseded-by TAG`) accepts it,
+because the published, audited Build settles every step it could still be
+working toward. Either way the full original state is kept in a `.retired`
+record, and nothing remote is mutated. Never delete or edit journal
 files by hand.
 
 The changelog step stays `pending` until the Owner-approved editorial is

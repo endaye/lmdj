@@ -1,10 +1,10 @@
 #include <lmdj/foundation/artifact.hpp>
 
-#include <array>
 #include <fstream>
 #include <limits>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include <picosha2.h>
 
@@ -71,7 +71,9 @@ Result<ArtifactRef> describe_artifact(
   }
 
   picosha2::hash256_one_by_one hasher;
-  std::array<unsigned char, 64U * 1024U> buffer{};
+  // The read buffer lives on the heap: a 64 KiB stack array made this the
+  // largest frame on the Web stack, under every import that hashes a file.
+  std::vector<unsigned char> buffer(64U * 1024U);
   std::uint64_t byte_length = 0;
 
   while (stream) {

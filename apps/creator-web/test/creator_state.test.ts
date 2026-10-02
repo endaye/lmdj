@@ -614,7 +614,7 @@ describe("Creator state", () => {
     expect(after.sample.pendingAction).toBeNull();
     expect(after.sample.lastError).toEqual(snapshotError === null ? null : {
       code: "COOK_FAILED",
-      message: "Sample runtime preparation failed",
+      message: "The sound was saved but is not ready to play yet.",
       retryPrepare: true,
     });
     expect(after.audio).toBe(before.audio);

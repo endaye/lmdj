@@ -1,3 +1,8 @@
+import {
+  PUBLIC_ERROR_CODES,
+  SAMPLE_PREVIEW_FAILURE,
+  sampleMessage,
+} from "./error_messages";
 import type {
   PadPlayback,
   RuntimeVoiceState,
@@ -154,30 +159,6 @@ const MUTATION_PENDING_KINDS = new Set<SamplePendingKind>([
   "update",
 ]);
 const RETRY_PENDING_KINDS = new Set<SamplePendingKind>(["retry-prepare"]);
-const ALLOWED_ERROR_CODES = new Set([
-  "INVALID_ARGUMENT",
-  "NOT_FOUND",
-  "REVISION_CONFLICT",
-  "DUPLICATE_ID",
-  "UNSUPPORTED_AUDIO",
-  "MISSING_ASSET",
-  "INVALID_PROJECT",
-  "COOK_FAILED",
-  "BANK_QUOTA_EXHAUSTED",
-  "PROJECT_QUOTA_EXHAUSTED",
-  "PROVIDER_NOT_FOUND",
-  "PROVIDER_FAILED",
-  "PERMISSION_DENIED",
-  "IO_ERROR",
-  "INTERNAL_ERROR",
-  "UNSUPPORTED_WEB_RUNTIME",
-  "PROJECT_BUSY",
-  "WEB_RUNTIME_RESOURCE_LIMIT",
-  "HOST_STATE_INVALID",
-  "HOST_TIMEOUT",
-  "HOST_RESTART_REQUIRED",
-  "HOST_PROTOCOL_MISMATCH",
-]);
 const VOICE_STATES = new Set(["started", "stopped", "completed"]);
 const MAX_SAFE_JSON_DEPTH = 8;
 const MAX_SAFE_JSON_NODES = 4_096;
@@ -231,33 +212,6 @@ const SNAPSHOT_STORAGE_CONDITIONS = new Set([
   "atomic_publish_unsupported",
 ]);
 const SNAPSHOT_TRANSFER_CONDITIONS = new Set(["resource_limit"]);
-const SAMPLE_PUBLIC_ERROR_MESSAGES: Readonly<Record<string, string>> =
-  Object.freeze({
-    INVALID_ARGUMENT: "Sample request is invalid",
-    NOT_FOUND: "Sample resource was not found",
-    REVISION_CONFLICT: "Project changed; review and try again",
-    DUPLICATE_ID: "Sample identity already exists",
-    UNSUPPORTED_AUDIO: "Sample audio is unsupported",
-    MISSING_ASSET: "Sample Artifact is unavailable",
-    INVALID_PROJECT: "Project could not be validated",
-    COOK_FAILED: "Sample runtime preparation failed",
-    BANK_QUOTA_EXHAUSTED:
-      "Selection exceeds this Bank quota; shorten it, free another Pad, or use another Bank",
-    PROJECT_QUOTA_EXHAUSTED:
-      "Selection exceeds the Project quota; shorten it or free prepared Samples",
-    PROVIDER_NOT_FOUND: "Sample operation failed",
-    PROVIDER_FAILED: "Sample operation failed",
-    PERMISSION_DENIED: "Sample operation is not permitted",
-    IO_ERROR: "Sample storage operation failed",
-    INTERNAL_ERROR: "Sample operation failed",
-    UNSUPPORTED_WEB_RUNTIME: "Sample operation is unavailable in this Web Runtime",
-    PROJECT_BUSY: "Project is already open for writing",
-    WEB_RUNTIME_RESOURCE_LIMIT: "Sample exceeds the Web Runtime resource limit",
-    HOST_STATE_INVALID: "Sample operation is unavailable",
-    HOST_TIMEOUT: "Sample operation timed out",
-    HOST_RESTART_REQUIRED: "Restart the Sample runtime and try again",
-    HOST_PROTOCOL_MISMATCH: "Sample Host response was invalid",
-  });
 const PRIVATE_HOST_MESSAGE_PATTERN = new RegExp([
   String.raw`\bopfs\b`,
   "file://",
@@ -680,14 +634,14 @@ export function normalizeSampleSnapshotError(
 ): Readonly<SampleSnapshotError> | null {
   if (value === null) return null;
   if (!exactKeys(value, ["code", "message", "details"]) ||
-    typeof value.code !== "string" || !ALLOWED_ERROR_CODES.has(value.code) ||
+    typeof value.code !== "string" || !PUBLIC_ERROR_CODES.has(value.code) ||
     typeof value.message !== "string" || value.message.length === 0 ||
     value.message.length > 512 || PRIVATE_HOST_MESSAGE_PATTERN.test(value.message)) {
     throw new TypeError("Sample snapshot error is invalid");
   }
   return Object.freeze({
     code: value.code,
-    message: SAMPLE_PUBLIC_ERROR_MESSAGES[value.code] ?? "Sample operation failed",
+    message: sampleMessage(value.code).message,
     details: normalizeQuotaDetails(value.code, value.details),
   });
 }
@@ -1254,7 +1208,7 @@ export function applySampleOperationFailure(
   const hasDetails = record(value) && Object.hasOwn(value, "details");
   if (!(exactKeys(value, ["code", "message"]) ||
     exactKeys(value, ["code", "message", "details"])) ||
-    typeof value.code !== "string" || !ALLOWED_ERROR_CODES.has(value.code) ||
+    typeof value.code !== "string" || !PUBLIC_ERROR_CODES.has(value.code) ||
     typeof value.message !== "string" || value.message.length === 0 ||
     value.message.length > 512) {
     throw new TypeError("Sample operation failure is invalid");
@@ -1267,7 +1221,7 @@ export function applySampleOperationFailure(
     pendingAction: null,
     lastError: Object.freeze({
       code: value.code,
-      message: SAMPLE_PUBLIC_ERROR_MESSAGES[value.code] ?? "Sample operation failed",
+      message: sampleMessage(value.code).message,
       retryPrepare: value.code === "COOK_FAILED",
       details,
     }),
@@ -1379,7 +1333,7 @@ export function reduceSampleState(
         auditionPlayback: null,
         lastError: Object.freeze({
           code: "HOST_STATE_INVALID",
-          message: "Runtime preview failed",
+          message: SAMPLE_PREVIEW_FAILURE.message,
           retryPrepare: false,
         }),
       });

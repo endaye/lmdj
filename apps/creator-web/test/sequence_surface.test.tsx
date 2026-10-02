@@ -101,11 +101,32 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
   expect(within(touch).queryByRole("button", {name: "Record off"})).toBeNull();
   fireEvent.click(within(touch).getByRole("checkbox", {name: "Quantize"}));
   expect(onSettingsChange).toHaveBeenCalledWith({quantizeEnabled: false});
-  fireEvent.change(within(touch).getByRole("slider", {name: /Swing/}), {
-    target: {value: "62"},
-  });
-  fireEvent.click(within(touch).getByRole("button", {name: "Apply Swing"}));
-  expect(onSettingsChange).toHaveBeenCalledWith({swingPercent: 62});
+  // Direct controls: a drag previews locally and commits once on release,
+  // step buttons and TAP commit immediately, and no Apply button exists.
+  expect(within(touch).queryByRole("button", {name: /Apply/})).toBeNull();
+  const swingSlider = within(touch).getByRole("slider", {name: "Swing"});
+  fireEvent.pointerDown(swingSlider, {pointerId: 1});
+  fireEvent.change(swingSlider, {target: {value: "62"}});
+  expect(within(touch).getByText("62%")).toBeTruthy();
+  expect(onSettingsChange).toHaveBeenCalledTimes(1);
+  fireEvent.pointerUp(swingSlider, {pointerId: 1});
+  expect(onSettingsChange).toHaveBeenCalledTimes(2);
+  expect(onSettingsChange).toHaveBeenLastCalledWith({swingPercent: 62});
+  // A step right after the slider's commit continues from the value that
+  // commit requested; the committed prop has not caught up yet.
+  fireEvent.click(within(touch).getByRole("button", {name: "Increase Swing"}));
+  expect(onSettingsChange).toHaveBeenLastCalledWith({swingPercent: 63});
+  fireEvent.click(within(touch).getByRole("button", {name: "Decrease BPM"}));
+  expect(onSettingsChange).toHaveBeenLastCalledWith({bpm: 119});
+  expect(onSettingsChange).toHaveBeenCalledTimes(4);
+  const now = vi.spyOn(performance, "now")
+    .mockReturnValueOnce(1_000).mockReturnValueOnce(1_600);
+  const tapTempo = within(touch).getByRole("button", {name: "Tap Tempo"});
+  fireEvent.click(tapTempo);
+  expect(onSettingsChange).toHaveBeenCalledTimes(4);
+  fireEvent.click(tapTempo);
+  expect(onSettingsChange).toHaveBeenLastCalledWith({bpm: 100});
+  now.mockRestore();
   fireEvent.click(within(touch).getByRole("button", {name: "4 bars"}));
   fireEvent.click(within(touch).getByRole("button", {name: "Create Pattern"}));
   expect(onCreatePattern).toHaveBeenCalledWith(4);
@@ -124,6 +145,104 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
   expect(onPlayStop).toHaveBeenCalledTimes(1);
 });
 
+test("a preview never commits and a failed commit restores the committed readout", () => {
+  const callbacks = renderSurface();
+  const bpmSlider = screen.getByRole("slider", {name: "BPM"});
+  fireEvent.pointerDown(bpmSlider, {pointerId: 2});
+  fireEvent.change(bpmSlider, {target: {value: "132"}});
+  expect(screen.getByText("132 BPM")).toBeTruthy();
+  expect(callbacks.onSettingsChange).not.toHaveBeenCalled();
+  fireEvent.pointerUp(bpmSlider, {pointerId: 2});
+  expect(callbacks.onSettingsChange).toHaveBeenCalledTimes(1);
+  expect(callbacks.onSettingsChange).toHaveBeenLastCalledWith({bpm: 132});
+  // The commit path owns the outcome: until Truth moves, the readout falls
+  // back to the committed value, not the abandoned preview.
+  expect(screen.getByText("120 BPM")).toBeTruthy();
+});
+
+test("rapid step clicks accumulate from the last requested value until Truth catches up", () => {
+  const onSettingsChange = vi.fn();
+  const props = {
+    transport: initialPatternTransportState,
+    state: {...initialSequenceState, phase: "stopped" as const},
+    onRefresh: () => {}, onSwitch: () => {},
+    onCreatePattern: () => {}, onSettingsChange,
+    onRecover: () => {}, onDiscard: () => {},
+  };
+  const view = render(<SequenceTouchWorkspace project={project} {...props} />);
+  // Each click commits through the Host; until the committed prop catches up,
+  // the next click must step from the last requested value, not the stale
+  // committed one.
+  fireEvent.click(screen.getByRole("button", {name: "Increase BPM"}));
+  fireEvent.click(screen.getByRole("button", {name: "Increase BPM"}));
+  expect(onSettingsChange).toHaveBeenNthCalledWith(1, {bpm: 121});
+  expect(onSettingsChange).toHaveBeenNthCalledWith(2, {bpm: 122});
+  fireEvent.click(screen.getByRole("button", {name: "Increase Swing"}));
+  fireEvent.click(screen.getByRole("button", {name: "Increase Swing"}));
+  expect(onSettingsChange).toHaveBeenNthCalledWith(3, {swingPercent: 51});
+  expect(onSettingsChange).toHaveBeenNthCalledWith(4, {swingPercent: 52});
+  // Once Truth lands on the requested value, stepping continues from it.
+  view.rerender(<SequenceTouchWorkspace
+    project={{
+      ...project, bpm: 122,
+      sequenceSettings: {quantizeEnabled: true, swingPercent: 52},
+    }} {...props} />);
+  fireEvent.click(screen.getByRole("button", {name: "Increase BPM"}));
+  expect(onSettingsChange).toHaveBeenNthCalledWith(5, {bpm: 123});
+  fireEvent.click(screen.getByRole("button", {name: "Decrease Swing"}));
+  expect(onSettingsChange).toHaveBeenNthCalledWith(6, {swingPercent: 51});
+});
+
+test("a failed settings commit resyncs the step base to the committed truth", () => {
+  const onSettingsChange = vi.fn();
+  const props = {
+    transport: initialPatternTransportState,
+    onRefresh: () => {}, onSwitch: () => {},
+    onCreatePattern: () => {}, onSettingsChange,
+    onRecover: () => {}, onDiscard: () => {},
+  };
+  const view = render(<SequenceTouchWorkspace project={project}
+    state={{...initialSequenceState, phase: "stopped"}} {...props} />);
+  fireEvent.click(screen.getByRole("button", {name: "Increase BPM"}));
+  expect(onSettingsChange).toHaveBeenNthCalledWith(1, {bpm: 121});
+  // The commit failed: the requested value never landed, so the next step
+  // derives from the committed truth again, not from the failed request.
+  view.rerender(<SequenceTouchWorkspace project={project}
+    state={{...initialSequenceState, phase: "stopped", errorCode: "HOST_TIMEOUT"}}
+    {...props} />);
+  fireEvent.click(screen.getByRole("button", {name: "Increase BPM"}));
+  expect(onSettingsChange).toHaveBeenNthCalledWith(2, {bpm: 121});
+});
+
+test("locks every Tempo and Swing control while recording and says why", () => {
+  render(<SequenceTouchWorkspace project={project}
+    transport={{
+      ...initialPatternTransportState,
+      sessionId: "session-1",
+      status: {
+        engaged: true, playing: true, recording: true, phase: "idle",
+        runtimeGeneration: 1, transportEpoch: 1, originFrame: 0,
+        commandId: "command-1", publicationPending: false, error: null,
+      },
+    }}
+    state={initialSequenceState}
+    onRefresh={() => {}} onSwitch={() => {}}
+    onCreatePattern={() => {}} onSettingsChange={() => {}}
+    onRecover={() => {}} onDiscard={() => {}} />);
+  for (const name of [
+    "BPM", "Swing",
+  ]) {
+    expect(screen.getByRole("slider", {name}).hasAttribute("disabled")).toBe(true);
+  }
+  for (const name of [
+    "Decrease BPM", "Increase BPM", "Tap Tempo",
+    "Decrease Swing", "Increase Swing",
+  ]) {
+    expect(screen.getByRole("button", {name}).hasAttribute("disabled")).toBe(true);
+  }
+  expect(screen.getByText(/locked while recording/)).toBeTruthy();
+});
+
 test("requires an explicit destination and preserves original recovery semantics", () => {
   const callbacks = renderSurface(true);
   fireEvent.click(screen.getByRole("button", {name: "Recover original Pattern"}));
@@ -136,4 +255,14 @@ test("requires an explicit destination and preserves original recovery semantics
   expect(callbacks.onRecover).toHaveBeenLastCalledWith(
     expect.anything(), project.patterns[1]!.patternId,
   );
+});
+
+test("keeps restoring into another Pattern behind a collapsed More disclosure", () => {
+  renderSurface(true);
+  const more = screen.getByText("More", {selector: "summary"}).closest("details");
+  expect(more).not.toBeNull();
+  expect(more!.open).toBe(false);
+  expect(more!.contains(screen.getByRole("button", {name: "Recover to selected Pattern"}))).toBe(true);
+  expect(more!.contains(screen.getByRole("button", {name: "Recover original Pattern"}))).toBe(false);
+  expect(more!.contains(screen.getByRole("button", {name: "Discard"}))).toBe(false);
 });

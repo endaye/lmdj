@@ -645,6 +645,23 @@ test("pointer-down on the backdrop does not close the panel (P2-D1)", () => {
   expect(screen.getByRole("dialog", {name: "Pad A1 Pad Capture"})).toBeTruthy();
 });
 
+test.each([
+  ["NotFoundError", "No microphone was found. Connect one, then record again."],
+  ["NotReadableError",
+    "The microphone could not be started; another app may be using it. Close that app, then record again."],
+  ["getUserMedia failed", "Recording could not start. Check the microphone, then record again."],
+])("a %s microphone failure says what to do without naming the exception", async (name, copy) => {
+  const user = userEvent.setup();
+  const {makeController} = createFactory({
+    startImpl: async () => { throw new CapturePermissionError(name); },
+  });
+  renderPanel({makeController});
+  await user.click(screen.getByRole("button", {name: "Record into Pad A1"}));
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain(copy);
+  expect(alert.textContent).not.toContain(name);
+});
+
 test("Record drives record then granted, and denial renders a retryable alert (behavior 1)", async () => {
   const user = userEvent.setup();
   const {makeController, instances} = createFactory({
@@ -656,7 +673,9 @@ test("Record drives record then granted, and denial renders a retryable alert (b
 
   await user.click(screen.getByRole("button", {name: "Record into Pad A1"}));
   const alert = await screen.findByRole("alert");
-  expect(alert.textContent).toContain("NotAllowedError");
+  expect(alert.textContent).toContain(
+    "Creator is not allowed to use the microphone. Allow microphone access for this site, then record again.");
+  expect(alert.textContent).not.toContain("NotAllowedError");
   const retry = screen.getByRole("button", {name: "Record into Pad A1"});
   expect(retry).toBeTruthy();
 

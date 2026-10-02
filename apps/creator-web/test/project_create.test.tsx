@@ -350,7 +350,7 @@ test("a stored copy with an invalid summary is reported and still listed", async
   await bootIntoListedProject(fixture);
   await userEvent.click(screen.getByRole("button", {name: "Duplicate Project"}));
   expect((await screen.findByRole("alert")).textContent)
-    .toBe("Duplicate failed (HOST_PROTOCOL_MISMATCH).");
+    .toBe("Duplicate failed: This copy of Creator is out of date. Reload the page to load the current version.");
   expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Open local"}));
   await waitFor(() =>

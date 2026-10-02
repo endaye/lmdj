@@ -1172,6 +1172,124 @@ void test_refused_live_gesture_leaves_no_journalled_event() {
   LMDJ_CHECK(sink->applied().size() == 1);
 }
 
+// Session-free FX admission (#1674): performance.fx.gesture applies a gesture
+// live to the master bus with no recording session, no project and no journal,
+// so FX are audible whenever audio runs.
+void test_session_free_fx_gesture_reaches_the_master_bus() {
+  TempDirectory temp;
+  auto sink = std::make_shared<GestureSink>();
+  lmdj::facade::ApplicationConfig config{
+      temp.path(),
+      nullptr,
+      {},
+      {},
+      std::nullopt,
+      nullptr,
+      std::make_shared<Clock>(),
+      std::make_shared<Sequencer>(),
+      std::make_shared<LaunchAcknowledger>(),
+      lmdj::facade::make_unavailable_performance_replay_controller(),
+      sink,
+  };
+  lmdj::facade::Application application(std::move(config));
+
+  const auto gesture = [](nlohmann::json payload) {
+    return nlohmann::json{{"operation", "performance.fx.gesture"},
+                          {"event", std::move(payload)}};
+  };
+  check_ok(application.command(
+      gesture({{"kind", "fx_engage"}, {"fx", "filter"}, {"value", 500}})));
+  check_ok(application.command(
+      gesture({{"kind", "fx_move"}, {"fx", "filter"}, {"value", 630}})));
+  check_ok(application.command(gesture({{"kind", "hold_on"}})));
+  check_ok(application.command(gesture({{"kind", "hold_off"}})));
+  check_ok(application.command(
+      gesture({{"kind", "fx_release"}, {"fx", "filter"}})));
+
+  const auto &applied = sink->applied();
+  LMDJ_CHECK(applied.size() == 5);
+  LMDJ_CHECK(applied.at(0).kind == lmdj::audio::FxGestureKind::engage);
+  LMDJ_CHECK(applied.at(0).fx == lmdj::domain::PerformanceFx::filter);
+  LMDJ_CHECK(applied.at(0).value == 500);
+  LMDJ_CHECK(applied.at(1).kind == lmdj::audio::FxGestureKind::move);
+  LMDJ_CHECK(applied.at(1).value == 630);
+  LMDJ_CHECK(applied.at(2).kind == lmdj::audio::FxGestureKind::hold_on);
+  LMDJ_CHECK(applied.at(3).kind == lmdj::audio::FxGestureKind::hold_off);
+  LMDJ_CHECK(applied.at(4).kind == lmdj::audio::FxGestureKind::release);
+  LMDJ_CHECK(applied.at(4).fx == lmdj::domain::PerformanceFx::filter);
+
+  // Nothing is journaled: no project exists and none is created.
+  LMDJ_CHECK(std::filesystem::is_empty(temp.path()));
+}
+
+void test_session_free_fx_gesture_refusals_fail_closed() {
+  TempDirectory temp;
+  auto sink = std::make_shared<GestureSink>();
+  lmdj::facade::ApplicationConfig config{
+      temp.path(),
+      nullptr,
+      {},
+      {},
+      std::nullopt,
+      nullptr,
+      std::make_shared<Clock>(),
+      std::make_shared<Sequencer>(),
+      std::make_shared<LaunchAcknowledger>(),
+      lmdj::facade::make_unavailable_performance_replay_controller(),
+      sink,
+  };
+  lmdj::facade::Application application(std::move(config));
+  const auto gesture = [](nlohmann::json payload) {
+    return nlohmann::json{{"operation", "performance.fx.gesture"},
+                          {"event", std::move(payload)}};
+  };
+
+  LMDJ_CHECK(!application
+                  .command(gesture({{"kind", "fx_engage"},
+                                    {"fx", "flanger"},
+                                    {"value", 500}}))
+                  .at("ok")
+                  .get<bool>());
+  LMDJ_CHECK(!application
+                  .command(gesture({{"kind", "fx_engage"},
+                                    {"fx", "filter"},
+                                    {"value", 1001}}))
+                  .at("ok")
+                  .get<bool>());
+  LMDJ_CHECK(!application
+                  .command(gesture({{"kind", "fx_engage"}, {"fx", "filter"}}))
+                  .at("ok")
+                  .get<bool>());
+  LMDJ_CHECK(
+      !application.command(gesture({{"kind", "pad_press"}})).at("ok").get<bool>());
+  LMDJ_CHECK(sink->applied().empty());
+
+  sink->refuse_next(1);
+  const auto refused = application.command(
+      gesture({{"kind", "fx_engage"}, {"fx", "filter"}, {"value", 500}}));
+  LMDJ_CHECK(!refused.at("ok").get<bool>());
+  LMDJ_CHECK(refused.at("error").at("code") == "INTERNAL_ERROR");
+  LMDJ_CHECK(sink->applied().empty());
+
+  lmdj::facade::Application engineless({
+      temp.path(),
+      nullptr,
+      {},
+      {},
+      std::nullopt,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
+  });
+  const auto unavailable = engineless.command(
+      gesture({{"kind", "fx_engage"}, {"fx", "filter"}, {"value", 500}}));
+  LMDJ_CHECK(!unavailable.at("ok").get<bool>());
+  LMDJ_CHECK(unavailable.at("error").at("details").at("reason") ==
+             "performance_fx_authority_unavailable");
+}
+
 } // namespace
 
 int main() {
@@ -1184,6 +1302,8 @@ int main() {
     test_ambiguous_tail_append_freezes_runtime_without_overwrite();
     test_admitted_fx_and_hold_gestures_reach_the_master_bus();
     test_refused_live_gesture_leaves_no_journalled_event();
+    test_session_free_fx_gesture_reaches_the_master_bus();
+    test_session_free_fx_gesture_refusals_fail_closed();
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';
     return 1;

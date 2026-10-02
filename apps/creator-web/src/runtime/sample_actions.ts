@@ -1,3 +1,4 @@
+import {PUBLIC_ERROR_CODES, SAMPLE_PREVIEW_FAILURE} from "../state/error_messages";
 import type {
   CreatorSampleRuntimeSession,
   PadPlayback,
@@ -27,30 +28,6 @@ import {encodePcm16Wav} from "../capture/wav_encoder";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const ALLOWED_ERROR_CODES = new Set([
-  "INVALID_ARGUMENT",
-  "NOT_FOUND",
-  "REVISION_CONFLICT",
-  "DUPLICATE_ID",
-  "UNSUPPORTED_AUDIO",
-  "MISSING_ASSET",
-  "INVALID_PROJECT",
-  "COOK_FAILED",
-  "BANK_QUOTA_EXHAUSTED",
-  "PROJECT_QUOTA_EXHAUSTED",
-  "PROVIDER_NOT_FOUND",
-  "PROVIDER_FAILED",
-  "PERMISSION_DENIED",
-  "IO_ERROR",
-  "INTERNAL_ERROR",
-  "UNSUPPORTED_WEB_RUNTIME",
-  "PROJECT_BUSY",
-  "WEB_RUNTIME_RESOURCE_LIMIT",
-  "HOST_STATE_INVALID",
-  "HOST_TIMEOUT",
-  "HOST_RESTART_REQUIRED",
-  "HOST_PROTOCOL_MISMATCH",
-]);
 const FORBIDDEN_PRIVATE_KEYS = new Set([
   "project",
   "projectPath",
@@ -97,7 +74,7 @@ const MAX_SAFE_JSON_STRING = 4_096;
 
 export const SAMPLE_CONFLICT_MESSAGE =
   "Project changed; review and try again";
-export const SAMPLE_PREVIEW_FAILURE_MESSAGE = "Runtime preview failed";
+export const SAMPLE_PREVIEW_FAILURE_MESSAGE = SAMPLE_PREVIEW_FAILURE.message;
 
 export type SampleMutationResolution =
   | Readonly<{

@@ -665,6 +665,27 @@ test("Project I/O recovery closes its prior page", async ({context}) => {
   expect(page.isClosed(), "recovery must follow an actual page close").toBe(true);
 });
 
+// #1720: Project I/O's deep paths keep ProjectState-sized locals, so every
+// Pad or Project field and every new by-value ProjectState local spends Web
+// stack. Each native action must stay within half the stack, which leaves
+// room for the Host frames above Project I/O and for the next field growth;
+// the overflow this replaces only showed up as unrelated traps.
+const STACK_HEADROOM_FRACTION = 0.5;
+
+function expectStackHeadroom(url, stack) {
+  expect(stack, `why: ${url} reported no stack high-water mark, so the Web stack ` +
+      `budget went unmeasured; remedy: keep the stack probe in ` +
+      `project_io_web_test.cpp main() reporting before terminal publication`).not.toBeNull();
+  expect(stack.high_water_bytes,
+      `why: ${url} reached ${stack.high_water_bytes} of the ${stack.size_bytes}-byte ` +
+      `Web stack, over ${STACK_HEADROOM_FRACTION * 100}%: a grown Pad or Project field, ` +
+      `or a by-value ProjectState local on a deep Project I/O frame, is spending ` +
+      `the budget; remedy: keep ProjectState off deep frames (heap, references, ` +
+      `noinline phases), compare em++ -O3 -fstack-usage frames against origin/main, ` +
+      `see .agents/pitfalls/web-project-io-stack-scales-with-project-state.md`)
+      .toBeLessThanOrEqual(stack.size_bytes * STACK_HEADROOM_FRACTION);
+}
+
 async function waitForResult(page) {
   const observer = RUNTIME_ERROR_OBSERVERS.get(page);
   if (!observer) {
@@ -717,6 +738,11 @@ async function waitForResult(page) {
       throw runtimeFailure(observer.error);
     }
     const result = await page.evaluate(() => window.lmdjProjectIoWeb.result);
+    const stack = await page.evaluate(() => window.lmdjProjectIoWeb.stack ?? null);
+    console.log(`lmdj-project-io-stack ${JSON.stringify({url: page.url(), stack})}`);
+    if (page.url().includes("/project_io/project_io_web_test.html")) {
+      expectStackHeadroom(page.url(), stack);
+    }
     if (result?.error) {
       throw new Error(`Web Project I/O native runtime failed: ${result.error}`);
     }

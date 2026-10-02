@@ -1,3 +1,10 @@
+import {
+  NO_ROOM_MESSAGE,
+  PUBLIC_ERROR_CODES,
+  sampleMessage,
+  sampleNextStep,
+} from "../state/error_messages";
+import {useReportFailure} from "../runtime/diagnostics_context";
 import {useCallback, useEffect, useRef, useState} from "react";
 
 import {ConfirmationDialog, SampleControls} from "./sample_controls";
@@ -107,46 +114,18 @@ interface PreviewOwner {
   readonly slot: number;
 }
 
-const SAMPLE_ERROR_CODES = new Set([
-  "INVALID_ARGUMENT",
-  "NOT_FOUND",
-  "REVISION_CONFLICT",
-  "DUPLICATE_ID",
-  "UNSUPPORTED_AUDIO",
-  "MISSING_ASSET",
-  "INVALID_PROJECT",
-  "COOK_FAILED",
-  "BANK_QUOTA_EXHAUSTED",
-  "PROJECT_QUOTA_EXHAUSTED",
-  "PROVIDER_NOT_FOUND",
-  "PROVIDER_FAILED",
-  "PERMISSION_DENIED",
-  "IO_ERROR",
-  "INTERNAL_ERROR",
-  "UNSUPPORTED_WEB_RUNTIME",
-  "PROJECT_BUSY",
-  "WEB_RUNTIME_RESOURCE_LIMIT",
-  "HOST_STATE_INVALID",
-  "HOST_TIMEOUT",
-  "HOST_RESTART_REQUIRED",
-  "HOST_PROTOCOL_MISMATCH",
-]);
 
 function publicOperationError(
   error: unknown,
 ): Readonly<{code: string; message: string; details?: Readonly<Record<string, unknown>>}> {
   const candidate = (error as TypedRuntimeError | null)?.code;
-  const code = candidate !== undefined && SAMPLE_ERROR_CODES.has(candidate)
+  const code = candidate !== undefined && PUBLIC_ERROR_CODES.has(candidate)
     ? candidate
     : "INTERNAL_ERROR";
   const details = (error as TypedRuntimeError | null)?.details;
   return Object.freeze({
     code,
-    message: code === "BANK_QUOTA_EXHAUSTED"
-      ? "Selection exceeds this Bank quota; shorten it, free another Pad, or use another Bank"
-      : code === "PROJECT_QUOTA_EXHAUSTED"
-        ? "Selection exceeds the Project quota; shorten it or free prepared Samples"
-        : "Sample operation failed",
+    message: sampleMessage(code).message,
     ...(details === undefined ? {} : {details}),
   });
 }
@@ -209,6 +188,13 @@ export function SampleSurface({
   captureBackgrounded = false,
   sequenceCapture,
 }: SampleSurfaceProps) {
+  // #1680: every Sample failure keeps its code and details in Developer
+  // diagnostics; the surface shows only the user-language message.
+  const reportFailure = useReportFailure();
+  const recordedFailure = (operation: string, error: unknown) => {
+    reportFailure(operation, error);
+    return publicOperationError(error);
+  };
   const input = useRef<HTMLInputElement | null>(null);
   const surface = useRef<HTMLElement | null>(null);
   const fileSlot = useRef<number | null>(null);
@@ -572,7 +558,7 @@ export function SampleSurface({
       dispatch({type: "sample-action", action: {type: "preview-cleared"}});
       dispatch({
         type: "sample-action",
-        action: {type: "operation-failed", pending, error: publicOperationError(error)},
+        action: {type: "operation-failed", pending, error: recordedFailure("Update Pad", error)},
       });
     }
   };
@@ -644,7 +630,7 @@ export function SampleSurface({
       operationPending.current = null;
       dispatch({
         type: "sample-action",
-        action: {type: "operation-failed", pending, error: publicOperationError(error)},
+        action: {type: "operation-failed", pending, error: recordedFailure("Reset Pad", error)},
       });
     }
   };
@@ -687,7 +673,7 @@ export function SampleSurface({
       if (operationPending.current !== pending) return;
       operationPending.current = null;
       dispatch({type: "sample-action", action: {
-        type: "operation-failed", pending, error: publicOperationError(error),
+        type: "operation-failed", pending, error: recordedFailure("Delete Pad", error),
       }});
     }
   };
@@ -754,7 +740,7 @@ export function SampleSurface({
         });
         return CANCELLED_OUTCOME;
       }
-      const failure = publicOperationError(error);
+      const failure = recordedFailure("Import Sample", error);
       dispatch({
         type: "sample-action",
         action: {type: "operation-failed", pending, error: failure},
@@ -785,11 +771,9 @@ export function SampleSurface({
       setLongSourceDraft({slot, source, quota});
     } catch (error) {
       if (ingestEpoch.current !== epoch) return;
-      if (error instanceof LongSourceIngestError) {
-        setIngestError(`${error.message} (${error.details.resource}: ${String(error.details.observed)} / ${String(error.details.limit)})`);
-      } else {
-        setIngestError(publicOperationError(error).message);
-      }
+      // The resource token, observed value and limit go to diagnostics only.
+      const failure = recordedFailure("Read Sample source", error);
+      setIngestError(error instanceof LongSourceIngestError ? error.message : failure.message);
     } finally {
       if (ingestEpoch.current === epoch) setIngestPending(false);
     }
@@ -835,12 +819,12 @@ export function SampleSurface({
     try {
       const quota = await session.querySampleQuota(slot);
       if (quota.effectiveRemainingFrames < 1) {
-        setIngestError("why: no prepared-PCM quota remains; remedy: free a Pad or choose another Bank.");
+        setIngestError(NO_ROOM_MESSAGE);
         return;
       }
       setCaptureTarget({slot, quota});
     } catch (error) {
-      setIngestError(publicOperationError(error).message);
+      setIngestError(recordedFailure("Check Sample room", error).message);
     }
   };
 
@@ -1016,6 +1000,8 @@ export function SampleSurface({
       {sample.lastError === null ? null : (
         <div className="sample-error" role="alert">
           <p>{sample.lastError.message}</p>
+          {sampleNextStep(sample.lastError) === "" ? null
+            : <p className="sample-next-step">{sampleNextStep(sample.lastError)}</p>}
           {quotaErrorCopy(sample.lastError) === null
             ? null
             : <p>{quotaErrorCopy(sample.lastError)}</p>}

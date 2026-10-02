@@ -120,3 +120,71 @@ createRoot(root).render(
     projectTakeover={createBrowserProjectTakeover()}
   />,
 );
+
+// Static shell dressing: the header/footer live in index.html so unit tests
+// that render <App/> never see them; both slots no-op when absent.
+const identitySlot = document.querySelector("[data-build-identity]");
+if (identitySlot !== null) {
+  identitySlot.textContent =
+    `v${buildIdentity.productBuild} · creator-web ${buildIdentity.hostVersion}`;
+}
+
+// Narrow-portrait stage fit. styles.css rotates the workspace 90° under
+// (max-width: 959px) and (orientation: portrait); this measures the stage
+// (#root, the flex item between header and footer) and sizes/scales the
+// workspace so the fixed 880×592 console fits -- CSS cannot divide two
+// lengths, so the scale is computed here. Outside the media query every
+// inline value is cleared and the desktop layout is untouched.
+const stagePortrait = window.matchMedia(
+  "(max-width: 959px) and (orientation: portrait)",
+);
+let fittedWorkspace: HTMLElement | null = null;
+function fitStage(): void {
+  const workspace = document.querySelector<HTMLElement>(".hardware-workspace");
+  if (workspace === null) return;
+  fittedWorkspace = workspace;
+  workspace.style.width = "";
+  workspace.style.height = "";
+  workspace.style.transform = "";
+  workspace.style.transformOrigin = "";
+  if (!stagePortrait.matches) return;
+  const stage = workspace.parentElement;
+  if (stage === null) return;
+  const naturalWidth = workspace.scrollWidth;
+  const naturalHeight = workspace.scrollHeight;
+  if (naturalWidth === 0 || naturalHeight === 0) return;
+  // rotate(-90deg) swaps the axes: the workspace's height spans the stage's
+  // width and vice versa. CSS cannot divide two lengths, so the fit scale is
+  // computed here. The workspace is pinned to the stage's top-left corner
+  // (place-items: start in the media query) and transformed about that
+  // corner, because grid centering of an overflowing item is unreliable.
+  const scale = Math.min(
+    stage.clientWidth / naturalHeight,
+    stage.clientHeight / naturalWidth,
+    1,
+  );
+  const dx = (stage.clientWidth - naturalHeight * scale) / 2;
+  const dy = (stage.clientHeight + naturalWidth * scale) / 2;
+  workspace.style.width = `${naturalWidth}px`;
+  workspace.style.height = `${naturalHeight}px`;
+  workspace.style.transformOrigin = "0 0";
+  workspace.style.transform =
+    `translate(${dx}px, ${dy}px) rotate(-90deg) scale(${scale})`;
+}
+stagePortrait.addEventListener("change", fitStage);
+window.addEventListener("resize", fitStage);
+window.addEventListener("load", fitStage);
+requestAnimationFrame(fitStage);
+// The App commits .hardware-workspace only after the Runtime session attempt
+// resolves, later than any of the events above, and a later remount produces
+// a fresh element without these inline styles. Keep watching and refit
+// whenever the mounted element changes; the identity check keeps steady-state
+// mutations free of refits, and the childList-only filter keeps our own
+// inline-style writes from retriggering.
+const stageMount = new MutationObserver(() => {
+  const workspace = document.querySelector<HTMLElement>(".hardware-workspace");
+  if (workspace === null || workspace === fittedWorkspace) return;
+  fittedWorkspace = workspace;
+  fitStage();
+});
+stageMount.observe(root, {childList: true, subtree: true});

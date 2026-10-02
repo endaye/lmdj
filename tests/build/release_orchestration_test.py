@@ -172,14 +172,22 @@ class RequestJournalTest(unittest.TestCase):
             journal.retire("release-1", self.RETIREMENT, expected_request=request())
             self.assertIsNone(journal.read("release-1"))
 
-    def test_completed_or_intent_holding_requests_are_not_retired(self):
+    def test_an_outstanding_intent_needs_reconciliation_unless_the_build_is_published(self):
         with RequestJournal(self.root) as journal:
             journal.create(request())
-            record = journal.begin("release-1", STEPS[0])
+            journal.begin("release-1", STEPS[0])
             with self.assertRaisesRegex(JournalError, "outstanding intent"):
-                journal.retire("release-1", self.RETIREMENT)
-            journal.confirm("release-1", record["operation_id"], EVIDENCE)
-            for step in STEPS[1:]:
+                journal.retire("release-1", self.UNRELEASED)
+            # The published, audited Build settles what the intent worked toward;
+            # the retirement keeps the intent in its retained original state.
+            record = journal.retire("release-1", self.RETIREMENT)
+            self.assertIsNone(journal.read("release-1"))
+            self.assertEqual(record["original"]["transitions"][-1]["status"], "intent")
+
+    def test_completed_requests_are_not_retired(self):
+        with RequestJournal(self.root) as journal:
+            journal.create(request())
+            for step in STEPS:
                 record = journal.begin("release-1", step)
                 journal.confirm("release-1", record["operation_id"], EVIDENCE)
             with self.assertRaisesRegex(JournalError, "completed release"):

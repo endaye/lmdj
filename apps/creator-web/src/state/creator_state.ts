@@ -692,8 +692,8 @@ export function creatorReducer(
           lastError: Object.freeze({
             code: action.errorCode,
             message: committed
-              ? "Sample was saved, but current Project truth could not be refreshed"
-              : "Project changed, but current Project truth could not be refreshed",
+              ? "The sound was saved, but Creator could not show the latest Project."
+              : "The Project changed, but Creator could not show the latest version.",
             retryPrepare: false,
           }),
         }),

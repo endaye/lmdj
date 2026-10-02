@@ -239,7 +239,12 @@ test("WebKit capability boundary remains unsupported and is not physical accepta
   await expect(page.getByTestId("creator-phase")).toHaveText("unsupported", {
     timeout: 30_000,
   });
-  await expect(page.getByRole("alert")).toContainText("UNSUPPORTED_WEB_RUNTIME");
+  // #1680: user language in the alert; the code is in Developer diagnostics.
+  await expect(page.getByRole("alert")).toContainText("This browser cannot run Creator.");
+  await expect(page.getByRole("alert")).not.toContainText("UNSUPPORTED_WEB_RUNTIME");
+  await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
+  await expect(page.getByRole("region", {name: "Developer diagnostics"}))
+    .toContainText("UNSUPPORTED_WEB_RUNTIME");
   await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
   await expect(page.getByRole("button", {name: "Export report"})).toBeDisabled();
 });

@@ -37,7 +37,50 @@ class TransactionTest(unittest.TestCase):
         c=FakeClient(enabled);events=[];checks=[]
         def verify(v,u):checks.append((v,u));return True
         return c,events,checks,verify
-    def run_case(self,c,events,verify):return promote(c,candidate=B,verify=verify,observe=events.append)
+    def run_case(self,c,events,verify):return promote(c,candidate=B,verify=verify,observe=events.append,settle_seconds=0)
+    def settling(self, client, failures):
+        """Stable serves the previous bytes `failures[v]` times after each mutation."""
+        clock=[0.0];sleeps=[];left=dict(failures)
+        def verify(v,u):
+            mutated=bool(client.writes)
+            if mutated and u==STABLE and left.get(v,0)>0:
+                left[v]-=1;raise RuntimeError(f'index.html served the previous bytes for {v[:8]}')
+            return True
+        def sleep(seconds):sleeps.append(seconds);clock[0]+=seconds
+        return verify,sleep,sleeps,(lambda:clock[0])
+    def test_production_bytes_are_awaited_after_publication(self):
+        c,e,_,_=self.setup_case()
+        verify,sleep,sleeps,clock=self.settling(c,{B:2})
+        result=promote(c,candidate=B,verify=verify,observe=e.append,settle_seconds=90,
+                       interval=5,sleep=sleep,clock=clock)
+        self.assertEqual(result['version_id'],B)
+        self.assertEqual(c.writes,[('publish',B),('route',True)])
+        self.assertEqual(sleeps,[5,5])
+        pending=[x for x in e if x['event']=='verification-pending']
+        self.assertEqual(len(pending),2)
+        self.assertIn('served the previous bytes',pending[0]['reason'])
+        self.assertEqual(e[-1]['event'],'passed')
+    def test_unsettled_production_recovers_and_awaits_the_prior_bytes(self):
+        c,e,_,_=self.setup_case()
+        verify,sleep,sleeps,clock=self.settling(c,{B:100,A:3})
+        with self.assertRaises(TransactionError) as caught:
+            promote(c,candidate=B,verify=verify,observe=e.append,settle_seconds=30,
+                    interval=5,sleep=sleep,clock=clock)
+        self.assertEqual(c.active['version_id'],A)
+        self.assertIn('recovery completed',str(caught.exception))
+        self.assertIn('served the previous bytes for bbbbbbbb',str(caught.exception))
+        self.assertEqual(e[-1]['event'],'recovered')
+    def test_an_unconfirmed_recovery_names_both_failures(self):
+        c,e,_,_=self.setup_case()
+        verify,sleep,_,clock=self.settling(c,{B:100,A:100})
+        with self.assertRaises(TransactionError) as caught:
+            promote(c,candidate=B,verify=verify,observe=e.append,settle_seconds=10,
+                    interval=5,sleep=sleep,clock=clock)
+        message=str(caught.exception)
+        self.assertIn('recovery not confirmed',message)
+        self.assertIn('production: index.html served the previous bytes for bbbbbbbb',message)
+        self.assertIn('recovery: index.html served the previous bytes for aaaaaaaa',message)
+        self.assertEqual(e[-1]['event'],'recovery-unconfirmed')
     def test_success_checks_prior_candidate_then_production(self):
         c,e,checks,v=self.setup_case();self.run_case(c,e,v)
         self.assertEqual([x[0] for x in checks],[A,A,B,B])

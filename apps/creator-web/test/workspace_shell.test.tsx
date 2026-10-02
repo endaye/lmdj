@@ -1290,15 +1290,17 @@ test.each([
       await flushAsyncTurns();
 
       expect(screen.getByText(
-        "Sample was saved, but current Project truth could not be refreshed",
+        "The sound was saved, but Creator could not show the latest Project.",
       )).toBeTruthy();
       expect(screen.getByText("Creator unavailable")).toBeTruthy();
       expect(screen.getByText(code === "HOST_PROTOCOL_MISMATCH"
-        ? "Creator and Runtime could not verify a compatible protocol."
+        ? "This copy of Creator is out of date."
         : code === "HOST_RESTART_REQUIRED"
-          ? "Runtime must be restarted before continuing."
-          : "Creator cannot continue (NOT_FOUND)."),
+          ? "The audio engine stopped. Your Project is saved and not affected."
+          : "That item is no longer in this Project."),
       ).toBeTruthy();
+      expect(screen.getByText("Creator unavailable").closest("[role=alert]")?.textContent ?? "")
+        .not.toContain(code);
       const pad = screen.getByRole("button", {name: "Pad A1 — empty — Key Q"});
       expect(pad.hasAttribute("disabled")).toBe(true);
       const settledReads = projectReads;
@@ -1306,7 +1308,7 @@ test.each([
       expect(projectReads).toBe(settledReads);
       expect(settledReads).toBeGreaterThan(0);
       expect(settledReads).toBeLessThanOrEqual(4);
-      expect(screen.queryByText("Sample operation failed")).toBeNull();
+      expect(screen.queryByText("Creator could not change this sound.")).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -1356,9 +1358,9 @@ test.each(["project", "sample"] as const)(
       await flushAsyncTurns();
 
       expect(screen.getByText(
-        "Sample was saved, but current Project truth could not be refreshed",
+        "The sound was saved, but Creator could not show the latest Project.",
       )).toBeTruthy();
-      expect(screen.getByText("Runtime must be restarted before continuing.")).toBeTruthy();
+      expect(screen.getByText(/^The audio engine stopped/)).toBeTruthy();
       expect(fixture.mutationCount).toBe(1);
       expect(fixture.busyCount).toBe(4);
       const settledBusyCount = fixture.busyCount;
@@ -1798,7 +1800,10 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
     })]},
   });
 
-  await screen.findByText(/the source container is not supported/);
+  await screen.findByText(/This type of audio file is not supported\. Choose a WAV, MP3, M4A\/AAC or FLAC file\./, {selector: "[role=alert]"});
+  // The resource token and limit stay in diagnostics, out of the alert.
+  expect(within(screen.getByRole("region", {name: "Developer diagnostics", hidden: true}))
+    .getByText("Read Sample source")).toBeTruthy();
   expect(screen.getByText("Pad A2", {selector: ".selected-sample strong"})).toBeTruthy();
   expect(screen.queryByText("private-source.mp3")).toBeNull();
   expect(screen.queryByText("/private/opfs")).toBeNull();
@@ -1807,7 +1812,7 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
     type: "audio/wav",
   }));
   await waitFor(() => expect(importCount).toBe(0));
-  expect(screen.getByText(/the source container is not supported/)).toBeTruthy();
+  expect(screen.getByText(/This type of audio file is not supported\. Choose a WAV, MP3, M4A\/AAC or FLAC file\./, {selector: "[role=alert]"})).toBeTruthy();
   expect(screen.queryByText("second-private.wav")).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
   expect(revisionCell()?.textContent).toBe("3");
@@ -2222,19 +2227,18 @@ test("retries a busy Project open only after the visible Retry action", async ()
 });
 
 test.each([
-  ["INVALID_PROJECT", {}, "The Project Bundle is invalid."],
+  ["INVALID_PROJECT", {}, "This file is not a Project Creator can open."],
   ["DUPLICATE_ID", {},
     "The import was refused because the local copy of this Project has newer changes. Nothing was lost."],
   ["WEB_RUNTIME_RESOURCE_LIMIT", {
     resource: "ingest_decoded_frames", observed: 43200001, limit: 43200000,
-  }, "ingest_decoded_frames: observed 43200001, limit 43200000."],
+  }, "This is more audio than Creator can handle at once on this device."],
   ["IO_ERROR", {storage_condition: "quota_exceeded"},
-    "Storage condition: quota_exceeded."],
-  ["HOST_PROTOCOL_MISMATCH", {},
-    "Creator and Runtime could not verify a compatible protocol."],
-  ["INTERNAL_ERROR", {}, "Creator encountered an internal failure."],
+    "This device has run out of storage space for Creator."],
+  ["HOST_PROTOCOL_MISMATCH", {}, "This copy of Creator is out of date."],
+  ["INTERNAL_ERROR", {}, "Something went wrong in Creator."],
   ["HOST_RESTART_REQUIRED", {terminal_state: "restart-required"},
-    "Runtime must be restarted before continuing."],
+    "The audio engine stopped. Your Project is saved and not affected."],
 ] as const)("presents a safe typed %s import failure without exposing private detail", async (
   code,
   details,
@@ -2256,6 +2260,10 @@ test.each([
 
   expect((await screen.findByRole("alert")).textContent).toContain(visible);
   expect(screen.getByRole("alert").textContent).not.toContain("/Users/private");
+  // #1680: codes and detail tokens stay out of the user-facing text.
+  for (const hidden of [code, ...Object.values(details).map(String)]) {
+    expect(screen.getByRole("alert").textContent).not.toContain(hidden);
+  }
   expect(screen.queryByText("private-name.lmdj")).toBeNull();
   if (code === "HOST_RESTART_REQUIRED") {
     expect(screen.getByTestId("creator-phase").textContent).toBe("restart-required");
@@ -2389,13 +2397,13 @@ test("gates the hardware Sequence key on the same reachability as the mode rail"
   expect(key.hasAttribute("disabled")).toBe(true);
 
   // The defect this gate catches: an enabled key mounted the full editor, so
-  // Apply BPM, Apply Swing and Create Pattern looked operable while every one
-  // of them hit `if (!isSequenceSession(session)) return` and reported
+  // the Tempo/Swing controls and Create Pattern looked operable while every
+  // one of them hit `if (!isSequenceSession(session)) return` and reported
   // nothing at all.
   const touch = screen.getByRole("region", {name: "Touch workspace"});
   expect(within(touch).queryByRole("region", {name: "Sequence settings"}))
     .toBeNull();
-  expect(within(touch).queryByRole("button", {name: "Apply BPM"})).toBeNull();
+  expect(within(touch).queryByRole("slider", {name: "BPM"})).toBeNull();
 });
 
 test("keeps pad identity and mounts Project Sample Sequence in the hardware touch screen", async () => {
@@ -2619,6 +2627,255 @@ test.each(["pointerup", "pointercancel"])("Sample rail Pad %s releases a gate vo
   expect(pad.getAttribute("data-outcome")).toBe("idle");
 });
 
+// #1680: the reopen prompt over the existing recovery candidates.
+const INTERRUPTED = Object.freeze({
+  sessionId: "interrupted-session", patternId: ready.project.current!.patternId,
+  bars: 1 as const, reason: "owner_lost", eventCount: 3,
+});
+
+// The Performance surface of a Runtime Session with one interrupted take.
+function performanceSessionStubs(candidates: unknown[]) {
+  const listed = [...candidates];
+  return {
+    listed,
+    stubs: {
+      performanceMasterCaptureStatus: () => ({state: "unconfigured", error: null}),
+      subscribePerformanceMasterCaptureStatus: () => () => {},
+      startPerformanceMasterCapture: vi.fn(), beginPerformanceRecording: vi.fn(),
+      recordPerformanceEvent: vi.fn(), requestPerformancePatternLaunch: vi.fn(),
+      flushPerformanceRecording: vi.fn(), stopPerformanceRecording: vi.fn(),
+      queryPerformanceRecordingStatus: vi.fn(), assignPatternSlot: vi.fn(),
+      clearPatternSlot: vi.fn(), movePatternSlot: vi.fn(),
+      listPerformances: vi.fn(async () => []), inspectPerformance: vi.fn(),
+      savePerformance: vi.fn(), discardPerformance: vi.fn(), renamePerformance: vi.fn(),
+      deletePerformance: vi.fn(),
+      listPerformanceRecovery: vi.fn(async () => [...listed]),
+      applyPerformanceRecovery: vi.fn(async ({sessionId}: {sessionId: string}) => {
+        listed.splice(listed.findIndex((entry) =>
+          (entry as {sessionId: string}).sessionId === sessionId), 1);
+        return {committedRevision: 4, replayed: false, projectRevision: 4};
+      }),
+      discardPerformanceRecovery: vi.fn(),
+      bindPerformanceRecording: vi.fn(), beginPerformanceReplay: vi.fn(),
+      stopPerformanceReplay: vi.fn(),
+      queryPerformanceReplayStatus: vi.fn(() => new Promise(() => {})),
+      commitPerformanceResample: vi.fn(),
+    },
+  };
+}
+
+function interruptedSequenceSession(
+  fixture: ReturnType<typeof mutableSampleRuntimeFixture>,
+  overrides: Record<string, unknown> = {},
+) {
+  const listed: unknown[] = [INTERRUPTED];
+  const apply = vi.fn(async ({sessionId}: {sessionId: string}) => {
+    listed.splice(listed.findIndex((entry) =>
+      (entry as {sessionId: string}).sessionId === sessionId), 1);
+    return {...sequenceStatusStub(), committedRevision: 4};
+  });
+  const discard = vi.fn(async (sessionId: string) => {
+    listed.splice(listed.findIndex((entry) =>
+      (entry as {sessionId: string}).sessionId === sessionId), 1);
+    return true;
+  });
+  const list = vi.fn(async () => [...listed]);
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    listSequenceRecovery: list,
+    applySequenceRecovery: apply,
+    discardSequenceRecovery: discard,
+    ...overrides,
+  });
+  return {session, apply, discard, list};
+}
+
+const interruptedRegion = () => screen.findByRole("region", {name: "Interrupted recording"});
+
+test("a Project that opens with an interrupted recording asks once whether to keep it", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const {session, apply} = interruptedSequenceSession(fixture);
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  expect(region.textContent).toContain("A recording stopped before it was saved (1 in Sequence)");
+  expect(apply).not.toHaveBeenCalled();
+
+  await userEvent.click(within(region).getByRole("button", {name: "Keep recording"}));
+  expect(apply).toHaveBeenCalledExactlyOnceWith({
+    sessionId: "interrupted-session", destinationPatternId: null,
+  });
+  expect(await within(region).findByText("The interrupted recording is back in this Project."))
+    .toBeTruthy();
+  await userEvent.click(within(region).getByRole("button", {name: "Close"}));
+  // A revision change within the same open never asks again.
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
+  await flushAsyncTurns();
+  expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
+});
+
+test("a Project without interrupted recordings does not ask", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const list = vi.fn(async () => []);
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    listSequenceRecovery: list,
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(list).toHaveBeenCalled());
+  await flushAsyncTurns();
+  expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
+});
+
+test("Decide later leaves the recording in the Sequence recovery list", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const {session, apply, discard} = interruptedSequenceSession(fixture);
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  await userEvent.click(within(region).getByRole("button", {name: "Decide later"}));
+  expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
+  expect(await screen.findByRole("button", {name: "Recover original Pattern"})).toBeTruthy();
+  expect(apply).not.toHaveBeenCalled();
+  expect(discard).not.toHaveBeenCalled();
+  expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
+});
+
+test("a recording the Core refuses to keep stays listed and the prompt opens it", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const refusal = Object.assign(new Error("Sequence admission is unresolved"), {
+    code: "INVALID_ARGUMENT",
+    details: {reason: "sequence_admission_unresolved", journal_retained: true},
+  });
+  const {session} = interruptedSequenceSession(fixture, {
+    applySequenceRecovery: vi.fn().mockRejectedValue(refusal),
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  await userEvent.click(within(region).getByRole("button", {name: "Keep recording"}));
+  expect(await within(region).findByText(/could not be kept here\s+\(1 in Sequence\)/)).toBeTruthy();
+  await userEvent.click(within(region).getByRole("button", {name: "Open Sequence"}));
+  expect(screen.getByRole("button", {name: "Sequence"}).getAttribute("aria-current")).toBe("page");
+  expect(await screen.findByRole("button", {name: "Recover original Pattern"})).toBeTruthy();
+  await userEvent.click(screen.getByText(/^Developer diagnostics/));
+  expect(within(screen.getByRole("region", {name: "Developer diagnostics"}))
+    .getByText("Keep interrupted Sequence recording")).toBeTruthy();
+});
+
+test("Discard removes the interrupted recording only after confirmation", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const {session, discard} = interruptedSequenceSession(fixture);
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  await userEvent.click(within(region).getByRole("button", {name: "Discard…"}));
+  expect(discard).not.toHaveBeenCalled();
+  await userEvent.click(within(region).getByRole("button", {name: "Discard recording"}));
+  expect(discard).toHaveBeenCalledExactlyOnceWith("interrupted-session");
+  expect(await within(region).findByText("The interrupted recording was discarded.")).toBeTruthy();
+});
+
+test("an interrupted Performance take is kept through the Perform controller", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const take = {sessionId: "take-session", performanceId: "take", reason: "owner_lost",
+    durableEventCount: 2, pendingEventCount: 0, fingerprint: "f".repeat(64)};
+  const performance = performanceSessionStubs([take]);
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), performance.stubs);
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  expect(region.textContent).toContain("(1 in Perform)");
+  await userEvent.click(within(region).getByRole("button", {name: "Keep recording"}));
+  await waitFor(() => expect(performance.stubs.applyPerformanceRecovery)
+    .toHaveBeenCalledWith(expect.objectContaining({sessionId: "take-session"})));
+  expect(await within(region).findByText("The interrupted recording is back in this Project."))
+    .toBeTruthy();
+});
+
+test("a Keep overtaken by a Runtime replacement sends none of its remaining commands", async () => {
+  const first = mutableSampleRuntimeFixture();
+  let hostListener: ((state: RuntimeHostState) => void) | undefined;
+  first.session.subscribeHostState = (listener) => {
+    hostListener = listener;
+    return () => {};
+  };
+  const firstApply = deferred<ReturnType<typeof sequenceStatusStub> & {committedRevision: number}>();
+  const listed = [
+    INTERRUPTED,
+    {...INTERRUPTED, sessionId: "second-interrupted-session"},
+  ];
+  const apply = vi.fn(() => firstApply.promise);
+  const firstSession = Object.assign(first.session, sequenceSessionStubs(), {
+    listSequenceRecovery: async () => [...listed],
+    applySequenceRecovery: apply,
+  });
+  const second = mutableSampleRuntimeFixture();
+  const sessions = [firstSession, interruptedSequenceSession(second).session];
+  let created = 0;
+  render(<App initialState={ready} runtimeFactory={() => sessions[created++]!} />);
+  const region = await interruptedRegion();
+  expect(region.textContent).toContain("2 recordings");
+  await userEvent.click(within(region).getByRole("button", {name: "Keep recording"}));
+  await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+  await act(async () => hostListener?.({
+    state: "restart-required", errorCode: "HOST_RESTART_REQUIRED", errorDetails: {},
+  }));
+  await waitFor(() => expect(created).toBe(2));
+  await act(async () => firstApply.resolve({...sequenceStatusStub(), committedRevision: 4}));
+  await flushAsyncTurns();
+  expect(apply).toHaveBeenCalledTimes(1);
+  // The new open asks afresh; the abandoned Keep claims no result.
+  const fresh = await interruptedRegion();
+  expect(within(fresh).getByRole("button", {name: "Keep recording"})).toBeTruthy();
+  expect(within(fresh).queryByText(/back in this Project/)).toBeNull();
+});
+
+test("Keep reports the remainder the Sequence list was refreshed with", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  // The Core's list changes between reads: the first read after Keep is
+  // empty, and any later read would still show the recording. The reported
+  // remainder must be the read the Sequence list projected.
+  let applied = false;
+  let readsAfterApply = 0;
+  const list = vi.fn(async () => {
+    if (!applied) return [INTERRUPTED];
+    readsAfterApply += 1;
+    return readsAfterApply === 1 ? [] : [INTERRUPTED];
+  });
+  const apply = vi.fn(async () => {
+    applied = true;
+    return {...sequenceStatusStub(), committedRevision: 4};
+  });
+  const {session} = interruptedSequenceSession(fixture, {
+    listSequenceRecovery: list, applySequenceRecovery: apply,
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  await userEvent.click(within(region).getByRole("button", {name: "Keep recording"}));
+  expect(await within(region).findByText("The interrupted recording is back in this Project."))
+    .toBeTruthy();
+});
+
+test("a replacement Runtime Session asks again for the same Project", async () => {
+  const first = mutableSampleRuntimeFixture();
+  const second = mutableSampleRuntimeFixture();
+  let hostListener: ((state: RuntimeHostState) => void) | undefined;
+  first.session.subscribeHostState = (listener) => {
+    hostListener = listener;
+    return () => {};
+  };
+  const sessions = [
+    interruptedSequenceSession(first).session,
+    interruptedSequenceSession(second).session,
+  ];
+  let created = 0;
+  render(<App initialState={ready} runtimeFactory={() => sessions[created++]!} />);
+  const region = await interruptedRegion();
+  await userEvent.click(within(region).getByRole("button", {name: "Decide later"}));
+  await act(async () => hostListener?.({
+    state: "restart-required", errorCode: "HOST_RESTART_REQUIRED", errorDetails: {},
+  }));
+  await waitFor(() => expect(created).toBe(2));
+  expect(await interruptedRegion()).toBeTruthy();
+});
+
 test("recovery refusal retains its full diagnostic envelope across mode navigation", async () => {
   const fixture = mutableSampleRuntimeFixture();
   const message = "Sequence admission is unresolved; retain the recording until its input conversion is finalized, or explicitly discard it";
@@ -2638,7 +2895,8 @@ test("recovery refusal retains its full diagnostic envelope across mode navigati
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
   await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
   await userEvent.click(await screen.findByRole("button", {name: "Recover original Pattern"}));
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("INVALID_ARGUMENT"));
+  await waitFor(() => expect(screen.getByRole("alert").textContent)
+    .toBe("Creator could not apply that request. Try again. Details are in Developer diagnostics."));
   expect(apply).toHaveBeenCalledExactlyOnceWith({
     sessionId: "retained-session", destinationPatternId: null,
   });
@@ -2704,7 +2962,14 @@ test("Delete failure remains visible and does not project an empty Pad", async (
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
   await userEvent.click(screen.getByRole("button", {name: "Delete Pad A1"}));
-  await screen.findByText("Sample storage operation failed");
+  await screen.findByText("Creator could not save the sound on this device.", {selector: "[role=alert] p"});
+  // #1680: the alert names no code; Developer diagnostics keeps it.
+  expect(screen.getByText("Creator could not save the sound on this device.", {selector: "[role=alert] p"})
+    .closest("[role=alert]")?.textContent).not.toContain("IO_ERROR");
+  await userEvent.click(screen.getByText(/^Developer diagnostics \(\d+\)$/));
+  const deleteLog = within(screen.getByRole("region", {name: "Developer diagnostics"}));
+  expect(deleteLog.getByText("Delete Pad")).toBeTruthy();
+  expect(deleteLog.getByText("IO_ERROR")).toBeTruthy();
   expect(screen.getByText("Asset 33333333")).toBeTruthy();
   expect(screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"})).toBeTruthy();
   expect(fixture.revision).toBe(3);
@@ -2776,7 +3041,7 @@ test.each(PRE_STOP_MUTATIONS)("%s with audio stopped commits without a Runtime s
   await screen.findByText("Asset 33333333");
   await performPadMutation(kind, container);
   await waitFor(() => expect(order).toEqual([kind]));
-  expect(screen.queryByText("Sample operation is unavailable")).toBeNull();
+  expect(screen.queryByText("That can't be done right now.")).toBeNull();
 });
 
 test.each(PRE_STOP_MUTATIONS)("%s with audio running stops the voice before committing", async (kind) => {

@@ -17,6 +17,9 @@ import {
   appendDiagnostic, diagnosticRecord, DiagnosticsLog, type DiagnosticRecord,
 } from "./components/diagnostics_log";
 import {ErrorPanel} from "./components/error_panel";
+import {DiagnosticsProvider} from "./runtime/diagnostics_context";
+import {PUBLIC_ERROR_CODES, sampleMessage} from "./state/error_messages";
+import {RecoveryPrompt, type RecoveryCounts} from "./components/recovery_prompt";
 import {
   TakenOverPanel,
   TakeoverPending,
@@ -91,6 +94,7 @@ import type {
   LocalProjectSummary,
   RuntimeSessionFactory,
   TypedRuntimeError,
+  SequenceRecoveryCandidate,
 } from "./runtime/runtime_types";
 import {
   creatorReducer,
@@ -121,6 +125,7 @@ import {
 import {
   createPerformController,
   type PerformController,
+  type PerformanceRecoverySummary,
 } from "./state/perform_state";
 import type {CapturePhase} from "./state/capture_state";
 
@@ -148,6 +153,16 @@ interface WorkspaceProps {
   ) => () => void;
 }
 
+// Protocol details are JSON, but a malformed exception must not break error
+// handling, as in diagnosticRecord: unserializable details key as the code.
+function runtimeErrorDetailsKey(details: Readonly<Record<string, unknown>> | undefined): string {
+  try {
+    return JSON.stringify(details ?? {});
+  } catch {
+    return "";
+  }
+}
+
 type BusyRetry =
   | {kind: "list"}
   | {kind: "open"; project: LocalProjectSummary};
@@ -161,31 +176,6 @@ interface SampleRetryToken {
   }>;
 }
 
-const SAMPLE_ERROR_CODES = new Set([
-  "INVALID_ARGUMENT",
-  "NOT_FOUND",
-  "REVISION_CONFLICT",
-  "DUPLICATE_ID",
-  "UNSUPPORTED_AUDIO",
-  "MISSING_ASSET",
-  "INVALID_PROJECT",
-  "COOK_FAILED",
-  "BANK_QUOTA_EXHAUSTED",
-  "PROJECT_QUOTA_EXHAUSTED",
-  "PROVIDER_NOT_FOUND",
-  "PROVIDER_FAILED",
-  "PERMISSION_DENIED",
-  "IO_ERROR",
-  "INTERNAL_ERROR",
-  "UNSUPPORTED_WEB_RUNTIME",
-  "PROJECT_BUSY",
-  "WEB_RUNTIME_RESOURCE_LIMIT",
-  "HOST_STATE_INVALID",
-  "HOST_TIMEOUT",
-  "HOST_RESTART_REQUIRED",
-  "HOST_PROTOCOL_MISMATCH",
-  "LOCAL_PROJECT_UNREADABLE",
-]);
 function errorDetails(error: unknown): Readonly<Record<string, unknown>> {
   const details = (error as TypedRuntimeError | null)?.details;
   return details !== null && typeof details === "object" && !Array.isArray(details)
@@ -648,6 +638,25 @@ function Workspace({
       }
     }
   }, [runtimeHostState, runtimeRecoveryProbeReady]);
+
+  // Runtime boot and Host terminal errors reach the user only as the panel's
+  // message, so their code and details are recorded here (#1680). Each Host
+  // notification carries a fresh details object, so an error is identified
+  // by its code and details content and recorded once until it changes.
+  const runtimeErrorKey = runtimeErrorCode
+    ? `${runtimeErrorCode}:${runtimeErrorDetailsKey(runtimeErrorDetails)}`
+    : null;
+  const reportedRuntimeError = useRef<string | null>(null);
+  useEffect(() => {
+    if (runtimeErrorKey === reportedRuntimeError.current) return;
+    reportedRuntimeError.current = runtimeErrorKey;
+    if (!runtimeErrorCode) return;
+    reportFailure("Runtime", Object.assign(new Error(runtimeErrorCode), {
+      code: runtimeErrorCode,
+      details: runtimeErrorDetails ?? {},
+    }));
+    // The key captures the code and details content.
+  }, [runtimeErrorKey, reportFailure]);
 
   useEffect(() => {
     if (!runtimePhase) return;
@@ -1293,13 +1302,13 @@ function Workspace({
     } catch (error) {
       if (sampleRetryAction.current === token) {
         const candidate = reportFailure("Retry Sample preparation", error);
-        const code = SAMPLE_ERROR_CODES.has(candidate) ? candidate : "INTERNAL_ERROR";
+        const code = PUBLIC_ERROR_CODES.has(candidate) ? candidate : "INTERNAL_ERROR";
         dispatch({
           type: "sample-action",
           action: {
             type: "operation-failed",
             pending,
-            error: {code, message: "Sample operation failed"},
+            error: {code, message: sampleMessage(code).message},
           },
         });
       }
@@ -1354,13 +1363,151 @@ function Workspace({
     URL.revokeObjectURL(url);
   };
 
+  // #1680: each time a Project opens in a Runtime Session, ask once about
+  // recordings an earlier owner left unfinished. The pair, not the revision,
+  // identifies an open, so in-session changes never ask again.
+  const recoveryOfferFor = useRef<Readonly<{session: unknown; projectId: string}> | null>(null);
+  const recoveryOfferId = useRef(0);
+  const [recoveryOffer, setRecoveryOffer] = useState<Readonly<{
+    id: number;
+    owner: Readonly<{session: unknown; projectId: string}>;
+    projectId: string;
+    sequence: readonly SequenceRecoveryCandidate[];
+    performance: readonly PerformanceRecoverySummary[];
+  }> | null>(null);
+  const openProjectId = runtimePhase === "ready" && state.project.phase === "ready"
+    ? state.project.current?.projectId ?? null
+    : null;
+  useEffect(() => {
+    if (session === undefined || openProjectId === null) return;
+    const last = recoveryOfferFor.current;
+    if (last !== null && last.session === session && last.projectId === openProjectId) return;
+    const owner = Object.freeze({session, projectId: openProjectId});
+    recoveryOfferFor.current = owner;
+    setRecoveryOffer(null);
+    void listInterruptedRecordings(openProjectId).then(({sequence, performance}) => {
+      if (recoveryOfferFor.current !== owner) return;
+      if (sequence.length + performance.length > 0) {
+        recoveryOfferId.current += 1;
+        setRecoveryOffer(Object.freeze({
+          id: recoveryOfferId.current, owner, projectId: openProjectId, sequence, performance,
+        }));
+      }
+    });
+    // Effects keep no cancellation: the owner check discards a stale reply,
+    // and a phase change within the same open must not lose the offer.
+  }, [session, openProjectId]);
+
+  const listInterruptedRecordings = async (projectId: string) => {
+    const [sequence, performance] = await Promise.all([
+      isSequenceSession(session)
+        ? session.listSequenceRecovery(projectId).catch((error: unknown) => {
+            reportFailure("List interrupted Sequence recordings", error);
+            return [] as readonly SequenceRecoveryCandidate[];
+          })
+        : Promise.resolve([] as readonly SequenceRecoveryCandidate[]),
+      isPerformanceSession(session)
+        ? (session.listPerformanceRecovery() as Promise<readonly PerformanceRecoverySummary[]>)
+          .catch((error: unknown) => {
+            reportFailure("List interrupted Performance recordings", error);
+            return [] as readonly PerformanceRecoverySummary[];
+          })
+        : Promise.resolve([] as readonly PerformanceRecoverySummary[]),
+    ]);
+    return {sequence, performance};
+  };
+
+  // The remainder is read from the same refresh that the Sequence and
+  // Perform lists project, so the counts the prompt reports are what the
+  // Open buttons then show. A list that could not be refreshed is read once.
+  const remainingRecordings = async (projectId: string): Promise<RecoveryCounts> => {
+    const sequence = await refreshSequence();
+    const controller = performControllerRef.current;
+    const performanceRefreshed = controller === null ? false
+      : await controller.refreshRecovery().then(() => true, () => false);
+    const fallback = sequence === null || !performanceRefreshed
+      ? await listInterruptedRecordings(projectId)
+      : null;
+    return {
+      sequence: (sequence ?? fallback!.sequence).length,
+      performance: performanceRefreshed
+        ? controller!.getState().recovery.length
+        : fallback!.performance.length,
+    };
+  };
+
+  // An offer acts only while its (Session, Project) open is current, so a
+  // Runtime replacement mid-Keep never sends the old list's commands.
+  const offerIsCurrent = (offer: NonNullable<typeof recoveryOffer>) =>
+    recoveryOfferFor.current === offer.owner;
+  const untouched = (offer: NonNullable<typeof recoveryOffer>): RecoveryCounts => ({
+    sequence: offer.sequence.length, performance: offer.performance.length,
+  });
+
+  // Keep restores each recording to where it was made; one the Core refuses
+  // stays in its list and is counted as remaining.
+  const keepInterruptedRecordings = async (): Promise<RecoveryCounts> => {
+    const offer = recoveryOffer;
+    if (offer === null) return {sequence: 0, performance: 0};
+    for (const candidate of offer.sequence) {
+      if (!isSequenceSession(session) || !offerIsCurrent(offer)) break;
+      try {
+        const status = await session.applySequenceRecovery({
+          sessionId: candidate.sessionId,
+          destinationPatternId: null,
+        });
+        if (status.committedRevision !== null) {
+          dispatch({type: "project-revision-updated", revision: status.committedRevision});
+        }
+      } catch (error) {
+        reportFailure("Keep interrupted Sequence recording", error);
+      }
+    }
+    for (const candidate of offer.performance) {
+      if (!offerIsCurrent(offer)) break;
+      try {
+        await performControllerRef.current?.applyRecovery(candidate.sessionId);
+      } catch (error) {
+        reportFailure("Keep interrupted Performance recording", error);
+      }
+    }
+    // An open replaced mid-Keep claims nothing: its prompt is gone and the
+    // new open asks again about whatever is still waiting.
+    if (!offerIsCurrent(offer)) return untouched(offer);
+    return remainingRecordings(offer.projectId);
+  };
+
+  const discardInterruptedRecordings = async (): Promise<RecoveryCounts> => {
+    const offer = recoveryOffer;
+    if (offer === null) return {sequence: 0, performance: 0};
+    for (const candidate of offer.sequence) {
+      if (!isSequenceSession(session) || !offerIsCurrent(offer)) break;
+      try {
+        await session.discardSequenceRecovery(candidate.sessionId);
+      } catch (error) {
+        reportFailure("Discard interrupted Sequence recording", error);
+      }
+    }
+    for (const candidate of offer.performance) {
+      if (!offerIsCurrent(offer)) break;
+      try {
+        await performControllerRef.current?.discardRecovery(candidate.sessionId);
+      } catch (error) {
+        reportFailure("Discard interrupted Performance recording", error);
+      }
+    }
+    if (!offerIsCurrent(offer)) return untouched(offer);
+    return remainingRecordings(offer.projectId);
+  };
+
   const sequenceFailure = (operation: string, error: unknown) => {
     dispatchSequence({type: "failed", errorCode: reportFailure(operation, error)});
   };
 
-  const refreshSequence = async () => {
+  // Resolves the recovery list it projected, or null when none was read.
+  const refreshSequence = async (): Promise<readonly SequenceRecoveryCandidate[] | null> => {
     const project = stateRef.current.project.current;
-    if (!isSequenceSession(session) || project === null) return;
+    if (!isSequenceSession(session) || project === null) return null;
     try {
       const authority = await refreshSequenceJourney(session, project.projectId);
       // The transport commits through its own coordinator, so the legacy
@@ -1376,7 +1523,7 @@ function Workspace({
           ? inspected.project_revision
           : null;
       // A refresh that outlived its Project describes the previous one.
-      if (stateRef.current.project.current?.projectId !== project.projectId) return;
+      if (stateRef.current.project.current?.projectId !== project.projectId) return null;
       const committedRevision = Math.max(
         authority.status.expectedRevision,
         inspectedRevision ?? 0,
@@ -1411,8 +1558,10 @@ function Workspace({
         }
       }
       dispatchSequence({type: "recovery", candidates: authority.recovery});
+      return authority.recovery;
     } catch (error) {
       sequenceFailure("Refresh Sequence authority", error);
+      return null;
     }
   };
 
@@ -1844,6 +1993,7 @@ function Workspace({
   );
 
   return (
+    <DiagnosticsProvider value={reportFailure}>
     <div className="hardware-workspace">
       {defaultSeedError !== null && <p role="status">{defaultSeedError}</p>}
       {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "failed") &&
@@ -2151,6 +2301,23 @@ function Workspace({
                 />
               </div>
               ) : null}
+              {recoveryOffer !== null &&
+                recoveryOffer.projectId === state.project.current?.projectId && (
+                <RecoveryPrompt
+                  key={recoveryOffer.id}
+                  counts={{
+                    sequence: recoveryOffer.sequence.length,
+                    performance: recoveryOffer.performance.length,
+                  }}
+                  onKeep={keepInterruptedRecordings}
+                  onDiscard={discardInterruptedRecordings}
+                  onOpen={(mode) => {
+                    setActiveMode(mode);
+                    setRecoveryOffer(null);
+                  }}
+                  onClose={() => setRecoveryOffer(null)}
+                />
+              )}
               <DiagnosticsLog records={diagnostics} />
               <ErrorPanel
                 code={state.runtime.errorCode}
@@ -2212,6 +2379,7 @@ function Workspace({
         />
         </div>
     </div>
+    </DiagnosticsProvider>
   );
 }
 
