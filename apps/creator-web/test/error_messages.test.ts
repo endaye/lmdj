@@ -112,9 +112,9 @@ test("the no-room message is user language", () => {
 test.each([
   ["capture-unsupported", "This browser cannot record a Performance. Use a current version of another browser."],
   ["tap-initialization-failed",
-    "Performance recording could not start. Reload the page and activate audio again, then record."],
+    "Performance recording could not start. Reload the page and play a Pad to start audio, then record."],
   ["tap-processor-failed",
-    "Performance recording could not start. Reload the page and activate audio again, then record."],
+    "Performance recording could not start. Reload the page and play a Pad to start audio, then record."],
   ["something-new", "Performance recording is not available. Reload the page, then try again."],
 ])("Performance capture %s says what to do without its code", (code, copy) => {
   expect(performCaptureUnavailableMessage(code)).toBe(copy);

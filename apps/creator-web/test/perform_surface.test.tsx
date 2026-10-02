@@ -61,7 +61,10 @@ function creatorState(overrides: Partial<CreatorState> = {}): CreatorState {
   };
 }
 
-function status(state: "unconfigured" | "configured" | "ready" | "unavailable") {
+function status(
+  state: "unconfigured" | "configured" | "ready" | "unavailable",
+  code: "tap-initialization-failed" | "tap-processor-failed" = "tap-initialization-failed",
+) {
   const config = state === "unconfigured" ? null : {
     performRecordingFrames: 86_400_000,
     performRecordingQueueBatches: 32,
@@ -69,7 +72,7 @@ function status(state: "unconfigured" | "configured" | "ready" | "unavailable") 
   return state === "unavailable" ? {
     state,
     config,
-    error: {code: "tap-initialization-failed" as const,
+    error: {code,
       message: "Reload after checking the audio processor URL."},
   } : {state, config, error: null};
 }
@@ -358,7 +361,7 @@ test.each([
   {captureState: "unconfigured" as const, message: null},
   {captureState: "configured" as const, message: "Preparing recording"},
   {captureState: "unavailable" as const,
-    message: "Performance recording could not start. Reload the page and activate audio again, then record."},
+    message: "Performance recording could not start. Reload the page and play a Pad to start audio, then record."},
 ])("gates Record for $captureState capture", ({captureState, message}) => {
   renderSurface(controllerFixture({captureState}));
   expect(screen.getByRole("button", {name: "Record Performance"}).hasAttribute("disabled"))
@@ -366,6 +369,21 @@ test.each([
   if (message === null) expect(screen.queryByText(/recording (unavailable|preparing)/i)).toBeNull();
   else expect(screen.getByText(message, {exact: false})).not.toBeNull();
 });
+
+test.each(["tap-initialization-failed", "tap-processor-failed"] as const)(
+  "%s recovery names the musical audio-start gesture", (code) => {
+    const fixture = controllerFixture({captureState: "unavailable"});
+    fixture.runtime.setStatus(status("unavailable", code));
+    renderSurface(fixture);
+    expect(screen.getByText(
+      "Performance recording could not start. Reload the page and play a Pad to start audio, then record.",
+    )).not.toBeNull();
+    expect(screen.getByRole("button", {name: "Record Performance"}).hasAttribute("disabled"))
+      .toBe(true);
+    expect(screen.queryByRole("button", {name: "Activate audio"})).toBeNull();
+    expect(fixture.runtime.calls.begin).not.toHaveBeenCalled();
+  },
+);
 
 test.each([
   {name: "Project is not playable", state: creatorState({audio: {phase: "suspended"}}), opfs: true},

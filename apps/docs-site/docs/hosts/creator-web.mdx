@@ -350,7 +350,9 @@ Creator surface shows a Host message, a raw `Error.message` or a code:
   keeps each code and reason on its row as `data-code` and `data-reason` for
   support and the cross-Host parity check.
 - Perform names the next action, such as "Choose Retry WAV bind" or "Choose Save
-  Performance again". It explains an unavailable recording by its capture code.
+  Performance again". It explains an unavailable recording by its capture code. After
+  a master-tap initialization or processor failure, the next step is to reload,
+  play a Pad to start audio, then record again.
 - Undo history says what happened and what to try.
 
 Each of these failures is recorded in Developer diagnostics.

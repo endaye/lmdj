@@ -275,7 +275,7 @@ export function performCaptureUnavailableMessage(code: string): string {
       return "This browser cannot record a Performance. Use a current version of another browser.";
     case "tap-initialization-failed":
     case "tap-processor-failed":
-      return "Performance recording could not start. Reload the page and activate audio again, then record.";
+      return "Performance recording could not start. Reload the page and play a Pad to start audio, then record.";
     default:
       return "Performance recording is not available. Reload the page, then try again.";
   }
