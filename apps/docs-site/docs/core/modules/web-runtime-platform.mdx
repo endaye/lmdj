@@ -128,6 +128,10 @@ Native control-runtime tests cover import identity, exact retry, reopen isolatio
 parameters, Pattern restoration, recording refusal and grouped recorded events.
 
 
+## 分 Pad Sound Set 获取
+
+Host 支持 `soundset.catalog.describe`、`soundset.slot.acquire` 与 `soundset.slot.install`。资产获取只解析 Core 给出的 object_kind/sha256 地址，使用独立获取队列，网络等待不占用 Project mutation queue；完整 Set 浏览和 slot 获取共享该队列，避免 pending/supply 交错。安装仍串行提交；Runtime publication 由现有 snapshot 路径完成。
+
 ## Pad deletion and cancellation
 
 `RuntimeSession.deletePad({slot, expectedRevision})` cancels queued and active
