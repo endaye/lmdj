@@ -732,6 +732,7 @@ class RealtimeEngine final {
     std::uint32_t attack_frames_remaining = 0;
     bool releasing = false;
     std::uint32_t release_frames_remaining = 0;
+#if LMDJ_VOICE_DSP
     // The voice's envelope (detail::voice_envelope): ramp lengths and their
     // per-frame scales, fixed at trigger. The release scale is rescaled when a
     // second stop shortens a long tail to the declick.
@@ -739,6 +740,14 @@ class RealtimeEngine final {
     float attack_scale = 0.0F;
     std::uint32_t release_frames = 0;
     float release_scale = 0.0F;
+#else
+    // Built without the voice DSP, every envelope is the declick.
+    static constexpr std::uint32_t attack_frames = kRealtimeRampFrames;
+    static constexpr float attack_scale =
+        1.0F / static_cast<float>(kRealtimeRampFrames);
+    static constexpr std::uint32_t release_frames = kRealtimeRampFrames;
+    static constexpr float release_scale = attack_scale;
+#endif
     std::uint64_t scheduled_release_frame = 0;
     bool pattern_voice = false;
     PadControlOrigin origin = PadControlOrigin::host_input;
@@ -747,10 +756,16 @@ class RealtimeEngine final {
     // the shared kernel; every other voice keeps the original path, whose
     // output is unchanged.
     bool dsp_active = false;
+#if LMDJ_VOICE_DSP
     detail::VoiceDspState dsp{};
     // The tone and EQ stages' memory; the voice mixes to mono, so one is
     // enough.
     detail::VoiceDspFilterMemory filter_memory{};
+#else
+    // Built without the voice DSP, both are empty and occupy no bytes.
+    [[no_unique_address]] detail::VoiceDspState dsp{};
+    [[no_unique_address]] detail::VoiceDspFilterMemory filter_memory{};
+#endif
   };
 
   std::uint64_t legacy_availability_mask() const noexcept;

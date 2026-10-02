@@ -200,6 +200,9 @@ bool valid_trigger_mode(domain::TriggerMode mode) noexcept {
 // rounding overshoot is clamped back inside the resolved loop so the block
 // always fits. Envelope milliseconds become 48 kHz output frames, a tone in
 // its +/-2 deadband resolves to neutral, and the EQ keeps its own units.
+// Built without the voice DSP (LMDJ_VOICE_DSP=0), it accepts exactly the
+// settings that resolve to the neutral block and refuses the rest, so a Pad
+// never plays differently from how it plays on the desktop.
 foundation::Result<ResolvedVoiceDsp> resolve_voice_dsp(
     const domain::PadPlayback& playback,
     std::uint32_t source_rate,
@@ -222,6 +225,13 @@ foundation::Result<ResolvedVoiceDsp> resolve_voice_dsp(
   const auto runtime_crossfade = std::min<std::uint64_t>(
       playback.loop_crossfade_frames * 48'000U / source_rate,
       runtime_loop_length / 2);
+  const auto loop_offset =
+      static_cast<std::uint32_t>(runtime_loop_start - runtime_start);
+  const auto crossfade = static_cast<std::uint32_t>(runtime_crossfade);
+  const auto tone = playback.tone >= -2 && playback.tone <= 2
+                        ? std::int8_t{0}
+                        : static_cast<std::int8_t>(playback.tone);
+#if LMDJ_VOICE_DSP
   std::uint8_t flags = 0;
   if (playback.reverse) {
     flags |= ResolvedVoiceDsp::kReverse;
@@ -230,17 +240,15 @@ foundation::Result<ResolvedVoiceDsp> resolve_voice_dsp(
     flags |= ResolvedVoiceDsp::kPingPong;
   }
   ResolvedVoiceDsp dsp{
-      static_cast<std::uint32_t>(runtime_loop_start - runtime_start),
-      static_cast<std::uint32_t>(runtime_crossfade),
+      loop_offset,
+      crossfade,
       static_cast<std::int16_t>(playback.pitch_cents),
       static_cast<std::int8_t>(playback.pan),
       flags,
   };
   dsp.attack_frames = static_cast<std::uint32_t>(playback.attack_ms) * 48U;
   dsp.release_frames = static_cast<std::uint32_t>(playback.release_ms) * 48U;
-  dsp.tone = playback.tone >= -2 && playback.tone <= 2
-                 ? std::int8_t{0}
-                 : static_cast<std::int8_t>(playback.tone);
+  dsp.tone = tone;
   if (const auto& low = playback.eq.low; low.has_value()) {
     dsp.eq_flags |= ResolvedVoiceDsp::kEqLow;
     if (low->kind == domain::EqBandKind::cut) {
@@ -264,6 +272,19 @@ foundation::Result<ResolvedVoiceDsp> resolve_voice_dsp(
     dsp.eq_high_gain_millidb = static_cast<std::int16_t>(high->gain_millidb);
   }
   return foundation::Result<ResolvedVoiceDsp>::success(dsp);
+#else
+  const bool neutral =
+      loop_offset == 0 && crossfade == 0 && playback.pitch_cents == 0 &&
+      playback.pan == 0 && !playback.reverse &&
+      playback.loop_mode != domain::LoopMode::ping_pong &&
+      playback.attack_ms == 0 && playback.release_ms == 0 && tone == 0 &&
+      !playback.eq.low.has_value() && !playback.eq.mid.has_value() &&
+      !playback.eq.high.has_value();
+  if (!neutral) {
+    return invalid("Pad playback voice settings are not supported by this build");
+  }
+  return foundation::Result<ResolvedVoiceDsp>::success(ResolvedVoiceDsp{});
+#endif
 }
 
 foundation::Result<ResolvedPlayback> resolve_playback(

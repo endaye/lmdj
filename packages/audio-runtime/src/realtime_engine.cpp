@@ -198,11 +198,13 @@ template <typename VoiceType>
 void set_voice_envelope(
     VoiceType& voice, const cooker::ResolvedPlayback& playback) noexcept {
   const auto envelope = detail::voice_envelope(playback);
+  voice.attack_frames_remaining = envelope.attack_frames;
+#if LMDJ_VOICE_DSP
   voice.attack_frames = envelope.attack_frames;
   voice.attack_scale = envelope.attack_scale;
-  voice.attack_frames_remaining = envelope.attack_frames;
   voice.release_frames = envelope.release_frames;
   voice.release_scale = envelope.release_scale;
+#endif
 }
 
 std::uint8_t global_slot(domain::PadSlotId slot) noexcept {
@@ -623,6 +625,7 @@ void RealtimeEngine::stop_voice(
       deactivate_voice(voice);
       return;
     }
+#if LMDJ_VOICE_DSP
     const float current =
         voice.release_frames_remaining < voice.release_frames
             ? static_cast<float>(voice.release_frames_remaining) *
@@ -631,6 +634,7 @@ void RealtimeEngine::stop_voice(
     voice.release_scale = current / static_cast<float>(kRealtimeRampFrames);
     voice.release_frames = kRealtimeRampFrames + 1;
     voice.release_frames_remaining = kRealtimeRampFrames;
+#endif
     return;
   }
   // `RuntimeVoiceState` is keyed by Pad slot. An audition owns no Pad, so

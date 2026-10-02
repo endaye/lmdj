@@ -5,6 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 
+// Built without the voice DSP (LMDJ_VOICE_DSP=0), the header supplies inline
+// stand-ins and this translation unit is empty.
+#if LMDJ_VOICE_DSP
 namespace lmdj::audio::detail {
 namespace {
 
@@ -254,3 +257,4 @@ bool prepare_voice_dsp(
 }
 
 }  // namespace lmdj::audio::detail
+#endif

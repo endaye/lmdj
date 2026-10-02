@@ -20,6 +20,7 @@
 #include <lmdj/cooker/wav_reader.hpp>
 #include <lmdj/domain/command_handler.hpp>
 
+#include "tests/core/cooker/voice_dsp_neutrality_cases.hpp"
 #include "tests/core/support/test.hpp"
 
 namespace {
@@ -814,6 +815,21 @@ void test_cooker_resolves_the_tone_deadband_to_neutral() {
   LMDJ_CHECK(resolve_pad_dsp(playback).tone == 3);
 }
 
+// The shared neutrality table: this build resolves exactly its neutral cases to
+// the neutral block. voice_dsp_disabled_test holds a build without the voice
+// DSP to accepting exactly the same cases.
+void test_cooker_resolves_exactly_the_shared_neutral_cases() {
+  for (const auto& entry : voice_dsp_neutrality_cases()) {
+    const auto resolved = lmdj::cooker::resolve_pad_playback(
+        entry.playback, entry.source_rate, kVoiceDspNeutralitySourceFrames);
+    LMDJ_CHECK(resolved.has_value());
+    if (lmdj::cooker::is_neutral(resolved.value().dsp) != entry.neutral) {
+      std::cerr << "neutrality case: " << entry.name << '\n';
+    }
+    LMDJ_CHECK(lmdj::cooker::is_neutral(resolved.value().dsp) == entry.neutral);
+  }
+}
+
 // The public resolver needs only the source rate and length, and yields what
 // cooking the same Pad yields, so a Host preview plays the cooked voice.
 void test_resolve_pad_playback_matches_the_cooked_playback() {
@@ -972,6 +988,7 @@ int main() {
     test_cooker_rejects_a_crossfade_beyond_half_an_open_loop();
     test_cooker_resolves_tone_fields();
     test_cooker_resolves_the_tone_deadband_to_neutral();
+    test_cooker_resolves_exactly_the_shared_neutral_cases();
     test_resolve_pad_playback_matches_the_cooked_playback();
     test_resolve_pad_playback_refuses_a_rate_or_trim_the_source_cannot_hold();
     test_cooker_rejects_invalid_tick_and_duration_bounds();

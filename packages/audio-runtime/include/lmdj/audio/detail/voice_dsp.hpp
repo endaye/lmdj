@@ -36,6 +36,7 @@ struct VoiceEnvelope {
   float release_scale;
 };
 
+#if LMDJ_VOICE_DSP
 inline VoiceEnvelope voice_envelope(
     const cooker::ResolvedPlayback& playback) noexcept {
   const auto ramp = [](std::uint32_t user) {
@@ -279,5 +280,65 @@ inline bool voice_dsp_advance(VoiceDspState& state) noexcept {
   state.backwards = false;
   return true;
 }
+
+#else
+// Built without the voice DSP (LMDJ_VOICE_DSP=0, see runtime_snapshot.hpp).
+// Every block is neutral, so no voice enters the kernel and every envelope is
+// the declick. The state and filter memory are empty, and the kernel functions
+// below are never reached: they let the engine and the offline renderer
+// compile unchanged while the kernel itself is compiled out.
+inline VoiceEnvelope voice_envelope(const cooker::ResolvedPlayback&) noexcept {
+  constexpr float kScale = 1.0F / static_cast<float>(kVoiceDspRampFrames);
+  return VoiceEnvelope{kVoiceDspRampFrames, kScale, kVoiceDspRampFrames, kScale};
+}
+
+struct VoiceDspFilterMemory {};
+
+struct VoiceDspState {
+  static constexpr bool reverse = false;
+  static constexpr std::uint8_t filter_count = 0;
+  static constexpr float pan_left = 1.0F;
+  static constexpr float pan_right = 1.0F;
+};
+
+static_assert(std::is_empty_v<VoiceDspFilterMemory>);
+static_assert(std::is_empty_v<VoiceDspState>);
+
+// Refuses: a non-neutral block cannot exist in this build.
+inline bool prepare_voice_dsp(
+    const cooker::ResolvedPlayback&, std::size_t, VoiceDspState&) noexcept {
+  return false;
+}
+
+inline bool voice_dsp_fits(
+    const cooker::ResolvedPlayback&, std::size_t) noexcept {
+  return true;
+}
+
+inline std::uint32_t voice_dsp_source_frame(const VoiceDspState&) noexcept {
+  return 0;
+}
+
+template <typename Fetch>
+float voice_dsp_read(const VoiceDspState&, Fetch&&) noexcept {
+  return 0.0F;
+}
+
+inline float voice_dsp_end_fade(const VoiceDspState&) noexcept {
+  return 1.0F;
+}
+
+inline float voice_dsp_filter(
+    const VoiceDspState&, VoiceDspFilterMemory&, float sample) noexcept {
+  return sample;
+}
+
+inline void voice_dsp_flush_filters(
+    const VoiceDspState&, VoiceDspFilterMemory&) noexcept {}
+
+inline bool voice_dsp_advance(VoiceDspState&) noexcept {
+  return false;
+}
+#endif
 
 }  // namespace lmdj::audio::detail

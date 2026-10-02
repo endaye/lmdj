@@ -16,6 +16,17 @@ struct PcmSample {
   std::vector<std::int16_t> interleaved;
 };
 
+// LMDJ_VOICE_DSP selects whether a Pad's playback carries the voice DSP
+// block. A Host whose runtime content cannot carry the block (the Cardputer:
+// lmdj.runtime-content.v1, decision 2026-09-30 point 9) builds every target
+// that includes this header with LMDJ_VOICE_DSP=0. The block is then empty and
+// occupies no bytes, the cooker refuses a Pad whose settings need it, and the
+// Audio Runtime compiles its voice kernel out.
+#ifndef LMDJ_VOICE_DSP
+#define LMDJ_VOICE_DSP 1
+#endif
+
+#if LMDJ_VOICE_DSP
 // The resolved per-voice DSP settings of a Pad (lmdj.project.v5 5.1.0 and
 // 5.2.0). It is
 // integer-only and trivially copyable so it rides every realtime control
@@ -58,6 +69,16 @@ struct ResolvedVoiceDsp {
   bool operator==(const ResolvedVoiceDsp&) const = default;
 };
 
+static_assert(sizeof(ResolvedVoiceDsp) == 36);
+#else
+// Built without the voice DSP: every block is the neutral one.
+struct ResolvedVoiceDsp {
+  bool operator==(const ResolvedVoiceDsp&) const = default;
+};
+
+static_assert(std::is_empty_v<ResolvedVoiceDsp>);
+#endif
+
 constexpr bool is_neutral(const ResolvedVoiceDsp& dsp) noexcept {
   return dsp == ResolvedVoiceDsp{};
 }
@@ -85,10 +106,10 @@ struct ResolvedPlayback {
   domain::TriggerMode trigger_mode;
   float linear_gain;
   bool muted;
-  ResolvedVoiceDsp dsp;
+  // Empty, and therefore free, when built without the voice DSP.
+  [[no_unique_address]] ResolvedVoiceDsp dsp;
 };
 
-static_assert(sizeof(ResolvedVoiceDsp) == 36);
 static_assert(std::is_trivially_copyable_v<ResolvedVoiceDsp>);
 static_assert(std::is_trivially_copyable_v<ResolvedPlayback>);
 

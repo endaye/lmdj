@@ -68,6 +68,52 @@ if(BUILD_TESTING)
   lmdj_target_warnings(lmdj_audio_runtime_testable)
   lmdj_target_sanitizers(lmdj_audio_runtime_testable)
 
+  # The Cardputer's configuration: built without the voice DSP, over the
+  # cooker built the same way (packages/project-cooker/CMakeLists.txt).
+  add_library(
+    lmdj_audio_runtime_without_voice_dsp
+    STATIC
+      src/master_fx.cpp
+      src/offline_renderer.cpp
+      src/prepared_sample_bank.cpp
+      src/realtime_engine.cpp
+      src/voice_dsp.cpp
+      src/wav_writer.cpp
+  )
+  target_include_directories(
+    lmdj_audio_runtime_without_voice_dsp
+    PUBLIC
+      "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  )
+  target_link_libraries(
+    lmdj_audio_runtime_without_voice_dsp
+    PUBLIC
+      lmdj::foundation
+      lmdj_project_cooker_without_voice_dsp
+  )
+  lmdj_target_warnings(lmdj_audio_runtime_without_voice_dsp)
+  lmdj_target_sanitizers(lmdj_audio_runtime_without_voice_dsp)
+
+  add_executable(
+    lmdj_audio_voice_dsp_disabled_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/voice_dsp_disabled_test.cpp"
+  )
+  target_include_directories(
+    lmdj_audio_voice_dsp_disabled_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_audio_voice_dsp_disabled_tests
+    PRIVATE lmdj_audio_runtime_without_voice_dsp
+  )
+  lmdj_target_warnings(lmdj_audio_voice_dsp_disabled_tests)
+  lmdj_target_sanitizers(lmdj_audio_voice_dsp_disabled_tests)
+  lmdj_add_test(
+    NAME audio.voice_dsp_disabled
+    TIER unit
+    COMMAND lmdj_audio_voice_dsp_disabled_tests
+    LABELS audio
+  )
+
   add_executable(
     lmdj_prepared_sample_bank_tests
     "${CMAKE_SOURCE_DIR}/tests/core/audio/prepared_sample_bank_test.cpp"
