@@ -2,6 +2,7 @@ import {expect, test} from "vitest";
 
 import {
   NO_ROOM_MESSAGE,
+  performCaptureUnavailableMessage,
   PUBLIC_ERROR_CODES,
   SAMPLE_PREVIEW_FAILURE,
   sampleMessage,
@@ -106,4 +107,16 @@ test("a preview failure points to activating audio rather than to a busy Project
 
 test("the no-room message is user language", () => {
   expect(NO_ROOM_MESSAGE).not.toMatch(TECHNICAL);
+});
+
+test.each([
+  ["capture-unsupported", "This browser cannot record a Performance. Use a current version of another browser."],
+  ["tap-initialization-failed",
+    "Performance recording could not start. Reload the page and activate audio again, then record."],
+  ["tap-processor-failed",
+    "Performance recording could not start. Reload the page and activate audio again, then record."],
+  ["something-new", "Performance recording is not available. Reload the page, then try again."],
+])("Performance capture %s says what to do without its code", (code, copy) => {
+  expect(performCaptureUnavailableMessage(code)).toBe(copy);
+  expect(copy).not.toMatch(TECHNICAL);
 });

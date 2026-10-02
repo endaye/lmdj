@@ -1256,7 +1256,7 @@ test("a retryable WAV bind keeps the real Store receipt path and removes the tem
   const baselineWavs = await opfsWavFiles(page);
   await recordShortPerformance(page, {name: "Retry Set"});
 
-  await expect(page.getByRole("alert")).toContainText(/WAV.*bind.*retry/i);
+  await expect(page.getByRole("alert")).toContainText("The recording could not be saved into the Project. Choose Retry WAV bind.");
   expect((await opfsWavFiles(page)).length).toBeGreaterThan(baselineWavs.length);
   const revision = await projectRevision(page);
   await page.getByRole("button", {name: "Retry WAV bind"}).click();

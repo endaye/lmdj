@@ -369,19 +369,21 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   await expect(refusals.getByRole("listitem"))
     .toHaveCount(expectedSetIds.length);
   // Which Set carries which locked token, not just that the tokens appear.
-  // Each row renders `<setId> <version> — <CODE> (<reason>)`, so the surface
-  // can be read back into the same shape the Native and CLI Hosts answer with
-  // and compared as one object: a swap between two refusals, a changed code,
-  // or a Set moving across the eligible line all fail here.
+  // Each row shows `<setId> <version> — <explanation>` and carries its code
+  // and reason as data-code/data-reason (#1680 keeps them out of the visible
+  // text). The surface is read back into the same shape the Native and CLI
+  // Hosts answer with and compared as one object: a swap between two
+  // refusals, a changed code, or a Set moving across the eligible line all
+  // fail here.
   const observedRefusals = Object.fromEntries(
-    (await refusals.getByRole("listitem").allInnerTexts()).map((row) => {
-      const match = row.match(
-        /^(\S+)\s+\S+\s+—\s+([A-Z_]+)\s+\(([a-z_]+)\)$/u,
-      );
-      expect(match, `unreadable refusal row: ${row}`).not.toBeNull();
-      return [match[1], {code: match[2], reason: match[3]}];
-    }),
+    await refusals.getByRole("listitem").evaluateAll((rows) => rows.map((row) => [
+      row.textContent?.trim().split(/\s+/u)[0] ?? "",
+      {code: row.getAttribute("data-code"), reason: row.getAttribute("data-reason")},
+    ])),
   );
+  for (const text of await refusals.getByRole("listitem").allInnerTexts()) {
+    expect(text, "a refusal row shows no code or reason token").not.toMatch(/[A-Z]+_[A-Z_]+|[a-z]+_[a-z_]+/u);
+  }
   expect(Object.keys(observedRefusals).sort()).toEqual(expectedSetIds);
   for (const setId of expectedSetIds) {
     expect(observedRefusals[setId], `refusal for ${setId}`).toEqual({

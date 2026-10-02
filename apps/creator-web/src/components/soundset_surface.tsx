@@ -1,3 +1,5 @@
+import {userMessage} from "../state/error_messages";
+import {useReportFailure} from "../runtime/diagnostics_context";
 import {useCallback, useEffect, useReducer} from "react";
 
 import {BankSelector} from "./bank_selector";
@@ -46,11 +48,10 @@ function failure(error: unknown): SoundSetError {
     ? (details as Record<string, unknown>).reason
     : null;
   const reason = typeof candidate === "string" ? candidate : null;
-  return {
-    code: typed?.code ?? "INTERNAL_ERROR",
-    reason,
-    message: typed?.message ?? "Sound Set request failed",
-  };
+  const code = typed?.code ?? "INTERNAL_ERROR";
+  // #1680: the Host's own message and the code stay in Developer
+  // diagnostics; the alert reads from the catalogue.
+  return {code, reason, message: userMessage(code).message};
 }
 
 export function formatSetBytes(bytes: number): string {
@@ -59,6 +60,10 @@ export function formatSetBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
+// A refusal without reason-specific guidance still describes the Set, not
+// the Project; its code and reason are on the row's data attributes.
+const REFUSED_SET_FALLBACK = "This Set cannot be installed.";
+
 export function soundSetReasonCopy(error: SoundSetError): string | null {
   switch (error.reason) {
     case "soundset_license_ineligible":
@@ -66,14 +71,14 @@ export function soundSetReasonCopy(error: SoundSetError): string | null {
     case "soundset_audio_unsupported":
       return "Accepted Set audio: PCM16 WAV, mono or stereo, 44.1 or 48 kHz";
     case "soundset_content_mismatch":
-      return "The Catalog answered with bytes that are not the ones this Set declares.";
+      return "The downloaded sounds do not match this Set, so nothing was installed. Try again later.";
     case "catalog_unavailable":
       return "The Catalog could not be reached. Sets already in this Workspace are still listed.";
     case "soundset_occupied_conflict":
       return "Choose Keep or Replace for the occupied Pads before installing.";
     case "soundset_manifest_invalid":
     case "soundset_slot_invalid":
-      return "This Set's manifest is not a valid Sound Set package.";
+      return "This Set is not a valid Sound Set, so it cannot be installed.";
     default:
       return null;
   }
@@ -126,6 +131,11 @@ export function SoundSetSurface({
   onInstalled,
   initialState = initialSoundSetState,
 }: SoundSetSurfaceProps) {
+  const reportFailure = useReportFailure();
+  const recordedFailure = (error: unknown) => {
+    reportFailure("Sound Sets", error);
+    return failure(error);
+  };
   const [state, dispatch] = useReducer(reduceSoundSet, {
     ...initialState,
     targetBank: activeBank,
@@ -138,7 +148,7 @@ export function SoundSetSurface({
     try {
       dispatch({type: "listed", catalog: await session.listSoundSets()});
     } catch (error) {
-      dispatch({type: "failed", error: failure(error)});
+      dispatch({type: "failed", error: recordedFailure(error)});
     }
   }, [session]);
 
@@ -155,7 +165,7 @@ export function SoundSetSurface({
         inspect: await session.inspectSoundSet(identityOf(summary)),
       });
     } catch (error) {
-      dispatch({type: "failed", error: failure(error)});
+      dispatch({type: "failed", error: recordedFailure(error)});
     }
   };
 
@@ -173,7 +183,7 @@ export function SoundSetSurface({
           : {...identityOf(state.selected), slotIndex},
       );
     } catch (error) {
-      dispatch({type: "failed", error: failure(error)});
+      dispatch({type: "failed", error: recordedFailure(error)});
     }
   };
 
@@ -186,7 +196,7 @@ export function SoundSetSurface({
     try {
       await session.stopSoundSetAudition();
     } catch (error) {
-      dispatch({type: "failed", error: failure(error)});
+      dispatch({type: "failed", error: recordedFailure(error)});
     }
   };
 
@@ -202,7 +212,7 @@ export function SoundSetSurface({
         }),
       });
     } catch (error) {
-      dispatch({type: "failed", error: failure(error)});
+      dispatch({type: "failed", error: recordedFailure(error)});
     }
   };
 
@@ -233,7 +243,7 @@ export function SoundSetSurface({
       dispatch({type: "installed", receipt});
       onInstalled?.(receipt.committedRevision);
     } catch (error) {
-      dispatch({type: "failed", error: failure(error)});
+      dispatch({type: "failed", error: recordedFailure(error)});
     }
   };
 
@@ -264,9 +274,7 @@ export function SoundSetSurface({
       {state.lastError === null ? null : (
         <div className="soundset-error" role="alert">
           <p>{state.lastError.message}</p>
-          {soundSetReasonCopy(state.lastError) === null
-            ? null
-            : <p>{soundSetReasonCopy(state.lastError)}</p>}
+          <p>{soundSetReasonCopy(state.lastError) ?? userMessage(state.lastError.code).nextStep}</p>
           <button
             type="button"
             onClick={() => dispatch({type: "error-dismissed"})}
@@ -320,9 +328,14 @@ export function SoundSetSurface({
       {state.refused.length === 0 ? null : (
         <ul className="soundset-refused" aria-label="Unavailable Sound Sets">
           {state.refused.map((refusal) => (
-            <li key={refusal.manifestSha256}>
-              {refusal.setId} {refusal.version} — {refusal.code}
-              {refusal.reason === null ? "" : ` (${refusal.reason})`}
+            // The code and reason stay readable to support and to the
+            // cross-Host parity check, out of the visible text (#1680).
+            <li key={refusal.manifestSha256}
+              data-code={refusal.code}
+              {...(refusal.reason === null ? {} : {"data-reason": refusal.reason})}>
+              {refusal.setId} {refusal.version} — {
+                soundSetReasonCopy({code: refusal.code, reason: refusal.reason, message: ""}) ??
+                REFUSED_SET_FALLBACK}
             </li>
           ))}
         </ul>

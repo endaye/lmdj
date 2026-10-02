@@ -1,4 +1,5 @@
 import {render, screen, waitFor, within} from "@testing-library/react";
+import {DiagnosticsProvider} from "../src/runtime/diagnostics_context";
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
 
@@ -379,8 +380,14 @@ test("a refused Set names its public reason instead of vanishing", async () => {
   const refused = await screen.findByRole("list", {
     name: "Unavailable Sound Sets",
   });
-  expect(refused.textContent).toContain("PERMISSION_DENIED");
-  expect(refused.textContent).toContain("soundset_license_ineligible");
+  // #1680: the visible row explains the reason; the code and reason stay on
+  // the row for support and the cross-Host parity check.
+  expect(refused.textContent).toContain(
+    "This Set's licence is outside the allowed list, or its required attribution is missing.");
+  expect(refused.textContent).not.toMatch(/PERMISSION_DENIED|soundset_license_ineligible/);
+  const row = within(refused).getByRole("listitem");
+  expect(row.getAttribute("data-code")).toBe("PERMISSION_DENIED");
+  expect(row.getAttribute("data-reason")).toBe("soundset_license_ineligible");
 });
 
 test("an install refusal is reported with the locked reason and no Project change", async () => {
@@ -494,7 +501,8 @@ test("an audition refusal reaches the surface instead of being swallowed", async
   // understood. Any thrown object would produce a message; only this one
   // produces the S8-D6 accepted-audio line.
   const alert = await screen.findByRole("alert");
-  expect(alert.textContent).toContain("Sound Set audio is unsupported");
+  expect(alert.textContent).toContain("This audio file's format is not supported.");
+  expect(alert.textContent).not.toContain("Sound Set audio is unsupported");
   expect(alert.textContent).toContain(
     "Accepted Set audio: PCM16 WAV, mono or stereo, 44.1 or 48 kHz");
 });
@@ -513,4 +521,41 @@ test("install target is explicit and independent of the playing Bank", async () 
   await waitFor(() => expect(session.previewSoundSetMap).toHaveBeenCalledWith(
     expect.objectContaining({bankId: 2}),
   ));
+});
+
+test("a refused listing shows catalogue copy and records the raw failure (#1680)", async () => {
+  const reportFailure = vi.fn(() => "IO_ERROR");
+  const raw = {code: "IO_ERROR", message: "workspace set store write failed at /private/opfs",
+    details: {storage_condition: "io_failure"}};
+  const session = fakeSession({listSoundSets: vi.fn(async () => { throw raw; })});
+  render(<DiagnosticsProvider value={reportFailure}>
+    <SoundSetSurface session={session} projectRevision={9} activeBank={0}
+      onInstalled={vi.fn()} />
+  </DiagnosticsProvider>);
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("Creator could not read or save data on this device.");
+  expect(alert.textContent).not.toMatch(/IO_ERROR|io_failure|workspace set store|opfs/);
+  expect(reportFailure).toHaveBeenCalledWith("Sound Sets", raw);
+});
+
+test("a refused Set without specific guidance says it cannot be installed (#1680)", async () => {
+  const session = fakeSession({
+    listSoundSets: vi.fn(async () => ({
+      catalogAvailable: true,
+      sets: [],
+      refused: [{
+        setId: "88888888-8888-4888-8888-888888888888",
+        version: "1.0.0",
+        manifestSha256: "8b".repeat(32),
+        code: "NOT_FOUND",
+        reason: "soundset_object_missing",
+      }],
+    })),
+  } as Partial<CreatorSoundSetRuntimeSession>);
+  renderSurface(session);
+  const refused = await screen.findByRole("list", {name: "Unavailable Sound Sets"});
+  const row = within(refused).getByRole("listitem");
+  expect(row.textContent).toBe("88888888-8888-4888-8888-888888888888 1.0.0 — This Set cannot be installed.");
+  expect(row.getAttribute("data-code")).toBe("NOT_FOUND");
+  expect(row.getAttribute("data-reason")).toBe("soundset_object_missing");
 });

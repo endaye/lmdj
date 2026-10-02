@@ -816,6 +816,7 @@ function Workspace({
     }
     const controller = createPerformController({
       session,
+      reportFailure,
       getCreatorState: () => stateRef.current,
       refreshProject: refreshPerformProject,
       opfsAvailable: () => session.diagnostics().capabilities.opfs === true &&
