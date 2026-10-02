@@ -626,12 +626,14 @@ void RealtimeEngine::stop_voice(
   if (voice.releasing) {
     // A second stop (stop_all or stop_slot after a gate release) ends the
     // tail. The stopped edge was already published when the release began,
-    // so only the physical end remains. Within the declick it hard-kills, as
-    // a 96-frame tail always has. A longer user release would step to
-    // silence, so it fades from the tail's current gain over the declick
-    // instead.
+    // so only the physical end remains. A neutral voice's 96-frame tail is
+    // hard-killed, as it always has been. A kernel voice never steps to
+    // silence: a tail with at most 96 frames left finishes, and a longer one
+    // fades from its current gain over the declick.
     if (voice.release_frames_remaining <= kRealtimeRampFrames) {
-      deactivate_voice(voice);
+      if (!voice.dsp_active) {
+        deactivate_voice(voice);
+      }
       return;
     }
 #if LMDJ_VOICE_DSP
@@ -667,6 +669,20 @@ void RealtimeEngine::stop_voice(
   if (how == VoiceStop::declick) {
     voice.release_frames = kRealtimeRampFrames;
     voice.release_scale = kRealtimeRampScale;
+  }
+  // A release that starts during a user attack fades from the attack's
+  // current level, so it never grows louder after the stop. The tail keeps
+  // its length; its first frame is that level, so nothing steps.
+  if (voice.attack_frames_remaining != 0 &&
+      voice.attack_frames > kRealtimeRampFrames) {
+    const float level =
+        static_cast<float>(voice.attack_frames - voice.attack_frames_remaining) *
+        voice.attack_scale;
+    voice.attack_frames_remaining = 0;
+    voice.release_scale = level / static_cast<float>(voice.release_frames);
+    voice.release_frames_remaining = voice.release_frames;
+    voice.release_frames += 1;
+    return;
   }
 #else
   static_cast<void>(how);
@@ -2400,6 +2416,13 @@ void RealtimeEngine::render(
         if (voice.dsp.filter_count != 0) {
           value = detail::voice_dsp_filter(
               voice.dsp, voice.filter_memory, value);
+          // A filter still rings when its input reaches zero, so the declick
+          // that ends the voice runs again on the filtered output: its last
+          // 96 frames fade to zero instead of stepping to silence (owner
+          // decision 2026-10-02).
+          value *= detail::voice_dsp_end_fade(voice.dsp) *
+                   detail::voice_dsp_release_declick(
+                       voice.releasing, voice.release_frames_remaining);
         }
         left[frame] += value * voice.dsp.pan_left;
         right[frame] += value * voice.dsp.pan_right;

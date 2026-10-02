@@ -206,6 +206,29 @@ void tone_and_eq_match_between_realtime_and_offline() {
       kernel_playback(TriggerMode::loop_gate, dsp), 24'000 + 4'800 + 512);
 }
 
+// The gate releases at frame 24 000, halfway through a 1 s user attack: both
+// renders fade from the attack's level over the release.
+void release_during_a_user_attack_matches_between_realtime_and_offline() {
+  ResolvedVoiceDsp dsp{};
+  dsp.attack_frames = 48'000;
+  dsp.release_frames = 9'600;
+  expect_kernel_voice_matches_between_realtime_and_offline(
+      kernel_playback(TriggerMode::loop_gate, dsp), 24'000 + 9'600 + 512);
+}
+
+// A filtered one-shot reaching its sample's end: both renders take the ending
+// declick on the filtered output at the same frames.
+void filtered_one_shot_end_matches_between_realtime_and_offline() {
+  ResolvedVoiceDsp dsp{};
+  dsp.tone = -100;
+  dsp.eq_flags = ResolvedVoiceDsp::kEqMid;
+  dsp.eq_mid_freq_hz = 200;
+  dsp.eq_mid_gain_millidb = 12'000;
+  dsp.eq_mid_q_milli = 4'000;
+  expect_kernel_voice_matches_between_realtime_and_offline(
+      kernel_playback(TriggerMode::one_shot, dsp), kSourceFrames + 512);
+}
+
 // A burst and then silence: every filter stage rings down through the flush
 // floor while the voice still plays, so the two renders zero their filter
 // memory at different offsets. They still agree within one step, and the
@@ -242,6 +265,8 @@ int main() {
     reversed_ping_pong_loop_matches_between_realtime_and_offline();
     user_envelope_matches_between_realtime_and_offline();
     tone_and_eq_match_between_realtime_and_offline();
+    release_during_a_user_attack_matches_between_realtime_and_offline();
+    filtered_one_shot_end_matches_between_realtime_and_offline();
     filter_flushes_at_different_offsets_keep_the_renders_together();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

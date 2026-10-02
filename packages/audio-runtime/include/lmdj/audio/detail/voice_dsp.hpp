@@ -36,6 +36,18 @@ struct VoiceEnvelope {
   float release_scale;
 };
 
+// The release part of the declick that ends a voice: 1 until the release
+// tail's last 96 frames, then the frames left over 96. With
+// voice_dsp_end_fade it fades a filtered voice's output to zero as the voice
+// ends, because the filter still rings after the envelope reaches zero.
+inline float voice_dsp_release_declick(
+    bool releasing, std::uint32_t frames_remaining) noexcept {
+  return releasing && frames_remaining < kVoiceDspRampFrames
+             ? static_cast<float>(frames_remaining) *
+                   (1.0F / static_cast<float>(kVoiceDspRampFrames))
+             : 1.0F;
+}
+
 #if LMDJ_VOICE_DSP
 inline VoiceEnvelope voice_envelope(
     const cooker::ResolvedPlayback& playback) noexcept {

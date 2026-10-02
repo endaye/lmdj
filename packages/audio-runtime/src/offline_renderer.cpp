@@ -27,8 +27,11 @@ std::int16_t quantize_pcm16(float value) noexcept {
 // shared kernel, the voice's attack, the kernel's end fade and, for a
 // releasing mode, the voice's release tail that starts at the event's release
 // frame, in the engine's operation order. Both envelope ramps come from
-// detail::voice_envelope, as in the engine. Each output sample is quantized and then
-// saturated into the mix in snapshot order, as a neutral event is.
+// detail::voice_envelope, as in the engine; a release that starts during a
+// user attack fades from the attack's level, and a filtered voice's output
+// takes the ending declick again, both as in the engine. Each output sample is
+// quantized and then saturated into the mix in snapshot order, as a neutral
+// event is.
 void render_kernel_voice(
     std::vector<std::int16_t>& output,
     const cooker::PcmSample& source,
@@ -48,7 +51,10 @@ void render_kernel_voice(
   detail::VoiceDspFilterMemory memory[2]{};
   const auto release_at = release_frame - start_frame;
   bool releasing = false;
+  bool attacking = true;
   std::uint32_t release_remaining = 0;
+  std::uint32_t release_frames = envelope.release_frames;
+  float release_scale = envelope.release_scale;
   const auto channels = source.channels;
   const auto fetch_channel = [&source, channels](std::uint16_t channel) {
     return [&source, channels, channel](std::uint32_t frame) {
@@ -62,22 +68,33 @@ void render_kernel_voice(
     if (releases && !releasing && relative >= release_at) {
       releasing = true;
       release_remaining = envelope.release_frames;
+      if (relative < envelope.attack_frames &&
+          envelope.attack_frames > detail::kVoiceDspRampFrames) {
+        const float level =
+            static_cast<float>(relative) * envelope.attack_scale;
+        attacking = false;
+        release_scale = level / static_cast<float>(envelope.release_frames);
+        release_frames = envelope.release_frames + 1;
+      }
     }
     float ramp = 1.0F;
-    if (relative < envelope.attack_frames) {
+    if (attacking && relative < envelope.attack_frames) {
       ramp *= static_cast<float>(relative) * envelope.attack_scale;
     }
-    ramp *= detail::voice_dsp_end_fade(state);
-    if (releasing && release_remaining < envelope.release_frames) {
-      ramp *= static_cast<float>(release_remaining) * envelope.release_scale;
+    const float end_fade = detail::voice_dsp_end_fade(state);
+    ramp *= end_fade;
+    if (releasing && release_remaining < release_frames) {
+      ramp *= static_cast<float>(release_remaining) * release_scale;
     }
+    const float ending =
+        end_fade * detail::voice_dsp_release_declick(releasing, release_remaining);
     float left = 0.0F;
     float right = 0.0F;
     if (channels == 1) {
       auto value =
           detail::voice_dsp_read(state, fetch_channel(0)) * gain * ramp;
       if (state.filter_count != 0) {
-        value = detail::voice_dsp_filter(state, memory[0], value);
+        value = detail::voice_dsp_filter(state, memory[0], value) * ending;
       }
       left = value * state.pan_left;
       right = value * state.pan_right;
@@ -87,8 +104,10 @@ void render_kernel_voice(
       auto right_value =
           detail::voice_dsp_read(state, fetch_channel(1)) * gain * ramp;
       if (state.filter_count != 0) {
-        left_value = detail::voice_dsp_filter(state, memory[0], left_value);
-        right_value = detail::voice_dsp_filter(state, memory[1], right_value);
+        left_value =
+            detail::voice_dsp_filter(state, memory[0], left_value) * ending;
+        right_value =
+            detail::voice_dsp_filter(state, memory[1], right_value) * ending;
       }
       left = left_value * state.pan_left;
       right = right_value * state.pan_right;
