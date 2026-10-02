@@ -4111,6 +4111,56 @@ void a_release_before_a_user_attack_sounds_ends_the_voice() {
   LMDJ_CHECK(engine.telemetry().active_voices == 0);
 }
 
+// The Pattern's own stops are stops, not release events: a transport stop and
+// a switch to another Pattern end a voice over the declick even when its Pad
+// has a long release.
+void pattern_stops_end_voices_over_the_declick() {
+  using namespace lmdj::audio;
+  for (const bool switch_pattern : {false, true}) {
+    auto snapshot = pattern_snapshot(kPatternA, {0, 0}, 127, 120, 12'000);
+    snapshot.pads[0].playback.dsp.release_frames = 4'800;
+    PatternTransportFixture f(snapshot);
+    f.apply(1, PatternTransportAction::start);
+    render_frames(f.engine, 256);
+    LMDJ_CHECK(f.engine.telemetry().active_voices == 1);
+    if (switch_pattern) {
+      auto next = pattern_snapshot(kPatternB, {0, 0}, 127);
+      next.events.clear();
+      auto view = PreparedPatternView::from_snapshot(next);
+      LMDJ_CHECK(f.engine.publish_pattern_view_immediate(std::move(view.value())).result ==
+                 PatternPublishResult::accepted);
+      render_frames(f.engine, 128);
+    } else {
+      f.apply(2, PatternTransportAction::stop);
+      render_frames(f.engine, 95);
+    }
+    LMDJ_CHECK(f.engine.telemetry().active_voices == 0);
+  }
+}
+
+// An audition stop is a stop too: an audition played with a long release
+// still ends over the declick.
+void an_audition_stop_ends_over_the_declick() {
+  RealtimeEngine engine;
+  const std::vector<float> sample(8000, 0.5F);
+  LMDJ_CHECK(engine.publish_sample_bank(PreparedSampleBank::empty(ProjectId{kProjectId}, 1)) ==
+             PublishResult::accepted);
+  auto audition = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+  LMDJ_CHECK(audition.set_sample(lmdj::audio::kAuditionSampleSlot, sample).has_value());
+  LMDJ_CHECK(engine.publish_audition_bank(std::move(audition)) == PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue_control(control(
+                 93, 0, PadControlKind::audition_start, 127,
+                 dsp_playback(0, 8000, TriggerMode::gate, envelope_dsp(0, 4800)))) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 200);
+  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+  LMDJ_CHECK(engine.enqueue_control(control(94, 0, PadControlKind::audition_stop)) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 97);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+}
+
 void render_does_not_allocate_or_deallocate() {
   RealtimeEngine engine;
   const std::array<float, 2> old_sample{0.25F, 0.5F};
@@ -5490,6 +5540,8 @@ int main() {
   second_stop_near_the_end_of_a_user_release_lets_it_finish();
   a_release_during_a_user_attack_fades_from_the_attack_level();
   a_release_before_a_user_attack_sounds_ends_the_voice();
+  pattern_stops_end_voices_over_the_declick();
+  an_audition_stop_ends_over_the_declick();
   toned_voice_is_filtered_in_the_engine();
   a_released_filtered_voice_ends_without_a_step();
   a_filtered_one_shot_ends_without_a_step();
