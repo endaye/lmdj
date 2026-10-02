@@ -398,7 +398,9 @@ test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({pag
   await latchLoopToggle(page);
 
   await page.evaluate(() => window.dispatchEvent(new Event("blur")));
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
+  // Synthetic edges do not suspend the real AudioContext; the guaranteed
+  // recovery state is the same one the recovery helper below requires.
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {
     timeout: 30_000,
   });
   await recoverFromLifecycleEdge(page);
@@ -415,7 +417,7 @@ test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({pag
     });
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {
     timeout: 30_000,
   });
   await page.evaluate(() => {
