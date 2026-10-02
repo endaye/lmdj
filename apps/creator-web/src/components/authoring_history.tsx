@@ -1,3 +1,5 @@
+import {userMessage} from "../state/error_messages";
+import {useReportFailure} from "../runtime/diagnostics_context";
 import {useEffect, useRef, useState} from "react";
 import type {
   AuthoringHistoryMutation,
@@ -42,7 +44,17 @@ interface Props {
   onBusy(busy: boolean): void;
 }
 
+// #1680: what the user sees for a failed history request; the code and the
+// Host message are recorded in Developer diagnostics.
+function historyFailureCopy(failure: unknown): string {
+  const code = typeof failure === "object" && failure !== null && "code" in failure &&
+    typeof failure.code === "string" ? failure.code : "INTERNAL_ERROR";
+  const {message, nextStep} = userMessage(code);
+  return `${message} ${nextStep}`;
+}
+
 export function AuthoringHistoryControls(props: Props) {
+  const reportFailure = useReportFailure();
   const [status, setStatus] = useState<Readonly<AuthoringHistoryStatus> | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,7 +82,10 @@ export function AuthoringHistoryControls(props: Props) {
       } catch (failure) {
         if (epoch === generation.current) {
           setStatus(null);
-          setError(failure instanceof Error ? failure.message : "History could not be checked.");
+          reportFailure("Check Undo history", failure);
+          setError(`History could not be checked. ${userMessage(
+            typeof failure === "object" && failure !== null && "code" in failure &&
+              typeof failure.code === "string" ? failure.code : "INTERNAL_ERROR").nextStep}`);
         }
       }
     };
@@ -111,7 +126,8 @@ export function AuthoringHistoryControls(props: Props) {
       if (!stillCurrent()) return;
       await current.onChanged(mutation);
       if (stillCurrent() && mutation.snapshotError !== null) {
-        setError(`Change saved; sound update failed: ${mutation.snapshotError.message}`);
+        reportFailure("Prepare sound after Undo or Redo", mutation.snapshotError);
+        setError("The change was saved, but the sound is not ready to play yet. Try preparing the audio again.");
       }
     } catch (failure) {
       // The Core checks an existing receipt before revision validation, so an
@@ -120,7 +136,10 @@ export function AuthoringHistoryControls(props: Props) {
       if (failure instanceof Error && "code" in failure && failure.code === "REVISION_CONFLICT") {
         retained.current = null;
       }
-      if (stillCurrent()) setError(failure instanceof Error ? failure.message : "History change failed.");
+      if (stillCurrent()) {
+        reportFailure(direction === "undo" ? "Undo" : "Redo", failure);
+        setError(historyFailureCopy(failure));
+      }
     } finally {
       if (stillCurrent()) {
         try {

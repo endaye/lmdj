@@ -1,3 +1,4 @@
+import {userMessage} from "./error_messages";
 import type {
   PerformanceFx,
   PerformanceMasterCapture,
@@ -237,6 +238,8 @@ export interface PerformControllerOptions {
   readonly refreshProject: () => Promise<unknown>;
   readonly opfsAvailable: () => boolean;
   readonly dependencies?: PerformControllerDependencies;
+  // Records a failure in Developer diagnostics (#1680).
+  readonly reportFailure?: (operation: string, error: unknown) => unknown;
 }
 
 async function defaultPrepareRecording(
@@ -289,8 +292,12 @@ async function defaultPrepareRecording(
   }
 }
 
+// #1680: Host and internal messages stay in Developer diagnostics; the
+// Perform surface reads the shared catalogue for the error's code.
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Performance operation failed";
+  const code = errorCode(error);
+  const {message, nextStep} = userMessage(code ?? "INTERNAL_ERROR");
+  return `${message} ${nextStep}`;
 }
 
 function errorCode(error: unknown): string | null {
@@ -376,7 +383,11 @@ export function createPerformController(options: PerformControllerOptions): Perf
     state = reducePerform(state, action);
     for (const listener of listeners) listener();
   };
-  const fail = (error: unknown) => dispatch({type: "error", message: errorMessage(error)});
+  const report = (error: unknown) => options.reportFailure?.("Perform", error);
+  const fail = (error: unknown) => {
+    report(error);
+    dispatch({type: "error", message: errorMessage(error)});
+  };
   const observeProjectRevision = (value: unknown) => {
     if (value === null || typeof value !== "object") return;
     for (const key of ["committedRevision", "projectRevision", "revision"] as const) {
@@ -469,8 +480,9 @@ export function createPerformController(options: PerformControllerOptions): Perf
       } catch (error) {
         dispatch({type: "binding-status", status: "retry"});
         setRecording("stopped");
+        report(error);
         dispatch({type: "error", message:
-          `WAV bind failed; retry is available: ${errorMessage(error)}`});
+          "The recording could not be saved into the Project. Choose Retry WAV bind."});
         return;
       }
     }
@@ -479,9 +491,10 @@ export function createPerformController(options: PerformControllerOptions): Perf
     } catch (error) {
       dispatch({type: "binding-status", status: "retry"});
       setRecording("stopped");
+      report(error);
       dispatch({type: "error", message:
-        `WAV was bound, but current Project truth could not be refreshed; ` +
-        `retry WAV bind: ${errorMessage(error)}`});
+        "The recording was saved, but Creator could not show the latest Project. " +
+        "Choose Retry WAV bind."});
       return;
     }
     if (resources === bindingResources) {
@@ -665,9 +678,10 @@ export function createPerformController(options: PerformControllerOptions): Perf
               dispatch({type: "wav-status", message: "sealed · temporary retained"});
               dispatch({type: "recovery-checking"});
               dispatch({type: "recovery-status", message: "recovery required"});
+              report(error);
+              report(compensationError);
               dispatch({type: "error", message:
-                `${errorMessage(error)}; recovery cleanup failed: ${
-                  errorMessage(compensationError)}`});
+                `${errorMessage(error)} The interrupted recording is kept for recovery.`});
               await loadRecovery("recovery required").catch(fail);
               return;
             }
@@ -801,18 +815,20 @@ export function createPerformController(options: PerformControllerOptions): Perf
             await refreshProjectTruth();
           } catch (error) {
             setRecording("stopped");
+            report(error);
             dispatch({type: "error", message:
-              `Performance was saved, but current Project truth could not be ` +
-              `refreshed; retry Save Performance: ${errorMessage(error)}`});
+              "The Performance was saved, but Creator could not show the latest Project. " +
+              "Choose Save Performance again."});
             return;
           }
           await bindSavedRecording();
         } catch (error) {
           setRecording("stopped");
           if (saveOutcomeUnknown) {
+            report(error);
             dispatch({type: "error", message:
-              `Save outcome is unknown; retry Save Performance to reconcile ` +
-              `Project truth before another save: ${errorMessage(error)}`});
+              "Creator could not confirm the save. Choose Save Performance again " +
+              "before saving anything else."});
           } else if (errorCode(error) === "PROJECT_BUSY") {
             savedName = null;
             dispatch({type: "error", message:
@@ -871,9 +887,10 @@ export function createPerformController(options: PerformControllerOptions): Perf
         } catch (error) {
           setRecording("stopped");
           if (discardCommitted) {
+            report(error);
             dispatch({type: "error", message:
-              `Performance was discarded, but current Project truth could not ` +
-              `be refreshed; retry Discard Performance: ${errorMessage(error)}`});
+              "The Performance was discarded, but Creator could not show the latest Project. " +
+              "Choose Discard Performance again."});
           } else {
             fail(error);
           }

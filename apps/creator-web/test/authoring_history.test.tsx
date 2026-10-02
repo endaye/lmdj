@@ -1,4 +1,5 @@
 import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
+import {DiagnosticsProvider} from "../src/runtime/diagnostics_context";
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
 import {AuthoringHistoryControls} from "../src/components/authoring_history";
@@ -48,7 +49,9 @@ test("a refused operation retains its command for an explicit retry and never re
   render(<AuthoringHistoryControls {...props} />);
   await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
   await userEvent.click(screen.getByRole("button", {name: "Undo"}));
-  await screen.findByText("Writer busy");
+  // #1680: the raw message stays in diagnostics; the user sees the catalogue.
+  await screen.findByText("Something went wrong in Creator. Try again. Details are in Developer diagnostics.");
+  expect(screen.queryByText(/Writer busy/)).toBeNull();
   await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
   expect(history.undoAuthoring).toHaveBeenCalledTimes(1);
   expect(props.onChanged).not.toHaveBeenCalled();
@@ -93,7 +96,8 @@ test("reopening shows an empty history and a committed sound publication failure
   const view = render(<AuthoringHistoryControls {...props} />);
   await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
   await userEvent.click(screen.getByRole("button", {name: "Undo"}));
-  await screen.findByText("Change saved; sound update failed: Audio unavailable");
+  await screen.findByText("The change was saved, but the sound is not ready to play yet. Try preparing the audio again.");
+  expect(screen.queryByText(/Audio unavailable/)).toBeNull();
   const reopened = fixture({...status, sessionId: "20000000-0000-4000-8000-000000000002", undoCount: 0, undoLabel: "", canUndo: false});
   view.rerender(<AuthoringHistoryControls {...reopened.props} />);
   await screen.findByText("No changes in this session");
@@ -112,7 +116,8 @@ test("lost acknowledgement replays the original command after the source stack b
   const view = render(<AuthoringHistoryControls {...props} />);
   await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
   await userEvent.click(screen.getByRole("button", {name: "Undo"}));
-  await screen.findByText("Response lost");
+  await screen.findByText("Something went wrong in Creator. Try again. Details are in Developer diagnostics.");
+  expect(screen.queryByText(/Response lost/)).toBeNull();
   await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
   view.rerender(<AuthoringHistoryControls {...props} revision={2} refreshKey="sequence" />);
   await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
@@ -131,7 +136,8 @@ test("a definite revision refusal allows a new Undo at the observed revision", a
   render(<AuthoringHistoryControls {...props} />);
   await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
   await userEvent.click(screen.getByRole("button", {name: "Undo"}));
-  await screen.findByText("Project changed before Undo");
+  await screen.findByText("The Project changed while this was in progress. Review the change, then try again.");
+  expect(screen.queryByText(/Project changed before Undo/)).toBeNull();
   await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
   expect(props.onChanged).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", {name: "Undo"}));
@@ -139,4 +145,18 @@ test("a definite revision refusal allows a new Undo at the observed revision", a
   const [first, second] = vi.mocked(history.undoAuthoring).mock.calls;
   expect(second![0].expectedRevision).toBe(2);
   expect(second![0].commandId).not.toBe(first![0].commandId);
+});
+
+test("a failed Undo records its raw failure in Developer diagnostics (#1680)", async () => {
+  const {props, history} = fixture();
+  const raw = Object.assign(new Error("history journal locked"), {code: "HOST_STATE_INVALID"});
+  vi.mocked(history.undoAuthoring).mockRejectedValueOnce(raw);
+  const reportFailure = vi.fn(() => "HOST_STATE_INVALID");
+  render(<DiagnosticsProvider value={reportFailure}><AuthoringHistoryControls {...props} /></DiagnosticsProvider>);
+  await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
+  await userEvent.click(screen.getByRole("button", {name: "Undo"}));
+  await screen.findByText(
+    "That can't be done right now. Stop playback and finish any recording or import, then try again.");
+  expect(screen.queryByText(/history journal locked/)).toBeNull();
+  expect(reportFailure).toHaveBeenCalledWith("Undo", raw);
 });

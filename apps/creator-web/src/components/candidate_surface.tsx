@@ -1,3 +1,5 @@
+import {userMessage} from "../state/error_messages";
+import {useReportFailure} from "../runtime/diagnostics_context";
 import {useEffect, useRef, useState} from "react";
 import type {
   CandidateJobView, CandidateProviderList, CandidateRecipe,
@@ -29,7 +31,10 @@ function errorCopy(error: unknown): string {
   if (code === "NOT_FOUND") return "The source or slice is unavailable. Refresh to inspect it.";
   if (code === "PERMISSION_DENIED") return "Analysis permission is required. Grant it explicitly above.";
   if (code === "RESOURCE_EXHAUSTED") return "These Pads exceed the available audio capacity. Choose fewer or shorter slices.";
-  return error instanceof Error ? error.message : `The request was refused (${code}).`;
+  // #1680: any other refusal uses the shared catalogue, never the raw message
+  // or the code; both go to Developer diagnostics.
+  const {message, nextStep} = userMessage(code);
+  return `${message} ${nextStep}`;
 }
 function recipeLabel(recipe: CandidateRecipe, index: number): string {
   return `Slice ${index + 1} · ${(recipe.start_frame / recipe.frame_rate).toFixed(3)}–${
@@ -43,6 +48,11 @@ interface CandidateSurfaceProps {
 }
 
 export function CandidateSurface({session, projectId, projectRevision, onRefreshProject}: CandidateSurfaceProps) {
+  const reportFailure = useReportFailure();
+  const shownFailure = (error: unknown) => {
+    reportFailure("Slices", error);
+    return errorCopy(error);
+  };
   const [sources, setSources] = useState<readonly CandidateSource[]>([]);
   const [source, setSource] = useState("");
   const [providers, setProviders] = useState<CandidateProviderList | null>(null);
@@ -61,13 +71,13 @@ export function CandidateSurface({session, projectId, projectRevision, onRefresh
       if (!active) return;
       setSources(projection.sources);
       setProviders(listing);
-    }).catch(error => {if (active) setError(errorCopy(error));});
+    }).catch(error => {if (active) setError(shownFailure(error));});
     return () => {active = false; mounted.current = false;};
   }, [session, projectId]);
   const settingsAction = async (action: () => Promise<void>) => {
     if (busyRef.current) return;
     busyRef.current = true; setBusy(true); setError(null);
-    try {await action();} catch (error) {if (mounted.current) setError(errorCopy(error));}
+    try {await action();} catch (error) {if (mounted.current) setError(shownFailure(error));}
     finally {busyRef.current = false; if (mounted.current) setBusy(false);}
   };
   const refreshProject = async (committedRevision?: number) => {
@@ -124,6 +134,11 @@ interface CandidateJobProps {
 }
 function CandidateJob({session, projectId, assetId, revision, analysisReady, uncertain,
   onUncertain, onRefreshProject, adoptionPending, onAdoptionPendingChange}: CandidateJobProps) {
+  const reportFailure = useReportFailure();
+  const shownFailure = (error: unknown) => {
+    reportFailure("Slices", error);
+    return errorCopy(error);
+  };
   const jobId = candidateJobId(projectId, assetId);
   const [job, setJob] = useState<CandidateJobView | null>(null);
   const [publicSource, setPublicSource] = useState(false);
@@ -140,7 +155,7 @@ function CandidateJob({session, projectId, assetId, revision, analysisReady, unc
     let live = true;
     void session.inspectCandidateJob(jobId).then(result => {
       if (live) setJob(result);
-    }).catch(error => {if (live && errorCode(error) !== "NOT_FOUND") setError(errorCopy(error));})
+    }).catch(error => {if (live && errorCode(error) !== "NOT_FOUND") setError(shownFailure(error));})
       .finally(() => {if (live) {locked.current = false; setBusy(false);}});
     const stop = () => {void session.stopCandidateAudition().catch(() => {});};
     window.addEventListener("pagehide", stop);
@@ -153,7 +168,7 @@ function CandidateJob({session, projectId, assetId, revision, analysisReady, unc
   const operation = async (action: () => Promise<void>) => {
     if (locked.current) return;
     locked.current = true; setBusy(true); setError(null); setMessage(null);
-    try {await action();} catch (error) {if (mounted.current) setError(errorCopy(error));}
+    try {await action();} catch (error) {if (mounted.current) setError(shownFailure(error));}
     finally {locked.current = false; if (mounted.current) setBusy(false);}
   };
   const acceptJob = (value: CandidateJobView) => {
@@ -223,7 +238,7 @@ function CandidateJob({session, projectId, assetId, revision, analysisReady, unc
       })}>Cancel analysis</button> : null}
       <button type="button" onClick={() => {
         void session.stopCandidateAudition().then(() => {if (mounted.current) setMessage("Preview stopped.");},
-          error => {if (mounted.current) setError(errorCopy(error));});
+          error => {if (mounted.current) setError(shownFailure(error));});
       }}>Stop preview</button>
     </div>
     {error ? <p role="alert">{error}</p> : null}

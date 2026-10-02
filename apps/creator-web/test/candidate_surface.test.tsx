@@ -2,6 +2,7 @@ import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
 import {CandidateSurface, isCandidateSession} from "../src/components/candidate_surface";
+import {DiagnosticsProvider} from "../src/runtime/diagnostics_context";
 import type {CandidateJobView, CreatorCandidateRuntimeSession} from "../src/runtime/runtime_types";
 const projectId = "11111111-1111-4111-8111-111111111111";
 const assetId = "22222222-2222-4222-8222-222222222222";
@@ -184,4 +185,20 @@ test("pending adoption keeps uncertainty across source switches until Project in
   await userEvent.click(screen.getByRole("button", {name: "Refresh slices and Project"}));
   await waitFor(() => expect(screen.queryByText(/previous request may have committed/)).toBeNull());
   expect(session.adoptCandidates).toHaveBeenCalledTimes(1);
+});
+
+test("an unexpected refusal shows catalogue copy and records the raw failure (#1680)", async () => {
+  const reportFailure = vi.fn(() => "HOST_PROTOCOL_MISMATCH");
+  const raw = Object.assign(new Error("candidate bridge payload rejected"), {code: "HOST_PROTOCOL_MISMATCH"});
+  const session = {
+    inspectProject: vi.fn(async () => ({project_revision: 3, project: {project_id: projectId}})),
+    listProviders: vi.fn(async () => { throw raw; }),
+  };
+  render(<DiagnosticsProvider value={reportFailure}>
+    <CandidateSurface session={session as unknown as CreatorCandidateRuntimeSession}
+      projectId={projectId} projectRevision={3} onRefreshProject={vi.fn(async () => {})} />
+  </DiagnosticsProvider>);
+  const alert = await screen.findByText(/This copy of Creator is out of date\. Reload the page to load the current version\./);
+  expect(alert.textContent).not.toMatch(/candidate bridge payload rejected|HOST_PROTOCOL_MISMATCH/);
+  expect(reportFailure).toHaveBeenCalledWith("Slices", raw);
 });

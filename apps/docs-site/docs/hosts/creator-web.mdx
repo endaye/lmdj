@@ -320,5 +320,17 @@ access, connecting a microphone or closing the other app, and never names the
 browser exception. Each Pad change, import, room check and recording start
 that fails is recorded in Developer diagnostics with its code and details.
 Creator keeps a single set of accepted public codes, so a code accepted at one
-boundary is never rejected at the next. Candidate, Sound Set, Perform and Undo
-history messages move to the catalogue in the last step of #1680.
+boundary is never rejected at the next.
+
+Slices, Sound Sets, Perform and Undo history also read from the catalogue, so no
+Creator surface shows a Host message, a raw `Error.message` or a code:
+
+- Slices keeps its four specific refusals and uses the catalogue for any other.
+- Sound Set refusals show the reason's guidance. The list of unavailable Sets
+  keeps each code and reason on its row as `data-code` and `data-reason` for
+  support and the cross-Host parity check.
+- Perform names the next action, such as "Choose Retry WAV bind" or "Choose Save
+  Performance again". It explains an unavailable recording by its capture code.
+- Undo history says what happened and what to try.
+
+Each of these failures is recorded in Developer diagnostics.
