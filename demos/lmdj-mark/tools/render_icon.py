@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the Creator LogoIcon vector into the mark SVG and the two icon PNGs.
+"""Render the Creator LogoIcon vector into the mark SVG, icon PNGs, and favicon.
 
 The path data is read from the product component. This demo does not redraw it.
 Called by hand:
@@ -29,6 +29,11 @@ TOUCH_ICON = 180
 # margin the iOS squircle mask must not be asked to invent.
 MARK_SCALE = 8
 MARK_ORIGIN = (APP_ICON - 80 * MARK_SCALE) // 2
+# Tab icons are 16 and 32. Two units of plate on a 32-unit canvas keeps the
+# glyph readable there; the app icon's 192px margin would shrink it to a speck.
+FAVICON = 32
+FAVICON_SCALE = "0.35"
+FAVICON_ORIGIN = "2"
 
 
 def logo_paths(source: str) -> list[tuple[str, str]]:
@@ -182,6 +187,40 @@ def _chunk(kind: bytes, payload: bytes) -> bytes:
     )
 
 
+def favicon_svg(paths: list[tuple[str, str]]) -> str:
+    body = "\n".join(
+        f'    <path d="{escape(d)}" fill="{fill.upper()}"/>' for d, fill in paths
+    )
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" '
+        f'width="{FAVICON}" height="{FAVICON}" '
+        f'viewBox="0 0 {FAVICON} {FAVICON}">\n'
+        f'  <rect width="{FAVICON}" height="{FAVICON}" fill="{BACKGROUND}"/>\n'
+        f'  <g transform="translate({FAVICON_ORIGIN} {FAVICON_ORIGIN}) '
+        f'scale({FAVICON_SCALE})">\n'
+        f"{body}\n"
+        "  </g>\n"
+        "</svg>\n"
+    )
+
+
+def write_ico(path: Path, images: list[tuple[int, bytes]]) -> None:
+    """Vista ICO: each entry is a PNG. Width byte 0 means 256."""
+    count = len(images)
+    header = struct.pack("<HHH", 0, 1, count)
+    entries = b""
+    blobs = b""
+    offset = 6 + 16 * count
+    for size, blob in images:
+        if blob[:8] != b"\x89PNG\r\n\x1a\n":
+            raise SystemExit("favicon.ico entries must be PNG")
+        side = 0 if size >= 256 else size
+        entries += struct.pack("<BBBBHHII", side, side, 0, 0, 1, 32, len(blob), offset)
+        blobs += blob
+        offset += len(blob)
+    path.write_bytes(header + entries + blobs)
+
+
 def rasterize(svg: Path, png: Path, size: int) -> None:
     rsvg = shutil.which("rsvg-convert")
     if rsvg is None:
@@ -202,12 +241,23 @@ def main() -> int:
     icon = OUT / "icon.svg"
     mark.write_text(mark_svg(paths), encoding="utf-8")
     icon.write_text(icon_svg(paths), encoding="utf-8")
+    favicon = OUT / "favicon.svg"
+    png32 = OUT / "favicon-32.png"
+    png16 = OUT / "favicon-16.png"
+    favicon.write_text(favicon_svg(paths), encoding="utf-8")
     rasterize(icon, OUT / "icon-1024.png", APP_ICON)
     rasterize(icon, OUT / "apple-touch-icon.png", TOUCH_ICON)
+    rasterize(favicon, png32, 32)
+    rasterize(favicon, png16, 16)
+    write_ico(OUT / "favicon.ico", [(32, png32.read_bytes()), (16, png16.read_bytes())])
     print(f"wrote {mark.relative_to(ROOT)}")
     print(f"wrote {icon.relative_to(ROOT)}")
+    print(f"wrote {favicon.relative_to(ROOT)}")
     print("wrote demos/lmdj-mark/icon-1024.png")
     print("wrote demos/lmdj-mark/apple-touch-icon.png")
+    print("wrote demos/lmdj-mark/favicon-32.png")
+    print("wrote demos/lmdj-mark/favicon-16.png")
+    print("wrote demos/lmdj-mark/favicon.ico")
     return 0
 
 

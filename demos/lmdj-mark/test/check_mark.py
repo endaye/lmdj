@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""The site mark is the Creator LogoIcon, at Apple's two standard sizes.
+"""The site mark is the Creator LogoIcon, at Apple's sizes and as the favicon.
 
 One fact: the published SVG paths are the four LogoIcon paths, the app icon
-is a 1024 RGB PNG, and the touch icon is a 180 RGB PNG of that same drawing.
+is a 1024 RGB PNG, the touch icon is a 180 RGB PNG of that same drawing, and
+the tab icon is that drawing on the 32 plate at 32 and 16.
 """
 
 from __future__ import annotations
@@ -105,19 +106,51 @@ def pixel(rows: list[bytearray], x: int, y: int) -> tuple[int, int, int]:
     return row[i], row[i + 1], row[i + 2]
 
 
+def ico_pngs(path: Path) -> dict[int, bytes]:
+    data = path.read_bytes()
+    if len(data) < 6:
+        raise SystemExit(f"{path.name} is too small to be an ICO")
+    reserved, kind, count = struct.unpack_from("<HHH", data, 0)
+    if (reserved, kind) != (0, 1) or count != 2:
+        raise SystemExit(f"{path.name} should be an ICO with 32 and 16")
+    found: dict[int, bytes] = {}
+    for index in range(count):
+        width, height, _colors, _reserved, planes, bits, nbytes, offset = struct.unpack_from(
+            "<BBBBHHII", data, 6 + 16 * index
+        )
+        blob = data[offset : offset + nbytes]
+        if blob[:8] != b"\x89PNG\r\n\x1a\n":
+            raise SystemExit(f"{path.name} entry {index} is not a PNG")
+        if planes != 1 or bits != 32:
+            raise SystemExit(f"{path.name} entry {index} is not 32-bit")
+        side = width or 256
+        if side != (height or 256):
+            raise SystemExit(f"{path.name} entry {index} is not square")
+        found[side] = blob
+    return found
+
+
 def main() -> int:
     paths = logo_paths(SOURCE.read_text(encoding="utf-8"))
     mark = (DEMO / "mark.svg").read_text(encoding="utf-8")
     icon = (DEMO / "icon.svg").read_text(encoding="utf-8")
+    favicon = (DEMO / "favicon.svg").read_text(encoding="utf-8")
     for d, fill in paths:
-        if d not in mark or d not in icon:
+        if d not in mark or d not in icon or d not in favicon:
             raise SystemExit("a LogoIcon path is missing from the published SVG")
-        if fill.upper() not in mark or fill.upper() not in icon:
+        if fill.upper() not in mark or fill.upper() not in icon or fill.upper() not in favicon:
             raise SystemExit(f"fill {fill} is missing from the published SVG")
     if 'viewBox="0 0 1024 1024"' not in icon or 'fill="#0a0b09"' not in icon:
         raise SystemExit("icon.svg is not the 1024 plate on #0a0b09")
+    if (
+        'viewBox="0 0 32 32"' not in favicon
+        or 'fill="#0a0b09"' not in favicon
+        or 'translate(2 2) scale(0.35)' not in favicon
+    ):
+        raise SystemExit("favicon.svg is not the tight 32 plate")
 
-    for name, size in (("icon-1024.png", 1024), ("apple-touch-icon.png", 180)):
+    plates = (("icon-1024.png", 1024, 3), ("apple-touch-icon.png", 180, 3), ("favicon-32.png", 32, 1), ("favicon-16.png", 16, 1))
+    for name, size, step in plates:
         width, height, rows = png_rgb(DEMO / name)
         if (width, height) != (size, size):
             raise SystemExit(f"{name} is {width}x{height}, expected {size}")
@@ -125,15 +158,22 @@ def main() -> int:
             raise SystemExit(f"{name} corner is not the plate color")
         acid = any(
             pixel(rows, x, y) == (0xD9, 0xFA, 0x08)
-            for y in range(0, height, 3)
-            for x in range(0, width, 3)
+            for y in range(0, height, step)
+            for x in range(0, width, step)
         )
         if not acid:
             raise SystemExit(f"{name} does not contain the acid glyph")
 
+    embedded = ico_pngs(DEMO / "favicon.ico")
+    for name, size in (("favicon-32.png", 32), ("favicon-16.png", 16)):
+        if embedded.get(size) != (DEMO / name).read_bytes():
+            raise SystemExit(f"favicon.ico does not embed {name}")
+
     for page in ("index.html", "instrument.html", "icon.html"):
         text = (DEMO / page).read_text(encoding="utf-8")
         for needle in (
+            'rel="icon" href="favicon.ico" sizes="any"',
+            'rel="icon" href="favicon.svg" type="image/svg+xml"',
             'href="apple-touch-icon.png"',
             'sizes="180x180"',
             'href="index.html"',
@@ -146,6 +186,8 @@ def main() -> int:
     icon_page = (DEMO / "icon.html").read_text(encoding="utf-8")
     if 'src="icon-1024.png"' not in icon_page:
         raise SystemExit("icon page does not show the 1024 icon")
+    if 'src="favicon-32.png"' not in icon_page or 'src="favicon-16.png"' not in icon_page:
+        raise SystemExit("icon page does not show the tab icons")
 
     print("lmdj mark: PASS")
     return 0

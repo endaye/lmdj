@@ -198,7 +198,22 @@ h1 {
 
 .pair img.masked { border-radius: 22.37%; }
 
+.tabsizes {
+  display: flex;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.tabsizes figure { margin: 0; }
+
+.tabsizes img {
+  display: block;
+  width: auto;
+  height: auto;
+}
+
 .pair figcaption,
+.tabsizes figcaption,
 .spec dt {
   margin-top: 8px;
   color: var(--dim);

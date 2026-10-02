@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0a0b09" />
     <title>图标 — LMDJ</title>
-    <link rel="icon" href="mark.svg" type="image/svg+xml" />
+    <link rel="icon" href="favicon.ico" sizes="any" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="apple-touch-icon.png" sizes="180x180" />
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -38,13 +39,27 @@
             <figcaption>系统圆角预览</figcaption>
           </figure>
         </div>
+        <div class="tabsizes">
+          <figure>
+            <div class="tile">
+              <img src="favicon-32.png" width="32" height="32" alt="网站标签页图标，32×32" />
+            </div>
+            <figcaption>32×32</figcaption>
+          </figure>
+          <figure>
+            <div class="tile">
+              <img src="favicon-16.png" width="16" height="16" alt="网站标签页图标，16×16" />
+            </div>
+            <figcaption>16×16</figcaption>
+          </figure>
+        </div>
       </div>
       <section>
         <p class="kicker">Apple</p>
         <h1>1024</h1>
         <p class="lede">
           App 图标只要这一张。1024×1024，不透明，直角。圆角由系统遮罩切，不画进文件。
-          网页加到主屏幕用同一张矢量的 180×180。
+          网页加到主屏幕用同一张矢量的 180×180。标签页用收紧边距的同一块矢量。
         </p>
         <dl class="spec">
           <div>
@@ -59,6 +74,10 @@
             <dt>矢量</dt>
             <dd>Creator LogoIcon 的四条路径，viewBox 0 0 80 80。放大 8 倍后居中，四边留 192px。</dd>
           </div>
+          <div>
+            <dt>标签页</dt>
+            <dd>favicon.ico 收进 32 与 16。favicon.svg 是同一块矢量，画布 32，四边留 2。</dd>
+          </div>
         </dl>
         <div class="swatches" aria-label="颜色">
           <span><i style="background:#0a0b09"></i>#0A0B09</span>
@@ -69,6 +88,7 @@
           <a href="icon-1024.png" download="lmdj-icon-1024.png">下载 1024</a>
           <a href="apple-touch-icon.png" download="apple-touch-icon.png">下载 180</a>
           <a href="mark.svg" download="lmdj-mark.svg">下载矢量</a>
+          <a href="favicon.ico" download="favicon.ico">下载标签页</a>
         </p>
       </section>
     </main>
