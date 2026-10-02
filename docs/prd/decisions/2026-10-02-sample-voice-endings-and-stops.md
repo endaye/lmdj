@@ -16,12 +16,12 @@
   3. **Release 从 attack 当时的电平开始（落实第 5 条）。**
      - 在长于 2 ms 的用户 attack 进行中开始的 release，从 attack 当时的电平线性淡出，release 长度不变，不会在松开后继续变响。
      - 起始电平为 0 时 voice 立即结束，不让无声尾音占用声部；这发生在按下与松开落在同一个音频回调时。
-     - 不超过 2 ms 的 attack 按第 5 条等同 declick，release 开始后 declick 仍会走完，最多 2 ms 的上升。
+     - 不超过 2 ms 的 attack 按第 3 条参数表的"实际长度取 max(用户值, 2 ms)"等同 declick，release 开始后 declick 仍会走完，最多 2 ms 的上升。
   4. **one_shot 的 release 解析为 0（落实第 5 条）。** 第 5 条已规定 one_shot 忽略 release，所以只设置了 release 的 one_shot 仍是中性的，Cardputer 不会因此拒绝它。
 - 原因：
   - 结尾 declick 的作用是防止阶跃。阶跃发生在 voice 的最终输出上，所以它对带滤波 voice 的输出也必须成立。
   - Release 表示演奏者松手，停止表示立即静音。一次停止若让尾音再响 4 秒，就和"停止"的含义相冲突。
 - 影响：
-  - 中性 Pad 在所有停止路径上的输出与此前逐位相同。
+  - 本决策的规则不改变中性 Pad 的输出：它们只作用于内核 voice，或者对中性 voice 而言本来就是 declick。
   - 内核 voice 的行为见 Portal `/core/modules/audio-runtime`。
   - 不改 Contract、Module 版本或 Product Build。
