@@ -217,13 +217,14 @@ test("metronome never enters the Perform capture; the witness sample proves the 
   const silentWav = parsePcm16StereoWav(await exportPerformanceWav(page));
   expect(silentWav.frames).toBeGreaterThan(0);
   // Far side: digital silence on both channels for every frame — the click
-  // routed straight to the destination never reached the tap.
-  for (const sample of silentWav.left) {
-    expect(Math.abs(sample)).toBeLessThanOrEqual(2);
-  }
-  for (const sample of silentWav.right) {
-    expect(Math.abs(sample)).toBeLessThanOrEqual(2);
-  }
+  // routed straight to the destination never reached the tap. The peak over
+  // every frame asserts the same fact as per-sample expects without millions
+  // of matcher invocations (a per-sample loop starved the worker for tens of
+  // minutes on longer recordings).
+  let peak = 0;
+  for (const sample of silentWav.left) peak = Math.max(peak, Math.abs(sample));
+  for (const sample of silentWav.right) peak = Math.max(peak, Math.abs(sample));
+  expect(peak).toBeLessThanOrEqual(2);
 
   await page.getByRole("button", {name: "Discard Performance"}).click();
   await expect(page.getByRole("status", {name: "WAV recording status"}))
