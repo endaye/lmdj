@@ -1,7 +1,9 @@
 import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import {useState} from "react";
 import {expect, test, vi} from "vitest";
-import {AuthoringHistoryControls} from "../src/components/authoring_history";
+import {useAuthoringHistory} from "../src/components/authoring_history";
+import {PhysicalControls} from "../src/components/physical_controls";
 import type {AuthoringHistoryRuntimeSession, AuthoringHistoryStatus} from "@lmdj/web-runtime-platform/runtime_types";
 import type {CreatorRuntimeSession} from "../src/runtime/runtime_types";
 
@@ -26,33 +28,124 @@ function fixture(initial = status) {
   return {history, props};
 }
 
+const UNDO_NAME = "Undo — SHIFT + ←";
+const REDO_NAME = "Redo — SHIFT + →";
+const SHIFT_NAME = "SHIFT — engage the Undo/Redo layer";
+
+// The rail chord exactly as app.tsx wires it: SHIFT toggles, ← / → consume it.
+function Harness(props: Parameters<typeof useAuthoringHistory>[0]) {
+  const history = useAuthoringHistory(props);
+  const [shifted, setShifted] = useState(false);
+  return (
+    <>
+      <PhysicalControls
+        activeMode="sample"
+        activeBank={0}
+        onSelectMode={() => setShifted(false)}
+        onSelectBank={() => setShifted(false)}
+        history={{
+          shifted,
+          onToggleShift: () => setShifted((value) => !value),
+          undoAvailable: history.undoAvailable,
+          redoAvailable: history.redoAvailable,
+          onUndo: () => { setShifted(false); history.undo(); },
+          onRedo: () => { setShifted(false); history.redo(); },
+          undoTitle: history.undoTitle,
+          redoTitle: history.redoTitle,
+        }}
+      />
+      <div role="status">{history.statusText}</div>
+    </>
+  );
+}
+
+const undoKey = () => screen.getByRole("button", {name: UNDO_NAME});
+const redoKey = () => screen.getByRole("button", {name: REDO_NAME});
+const shiftKey = () => screen.getByRole("button", {name: SHIFT_NAME});
+const lit = (key: HTMLElement) => key.classList.contains("is-lit");
+
+async function pressUndo() {
+  await userEvent.click(shiftKey());
+  await userEvent.click(undoKey());
+}
+async function pressRedo() {
+  await userEvent.click(shiftKey());
+  await userEvent.click(redoKey());
+}
+
+test("the lamp carries availability and the chord needs SHIFT first", async () => {
+  const {props, history} = fixture();
+  render(<Harness {...props} />);
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
+  // The lamp says undo is possible; the key stays inert until SHIFT engages,
+  // so a bare tap on the direction row never rewrites history.
+  expect(undoKey()).toHaveProperty("disabled", true);
+  await userEvent.click(undoKey());
+  expect(history.undoAuthoring).not.toHaveBeenCalled();
+  expect(shiftKey().getAttribute("aria-pressed")).toBe("false");
+  await pressUndo();
+  await waitFor(() => expect(history.undoAuthoring).toHaveBeenCalledTimes(1));
+  // One chord, one action: SHIFT falls back off after the direction key.
+  expect(shiftKey().getAttribute("aria-pressed")).toBe("false");
+  await waitFor(() => expect(lit(redoKey())).toBe(true));
+});
+
 test("one action undoes and redoes through the same session across modes", async () => {
   const {props, history} = fixture();
-  const view = render(<AuthoringHistoryControls {...props} />);
-  await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
-  await userEvent.click(screen.getByRole("button", {name: "Undo"}));
-  await waitFor(() => expect(screen.getByRole("button", {name: "Redo"})).toHaveProperty("disabled", false));
+  const view = render(<Harness {...props} />);
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
+  await pressUndo();
+  await waitFor(() => expect(lit(redoKey())).toBe(true));
   expect(history.undoAuthoring).toHaveBeenCalledWith({sessionId, expectedRevision: 1, commandId: expect.any(String)});
   expect(props.onChanged).toHaveBeenCalledWith(mutation);
-  expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", true);
-  view.rerender(<AuthoringHistoryControls {...props} revision={2} refreshKey="sequence" />);
-  await waitFor(() => expect(screen.getByRole("button", {name: "Redo"})).toHaveProperty("disabled", false));
-  await userEvent.click(screen.getByRole("button", {name: "Redo"}));
-  await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
+  expect(lit(undoKey())).toBe(false);
+  view.rerender(<Harness {...props} revision={2} refreshKey="sequence" />);
+  await waitFor(() => expect(lit(redoKey())).toBe(true));
+  await pressRedo();
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
   expect(history.redoAuthoring).toHaveBeenCalledWith({sessionId, expectedRevision: 2, commandId: expect.any(String)});
+});
+
+test("Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z drive the same history without the rail", async () => {
+  const {props, history} = fixture();
+  render(<Harness {...props} />);
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
+  fireEvent.keyDown(window, {code: "KeyZ", key: "z", ctrlKey: true});
+  await waitFor(() => expect(history.undoAuthoring).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(lit(redoKey())).toBe(true));
+  fireEvent.keyDown(window, {code: "KeyZ", key: "z", metaKey: true, shiftKey: true});
+  await waitFor(() => expect(history.redoAuthoring).toHaveBeenCalledTimes(1));
+});
+
+test("the keyboard shortcut leaves native text undo inside editable fields", async () => {
+  const {props, history} = fixture();
+  render(<><Harness {...props} /><input aria-label="Project note" />
+    <div aria-label="Rich note" ref={(el) => el?.setAttribute("contenteditable", "")} />
+    <div aria-label="Plain note" contentEditable="plaintext-only" suppressContentEditableWarning /></>);
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
+  for (const name of ["Project note", "Rich note", "Plain note"]) {
+    fireEvent.keyDown(screen.getByLabelText(name), {code: "KeyZ", key: "z", ctrlKey: true});
+  }
+  expect(history.undoAuthoring).not.toHaveBeenCalled();
+  // A widget that already handled the chord keeps precedence over history.
+  const handled = new KeyboardEvent("keydown",
+    {code: "KeyZ", key: "z", ctrlKey: true, bubbles: true, cancelable: true});
+  handled.preventDefault();
+  fireEvent(shiftKey(), handled);
+  expect(history.undoAuthoring).not.toHaveBeenCalled();
 });
 
 test("a refused operation retains its command for an explicit retry and never retries itself", async () => {
   const {props, history} = fixture();
   vi.mocked(history.undoAuthoring).mockRejectedValueOnce(new Error("Writer busy"));
-  render(<AuthoringHistoryControls {...props} />);
-  await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
-  await userEvent.click(screen.getByRole("button", {name: "Undo"}));
+  render(<Harness {...props} />);
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
+  await pressUndo();
   await screen.findByText("Writer busy");
-  await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
   expect(history.undoAuthoring).toHaveBeenCalledTimes(1);
   expect(props.onChanged).not.toHaveBeenCalled();
-  await userEvent.click(screen.getByRole("button", {name: "Undo"}));
+  await pressUndo();
   await waitFor(() => expect(history.undoAuthoring).toHaveBeenCalledTimes(2));
   expect(vi.mocked(history.undoAuthoring).mock.calls[0]).toEqual(vi.mocked(history.undoAuthoring).mock.calls[1]);
 });
@@ -61,10 +154,11 @@ test("recording and recovery show the Core reason without submitting history com
   for (const [reason, message] of [["sequence_session_active", "Finish Pattern recording to undo or redo."],
       ["sequence_recovery_pending", "Resolve the pending recording recovery first."]]) {
     const {props, history} = fixture({...status, disabledReason: reason!, canUndo: false});
-    const view = render(<AuthoringHistoryControls {...props} />);
+    const view = render(<Harness {...props} />);
     await screen.findByText(message!);
-    expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", true);
-    fireEvent.click(screen.getByRole("button", {name: "Undo"}));
+    expect(lit(undoKey())).toBe(false);
+    fireEvent.click(shiftKey());
+    fireEvent.click(undoKey());
     expect(history.undoAuthoring).not.toHaveBeenCalled();
     view.unmount();
   }
@@ -74,15 +168,17 @@ test("a pending request admits no second action and waits for the refreshed proj
   const {props, history} = fixture();
   let release!: () => void;
   props.onChanged.mockImplementation(() => new Promise<void>((resolve) => {release = resolve;}));
-  render(<AuthoringHistoryControls {...props} />);
-  await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
-  fireEvent.click(screen.getByRole("button", {name: "Undo"}));
-  fireEvent.click(screen.getByRole("button", {name: "Undo"}));
+  render(<Harness {...props} />);
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
+  fireEvent.click(shiftKey());
+  fireEvent.click(undoKey());
+  fireEvent.click(shiftKey());
+  fireEvent.click(undoKey());
   await waitFor(() => expect(props.onChanged).toHaveBeenCalledTimes(1));
   expect(history.undoAuthoring).toHaveBeenCalledTimes(1);
-  expect(screen.getByRole("button", {name: "Redo"})).toHaveProperty("disabled", true);
+  expect(lit(redoKey())).toBe(false);
   await act(async () => release());
-  await waitFor(() => expect(screen.getByRole("button", {name: "Redo"})).toHaveProperty("disabled", false));
+  await waitFor(() => expect(lit(redoKey())).toBe(true));
   expect(props.onBusy.mock.calls).toEqual([[true], [false]]);
 });
 
@@ -90,15 +186,15 @@ test("reopening shows an empty history and a committed sound publication failure
   const {props, history} = fixture();
   vi.mocked(history.undoAuthoring).mockResolvedValue({...mutation, runtimePublished: false,
     runtimeRevision: 1, snapshotError: {code: "COOK_FAILED", message: "Audio unavailable", details: {}}});
-  const view = render(<AuthoringHistoryControls {...props} />);
-  await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
-  await userEvent.click(screen.getByRole("button", {name: "Undo"}));
+  const view = render(<Harness {...props} />);
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
+  await pressUndo();
   await screen.findByText("Change saved; sound update failed: Audio unavailable");
   const reopened = fixture({...status, sessionId: "20000000-0000-4000-8000-000000000002", undoCount: 0, undoLabel: "", canUndo: false});
-  view.rerender(<AuthoringHistoryControls {...reopened.props} />);
+  view.rerender(<Harness {...reopened.props} />);
   await screen.findByText("No changes in this session");
-  expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", true);
-  expect(screen.getByRole("button", {name: "Redo"})).toHaveProperty("disabled", true);
+  expect(lit(undoKey())).toBe(false);
+  expect(lit(redoKey())).toBe(false);
 });
 
 test("lost acknowledgement replays the original command after the source stack becomes empty", async () => {
@@ -109,14 +205,14 @@ test("lost acknowledgement replays the original command after the source stack b
       canUndo: false, canRedo: true});
     throw new Error("Response lost");
   });
-  const view = render(<AuthoringHistoryControls {...props} />);
-  await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
-  await userEvent.click(screen.getByRole("button", {name: "Undo"}));
+  const view = render(<Harness {...props} />);
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
+  await pressUndo();
   await screen.findByText("Response lost");
-  await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
-  view.rerender(<AuthoringHistoryControls {...props} revision={2} refreshKey="sequence" />);
-  await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
-  await userEvent.click(screen.getByRole("button", {name: "Undo"}));
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
+  view.rerender(<Harness {...props} revision={2} refreshKey="sequence" />);
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
+  await pressUndo();
   await waitFor(() => expect(props.onChanged).toHaveBeenCalledWith(mutation));
   expect(vi.mocked(history.undoAuthoring).mock.calls[1]).toEqual(vi.mocked(history.undoAuthoring).mock.calls[0]);
   expect(vi.mocked(history.undoAuthoring).mock.calls[1]![0].expectedRevision).toBe(1);
@@ -128,13 +224,13 @@ test("a definite revision refusal allows a new Undo at the observed revision", a
     vi.mocked(history.inspectAuthoringHistory).mockResolvedValue({...status, projectRevision: 2});
     throw Object.assign(new Error("Project changed before Undo"), {code: "REVISION_CONFLICT"});
   });
-  render(<AuthoringHistoryControls {...props} />);
-  await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
-  await userEvent.click(screen.getByRole("button", {name: "Undo"}));
+  render(<Harness {...props} />);
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
+  await pressUndo();
   await screen.findByText("Project changed before Undo");
-  await waitFor(() => expect(screen.getByRole("button", {name: "Undo"})).toHaveProperty("disabled", false));
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
   expect(props.onChanged).not.toHaveBeenCalled();
-  await userEvent.click(screen.getByRole("button", {name: "Undo"}));
+  await pressUndo();
   await waitFor(() => expect(history.undoAuthoring).toHaveBeenCalledTimes(2));
   const [first, second] = vi.mocked(history.undoAuthoring).mock.calls;
   expect(second![0].expectedRevision).toBe(2);
