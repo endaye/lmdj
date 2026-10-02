@@ -1,5 +1,6 @@
 import {cleanup, configure} from "@testing-library/react";
-import {afterEach} from "vitest";
+import {IDBFactory} from "fake-indexeddb";
+import {afterEach, beforeEach} from "vitest";
 
 // Testing Library defaults `findBy*` to a 1000 ms budget. That is generous on
 // an idle laptop — this suite's slowest file finishes in about 2.3 s total —
@@ -17,12 +18,9 @@ configure({asyncUtilTimeout: 5_000});
 
 afterEach(() => cleanup());
 
-// The Creator remembers the last opened Project in localStorage. Clearing it
-// keeps one test's open from turning the next test's boot into a reopen.
-afterEach(() => {
-  try {
-    globalThis.localStorage?.clear();
-  } catch {
-    // An environment without usable storage has nothing to leak.
-  }
+// The Creator remembers the last opened Project in IndexedDB, which jsdom
+// lacks. A fresh in-memory factory per test keeps one test's open from turning
+// the next test's boot into a reopen.
+beforeEach(() => {
+  globalThis.indexedDB = new IDBFactory();
 });

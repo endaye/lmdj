@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-30
     occurrence: https://github.com/endaye/lmdj/issues/1696
     observed_by: claude-opus-5-5
+  - date: 2026-10-01
+    occurrence: https://github.com/endaye/lmdj/issues/1730
+    observed_by: claude-opus-5-5
 exit: none
 ---
 
@@ -54,3 +57,11 @@ real code was in the diagnostics region of the retained trace.
 No mechanism exits this entry. The harness cannot choose the machine's output
 device, and substituting a fake output would stop the proofs exercising the
 real output path.
+
+It recurred on 2026-10-01: three `creator` journeys failed within 14:10–14:13
++0800 while coreaudiod logged 17 cold Bluetooth starts, and an immediate
+re-run on the built-in speakers passed with no Bluetooth start logged. The
+second recurrence escalates to
+[#1730](https://github.com/endaye/lmdj/issues/1730), which asks the local
+audio lanes to record and flag the default output device. The entry stays open
+until that mechanism lands.

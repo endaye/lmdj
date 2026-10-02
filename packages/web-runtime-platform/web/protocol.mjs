@@ -33,6 +33,7 @@ export const HOST_OPERATIONS = Object.freeze([
   "performance.inspect",
   "performance.record.begin",
   "performance.record.event",
+  "performance.fx.gesture",
   "performance.record.launch-request",
   "performance.record.flush",
   "performance.record.stop",
@@ -136,6 +137,7 @@ const SHORT_OPERATIONS = new Set([
   "sequence.record.status",
   "sequence.recovery.list",
   "performance.record.event",
+  "performance.fx.gesture",
   "performance.record.launch-request",
   "performance.record.status",
   "performance.recovery.list",
@@ -211,15 +213,59 @@ function validSlot(value) {
   );
 }
 
+const PLAYBACK_BASE_KEYS = Object.freeze([
+  "trim_start_frame",
+  "trim_end_frame",
+  "trigger_mode",
+  "gain_millidb",
+  "muted",
+]);
+// lmdj.project.v5 5.1.0: optional on the wire; an omitted key is its default.
+const PLAYBACK_PARITY_KEYS = Object.freeze([
+  "reverse",
+  "pitch_cents",
+  "pan",
+  "loop_mode",
+  "loop_start_frame",
+  "loop_crossfade_frames",
+]);
+
+function hasPlaybackKeys(value) {
+  return (
+    isPlainObject(value) &&
+    PLAYBACK_BASE_KEYS.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every(
+      (key) =>
+        PLAYBACK_BASE_KEYS.includes(key) || PLAYBACK_PARITY_KEYS.includes(key),
+    )
+  );
+}
+
+function validPlaybackParity(value) {
+  return (
+    (value.reverse === undefined || typeof value.reverse === "boolean") &&
+    (value.pitch_cents === undefined ||
+      (Number.isSafeInteger(value.pitch_cents) &&
+        value.pitch_cents >= -2_400 &&
+        value.pitch_cents <= 2_400)) &&
+    (value.pan === undefined ||
+      (Number.isSafeInteger(value.pan) &&
+        value.pan >= -100 &&
+        value.pan <= 100)) &&
+    (value.loop_mode === undefined ||
+      ["forward", "ping_pong"].includes(value.loop_mode)) &&
+    (value.loop_start_frame === undefined ||
+      value.loop_start_frame === null ||
+      isUnsignedInteger(value.loop_start_frame)) &&
+    (value.loop_crossfade_frames === undefined ||
+      isUnsignedInteger(value.loop_crossfade_frames))
+  );
+}
+
 function validPlayback(value) {
   return (
-    hasExactKeys(value, [
-      "trim_start_frame",
-      "trim_end_frame",
-      "trigger_mode",
-      "gain_millidb",
-      "muted",
-    ]) &&
+    hasPlaybackKeys(value) &&
+    validPlaybackParity(value) &&
     isUnsignedInteger(value.trim_start_frame) &&
     (value.trim_end_frame === null ||
       (isUnsignedInteger(value.trim_end_frame) &&
@@ -460,6 +506,29 @@ function validPerformanceGesture(value) {
   }
 }
 
+// Session-free live FX gesture (#1674): the FX subset of
+// validPerformanceGesture without the journal's gesture identity.
+function validPerformanceFxGesture(value) {
+  if (!isPlainObject(value) || typeof value.kind !== "string") {
+    return false;
+  }
+  switch (value.kind) {
+    case "fx_engage":
+    case "fx_move":
+      return hasExactKeys(value, ["kind", "fx", "value"]) &&
+        ["filter", "delay", "reverb", "stutter", "gate", "reverse", "crush", "cutter"].includes(value.fx) &&
+        isUnsignedInteger(value.value, 1000);
+    case "fx_release":
+      return hasExactKeys(value, ["kind", "fx"]) &&
+        ["filter", "delay", "reverb", "stutter", "gate", "reverse", "crush", "cutter"].includes(value.fx);
+    case "hold_on":
+    case "hold_off":
+      return hasExactKeys(value, ["kind"]);
+    default:
+      return false;
+  }
+}
+
 function requirePerformanceOperationPayload(
   operation,
   payload,
@@ -502,6 +571,10 @@ function requirePerformanceOperationPayload(
         (!Object.hasOwn(payload.event, "gesture_id") ||
           (payload.event.gesture_id !== payload.event_id &&
            payload.event.gesture_id !== transportRequestId));
+      break;
+    case "performance.fx.gesture":
+      valid = hasExactKeys(payload, ["event"]) &&
+        validPerformanceFxGesture(payload.event);
       break;
     case "performance.record.launch-request":
       valid = hasExactKeys(payload, ["session_id", "request_id", "pattern_slot"]) &&
@@ -1043,6 +1116,9 @@ function validPerformanceResult(operation, value) {
         validUuid(value.event_id) && isUnsignedInteger(value.accepted_tick) &&
         isUnsignedInteger(value.input_sequence) && typeof value.coalesced === "boolean" &&
         typeof value.replayed === "boolean" && value.project_revision === null;
+    case "performance.fx.gesture":
+      return hasExactKeys(value, ["applied", "project_revision"]) &&
+        value.applied === true && value.project_revision === null;
     case "performance.record.launch-request":
       return hasExactKeys(value, ["request_id", "state", "target_tick", "project_revision"]) &&
         validUuid(value.request_id) && value.state === "pending" &&

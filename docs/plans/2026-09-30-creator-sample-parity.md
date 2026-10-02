@@ -205,14 +205,21 @@ Canonical policy: `docs/governance/version-management.md`. All targets below are
 
 Each allocating PR writes exactly one column of the table below. Each Build is proved unoccupied separately, at that PR's own tip.
 
-| Identity | Baseline (`2.0.70.0`) | PR 4 (#1666 settle + 5.2.0 cut) | PR 7 (#1667 settle) | Reason |
+**Revised 2026-10-01.** PR 4 is split. Its Module column landed as PR 4a at Product Build `2.0.71.0`, and the `5.2.0` cut follows as PR 4b after #1720. Where 4a differs from the prediction, the owner chose MAJOR:
+
+- project-io `6.0.0`, not `5.1.0`: the same persistence break #1699 judged MAJOR;
+- project-cooker `2.0.0`, not `1.3.0`: `ResolvedPlayback` lost aggregate initialisation.
+
+The PR 7 column shifts with them, and is re-derived from live `origin/main` when written.
+
+| Identity | Baseline (`2.0.70.0`) | PR 4 (4a: #1666 settle, `2.0.71.0`; 4b: `5.2.0` cut) | PR 7 (#1667 settle) | Reason |
 | --- | --- | --- | --- | --- |
-| Product Build | `2.0.70.0` | next free `2.0.*` BUILD | next free `2.0.*` BUILD | Contract and Module identity changes |
-| `lmdj.project.v5` | `5.1.0` | `5.2.0` | unchanged | Backward-compatible optional fields, Contract MINOR (§7; precedent `lmdj.project.v4` `4.1.0`) |
+| Product Build | `2.0.70.0` | 4a: `2.0.71.0`; 4b: `2.0.75.0` | next free `2.0.*` BUILD | Contract and Module identity changes |
+| `lmdj.project.v5` | `5.1.0` | 4b: `5.2.0` | unchanged | Backward-compatible optional fields, Contract MINOR (§7; precedent `lmdj.project.v4` `4.1.0`) |
 | `lmdj.runtime-content.v1` | `1.0.0` | unchanged | unchanged | Encoder refuses non-neutral DSP |
 | `authoring-domain` | `4.2.0` | `4.3.0` | `4.4.0` | New playback fields and refusals |
-| `project-io` | `5.0.0` | `5.1.0` | `5.2.0` | Optional-key read/write |
-| `project-cooker` | `1.2.1` | `1.3.0` | `1.4.0` | `ResolvedVoiceDsp` resolution |
+| `project-io` | `5.0.0` | `6.0.0` (MAJOR) | `6.1.0` | Optional-key read/write |
+| `project-cooker` | `1.2.1` | `2.0.0` (MAJOR) | `2.1.0` | `ResolvedVoiceDsp` resolution |
 | `audio-runtime` | `5.0.1` | `5.1.0` | `5.2.0` | Shared kernel and new stages |
 | `application-facade` | `6.3.0` | `6.4.0` | `6.5.0` | Typed surface accepts new fields |
 | `web-runtime-platform` | `5.4.0` | `5.5.0` | `5.6.0` | Transport of new fields |
@@ -237,7 +244,8 @@ Each allocating PR writes exactly one column of the table below. Each Build is p
 | 1 | `feat/project-v5-playback-parity-cut` | 1 | — |
 | 2 | `feat/sample-playback-parity-core` | 2–8 | relates #1666 |
 | 3 | `feat/sample-playback-parity-creator` | 9–11 | fixes #1666 |
-| 4 | `feat/project-v5-tone-parity-cut` | 12 | — |
+| 4a | `feat/settle-module-versions-2-0-71` | 12 (settle) | — |
+| 4b | `feat/project-v5-tone-parity-cut` | 12 (5.2.0 cut, after #1720) | — |
 | 5 | `feat/sample-tone-parity-core` | 13–16 | relates #1667 |
 | 6 | `feat/sample-tone-parity-creator` | 17–19 | fixes #1667 |
 | 7 | `feat/sample-tone-parity-settle` | 20 | — |
@@ -410,11 +418,20 @@ Branch prefixes are limited to `feat/`, `fix/` and `docs/` (`docs/governance/git
 
 ### Task 12: Settle #1666 and cut `lmdj.project.v5` 5.2.0
 
-**Files:** as Task 1, plus the #1666 module manifests and pins listed in Version Management, `tests/fixtures/contracts/project-v5-tone-parity-{valid,invalid}.json`
+**Revised 2026-10-01 (owner order: settle, then #1720, then #1667).** Task 12 is split:
 
-- [ ] Settle the #1666 Module SemVer.
-- [ ] Add the #1667 optional keys to the schema: `attack_ms`, `release_ms`, `tone`, `eq` with `kind`, `freq_hz`, `gain_millidb` and `q_milli`.
-- [ ] Allocate one Product Build and freeze its snapshot as a separate commit.
+- The settle lands alone as PR 4a, `feat/settle-module-versions-2-0-71`, Product Build `2.0.71.0`. It settles every Module identity owed since `2.0.69.0`: #1666's (#1717, #1735) and the concurrent Creator workflow PRs' (#1707, #1708, #1711, #1714, #1716, #1727, #1734). The owner chose MAJOR for project-io (`6.0.0`, the #1699 persistence precedent) and for project-cooker (`2.0.0`, `ResolvedPlayback` lost aggregate initialisation).
+- The `5.2.0` cut moves to PR 4b, opened only after #1720. #1667's Pad fields grow wasm32 `ProjectState` again, so its Web stack budget must be fixed or re-measured first (pitfall `web-project-io-stack-scales-with-project-state`).
+
+**Files (4b):** as Task 1, with `tests/fixtures/contracts/project-v5-tone-parity-valid.json`, plus the Cardputer profile (`products/lmdj/src/cardputer_assembly.cpp`, `apps/cardputer-host/CMakeLists.txt`), which tracks the Build and the Assembly digest since 4a. As in Task 1, the invalid cases are bound mutations of the valid fixture in `schema_contract_test.py`, not a second fixture file.
+
+- [x] Settle the #1666 Module SemVer (PR 4a, `2.0.71.0`).
+- [x] Add the #1667 optional keys to the schema: `attack_ms`, `release_ms`, `tone`, `eq` with `kind`, `freq_hz`, `gain_millidb` and `q_milli` (PR 4b).
+  - An absent EQ band is bypassed, and a present band carries every field.
+  - A `cut` band keeps its `gain_millidb`, which the DSP ignores, so a band dragged from cut back to shelf keeps its gain.
+  - `eq: {}` and other explicit defaults are accepted, as in `5.1.0`. Writers omit them.
+- [x] Allocate Product Build `2.0.75.0` and freeze its snapshot as a separate commit (PR 4b).
+  - `2.0.72.0` to `2.0.74.0` were skipped: open #1741 (P1 integration) carries snapshots for `2.0.72.0` and `2.0.73.0` and allocates `2.0.74.0`. By owner decision (2026-10-02 +0800), the first PR to merge keeps its number and the later one re-cuts, as with #1697 and #1699.
 
 ### Tasks 13–16: #1667 Core (envelope, tone, EQ)
 

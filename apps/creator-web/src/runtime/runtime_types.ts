@@ -55,12 +55,22 @@ export type SampleTriggerMode =
   | "loop_gate"
   | "loop_toggle";
 
+export type SampleLoopMode = "forward" | "ping_pong";
+
+// lmdj.project.v5 5.1.0 adds the six parity fields after `muted`. The session
+// always supplies every field, defaulting the ones a Project leaves unset.
 export interface PadPlayback {
   trimStartFrame: number;
   trimEndFrame: number | null;
   triggerMode: SampleTriggerMode;
   gainMillidb: number;
   muted: boolean;
+  reverse: boolean;
+  pitchCents: number;
+  pan: number;
+  loopMode: SampleLoopMode;
+  loopStartFrame: number | null;
+  loopCrossfadeFrames: number;
 }
 
 export interface SampleMetadata {

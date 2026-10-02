@@ -1,6 +1,6 @@
 import {act, render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import {afterEach, expect, test, vi} from "vitest";
+import {expect, test} from "vitest";
 
 import {App} from "../src/app";
 import type {
@@ -8,6 +8,7 @@ import type {
   LocalProjectSummary,
   RuntimeHostState,
 } from "../src/runtime/runtime_types";
+import {readLastProjectId, writeLastProjectId} from "../src/state/last_project";
 
 const LISTED: LocalProjectSummary = {
   projectId: "11111111-1111-4111-8111-111111111111",
@@ -24,20 +25,6 @@ const OTHER: LocalProjectSummary = {
   projectId: "66666666-6666-4666-8666-666666666666",
   patternId: "77777777-7777-4777-8777-777777777777",
 };
-const LAST_PROJECT_KEY = "lmdj.creator.last-project.v1";
-
-function memoryStorage(initial: Record<string, string> = {}) {
-  const values = new Map(Object.entries(initial));
-  return {
-    values,
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => { values.set(key, value); },
-    removeItem: (key: string) => { values.delete(key); },
-    clear: () => { values.clear(); },
-  };
-}
-
-afterEach(() => { vi.unstubAllGlobals(); });
 
 // An empty Project truth for whichever identity the session last opened or
 // created, so opening and creating run through the real journeys.
@@ -163,7 +150,6 @@ test("a create whose read fails keeps the error and lists the stored Project", a
 });
 
 test("boot on a device with no Project creates one and lands on Sample", async () => {
-  vi.stubGlobal("localStorage", memoryStorage());
   const fixture = projectFixture([]);
   render(<App runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(sampleKeyIsCurrent()).toBe(true));
@@ -172,7 +158,7 @@ test("boot on a device with no Project creates one and lands on Sample", async (
 });
 
 test("boot reopens the remembered Project", async () => {
-  vi.stubGlobal("localStorage", memoryStorage({[LAST_PROJECT_KEY]: OTHER.projectId}));
+  await writeLastProjectId(OTHER.projectId);
   const fixture = projectFixture([LISTED, OTHER]);
   render(<App runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain(`openProject:${OTHER.projectId}`));
@@ -180,7 +166,6 @@ test("boot reopens the remembered Project", async () => {
 });
 
 test("boot with stored Projects but none remembered stays in the library", async () => {
-  vi.stubGlobal("localStorage", memoryStorage());
   const fixture = projectFixture([LISTED]);
   render(<App runtimeFactory={() => fixture.session} />);
   await screen.findByRole("button", {name: "Open Project 11111111"});
@@ -189,16 +174,14 @@ test("boot with stored Projects but none remembered stays in the library", async
 });
 
 test("an opened Project is remembered for the next boot", async () => {
-  const storage = memoryStorage();
-  vi.stubGlobal("localStorage", storage);
   const fixture = projectFixture([LISTED]);
   render(<App runtimeFactory={() => fixture.session} />);
   await userEvent.click(await screen.findByRole("button", {name: "Open Project 11111111"}));
-  await waitFor(() => expect(storage.values.get(LAST_PROJECT_KEY)).toBe(LISTED.projectId));
+  await waitFor(async () => expect(await readLastProjectId()).toBe(LISTED.projectId));
 });
 
 test("boot shows a busy remembered Project as retryable and creates nothing", async () => {
-  vi.stubGlobal("localStorage", memoryStorage({[LAST_PROJECT_KEY]: LISTED.projectId}));
+  await writeLastProjectId(LISTED.projectId);
   const fixture = projectFixture([LISTED], {
     openProject: async () => { throw refusal("PROJECT_BUSY"); },
   });
@@ -209,7 +192,7 @@ test("boot shows a busy remembered Project as retryable and creates nothing", as
 });
 
 test("a failed boot reopen reports the error instead of creating a Project", async () => {
-  vi.stubGlobal("localStorage", memoryStorage({[LAST_PROJECT_KEY]: LISTED.projectId}));
+  await writeLastProjectId(LISTED.projectId);
   const fixture = projectFixture([LISTED], {
     openProject: async () => { throw refusal("LOCAL_PROJECT_UNREADABLE"); },
   });
@@ -219,8 +202,6 @@ test("a failed boot reopen reports the error instead of creating a Project", asy
 });
 
 test("a failed first-run create reports the error and remembers no Project", async () => {
-  const storage = memoryStorage();
-  vi.stubGlobal("localStorage", storage);
   let creates = 0;
   const fixture = projectFixture([], {
     createProject: async () => { creates += 1; throw refusal("IO_ERROR"); },
@@ -229,11 +210,10 @@ test("a failed first-run create reports the error and remembers no Project", asy
   await screen.findByRole("alert");
   expect(creates).toBe(1);
   expect(sampleKeyIsCurrent()).toBe(false);
-  expect(storage.values.has(LAST_PROJECT_KEY)).toBe(false);
+  expect(await readLastProjectId()).toBeNull();
 });
 
 test("a first-run create whose read fails keeps the error and lists the stored Project", async () => {
-  vi.stubGlobal("localStorage", memoryStorage());
   const fixture = projectFixture([], {
     inspectProject: async () => { throw refusal("IO_ERROR"); },
   });
@@ -246,11 +226,16 @@ test("a first-run create whose read fails keeps the error and lists the stored P
 });
 
 test("a Runtime replaced during boot discards the retired session's late reopen", async () => {
-  vi.stubGlobal("localStorage", memoryStorage({[LAST_PROJECT_KEY]: LISTED.projectId}));
+  await writeLastProjectId(LISTED.projectId);
   let release: (() => void) | undefined;
   const pending = new Promise<void>((resolve) => { release = resolve; });
+  let retiredReopenStarted = false;
   const retired = projectFixture([LISTED], {
-    openProject: async () => { await pending; return {}; },
+    openProject: async () => {
+      retiredReopenStarted = true;
+      await pending;
+      return {};
+    },
   });
   // The retired session reports a later revision, so its reopen landing
   // would be visible in the overview.
@@ -274,6 +259,8 @@ test("a Runtime replaced during boot discards the retired session's late reopen"
   let creations = 0;
   render(<App runtimeFactory={() => sessions[creations++]!.session} />);
   await waitFor(() => expect(creations).toBe(1));
+  // Replace the Runtime only once the retired session's reopen is in flight.
+  await waitFor(() => expect(retiredReopenStarted).toBe(true));
   retired.emit({state: "restart-required", errorCode: "HOST_RESTART_REQUIRED", errorDetails: {}});
   await waitFor(() => expect(overviewRevision()).toBe("0"));
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
@@ -296,7 +283,7 @@ function overviewRevision(): string | null {
 // Duplicate (replaces Save As, #1684). Boot reopens the remembered Project
 // and lands on Sample, so each test first returns to the Project surface.
 async function bootIntoListedProject(fixture: ReturnType<typeof projectFixture>) {
-  vi.stubGlobal("localStorage", memoryStorage({[LAST_PROJECT_KEY]: LISTED.projectId}));
+  await writeLastProjectId(LISTED.projectId);
   render(<App runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(sampleKeyIsCurrent()).toBe(true));
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
@@ -324,11 +311,10 @@ test("Duplicate opens a copy under a new identity and lists both Projects", asyn
 test("an opened duplicate is remembered for the next boot", async () => {
   const fixture = projectFixture([LISTED]);
   await bootIntoListedProject(fixture);
-  const storage = globalThis.localStorage as unknown as ReturnType<typeof memoryStorage>;
   await userEvent.click(screen.getByRole("button", {name: "Duplicate Project"}));
   await waitFor(() => expect(copiedProjectId(fixture.calls)).toBeDefined());
   const copyId = copiedProjectId(fixture.calls)!;
-  await waitFor(() => expect(storage.values.get(LAST_PROJECT_KEY)).toBe(copyId));
+  await waitFor(async () => expect(await readLastProjectId()).toBe(copyId));
 });
 
 test("a busy refusal keeps the open Project and explains the refusal", async () => {
@@ -364,7 +350,7 @@ test("a stored copy with an invalid summary is reported and still listed", async
   await bootIntoListedProject(fixture);
   await userEvent.click(screen.getByRole("button", {name: "Duplicate Project"}));
   expect((await screen.findByRole("alert")).textContent)
-    .toBe("Duplicate failed (HOST_PROTOCOL_MISMATCH).");
+    .toBe("Duplicate failed: This copy of Creator is out of date. Reload the page to load the current version.");
   expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Open local"}));
   await waitFor(() =>
@@ -411,7 +397,7 @@ test("a Runtime replaced during a Duplicate never opens the retired session's co
   const replacement = projectFixture([LISTED]);
   const sessions = [retired, replacement];
   let creations = 0;
-  vi.stubGlobal("localStorage", memoryStorage({[LAST_PROJECT_KEY]: LISTED.projectId}));
+  await writeLastProjectId(LISTED.projectId);
   render(<App runtimeFactory={() => sessions[creations++]!.session} />);
   await waitFor(() => expect(sampleKeyIsCurrent()).toBe(true));
   await userEvent.click(screen.getByRole("button", {name: "Project"}));

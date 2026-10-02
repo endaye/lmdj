@@ -1,3 +1,4 @@
+import {userMessage} from "../state/error_messages";
 import type {ProjectView} from "../runtime/runtime_types";
 import type {SequenceState} from "../state/sequence_state";
 import type {PatternTransportState} from "../state/pattern_transport_state";
@@ -62,10 +63,10 @@ export function SequenceOverview({
         <p>Committed, publication pending</p>
       ) : null}
       {state.errorCode !== null ? (
-        <p>{state.errorCode}</p>
+        <p>{userMessage(state.errorCode).message}</p>
       ) : null}
       {transport?.errorCode !== null && transport?.errorCode !== undefined ? (
-        <p>{transport.errorCode}</p>
+        <p>{userMessage(transport.errorCode).message}</p>
       ) : null}
       <p className="overview-grid-caption">
         Event grid is a live projection target; this overview does not edit it.

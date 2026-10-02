@@ -156,3 +156,25 @@ Documentation impact: required — current `/hosts/creator-web/`,
 `/core/modules/web-runtime-platform/` and `/platform/web-runtime/` pages and relevant
 source diagrams change with their owning Task. Frozen historical snapshots remain
 immutable. Run `scripts/docs-site.sh check` for each affected Task.
+
+## T1 current-main conflict reconciliation
+
+Retain current main's IndexedDB crash-reopen documentation and its authoring,
+Sample playback, takeover, inactive-audio mutation and version settlement source.
+The only textual merge conflict is the Creator portal Boot paragraph: keep both
+IndexedDB persistence and first musical gesture wake. Source composition exposes
+four pre-stop fixtures that declare running diagnostics before Runtime boot;
+move that fixture setup after the real running event assertion, retaining every
+mute/reset/replace/delete stop-before-mutation assertion. Assert the existing
+stable recovering phase after synthetic blur/hidden in the packaged lifecycle
+journey; retain all three fresh voice admissions and both lifecycle cleanup legs.
+
+Declared reconciliation files are this plan, the current Creator portal page,
+`apps/creator-web/test/workspace_shell.test.tsx` and
+`tests/platform/web/creator/creator_web_lifecycle.spec.mjs`, in addition to the
+unchanged imported current-main merge inventory. Retain raw failed verification;
+run focused pre-stop cases, all Creator component tests, TypeScript, scope and
+portal checks before committing, then full Creator/Runtime proofs and independent
+review on the changed committed PR head. This imports existing main identities
+and allocates none; coordinated P1 version settlement remains T8. No real-device
+acceptance is inferred from synthetic event or fake microphone tests.

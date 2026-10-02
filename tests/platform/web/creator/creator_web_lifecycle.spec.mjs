@@ -114,6 +114,10 @@ async function installPackagedRecoveryProbe(page) {
     window.BroadcastChannel = new Proxy(NativeBroadcastChannel, {
       construct(target, argumentsList) {
         const channel = Reflect.construct(target, argumentsList, target);
+        // The Creator's tab-takeover channel (#1679) lives as long as the
+        // page, not a Runtime generation; the Session-owned channels are what
+        // this probe accounts for.
+        if (argumentsList[0] === "lmdj.creator.project-takeover.v1") return channel;
         broadcastOwners.set(channel, currentGeneration);
         generationRecord(currentGeneration).broadcastChannels.add(channel);
         return channel;
@@ -394,9 +398,8 @@ test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({pag
   await latchLoopToggle(page);
 
   await page.evaluate(() => window.dispatchEvent(new Event("blur")));
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
-    timeout: 30_000,
-  });
+  // A synthetic edge leaves the real AudioContext running. Assert its stable
+  // armed recovery state, not the transient interrupted/suspended projection.
   await recoverFromLifecycleEdge(page);
   await latchLoopToggle(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
@@ -411,9 +414,7 @@ test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({pag
     });
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
-    timeout: 30_000,
-  });
+  await recoverFromLifecycleEdge(page);
   await page.evaluate(() => {
     delete document.visibilityState;
     document.dispatchEvent(new Event("visibilitychange"));

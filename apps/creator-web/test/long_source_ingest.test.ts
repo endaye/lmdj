@@ -204,3 +204,24 @@ describe("openLongSource", () => {
   });
 });
 import {readFileSync} from "node:fs";
+
+describe("ingest failure copy (#1680)", () => {
+  // A code, a snake_case token or the tooling why/remedy format.
+  const TECHNICAL = /\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b|\b[a-z]+_[a-z_]+\b|\bwhy:|\bremedy:|\d{4,}/;
+
+  test.each([
+    ["an oversized file", () => fakeFile(new Uint8Array(), LIMITS.sourceBytes + 1),
+      "This file is too large to import. Choose a smaller file."],
+    ["an unsupported container", () => fakeFile(new TextEncoder().encode("OggSunsupported")),
+      "This type of audio file is not supported. Choose a WAV, MP3, M4A/AAC or FLAC file."],
+    ["a source longer than the limit", () => fakeFile(flacStreamInfo(LIMITS.decodedFrames + 1)),
+      "This sound is longer than Creator can import. Shorten it in your audio app, then import it again."],
+    ["too many channels", () => fakeFile(mp4Aac(6)),
+      "This file has more audio channels than Creator supports. Export it again as mono or stereo audio."],
+  ] as const)("%s reads as two plain sentences without tokens or counts", async (_name, file, copy) => {
+    const failure = await openLongSource(file(), LIMITS, {decode: vi.fn()}).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(LongSourceIngestError);
+    expect((failure as LongSourceIngestError).message).toBe(copy);
+    expect((failure as LongSourceIngestError).message).not.toMatch(TECHNICAL);
+  });
+});

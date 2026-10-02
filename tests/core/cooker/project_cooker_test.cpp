@@ -760,6 +760,47 @@ void test_cooker_resolves_parity_fields_into_48_khz_frames() {
                   3, 1, 700, -30, lmdj::cooker::ResolvedVoiceDsp::kReverse}));
 }
 
+// The public resolver needs only the source rate and length, and yields what
+// cooking the same Pad yields, so a Host preview plays the cooked voice.
+void test_resolve_pad_playback_matches_the_cooked_playback() {
+  const auto artifact = fixture_artifact("mono-44100.wav");
+  auto project = project_with_pattern(artifact);
+  auto& playback = project.banks.at(0).at(0).playback;
+  playback = {1, 7, TriggerMode::loop_gate, -600, false};
+  playback.reverse = true;
+  playback.pitch_cents = 700;
+  playback.pan = -30;
+  playback.loop_start_frame = 4;
+  playback.loop_crossfade_frames = 1;
+  const auto cooked = lmdj::cooker::cook(
+      project,
+      PatternId{kPatternId},
+      resolver_for({{artifact.sha256, fixture_bytes("mono-44100.wav")}}));
+  LMDJ_CHECK(cooked.has_value());
+  const auto& expected = cooked.value()->pads.at(0).playback;
+
+  const auto resolved = lmdj::cooker::resolve_pad_playback(playback, 44'100, 8);
+  LMDJ_CHECK(resolved.has_value());
+  LMDJ_CHECK(resolved.value().start_frame == expected.start_frame);
+  LMDJ_CHECK(resolved.value().end_frame == expected.end_frame);
+  LMDJ_CHECK(resolved.value().trigger_mode == expected.trigger_mode);
+  LMDJ_CHECK(resolved.value().linear_gain == expected.linear_gain);
+  LMDJ_CHECK(resolved.value().muted == expected.muted);
+  LMDJ_CHECK(resolved.value().dsp == expected.dsp);
+}
+
+void test_resolve_pad_playback_refuses_a_rate_or_trim_the_source_cannot_hold() {
+  const lmdj::domain::PadPlayback playback{0, 9, TriggerMode::one_shot, 0, false};
+  for (const auto& [rate, frames] :
+       {std::pair<std::uint32_t, std::uint64_t>{44'100, 8},
+        std::pair<std::uint32_t, std::uint64_t>{0, 16}}) {
+    const auto resolved = lmdj::cooker::resolve_pad_playback(playback, rate, frames);
+    LMDJ_CHECK(!resolved.has_value());
+    LMDJ_CHECK(resolved.error().code == ErrorCode::invalid_argument);
+  }
+  LMDJ_CHECK(lmdj::cooker::resolve_pad_playback(playback, 44'100, 16).has_value());
+}
+
 // An open trim end leaves the crossfade bound to the source length.
 void test_cooker_rejects_a_crossfade_beyond_half_an_open_loop() {
   const auto artifact = fixture_artifact("mono-44100.wav");
@@ -875,6 +916,8 @@ int main() {
     test_cooker_resolves_default_playback_to_a_neutral_dsp_block();
     test_cooker_resolves_parity_fields_into_48_khz_frames();
     test_cooker_rejects_a_crossfade_beyond_half_an_open_loop();
+    test_resolve_pad_playback_matches_the_cooked_playback();
+    test_resolve_pad_playback_refuses_a_rate_or_trim_the_source_cannot_hold();
     test_cooker_rejects_invalid_tick_and_duration_bounds();
     test_cooker_returns_immutable_deterministic_snapshot_values();
   } catch (const std::exception& error) {

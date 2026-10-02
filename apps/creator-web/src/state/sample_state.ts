@@ -1,9 +1,15 @@
+import {
+  PUBLIC_ERROR_CODES,
+  SAMPLE_PREVIEW_FAILURE,
+  sampleMessage,
+} from "./error_messages";
 import type {
   PadPlayback,
   RuntimeVoiceState,
   SampleCommit,
   SampleInspect,
   SampleMetadata,
+  SampleLoopMode,
   SampleSnapshotError,
   SampleTriggerMode,
   SnapshotPublication,
@@ -72,6 +78,12 @@ export interface SamplePlayheadRender {
   readonly trimStartFrame: number | null;
   readonly trimEndFrame: number | null;
   readonly triggerMode: SampleTriggerMode | null;
+  // The voice DSP settings the playhead models, as the kernel renders them.
+  readonly reverse: boolean;
+  readonly pitchCents: number;
+  readonly loopMode: SampleLoopMode;
+  readonly loopStartFrame: number | null;
+  readonly loopCrossfadeFrames: number;
 }
 
 export interface SampleState {
@@ -147,30 +159,6 @@ const MUTATION_PENDING_KINDS = new Set<SamplePendingKind>([
   "update",
 ]);
 const RETRY_PENDING_KINDS = new Set<SamplePendingKind>(["retry-prepare"]);
-const ALLOWED_ERROR_CODES = new Set([
-  "INVALID_ARGUMENT",
-  "NOT_FOUND",
-  "REVISION_CONFLICT",
-  "DUPLICATE_ID",
-  "UNSUPPORTED_AUDIO",
-  "MISSING_ASSET",
-  "INVALID_PROJECT",
-  "COOK_FAILED",
-  "BANK_QUOTA_EXHAUSTED",
-  "PROJECT_QUOTA_EXHAUSTED",
-  "PROVIDER_NOT_FOUND",
-  "PROVIDER_FAILED",
-  "PERMISSION_DENIED",
-  "IO_ERROR",
-  "INTERNAL_ERROR",
-  "UNSUPPORTED_WEB_RUNTIME",
-  "PROJECT_BUSY",
-  "WEB_RUNTIME_RESOURCE_LIMIT",
-  "HOST_STATE_INVALID",
-  "HOST_TIMEOUT",
-  "HOST_RESTART_REQUIRED",
-  "HOST_PROTOCOL_MISMATCH",
-]);
 const VOICE_STATES = new Set(["started", "stopped", "completed"]);
 const MAX_SAFE_JSON_DEPTH = 8;
 const MAX_SAFE_JSON_NODES = 4_096;
@@ -224,33 +212,6 @@ const SNAPSHOT_STORAGE_CONDITIONS = new Set([
   "atomic_publish_unsupported",
 ]);
 const SNAPSHOT_TRANSFER_CONDITIONS = new Set(["resource_limit"]);
-const SAMPLE_PUBLIC_ERROR_MESSAGES: Readonly<Record<string, string>> =
-  Object.freeze({
-    INVALID_ARGUMENT: "Sample request is invalid",
-    NOT_FOUND: "Sample resource was not found",
-    REVISION_CONFLICT: "Project changed; review and try again",
-    DUPLICATE_ID: "Sample identity already exists",
-    UNSUPPORTED_AUDIO: "Sample audio is unsupported",
-    MISSING_ASSET: "Sample Artifact is unavailable",
-    INVALID_PROJECT: "Project could not be validated",
-    COOK_FAILED: "Sample runtime preparation failed",
-    BANK_QUOTA_EXHAUSTED:
-      "Selection exceeds this Bank quota; shorten it, free another Pad, or use another Bank",
-    PROJECT_QUOTA_EXHAUSTED:
-      "Selection exceeds the Project quota; shorten it or free prepared Samples",
-    PROVIDER_NOT_FOUND: "Sample operation failed",
-    PROVIDER_FAILED: "Sample operation failed",
-    PERMISSION_DENIED: "Sample operation is not permitted",
-    IO_ERROR: "Sample storage operation failed",
-    INTERNAL_ERROR: "Sample operation failed",
-    UNSUPPORTED_WEB_RUNTIME: "Sample operation is unavailable in this Web Runtime",
-    PROJECT_BUSY: "Project is already open for writing",
-    WEB_RUNTIME_RESOURCE_LIMIT: "Sample exceeds the Web Runtime resource limit",
-    HOST_STATE_INVALID: "Sample operation is unavailable",
-    HOST_TIMEOUT: "Sample operation timed out",
-    HOST_RESTART_REQUIRED: "Restart the Sample runtime and try again",
-    HOST_PROTOCOL_MISMATCH: "Sample Host response was invalid",
-  });
 const PRIVATE_HOST_MESSAGE_PATTERN = new RegExp([
   String.raw`\bopfs\b`,
   "file://",
@@ -267,7 +228,27 @@ const DEFAULT_PLAYBACK: Readonly<PadPlayback> = Object.freeze({
   triggerMode: "one_shot",
   gainMillidb: 0,
   muted: false,
+  reverse: false,
+  pitchCents: 0,
+  pan: 0,
+  loopMode: "forward",
+  loopStartFrame: null,
+  loopCrossfadeFrames: 0,
 });
+
+const PLAYBACK_FIELDS = Object.freeze([
+  "trimStartFrame",
+  "trimEndFrame",
+  "triggerMode",
+  "gainMillidb",
+  "muted",
+  "reverse",
+  "pitchCents",
+  "pan",
+  "loopMode",
+  "loopStartFrame",
+  "loopCrossfadeFrames",
+] as const);
 
 export const initialSampleState: SampleState = Object.freeze({
   selectedSlot: null,
@@ -397,23 +378,14 @@ function freezePlayback(playback: PadPlayback): Readonly<PadPlayback> {
   return Object.freeze({...playback});
 }
 
-function playbackEquals(left: PadPlayback, right: PadPlayback): boolean {
-  return left.trimStartFrame === right.trimStartFrame &&
-    left.trimEndFrame === right.trimEndFrame &&
-    left.triggerMode === right.triggerMode &&
-    left.gainMillidb === right.gainMillidb &&
-    left.muted === right.muted;
+// The one Creator equality for a Pad's playback; every field takes part.
+export function playbackEquals(left: PadPlayback, right: PadPlayback): boolean {
+  return PLAYBACK_FIELDS.every((field) => left[field] === right[field]);
 }
 
 function validatePlayback(value: unknown): Readonly<PadPlayback> {
   assertPrivacySafe(value);
-  if (!exactKeys(value, [
-    "trimStartFrame",
-    "trimEndFrame",
-    "triggerMode",
-    "gainMillidb",
-    "muted",
-  ]) ||
+  if (!exactKeys(value, [...PLAYBACK_FIELDS]) ||
     !unsignedInteger(value.trimStartFrame) ||
     !(value.trimEndFrame === null ||
       (unsignedInteger(value.trimEndFrame) &&
@@ -423,7 +395,17 @@ function validatePlayback(value: unknown): Readonly<PadPlayback> {
     !Number.isSafeInteger(value.gainMillidb) ||
     (value.gainMillidb as number) < -60_000 ||
     (value.gainMillidb as number) > 6_000 ||
-    typeof value.muted !== "boolean") {
+    typeof value.muted !== "boolean" ||
+    typeof value.reverse !== "boolean" ||
+    !Number.isSafeInteger(value.pitchCents) ||
+    (value.pitchCents as number) < -2_400 ||
+    (value.pitchCents as number) > 2_400 ||
+    !Number.isSafeInteger(value.pan) ||
+    (value.pan as number) < -100 ||
+    (value.pan as number) > 100 ||
+    (value.loopMode !== "forward" && value.loopMode !== "ping_pong") ||
+    !(value.loopStartFrame === null || unsignedInteger(value.loopStartFrame)) ||
+    !unsignedInteger(value.loopCrossfadeFrames)) {
     throw new TypeError("Sample playback is invalid");
   }
   return freezePlayback({
@@ -432,6 +414,12 @@ function validatePlayback(value: unknown): Readonly<PadPlayback> {
     triggerMode: value.triggerMode as SampleTriggerMode,
     gainMillidb: value.gainMillidb as number,
     muted: value.muted,
+    reverse: value.reverse,
+    pitchCents: value.pitchCents as number,
+    pan: value.pan as number,
+    loopMode: value.loopMode,
+    loopStartFrame: value.loopStartFrame as number | null,
+    loopCrossfadeFrames: value.loopCrossfadeFrames as number,
   });
 }
 
@@ -646,14 +634,14 @@ export function normalizeSampleSnapshotError(
 ): Readonly<SampleSnapshotError> | null {
   if (value === null) return null;
   if (!exactKeys(value, ["code", "message", "details"]) ||
-    typeof value.code !== "string" || !ALLOWED_ERROR_CODES.has(value.code) ||
+    typeof value.code !== "string" || !PUBLIC_ERROR_CODES.has(value.code) ||
     typeof value.message !== "string" || value.message.length === 0 ||
     value.message.length > 512 || PRIVATE_HOST_MESSAGE_PATTERN.test(value.message)) {
     throw new TypeError("Sample snapshot error is invalid");
   }
   return Object.freeze({
     code: value.code,
-    message: SAMPLE_PUBLIC_ERROR_MESSAGES[value.code] ?? "Sample operation failed",
+    message: sampleMessage(value.code).message,
     details: normalizeQuotaDetails(value.code, value.details),
   });
 }
@@ -684,13 +672,9 @@ export function updateSampleDraft(
   draft: SampleDraft,
   changes: Partial<PadPlayback>,
 ): SampleDraft {
-  if (!record(changes) || Object.keys(changes).some((key) => ![
-    "trimStartFrame",
-    "trimEndFrame",
-    "triggerMode",
-    "gainMillidb",
-    "muted",
-  ].includes(key))) {
+  if (!record(changes) || Object.keys(changes).some(
+    (key) => !(PLAYBACK_FIELDS as readonly string[]).includes(key),
+  )) {
     throw new TypeError("Sample draft changes are invalid");
   }
   const proposed = validatePlayback({...draft.proposed, ...changes});
@@ -1151,6 +1135,11 @@ export function applyRuntimeVoiceState(
         sourceFrame,
         ...renderBounds,
         triggerMode: playback?.triggerMode ?? null,
+        reverse: playback?.reverse ?? false,
+        pitchCents: playback?.pitchCents ?? 0,
+        loopMode: playback?.loopMode ?? "forward",
+        loopStartFrame: playback?.loopStartFrame ?? null,
+        loopCrossfadeFrames: playback?.loopCrossfadeFrames ?? 0,
       });
     }
   } else if (playhead?.sequence === event.sequence) {
@@ -1175,15 +1164,39 @@ export function samplePlayheadFrameAt(
     runtimeFrame <= playhead.runtimeFrame) {
     return playhead.sourceFrame;
   }
-  const initial = Math.min(Math.max(lower, playhead.sourceFrame), upper - 1);
-  const advanced = initial + Math.floor(
-    (runtimeFrame - playhead.runtimeFrame) * sampleRate / 48_000,
+  // Modelled in the kernel's logical space: frames from the trim start in
+  // playback order, so reverse is a mirror applied last.
+  const length = upper - lower;
+  const anchored = Math.min(Math.max(lower, playhead.sourceFrame), upper - 1) - lower;
+  const initial = playhead.reverse ? length - 1 - anchored : anchored;
+  const rate = 2 ** (playhead.pitchCents / 1_200);
+  let logical = initial + Math.floor(
+    (runtimeFrame - playhead.runtimeFrame) * sampleRate / 48_000 * rate,
   );
   if (playhead.triggerMode === "loop_gate" ||
     playhead.triggerMode === "loop_toggle") {
-    return lower + (advanced - lower) % (upper - lower);
+    const loopBegin = Math.min(
+      length - 1,
+      Math.max(0, (playhead.loopStartFrame ?? lower) - lower),
+    );
+    if (playhead.loopMode === "ping_pong") {
+      const top = length - 1;
+      const span = top - loopBegin;
+      if (span === 0) {
+        // A one-frame loop holds its only frame from the first advance.
+        if (logical > initial) logical = top;
+      } else if (logical > top) {
+        const phase = (logical - top) % (2 * span);
+        logical = phase <= span ? top - phase : loopBegin + (phase - span);
+      }
+    } else if (logical >= length) {
+      const resume = loopBegin + playhead.loopCrossfadeFrames;
+      logical = resume + (logical - length) % (length - resume);
+    }
+  } else {
+    logical = Math.min(logical, length - 1);
   }
-  return Math.min(advanced, upper - 1);
+  return playhead.reverse ? lower + (length - 1 - logical) : lower + logical;
 }
 
 export function applySampleOperationFailure(
@@ -1195,7 +1208,7 @@ export function applySampleOperationFailure(
   const hasDetails = record(value) && Object.hasOwn(value, "details");
   if (!(exactKeys(value, ["code", "message"]) ||
     exactKeys(value, ["code", "message", "details"])) ||
-    typeof value.code !== "string" || !ALLOWED_ERROR_CODES.has(value.code) ||
+    typeof value.code !== "string" || !PUBLIC_ERROR_CODES.has(value.code) ||
     typeof value.message !== "string" || value.message.length === 0 ||
     value.message.length > 512) {
     throw new TypeError("Sample operation failure is invalid");
@@ -1208,7 +1221,7 @@ export function applySampleOperationFailure(
     pendingAction: null,
     lastError: Object.freeze({
       code: value.code,
-      message: SAMPLE_PUBLIC_ERROR_MESSAGES[value.code] ?? "Sample operation failed",
+      message: sampleMessage(value.code).message,
       retryPrepare: value.code === "COOK_FAILED",
       details,
     }),
@@ -1320,7 +1333,7 @@ export function reduceSampleState(
         auditionPlayback: null,
         lastError: Object.freeze({
           code: "HOST_STATE_INVALID",
-          message: "Runtime preview failed",
+          message: SAMPLE_PREVIEW_FAILURE.message,
           retryPrepare: false,
         }),
       });

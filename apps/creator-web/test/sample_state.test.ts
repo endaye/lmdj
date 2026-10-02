@@ -35,6 +35,12 @@ const saved = Object.freeze({
   triggerMode: "gate" as const,
   gainMillidb: -1_200,
   muted: false,
+  reverse: false,
+  pitchCents: 0,
+  pan: 0,
+  loopMode: "forward" as const,
+  loopStartFrame: null,
+  loopCrossfadeFrames: 0,
 });
 
 const metadata = Object.freeze({
@@ -73,6 +79,12 @@ describe("Creator Sample state", () => {
       triggerMode: "one_shot",
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     });
     expect(projectSamplePlayback(saved)).toEqual(saved);
   });
@@ -299,7 +311,7 @@ describe("Creator Sample state", () => {
         runtimePublished: false,
         snapshotError: {
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details: {},
         },
       },
@@ -335,7 +347,7 @@ describe("Creator Sample state", () => {
       runtimePublished: false,
       snapshotError: {
         code: "COOK_FAILED",
-        message: "Sample runtime preparation failed",
+        message: "The sound was saved but is not ready to play yet.",
         details: {},
       },
     });
@@ -347,7 +359,7 @@ describe("Creator Sample state", () => {
     expect(state.pendingAction).toBeNull();
     expect(state.lastError).toEqual({
       code: "COOK_FAILED",
-      message: "Sample runtime preparation failed",
+      message: "The sound was saved but is not ready to play yet.",
       retryPrepare: true,
     });
 
@@ -516,6 +528,24 @@ describe("Creator Sample state", () => {
     expect(state.draft).toBeNull();
   });
 
+  test("accepts LOCAL_PROJECT_UNREADABLE from a Sample retry instead of throwing (#1680)", () => {
+    let state = inspectedState();
+    state = reduceSampleState(state, {
+      type: "pending-began",
+      pending: {kind: "import", slot: 17, expectedRevision: 42},
+    });
+    state = reduceSampleState(state, {
+      type: "operation-failed",
+      pending: state.pendingAction,
+      error: {code: "LOCAL_PROJECT_UNREADABLE", message: "unreadable"},
+    });
+    expect(state.pendingAction).toBeNull();
+    expect(state.lastError).toMatchObject({
+      code: "LOCAL_PROJECT_UNREADABLE",
+      message: "The local copy of this Project could not be read.",
+    });
+  });
+
   test("reduces pending success, conflict, retry, failure, and cancellation", () => {
     let state = inspectedState();
     state = reduceSampleState(state, {
@@ -534,7 +564,7 @@ describe("Creator Sample state", () => {
     expect(state.pendingAction).toBeNull();
     expect(state.lastError).toEqual({
       code: "IO_ERROR",
-      message: "Sample storage operation failed",
+      message: "Creator could not save the sound on this device.",
       retryPrepare: false,
       details: {storage_condition: "already_exists"},
     });
@@ -572,7 +602,7 @@ describe("Creator Sample state", () => {
         runtimePublished: false,
         snapshotError: {
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details: {},
         },
       },
@@ -637,7 +667,7 @@ describe("Creator Sample state", () => {
 
     expect(state.lastError).toEqual({
       code: "IO_ERROR",
-      message: "Sample storage operation failed",
+      message: "Creator could not save the sound on this device.",
       retryPrepare: false,
       details: {},
     });
@@ -662,7 +692,7 @@ describe("Creator Sample state", () => {
     expect(state.pendingAction).toBeNull();
     expect(state.lastError).toEqual({
       code: "HOST_PROTOCOL_MISMATCH",
-      message: "Sample Host response was invalid",
+      message: "This copy of Creator is out of date.",
       retryPrepare: false,
       details: {},
     });
@@ -747,7 +777,7 @@ describe("Creator Sample state", () => {
     expect(state.pendingAction).toEqual(pendingAction);
     expect(state.lastError).toEqual({
       code: "HOST_STATE_INVALID",
-      message: "Runtime preview failed",
+      message: "This sound could not be previewed.",
       retryPrepare: false,
     });
     expect(() => reduceSampleState(state, {
@@ -804,7 +834,7 @@ describe("Creator Sample state", () => {
         runtimePublished: false,
         snapshotError: {
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details: {},
         },
       },
@@ -847,6 +877,11 @@ describe("Creator Sample state", () => {
       trimStartFrame: 10,
       trimEndFrame: 480,
       triggerMode: "gate",
+      reverse: false,
+      pitchCents: 0,
+      loopMode: "forward",
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     });
 
     state = applyRuntimeVoiceState(state, {
@@ -931,6 +966,12 @@ describe("Creator Sample state", () => {
         triggerMode: "one_shot",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       },
       waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/87`,
     });
@@ -955,6 +996,11 @@ describe("Creator Sample state", () => {
       trimStartFrame: 4_800,
       trimEndFrame: 28_800,
       triggerMode: "one_shot",
+      reverse: false,
+      pitchCents: 0,
+      loopMode: "forward",
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     } as const;
     expect(samplePlayheadFrameAt(oneShot, 12_128)).toBe(16_800);
     expect(samplePlayheadFrameAt(oneShot, 48_128)).toBe(28_799);
@@ -969,6 +1015,50 @@ describe("Creator Sample state", () => {
       trimStartFrame: 4_410,
       trimEndFrame: 44_100,
     }, 24_128)).toBe(26_460);
+  });
+
+  test("models reverse, pitch, loop point, crossfade and ping-pong like the kernel", () => {
+    const voice = {
+      sequence: 9,
+      slot: 17,
+      runtimeFrame: 0,
+      observedAtMilliseconds: 1_000,
+      sourceFrame: 0,
+      sampleRate: 48_000,
+      trimStartFrame: 0,
+      trimEndFrame: 100,
+      triggerMode: "loop_gate",
+      reverse: false,
+      pitchCents: 0,
+      loopMode: "forward",
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
+    } as const;
+    // Reverse plays the trim from its last frame backwards; its start edge
+    // publishes that physical frame.
+    const reversed = {...voice, reverse: true, sourceFrame: 99};
+    expect(samplePlayheadFrameAt({...reversed, triggerMode: "one_shot"}, 10))
+      .toBe(89);
+    // A reversed loop wraps at the loop point's mirror: logical 20 is 79.
+    expect(samplePlayheadFrameAt({...reversed, loopStartFrame: 20}, 100))
+      .toBe(79);
+    // An octave up covers twice the source per output frame.
+    expect(samplePlayheadFrameAt({...voice, triggerMode: "one_shot", pitchCents: 1_200}, 10))
+      .toBe(20);
+    // Later passes resume at the loop point plus the crossfade.
+    expect(samplePlayheadFrameAt({...voice, loopStartFrame: 40, loopCrossfadeFrames: 10}, 100))
+      .toBe(50);
+    // Ping-pong reflects at the last frame and at the loop point.
+    expect(samplePlayheadFrameAt({...voice, loopMode: "ping_pong", loopStartFrame: 90}, 101))
+      .toBe(97);
+    expect(samplePlayheadFrameAt({...voice, loopMode: "ping_pong", loopStartFrame: 90}, 108))
+      .toBe(90);
+    // A one-frame ping-pong loop holds its last frame from the first advance,
+    // as the kernel's top <= bottom branch does.
+    expect(samplePlayheadFrameAt({...voice, loopMode: "ping_pong", loopStartFrame: 99}, 1))
+      .toBe(99);
+    expect(samplePlayheadFrameAt(
+      {...reversed, loopMode: "ping_pong", loopStartFrame: 99}, 1)).toBe(0);
   });
 
   test("keeps the newest selected-Pad Voice as deterministic playhead owner", () => {
@@ -1071,7 +1161,7 @@ describe("Creator Sample state", () => {
         runtimePublished: false,
         snapshotError: {
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details: {payload},
         },
       })).toThrow();
@@ -1115,7 +1205,7 @@ describe("Creator Sample state", () => {
       });
       expect(applied.lastError).toEqual({
         code: "COOK_FAILED",
-        message: "Sample runtime preparation failed",
+        message: "The sound was saved but is not ready to play yet.",
         retryPrepare: true,
       });
     }
@@ -1169,7 +1259,7 @@ describe("Creator Sample state", () => {
         runtimePublished: false,
         snapshotError: {
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details,
         },
       })).toThrow();
