@@ -1,6 +1,6 @@
 import {userMessage} from "../state/error_messages";
 import {useReportFailure} from "../runtime/diagnostics_context";
-import {useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 import type {
   AuthoringHistoryMutation,
   AuthoringHistoryRequest,
@@ -34,7 +34,7 @@ export function historyDisabledMessage(reason: string): string {
   }
 }
 
-interface Props {
+interface UseAuthoringHistoryOptions {
   session: CreatorRuntimeSession | undefined;
   projectId: string | null;
   revision: number | null;
@@ -53,7 +53,32 @@ function historyFailureCopy(failure: unknown): string {
   return `${message} ${nextStep}`;
 }
 
-export function AuthoringHistoryControls(props: Props) {
+export interface AuthoringHistoryController {
+  busy: boolean;
+  reason: string;
+  statusText: string;
+  undoAvailable: boolean;
+  redoAvailable: boolean;
+  undoTitle: string;
+  redoTitle: string;
+  undo(): void;
+  redo(): void;
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.closest("input, textarea, select") !== null) return true;
+  // The nearest contenteditable host decides: every value but "false" edits
+  // ("", "true", "plaintext-only"), matching isContentEditable without
+  // depending on it (jsdom does not implement the property).
+  const host = target.closest("[contenteditable]");
+  return host !== null && host.getAttribute("contenteditable")?.toLowerCase() !== "false";
+}
+
+// Headless session-history controller. The rail renders it as a SHIFT chord
+// (SHIFT + ← / SHIFT + →) with lamp availability; this hook owns inspection,
+// exact-retry identity and the desktop Cmd/Ctrl+Z shortcuts.
+export function useAuthoringHistory(props: UseAuthoringHistoryOptions): AuthoringHistoryController {
   const reportFailure = useReportFailure();
   const [status, setStatus] = useState<Readonly<AuthoringHistoryStatus> | null>(null);
   const [busy, setBusy] = useState(false);
@@ -63,6 +88,8 @@ export function AuthoringHistoryControls(props: Props) {
   const retained = useRef<{direction: "undo" | "redo"; request: AuthoringHistoryRequest} | null>(null);
   const latest = useRef(props);
   latest.current = props;
+  const latestStatus = useRef(status);
+  latestStatus.current = status;
   const available = isAuthoringHistorySession(props.session) && props.projectId !== null;
 
   useEffect(() => {
@@ -97,14 +124,26 @@ export function AuthoringHistoryControls(props: Props) {
     };
   }, [props.session, props.projectId, props.revision, props.refreshKey]);
 
-  const canRetry = (direction: "undo" | "redo") => retained.current?.direction === direction &&
-    retained.current.request.sessionId === status?.sessionId;
+  // One synchronous admission reading for the rail chord, the keyboard
+  // shortcut and restore itself, so preventDefault only happens when a
+  // history action will actually run.
+  const canRestoreNow = useRef<(direction: "undo" | "redo") => boolean>(() => false);
+  canRestoreNow.current = (direction) => {
+    const current = latest.current;
+    const snapshot = latestStatus.current;
+    if (!isAuthoringHistorySession(current.session) || snapshot === null ||
+        inFlight.current || current.disabledReason) return false;
+    return (retained.current?.direction === direction &&
+        retained.current.request.sessionId === snapshot.sessionId) ||
+      (direction === "undo" ? snapshot.canUndo : snapshot.canRedo);
+  };
 
-  const restore = async (direction: "undo" | "redo") => {
+  const restore = useCallback(async (direction: "undo" | "redo") => {
+    if (!canRestoreNow.current(direction)) return;
     const current = latest.current;
     const session = current.session;
-    if (!isAuthoringHistorySession(session) || status === null || inFlight.current ||
-        current.disabledReason || !(canRetry(direction) || (direction === "undo" ? status.canUndo : status.canRedo))) return;
+    const snapshot = latestStatus.current;
+    if (!isAuthoringHistorySession(session) || snapshot === null) return;
     inFlight.current = true;
     setBusy(true);
     current.onBusy(true);
@@ -116,9 +155,9 @@ export function AuthoringHistoryControls(props: Props) {
     // command even when inspection now reports an empty source stack.
     const previous = retained.current;
     const request = previous?.direction === direction &&
-        previous.request.sessionId === status.sessionId
+        previous.request.sessionId === snapshot.sessionId
       ? previous.request
-      : {sessionId: status.sessionId, commandId: crypto.randomUUID(), expectedRevision: status.projectRevision};
+      : {sessionId: snapshot.sessionId, commandId: crypto.randomUUID(), expectedRevision: snapshot.projectRevision};
     retained.current = {direction, request};
     try {
       const mutation = await (direction === "undo" ? session.undoAuthoring(request) : session.redoAuthoring(request));
@@ -151,21 +190,45 @@ export function AuthoringHistoryControls(props: Props) {
       setBusy(false);
       current.onBusy(false);
     }
-  };
+  }, []);
 
+  const undo = useCallback(() => { void restore("undo"); }, [restore]);
+  const redo = useCallback(() => { void restore("redo"); }, [restore]);
+
+  // Desktop parity: Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z redoes. Editable
+  // fields keep their native text undo, a widget that already handled the
+  // key keeps precedence, and the key is only intercepted when a history
+  // action will actually run.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.code !== "KeyZ" || event.altKey || !(event.metaKey || event.ctrlKey)) return;
+      if (isEditableTarget(event.target)) return;
+      const direction = event.shiftKey ? "redo" : "undo";
+      if (!canRestoreNow.current(direction)) return;
+      event.preventDefault();
+      void restore(direction);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [restore]);
+
+  const canRetry = (direction: "undo" | "redo") => retained.current?.direction === direction &&
+    retained.current.request.sessionId === status?.sessionId;
   const reason = props.disabledReason || historyDisabledMessage(status?.disabledReason ?? "authoring_history_not_open");
-  return (
-    <div className="authoring-history" aria-label="Project history" data-testid="authoring-history">
-      <div role="group" aria-label="Undo and redo">
-        <button type="button" disabled={!available || busy || !!reason || !(status?.canUndo || canRetry("undo"))}
-          title={reason || (status?.undoLabel ? `Undo ${status.undoLabel}` : "Nothing to undo")}
-          onClick={() => { void restore("undo"); }}>Undo</button>
-        <button type="button" disabled={!available || busy || !!reason || !(status?.canRedo || canRetry("redo"))}
-          title={reason || (status?.redoLabel ? `Redo ${status.redoLabel}` : "Nothing to redo")}
-          onClick={() => { void restore("redo"); }}>Redo</button>
-      </div>
-      <span role="status">{error || (busy ? "Updating Project…" : reason ||
-        (status?.undoLabel ? `Undo: ${status.undoLabel}` : status?.redoLabel ? `Redo: ${status.redoLabel}` : "No changes in this session"))}</span>
-    </div>
-  );
+  const undoAvailable = available && !busy && !reason && (status?.canUndo === true || canRetry("undo"));
+  const redoAvailable = available && !busy && !reason && (status?.canRedo === true || canRetry("redo"));
+  return {
+    busy,
+    reason,
+    statusText: error || (busy ? "Updating Project…" : reason ||
+      (status?.undoLabel ? `Undo: ${status.undoLabel}` : status?.redoLabel ? `Redo: ${status.redoLabel}` :
+        available ? "No changes in this session" : "")),
+    undoAvailable,
+    redoAvailable,
+    undoTitle: reason || (status?.undoLabel ? `Undo ${status.undoLabel}` : "Nothing to undo"),
+    redoTitle: reason || (status?.redoLabel ? `Redo ${status.redoLabel}` : "Nothing to redo"),
+    undo,
+    redo,
+  };
 }
