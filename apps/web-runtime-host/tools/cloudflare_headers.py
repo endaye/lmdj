@@ -28,6 +28,8 @@ def render(dist: Path) -> bytes:
     for asset in manifest["assets"]:
         suffix = Path(asset["path"]).suffix
         block = f"\n/{asset['path']}\n  ! Cache-Control\n  Cache-Control: public, max-age=31536000, immutable\n"
+        if asset["role"] == "offline_worker":
+            block += "  Service-Worker-Allowed: /\n"
         if suffix != ".wasm":
             block += f"  Content-Type: {types[suffix]}; charset=utf-8\n"
         base += block.encode()
