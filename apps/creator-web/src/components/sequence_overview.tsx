@@ -13,7 +13,6 @@ import {
   type SequenceGridViewport,
 } from "../state/sequence_grid_model";
 import type {PatternTransportState} from "../state/pattern_transport_state";
-import {transportStatusLabel} from "./transport_status";
 
 interface SequenceOverviewProps {
   project: ProjectView | null;
@@ -42,9 +41,15 @@ export function SequenceOverview({
     ? undefined
     : project?.patterns.find((item) => item.patternId === selectedPatternId);
   const pendingPatternId = state.status?.pendingPatternId ?? null;
-  const phase = transport === undefined
-    ? state.phase
-    : transportStatusLabel(transport);
+  // The 176 px display holds one status line: the most severe of the
+  // transport error, the Sequence error and a pending publication.
+  const statusLine = transport?.errorCode !== null && transport?.errorCode !== undefined
+    ? userMessage(transport.errorCode).message
+    : state.errorCode !== null
+      ? userMessage(state.errorCode).message
+      : transport?.status?.publicationPending === true
+        ? "Committed, publication pending"
+        : null;
   const thumbnail = pattern === undefined ? null : createSequenceGridThumbnail(pattern);
   const selectionVelocity = pattern === undefined
     ? null
@@ -132,6 +137,7 @@ export function SequenceOverview({
           )}
         </svg>
       ) : null}
+      <div className="sequence-overview-side">
       <dl className="overview-facts">
         <div>
           <dt>Quantize</dt>
@@ -140,18 +146,6 @@ export function SequenceOverview({
         <div>
           <dt>Swing</dt>
           <dd>{project ? `${project.sequenceSettings.swingPercent}%` : "—"}</dd>
-        </div>
-        <div>
-          <dt>Pattern</dt>
-          <dd>
-            {pattern === undefined
-              ? "—"
-              : `${pattern.bars} ${pattern.bars === 1 ? "bar" : "bars"}`}
-          </dd>
-        </div>
-        <div>
-          <dt>Phase</dt>
-          <dd>{phase}</dd>
         </div>
         <div>
           <dt>Selected</dt>
@@ -178,15 +172,10 @@ export function SequenceOverview({
           </div>
         ) : null}
       </dl>
-      {transport?.status?.publicationPending === true ? (
-        <p>Committed, publication pending</p>
-      ) : null}
-      {state.errorCode !== null ? (
-        <p>{userMessage(state.errorCode).message}</p>
-      ) : null}
-      {transport?.errorCode !== null && transport?.errorCode !== undefined ? (
-        <p>{userMessage(transport.errorCode).message}</p>
-      ) : null}
+      {statusLine === null ? null : (
+        <p className="sequence-overview-status">{statusLine}</p>
+      )}
+      </div>
     </div>
   );
 }

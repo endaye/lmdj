@@ -211,6 +211,28 @@ const overviewFact = (page, name) =>
 // while the mutation's refresh tail runs; a gesture fired into that window
 // hits the page root instead of the grid, so every Undo/Redo also waits for
 // the frame to become interactive again.
+// The 752×176 upper display clips its overflow and the touch workspace is a
+// fixed 368 px column, so a fact pushed outside either is simply invisible —
+// jsdom has no layout and `toBeVisible` ignores ancestor clipping.
+async function expectSequenceLayoutFits(page) {
+  const layout = await page.evaluate(() => {
+    const display = document.querySelector('[data-testid="overview-display"]');
+    const box = display.getBoundingClientRect();
+    const clipped = [...display.querySelectorAll("dt, dd, .sequence-overview-status")]
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 &&
+          (rect.bottom > box.bottom + 0.5 || rect.right > box.right + 0.5);
+      })
+      .map((element) => element.textContent.trim());
+    const touch = document.querySelector('[data-testid="touch-workspace"]');
+    return {clipped, touchOverflow: touch.scrollWidth - touch.clientWidth};
+  });
+  expect(layout.clipped, "every overview fact sits inside the upper display").toEqual([]);
+  expect(layout.touchOverflow, "the touch workspace never scrolls sideways")
+    .toBeLessThanOrEqual(0);
+}
+
 async function awaitConsoleInteractive(page) {
   await page.waitForFunction(() =>
     document.querySelector(".creator-console-frame")?.inert !== true,
@@ -324,6 +346,7 @@ test("grid gestures edit Truth one command at a time, with Undo/Redo, refusal wh
     await page.mouse.up();
   }
   await expect(overviewFact(page, "Selected")).toHaveText("2", {timeout: 30_000});
+  await expectSequenceLayoutFits(page);
   const selection = page.getByRole("group", {name: "Note selection"});
   await expect(selection).toContainText("2 selected");
   await selection.getByRole("button", {name: "Delete"}).click();

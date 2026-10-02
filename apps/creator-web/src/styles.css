@@ -1116,7 +1116,9 @@ button:disabled { color: #737b87; }
   align-items: start;
 }
 .sequence-grid-toolbar .sequence-segment:first-child { flex: 1 1 280px; }
-.sequence-grid .sequence-segment { grid-template-columns: 48px repeat(5, 1fr); }
+/* Five snap choices share the 336 px content box: the tracks may shrink below
+   a button's text width, so the row never widens the touch workspace. */
+.sequence-grid .sequence-segment { grid-template-columns: 40px repeat(5, minmax(0, 1fr)); gap: 4px; }
 .sequence-grid .sequence-grid-mode { grid-template-columns: 48px repeat(2, 64px); }
 .sequence-grid-reason {
   margin: 0;
@@ -1176,6 +1178,7 @@ button:disabled { color: #737b87; }
 }
 .sequence-grid-batch {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   color: #adb6aa;
@@ -1188,6 +1191,31 @@ button:disabled { color: #737b87; }
   color: #f1f2e9;
   border: 0;
   padding: 0 12px;
+}
+/* The upper display is 752×176 with 16 px padding, so the Sequence row has
+   66 px below the primary, facts and build lines. The 64-row thumbnail takes
+   exactly that height; the Sequence facts and one status line sit beside it
+   instead of below, where the display's overflow would hide them. */
+.sequence-overview {
+  grid-template-columns: minmax(0, 1fr) max-content;
+  column-gap: 16px;
+  align-items: start;
+}
+.sequence-overview-side { min-width: 0; }
+.sequence-overview .overview-facts {
+  display: grid;
+  grid-template-columns: repeat(3, max-content);
+  gap: 0 14px;
+  line-height: 16px;
+}
+.sequence-overview-status {
+  margin: 0;
+  line-height: 16px;
+  contain: inline-size;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #ffc0c0;
 }
 .sequence-overview-thumbnail {
   display: block;

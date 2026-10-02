@@ -340,6 +340,33 @@ test("Project action module has no New, Save As, or Project export journey", () 
   expect(calls).not.toContain("openProject");
 });
 
+// A one-bar Pattern is 3840 ticks: the inspection boundary admits exactly the
+// Contract's events — no note past the seam, velocity 1..127 — and keeps them.
+test("Pattern events outside the Contract's per-bar bounds are a protocol mismatch", async () => {
+  const withEvent = (event: Record<string, unknown>) => {
+    const inspected = inspectV3();
+    inspected.project.patterns = {[PATTERN_ID]: {bars: 1, events: [event]}};
+    return sessionFor(inspected);
+  };
+  const valid = {slot: {bank: 3, pad: 15}, onset_tick: 3600, duration_tick: 240, velocity: 127};
+  const view = await openProjectJourney(withEvent(valid), summary);
+  expect(view.patterns[0]!.events).toEqual([
+    {slot: {bank: 3, pad: 15}, onsetTick: 3600, durationTick: 240, velocity: 127},
+  ]);
+  for (const invalid of [
+    {...valid, onset_tick: 3840, duration_tick: 1},
+    {...valid, duration_tick: 241},
+    {...valid, duration_tick: 0},
+    {...valid, velocity: 128},
+    {...valid, velocity: 0},
+    {...valid, slot: {bank: 4, pad: 0}},
+    {...valid, slot: {bank: 0, pad: 16}},
+  ]) {
+    await expect(openProjectJourney(withEvent(invalid), summary), JSON.stringify(invalid))
+      .rejects.toMatchObject({code: "HOST_PROTOCOL_MISMATCH"});
+  }
+});
+
 const COPY_ID = "66666666-6666-4666-8666-666666666666";
 
 test("duplicateProjectJourney copies under a new identity and does not open the copy", async () => {
