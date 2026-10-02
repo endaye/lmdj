@@ -60,6 +60,10 @@ export function formatSetBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
+// A refusal without reason-specific guidance still describes the Set, not
+// the Project; its code and reason are on the row's data attributes.
+const REFUSED_SET_FALLBACK = "This Set cannot be installed.";
+
 export function soundSetReasonCopy(error: SoundSetError): string | null {
   switch (error.reason) {
     case "soundset_license_ineligible":
@@ -331,7 +335,7 @@ export function SoundSetSurface({
               {...(refusal.reason === null ? {} : {"data-reason": refusal.reason})}>
               {refusal.setId} {refusal.version} — {
                 soundSetReasonCopy({code: refusal.code, reason: refusal.reason, message: ""}) ??
-                userMessage(refusal.code).message}
+                REFUSED_SET_FALLBACK}
             </li>
           ))}
         </ul>

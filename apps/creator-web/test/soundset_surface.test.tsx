@@ -537,3 +537,25 @@ test("a refused listing shows catalogue copy and records the raw failure (#1680)
   expect(alert.textContent).not.toMatch(/IO_ERROR|io_failure|workspace set store|opfs/);
   expect(reportFailure).toHaveBeenCalledWith("Sound Sets", raw);
 });
+
+test("a refused Set without specific guidance says it cannot be installed (#1680)", async () => {
+  const session = fakeSession({
+    listSoundSets: vi.fn(async () => ({
+      catalogAvailable: true,
+      sets: [],
+      refused: [{
+        setId: "88888888-8888-4888-8888-888888888888",
+        version: "1.0.0",
+        manifestSha256: "8b".repeat(32),
+        code: "NOT_FOUND",
+        reason: "soundset_object_missing",
+      }],
+    })),
+  } as Partial<CreatorSoundSetRuntimeSession>);
+  renderSurface(session);
+  const refused = await screen.findByRole("list", {name: "Unavailable Sound Sets"});
+  const row = within(refused).getByRole("listitem");
+  expect(row.textContent).toBe("88888888-8888-4888-8888-888888888888 1.0.0 — This Set cannot be installed.");
+  expect(row.getAttribute("data-code")).toBe("NOT_FOUND");
+  expect(row.getAttribute("data-reason")).toBe("soundset_object_missing");
+});
