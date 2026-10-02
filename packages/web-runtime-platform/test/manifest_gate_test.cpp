@@ -232,11 +232,40 @@ void test_creator_contract_and_compatibility_inventory_are_bound() {
   check_rejected(creator);
   creator["assets"].push_back(
       asset("perform-master-tap", '9', ".js", "perform_master_tap_worklet"));
+  if (creator_host.at("version").get<std::string>().starts_with("5.")) {
+    creator["assets"].push_back(asset("offline-worker", 'b', ".js", "offline_worker"));
+  }
   auto encoded = lmdj::foundation::canonical_json(creator);
   ManifestGate accepted;
   LMDJ_CHECK(
       accepted.initialize(as_bytes(encoded), sha256(encoded), expected()) ==
       ManifestGateStatus::accepted);
+
+  auto offline = creator;
+  offline["host_version"] = "5.0.0";
+  if (offline["assets"].size() == creator["assets"].size() &&
+      !creator_host.at("version").get<std::string>().starts_with("5.")) {
+    offline["assets"].push_back(asset("offline-worker", 'b', ".js", "offline_worker"));
+  }
+  const std::array offline_identities{
+      ManifestExpectation::ComponentIdentity{
+          creator_host.at("distribution_contract").get_ref<const std::string&>(),
+          "creator-web", "5.0.0"},
+      ManifestExpectation::ComponentIdentity{
+          runtime_host.at("distribution_contract").get_ref<const std::string&>(),
+          runtime_host.at("id").get_ref<const std::string&>(),
+          runtime_host.at("version").get_ref<const std::string&>()}};
+  auto offline_expected = expected();
+  offline_expected.allowed_hosts = offline_identities;
+  auto offline_encoded = lmdj::foundation::canonical_json(offline);
+  ManifestGate offline_gate;
+  LMDJ_CHECK(offline_gate.initialize(as_bytes(offline_encoded), sha256(offline_encoded),
+      offline_expected) == ManifestGateStatus::accepted);
+  offline["assets"].erase(offline["assets"].end() - 1);
+  offline_encoded = lmdj::foundation::canonical_json(offline);
+  ManifestGate incomplete_offline;
+  LMDJ_CHECK(incomplete_offline.initialize(as_bytes(offline_encoded), sha256(offline_encoded),
+      offline_expected) == ManifestGateStatus::protocol_mismatch);
 
   auto duplicate_tap = creator;
   duplicate_tap["assets"].push_back(
