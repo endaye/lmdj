@@ -53,7 +53,10 @@ class NoRedirect(HTTPRedirectHandler):
 def live_get(url):
     try:
         response = build_opener(NoRedirect()).open(
-            Request(url, headers={"Cache-Control": "no-cache"}), timeout=30)
+            Request(url, headers={
+                "Cache-Control": "no-cache",
+                "User-Agent": "LMDJ-Default-Assets-Verification (+https://github.com/endaye/lmdj)",
+            }), timeout=30)
     except HTTPError as error:
         code = error.code
         error.close()

@@ -15,7 +15,11 @@ class LiveGetTest(unittest.TestCase):
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 requests.append(self.path)
-                if self.path in ("/object/blob/redirect", "/health"):
+                if self.path == "/tool-user-agent":
+                    user_agent = self.headers.get("User-Agent", "")
+                    self.send_response(200 if user_agent.startswith("LMDJ-") and
+                        "https://github.com/endaye/lmdj" in user_agent else 403)
+                elif self.path in ("/object/blob/redirect", "/health"):
                     self.send_response(302)
                     self.send_header("Location", "/mirror")
                 elif self.path == "/created":
@@ -40,6 +44,16 @@ class LiveGetTest(unittest.TestCase):
 
     def test_direct_200_returns_original_bytes(self):
         with live_get(self.origin + "/object/blob/direct") as response:
+            self.assertEqual(response.read(), b"expected bytes")
+
+    def test_explicit_tool_identity_reaches_the_object(self):
+        try:
+            response = live_get(self.origin + "/tool-user-agent")
+        except ValueError as error:
+            self.fail(
+                "why: the live verifier did not reach the object with an explicit LMDJ tool identity; "
+                "remedy: send the descriptive LMDJ User-Agent in live_get. " + str(error))
+        with response:
             self.assertEqual(response.read(), b"expected bytes")
 
     def test_object_redirect_is_refused_without_fetching_mirror(self):
