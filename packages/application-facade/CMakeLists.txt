@@ -484,6 +484,15 @@ if(BUILD_TESTING)
   lmdj_add_test(NAME facade.pad_delete TIER component
     COMMAND lmdj_facade_pad_delete_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
+  add_executable(lmdj_facade_pattern_events_edit_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_events_edit_test.cpp")
+  target_include_directories(lmdj_facade_pattern_events_edit_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_facade_pattern_events_edit_tests PRIVATE lmdj::application)
+  lmdj_target_warnings(lmdj_facade_pattern_events_edit_tests)
+  lmdj_target_sanitizers(lmdj_facade_pattern_events_edit_tests)
+  lmdj_add_test(NAME facade.pattern_events_edit TIER component
+    COMMAND lmdj_facade_pattern_events_edit_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
   add_executable(
     lmdj_facade_sample_surface_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/sample_surface_test.cpp"
