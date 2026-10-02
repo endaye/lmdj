@@ -294,3 +294,21 @@ In the Sequence recovery list, restoring into another Pattern now sits behind a
 Automation covers the prompt in component tests and in a packaged owner-loss
 journey. That journey keeps the take, then reloads with the same persisted Truth
 and no prompt. Real crash and device-lifecycle acceptance is not claimed.
+
+## Error messages
+
+Creator keeps one message catalogue (`state/error_messages.ts`). It maps each
+public error code to what happened, in the user's terms, and to what to do
+next. Storage problems are matched by their storage condition: a full device
+says how to free space, and other storage failures say that saved work stays
+on this device. Audio engine stops say that the Project is saved and not
+affected, and point to Retry runtime. A code Creator does not know gets the
+general message, never the code itself.
+
+The error panel, the Duplicate refusal and Sequence and transport errors use the
+catalogue. The Project overview shows only that something needs attention.
+Codes, storage conditions and resource tokens never appear in that text. They
+are recorded in Developer diagnostics, together with Runtime boot and Host
+terminal errors. Button names are unchanged. Sample, long-source import,
+Capture, Candidate, Sound Set, Perform and Undo history messages move to the
+catalogue in a later step of #1680.

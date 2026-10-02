@@ -1,3 +1,4 @@
+import {userMessage} from "../state/error_messages";
 import {useEffect, useRef, useState} from "react";
 
 import {ValueSlider} from "./value_slider";
@@ -234,10 +235,14 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
         </section>
       ) : null}
       {state.errorCode !== null ? (
-        <p role="alert" className="sequence-error">{state.errorCode}</p>
+        <p role="alert" className="sequence-error">
+          {userMessage(state.errorCode).message} {userMessage(state.errorCode).nextStep}
+        </p>
       ) : null}
       {props.showRefresh === false || transport.errorCode === null ? null : (
-        <p role="alert" className="sequence-error">{transport.errorCode}</p>
+        <p role="alert" className="sequence-error">
+          {userMessage(transport.errorCode).message} {userMessage(transport.errorCode).nextStep}
+        </p>
       )}
     </section>
   );

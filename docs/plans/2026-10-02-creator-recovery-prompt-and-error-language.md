@@ -54,6 +54,16 @@ and Host terminal errors also record into Developer diagnostics. Tests that
 pinned old copy or codes in user-visible text are updated to the new copy, and
 the code assertions move to the diagnostics log.
 
+Task 2 declared files: `apps/creator-web/src/state/error_messages.ts` (new)
+with `test/error_messages.test.ts` (new); `src/components/error_panel.tsx`,
+`project_surface.tsx`, `project_overview.tsx`, `sequence_overview.tsx`,
+`sequence_touch_workspace.tsx`; the Runtime diagnostics effect in
+`src/app.tsx`; the tests that pinned the old copy or a code in user-visible
+text (`audio_lifecycle`, `project_create`, `workspace_shell`, and the two
+WebKit capability-boundary specs, whose code assertion moves to
+Developer diagnostics); portal `/hosts/creator-web/`. The Project overview row
+shows "Needs attention", so the alert is the single place for the message.
+
 ## Task 3 — Remaining surfaces
 
 Sample, long-source ingest, Capture, Candidate, Sound Set, Perform and

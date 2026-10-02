@@ -161,6 +161,18 @@ function sessionFixture(name: string) {
   };
 }
 
+
+// #1680: a failure shows user language in its alert and keeps its code in
+// Developer diagnostics.
+async function expectUserLanguageFailure(code: string, message: string) {
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain(message);
+  expect(alert.textContent).not.toContain(code);
+  fireEvent.click(screen.getByText(/^Developer diagnostics \(\d+\)$/));
+  expect(within(screen.getByRole("region", {name: "Developer diagnostics"}))
+    .getAllByText(code).length).toBeGreaterThan(0);
+}
+
 test("suspend stays explicit and restart rebuilds, lists, and reopens without autoplay", async () => {
   const user = userEvent.setup();
   const first = sessionFixture("first");
@@ -353,8 +365,50 @@ test("a failed Runtime Session start never becomes ready", async () => {
   failed.session.start = async () => false;
   failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID"});
   render(<App runtimeFactory={() => failed.session} />);
-  expect((await screen.findByRole("alert")).textContent).toContain("HOST_STATE_INVALID");
+  await expectUserLanguageFailure("HOST_STATE_INVALID", "That can't be done right now.");
   expect(screen.getByTestId("creator-phase").textContent).toBe("failed");
+});
+
+test("a repeated Host notification of one Runtime error is recorded once", async () => {
+  const failed = sessionFixture("failed");
+  failed.session.start = async () => false;
+  failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID"});
+  render(<App runtimeFactory={() => failed.session} />);
+  await screen.findByRole("alert");
+  // Each notification carries a fresh but equal details object.
+  for (let repeat = 0; repeat < 3; repeat += 1) {
+    act(() => failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID", errorDetails: {}}));
+  }
+  await screen.findByText("Developer diagnostics (1)");
+  act(() => failed.emit({state: "failed", errorCode: "INTERNAL_ERROR", errorDetails: {}}));
+  await screen.findByText("Developer diagnostics (2)");
+  fireEvent.click(screen.getByText("Developer diagnostics (2)"));
+  const log = within(screen.getByRole("region", {name: "Developer diagnostics"}));
+  expect(log.getAllByText("Runtime")).toHaveLength(2);
+  expect(log.getAllByText("HOST_STATE_INVALID").length).toBeGreaterThan(0);
+  expect(log.getAllByText("INTERNAL_ERROR").length).toBeGreaterThan(0);
+});
+
+test("a Runtime error with unserializable details is still shown and recorded", async () => {
+  const failed = sessionFixture("failed");
+  failed.session.start = async () => false;
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID", errorDetails: cyclic});
+  render(<App runtimeFactory={() => failed.session} />);
+  expect((await screen.findByRole("alert")).textContent).toContain("That can't be done right now.");
+  expect(await screen.findByText("Developer diagnostics (1)")).toBeTruthy();
+});
+
+test("the overview error row names no code but keeps it for support", async () => {
+  const failed = sessionFixture("failed");
+  failed.session.start = async () => false;
+  failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID"});
+  render(<App runtimeFactory={() => failed.session} />);
+  await screen.findByRole("alert");
+  await userEvent.click(screen.getByRole("button", {name: /^Project$/}));
+  const row = screen.getByText("Needs attention");
+  expect(row.getAttribute("data-error-code")).toBe("HOST_STATE_INVALID");
 });
 
 test("recovery keeps the Project playable for the required probe Trigger", async () => {
@@ -505,8 +559,7 @@ test("a failed activation with Runtime diagnostics restores its prior phase", as
     await screen.findByText("Audio suspended");
 
     await user.click(screen.getByRole("button", {name: "Activate audio"}));
-    expect((await screen.findByRole("alert")).textContent)
-      .toContain("HOST_STATE_INVALID");
+    await expectUserLanguageFailure("HOST_STATE_INVALID", "That can't be done right now.");
     expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
   } finally {
     activationStub.current = null;
@@ -533,8 +586,7 @@ test("a rejected activation restores its prior phase while reporting the error",
     await screen.findByText("Audio suspended");
 
     await user.click(screen.getByRole("button", {name: "Activate audio"}));
-    expect((await screen.findByRole("alert")).textContent)
-      .toContain("HOST_STATE_INVALID");
+    await expectUserLanguageFailure("HOST_STATE_INVALID", "That can't be done right now.");
     expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
   } finally {
     activationStub.current = null;
