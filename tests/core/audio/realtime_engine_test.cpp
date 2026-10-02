@@ -3681,13 +3681,38 @@ void starting_kernel_voices_does_not_allocate() {
   render_frames(engine, 1);
   // Every #1666 stage at once: reverse, a fractional pitch, pan, and a
   // ping-pong loop from a loop point; plus a crossfaded forward loop.
-  const auto ping_pong = dsp_playback(
+  auto ping_pong = dsp_playback(
       0, 512, TriggerMode::loop_toggle,
       {100, 0, 700, 40,
        lmdj::cooker::ResolvedVoiceDsp::kReverse |
            lmdj::cooker::ResolvedVoiceDsp::kPingPong});
-  const auto crossfaded = dsp_playback(
+  auto crossfaded = dsp_playback(
       0, 512, TriggerMode::loop_gate, {64, 128, -300, -60, 0});
+  // Every #1667 stage too, so both voices design their filters at trigger:
+  // user envelopes, a low-pass tone with all three EQ bands, and a high-pass
+  // tone with both shelves dragged to cuts.
+  ping_pong.dsp.attack_frames = 480;
+  ping_pong.dsp.release_frames = 960;
+  ping_pong.dsp.tone = -60;
+  ping_pong.dsp.eq_flags = lmdj::cooker::ResolvedVoiceDsp::kEqLow |
+                           lmdj::cooker::ResolvedVoiceDsp::kEqMid |
+                           lmdj::cooker::ResolvedVoiceDsp::kEqHigh;
+  ping_pong.dsp.eq_low_freq_hz = 120;
+  ping_pong.dsp.eq_low_gain_millidb = 6'000;
+  ping_pong.dsp.eq_mid_freq_hz = 1'500;
+  ping_pong.dsp.eq_mid_gain_millidb = -9'000;
+  ping_pong.dsp.eq_mid_q_milli = 3'000;
+  ping_pong.dsp.eq_high_freq_hz = 8'000;
+  ping_pong.dsp.eq_high_gain_millidb = 4'000;
+  crossfaded.dsp.attack_frames = 960;
+  crossfaded.dsp.release_frames = 4'800;
+  crossfaded.dsp.tone = 60;
+  crossfaded.dsp.eq_flags = lmdj::cooker::ResolvedVoiceDsp::kEqLow |
+                            lmdj::cooker::ResolvedVoiceDsp::kEqLowCut |
+                            lmdj::cooker::ResolvedVoiceDsp::kEqHigh |
+                            lmdj::cooker::ResolvedVoiceDsp::kEqHighCut;
+  crossfaded.dsp.eq_low_freq_hz = 200;
+  crossfaded.dsp.eq_high_freq_hz = 6'000;
   LMDJ_CHECK(engine.enqueue_control(control(
                  30, 0, PadControlKind::preview_set, 0, ping_pong)) ==
              EnqueueResult::accepted);

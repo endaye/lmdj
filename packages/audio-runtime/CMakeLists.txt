@@ -341,14 +341,20 @@ if(BUILD_TESTING)
     PRIVATE lmdj::audio_runtime Threads::Threads
   )
   if(LMDJ_SANITIZER STREQUAL "none")
+    # The every-tone-stage scenario is timed only where the nightly Release
+    # stress gate runs: an optimized build (owner decision 2026-10-02).
     target_compile_definitions(
       lmdj_master_fx_stress_tests
-      PRIVATE LMDJ_MASTER_FX_VERIFY_REALTIME_DEADLINE=1
+      PRIVATE
+        LMDJ_MASTER_FX_VERIFY_REALTIME_DEADLINE=1
+        LMDJ_MASTER_FX_VERIFY_OPTIMIZED_DEADLINE=$<IF:$<CONFIG:Release,RelWithDebInfo,MinSizeRel>,1,0>
     )
   else()
     target_compile_definitions(
       lmdj_master_fx_stress_tests
-      PRIVATE LMDJ_MASTER_FX_VERIFY_REALTIME_DEADLINE=0
+      PRIVATE
+        LMDJ_MASTER_FX_VERIFY_REALTIME_DEADLINE=0
+        LMDJ_MASTER_FX_VERIFY_OPTIMIZED_DEADLINE=0
     )
   endif()
   lmdj_target_warnings(lmdj_master_fx_stress_tests)
