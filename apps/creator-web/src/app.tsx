@@ -1,4 +1,4 @@
-import {AuthoringHistoryControls} from "./components/authoring_history";
+import {useAuthoringHistory} from "./components/authoring_history";
 import {CandidateSurface, isCandidateSession} from "./components/candidate_surface";
 import {
   useCallback,
@@ -285,6 +285,9 @@ function Workspace({
   const [inputControllerRevision, setInputControllerRevision] = useState(0);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyPerformPhase, setHistoryPerformPhase] = useState("idle");
+  // The rail's SHIFT modifier: toggled by its key, consumed by the ← / →
+  // history chord or by any other rail action.
+  const [railShift, setRailShift] = useState(false);
   const [capturePhase, setCapturePhase] = useState<CapturePhase>("idle");
   const capturePhaseRef = useRef(capturePhase);
   capturePhaseRef.current = capturePhase;
@@ -1852,6 +1855,7 @@ function Workspace({
   };
   const selectMode = (mode: CreatorMode) => {
     inputController.current?.clearPressed();
+    setRailShift(false);
     // Normal navigation never stops the global Pattern transport; only the
     // separately owned performance recording leaves with its mode.
     if (activeModeRef.current === "perform" && mode !== "perform" &&
@@ -1866,6 +1870,7 @@ function Workspace({
   };
   const selectBank = (bank: typeof state.activeBank) => {
     inputController.current?.clearPressed();
+    setRailShift(false);
     dispatch({type: "bank-selected", bank});
     const current = stateRef.current;
     if (activeMode === "sample" && armedCaptureSlot === null &&
@@ -1901,34 +1906,40 @@ function Workspace({
     />
   );
 
+  const history = useAuthoringHistory({
+    session,
+    projectId: state.project.current?.projectId ?? null,
+    revision: state.project.current?.revision ?? null,
+    refreshKey: `${activeMode}:${sequence.phase}:${transport.status?.phase ?? "idle"}:${playing}:${recording}:${historyPerformPhase}`,
+    disabledReason: state.project.phase !== "ready" ? "Open a Project to use its history." :
+      state.runtime.phase !== "ready" ? "Wait for the audio session to become ready." :
+      state.transfer.phase !== "idle" || state.sample.pendingAction !== null ||
+      state.projectProjectionRefresh !== null ? "Wait for the current Project change to finish." :
+      !["idle", "permission-error"].includes(capturePhase) ? "Finish or discard the sound recording first." :
+      historyPerformPhase !== "idle" ? "Save or discard the Performance recording first." :
+      state.sample.draft !== null ? "Finish the parameter edit first." : "",
+    onBusy: setHistoryBusy,
+    onChanged: async () => {
+      const project = await refreshPerformProject();
+      sequenceAuthoringRevision.current = project.revision;
+      dispatchTransport({type: "revision", revision: project.revision});
+      if (sequenceRef.current.selectedPatternId !== null &&
+          !project.patterns.some(({patternId}) => patternId === sequenceRef.current.selectedPatternId)) {
+        dispatchSequence({type: "selected", patternId: project.patternId});
+      }
+      dispatch({type: "sample-action", action: {type: "draft-cancelled"}});
+      await refreshSequence();
+    },
+  });
+
   return (
     <DiagnosticsProvider value={reportFailure}>
     <div className="hardware-workspace">
-        <AuthoringHistoryControls
-          session={session}
-          projectId={state.project.current?.projectId ?? null}
-          revision={state.project.current?.revision ?? null}
-          refreshKey={`${activeMode}:${sequence.phase}:${transport.status?.phase ?? "idle"}:${playing}:${recording}:${historyPerformPhase}`}
-          disabledReason={state.project.phase !== "ready" ? "Open a Project to use its history." :
-            state.runtime.phase !== "ready" ? "Wait for the audio session to become ready." :
-            state.transfer.phase !== "idle" || state.sample.pendingAction !== null ||
-            state.projectProjectionRefresh !== null ? "Wait for the current Project change to finish." :
-            !["idle", "permission-error"].includes(capturePhase) ? "Finish or discard the sound recording first." :
-            historyPerformPhase !== "idle" ? "Save or discard the Performance recording first." :
-            state.sample.draft !== null ? "Finish the parameter edit first." : ""}
-          onBusy={setHistoryBusy}
-          onChanged={async () => {
-            const project = await refreshPerformProject();
-            sequenceAuthoringRevision.current = project.revision;
-            dispatchTransport({type: "revision", revision: project.revision});
-            if (sequenceRef.current.selectedPatternId !== null &&
-                !project.patterns.some(({patternId}) => patternId === sequenceRef.current.selectedPatternId)) {
-              dispatchSequence({type: "selected", patternId: project.patternId});
-            }
-            dispatch({type: "sample-action", action: {type: "draft-cancelled"}});
-            await refreshSequence();
-          }}
-        />
+        {/* History status stays in the accessibility tree; the rail lamps carry
+            the visual state, so no software toolbar sits above the device. */}
+        <div role="status" className="visually-hidden" data-testid="authoring-history-status">
+          {history.statusText}
+        </div>
         <div inert={historyBusy} className="creator-console-frame">
         <HardwareConsole
           physicalControls={
@@ -1946,6 +1957,7 @@ function Workspace({
               onSelectMode={selectMode}
               onSelectBank={selectBank}
               onRecord={(event) => {
+                setRailShift(false);
                 const project = stateRef.current.project.current;
                 const epoch = gestureEpoch.current;
                 const activation = activateAudio(event.nativeEvent);
@@ -1960,6 +1972,7 @@ function Workspace({
               recordEnabled={transportReady && !transportBusy}
               recording={recording}
               onPlayStop={(event) => {
+                setRailShift(false);
                 const project = stateRef.current.project.current;
                 const epoch = gestureEpoch.current;
                 const activation = activateAudio(event.nativeEvent);
@@ -1973,6 +1986,22 @@ function Workspace({
               }}
               playEnabled={transportReady && !transportBusy}
               playing={playing}
+              history={{
+                shifted: railShift,
+                onToggleShift: () => setRailShift((value) => !value),
+                undoAvailable: history.undoAvailable,
+                redoAvailable: history.redoAvailable,
+                onUndo: () => {
+                  setRailShift(false);
+                  history.undo();
+                },
+                onRedo: () => {
+                  setRailShift(false);
+                  history.redo();
+                },
+                undoTitle: history.undoTitle,
+                redoTitle: history.redoTitle,
+              }}
             />
           }
           overview={

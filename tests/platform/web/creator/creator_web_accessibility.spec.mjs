@@ -183,13 +183,15 @@ for (const viewport of [
     await expect(page.getByRole("button", {name: /^Perform/})).toBeEnabled();
     // The physical column is the rail now. Its keys are icons, so the walk
     // reads each stop's accessible name. Audio is not running in this case,
-    // and the first transport/Pad gesture wakes it. Only unassigned encoder
-    // and direction keys are skipped; landing on the
-    // first Pad after the transport keys proves the complete physical rail.
+    // The first transport/Pad gesture wakes audio. Unassigned encoders
+    // and directions are skipped; history directions stay inert until SHIFT
+    // is held. SHIFT remains reachable, followed by Record, Play/Stop and
+    // the first Pad, proving the complete physical rail.
     await page.getByTestId("physical-controls")
       .getByRole("button", {name: "Project", exact: true}).focus();
     const expectedFocusOrder = [
       "Sample", "Sequence", "Perform", "Bank A", "Bank B", "Bank C", "Bank D",
+      "SHIFT — engage the Undo/Redo layer",
       "Record", "Play/Stop", "Pad A1 — assigned — Key Q",
     ];
     const focusOrder = [];

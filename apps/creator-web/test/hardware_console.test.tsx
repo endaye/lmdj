@@ -60,10 +60,66 @@ test("names D01–D04 physical keys by accessible name and exported icons", () =
   expect(screen.getByRole("button", {
     name: "Play/Stop — needs a playable Project and running audio",
   }).querySelector("svg")).toBeTruthy();
+  // The −/+ placeholder row is gone; SHIFT holds its row as one full-width key.
+  expect(screen.queryByRole("button", {name: /^Decrease/})).toBeNull();
+  expect(screen.queryByRole("button", {name: /^Increase/})).toBeNull();
+  expect(screen.getByRole("button", {name: "SHIFT — history layer unavailable"})
+    .classList.contains("is-shift")).toBe(true);
   expect(screen.getByRole("group", {name: "Encoders"})).toBeTruthy();
   expect(screen.getAllByRole("button", {
     name: /Encoder \d — unassigned until hardware mapping is approved/,
   })).toHaveLength(4);
+});
+
+test("the rail SHIFT chord gates Undo/Redo behind the modifier with lamp availability", () => {
+  const onUndo = vi.fn();
+  const onRedo = vi.fn();
+  const onToggleShift = vi.fn();
+  const history = {
+    shifted: false,
+    onToggleShift,
+    undoAvailable: true,
+    redoAvailable: false,
+    onUndo,
+    onRedo,
+    undoTitle: "Undo Edit Pad",
+    redoTitle: "Nothing to redo",
+  };
+  const view = render(<PhysicalControls
+    activeMode="sample"
+    activeBank={0}
+    onSelectMode={() => {}}
+    onSelectBank={() => {}}
+    history={history}
+  />);
+  const shift = screen.getByRole("button", {name: "SHIFT — engage the Undo/Redo layer"});
+  const undo = screen.getByRole("button", {name: "Undo — SHIFT + ←"});
+  const redo = screen.getByRole("button", {name: "Redo — SHIFT + →"});
+  // Lamps report availability even before the modifier engages; both
+  // direction keys stay inert until SHIFT is held.
+  expect(undo.classList.contains("is-lit")).toBe(true);
+  expect(redo.classList.contains("is-lit")).toBe(false);
+  expect(shift.getAttribute("aria-pressed")).toBe("false");
+  expect(undo).toHaveProperty("disabled", true);
+  expect(redo).toHaveProperty("disabled", true);
+  fireEvent.click(shift);
+  expect(onToggleShift).toHaveBeenCalledTimes(1);
+
+  view.rerender(<PhysicalControls
+    activeMode="sample"
+    activeBank={0}
+    onSelectMode={() => {}}
+    onSelectBank={() => {}}
+    history={{...history, shifted: true}}
+  />);
+  expect(shift.getAttribute("aria-pressed")).toBe("true");
+  expect(undo).toHaveProperty("disabled", false);
+  // Redo is not available, so its chord stays inert even while shifted.
+  expect(redo).toHaveProperty("disabled", true);
+  fireEvent.click(undo);
+  expect(onUndo).toHaveBeenCalledTimes(1);
+  fireEvent.click(redo);
+  expect(onRedo).not.toHaveBeenCalled();
 });
 
 test("physical icons are inline SVG so the img-src 'self' CSP cannot blank them", () => {

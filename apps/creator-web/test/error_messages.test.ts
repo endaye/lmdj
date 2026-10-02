@@ -99,7 +99,7 @@ test("a full device during a Sample change says how to free space", () => {
 
 test("a preview failure points to activating audio rather than to a busy Project", () => {
   expect(sampleNextStep({code: "HOST_STATE_INVALID", message: SAMPLE_PREVIEW_FAILURE.message}))
-    .toBe("Activate audio, then preview again.");
+    .toBe("Play a Pad to start audio, then preview again.");
   expect(sampleNextStep({code: "HOST_STATE_INVALID", message: "That can't be done right now."}))
     .toBe(sampleMessage("HOST_STATE_INVALID").nextStep);
 });

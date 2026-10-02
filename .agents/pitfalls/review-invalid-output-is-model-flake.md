@@ -1,12 +1,15 @@
 ---
 id: review-invalid-output-is-model-flake
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-15
     occurrence: https://github.com/endaye/lmdj/actions/runs/34960024950
     observed_by: Kimi (agent)
-exit: none
+  - date: 2026-10-02
+    occurrence: https://github.com/endaye/lmdj/actions/runs/36954671542
+    observed_by: Kimi (agent)
+exit: skill:.agents/skills/lmdj-review-ci-triage/SKILL.md
 ---
 
 # A `not-reviewed` / `invalid_output` review result is usually a malformed model response, not an input defect — retry the same head before redesigning the review input.
@@ -27,13 +30,15 @@ review input that was already within the enforced limits.
 
 ## How to apply
 
-When a review run ends `not-reviewed` with `invalid_output`, first confirm the
-input was actually admitted (file and byte budgets in the review input
-document were not the refusal reason — those refusals are explicit and
-separate, see `review-input-generated-bytes-exhaust-limit`). Then redispatch
-the review for the unchanged head (`gh workflow run pr-review.yml -f
-pr_number=<N>`) and re-poll instead of editing the change. Treat a pass on the
-unchanged head as confirmation the failure was model-side. No eligible
-mechanism exists yet (`exit: none`): automatic retry of `invalid_output`
-inside the review workflow would need to bound attempts and preserve the
-failure as evidence, and that design has not been made.
+When a review run ends `not-reviewed` with `invalid_output`, follow the
+classification and rerun procedure in
+[`.agents/skills/lmdj-review-ci-triage/SKILL.md`](../skills/lmdj-review-ci-triage/SKILL.md)
+("Model-variance invalid_output: rerun before diagnosing"), which this entry
+now exits to: confirm the input was actually admitted (file and byte budgets
+in the review input document were not the refusal reason — those refusals are
+explicit and separate, see `review-input-generated-bytes-exhaust-limit`),
+download the review artifact and classify from `failure.json` /
+`t2-result.json`, then rerun the whole run for the unchanged head
+(`gh run rerun <id>` without `--failed`) and re-poll instead of editing the
+change. Treat a pass on the unchanged head as confirmation the failure was
+model-side.
