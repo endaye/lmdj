@@ -232,11 +232,21 @@ test("boot creates a stored Project, New Project adds one, and a reload reopens 
   const emptyPads = page.getByRole("button", {name: /^Pad A\d+ — empty — Key [QWERTYUIASDFGHJK]$/});
   const sampleKey = page.getByRole("button", {name: "Sample", exact: true});
 
-  // A fresh store boots into an automatically created, empty Project on Sample.
+  // The generic proof server has no default-kit Catalog. Boot still owns its
+  // first Project and starts the seed; loading/failed labels are not empty
+  // labels. Read the authoritative empty Bank independently of that progress.
   await page.goto("/index.html");
   await waitForBootProject(page);
   await expect(sampleKey).toHaveAttribute("aria-current", "page");
-  await expect(emptyPads).toHaveCount(16);
+  await expect(page.getByTestId("pad-matrix").getByRole("button", {
+    name: /^Pad A\d+ — .* — Key [QWERTYUIASDFGHJK]$/,
+  })).toHaveCount(16);
+  const firstTruth = (await inspectProject(page)).project;
+  expect(firstTruth.banks[0].pads).toHaveLength(16);
+  expect(firstTruth.banks[0].pads.map(pad => pad.asset_id)).toEqual(Array(16).fill(null));
+  const seed = await page.evaluate(() => JSON.parse(localStorage.getItem("lmdj.creator.default-seed.v1")));
+  expect(seed.projectId).toBe(firstTruth.project_id);
+  expect(seed.slots).toHaveLength(16);
   const first = (await overviewProjectId(page).textContent())?.trim();
   expect(first).toMatch(/^[0-9a-f]{8}$/);
 
@@ -245,6 +255,12 @@ test("boot creates a stored Project, New Project adds one, and a reload reopens 
   await page.getByRole("button", {name: "New Project"}).click();
   await expect(overviewProjectId(page)).not.toHaveText(first, {timeout: 60_000});
   await expect(sampleKey).toHaveAttribute("aria-current", "page");
+  await expect(emptyPads).toHaveCount(16);
+  const secondTruth = (await inspectProject(page)).project;
+  expect(secondTruth.project_id).not.toBe(firstTruth.project_id);
+  expect(secondTruth.banks[0].pads.map(pad => pad.asset_id)).toEqual(Array(16).fill(null));
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("lmdj.creator.default-seed.v1")).projectId))
+    .toBe(firstTruth.project_id);
   const second = (await overviewProjectId(page).textContent())?.trim();
   expect(second).toMatch(/^[0-9a-f]{8}$/);
 
@@ -254,6 +270,8 @@ test("boot creates a stored Project, New Project adds one, and a reload reopens 
   // which surfaces as a visible, retryable PROJECT_BUSY.
   await page.reload();
   await waitForProjectReopen(page, second);
+  await expect(emptyPads).toHaveCount(16);
+  expect((await inspectProject(page)).project).toEqual(secondTruth);
   await page.getByRole("button", {name: "Project", exact: true}).click();
   await page.getByRole("button", {name: "Open local"}).click();
   await expect(page.getByRole("button", {name: /^Open Project [0-9a-f]{8}$/})).toHaveCount(2);

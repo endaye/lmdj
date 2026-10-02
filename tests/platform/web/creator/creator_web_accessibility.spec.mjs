@@ -148,7 +148,9 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     await page.goto("/index.html");
     await waitForBootProject(page);
-    await expect(page.getByRole("button", {name: /^Pad A\d+ — empty — Key [QWERTYUIASDFGHJK]$/}))
+    // This proof has no Catalog upstream: first-project slots fail explicitly
+    // and cannot masquerade as empty or playable Pads.
+    await expect(page.getByRole("button", {name: /^Pad A\d+ — failed — Key [QWERTYUIASDFGHJK]$/}))
       .toHaveCount(16);
     expect(await page.evaluate(() =>
       document.documentElement.scrollWidth <= document.documentElement.clientWidth,
