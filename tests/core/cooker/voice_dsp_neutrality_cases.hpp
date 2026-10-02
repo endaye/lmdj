@@ -60,6 +60,12 @@ inline std::vector<VoiceDspNeutralityCase> voice_dsp_neutrality_cases() {
        44'100, false},
       {"attack", with([](PadPlayback& p) { p.attack_ms = 1; }), 44'100, false},
       {"release", with([](PadPlayback& p) { p.release_ms = 1; }), 44'100, false},
+      {"release on a one-shot, which never plays it",
+       with([](PadPlayback& p) {
+         p.trigger_mode = TriggerMode::one_shot;
+         p.release_ms = 4'000;
+       }),
+       44'100, true},
       // The extremes Project Truth admits: each still resolves, and no
       // conversion to frames or narrower fields wraps to zero.
       {"longest attack", with([](PadPlayback& p) { p.attack_ms = 2'000; }), 44'100,

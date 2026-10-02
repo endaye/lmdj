@@ -198,8 +198,10 @@ bool valid_trigger_mode(domain::TriggerMode mode) noexcept {
 // Resolves the lmdj.project.v5 5.1.0 and 5.2.0 voice settings. Source-frame
 // values are rescaled to 48 kHz output frames exactly as the trim start is; a
 // rounding overshoot is clamped back inside the resolved loop so the block
-// always fits. Envelope milliseconds become 48 kHz output frames, a tone in
-// its +/-2 deadband resolves to neutral, and the EQ keeps its own units.
+// always fits. Envelope milliseconds become 48 kHz output frames, a one-shot's
+// release resolves to zero because a one-shot never plays it (decision
+// 2026-09-30 point 5), a tone in its +/-2 deadband resolves to neutral, and the
+// EQ keeps its own units.
 // Built without the voice DSP (LMDJ_VOICE_DSP=0), it accepts exactly the
 // settings that resolve to the neutral block and refuses the rest, so a Pad
 // never plays differently from how it plays on the desktop.
@@ -231,6 +233,9 @@ foundation::Result<ResolvedVoiceDsp> resolve_voice_dsp(
   const auto tone = playback.tone >= -2 && playback.tone <= 2
                         ? std::int8_t{0}
                         : static_cast<std::int8_t>(playback.tone);
+  const auto release_ms =
+      playback.trigger_mode == domain::TriggerMode::one_shot ? 0
+                                                             : playback.release_ms;
 #if LMDJ_VOICE_DSP
   std::uint8_t flags = 0;
   if (playback.reverse) {
@@ -247,7 +252,7 @@ foundation::Result<ResolvedVoiceDsp> resolve_voice_dsp(
       flags,
   };
   dsp.attack_frames = static_cast<std::uint32_t>(playback.attack_ms) * 48U;
-  dsp.release_frames = static_cast<std::uint32_t>(playback.release_ms) * 48U;
+  dsp.release_frames = static_cast<std::uint32_t>(release_ms) * 48U;
   dsp.tone = tone;
   if (const auto& low = playback.eq.low; low.has_value()) {
     dsp.eq_flags |= ResolvedVoiceDsp::kEqLow;
@@ -277,7 +282,7 @@ foundation::Result<ResolvedVoiceDsp> resolve_voice_dsp(
       loop_offset == 0 && crossfade == 0 && playback.pitch_cents == 0 &&
       playback.pan == 0 && !playback.reverse &&
       playback.loop_mode != domain::LoopMode::ping_pong &&
-      playback.attack_ms == 0 && playback.release_ms == 0 && tone == 0 &&
+      playback.attack_ms == 0 && release_ms == 0 && tone == 0 &&
       !playback.eq.low.has_value() && !playback.eq.mid.has_value() &&
       !playback.eq.high.has_value();
   if (!neutral) {
