@@ -109,15 +109,26 @@ export function useAuthoringHistory(props: UseAuthoringHistoryOptions): Authorin
     };
   }, [props.session, props.projectId, props.revision, props.refreshKey]);
 
+  // One synchronous admission reading for the rail chord, the keyboard
+  // shortcut and restore itself, so preventDefault only happens when a
+  // history action will actually run.
+  const canRestoreNow = useRef<(direction: "undo" | "redo") => boolean>(() => false);
+  canRestoreNow.current = (direction) => {
+    const current = latest.current;
+    const snapshot = latestStatus.current;
+    if (!isAuthoringHistorySession(current.session) || snapshot === null ||
+        inFlight.current || current.disabledReason) return false;
+    return (retained.current?.direction === direction &&
+        retained.current.request.sessionId === snapshot.sessionId) ||
+      (direction === "undo" ? snapshot.canUndo : snapshot.canRedo);
+  };
+
   const restore = useCallback(async (direction: "undo" | "redo") => {
+    if (!canRestoreNow.current(direction)) return;
     const current = latest.current;
     const session = current.session;
     const snapshot = latestStatus.current;
-    if (!isAuthoringHistorySession(session) || snapshot === null || inFlight.current ||
-        current.disabledReason) return;
-    const canRetry = retained.current?.direction === direction &&
-      retained.current.request.sessionId === snapshot.sessionId;
-    if (!(canRetry || (direction === "undo" ? snapshot.canUndo : snapshot.canRedo))) return;
+    if (!isAuthoringHistorySession(session) || snapshot === null) return;
     inFlight.current = true;
     setBusy(true);
     current.onBusy(true);
@@ -166,15 +177,18 @@ export function useAuthoringHistory(props: UseAuthoringHistoryOptions): Authorin
   const redo = useCallback(() => { void restore("redo"); }, [restore]);
 
   // Desktop parity: Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z redoes. Editable
-  // fields keep their native text undo, and a widget that already handled
-  // the key keeps precedence over the session history.
+  // fields keep their native text undo, a widget that already handled the
+  // key keeps precedence, and the key is only intercepted when a history
+  // action will actually run.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (event.code !== "KeyZ" || event.altKey || !(event.metaKey || event.ctrlKey)) return;
       if (isEditableTarget(event.target)) return;
+      const direction = event.shiftKey ? "redo" : "undo";
+      if (!canRestoreNow.current(direction)) return;
       event.preventDefault();
-      void restore(event.shiftKey ? "redo" : "undo");
+      void restore(direction);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);

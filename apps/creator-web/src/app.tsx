@@ -1937,10 +1937,16 @@ function Workspace({
                 state.project.current !== null}
               onSelectMode={selectMode}
               onSelectBank={selectBank}
-              onRecord={() => { void submitTransportIntent("record"); }}
+              onRecord={() => {
+                setRailShift(false);
+                void submitTransportIntent("record");
+              }}
               recordEnabled={transportReady && !transportBusy}
               recording={recording}
-              onPlayStop={() => { void submitTransportIntent("play_stop"); }}
+              onPlayStop={() => {
+                setRailShift(false);
+                void submitTransportIntent("play_stop");
+              }}
               playEnabled={transportReady && !transportBusy}
               playing={playing}
               history={{

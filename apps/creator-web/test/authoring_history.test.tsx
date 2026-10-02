@@ -43,6 +43,10 @@ function Harness(props: Parameters<typeof useAuthoringHistory>[0]) {
         activeBank={0}
         onSelectMode={() => setShifted(false)}
         onSelectBank={() => setShifted(false)}
+        onRecord={() => setShifted(false)}
+        recordEnabled
+        onPlayStop={() => setShifted(false)}
+        playEnabled
         history={{
           shifted,
           onToggleShift: () => setShifted((value) => !value),
@@ -90,6 +94,18 @@ test("the lamp carries availability and the chord needs SHIFT first", async () =
   await waitFor(() => expect(lit(redoKey())).toBe(true));
 });
 
+test("any other rail action consumes an engaged SHIFT", async () => {
+  const {props} = fixture();
+  render(<Harness {...props} />);
+  await userEvent.click(shiftKey());
+  expect(shiftKey().getAttribute("aria-pressed")).toBe("true");
+  await userEvent.click(screen.getByRole("button", {name: "Record"}));
+  expect(shiftKey().getAttribute("aria-pressed")).toBe("false");
+  await userEvent.click(shiftKey());
+  await userEvent.click(screen.getByRole("button", {name: "Play/Stop"}));
+  expect(shiftKey().getAttribute("aria-pressed")).toBe("false");
+});
+
 test("one action undoes and redoes through the same session across modes", async () => {
   const {props, history} = fixture();
   const view = render(<Harness {...props} />);
@@ -110,11 +126,25 @@ test("Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z drive the same history without the rail", 
   const {props, history} = fixture();
   render(<Harness {...props} />);
   await waitFor(() => expect(lit(undoKey())).toBe(true));
-  fireEvent.keyDown(window, {code: "KeyZ", key: "z", ctrlKey: true});
+  const undoEvent = new KeyboardEvent("keydown",
+    {code: "KeyZ", key: "z", ctrlKey: true, bubbles: true, cancelable: true});
+  fireEvent(window, undoEvent);
+  expect(undoEvent.defaultPrevented).toBe(true);
   await waitFor(() => expect(history.undoAuthoring).toHaveBeenCalledTimes(1));
   await waitFor(() => expect(lit(redoKey())).toBe(true));
   fireEvent.keyDown(window, {code: "KeyZ", key: "z", metaKey: true, shiftKey: true});
   await waitFor(() => expect(history.redoAuthoring).toHaveBeenCalledTimes(1));
+});
+
+test("the keyboard shortcut leaves the key alone when no history action can run", async () => {
+  const {props, history} = fixture({...status, undoCount: 0, undoLabel: "", canUndo: false});
+  render(<Harness {...props} />);
+  await screen.findByText("No changes in this session");
+  const event = new KeyboardEvent("keydown",
+    {code: "KeyZ", key: "z", ctrlKey: true, bubbles: true, cancelable: true});
+  fireEvent(window, event);
+  expect(event.defaultPrevented).toBe(false);
+  expect(history.undoAuthoring).not.toHaveBeenCalled();
 });
 
 test("the keyboard shortcut leaves native text undo inside editable fields", async () => {
