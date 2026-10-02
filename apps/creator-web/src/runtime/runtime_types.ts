@@ -278,6 +278,17 @@ export interface CreatorRuntimeSession {
   reloadSnapshot(patternId: string): Promise<unknown>;
   activateAudio(token: unknown): Promise<boolean>;
   suspendAudio(): Promise<boolean>;
+  // One synchronous audio-clock sample. Within one engine epoch,
+  // engineFrame ≈ (callbackHeartbeat − engineEpochHeartbeat) × 128 at
+  // contextTimeSeconds, advancing 1:1 at 48 000 fps; see the platform type
+  // for the full semantics. Throws HOST_STATE_INVALID unless audio is
+  // running. Optional so test fakes that never drive the audio clock do not
+  // need to stub it; the real session always provides it.
+  sampleAudioClock?(): Readonly<{
+    contextTimeSeconds: number;
+    callbackHeartbeat: number;
+    engineEpochHeartbeat: number;
+  }>;
   trigger(
     slot: number,
     velocity: number,

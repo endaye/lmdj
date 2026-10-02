@@ -37,6 +37,7 @@ function renderSurface(recovery = false, options: {
   const callbacks = {
     onRefresh: vi.fn(), onSwitch: vi.fn(),
     onCreatePattern: vi.fn(), onSettingsChange: vi.fn(),
+    onToggleMetronome: vi.fn(),
     onRecover: vi.fn(), onDiscard: vi.fn(),
     onSnapChange: vi.fn(), onViewportChange: vi.fn(),
     onEditModeChange: vi.fn(), onEdit: vi.fn(),
@@ -47,6 +48,7 @@ function renderSurface(recovery = false, options: {
     bank={0} snap="1/16"
     editMode="note" selection={[]} defaultVelocity={100}
     projectionRefreshing={options.projectionRefreshing ?? false}
+    metronomeOn={false}
     state={{
       ...initialSequenceState,
       recovery: recovery ? [{sessionId: "session-1", patternId: project.patternId,
@@ -101,6 +103,7 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
       onSnapChange={onSnapChange} onViewportChange={onViewportChange}
       onEditModeChange={vi.fn()} onEdit={vi.fn()}
       onSelectionChange={vi.fn()} onVelocityChange={vi.fn()}
+      metronomeOn={false} onToggleMetronome={() => {}}
       onRefresh={onRefresh} onSwitch={onSwitch}
       onCreatePattern={onCreatePattern} onSettingsChange={onSettingsChange}
       onRecover={onRecover} onDiscard={onDiscard}
@@ -194,6 +197,7 @@ test("rapid step clicks accumulate from the last requested value until Truth cat
     projectionRefreshing: false,
     onSnapChange: () => {}, onEditModeChange: () => {}, onViewportChange: () => {},
     onEdit: () => {}, onSelectionChange: () => {}, onVelocityChange: () => {},
+    metronomeOn: false, onToggleMetronome: () => {},
     onRefresh: () => {}, onSwitch: () => {},
     onCreatePattern: () => {}, onSettingsChange,
     onRecover: () => {}, onDiscard: () => {},
@@ -231,6 +235,7 @@ test("a failed settings commit resyncs the step base to the committed truth", ()
     projectionRefreshing: false,
     onSnapChange: () => {}, onEditModeChange: () => {}, onViewportChange: () => {},
     onEdit: () => {}, onSelectionChange: () => {}, onVelocityChange: () => {},
+    metronomeOn: false, onToggleMetronome: () => {},
     onRefresh: () => {}, onSwitch: () => {},
     onCreatePattern: () => {}, onSettingsChange,
     onRecover: () => {}, onDiscard: () => {},
@@ -265,6 +270,7 @@ test("locks every Tempo and Swing control while recording and says why", () => {
     projectionRefreshing={false}
     onSnapChange={() => {}} onEditModeChange={() => {}} onViewportChange={() => {}}
     onEdit={() => {}} onSelectionChange={() => {}} onVelocityChange={() => {}}
+    metronomeOn={true} onToggleMetronome={() => {}}
     onRefresh={() => {}} onSwitch={() => {}}
     onCreatePattern={() => {}} onSettingsChange={() => {}}
     onRecover={() => {}} onDiscard={() => {}} />);
@@ -279,7 +285,20 @@ test("locks every Tempo and Swing control while recording and says why", () => {
   ]) {
     expect(screen.getByRole("button", {name}).hasAttribute("disabled")).toBe(true);
   }
+  // The metronome is a monitoring switch, not a Transport setting: it stays
+  // toggleable while recording.
+  const metronome = screen.getByRole("button", {name: "Metronome"});
+  expect(metronome.hasAttribute("disabled")).toBe(false);
+  expect(metronome.getAttribute("aria-pressed")).toBe("true");
   expect(screen.getByText(/locked while recording/)).toBeTruthy();
+});
+
+test("the metronome toggle reports its state and fires the callback", () => {
+  const callbacks = renderSurface();
+  const metronome = screen.getByRole("button", {name: "Metronome"});
+  expect(metronome.getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(metronome);
+  expect(callbacks.onToggleMetronome).toHaveBeenCalledTimes(1);
 });
 
 test("requires an explicit destination and preserves original recovery semantics", () => {

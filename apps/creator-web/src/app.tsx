@@ -107,6 +107,20 @@ import {
 } from "./state/creator_state";
 import {readLastProjectId, writeLastProjectId} from "./state/last_project";
 import {
+  readMetronomePreference,
+  writeMetronomePreference,
+} from "./state/metronome_preference";
+import {
+  contextSecondsToEngineFrame,
+  engineFrameToContextSeconds,
+  hasAnchor as hasAudioClockAnchor,
+  invalidate as invalidateAudioClockAnchor,
+  retainedAudioContext,
+  sampleAnchor as sampleAudioClockAnchor,
+} from "./runtime/audio_clock";
+import {beatsInWindow} from "./runtime/metronome_scheduler";
+import {createMetronomeClickLoop} from "./runtime/metronome_click";
+import {
   initialSequenceState,
   reduceSequence,
   type SequenceState,
@@ -320,6 +334,18 @@ function Workspace({
     useState<PerformController | null>(null);
   const [performCaptureConfigured, setPerformCaptureConfigured] = useState(false);
   const [captureTransportOverlay, setCaptureTransportOverlay] = useState(false);
+  // Per-device monitoring preference, never Project Truth; boot reads it back
+  // from the Host settings store.
+  const [metronomeOn, setMetronomeOn] = useState(false);
+  // The grid a bpm commit while playing activates at its activation frame:
+  // the old grid owns beats before it, the committed grid restarts there.
+  // State (not a ref) so the metronome effect rebuilds the moment a pending
+  // grid is recorded, independent of the other dependencies' timing.
+  const [metronomePendingGrid, setMetronomePendingGrid] = useState<Readonly<{
+    fromFrame: number;
+    previousBpm: number;
+    bpm: number;
+  }> | null>(null);
   const [candidateAudio, setCandidateAudio] = useState<Readonly<{
     projectId: string; revision: number; preparing: boolean;
   }> | null>(null);
@@ -636,6 +662,9 @@ function Workspace({
     dispatch({type: "projects-listing"});
     // Read alongside the listing, so the library never shows while it waits.
     const remembered = readLastProjectId();
+    void readMetronomePreference().then((on) => {
+      if (active) setMetronomeOn(on);
+    });
     void listLocalProjectsJourney(session).then(
       async (projects) => {
         if (!active) return;
@@ -1641,6 +1670,89 @@ function Workspace({
     void refreshSequence();
   }, [transport.status]);
 
+  // The metronome is a Host monitoring loop: it runs only while the switch is
+  // on, audio is running and the transport is playing or recording, and it
+  // schedules clicks on the AudioContext clock from the engine-frame beat
+  // grid through the audio clock anchor. The anchor is re-sampled whenever
+  // audio (re)enters running — each activation is a new engine epoch — and
+  // invalidated when audio leaves running. Any grid-affecting change (a new
+  // transport origin, a committed bpm, a pending activation frame) rebuilds
+  // the loop, which cancels every click that has not sounded.
+  const metronomeAudioPhase = state.audio.phase;
+  const metronomePlaying = selectTransportPlaying(transport) ||
+    selectTransportRecording(transport);
+  const metronomeOriginFrame = transport.status?.originFrame ?? null;
+  const metronomeBpm = state.project.current?.bpm ?? null;
+  useEffect(() => {
+    const context = retainedAudioContext();
+    if (!metronomeOn || metronomeAudioPhase !== "running" || !metronomePlaying ||
+        session == null || context === null ||
+        metronomeOriginFrame === null || metronomeBpm === null) {
+      if (metronomeAudioPhase !== "running") invalidateAudioClockAnchor();
+      if (!metronomePlaying && metronomePendingGrid !== null) {
+        setMetronomePendingGrid(null);
+      }
+      return;
+    }
+    if (!hasAudioClockAnchor()) {
+      try {
+        sampleAudioClockAnchor(session);
+      } catch {
+        // Audio left running between the phase dispatch and this sample.
+        return;
+      }
+    }
+    if (metronomePendingGrid !== null &&
+        metronomePendingGrid.fromFrame <= metronomeOriginFrame) {
+      // The transport projection caught up with the committed grid.
+      setMetronomePendingGrid(null);
+    }
+    const segments = metronomePendingGrid !== null
+      ? [
+          {
+            fromFrame: 0,
+            originFrame: metronomeOriginFrame,
+            bpm: metronomePendingGrid.previousBpm,
+          },
+          {
+            fromFrame: metronomePendingGrid.fromFrame,
+            originFrame: metronomePendingGrid.fromFrame,
+            bpm: metronomePendingGrid.bpm,
+          },
+        ]
+      : [{fromFrame: 0, originFrame: metronomeOriginFrame, bpm: metronomeBpm}];
+    const loop = createMetronomeClickLoop({
+      context,
+      supply: (fromSeconds, untilSeconds) => {
+        const fromFrame = Math.max(
+          0, Math.ceil(contextSecondsToEngineFrame(fromSeconds)));
+        const toFrame = Math.max(
+          fromFrame, Math.ceil(contextSecondsToEngineFrame(untilSeconds)));
+        return beatsInWindow({fromFrame, toFrame, segments}).map((beat) => ({
+          contextTime: engineFrameToContextSeconds(beat.frame),
+          beat: beat.beat,
+          accent: beat.accent,
+        }));
+      },
+    });
+    loop.start(context.currentTime);
+    return () => loop.stop();
+  }, [
+    session,
+    metronomeOn,
+    metronomeAudioPhase,
+    metronomePlaying,
+    metronomeOriginFrame,
+    metronomeBpm,
+    metronomePendingGrid,
+  ]);
+
+  const onToggleMetronome = () => {
+    const next = !metronomeOn;
+    setMetronomeOn(next);
+    void writeMetronomePreference(next);
+  };
+
   const stopArmedCapture = async () => {
     const current = sequenceRef.current;
     if (current.phase === "flushing") return;
@@ -1789,6 +1901,16 @@ function Workspace({
       });
       sequenceAuthoringRevision.current = result.committedRevision;
       dispatchTransport({type: "revision", revision: result.committedRevision});
+      if (result.patternPublication !== null &&
+          selectTransportPlaying(currentTransport)) {
+        // A bpm commit while playing activates the new grid at the returned
+        // activation frame; the metronome switches grids there.
+        setMetronomePendingGrid({
+          fromFrame: result.patternPublication.activationFrame,
+          previousBpm: project.bpm,
+          bpm: result.bpm,
+        });
+      }
       dispatch({
         type: "project-sequence-settings-updated",
         revision: result.committedRevision,
@@ -2259,6 +2381,8 @@ function Workspace({
                 onEdit={(edit) => { void editSequenceGridEvents(edit); }}
                 onSelectionChange={setSequenceGridSelection}
                 onVelocityChange={setSequenceGridVelocity}
+                metronomeOn={metronomeOn}
+                onToggleMetronome={onToggleMetronome}
                 onRefresh={() => {
                   void refreshSequence();
                   void reconcileTransport();

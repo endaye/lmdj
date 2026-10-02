@@ -158,8 +158,8 @@ Koala 没有社区。首版只在 Project → 出 提供"分享"操作；社区�
 | --- | --- | --- | --- |
 | 播放 / 录音 / 叠录 | ✅ 5.1 | ✅ 默认开启全局 transport（`main.tsx:103`） | 保持 |
 | Pattern 数量 / 最大长度 | 32 个 / 64 小节 | 16 个 / 1-2-4-8 小节 | 维持既有收窄决策（[Sequence 录音语义设计](2026-08-22-sequence-recording-semantics-design.md) §3），是否扩展另议 |
-| Tempo / Swing / Quantize | 拖动、tap、加减 5.3 | 数值 + 显式 Apply（`sequence_touch_workspace.tsx:77-126`） | 对齐 Koala 的直接调节 |
-| 节拍器 | ✅ | 盘点未发现 | 对齐 |
+| Tempo / Swing / Quantize | 拖动、tap、加减 5.3 | ✅ 直接调节：拖动预览、松手提交一次，±1 步进与 Tap Tempo（#1672，2026-10-02） | 对齐 |
+| 节拍器 | ✅ | ✅ 设备级开关，播放/录音中可闻，不进任何录制（#1672，2026-10-02） | 对齐 |
 | **网格编辑**（增删音符、拉长、多选） | ✅ 5.7 | ❌（`sequence_overview.tsx:70-72`） | **高优先级** |
 | **撤销** / 清空 | ✅ | ❌ | **高优先级**（§12 前置能力） |
 | 拖拽复制 / 合并 Pattern | ✅ | 部分（Perform 槽位 Assign / Clear / Move） | 对齐 |

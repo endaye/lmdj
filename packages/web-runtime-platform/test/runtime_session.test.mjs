@@ -81,6 +81,7 @@ const API = [
   "deletePad",
   "retryPrepare",
   "setSamplePreview",
+  "sampleAudioClock",
   "sampleIngestLimits",
   "start",
   "savePerformance",
@@ -1699,6 +1700,67 @@ test("applyFxGesture wires session-free FX gestures without recording identity",
   await assert.rejects(session.applyFxGesture({kind: "fx_release"}), TypeError);
   await assert.rejects(session.applyFxGesture({kind: "pad_press"}), TypeError);
   assert.equal(operations.length, 5);
+});
+
+test("audio clock sampling refuses before activation and outside running", async () => {
+  let heartbeat = 0;
+  const {context, session} = fixture({
+    audioCallbackHeartbeat: () => heartbeat,
+  });
+  const refusal = (error) => error?.code === "HOST_STATE_INVALID";
+  assert.throws(() => session.sampleAudioClock(), refusal);
+  await session.start();
+  assert.throws(() => session.sampleAudioClock(), refusal);
+
+  const first = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  assert.throws(() => session.sampleAudioClock(), refusal);
+  heartbeat = 1;
+  assert.equal(await first, true);
+
+  context.currentTime = 2.5;
+  assert.deepEqual(session.sampleAudioClock(), {
+    contextTimeSeconds: 2.5,
+    callbackHeartbeat: 1,
+    engineEpochHeartbeat: 1,
+  });
+
+  await session.suspendAudio();
+  assert.throws(() => session.sampleAudioClock(), refusal);
+});
+
+test("audio clock epoch re-anchors on every activation", async () => {
+  let heartbeat = 0;
+  const {context, session} = fixture({
+    audioCallbackHeartbeat: () => heartbeat,
+  });
+  await session.start();
+
+  const first = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  heartbeat = 4;
+  assert.equal(await first, true);
+  assert.equal(session.sampleAudioClock().engineEpochHeartbeat, 4);
+
+  heartbeat = 9;
+  context.currentTime = 7.75;
+  assert.deepEqual(session.sampleAudioClock(), {
+    contextTimeSeconds: 7.75,
+    callbackHeartbeat: 9,
+    engineEpochHeartbeat: 4,
+  });
+
+  assert.equal(await session.suspendAudio(), true);
+  const second = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  heartbeat = 12;
+  assert.equal(await second, true);
+  const resampled = session.sampleAudioClock();
+  assert.equal(resampled.engineEpochHeartbeat, 12);
+  assert.equal(resampled.callbackHeartbeat, 12);
 });
 
 test("activation waits for a resumed AudioWorklet callback within its original budget", async () => {
