@@ -85,19 +85,22 @@ nlohmann::json command_event(
   };
 }
 
-AppliedCommand applied(
-    ProjectState state,
+// The applied command is built in the caller's return slot: the state is
+// moved in rather than taken by value, and no AppliedCommand temporary sits in
+// the handler's frame beside its working copy. Each such ProjectState-sized
+// value used to cost a full copy on every deep Web authoring frame (#1771).
+foundation::Result<AppliedCommand> applied(
+    ProjectState&& state,
     std::string_view type,
     const CommandMeta& meta,
     ProjectContract contract = ProjectContract::v3) {
   state.contract = std::max(state.contract, contract);
   ++state.revision;
   const auto committed_revision = state.revision;
-  return AppliedCommand{
+  return foundation::Result<AppliedCommand>::emplace_success(
       std::move(state),
       command_event(type, meta, committed_revision),
-      false,
-  };
+      false);
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -130,9 +133,9 @@ foundation::Result<AppliedCommand> apply_new_command(
       "pattern.slot_assigned",
       command.meta,
       ProjectContract::v4);
-  result.event["pattern_id"] = command.pattern_id.value();
-  result.event["pattern_slot"] = command.slot;
-  return foundation::Result<AppliedCommand>::success(std::move(result));
+  result.value().event["pattern_id"] = command.pattern_id.value();
+  result.value().event["pattern_slot"] = command.slot;
+  return result;
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -156,9 +159,9 @@ foundation::Result<AppliedCommand> apply_new_command(
       "pattern.slot_cleared",
       command.meta,
       ProjectContract::v4);
-  result.event["pattern_id"] = pattern_id.value();
-  result.event["pattern_slot"] = command.slot;
-  return foundation::Result<AppliedCommand>::success(std::move(result));
+  result.value().event["pattern_id"] = pattern_id.value();
+  result.value().event["pattern_slot"] = command.slot;
+  return result;
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -190,10 +193,10 @@ foundation::Result<AppliedCommand> apply_new_command(
       "pattern.slot_moved",
       command.meta,
       ProjectContract::v4);
-  result.event["from_slot"] = command.from_slot;
-  result.event["pattern_id"] = pattern_id.value();
-  result.event["to_slot"] = command.to_slot;
-  return foundation::Result<AppliedCommand>::success(std::move(result));
+  result.value().event["from_slot"] = command.from_slot;
+  result.value().event["pattern_id"] = pattern_id.value();
+  result.value().event["to_slot"] = command.to_slot;
+  return result;
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -226,8 +229,7 @@ foundation::Result<AppliedCommand> apply_new_command(
   }
   auto copy = state;
   copy.assets.emplace(command.asset.id, command.asset);
-  return foundation::Result<AppliedCommand>::success(
-      applied(std::move(copy), "asset.imported", command.meta));
+  return applied(std::move(copy), "asset.imported", command.meta);
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -256,8 +258,7 @@ foundation::Result<AppliedCommand> apply_new_command(
   if (resets_playback) {
     pad.playback = PadPlayback{};
   }
-  return foundation::Result<AppliedCommand>::success(
-      applied(std::move(copy), "pad.assigned", command.meta));
+  return applied(std::move(copy), "pad.assigned", command.meta);
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -296,8 +297,7 @@ foundation::Result<AppliedCommand> apply_new_command(
   auto& pad = copy.banks.at(command.slot.bank).at(command.slot.pad);
   pad.asset_id = command.asset.id;
   pad.playback = PadPlayback{};
-  return foundation::Result<AppliedCommand>::success(
-      applied(std::move(copy), "sample.imported_assigned", command.meta));
+  return applied(std::move(copy), "sample.imported_assigned", command.meta);
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -343,8 +343,7 @@ foundation::Result<AppliedCommand> apply_new_command(
     pad.asset_id = assignment.asset.id;
     pad.playback = PadPlayback{};
   }
-  return foundation::Result<AppliedCommand>::success(
-      applied(std::move(copy), "candidate.adopted", command.meta, ProjectContract::v5));
+  return applied(std::move(copy), "candidate.adopted", command.meta, ProjectContract::v5);
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -427,12 +426,11 @@ foundation::Result<AppliedCommand> apply_new_command(
     pad.asset_id = assignment.asset.id;
     pad.playback = PadPlayback{};
   }
-  return foundation::Result<AppliedCommand>::success(
-      applied(
-          std::move(copy),
-          "soundset.installed",
-          command.meta,
-          ProjectContract::v4));
+  return applied(
+      std::move(copy),
+      "soundset.installed",
+      command.meta,
+      ProjectContract::v4);
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -447,8 +445,7 @@ foundation::Result<AppliedCommand> apply_new_command(
   auto copy = state;
   copy.banks.at(command.slot.bank).at(command.slot.pad).playback =
       command.playback;
-  return foundation::Result<AppliedCommand>::success(
-      applied(std::move(copy), "pad.playback_updated", command.meta));
+  return applied(std::move(copy), "pad.playback_updated", command.meta);
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -459,8 +456,7 @@ foundation::Result<AppliedCommand> apply_new_command(
   }
   auto copy = state;
   copy.banks.at(command.slot.bank).at(command.slot.pad).playback = PadPlayback{};
-  return foundation::Result<AppliedCommand>::success(
-      applied(std::move(copy), "pad.playback_reset", command.meta));
+  return applied(std::move(copy), "pad.playback_reset", command.meta);
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -481,8 +477,7 @@ foundation::Result<AppliedCommand> apply_new_command(
   auto pattern = command.pattern;
   pattern.events = merge_pattern_events({}, pattern.events);
   copy.patterns.emplace(pattern.id, std::move(pattern));
-  return foundation::Result<AppliedCommand>::success(
-      applied(std::move(copy), "pattern.created", command.meta));
+  return applied(std::move(copy), "pattern.created", command.meta);
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -507,8 +502,7 @@ foundation::Result<AppliedCommand> apply_new_command(
   auto copy = state;
   copy.patterns.at(command.pattern_id).events = merge_pattern_events(
       found->second.events, command.events);
-  return foundation::Result<AppliedCommand>::success(
-      applied(std::move(copy), "pattern.events_merged", command.meta));
+  return applied(std::move(copy), "pattern.events_merged", command.meta);
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -537,8 +531,7 @@ foundation::Result<AppliedCommand> apply_new_command(
   if (command.swing_percent.has_value()) {
     copy.swing_percent = *command.swing_percent;
   }
-  return foundation::Result<AppliedCommand>::success(
-      applied(std::move(copy), "sequence.settings_updated", command.meta));
+  return applied(std::move(copy), "sequence.settings_updated", command.meta);
 }
 
 template <typename CommandType>
@@ -552,8 +545,8 @@ foundation::Result<AppliedCommand> apply_checked(
   }
   const auto receipt = receipts.find(meta.command_id);
   if (receipt != receipts.end()) {
-    return foundation::Result<AppliedCommand>::success(
-        AppliedCommand{state, receipt->second.event, true});
+    return foundation::Result<AppliedCommand>::emplace_success(
+        state, receipt->second.event, true);
   }
   if (meta.expected_revision != state.revision) {
     return foundation::Result<AppliedCommand>::failure(
