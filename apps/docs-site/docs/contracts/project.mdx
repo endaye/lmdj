@@ -64,11 +64,13 @@ writer 同样省略取缺省值的键。
 | `mid` | `freq_hz` 100..10000、`gain_millidb` −18000..+18000、`q_milli` 100..10000（钟形） |
 | `high` | `kind`（`shelf` 高架 \| `cut` 低通）、`freq_hz` 1000..20000、`gain_millidb` −18000..+18000 |
 
-`kind: cut` 的一段同样携带 `gain_millidb`：DSP 忽略它，但它留在 Project Truth 里，所以从 cut 拖回 shelf 时保留原增益。
+`kind: cut` 的一段同样携带 `gain_millidb`：DSP 忽略它，但它留在 Project Truth 里。Creator 的 EQ 编辑器把架式变为 cut 时保留手势开始时该段的增益，用键盘离开 cut 时恢复它；用指针拖出 cut 时，增益跟随指针。
 Koala 的"低架拖到底变高通、高架拖到底变低通"用显式的 `kind: cut` 表达，不用魔法增益值。
 `5.1.0` reader 按设计拒绝携带这些键的 Project。取值与语义的权威仍是同一份 2026-09-30 决策。
-本 Build 只推进 Contract：读写这些键的 Domain、Project I/O、Cooker 与 Audio Runtime 实现是 #1667 的后续 Core Task，
-在它合入之前 Project I/O 仍拒绝这些键。
+Core 已实现这些键（#1780）：Authoring Domain、Project I/O、Cooker 与 Audio Runtime 读写并渲染它们。
+Application Facade 的 `sample.update_pad`/`sample.inspect`、MCP 的 `lmdj.sample.update_pad`、Web Runtime Platform 的
+`sample.update_pad`/`sample.preview.set` 与 Creator Sample Editor 暴露同一组键：请求可省略任一可选键或任一频段，
+回读只输出非缺省键与出现的频段。
 
 ## Slice 采纳 Lineage
 

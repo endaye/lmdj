@@ -24,6 +24,7 @@ import {
   waveformWindowForViewport,
   zoomSampleViewport,
 } from "../src/state/sample_state";
+import type {PadPlayback} from "../src/runtime/runtime_types";
 import {
   creatorReducer,
   initialCreatorState,
@@ -41,6 +42,10 @@ const saved = Object.freeze({
   loopMode: "forward" as const,
   loopStartFrame: null,
   loopCrossfadeFrames: 0,
+  attackMs: 0,
+  releaseMs: 0,
+  tone: 0,
+  eq: {low: null, mid: null, high: null},
 });
 
 const metadata = Object.freeze({
@@ -85,6 +90,10 @@ describe("Creator Sample state", () => {
       loopMode: "forward" as const,
       loopStartFrame: null,
       loopCrossfadeFrames: 0,
+      attackMs: 0,
+      releaseMs: 0,
+      tone: 0,
+      eq: {low: null, mid: null, high: null},
     });
     expect(projectSamplePlayback(saved)).toEqual(saved);
   });
@@ -973,6 +982,10 @@ describe("Creator Sample state", () => {
         loopMode: "forward" as const,
         loopStartFrame: null,
         loopCrossfadeFrames: 0,
+        attackMs: 0,
+        releaseMs: 0,
+        tone: 0,
+        eq: {low: null, mid: null, high: null},
       },
       waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/87`,
     });
@@ -1289,5 +1302,99 @@ describe("Creator Sample state", () => {
       /(?:\/Users\/|file:\/+(?:Users|home)\/|[A-Za-z]:\\)/;
 
     expect(source).not.toMatch(packagePrivatePathPattern);
+  });
+});
+
+// lmdj.project.v5 5.2.0: the shared fixture holds this copy of the playback
+// shape to the same values as the Facade, protocol and session copies
+// (.agents/pitfalls/parity-check-between-agreeing-copies.md).
+const PAD_PLAYBACK_FULL = JSON.parse(
+  readFileSync("../../tests/fixtures/contracts/pad-playback-full.json", "utf8"),
+) as Record<string, Record<string, unknown>>;
+const TONE_WIRE = PAD_PLAYBACK_FULL.tone!;
+
+type WireBand = {kind?: string; freq_hz: number; gain_millidb: number; q_milli?: number};
+
+function creatorPlaybackFrom(wire: Record<string, unknown>): PadPlayback {
+  const eq = (wire.eq ?? {}) as Record<string, WireBand | undefined>;
+  const shelf = (band: WireBand | undefined) => band === undefined ? null : {
+    kind: band.kind,
+    freqHz: band.freq_hz,
+    gainMillidb: band.gain_millidb,
+  };
+  return {
+    trimStartFrame: wire.trim_start_frame,
+    trimEndFrame: wire.trim_end_frame,
+    triggerMode: wire.trigger_mode,
+    gainMillidb: wire.gain_millidb,
+    muted: wire.muted,
+    reverse: wire.reverse ?? false,
+    pitchCents: wire.pitch_cents ?? 0,
+    pan: wire.pan ?? 0,
+    loopMode: wire.loop_mode ?? "forward",
+    loopStartFrame: wire.loop_start_frame ?? null,
+    loopCrossfadeFrames: wire.loop_crossfade_frames ?? 0,
+    attackMs: wire.attack_ms ?? 0,
+    releaseMs: wire.release_ms ?? 0,
+    tone: wire.tone ?? 0,
+    eq: {
+      low: shelf(eq.low),
+      mid: eq.mid === undefined ? null : {
+        freqHz: eq.mid.freq_hz,
+        gainMillidb: eq.mid.gain_millidb,
+        qMilli: eq.mid.q_milli,
+      },
+      high: shelf(eq.high),
+    },
+  } as unknown as PadPlayback;
+}
+
+describe("Creator Sample tone parity state", () => {
+  test("keeps every shared fixture playback exactly", () => {
+    for (const wire of Object.values(PAD_PLAYBACK_FULL)) {
+      const playback = creatorPlaybackFrom(wire);
+      expect(projectSamplePlayback(playback)).toEqual(playback);
+    }
+  });
+
+  test("defaults the envelope, tone and every EQ band to bypassed", () => {
+    expect(projectSamplePlayback(undefined)).toMatchObject({
+      attackMs: 0,
+      releaseMs: 0,
+      tone: 0,
+      eq: {low: null, mid: null, high: null},
+    });
+  });
+
+  test("compares EQ band by band, so a moved band makes the draft dirty", () => {
+    const tone = creatorPlaybackFrom(TONE_WIRE);
+    const draft = beginSampleDraft(projectSamplePlayback(tone), 42);
+    const same = updateSampleDraft(draft, {eq: {...tone.eq, mid: {...tone.eq.mid!}}});
+    expect(same.dirty).toBe(false);
+    const moved = updateSampleDraft(draft, {
+      eq: {...tone.eq, mid: {...tone.eq.mid!, gainMillidb: 0}},
+    });
+    expect(moved.dirty).toBe(true);
+    const bypassed = updateSampleDraft(draft, {eq: {...tone.eq, high: null}});
+    expect(bypassed.dirty).toBe(true);
+  });
+
+  test("refuses out-of-range tone fields and malformed EQ bands", () => {
+    const tone = creatorPlaybackFrom(TONE_WIRE);
+    const low = tone.eq.low!;
+    const mid = tone.eq.mid!;
+    for (const invalid of [
+      {...tone, attackMs: 2_001},
+      {...tone, releaseMs: -1},
+      {...tone, tone: 101},
+      {...tone, eq: {low: null, mid: null}},
+      {...tone, eq: {...tone.eq, low: {...low, kind: "bell"}}},
+      {...tone, eq: {...tone.eq, low: {...low, freqHz: 19}}},
+      {...tone, eq: {...tone.eq, high: {...low, freqHz: 999}}},
+      {...tone, eq: {...tone.eq, mid: {...mid, qMilli: 10_001}}},
+      {...tone, eq: {...tone.eq, mid: {...mid, kind: "shelf"}}},
+    ]) {
+      expect(() => projectSamplePlayback(invalid)).toThrow(TypeError);
+    }
   });
 });

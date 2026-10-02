@@ -242,7 +242,8 @@ const PLAYBACK_BASE_KEYS = Object.freeze([
   "gain_millidb",
   "muted",
 ]);
-// lmdj.project.v5 5.1.0: optional on the wire; an omitted key is its default.
+// lmdj.project.v5 5.1.0 and 5.2.0: optional on the wire; an omitted key is
+// its default.
 const PLAYBACK_PARITY_KEYS = Object.freeze([
   "reverse",
   "pitch_cents",
@@ -250,6 +251,11 @@ const PLAYBACK_PARITY_KEYS = Object.freeze([
   "loop_mode",
   "loop_start_frame",
   "loop_crossfade_frames",
+  // lmdj.project.v5 5.2.0.
+  "attack_ms",
+  "release_ms",
+  "tone",
+  "eq",
 ]);
 
 function hasPlaybackKeys(value) {
@@ -280,7 +286,43 @@ function validPlaybackParity(value) {
       value.loop_start_frame === null ||
       isUnsignedInteger(value.loop_start_frame)) &&
     (value.loop_crossfade_frames === undefined ||
-      isUnsignedInteger(value.loop_crossfade_frames))
+      isUnsignedInteger(value.loop_crossfade_frames)) &&
+    validPlaybackTone(value)
+  );
+}
+
+function integerIn(value, minimum, maximum) {
+  return Number.isSafeInteger(value) && value >= minimum && value <= maximum;
+}
+
+// An EQ shelf or cut band (lmdj.project.v5 5.2.0); a cut ignores its gain.
+function validEqShelf(value, minimumHz, maximumHz) {
+  return (
+    hasExactKeys(value, ["kind", "freq_hz", "gain_millidb"]) &&
+    ["shelf", "cut"].includes(value.kind) &&
+    integerIn(value.freq_hz, minimumHz, maximumHz) &&
+    integerIn(value.gain_millidb, -18_000, 18_000)
+  );
+}
+
+// lmdj.project.v5 5.2.0: an omitted key is its default, and an absent EQ band
+// is bypassed.
+function validPlaybackTone(value) {
+  const eq = value.eq;
+  return (
+    (value.attack_ms === undefined || integerIn(value.attack_ms, 0, 2_000)) &&
+    (value.release_ms === undefined || integerIn(value.release_ms, 0, 4_000)) &&
+    (value.tone === undefined || integerIn(value.tone, -100, 100)) &&
+    (eq === undefined ||
+      (isPlainObject(eq) &&
+        Object.keys(eq).every((band) => ["low", "mid", "high"].includes(band)) &&
+        (eq.low === undefined || validEqShelf(eq.low, 20, 2_000)) &&
+        (eq.high === undefined || validEqShelf(eq.high, 1_000, 20_000)) &&
+        (eq.mid === undefined ||
+          (hasExactKeys(eq.mid, ["freq_hz", "gain_millidb", "q_milli"]) &&
+            integerIn(eq.mid.freq_hz, 100, 10_000) &&
+            integerIn(eq.mid.gain_millidb, -18_000, 18_000) &&
+            integerIn(eq.mid.q_milli, 100, 10_000)))))
   );
 }
 

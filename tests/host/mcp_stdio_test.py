@@ -172,6 +172,58 @@ def expected_schemas() -> dict[str, dict]:
             "loop_mode": {"type": "string", "enum": ["forward", "ping_pong"]},
             "loop_start_frame": {"oneOf": [uint, {"type": "null"}]},
             "loop_crossfade_frames": uint,
+            "attack_ms": {"type": "integer", "minimum": 0, "maximum": 2000},
+            "release_ms": {"type": "integer", "minimum": 0, "maximum": 4000},
+            "tone": {"type": "integer", "minimum": -100, "maximum": 100},
+            "eq": {
+                "type": "object",
+                "properties": {
+                    "low": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"type": "string", "enum": ["shelf", "cut"]},
+                            "freq_hz": {"type": "integer", "minimum": 20, "maximum": 2000},
+                            "gain_millidb": {
+                                "type": "integer",
+                                "minimum": -18000,
+                                "maximum": 18000,
+                            },
+                        },
+                        "required": ["kind", "freq_hz", "gain_millidb"],
+                        "additionalProperties": False,
+                    },
+                    "mid": {
+                        "type": "object",
+                        "properties": {
+                            "freq_hz": {"type": "integer", "minimum": 100, "maximum": 10000},
+                            "gain_millidb": {
+                                "type": "integer",
+                                "minimum": -18000,
+                                "maximum": 18000,
+                            },
+                            "q_milli": {"type": "integer", "minimum": 100, "maximum": 10000},
+                        },
+                        "required": ["freq_hz", "gain_millidb", "q_milli"],
+                        "additionalProperties": False,
+                    },
+                    "high": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"type": "string", "enum": ["shelf", "cut"]},
+                            "freq_hz": {"type": "integer", "minimum": 1000, "maximum": 20000},
+                            "gain_millidb": {
+                                "type": "integer",
+                                "minimum": -18000,
+                                "maximum": 18000,
+                            },
+                        },
+                        "required": ["kind", "freq_hz", "gain_millidb"],
+                        "additionalProperties": False,
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
         },
         [
             "trim_start_frame",

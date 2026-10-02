@@ -21,5 +21,32 @@
     "trigger_mode": "loop_toggle",
     "trim_end_frame": null,
     "trim_start_frame": 0
+  },
+  "tone": {
+    "attack_ms": 120,
+    "eq": {
+      "high": {
+        "freq_hz": 9000,
+        "gain_millidb": 300,
+        "kind": "shelf"
+      },
+      "low": {
+        "freq_hz": 80,
+        "gain_millidb": 0,
+        "kind": "cut"
+      },
+      "mid": {
+        "freq_hz": 1200,
+        "gain_millidb": -600,
+        "q_milli": 1400
+      }
+    },
+    "gain_millidb": -600,
+    "muted": false,
+    "release_ms": 900,
+    "tone": -40,
+    "trigger_mode": "gate",
+    "trim_end_frame": 7,
+    "trim_start_frame": 1
   }
 }

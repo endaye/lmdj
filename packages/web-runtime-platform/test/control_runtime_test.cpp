@@ -3015,7 +3015,7 @@ void test_sample_parity_playback_crosses_the_fixed_control_wire() {
         {});
   };
 
-  for (const auto variant : {"forward", "ping_pong"}) {
+  for (const auto variant : {"forward", "ping_pong", "tone"}) {
     const auto playback = parity_playback_payload(variant);
     const auto committed = check_exact_success(
         update(playback),
@@ -3034,6 +3034,27 @@ void test_sample_parity_playback_crosses_the_fixed_control_wire() {
   auto out_of_range = parity_playback_payload("forward");
   out_of_range["pan"] = 101;
   check_error(update(out_of_range), "HOST_PROTOCOL_MISMATCH");
+  // lmdj.project.v5 5.2.0: each tone bound and band shape is a protocol
+  // failure on the fixed wire.
+  const auto tone = parity_playback_payload("tone");
+  std::vector<Json> invalid_tone(7, tone);
+  invalid_tone[0]["attack_ms"] = 2'001;
+  invalid_tone[1]["release_ms"] = -1;
+  invalid_tone[2]["tone"] = -101;
+  invalid_tone[3]["eq"]["band"] = Json::object();
+  invalid_tone[4]["eq"]["low"]["kind"] = "bell";
+  invalid_tone[5]["eq"]["high"]["freq_hz"] = 999;
+  invalid_tone[6]["eq"]["mid"]["q_milli"] = 10'001;
+  // Review of #1799: unsigned values above INT64_MAX that would wrap to -50
+  // and -600 if read as int64.
+  invalid_tone.push_back(tone);
+  invalid_tone.back()["tone"] = std::uint64_t{18'446'744'073'709'551'566ULL};
+  invalid_tone.push_back(tone);
+  invalid_tone.back()["eq"]["mid"]["gain_millidb"] =
+      std::uint64_t{18'446'744'073'709'551'016ULL};
+  for (const auto& invalid : invalid_tone) {
+    check_error(update(invalid), "HOST_PROTOCOL_MISMATCH");
+  }
   // The wire shape is valid; only the 256-frame source refuses the loop point.
   auto past_source = parity_playback_payload("ping_pong");
   past_source["loop_start_frame"] = 256;
@@ -3051,7 +3072,7 @@ void test_sample_parity_playback_crosses_the_fixed_control_wire() {
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
   check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-  for (const auto variant : {"forward", "ping_pong"}) {
+  for (const auto variant : {"forward", "ping_pong", "tone"}) {
     check_exact_success(
         runtime->dispatch(
             "sample.preview.set",

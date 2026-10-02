@@ -4,6 +4,9 @@ import {
   sampleMessage,
 } from "./error_messages";
 import type {
+  PadEq,
+  PadEqBell,
+  PadEqShelf,
   PadPlayback,
   RuntimeVoiceState,
   SampleCommit,
@@ -234,6 +237,10 @@ const DEFAULT_PLAYBACK: Readonly<PadPlayback> = Object.freeze({
   loopMode: "forward",
   loopStartFrame: null,
   loopCrossfadeFrames: 0,
+  attackMs: 0,
+  releaseMs: 0,
+  tone: 0,
+  eq: Object.freeze({low: null, mid: null, high: null}),
 });
 
 const PLAYBACK_FIELDS = Object.freeze([
@@ -248,7 +255,13 @@ const PLAYBACK_FIELDS = Object.freeze([
   "loopMode",
   "loopStartFrame",
   "loopCrossfadeFrames",
+  "attackMs",
+  "releaseMs",
+  "tone",
+  "eq",
 ] as const);
+
+const EQ_BANDS = Object.freeze(["low", "mid", "high"] as const);
 
 export const initialSampleState: SampleState = Object.freeze({
   selectedSlot: null,
@@ -375,12 +388,59 @@ function assertPrivacySafe(value: unknown): void {
 }
 
 function freezePlayback(playback: PadPlayback): Readonly<PadPlayback> {
-  return Object.freeze({...playback});
+  return Object.freeze({
+    ...playback,
+    eq: Object.freeze({
+      low: playback.eq.low === null ? null : Object.freeze({...playback.eq.low}),
+      mid: playback.eq.mid === null ? null : Object.freeze({...playback.eq.mid}),
+      high: playback.eq.high === null ? null : Object.freeze({...playback.eq.high}),
+    }),
+  });
 }
 
-// The one Creator equality for a Pad's playback; every field takes part.
+function eqBandEquals(
+  left: PadEqShelf | PadEqBell | null,
+  right: PadEqShelf | PadEqBell | null,
+): boolean {
+  if (left === null || right === null) return left === right;
+  const leftRecord = left as unknown as Record<string, unknown>;
+  const rightRecord = right as unknown as Record<string, unknown>;
+  const keys = Object.keys(leftRecord);
+  return keys.length === Object.keys(rightRecord).length &&
+    keys.every((key) => leftRecord[key] === rightRecord[key]);
+}
+
+// The one Creator equality for a Pad's playback; every field takes part, and
+// the EQ compares band by band.
 export function playbackEquals(left: PadPlayback, right: PadPlayback): boolean {
-  return PLAYBACK_FIELDS.every((field) => left[field] === right[field]);
+  return PLAYBACK_FIELDS.every((field) =>
+    field === "eq"
+      ? EQ_BANDS.every((band) => eqBandEquals(left.eq[band], right.eq[band]))
+      : left[field] === right[field]);
+}
+
+function integerIn(value: unknown, minimum: number, maximum: number): value is number {
+  return Number.isSafeInteger(value) &&
+    (value as number) >= minimum && (value as number) <= maximum;
+}
+
+// lmdj.project.v5 5.2.0 band shapes and ranges; null is a bypassed band.
+function validEqShelf(value: unknown, minimumHz: number, maximumHz: number): boolean {
+  return value === null || (exactKeys(value, ["kind", "freqHz", "gainMillidb"]) &&
+    (value.kind === "shelf" || value.kind === "cut") &&
+    integerIn(value.freqHz, minimumHz, maximumHz) &&
+    integerIn(value.gainMillidb, -18_000, 18_000));
+}
+
+function validEq(value: unknown): value is PadEq {
+  if (!exactKeys(value, [...EQ_BANDS])) return false;
+  const mid = value.mid;
+  return validEqShelf(value.low, 20, 2_000) &&
+    validEqShelf(value.high, 1_000, 20_000) &&
+    (mid === null || (exactKeys(mid, ["freqHz", "gainMillidb", "qMilli"]) &&
+      integerIn(mid.freqHz, 100, 10_000) &&
+      integerIn(mid.gainMillidb, -18_000, 18_000) &&
+      integerIn(mid.qMilli, 100, 10_000)));
 }
 
 function validatePlayback(value: unknown): Readonly<PadPlayback> {
@@ -405,7 +465,11 @@ function validatePlayback(value: unknown): Readonly<PadPlayback> {
     (value.pan as number) > 100 ||
     (value.loopMode !== "forward" && value.loopMode !== "ping_pong") ||
     !(value.loopStartFrame === null || unsignedInteger(value.loopStartFrame)) ||
-    !unsignedInteger(value.loopCrossfadeFrames)) {
+    !unsignedInteger(value.loopCrossfadeFrames) ||
+    !integerIn(value.attackMs, 0, 2_000) ||
+    !integerIn(value.releaseMs, 0, 4_000) ||
+    !integerIn(value.tone, -100, 100) ||
+    !validEq(value.eq)) {
     throw new TypeError("Sample playback is invalid");
   }
   return freezePlayback({
@@ -420,6 +484,10 @@ function validatePlayback(value: unknown): Readonly<PadPlayback> {
     loopMode: value.loopMode,
     loopStartFrame: value.loopStartFrame as number | null,
     loopCrossfadeFrames: value.loopCrossfadeFrames as number,
+    attackMs: value.attackMs,
+    releaseMs: value.releaseMs,
+    tone: value.tone,
+    eq: value.eq,
   });
 }
 

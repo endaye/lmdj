@@ -72,8 +72,31 @@ export type SampleTriggerMode =
 
 export type SampleLoopMode = "forward" | "ping_pong";
 
-// lmdj.project.v5 5.1.0 adds the six parity fields after `muted`. The session
-// always supplies every field, defaulting the ones a Project leaves unset.
+// An EQ shelf band (lmdj.project.v5 5.2.0). `cut` turns the shelf into a
+// high-pass (low band) or low-pass (high band) at its frequency and ignores
+// its gain.
+export interface PadEqShelf {
+  kind: "shelf" | "cut";
+  freqHz: number;
+  gainMillidb: number;
+}
+
+export interface PadEqBell {
+  freqHz: number;
+  gainMillidb: number;
+  qMilli: number;
+}
+
+// The three EQ bands; a null band is bypassed.
+export interface PadEq {
+  low: PadEqShelf | null;
+  mid: PadEqBell | null;
+  high: PadEqShelf | null;
+}
+
+// lmdj.project.v5 5.1.0 adds the six parity fields after `muted`, and 5.2.0
+// the envelope, tone and EQ. The session always supplies every field,
+// defaulting the ones a Project leaves unset.
 export interface PadPlayback {
   trimStartFrame: number;
   trimEndFrame: number | null;
@@ -86,6 +109,10 @@ export interface PadPlayback {
   loopMode: SampleLoopMode;
   loopStartFrame: number | null;
   loopCrossfadeFrames: number;
+  attackMs: number;
+  releaseMs: number;
+  tone: number;
+  eq: PadEq;
 }
 
 export interface SampleMetadata {
