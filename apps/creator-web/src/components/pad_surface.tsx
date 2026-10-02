@@ -85,7 +85,7 @@ export function PadSurface({
               }
             }}
             onKeyDown={(event) => {
-              if ((!assigned && !capturing) || controller === undefined ||
+              if ((!assigned && !capturing && !emptyPadCapture) || controller === undefined ||
                 (event.key !== "Enter" && event.key !== " ")) return;
               event.preventDefault();
               if (event.repeat) return;
@@ -98,7 +98,7 @@ export function PadSurface({
               }
             }}
             onKeyUp={(event) => {
-              if ((!assigned && !capturing) || controller === undefined ||
+              if ((!assigned && !capturing && !emptyPadCapture) || controller === undefined ||
                 (event.key !== "Enter" && event.key !== " ")) return;
               event.preventDefault();
               const code = KEYBOARD_CODE_BY_LOCAL_PAD.get(

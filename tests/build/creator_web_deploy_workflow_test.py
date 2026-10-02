@@ -418,13 +418,42 @@ class CreatorWebDeployWorkflowTest(unittest.TestCase):
         source = self.workflow_source()
         self.assertIn("python-version: \"3.11\"", source)
         self.assertIn("node-version: \"26\"", source)
-        self.assertIn("working-directory: tests/platform/web", source)
+        self.assertIn("working-directory: ${{ runner.temp }}/release-source/tests/platform/web",
+                      source)
+        self.assertNotIn("working-directory: tests/platform/web", source)
         self.assertIn("run: npm ci", source)
         self.assertIn("playwright install --with-deps chromium", source)
         self.assertNotIn("webkit", source)
         self.assertNotIn("emsdk", source.lower())
         self.assertNotIn("emscripten", source.lower())
         self.assertNotIn("scripts/core.sh", source)
+
+    def test_the_browser_smoke_runs_the_released_tag_s_own_tests(self) -> None:
+        # main's tests can expect behaviour the release predates (#1711): the
+        # deployment spec must come from the exact commit the signed tag names.
+        deploy = self.job_block(self.workflow_source(), "deploy")
+        checkout = self.step_named(deploy, "Check out the release's own browser smoke tests")
+        self.assertIn('git rev-parse --verify "refs/tags/$LMDJ_RELEASE_TAG^{commit}"', checkout)
+        # The default smoke source is the tag's own target.
+        self.assertIn('smoke="$target"', checkout)
+        self.assertIn('git worktree add --detach "$RUNNER_TEMP/release-source" "$smoke"', checkout)
+        self.assertIn("LMDJ_RELEASE_TAG: ${{ needs.preflight.outputs.tag }}", checkout)
+        self.assertLess(deploy.index("Check out the release's own browser smoke tests"),
+                        deploy.index("Install browser smoke dependencies"))
+        self.assertIn('--browser-root "$RUNNER_TEMP/release-source"', deploy)
+        self.assertIn('--smoke-revision "$LMDJ_SMOKE_SOURCE"', deploy)
+
+    def test_a_reviewed_smoke_revision_is_validated_before_checkout(self) -> None:
+        source = self.workflow_source()
+        self.assertIn("      smoke_revision:", source)
+        checkout = self.step_named(self.job_block(source, "deploy"),
+                                   "Check out the release's own browser smoke tests")
+        self.assertIn("LMDJ_SMOKE_REVISION: ${{ inputs.smoke_revision }}", checkout)
+        for check in ('=~ ^[0-9a-f]{40}$',
+                      'git merge-base --is-ancestor "$target" "$LMDJ_SMOKE_REVISION"',
+                      'git merge-base --is-ancestor "$LMDJ_SMOKE_REVISION" refs/remotes/origin/main'):
+            self.assertIn(check, checkout)
+            self.assertLess(checkout.index(check), checkout.index("git worktree add"))
 
     def test_workflow_scopes_secrets_and_always_uploads_evidence(self) -> None:
         source = self.workflow_source()
@@ -516,6 +545,7 @@ class CreatorWebDeployWorkflowTest(unittest.TestCase):
             "Set up Node": 3,
             "Verify the recorded upload Node survived": 1,
             "Install the pinned deploy CLI without deployment credentials": 5,
+            "Check out the release's own browser smoke tests": 1,
             "Install browser smoke dependencies": 5,
             "Install Chromium": 10,
             "Deploy signed Creator Web Host release to Cloudflare": 35,

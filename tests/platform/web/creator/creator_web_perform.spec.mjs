@@ -535,7 +535,7 @@ async function importActivateAndPerform(page, scenario = "none") {
   return candidate;
 }
 
-async function openProjectSuccessor(context, url) {
+async function navigateSuccessor(context, url) {
   // Chromium may restore the crashed Project tab alongside about:blank.
   // Keep one successor page so that an unintended restored tab cannot acquire
   // the Project's writer while this recovery journey opens the same bundle.
@@ -549,6 +549,11 @@ async function openProjectSuccessor(context, url) {
   await installDependencyScenario(successor);
   await routeCandidateIdentity(successor);
   await successor.goto(url);
+  return successor;
+}
+
+async function openProjectSuccessor(context, url) {
+  const successor = await navigateSuccessor(context, url);
   await openLocalProject(successor);
   await activateAudio(successor);
   await openPerform(successor);
@@ -632,6 +637,13 @@ async function launchCrashableCreatorContext(userDataDir) {
     browser,
     context,
     page,
+    async close() {
+      const client = await browser.newBrowserCDPSession();
+      await client.send("Browser.close").catch(() => {});
+      await expect.poll(() => child.exitCode, {timeout: 30_000}).toBe(0);
+      killProcessGroup(child);
+      await browser.close().catch(() => {});
+    },
     async kill() {
       if (child.exitCode === null) {
         const exited = once(child, "exit");
@@ -641,6 +653,26 @@ async function launchCrashableCreatorContext(userDataDir) {
       await browser.close().catch(() => {});
     },
   });
+}
+
+// Confirm the remembered identity on disk before the separate owner-loss leg.
+// A clean cross-process reopen is the checkpoint, then SIGKILL still exercises
+// an active recording and automatic recovery on a new process.
+async function launchPersistedCreatorOwner(profile) {
+  let process = await launchCrashableCreatorContext(profile);
+  try {
+    const candidate = await importActivateAndPerform(process.page);
+    const url = candidate.routed ? `${candidate.origin}/index.html` : process.page.url();
+    const before = await inspectProjectTruth(process.page);
+    await process.close();
+    process = await launchCrashableCreatorContext(profile);
+    const page = await openProjectSuccessor(process.context, url);
+    expect((await inspectProjectTruth(page)).project).toEqual(before.project);
+    return {process, page, url};
+  } catch (error) {
+    await process.kill().catch(() => {});
+    throw error;
+  }
 }
 
 function projectRevisionLocator(page) {
@@ -1147,12 +1179,10 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
   let ownerProcess = null;
   let applyingProcess = null;
   try {
-    ownerProcess = await launchCrashableCreatorContext(applyProfile);
-    const ownerPage = ownerProcess.page;
-    const candidate = await importActivateAndPerform(ownerPage);
-    const candidateUrl = candidate.routed
-      ? `${candidate.origin}/index.html`
-      : ownerPage.url();
+    const owner = await launchPersistedCreatorOwner(applyProfile);
+    ownerProcess = owner.process;
+    const ownerPage = owner.page;
+    const candidateUrl = owner.url;
     const baselineWavs = await opfsWavFiles(ownerPage);
 
     await beginRecording(ownerPage);
@@ -1198,12 +1228,10 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
   let discardOwnerProcess = null;
   let discardingProcess = null;
   try {
-    discardOwnerProcess = await launchCrashableCreatorContext(discardProfile);
-    const discardOwnerPage = discardOwnerProcess.page;
-    const candidate = await importActivateAndPerform(discardOwnerPage);
-    const candidateUrl = candidate.routed
-      ? `${candidate.origin}/index.html`
-      : discardOwnerPage.url();
+    const owner = await launchPersistedCreatorOwner(discardProfile);
+    discardOwnerProcess = owner.process;
+    const discardOwnerPage = owner.page;
+    const candidateUrl = owner.url;
     await beginRecording(discardOwnerPage);
     await discardOwnerPage.getByRole("button", {name: /^Pad A2\b/}).dispatchEvent(
       "pointerdown",
@@ -1337,6 +1365,42 @@ test("an active recording receives an empty-slot acknowledgement and interruptio
     .toBeDisabled();
 });
 
+// #1726: an opened Project is remembered durably at once. Chromium commits
+// localStorage lazily and rate-limits it, so a crash within about a minute of
+// an import lost the write and the next boot reopened the boot-created Project.
+test("a crash just after an import reopens the imported Project at the next boot", async ({browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(240_000);
+  const profile = await mkdtemp(join(tmpdir(), "lmdj-perform-remembered-"));
+  let ownerProcess = null;
+  let successorProcess = null;
+  try {
+    ownerProcess = await launchCrashableCreatorContext(profile);
+    const ownerPage = ownerProcess.page;
+    const candidate = await openCandidate(ownerPage);
+    const candidateUrl = candidate.routed
+      ? `${candidate.origin}/index.html`
+      : ownerPage.url();
+    // Let the boot-created Project's write commit first: the import's write
+    // then falls in the rate-limited window in which #1726 lost it.
+    await ownerPage.waitForTimeout(6_000);
+    await importProject(ownerPage);
+    // An IndexedDB commit takes milliseconds; two seconds stays far inside
+    // the minute that a rate-limited localStorage commit could wait.
+    await ownerPage.waitForTimeout(2_000);
+    await ownerProcess.kill();
+    ownerProcess = null;
+
+    successorProcess = await launchCrashableCreatorContext(profile);
+    const successor = await navigateSuccessor(successorProcess.context, candidateUrl);
+    await waitForProjectReopen(successor, "00000000", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  } finally {
+    await ownerProcess?.kill().catch(() => {});
+    await successorProcess?.kill().catch(() => {});
+    await removeProfile(profile);
+  }
+});
+
 test("owner process loss leaves one recoverable recording and no second capture owner", async ({browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(300_000);
@@ -1344,12 +1408,10 @@ test("owner process loss leaves one recoverable recording and no second capture 
   let ownerProcess = null;
   let successorProcess = null;
   try {
-    ownerProcess = await launchCrashableCreatorContext(profile);
-    const ownerPage = ownerProcess.page;
-    const candidate = await importActivateAndPerform(ownerPage);
-    const candidateUrl = candidate.routed
-      ? `${candidate.origin}/index.html`
-      : ownerPage.url();
+    const owner = await launchPersistedCreatorOwner(profile);
+    ownerProcess = owner.process;
+    const ownerPage = owner.page;
+    const candidateUrl = owner.url;
     await beginRecording(ownerPage);
     await ownerPage.getByRole("button", {name: /^Pad A1\b/}).dispatchEvent(
       "pointerdown",
@@ -1403,4 +1465,52 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
     .toHaveAttribute("aria-pressed", "false");
   await expect(page.getByRole("button", {name: "Launch Pattern 2"}))
     .toHaveAttribute("data-launch", "idle");
+});
+
+async function inspectedPadA1Pan(page) {
+  return page.evaluate(async () => {
+    const response = await window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "sample.inspect",
+      payload: {slot: {bank: 0, pad: 0}},
+    });
+    return response.ok ? (response.result.playback.pan ?? 0) : response.error.code;
+  });
+}
+
+test("a hard-left Pad pan silences the right channel of the recorded master output", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  await importActivateAndPerform(page);
+  await installPerformWitnessSample(page);
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
+  await page.getByRole("button", {name: /^Pad A1 — assigned — Key Q$/})
+    .evaluate((element) => element.click());
+  expect(await inspectedPadA1Pan(page)).toBe(0);
+  const pan = page.getByRole("slider", {name: "Pad A1 Pan"});
+  await pan.dispatchEvent("pointerdown", {pointerId: 81, isPrimary: true, button: 0});
+  await pan.fill("-100");
+  await pan.dispatchEvent("pointerup", {pointerId: 81, isPrimary: true, button: 0});
+  await expect.poll(() => inspectedPadA1Pan(page), {
+    timeout: PROJECT_TRANSITION_TIMEOUT_MS,
+  }).toBe(-100);
+  await expect(pan).toBeEnabled({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await openPerform(page);
+
+  await beginRecording(page);
+  const pad = page.getByRole("button", {name: /^Pad A1\b/});
+  await pad.dispatchEvent("pointerdown", {button: 0, isPrimary: true, pointerId: 82});
+  await page.waitForTimeout(120);
+  await pad.dispatchEvent("pointerup", {button: 0, isPrimary: true, pointerId: 82});
+  await stopRecording(page);
+  const wav = parsePcm16StereoWav(await exportPerformanceWav(page));
+
+  // pan -100 is gL = sqrt(2), gR = sin(0) = 0: the far channel is exact
+  // silence across the whole capture, while the near one carries the hit.
+  const start = firstSignalFrame(wav.left);
+  const hit = wav.left.slice(start, start + 4_800);
+  expect(hit.filter((sample) => Math.abs(sample) > 256).length).toBeGreaterThan(2_400);
+  expect(wav.right.filter((sample) => sample !== 0)).toEqual([]);
 });

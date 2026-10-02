@@ -72,12 +72,27 @@ struct Error {
 template <typename T>
 class Result {
  public:
-  static Result success(T value) {
-    return Result(std::move(value));
+  // By reference, not by value: a by-value T is a caller-frame temporary, so
+  // every Result<ProjectState>-sized success used to cost an extra copy of T
+  // on the stack of whoever returned it (#1720).
+  static Result success(T&& value) {
+    return Result(std::in_place_index<0>, std::move(value));
+  }
+
+  static Result success(const T& value) {
+    return Result(std::in_place_index<0>, value);
+  }
+
+  // Constructs T in place from its constructor or aggregate arguments, so a
+  // composite such as an applied command holding a ProjectState is never a
+  // separate temporary in the returning frame (#1771).
+  template <typename... Args>
+  static Result emplace_success(Args&&... args) {
+    return Result(std::in_place_index<0>, std::forward<Args>(args)...);
   }
 
   static Result failure(Error error) {
-    return Result(std::move(error));
+    return Result(std::in_place_index<1>, std::move(error));
   }
 
   bool has_value() const noexcept {
@@ -89,8 +104,9 @@ class Result {
   const Error& error() const { return std::get<Error>(storage_); }
 
  private:
-  explicit Result(T value) : storage_(std::move(value)) {}
-  explicit Result(Error error) : storage_(std::move(error)) {}
+  template <std::size_t Index, typename... Values>
+  Result(std::in_place_index_t<Index> index, Values&&... values)
+      : storage_(index, std::forward<Values>(values)...) {}
 
   std::variant<T, Error> storage_;
 };

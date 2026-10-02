@@ -39,6 +39,12 @@ const playback = Object.freeze({
   triggerMode: "gate" as const,
   gainMillidb: -1_200,
   muted: false,
+  reverse: false,
+  pitchCents: 0,
+  pan: 0,
+  loopMode: "forward" as const,
+  loopStartFrame: null,
+  loopCrossfadeFrames: 0,
 });
 
 const inspect: SampleInspect = Object.freeze({
@@ -294,7 +300,7 @@ describe("Creator Sample actions", () => {
 
     await expect(previewSampleDraftJourney(session, 17, draft)).rejects.toMatchObject({
       code: "HOST_STATE_INVALID",
-      message: "Runtime preview failed",
+      message: "This sound could not be previewed.",
     });
     expect(calls).toEqual([
       {method: "setSamplePreview", arguments: [17, draft.proposed]},
@@ -411,7 +417,7 @@ describe("Creator Sample actions", () => {
       runtimePublished: false,
       snapshotError: {
         code: "COOK_FAILED",
-        message: "Sample runtime preparation failed",
+        message: "The sound was saved but is not ready to play yet.",
         details: {},
       },
     };
@@ -540,7 +546,7 @@ describe("Creator Sample actions", () => {
       if (result.kind === "committed") {
         expect(result.commit.snapshotError).toEqual({
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details,
         });
         expect(Object.isFrozen(result.commit.snapshotError?.details)).toBe(true);
@@ -589,7 +595,7 @@ describe("Creator Sample actions", () => {
         runtimePublished: false,
         snapshotError: {
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details,
         },
       });
@@ -703,7 +709,7 @@ describe("Creator Sample actions", () => {
         runtimePublished: false,
         snapshotError: {
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details: {},
         },
       },
@@ -907,7 +913,9 @@ test("Delete resolves the empty Pad from authoritative inspection", async () => 
   const {session, calls} = fixture();
   const empty = {...inspect, projectRevision: 43, assetId: null, metadata: null,
     waveformCacheIdentity: null, playback: {trimStartFrame: 0, trimEndFrame: null,
-      triggerMode: "one_shot" as const, gainMillidb: 0, muted: false}};
+      triggerMode: "one_shot" as const, gainMillidb: 0, muted: false,
+      reverse: false, pitchCents: 0, pan: 0, loopMode: "forward" as const,
+      loopStartFrame: null, loopCrossfadeFrames: 0}};
   session.inspectSample = async () => empty;
   const result = await deleteSampleJourney(session, {slot: 17, expectedRevision: 42});
   expect(calls.some(({method, arguments: args}) => method === "deletePad" &&

@@ -38,6 +38,12 @@ const HOST_MANIFEST_MAXIMUM_BYTES = 65_536;
 const CONTROL_WORKER_CAPABILITY_PROBE_TIMEOUT_MS = 15_000;
 const TRIGGER_LEDGER_LIMIT = 4_096;
 const RECOVERY_OUTCOME_DEADLINE_MS = 1_000;
+// The output device's own start, from the resume edge to its first
+// AudioWorklet callback, is bounded on its own: it is browser and device work,
+// not Runtime work, and a cold Bluetooth start alone can take most of a
+// second. The one-second Control budget opens only at that first callback
+// (2026-10-01 decision, #1704).
+const AUDIO_DEVICE_START_BOUND_MS = 5_000;
 const SAMPLE_PREVIEW_SLOT_LIMIT = 64;
 const VOICE_LISTENER_LIMIT = 64;
 const VOICE_NOTIFICATION_EVENT_LIMIT = 4_096;
@@ -290,15 +296,47 @@ function flatSlotFromAddress(value) {
   return value.bank * 16 + value.pad;
 }
 
+const PLAYBACK_BASE_FIELDS = Object.freeze([
+  "trimStartFrame",
+  "trimEndFrame",
+  "triggerMode",
+  "gainMillidb",
+  "muted",
+]);
+// lmdj.project.v5 5.1.0. The session's playback object always carries every
+// field; the wire carries a parity field only when it differs from its default.
+const PLAYBACK_PARITY_DEFAULTS = Object.freeze({
+  reverse: false,
+  pitchCents: 0,
+  pan: 0,
+  loopMode: "forward",
+  loopStartFrame: null,
+  loopCrossfadeFrames: 0,
+});
+const PLAYBACK_PARITY_WIRE = Object.freeze({
+  reverse: "reverse",
+  pitchCents: "pitch_cents",
+  pan: "pan",
+  loopMode: "loop_mode",
+  loopStartFrame: "loop_start_frame",
+  loopCrossfadeFrames: "loop_crossfade_frames",
+});
+
+function hasFields(value, required, optional) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    required.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every(
+      (key) => required.includes(key) || optional.includes(key),
+    )
+  );
+}
+
 function wirePlayback(value) {
   if (
-    !exactKeys(value, [
-      "trimStartFrame",
-      "trimEndFrame",
-      "triggerMode",
-      "gainMillidb",
-      "muted",
-    ]) ||
+    !hasFields(value, PLAYBACK_BASE_FIELDS, Object.keys(PLAYBACK_PARITY_WIRE)) ||
     !isUnsignedInteger(value.trimStartFrame) ||
     !(
       value.trimEndFrame === null ||
@@ -315,44 +353,70 @@ function wirePlayback(value) {
   ) {
     throw new TypeError("Sample playback is invalid");
   }
-  return Object.freeze({
+  const parity = {...PLAYBACK_PARITY_DEFAULTS};
+  for (const field of Object.keys(PLAYBACK_PARITY_WIRE)) {
+    if (Object.hasOwn(value, field)) {
+      parity[field] = value[field];
+    }
+  }
+  if (
+    typeof parity.reverse !== "boolean" ||
+    !Number.isSafeInteger(parity.pitchCents) ||
+    parity.pitchCents < -2_400 ||
+    parity.pitchCents > 2_400 ||
+    !Number.isSafeInteger(parity.pan) ||
+    parity.pan < -100 ||
+    parity.pan > 100 ||
+    !["forward", "ping_pong"].includes(parity.loopMode) ||
+    !(parity.loopStartFrame === null || isUnsignedInteger(parity.loopStartFrame)) ||
+    !isUnsignedInteger(parity.loopCrossfadeFrames)
+  ) {
+    throw new TypeError("Sample playback is invalid");
+  }
+  const wire = {
     trim_start_frame: value.trimStartFrame,
     trim_end_frame: value.trimEndFrame,
     trigger_mode: value.triggerMode,
     gain_millidb: value.gainMillidb,
     muted: value.muted,
-  });
+  };
+  for (const [field, key] of Object.entries(PLAYBACK_PARITY_WIRE)) {
+    if (parity[field] !== PLAYBACK_PARITY_DEFAULTS[field]) {
+      wire[key] = parity[field];
+    }
+  }
+  return Object.freeze(wire);
 }
 
 function normalizePlayback(value) {
-  if (!exactKeys(value, [
+  const parityKeys = Object.values(PLAYBACK_PARITY_WIRE);
+  if (!hasFields(value, [
     "trim_start_frame",
     "trim_end_frame",
     "trigger_mode",
     "gain_millidb",
     "muted",
-  ])) {
+  ], parityKeys)) {
     throw protocolMismatch("Sample playback result is invalid");
   }
-  let validated;
+  const session = {
+    trimStartFrame: value.trim_start_frame,
+    trimEndFrame: value.trim_end_frame,
+    triggerMode: value.trigger_mode,
+    gainMillidb: value.gain_millidb,
+    muted: value.muted,
+  };
+  for (const [field, key] of Object.entries(PLAYBACK_PARITY_WIRE)) {
+    session[field] = Object.hasOwn(value, key)
+      ? value[key]
+      : PLAYBACK_PARITY_DEFAULTS[field];
+  }
   try {
-    validated = wirePlayback({
-      trimStartFrame: value.trim_start_frame,
-      trimEndFrame: value.trim_end_frame,
-      triggerMode: value.trigger_mode,
-      gainMillidb: value.gain_millidb,
-      muted: value.muted,
-    });
+    wirePlayback(session);
   } catch {
     throw protocolMismatch("Sample playback result is invalid");
   }
-  return Object.freeze({
-    trimStartFrame: validated.trim_start_frame,
-    trimEndFrame: validated.trim_end_frame,
-    triggerMode: validated.trigger_mode,
-    gainMillidb: validated.gain_millidb,
-    muted: validated.muted,
-  });
+  return Object.freeze(session);
 }
 
 function normalizeMetadata(value) {
@@ -1345,6 +1409,8 @@ function createRuntimeSessionController(options = {}) {
   let activationReservation = null;
   let probeReservation = null;
   let lastErrorCode = null;
+  // A typed, non-fatal reason the last explicit activation was refused.
+  let activationRefusal = null;
   let lastErrorDetails = Object.freeze({});
   let controlGeneration = null;
   let acknowledgedGeneration = null;
@@ -1428,6 +1494,7 @@ function createRuntimeSessionController(options = {}) {
       trigger_admitted_count: triggerAdmittedCount,
       trigger_outcome_count: triggerOutcomeCount,
       trigger_rejected_count: triggerRejectedCount,
+      activation_refusal: activationRefusal,
       midi_permission: midi.permission,
       connected_input_count: midi.connected_input_count,
       pressed_count: pressedCount(),
@@ -2115,8 +2182,7 @@ function createRuntimeSessionController(options = {}) {
 
   async function activateRuntimeForRecovery(
     epoch,
-    activationDeadline =
-      monotonicNow() + deadlineForOperation("audio.activate"),
+    activationDeadline = null,
     callbackReady = false,
   ) {
     if (
@@ -2132,11 +2198,23 @@ function createRuntimeSessionController(options = {}) {
     try {
       if (!callbackReady) {
         const callbackBaseline = readAudioCallbackHeartbeat();
-        await awaitAudioCallbackAfterResume(
-          callbackBaseline, activationDeadline);
+        // Automatic recovery has already parked Control, so an output device
+        // that never calls back still fails closed, after its own bound.
+        if (!await awaitAudioCallbackAfterResume(
+          callbackBaseline, monotonicNow() + AUDIO_DEVICE_START_BOUND_MS)) {
+          throw typedError(
+            "HOST_TIMEOUT",
+            "AudioWorklet callback did not resume",
+          );
+        }
+        if (recoveryEpoch !== epoch || machine.state !== "recovering") {
+          return;
+        }
       }
+      const controlDeadline = activationDeadline ??
+        monotonicNow() + deadlineForOperation("audio.activate");
       await boundedRequest("audio.activate", {}, {
-        deadlineMs: remainingActivationBudget(activationDeadline),
+        deadlineMs: remainingActivationBudget(controlDeadline),
       });
       if (recoveryEpoch !== epoch || machine.state !== "recovering") {
         return;
@@ -2632,6 +2710,40 @@ function createRuntimeSessionController(options = {}) {
     return heartbeat;
   }
 
+  async function parkContextAfterRefusedStart() {
+    const state = audioContext?.state;
+    if (state !== "running" && state !== "suspended") return;
+    // A running context reports its own suspend. One whose resume() is still
+    // pending has not changed state and reports nothing, but suspend() still
+    // withdraws that pending start.
+    const reportsSuspend = state === "running";
+    if (reportsSuspend) expectedContextSuspend = true;
+    try {
+      await audioContext.suspend();
+    } catch {
+      if (reportsSuspend) expectedContextSuspend = false;
+    }
+  }
+
+  // Whether resume() settled before the output device's bound. A browser that
+  // has not allowed the context to start leaves it pending; a rejection still
+  // fails the attempt.
+  async function resumeWithinDeviceStartBound(deadline) {
+    let outcome = null;
+    audioContext.resume().then(
+      () => { outcome = {resumed: true}; },
+      (error) => { outcome = {resumed: false, error}; },
+    );
+    while (outcome === null && monotonicNow() < deadline) {
+      await new Promise((resolvePromise) =>
+        timers.setTimeout(resolvePromise, 0));
+    }
+    if (outcome === null) return false;
+    if (!outcome.resumed) throw outcome.error;
+    return true;
+  }
+
+  // Whether the AudioWorklet called back before the output device's bound.
   async function awaitAudioCallbackAfterResume(baseline, deadline) {
     let heartbeat = readAudioCallbackHeartbeat();
     while (heartbeat === baseline && monotonicNow() < deadline) {
@@ -2639,12 +2751,7 @@ function createRuntimeSessionController(options = {}) {
         timers.setTimeout(resolvePromise, 0));
       heartbeat = readAudioCallbackHeartbeat();
     }
-    if (heartbeat === baseline) {
-      throw typedError(
-        "HOST_TIMEOUT",
-        "AudioWorklet callback did not resume",
-      );
-    }
+    return heartbeat !== baseline;
   }
 
   function remainingActivationBudget(deadline) {
@@ -2671,6 +2778,7 @@ function createRuntimeSessionController(options = {}) {
     }
     const reservation = Object.freeze({recoveryEpoch, foregroundLossEpoch});
     activationReservation = reservation;
+    activationRefusal = null;
     try {
       if (audioContext === null) {
         audioContext = createAudioContext({ sampleRate: 48_000 });
@@ -2754,18 +2862,29 @@ function createRuntimeSessionController(options = {}) {
       if (!activationIsCurrent(reservation, "audio-suspended")) {
         return false;
       }
+      const callbackBaseline = readAudioCallbackHeartbeat();
+      const deviceStartDeadline = monotonicNow() + AUDIO_DEVICE_START_BOUND_MS;
+      const resumed = await resumeWithinDeviceStartBound(deviceStartDeadline);
+      if (!activationIsCurrent(reservation, "audio-suspended")) {
+        return false;
+      }
+      if (!resumed || !await awaitAudioCallbackAfterResume(
+        callbackBaseline, deviceStartDeadline)) {
+        // Nothing has reached Control yet, so a device that does not start
+        // within its bound is refused rather than sealed: park the context
+        // again and leave the session as retryable as before the attempt.
+        await parkContextAfterRefusedStart();
+        if (activationReservation === reservation && !closing) {
+          activationRefusal = "audio_output_start_timeout";
+          renderDiagnostics();
+        }
+        return false;
+      }
+      if (!activationIsCurrent(reservation, "audio-suspended")) {
+        return false;
+      }
       const activationDeadline =
         monotonicNow() + deadlineForOperation("audio.activate");
-      const callbackBaseline = readAudioCallbackHeartbeat();
-      await audioContext.resume();
-      if (!activationIsCurrent(reservation, "audio-suspended")) {
-        return false;
-      }
-      await awaitAudioCallbackAfterResume(
-        callbackBaseline, activationDeadline);
-      if (!activationIsCurrent(reservation, "audio-suspended")) {
-        return false;
-      }
       if (recoveryEpoch !== null) {
         machine.transition("recovering", {
           reason: "recovery_activation",
@@ -3850,6 +3969,43 @@ function createRuntimeSessionController(options = {}) {
         replayed: value.replayed,
         projectRevision: value.project_revision,
       });
+    });
+  }
+
+  function wireFxGesture(event) {
+    if (event === null || typeof event !== "object" || typeof event.kind !== "string") {
+      throw new TypeError("Performance FX gesture is invalid");
+    }
+    if (event.kind === "hold_on" || event.kind === "hold_off") {
+      if (!exactKeys(event, ["kind"])) throw new TypeError("Performance FX gesture is invalid");
+      return {kind: event.kind};
+    }
+    if (event.kind === "fx_engage" || event.kind === "fx_move") {
+      if (!exactKeys(event, ["kind", "fx", "value"]) || typeof event.fx !== "string" ||
+          !isUnsignedInteger(event.value) || event.value > 1000) {
+        throw new TypeError("Performance FX gesture is invalid");
+      }
+      return {kind: event.kind, fx: event.fx, value: event.value};
+    }
+    if (event.kind === "fx_release") {
+      if (!exactKeys(event, ["kind", "fx"]) || typeof event.fx !== "string") {
+        throw new TypeError("Performance FX gesture is invalid");
+      }
+      return {kind: event.kind, fx: event.fx};
+    }
+    throw new TypeError("Performance FX gesture is invalid");
+  }
+
+  function applyFxGesture(event) {
+    let wired;
+    try {
+      wired = wireFxGesture(event);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return serializeRuntimeAction(async () => {
+      await boundedRequest("performance.fx.gesture", {event: wired});
+      return Object.freeze({applied: true});
     });
   }
 
@@ -5361,6 +5517,7 @@ function createRuntimeSessionController(options = {}) {
     inspectPerformance,
     beginPerformanceRecording,
     recordPerformanceEvent,
+    applyFxGesture,
     requestPerformancePatternLaunch,
     flushPerformanceRecording,
     stopPerformanceRecording,

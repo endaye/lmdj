@@ -173,6 +173,12 @@ function sampleInspect(
       triggerMode,
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     },
     metadata: assetId === null
       ? null
@@ -197,8 +203,10 @@ interface SampleFixtureOptions {
   onEmptyPadPress?: (slot: number, key: object, source: import("../src/runtime/runtime_types").RuntimeTriggerSource,
     activation: Promise<boolean> | null) => boolean;
   onEmptyPadRelease?: (key: object) => void;
-  onEmptyPadCancel?: () => void;
+  onEmptyPadCancel?: (key?: object) => void;
   canUsePad?: (slot: number) => boolean;
+  audioState?: "audio-suspended" | "running";
+  windowTarget?: Window;
   activateAudioForGesture?: (event: {isTrusted: boolean}) => Promise<boolean> | null;
   isAssigned?: (slot: number) => boolean;
   isAvailable?: (slot: number) => boolean;
@@ -218,6 +226,7 @@ function sampleFixture(options: SampleFixtureOptions = {}) {
   const filePickIntents: Array<{slot: number; source: string}> = [];
   const session: CreatorSampleRuntimeSession = {
     ...value.session,
+    diagnostics: () => ({...value.session.diagnostics(), state: options.audioState ?? "running"}),
     querySampleQuota: async (slot) => ({
       projectRevision: 3, slot, bankQuotaBytes: 67_108_864,
       bankUsedBytes: 0, bankRemainingBytes: 67_108_864,
@@ -264,6 +273,7 @@ function sampleFixture(options: SampleFixtureOptions = {}) {
     ...(options.onEmptyPadPress === undefined ? {} : {onEmptyPadPress: options.onEmptyPadPress}),
     ...(options.onEmptyPadRelease === undefined ? {} : {onEmptyPadRelease: options.onEmptyPadRelease}),
     ...(options.onEmptyPadCancel === undefined ? {} : {onEmptyPadCancel: options.onEmptyPadCancel}),
+    ...(options.windowTarget === undefined ? {} : {windowTarget: options.windowTarget}),
     ...(options.activateAudioForGesture === undefined ? {} : {activateAudioForGesture: options.activateAudioForGesture}),
     getActiveBank: () => 0,
     isAssigned: options.isAssigned ?? (() => true),
@@ -302,6 +312,23 @@ async function settle() {
 }
 
 describe("Creator input controller", () => {
+  test.each(["mouse", "touch", "pen"])("empty %s Pad offers capture immediately while playback keeps its activation boundary", pointerType => {
+    const order: string[] = [];
+    let wakes = 0;
+    const value = sampleFixture({audioState: "audio-suspended", isAssigned: () => false,
+      activateAudioForGesture: async () => {wakes++; order.push("wake"); return true;},
+      onEmptyPadPress: () => {order.push("capture"); return true;},
+    });
+    const event = {type: "pointerdown", pointerType, pointerId: 18,
+      isPrimary: true, button: 0, isTrusted: true};
+    value.controller.pointerDown(event, 0);
+    expect(order).toEqual(pointerType === "mouse" ? ["wake", "capture"] : ["capture"]);
+    expect(wakes).toBe(pointerType === "mouse" ? 1 : 0);
+    value.controller.pointerUp({...event, type: "pointerup"}, 0);
+    expect(wakes).toBe(1);
+    value.controller.dispose();
+  });
+
   test("waits for native activation and retains the first released one-shot", async () => {
     const activation = deferred<boolean>();
     const events: Array<{isTrusted: boolean}> = [];
@@ -362,6 +389,170 @@ describe("Creator input controller", () => {
     value.controller.keyUp({code: "KeyQ"});
     await settle();
     expect(attempts).toBe(2);
+    expect(value.triggers).toHaveLength(1);
+    value.controller.dispose();
+  });
+
+  test.each(["touch", "pen"])("cold %s wakes on its native release and retains the first one-shot", async pointerType => {
+    const events: object[] = [];
+    const value = sampleFixture({audioState: "audio-suspended",
+      activateAudioForGesture: event => {events.push(event); return Promise.resolve(true);},
+    });
+    const down = {type: "pointerdown", pointerType, pointerId: 18, isPrimary: true,
+      button: 0, nativeEvent: {isTrusted: true, type: "pointerdown", pointerType}};
+    const up = {...down, type: "pointerup",
+      nativeEvent: {isTrusted: true, type: "pointerup", pointerType}};
+    expect(value.controller.pointerDown(down, 0)).toBe(true);
+    await settle();
+    expect(events).toEqual([]);
+    expect(value.triggers).toEqual([]);
+    expect(value.controller.pointerUp(up, 0)).toBe(true);
+    // The wake call must run inside this native pointerup stack.
+    expect(events).toEqual([up.nativeEvent]);
+    value.controller.pointerUp(up, 0);
+    await settle();
+    expect(events).toHaveLength(1);
+    expect(value.triggers).toEqual([{slot: 0, velocity: 100, source: "pointer"}]);
+    value.controller.dispose();
+  });
+
+  test.each(["gate", "loop_gate"] as const)("cold touch wakes without a late released %s voice", async mode => {
+    let wakes = 0;
+    const value = sampleFixture({audioState: "audio-suspended",
+      activateAudioForGesture: async () => {wakes++; return true;},
+      inspectSample: async slot => ({...sampleInspect(slot), playback: {
+        ...sampleInspect(slot).playback, triggerMode: mode,
+      }}),
+    });
+    const event = {type: "pointerdown", pointerType: "touch", pointerId: 18,
+      isPrimary: true, button: 0, isTrusted: true};
+    value.controller.pointerDown(event, 0);
+    value.controller.pointerUp({...event, type: "pointerup"}, 0);
+    await settle();
+    expect(wakes).toBe(1);
+    expect(value.triggers).toEqual([]);
+    value.controller.dispose();
+  });
+
+  test.each(["cancel", "blur", "dispose"])("%s retires cold touch before any audio wake", async action => {
+    let wakes = 0;
+    const value = sampleFixture({audioState: "audio-suspended",
+      activateAudioForGesture: async () => {wakes++; return true;},
+    });
+    const event = {type: "pointerdown", pointerType: "touch", pointerId: 18,
+      isPrimary: true, button: 0, isTrusted: true};
+    value.controller.pointerDown(event, 0);
+    if (action === "cancel") value.controller.pointerCancel({...event, type: "pointercancel"}, 0);
+    else if (action === "blur") window.dispatchEvent(new Event("blur"));
+    else value.controller.dispose();
+    value.controller.pointerUp({...event, type: "pointerup"}, 0);
+    await settle();
+    expect(wakes).toBe(0);
+    expect(value.triggers).toEqual([]);
+    value.controller.dispose();
+  });
+
+  test("running touch keeps immediate press admission", async () => {
+    const value = sampleFixture({activateAudioForGesture: () => null});
+    value.controller.pointerDown({type: "pointerdown", pointerType: "touch",
+      pointerId: 18, isPrimary: true, button: 0, isTrusted: true}, 0);
+    await settle();
+    expect(value.triggers).toHaveLength(1);
+    value.controller.dispose();
+  });
+
+  test("a released primary pen plays while a primary touch remains held", async () => {
+    let wakes = 0;
+    const value = sampleFixture({audioState: "audio-suspended",
+      activateAudioForGesture: async () => {wakes++; return true;}});
+    const event = {type: "pointerdown", pointerType: "touch", pointerId: 18,
+      isPrimary: true, button: 0, isTrusted: true};
+    value.controller.pointerDown(event, 0);
+    const pen = {...event, pointerType: "pen", pointerId: 19};
+    value.controller.pointerDown(pen, 1);
+    value.controller.pointerUp({...pen, type: "pointerup"}, 1);
+    await settle();
+    expect(wakes).toBe(1);
+    expect(value.triggers.map(trigger => trigger.slot)).toEqual([1]);
+    value.controller.pointerUp({...event, type: "pointerup"}, 0);
+    await settle();
+    expect(wakes).toBe(2);
+    expect(value.triggers.map(trigger => trigger.slot)).toEqual([1, 0]);
+    value.controller.dispose();
+  });
+
+  test("cold touch released outside the Pad wakes through the window listener", async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const windowTarget = {navigator: window.navigator,
+      addEventListener: (type: string, listener: (event: unknown) => void) => listeners.set(type, listener),
+      removeEventListener: (type: string) => listeners.delete(type),
+    } as unknown as Window;
+    const events: object[] = [];
+    const value = sampleFixture({audioState: "audio-suspended", windowTarget,
+      activateAudioForGesture: event => {events.push(event); return Promise.resolve(true);}});
+    const event = {type: "pointerdown", pointerType: "touch", pointerId: 18,
+      isPrimary: true, button: 0, isTrusted: true};
+    value.controller.pointerDown(event, 0);
+    const up = {...event, type: "pointerup"};
+    listeners.get("pointerup")!(up);
+    expect(events).toHaveLength(1);
+    listeners.get("pointerup")!(up);
+    await settle();
+    expect(events).toHaveLength(1);
+    expect(value.triggers).toHaveLength(1);
+    value.controller.dispose();
+  });
+
+  test("cold touch and pen releases on the same gate Pad do not admit a late voice", async () => {
+    let wakes = 0;
+    const value = sampleFixture({audioState: "audio-suspended",
+      activateAudioForGesture: async () => {wakes++; return true;},
+      inspectSample: async slot => sampleInspect(slot, "gate")});
+    const event = {type: "pointerdown", pointerType: "touch", pointerId: 18,
+      isPrimary: true, button: 0, isTrusted: true};
+    value.controller.pointerDown(event, 0);
+    const pen = {...event, pointerType: "pen", pointerId: 19};
+    value.controller.pointerDown(pen, 0);
+    value.controller.pointerUp({...event, type: "pointerup"}, 0);
+    value.controller.pointerUp({...pen, type: "pointerup"}, 0);
+    await settle();
+    expect(wakes).toBe(2);
+    expect(value.triggers).toEqual([]);
+    value.controller.dispose();
+  });
+
+  test("cancelled primary pen cannot steal a primary touch's audio wake on the same Pad", async () => {
+    let wakes = 0;
+    const value = sampleFixture({audioState: "audio-suspended",
+      activateAudioForGesture: async () => {wakes++; return true;}});
+    const event = {type: "pointerdown", pointerType: "touch", pointerId: 18,
+      isPrimary: true, button: 0, isTrusted: true};
+    value.controller.pointerDown(event, 0);
+    const pen = {...event, pointerType: "pen", pointerId: 19};
+    value.controller.pointerDown(pen, 0);
+    value.controller.pointerCancel({...pen, type: "pointercancel"}, 0);
+    value.controller.pointerUp({...event, type: "pointerup"}, 0);
+    value.controller.pointerUp({...pen, type: "pointerup"}, 0);
+    await settle();
+    expect(wakes).toBe(1);
+    expect(value.triggers).toHaveLength(1);
+    value.controller.dispose();
+  });
+
+  test("a refused cold touch permits the next touch to retry", async () => {
+    let wakes = 0;
+    const value = sampleFixture({audioState: "audio-suspended",
+      activateAudioForGesture: async () => ++wakes > 1});
+    const event = {type: "pointerdown", pointerType: "touch", pointerId: 18,
+      isPrimary: true, button: 0, isTrusted: true};
+    value.controller.pointerDown(event, 0);
+    value.controller.pointerUp({...event, type: "pointerup"}, 0);
+    await settle();
+    expect(value.triggers).toEqual([]);
+    value.controller.pointerDown(event, 0);
+    value.controller.pointerUp({...event, type: "pointerup"}, 0);
+    await settle();
+    expect(wakes).toBe(2);
     expect(value.triggers).toHaveLength(1);
     value.controller.dispose();
   });
@@ -1767,5 +1958,24 @@ test("empty Pad capture consumes pointer release and cancellation without a file
   value.controller.pointerDown({...event,pointerId:78},3);
   value.controller.clearPressed();expect(cancels).toBe(1);
   expect(releases).toHaveLength(1);
+  value.controller.dispose();
+});
+
+test("a busy primary pointer cancellation carries its own key while lifecycle cancellation is global", () => {
+  const presses: object[] = []; const cancels: Array<object | undefined> = [];
+  const value = sampleFixture({isAssigned: () => false,
+    onEmptyPadPress: (_slot, key) => {presses.push(key); return true;},
+    onEmptyPadCancel: key => {cancels.push(key);}});
+  value.controller.keyDown({type: "keydown", code: "KeyQ", repeat: false, target: document.body});
+  const event = {type: "pointerdown", pointerType: "mouse", isPrimary: true,
+    button: 0, pointerId: 77, target: document.createElement("button")};
+  value.controller.pointerDown(event, 1);
+  expect(presses).toHaveLength(2);
+  value.controller.pointerCancel({...event, type: "pointercancel"}, 1);
+  expect(cancels).toEqual([presses[1]]);
+  expect(value.filePickIntents).toEqual([]);
+  expect(value.triggers).toEqual([]);
+  value.controller.clearPressed();
+  expect(cancels).toEqual([presses[1], undefined]);
   value.controller.dispose();
 });

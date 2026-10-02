@@ -74,7 +74,6 @@ using Json = nlohmann::json;
 using foundation::Error;
 using foundation::ErrorCode;
 
-constexpr std::uint32_t kSampleRate = 48'000;
 constexpr std::uint64_t kMaximumSafeInteger = 9'007'199'254'740'991ULL;
 
 std::string generated_uuid() {
@@ -108,6 +107,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
       operation == "sequence.record.status" ||
       operation == "sequence.recovery.list" ||
       operation == "performance.record.event" ||
+      operation == "performance.fx.gesture" ||
       operation == "performance.record.launch-request" ||
       operation == "performance.record.status" ||
       operation == "performance.recovery.list" ||
@@ -222,24 +222,65 @@ domain::TriggerMode trigger_mode_value(const Json& value) {
   protocol_failure();
 }
 
+// The five 5.0.0 playback keys are required; a lmdj.project.v5 5.1.0 parity
+// key may be omitted, which means its default; an unknown key is a protocol
+// failure, as before.
 domain::PadPlayback playback_value(const Json& value) {
-  require(exact_keys(
-      value,
-      {"trim_start_frame", "trim_end_frame", "trigger_mode",
-       "gain_millidb", "muted"}));
+  static constexpr std::array<std::string_view, 5> base{
+      "trim_start_frame", "trim_end_frame", "trigger_mode", "gain_millidb",
+      "muted"};
+  static constexpr std::array<std::string_view, 6> parity{
+      "reverse", "pitch_cents", "pan", "loop_mode", "loop_start_frame",
+      "loop_crossfade_frames"};
+  require(value.is_object());
+  for (const auto key : base) {
+    require(value.contains(std::string(key)));
+  }
+  for (const auto& [key, field] : value.items()) {
+    (void)field;
+    require(std::find(base.begin(), base.end(), key) != base.end() ||
+            std::find(parity.begin(), parity.end(), key) != parity.end());
+  }
   const auto start = unsigned_field(value, "trim_start_frame");
   std::optional<std::uint64_t> end;
   if (!value.at("trim_end_frame").is_null()) {
     end = unsigned_field(value, "trim_end_frame");
     require(*end > start);
   }
-  return domain::PadPlayback{
+  domain::PadPlayback playback{
       start,
       end,
       trigger_mode_value(value.at("trigger_mode")),
       signed_field(value, "gain_millidb", -60'000, 6'000),
       bool_field(value, "muted"),
   };
+  if (value.contains("reverse")) {
+    playback.reverse = bool_field(value, "reverse");
+  }
+  if (value.contains("pitch_cents")) {
+    playback.pitch_cents = signed_field(
+        value, "pitch_cents", domain::kPadPitchCentsMin,
+        domain::kPadPitchCentsMax);
+  }
+  if (value.contains("pan")) {
+    playback.pan =
+        signed_field(value, "pan", domain::kPadPanMin, domain::kPadPanMax);
+  }
+  if (value.contains("loop_mode")) {
+    const auto& mode = string_field(value, "loop_mode");
+    require(mode == "forward" || mode == "ping_pong");
+    playback.loop_mode = mode == "ping_pong" ? domain::LoopMode::ping_pong
+                                             : domain::LoopMode::forward;
+  }
+  if (value.contains("loop_start_frame") &&
+      !value.at("loop_start_frame").is_null()) {
+    playback.loop_start_frame = unsigned_field(value, "loop_start_frame");
+  }
+  if (value.contains("loop_crossfade_frames")) {
+    playback.loop_crossfade_frames =
+        unsigned_field(value, "loop_crossfade_frames");
+  }
+  return playback;
 }
 
 domain::Pattern pattern_value(const Json& value) {
@@ -304,6 +345,10 @@ void validate_performance_artifact(const Json& value) {
   (void)safe_unsigned_field(value, "byte_length");
 }
 
+constexpr std::array<std::string_view, 8> kPerformanceFxNames{
+    "filter", "delay", "reverb", "stutter",
+    "gate", "reverse", "crush", "cutter"};
+
 void validate_performance_gesture(const Json& event) {
   require(event.is_object() && event.contains("kind"));
   const auto& kind = string_field(event, "kind");
@@ -322,15 +367,13 @@ void validate_performance_gesture(const Json& event) {
     (void)safe_unsigned_field(event, "slot", 63U);
     return;
   }
-  static constexpr std::array<std::string_view, 8> effects{
-      "filter", "delay", "reverb", "stutter",
-      "gate", "reverse", "crush", "cutter"};
   if (kind == "fx_engage" || kind == "fx_move") {
     require(exact_keys(
         event, {"kind", "gesture_id", "fx", "value"}));
     (void)uuid_field(event, "gesture_id");
     const auto& effect = string_field(event, "fx");
-    require(std::find(effects.begin(), effects.end(), effect) != effects.end());
+    require(std::find(kPerformanceFxNames.begin(), kPerformanceFxNames.end(),
+                      effect) != kPerformanceFxNames.end());
     (void)safe_unsigned_field(event, "value", 1'000U);
     return;
   }
@@ -338,7 +381,34 @@ void validate_performance_gesture(const Json& event) {
     require(exact_keys(event, {"kind", "gesture_id", "fx"}));
     (void)uuid_field(event, "gesture_id");
     const auto& effect = string_field(event, "fx");
-    require(std::find(effects.begin(), effects.end(), effect) != effects.end());
+    require(std::find(kPerformanceFxNames.begin(), kPerformanceFxNames.end(),
+                      effect) != kPerformanceFxNames.end());
+    return;
+  }
+  require(
+      (kind == "hold_on" || kind == "hold_off") &&
+      exact_keys(event, {"kind"}));
+}
+
+// Session-free live FX gestures (#1674): the same gesture vocabulary as a
+// journaled recording event, minus the gesture identity the recording journal
+// tracks. Applied to the master bus only; journaled nowhere.
+void validate_performance_fx_gesture_event(const Json& event) {
+  require(event.is_object() && event.contains("kind"));
+  const auto& kind = string_field(event, "kind");
+  if (kind == "fx_engage" || kind == "fx_move") {
+    require(exact_keys(event, {"kind", "fx", "value"}));
+    const auto& effect = string_field(event, "fx");
+    require(std::find(kPerformanceFxNames.begin(), kPerformanceFxNames.end(),
+                      effect) != kPerformanceFxNames.end());
+    (void)safe_unsigned_field(event, "value", 1'000U);
+    return;
+  }
+  if (kind == "fx_release") {
+    require(exact_keys(event, {"kind", "fx"}));
+    const auto& effect = string_field(event, "fx");
+    require(std::find(kPerformanceFxNames.begin(), kPerformanceFxNames.end(),
+                      effect) != kPerformanceFxNames.end());
     return;
   }
   require(
@@ -2012,57 +2082,9 @@ struct ControlRuntime::Impl {
   foundation::Result<cooker::ResolvedPlayback> resolve_preview_playback(
       const facade::SampleInspectResult& inspected,
       const domain::PadPlayback& playback) {
-    if (!inspected.asset_id.has_value() ||
-        !inspected.metadata.has_value()) {
-      return foundation::Result<cooker::ResolvedPlayback>::failure(Error{
-          ErrorCode::missing_asset,
-          "Sample preview Pad is unassigned",
-      });
-    }
-    const auto& metadata = *inspected.metadata;
-    const auto source_end =
-        playback.trim_end_frame.value_or(metadata.source_frames);
-    if (metadata.sample_rate == 0 || playback.trim_start_frame >= source_end ||
-        source_end > metadata.source_frames ||
-        playback.trim_start_frame >
-            std::numeric_limits<std::uint64_t>::max() / kSampleRate ||
-        source_end >
-            std::numeric_limits<std::uint64_t>::max() / kSampleRate) {
-      return foundation::Result<cooker::ResolvedPlayback>::failure(Error{
-          ErrorCode::invalid_argument,
-          "Sample preview playback is invalid",
-      });
-    }
-    const auto scaled_start = playback.trim_start_frame * kSampleRate;
-    const auto scaled_end = source_end * kSampleRate;
-    const auto runtime_start = scaled_start / metadata.sample_rate;
-    const auto runtime_end =
-        scaled_end / metadata.sample_rate +
-        (scaled_end % metadata.sample_rate != 0 ? 1U : 0U);
-    const auto prepared_frames =
-        metadata.source_frames * kSampleRate / metadata.sample_rate +
-        (metadata.source_frames * kSampleRate % metadata.sample_rate != 0
-             ? 1U
-             : 0U);
-    const auto gain = static_cast<float>(std::pow(
-        10.0, static_cast<double>(playback.gain_millidb) / 20'000.0));
-    if (runtime_start >= runtime_end || runtime_end > prepared_frames ||
-        runtime_start > std::numeric_limits<std::uint32_t>::max() ||
-        runtime_end > std::numeric_limits<std::uint32_t>::max() ||
-        !std::isfinite(gain)) {
-      return foundation::Result<cooker::ResolvedPlayback>::failure(Error{
-          ErrorCode::invalid_argument,
-          "Sample preview playback is invalid",
-      });
-    }
-    return foundation::Result<cooker::ResolvedPlayback>::success(
-        cooker::ResolvedPlayback{
-            static_cast<std::uint32_t>(runtime_start),
-            static_cast<std::uint32_t>(runtime_end),
-            playback.trigger_mode,
-            gain,
-            playback.muted,
-        });
+    // One resolution for cooking and previewing, so a preview plays exactly
+    // what a cooked Pad would, voice DSP block included.
+    return facade::resolve_sample_preview_playback(inspected, playback);
   }
 
   // #799. Publish the audition PCM the Facade decoded into the engine's
@@ -3028,6 +3050,18 @@ Json ControlRuntime::dispatch(
           normalized.at("result")["played"] = played;
         }
         return normalized;
+      }
+      return normalized_facade_success(response);
+    }
+    if (operation == "performance.fx.gesture") {
+      require(sidecar.empty());
+      require(exact_keys(payload, {"event"}));
+      validate_performance_fx_gesture_event(payload.at("event"));
+      auto request = payload;
+      request["operation"] = operation;
+      const auto response = impl_->application.command(request);
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
       }
       return normalized_facade_success(response);
     }

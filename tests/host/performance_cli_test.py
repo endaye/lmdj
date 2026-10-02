@@ -22,6 +22,7 @@ PERFORMANCE_OPERATIONS = {
     "performance.inspect": "query",
     "performance.record.begin": "command",
     "performance.record.event": "command",
+    "performance.fx.gesture": "command",
     "performance.record.launch-request": "command",
     "performance.record.flush": "command",
     "performance.record.stop": "command",
@@ -39,7 +40,7 @@ PERFORMANCE_OPERATIONS = {
     "performance.replay.status": "query",
     "performance.resample.commit": "command",
 }
-assert len(PERFORMANCE_OPERATIONS) == 23
+assert len(PERFORMANCE_OPERATIONS) == 24
 
 # Stage 11's Sound Set surface is a second Facade inventory the Native Host
 # forwards, kept apart from the Performance one above so P10-D20 stays exactly
@@ -55,6 +56,15 @@ SOUNDSET_OPERATIONS = {
     "soundset.map.preview": "query",
 }
 assert len(SOUNDSET_OPERATIONS) == 5
+# Slot acquisition is a Facade/Bridge surface. The Native instrument's complete
+# Sound Set inventory remains separate and unchanged.
+FACADE_SOUNDSET_OPERATIONS = {
+    **SOUNDSET_OPERATIONS,
+    "soundset.catalog.describe": "query",
+    "soundset.slot.acquire": "query",
+    "soundset.slot.install": "command",
+}
+assert len(FACADE_SOUNDSET_OPERATIONS) == 8
 
 
 def registered_facade_performance_operations() -> dict[str, str]:
@@ -265,7 +275,7 @@ def cli_operation_kind_contract(
 ) -> None:
     assert registered_facade_performance_operations() == PERFORMANCE_OPERATIONS
     assert registered_native_performance_operations() == PERFORMANCE_OPERATIONS
-    assert registered_facade_soundset_operations() == SOUNDSET_OPERATIONS
+    assert registered_facade_soundset_operations() == FACADE_SOUNDSET_OPERATIONS
     assert registered_native_soundset_operations() == SOUNDSET_OPERATIONS
     for operation, surface in PERFORMANCE_OPERATIONS.items():
         request = {"operation": operation}

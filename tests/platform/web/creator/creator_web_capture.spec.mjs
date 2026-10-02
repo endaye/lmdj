@@ -599,6 +599,10 @@ test("a denied microphone permission is explicit and retryable", async ({page}, 
   // S8B-D2: denial is a visible, explained, retryable state — not a silent
   // no-op and not a dead panel.
   await expect(panel.getByRole("alert")).toBeVisible({timeout: 60_000});
+  // #1680: the explanation says what to do and never names the exception.
+  await expect(panel.getByRole("alert")).toContainText(
+    "Creator is not allowed to use the microphone. Allow microphone access for this site, then record again.");
+  await expect(panel.getByRole("alert")).not.toContainText("NotAllowedError");
   await expect(panel.getByRole("button", {name: "Record into Pad A1"})).toBeEnabled();
 });
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -129,6 +130,7 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "performance.inspect",
     "performance.record.begin",
     "performance.record.event",
+    "performance.fx.gesture",
     "performance.record.launch-request",
     "performance.record.flush",
     "performance.record.stop",
@@ -319,6 +321,43 @@ test("accepts only exact privacy-safe Sample operation payloads", () => {
   );
 });
 
+// lmdj.project.v5 5.1.0: the shared fixture holds every PadPlayback copy to
+// one shape (.agents/pitfalls/parity-check-between-agreeing-copies.md).
+const PAD_PLAYBACK_FULL = JSON.parse(
+  readFileSync(
+    new URL("../../../tests/fixtures/contracts/pad-playback-full.json", import.meta.url),
+    "utf8",
+  ),
+);
+
+test("Sample playback payloads admit every parity key and refuse the rest", () => {
+  const update = (playback) => createRequestEnvelope({
+    operation: "sample.update_pad",
+    payload: {
+      command_id: requestIdFor(201),
+      expected_revision: 7,
+      slot: {bank: 0, pad: 3},
+      playback,
+    },
+    crypto: {randomUUID: () => REQUEST_ID},
+  });
+  for (const variant of Object.values(PAD_PLAYBACK_FULL)) {
+    assert.equal(update(variant).operation, "sample.update_pad");
+  }
+  const forward = PAD_PLAYBACK_FULL.forward;
+  for (const invalid of [
+    {...forward, time_stretch: true},
+    {...forward, pitch_cents: 2401},
+    {...forward, pan: -101},
+    {...forward, loop_mode: "reverse"},
+    {...forward, reverse: "true"},
+    {...forward, loop_start_frame: -1},
+    {...forward, loop_crossfade_frames: 1.5},
+  ]) {
+    assert.throws(() => update(invalid), expectCode("HOST_PROTOCOL_MISMATCH"));
+  }
+});
+
 test("strictly decodes UTF-8 and rejects malformed input", () => {
   assert.throws(
     () => decodeRequestEnvelope(Uint8Array.from([0xc3, 0x28])),
@@ -498,6 +537,7 @@ test("uses exact operation-class deadlines", () => {
     "sequence.record.status",
     "sequence.recovery.list",
     "performance.record.event",
+    "performance.fx.gesture",
     "performance.record.launch-request",
     "performance.record.status",
     "performance.recovery.list",
@@ -520,6 +560,7 @@ test("uses exact operation-class deadlines", () => {
         "sequence.record.status",
         "sequence.recovery.list",
         "performance.record.event",
+        "performance.fx.gesture",
         "performance.record.launch-request",
         "performance.record.status",
         "performance.recovery.list",

@@ -199,25 +199,23 @@ foundation::Result<ProjectState> create_project(
         });
   }
 
-  ProjectState state{
+  // Built in the caller's return slot, so the new Project is never also a
+  // local in this frame (#1771).
+  auto created = foundation::Result<ProjectState>::emplace_success(
       ProjectContract::v5,
       std::move(id),
-      0,
+      std::uint64_t{0},
       bpm,
       true,
-      50,
-      {},
-      {},
-      {},
-      {},
-  };
+      std::uint8_t{50});
+  auto& state = created.value();
   for (std::uint8_t bank = 0; bank < state.banks.size(); ++bank) {
     for (std::uint8_t pad = 0; pad < state.banks.at(bank).size(); ++pad) {
       state.banks.at(bank).at(pad) =
           PadSlot{PadSlotId{bank, pad}, std::nullopt, PadPlayback{}};
     }
   }
-  return foundation::Result<ProjectState>::success(std::move(state));
+  return created;
 }
 
 bool is_valid_uuid(std::string_view value) noexcept {
@@ -285,6 +283,22 @@ bool is_valid_playback(const PadPlayback& playback) noexcept {
   return !playback.trim_end_frame.has_value() ||
          playback.loop_crossfade_frames <=
              (*playback.trim_end_frame - loop_start) / 2;
+}
+
+bool is_valid_playback_for_source(
+    const PadPlayback& playback,
+    std::uint64_t source_frames) noexcept {
+  if (!is_valid_playback(playback)) {
+    return false;
+  }
+  const auto end = playback.trim_end_frame.value_or(source_frames);
+  if (playback.trim_start_frame >= end || end > source_frames) {
+    return false;
+  }
+  const auto loop_start =
+      playback.loop_start_frame.value_or(playback.trim_start_frame);
+  return loop_start < end &&
+         playback.loop_crossfade_frames <= (end - loop_start) / 2;
 }
 
 std::optional<Asset> resolve_slot_asset(

@@ -1,7 +1,7 @@
 ---
 id: web-project-io-stack-scales-with-project-state
 area: core
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-30
     occurrence: https://github.com/endaye/lmdj/pull/1699
@@ -9,7 +9,10 @@ recurrences:
   - date: 2026-10-01
     occurrence: https://github.com/endaye/lmdj/pull/1717
     observed_by: Claude Opus 5.5
-exit: none
+  - date: 2026-10-02
+    occurrence: https://github.com/endaye/lmdj/issues/1771
+    observed_by: Claude Opus 5.5
+exit: gate:tests/platform/web/project_io/project_io_web_conformance.spec.mjs
 ---
 
 # Growing a Pad or Project field silently grows Project I/O's Web stack demand until a deep path overflows.
@@ -28,18 +31,30 @@ journeys.
 
 ## How to apply
 
-- When a Task grows `PadPlayback`, `PadSlot`, `ProjectState` or another value
-  that Project I/O copies, measure its wasm32 `sizeof` before and after.
-- Compare the deep Project I/O frames with
-  `em++ -O3 -fstack-usage` on the Web build flags (`flags.make` and
-  `includes_CXX.rsp` under `build/web/toolchain/project_io`), against `origin/main`.
-- Run `web_toolchain`, `creator` and `web_runtime_host` locally before merge.
-  Read a `null function` trap in those lanes as a possible stack overflow
-  first.
-- Do not bound one test frame with `[[gnu::noinline]]` and move on: the
-  product paths share the same budget.
+Absorbed by #1720. Every native action in the Project I/O Web conformance reports
+its stack high-water mark, and the spec fails any action over half the Web
+stack, with `why` and `remedy`. This runs in the `web_toolchain` lane, so run
+that lane whenever a Pad or Project field grows. If it fails, keep
+`ProjectState` off the deep frames: use the heap, references or `noinline`
+phases. Locate the cost with `em++ -O3 -fstack-usage`, using the Web build
+flags against `origin/main`.
 
-This stays open with `exit: none` until
-[#1720](https://github.com/endaye/lmdj/issues/1720) reduces the copies or lands
-a frame-size gate on the Web build of `packages/project-io`. #1720 is the
-escalation Issue for this second recurrence.
+Third occurrence (#1771). The gate worked: #1667's tone fields grew wasm32
+`ProjectState` from 6 472 to 10 568 bytes, and the spec failed at 151 472
+bytes before anything trapped. Each action's peak had grown by an exact
+multiple of the 4 096 bytes added, which counts the `ProjectState`-sized
+values live at its deepest point (9–13 here). Before adding the field, find
+and remove those values:
+
+- Build composite results in place with `Result::emplace_success`. A
+  `success(Aggregate{...})` leaves the aggregate as a temporary in the
+  returning frame.
+- Take a state that is about to be consumed by `&&`, not by value.
+- Canonicalize in place when the caller owns the state.
+- Return parsed Projects on the heap.
+- Check the conformance harness's own frames as well. `value(...)` of a
+  `ProjectState` result leaves two copies in the calling test frame, and
+  one harness frame was the largest share of an action's peak.
+
+To find which step sets an action's peak, temporarily record the cumulative
+high-water mark after each step inside the action.

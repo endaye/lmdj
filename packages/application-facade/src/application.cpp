@@ -3,6 +3,7 @@
 #include <lmdj/facade/pattern_transport_controller_factory.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -174,6 +175,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"pattern.create", OperationKind::command},
       {"performance.delete", OperationKind::command},
       {"performance.discard", OperationKind::command},
+      {"performance.fx.gesture", OperationKind::command},
       {"performance.inspect", OperationKind::query},
       {"performance.list", OperationKind::query},
       {"performance.record.begin", OperationKind::command},
@@ -500,23 +502,32 @@ std::string_view trigger_mode_name(domain::TriggerMode mode) {
   return "one_shot";
 }
 
+// The five 5.0.0 playback keys are required; a lmdj.project.v5 5.1.0 parity
+// key may be omitted, which means its default, and an unknown key is refused.
 domain::PadPlayback playback_value(const nlohmann::json& encoded) {
-  require(
-      exact_keys(
-          encoded,
-          {"trim_start_frame",
-           "trim_end_frame",
-           "trigger_mode",
-           "gain_millidb",
-           "muted"}),
-      "playback shape is invalid");
+  static constexpr std::array<std::string_view, 5> base{
+      "trim_start_frame", "trim_end_frame", "trigger_mode", "gain_millidb",
+      "muted"};
+  static constexpr std::array<std::string_view, 6> parity{
+      "reverse", "pitch_cents", "pan", "loop_mode", "loop_start_frame",
+      "loop_crossfade_frames"};
+  require(encoded.is_object(), "playback shape is invalid");
+  for (const auto key : base) {
+    require(encoded.contains(std::string(key)), "playback shape is invalid");
+  }
+  for (const auto& [key, value] : encoded.items()) {
+    (void)value;
+    require(std::find(base.begin(), base.end(), key) != base.end() ||
+                std::find(parity.begin(), parity.end(), key) != parity.end(),
+            "playback shape is invalid");
+  }
   const auto start = unsigned_field(encoded, "trim_start_frame");
   std::optional<std::uint64_t> end;
   if (!encoded.at("trim_end_frame").is_null()) {
     end = unsigned_field(encoded, "trim_end_frame");
   }
   require(encoded.at("muted").is_boolean(), "muted must be a boolean");
-  return domain::PadPlayback{
+  domain::PadPlayback playback{
       start,
       end,
       trigger_mode_value(encoded.at("trigger_mode")),
@@ -524,6 +535,36 @@ domain::PadPlayback playback_value(const nlohmann::json& encoded) {
           encoded, "gain_millidb", -60'000, 6'000)),
       encoded.at("muted").get<bool>(),
   };
+  if (encoded.contains("reverse")) {
+    require(encoded.at("reverse").is_boolean(), "reverse must be a boolean");
+    playback.reverse = encoded.at("reverse").get<bool>();
+  }
+  if (encoded.contains("pitch_cents")) {
+    playback.pitch_cents = static_cast<std::int32_t>(signed_field(
+        encoded, "pitch_cents", domain::kPadPitchCentsMin,
+        domain::kPadPitchCentsMax));
+  }
+  if (encoded.contains("pan")) {
+    playback.pan = static_cast<std::int32_t>(signed_field(
+        encoded, "pan", domain::kPadPanMin, domain::kPadPanMax));
+  }
+  if (encoded.contains("loop_mode")) {
+    const auto& mode = encoded.at("loop_mode");
+    require(mode.is_string(), "loop_mode must be a string");
+    const auto& name = mode.get_ref<const std::string&>();
+    require(name == "forward" || name == "ping_pong", "loop_mode is invalid");
+    playback.loop_mode = name == "ping_pong" ? domain::LoopMode::ping_pong
+                                             : domain::LoopMode::forward;
+  }
+  if (encoded.contains("loop_start_frame") &&
+      !encoded.at("loop_start_frame").is_null()) {
+    playback.loop_start_frame = unsigned_field(encoded, "loop_start_frame");
+  }
+  if (encoded.contains("loop_crossfade_frames")) {
+    playback.loop_crossfade_frames =
+        unsigned_field(encoded, "loop_crossfade_frames");
+  }
+  return playback;
 }
 
 cooker::WaveformRequest waveform_request_value(
@@ -587,8 +628,10 @@ nlohmann::json slot_json(domain::PadSlotId slot) {
   return {{"bank", slot.bank}, {"pad", slot.pad}};
 }
 
+// A parity key is emitted only when it differs from its default, so a Pad
+// that uses none of them answers exactly as before.
 nlohmann::json playback_json(const domain::PadPlayback& playback) {
-  return {
+  nlohmann::json encoded{
       {"trim_start_frame", playback.trim_start_frame},
       {"trim_end_frame",
        playback.trim_end_frame.has_value()
@@ -598,6 +641,25 @@ nlohmann::json playback_json(const domain::PadPlayback& playback) {
       {"gain_millidb", playback.gain_millidb},
       {"muted", playback.muted},
   };
+  if (playback.reverse) {
+    encoded["reverse"] = true;
+  }
+  if (playback.pitch_cents != 0) {
+    encoded["pitch_cents"] = playback.pitch_cents;
+  }
+  if (playback.pan != 0) {
+    encoded["pan"] = playback.pan;
+  }
+  if (playback.loop_mode == domain::LoopMode::ping_pong) {
+    encoded["loop_mode"] = "ping_pong";
+  }
+  if (playback.loop_start_frame.has_value()) {
+    encoded["loop_start_frame"] = *playback.loop_start_frame;
+  }
+  if (playback.loop_crossfade_frames != 0) {
+    encoded["loop_crossfade_frames"] = playback.loop_crossfade_frames;
+  }
+  return encoded;
 }
 
 nlohmann::json pattern_event_json(const domain::PatternEvent& event) {
@@ -2036,17 +2098,6 @@ std::optional<cooker::WaveformEnvelope> cached_waveform_window(
       cached.algorithm_version,
       std::move(buckets),
   };
-}
-
-bool valid_trigger_mode(domain::TriggerMode mode) {
-  switch (mode) {
-    case domain::TriggerMode::one_shot:
-    case domain::TriggerMode::gate:
-    case domain::TriggerMode::loop_gate:
-    case domain::TriggerMode::loop_toggle:
-      return true;
-  }
-  return false;
 }
 
 foundation::Result<void> remove_sample_staging(
@@ -3954,6 +4005,9 @@ struct Application::Impl {
     if (operation == "performance.record.event") {
       return performance_event(request);
     }
+    if (operation == "performance.fx.gesture") {
+      return performance_fx_gesture(request);
+    }
     if (operation == "performance.record.launch-request") {
       return performance_launch_request(request);
     }
@@ -5282,14 +5336,8 @@ struct Application::Impl {
         return foundation::Result<SampleMutationResult>::failure(
             metadata.error());
       }
-      const auto& playback = request.playback;
-      if (!valid_trigger_mode(playback.trigger_mode) ||
-          playback.gain_millidb < -60'000 ||
-          playback.gain_millidb > 6'000 ||
-          playback.trim_start_frame >= metadata.value().source_frames ||
-          (playback.trim_end_frame.has_value() &&
-           (*playback.trim_end_frame <= playback.trim_start_frame ||
-            *playback.trim_end_frame > metadata.value().source_frames))) {
+      if (!domain::is_valid_playback_for_source(
+              request.playback, metadata.value().source_frames)) {
         return foundation::Result<SampleMutationResult>::failure(
             invalid_sample_request("Sample playback selection is invalid"));
       }
@@ -7242,6 +7290,52 @@ struct Application::Impl {
                              {"coalesced", coalesced},
                              {"replayed", false}},
                             std::nullopt);
+  }
+
+  nlohmann::json performance_fx_gesture(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "event"}),
+            "performance.fx.gesture request shape is invalid");
+    const auto &event = request.at("event");
+    require(event.is_object(), "Performance FX gesture is invalid");
+    require(event.contains("kind"), "Performance FX gesture kind is required");
+    const auto kind = string_field(event, "kind");
+    audio::FxGesture gesture;
+    if (kind == "fx_engage" || kind == "fx_move") {
+      require(exact_keys(event, {"kind", "fx", "value"}),
+              "fx_engage/fx_move gesture shape is invalid");
+      gesture = audio::FxGesture{
+          kind == "fx_engage" ? audio::FxGestureKind::engage
+                              : audio::FxGestureKind::move,
+          performance_fx(string_field(event, "fx")),
+          static_cast<std::uint16_t>(unsigned_field(event, "value", 1000U))};
+    } else if (kind == "fx_release") {
+      require(exact_keys(event, {"kind", "fx"}),
+              "fx_release gesture shape is invalid");
+      gesture = audio::FxGesture{audio::FxGestureKind::release,
+                                 performance_fx(string_field(event, "fx")), 0};
+    } else if (kind == "hold_on" || kind == "hold_off") {
+      require(exact_keys(event, {"kind"}), "hold gesture shape is invalid");
+      gesture = audio::FxGesture{
+          kind == "hold_on" ? audio::FxGestureKind::hold_on
+                            : audio::FxGestureKind::hold_off,
+          domain::PerformanceFx::filter, 0};
+    } else {
+      require(false, "Performance FX gesture kind is invalid");
+    }
+    if (!performance_gesture_sink) {
+      return error_envelope(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance FX authority is unavailable",
+          {{"reason", "performance_fx_authority_unavailable"}}));
+    }
+    // Session-free by design: the gesture is applied live to the master bus
+    // and journaled nowhere; a running recording journals the same gesture
+    // through performance.record.event as an independent toggle.
+    const auto applied = performance_gesture_sink->apply_gesture(gesture);
+    if (!applied.has_value()) {
+      return error_envelope(applied.error());
+    }
+    return success_envelope({{"applied", true}}, std::nullopt);
   }
 
   nlohmann::json performance_launch_request(const nlohmann::json &request) {
@@ -9996,6 +10090,30 @@ foundation::Result<void> Application::discard_sequence_recovery(
         "unexpected Application Facade Host API failure",
     });
   }
+}
+
+foundation::Result<cooker::ResolvedPlayback> resolve_sample_preview_playback(
+    const SampleInspectResult& inspected,
+    const domain::PadPlayback& playback) {
+  if (!inspected.asset_id.has_value() || !inspected.metadata.has_value()) {
+    return foundation::Result<cooker::ResolvedPlayback>::failure(
+        foundation::Error{
+            foundation::ErrorCode::missing_asset,
+            "Sample preview Pad is unassigned",
+        });
+  }
+  auto resolved = cooker::resolve_pad_playback(
+      playback,
+      inspected.metadata->sample_rate,
+      inspected.metadata->source_frames);
+  if (!resolved.has_value()) {
+    return foundation::Result<cooker::ResolvedPlayback>::failure(
+        foundation::Error{
+            foundation::ErrorCode::invalid_argument,
+            "Sample preview playback is invalid",
+        });
+  }
+  return resolved;
 }
 
 }  // namespace lmdj::facade

@@ -1,0 +1,25 @@
+{
+  "forward": {
+    "gain_millidb": -300,
+    "loop_crossfade_frames": 1,
+    "loop_start_frame": 2,
+    "muted": false,
+    "pan": -20,
+    "pitch_cents": 300,
+    "reverse": true,
+    "trigger_mode": "loop_gate",
+    "trim_end_frame": 7,
+    "trim_start_frame": 1
+  },
+  "ping_pong": {
+    "gain_millidb": 0,
+    "loop_mode": "ping_pong",
+    "loop_start_frame": 3,
+    "muted": true,
+    "pan": 100,
+    "pitch_cents": -2400,
+    "trigger_mode": "loop_toggle",
+    "trim_end_frame": null,
+    "trim_start_frame": 0
+  }
+}

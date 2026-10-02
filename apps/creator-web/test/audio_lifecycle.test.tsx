@@ -161,6 +161,20 @@ function sessionFixture(name: string) {
   };
 }
 
+
+// #1680: a failure shows user language in its alert and keeps its code in
+// Developer diagnostics.
+async function expectUserLanguageFailure(code: string, message: string) {
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain(message);
+  expect(alert.textContent).not.toContain(code);
+  fireEvent.click(screen.getByRole("button", {name: "System"}));
+  fireEvent.click(screen.getByText(/^Developer diagnostics \(\d+\)$/));
+  expect(within(screen.getByRole("region", {name: "Developer diagnostics"}))
+    .getAllByText(code).length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole("button", {name: "Back to music"}));
+}
+
 test("suspend stays explicit and restart rebuilds, lists, and reopens without autoplay", async () => {
   const user = userEvent.setup();
   const first = sessionFixture("first");
@@ -344,7 +358,10 @@ test("Runtime replacement cannot leave an aborted import permanently visible", a
     "import-second:list",
   ]));
 
-  expect(screen.getByTestId("creator-phase").textContent).toBe("ready");
+  // The listing settles after the remembered-Project read, so ready follows it.
+  await waitFor(() =>
+    expect(screen.getByTestId("creator-phase").textContent).toBe("ready"));
+  expect(second.calls).toEqual(["import-second:start", "import-second:list"]);
   expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
     .toBe(false);
   expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
@@ -356,8 +373,52 @@ test("a failed Runtime Session start never becomes ready", async () => {
   failed.session.start = async () => false;
   failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID"});
   render(<App runtimeFactory={() => failed.session} />);
-  expect((await screen.findByRole("alert")).textContent).toContain("HOST_STATE_INVALID");
+  await expectUserLanguageFailure("HOST_STATE_INVALID", "That can't be done right now.");
   expect(screen.getByTestId("creator-phase").textContent).toBe("failed");
+});
+
+test("a repeated Host notification of one Runtime error is recorded once", async () => {
+  const failed = sessionFixture("failed");
+  failed.session.start = async () => false;
+  failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID"});
+  render(<App runtimeFactory={() => failed.session} />);
+  await screen.findByRole("alert");
+  // Each notification carries a fresh but equal details object.
+  for (let repeat = 0; repeat < 3; repeat += 1) {
+    act(() => failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID", errorDetails: {}}));
+  }
+  fireEvent.click(screen.getByRole("button", {name: "System"}));
+  await screen.findByText("Developer diagnostics (1)");
+  act(() => failed.emit({state: "failed", errorCode: "INTERNAL_ERROR", errorDetails: {}}));
+  await screen.findByText("Developer diagnostics (2)");
+  fireEvent.click(screen.getByText("Developer diagnostics (2)"));
+  const log = within(screen.getByRole("region", {name: "Developer diagnostics"}));
+  expect(log.getAllByText("Runtime")).toHaveLength(2);
+  expect(log.getAllByText("HOST_STATE_INVALID").length).toBeGreaterThan(0);
+  expect(log.getAllByText("INTERNAL_ERROR").length).toBeGreaterThan(0);
+});
+
+test("a Runtime error with unserializable details is still shown and recorded", async () => {
+  const failed = sessionFixture("failed");
+  failed.session.start = async () => false;
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID", errorDetails: cyclic});
+  render(<App runtimeFactory={() => failed.session} />);
+  expect((await screen.findByRole("alert")).textContent).toContain("That can't be done right now.");
+  fireEvent.click(screen.getByRole("button", {name: "System"}));
+  expect(await screen.findByText("Developer diagnostics (1)")).toBeTruthy();
+});
+
+test("the overview error row names no code but keeps it for support", async () => {
+  const failed = sessionFixture("failed");
+  failed.session.start = async () => false;
+  failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID"});
+  render(<App runtimeFactory={() => failed.session} />);
+  await screen.findByRole("alert");
+  await userEvent.click(screen.getByRole("button", {name: /^Project$/}));
+  const row = screen.getByText("Needs attention");
+  expect(row.getAttribute("data-error-code")).toBe("HOST_STATE_INVALID");
 });
 
 test("recovery keeps the Project playable for the required probe Trigger", async () => {
@@ -511,8 +572,7 @@ test("a failed activation with Runtime diagnostics restores its prior phase", as
     await screen.findByText("Audio suspended");
 
     await user.keyboard("q");
-    expect((await screen.findByRole("alert")).textContent)
-      .toContain("HOST_STATE_INVALID");
+    await expectUserLanguageFailure("HOST_STATE_INVALID", "That can't be done right now.");
     expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
   } finally {
     activationStub.current = null;
@@ -541,8 +601,7 @@ test("a rejected activation restores its prior phase while reporting the error",
     await screen.findByText("Audio suspended");
 
     await user.keyboard("q");
-    expect((await screen.findByRole("alert")).textContent)
-      .toContain("HOST_STATE_INVALID");
+    await expectUserLanguageFailure("HOST_STATE_INVALID", "That can't be done right now.");
     expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
     activationStub.current = async () => {
       value.emit({state: "running", errorCode: null});
@@ -724,6 +783,12 @@ test("lifecycle matrix clears fresh loop toggles without duplicate Session stop 
         triggerMode: "loop_toggle",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       },
       metadata: slot === 0
         ? {sampleRate: 48_000, channels: 1, sourceFrames: 8}

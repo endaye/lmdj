@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {webcrypto} from "node:crypto";
+import {readFileSync} from "node:fs";
 import test from "node:test";
 
 import {createDiagnosticClient} from "../web/diagnostic_client.mjs";
@@ -17,6 +18,7 @@ const API = [
   "runProvider",
   "inspectAttempt",
   "activateAudio",
+  "applyFxGesture",
   "applyPerformanceRecovery",
   "applySequenceRecovery",
   "assignPatternSlot",
@@ -110,6 +112,42 @@ const PLAYBACK = Object.freeze({
   gainMillidb: -1_200,
   muted: false,
 });
+
+// A session playback always carries every field; parity fields default.
+const SESSION_PLAYBACK = Object.freeze({
+  ...PLAYBACK,
+  reverse: false,
+  pitchCents: 0,
+  pan: 0,
+  loopMode: "forward",
+  loopStartFrame: null,
+  loopCrossfadeFrames: 0,
+});
+
+// lmdj.project.v5 5.1.0: the shared fixture holds every PadPlayback copy to
+// one shape (.agents/pitfalls/parity-check-between-agreeing-copies.md).
+const PAD_PLAYBACK_FULL = JSON.parse(
+  readFileSync(
+    new URL("../../../tests/fixtures/contracts/pad-playback-full.json", import.meta.url),
+    "utf8",
+  ),
+);
+
+function sessionPlaybackFrom(wire) {
+  return {
+    trimStartFrame: wire.trim_start_frame,
+    trimEndFrame: wire.trim_end_frame,
+    triggerMode: wire.trigger_mode,
+    gainMillidb: wire.gain_millidb,
+    muted: wire.muted,
+    reverse: wire.reverse ?? false,
+    pitchCents: wire.pitch_cents ?? 0,
+    pan: wire.pan ?? 0,
+    loopMode: wire.loop_mode ?? "forward",
+    loopStartFrame: wire.loop_start_frame ?? null,
+    loopCrossfadeFrames: wire.loop_crossfade_frames ?? 0,
+  };
+}
 
 const WIRE_PLAYBACK = Object.freeze({
   trim_start_frame: 10,
@@ -1609,6 +1647,62 @@ test("bridges raw Performance identities and values without Host timing authorit
   });
 });
 
+test("applyFxGesture wires session-free FX gestures without recording identity", async () => {
+  const operations = [];
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push(envelope);
+      if (envelope.operation === "performance.fx.gesture") {
+        return success(envelope, {applied: true, project_revision: null});
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  assert.deepEqual(
+    await session.applyFxGesture({kind: "fx_engage", fx: "filter", value: 500}),
+    {applied: true},
+  );
+  assert.deepEqual(
+    await session.applyFxGesture({kind: "fx_move", fx: "filter", value: 630}),
+    {applied: true},
+  );
+  assert.deepEqual(await session.applyFxGesture({kind: "hold_on"}), {applied: true});
+  assert.deepEqual(await session.applyFxGesture({kind: "hold_off"}), {applied: true});
+  assert.deepEqual(
+    await session.applyFxGesture({kind: "fx_release", fx: "filter"}),
+    {applied: true},
+  );
+
+  const wired = operations.map(({operation, payload}) => ({operation, payload}));
+  assert.deepEqual(wired, [
+    {operation: "performance.fx.gesture",
+     payload: {event: {kind: "fx_engage", fx: "filter", value: 500}}},
+    {operation: "performance.fx.gesture",
+     payload: {event: {kind: "fx_move", fx: "filter", value: 630}}},
+    {operation: "performance.fx.gesture", payload: {event: {kind: "hold_on"}}},
+    {operation: "performance.fx.gesture", payload: {event: {kind: "hold_off"}}},
+    {operation: "performance.fx.gesture",
+     payload: {event: {kind: "fx_release", fx: "filter"}}},
+  ]);
+  for (const forbidden of ["gesture_id", "session_id", "event_id", "tick"]) {
+    assert.equal(JSON.stringify(wired).includes(forbidden), false);
+  }
+
+  await assert.rejects(
+    session.applyFxGesture({kind: "fx_engage", fx: "filter", value: 1001}),
+    TypeError,
+  );
+  await assert.rejects(
+    session.applyFxGesture({kind: "fx_engage", gestureId: "x", fx: "filter", value: 500}),
+    TypeError,
+  );
+  await assert.rejects(session.applyFxGesture({kind: "fx_release"}), TypeError);
+  await assert.rejects(session.applyFxGesture({kind: "pad_press"}), TypeError);
+  assert.equal(operations.length, 5);
+});
+
 test("activation waits for a resumed AudioWorklet callback within its original budget", async () => {
   let heartbeat = 7;
   const activations = [];
@@ -1651,6 +1745,176 @@ test("activation waits for a resumed AudioWorklet callback within its original b
   heartbeat = 0;
   assert.equal(await wrapped, true);
   assert.equal(activations.length, 3);
+});
+
+test("a slow output-device start does not consume the Control activation budget", async () => {
+  let monotonicTime = 0;
+  let resumed = false;
+  const activations = [];
+  const {context, session} = fixture({
+    now: () => monotonicTime,
+    // The first callback arrives 900 ms after the resume edge.
+    audioCallbackHeartbeat: () => {
+      if (!resumed) return 0;
+      monotonicTime += 300;
+      return monotonicTime >= 900 ? 1 : 0;
+    },
+    send: async (envelope, options) => {
+      if (envelope.operation === "audio.activate") {
+        activations.push(options.deadlineMs);
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  const resume = context.resume;
+  context.resume = async function () {
+    resumed = true;
+    return resume.call(this);
+  };
+  await session.start();
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.deepEqual(activations, [1_000]);
+});
+
+test("an output device that does not start within its bound refuses activation without sealing the Runtime", async () => {
+  let monotonicTime = 0;
+  let deviceStarts = false;
+  let beats = 0;
+  const operations = [];
+  const {context, session} = fixture({
+    now: () => monotonicTime,
+    audioCallbackHeartbeat: () => {
+      monotonicTime += 1_000;
+      return deviceStarts ? ++beats : beats;
+    },
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  operations.length = 0;
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), false);
+  assert.equal(session.diagnostics().state, "audio-suspended");
+  assert.equal(session.diagnostics().error_code, null);
+  assert.equal(session.diagnostics().activation_refusal, "audio_output_start_timeout");
+  assert.equal(operations.includes("audio.activate"), false);
+  assert.equal(context.state, "suspended");
+
+  // The next gesture retries normally once the device starts.
+  deviceStarts = true;
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.equal(session.diagnostics().state, "running");
+  assert.equal(session.diagnostics().activation_refusal, null);
+});
+
+test("a resume that never settles is refused within the device bound and withdrawn", async () => {
+  let monotonicTime = 0;
+  let resumeSettles = false;
+  const operations = [];
+  const {context, session} = fixture({
+    // Time passes only while the attempt waits on its pending resume().
+    now: () => (resumeSettles ? monotonicTime : (monotonicTime += 250)),
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  const resume = context.resume;
+  let suspendsAfterResume = 0;
+  let resumeRequested = false;
+  context.resume = function () {
+    resumeRequested = true;
+    return resumeSettles ? resume.call(this) : new Promise(() => {});
+  };
+  const suspend = context.suspend;
+  context.suspend = function () {
+    if (resumeRequested) suspendsAfterResume += 1;
+    return suspend.call(this);
+  };
+  await session.start();
+  operations.length = 0;
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), false);
+  assert.equal(session.diagnostics().state, "audio-suspended");
+  assert.equal(session.diagnostics().error_code, null);
+  assert.equal(session.diagnostics().activation_refusal, "audio_output_start_timeout");
+  assert.equal(operations.includes("audio.activate"), false);
+  assert.equal(suspendsAfterResume, 1);
+
+  resumeSettles = true;
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.equal(session.diagnostics().state, "running");
+});
+
+test("withdrawing a pending resume leaves a later context suspension observable", async () => {
+  let monotonicTime = 0;
+  let resumeSettles = false;
+  const {context, session} = fixture({
+    now: () => (resumeSettles ? monotonicTime : (monotonicTime += 250)),
+  });
+  const resume = context.resume;
+  context.resume = function () {
+    return resumeSettles ? resume.call(this) : new Promise(() => {});
+  };
+  await session.start();
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), false);
+  resumeSettles = true;
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.equal(session.diagnostics().state, "running");
+
+  // The withdrawal changed no state, so it must not absorb this one.
+  context.dispatchEvent(new Event("statechange"));
+  context.state = "suspended";
+  context.dispatchEvent(new Event("statechange"));
+  await drainTasks();
+  await drainTasks();
+  assert.equal(session.diagnostics().state, "audio-suspended");
+});
+
+test("automatic recovery gives the output device its own bound before the Control budget", async () => {
+  const browserWindow = new EventTarget();
+  let monotonicTime = 0;
+  let heartbeat = 0;
+  let slowDevice = false;
+  let slowSince = null;
+  const activations = [];
+  const runtime = fixture({
+    browserWindow,
+    now: () => monotonicTime,
+    // During recovery the device calls back 1.5 s after the first read.
+    audioCallbackHeartbeat: () => {
+      if (!slowDevice) return ++heartbeat;
+      monotonicTime += 500;
+      slowSince ??= monotonicTime;
+      return monotonicTime - slowSince >= 1_500 ? ++heartbeat : heartbeat;
+    },
+    send: async (envelope, options) => {
+      if (envelope.operation === "audio.activate") {
+        activations.push(options.deadlineMs);
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await runtime.session.start();
+  assert.equal(await runtime.session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  slowDevice = true;
+  activations.length = 0;
+  browserWindow.dispatchEvent(browserEvent("pagehide", {persisted: true}));
+  for (let attempt = 0; attempt < 50; ++attempt) {
+    if (runtime.session.diagnostics().recovery_probe_ready === true) break;
+    await drainTasks();
+  }
+  assert.equal(runtime.session.diagnostics().state, "recovering");
+  assert.equal(runtime.session.diagnostics().recovery_probe_ready, true);
+  assert.deepEqual(activations, [1_000]);
 });
 
 test("foreground loss while recovery waits for heartbeat invalidates the old gesture", async () => {
@@ -2414,7 +2678,7 @@ test("Sample queries bind flat slots to the current Project and validate typed r
     projectRevision: 7,
     slot: 33,
     assetId,
-    playback: PLAYBACK,
+    playback: SESSION_PLAYBACK,
     metadata: {sampleRate: 48_000, channels: 2, sourceFrames: 100},
     waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/1`,
   });
@@ -2648,6 +2912,64 @@ test("Project open and Sample mutations share one lane without conflict retry", 
     slot: {bank: 1, pad: 1},
     playback: WIRE_PLAYBACK,
   });
+});
+
+test("Sample playback crosses the session in both directions as the shared fixture", async () => {
+  const sent = [];
+  const {session} = fixture({
+    send: async (envelope) => {
+      if (envelope.operation === "sample.update_pad") {
+        sent.push(envelope.payload.playback);
+        return success(envelope, {
+          committed_revision: 2,
+          runtime_revision: 2,
+          runtime_published: true,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  for (const wire of Object.values(PAD_PLAYBACK_FULL)) {
+    await session.updatePad({
+      slot: 0,
+      expectedRevision: 1,
+      playback: sessionPlaybackFrom(wire),
+    });
+  }
+  // The wire carries exactly the fixture: every non-default key, no default.
+  assert.deepEqual(sent, Object.values(PAD_PLAYBACK_FULL));
+  await assert.rejects(
+    session.updatePad({
+      slot: 0,
+      expectedRevision: 1,
+      playback: {...sessionPlaybackFrom(PAD_PLAYBACK_FULL.forward), timeStretch: true},
+    }),
+    TypeError,
+  );
+});
+
+test("Sample inspect normalizes every fixture playback to the full session shape", async () => {
+  for (const wire of Object.values(PAD_PLAYBACK_FULL)) {
+    const {session} = fixture({
+      send: async (envelope) => {
+        if (envelope.operation === "sample.inspect") {
+          return success(envelope, {
+            project_revision: 7,
+            slot: {bank: 0, pad: 0},
+            asset_id: "11111111-1111-4111-8111-111111111111",
+            playback: wire,
+            metadata: {sample_rate: 48_000, channels: 1, source_frames: 8},
+            waveform_cache_identity: `${"a".repeat(64)}/1/max-abs-mirror/1`,
+          });
+        }
+        return success(envelope, defaultResult(envelope.operation));
+      },
+    });
+    await session.start();
+    const inspected = await session.inspectSample(0);
+    assert.deepEqual(inspected.playback, sessionPlaybackFrom(wire));
+  }
 });
 
 test("Sample mutations preserve committed and stale Runtime truth after Cook failure", async () => {
