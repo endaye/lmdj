@@ -20,6 +20,12 @@ async function installTransportProofRecorder(page) {
       },
       set(nativeHost) {
         const nativeTransport = nativeHost.transport;
+        window.__patternTransportVoiceProof = [];
+        nativeTransport.subscribe(message => {
+          if (message.event === "runtime.voice_state") {
+            window.__patternTransportVoiceProof.push(...message.payload.events);
+          }
+        });
         nativeHost.transport = Object.freeze({
           async send(...arguments_) {
             const [request] = arguments_;
@@ -88,6 +94,7 @@ async function installTransportProofRecorder(page) {
                 ok: response?.ok ?? null,
                 status: response?.result?.status ?? null,
                 accepted: response?.result?.accepted ?? null,
+                sequence: response?.result?.sequence ?? null,
               });
             }
             if (operation === "snapshot.reload") {
@@ -188,6 +195,20 @@ async function awaitAdmittedPresses(page, count) {
       .length), {timeout: 30_000}).toBe(count);
 }
 
+// Record-off excludes candidates at or after the terminal frame. Durable
+// admission alone does not prove the native voice started before that fence.
+async function awaitRenderedPresses(page, count) {
+  await awaitAdmittedPresses(page, count);
+  await expect.poll(() => page.evaluate(count => {
+    const presses = (window.__patternTransportTriggerProof ?? [])
+      .filter(({payload, ok}) => ok === true && payload?.velocity !== undefined);
+    const voices = window.__patternTransportVoiceProof ?? [];
+    return presses.length === count && presses.every(({sequence}) =>
+      Number.isSafeInteger(sequence) && sequence > 0 && voices.some(event =>
+        event.sequence === sequence && event.state === "started"));
+  }, count), {timeout: 30_000}).toBe(true);
+}
+
 async function enterSequenceAndPlay(page) {
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
   // The Sequence editor is one component in both layouts and names itself
@@ -228,7 +249,7 @@ test("global Pattern transport plays, overdubs, survives navigation, stops, and 
   await transportStatus(page, "recording");
   await page.keyboard.press("KeyQ");
   await page.keyboard.press("KeyW");
-  await awaitAdmittedPresses(page, 2);
+  await awaitRenderedPresses(page, 2);
   // Nothing is committed while recording is open.
   expect((await inspectTruth(page)).patterns[patternId].events).toHaveLength(0);
 
@@ -313,7 +334,7 @@ test("records notes and sees them on both grids after reopen", async ({page, bro
   await transportStatus(page, "recording");
   await page.keyboard.press("KeyQ");
   await page.keyboard.press("KeyW");
-  await awaitAdmittedPresses(page, 2);
+  await awaitRenderedPresses(page, 2);
   await recordKey(page).click();
   await transportStatus(page, "playing");
   const committed = await inspectTruth(page);
@@ -398,7 +419,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   await recordKey(page).click();
   await transportStatus(page, "recording");
   await page.keyboard.press("KeyQ");
-  await awaitAdmittedPresses(page, 1);
+  await awaitRenderedPresses(page, 1);
 
   // The Record-off ticket response is lost after the native side accepted
   // the command. The Creator shows the failure, keeps the command identity
@@ -472,7 +493,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
     throw error;
   }
   await page.keyboard.press("KeyW");
-  await awaitAdmittedPresses(page, 2);
+  await awaitRenderedPresses(page, 2);
   await recordKey(page).click();
   await transportStatus(page, "playing");
   const overdubbed = await inspectTruth(page);
@@ -633,7 +654,7 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
   await recordKey(page).click();
   await transportStatus(page, "recording");
   await page.keyboard.press("KeyW");
-  await awaitAdmittedPresses(page, 1);
+  await awaitRenderedPresses(page, 1);
   await recordKey(page).click();
   await transportStatus(page, "playing");
   const recovered = await inspectTruth(page);
