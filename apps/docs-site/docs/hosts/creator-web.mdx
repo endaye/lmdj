@@ -339,6 +339,8 @@ counts. A microphone that cannot start names what to do, for example allowing
 access, connecting a microphone or closing the other app, and never names the
 browser exception. Each Pad change, import, room check and recording start
 that fails is recorded in Developer diagnostics with its code and details.
+P1 预览被播放音频暂停拒绝时，下一步提示为先演奏 Pad 启动音频，再重试预览；没有单独的音频激活按钮。
+
 Creator keeps a single set of accepted public codes, so a code accepted at one
 boundary is never rejected at the next.
 
@@ -356,5 +358,3 @@ Creator surface shows a Host message, a raw `Error.message` or a code:
 - Undo history says what happened and what to try.
 
 Each of these failures is recorded in Developer diagnostics.
-
-P1 预览被播放音频暂停拒绝时，下一步提示为先演奏 Pad 启动音频，再重试预览；没有单独的音频激活按钮。
