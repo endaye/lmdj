@@ -24,6 +24,11 @@ live object against committed bytes. An environment approval remains external to
 source verification. The retained artifact binds the actual workers.dev origin,
 source revision and live GET evidence. A green source test is not deployment.
 
+Live verification requires HTTP 200 directly from the declared HTTPS origin for
+every object and `/health`. It refuses redirects rather than following a mirror,
+matching Creator's production Catalog proxy. Serve each route directly before
+rerunning `scripts/asset-server.sh verify-live ORIGIN`.
+
 Bind Creator's `CATALOG_UPSTREAM` to the reported verified origin with a trailing
 slash in the streaming boot Task. Creator continues fetching its same-origin
 `/soundset-catalog/` proxy under the existing CSP. This service deployment does not

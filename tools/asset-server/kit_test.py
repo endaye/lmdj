@@ -7,7 +7,8 @@ from pathlib import Path
 import struct
 import sys
 import tempfile
-from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 import wave
 import kit
 sys.path.insert(0, str(kit.ROOT / "tests/conformance"))
@@ -45,6 +46,28 @@ def validate(files):
     assert len(raw) + sum(unique.values()) == entry["total_bytes"], "Catalog total includes the authenticated manifest and unique blobs"
     return entry
 
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, url):
+        return None
+
+def live_get(url):
+    try:
+        response = build_opener(NoRedirect()).open(
+            Request(url, headers={"Cache-Control": "no-cache"}), timeout=30)
+    except HTTPError as error:
+        code = error.code
+        error.close()
+        raise ValueError(
+            f"live GET needs HTTP 200 from the declared origin; observed {code} at {url}. "
+            "Serve the object directly at this origin, then rerun verify-live.") from error
+    if response.status != 200:
+        code = response.status
+        response.close()
+        raise ValueError(
+            f"live GET needs HTTP 200 from the declared origin; observed {code} at {url}. "
+            "Serve the object directly at this origin, then rerun verify-live.")
+    return response
+
 def live(origin):
     from urllib.parse import urlsplit
     parsed = urlsplit(origin)
@@ -54,12 +77,12 @@ def live(origin):
     expected = kit.check()
     for name, data in expected.items():
         route = "/catalog/index.json" if name == "catalog/index.json" else "/object/" + name
-        with urlopen(Request(origin + route, headers={"Cache-Control": "no-cache"}), timeout=30) as response:
+        with live_get(origin + route) as response:
             observed = response.read(len(data) + 1)
             if observed != data: raise ValueError(f"deployed bytes mismatch at {route}")
             assert response.headers.get("Access-Control-Allow-Origin") == "*"
             if name != "catalog/index.json": assert "immutable" in response.headers.get("Cache-Control", "")
-    with urlopen(origin + "/health", timeout=30) as response:
+    with live_get(origin + "/health") as response:
         assert json.load(response) == {"service": "lmdj-default-assets", "ok": True}
     print(f"live default assets: {len(expected)} objects authenticated at {origin}")
 

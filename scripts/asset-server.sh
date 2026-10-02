@@ -5,6 +5,7 @@ case "${1:-check}" in
   check)
     python3 "$repo_root/tools/asset-server/kit.py" --check
     python3 "$repo_root/tools/asset-server/kit_test.py"
+    python3 "$repo_root/tools/asset-server/live_test.py"
     node --test "$repo_root/tools/asset-server/worker.test.mjs"
     ;;
   deploy)
