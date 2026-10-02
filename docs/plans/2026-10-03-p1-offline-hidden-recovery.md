@@ -5,8 +5,9 @@
 - `tests/platform/web/creator/creator_web_lifecycle.spec.mjs`
 - `docs/plans/2026-10-03-p1-offline-hidden-recovery.md`
 
-The prior candidate replaced the original blur and hidden30-second recovering
-waits with a helper using35 seconds. Restore both original30-second waits. The
+The prior55 candidate retained the original30-second blur wait but replaced
+the original30-second hidden wait with a helper using35 seconds. Preserve the
+blur bound and restore the hidden bound. The
 helper only reads a label; do not claim it completes recovery or proves Native
 voice state. Prior actual green runs and independent-report corrections remain
 preserved and do not discharge this corrected candidate.
