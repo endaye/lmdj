@@ -2623,40 +2623,67 @@ test("a settled transport commit shows its revision even when the projection re-
 
 test("a settled transport commit's completed re-read lands its events on the grid", async () => {
   const fixture = mutableSampleRuntimeFixture();
-  // Truth is already ahead of the view (revision 5 vs 4), as a committed
-  // Record-off leaves it, and the committed Pattern carries the new event.
-  fixture.revision = 5;
+  // Boot settles on pre-commit Truth: revision 4, no event. Only after that
+  // does the transport settle a Record-off commit (a new idle epoch), and
+  // the commit lands as Sequence authority is re-read — so the committed
+  // event can reach the grid only through the re-read that follows it.
+  fixture.revision = 4;
+  let transportEpoch = 1;
+  let commitArmed = false;
+  let committed = false;
+  let hostListener: ((state: RuntimeHostState) => void) | undefined;
+  fixture.session.subscribeHostState = (listener) => {
+    hostListener = listener;
+    return () => {};
+  };
   const session = Object.assign(fixture.session, sequenceSessionStubs(), {
-    inspectPatternTransport: async () => engagedTransportStatus({playing: false}),
+    inspectPatternTransport: async () =>
+      engagedTransportStatus({playing: false, transportEpoch}),
     requestPatternTransport: async () => {
       throw new Error("no transport command is submitted in this test");
     },
-    inspectProject: async () => ({
-      ...fixture.inspectProject(),
-      project: {
-        ...fixture.inspectProject().project,
-        patterns: {
-          [listedSummary.patternId]: {
-            bars: 1,
-            events: [{
-              slot: {bank: 0, pad: 0},
-              onset_tick: 240, duration_tick: 240, velocity: 100,
-            }],
+    querySequenceStatus: async () => {
+      if (commitArmed && !committed) {
+        committed = true;
+        fixture.revision = 5;
+      }
+      return sequenceStatusStub();
+    },
+    inspectProject: async () => committed
+      ? {
+          ...fixture.inspectProject(),
+          project: {
+            ...fixture.inspectProject().project,
+            patterns: {
+              [listedSummary.patternId]: {
+                bars: 1,
+                events: [{
+                  slot: {bank: 0, pad: 0},
+                  onset_tick: 240, duration_tick: 240, velocity: 100,
+                }],
+              },
+            },
           },
-        },
-      },
-    }),
+        }
+      : fixture.inspectProject(),
   });
   render(<App initialState={ready} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await screen.findByTestId("sequence-grid");
+  const gridNote = () => document.querySelector(
+    ".sequence-grid-row[data-pad='0'] [data-testid='sequence-grid-note']");
+  expect(gridNote()).toBeNull();
+  expect(revisionCell()?.textContent).toBe("4");
 
   // The revision update lands before the re-read starts, so the refresh must
   // not be rejected for naming the pre-commit revision: the refreshed
   // projection carries the committed event all the way onto the grid.
-  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  commitArmed = true;
+  transportEpoch = 2;
+  await act(async () => hostListener?.({state: "running", errorCode: null, errorDetails: {}}));
   const note = await waitFor(() => {
-    const found = document.querySelector(
-      ".sequence-grid-row[data-pad='0'] [data-testid='sequence-grid-note']");
+    const found = gridNote();
     expect(found).not.toBeNull();
     return found!;
   });

@@ -96,10 +96,32 @@ test("shows the existing facts plus the selection facts", () => {
     within(overview).getByText(name).nextElementSibling?.textContent;
   expect(fact("Quantize")).toBe("on");
   expect(fact("Swing")).toBe("50%");
-  expect(fact("Pattern")).toBe("2 bars");
   expect(fact("Selected")).toBe("0");
   expect(fact("Snap")).toBe("1/32");
   expect(fact("Velocity")).toBe("—");
+  // The display's own facts and primary line already carry the bar count and
+  // phase; repeating them would push the Sequence facts out of the display.
+  expect(within(overview).queryByText("Pattern")).toBeNull();
+  expect(within(overview).queryByText("Phase")).toBeNull();
+});
+
+test("shows one status line, the most severe first", () => {
+  const pending = {
+    ...playingTransport,
+    status: {...playingTransport.status!, publicationPending: true},
+  };
+  const view = renderOverview({transport: pending});
+  const status = () => screen.getByTestId("sequence-overview")
+    .querySelectorAll(".sequence-overview-status");
+  expect(status()).toHaveLength(1);
+  expect(status()[0]!.textContent).toBe("Committed, publication pending");
+  view.rerender(
+    <SequenceOverview project={project}
+      state={{...initialSequenceState, errorCode: "HOST_TIMEOUT"}}
+      bank={0} snap="1/16" viewport={null} selection={[]}
+      transport={{...pending, errorCode: "HOST_STATE_INVALID"}} />);
+  expect(status()).toHaveLength(1);
+  expect(status()[0]!.textContent).toBe("That can't be done right now.");
 });
 
 test("a playhead frame that outlives its effect never reschedules", () => {

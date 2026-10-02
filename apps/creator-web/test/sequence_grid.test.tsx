@@ -131,6 +131,33 @@ test("reports the whole Pattern as the viewport when the grid is not scrolled", 
   });
 });
 
+test("scrolling the grid moves the reported viewport window", () => {
+  const {callbacks, view} = renderGrid({bank: 0});
+  const scroller = view.container.querySelector(".sequence-grid-scroll") as HTMLElement;
+  // A 384 px window over the 768 px, two-bar timeline.
+  Object.defineProperty(scroller, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({left: 0, top: 0, width: 384, height: 352,
+      right: 384, bottom: 352, x: 0, y: 0, toJSON: () => {}}),
+  });
+  const scrollTo = (left: number) => {
+    view.container.querySelectorAll(".sequence-grid-lane").forEach((lane, index) => {
+      Object.defineProperty(lane, "getBoundingClientRect", {
+        configurable: true,
+        value: () => ({left: -left, top: index * ROW_PITCH, width: LANE_WIDTH,
+          height: LANE_HEIGHT, right: LANE_WIDTH - left,
+          bottom: index * ROW_PITCH + LANE_HEIGHT, x: -left, y: index * ROW_PITCH,
+          toJSON: () => {}}),
+      });
+    });
+    fireEvent.scroll(scroller);
+  };
+  scrollTo(0);
+  expect(callbacks.onViewportChange).toHaveBeenLastCalledWith({startTick: 0, endTick: 3840});
+  scrollTo(384);
+  expect(callbacks.onViewportChange).toHaveBeenLastCalledWith({startTick: 3840, endTick: 7680});
+});
+
 test("a tap on an empty cell adds one note with the grid defaults", () => {
   const {callbacks} = renderGrid();
   fireEvent.pointerDown(lane(2), {pointerId: 1, clientX: 60, clientY: 54, button: 0});

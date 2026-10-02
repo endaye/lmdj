@@ -398,12 +398,23 @@ reason; a committed edit whose swap fails surfaces the typed snapshot error
 honestly. Undo and Redo are the existing stop-only history controls.
 
 The upper display is a whole-Pattern overview. A 64-row thumbnail maps every
-event of all four Banks; a live playhead advances from the existing transport
-projection (the playing Pattern's origin frame and the Project tempo); a frame
-marks the touch grid's current Bank and visible time window; and the existing
-Quantize, Swing, bar-count and phase facts are joined by the live selection
-facts — selected note count, snap and velocity (the shared value, `mixed`
-when the selection differs, empty with no selection).
+event of all four Banks, and a frame marks the touch grid's current Bank and
+visible time window. The display is a fixed 752×176 that clips its overflow,
+so the Sequence facts sit beside the thumbnail rather than below it:
+
+- Quantize and Swing;
+- the live selection facts: selected note count, snap and velocity (the shared
+  value, `mixed` when the selection differs, empty with no selection);
+- a pending Pattern and a recovery count, when present.
+
+The bar count and transport phase stay in the display's own facts and primary
+line. Below the Sequence facts sits one status line, which shows the most
+severe of a transport error, a Sequence error and a pending publication.
+
+A live playhead advances at the Project tempo from the playing Pattern's
+origin frame. It counts from the moment the overview mounts, not from the
+Runtime's current frame, so after playback continues in another mode it is
+offset until the transport restarts.
 
 `ProjectView.patterns` keeps the canonical events, validated against the
 Contract's per-bar tick bounds at the inspection boundary. Both views re-read
