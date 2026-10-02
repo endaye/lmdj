@@ -678,6 +678,14 @@ void RealtimeEngine::stop_voice(
     const float level =
         static_cast<float>(voice.attack_frames - voice.attack_frames_remaining) *
         voice.attack_scale;
+    if (level == 0.0F) {
+      // Released before its attack sounded (a press and its release in one
+      // callback): nothing to fade, so the voice ends now instead of holding
+      // a slot through a silent tail (owner 2026-10-02). An offline release
+      // always starts at least one frame into its voice.
+      deactivate_voice(voice);
+      return;
+    }
     voice.attack_frames_remaining = 0;
     voice.release_scale = level / static_cast<float>(voice.release_frames);
     voice.release_frames_remaining = voice.release_frames;

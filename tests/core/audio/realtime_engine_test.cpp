@@ -4093,6 +4093,24 @@ void a_release_during_a_user_attack_fades_from_the_attack_level() {
   LMDJ_CHECK(engine.telemetry().active_voices == 0);
 }
 
+// A gate released before its user attack has sounded, as when the press and
+// its release reach one callback, ends at once: no silent tail holds a slot.
+void a_release_before_a_user_attack_sounds_ends_the_voice() {
+  RealtimeEngine engine;
+  const std::vector<float> sample(8000, 0.5F);
+  start_with_playback(
+      engine, sample, dsp_playback(0, 8000, TriggerMode::gate, envelope_dsp(144, 4800)));
+  LMDJ_CHECK(engine.enqueue_control(control(91, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  LMDJ_CHECK(engine.enqueue_control(control(92, 0, PadControlKind::release, 0)) ==
+             EnqueueResult::accepted);
+  const auto out = render_channels(engine, 128);
+  for (const float value : out.left) {
+    LMDJ_CHECK(value == 0.0F);
+  }
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+}
+
 void render_does_not_allocate_or_deallocate() {
   RealtimeEngine engine;
   const std::array<float, 2> old_sample{0.25F, 0.5F};
@@ -5471,6 +5489,7 @@ int main() {
   a_stop_ends_a_voice_over_the_declick();
   second_stop_near_the_end_of_a_user_release_lets_it_finish();
   a_release_during_a_user_attack_fades_from_the_attack_level();
+  a_release_before_a_user_attack_sounds_ends_the_voice();
   toned_voice_is_filtered_in_the_engine();
   a_released_filtered_voice_ends_without_a_step();
   a_filtered_one_shot_ends_without_a_step();
