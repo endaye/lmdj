@@ -562,9 +562,12 @@ def capture(directory, backend):
                                                   changed_paths=changed_paths, collector=collector,
                                                   trusted_config=trusted)
             if backend is not None:
-                selected = history["attempts"][t2["selected_attempt"]]["backend"] if t2["selected_attempt"] is not None else None
-                review_scope.require(selected is None or backend == selected,
-                                     "capture backend disagrees with complete T2 selected attempt")
+                # The engine owns provider fallback inside one run, so the
+                # step's backend names where the chain STARTED, not which
+                # provider produced the review; adapt_t2_result already pinned
+                # the attempts to the trusted ascending provider order.
+                review_scope.require(history["attempts"][0]["backend"] == backend,
+                                     "capture backend disagrees with complete T2 chain start")
             report_provider_warnings(t2)
         else:
             review_scope.require(isinstance(history, list) and not history,

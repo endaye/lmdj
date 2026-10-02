@@ -157,7 +157,7 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         self.assertIn("reviewable: ${{ steps.input.outputs.reviewable }}", review,
                       "why: the publisher job reads this output; remedy: keep it on the review job")
         gate = "steps.input.outputs.reviewable != 'false'"
-        for step in ("deepseek review", "Validate PR-Agent result", "Save honest final result"):
+        for step in ("PR-Agent review", "Validate PR-Agent result", "Save honest final result"):
             with self.subTest(step=step):
                 block = review.split(f"      - name: {step}", 1)[1].split("\n      - ", 1)[0]
                 self.assertIn(gate, block,
@@ -176,9 +176,11 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         runs_on = job.split("    runs-on: ", 1)[1].split("\n", 1)[0]
         self.assertIn("netcup", runs_on, "why: the engine is installed only on the Netcup host; remedy: keep the netcup label")
         self.assertIn("run-engine.sh --witness", job)
-        engine = job.split("      - name: deepseek review", 1)[1].split("      - name: Validate PR-Agent result", 1)[0]
+        engine = job.split("      - name: PR-Agent review", 1)[1].split("      - name: Validate PR-Agent result", 1)[0]
         self.assertIn("continue-on-error: true", engine)
         self.assertIn("PR_AGENT_DEEPSEEK_API_KEY: ${{ secrets.PR_AGENT_DEEPSEEK_API_KEY }}", engine)
+        self.assertIn("PR_AGENT_ZAI_API_KEY: ${{ secrets.PR_AGENT_ZAI_API_KEY }}", engine,
+                      "why: the engine owns provider fallback; remedy: pass every enabled provider key to the one model step")
         self.assertNotIn("GITHUB_TOKEN", engine)
         self.assertNotIn("GH_TOKEN", engine)
         self.assertIn("flock -w 900 /var/lib/lmdj/pr-agent/slot.lock", engine)
@@ -217,7 +219,7 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         job = self.jobs["review"]
         self.assertIn("generated_only: ${{ steps.input.outputs.generated_only }}", job,
                       "why: the publish job routes on the collection outcome; remedy: expose the step output")
-        for step in ("deepseek review", "Validate PR-Agent result", "Save honest final result"):
+        for step in ("PR-Agent review", "Validate PR-Agent result", "Save honest final result"):
             with self.subTest(step=step):
                 block = job.split("      - name: " + step + "\n", 1)[1].split("      - ", 1)[0]
                 self.assertIn("steps.input.outcome == 'success'", block)

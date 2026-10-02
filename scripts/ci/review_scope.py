@@ -21,7 +21,10 @@ import test_scope
 BACKENDS = ("glm", "kimi", "grok")
 LEGACY_BACKENDS = BACKENDS
 V2_BACKENDS = ("deepseek", "glm", "grok", "kimi")
-BACKEND_PROVIDERS = {"deepseek": "deepseek", "glm": "zai", "grok": "xai", "kimi": "moonshot"}
+# Values are the engine's own provider registry identities (the keys of the
+# trusted witness `providers` map and the `provider` field the T2 engine emits
+# in attempts and coverage receipts), not litellm route names.
+BACKEND_PROVIDERS = {"deepseek": "deepseek", "glm": "glm", "grok": "xai", "kimi": "kimi"}
 HISTORY_SCHEMA_V2 = "lmdj.ci-review-history.v2"
 COVERAGE_SCHEMA = "lmdj.pr-agent-coverage.v1"
 COLLECTOR_SCHEMA = "lmdj.pr-agent-collector.v1"
