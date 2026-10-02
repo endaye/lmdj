@@ -373,14 +373,19 @@ When every engine Pattern slot is held by a sounding retiring view the edit
 still commits (`deferred`) and the Runtime swaps in place by itself once a
 slot frees — it is committed Truth like any other edit, so the grid shows no
 separate deferred state. A `pattern_transport_busy` or
-`pattern_publication_pending` refusal happens before the commit and the Host
+`pattern_publication_pending` refusal happens before the commit, and Creator
 retries it instead of showing a conflict, re-reading the current revision
 before every attempt because the busy window can land an intervening commit.
-While the projection re-reads Truth after a commit no gesture starts, so a
-box selection can never resolve against a stale model. Any other conflict or
-refusal restores the projection from Truth and shows the reason; a committed
-edit whose swap fails surfaces the typed snapshot error honestly. Undo and
-Redo are the existing stop-only history controls.
+The retry is bounded: 32 attempts 250 ms apart cover a bar boundary at the
+slowest tempo (6 s at 40 BPM). A longer wait, or a revision that cannot be
+re-read, shows the refusal itself ("can't be done right now"), never a
+stale-revision conflict. While the projection re-reads Truth after a commit no gesture
+starts; a box selection hit-tests the notes Truth holds when it is released,
+so it never names a key that no longer exists. Keys that an Undo or Redo, a
+transport settle or another surface's edit removes leave the selection. Any
+other conflict or refusal restores the projection from Truth and shows the
+reason; a committed edit whose swap fails surfaces the typed snapshot error
+honestly. Undo and Redo are the existing stop-only history controls.
 
 The upper display is a whole-Pattern overview. A 64-row thumbnail maps every
 event of all four Banks; a live playhead advances from the existing transport

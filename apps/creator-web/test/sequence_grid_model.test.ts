@@ -13,6 +13,7 @@ import {
   sequenceGridNotesInBox,
   sequenceGridRemoveNote,
   sequenceGridResizeNote,
+  sequenceGridLiveSelection,
   sequenceGridSelectionVelocity,
   sequenceGridVelocityNote,
   sequenceGridFlatSlot,
@@ -425,4 +426,17 @@ test("the Host addresses Pads as flat slots, bank × 16 + pad", () => {
   expect(sequenceGridFlatSlot(0, 15)).toBe(15);
   expect(sequenceGridFlatSlot(1, 0)).toBe(16);
   expect(sequenceGridFlatSlot(3, 15)).toBe(63);
+});
+
+test("the live selection keeps only keys the Pattern still holds", () => {
+  const events = pattern(1, [
+    {slot: {bank: 0, pad: 1}, onsetTick: 0, durationTick: 240, velocity: 100},
+    {slot: {bank: 0, pad: 2}, onsetTick: 480, durationTick: 240, velocity: 90},
+  ]);
+  const kept = {bank: 0, pad: 2, onsetTick: 480} as const;
+  const selection = [kept, {bank: 0, pad: 3, onsetTick: 0}] as const;
+  expect(sequenceGridLiveSelection(events, selection)).toEqual([kept]);
+  const unchanged = [kept];
+  expect(sequenceGridLiveSelection(events, unchanged)).toBe(unchanged);
+  expect(sequenceGridLiveSelection(undefined, unchanged)).toEqual([]);
 });

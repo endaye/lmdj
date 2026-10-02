@@ -344,6 +344,26 @@ test("a busy retry re-reads authority after an intervening commit", async () => 
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
+test("a busy retry that cannot re-read the revision surfaces the refusal, not a conflict", async () => {
+  const fixture = gridFixture();
+  // Refused pre-commit, then the revision re-read comes back unreadable: a
+  // retry would name a known-stale revision, so the refusal stands.
+  fixture.editPatternEvents.mockImplementationOnce(async () => {
+    fixture.inspectProject.mockResolvedValueOnce({} as never);
+    throw Object.assign(new Error("transport busy"), {
+      code: "HOST_STATE_INVALID",
+      details: {reason: "pattern_transport_busy"},
+    });
+  });
+  await openSequenceGrid(fixture);
+  await tapEmptyCell(2, 60, 54);
+  await screen.findByRole("alert", {}, {timeout: 10_000});
+  expect(fixture.editPatternEvents).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("alert").textContent).toContain("That can't be done right now.");
+  expect(screen.getByRole("alert").textContent).not.toContain("Project changed");
+  expect(fixture.truth.events).toHaveLength(0);
+});
+
 test("a live edit while playing swaps in place with no next-bar mark", async () => {
   const fixture = gridFixture({playing: true, publication: "live"});
   await openSequenceGrid(fixture);
@@ -415,4 +435,27 @@ test("Undo and Redo refresh both grids from Truth", async () => {
     expect(screen.getByTestId("sequence-pattern-overview")
       .getElementsByClassName("sequence-overview-note")).toHaveLength(1));
   expect(fixture.truth.events).toHaveLength(1);
+});
+
+test("an Undo that removes a selected note drops it from the selection", async () => {
+  const fixture = gridFixture();
+  await openSequenceGrid(fixture);
+  await tapEmptyCell(2, 60, 54);
+  const grid = screen.getByTestId("sequence-grid");
+  await waitFor(() =>
+    expect(within(grid).getByTestId("sequence-grid-note")).toBeTruthy());
+  mockGridGeometry();
+  // Box-select the note at tick 480 (48 px) on pad 2.
+  fireEvent.pointerDown(lane(2), {pointerId: 43, clientX: 40, clientY: 50, button: 0});
+  fireEvent.pointerMove(lane(2), {pointerId: 43, clientX: 100, clientY: 60});
+  fireEvent.pointerUp(window, {pointerId: 43});
+  const overview = () => screen.getByTestId("sequence-overview");
+  const fact = (name: string) =>
+    within(overview()).getByText(name).nextElementSibling?.textContent;
+  await waitFor(() => expect(fact("Selected")).toBe("1"));
+
+  await shiftAndPress("Undo — SHIFT + ←");
+  await waitFor(() =>
+    expect(within(grid).queryByTestId("sequence-grid-note")).toBeNull());
+  await waitFor(() => expect(fact("Selected")).toBe("0"));
 });

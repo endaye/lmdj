@@ -420,6 +420,23 @@ export function sequenceGridNotesInBox(options: Readonly<{
     note.onsetTick < tickHigh && note.onsetTick + note.durationTick > tickLow);
 }
 
+// The selection keys that still name an event of the Pattern. An Undo, a
+// transport settle or an edit from another surface can change events in
+// place; a key it removed must leave the selection. Returns the same array
+// when nothing was dropped, so a caller can skip the state update.
+export function sequenceGridLiveSelection(
+  pattern: SequenceGridPattern | undefined,
+  selection: readonly SequenceGridEventKey[],
+): readonly SequenceGridEventKey[] {
+  if (selection.length === 0) return selection;
+  if (pattern === undefined) return [];
+  const live = new Set(pattern.events.map((event) =>
+    `${event.slot.bank}:${event.slot.pad}:${event.onsetTick}`));
+  const kept = selection.filter((key) =>
+    live.has(`${key.bank}:${key.pad}:${key.onsetTick}`));
+  return kept.length === selection.length ? selection : kept;
+}
+
 // The overview's velocity fact: the one velocity every selected note shares,
 // "mixed" when they differ, null with no live selection.
 export function sequenceGridSelectionVelocity(

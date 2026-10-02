@@ -114,6 +114,7 @@ import {
 import {
   DEFAULT_SEQUENCE_GRID_SNAP,
   sequenceGridFlatSlot,
+  sequenceGridLiveSelection,
   type SequenceGridEdit,
   type SequenceGridEditMode,
   type SequenceGridEventKey,
@@ -404,6 +405,16 @@ function Workspace({
   useEffect(() => {
     setSequenceGridSelection([]);
   }, [sequence.selectedPatternId, state.activeBank, state.project.current?.projectId]);
+
+  // Events can change in place (Undo/Redo, a transport settle, another
+  // surface's edit); keys they removed leave the selection.
+  const selectedGridPattern = state.project.current?.patterns.find(
+    ({patternId}) => patternId ===
+      (sequence.selectedPatternId ?? state.project.current?.patternId));
+  useEffect(() => {
+    setSequenceGridSelection((selection) =>
+      sequenceGridLiveSelection(selectedGridPattern, selection));
+  }, [selectedGridPattern]);
 
   useEffect(() => {
     setMidi(null);
@@ -1709,14 +1720,15 @@ function Workspace({
               inspected.project_revision >= 0
                 ? inspected.project_revision
                 : null;
-            if (inspectedRevision !== null) {
-              sequenceAuthoringRevision.current =
-                reconcileSequenceAuthoringRevision(
-                  sequenceAuthoringRevision.current,
-                  stateRef.current.project.current?.revision ?? 0,
-                  inspectedRevision,
-                );
-            }
+            // Without a readable revision the next attempt would name a
+            // known-stale one and die as a conflict; surface this refusal.
+            if (inspectedRevision === null) throw error;
+            sequenceAuthoringRevision.current =
+              reconcileSequenceAuthoringRevision(
+                sequenceAuthoringRevision.current,
+                stateRef.current.project.current?.revision ?? 0,
+                inspectedRevision,
+              );
           }
         }
         if (result === null) return;
