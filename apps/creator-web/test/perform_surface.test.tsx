@@ -211,6 +211,7 @@ function controllerFixture(options: {
   opfsAvailable?: boolean;
   maximumStatusQueries?: number;
   waitForStatusQuery?: () => Promise<void>;
+  reportFailure?: (operation: string, error: unknown) => unknown;
 } = {}) {
   const runtime = sessionFixture(status(options.captureState ?? "ready"));
   let state = options.state ?? creatorState();
@@ -282,6 +283,7 @@ function controllerFixture(options: {
     refreshProject,
     opfsAvailable: () => options.opfsAvailable ?? true,
     dependencies,
+    ...(options.reportFailure === undefined ? {} : {reportFailure: options.reportFailure}),
   });
   return {runtime, controller, order, store, refreshProject, cleanupTemporary,
     captureStop, getQueueListener: () => queueListener,
@@ -355,7 +357,8 @@ test("switches Bank synchronously without any Core request", async () => {
 test.each([
   {captureState: "unconfigured" as const, message: null},
   {captureState: "configured" as const, message: "Preparing recording"},
-  {captureState: "unavailable" as const, message: "Reload after checking the audio processor URL."},
+  {captureState: "unavailable" as const,
+    message: "Performance recording could not start. Reload the page and activate audio again, then record."},
 ])("gates Record for $captureState capture", ({captureState, message}) => {
   renderSurface(controllerFixture({captureState}));
   expect(screen.getByRole("button", {name: "Record Performance"}).hasAttribute("disabled"))
@@ -419,7 +422,8 @@ test("capture readiness loss stops the matching Core recording and WAV", async (
 });
 
 test("capture-stop rejection converges through the controller stop path", async () => {
-  const fixture = controllerFixture();
+  const reportFailure = vi.fn();
+  const fixture = controllerFixture({reportFailure});
   fixture.captureStop.mockRejectedValueOnce(new Error("tap stop failed"));
   renderSurface(fixture);
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
@@ -429,7 +433,10 @@ test("capture-stop rejection converges through the controller stop path", async 
   await waitFor(() => expect(fixture.controller.getState().recording.phase).toBe("stopped"));
   expect(fixture.runtime.calls.stop).toHaveBeenCalledTimes(1);
   expect(fixture.captureStop).toHaveBeenCalledTimes(1);
-  expect(fixture.controller.getState().error).toContain("tap stop failed");
+  // #1680: the raw message goes to diagnostics; the surface shows the catalogue.
+  expect(fixture.controller.getState().error).toBe("Something went wrong in Creator. Try again. Details are in Developer diagnostics.");
+  expect(reportFailure).toHaveBeenCalledWith("Perform",
+    expect.objectContaining({message: "tap stop failed"}));
 });
 
 test("begin failure stops capture, drains its tail, and removes the temporary WAV", async () => {
@@ -475,7 +482,8 @@ test("retains the sealed WAV and fails closed when projection compensation fails
   await waitFor(() => expect(fixture.controller.getState().recording.phase).toBe("stopped"));
   expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
   expect(fixture.controller.getState().wavStatus).toContain("temporary retained");
-  expect(fixture.controller.getState().error).toMatch(/recovery cleanup failed/i);
+  expect(fixture.controller.getState().error).toMatch(/The interrupted recording is kept for recovery\.$/);
+  expect(fixture.controller.getState().error).not.toMatch(/projection failed|discard failed/);
 });
 
 test("default recording resources decorate real writer and store instances through Host seams", async () => {
@@ -966,7 +974,7 @@ test("retains a failed WAV binding for an explicit retry without saving twice", 
     .not.toBeNull());
 
   expect(fixture.runtime.session.savePerformance).toHaveBeenCalledTimes(1);
-  expect(screen.getByRole("alert").textContent).toMatch(/WAV.*bind.*retry/i);
+  expect(screen.getByRole("alert").textContent).toBe("The recording could not be saved into the Project. Choose Retry WAV bind.");
   await userEvent.click(screen.getByRole("button", {name: "Retry WAV bind"}));
   await waitFor(() => expect(fixture.store.bind).toHaveBeenCalledTimes(2));
   expect(fixture.runtime.session.savePerformance).toHaveBeenCalledTimes(1);
@@ -982,7 +990,7 @@ test("retries Project projection after save without saving the Performance twice
   fixture.refreshProject.mockRejectedValueOnce(new Error("projection failed"));
   await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
   await waitFor(() => expect(screen.getByRole("alert").textContent)
-    .toMatch(/saved.*Project.*refresh.*retry/i));
+    .toBe("The Performance was saved, but Creator could not show the latest Project. Choose Save Performance again."));
   expect(fixture.runtime.session.savePerformance).toHaveBeenCalledTimes(1);
   expect(fixture.store.bind).not.toHaveBeenCalled();
   expect(fixture.controller.getState().recording.phase).toBe("stopped");
@@ -1006,7 +1014,7 @@ test("retries the saved Performance list projection before binding", async () =>
 
   await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
   await waitFor(() => expect(screen.getByRole("alert").textContent)
-    .toMatch(/saved.*Project.*refresh.*retry/i));
+    .toBe("The Performance was saved, but Creator could not show the latest Project. Choose Save Performance again."));
   expect(fixture.runtime.session.savePerformance).toHaveBeenCalledTimes(1);
   expect(fixture.store.bind).not.toHaveBeenCalled();
 
@@ -1071,7 +1079,7 @@ test("retries projection after committed discard without discarding twice", asyn
   await userEvent.click(screen.getByRole("button", {name: "Discard Performance"}));
   await waitFor(() => expect(fixture.store.discard).toHaveBeenCalledTimes(1));
   expect(fixture.controller.getState().recording.phase).toBe("stopped");
-  expect(screen.getByRole("alert").textContent).toMatch(/discarded.*refresh.*retry/i);
+  expect(screen.getByRole("alert").textContent).toBe("The Performance was discarded, but Creator could not show the latest Project. Choose Discard Performance again.");
 
   await userEvent.click(screen.getByRole("button", {name: "Discard Performance"}));
   await waitFor(() => expect(fixture.controller.getState().recording.phase).toBe("idle"));

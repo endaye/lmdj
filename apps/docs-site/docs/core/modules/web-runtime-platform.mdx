@@ -134,3 +134,53 @@ stops the Pad and clears preview, delegates `pad.delete` to the Facade, removes
 cancelled import handles and publishes the new Bank through exact-generation
 acknowledgement. Responses retain the committed revision separately from Runtime
 publication failure. Other Pad imports and their revision guards remain intact.
+
+`RuntimeSession.editPatternEvents({patternId, expectedRevision, remove, put})`
+sends flat-slot keys and events as `pattern.events.edit` through the shared
+Project action queue.
+
+Control refuses the edit before commit, with Truth unchanged and the edit
+retryable, while:
+
+- the Pattern transport records (`sequence_session_active`);
+- a Pattern transport command is in flight (`pattern_transport_busy`);
+- a scheduled Pattern publication has not yet applied at its boundary
+  (`pattern_publication_pending`), and the edit would swap the playing Pattern
+  in place, or the scheduled view is of the edited, not current, Pattern. A BPM
+  change, an Undo, a Pad edit or a reload can schedule one. A stopped edit of
+  the current Pattern is admitted: its immediate publication supersedes or
+  follows the scheduled one.
+
+Otherwise it delegates to the Facade. When the edited Pattern is the Runtime's
+current one, Control then republishes only the Pattern view, without a Bank:
+
+- **Stopped:** the view is replaced immediately (`publication: "published"`),
+  so the next Play is not refused for a pending publication.
+- **Playing:** the view is swapped in place with
+  `publish_pattern_view_preserving_phase` (`"live"`). This keeps the origin and
+  any sounding voices, so playback neither restarts nor waits for a bar, and new
+  notes ahead of the playhead sound in the current loop.
+
+Each swap takes a fresh engine Pattern slot, and a retiring view keeps its slot
+while its voices sound. When every slot is held, the edit stays committed and
+the swap is deferred (`"deferred"`). The service cadence reclaims slots and
+swaps the view in place, prepared from Truth, as soon as one frees; a later edit
+or any other Pattern publication supersedes the deferral. It waits while a
+transport command is in flight or a recording is open, because a recording
+admits no outside publication; the recording's own publications are prepared
+from Truth and carry the edit, and once the recording closes the deferral
+resumes. An audio interruption, which retires the transport engagement, does not
+drop it. Nothing reports the deferral after the response.
+
+Without the Pattern transport opt-in, legacy scheduling plays the Pattern
+whenever audio runs, and Control has no transport state to tell it so. The edit
+then takes the immediate path, which restarts the Pattern from its first bar,
+and a full slot set is reported as a failed swap, since no service cadence
+retries it. Creator always opts in.
+
+An edit of another Pattern publishes nothing (`"none"`); that Pattern is
+prepared from Truth when it is selected. A failed swap after commit returns the
+committed revision with `"failed"` and `snapshot_error`. Because a grid edit
+changes no Bank, a Runtime that was current before the edit, so that a
+Bank-bound `sample.preview.set` is admitted, stays current after a successful
+or deferred swap or an edit of another Pattern.

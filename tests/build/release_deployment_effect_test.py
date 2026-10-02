@@ -364,6 +364,27 @@ class RuntimeEffectTest(unittest.TestCase):
                 self.assertEqual(self.observe().status, "unknown")
         self.assertEqual(len(self.managed.child.posts), 1)
 
+    def run_on_newer_main(self):
+        c = self.managed.child; c.run_head = c.commit("tools/release/newer_tooling.py")
+        self.artifact["workflow_run"]["head_sha"] = c.run_head
+        return c.run_head
+
+    def test_run_on_main_that_moved_past_unchanged_workflow_is_verified(self):
+        self.run_on_newer_main()
+        result = self.drive()
+        self.assertEqual((result.status, result.step), ("pending", self.next_step))
+        self.assertEqual(self.observe().status, "verified")
+
+    def test_deploy_job_on_another_revision_than_its_run_is_not_accepted(self):
+        self.run_on_newer_main()
+        self.post_hook = lambda: self.jobs["jobs"][1].update(head_sha=self.managed.child.fixture.source)
+        self.assertEqual(self.drive().status, "conflict")
+
+    def test_evidence_from_another_revision_than_its_run_is_rejected(self):
+        self.run_on_newer_main()
+        self.artifact["workflow_run"]["head_sha"] = self.managed.child.fixture.source
+        self.assertEqual(self.drive().status, "unknown")
+
     def test_wrong_artifact_origin_is_rejected(self):
         self.artifact["workflow_run"]["id"] = 42
         self.assertEqual(self.drive().status, "unknown")

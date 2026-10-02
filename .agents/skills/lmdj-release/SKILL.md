@@ -160,6 +160,14 @@ reviewed PR. Report only independently verified status; Release publication
 alone never proves Deployment or Channel promotion. If publication is not
 covered, report the verified inputs without dispatching.
 
+The driver's dispatches do not need main to stay at the frozen control. Main
+moving on during a release is normal, and a dispatch runs on live main when it
+descends from the control and the dispatched workflow file is unchanged since.
+Newer reviewed tooling is accepted. A commit missing locally triggers one
+canonical-main fetch first. A changed workflow, or history still unreadable
+after that fetch, is refused before any POST intent is recorded. Resume once
+the history is readable; a changed workflow needs a new request.
+
 If `publish-release.yml` fails at `verify-published`, read the live Release by
 numeric ID and compare it with the immutable plan before concluding publication
 failed. If it fails earlier, treat publication as not done and diagnose the

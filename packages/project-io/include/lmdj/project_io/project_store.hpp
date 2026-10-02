@@ -250,6 +250,9 @@ class ProjectStore {
       const domain::ResetPadPlayback& command);
   foundation::Result<domain::AppliedCommand> execute(
       const std::filesystem::path& bundle,
+      const domain::EditPatternEvents& command);
+  foundation::Result<domain::AppliedCommand> execute(
+      const std::filesystem::path& bundle,
       const domain::DeletePad& command);
   foundation::Result<CommandExecution> execute_with_identity(
       const std::filesystem::path& bundle,

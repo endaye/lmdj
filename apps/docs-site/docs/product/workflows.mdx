@@ -42,7 +42,7 @@ Undo/Redo 恢复创作内容并生成新的递增 revision，不回写旧 revisi
 
 - **布局。** 网格在 Sequence 触控区：行为当前 Bank 的 16 个 Pad，横轴为整个 Pattern，吸附默认 1/16。上屏保持只读，显示 64 行 Pattern 总览、播放头、触控区视窗框与选中信息。
 - **首版编辑。** 笔点增删音符、拖动改位置与长度、调力度、框选后批量删除或移动。一次手势或一次批量操作是一条撤销记录。
-- **播放与录音。** 只播放时可以编辑：被编辑的若是正在播放的 Pattern，新内容从下一小节生效。录音中拒绝编辑，撤销仍需先 Stop。
+- **播放与录音。** 只播放时可以编辑：被编辑的若是正在播放的 Pattern，提交后立即在原位替换，播放位置不变，播放头之后的新音符本圈就能听到（[2026-10-02 勘误](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-02-sequence-grid-live-edit.md)替代原先的"下一小节生效"）。录音中拒绝编辑，撤销仍需先 Stop。
 - **Contract。** 编辑在 `lmdj.project.v5` 现有的 `duration_tick` 与事件键规则内表达，不改 Contract。DICE 概率、Legato/Reverse/Stretch/Repeat/Double Up 与复制粘贴由后续 Task 处理。
 
 ## Tempo/Swing 直接调节与节拍器（已确认，尚未实现）

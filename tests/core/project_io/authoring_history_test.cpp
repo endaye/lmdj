@@ -368,7 +368,38 @@ void persisted_history_rejects_malformed_commands_atomically() {
   }
 }
 
+// #1671: one grid edit is one action, Undo and Redo restore it exactly, and
+// its persisted identity survives a reload so a retry still replays.
+void pattern_event_edit_is_one_action_and_replays_after_reload() {
+  Fixture f;
+  const auto pattern_id = PatternId{uuid(3)};
+  LMDJ_CHECK(f.store.execute(f.root, CreatePattern{f.meta(), Pattern{pattern_id, 1,
+      {{{0,0},0,240,100}, {{0,1},240,240,100}}}}).has_value());
+  const auto before = f.state();
+  const auto count = f.status().undo_count;
+  // Put is deliberately not in canonical order.
+  const EditPatternEvents command{f.meta(), pattern_id, {{{0,0}, 0}},
+      {{{0,2},0,120,90}, {{0,0},480,240,100}, {{0,1},240,720,64}}};
+  const auto edited = f.store.execute(f.root, command);
+  LMDJ_CHECK(edited.has_value() && !edited.value().replayed);
+  LMDJ_CHECK(f.status().undo_count == count + 1);
+  LMDJ_CHECK(f.status().undo_label == "Edit Pattern");
+  const auto after = f.state();
+  LMDJ_CHECK((after.patterns.at(pattern_id).events == std::vector<PatternEvent>{
+      {{0,2},0,120,90}, {{0,1},240,720,64}, {{0,0},480,240,100}}));
+
+  ProjectStore reopened;
+  const auto retry = reopened.execute(f.root, command);
+  LMDJ_CHECK(retry.has_value() && retry.value().replayed);
+  LMDJ_CHECK(reopened.load(f.root).value() == after);
+
+  const auto undone = f.restore().state;
+  LMDJ_CHECK(undone.patterns == before.patterns);
+  LMDJ_CHECK(f.restore(true).state.patterns == after.patterns);
 }
+
+}
+
 int main() {
   try {
     persisted_history_rejects_malformed_commands_atomically();
@@ -378,6 +409,7 @@ int main() {
     grouped_cancel_restores_redo_and_capacity();
     unknown_commit_reconciles_exactly_once(); missing_redo_bytes_refuses_without_moving_history();
     clear_pad_preserves_pattern_events_and_restores_binding(); performance_draft_save_and_cancel_are_single_actions();
+    pattern_event_edit_is_one_action_and_replays_after_reload();
     return 0;
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

@@ -1,3 +1,4 @@
+import {performCaptureUnavailableMessage} from "../state/error_messages";
 import {useEffect, useState, useSyncExternalStore} from "react";
 
 import type {ProjectView} from "../runtime/runtime_types";
@@ -187,7 +188,7 @@ export function PerformSurface(props: PerformSurfaceProps) {
   const captureMessage = state.captureStatus.state === "configured"
     ? "Preparing recording…"
     : state.captureStatus.state === "unavailable"
-      ? state.captureStatus.error.message
+      ? performCaptureUnavailableMessage(state.captureStatus.error.code)
       : null;
   const performing = ["recording", "flushing"].includes(state.recording.phase);
   // D04 heads the touch workspace with the switch cue. NEXT BAR is pictured

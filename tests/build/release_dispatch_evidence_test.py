@@ -141,6 +141,73 @@ class EvidenceTest(unittest.TestCase):
         inventory["workflow_runs"].append(row);inventory["total_count"]+=1
         return row
 
+    def advance_main(self,path):
+        (self.root/path).parent.mkdir(parents=True,exist_ok=True)
+        (self.root/path).write_text("changed\n");self.git("add",path)
+        self.git("-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","-qm","main moved")
+        revision=self.git("rev-parse","HEAD")
+        self.routes["/branches/main"]["commit"]["sha"]=revision
+        return revision
+
+    def test_run_on_newer_main_with_unchanged_workflow_binds_its_dispatch_revision(self):
+        newer=self.advance_main("tools/release/newer_tooling.py")
+        self.another_run(41,control=newer)
+        binding=self.consumer.verify(run_id=41,actor_id=20,control_revision=self.source,inputs=self.inputs)
+        self.assertEqual((binding["control_revision"],binding["dispatch_revision"]),(self.source,newer))
+
+    def test_run_on_newer_main_with_changed_workflow_is_refused(self):
+        newer=self.advance_main(".github/workflows/"+self.workflow)
+        self.another_run(41,control=newer)
+        with self.assertRaisesRegex(DispatchEvidenceError,"run identity differs"):
+            self.consumer.verify(run_id=41,actor_id=20,control_revision=self.source,inputs=self.inputs)
+
+    def test_discovery_correlates_this_request_on_newer_main_with_unchanged_workflow(self):
+        newer=self.advance_main("tools/release/newer_tooling.py")
+        self.another_run(41,control=newer)
+        result=self.discover(prior=[40])
+        self.assertEqual(result["status"],"correlated")
+        self.assertEqual((result["binding"]["run_id"],result["binding"]["dispatch_revision"]),(41,newer))
+
+    def test_discovery_of_this_request_after_a_workflow_change_is_conflict(self):
+        newer=self.advance_main(".github/workflows/"+self.workflow)
+        self.another_run(41,control=newer)
+        self.assertEqual(self.discover(prior=[40]),{"status":"conflict","binding":None})
+
+    def upstream_commit(self,directory):
+        upstream=Path(directory)/"upstream"
+        subprocess.run(["git","clone","-q",str(self.root),str(upstream)],check=True,capture_output=True)
+        (upstream/"newer_tooling.py").write_text("newer\n")
+        for args in (("add","newer_tooling.py"),("-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","-qm","upstream")):
+            subprocess.run(["git","-C",str(upstream),*args],check=True,capture_output=True)
+        newer=subprocess.run(["git","-C",str(upstream),"rev-parse","HEAD"],check=True,capture_output=True,text=True).stdout.strip()
+        return upstream,newer
+
+    def refreshing_consumer(self,refresh):
+        return DispatchEvidenceConsumer(api_get=self.client.get_dispatch_evidence,git_root=self.root,
+            repository_id=10,workflow=self.workflow,workflow_id=50,producer_revision=self.source,
+            now=datetime(2026,9,13,tzinfo=timezone.utc),refresh_main=refresh)
+
+    def test_unfetched_main_is_fetched_once_before_it_is_judged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            upstream,newer=self.upstream_commit(directory)
+            fetches=[]
+            def refresh():
+                fetches.append(1);self.git("fetch","-q",str(upstream),"+refs/heads/main:refs/lmdj-release/origin-main")
+            self.assertTrue(self.refreshing_consumer(refresh).equivalent(self.source,newer))
+            self.assertEqual(len(fetches),1)
+
+    def test_commit_still_missing_after_the_fetch_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _,newer=self.upstream_commit(directory)
+            with self.assertRaisesRegex(DispatchEvidenceError,"not a commit"):
+                self.refreshing_consumer(lambda:None).equivalent(self.source,newer)
+
+    def test_failed_main_fetch_is_reported_without_its_detail(self):
+        def refresh():raise RuntimeError("private-sentinel")
+        with self.assertRaisesRegex(DispatchEvidenceError,"not fetchable") as caught:
+            self.refreshing_consumer(refresh).equivalent(self.source,"f"*40)
+        self.assertNotIn("private-sentinel",str(caught.exception))
+
     def test_discovery_correlates_original_run_without_post(self):
         result=self.discover()
         self.assertEqual(result["status"],"correlated");self.assertEqual(result["binding"]["run_id"],40)
