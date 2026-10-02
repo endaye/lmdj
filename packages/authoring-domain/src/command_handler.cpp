@@ -498,8 +498,7 @@ foundation::Result<AppliedCommand> apply_new_command(
   }
   auto copy = state;
   copy.patterns.at(command.pattern_id).events = std::move(events);
-  return foundation::Result<AppliedCommand>::success(
-      applied(std::move(copy), "pattern.events_edited", command.meta));
+  return applied(std::move(copy), "pattern.events_edited", command.meta);
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
