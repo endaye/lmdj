@@ -23,6 +23,7 @@ export interface PerformSurfaceProps {
   // The Perform surface renders the same global Pattern transport projection
   // every other mode consumes; it never drives it.
   readonly transport?: PatternTransportState;
+  readonly recordingBusy?: boolean;
 }
 
 function RecordingPanel(props: {
@@ -84,16 +85,9 @@ function ReplayPanel(props: {
   readonly state: PerformState;
   readonly onReplay: (performanceId: string) => void;
   readonly onStop: () => void;
-  readonly onResample: (performanceId: string, start: number,
-    end: number, targetSlot: number) => void;
   readonly onRecover: (sessionId: string) => void;
   readonly onDiscardRecovery: (sessionId: string) => void;
 }) {
-  const [selectedPerformance, setSelectedPerformance] = useState<string | null>(null);
-  const [startFrame, setStartFrame] = useState(0);
-  const [endFrame, setEndFrame] = useState(4_800);
-  const [targetSlot, setTargetSlot] = useState(0);
-  const selected = selectedPerformance ?? props.state.performances[0]?.performanceId ?? null;
   return (
     <section className="perform-replay" aria-label="Performance replay">
       {props.state.performances.map((performance) => (
@@ -102,7 +96,6 @@ function ReplayPanel(props: {
           <button type="button"
             aria-label={`Replay ${performance.name}`}
             onClick={() => {
-              setSelectedPerformance(performance.performanceId);
               props.onReplay(performance.performanceId);
             }}>Replay</button>
         </article>
@@ -113,33 +106,6 @@ function ReplayPanel(props: {
         {props.state.replay === null ? "idle" : `${props.state.replay.state}${
           props.state.replayNeutral ? " · neutral" : ""} · resolved revision · ${
           props.state.replay.resolvedRevision}`}
-      </output>
-      <label>Resample start frame
-        <input type="number" min={0} aria-label="Resample start frame"
-          value={startFrame}
-          onChange={(event) => setStartFrame(event.currentTarget.valueAsNumber)} />
-      </label>
-      <label>Resample end frame
-        <input type="number" min={1} aria-label="Resample end frame"
-          value={endFrame}
-          onChange={(event) => setEndFrame(event.currentTarget.valueAsNumber)} />
-      </label>
-      <label>Resample target Pad
-        <input type="number" min={0} max={63} aria-label="Resample target Pad"
-          value={targetSlot}
-          onChange={(event) => setTargetSlot(event.currentTarget.valueAsNumber)} />
-      </label>
-      <button type="button" disabled={selected === null ||
-        !Number.isSafeInteger(startFrame) || !Number.isSafeInteger(endFrame) ||
-        endFrame <= startFrame || !Number.isSafeInteger(targetSlot) ||
-        targetSlot < 0 || targetSlot > 63}
-        onClick={() => {
-          if (selected !== null) props.onResample(
-            selected, startFrame, endFrame, targetSlot,
-          );
-        }}>Resample selection</button>
-      <output role="status" aria-label="Resample status">
-        {props.state.resampleStatus}
       </output>
       {props.state.recovery.map((candidate) => (
         <article key={candidate.sessionId}>
@@ -234,7 +200,7 @@ export function PerformSurface(props: PerformSurfaceProps) {
         onRelease={(gestureId, fx) => controller.releaseFx(gestureId, fx)} />
       <button className="perform-hold" type="button" aria-pressed={state.hold}
         onClick={() => controller.toggleHold()}>HOLD</button>
-      <RecordingPanel state={state} canRecord={controller.canRecord()}
+      <RecordingPanel state={state} canRecord={!props.recordingBusy && controller.canRecord()}
         onRecord={() => { void controller.record(); }}
         onFlush={() => { void controller.flush(); }}
         onStop={() => { void controller.stop(); }}
@@ -245,9 +211,6 @@ export function PerformSurface(props: PerformSurfaceProps) {
       <ReplayPanel state={state}
         onReplay={(performanceId) => { void controller.beginReplay(performanceId); }}
         onStop={() => { void controller.stopReplay().catch(() => {}); }}
-        onResample={(performanceId, start, end, targetSlot) => {
-          void controller.resample(performanceId, start, end, targetSlot);
-        }}
         onRecover={(sessionId) => { void controller.applyRecovery(sessionId); }}
         onDiscardRecovery={(sessionId) => {
           void controller.discardRecovery(sessionId);

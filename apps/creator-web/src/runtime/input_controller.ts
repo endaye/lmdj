@@ -64,6 +64,10 @@ export type PerformancePadInputEvent = Extract<
 interface CreatorInputControllerCommonOptions {
   onAdverseLifecycle?: () => void;
   canUsePad?: (slot: number) => boolean;
+  onEmptyPadPress?: (slot: number, key: object, source: RuntimeTriggerSource,
+    activation: Promise<boolean> | null) => boolean;
+  onEmptyPadRelease?: (key: object) => void;
+  onEmptyPadCancel?: (key?: object) => void;
   activateAudioForGesture?: (event: {isTrusted: boolean}) => Promise<boolean> | null;
   getActiveBank: () => Bank;
   dispatch: (action: CreatorAction) => void;
@@ -159,6 +163,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       ? (options as CreatorLegacyInputControllerOptions).isAssigned(slot)
       : true);
   const activeGestures = new Set<string>();
+  const captureGestures = new Set<object>();
   const gestureModes = new Map<string, SampleTriggerMode>();
   const sampleGestureTokens = new Map<string, SampleGestureToken[]>();
   const runtimeAgnosticGestures = new Set<string>();
@@ -370,6 +375,11 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
         } catch { wake(false); }
       } else wake(false);
     }
+    if (captureGestures.delete(gestureKey)) {
+      options.onEmptyPadRelease?.(gestureKey);
+      dispatch({type: "pad-released", slot});
+      return;
+    }
     const currentGesture = gesture(source, slot);
     observePerformanceRelease(gestureKey, slot, source);
     const mode = gestureModes.get(currentGesture);
@@ -415,6 +425,11 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   ) {
     pendingTouchWakes.get(gestureKey)?.(false);
     pendingTouchWakes.delete(gestureKey);
+    if (captureGestures.delete(gestureKey)) {
+      options.onEmptyPadCancel?.(gestureKey);
+      dispatch({type: "pad-released", slot});
+      return;
+    }
     const currentGesture = gesture(source, slot);
     observePerformanceRelease(gestureKey, slot, source);
     const mode = gestureModes.get(currentGesture);
@@ -667,6 +682,11 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     }
     if (stopAcceptedLoopToggle(slot)) return;
     if (!sampleOptions.isAssigned(slot)) {
+      if (options.onEmptyPadPress?.(slot, gestureKey, source, activation)) {
+        captureGestures.add(gestureKey);
+        dispatch({type: "pad-pressed", slot, outcome: "admitted"});
+        return;
+      }
       sampleOptions.onFilePickIntent(slot, source);
       return;
     }
@@ -887,6 +907,8 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   function clearPressed() {
     for (const wake of pendingTouchWakes.values()) wake(false);
     pendingTouchWakes.clear();
+    if (captureGestures.size > 0) options.onEmptyPadCancel?.();
+    captureGestures.clear();
     pointer.clearPressed();
     keyboard.clearPressed();
     midi.clearPressed();
@@ -906,6 +928,8 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   }
 
   function clearAdversePressed() {
+    options.onEmptyPadCancel?.();
+    captureGestures.clear();
     inputGeneration += 1;
     for (const wake of pendingTouchWakes.values()) wake(false);
     pendingTouchWakes.clear();
