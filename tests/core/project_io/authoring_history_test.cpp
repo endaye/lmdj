@@ -92,6 +92,22 @@ void parity_edit_undoes_and_redoes() {
   LMDJ_CHECK(f.restore().state.banks == before.banks);
   LMDJ_CHECK(f.restore(true).state.banks == edited.banks);
 }
+void tone_edit_undoes_and_redoes() {
+  Fixture f;
+  const auto before = f.state();
+  auto playback = before.banks[0][0].playback;
+  playback.trigger_mode = TriggerMode::gate;
+  playback.attack_ms = 250;
+  playback.release_ms = 1200;
+  playback.tone = 35;
+  playback.eq.mid = lmdj::domain::PadEqBell{2500, -600, 1400};
+  playback.eq.high = lmdj::domain::PadEqShelf{lmdj::domain::EqBandKind::cut, 9000, -1800};
+  LMDJ_CHECK(f.store.execute(f.root, UpdatePadPlayback{f.meta(), {0,0}, playback}).has_value());
+  const auto edited = f.state();
+  LMDJ_CHECK(edited.banks[0][0].playback == playback);
+  LMDJ_CHECK(f.restore().state.banks == before.banks);
+  LMDJ_CHECK(f.restore(true).state.banks == edited.banks);
+}
 void edit_restore_and_persist() {
   Fixture f;
   const auto before = f.state();
@@ -372,7 +388,7 @@ void persisted_history_rejects_malformed_commands_atomically() {
 int main() {
   try {
     persisted_history_rejects_malformed_commands_atomically();
-    edit_restore_and_persist(); parity_edit_undoes_and_redoes(); retry_noop_and_fork(); import_retains_original_bytes();
+    edit_restore_and_persist(); parity_edit_undoes_and_redoes(); tone_edit_undoes_and_redoes(); retry_noop_and_fork(); import_retains_original_bytes();
     failed_publication_keeps_stack(); external_changes_and_sessions_invalidate();
     adoption_is_one_action_and_reuses_every_original_artifact();
     grouped_cancel_restores_redo_and_capacity();
