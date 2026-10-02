@@ -161,6 +161,15 @@ async function inspectTruth(page) {
   return response.result.project;
 }
 
+// PPQ960, 4/4: recovery normalizes an unreleased default tail at the loop end.
+function expectRecoveredAttackTail(pattern, event) {
+  const loopTicks = pattern.bars * 3840;
+  expect(Number.isSafeInteger(event.onset_tick)).toBe(true);
+  expect(event.onset_tick).toBeGreaterThanOrEqual(0);
+  expect(event.onset_tick).toBeLessThan(loopTicks);
+  expect(event.duration_tick).toBe(Math.min(240, loopTicks - event.onset_tick));
+}
+
 async function inspectTransport(page, sessionId) {
   const response = await page.evaluate(async (session) =>
     window.lmdjWebRuntimeHost.transport.send({
@@ -550,10 +559,13 @@ test("reopening after owner loss asks once and keeps the heard take", async ({pa
   const patternId = await page.getByRole("combobox", {name: "Pattern"}).inputValue();
   await recordKey(page).click();
   await transportStatus(page, "recording");
-  await page.keyboard.press("KeyQ");
+  // Hold the original admission through document loss: the recovered default
+  // tail must not depend on whether Runtime currentness routes a key release.
+  await page.keyboard.down("KeyQ");
   await awaitAdmittedPresses(page, 1);
 
   await reopenProject(page);
+  await page.keyboard.up("KeyQ");
   const prompt = page.getByRole("region", {name: "Interrupted recording"});
   await expect(prompt).toContainText("A recording stopped before it was saved (1 in Sequence)",
     {timeout: 60_000});
@@ -568,7 +580,8 @@ test("reopening after owner loss asks once and keeps the heard take", async ({pa
   expect(kept.revision).toBe(imported.revision + 1);
   expect(kept.patterns[patternId].events).toHaveLength(1);
   expect(kept.patterns[patternId].events[0])
-    .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100, duration_tick: 240});
+    .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100});
+  expectRecoveredAttackTail(kept.patterns[patternId], kept.patterns[patternId].events[0]);
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
   await expect(page.getByRole("region", {name: "Sequence recovery"})).toHaveCount(0);
 
@@ -596,12 +609,15 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
 
   await recordKey(page).click();
   await transportStatus(page, "recording");
-  await page.keyboard.press("KeyQ");
+  // Hold the original admission through document loss: the recovered default
+  // tail must not depend on whether Runtime currentness routes a key release.
+  await page.keyboard.down("KeyQ");
   // The admission must be durable before the reload, or the recovery
   // assertion would be testing an empty journal instead of owner loss.
   await awaitAdmittedPresses(page, 1);
 
   await reopenProject(page);
+  await page.keyboard.up("KeyQ");
   const lostTruth = await inspectTruth(page);
   // Nothing was committed: the unresolved admission never reaches truth.
   expect(lostTruth.revision).toBe(imported.revision);
@@ -622,9 +638,10 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
   const appliedTruth = await inspectTruth(page);
   expect(appliedTruth.revision).toBe(imported.revision + 1);
   expect(appliedTruth.patterns[patternId].events).toHaveLength(1);
-  // The one-shot press is finalized with the default 240-tick attack tail.
+  // The default attack tail is normalized exactly at the Pattern loop end.
   expect(appliedTruth.patterns[patternId].events[0])
-    .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100, duration_tick: 240});
+    .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100});
+  expectRecoveredAttackTail(appliedTruth.patterns[patternId], appliedTruth.patterns[patternId].events[0]);
 
   // A fresh recording on the same session opens a new journal and commits.
   await page.getByRole("button", {name: "Activate audio"}).click();
