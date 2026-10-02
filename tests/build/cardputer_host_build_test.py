@@ -142,5 +142,23 @@ class CardputerBuildCommandTest(unittest.TestCase):
         self.assertEqual(calls, [['cmake', '--preset', 'dev']])
 
 
+
+class CardputerVoiceDspConfigurationTest(unittest.TestCase):
+    def test_main_component_builds_without_the_voice_dsp(self):
+        # CI never builds the firmware, so nothing else notices if the
+        # definition goes: the firmware would build with the voice DSP and
+        # fail only at memory admission on the device.
+        cmake = REPO / 'apps/cardputer-host/main/CMakeLists.txt'
+        lines = [line.strip() for line in cmake.read_text().splitlines()]
+        self.assertIn(
+            'add_compile_definitions(LMDJ_VOICE_DSP=0)', lines,
+            'why: the Cardputer main component must define LMDJ_VOICE_DSP=0 '
+            'for its whole directory, because lmdj.runtime-content.v1 cannot '
+            'carry the voice DSP block and its per-voice state does not fit '
+            'the device (decision 2026-09-30 point 9); remedy: restore '
+            '`add_compile_definitions(LMDJ_VOICE_DSP=0)` in '
+            'apps/cardputer-host/main/CMakeLists.txt')
+
+
 if __name__ == '__main__':
     unittest.main()
