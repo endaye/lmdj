@@ -24,6 +24,9 @@ recurrences:
   - date: 2026-09-28
     occurrence: https://github.com/endaye/lmdj/pull/1621
     observed_by: claude-code/opus-5.5
+  - date: 2026-10-02
+    occurrence: https://github.com/endaye/lmdj/pull/1766
+    observed_by: kimi-code
 exit: gate:tests/build/ci_local_preflight_test.py
 escalation: https://github.com/endaye/lmdj/issues/1619
 ---
@@ -97,3 +100,14 @@ input edit after the run makes it stale. `BatchOnlyEvidenceTest` in
 `accepted-risk`, `none`, the clean-tree requirement, and that `--lanes` cannot
 shrink the obligation. It is a procedure check, not a required status: it
 catches "never ran", not a fabricated line.
+
+#1766 edited Pattern events through the Facade and Web Host, wrapping an
+already-`Result` return in a second `Result::success` and adding
+`"pattern.events.edit"` to `bridge.cpp`'s supported-operation list without
+growing its `std::array` size. No Pull Request lane compiles
+`packages/authoring-domain` or `packages/web-runtime-platform`, so both breaks
+reached `main` together and stopped every native and Emscripten build; an
+unrelated Creator Task tripped over them while building its own lane. A compile
+break is the cheapest case for the batch-evidence obligation: the owning lanes
+fail in seconds, so run them locally before merge instead of discovering the
+red from someone else's Task.
