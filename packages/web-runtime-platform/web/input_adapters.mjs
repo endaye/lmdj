@@ -204,6 +204,7 @@ export function createPointerAdapter({
     const gesture = beginGesture("pointer", flatSlot, event.pointerId);
     compatibilityMarker = Object.freeze({
       pointerId: event.pointerId,
+      pointerType: event.pointerType ?? event.nativeEvent?.pointerType,
       flatSlot,
       gesture,
       target: event.target,
@@ -232,7 +233,15 @@ export function createPointerAdapter({
     }
     const marker = compatibilityMarker;
     compatibilityMarker = null;
-    if (marker !== null && matchesCompatibilityMouse(event, flatSlot, marker)) {
+    const capabilities = event?.nativeEvent?.sourceCapabilities ?? event?.sourceCapabilities;
+    // Chromium dispatches touch compatibility mouse after pointerup. React
+    // carries the original device metadata on nativeEvent, not the wrapper.
+    if (capabilities?.firesTouchEvents === true) {
+      return false;
+    }
+    if (marker !== null &&
+      !(marker.pointerType === "touch" && capabilities?.firesTouchEvents === false) &&
+      matchesCompatibilityMouse(event, flatSlot, marker)) {
       return false;
     }
     if (!canTrigger(flatSlot, options)) {
@@ -244,19 +253,28 @@ export function createPointerAdapter({
     return true;
   }
 
+  function releaseCompatibilityMarker(gesture) {
+    if (compatibilityMarker?.gesture !== gesture) return;
+    // Without device metadata, correlate the bounded compatibility event
+    // after touch release; a long hold must not consume that release window.
+    compatibilityMarker = compatibilityMarker.pointerType === "touch"
+      ? Object.freeze({...compatibilityMarker, expiresAt: now() + compatibilityWindowMs})
+      : null;
+  }
+
   function pointerUp(event, flatSlot) {
     const gesture = event?.pointerId === undefined
       ? legacyPointers.find((candidate) => candidate.flatSlot === flatSlot)
       : pointerSlots.get(event.pointerId);
     if (gesture?.flatSlot !== flatSlot) return false;
-    if (compatibilityMarker?.gesture === gesture) compatibilityMarker = null;
+    releaseCompatibilityMarker(gesture);
     return closeGesture(gesture, onRelease);
   }
 
   function releasePointer(event) {
     const gesture = pointerSlots.get(event?.pointerId);
     if (gesture === undefined) return false;
-    if (compatibilityMarker?.gesture === gesture) compatibilityMarker = null;
+    releaseCompatibilityMarker(gesture);
     return closeGesture(gesture, onRelease);
   }
 

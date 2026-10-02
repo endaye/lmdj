@@ -420,9 +420,6 @@ describe("Creator state", () => {
       type: "transfer-progressed", completedBytes: 4,
     }],
     ["end absent transfer", readyState(), {type: "transfer-ended"}],
-    ["activate without Project", {
-      ...readyState(), project: {phase: "empty", projects: [], current: null},
-    }, {type: "audio-changed", phase: "activating"}],
     ["recover without suspend", readyState(), {
       type: "audio-changed", phase: "recovering",
     }],
@@ -439,6 +436,17 @@ describe("Creator state", () => {
   ])("rejects illegal %s from the reducer boundary", (_name, state, action) => {
     expect(isCreatorActionAllowed(state, action)).toBe(false);
     expect(creatorReducer(state, action)).toBe(state);
+  });
+
+  test("audio activation does not require a Project to be open", () => {
+    const state: CreatorState = {...readyState(), project: {phase: "empty", projects: [], current: null}};
+    expect(selectCanActivateAudio(state)).toBe(true);
+    const activating = creatorReducer(state, {type: "audio-changed", phase: "activating"});
+    expect(activating.audio.phase).toBe("activating");
+    const running = creatorReducer(activating, {type: "audio-changed", phase: "running"});
+    expect(running.audio.phase).toBe("running");
+    expect(selectCanTrigger(running)).toBe(false);
+    expect(creatorReducer(running, {type: "audio-changed", phase: "suspending"}).audio.phase).toBe("suspending");
   });
 
   test("keeps lifecycle cleanup legal after the Runtime becomes terminal", () => {
