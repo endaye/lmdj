@@ -1,3 +1,4 @@
+import {useReportFailure} from "../runtime/diagnostics_context";
 import {useCallback, useEffect, useReducer, useRef, useState} from "react";
 
 import {CAPTURE_MAX_FRAMES, CAPTURE_SAMPLE_RATE, CaptureBuffer} from "../capture/capture_buffer";
@@ -75,11 +76,23 @@ function defaultMakeController(listener: CaptureListener): CaptureController {
   return new CaptureController(browserCaptureDeps(), listener);
 }
 
+// #1680: what the user can do about each microphone failure. The browser's
+// DOMException name goes to Developer diagnostics, never into this text.
 function permissionErrorMessage(error: unknown): string {
-  if (error instanceof CapturePermissionError) {
-    return `Microphone access failed (${error.message}).`;
+  const name = error instanceof CapturePermissionError ? error.message : null;
+  switch (name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      return "Creator is not allowed to use the microphone. Allow microphone access for this site, then record again.";
+    case "NotFoundError":
+    case "OverconstrainedError":
+      return "No microphone was found. Connect one, then record again.";
+    case "NotReadableError":
+    case "AbortError":
+      return "The microphone could not be started; another app may be using it. Close that app, then record again.";
+    default:
+      return "Recording could not start. Check the microphone, then record again.";
   }
-  return "Recording could not start.";
 }
 
 function secondsLabel(frames: number): string {
@@ -103,6 +116,7 @@ export function CapturePanel({
   backgrounded = false,
   maxCommitFrames = CAPTURE_MAX_FRAMES,
 }: CapturePanelProps) {
+  const reportFailure = useReportFailure();
   const [state, dispatch] = useReducer(reduceCapture, initialCaptureState);
   const bufferRef = useRef<CaptureBuffer | null>(null);
   // The buffer is now created lazily from the first delivered batch (Finding
@@ -334,6 +348,10 @@ export function CapturePanel({
       dispatch({kind: "granted"});
     } catch (error) {
       controllerRef.current = null;
+      reportFailure("Start recording", {
+        code: error instanceof CapturePermissionError ? "PERMISSION_DENIED" : "INTERNAL_ERROR",
+        message: error instanceof Error ? error.message : "Recording could not start",
+      });
       dispatch({kind: "denied", message: permissionErrorMessage(error)});
     }
   };

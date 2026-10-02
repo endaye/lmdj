@@ -1286,7 +1286,7 @@ test.each([
       await flushAsyncTurns();
 
       expect(screen.getByText(
-        "Sample was saved, but current Project truth could not be refreshed",
+        "The sound was saved, but Creator could not show the latest Project.",
       )).toBeTruthy();
       expect(screen.getByText("Creator unavailable")).toBeTruthy();
       expect(screen.getByText(code === "HOST_PROTOCOL_MISMATCH"
@@ -1304,7 +1304,7 @@ test.each([
       expect(projectReads).toBe(settledReads);
       expect(settledReads).toBeGreaterThan(0);
       expect(settledReads).toBeLessThanOrEqual(4);
-      expect(screen.queryByText("Sample operation failed")).toBeNull();
+      expect(screen.queryByText("Creator could not change this sound.")).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -1354,7 +1354,7 @@ test.each(["project", "sample"] as const)(
       await flushAsyncTurns();
 
       expect(screen.getByText(
-        "Sample was saved, but current Project truth could not be refreshed",
+        "The sound was saved, but Creator could not show the latest Project.",
       )).toBeTruthy();
       expect(screen.getByText(/^The audio engine stopped/)).toBeTruthy();
       expect(fixture.mutationCount).toBe(1);
@@ -1795,7 +1795,10 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
     })]},
   });
 
-  await screen.findByText(/the source container is not supported/);
+  await screen.findByText(/This type of audio file is not supported\. Choose a WAV, MP3, M4A\/AAC or FLAC file\./, {selector: "[role=alert]"});
+  // The resource token and limit stay in diagnostics, out of the alert.
+  expect(within(screen.getByRole("region", {name: "Developer diagnostics", hidden: true}))
+    .getByText("Read Sample source")).toBeTruthy();
   expect(screen.getByText("Pad A2", {selector: ".selected-sample strong"})).toBeTruthy();
   expect(screen.queryByText("private-source.mp3")).toBeNull();
   expect(screen.queryByText("/private/opfs")).toBeNull();
@@ -1804,7 +1807,7 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
     type: "audio/wav",
   }));
   await waitFor(() => expect(importCount).toBe(0));
-  expect(screen.getByText(/the source container is not supported/)).toBeTruthy();
+  expect(screen.getByText(/This type of audio file is not supported\. Choose a WAV, MP3, M4A\/AAC or FLAC file\./, {selector: "[role=alert]"})).toBeTruthy();
   expect(screen.queryByText("second-private.wav")).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
   expect(revisionCell()?.textContent).toBe("3");
@@ -2952,7 +2955,14 @@ test("Delete failure remains visible and does not project an empty Pad", async (
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
   await userEvent.click(screen.getByRole("button", {name: "Delete Pad A1"}));
-  await screen.findByText("Sample storage operation failed");
+  await screen.findByText("Creator could not save the sound on this device.", {selector: "[role=alert] p"});
+  // #1680: the alert names no code; Developer diagnostics keeps it.
+  expect(screen.getByText("Creator could not save the sound on this device.", {selector: "[role=alert] p"})
+    .closest("[role=alert]")?.textContent).not.toContain("IO_ERROR");
+  await userEvent.click(screen.getByText(/^Developer diagnostics \(\d+\)$/));
+  const deleteLog = within(screen.getByRole("region", {name: "Developer diagnostics"}));
+  expect(deleteLog.getByText("Delete Pad")).toBeTruthy();
+  expect(deleteLog.getByText("IO_ERROR")).toBeTruthy();
   expect(screen.getByText("Asset 33333333")).toBeTruthy();
   expect(screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"})).toBeTruthy();
   expect(fixture.revision).toBe(3);
@@ -3024,7 +3034,7 @@ test.each(PRE_STOP_MUTATIONS)("%s with audio stopped commits without a Runtime s
   await screen.findByText("Asset 33333333");
   await performPadMutation(kind, container);
   await waitFor(() => expect(order).toEqual([kind]));
-  expect(screen.queryByText("Sample operation is unavailable")).toBeNull();
+  expect(screen.queryByText("That can't be done right now.")).toBeNull();
 });
 
 test.each(PRE_STOP_MUTATIONS)("%s with audio running stops the voice before committing", async (kind) => {
