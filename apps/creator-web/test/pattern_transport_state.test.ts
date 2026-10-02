@@ -18,6 +18,8 @@ const status = (overrides: Partial<PatternTransportStatus> = {}): PatternTranspo
   runtimeGeneration: 1,
   transportEpoch: 1,
   originFrame: 0,
+  runtimeFrame: 0,
+  observedAtMilliseconds: 0,
   commandId: "command-1",
   publicationPending: false,
   error: null,

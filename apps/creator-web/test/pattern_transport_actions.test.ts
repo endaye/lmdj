@@ -17,6 +17,8 @@ const status: PatternTransportStatus = {
   runtimeGeneration: 1,
   transportEpoch: 2,
   originFrame: 96_000,
+  runtimeFrame: 96_000,
+  observedAtMilliseconds: 0,
   commandId: "command-1",
   publicationPending: false,
   error: null,

@@ -6953,8 +6953,8 @@ Json pattern_transport_inspect(
       runtime.dispatch(
           "pattern.transport.inspect", {{"session_id", session_id}}, {}),
       {"engaged", "playing", "recording", "phase", "runtime_generation",
-       "transport_epoch", "origin_frame", "command_id", "publication_pending",
-       "error"});
+       "transport_epoch", "origin_frame", "runtime_frame", "command_id",
+       "publication_pending", "error"});
 }
 
 // Each inspection turn drives one bounded continuation step; a render between
@@ -7037,6 +7037,21 @@ bool render_grid_frames(RealtimeEngine& engine, std::uint64_t frames) {
         [](float value) { return value != 0; });
   }
   return audible;
+}
+
+// #1671: a Host places the playhead from the frame the status was read at,
+// not from when it happened to look, so the status carries that frame.
+void test_pattern_transport_status_reports_the_rendered_frame() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  play_grid_transport(*runtime, 9660);
+  static_cast<void>(render_grid_frames(runtime->engine(), 4'800));
+  const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  const auto rendered = runtime->engine().telemetry().rendered_frames;
+  LMDJ_CHECK(status.at("runtime_frame").get<std::uint64_t>() == rendered);
+  LMDJ_CHECK(status.at("runtime_frame").get<std::uint64_t>() >=
+             status.at("origin_frame").get<std::uint64_t>() + 4'800);
 }
 
 void test_pattern_events_edit_while_stopped_reaches_the_next_play() {
@@ -8394,6 +8409,7 @@ int main() {
     test_authoring_history_import_roundtrip_and_reopen();
     test_authoring_history_restores_pattern_and_parameters();
     test_pad_delete_stops_voice_preserves_rhythm_and_roundtrips_history();
+    test_pattern_transport_status_reports_the_rendered_frame();
     test_pattern_events_edit_while_stopped_reaches_the_next_play();
     test_pattern_events_edit_while_playing_swaps_the_pattern_in_place();
     test_pattern_events_edit_of_another_pattern_publishes_nothing();

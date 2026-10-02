@@ -3422,6 +3422,7 @@ function createRuntimeSessionController(options = {}) {
         "runtime_generation",
         "transport_epoch",
         "origin_frame",
+        "runtime_frame",
         "command_id",
         "publication_pending",
         "error",
@@ -3433,6 +3434,7 @@ function createRuntimeSessionController(options = {}) {
       !isUnsignedInteger(value.runtime_generation) ||
       !isUnsignedInteger(value.transport_epoch) ||
       !isUnsignedInteger(value.origin_frame) ||
+      !isUnsignedInteger(value.runtime_frame) ||
       (value.command_id !== null && !UUID_PATTERN.test(value.command_id)) ||
       typeof value.publication_pending !== "boolean" ||
       (value.error !== null &&
@@ -3454,6 +3456,11 @@ function createRuntimeSessionController(options = {}) {
       runtimeGeneration: value.runtime_generation,
       transportEpoch: value.transport_epoch,
       originFrame: value.origin_frame,
+      // The Engine's rendered frame when the Host read the status, and when
+      // this Session received it, on the same monotonic clock a Host's
+      // animation frames use.
+      runtimeFrame: value.runtime_frame,
+      observedAtMilliseconds: monotonicNow(),
       commandId: value.command_id,
       publicationPending: value.publication_pending,
       error: value.error === null
