@@ -1,3 +1,4 @@
+import {NO_ROOM_MESSAGE} from "../state/error_messages";
 import {useEffect, useMemo, useState} from "react";
 
 import type {DecodedLongSource} from "../ingest/long_source_ingest";
@@ -141,7 +142,7 @@ export function LongSourceEditor({
         </p>
         {maximumFrames < 1 ? (
           <p role="alert">
-            why: no prepared-PCM quota remains; remedy: free a Pad or choose another Bank.
+            {NO_ROOM_MESSAGE}
           </p>
         ) : (
           <>

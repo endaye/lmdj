@@ -1,3 +1,4 @@
+import {userMessage} from "../state/error_messages";
 import {useRef, type ChangeEvent} from "react";
 
 import type {
@@ -44,8 +45,10 @@ export function duplicateRefusalMessage(code: string): string {
       return "Duplicate refused: the new identity is already in use. Try again.";
     case "IO_ERROR":
       return "Duplicate failed: local storage could not hold the copy.";
-    default:
-      return `Duplicate failed (${/^[A-Z0-9_]{1,64}$/.test(code) ? code : "UNKNOWN_ERROR"}).`;
+    default: {
+      const {message, nextStep} = userMessage(code);
+      return `Duplicate failed: ${message} ${nextStep}`;
+    }
   }
 }
 

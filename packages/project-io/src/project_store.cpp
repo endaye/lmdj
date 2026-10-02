@@ -456,9 +456,8 @@ nlohmann::json pattern_json(const domain::Pattern& pattern) {
 // The load path compares a replayed state against the head checkpoint at
 // whatever level that checkpoint declares, including a level an older Build
 // wrote, so the Contract decision does not belong here.
-domain::ProjectState canonical_projection(
-    const domain::ProjectState& state) {
-  auto projected = state;
+// In place, so a caller that owns the state pays no ProjectState copy (#1771).
+void canonicalize(domain::ProjectState& projected) {
   if (projected.contract == domain::ProjectContract::v1 ||
       projected.contract == domain::ProjectContract::v2) {
     projected.quantize_enabled = true;
@@ -473,6 +472,12 @@ domain::ProjectState canonical_projection(
     performance.events =
         domain::canonical_performance_events(performance.events);
   }
+}
+
+domain::ProjectState canonical_projection(
+    const domain::ProjectState& state) {
+  auto projected = state;
+  canonicalize(projected);
   return projected;
 }
 
@@ -480,10 +485,15 @@ domain::ProjectState canonical_projection(
 // Project's Contract level never has to be inferred from its command history.
 // An existing v3/v4 Project retains its Contract on load and is promoted to v5 the
 // first time it is persisted; nothing is rewritten merely by opening it.
+void persist_in_place(domain::ProjectState& state) {
+  canonicalize(state);
+  state.contract = domain::ProjectContract::v5;
+}
+
 domain::ProjectState persisted_projection(
     const domain::ProjectState& state) {
-  auto projected = canonical_projection(state);
-  projected.contract = domain::ProjectContract::v5;
+  auto projected = state;
+  persist_in_place(projected);
   return projected;
 }
 
@@ -1026,7 +1036,20 @@ foundation::Result<domain::Performance> parse_performance(
   }
 }
 
-foundation::Result<domain::ProjectState> parse_project(
+// Creates a Project on the heap. The create_project result lives only in
+// this short frame, never in parse_project's (#1771).
+[[gnu::noinline]] foundation::Result<std::unique_ptr<domain::ProjectState>>
+create_heap_project(foundation::ProjectId id, std::uint16_t bpm) {
+  auto created = domain::create_project(std::move(id), bpm);
+  if (!created.has_value()) {
+    return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
+        created.error());
+  }
+  return foundation::Result<std::unique_ptr<domain::ProjectState>>::success(
+      std::make_unique<domain::ProjectState>(std::move(created.value())));
+}
+
+foundation::Result<std::unique_ptr<domain::ProjectState>> parse_project(
     const nlohmann::json& input,
     const std::filesystem::path& path) {
   try {
@@ -1102,7 +1125,7 @@ foundation::Result<domain::ProjectState> parse_project(
         !nonnegative_integer(input.at("revision")) ||
         !nonnegative_integer(input.at("bpm")) ||
         !input.at("banks").is_array()) {
-      return foundation::Result<domain::ProjectState>::failure(
+      return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
           invalid_project("project checkpoint contract is invalid", path));
     }
     const auto bpm = unsigned_integer_value(input.at("bpm"));
@@ -1110,20 +1133,21 @@ foundation::Result<domain::ProjectState> parse_project(
         unsigned_integer_value(input.at("revision"));
     if (!bpm.has_value() || *bpm > 240 ||
         !revision.has_value()) {
-      return foundation::Result<domain::ProjectState>::failure(
+      return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
           invalid_project("project metadata is invalid", path));
     }
-    auto created = domain::create_project(
+    auto created = create_heap_project(
         foundation::ProjectId{
             input.at("project_id").get<std::string>()},
         static_cast<std::uint16_t>(*bpm));
     if (!created.has_value()) {
-      return foundation::Result<domain::ProjectState>::failure(
+      return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
           invalid_project("project metadata is invalid", path));
     }
-    // Fill the created state in place: a second ProjectState here would cost
-    // another 6 KiB of Web stack on every checkpoint parse.
-    auto& state = created.value();
+    // Fill the created state in place on the heap: a ProjectState in this
+    // frame would sit under every checkpoint parse, and under the re-parse
+    // that proves each commit round-trips (#1720, #1771).
+    auto& state = *created.value();
     state.contract = is_v5 ? domain::ProjectContract::v5
                            : is_v4 ? domain::ProjectContract::v4
                            : domain::ProjectContract::v3;
@@ -1137,7 +1161,7 @@ foundation::Result<domain::ProjectState> parse_project(
           !swing.has_value() ||
           *swing < domain::kSwingPercentMin ||
           *swing > domain::kSwingPercentMax) {
-        return foundation::Result<domain::ProjectState>::failure(
+        return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
             invalid_project("project sequence settings are invalid", path));
       }
       state.quantize_enabled = input.at("sequence_settings")
@@ -1148,7 +1172,7 @@ foundation::Result<domain::ProjectState> parse_project(
 
     const auto& banks = input.at("banks");
     if (banks.size() != state.banks.size()) {
-      return foundation::Result<domain::ProjectState>::failure(
+      return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
           invalid_project("project bank count is invalid", path));
     }
     std::array<bool, 4> seen_banks{};
@@ -1156,7 +1180,7 @@ foundation::Result<domain::ProjectState> parse_project(
       if (!exact_object_keys(encoded_bank, {"bank", "pads"}) ||
           !nonnegative_integer(encoded_bank.at("bank")) ||
           !encoded_bank.at("pads").is_array()) {
-        return foundation::Result<domain::ProjectState>::failure(
+        return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
             invalid_project("project bank shape is invalid", path));
       }
       const auto bank =
@@ -1165,7 +1189,7 @@ foundation::Result<domain::ProjectState> parse_project(
           *bank >= state.banks.size() || seen_banks.at(*bank) ||
           encoded_bank.at("pads").size() !=
               state.banks.at(*bank).size()) {
-        return foundation::Result<domain::ProjectState>::failure(
+        return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
             invalid_project("project bank layout is invalid", path));
       }
       seen_banks.at(*bank) = true;
@@ -1178,7 +1202,7 @@ foundation::Result<domain::ProjectState> parse_project(
                       encoded_pad, {"asset_id", "pad", "playback"});
         if (!valid_pad_shape ||
             !nonnegative_integer(encoded_pad.at("pad"))) {
-          return foundation::Result<domain::ProjectState>::failure(
+          return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
               invalid_project("project pad shape is invalid", path));
         }
         const auto pad =
@@ -1186,7 +1210,7 @@ foundation::Result<domain::ProjectState> parse_project(
         if (!pad.has_value() ||
             *pad >= state.banks.at(*bank).size() ||
             seen_pads.at(*pad)) {
-          return foundation::Result<domain::ProjectState>::failure(
+          return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
               invalid_project("project pad layout is invalid", path));
         }
         seen_pads.at(*pad) = true;
@@ -1197,7 +1221,7 @@ foundation::Result<domain::ProjectState> parse_project(
           const auto asset_id =
               encoded_pad.at("asset_id").get<std::string>();
           if (!domain::is_valid_uuid(asset_id)) {
-            return foundation::Result<domain::ProjectState>::failure(
+            return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
                 invalid_project(
                     "project pad asset reference is invalid",
                     path));
@@ -1211,7 +1235,7 @@ foundation::Result<domain::ProjectState> parse_project(
               path,
               is_v5 ? PlaybackKeys::with_parity : PlaybackKeys::base_only);
           if (!playback.has_value()) {
-            return foundation::Result<domain::ProjectState>::failure(
+            return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
                 playback.error());
           }
           state.banks.at(*bank).at(*pad).playback = playback.value();
@@ -1274,7 +1298,7 @@ foundation::Result<domain::ProjectState> parse_project(
                 : exact_object_keys(encoded, {"artifact", "asset_id"});
         if (!valid_asset_shape ||
             !encoded.at("asset_id").is_string()) {
-          return foundation::Result<domain::ProjectState>::failure(
+          return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
               invalid_project("project asset entry is invalid", path));
         }
         std::optional<domain::AssetLineage> lineage;
@@ -1282,7 +1306,7 @@ foundation::Result<domain::ProjectState> parse_project(
           auto parsed_lineage =
               domain::asset_lineage_from_json(encoded.at("lineage"));
           if (!parsed_lineage.has_value()) {
-            return foundation::Result<domain::ProjectState>::failure(
+            return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
                 invalid_project(
                     "project Asset Lineage is invalid",
                     path,
@@ -1290,7 +1314,7 @@ foundation::Result<domain::ProjectState> parse_project(
           }
           if (!is_v5 && domain::asset_lineage_derivation_kind(parsed_lineage.value()) ==
                             domain::AssetLineageDerivationKind::capability_adoption) {
-            return foundation::Result<domain::ProjectState>::failure(
+            return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
                 invalid_project("capability adoption requires Project v5", path));
           }
           lineage = std::move(parsed_lineage.value());
@@ -1301,7 +1325,7 @@ foundation::Result<domain::ProjectState> parse_project(
             value,
             std::move(lineage));
         if (!parsed.has_value()) {
-          return foundation::Result<domain::ProjectState>::failure(
+          return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
               parsed.error());
         }
       }
@@ -1311,7 +1335,7 @@ foundation::Result<domain::ProjectState> parse_project(
         auto parsed = parse_asset_entry(
             iterator.key(), iterator.value(), std::nullopt);
         if (!parsed.has_value()) {
-          return foundation::Result<domain::ProjectState>::failure(
+          return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
               parsed.error());
         }
       }
@@ -1320,7 +1344,7 @@ foundation::Result<domain::ProjectState> parse_project(
       for (const auto& slot : bank) {
         if (slot.asset_id.has_value() &&
             !state.assets.contains(*slot.asset_id)) {
-          return foundation::Result<domain::ProjectState>::failure(
+          return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
               invalid_project(
                   "project pad references a missing asset",
                   path));
@@ -1333,7 +1357,7 @@ foundation::Result<domain::ProjectState> parse_project(
         if (!exact_object_keys(
                 encoded, {"bars", "events", "pattern_id"}) ||
             !encoded.at("pattern_id").is_string()) {
-          return foundation::Result<domain::ProjectState>::failure(
+          return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
               invalid_project("project pattern entry is invalid", path));
         }
         auto value = encoded;
@@ -1342,7 +1366,7 @@ foundation::Result<domain::ProjectState> parse_project(
         auto pattern = parse_pattern(value, path);
         if (!pattern.has_value() ||
             !state.patterns.emplace(pattern.value().id, pattern.value()).second) {
-          return foundation::Result<domain::ProjectState>::failure(
+          return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
               pattern.has_value()
                   ? invalid_project("project pattern id is duplicated", path)
                   : pattern.error());
@@ -1355,7 +1379,7 @@ foundation::Result<domain::ProjectState> parse_project(
         auto capture = validate_retired_capture(
             iterator.key(), iterator.value(), path);
         if (!capture.has_value()) {
-          return foundation::Result<domain::ProjectState>::failure(
+          return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
               capture.error());
         }
       }
@@ -1364,7 +1388,7 @@ foundation::Result<domain::ProjectState> parse_project(
         auto pattern = parse_project_pattern(
             iterator.key(), iterator.value(), path);
         if (!pattern.has_value()) {
-          return foundation::Result<domain::ProjectState>::failure(
+          return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
               pattern.error());
         }
         state.patterns.emplace(pattern.value().id, pattern.value());
@@ -1373,7 +1397,7 @@ foundation::Result<domain::ProjectState> parse_project(
     if (is_v4) {
       const auto& encoded_slots = input.at("pattern_slots");
       if (encoded_slots.size() != domain::kPatternSlotCount) {
-        return foundation::Result<domain::ProjectState>::failure(
+        return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
             invalid_project("project Pattern slot count is invalid", path));
       }
       for (std::size_t slot = 0; slot < encoded_slots.size(); ++slot) {
@@ -1382,7 +1406,7 @@ foundation::Result<domain::ProjectState> parse_project(
           continue;
         }
         if (!encoded.is_string()) {
-          return foundation::Result<domain::ProjectState>::failure(
+          return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
               invalid_project("project Pattern slot is invalid", path));
         }
         state.pattern_slots.at(slot) = foundation::PatternId{
@@ -1390,7 +1414,7 @@ foundation::Result<domain::ProjectState> parse_project(
       }
       const auto slots_valid = domain::validate_pattern_slots(state);
       if (!slots_valid.has_value()) {
-        return foundation::Result<domain::ProjectState>::failure(
+        return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
             invalid_project(
                 "project Pattern slots are invalid",
                 path,
@@ -1402,7 +1426,7 @@ foundation::Result<domain::ProjectState> parse_project(
             !state.performances
                  .emplace(performance.value().id, performance.value())
                  .second) {
-          return foundation::Result<domain::ProjectState>::failure(
+          return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
               performance.has_value()
                   ? invalid_project(
                         "project Performance id is duplicated", path)
@@ -1410,9 +1434,9 @@ foundation::Result<domain::ProjectState> parse_project(
         }
       }
     }
-    return foundation::Result<domain::ProjectState>::success(std::move(state));
+    return foundation::Result<std::unique_ptr<domain::ProjectState>>::success(std::move(created.value()));
   } catch (const std::exception& exception) {
-    return foundation::Result<domain::ProjectState>::failure(
+    return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
         invalid_project(
             "project checkpoint could not be parsed",
             path,
@@ -2672,7 +2696,7 @@ read_checkpoint(
     *json_out = std::move(json.value());
   }
   return foundation::Result<std::unique_ptr<domain::ProjectState>>::success(
-      std::make_unique<domain::ProjectState>(std::move(parsed.value())));
+      std::move(parsed.value()));
 }
 
 // Replays one recorded transaction onto the loaded Project. Its JSON, command
@@ -3490,15 +3514,15 @@ std::pair<std::string, std::string> history_description(
   }, command);
 }
 
-// Promotes the state being committed to the persisted Contract level and
-// proves it round-trips as Project Truth. The projection and the re-parsed
-// copy live only in this frame, not across commit_loaded's (#1720).
+// Promotes the state being committed to the persisted Contract level, in
+// place, and proves it round-trips as Project Truth. The re-parsed copy is on
+// the heap, so no ProjectState-sized value sits in this frame (#1720, #1771).
 [[gnu::noinline]] bool promote_for_persist(
     domain::ProjectState& state,
     const std::filesystem::path& manifest_path) {
-  state = persisted_projection(state);
+  persist_in_place(state);
   const auto validated = parse_project(project_json(state), manifest_path);
-  return validated.has_value() && validated.value() == state;
+  return validated.has_value() && *validated.value() == state;
 }
 
 foundation::Result<domain::AppliedCommand> commit_loaded(
@@ -4491,7 +4515,7 @@ foundation::Result<void> ProjectStore::create(
   const auto persisted_initial = persisted_projection(initial);
   const auto encoded = project_json(persisted_initial);
   const auto validated = parse_project(encoded, bundle);
-  if (!validated.has_value() || validated.value() != persisted_initial) {
+  if (!validated.has_value() || *validated.value() != persisted_initial) {
     return foundation::Result<void>::failure(
         Error{
             ErrorCode::invalid_argument,
@@ -4554,7 +4578,7 @@ foundation::Result<void> ProjectStore::create(
     auto existing_state =
         parse_project(existing_json.value(), checkpoint_final);
     if (!existing_state.has_value() ||
-        existing_state.value() != persisted_initial ||
+        *existing_state.value() != persisted_initial ||
         existing_bytes.value() != checkpoint_bytes) {
       return foundation::Result<void>::failure(
           invalid_project(
@@ -6955,14 +6979,12 @@ ProjectStore::import_artifact_with_identity(
               "persisted ImportAsset receipt is missing",
               bundle / "manifest.json"));
     }
-    return foundation::Result<ImportArtifactExecution>::success(
-        ImportArtifactExecution{
-            *import,
-            domain::AppliedCommand{
-                std::move(loaded.value()->state),
-                receipt->second.event,
-                true,
-            },
+    return foundation::Result<ImportArtifactExecution>::emplace_success(
+        *import,
+        domain::AppliedCommand{
+            std::move(loaded.value()->state),
+            receipt->second.event,
+            true,
         });
   }
   const auto described =
@@ -7000,11 +7022,8 @@ ProjectStore::import_artifact_with_identity(
             "persisted import outcome has the wrong command type",
             bundle / "manifest.json"));
   }
-  return foundation::Result<ImportArtifactExecution>::success(
-      ImportArtifactExecution{
-          *import,
-          std::move(outcome.value()),
-      });
+  return foundation::Result<ImportArtifactExecution>::emplace_success(
+      *import, std::move(outcome.value()));
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact(

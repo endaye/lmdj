@@ -228,12 +228,10 @@ export function PerformSurface(props: PerformSurfaceProps) {
         </div>
       </dl>
       <FxSliderBank order={PERFORMANCE_FX_ORDER} values={state.fx}
-        disabled={!performing}
         onEngage={(fx, value) => controller.engageFx(fx, value)}
         onMove={(gestureId, fx, value) => controller.moveFx(gestureId, fx, value)}
         onRelease={(gestureId, fx) => controller.releaseFx(gestureId, fx)} />
       <button className="perform-hold" type="button" aria-pressed={state.hold}
-        disabled={!performing}
         onClick={() => controller.toggleHold()}>HOLD</button>
       <RecordingPanel state={state} canRecord={controller.canRecord()}
         onRecord={() => { void controller.record(); }}

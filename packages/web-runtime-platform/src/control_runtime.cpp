@@ -107,6 +107,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
       operation == "sequence.record.status" ||
       operation == "sequence.recovery.list" ||
       operation == "performance.record.event" ||
+      operation == "performance.fx.gesture" ||
       operation == "performance.record.launch-request" ||
       operation == "performance.record.status" ||
       operation == "performance.recovery.list" ||
@@ -344,6 +345,10 @@ void validate_performance_artifact(const Json& value) {
   (void)safe_unsigned_field(value, "byte_length");
 }
 
+constexpr std::array<std::string_view, 8> kPerformanceFxNames{
+    "filter", "delay", "reverb", "stutter",
+    "gate", "reverse", "crush", "cutter"};
+
 void validate_performance_gesture(const Json& event) {
   require(event.is_object() && event.contains("kind"));
   const auto& kind = string_field(event, "kind");
@@ -362,15 +367,13 @@ void validate_performance_gesture(const Json& event) {
     (void)safe_unsigned_field(event, "slot", 63U);
     return;
   }
-  static constexpr std::array<std::string_view, 8> effects{
-      "filter", "delay", "reverb", "stutter",
-      "gate", "reverse", "crush", "cutter"};
   if (kind == "fx_engage" || kind == "fx_move") {
     require(exact_keys(
         event, {"kind", "gesture_id", "fx", "value"}));
     (void)uuid_field(event, "gesture_id");
     const auto& effect = string_field(event, "fx");
-    require(std::find(effects.begin(), effects.end(), effect) != effects.end());
+    require(std::find(kPerformanceFxNames.begin(), kPerformanceFxNames.end(),
+                      effect) != kPerformanceFxNames.end());
     (void)safe_unsigned_field(event, "value", 1'000U);
     return;
   }
@@ -378,7 +381,34 @@ void validate_performance_gesture(const Json& event) {
     require(exact_keys(event, {"kind", "gesture_id", "fx"}));
     (void)uuid_field(event, "gesture_id");
     const auto& effect = string_field(event, "fx");
-    require(std::find(effects.begin(), effects.end(), effect) != effects.end());
+    require(std::find(kPerformanceFxNames.begin(), kPerformanceFxNames.end(),
+                      effect) != kPerformanceFxNames.end());
+    return;
+  }
+  require(
+      (kind == "hold_on" || kind == "hold_off") &&
+      exact_keys(event, {"kind"}));
+}
+
+// Session-free live FX gestures (#1674): the same gesture vocabulary as a
+// journaled recording event, minus the gesture identity the recording journal
+// tracks. Applied to the master bus only; journaled nowhere.
+void validate_performance_fx_gesture_event(const Json& event) {
+  require(event.is_object() && event.contains("kind"));
+  const auto& kind = string_field(event, "kind");
+  if (kind == "fx_engage" || kind == "fx_move") {
+    require(exact_keys(event, {"kind", "fx", "value"}));
+    const auto& effect = string_field(event, "fx");
+    require(std::find(kPerformanceFxNames.begin(), kPerformanceFxNames.end(),
+                      effect) != kPerformanceFxNames.end());
+    (void)safe_unsigned_field(event, "value", 1'000U);
+    return;
+  }
+  if (kind == "fx_release") {
+    require(exact_keys(event, {"kind", "fx"}));
+    const auto& effect = string_field(event, "fx");
+    require(std::find(kPerformanceFxNames.begin(), kPerformanceFxNames.end(),
+                      effect) != kPerformanceFxNames.end());
     return;
   }
   require(
@@ -3005,6 +3035,18 @@ Json ControlRuntime::dispatch(
           normalized.at("result")["played"] = played;
         }
         return normalized;
+      }
+      return normalized_facade_success(response);
+    }
+    if (operation == "performance.fx.gesture") {
+      require(sidecar.empty());
+      require(exact_keys(payload, {"event"}));
+      validate_performance_fx_gesture_event(payload.at("event"));
+      auto request = payload;
+      request["operation"] = operation;
+      const auto response = impl_->application.command(request);
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
       }
       return normalized_facade_success(response);
     }

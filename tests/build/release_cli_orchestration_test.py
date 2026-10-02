@@ -458,11 +458,26 @@ class ReleaseEntryPointTest(unittest.TestCase):
         self.assertIn("only a published release", report)
         self.assertEqual(self.request_ids(), [request_id])
 
-    def test_retire_refuses_a_request_with_an_outstanding_intent(self):
+    def test_a_published_supersession_retires_over_an_outstanding_intent(self):
+        # 1.0.66.0: the driver's publication intent stayed outstanding while the
+        # Build was published through the per-command path. The published,
+        # audited Build settles it; the intent stays in the retained record.
         self.carriers["publication"].fail_after_write = True
         self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 2)
         (request_id,) = self.request_ids()
         code, report, _ = self.retire(request_id, "lmdj-v1.0.61.0")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(self.request_ids(), [])
+        with RequestJournal(self.journal(), writable=False) as journal:
+            retained = journal.read_retirement(request_id)
+        self.assertEqual(retained["original"]["transitions"][-1]["status"], "intent")
+
+    def test_an_unreleased_supersession_refuses_an_outstanding_intent(self):
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 2)
+        (request_id,) = self.request_ids()
+        code, report, _ = self.retire_unreleased(request_id, "1.0.62.0", reserved="1.0.61.0",
+                                                 on_main="1.0.62.0")
         self.assertEqual(code, 2)
         self.assertIn("outstanding intent", report)
         self.assertEqual(self.request_ids(), [request_id])
