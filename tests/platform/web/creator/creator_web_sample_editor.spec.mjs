@@ -736,13 +736,17 @@ test("Sample Editor WebKit capability boundary is explicit, private, and non-phy
   await expect(alert).toContainText("This browser cannot run Creator.");
   const publicText = await alert.textContent();
   expect(publicText).not.toMatch(/UNSUPPORTED_WEB_RUNTIME|HOST_PROTOCOL_MISMATCH|\/Users\/|file:\/\/|\.lmdj|\.wav/i);
+  await openCreatorSystem(page);
+  await expect(page.getByRole("region", {name: "System", exact: true}))
+    .toBeVisible();
   await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
   await expect(page.getByRole("region", {name: "Developer diagnostics"}))
     .toContainText("UNSUPPORTED_WEB_RUNTIME");
   expect(await page.evaluate(() => window.lmdjWebRuntimeHost === undefined)).toBe(true);
   await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
-  await openCreatorSystem(page);
   await expect(page.getByRole("button", {name: "Export report"})).toBeDisabled();
+  await page.getByRole("button", {name: "Back to music", exact: true}).click();
+  await expect(alert).toContainText("This browser cannot run Creator.");
 });
 
 test("re-importing a diverged Project Bundle recovers through Open local Project without a reload", async ({page, browserName}) => {
