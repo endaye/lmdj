@@ -672,6 +672,11 @@ struct FakeCoordinator final {
         ++self.acknowledgement_polls >= self.acknowledgement_delay_polls) {
       self.acknowledged = self.begin_acknowledgement;
     }
+    if (self.render_on_acknowledgement_poll && self.engine != nullptr) {
+      std::array<float, 128> left{};
+      std::array<float, 128> right{};
+      self.engine->render(left.data(), right.data(), 128);
+    }
     if (self.observe_engine_generation && self.engine != nullptr) {
       self.acknowledged =
           self.engine->bank_telemetry().current_generation;
@@ -697,6 +702,7 @@ struct FakeCoordinator final {
   bool timeout = false;
   bool called = false;
   bool render_during_await = false;
+  bool render_on_acknowledgement_poll = false;
   bool observe_engine_generation = false;
   bool observed_capture_idle = false;
   bool observed_engine_running = false;
@@ -7186,11 +7192,13 @@ void test_a_pad_delete_during_a_replay_stops_only_the_live_voice() {
   check_success(runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 127}}, {}));
   static_cast<void>(render_grid_frames(engine, 128));
   LMDJ_CHECK(engine.telemetry().active_voices == 2);
-  {
-    ContinuousAudioDriver audio(engine);
-    check_success(runtime->dispatch("pad.delete", {{"command_id", uuid(9685)},
-        {"expected_revision", revision}, {"slot", slot(0, 0)}}, {}));
-  }
+  // The Bank's acknowledgement needs audio. A continuous driver renders for
+  // as long as the delete takes, which under ASan outlasts the replay's hit,
+  // so each acknowledgement poll renders one callback instead.
+  coordinator.render_on_acknowledgement_poll = true;
+  check_success(runtime->dispatch("pad.delete", {{"command_id", uuid(9685)},
+      {"expected_revision", revision}, {"slot", slot(0, 0)}}, {}));
+  coordinator.render_on_acknowledgement_poll = false;
   static_cast<void>(render_grid_frames(engine, 256));
   // The live voice declicked out; the replay's held hit keeps sounding.
   LMDJ_CHECK(engine.telemetry().active_voices == 1);
