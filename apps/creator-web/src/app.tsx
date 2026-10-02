@@ -3,7 +3,7 @@ import {CREATOR_DEFAULT_SOUND_SET} from "../../../products/lmdj/creator-defaults
 import {claimDefaultSeed, readDefaultSeed, type DefaultSeed} from "./state/default_seed";
 import {createDefaultSeedController} from "./runtime/default_seed_controller";
 import type {CreatorSlotSoundSetRuntimeSession} from "./runtime/runtime_types";
-import {AuthoringHistoryControls} from "./components/authoring_history";
+import {useAuthoringHistory} from "./components/authoring_history";
 import {CandidateSurface, isCandidateSession} from "./components/candidate_surface";
 import {
   useCallback,
@@ -18,6 +18,8 @@ import {
   appendDiagnostic, diagnosticRecord, DiagnosticsLog, type DiagnosticRecord,
 } from "./components/diagnostics_log";
 import {ErrorPanel} from "./components/error_panel";
+import {DiagnosticsProvider} from "./runtime/diagnostics_context";
+import {PUBLIC_ERROR_CODES, sampleMessage} from "./state/error_messages";
 import {RecoveryPrompt, type RecoveryCounts} from "./components/recovery_prompt";
 import {
   TakenOverPanel,
@@ -154,6 +156,16 @@ interface WorkspaceProps {
   ) => () => void;
 }
 
+// Protocol details are JSON, but a malformed exception must not break error
+// handling, as in diagnosticRecord: unserializable details key as the code.
+function runtimeErrorDetailsKey(details: Readonly<Record<string, unknown>> | undefined): string {
+  try {
+    return JSON.stringify(details ?? {});
+  } catch {
+    return "";
+  }
+}
+
 type BusyRetry =
   | {kind: "list"}
   | {kind: "open"; project: LocalProjectSummary};
@@ -167,31 +179,6 @@ interface SampleRetryToken {
   }>;
 }
 
-const SAMPLE_ERROR_CODES = new Set([
-  "INVALID_ARGUMENT",
-  "NOT_FOUND",
-  "REVISION_CONFLICT",
-  "DUPLICATE_ID",
-  "UNSUPPORTED_AUDIO",
-  "MISSING_ASSET",
-  "INVALID_PROJECT",
-  "COOK_FAILED",
-  "BANK_QUOTA_EXHAUSTED",
-  "PROJECT_QUOTA_EXHAUSTED",
-  "PROVIDER_NOT_FOUND",
-  "PROVIDER_FAILED",
-  "PERMISSION_DENIED",
-  "IO_ERROR",
-  "INTERNAL_ERROR",
-  "UNSUPPORTED_WEB_RUNTIME",
-  "PROJECT_BUSY",
-  "WEB_RUNTIME_RESOURCE_LIMIT",
-  "HOST_STATE_INVALID",
-  "HOST_TIMEOUT",
-  "HOST_RESTART_REQUIRED",
-  "HOST_PROTOCOL_MISMATCH",
-  "LOCAL_PROJECT_UNREADABLE",
-]);
 function errorDetails(error: unknown): Readonly<Record<string, unknown>> {
   const details = (error as TypedRuntimeError | null)?.details;
   return details !== null && typeof details === "object" && !Array.isArray(details)
@@ -319,6 +306,9 @@ function Workspace({
   const [inputControllerRevision, setInputControllerRevision] = useState(0);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyPerformPhase, setHistoryPerformPhase] = useState("idle");
+  // The rail's SHIFT modifier: toggled by its key, consumed by the ← / →
+  // history chord or by any other rail action.
+  const [railShift, setRailShift] = useState(false);
   const [capturePhase, setCapturePhase] = useState<CapturePhase>("idle");
   const [padCaptureState, setPadCaptureState] = useState<PadCaptureState | null>(null);
   const padCapture = useRef<ReturnType<typeof createPadCapture> | null>(null);
@@ -721,6 +711,25 @@ function Workspace({
       }
     }
   }, [runtimeHostState, runtimeRecoveryProbeReady]);
+
+  // Runtime boot and Host terminal errors reach the user only as the panel's
+  // message, so their code and details are recorded here (#1680). Each Host
+  // notification carries a fresh details object, so an error is identified
+  // by its code and details content and recorded once until it changes.
+  const runtimeErrorKey = runtimeErrorCode
+    ? `${runtimeErrorCode}:${runtimeErrorDetailsKey(runtimeErrorDetails)}`
+    : null;
+  const reportedRuntimeError = useRef<string | null>(null);
+  useEffect(() => {
+    if (runtimeErrorKey === reportedRuntimeError.current) return;
+    reportedRuntimeError.current = runtimeErrorKey;
+    if (!runtimeErrorCode) return;
+    reportFailure("Runtime", Object.assign(new Error(runtimeErrorCode), {
+      code: runtimeErrorCode,
+      details: runtimeErrorDetails ?? {},
+    }));
+    // The key captures the code and details content.
+  }, [runtimeErrorKey, reportFailure]);
 
   useEffect(() => {
     if (!runtimePhase) return;
@@ -1368,13 +1377,13 @@ function Workspace({
     } catch (error) {
       if (sampleRetryAction.current === token) {
         const candidate = reportFailure("Retry Sample preparation", error);
-        const code = SAMPLE_ERROR_CODES.has(candidate) ? candidate : "INTERNAL_ERROR";
+        const code = PUBLIC_ERROR_CODES.has(candidate) ? candidate : "INTERNAL_ERROR";
         dispatch({
           type: "sample-action",
           action: {
             type: "operation-failed",
             pending,
-            error: {code, message: "Sample operation failed"},
+            error: {code, message: sampleMessage(code).message},
           },
         });
       }
@@ -2014,6 +2023,7 @@ function Workspace({
   const selectMode = (mode: CreatorMode) => {
     setSystemOpen(false);
     inputController.current?.clearPressed();
+    setRailShift(false);
     // Normal navigation never stops the global Pattern transport; only the
     // separately owned performance recording leaves with its mode.
     if (activeModeRef.current === "perform" && mode !== "perform" &&
@@ -2028,6 +2038,7 @@ function Workspace({
   };
   const selectBank = (bank: typeof state.activeBank) => {
     inputController.current?.clearPressed();
+    setRailShift(false);
     dispatch({type: "bank-selected", bank});
     const current = stateRef.current;
     if (activeMode === "sample" && armedCaptureSlot === null &&
@@ -2065,33 +2076,39 @@ function Workspace({
     />
   );
 
+  const history = useAuthoringHistory({
+    session,
+    projectId: state.project.current?.projectId ?? null,
+    revision: state.project.current?.revision ?? null,
+    refreshKey: `${activeMode}:${sequence.phase}:${transport.status?.phase ?? "idle"}:${playing}:${recording}:${historyPerformPhase}`,
+    disabledReason: state.project.phase !== "ready" ? "Open a Project to use its history." :
+      state.runtime.phase !== "ready" ? "Wait for the audio session to become ready." :
+      state.transfer.phase !== "idle" || state.sample.pendingAction !== null ||
+      state.projectProjectionRefresh !== null ? "Wait for the current Project change to finish." :
+      !["idle", "permission-error"].includes(capturePhase) ? "Finish or discard the sound recording first." :
+      historyPerformPhase !== "idle" ? "Save or discard the Performance recording first." :
+      state.sample.draft !== null ? "Finish the parameter edit first." : "",
+    onBusy: setHistoryBusy,
+    onChanged: async () => {
+      const project = await refreshPerformProject();
+      sequenceAuthoringRevision.current = project.revision;
+      dispatchTransport({type: "revision", revision: project.revision});
+      if (sequenceRef.current.selectedPatternId !== null &&
+          !project.patterns.some(({patternId}) => patternId === sequenceRef.current.selectedPatternId)) {
+        dispatchSequence({type: "selected", patternId: project.patternId});
+      }
+      dispatch({type: "sample-action", action: {type: "draft-cancelled"}});
+      await refreshSequence();
+    },
+  });
+
   return (
+    <DiagnosticsProvider value={reportFailure}>
     <div className="hardware-workspace">
-        <AuthoringHistoryControls
-          session={session}
-          projectId={state.project.current?.projectId ?? null}
-          revision={state.project.current?.revision ?? null}
-          refreshKey={`${activeMode}:${sequence.phase}:${transport.status?.phase ?? "idle"}:${playing}:${recording}:${historyPerformPhase}`}
-          disabledReason={state.project.phase !== "ready" ? "Open a Project to use its history." :
-            state.runtime.phase !== "ready" ? "Wait for the audio session to become ready." :
-            state.transfer.phase !== "idle" || state.sample.pendingAction !== null ||
-            state.projectProjectionRefresh !== null ? "Wait for the current Project change to finish." :
-            !["idle", "permission-error"].includes(capturePhase) ? "Finish or discard the sound recording first." :
-            historyPerformPhase !== "idle" ? "Save or discard the Performance recording first." :
-            state.sample.draft !== null ? "Finish the parameter edit first." : ""}
-          onBusy={setHistoryBusy}
-          onChanged={async () => {
-            const project = await refreshPerformProject();
-            sequenceAuthoringRevision.current = project.revision;
-            dispatchTransport({type: "revision", revision: project.revision});
-            if (sequenceRef.current.selectedPatternId !== null &&
-                !project.patterns.some(({patternId}) => patternId === sequenceRef.current.selectedPatternId)) {
-              dispatchSequence({type: "selected", patternId: project.patternId});
-            }
-            dispatch({type: "sample-action", action: {type: "draft-cancelled"}});
-            await refreshSequence();
-          }}
-        />
+        {/* History status stays in the accessibility tree; rail lamps carry the visual state. */}
+        <div role="status" className="visually-hidden" data-testid="authoring-history-status">
+          {history.statusText}
+        </div>
         <div inert={historyBusy} className="creator-console-frame">
         <HardwareConsole
           physicalControls={
@@ -2109,6 +2126,7 @@ function Workspace({
               onSelectMode={selectMode}
               onSelectBank={selectBank}
               onRecord={(event) => {
+                setRailShift(false);
                 const project = stateRef.current.project.current;
                 const epoch = gestureEpoch.current;
                 const activation = activateAudio(event.nativeEvent);
@@ -2126,6 +2144,7 @@ function Workspace({
                 ["idle", "saved", "discarded"].includes(historyPerformPhase)}
               recording={recording}
               onPlayStop={(event) => {
+                setRailShift(false);
                 const project = stateRef.current.project.current;
                 const epoch = gestureEpoch.current;
                 const activation = activateAudio(event.nativeEvent);
@@ -2139,6 +2158,22 @@ function Workspace({
               }}
               playEnabled={transportReady && !transportBusy}
               playing={playing}
+              history={{
+                shifted: railShift,
+                onToggleShift: () => setRailShift((value) => !value),
+                undoAvailable: history.undoAvailable,
+                redoAvailable: history.redoAvailable,
+                onUndo: () => {
+                  setRailShift(false);
+                  history.undo();
+                },
+                onRedo: () => {
+                  setRailShift(false);
+                  history.redo();
+                },
+                undoTitle: history.undoTitle,
+                redoTitle: history.redoTitle,
+              }}
             />
           }
           overview={
@@ -2425,7 +2460,6 @@ function Workspace({
                   onClose={() => setRecoveryOffer(null)}
                 />
               )}
-
               <ErrorPanel
                 code={state.runtime.errorCode}
                 details={state.runtime.errorDetails}
@@ -2486,6 +2520,7 @@ function Workspace({
         />
         </div>
     </div>
+    </DiagnosticsProvider>
   );
 }
 

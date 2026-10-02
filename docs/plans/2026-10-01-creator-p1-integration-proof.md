@@ -3,7 +3,7 @@
 Relates to #1662, #1663, #1664 and #1665. Integrates the seven P1 Tasks with
 current main recovery, takeover, native remembered-Project, Web stack and site-shell fixes.
 The final allocation and exact changed files are declared in
-`2026-10-02-creator-p1-main-shell-candidate.md`; its clean source is followed by a
+`2026-10-02-creator-p1-shift-main-candidate.md`; its clean source is followed by a
 separate official immutable canary snapshot Task.
 
 ## Behavior and verification

@@ -132,7 +132,19 @@ test("default Bank A plays on the first native touch while the next object waits
     expect(blocked).toBe(true);
     expect(blobs).toHaveLength(2);
     release();
-    await expect(page.getByRole("button", {name:/^Pad A16 — assigned/})).toBeEnabled({timeout:120_000});
+    try {
+      await expect(page.getByRole("button", {name:/^Pad A16 — assigned/})).toBeEnabled({timeout:120_000});
+    } catch (error) {
+      const observed = await page.evaluate(() => ({
+        phase: document.querySelector('[data-testid="creator-phase"]')?.textContent,
+        audio: document.querySelector('[data-testid="audio-state"]')?.textContent,
+        pads: [...document.querySelectorAll('.pad-grid button')].map(button => ({
+          label: button.getAttribute("aria-label"), disabled: button.disabled,
+        })),
+        responses: window.__seedResponses,
+      }));
+      throw new Error(`${error.message}\nProgressive completion evidence: ${JSON.stringify(observed)}`);
+    }
     expect(new Set(blobs).size).toBe(16);
     const ownedId = await projectIdentity(page);
     await page.reload();

@@ -1297,15 +1297,17 @@ test.each([
       await flushAsyncTurns();
 
       expect(screen.getByText(
-        "Sample was saved, but current Project truth could not be refreshed",
+        "The sound was saved, but Creator could not show the latest Project.",
       )).toBeTruthy();
       expect(screen.getByText("Creator unavailable")).toBeTruthy();
       expect(screen.getByText(code === "HOST_PROTOCOL_MISMATCH"
-        ? "Creator and Runtime could not verify a compatible protocol."
+        ? "This copy of Creator is out of date."
         : code === "HOST_RESTART_REQUIRED"
-          ? "Runtime must be restarted before continuing."
-          : "Creator cannot continue (NOT_FOUND)."),
+          ? "The audio engine stopped. Your Project is saved and not affected."
+          : "That item is no longer in this Project."),
       ).toBeTruthy();
+      expect(screen.getByText("Creator unavailable").closest("[role=alert]")?.textContent ?? "")
+        .not.toContain(code);
       const pad = screen.getByRole("button", {name: "Pad A1 — empty — Key Q"});
       expect(pad.hasAttribute("disabled")).toBe(true);
       const settledReads = projectReads;
@@ -1313,7 +1315,7 @@ test.each([
       expect(projectReads).toBe(settledReads);
       expect(settledReads).toBeGreaterThan(0);
       expect(settledReads).toBeLessThanOrEqual(4);
-      expect(screen.queryByText("Sample operation failed")).toBeNull();
+      expect(screen.queryByText("Creator could not change this sound.")).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -1363,9 +1365,9 @@ test.each(["project", "sample"] as const)(
       await flushAsyncTurns();
 
       expect(screen.getByText(
-        "Sample was saved, but current Project truth could not be refreshed",
+        "The sound was saved, but Creator could not show the latest Project.",
       )).toBeTruthy();
-      expect(screen.getByText("Runtime must be restarted before continuing.")).toBeTruthy();
+      expect(screen.getByText(/^The audio engine stopped/)).toBeTruthy();
       expect(fixture.mutationCount).toBe(1);
       expect(fixture.busyCount).toBe(4);
       const settledBusyCount = fixture.busyCount;
@@ -1808,7 +1810,13 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
     })]},
   });
 
-  await screen.findByText(/the source container is not supported/);
+  await screen.findByText(/This type of audio file is not supported\. Choose a WAV, MP3, M4A\/AAC or FLAC file\./, {selector: "[role=alert]"});
+  // The resource token and limit stay in diagnostics, out of the alert.
+  await userEvent.click(screen.getByRole("button", {name: "System"}));
+  await userEvent.click(screen.getByText(/^Developer diagnostics \(\d+\)$/));
+  expect(within(screen.getByRole("region", {name: "Developer diagnostics"}))
+    .getByText("Read Sample source")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
   expect(screen.getByText("Pad A2", {selector: ".selected-sample strong"})).toBeTruthy();
   expect(screen.queryByText("private-source.mp3")).toBeNull();
   expect(screen.queryByText("/private/opfs")).toBeNull();
@@ -1817,7 +1825,7 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
     type: "audio/wav",
   }));
   await waitFor(() => expect(importCount).toBe(0));
-  expect(screen.getByText(/the source container is not supported/)).toBeTruthy();
+  expect(screen.getByText(/This type of audio file is not supported\. Choose a WAV, MP3, M4A\/AAC or FLAC file\./, {selector: "[role=alert]"})).toBeTruthy();
   expect(screen.queryByText("second-private.wav")).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
   expect(revisionCell()?.textContent).toBe("3");
@@ -2232,19 +2240,18 @@ test("retries a busy Project open only after the visible Retry action", async ()
 });
 
 test.each([
-  ["INVALID_PROJECT", {}, "The Project Bundle is invalid."],
+  ["INVALID_PROJECT", {}, "This file is not a Project Creator can open."],
   ["DUPLICATE_ID", {},
     "The import was refused because the local copy of this Project has newer changes. Nothing was lost."],
   ["WEB_RUNTIME_RESOURCE_LIMIT", {
     resource: "ingest_decoded_frames", observed: 43200001, limit: 43200000,
-  }, "ingest_decoded_frames: observed 43200001, limit 43200000."],
+  }, "This is more audio than Creator can handle at once on this device."],
   ["IO_ERROR", {storage_condition: "quota_exceeded"},
-    "Storage condition: quota_exceeded."],
-  ["HOST_PROTOCOL_MISMATCH", {},
-    "Creator and Runtime could not verify a compatible protocol."],
-  ["INTERNAL_ERROR", {}, "Creator encountered an internal failure."],
+    "This device has run out of storage space for Creator."],
+  ["HOST_PROTOCOL_MISMATCH", {}, "This copy of Creator is out of date."],
+  ["INTERNAL_ERROR", {}, "Something went wrong in Creator."],
   ["HOST_RESTART_REQUIRED", {terminal_state: "restart-required"},
-    "Runtime must be restarted before continuing."],
+    "The audio engine stopped. Your Project is saved and not affected."],
 ] as const)("presents a safe typed %s import failure without exposing private detail", async (
   code,
   details,
@@ -2266,6 +2273,10 @@ test.each([
 
   expect((await screen.findByRole("alert")).textContent).toContain(visible);
   expect(screen.getByRole("alert").textContent).not.toContain("/Users/private");
+  // #1680: codes and detail tokens stay out of the user-facing text.
+  for (const hidden of [code, ...Object.values(details).map(String)]) {
+    expect(screen.getByRole("alert").textContent).not.toContain(hidden);
+  }
   expect(screen.queryByText("private-name.lmdj")).toBeNull();
   if (code === "HOST_RESTART_REQUIRED") {
     expect(screen.getByTestId("creator-phase").textContent).toBe("restart-required");
@@ -2403,13 +2414,13 @@ test("gates the hardware Sequence key on the same reachability as the mode rail"
   expect(key.hasAttribute("disabled")).toBe(true);
 
   // The defect this gate catches: an enabled key mounted the full editor, so
-  // Apply BPM, Apply Swing and Create Pattern looked operable while every one
-  // of them hit `if (!isSequenceSession(session)) return` and reported
+  // the Tempo/Swing controls and Create Pattern looked operable while every
+  // one of them hit `if (!isSequenceSession(session)) return` and reported
   // nothing at all.
   const touch = screen.getByRole("region", {name: "Touch workspace"});
   expect(within(touch).queryByRole("region", {name: "Sequence settings"}))
     .toBeNull();
-  expect(within(touch).queryByRole("button", {name: "Apply BPM"})).toBeNull();
+  expect(within(touch).queryByRole("slider", {name: "BPM"})).toBeNull();
 });
 
 test("keeps pad identity and mounts Project Sample Sequence in the hardware touch screen", async () => {
@@ -2905,7 +2916,8 @@ test("recovery refusal retains its full diagnostic envelope across mode navigati
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
   await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
   await userEvent.click(await screen.findByRole("button", {name: "Recover original Pattern"}));
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("INVALID_ARGUMENT"));
+  await waitFor(() => expect(screen.getByRole("alert").textContent)
+    .toBe("Creator could not apply that request. Try again. Details are in Developer diagnostics."));
   expect(apply).toHaveBeenCalledExactlyOnceWith({
     sessionId: "retained-session", destinationPatternId: null,
   });
@@ -2974,7 +2986,16 @@ test("Delete failure remains visible and does not project an empty Pad", async (
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
   await userEvent.click(screen.getByRole("button", {name: "Delete Pad A1"}));
-  await screen.findByText("Sample storage operation failed");
+  await screen.findByText("Creator could not save the sound on this device.", {selector: "[role=alert] p"});
+  // #1680: the alert names no code; Developer diagnostics keeps it.
+  expect(screen.getByText("Creator could not save the sound on this device.", {selector: "[role=alert] p"})
+    .closest("[role=alert]")?.textContent).not.toContain("IO_ERROR");
+  await userEvent.click(screen.getByRole("button", {name: "System"}));
+  await userEvent.click(screen.getByText(/^Developer diagnostics \(\d+\)$/));
+  const deleteLog = within(screen.getByRole("region", {name: "Developer diagnostics"}));
+  expect(deleteLog.getByText("Delete Pad")).toBeTruthy();
+  expect(deleteLog.getByText("IO_ERROR")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
   expect(screen.getByText("Asset 33333333")).toBeTruthy();
   expect(screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"})).toBeTruthy();
   expect(fixture.revision).toBe(3);
@@ -3046,7 +3067,7 @@ test.each(PRE_STOP_MUTATIONS)("%s with audio stopped commits without a Runtime s
   await screen.findByText("Asset 33333333");
   await performPadMutation(kind, container);
   await waitFor(() => expect(order).toEqual([kind]));
-  expect(screen.queryByText("Sample operation is unavailable")).toBeNull();
+  expect(screen.queryByText("That can't be done right now.")).toBeNull();
 });
 
 test.each(PRE_STOP_MUTATIONS)("%s with audio running stops the voice before committing", async (kind) => {
@@ -3147,6 +3168,7 @@ test("System preserves the creative page and playing transport, then restores en
   await waitFor(() => expect(document.activeElement).toBe(entry));
   expect(transportPhase()).toBe("playing");expect(request).not.toHaveBeenCalled();
 });
+
 
 test("recovery More options leaves System and opens its Sequence destination", async () => {
   const fixture = mutableSampleRuntimeFixture();

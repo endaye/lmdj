@@ -77,6 +77,26 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
     const box = rounded(await keys.getByRole("button", {name: bank, exact: true}).boundingBox());
     expect(box).toMatchObject({width: 32, height: 32});
   }
+  // #1770: the −/+ placeholder row is gone and SHIFT holds its row as one
+  // full-width key (both 32px cells plus the 16px gap) directly above the
+  // record/play row, keeping the 8-row 368px key block. Rows step 48px
+  // (32px key + 16px gap), so SHIFT's row starts 6 steps into the block.
+  const shift = rounded(await keys.getByRole("button", {name: /^SHIFT/}).boundingBox());
+  expect(shift).toMatchObject({
+    x: physical.x,
+    y: keyBlock.y + 6 * 48,
+    width: 80,
+    height: 32,
+  });
+  // Undo/Redo is the SHIFT + ← / → chord on the direction row; the lamp, not
+  // a greyed button pair, reports availability, and nothing sits outside the
+  // console frame.
+  const undoKey = keys.getByRole("button", {name: "Undo — SHIFT + ←", exact: true});
+  await expect(undoKey).toBeDisabled();
+  await expect(undoKey).not.toHaveClass(/\bis-lit\b/);
+  await expect(keys.getByRole("button", {name: "Redo — SHIFT + →", exact: true}))
+    .toBeDisabled();
+  await expect(page.getByTestId("authoring-history")).toHaveCount(0);
   await expect(keys.getByRole("button", {name: "Project", exact: true})).toBeVisible();
   await expect(keys.getByRole("button", {name: "Sample", exact: true})).toBeVisible();
   // Boot opens a playable Project (#1660), so Sequence is reachable at once.
@@ -160,7 +180,20 @@ async function committedBpm(page) {
   return bpm;
 }
 
-test("keeps Project Truth across an unapplied draft and a reload", async ({page}) => {
+// Project Truth answers with the same authority the Host writes through.
+async function inspectTruth(page) {
+  const response = await page.evaluate(() =>
+    window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "project.inspect",
+      payload: {},
+    }));
+  expect(response.ok).toBe(true);
+  return response.result.project;
+}
+
+test("commits Tempo only on release and keeps Project Truth across a reload", async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});
   await page.goto("/");
   await waitForBootProject(page);
@@ -172,20 +205,40 @@ test("keeps Project Truth across an unapplied draft and a reload", async ({page}
   });
   const committed = await committedBpm(page);
   expect(committed).toBeGreaterThan(0);
+  const baseline = await inspectTruth(page);
+  expect(baseline.bpm).toBe(committed);
 
-  // Leg 1 — an unapplied Tempo draft. Moving the fader is not a commit, so
-  // the published tempo must not move with it. Whether the draft itself
-  // survives navigation is D03 and is deliberately not asserted here.
+  // Leg 1 — a draft without release is not a commit. Moving the fader only
+  // previews locally: the published tempo and Project Truth stay put, and no
+  // Apply button exists to turn the draft into a commit.
   await page.getByRole("button", {name: "Sequence"}).click();
   const bpmFader = page.getByRole("slider", {name: "BPM"});
   await expect(bpmFader).toBeVisible();
   await bpmFader.fill(String(committed + 12));
-  await expect(page.getByRole("button", {name: "Apply BPM"})).toBeVisible();
+  await expect(page.getByRole("button", {name: /Apply/})).toHaveCount(0);
   expect(await committedBpm(page)).toBe(committed);
+  expect((await inspectTruth(page)).bpm).toBe(committed);
 
-  // Leg 2 — same-origin reload with that draft outstanding. Audio does not
-  // survive, because resuming it needs a fresh gesture; the Project the reload
-  // reopens must still carry the committed tempo, not the abandoned draft.
+  // Leg 2 — Escape cancels the draft: the control falls back to the
+  // committed value and Truth never moved, not even by a revision.
+  await bpmFader.press("Escape");
+  await expect(bpmFader).toHaveValue(String(committed));
+  const cancelled = await inspectTruth(page);
+  expect(cancelled.bpm).toBe(committed);
+  expect(cancelled.revision).toBe(baseline.revision);
+
+  // Leg 3 — release commits exactly once: the published tempo and Truth move
+  // to the dragged value with one revision.
+  await bpmFader.fill(String(committed + 12));
+  await bpmFader.dispatchEvent("pointerup");
+  await expect.poll(() => committedBpm(page)).toBe(committed + 12);
+  const released = await inspectTruth(page);
+  expect(released.bpm).toBe(committed + 12);
+  expect(released.revision).toBe(baseline.revision + 1);
+
+  // Leg 4 — same-origin reload. Audio does not survive, because resuming it
+  // needs a fresh gesture; the Project the reload reopens must carry the
+  // committed tempo.
   await page.reload();
   await expect(page.getByTestId("hardware-console")).toBeVisible({
     timeout: 30_000,
@@ -197,5 +250,6 @@ test("keeps Project Truth across an unapplied draft and a reload", async ({page}
   // with a stale tempo, so the phase is asserted rather than inferred.
   await expect(page.getByTestId("creator-phase"))
     .toHaveText("ready", {timeout: 30_000});
-  expect(await committedBpm(page)).toBe(committed);
+  expect(await committedBpm(page)).toBe(committed + 12);
+  expect((await inspectTruth(page)).bpm).toBe(committed + 12);
 });

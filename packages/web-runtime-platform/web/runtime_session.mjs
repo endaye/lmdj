@@ -3972,6 +3972,43 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  function wireFxGesture(event) {
+    if (event === null || typeof event !== "object" || typeof event.kind !== "string") {
+      throw new TypeError("Performance FX gesture is invalid");
+    }
+    if (event.kind === "hold_on" || event.kind === "hold_off") {
+      if (!exactKeys(event, ["kind"])) throw new TypeError("Performance FX gesture is invalid");
+      return {kind: event.kind};
+    }
+    if (event.kind === "fx_engage" || event.kind === "fx_move") {
+      if (!exactKeys(event, ["kind", "fx", "value"]) || typeof event.fx !== "string" ||
+          !isUnsignedInteger(event.value) || event.value > 1000) {
+        throw new TypeError("Performance FX gesture is invalid");
+      }
+      return {kind: event.kind, fx: event.fx, value: event.value};
+    }
+    if (event.kind === "fx_release") {
+      if (!exactKeys(event, ["kind", "fx"]) || typeof event.fx !== "string") {
+        throw new TypeError("Performance FX gesture is invalid");
+      }
+      return {kind: event.kind, fx: event.fx};
+    }
+    throw new TypeError("Performance FX gesture is invalid");
+  }
+
+  function applyFxGesture(event) {
+    let wired;
+    try {
+      wired = wireFxGesture(event);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return serializeRuntimeAction(async () => {
+      await boundedRequest("performance.fx.gesture", {event: wired});
+      return Object.freeze({applied: true});
+    });
+  }
+
   function requestPerformancePatternLaunch(request) {
     if (request === null || typeof request !== "object" ||
         !exactKeys(request, ["sessionId", "requestId", "patternSlot"])) {
@@ -5480,6 +5517,7 @@ function createRuntimeSessionController(options = {}) {
     inspectPerformance,
     beginPerformanceRecording,
     recordPerformanceEvent,
+    applyFxGesture,
     requestPerformancePatternLaunch,
     flushPerformanceRecording,
     stopPerformanceRecording,

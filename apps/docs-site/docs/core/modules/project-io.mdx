@@ -94,7 +94,16 @@ Web 构建的栈是 256 KiB（`-sSTACK_SIZE=262144`）。`ProjectState` 把 64 �
 - `foundation::Result::success` 按引用接收值，不再在调用方帧里留一份副本；
 - `describe_artifact` 的 64 KiB 读缓冲改到堆上。
 
-实测最深路径的栈高水位从 175 624 B 降到 98 208 B。Project I/O Web 一致性测试在每个原生动作结束时报告栈高水位，任何动作超过栈的一半都会失败，并写明原因与补救。
+实测最深路径的栈高水位从 175 624 B 降到 98 208 B。
+
+#1667 的音色对齐字段又把 `ProjectState` 加到 10 568 B，门限因此失败：每个动作的峰值都按 4 096 B 的整数倍增长，说明最深处仍同时活着 9–13 个 `ProjectState` 大小的值。[#1771](https://github.com/endaye/lmdj/issues/1771) 在字段合入前清理了这些副本：
+
+- `foundation::Result::emplace_success` 在结果里原位构造组合值，不再先在返回帧里造一个临时对象；
+- Authoring Domain 的每个命令处理只保留自己的工作副本，`applied()` 按 `&&` 接收状态并原位构造结果，`create_project` 直接在调用方的返回槽里建 Project；
+- `parse_project` 在堆上返回解析结果，提交前的 round-trip 校验原地规范化状态；
+- 一致性测试的 harness 不再在自己的帧里持有 `ProjectState`：原来 `mutate_sample_cache` 的测试帧就占了该动作峰值的四成多。
+
+清理后 `main` 上最深的动作是 71 972 B（`history_roundtrip`）；叠加 #1667 的字段后最深是 112 932 B，约为栈的 43%。Project I/O Web 一致性测试在每个原生动作结束时报告栈高水位，任何动作超过栈的一半都会失败，并写明原因与补救。
 
 ### Real OPFS evidence and remaining gaps
 

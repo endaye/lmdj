@@ -22,6 +22,7 @@ PERFORMANCE_OPERATIONS = {
     "performance.inspect": "query",
     "performance.record.begin": "command",
     "performance.record.event": "command",
+    "performance.fx.gesture": "command",
     "performance.record.launch-request": "command",
     "performance.record.flush": "command",
     "performance.record.stop": "command",
@@ -39,7 +40,7 @@ PERFORMANCE_OPERATIONS = {
     "performance.replay.status": "query",
     "performance.resample.commit": "command",
 }
-assert len(PERFORMANCE_OPERATIONS) == 23
+assert len(PERFORMANCE_OPERATIONS) == 24
 
 # Stage 11's Sound Set surface is a second Facade inventory the Native Host
 # forwards, kept apart from the Performance one above so P10-D20 stays exactly
@@ -55,8 +56,8 @@ SOUNDSET_OPERATIONS = {
     "soundset.map.preview": "query",
 }
 assert len(SOUNDSET_OPERATIONS) == 5
-# Catalog description and slot operations are Facade/Bridge operations, not added Native
-# instrument tool. Keep each complete registration inventory exact.
+# Slot acquisition is a Facade/Bridge surface. The Native instrument's complete
+# Sound Set inventory remains separate and unchanged.
 FACADE_SOUNDSET_OPERATIONS = {
     **SOUNDSET_OPERATIONS,
     "soundset.catalog.describe": "query",

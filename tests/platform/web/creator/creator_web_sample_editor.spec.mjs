@@ -23,6 +23,29 @@ const AUDIO_TRANSITION_TIMEOUT_MS = 30_000 + 5_000;
 const REPORT_REVISION_TIMEOUT_MS = 30_000 + 5_000;
 let pointerSequence = 10;
 
+// Session history is the rail's SHIFT chord (#1770): SHIFT toggles the
+// modifier, ← / → consume it, and each direction key's lamp lights while its
+// action is available -- there is no Undo/Redo control outside the console.
+const RAIL_LIT = /\bis-lit\b/;
+function railHistoryKeys(page) {
+  const rail = page.getByTestId("physical-controls");
+  return {
+    shift: rail.getByRole("button", {name: /^SHIFT/}),
+    undo: rail.getByRole("button", {name: "Undo — SHIFT + ←", exact: true}),
+    redo: rail.getByRole("button", {name: "Redo — SHIFT + →", exact: true}),
+  };
+}
+async function pressRailUndo(page) {
+  const keys = railHistoryKeys(page);
+  await keys.shift.click();
+  await keys.undo.click();
+}
+async function pressRailRedo(page) {
+  const keys = railHistoryKeys(page);
+  await keys.shift.click();
+  await keys.redo.click();
+}
+
 function pcm16Wav({frames = 96_000, sampleRate = 48_000, phase = 0}) {
   const channels = 1;
   const bytes = Buffer.alloc(44 + frames * channels * 2);
@@ -100,7 +123,7 @@ async function installHostProofRecorder(page) {
                     ...response.result,
                     snapshot_error: {
                       code: "COOK_FAILED",
-                      message: "Sample runtime preparation failed",
+                      message: "The sound was saved but is not ready to play yet.",
                       details: {},
                     },
                   },
@@ -485,7 +508,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   );
   await page.getByRole("button", {name: "Confirm replace"}).click();
   await expect(page.getByRole("alert")).toContainText(
-    "why: the source container is not supported; remedy: choose WAV, MP3, M4A/AAC, or FLAC audio",
+    "This type of audio file is not supported. Choose a WAV, MP3, M4A/AAC or FLAC file.",
     {timeout: 30_000},
   );
   await expectProjectRevision(page, 55);
@@ -709,9 +732,13 @@ test("Sample Editor WebKit capability boundary is explicit, private, and non-phy
     timeout: 30_000,
   });
   const alert = page.getByRole("alert");
-  await expect(alert).toContainText("UNSUPPORTED_WEB_RUNTIME");
+  // #1680: user language in the alert; the code is in Developer diagnostics.
+  await expect(alert).toContainText("This browser cannot run Creator.");
   const publicText = await alert.textContent();
-  expect(publicText).not.toMatch(/HOST_PROTOCOL_MISMATCH|\/Users\/|file:\/\/|\.lmdj|\.wav/i);
+  expect(publicText).not.toMatch(/UNSUPPORTED_WEB_RUNTIME|HOST_PROTOCOL_MISMATCH|\/Users\/|file:\/\/|\.lmdj|\.wav/i);
+  await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
+  await expect(page.getByRole("region", {name: "Developer diagnostics"}))
+    .toContainText("UNSUPPORTED_WEB_RUNTIME");
   expect(await page.evaluate(() => window.lmdjWebRuntimeHost === undefined)).toBe(true);
   await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
   await openCreatorSystem(page);
@@ -783,31 +810,30 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   // A fresh store boots into a newly created, empty Project (#1660).
   await page.goto("/index.html");
   await waitForBootProject(page);
-  const undo = page.getByRole("button", {name: "Undo", exact: true});
-  const redo = page.getByRole("button", {name: "Redo", exact: true});
-  await expect(undo).toBeDisabled();
-  await expect(redo).toBeDisabled();
+  const {undo, redo} = railHistoryKeys(page);
+  await expect(undo).not.toHaveClass(RAIL_LIT);
+  await expect(redo).not.toHaveClass(RAIL_LIT);
   await activateAudio(page);
   await chooseSampleFile(page, "Add Sample to Pad A1", "history.wav", pcm16Wav({frames: 4800}));
   await commitLongSourceSelection(page);
   await expectProjectRevision(page, 1);
   const imported = (await rawRequest(page, "project.inspect", {})).result.project;
-  await expect(undo).toBeEnabled();
+  await expect(undo).toHaveClass(RAIL_LIT);
   await page.getByRole("button", {name: "Mute", exact: true}).click();
   await expectProjectRevision(page, 2);
   expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback.muted).toBe(true);
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
-  await expect(undo).toBeEnabled();
-  await undo.click();
+  await expect(undo).toHaveClass(RAIL_LIT);
+  await pressRailUndo(page);
   await expectProjectRevision(page, 3);
   expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback.muted).toBe(false);
-  await undo.click();
+  await pressRailUndo(page);
   await expectProjectRevision(page, 4);
   const cleared = (await rawRequest(page, "project.inspect", {})).result.project;
   expect(cleared.assets).toEqual({});
   expect(cleared.banks[0].pads[0].asset_id).toBeNull();
   await page.getByRole("button", {name: "Sample", exact: true}).click();
-  await expect(redo).toBeEnabled();
+  await expect(redo).toHaveClass(RAIL_LIT);
   await chooseSampleFile(page, "Add Sample to Pad A1", "cancelled.wav", pcm16Wav({frames: 9600}));
   const draft = page.getByRole("dialog", {name: /Pad A1 Long Source/});
   await expect(draft).toBeVisible();
@@ -819,9 +845,9 @@ test("Creator history preserves sound identity across modes, cancelled edits and
     command_id: crypto.randomUUID(), expected_revision: 3});
   expect(refused.ok).toBe(false);
   expect((await rawRequest(page, "history.inspect", {})).result).toEqual(retained);
-  await expect(redo).toBeEnabled();
+  await expect(redo).toHaveClass(RAIL_LIT);
   const responseOffset = await page.evaluate(() => window.__sampleProofResponses.length);
-  await redo.click();
+  await pressRailRedo(page);
   await expect.poll(() => page.evaluate((offset) =>
     window.__sampleProofResponses.slice(offset).some((r) => r.operation === "history.redo"), responseOffset)).toBe(true);
   const redoResponse = await page.evaluate((offset) =>
@@ -831,15 +857,15 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   const restored = (await rawRequest(page, "project.inspect", {})).result.project;
   expect(restored.assets).toEqual(imported.assets);
   expect(restored.banks).toEqual(imported.banks);
-  await redo.click();
+  await pressRailRedo(page);
   await expectProjectRevision(page, 6);
   expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback.muted).toBe(true);
-  await undo.click();
+  await pressRailUndo(page);
   await expectProjectRevision(page, 7);
   await expect(page.getByRole("button", {name: "Mute", exact: true})).toHaveAttribute("aria-pressed", "false");
   await page.getByRole("button", {name: "Loop", exact: true}).click();
   await expectProjectRevision(page, 8);
-  await expect(redo).toBeDisabled();
+  await expect(redo).not.toHaveClass(RAIL_LIT);
   const saved = (await rawRequest(page, "project.inspect", {})).result.project;
   await page.getByRole("button", {name: "Project", exact: true}).click();
   expect((await rawRequest(page, "history.inspect", {})).result.undo_count).toBeGreaterThan(0);
@@ -851,8 +877,8 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   expect(reopened.session_id).not.toBe(retained.session_id);
   expect(reopened.undo_count).toBe(0);
   expect(reopened.redo_count).toBe(0);
-  await expect(undo).toBeDisabled();
-  await expect(redo).toBeDisabled();
+  await expect(undo).not.toHaveClass(RAIL_LIT);
+  await expect(redo).not.toHaveClass(RAIL_LIT);
   noErrors();
 });
 
@@ -981,7 +1007,7 @@ test("Sample playback parity commits, cancels, refuses, fails and reopens throug
   const reverse = page.getByRole("button", {name: "Reverse", exact: true});
   await page.evaluate(() => { window.__failNextSampleUpdate = true; });
   await reverse.click();
-  await expect(page.getByRole("alert")).toContainText("Sample operation failed");
+  await expect(page.getByRole("alert")).toContainText("Creator could not change this sound.");
   await expect(reverse).toHaveAttribute("aria-pressed", "true");
   expect(await page.evaluate(() => window.__failNextSampleUpdate)).toBe(false);
   await expectProjectRevision(page, 8);
@@ -1031,17 +1057,15 @@ test("Pattern history keeps the Project open when its inventory anchor changes",
   const earlierPatternId = Object.keys(created.patterns).find((id) => id !== originalPatternId);
   expect(earlierPatternId).toBeDefined();
   expect(earlierPatternId < originalPatternId).toBe(true);
-  const undo = page.getByRole("button", {name: "Undo", exact: true});
-  const redo = page.getByRole("button", {name: "Redo", exact: true});
-  await undo.click();
+  await pressRailUndo(page);
   await expectProjectRevision(page, 2);
   expect((await rawRequest(page, "project.inspect", {})).result.project.patterns).toEqual(initial.patterns);
-  await redo.click();
+  await pressRailRedo(page);
   await expectProjectRevision(page, 3);
   await expect(page.getByTestId("creator-phase")).toHaveText("ready");
   await expect(page.getByRole("combobox", {name: "Pattern"}).locator("option")).toHaveCount(2);
   expect((await rawRequest(page, "history.inspect", {})).result.session_id).toBe(history.session_id);
-  await undo.click();
+  await pressRailUndo(page);
   await expectProjectRevision(page, 4);
   expect((await rawRequest(page, "project.inspect", {})).result.project.patterns).toEqual(initial.patterns);
   noErrors();
@@ -1073,7 +1097,7 @@ test("Pad Delete commits while audio is inactive after a reopen", async ({page, 
   await page.getByRole("button", {name: "Delete Pad A1", exact: true}).click();
   await expectProjectRevision(page, 2);
   await expect(page.getByRole("button", {name: "Pad A1 — empty — Key Q", exact: true})).toBeVisible();
-  await expect(page.getByText("Sample operation is unavailable")).toHaveCount(0);
+  await expect(page.getByText("That can't be done right now.")).toHaveCount(0);
   const deleted = (await rawRequest(page, "project.inspect", {})).result.project;
   expect(deleted.banks[0].pads[0].asset_id).toBeNull();
   expect(deleted.patterns).toEqual(before.patterns);
@@ -1129,8 +1153,7 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   const oldArtifact = before.assets[oldAsset].artifact;
   expect(oldArtifact.sha256).toMatch(/^[a-f0-9]{64}$/);
   expect(oldArtifact.byte_length).toBeGreaterThan(44);
-  const undo = page.getByRole("button", {name: "Undo", exact: true});
-  const redo = page.getByRole("button", {name: "Redo", exact: true});
+  const {redo} = railHistoryKeys(page);
 
   await page.getByRole("button", {name: "Delete Pad A1", exact: true}).click();
   await expectProjectRevision(page, 4);
@@ -1150,14 +1173,14 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   // The native host.web_control_runtime companion renders and checks both PCM
   // channels are exactly silent after deleting an active voice. Publication
   // here is real Wasm/OPFS/AudioWorklet evidence, not physical listening.
-  await undo.click();
+  await pressRailUndo(page);
   await expectProjectRevision(page, 5);
   const restored = (await rawRequest(page, "project.inspect", {})).result.project;
   expect(restored.banks).toEqual(before.banks);
   expect(restored.patterns).toEqual(before.patterns);
   expect(restored.assets[oldAsset].artifact).toEqual(oldArtifact);
   await expect(page.getByRole("button", {name: "Loop", exact: true})).toHaveAttribute("aria-pressed", "true");
-  await redo.click();
+  await pressRailRedo(page);
   await expectProjectRevision(page, 6);
   expect((await rawRequest(page, "project.inspect", {})).result.project.banks).toEqual(deleted.banks);
   await chooseSampleFile(page, "Add Sample to Pad A1", "new-sound.wav", pcm16Wav({frames: 9600, phase: 7}));
@@ -1167,7 +1190,7 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   expect(reassigned.patterns).toEqual(before.patterns);
   expect(reassigned.banks[0].pads[0].asset_id).not.toBe(oldAsset);
   expect(reassigned.assets[oldAsset].artifact).toEqual(oldArtifact);
-  await expect(redo).toBeDisabled();
+  await expect(redo).not.toHaveClass(RAIL_LIT);
   await page.reload();
   await waitForProjectReopen(page, reassigned.project_id.slice(0, 8));
   expect((await rawRequest(page, "project.inspect", {})).result.project).toEqual(reassigned);

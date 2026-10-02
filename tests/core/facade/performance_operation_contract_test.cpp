@@ -75,6 +75,7 @@ void test_locked_task4_operations_are_registered_with_exact_kinds() {
            "pattern.slot.move",
            "performance.record.begin",
            "performance.record.event",
+           "performance.fx.gesture",
            "performance.record.launch-request",
            "performance.record.flush",
            "performance.record.stop",
