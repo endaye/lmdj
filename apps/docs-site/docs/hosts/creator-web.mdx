@@ -340,3 +340,34 @@ Creator surface shows a Host message, a raw `Error.message` or a code:
 - Undo history says what happened and what to try.
 
 Each of these failures is recorded in Developer diagnostics.
+
+## Sequence Pattern grid projection
+
+The Sequence touch workspace shows the selected Pattern on a read-only grid.
+Sixteen rows are the active Bank's sixteen Pads, so the grid follows the
+existing Bank keys and the Pattern selector. The horizontal axis is the whole
+Pattern — one, two, four or eight bars — with horizontal scrolling. A snap
+selector offers 1/4, 1/8, 1/16, 1/32 and off, defaulting to 1/16. Each note
+renders as a rectangle whose position and length are its exact
+`onset_tick`/`duration_tick` from Project Truth; velocity reads as shade. The
+grid edits nothing: pen gestures belong to the editing Task that follows, and
+the `pattern.events.edit` Host operation stays uncalled here.
+
+The upper display becomes a whole-Pattern overview. A 64-row thumbnail maps
+every event of all four Banks; a live playhead advances from the existing
+transport projection (the playing Pattern's origin frame and the Project
+tempo); a frame marks the touch grid's current Bank and visible time window;
+and the existing Quantize, Swing, bar-count and phase facts are joined by the
+selection facts — selected note count, snap and velocity. Count and velocity
+stay empty while the grid is read-only. The former placeholder caption is
+gone.
+
+`ProjectView.patterns` now keeps the canonical events, validated against the
+Contract's per-bar tick bounds at the inspection boundary. Both views re-read
+Truth after any authoring commit — including a recording that settles through
+the transport — and after Undo/Redo or reopen, so they never drift from the
+Pattern the Core holds. Automation covers the view model's snap columns, bar
+extents, loop seam, overlaps, Bank filtering and 64-row mapping; the grid and
+overview components; and a packaged journey that records two notes, sees them
+on both grids, and sees them again after reopen. Editing gestures are not
+claimed.

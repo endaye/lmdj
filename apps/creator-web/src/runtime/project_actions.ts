@@ -9,6 +9,8 @@ import type {
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PROJECTION_READ_ATTEMPTS = 4;
+// PPQ 960 in 4/4: one bar is 3840 ticks (Sequence recording semantics §10.1).
+const TICKS_PER_BAR = 3840;
 
 export interface ProjectActionToken {
   readonly generation: number;
@@ -155,12 +157,38 @@ function projectView(
   const assignedPadCount = pads.filter(({assetId}) => assetId !== null).length;
   const patterns = Object.entries(project.patterns).map(([patternId, value]) => {
     if (!UUID_PATTERN.test(patternId) || !record(value) ||
-        ![1, 2, 4, 8].includes(value.bars as number)) {
+        ![1, 2, 4, 8].includes(value.bars as number) ||
+        !Array.isArray(value.events)) {
       throw protocolMismatch("Project Pattern inspection is invalid");
     }
+    const bars = value.bars as 1 | 2 | 4 | 8;
+    const loopTicks = bars * TICKS_PER_BAR;
+    const events = value.events.map((event) => {
+      if (!record(event) || !record(event.slot)) {
+        throw protocolMismatch("Project Pattern event inspection is invalid");
+      }
+      const bank = event.slot.bank;
+      const pad = event.slot.pad;
+      const onset = event.onset_tick;
+      const duration = event.duration_tick;
+      const velocity = event.velocity;
+      if (!integer(bank) || bank > 3 || !integer(pad) || pad > 15 ||
+          !integer(onset) || onset >= loopTicks ||
+          !integer(duration, 1) || duration > loopTicks - onset ||
+          !integer(velocity, 1) || velocity > 127) {
+        throw protocolMismatch("Project Pattern event inspection is invalid");
+      }
+      return Object.freeze({
+        slot: Object.freeze({bank, pad}),
+        onsetTick: onset,
+        durationTick: duration,
+        velocity,
+      });
+    });
     return Object.freeze({
       patternId,
-      bars: value.bars as 1 | 2 | 4 | 8,
+      bars,
+      events: Object.freeze(events),
     });
   }).sort((left, right) => left.patternId.localeCompare(right.patternId));
   if (!patterns.some(({patternId}) => patternId === summary.patternId)) {

@@ -26,7 +26,7 @@ const project: ProjectView = {
     slot,
     assetId: slot === 0 || slot === 32 ? `asset-${slot}` : null,
   })),
-  patterns: [{patternId: "22222222-2222-4222-8222-222222222222", bars: 1}],
+  patterns: [{patternId: "22222222-2222-4222-8222-222222222222", bars: 1, events: []}],
   patternSlots: Object.freeze(Array<string | null>(16).fill(null)),
   sequenceSettings: {quantizeEnabled: true, swingPercent: 50},
 };
@@ -239,7 +239,7 @@ describe("Creator state", () => {
         patternId,
         ...Array<string | null>(15).fill(null),
       ]),
-      patterns: [...project.patterns, {patternId, bars: 4}],
+      patterns: [...project.patterns, {patternId, bars: 4, events: []}],
     };
 
     const token = Object.freeze({
@@ -292,7 +292,7 @@ describe("Creator state", () => {
         patternId,
         ...Array<string | null>(15).fill(null),
       ]),
-      patterns: [...project.patterns, {patternId, bars: 4}],
+      patterns: [...project.patterns, {patternId, bars: 4, events: []}],
     };
 
     const token = Object.freeze({

@@ -288,6 +288,76 @@ test("global Pattern transport plays, overdubs, survives navigation, stops, and 
   expect(reopened.patterns[patternId].events).toEqual(committedEvents);
 });
 
+test("records notes and sees them on both grids after reopen", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(240_000);
+  await installTransportProofRecorder(page);
+  await page.goto("/index.html");
+  await importProject(page);
+  const baseline = await inspectTruth(page);
+  await enterSequenceAndPlay(page);
+  const patternId = await page.getByRole("combobox", {name: "Pattern"}).inputValue();
+  expect(baseline.patterns[patternId].events).toHaveLength(0);
+
+  // Before anything is recorded, both projections are empty and the overview
+  // frame marks the touch grid's Bank and time window.
+  const touchGrid = page.getByTestId("sequence-grid");
+  const overviewGrid = page.getByTestId("sequence-pattern-overview");
+  await expect(touchGrid).toBeVisible();
+  await expect(overviewGrid).toBeVisible();
+  await expect(touchGrid.getByTestId("sequence-grid-note")).toHaveCount(0);
+  await expect(overviewGrid.getByTestId("sequence-overview-note")).toHaveCount(0);
+  await expect(page.getByTestId("sequence-overview-frame")).toBeVisible();
+
+  await recordKey(page).click();
+  await transportStatus(page, "recording");
+  await page.keyboard.press("KeyQ");
+  await page.keyboard.press("KeyW");
+  await awaitAdmittedPresses(page, 2);
+  await recordKey(page).click();
+  await transportStatus(page, "playing");
+  const committed = await inspectTruth(page);
+  expect(committed.revision).toBe(baseline.revision + 1);
+  expect(committed.patterns[patternId].events).toHaveLength(2);
+
+  // The commit re-reads the whole projection, so both grids follow Truth: the
+  // touch grid shows one note per Pad row of the active Bank, the overview one
+  // rect per 64-row thumbnail row, each with the committed tick geometry.
+  const truthByPad = new Map(committed.patterns[patternId].events
+    .map((event) => [event.slot.pad, event]));
+  for (const pad of [0, 1]) {
+    const note = touchGrid.locator(`.sequence-grid-row[data-pad='${pad}']`)
+      .getByTestId("sequence-grid-note");
+    await expect(note).toHaveCount(1, {timeout: 30_000});
+    const event = truthByPad.get(pad);
+    expect(event).toBeDefined();
+    await expect(note).toHaveAttribute("data-onset-tick", String(event.onset_tick));
+    await expect(note).toHaveAttribute("data-duration-tick", String(event.duration_tick));
+    await expect(note).toHaveAttribute("data-velocity", "100");
+  }
+  await expect(overviewGrid.getByTestId("sequence-overview-note")).toHaveCount(2);
+  await expect(overviewGrid.locator("[data-row='0']")).toHaveCount(1);
+  await expect(overviewGrid.locator("[data-row='1']")).toHaveCount(1);
+
+  await playStopKey(page).click();
+  await transportStatus(page, "stopped");
+
+  await reopenProject(page);
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
+  const reopenedGrid = page.getByTestId("sequence-grid");
+  for (const pad of [0, 1]) {
+    await expect(reopenedGrid.locator(`.sequence-grid-row[data-pad='${pad}']`)
+      .getByTestId("sequence-grid-note")).toHaveCount(1, {timeout: 30_000});
+  }
+  await expect(page.getByTestId("sequence-pattern-overview")
+    .getByTestId("sequence-overview-note")).toHaveCount(2);
+  const reopened = await inspectTruth(page);
+  expect(reopened.patterns[patternId].events)
+    .toEqual(committed.patterns[patternId].events);
+});
+
+
 test("Record-off ticket loss reconciles the same command; Pattern switch and stopped Record survive reopen", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(240_000);
