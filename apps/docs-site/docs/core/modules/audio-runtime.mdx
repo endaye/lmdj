@@ -22,12 +22,12 @@ Audio Runtime（当前身份见上方 Build Identity）已实现 Prepared Sample
 
 #1667（`lmdj.project.v5` `5.2.0`）在同一内核上增加用户包络、tone 与三段 EQ，实时与离线共用同一份代码：
 
-- **包络。** attack 与 release 都是线性斜坡，长度取 max(用户值, 96 帧)；缺省时斜率正是 declick 的 1/96，因此逐位不变。`one_shot` 忽略 Pad 的 release（Cooker 把它解析为 0），停止时仍用 96 帧 declick。在用户 attack 进行中开始的 release，从 attack 当时的电平线性淡出，松开后不会继续变响。
-- **停止路径。** 只有 release 事件走 Pad 的 release：gate/loop_gate 松开、`loop_toggle` 再次按下、Pattern 与 Replay 的 note-off。`stop_all`、`stop_slot`、Pattern 切换与 transport 停止、audition 停止只用 96 帧 declick（Owner 2026-10-02，见决策补记）。
+- **包络。** attack 与 release 都是线性斜坡，长度取 max(用户值, 96 帧)；缺省时斜率正是 declick 的 1/96，因此逐位不变。`one_shot` 忽略 Pad 的 release（Cooker 把它解析为 0），停止时仍用 96 帧 declick。在长于 2 ms 的用户 attack 进行中开始的 release，从 attack 当时的电平线性淡出，松开后不会继续变响；起始电平为 0（按下与松开落在同一个回调）时 voice 立即结束。不超过 2 ms 的 attack 等同 declick，release 开始后 declick 仍会走完。
+- **停止路径。** 只有 release 事件走 Pad 的 release：gate/loop_gate 松开、`loop_toggle` 再次按下、Pattern 与 Replay 的 note-off。`stop_all`、`stop_slot`、Pattern 切换与 transport 停止、audition 停止只用 96 帧 declick（`docs/prd/decisions/2026-10-02-sample-voice-endings-and-stops.md`）。
   - release 尾音期间 voice 继续占用 voice 容量，满时照常报告 `voice_capacity`。
   - 对已在 release 的 Pad 重复 release 不打断尾音；`loop_toggle` 在尾音期间再次按下会重新启动 Pad，旧尾音在旁边继续淡出。这两点对中性 Pad 也成立。
   - 尾音期间的第二次停止：中性 voice 的 96 帧尾音照旧立即结束；内核 voice 不会阶跃到静音，剩余不超过 96 帧的尾音照常走完，更长的尾音从当前增益起在 96 帧内淡出。
-- **tone 与 EQ。** 最多四级 RBJ biquad（转置直接 II 型），顺序为 tone → low → mid → high，被旁通的级不存储也不计算。tone 为负时是 12 dB/oct Butterworth 低通，截止频率按对数从 20 kHz 扫到 100 Hz；为正时是从 20 Hz 扫到 8 kHz 的高通；|tone| ≤ 2 不建级。low/high 为 S = 1 的架式滤波器，`kind: cut` 时改为该频率的高通/低通；mid 为钟形。包络归零时滤波器仍在响，所以开了 tone 或 EQ 的 voice，结尾的 96 帧 declick 在 EQ 之后对输出再乘一次，voice 结束时不会阶跃到静音（Owner 2026-10-02）。
+- **tone 与 EQ。** 最多四级 RBJ biquad（转置直接 II 型），顺序为 tone → low → mid → high，被旁通的级不存储也不计算。tone 为负时是 12 dB/oct Butterworth 低通，截止频率按对数从 20 kHz 扫到 100 Hz；为正时是从 20 Hz 扫到 8 kHz 的高通；|tone| ≤ 2 不建级。low/high 为 S = 1 的架式滤波器，`kind: cut` 时改为该频率的高通/低通；mid 为钟形。包络归零时滤波器仍在响，所以开了 tone 或 EQ 的 voice，结尾的 96 帧 declick 在 EQ 之后对输出再乘一次，voice 结束时不会阶跃到静音（同一决策）。
 - **实时约束。** 系数在每次触发时计算一次：触发路径只校验 trim、模式与增益，块是否适配由准备内核本身判定。滤波位于包络之后：两者都是线性的且增益恒定，与决策规定的顺序等价。每个 render block 把衰减到 1e-20 以下的滤波器状态清零，静音尾音最多在一个 block 内经过 denormal。实时路径每个 voice 一份滤波器状态（下混为 mono），离线路径每个源声道一份。
 
 Cardputer 构建定义 `LMDJ_VOICE_DSP=0`（`apps/cardputer-host/main/CMakeLists.txt`，目录级定义，让该目录下所有目标对块布局一致）：
@@ -251,7 +251,7 @@ allocator interposition 验证失败不创建 session、播放继续及相同身
 #1667 的测试：
 
 - `audio.voice_dsp`：包络不短于 declick、缺省包络逐位不变、过长包络被拒；tone −100 是 100 Hz 低通（截止点 −3 dB，10 kHz 处至少衰减 40 dB），+100 是 8 kHz 高通；死区不建级；mid 钟形在中心达到增益；cut 在其频率处为 −3 dB；架式滤波器达到增益；极端设置下十秒噪声保持有限，输入停止后按块清零到精确 0；越界 tone/EQ 被拒。
-- `audio.realtime_engine`：用户 attack/release 的长度与终点、短 attack 等同 declick、`one_shot` 忽略 release、重复 release 不打断尾音、toggle 在尾音期间重启、第二次停止在 96 帧内淡出或让短尾音走完、停止只用 declick、attack 中途的 release 从 attack 电平淡出、尾音占用 voice 容量、引擎内 tone 真实滤波，以及带滤波的 voice 在 release 结束与采样播完时都不阶跃。不分配测试也给两个 voice 加上包络、tone 与 EQ，让滤波器设计落在计数窗口内。
+- `audio.realtime_engine`：用户 attack/release 的长度与终点、短 attack 等同 declick、`one_shot` 忽略 release、重复 release 不打断尾音、toggle 在尾音期间重启、第二次停止在 96 帧内淡出或让短尾音走完、`stop_all`/`stop_slot`、Pattern 切换、transport 停止与 audition 停止都只用 declick、attack 中途的 release 从 attack 电平淡出、attack 尚未发声就松开的 voice 立即结束、尾音占用 voice 容量、引擎内 tone 真实滤波，以及带滤波的 voice 在 release 结束与采样播完时都不阶跃。不分配测试也给两个 voice 加上包络、tone 与 EQ，让滤波器设计落在计数窗口内。
 - `audio.voice_dsp_parity`：包络、tone 与 EQ 的实时与离线输出一致到 release 尾音结束，包括 attack 中途的 release 与带滤波 one-shot 的结尾；实时以 100 帧 block 渲染，所以两者在不同的 flush 位置比较，另有一个先短促发声再长段静音的用例，让每级滤波都衰减穿过 flush 下限。
 - `audio.master_fx_stress`：#1666 场景保持原样；另加 #1667 全阶段场景，每个 voice 都开用户包络、tone 与三段 EQ。该场景的 deadline 只在优化构建里断言，也就是 Release stress lane 所用的构建（Owner 2026-10-02 决定，见 `docs/quality/core-test-policy.md`）；Debug 里照跑，检查输出有限、voice 计数与满池。
 - `audio.voice_dsp_disabled`：CI 不构建 Cardputer 固件，所以主机以 `LMDJ_VOICE_DSP=0` 构建同一批 Cooker 与 Audio Runtime 源码。它固定块为空、playback 不变大、Cooker 恰好接受共享中性表里的中性情形，以及 declick 的 attack、release 与第二次停止。
