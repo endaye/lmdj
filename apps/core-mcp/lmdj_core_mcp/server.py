@@ -448,6 +448,17 @@ def input_schemas() -> dict[str, dict]:
                 "maximum": 6_000,
             },
             "muted": {"type": "boolean"},
+            # lmdj.project.v5 5.1.0: optional; an omitted key is its default.
+            "reverse": {"type": "boolean"},
+            "pitch_cents": {
+                "type": "integer",
+                "minimum": -2_400,
+                "maximum": 2_400,
+            },
+            "pan": {"type": "integer", "minimum": -100, "maximum": 100},
+            "loop_mode": {"type": "string", "enum": ["forward", "ping_pong"]},
+            "loop_start_frame": {"oneOf": [uint, {"type": "null"}]},
+            "loop_crossfade_frames": uint,
         },
         [
             "trim_start_frame",

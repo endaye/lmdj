@@ -9,6 +9,7 @@ import type {
 import {
   fitSampleViewport,
   panSampleViewport,
+  playbackEquals,
   zoomSampleViewport,
   type SampleViewport,
 } from "../state/sample_state";
@@ -115,12 +116,31 @@ function waveformPath(
   ).join(" ") + " Z";
 }
 
-function samePlayback(left: PadPlayback, right: PadPlayback): boolean {
-  return left.trimStartFrame === right.trimStartFrame &&
-    left.trimEndFrame === right.trimEndFrame &&
-    left.triggerMode === right.triggerMode &&
-    left.gainMillidb === right.gainMillidb &&
-    left.muted === right.muted;
+// Keeps the loop point inside the trim and the crossfade within half of the
+// remaining loop (none for ping-pong), so an edit never proposes a playback
+// the Core would refuse.
+function fitLoop(
+  playback: Readonly<PadPlayback>,
+  sourceFrames: number,
+): Readonly<PadPlayback> {
+  const end = playback.trimEndFrame ?? sourceFrames;
+  const loopStartFrame = playback.loopStartFrame === null
+    ? null
+    : Math.min(end - 1, Math.max(playback.trimStartFrame, playback.loopStartFrame));
+  const loopStart = loopStartFrame ?? playback.trimStartFrame;
+  const maxCrossfade = playback.loopMode === "ping_pong"
+    ? 0
+    : Math.floor((end - loopStart) / 2);
+  const loopCrossfadeFrames = Math.min(playback.loopCrossfadeFrames, maxCrossfade);
+  return loopStartFrame === playback.loopStartFrame &&
+      loopCrossfadeFrames === playback.loopCrossfadeFrames
+    ? playback
+    : {...playback, loopStartFrame, loopCrossfadeFrames};
+}
+
+function isLooping(playback: Readonly<PadPlayback>): boolean {
+  return playback.triggerMode === "loop_gate" ||
+    playback.triggerMode === "loop_toggle";
 }
 
 function seconds(frame: number, sampleRate: number): string {
@@ -169,6 +189,14 @@ export function WaveformEditor({
   cancelRef.current = onCancel;
   const effective = draftPlayback ?? playback;
   const resolvedEnd = effective.trimEndFrame ?? sourceFrames;
+  // Reverse mirrors the trimmed region together with its loop point, so a
+  // loop boundary is drawn and edited at its mirror: later passes then wrap
+  // where the marker sits, and a null loop point sits at End.
+  const loopBoundary = (frame: number): number => effective.reverse
+    ? effective.trimStartFrame + resolvedEnd - frame
+    : frame;
+  const loopStartBoundary = loopBoundary(
+    effective.loopStartFrame ?? effective.trimStartFrame);
 
   useEffect(() => () => {
     queryEpoch.current += 1;
@@ -211,18 +239,35 @@ export function WaveformEditor({
     }
   };
 
-  const preview = (kind: "start" | "end", requestedFrame: number) => {
+  const preview = (
+    kind: "start" | "end" | "loop" | "crossfade",
+    requestedFrame: number,
+  ) => {
     if (!Number.isFinite(requestedFrame)) return;
     beginGesture();
     const current = gesture.current?.latest ?? playback;
     const currentEnd = current.trimEndFrame ?? sourceFrames;
-    const frame = kind === "start"
-      ? Math.min(currentEnd - 1, Math.max(0, requestedFrame))
-      : Math.min(sourceFrames, Math.max(current.trimStartFrame + 1, requestedFrame));
-    const next: Readonly<PadPlayback> = kind === "start"
-      ? {...current, trimStartFrame: frame}
-      : {...current, trimEndFrame: frame};
-    if (samePlayback(current, next)) return;
+    let next: Readonly<PadPlayback>;
+    if (kind === "start") {
+      next = {
+        ...current,
+        trimStartFrame: Math.min(currentEnd - 1, Math.max(0, requestedFrame)),
+      };
+    } else if (kind === "end") {
+      next = {
+        ...current,
+        trimEndFrame: Math.min(
+          sourceFrames,
+          Math.max(current.trimStartFrame + 1, requestedFrame),
+        ),
+      };
+    } else if (kind === "loop") {
+      next = {...current, loopStartFrame: requestedFrame};
+    } else {
+      next = {...current, loopCrossfadeFrames: Math.max(0, requestedFrame)};
+    }
+    next = fitLoop(next, sourceFrames);
+    if (playbackEquals(current, next)) return;
     gesture.current = {base: gesture.current!.base, latest: next};
     setDraftPlayback(next);
     onPreview(next);
@@ -235,7 +280,7 @@ export function WaveformEditor({
     gripDrag.current = null;
     gesture.current = null;
     setDraftPlayback(null);
-    if (!samePlayback(current.base, current.latest)) onCommit(current.latest);
+    if (!playbackEquals(current.base, current.latest)) onCommit(current.latest);
   };
 
   const cancelGesture = () => {
@@ -298,6 +343,10 @@ export function WaveformEditor({
   };
   const startX = frameToX(effective.trimStartFrame);
   const endX = frameToX(resolvedEnd);
+  // The crossfade window is the last frames of each pass: before End going
+  // forward, after Start in reverse.
+  const loopEndX = frameToX(loopBoundary(resolvedEnd));
+  const fadeEdgeX = frameToX(loopBoundary(resolvedEnd - effective.loopCrossfadeFrames));
   const visibleBuckets = envelopeIsValid
     ? activeEnvelope.buckets.filter((bucket) =>
         bucket.endFrame > viewport.startFrame && bucket.startFrame < viewport.endFrame
@@ -419,6 +468,25 @@ export function WaveformEditor({
             />
             <line data-handle="start" x1={startX} x2={startX} y1="0" y2={SVG_HEIGHT} />
             <line data-handle="end" x1={endX} x2={endX} y1="0" y2={SVG_HEIGHT} />
+            {isLooping(effective) ? (
+              <>
+                <rect
+                  data-crossfade
+                  aria-hidden="true"
+                  x={Math.min(fadeEdgeX, loopEndX)}
+                  y="0"
+                  width={Math.abs(loopEndX - fadeEdgeX)}
+                  height={SVG_HEIGHT}
+                />
+                <line
+                  data-handle="loop"
+                  x1={frameToX(loopStartBoundary)}
+                  x2={frameToX(loopStartBoundary)}
+                  y1="0"
+                  y2={SVG_HEIGHT}
+                />
+              </>
+            ) : null}
             {playheadFrame === null ? null : (
               <line
                 data-playhead
@@ -553,6 +621,65 @@ export function WaveformEditor({
           />
           <small>s</small>
         </label>
+        {isLooping(effective) ? (
+          <>
+            <label className="waveform-value-card">
+              <span>LOOP START / TAP TO EDIT</span>
+              <input
+                className="sample-value-input"
+                type="number"
+                min={(effective.reverse
+                  ? effective.trimStartFrame + 1
+                  : effective.trimStartFrame) / sampleRate}
+                max={(effective.reverse ? resolvedEnd : resolvedEnd - 1) / sampleRate}
+                step={1 / sampleRate}
+                value={loopStartBoundary / sampleRate}
+                disabled={disabled || !envelopeIsValid}
+                aria-label={`${padLabel} Loop start time (seconds)`}
+                onFocus={beginGesture}
+                onChange={(event) => preview(
+                  "loop",
+                  loopBoundary(Math.round(event.currentTarget.valueAsNumber * sampleRate)),
+                )}
+                onBlur={commitGesture}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    cancelGesture();
+                  }
+                }}
+              />
+              <small>s</small>
+            </label>
+            {effective.loopMode === "forward" ? (
+              <label className="waveform-value-card">
+                <span>CROSSFADE / TAP TO EDIT</span>
+                <input
+                  className="sample-value-input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={Math.round(effective.loopCrossfadeFrames * 1_000 / sampleRate)}
+                  disabled={disabled || !envelopeIsValid}
+                  aria-label={`${padLabel} Loop crossfade (milliseconds)`}
+                  onFocus={beginGesture}
+                  onChange={(event) => preview(
+                    "crossfade",
+                    Math.round(event.currentTarget.valueAsNumber * sampleRate / 1_000),
+                  )}
+                  onBlur={commitGesture}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      cancelGesture();
+                    }
+                  }}
+                />
+                <small>ms</small>
+              </label>
+            ) : null}
+          </>
+        ) : null}
       </div>
       <div className="waveform-viewport-actions" aria-label="Waveform viewport">
         <button

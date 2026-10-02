@@ -12,14 +12,19 @@ from the active tree and remains recoverable from Git history.
 ## Current status
 
 - Designed: full product and Core architecture.
-- Implemented: M1 Headless Core Proof, the Formal Native Host, the Stage 8
-  Sample Editor in Creator Web Host `1.2.0`, and Formal Web Runtime Host
-  `1.2.9` in Product Build `1.0.22.0`. Both Web Hosts use Web Runtime Platform
-  `0.3.0`, Project Truth v2 over OPFS Project I/O, and C++ Audio Runtime through
-  the same Wasm AudioWorklet.
+- Implemented: M1 Headless Core Proof, the Formal Native Host, the Creator Web
+  Host Sample Editor `4.7.0`, and Formal Web Runtime Host `4.3.5` in Product
+  Build `2.0.71.0`, with both Web Hosts deployed to Cloudflare. They use Web
+  Runtime Platform `5.5.0`, Project Truth v5 over OPFS Project I/O, Stage 9
+  Sequence recording, and C++ Audio Runtime through the same Wasm
+  AudioWorklet.
 - Not implemented: installable/offline PWA behavior, Sample intelligence,
-  Sequence editing, production Providers, or cloud deployment.
-  The five required Web physical-device rows remain `deferred / unverified`.
+  Sequence editing, or production Providers.
+- The five required Web physical-device rows (L1–L5) `PASS` for their exact
+  tested revisions of Product Builds `1.0.36.0`/`1.0.40.0`, with retained
+  evidence under `docs/release-evidence/`. Per the carry-forward rule each new
+  Build derives its own re-run set, and the Creator acceptance report's
+  physical rows remain `deferred / unverified` until performed.
 
 ## Architecture
 
@@ -76,7 +81,8 @@ generates a canary Build Manifest. `scripts/core.sh clean` removes only
 `scripts/web-runtime-host.sh proof` requires the pinned Emscripten `6.0.5`,
 Node 26, and the locked Playwright browsers. It performs clean reproducible Web
 builds, isolated packaging, Chromium full-journey automation, and WebKit
-capability smoke; it does not substitute for the five deferred physical rows.
+capability smoke; it does not substitute for the five physical rows, whose
+passes stay bound to their exact tested revisions.
 
 `scripts/creator-web.sh proof` adds deterministic Creator packaging plus the
 packaged Chromium creation/import/Pad/runtime journey and WebKit capability

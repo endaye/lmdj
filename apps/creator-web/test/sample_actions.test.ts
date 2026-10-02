@@ -39,6 +39,12 @@ const playback = Object.freeze({
   triggerMode: "gate" as const,
   gainMillidb: -1_200,
   muted: false,
+  reverse: false,
+  pitchCents: 0,
+  pan: 0,
+  loopMode: "forward" as const,
+  loopStartFrame: null,
+  loopCrossfadeFrames: 0,
 });
 
 const inspect: SampleInspect = Object.freeze({
@@ -907,7 +913,9 @@ test("Delete resolves the empty Pad from authoritative inspection", async () => 
   const {session, calls} = fixture();
   const empty = {...inspect, projectRevision: 43, assetId: null, metadata: null,
     waveformCacheIdentity: null, playback: {trimStartFrame: 0, trimEndFrame: null,
-      triggerMode: "one_shot" as const, gainMillidb: 0, muted: false}};
+      triggerMode: "one_shot" as const, gainMillidb: 0, muted: false,
+      reverse: false, pitchCents: 0, pan: 0, loopMode: "forward" as const,
+      loopStartFrame: null, loopCrossfadeFrames: 0}};
   session.inspectSample = async () => empty;
   const result = await deleteSampleJourney(session, {slot: 17, expectedRevision: 42});
   expect(calls.some(({method, arguments: args}) => method === "deletePad" &&
