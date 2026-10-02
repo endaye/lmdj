@@ -218,9 +218,9 @@ from Truth: at the next bar while the transport plays, as a Pattern switch does,
 otherwise immediately. The restore waits while a transport command is in flight,
 a recording is open, the transport reports an error or a publication is pending.
 It is prepared from Truth, so it carries any deferred grid edit. While the
-transport plays, a refused restore, such as one finding every slot held, stays
-pending and retries on the next turn. A failed immediate restore clears
-`runtime_revision`.
+transport plays, a restore that finds every slot held waits until reclaim frees
+one, and does not prepare again in the meantime. Any other refused or failed
+restore clears `runtime_revision`.
 
 Transport commands during a replay (Play/Stop, Record) still replace the
 replay's Pattern view; they are outside this change and tracked in #1801.

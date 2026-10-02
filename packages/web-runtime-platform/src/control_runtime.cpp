@@ -1547,7 +1547,7 @@ struct ControlRuntime::Impl {
     }
     if (active_replay.has_value() && state != "playing" &&
         result.at("replay_id") == active_replay->replay_id) {
-      replay_restore_project = active_replay->project_id;
+      replay_restore = PendingReplayRestore{active_replay->project_id, std::nullopt};
       active_replay.reset();
     }
   }
@@ -1566,7 +1566,7 @@ struct ControlRuntime::Impl {
       // Another Project replaced the one the replay played; its open path
       // publishes that Project's own view.
       active_replay.reset();
-      replay_restore_project.reset();
+      replay_restore.reset();
       return;
     }
     const auto status = application.query({
@@ -1576,7 +1576,7 @@ struct ControlRuntime::Impl {
     });
     if (!status.value("ok", false)) {
       // An unreadable replay cannot be holding the Runtime any longer.
-      replay_restore_project = active_replay->project_id;
+      replay_restore = PendingReplayRestore{active_replay->project_id, std::nullopt};
       active_replay.reset();
       return;
     }
@@ -1587,12 +1587,12 @@ struct ControlRuntime::Impl {
   // so the Host's selected Pattern comes back from Truth — at the next Bar
   // while the transport plays, as a Pattern switch does, otherwise at once.
   void restore_after_replay() {
-    if (!replay_restore_project.has_value() || active_replay.has_value()) {
+    if (!replay_restore.has_value() || active_replay.has_value()) {
       return;
     }
     if (!session_available() || !pattern_id.has_value() ||
-        project_id != replay_restore_project) {
-      replay_restore_project.reset();
+        project_id != replay_restore->project_id) {
+      replay_restore.reset();
       return;
     }
     bool playing = false;
@@ -1610,14 +1610,32 @@ struct ControlRuntime::Impl {
     }
     const foundation::PatternId selected{*pattern_id};
     if (playing) {
-      // The restore carries any deferred edit, since both come from Truth. A
-      // refusal, such as every slot held by a sounding retiring view, stays
-      // pending and retries on the next turn, as the transport's settlement
-      // publication does; the Bank, and so `runtime_revision`, is current.
+      // The restore carries any deferred edit, since both come from Truth.
       deferred_pattern_edit.reset();
-      if (publish_project_pattern(selected).has_value()) {
-        replay_restore_project.reset();
+      static_cast<void>(engine.reclaim_retired_patterns());
+      const auto reclaimed = engine.pattern_telemetry().reclaimed_patterns;
+      if (replay_restore->held_at_reclaimed == reclaimed) {
+        // Every slot was held and none has freed since; preparing from Truth
+        // again would only be refused again.
+        return;
       }
+      auto pattern = prepare_project_pattern(selected);
+      if (pattern.has_value()) {
+        const auto result =
+            engine.publish_pattern_view(std::move(pattern.value())).result;
+        if (result == audio::PatternPublishResult::pattern_slots_full) {
+          // A sounding retiring view holds every slot; retry once one frees.
+          replay_restore->held_at_reclaimed = reclaimed;
+          return;
+        }
+        if (result == audio::PatternPublishResult::accepted) {
+          replay_restore.reset();
+          return;
+        }
+      }
+      // The Runtime no longer reflects the revision it claimed.
+      runtime_revision.reset();
+      replay_restore.reset();
       return;
     }
     const auto published = publish_edited_pattern(selected, false);
@@ -1625,7 +1643,7 @@ struct ControlRuntime::Impl {
       // The Runtime no longer reflects the revision it claimed.
       runtime_revision.reset();
     }
-    replay_restore_project.reset();
+    replay_restore.reset();
   }
 
   std::filesystem::path project_path(std::string_view project_id) const {
@@ -2879,7 +2897,12 @@ struct ControlRuntime::Impl {
   };
   std::optional<TrackedReplay> active_replay;
   // The Project whose selected Pattern a replay's end restores.
-  std::optional<std::string> replay_restore_project;
+  struct PendingReplayRestore {
+    std::string project_id;
+    // The reclaim count when a playing restore last found every slot held.
+    std::optional<std::uint64_t> held_at_reclaimed;
+  };
+  std::optional<PendingReplayRestore> replay_restore;
   std::optional<SequenceSession> active_sequence;
   std::optional<PendingSequenceBoundary> pending_sequence_boundary;
   // Global Pattern transport engagement; present once a session has opted in

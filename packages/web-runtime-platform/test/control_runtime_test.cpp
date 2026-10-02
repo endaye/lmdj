@@ -7682,8 +7682,8 @@ void test_a_deferred_swap_waits_out_a_replay() {
   LMDJ_CHECK(grid_voice_starts_at(engine, deferral.origin + 288'000 + 6'000));
 }
 
-// #1789: a restore the engine refuses, here because every slot is still
-// held, stays pending and lands at the bar after a slot frees.
+// #1789: a restore the engine refuses because every slot is still held
+// neither prepares nor retries until a slot frees, then lands at the next bar.
 void test_a_refused_replay_restore_retries_until_a_slot_frees() {
   TempDirectory temp;
   FakeCoordinator coordinator;
@@ -7705,8 +7705,11 @@ void test_a_refused_replay_restore_retries_until_a_slot_frees() {
     serve_to(engine.telemetry().rendered_frames - deferral.origin + 128);
   }
   LMDJ_CHECK(replay_state(*runtime) != "playing");
-  // Until the first voice ends at frame 204000, every attempt is refused.
+  // The first attempt was refused; until the first voice ends at frame
+  // 204000 no slot frees, so no further attempt is made.
+  const auto rejections = engine.pattern_telemetry().publication_rejections;
   serve_to(200'000);
+  LMDJ_CHECK(engine.pattern_telemetry().publication_rejections == rejections);
   LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
   LMDJ_CHECK(engine.pattern_telemetry().current_generation == deferral.generation);
   serve_to(288'000 + 128);
