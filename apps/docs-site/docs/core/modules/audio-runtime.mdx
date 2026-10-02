@@ -23,7 +23,7 @@ Audio Runtime（当前身份见上方 Build Identity）已实现 Prepared Sample
 #1667（`lmdj.project.v5` `5.2.0`）在同一内核上增加用户包络、tone 与三段 EQ，实时与离线共用同一份代码：
 
 - **包络。** attack 与 release 都是线性斜坡，长度取 max(用户值, 96 帧)；缺省时斜率正是 declick 的 1/96，因此逐位不变。`one_shot` 忽略 Pad 的 release（Cooker 把它解析为 0），停止时仍用 96 帧 declick。在长于 2 ms 的用户 attack 进行中开始的 release，从 attack 当时的电平线性淡出，松开后不会继续变响；起始电平为 0（按下与松开落在同一个回调）时 voice 立即结束。不超过 2 ms 的 attack 等同 declick，release 开始后 declick 仍会走完。
-- **停止路径。** 只有 release 事件走 Pad 的 release：gate/loop_gate 松开、`loop_toggle` 再次按下、Pattern 与 Replay 的 note-off。`stop_all`、`stop_slot`、Pattern 切换与 transport 停止、audition 停止只用 96 帧 declick（`docs/prd/decisions/2026-10-02-sample-voice-endings-and-stops.md`）。
+- **停止路径。** 只有 release 事件走 Pad 的 release：gate/loop_gate 松开、`loop_toggle` 再次按下、Pattern 与 Replay 的 note-off。`stop_all`、`stop_slot`、Pattern 切换与 transport 停止、audition 停止只用 96 帧 declick（`docs/prd/decisions/2026-10-02-sample-voice-endings-and-stops.md`）。`stop_slot_live` 同样只用 declick，但只停该 Pad 的现场声音（来源为 host input 且不是 Pattern voice）：Performance 回放发出的击打与回放启动的 Pattern voice 继续发声，所以回放期间编辑 Pad 不会切断回放（#1789）。
   - release 尾音期间 voice 继续占用 voice 容量，满时照常报告 `voice_capacity`。
   - 对已在 release 的 Pad 重复 release 不打断尾音；`loop_toggle` 在尾音期间再次按下会重新启动 Pad，旧尾音在旁边继续淡出。这两点对中性 Pad 也成立。
   - 尾音期间的第二次停止：中性 voice 的 96 帧尾音照旧立即结束；内核 voice 不会阶跃到静音，剩余不超过 96 帧的尾音照常走完，更长的尾音从当前增益起在 96 帧内淡出。
