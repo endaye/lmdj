@@ -132,3 +132,138 @@ export function userMessage(code: string, details: Details = {}): UserMessage {
   if (code === "IO_ERROR") return storageMessage(details);
   return Object.hasOwn(MESSAGES, code) ? MESSAGES[code]! : UNKNOWN;
 }
+
+// The public typed codes a Creator surface accepts from the Host and its own
+// journeys; anything else is reported as INTERNAL_ERROR. One set, so that a
+// code accepted at one boundary is never rejected at the next.
+export const PUBLIC_ERROR_CODES: ReadonlySet<string> = new Set([
+  "INVALID_ARGUMENT", "NOT_FOUND", "REVISION_CONFLICT", "DUPLICATE_ID",
+  "UNSUPPORTED_AUDIO", "MISSING_ASSET", "INVALID_PROJECT", "COOK_FAILED",
+  "BANK_QUOTA_EXHAUSTED", "PROJECT_QUOTA_EXHAUSTED", "PROVIDER_NOT_FOUND",
+  "PROVIDER_FAILED", "PERMISSION_DENIED", "IO_ERROR", "INTERNAL_ERROR",
+  "UNSUPPORTED_WEB_RUNTIME", "PROJECT_BUSY", "WEB_RUNTIME_RESOURCE_LIMIT",
+  "HOST_STATE_INVALID", "HOST_TIMEOUT", "HOST_RESTART_REQUIRED",
+  "HOST_PROTOCOL_MISMATCH", "LOCAL_PROJECT_UNREADABLE",
+]);
+
+// The same failures, worded for the Pad and sound being edited. An empty
+// next step means the message already says what to do.
+const SAMPLE_MESSAGES: Readonly<Record<string, UserMessage>> = Object.freeze({
+  INVALID_ARGUMENT: {
+    message: "Creator could not apply that change to the Pad.",
+    nextStep: "Try again. Details are in Developer diagnostics.",
+  },
+  NOT_FOUND: {
+    message: "That sound is no longer in this Project.",
+    nextStep: "Choose the Pad again, then retry.",
+  },
+  REVISION_CONFLICT: {message: "Project changed; review and try again", nextStep: ""},
+  DUPLICATE_ID: {
+    message: "That sound is already in this Project.",
+    nextStep: "Assign it from its Pad instead of importing it again.",
+  },
+  UNSUPPORTED_AUDIO: {
+    message: "This audio file's format is not supported.",
+    nextStep: "Use a WAV, MP3, M4A/AAC or FLAC file.",
+  },
+  MISSING_ASSET: {
+    message: "This Pad's audio is missing from the Project.",
+    nextStep: "Assign the sound to the Pad again.",
+  },
+  INVALID_PROJECT: {
+    message: "This Project could not be read.",
+    nextStep: "Reopen it from the Project library.",
+  },
+  COOK_FAILED: {
+    message: "The sound was saved but is not ready to play yet.",
+    nextStep: "Choose Retry Prepare.",
+  },
+  BANK_QUOTA_EXHAUSTED: {
+    message: "Selection exceeds this Bank quota; shorten it, free another Pad, or use another Bank",
+    nextStep: "",
+  },
+  PROJECT_QUOTA_EXHAUSTED: {
+    message: "Selection exceeds the Project quota; shorten it or free prepared Samples",
+    nextStep: "",
+  },
+  PROVIDER_NOT_FOUND: {
+    message: "The tool needed for this sound is not available.",
+    nextStep: "Try again later.",
+  },
+  PROVIDER_FAILED: {
+    message: "The tool could not finish this sound.",
+    nextStep: "Try again.",
+  },
+  PERMISSION_DENIED: {
+    message: "Creator does not have permission to do this.",
+    nextStep: "Grant the permission, then try again.",
+  },
+  INTERNAL_ERROR: {
+    message: "Creator could not change this sound.",
+    nextStep: "Try again. Details are in Developer diagnostics.",
+  },
+  UNSUPPORTED_WEB_RUNTIME: {
+    message: "This browser cannot edit sounds in Creator.",
+    nextStep: "Open Creator in a current version of another browser.",
+  },
+  PROJECT_BUSY: {
+    message: "The Project is open in another tab or process.",
+    nextStep: "Finish there, or move the Project to this tab with Continue here.",
+  },
+  WEB_RUNTIME_RESOURCE_LIMIT: {
+    message: "This sound is more than Creator can handle on this device.",
+    nextStep: "Use a shorter sound, then try again.",
+  },
+  HOST_STATE_INVALID: {
+    message: "That can't be done right now.",
+    nextStep: "Stop playback and finish any recording or import, then try again.",
+  },
+  HOST_TIMEOUT: {
+    message: "The change took too long. Your Project is saved.",
+    nextStep: "Try again.",
+  },
+  HOST_RESTART_REQUIRED: {
+    message: "The audio engine stopped. Your Project is saved and not affected.",
+    nextStep: "Choose Retry runtime to restart it.",
+  },
+  HOST_PROTOCOL_MISMATCH: {
+    message: "This copy of Creator is out of date.",
+    nextStep: "Reload the page to load the current version.",
+  },
+  LOCAL_PROJECT_UNREADABLE: {
+    message: "The local copy of this Project could not be read.",
+    nextStep: "Open another Project, or import this Project's file again.",
+  },
+});
+
+export const SAMPLE_PREVIEW_FAILURE: UserMessage = Object.freeze({
+  message: "This sound could not be previewed.",
+  nextStep: "Activate audio, then preview again.",
+});
+
+export function sampleMessage(code: string, details: Details = {}): UserMessage {
+  if (code === "IO_ERROR") {
+    return Object.freeze({
+      message: details.storage_condition === "quota_exceeded"
+        ? STORAGE_FULL.message
+        : "Creator could not save the sound on this device.",
+      nextStep: storageMessage(details).nextStep,
+    });
+  }
+  return Object.hasOwn(SAMPLE_MESSAGES, code)
+    ? SAMPLE_MESSAGES[code]!
+    : SAMPLE_MESSAGES.INTERNAL_ERROR!;
+}
+
+// The next step shown under a Sample failure, keyed by what the state holds.
+export function sampleNextStep(failure: Readonly<{
+  code: string;
+  message: string;
+  details?: Details;
+}>): string {
+  if (failure.message === SAMPLE_PREVIEW_FAILURE.message) return SAMPLE_PREVIEW_FAILURE.nextStep;
+  return sampleMessage(failure.code, failure.details ?? {}).nextStep;
+}
+
+export const NO_ROOM_MESSAGE =
+  "There is no room left for more sound in this Bank. Free a Pad or use another Bank.";

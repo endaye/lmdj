@@ -1,6 +1,13 @@
 import {expect, test} from "vitest";
 
-import {userMessage} from "../src/state/error_messages";
+import {
+  NO_ROOM_MESSAGE,
+  PUBLIC_ERROR_CODES,
+  SAMPLE_PREVIEW_FAILURE,
+  sampleMessage,
+  sampleNextStep,
+  userMessage,
+} from "../src/state/error_messages";
 
 // The public typed error codes Creator receives from the Host and its own
 // journeys (#1680).
@@ -71,4 +78,32 @@ test("a resource limit never echoes its resource token or counts", () => {
 test("an inherited object key is not a message", () => {
   expect(userMessage("toString")).toEqual(userMessage("INTERNAL_ERROR"));
   expect(userMessage("__proto__")).toEqual(userMessage("INTERNAL_ERROR"));
+});
+
+test.each([...PUBLIC_ERROR_CODES])("the Sample copy for %s is user language", (code) => {
+  const {message, nextStep} = sampleMessage(code);
+  expect(message.length).toBeGreaterThan(0);
+  expect(`${message} ${nextStep}`).not.toMatch(TECHNICAL);
+  expect(`${message} ${nextStep}`).not.toMatch(/\b(?:Artifact|Host|Web Runtime|runtime preparation)\b/);
+});
+
+test("every public code has a Creator message, including LOCAL_PROJECT_UNREADABLE", () => {
+  expect([...PUBLIC_ERROR_CODES].sort()).toEqual([...PUBLIC_CODES]
+    .filter((code) => code !== "ABORTED").sort());
+});
+
+test("a full device during a Sample change says how to free space", () => {
+  expect(sampleMessage("IO_ERROR", {storage_condition: "quota_exceeded"}))
+    .toEqual(userMessage("IO_ERROR", {storage_condition: "quota_exceeded"}));
+});
+
+test("a preview failure points to activating audio rather than to a busy Project", () => {
+  expect(sampleNextStep({code: "HOST_STATE_INVALID", message: SAMPLE_PREVIEW_FAILURE.message}))
+    .toBe("Activate audio, then preview again.");
+  expect(sampleNextStep({code: "HOST_STATE_INVALID", message: "That can't be done right now."}))
+    .toBe(sampleMessage("HOST_STATE_INVALID").nextStep);
+});
+
+test("the no-room message is user language", () => {
+  expect(NO_ROOM_MESSAGE).not.toMatch(TECHNICAL);
 });

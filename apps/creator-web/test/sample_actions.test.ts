@@ -300,7 +300,7 @@ describe("Creator Sample actions", () => {
 
     await expect(previewSampleDraftJourney(session, 17, draft)).rejects.toMatchObject({
       code: "HOST_STATE_INVALID",
-      message: "Runtime preview failed",
+      message: "This sound could not be previewed.",
     });
     expect(calls).toEqual([
       {method: "setSamplePreview", arguments: [17, draft.proposed]},
@@ -417,7 +417,7 @@ describe("Creator Sample actions", () => {
       runtimePublished: false,
       snapshotError: {
         code: "COOK_FAILED",
-        message: "Sample runtime preparation failed",
+        message: "The sound was saved but is not ready to play yet.",
         details: {},
       },
     };
@@ -546,7 +546,7 @@ describe("Creator Sample actions", () => {
       if (result.kind === "committed") {
         expect(result.commit.snapshotError).toEqual({
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details,
         });
         expect(Object.isFrozen(result.commit.snapshotError?.details)).toBe(true);
@@ -595,7 +595,7 @@ describe("Creator Sample actions", () => {
         runtimePublished: false,
         snapshotError: {
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details,
         },
       });
@@ -709,7 +709,7 @@ describe("Creator Sample actions", () => {
         runtimePublished: false,
         snapshotError: {
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details: {},
         },
       },

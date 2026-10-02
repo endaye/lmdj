@@ -64,7 +64,24 @@ WebKit capability-boundary specs, whose code assertion moves to
 Developer diagnostics); portal `/hosts/creator-web/`. The Project overview row
 shows "Needs attention", so the alert is the single place for the message.
 
-## Task 3 — Remaining surfaces
+## Task 3 — Remaining surfaces, in two PRs
+
+The inventory's remaining surfaces are split into two reviewable PRs.
+
+- **3a (relates to #1680):** Sample errors, long-source import, Capture and
+  Sample diagnostics. One `PUBLIC_ERROR_CODES` set replaces the four
+  hand-copied ones in `sample_state.ts`, `sample_actions.ts`,
+  `sample_surface.tsx` and `app.tsx`. Sample messages come from
+  `sampleMessage`, with a next step rendered under them. Ingest errors become
+  two plain sentences; microphone failures name what to do. A
+  `DiagnosticsProvider` from the Workspace lets surfaces record failures:
+  `src/runtime/diagnostics_context.tsx` (new). Declared files: those modules,
+  `long_source_editor.tsx`, `capture_panel.tsx`, `creator_state.ts`
+  (projection-refresh copy), `long_source_ingest.ts`, their tests, the two
+  browser specs that pinned old Sample copy, and portal `/hosts/creator-web/`.
+- **3b (closes #1680):** Candidate, Sound Set, Perform and Authoring History.
+
+## Task 3 — Remaining surfaces (original scope)
 
 Sample, long-source ingest, Capture, Candidate, Sound Set, Perform and
 Authoring History move to the catalogue. why/remedy text, raw `Error.message`,
