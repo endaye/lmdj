@@ -38,6 +38,10 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(entry.diagnostic('control', 'auth-main-refresh', outer)['http'],
             {'status': 403, 'remaining': 0, 'reset': 1234567890, 'retry_after': 15})
         self.assertNotIn('SECRET', json.dumps(entry.diagnostic('control', 'auth-main-refresh', outer)))
+        blocked = entry.OutboxBlocked('SECRET')
+        blocked.__context__ = wrapped
+        self.assertEqual(entry.http_diagnostic(blocked),
+            {'status': 403, 'remaining': 0, 'reset': 1234567890, 'retry_after': 15})
         unknown = RuntimeError('SECRET')
         unknown.__context__ = http
         self.assertEqual(entry.http_diagnostic(unknown), {})
@@ -105,6 +109,7 @@ class EntryTests(unittest.TestCase):
         for error, kind in ((entry.JournalBlocked('SECRET'), 'journal-blocked'),
                             (entry.JournalRecordOversized('SECRET'), 'journal-record-oversized'),
                             (entry.batch.BatchError('SECRET'), 'batch-error'),
+                            (entry.OutboxBlocked('SECRET'), 'outbox-blocked'),
                             (entry.ScopeError('SECRET'), 'scope-error'),
                             (json.JSONDecodeError('SECRET', 'SECRET', 0), 'json-error'),
                             (entry.GitHubApiError(403, 'SECRET'), 'github-api-error'),

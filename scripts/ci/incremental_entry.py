@@ -22,6 +22,7 @@ import incremental_batch as batch
 import report_runtime
 import self_test
 from incremental_batch_journal import JournalBlocked
+from report_outbox import OutboxBlocked
 from batch_github_journal import JournalRecordOversized
 from test_scope import ScopeError
 from self_test_report import GitHubApiError
@@ -74,7 +75,7 @@ def http_diagnostic(error):
                     result[key] = value
             if len(result) > 1:
                 return result
-        if type(error) not in (batch.BatchError, JournalBlocked, GitHubApiError):
+        if type(error) not in (batch.BatchError, JournalBlocked, GitHubApiError, OutboxBlocked):
             break
         error = error.__context__
     return {}
@@ -83,7 +84,7 @@ def http_diagnostic(error):
 def diagnostic(operation, stage, error):
     """Closed diagnostic only. Never inspect exception text or dynamic names."""
     kinds = {JournalBlocked: "journal-blocked", JournalRecordOversized: "journal-record-oversized",
-             batch.BatchError: "batch-error",
+             batch.BatchError: "batch-error", OutboxBlocked: "outbox-blocked",
              ScopeError: "scope-error", json.JSONDecodeError: "json-error", OSError: "os-error",
              GitHubApiError: "github-api-error", HTTPError: "http-error"}
     answer = {"schema": "lmdj.ci-entry-diagnostic.v1",

@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-28
     occurrence: https://github.com/endaye/lmdj/actions/runs/36383374374
     observed_by: claude-code/opus-5.5
+  - date: 2026-10-02
+    occurrence: https://github.com/endaye/lmdj/actions/runs/37006698741
+    observed_by: Kimi
 exit: gate:tests/build/ci_incremental_batch_journal_test.py
 ---
 
@@ -51,3 +54,17 @@ before anyone notices: no batch ran from 05:49 to 08:53 UTC, and the only
 signal was a generic `journal-blocked` with the `why` withheld. When every
 controller tick fails `journal-blocked` with healthy quota, read the #807
 anchor for a `pending` before anything else.
+
+On 2026-10-02 the same strand recurred on the report outbox (#817), not the
+scheduler: a managed report delivery POST never confirmed during the same
+quota incident window, and every later report tick fail-closed in
+`_peek_pending`. Two new signals mattered. The closed entry diagnostic
+reported `error_kind:"unknown"` because `OutboxBlocked` was not in its kind
+map and the bounded context walk stopped at that wrapper, so the fault class
+was invisible until a manual exception-chain read; and the only external
+signal was the by-design red "Keep unresolved reporting visible" step, not a
+control failure. The drain is the same guarded `reconcile-pending`, but the
+dispatch must carry the outbox `journal_config` (the default is the
+scheduler role) plus the audited digest; run 37006698741 cleared it and the
+next ordinary tick re-derived and committed the dropped delivery. The entry
+diagnostic now names `outbox-blocked` and walks through the wrapper.
