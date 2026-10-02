@@ -25,9 +25,18 @@ def require(value, why):
 
 
 class DispatchEvidenceConsumer:
-    def __init__(self, *, api_get, git_root, repository_id, workflow, workflow_id, producer_revision, now=None):
+    def __init__(self, *, api_get, git_root, repository_id, workflow, workflow_id, producer_revision, now=None,
+                 refresh_main=None):
+        """`refresh_main`, when given, is the trusted canonical-main fetch.
+
+        The live main tip and the run's head must be commits in local Git, and
+        main keeps moving during a release run that fetched it at the start.
+        A commit that is not local triggers one fetch before it is refused.
+        """
         require(positive(repository_id) and positive(workflow_id) and workflow in WORKFLOWS
-                and sha(producer_revision), "trusted configuration is invalid")
+                and sha(producer_revision) and (refresh_main is None or callable(refresh_main)),
+                "trusted configuration is invalid")
+        self.refresh = refresh_main
         self.api, self.root = api_get, Path(git_root)
         self.repository_id, self.workflow, self.workflow_id = repository_id, workflow, workflow_id
         self.producer = producer_revision
@@ -44,18 +53,59 @@ class DispatchEvidenceConsumer:
         except Exception:
             raise DispatchEvidenceError("why: dispatch API is unavailable; remedy: restore read access to the original run; never redispatch on an observation failure") from None
 
-    def git(self, *args):
+    def _git(self, *args):
         env = {k:v for k,v in os.environ.items() if k in ("PATH", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP")}
         env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
                    GIT_NO_REPLACE_OBJECTS="1", GIT_GRAFT_FILE=os.devnull,
                    GIT_NO_LAZY_FETCH="1", GIT_ALLOW_PROTOCOL="", LC_ALL="C")
         try:
-            result = subprocess.run(["git", "-C", str(self.root), *args], env=env,
-                                    capture_output=True, timeout=30)
+            return subprocess.run(["git", "-C", str(self.root), *args], env=env,
+                                  capture_output=True, timeout=30)
         except (OSError, subprocess.TimeoutExpired):
             raise DispatchEvidenceError("why: dispatch source is unavailable; remedy: restore the original canonical Git objects without executing target code") from None
+
+    def git(self, *args):
+        result = self._git(*args)
         require(result.returncode == 0, "source ancestry is unavailable or conflicts")
         return result.stdout
+
+    def commit(self, value):
+        """Whether a commit is in local Git, after one canonical-main fetch if it is not."""
+        def present():
+            result = self._git("cat-file", "-t", value)
+            return result.returncode == 0 and result.stdout.strip() == b"commit"
+        if present():
+            return True
+        if self.refresh is None:
+            return False
+        try:
+            self.refresh()
+        except Exception:
+            raise DispatchEvidenceError("why: canonical main is not fetchable; remedy: restore read access to canonical main and resume; never redispatch") from None
+        return present()
+
+    def equivalent(self, control, revision):
+        """Whether a main revision may run this dispatch in place of the frozen control.
+
+        GitHub runs a dispatched workflow at whatever main is when it accepts
+        the POST, and main keeps moving during a release. That revision stands
+        in for the control when it descends from it and the dispatched workflow
+        definition is unchanged since: the last commit that touched the
+        workflow file is the same at both. Newer reviewed tooling on protected
+        main is accepted; a changed workflow is not. Missing objects or
+        unreadable history raise rather than answer.
+        """
+        require(sha(control) and sha(revision), "dispatch revision is invalid")
+        if revision == control:
+            return True
+        require(self.commit(control) and self.commit(revision), "source object is not a commit")
+        ancestry = self._git("merge-base", "--is-ancestor", control, revision).returncode
+        require(ancestry in (0, 1), "source ancestry is unavailable or conflicts")
+        if ancestry == 1:
+            return False
+        path = ".github/workflows/" + self.workflow
+        return (self.git("log", "-1", "--format=%H", control, "--", path)
+                == self.git("log", "-1", "--format=%H", revision, "--", path))
 
     def pages(self, suffix, key):
         rows, count, seen = [], None, set()
@@ -79,13 +129,16 @@ class DispatchEvidenceConsumer:
         raise DispatchEvidenceError("why: dispatch read budget exhausted; remedy: reconcile complete inventory without redispatch")
 
     def run(self, run_id, actor_id, control):
+        """The run, whose head may be any main revision equivalent to the control."""
         expected = {"id":run_id, "run_attempt":1, "workflow_id":self.workflow_id,
-                    "path":".github/workflows/"+self.workflow, "head_sha":control,
+                    "path":".github/workflows/"+self.workflow,
                     "head_branch":"main", "event":"workflow_dispatch"}
+        heads = []
         for suffix in (f"/actions/runs/{run_id}", f"/actions/runs/{run_id}/attempts/1"):
             value = self.get(suffix)
             require(type(value) is dict and all(type(value.get(k)) is type(v) and value[k] == v
-                    for k,v in expected.items()), "run identity differs")
+                    for k,v in expected.items()) and sha(value.get("head_sha")), "run identity differs")
+            heads.append(value["head_sha"])
             for key in ("repository", "head_repository"):
                 repo = value.get(key)
                 require(type(repo) is dict and type(repo.get("id")) is int and repo["id"] == self.repository_id
@@ -93,6 +146,7 @@ class DispatchEvidenceConsumer:
             actor = value.get("actor")
             require(type(actor) is dict and type(actor.get("id")) is int and actor["id"] == actor_id,
                     "run actor differs")
+        require(heads[0] == heads[1] and self.equivalent(control, heads[0]), "run identity differs")
         # Failure or still-running publication/deployment is intentionally not
         # rejected here: correlation proves origin, not the effect's outcome.
         return value
@@ -115,14 +169,14 @@ class DispatchEvidenceConsumer:
         require(type(workflow) is dict and type(workflow.get("id")) is int and workflow["id"] == self.workflow_id
                 and workflow.get("path") == ".github/workflows/"+self.workflow and workflow.get("state") == "active",
                 "workflow identity differs")
-        self.run(run_id, actor_id, control_revision)
+        revision = self.run(run_id, actor_id, control_revision)["head_sha"]
         jobs = self.pages(f"/actions/runs/{run_id}/attempts/1/jobs", "jobs")
         preflights = [j for j in jobs if j.get("name") == "preflight"]
         require(len(preflights) == 1, "preflight job is absent or ambiguous")
         job = preflights[0]
         require(type(job.get("run_id")) is int and job["run_id"] == run_id
                 and type(job.get("run_attempt")) is int and job["run_attempt"] == 1
-                and job.get("head_sha") == control_revision and type(job.get("steps")) is list,
+                and job.get("head_sha") == revision and type(job.get("steps")) is list,
                 "preflight belongs to another run/attempt")
         for name in ("Record dispatch correlation", "Upload dispatch correlation"):
             matches = [s for s in job["steps"] if type(s) is dict and s.get("name") == name]
@@ -142,7 +196,7 @@ class DispatchEvidenceConsumer:
         origin = artifact.get("workflow_run")
         require(type(origin) is dict and all(type(origin.get(k)) is int and origin[k] == v for k,v in {
             "id":run_id,"repository_id":self.repository_id,"head_repository_id":self.repository_id}.items())
-            and origin.get("head_sha") == control_revision and origin.get("head_branch") == "main", "artifact origin differs")
+            and origin.get("head_sha") == revision and origin.get("head_branch") == "main", "artifact origin differs")
         raw = self.get(f"/actions/artifacts/{artifact['id']}/zip", raw=True)
         require(type(raw) is bytes and 0 < len(raw) <= LIMIT
                 and artifact.get("digest") == "sha256:"+hashlib.sha256(raw).hexdigest(), "archive transfer differs")
@@ -164,7 +218,7 @@ class DispatchEvidenceConsumer:
             env = {"GITHUB_REPOSITORY_ID":str(self.repository_id),"GITHUB_ACTOR_ID":str(actor_id),
                 "GITHUB_RUN_ID":str(run_id),"GITHUB_RUN_ATTEMPT":"1","GITHUB_EVENT_NAME":"workflow_dispatch",
                 "GITHUB_REF":"refs/heads/main","GITHUB_REPOSITORY":"endaye/lmdj",
-                "GITHUB_SHA":control_revision,"GITHUB_WORKFLOW_SHA":control_revision,
+                "GITHUB_SHA":revision,"GITHUB_WORKFLOW_SHA":revision,
                 "GITHUB_WORKFLOW_REF":f"endaye/lmdj/.github/workflows/{self.workflow}@refs/heads/main"}
             expected = receipt({"inputs":inputs,"ref":"main","repository":{"id":self.repository_id,
                 "full_name":"endaye/lmdj"},"sender":{"id":actor_id}}, env, self.workflow, document["tooling_revision"])
@@ -174,27 +228,30 @@ class DispatchEvidenceConsumer:
                 raise
             raise DispatchEvidenceError("why: dispatch receipt is malformed; remedy: retain the original run and obtain authentic correlation evidence") from None
         require(self.git("rev-parse", "--is-shallow-repository").strip() == b"false", "Git history is shallow")
-        for revision in (self.producer, control_revision, document["tooling_revision"], main_sha):
-            require(self.git("cat-file", "-t", revision).strip() == b"commit", "source object is not a commit")
-        for older, newer in ((self.producer, control_revision), (control_revision, document["tooling_revision"]),
+        for value in (self.producer, control_revision, revision, document["tooling_revision"], main_sha):
+            require(self.commit(value), "source object is not a commit")
+        for older, newer in ((self.producer, control_revision), (revision, document["tooling_revision"]),
                              (document["tooling_revision"], main_sha)):
             self.git("merge-base", "--is-ancestor", older, newer)
-        self.run(run_id, actor_id, control_revision)
+        require(self.run(run_id, actor_id, control_revision)["head_sha"] == revision, "run identity differs")
         require(canonical_json(self.pages(f"/actions/runs/{run_id}/artifacts", "artifacts")) == canonical_json(artifacts),
                 "artifact inventory changed during observation")
         require(expires > self.now, "artifact retention elapsed")
-        return {"schema":"lmdj.release-dispatch-binding.v1", "run_id":run_id,"run_attempt":1,
+        return {"schema":"lmdj.release-dispatch-binding.v2", "run_id":run_id,"run_attempt":1,
                 "repository_id":self.repository_id,"actor_id":actor_id,
                 "workflow":self.workflow,"workflow_id":self.workflow_id,"producer_revision":self.producer,
                 "artifact_id":artifact["id"],"artifact_sha256":hashlib.sha256(raw).hexdigest(),
                 "artifact_expires_at":artifact["expires_at"],
                 "receipt_sha256":canonical_sha256(document),"inputs":dict(inputs),
-                "control_revision":control_revision,"tooling_revision":document["tooling_revision"]}
+                "control_revision":control_revision,"dispatch_revision":revision,
+                "tooling_revision":document["tooling_revision"]}
 
     def discover(self, *, actor_id, control_revision, inputs, prior_run_ids):
         """Reconcile an unknown POST read-only. No result permits another POST.
 
         Scan the complete workflow inventory, including other control SHAs.
+        A run of this request on a newer main still correlates when that main
+        is equivalent to the control; a non-equivalent one is a conflict.
         prior_run_ids MUST be the complete API snapshot frozen in the trusted
         operation journal before its sole POST intent, not a caller's later
         reconstruction or an artifact claim. This reader does not attest when
@@ -240,7 +297,9 @@ class DispatchEvidenceConsumer:
             second = inventory()
             if first != second:
                 return {"status":"unknown","binding":None}
-            if len(candidates) > 1 or any(item["inputs"] != inputs or item["control_revision"] != control_revision for item in candidates):
+            if len(candidates) > 1 or any(item["inputs"] != inputs
+                                          or not self.equivalent(control_revision, item["dispatch_revision"])
+                                          for item in candidates):
                 return {"status":"conflict","binding":None}
             if unknown or not candidates:
                 return {"status":"unknown","binding":None}
@@ -249,7 +308,8 @@ class DispatchEvidenceConsumer:
             # duplicate dispatch; this is an observation, not a global lock.
             binding = self.verify(run_id=candidates[0]["run_id"], actor_id=actor_id,
                                   control_revision=control_revision, inputs=inputs)
-            require(binding == candidates[0], "discovered receipt changed before binding")
+            require(binding == dict(candidates[0], control_revision=control_revision),
+                    "discovered receipt changed before binding")
             return {"status":"correlated","binding":binding}
         except DispatchEvidenceError:
             return {"status":"unknown","binding":None}

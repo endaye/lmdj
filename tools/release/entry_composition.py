@@ -497,7 +497,7 @@ def _prepare_release(context):
 
 def _dispatch_transition(context, root, operations, step, workflow, spec,
                          expected, bind, github, token, repository_id,
-                         dispatch_authorize, release_by_tag):
+                         dispatch_authorize, release_by_tag, refresh_main):
     """Assemble one step's concrete DispatchTransition from production parts."""
     from .deployment_effect import DeploymentEffect
     from .dispatch_evidence import DispatchEvidenceConsumer
@@ -509,7 +509,7 @@ def _dispatch_transition(context, root, operations, step, workflow, spec,
         api_get=github.get_dispatch_evidence, git_root=root,
         repository_id=repository_id, workflow=workflow,
         workflow_id=spec["workflow_id"],
-        producer_revision=spec["producer_revision"])
+        producer_revision=spec["producer_revision"], refresh_main=refresh_main)
 
     if step == "publication":
         def ready(spec):
@@ -828,7 +828,9 @@ def compose_carriers(context, policy, request):
         def transition_for(spec, expected, bind):
             return _dispatch_transition(
                 context, root, operations, step, workflow, spec, expected, bind,
-                github, token, repository_id, spec_authorize, release_by_tag)
+                github, token, repository_id, spec_authorize, release_by_tag,
+                lambda: git.fetch_authority(context.policy.repository,
+                                            context.policy.branch))
         return transition_for
 
     def record_transition_for(**inputs):

@@ -108,7 +108,7 @@ class DeploymentEffect:
         if (len(jobs) != 2 or {j.get("name") for j in jobs} != {"preflight", "deploy"}
                 or any(type(j.get("run_id")) is not int or j["run_id"] != binding["run_id"]
                     or type(j.get("run_attempt")) is not int or j["run_attempt"] != 1
-                    or j.get("head_sha") != self.spec["control_revision"]
+                    or j.get("head_sha") != binding["dispatch_revision"]
                     or j.get("status") != "completed" or j.get("conclusion") != "success" for j in jobs)):
             return "conflict"
         deploy = next(j for j in jobs if j["name"] == "deploy")
@@ -131,7 +131,7 @@ class DeploymentEffect:
         origin = artifact.get("workflow_run")
         require(type(origin) is dict and all(type(origin.get(k)) is int and origin[k] == v for k,v in {
             "id":binding["run_id"], "repository_id":c.repository_id, "head_repository_id":c.repository_id}.items())
-            and origin.get("head_sha") == self.spec["control_revision"] and origin.get("head_branch") == "main",
+            and origin.get("head_sha") == binding["dispatch_revision"] and origin.get("head_branch") == "main",
             "artifact origin differs")
         raw = c.get(f"/actions/artifacts/{artifact['id']}/zip", raw=True)
         require(type(raw) is bytes and 0 < len(raw) <= LIMIT and len(raw) == artifact["size_in_bytes"]
