@@ -261,6 +261,7 @@ test("locks every Tempo and Swing control while recording and says why", () => {
       status: {
         engaged: true, playing: true, recording: true, phase: "idle",
         runtimeGeneration: 1, transportEpoch: 1, originFrame: 0,
+        runtimeFrame: 0, observedAtMilliseconds: 0,
         commandId: "command-1", publicationPending: false, error: null,
       },
     }}
@@ -336,6 +337,8 @@ const transportStatus = (overrides: Partial<PatternTransportStatus>): PatternTra
     runtimeGeneration: 1,
     transportEpoch: 1,
     originFrame: 0,
+    runtimeFrame: 0,
+    observedAtMilliseconds: 0,
     commandId: null,
     publicationPending: false,
     error: null,

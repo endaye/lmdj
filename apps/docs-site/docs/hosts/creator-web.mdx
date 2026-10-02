@@ -412,9 +412,10 @@ line. Below the Sequence facts sits one status line, which shows the most
 severe of a transport error, a Sequence error and a pending publication.
 
 A live playhead advances at the Project tempo from the playing Pattern's
-origin frame. It counts from the moment the overview mounts, not from the
-Runtime's current frame, so after playback continues in another mode it is
-offset until the transport restarts.
+origin frame. It is anchored on the last transport status: the Runtime frame
+that status was read at, plus the time since the Session received it. An
+overview that mounts mid-playback, for example after leaving Sequence and
+coming back, therefore resumes at the playing position.
 
 `ProjectView.patterns` keeps the canonical events, validated against the
 Contract's per-bar tick bounds at the inspection boundary. Both views re-read

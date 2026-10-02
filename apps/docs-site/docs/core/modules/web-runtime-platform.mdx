@@ -52,7 +52,10 @@ T3 起 Platform 向 opted-in session 提供公开的全局 Pattern transport 面
 标记完成协商；未协商的 session 请求一律 `HOST_STATE_INVALID`，legacy
 `sequence.record.begin` 语义不变。request 绑定 session/project/command/epoch/intent，
 返回 pending ticket（`submit` 为 `accepted`/`replayed`，附完整 status），dispatch tail
-立即释放；continuation 由 bridge 的 service cadence 以短的 epoch-checked 步骤重入，
+立即释放。每个 status 都带 `runtime_frame`，即 Host 读取 status 时 Engine 已渲染的帧数；
+Session 把它规范化为 `runtimeFrame`，并以自身的 `performance.now()` 时钟记下收到的时刻
+`observedAtMilliseconds`。Host 由此可以从任意时刻的观测推算播放位置，不必假定 transport
+刚从 `origin_frame` 开始；continuation 由 bridge 的 service cadence 以短的 epoch-checked 步骤重入，
 不在 tail 内等待 audio receipt 或长 IO。engine 的 Pattern 事件调度只在协商启用后
 由 transport 门控，legacy 路径逐位不变。已 engaged 的 session 拒绝冲突的 legacy 直接写入
 （`sequence.record.begin`、录音中的 `sequence.settings.update`），保证单一 journal owner。

@@ -46,6 +46,8 @@ const playingTransport: PatternTransportState = {
     runtimeGeneration: 1,
     transportEpoch: 1,
     originFrame: 0,
+    runtimeFrame: 0,
+    observedAtMilliseconds: 1_000,
     commandId: null,
     publicationPending: false,
     error: null,
@@ -195,6 +197,36 @@ test("advances the playhead on the render clock while the transport plays", () =
     );
     expect(playhead()).toBeNull();
     expect(cancelAnimationFrame).toHaveBeenCalledWith(71);
+  } finally {
+    requestAnimationFrame.mockRestore();
+    cancelAnimationFrame.mockRestore();
+    now.mockRestore();
+  }
+});
+
+test("a remounted overview resumes the playhead at the playing position", () => {
+  const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")
+    .mockImplementation(() => 72);
+  const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame")
+    .mockImplementation(() => {});
+  // The status was observed at 1000 ms with the Runtime at the origin; the
+  // overview mounts 750 ms later, as after leaving Sequence mid-playback.
+  // 0.75 s at 120 BPM is 1440 ticks.
+  const now = vi.spyOn(performance, "now").mockReturnValue(1_750);
+  try {
+    const view = renderOverview({transport: playingTransport});
+    expect(view.container.querySelector("line[data-playhead]")
+      ?.getAttribute("x1")).toBe("1440");
+    // An observation already past the origin counts from its own frame:
+    // 24000 frames after a 96000 origin is half a second, 960 ticks.
+    view.rerender(
+      <SequenceOverview project={project} state={initialSequenceState}
+        bank={0} snap="1/16" viewport={null} selection={[]}
+        transport={{...playingTransport, status: {...playingTransport.status!,
+          originFrame: 96_000, runtimeFrame: 120_000,
+          observedAtMilliseconds: 1_750}}} />);
+    expect(view.container.querySelector("line[data-playhead]")
+      ?.getAttribute("x1")).toBe("960");
   } finally {
     requestAnimationFrame.mockRestore();
     cancelAnimationFrame.mockRestore();

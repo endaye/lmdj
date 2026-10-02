@@ -1393,10 +1393,14 @@ std::string_view pattern_transport_submit_name(
   return "refused";
 }
 
+// `runtime_frame` is the Engine's rendered frame count when the status was
+// read, so a Host can place a playhead relative to `origin_frame` without
+// assuming the transport has just started.
 Json pattern_transport_status_json(
     bool engaged,
     const facade::PatternTransportStatus& status,
-    bool publication_pending) {
+    bool publication_pending,
+    std::uint64_t runtime_frame) {
   return {
       {"engaged", engaged},
       {"playing", status.playing},
@@ -1405,6 +1409,7 @@ Json pattern_transport_status_json(
       {"runtime_generation", status.runtime_generation},
       {"transport_epoch", status.transport_epoch},
       {"origin_frame", status.origin_frame},
+      {"runtime_frame", runtime_frame},
       {"command_id",
        status.command_id.has_value() ? Json(status.command_id->value())
                                      : Json(nullptr)},
@@ -2136,7 +2141,8 @@ struct ControlRuntime::Impl {
              ? pattern_transport_status_json(
                  true,
                  transport->controller->inspect(),
-                 transport->publish_pending)
+                 transport->publish_pending,
+                 engine.telemetry().rendered_frames)
              : Json(nullptr)},
     });
   }
@@ -4588,7 +4594,8 @@ Json ControlRuntime::dispatch(
            pattern_transport_status_json(
                true,
                engagement->controller->inspect(),
-               engagement->publish_pending)},
+               engagement->publish_pending,
+               impl_->engine.telemetry().rendered_frames)},
       });
     }
     if (operation == "pattern.transport.inspect") {
@@ -4597,7 +4604,8 @@ Json ControlRuntime::dispatch(
       const auto session_id = uuid_field(payload, "session_id");
       if (impl_->transport == nullptr ||
           impl_->transport->session->value() != session_id) {
-        return success(pattern_transport_status_json(false, {}, false));
+        return success(pattern_transport_status_json(
+            false, {}, false, impl_->engine.telemetry().rendered_frames));
       }
       if (impl_->state == Impl::State::running) {
         // One short continuation step per inspection turn.
@@ -4606,7 +4614,8 @@ Json ControlRuntime::dispatch(
       return success(pattern_transport_status_json(
           true,
           impl_->transport->controller->inspect(),
-          impl_->transport->publish_pending));
+          impl_->transport->publish_pending,
+          impl_->engine.telemetry().rendered_frames));
     }
     if (operation == "sequence.record.begin") {
       require(

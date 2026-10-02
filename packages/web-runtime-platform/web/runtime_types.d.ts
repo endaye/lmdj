@@ -76,6 +76,10 @@ export interface PatternTransportStatus {
   readonly runtimeGeneration: number;
   readonly transportEpoch: number;
   readonly originFrame: number;
+  /** The Engine's rendered frame when the Host read this status. */
+  readonly runtimeFrame: number;
+  /** When the Session received it, on the `performance.now()` clock. */
+  readonly observedAtMilliseconds: number;
   readonly commandId: string | null;
   readonly publicationPending: boolean;
   readonly error: Readonly<{

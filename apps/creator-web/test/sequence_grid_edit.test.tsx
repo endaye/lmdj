@@ -103,6 +103,8 @@ function gridFixture(options: {
     runtimeGeneration: 1,
     transportEpoch: 1,
     originFrame: 96_000,
+    runtimeFrame: 96_000,
+    observedAtMilliseconds: performance.now(),
     commandId: null,
     publicationPending: false,
     error: null,

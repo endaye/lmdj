@@ -5995,6 +5995,7 @@ function transportStatus(overrides = {}) {
     runtime_generation: 1,
     transport_epoch: 1,
     origin_frame: 0,
+    runtime_frame: 0,
     command_id: TRANSPORT_COMMAND_ID,
     publication_pending: false,
     error: null,
@@ -6307,10 +6308,28 @@ test("Project duplicate rejects a Host result that is not at revision 0", async 
   await session.close();
 });
 
+test("a Pattern transport status without its runtime frame is a protocol mismatch", async () => {
+  const {session} = fixture({
+    patternTransport: true,
+    send: async (envelope) => {
+      if (envelope.operation === "pattern.transport.inspect") {
+        const {runtime_frame: _omitted, ...status} = transportStatus({phase: "idle"});
+        return success(envelope, status);
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await assert.rejects(session.inspectPatternTransport(TRANSPORT_SESSION_ID),
+    {code: "HOST_PROTOCOL_MISMATCH"});
+  await session.close();
+});
+
 test("Pattern transport request returns the pending ticket without awaiting settlement", async () => {
   const sent = [];
   const {session} = fixture({
     patternTransport: true,
+    now: () => 1234.5,
     send: async (envelope) => {
       sent.push(envelope);
       if (envelope.operation === "pattern.transport.request") {
@@ -6326,6 +6345,8 @@ test("Pattern transport request returns the pending ticket without awaiting sett
           phase: "idle",
           playing: true,
           recording: true,
+          origin_frame: 96_000,
+          runtime_frame: 150_000,
         }));
       }
       return success(envelope, defaultResult(envelope.operation));
@@ -6366,7 +6387,10 @@ test("Pattern transport request returns the pending ticket without awaiting sett
     phase: "idle",
     runtimeGeneration: 1,
     transportEpoch: 1,
-    originFrame: 0,
+    originFrame: 96_000,
+    // The Host's rendered frame, stamped with the Session's clock on receipt.
+    runtimeFrame: 150_000,
+    observedAtMilliseconds: 1234.5,
     commandId: TRANSPORT_COMMAND_ID,
     publicationPending: false,
     error: null,
