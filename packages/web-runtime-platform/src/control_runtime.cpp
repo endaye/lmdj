@@ -222,16 +222,62 @@ domain::TriggerMode trigger_mode_value(const Json& value) {
   protocol_failure();
 }
 
-// The five 5.0.0 playback keys are required; a lmdj.project.v5 5.1.0 parity
-// key may be omitted, which means its default; an unknown key is a protocol
-// failure, as before.
+// An EQ shelf band (lmdj.project.v5 5.2.0): exact keys, a shelf or cut kind,
+// and the band's frequency range.
+domain::PadEqShelf eq_shelf_value(
+    const Json& value, std::int32_t minimum_hz, std::int32_t maximum_hz) {
+  require(exact_keys(value, {"kind", "freq_hz", "gain_millidb"}));
+  const auto& kind = string_field(value, "kind");
+  require(kind == "shelf" || kind == "cut");
+  return domain::PadEqShelf{
+      kind == "cut" ? domain::EqBandKind::cut : domain::EqBandKind::shelf,
+      signed_field(value, "freq_hz", minimum_hz, maximum_hz),
+      signed_field(value, "gain_millidb", domain::kPadEqGainMillidbMin,
+                   domain::kPadEqGainMillidbMax),
+  };
+}
+
+// The three optional EQ bands; an absent band is bypassed.
+domain::PadEq eq_value(const Json& value) {
+  require(value.is_object());
+  for (const auto& [key, band] : value.items()) {
+    (void)band;
+    require(key == "low" || key == "mid" || key == "high");
+  }
+  domain::PadEq eq;
+  if (value.contains("low")) {
+    eq.low = eq_shelf_value(value.at("low"), domain::kPadEqLowFreqHzMin,
+                            domain::kPadEqLowFreqHzMax);
+  }
+  if (value.contains("mid")) {
+    const auto& mid = value.at("mid");
+    require(exact_keys(mid, {"freq_hz", "gain_millidb", "q_milli"}));
+    eq.mid = domain::PadEqBell{
+        signed_field(mid, "freq_hz", domain::kPadEqMidFreqHzMin,
+                     domain::kPadEqMidFreqHzMax),
+        signed_field(mid, "gain_millidb", domain::kPadEqGainMillidbMin,
+                     domain::kPadEqGainMillidbMax),
+        signed_field(mid, "q_milli", domain::kPadEqMidQMilliMin,
+                     domain::kPadEqMidQMilliMax),
+    };
+  }
+  if (value.contains("high")) {
+    eq.high = eq_shelf_value(value.at("high"), domain::kPadEqHighFreqHzMin,
+                             domain::kPadEqHighFreqHzMax);
+  }
+  return eq;
+}
+
+// The five 5.0.0 playback keys are required; a lmdj.project.v5 5.1.0 or 5.2.0
+// parity key may be omitted, which means its default; an unknown key is a
+// protocol failure, as before.
 domain::PadPlayback playback_value(const Json& value) {
   static constexpr std::array<std::string_view, 5> base{
       "trim_start_frame", "trim_end_frame", "trigger_mode", "gain_millidb",
       "muted"};
-  static constexpr std::array<std::string_view, 6> parity{
+  static constexpr std::array<std::string_view, 10> parity{
       "reverse", "pitch_cents", "pan", "loop_mode", "loop_start_frame",
-      "loop_crossfade_frames"};
+      "loop_crossfade_frames", "attack_ms", "release_ms", "tone", "eq"};
   require(value.is_object());
   for (const auto key : base) {
     require(value.contains(std::string(key)));
@@ -279,6 +325,21 @@ domain::PadPlayback playback_value(const Json& value) {
   if (value.contains("loop_crossfade_frames")) {
     playback.loop_crossfade_frames =
         unsigned_field(value, "loop_crossfade_frames");
+  }
+  if (value.contains("attack_ms")) {
+    playback.attack_ms =
+        signed_field(value, "attack_ms", 0, domain::kPadAttackMsMax);
+  }
+  if (value.contains("release_ms")) {
+    playback.release_ms =
+        signed_field(value, "release_ms", 0, domain::kPadReleaseMsMax);
+  }
+  if (value.contains("tone")) {
+    playback.tone = signed_field(value, "tone", domain::kPadToneMin,
+                                 domain::kPadToneMax);
+  }
+  if (value.contains("eq")) {
+    playback.eq = eq_value(value.at("eq"));
   }
   return playback;
 }
