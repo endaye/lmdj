@@ -6,10 +6,16 @@
 }
 
 * { box-sizing: border-box; }
+html { overscroll-behavior: none; }
 body {
   margin: 0;
   min-width: 768px;
-  min-height: 100dvh;
+  /* The page is exactly one viewport, always: no document scroll and no
+     rubber-band overscroll, so the shell feels like a native app. Content
+     that cannot fit scrolls inside the stage (.hardware-workspace keeps
+     overflow: auto), which the hardware_layout 768×600 leg exercises. */
+  height: 100dvh;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   /* Dark-stage shell: a lime house-light pool behind the console, a faint
@@ -28,6 +34,7 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 button { font: inherit; }
 .eyebrow { color: #9da6b4; }
@@ -40,7 +47,6 @@ button { font: inherit; }
   justify-content: space-between;
   gap: 1rem;
   padding-inline: clamp(1rem, 3vw, 2rem);
-  border-bottom: 1px solid rgb(221 244 120 / 12%);
   background: rgb(10 11 9 / 72%);
   backdrop-filter: blur(14px);
 }
@@ -69,9 +75,8 @@ button { font: inherit; }
   justify-content: space-between;
   gap: 1rem;
   padding-inline: clamp(1rem, 3vw, 2rem);
-  border-top: 1px solid rgb(255 255 255 / 6%);
   color: #6f7887;
-  font-size: .72rem;
+  font-size: .64rem;
   letter-spacing: .06em;
   font-variant-numeric: tabular-nums;
 }
