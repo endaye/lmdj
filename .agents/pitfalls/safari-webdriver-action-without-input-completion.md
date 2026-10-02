@@ -3,7 +3,7 @@ id: safari-webdriver-action-without-input-completion
 area: web-host
 status: open
 recurrences:
-  - date: 2026-10-03
+  - date: 2026-10-02
     occurrence: https://github.com/endaye/lmdj/issues/1671
     observed_by: Codex (GPT-6)
 exit: none

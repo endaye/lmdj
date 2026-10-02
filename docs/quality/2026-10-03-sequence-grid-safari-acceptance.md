@@ -1,6 +1,7 @@
 # Sequence grid: macOS and real iPad Safari acceptance
 
-Date: 2026-10-03. Relates to [#1671](https://github.com/endaye/lmdj/issues/1671).
+Date: 2026-10-03 (Asia/Shanghai; observations on 2026-10-02 UTC).
+Relates to [#1671](https://github.com/endaye/lmdj/issues/1671).
 Authority: [the Sequence grid plan](../plans/2026-10-02-creator-sequence-grid.md),
 including its T3 journey and separate physical-input and hearing rows.
 
