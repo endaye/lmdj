@@ -46,3 +46,13 @@ inline Native attachment body to a file. Preserve that limitation. A same-source
 JSON-reporter run retains the Native body for independent inspection; it is
 additional evidence, not a substitute for the new committed-head full Creator
 proof. No eligibility or owner adoption is inferred from the named pass.
+
+R19 independent controlled cleanup exposed an observer interface omission:
+terminate and the live terminated/terminalOwnerReleased getters were missing.
+The actual Product terminator then chose direct Worker termination and stopped
+awaiting Native owner cleanup. Forward all six actual Native transport members,
+including the original cleanup Promise and both live getters. Require the same
+controlled actual-terminator reduction to pass, then repeat the complete named
+Native lifecycle journey and the new full Creator proof. Preserve the genuine
+old named passes and stopped incomplete full runs; this interface counterexample
+is not a cause claim about an original Native/browser timeout.
