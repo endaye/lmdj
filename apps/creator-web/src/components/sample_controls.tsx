@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState, type ReactNode} from "react";
 
+import {EqEditor} from "./eq_editor";
 import {ModalDialog} from "./modal_dialog";
 import {ParameterSlider} from "./parameter_slider";
 import type {
@@ -282,6 +283,15 @@ export function SampleControls({
         step={1}
         scale={1}
         format={formatTone}
+        playback={playback}
+        disabled={disabled}
+        audioSuspended={audioSuspended}
+        onPreview={onPreview}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />
+      <EqEditor
+        padLabel={padLabel}
         playback={playback}
         disabled={disabled}
         audioSuspended={audioSuspended}
