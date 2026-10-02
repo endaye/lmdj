@@ -287,6 +287,73 @@ async function recoverFromLifecycleEdge(page) {
   });
 }
 
+async function installLifecycleNativeProof(page) {
+  await page.addInitScript(() => {
+    window.__lifecycleNativeProof = {suspends: [], voices: [], outcomes: []};
+    let exposed;
+    Object.defineProperty(window, "lmdjWebRuntimeHost", {
+      configurable: true,
+      get() { return exposed; },
+      set(nativeHost) {
+        const nativeTransport = nativeHost.transport;
+        nativeTransport.subscribe((notification) => {
+          if (notification?.event === "runtime.voice_state") {
+            window.__lifecycleNativeProof.voices.push(...structuredClone(notification.payload.events));
+          }
+          if (notification?.event === "runtime.trigger_outcomes") {
+            window.__lifecycleNativeProof.outcomes.push(...structuredClone(notification.payload.events));
+          }
+        });
+        nativeHost.transport = Object.freeze({
+          async send(...args) {
+            const response = await nativeTransport.send(...args);
+            if (args[0]?.operation === "audio.suspend") {
+              window.__lifecycleNativeProof.suspends.push({
+                request: structuredClone(args[0]), response: structuredClone(response),
+              });
+            }
+            return response;
+          },
+          subscribe(...args) { return nativeTransport.subscribe(...args); },
+          subscribeFailure(...args) { return nativeTransport.subscribeFailure(...args); },
+          terminate(...args) { return nativeTransport.terminate(...args); },
+          get terminated() { return nativeTransport.terminated; },
+          get terminalOwnerReleased() { return nativeTransport.terminalOwnerReleased; },
+        });
+        exposed = nativeHost;
+      },
+    });
+  });
+}
+
+async function expectNativeLoopClear(page, afterSuspend) {
+  // Native audio.suspend acknowledges its quiesce-and-stop barrier before
+  // returning. Observe that real reply; never substitute a UI label for it.
+  await expect.poll(() => page.evaluate((after) =>
+    window.__lifecycleNativeProof.suspends.slice(after).some(({request, response}) =>
+      response.ok === true && response.request_id === request.request_id &&
+      response.result.state === "audio-suspended" && response.result.changed === true),
+  afterSuspend), {timeout: 30_000}).toBe(true);
+  await expect(page.getByRole("button", {
+    name: "Pad A1 — assigned — Key Q", exact: true,
+  })).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
+}
+
+async function latchObservedLoopToggle(page) {
+  const before = await page.evaluate(() => ({
+    voices: window.__lifecycleNativeProof.voices.length,
+    outcomes: window.__lifecycleNativeProof.outcomes.length,
+  }));
+  await latchLoopToggle(page);
+  await expect.poll(() => page.evaluate((after) => {
+    const proof = window.__lifecycleNativeProof;
+    return proof.voices.slice(after.voices).some((voice) =>
+      voice.slot === 0 && voice.state === "started" &&
+      proof.outcomes.slice(after.outcomes).some((outcome) =>
+        outcome.sequence === voice.sequence && outcome.outcome === "voice_started"));
+  }, before), {timeout: 30_000}).toBe(true);
+}
+
 async function enterLoopToggleSample(page) {
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
@@ -389,41 +456,59 @@ test("suspend, restart, and reopen clear an active loop toggle before reactivati
   );
 });
 
-test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({page, browserName}) => {
+test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({page, browserName}, testInfo) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(180_000);
+  await installLifecycleNativeProof(page);
   await page.goto("/index.html");
   await importAndActivate(page);
   await enterLoopToggleSample(page);
-  await latchLoopToggle(page);
-
-  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
-  // A synthetic edge leaves the real AudioContext running. Assert its stable
-  // armed recovery state, not the transient interrupted/suspended projection.
-  await recoverFromLifecycleEdge(page);
-  await latchLoopToggle(page);
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
-    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
-  });
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-
-  await page.evaluate(() => {
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      value: "hidden",
+  try {
+    await latchObservedLoopToggle(page);
+    const beforeBlurSuspend = await page.evaluate(() =>
+      window.__lifecycleNativeProof.suspends.length);
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {
+      timeout: 30_000,
     });
-    document.dispatchEvent(new Event("visibilitychange"));
-  });
-  await recoverFromLifecycleEdge(page);
-  await page.evaluate(() => {
-    delete document.visibilityState;
-    document.dispatchEvent(new Event("visibilitychange"));
-  });
-  await recoverFromLifecycleEdge(page);
-  await latchLoopToggle(page);
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
-    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
-  });
+    await expectNativeLoopClear(page, beforeBlurSuspend);
+    await recoverFromLifecycleEdge(page);
+    await latchObservedLoopToggle(page);
+    await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+      timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+    });
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+
+    const beforeHiddenSuspend = await page.evaluate(() =>
+      window.__lifecycleNativeProof.suspends.length);
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "hidden",
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    // Preserve the original30s state boundary. While hidden, require the
+    // Native stop receipt and idle Pad; the fresh probe belongs after return.
+    await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {
+      timeout: 30_000,
+    });
+    await expectNativeLoopClear(page, beforeHiddenSuspend);
+    await page.evaluate(() => {
+      delete document.visibilityState;
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await recoverFromLifecycleEdge(page);
+    await latchObservedLoopToggle(page);
+    await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+      timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+    });
+  } finally {
+    await testInfo.attach("native-lifecycle-proof", {
+      body: JSON.stringify(await page.evaluate(() => window.__lifecycleNativeProof)),
+      contentType: "application/json",
+    });
+  }
 });
 
 test("persisted page lifecycle retains the Project and live input surface", async ({page, browserName}) => {
