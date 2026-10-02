@@ -378,6 +378,13 @@ export function sequenceGridBatchMove(options: Readonly<{
     lowPads = Math.max(lowPads, -note.pad);
     highPads = Math.min(highPads, SEQUENCE_BANK_PADS - 1 - note.pad);
   }
+  // With snap on, the bounds tighten to snap multiples so a drag that hits
+  // an edge stops on the grid instead of at the edge's off-grid tick. Zero
+  // is a snap multiple inside every range, so the no-op point survives.
+  if (snapTicks !== null) {
+    lowTicks = Math.ceil(lowTicks / snapTicks) * snapTicks;
+    highTicks = Math.floor(highTicks / snapTicks) * snapTicks;
+  }
   const deltaTicks = Math.max(lowTicks, Math.min(
     snapTicks === null
       ? Math.round(options.deltaTicks)

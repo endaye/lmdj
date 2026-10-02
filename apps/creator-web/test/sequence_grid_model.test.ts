@@ -390,6 +390,21 @@ describe("grid editing gestures map to one exact command each", () => {
     });
   });
 
+  test("a batch that hits an off-grid edge stops on the snap grid", () => {
+    // A recorded note at onset 100 can move back at most 100 ticks; with
+    // 1/16 snap the selection must not land 100 ticks back, off the grid.
+    const notes = [gridNote(0, 100, 240), gridNote(1, 1200, 240, 80)];
+    expect(sequenceGridBatchMove({
+      bank: 0, notes, deltaTicks: -9999, deltaPads: 0, snapTicks: 240,
+      lengthTicks: 3840,
+    })).toBeNull();
+    // Snap off keeps the exact edge.
+    expect(sequenceGridBatchMove({
+      bank: 0, notes, deltaTicks: -9999, deltaPads: 0, snapTicks: null,
+      lengthTicks: 3840,
+    })?.put.map((event) => event.onsetTick)).toEqual([0, 1100]);
+  });
+
   test("the box hit test covers pads and intersecting tick windows", () => {
     const notes = [
       gridNote(0, 0, 240),
