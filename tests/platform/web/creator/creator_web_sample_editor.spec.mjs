@@ -1057,20 +1057,19 @@ test("Sample tone parity commits, cancels, refuses, fails and reopens through th
   // 36 half-dB steps reach the floor; one more makes the low shelf a cut.
   await holdKeySteps(page, page.getByRole("slider", {name: "Pad A1 EQ Low"}), "ArrowDown", 37);
   await expectProjectRevision(page, 7);
-  // A pointer drag up and right turns the mid band on. The events go to the
-  // pole itself, as slideAndRelease's do, at client coordinates on its plot.
+  // A real mouse drag up and right turns the mid band on, through the
+  // browser's own hit-testing, focus and pointer capture.
   const mid = page.getByRole("slider", {name: "Pad A1 EQ Mid"});
-  const box = await mid.boundingBox();
-  const centre = {x: box.x + box.width / 2, y: box.y + box.height / 2};
-  const dragId = ++pointerSequence;
-  await mid.dispatchEvent("pointerdown",
-    {pointerId: dragId, isPrimary: true, button: 0, clientX: centre.x, clientY: centre.y});
-  for (const step of [10, 20, 30]) {
-    await mid.dispatchEvent("pointermove",
-      {pointerId: dragId, isPrimary: true, clientX: centre.x + step, clientY: centre.y - step});
-  }
-  await mid.dispatchEvent("pointerup",
-    {pointerId: dragId, isPrimary: true, button: 0, clientX: centre.x + 30, clientY: centre.y - 30});
+  const poleCentre = async () => {
+    await mid.scrollIntoViewIfNeeded();
+    const box = await mid.boundingBox();
+    return {x: box.x + box.width / 2, y: box.y + box.height / 2};
+  };
+  const centre = await poleCentre();
+  await page.mouse.move(centre.x, centre.y);
+  await page.mouse.down();
+  await page.mouse.move(centre.x + 30, centre.y - 30, {steps: 5});
+  await page.mouse.up();
   await expectProjectRevision(page, 8);
   const committed = await inspectedPlayback(page);
   expect(committed).toEqual({
@@ -1108,6 +1107,17 @@ test("Sample tone parity commits, cancels, refuses, fails and reopens through th
   await page.keyboard.up("Escape");
   await page.keyboard.up("ArrowUp");
   await expect(high).toHaveAttribute("aria-valuetext", "High shelf 8.00 kHz +1.0 dB");
+  // A pointer press never focuses the pole, so the browser delivers Escape to
+  // whatever had focus; the drag still cancels.
+  const midText = await mid.getAttribute("aria-valuetext");
+  const grab = await poleCentre();
+  await page.mouse.move(grab.x, grab.y);
+  await page.mouse.down();
+  await page.mouse.move(grab.x - 20, grab.y + 20, {steps: 4});
+  await expect(mid).not.toHaveAttribute("aria-valuetext", midText);
+  await page.keyboard.press("Escape");
+  await expect(mid).toHaveAttribute("aria-valuetext", midText);
+  await page.mouse.up();
   await expect.poll(() => page.evaluate((offset) =>
     window.__sampleProofOperations.slice(offset), cancelOffset))
     .toEqual(expect.arrayContaining(["sample.preview.set", "sample.preview.clear"]));
