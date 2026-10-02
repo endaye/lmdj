@@ -417,9 +417,10 @@ test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({pag
     });
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {
-    timeout: 30_000,
-  });
+  // Complete the armed recovery at the hidden boundary too: observe its
+  // recovering phase, Native idle/started probe and running far side before
+  // changing visibility again. A label alone leaves the recovery unresolved.
+  await recoverFromLifecycleEdge(page);
   await page.evaluate(() => {
     delete document.visibilityState;
     document.dispatchEvent(new Event("visibilitychange"));
