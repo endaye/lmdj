@@ -672,12 +672,14 @@ class GitHubClient:
                 and type(main) is dict and main.get("name")=="main" and main.get("protected") is True
                 and type(main.get("commit")) is dict and _sha(main["commit"].get("sha"))):
             raise GitHubApiError("why: dispatch actor, workflow or main scope changed; remedy: reconcile the original operation without retry")
+        # An unanswerable check is not a changed workflow: only the latter
+        # makes the request undispatchable for good.
         try:
-            accepted = dispatchable(main["commit"]["sha"]) is True
+            accepted = dispatchable(main["commit"]["sha"])
         except Exception:
-            accepted = False
-        if not accepted:
-            raise GitHubApiError("why: main no longer runs the frozen workflow definition, or its history is unreadable; remedy: resume once canonical main is readable, or start a new request if the workflow changed")
+            raise GitHubApiError("why: main history is unreadable for the dispatch check; remedy: resume once canonical main is readable; nothing was dispatched") from None
+        if accepted is not True:
+            raise GitHubApiError("why: main no longer runs the frozen workflow definition; remedy: start a new request from current main; nothing was dispatched")
 
     def dispatch_release(self, spec, *, before_post, dispatchable):
         """One exact main dispatch, called only after durable intent persistence.

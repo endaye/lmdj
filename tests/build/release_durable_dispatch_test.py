@@ -100,6 +100,17 @@ class DurableTest(unittest.TestCase):
         self.assertEqual(self.new_controller().resume(self.spec)["status"],"correlated")
         self.assertEqual(len(self.posts),1)
 
+    def test_scope_tells_an_unreadable_history_from_a_changed_workflow(self):
+        from tools.release.github_api import GitHubApiError
+        def unreadable(revision):raise ValueError("private-sentinel")
+        with self.assertRaisesRegex(GitHubApiError,"history is unreadable") as caught:
+            self.client.dispatch_scope(self.spec,dispatchable=unreadable)
+        self.assertNotIn("private-sentinel",str(caught.exception))
+        self.assertNotIn("workflow definition",str(caught.exception))
+        with self.assertRaisesRegex(GitHubApiError,"no longer runs the frozen workflow definition") as caught:
+            self.client.dispatch_scope(self.spec,dispatchable=lambda revision:False)
+        self.assertNotIn("unreadable",str(caught.exception))
+
     def test_successful_dispatch_is_correlated_and_resume_never_reposts(self):
         result=self.controller.start(self.spec)
         self.assertEqual(result["status"],"correlated");self.assertEqual(result["binding"]["run_id"],41)
