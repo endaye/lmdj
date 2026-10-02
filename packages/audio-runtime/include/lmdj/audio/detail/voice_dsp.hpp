@@ -15,7 +15,8 @@
 //
 // Everything here is noexcept, allocation-free and lock-free. Positions are
 // Q32.32 frames and the per-frame functions use no double; prepare_voice_dsp
-// derives the pitch step in double once per trigger, on the audio thread.
+// derives the pitch step and the filter coefficients in double once per
+// trigger, on the audio thread.
 namespace lmdj::audio::detail {
 
 inline constexpr std::uint32_t kVoiceDspRampFrames = 96;
@@ -234,8 +235,9 @@ inline float voice_dsp_filter(
 }
 
 // Sets filter memory that has decayed below any audible level to exact zero,
-// so a silent tail never runs on denormals. Called once per rendered block;
-// the change is far below one PCM16 step.
+// so a silent tail spends at most one rendered block on denormals instead of
+// decaying through them indefinitely. Called once per rendered block; the
+// change is far below one PCM16 step.
 inline void voice_dsp_flush_filters(
     const VoiceDspState& state, VoiceDspFilterMemory& memory) noexcept {
   constexpr float kFloor = 1e-20F;

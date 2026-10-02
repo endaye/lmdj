@@ -98,3 +98,22 @@
     实施计划的 Version Management 与 Documentation Impact 声明。
   - `lmdj.runtime-content.v1` 不变。
   - 不关闭 #1666、#1667；两者由各自的实施 PR 与验收证据关闭。
+
+## 补记：2026-10-02，#1780 独立审查后 Owner 确认
+
+#1667 的 Core 实现（[#1780](https://github.com/endaye/lmdj/pull/1780)）经独立审查实测，发现两处结束方式问题，Owner 在会话中做出以下两项决定。
+
+1. **第 4 条补充：带滤波 voice 的结尾 declick 在 EQ 之后再做一次。**
+   - 问题：包络在滤波器之前，包络归零时滤波器仍在响；voice 若在这一帧直接关闭，输出会从约 −2 dB 跳到 0（实时与导出相同）。
+   - 规则：开了 tone 或 EQ 的 voice，最后 96 帧的结尾 declick 在 EQ 之后对输出再乘一次（release 尾音与非循环 voice 的结尾都适用）。voice 仍在原来那一帧结束。
+   - 不变的部分：第 4 条的其余顺序不变；不开滤波的 voice 不受影响，输出逐位不变。
+   - 代价：共鸣很强的 EQ 尾巴会在最后 2 ms 被淡出截断。
+2. **第 5 条澄清：只有 release 事件才走 Pad 的 release。**
+   - 走 Pad release 的事件：gate / loop_gate 松开、loop_toggle 再次按下、Pattern 与 Performance Replay 的 note-off，以及将来的 choke。
+   - 只用 2 ms declick 的停止：`stop_all`、`stop_slot`、Pattern 切换与 transport 停止、audition 停止。
+   - 依据：Owner 要求"和 Koala 一致"。Koala 手册没有写明停止时的行为，最接近的官方说明是"要停止一个很长的 one-shot，可以双击播放键停止 sequencer"，即停止表示立即静音。
+
+同一轮审查还修正了两处实现，属于对本决策原有含义的落实，不改变决策：
+
+- Attack 期间开始的 release，从 attack 当时的电平线性淡出，不会在松开后继续变响。
+- 第 5 条已规定 one_shot 忽略 release，所以 one_shot 的 release 解析为 0。只设置了 release 的 one_shot 仍是中性的，Cardputer 不会因此拒绝它。
