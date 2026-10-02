@@ -529,6 +529,107 @@ void test_update_pad_playback_rejects_invalid_parity_values() {
   }
 }
 
+PadPlayback with_tone(
+    PadPlayback playback,
+    std::int32_t attack_ms,
+    std::int32_t release_ms,
+    std::int32_t tone,
+    lmdj::domain::PadEq eq) {
+  playback.attack_ms = attack_ms;
+  playback.release_ms = release_ms;
+  playback.tone = tone;
+  playback.eq = eq;
+  return playback;
+}
+
+lmdj::domain::PadEq full_eq(
+    lmdj::domain::PadEqShelf low,
+    lmdj::domain::PadEqBell mid,
+    lmdj::domain::PadEqShelf high) {
+  return lmdj::domain::PadEq{low, mid, high};
+}
+
+void test_update_pad_playback_accepts_tone_bounds() {
+  using lmdj::domain::EqBandKind;
+  auto state = apply_or_throw(
+      new_project(),
+      import_assign_sample(
+          kImportAssignCommand, 0, PadSlotId{0, 0}, kAsset1))
+                   .state;
+  const PadPlayback gate{10, 30, TriggerMode::gate, 0, false};
+  const std::array cases{
+      with_tone(gate, 2000, 4000, -100,
+                full_eq({EqBandKind::shelf, 20, -18000},
+                        {100, 18000, 100},
+                        {EqBandKind::cut, 20000, 18000})),
+      with_tone(gate, 1, 1, 100,
+                full_eq({EqBandKind::cut, 2000, 18000},
+                        {10000, -18000, 10000},
+                        {EqBandKind::shelf, 1000, -18000})),
+      // Every band is independent: one present band leaves the others bypassed.
+      with_tone(gate, 0, 0, 0,
+                lmdj::domain::PadEq{std::nullopt, lmdj::domain::PadEqBell{1000, 0, 707},
+                                    std::nullopt}),
+  };
+
+  for (const auto& playback : cases) {
+    const auto applied = lmdj::domain::apply(
+        state,
+        update_playback(
+            kPlaybackCommand, state.revision, PadSlotId{0, 0}, playback),
+        {});
+    LMDJ_CHECK(applied.has_value());
+    LMDJ_CHECK(applied.value().state.banks[0][0].playback == playback);
+    state = applied.value().state;
+  }
+}
+
+void test_update_pad_playback_rejects_invalid_tone_values() {
+  using lmdj::domain::EqBandKind;
+  using lmdj::domain::PadEq;
+  using lmdj::domain::PadEqBell;
+  using lmdj::domain::PadEqShelf;
+  const auto initial = new_project();
+  const PadPlayback gate{10, 30, TriggerMode::gate, 0, false};
+  const auto low = [&](PadEqShelf band) {
+    return with_tone(gate, 0, 0, 0, PadEq{band, std::nullopt, std::nullopt});
+  };
+  const auto mid = [&](PadEqBell band) {
+    return with_tone(gate, 0, 0, 0, PadEq{std::nullopt, band, std::nullopt});
+  };
+  const auto high = [&](PadEqShelf band) {
+    return with_tone(gate, 0, 0, 0, PadEq{std::nullopt, std::nullopt, band});
+  };
+  for (const PadPlayback& invalid_playback : {
+           with_tone(gate, 2001, 0, 0, {}),
+           with_tone(gate, -1, 0, 0, {}),
+           with_tone(gate, 0, 4001, 0, {}),
+           with_tone(gate, 0, -1, 0, {}),
+           with_tone(gate, 0, 0, 101, {}),
+           with_tone(gate, 0, 0, -101, {}),
+           low({EqBandKind::shelf, 19, 0}),
+           low({EqBandKind::shelf, 2001, 0}),
+           low({EqBandKind::shelf, 100, 18001}),
+           low({EqBandKind::cut, 100, -18001}),
+           low({static_cast<EqBandKind>(255), 100, 0}),
+           mid({99, 0, 707}),
+           mid({10001, 0, 707}),
+           mid({1000, 18001, 707}),
+           mid({1000, -18001, 707}),
+           mid({1000, 0, 99}),
+           mid({1000, 0, 10001}),
+           high({EqBandKind::shelf, 999, 0}),
+           high({EqBandKind::shelf, 20001, 0}),
+           high({EqBandKind::cut, 5000, 18001}),
+           high({static_cast<EqBandKind>(2), 5000, 0}),
+       }) {
+    check_invalid_without_state_change(
+        initial,
+        update_playback(
+            kPlaybackCommand, 0, PadSlotId{0, 0}, invalid_playback));
+  }
+}
+
 void test_explicit_reset_clears_parity_playback() {
   auto state = apply_or_throw(
       new_project(),
@@ -542,7 +643,13 @@ void test_explicit_reset_clears_parity_playback() {
                   1,
                   PadSlotId{0, 0},
                   with_parity(
-                      PadPlayback{5, 25, TriggerMode::loop_toggle, 0, false},
+                      with_tone(
+                          PadPlayback{5, 25, TriggerMode::loop_toggle, 0, false},
+                          300, 900, -40,
+                          lmdj::domain::PadEq{
+                              lmdj::domain::PadEqShelf{
+                                  lmdj::domain::EqBandKind::cut, 80, 0},
+                              std::nullopt, std::nullopt}),
                       true, 700, -40, LoopMode::forward, 9, 3)))
               .state;
   const auto reset = lmdj::domain::apply(
@@ -974,6 +1081,8 @@ int main() {
     test_update_pad_playback_rejects_invalid_values();
     test_update_pad_playback_accepts_parity_bounds();
     test_update_pad_playback_rejects_invalid_parity_values();
+    test_update_pad_playback_accepts_tone_bounds();
+    test_update_pad_playback_rejects_invalid_tone_values();
     test_explicit_reset_clears_parity_playback();
     test_assign_pad_rejects_missing_asset();
     test_update_pad_playback_rejects_stale_revision();

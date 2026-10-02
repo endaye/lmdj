@@ -240,7 +240,55 @@ bool is_valid_slot(PadSlotId slot) noexcept {
   return slot.bank < 4 && slot.pad < 16;
 }
 
+namespace {
+
+bool in_range(
+    std::int32_t value, std::int32_t low, std::int32_t high) noexcept {
+  return value >= low && value <= high;
+}
+
+bool is_valid_eq_kind(EqBandKind kind) noexcept {
+  switch (kind) {
+    case EqBandKind::shelf:
+    case EqBandKind::cut:
+      return true;
+  }
+  return false;
+}
+
+bool is_valid_eq_shelf(
+    const std::optional<PadEqShelf>& band,
+    std::int32_t freq_min,
+    std::int32_t freq_max) noexcept {
+  return !band.has_value() ||
+         (is_valid_eq_kind(band->kind) &&
+          in_range(band->freq_hz, freq_min, freq_max) &&
+          in_range(
+              band->gain_millidb, kPadEqGainMillidbMin, kPadEqGainMillidbMax));
+}
+
+bool is_valid_tone_playback(const PadPlayback& playback) noexcept {
+  const auto& mid = playback.eq.mid;
+  return in_range(playback.attack_ms, 0, kPadAttackMsMax) &&
+         in_range(playback.release_ms, 0, kPadReleaseMsMax) &&
+         in_range(playback.tone, kPadToneMin, kPadToneMax) &&
+         is_valid_eq_shelf(
+             playback.eq.low, kPadEqLowFreqHzMin, kPadEqLowFreqHzMax) &&
+         is_valid_eq_shelf(
+             playback.eq.high, kPadEqHighFreqHzMin, kPadEqHighFreqHzMax) &&
+         (!mid.has_value() ||
+          (in_range(mid->freq_hz, kPadEqMidFreqHzMin, kPadEqMidFreqHzMax) &&
+           in_range(
+               mid->gain_millidb, kPadEqGainMillidbMin, kPadEqGainMillidbMax) &&
+           in_range(mid->q_milli, kPadEqMidQMilliMin, kPadEqMidQMilliMax)));
+}
+
+}  // namespace
+
 bool is_valid_playback(const PadPlayback& playback) noexcept {
+  if (!is_valid_tone_playback(playback)) {
+    return false;
+  }
   switch (playback.trigger_mode) {
     case TriggerMode::one_shot:
     case TriggerMode::gate:

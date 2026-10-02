@@ -44,6 +44,20 @@ inline constexpr std::int32_t kPadPitchCentsMin = -2400;
 inline constexpr std::int32_t kPadPitchCentsMax = 2400;
 inline constexpr std::int32_t kPadPanMin = -100;
 inline constexpr std::int32_t kPadPanMax = 100;
+inline constexpr std::int32_t kPadAttackMsMax = 2000;
+inline constexpr std::int32_t kPadReleaseMsMax = 4000;
+inline constexpr std::int32_t kPadToneMin = -100;
+inline constexpr std::int32_t kPadToneMax = 100;
+inline constexpr std::int32_t kPadEqGainMillidbMin = -18000;
+inline constexpr std::int32_t kPadEqGainMillidbMax = 18000;
+inline constexpr std::int32_t kPadEqLowFreqHzMin = 20;
+inline constexpr std::int32_t kPadEqLowFreqHzMax = 2000;
+inline constexpr std::int32_t kPadEqMidFreqHzMin = 100;
+inline constexpr std::int32_t kPadEqMidFreqHzMax = 10000;
+inline constexpr std::int32_t kPadEqMidQMilliMin = 100;
+inline constexpr std::int32_t kPadEqMidQMilliMax = 10000;
+inline constexpr std::int32_t kPadEqHighFreqHzMin = 1000;
+inline constexpr std::int32_t kPadEqHighFreqHzMax = 20000;
 
 enum class TriggerMode : std::uint8_t {
   one_shot,
@@ -57,10 +71,43 @@ enum class LoopMode : std::uint8_t {
   ping_pong,
 };
 
-// Every field after `muted` is optional Project Truth (lmdj.project.v5 5.1.0)
-// whose default reproduces the playback that predates it. The constructor
-// keeps the five-value form every existing caller uses, so no caller relies on
-// partially initializing an aggregate.
+// A shelf band is a low or high shelf; a cut band is a high-pass (low band)
+// or low-pass (high band) at its frequency, which ignores the gain. The gain
+// stays in Project Truth, so a band dragged from cut back to shelf keeps it.
+enum class EqBandKind : std::uint8_t {
+  shelf,
+  cut,
+};
+
+struct PadEqShelf {
+  EqBandKind kind{EqBandKind::shelf};
+  std::int32_t freq_hz{0};
+  std::int32_t gain_millidb{0};
+
+  bool operator==(const PadEqShelf&) const = default;
+};
+
+struct PadEqBell {
+  std::int32_t freq_hz{0};
+  std::int32_t gain_millidb{0};
+  std::int32_t q_milli{0};
+
+  bool operator==(const PadEqBell&) const = default;
+};
+
+// An absent band is bypassed (lmdj.project.v5 5.2.0).
+struct PadEq {
+  std::optional<PadEqShelf> low;
+  std::optional<PadEqBell> mid;
+  std::optional<PadEqShelf> high;
+
+  bool operator==(const PadEq&) const = default;
+};
+
+// Every field after `muted` is optional Project Truth (lmdj.project.v5 5.1.0
+// and 5.2.0) whose default reproduces the playback that predates it. The
+// constructor keeps the five-value form every existing caller uses, so no
+// caller relies on partially initializing an aggregate.
 struct PadPlayback {
   PadPlayback() = default;
   PadPlayback(
@@ -87,6 +134,12 @@ struct PadPlayback {
   // Source frame where later loop passes resume; nullopt is the trim start.
   std::optional<std::uint64_t> loop_start_frame;
   std::uint64_t loop_crossfade_frames{0};
+  // Milliseconds; the rendered ramp is never shorter than the 2 ms declick.
+  std::int32_t attack_ms{0};
+  std::int32_t release_ms{0};
+  // Negative is a low-pass, positive a high-pass; |tone| <= 2 is bypassed.
+  std::int32_t tone{0};
+  PadEq eq{};
 
   bool operator==(const PadPlayback&) const = default;
 };
