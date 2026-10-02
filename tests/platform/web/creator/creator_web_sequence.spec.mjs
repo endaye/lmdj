@@ -169,6 +169,16 @@ async function inspectTruth(page) {
   return response.result.project;
 }
 
+// Sequence uses PPQ 960 in 4/4. Recovery keeps an unreleased attack's
+// default tail inside its Pattern loop; near the end, Truth clips it.
+function expectRecoveredAttackTail(pattern, event) {
+  const loopTicks = pattern.bars * 3840;
+  expect(Number.isSafeInteger(event.onset_tick)).toBe(true);
+  expect(event.onset_tick).toBeGreaterThanOrEqual(0);
+  expect(event.onset_tick).toBeLessThan(loopTicks);
+  expect(event.duration_tick).toBe(Math.min(240, loopTicks - event.onset_tick));
+}
+
 async function inspectTransport(page, sessionId) {
   const response = await page.evaluate(async (session) =>
     window.lmdjWebRuntimeHost.transport.send({
@@ -596,7 +606,8 @@ test("reopening after owner loss asks once and keeps the heard take", async ({pa
   expect(kept.revision).toBe(imported.revision + 1);
   expect(kept.patterns[patternId].events).toHaveLength(1);
   expect(kept.patterns[patternId].events[0])
-    .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100, duration_tick: 240});
+    .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100});
+  expectRecoveredAttackTail(kept.patterns[patternId], kept.patterns[patternId].events[0]);
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
   await expect(page.getByRole("region", {name: "Sequence recovery"})).toHaveCount(0);
 
@@ -654,9 +665,10 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
   const appliedTruth = await inspectTruth(page);
   expect(appliedTruth.revision).toBe(imported.revision + 1);
   expect(appliedTruth.patterns[patternId].events).toHaveLength(1);
-  // The one-shot press is finalized with the default 240-tick attack tail.
+  // The held press keeps its exact default tail, clipped only at the loop end.
   expect(appliedTruth.patterns[patternId].events[0])
-    .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100, duration_tick: 240});
+    .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100});
+  expectRecoveredAttackTail(appliedTruth.patterns[patternId], appliedTruth.patterns[patternId].events[0]);
 
   // A fresh recording on the same session opens a new journal and commits.
   await wakeAudioWithPad(page);
