@@ -624,8 +624,8 @@ void RealtimeEngine::stop_voice(
     return;
   }
   if (voice.releasing) {
-    // A second stop (stop_all or stop_slot after a gate release) ends the
-    // tail. The stopped edge was already published when the release began,
+    // A second stop (any stop that reaches a voice already in its release
+    // tail) ends the tail. The stopped edge was already published when the release began,
     // so only the physical end remains. A neutral voice's 96-frame tail is
     // hard-killed, as it always has been. A kernel voice never steps to
     // silence: a tail with at most 96 frames left finishes, and a longer one

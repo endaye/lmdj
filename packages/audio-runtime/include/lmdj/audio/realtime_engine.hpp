@@ -734,8 +734,10 @@ class RealtimeEngine final {
     std::uint32_t release_frames_remaining = 0;
 #if LMDJ_VOICE_DSP
     // The voice's envelope (detail::voice_envelope): ramp lengths and their
-    // per-frame scales, fixed at trigger. The release scale is rescaled when a
-    // second stop shortens a long tail to the declick.
+    // per-frame scales, set at trigger. stop_voice rewrites the release length
+    // and scale for a declick stop, for a release that starts from an
+    // attack's level, and when a second stop shortens a long tail to the
+    // declick.
     std::uint32_t attack_frames = 0;
     float attack_scale = 0.0F;
     std::uint32_t release_frames = 0;
