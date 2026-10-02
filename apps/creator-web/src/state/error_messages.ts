@@ -238,7 +238,7 @@ const SAMPLE_MESSAGES: Readonly<Record<string, UserMessage>> = Object.freeze({
 
 export const SAMPLE_PREVIEW_FAILURE: UserMessage = Object.freeze({
   message: "This sound could not be previewed.",
-  nextStep: "Activate audio, then preview again.",
+  nextStep: "Play a Pad to start audio, then preview again.",
 });
 
 export function sampleMessage(code: string, details: Details = {}): UserMessage {
