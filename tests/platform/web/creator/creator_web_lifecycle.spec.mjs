@@ -316,6 +316,9 @@ async function installLifecycleNativeProof(page) {
           },
           subscribe(...args) { return nativeTransport.subscribe(...args); },
           subscribeFailure(...args) { return nativeTransport.subscribeFailure(...args); },
+          terminate(...args) { return nativeTransport.terminate(...args); },
+          get terminated() { return nativeTransport.terminated; },
+          get terminalOwnerReleased() { return nativeTransport.terminalOwnerReleased; },
         });
         exposed = nativeHost;
       },
