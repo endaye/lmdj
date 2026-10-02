@@ -30,6 +30,10 @@ ProviderRunContext 按值传递并持有不可变请求；source/sink 只允许 
 Provider 从不接收可变 Project 或 bundle path，只接收 Artifact。
 每个输出端口必须由消费者注册 validator（可声明 scratch 字节预算）；SDK 不解析
 WAV 或 Slice JSON。输出复制、总量/数量校验与所有已产生输出的 schema 验证完成后才发布。
+不同输出端口可绑定同一完整 ArtifactRef（SHA-256、media type、byte length 全部相同）。
+物理内容只存一份，逻辑端口绑定全部保留；同一端口重复 mint 或同 hash 不同 Ref 拒绝。
+每个已产生的端口分别运行 validator；output bytes 按逻辑输出累加，staging 按实际
+保留的输入/输出 buffer 和 scratch lease 计费，不因磁盘去重而减免。输入仍要求内容唯一。
 Provider 仍返回单个 Candidate；Job、CandidateIndex 和 Slice interval 展开由 Facade 的 Workspace owner 拥有。
 ## 6. 状态、错误与生命周期
 Provider failure 属于 Attempt；取消、失败和输出身份均有隔离边界。
@@ -45,6 +49,7 @@ Application Facade 和两个本地 Proof Provider 使用 SDK。
 ## 8. 测试与证据
 Conformance、attempt isolation、Host settings invariant 与 spec regression 测试；跨进程 invariant 会同步确认 live owner contention，并在 owner 被终止和回收后验证下一次写入成功。
 ArtifactSource、output validation 和 callback stress 覆盖字节身份、生命周期与共享预算。
+双端口共享内容用例覆盖重开后的逐角色完整身份读取、Schema 独立拒绝、绑定伪造与配额。
 execution crash 在 reservation、staging、validation、publication、terminal 边界 SIGKILL，
 新进程检查完整输出 hash/长度、旧 terminal 不变及 interrupted ID 不可重用。
 ## 9. 限制与下一门禁
