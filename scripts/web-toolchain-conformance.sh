@@ -77,6 +77,7 @@ configure_fixture() {
   activate_toolchain
   python3 "$repo_root/tools/web-runtime/verify_emscripten.py"
   emcmake cmake \
+    -C "$repo_root/tools/web-runtime/emscripten-threads-cache-init.cmake" \
     -S "$web_test_root/toolchain" \
     -B "$cmake_root" \
     -DCMAKE_BUILD_TYPE=Release
@@ -94,6 +95,7 @@ build_project_io() {
   activate_toolchain
   if [[ ! -f "$project_io_cmake_root/CMakeCache.txt" ]]; then
     emcmake cmake \
+      -C "$repo_root/tools/web-runtime/emscripten-threads-cache-init.cmake" \
       -S "$web_test_root/project_io" \
       -B "$project_io_cmake_root" \
       -DCMAKE_BUILD_TYPE=Release
@@ -115,6 +117,7 @@ build_audio_runtime() {
   cmake -E remove_directory "$audio_runtime_root"
   cmake -E remove_directory "$formal_audio_root"
   emcmake cmake \
+    -C "$repo_root/tools/web-runtime/emscripten-threads-cache-init.cmake" \
     -S "$repo_root" \
     -B "$audio_runtime_cmake_root" \
     -DCMAKE_BUILD_TYPE=Release \
