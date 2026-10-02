@@ -1198,14 +1198,17 @@ bool same_bindings(
 bool valid_output_bindings(
     const std::vector<ArtifactBinding>& bindings,
     const std::vector<ArtifactPortDescriptor>& ports) {
-  std::set<std::string> artifact_hashes;
+  std::map<std::string, ArtifactRef> artifacts;
+  std::set<std::pair<std::string, std::string>> port_hashes;
   for (const auto& binding : bindings) {
     const auto* port = find_port(ports, binding.port);
     if (port == nullptr || !valid_artifact(binding.artifact) ||
         !media_type_allowed(*port, binding.artifact.media_type) ||
-        !artifact_hashes.insert(binding.artifact.sha256).second) {
+        !port_hashes.emplace(binding.port, binding.artifact.sha256).second) {
       return false;
     }
+    const auto [existing, inserted] = artifacts.emplace(binding.artifact.sha256, binding.artifact);
+    if (!inserted && existing->second != binding.artifact) return false;
   }
   return std::all_of(
       ports.begin(), ports.end(), [&bindings](const auto& port) {
@@ -2054,13 +2057,14 @@ foundation::Result<AttemptResult> AttemptStore::execute(
           if (std::any_of(
                   minted.begin(),
                   minted.end(),
-                  [&described](const auto& binding) {
-                    return binding.artifact.sha256 == described.value().sha256;
+                  [&described, &port_name](const auto& binding) {
+                    return binding.artifact.sha256 == described.value().sha256 &&
+                           (binding.port == port_name || binding.artifact != described.value());
                   })) {
             std::error_code cleanup_error;
             std::filesystem::remove(temp_path, cleanup_error);
             return foundation::Result<ArtifactRef>::failure(
-                invalid_argument("output Artifact was already minted"));
+                invalid_argument("output binding duplicates a port or conflicts with Artifact identity"));
           }
           const auto final_path =
               attempt_root / "staging/artifacts" /

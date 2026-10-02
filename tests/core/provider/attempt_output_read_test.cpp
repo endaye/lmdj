@@ -128,8 +128,47 @@ void policy_preflight_needs_no_inputs_or_resolver() {
   const auto full = f.execute(input, options());
   f.reason(full, ErrorCode::invalid_argument, "input_binding_invalid");
 }
+void shared_outputs_survive_reopen() {
+  Fixture f;
+  bool secondary_accepted = false;
+  f.install(shared_registration(f, [&](auto context) {
+    const auto sink = context.output;
+    context.output = [&](auto port, auto bytes, auto media_type) {
+      auto output = sink(port, bytes, media_type);
+      if (port == "secondary") secondary_accepted = output.has_value();
+      return output;
+    };
+    return shared_outputs(context);
+  }));
+  const auto result = f.execute(request(), options());
+  LMDJ_CHECK(secondary_accepted);
+  LMDJ_CHECK(result.candidate.has_value());
+  const auto outputs = result.candidate->outputs;
+  LMDJ_CHECK(outputs.size() == 2 && outputs[0].port != outputs[1].port);
+  LMDJ_CHECK(outputs[0].artifact == outputs[1].artifact);
+  AttemptStore reopened(f.path, {{"local"}, {"public"}, {"proof.execute"}}, [] { return std::string("2026-10-03T00:00:00Z"); });
+  const auto terminal = reopened.inspect(result.attempt_id);
+  LMDJ_CHECK(terminal.has_value());
+  LMDJ_CHECK(terminal.value().candidate_outputs == outputs);
+  LMDJ_CHECK(terminal.value().minted_outputs == outputs);
+  for (const auto& output : terminal.value().candidate_outputs) {
+    LMDJ_CHECK(output.artifact.sha256 == request().inputs[0].artifact.sha256);
+    LMDJ_CHECK(output.artifact.byte_length == 1);
+    LMDJ_CHECK(output.artifact.media_type == "application/x-lmdj-proof");
+    const auto bytes = reopened.read_candidate_artifact(result.attempt_id, output.artifact, 1);
+    LMDJ_CHECK(bytes.has_value() && bytes.value() == std::vector{std::byte{'a'}});
+    auto wrong = output.artifact; ++wrong.byte_length;
+    LMDJ_CHECK(!reopened.read_candidate_artifact(result.attempt_id, wrong, 2).has_value());
+    wrong = output.artifact; wrong.media_type = "audio/wav";
+    LMDJ_CHECK(!reopened.read_candidate_artifact(result.attempt_id, wrong, 1).has_value());
+  }
+  const auto artifacts = f.path / ".lmdj-workspace/attempts/attempt-bytes/artifacts";
+  LMDJ_CHECK(std::distance(std::filesystem::directory_iterator(artifacts),
+                            std::filesystem::directory_iterator{}) == 1);
+}
 int main() {
   try {
+    shared_outputs_survive_reopen();
     empty_output_is_verified(); fresh_workspace_has_no_attempts();
     reservation_callback_precedes_owner_reads(); duplicate_attempt_skips_callback();
     for (int failure : {0, 1, 2}) failed_callback_retains_reservation(failure);
