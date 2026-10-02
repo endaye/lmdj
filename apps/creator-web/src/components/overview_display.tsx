@@ -5,7 +5,11 @@ import type {CreatorBuildIdentity} from "../runtime/build_identity";
 import {describeBuildIdentity, shortBuildLabel} from "../runtime/build_identity";
 import {shortProjectId} from "../state/view_model";
 import type {SequenceState} from "../state/sequence_state";
-import type {SequenceGridSnap, SequenceGridViewport} from "../state/sequence_grid_model";
+import type {
+  SequenceGridEventKey,
+  SequenceGridSnap,
+  SequenceGridViewport,
+} from "../state/sequence_grid_model";
 import type {PatternTransportState} from "../state/pattern_transport_state";
 import {ProjectOverview} from "./project_overview";
 import {PerformOverview} from "./perform_overview";
@@ -19,6 +23,7 @@ interface OverviewDisplayProps {
   sequence: SequenceState;
   snap: SequenceGridSnap;
   viewport: SequenceGridViewport | null;
+  selection: readonly SequenceGridEventKey[];
   transport?: PatternTransportState;
   midi?: MidiStatus | null;
   buildIdentity?: CreatorBuildIdentity;
@@ -41,6 +46,7 @@ export function OverviewDisplay({
   sequence,
   snap,
   viewport,
+  selection,
   transport,
   midi = null,
   buildIdentity,
@@ -121,6 +127,7 @@ export function OverviewDisplay({
           bank={state.activeBank}
           snap={snap}
           viewport={viewport}
+          selection={selection}
           {...(transport === undefined ? {} : {transport})}
         />
       ) : activeMode === "project" ? (

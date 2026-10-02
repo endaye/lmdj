@@ -6,7 +6,11 @@ import {PhysicalControls} from "../src/components/physical_controls";
 import {SequenceOverview} from "../src/components/sequence_overview";
 import {SequenceTouchWorkspace} from "../src/components/sequence_touch_workspace";
 import {initialSequenceState} from "../src/state/sequence_state";
-import {initialPatternTransportState} from "../src/state/pattern_transport_state";
+import {
+  initialPatternTransportState,
+  type PatternTransportState,
+} from "../src/state/pattern_transport_state";
+import type {PatternTransportStatus} from "@lmdj/web-runtime-platform/runtime_types";
 
 const project = {
   projectId: "11111111-1111-4111-8111-111111111111",
@@ -25,21 +29,30 @@ const project = {
 // The Sequence editor is the same component in the hardware touch workspace
 // that the retired workspace shell used to wrap; its recovery semantics are
 // asserted on it directly.
-function renderSurface(recovery = false) {
+function renderSurface(recovery = false, options: {
+  transport?: PatternTransportState;
+  state?: Partial<Parameters<typeof SequenceTouchWorkspace>[0]["state"]>;
+  projectionRefreshing?: boolean;
+} = {}) {
   const callbacks = {
     onRefresh: vi.fn(), onSwitch: vi.fn(),
     onCreatePattern: vi.fn(), onSettingsChange: vi.fn(),
     onRecover: vi.fn(), onDiscard: vi.fn(),
     onSnapChange: vi.fn(), onViewportChange: vi.fn(),
+    onEditModeChange: vi.fn(), onEdit: vi.fn(),
+    onSelectionChange: vi.fn(), onVelocityChange: vi.fn(),
   };
   render(<SequenceTouchWorkspace project={project}
-    transport={initialPatternTransportState}
+    transport={options.transport ?? initialPatternTransportState}
     bank={0} snap="1/16"
+    editMode="note" selection={[]} defaultVelocity={100}
+    projectionRefreshing={options.projectionRefreshing ?? false}
     state={{
       ...initialSequenceState,
       recovery: recovery ? [{sessionId: "session-1", patternId: project.patternId,
         bars: 1, reason: "interrupted", eventCount: 3}] : [],
       phase: recovery ? "recovery" : "stopped",
+      ...options.state,
     }} {...callbacks} />);
   return callbacks;
 }
@@ -76,14 +89,18 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
     overview={<SequenceOverview
       project={project} state={sequenceState}
       transport={initialPatternTransportState}
-      bank={0} snap="1/16" viewport={null}
+      bank={0} snap="1/16" viewport={null} selection={[]}
     />}
     pads={<span>pads</span>}
     touchWorkspace={<SequenceTouchWorkspace
       project={project} state={sequenceState}
       transport={initialPatternTransportState}
       bank={0} snap="1/16"
+      editMode="note" selection={[]} defaultVelocity={100}
+      projectionRefreshing={false}
       onSnapChange={onSnapChange} onViewportChange={onViewportChange}
+      onEditModeChange={vi.fn()} onEdit={vi.fn()}
+      onSelectionChange={vi.fn()} onVelocityChange={vi.fn()}
       onRefresh={onRefresh} onSwitch={onSwitch}
       onCreatePattern={onCreatePattern} onSettingsChange={onSettingsChange}
       onRecover={onRecover} onDiscard={onDiscard}
@@ -173,7 +190,10 @@ test("rapid step clicks accumulate from the last requested value until Truth cat
     transport: initialPatternTransportState,
     state: {...initialSequenceState, phase: "stopped" as const},
     bank: 0 as const, snap: "1/16" as const,
-    onSnapChange: () => {}, onViewportChange: () => {},
+    editMode: "note" as const, selection: [], defaultVelocity: 100,
+    projectionRefreshing: false,
+    onSnapChange: () => {}, onEditModeChange: () => {}, onViewportChange: () => {},
+    onEdit: () => {}, onSelectionChange: () => {}, onVelocityChange: () => {},
     onRefresh: () => {}, onSwitch: () => {},
     onCreatePattern: () => {}, onSettingsChange,
     onRecover: () => {}, onDiscard: () => {},
@@ -207,7 +227,10 @@ test("a failed settings commit resyncs the step base to the committed truth", ()
   const props = {
     transport: initialPatternTransportState,
     bank: 0 as const, snap: "1/16" as const,
-    onSnapChange: () => {}, onViewportChange: () => {},
+    editMode: "note" as const, selection: [], defaultVelocity: 100,
+    projectionRefreshing: false,
+    onSnapChange: () => {}, onEditModeChange: () => {}, onViewportChange: () => {},
+    onEdit: () => {}, onSelectionChange: () => {}, onVelocityChange: () => {},
     onRefresh: () => {}, onSwitch: () => {},
     onCreatePattern: () => {}, onSettingsChange,
     onRecover: () => {}, onDiscard: () => {},
@@ -238,7 +261,10 @@ test("locks every Tempo and Swing control while recording and says why", () => {
     }}
     state={initialSequenceState}
     bank={0} snap="1/16"
-    onSnapChange={() => {}} onViewportChange={() => {}}
+    editMode="note" selection={[]} defaultVelocity={100}
+    projectionRefreshing={false}
+    onSnapChange={() => {}} onEditModeChange={() => {}} onViewportChange={() => {}}
+    onEdit={() => {}} onSelectionChange={() => {}} onVelocityChange={() => {}}
     onRefresh={() => {}} onSwitch={() => {}}
     onCreatePattern={() => {}} onSettingsChange={() => {}}
     onRecover={() => {}} onDiscard={() => {}} />);
@@ -278,4 +304,50 @@ test("keeps restoring into another Pattern behind a collapsed More disclosure", 
   expect(more!.contains(screen.getByRole("button", {name: "Recover to selected Pattern"}))).toBe(true);
   expect(more!.contains(screen.getByRole("button", {name: "Recover original Pattern"}))).toBe(false);
   expect(more!.contains(screen.getByRole("button", {name: "Discard"}))).toBe(false);
+});
+
+const transportStatus = (overrides: Partial<PatternTransportStatus>): PatternTransportState => ({
+  ...initialPatternTransportState,
+  sessionId: "session-1",
+  status: {
+    engaged: true,
+    playing: false,
+    recording: false,
+    phase: "idle",
+    runtimeGeneration: 1,
+    transportEpoch: 1,
+    originFrame: 0,
+    commandId: null,
+    publicationPending: false,
+    error: null,
+    ...overrides,
+  },
+});
+
+test("recording disables grid editing and the workspace names why", () => {
+  const callbacks = renderSurface(false, {
+    transport: transportStatus({playing: true, recording: true}),
+  });
+  expect(screen.getByTestId("sequence-grid")
+    .getAttribute("data-editing-disabled")).toBe("true");
+  const statuses = screen.getAllByRole("status").map((node) => node.textContent);
+  expect(statuses).toContain("Recording — stop recording to edit the grid.");
+  const lane = document.querySelector(
+    ".sequence-grid-row[data-pad='3'] .sequence-grid-lane") as HTMLElement;
+  fireEvent.pointerDown(lane, {pointerId: 31, clientX: 60, clientY: 76, button: 0});
+  fireEvent.pointerUp(window, {pointerId: 31});
+  expect(callbacks.onEdit).not.toHaveBeenCalled();
+});
+
+test("no gesture starts while the projection re-reads Truth after a commit", () => {
+  const callbacks = renderSurface(false, {projectionRefreshing: true});
+  expect(screen.getByTestId("sequence-grid")
+    .getAttribute("data-editing-disabled")).toBe("true");
+  const lane = document.querySelector(
+    ".sequence-grid-row[data-pad='3'] .sequence-grid-lane") as HTMLElement;
+  fireEvent.pointerDown(lane, {pointerId: 32, clientX: 60, clientY: 76, button: 0});
+  fireEvent.pointerMove(lane, {pointerId: 32, clientX: 120, clientY: 100});
+  fireEvent.pointerUp(window, {pointerId: 32});
+  expect(callbacks.onEdit).not.toHaveBeenCalled();
+  expect(callbacks.onSelectionChange).not.toHaveBeenCalled();
 });
