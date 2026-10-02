@@ -665,14 +665,23 @@ test("direct Tempo and Swing controls commit once, cancel, fail honestly, and st
   expect(truth.revision).toBe(baseline.revision + 3);
   expect(await settingsUpdates()).toHaveLength(3);
 
-  // Leg 5 — a failed commit surfaces the error code and changes nothing:
+  // Leg 5 — a failed commit surfaces the failure and changes nothing:
   // Truth keeps the committed value and the readout never adopted the draft.
+  // The alert speaks user language and the code is in Developer diagnostics
+  // (#1680).
   await page.evaluate(() => {
     window.__failNextSettingsUpdate = true;
   });
   await page.getByRole("button", {name: "Increase Swing"}).click();
-  await expect(page.getByRole("alert").filter({hasText: "HOST_TIMEOUT"}))
-    .toBeVisible({timeout: 30_000});
+  const failure = page.getByRole("alert")
+    .filter({hasText: "The audio engine stopped responding."});
+  await expect(failure).toBeVisible({timeout: 30_000});
+  await expect(failure).not.toContainText("HOST_TIMEOUT");
+  await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
+  const log = page.getByRole("region", {name: "Developer diagnostics"});
+  await expect(log).toContainText("Update Sequence settings");
+  await expect(log).toContainText("HOST_TIMEOUT");
+  await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
   truth = await inspectTruth(page);
   expect(truth.sequence_settings.swing_percent).toBe(baseSwing);
   expect(truth.revision).toBe(baseline.revision + 3);
