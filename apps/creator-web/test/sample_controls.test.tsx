@@ -346,3 +346,55 @@ test("Pan previews every move and Escape cancels it", () => {
   expect(onCommit).not.toHaveBeenCalled();
   expect(screen.getByText("C")).toBeTruthy();
 });
+
+// --- Sample tone parity (lmdj.project.v5 5.2.0) ---
+
+test("Attack previews every move and commits once in milliseconds", () => {
+  const {onPreview, onCommit} = renderControls();
+  const attack = screen.getByRole("slider", {name: "Pad A1 Attack"});
+  fireEvent.pointerDown(attack, {pointerId: 5});
+  fireEvent.change(attack, {target: {value: "250"}});
+  expect(onPreview).toHaveBeenLastCalledWith({...playback, attackMs: 250});
+  expect(screen.getByText("250 ms")).toBeTruthy();
+  fireEvent.pointerUp(attack, {pointerId: 5});
+  expect(onCommit).toHaveBeenCalledTimes(1);
+  expect(onCommit).toHaveBeenLastCalledWith({...playback, attackMs: 250});
+});
+
+// The rendered ramp is never shorter than the 2 ms declick, so 0..2 ms show
+// as the declick they render.
+test("a ramp at or under the declick reads as 2 ms", () => {
+  renderControls({playback: {...playback, triggerMode: "gate", attackMs: 1, releaseMs: 0}});
+  expect(screen.getAllByText("2 ms")).toHaveLength(2);
+});
+
+test("Release edits a releasing Pad and is unavailable on a one-shot", () => {
+  const oneShot = renderControls();
+  expect(screen.getByRole("slider", {name: "Pad A1 Release"}).hasAttribute("disabled"))
+    .toBe(true);
+  oneShot.unmount();
+  const gated = {...playback, triggerMode: "gate" as const};
+  const {onCommit} = renderControls({playback: gated});
+  const release = screen.getByRole("slider", {name: "Pad A1 Release"});
+  expect(release.hasAttribute("disabled")).toBe(false);
+  fireEvent.change(release, {target: {value: "1200"}});
+  fireEvent.blur(release);
+  expect(onCommit).toHaveBeenLastCalledWith({...gated, releaseMs: 1_200});
+});
+
+test("Tone is bipolar: low-pass below centre, high-pass above, off in the deadband", () => {
+  const {onPreview, onCommit} = renderControls();
+  const tone = screen.getByRole("slider", {name: "Pad A1 Tone"});
+  expect(screen.getByText("Off")).toBeTruthy();
+  fireEvent.pointerDown(tone, {pointerId: 6});
+  fireEvent.change(tone, {target: {value: "-40"}});
+  expect(onPreview).toHaveBeenLastCalledWith({...playback, tone: -40});
+  expect(screen.getByText("LP 40")).toBeTruthy();
+  fireEvent.change(tone, {target: {value: "2"}});
+  expect(screen.getByText("Off")).toBeTruthy();
+  fireEvent.change(tone, {target: {value: "60"}});
+  expect(screen.getByText("HP 60")).toBeTruthy();
+  fireEvent.pointerUp(tone, {pointerId: 6});
+  expect(onCommit).toHaveBeenCalledTimes(1);
+  expect(onCommit).toHaveBeenLastCalledWith({...playback, tone: 60});
+});
