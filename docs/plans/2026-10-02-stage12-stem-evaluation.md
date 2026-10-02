@@ -1,6 +1,11 @@
 # Stage 12B Stem：候选可行性评测与实施前清单
 
 日期：2026-10-02。状态：**T1 可评审交付；T2 等待范围、环境、预算批准**。
+后续状态（2026-10-03）：架构与功能按
+[Stem/Slice 决策](../prd/decisions/2026-10-03-stem-slice-provider-boundary.md) 推进；
+T2-D 的 Contract 前置由[新交付计划](2026-10-03-stem-slice-provider-delivery.md)
+D0/C1/C2 接续，不再重复创建同义设计。其余真实评测、具名环境、模型身份、
+质量与人工证据要求继续适用；设计通过不等于 T2 完成。
 交付 [#1171](https://github.com/endaye/lmdj/issues/1171)；
 Relates to #1172、#1164、#472。
 配套：[最小范围、候选固定身份与许可](../design/2026-10-02-stage12-stem-scope.md)。
