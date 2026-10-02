@@ -398,6 +398,12 @@ describe("grid editing gestures map to one exact command each", () => {
       bank: 0, notes, deltaTicks: -9999, deltaPads: 0, snapTicks: 240,
       lengthTicks: 3840,
     })).toBeNull();
+    // A rightward drag still clamps inside the seam: the tightened bounds
+    // stay around zero, so no note lands past L − duration.
+    expect(sequenceGridBatchMove({
+      bank: 0, notes, deltaTicks: 9999, deltaPads: 0, snapTicks: 240,
+      lengthTicks: 3840,
+    })?.put.map((event) => event.onsetTick)).toEqual([2500, 3600]);
     // Snap off keeps the exact edge.
     expect(sequenceGridBatchMove({
       bank: 0, notes, deltaTicks: -9999, deltaPads: 0, snapTicks: null,

@@ -177,6 +177,12 @@ export function SequenceGrid(props: SequenceGridProps) {
   latestRef.current = props;
   const modelRef = useRef(model);
   modelRef.current = model;
+  // A gesture's notes and pads come from the Bank it was drawn on; a Bank
+  // switch mid-gesture cancels it rather than naming the new Bank's keys.
+  // React runs this effect before it dispatches the next pointer event.
+  useEffect(() => {
+    setGesture(null);
+  }, [bank]);
   const onViewportChange = props.onViewportChange;
   useEffect(() => {
     const report = () => {

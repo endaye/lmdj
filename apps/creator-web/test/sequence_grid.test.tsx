@@ -153,6 +153,15 @@ test("a tap on a note removes it", () => {
   });
 });
 
+test("a Bank switch mid-gesture cancels it instead of editing the new Bank", () => {
+  const {callbacks, rerender} = renderGrid({bank: 0});
+  fireEvent.pointerDown(note(0), {pointerId: 9, clientX: 5, clientY: 10, button: 0});
+  fireEvent.pointerMove(note(0), {pointerId: 9, clientX: 125, clientY: 10});
+  rerender({bank: 1});
+  fireEvent.pointerUp(window, {pointerId: 9});
+  expect(callbacks.onEdit).not.toHaveBeenCalled();
+});
+
 test("dragging a note's body moves it; dragging back to the start sends nothing", () => {
   const {callbacks} = renderGrid();
   fireEvent.pointerDown(note(0), {pointerId: 3, clientX: 5, clientY: 10, button: 0});
