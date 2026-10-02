@@ -38,8 +38,8 @@ const project: ProjectView = {
   key: "—",
   pads: [],
   patterns: [
-    {patternId: "pattern-1", bars: 1},
-    {patternId: "pattern-2", bars: 4},
+    {patternId: "pattern-1", bars: 1, events: []},
+    {patternId: "pattern-2", bars: 4, events: []},
   ],
   patternSlots: Object.freeze(Array<string | null>(16).fill(null)),
   sequenceSettings: {quantizeEnabled: false, swingPercent: 62},

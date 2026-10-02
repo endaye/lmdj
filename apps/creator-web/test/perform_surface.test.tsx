@@ -44,8 +44,8 @@ const project = {
       : null,
   })),
   patterns: [
-    {patternId: ids.pattern1, bars: 1 as const},
-    {patternId: ids.pattern2, bars: 4 as const},
+    {patternId: ids.pattern1, bars: 1 as const, events: []},
+    {patternId: ids.pattern2, bars: 4 as const, events: []},
   ],
   patternSlots: [ids.pattern1, ids.pattern2, ...Array<string | null>(14).fill(null)],
   sequenceSettings: {quantizeEnabled: true, swingPercent: 50},

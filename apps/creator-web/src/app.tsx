@@ -110,6 +110,11 @@ import {
   type SequenceState,
 } from "./state/sequence_state";
 import {
+  DEFAULT_SEQUENCE_GRID_SNAP,
+  type SequenceGridSnap,
+  type SequenceGridViewport,
+} from "./state/sequence_grid_model";
+import {
   initialPatternTransportState,
   reducePatternTransport,
   selectTransportBusy,
@@ -294,6 +299,10 @@ function Workspace({
   const [armedCaptureSlot, setArmedCaptureSlot] = useState<number | null>(null);
   const [captureStopRequest, setCaptureStopRequest] = useState(0);
   const [midi, setMidi] = useState<MidiStatus | null>(null);
+  const [sequenceGridSnap, setSequenceGridSnap] =
+    useState<SequenceGridSnap>(DEFAULT_SEQUENCE_GRID_SNAP);
+  const [sequenceGridViewport, setSequenceGridViewport] =
+    useState<SequenceGridViewport | null>(null);
   const [performController, setPerformController] =
     useState<PerformController | null>(null);
   const [performCaptureConfigured, setPerformCaptureConfigured] = useState(false);
@@ -374,7 +383,13 @@ function Workspace({
 
   useEffect(() => {
     const project = state.project.current;
-    if (project === null || sequence.selectedPatternId !== null) return;
+    if (project === null) return;
+    // The selection belongs to the open Project: a Project that opens while
+    // another's selection is still held — boot, import, library open — moves
+    // the selection to its own anchor Pattern, so every Pattern view resolves.
+    if (sequence.selectedPatternId !== null &&
+        project.patterns.some(
+          ({patternId}) => patternId === sequence.selectedPatternId)) return;
     dispatchSequence({type: "selected", patternId: project.patternId});
   }, [state.project.current, sequence.selectedPatternId]);
 
@@ -729,7 +744,12 @@ function Workspace({
     dispatch({type: "project-error", errorCode: code, errorDetails: details});
   };
 
-  const refreshPerformProject = async () => {
+  // `settledRevision` is the authoritative revision the caller already
+  // dispatched ahead of this refresh; the token must name it, because the
+  // reducer sees that revision by the time the refresh actions land — a token
+  // minted from the still-stale ref would be rejected and the refreshed
+  // projection, Pattern events included, silently dropped.
+  const refreshPerformProject = async (settledRevision?: number) => {
     if (!session) throw new Error("Runtime session is unavailable");
     const current = stateRef.current.project.current;
     if (current === null) throw new Error("Current Project is unavailable");
@@ -740,7 +760,7 @@ function Workspace({
       id: crypto.randomUUID(),
       projectId: current.projectId,
       patternId: current.patternId,
-      baseRevision: current.revision,
+      baseRevision: settledRevision ?? current.revision,
     });
     projectProjectionRefreshRef.current = token;
     dispatch({type: "project-projection-refresh-started", token});
@@ -1463,12 +1483,18 @@ function Workspace({
           });
         }
         if (committedRevision > project.revision) {
-          // A transport commit advanced Project Truth; the revision display
-          // follows the commit.
+          // A transport commit advanced Project Truth. The revision display
+          // follows the commit first: a failed re-read clears the Project
+          // phase, which would reject this update and strand the revision.
+          // Then the whole projection — Pattern events included — is re-read
+          // so every view follows; the re-read reports its own failure. Its
+          // token must name the committed revision just dispatched, not the
+          // older one the ref still holds.
           dispatch({
             type: "project-revision-updated",
             revision: committedRevision,
           });
+          await refreshPerformProject(committedRevision).catch(() => {});
         }
       }
       dispatchSequence({type: "recovery", candidates: authority.recovery});
@@ -1693,7 +1719,7 @@ function Workspace({
       dispatch({
         type: "project-pattern-created",
         revision: result.committedRevision,
-        pattern: {patternId: result.patternId, bars: result.bars},
+        pattern: {patternId: result.patternId, bars: result.bars, events: []},
       });
       if (currentTransport.sessionId !== null &&
           isPatternTransportSession(session)) {
@@ -2010,6 +2036,8 @@ function Workspace({
               state={state}
               activeMode={activeMode}
               sequence={sequence}
+              snap={sequenceGridSnap}
+              viewport={sequenceGridViewport}
               transport={transport}
               midi={midi}
               {...(buildIdentity ? {buildIdentity} : {})}
@@ -2125,6 +2153,10 @@ function Workspace({
                 project={state.project.current}
                 state={sequence}
                 transport={transport}
+                bank={state.activeBank}
+                snap={sequenceGridSnap}
+                onSnapChange={setSequenceGridSnap}
+                onViewportChange={setSequenceGridViewport}
                 onRefresh={() => {
                   void refreshSequence();
                   void reconcileTransport();

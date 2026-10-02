@@ -106,17 +106,21 @@ jobs:
           AUTO_RECHECK: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
           PR_EVENT_ACTION: ${{ github.event.action }}
         run: python3 scripts/ci/review_pipeline.py collect-t2 --directory "$REVIEW_DIR"
-      - name: deepseek review
+      - name: PR-Agent review
         # PR-Agent runs here as the runner account with no GitHub token in its
-        # environment; the engine clears everything but the named provider key.
-        # Witness and model execution share the installation slot lock, so a
-        # release switch cannot mix their identities. The ledger caps spend.
+        # environment; the engine clears everything but the named provider keys.
+        # The engine owns provider fallback, so this single step covers the
+        # whole trusted provider_order and its capture backend names the chain
+        # start (deepseek). Witness and model execution share the installation
+        # slot lock, so a release switch cannot mix their identities. The
+        # ledger caps spend.
         id: deepseek
         if: ${{ !cancelled() && steps.input.outcome == 'success' && steps.input.outputs.reviewable != 'false' && steps.input.outputs.generated_only != 'true' }}
         timeout-minutes: 25
         continue-on-error: true
         env:
           PR_AGENT_DEEPSEEK_API_KEY: ${{ secrets.PR_AGENT_DEEPSEEK_API_KEY }}
+          PR_AGENT_ZAI_API_KEY: ${{ secrets.PR_AGENT_ZAI_API_KEY }}
         run: |
           flock -w 900 /var/lib/lmdj/pr-agent/slot.lock bash -euo pipefail <<'REVIEW'
             bash scripts/ci/pr-agent/run-engine.sh --witness > "$REVIEW_DIR/t2-config-witness.json"

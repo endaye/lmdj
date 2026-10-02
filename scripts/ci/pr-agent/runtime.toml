@@ -6,9 +6,11 @@
 # No secret lives here: the API key is the GitHub Actions secret named by
 # `credential_ref`, passed to the review step's environment only.
 schema = "lmdj.pr-agent-config.v1"
-# DeepSeek is the only active provider. Disabled registry entries below remain
-# for schema and historical-receipt compatibility, not runtime fallback.
-provider_order = ["deepseek"]
+# DeepSeek is the primary provider; GLM is the in-engine fallback. The engine
+# owns the fallback loop, so the workflow runs exactly one model step whose
+# capture backend names the chain start (deepseek). Remaining disabled entries
+# stay for schema and historical-receipt compatibility.
+provider_order = ["deepseek", "glm"]
 
 [budget]
 approval_id = "pr-agent-pilot-2026-09-10"
@@ -44,8 +46,29 @@ context_token_limit = 1048576
 fixed_request_charge_usd = 0.0
 billable_categories = ["input_tokens", "output_tokens", "fixed_request"]
 
+# GLM-5.3-Flash on the domestic pay-as-you-go platform, served under the API
+# model name `glm-5.3-flash`. Prices are the published standard (not the
+# limited-time 50% discount) cache-miss rates CNY 0.80 / 1M input and
+# CNY 2.80 / 1M output from https://www.bigmodel.cn/pricing read on
+# 2026-10-02, converted at a conservative CNY 7.0 / USD; the ledger reserves
+# the full 1M context at these rates per request, about USD 0.12, far under
+# the USD 1 per-PR cap. The Coding Plan subscription endpoint is not used:
+# its terms restrict it to whitelisted interactive tools. Thinking cannot be
+# disabled on this model, so the engine pins reasoning_effort to low per
+# request; reasoning tokens then share the 4096 output cap with the verdict.
 [providers.glm]
-enabled = false
+enabled = true
+endpoint = "https://open.bigmodel.cn/api/paas/v4"
+model = "zai/glm-5.3-flash"
+priced_response_model = "glm-5.3-flash"
+credential_ref = "PR_AGENT_ZAI_API_KEY"
+pricing_revision = "glm-5.3-flash-cn-standard-2026-10-02"
+pricing_verified = true
+input_price_usd_per_token = 0.0000001143
+output_price_usd_per_token = 0.0000004
+context_token_limit = 1048576
+fixed_request_charge_usd = 0.0
+billable_categories = ["input_tokens", "output_tokens", "fixed_request"]
 
 [providers.xai]
 enabled = false

@@ -1893,14 +1893,20 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
         kwargs["timeout"] = request_timeout
         request_id = f"{attempt_id}:{provider['provider_id']}:{context.get('request_index', 0) + 1}"
         context["request_index"] = context.get("request_index", 0) + 1
-        if provider["provider_id"] == "deepseek":
-            # DeepSeek V4 serves thinking by default. The review is priced and
-            # capped as plain output, so ask for the non-thinking mode explicitly;
-            # the live API accepts this field and returns no reasoning content.
+        if provider["provider_id"] in ("deepseek", "glm"):
             extra_body = kwargs.get("extra_body")
             if extra_body is not None and not isinstance(extra_body, dict):
                 raise EngineError("invalid_parameter", "request extra_body is not an object")
-            kwargs["extra_body"] = {**(extra_body or {}), "thinking": {"type": "disabled"}}
+            if provider["provider_id"] == "deepseek":
+                # DeepSeek V4 serves thinking by default. The review is priced and
+                # capped as plain output, so ask for the non-thinking mode explicitly;
+                # the live API accepts this field and returns no reasoning content.
+                kwargs["extra_body"] = {**(extra_body or {}), "thinking": {"type": "disabled"}}
+            else:
+                # GLM-5.3 cannot disable thinking and reasoning tokens share the
+                # output cap with the verdict, so pin the lightest effort; the
+                # priced output stays plain verdict tokens either way.
+                kwargs["extra_body"] = {**(extra_body or {}), "reasoning_effort": "low"}
         if raw_guard_enabled:
             context["raw_observation_count"] = 0
             context["raw_usage"] = None
