@@ -6452,13 +6452,24 @@ test("a Pattern event edit result must match its publication shape", async () =>
     {slot: 0, onsetTick: 0, durationTick: 240, velocity: 100}]};
   results.push({...base, publication: "none"});
   assert.equal((await session.editPatternEvents(request)).patternPublication, null);
-  results.push({...base, publication: "published", pattern_publication: null,
-    snapshot_error: {code: "HOST_STATE_INVALID", message: "unavailable", details: {}}});
+  results.push({...base, publication: "deferred", pattern_publication: null});
+  const deferred = await session.editPatternEvents(request);
+  assert.equal(deferred.publication, "deferred");
+  assert.equal(deferred.patternPublication, null);
+  assert.equal(deferred.snapshotError, null);
+  results.push({...base, publication: "failed", pattern_publication: null,
+    snapshot_error: {code: "HOST_STATE_INVALID", message: "unavailable",
+      details: {reason: "pattern_publication_unavailable"}}});
   const failed = await session.editPatternEvents(request);
   assert.equal(failed.patternPublication, null);
   assert.equal(failed.snapshotError.code, "HOST_STATE_INVALID");
+  assert.equal(failed.snapshotError.details.reason, "pattern_publication_unavailable");
   for (const result of [
     {...base, publication: "published"},
+    {...base, publication: "live", pattern_publication: null,
+      snapshot_error: {code: "HOST_STATE_INVALID", message: "unavailable", details: {}}},
+    {...base, publication: "deferred", pattern_publication: {generation: 1, activation_frame: 0}},
+    {...base, publication: "failed", pattern_publication: null},
     {...base, publication: "none", pattern_publication: {generation: 1, activation_frame: 0}},
     {...base, publication: "later"},
     {...base, project_revision: 6, publication: "none"},

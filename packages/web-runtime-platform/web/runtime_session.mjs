@@ -3634,8 +3634,8 @@ function createRuntimeSessionController(options = {}) {
       ];
       const publication = value?.publication;
       const swapped = publication === "published" || publication === "live";
-      const hasSnapshotError = Object.hasOwn(value ?? {}, "snapshot_error");
-      const keys = !swapped ? base : hasSnapshotError
+      const failed = publication === "failed";
+      const keys = publication === "none" ? base : failed
         ? [...base, "pattern_publication", "snapshot_error"]
         : [...base, "pattern_publication"];
       const patternPublication = value?.pattern_publication;
@@ -3645,12 +3645,12 @@ function createRuntimeSessionController(options = {}) {
         value.project_revision !== value.committed_revision ||
         value.pattern_id !== request.patternId ||
         typeof value.replayed !== "boolean" ||
-        !["none", "published", "live"].includes(publication) ||
-        (swapped && (hasSnapshotError
-          ? patternPublication !== null
-          : !(exactKeys(patternPublication, ["generation", "activation_frame"]) &&
+        !["none", "published", "live", "deferred", "failed"].includes(publication) ||
+        (swapped
+          ? !(exactKeys(patternPublication, ["generation", "activation_frame"]) &&
               isUnsignedInteger(patternPublication.generation) &&
-              isUnsignedInteger(patternPublication.activation_frame))))
+              isUnsignedInteger(patternPublication.activation_frame))
+          : publication !== "none" && patternPublication !== null)
       ) {
         throw protocolMismatch("Pattern event edit result is invalid");
       }
@@ -3660,13 +3660,13 @@ function createRuntimeSessionController(options = {}) {
         patternId: value.pattern_id,
         replayed: value.replayed,
         publication,
-        patternPublication: swapped && !hasSnapshotError
+        patternPublication: swapped
           ? Object.freeze({
               generation: patternPublication.generation,
               activationFrame: patternPublication.activation_frame,
             })
           : null,
-        snapshotError: hasSnapshotError
+        snapshotError: failed
           ? normalizeSnapshotError(value.snapshot_error)
           : null,
       });

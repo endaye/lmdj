@@ -105,6 +105,13 @@ void recording_session_refuses_edits() {
   const auto refused = f.edit(f.command_id(), 1, Json::array(), Json::array({note(0, 0, 240, 100)}));
   error(refused, "INVALID_ARGUMENT");
   LMDJ_CHECK(refused.at("error").at("details").at("reason") == "sequence_session_active");
+  // A malformed identity is a shape error before admission, as for pattern.create.
+  const auto malformed = f.app->command({{"operation", "pattern.events.edit"},
+      {"project_path", f.project.generic_string()}, {"command_id", "not-a-uuid"},
+      {"expected_revision", 1}, {"pattern_id", pattern_id},
+      {"remove", Json::array()}, {"put", Json::array({note(0, 0, 240, 100)})}});
+  error(malformed, "INVALID_ARGUMENT");
+  LMDJ_CHECK(malformed.at("error").at("details").value("reason", "") != "sequence_session_active");
   LMDJ_CHECK(f.project_json() == before);
 }
 }  // namespace

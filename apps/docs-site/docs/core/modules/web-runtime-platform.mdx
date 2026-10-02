@@ -139,10 +139,14 @@ publication failure. Other Pad imports and their revision guards remain intact.
 sends flat-slot keys and events as `pattern.events.edit` through the shared
 Project action queue.
 
-Control refuses the edit before commit while the Pattern transport:
+Control refuses the edit before commit, with Truth unchanged and the edit
+retryable, while:
 
-- records (`sequence_session_active`);
-- has a command or publication in flight (`pattern_transport_busy`).
+- the Pattern transport records (`sequence_session_active`);
+- a Pattern transport command is in flight (`pattern_transport_busy`);
+- a scheduled Pattern publication, such as a playing BPM change, a Sequence
+  switch or a reload, has not yet applied at its boundary
+  (`pattern_publication_pending`).
 
 Otherwise it delegates to the Facade. When the edited Pattern is the Runtime's
 current one, Control then republishes only the Pattern view, without a Bank:
@@ -154,6 +158,21 @@ current one, Control then republishes only the Pattern view, without a Bank:
   any sounding voices, so playback neither restarts nor waits for a bar, and new
   notes ahead of the playhead sound in the current loop.
 
+Each swap takes a fresh engine Pattern slot, and a retiring view keeps its slot
+while its voices sound. When every slot is held, the edit stays committed and
+the swap is deferred (`"deferred"`). The transport service cadence reclaims
+slots and swaps the view in place, prepared from Truth, as soon as one frees; a
+later edit or any other Pattern publication supersedes the deferral.
+
+Without the Pattern transport opt-in, legacy scheduling plays the Pattern
+whenever audio runs, and Control has no transport state to tell it so. The edit
+then takes the immediate path, which restarts the Pattern from its first bar,
+and a full slot set is reported as a failed swap, since no service cadence
+retries it. Creator always opts in.
+
 An edit of another Pattern publishes nothing (`"none"`); that Pattern is
 prepared from Truth when it is selected. A failed swap after commit returns the
-committed revision with `snapshot_error`.
+committed revision with `"failed"` and `snapshot_error`. Because a grid edit
+changes no Bank, a Runtime that was current before the edit, so that a
+Bank-bound `sample.preview.set` is admitted, stays current after a successful
+or deferred swap or an edit of another Pattern.

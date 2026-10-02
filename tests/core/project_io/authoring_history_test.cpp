@@ -368,7 +368,6 @@ void persisted_history_rejects_malformed_commands_atomically() {
   }
 }
 
-}
 // #1671: one grid edit is one action, Undo and Redo restore it exactly, and
 // its persisted identity survives a reload so a retry still replays.
 void pattern_event_edit_is_one_action_and_replays_after_reload() {
@@ -397,6 +396,8 @@ void pattern_event_edit_is_one_action_and_replays_after_reload() {
   const auto undone = f.restore().state;
   LMDJ_CHECK(undone.patterns == before.patterns);
   LMDJ_CHECK(f.restore(true).state.patterns == after.patterns);
+}
+
 }
 
 int main() {

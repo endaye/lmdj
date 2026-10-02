@@ -123,8 +123,11 @@ export interface SequenceRuntimeSession {
   /**
    * Atomically removes the keyed events, then puts each event by key.
    * `publication` is "none" when the edited Pattern is not the Runtime's
-   * current one, "published" when it was swapped in while stopped, and
-   * "live" when it was swapped in place while playing.
+   * current one, "published" when it was swapped in while stopped, "live"
+   * when it was swapped in place while playing, "deferred" when every
+   * Pattern slot was held by a sounding retiring view (it swaps in place by
+   * itself once one frees), and "failed" when the committed edit's view
+   * could not swap (`snapshotError`).
    */
   editPatternEvents(request: {
     readonly patternId: string;
@@ -136,7 +139,7 @@ export interface SequenceRuntimeSession {
     projectRevision: number;
     patternId: string;
     replayed: boolean;
-    publication: "none" | "published" | "live";
+    publication: "none" | "published" | "live" | "deferred" | "failed";
     patternPublication: Readonly<{generation: number; activationFrame: number}> | null;
     snapshotError: Readonly<{code: string; message: string; details: Readonly<Record<string, unknown>>}> | null;
   }>>;

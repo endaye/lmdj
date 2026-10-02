@@ -3,6 +3,7 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -816,15 +817,24 @@ EditPatternEvents edit_pattern(
                            std::move(remove), std::move(put)};
 }
 
-void check_edit_refused(const lmdj::domain::ProjectState& state,
-                        const EditPatternEvents& command, ErrorCode code,
-                        std::string_view reason) {
+// The refusal's exact code and reason, so each caller fails at its own line.
+std::optional<std::pair<ErrorCode, std::string>> edit_refusal(
+    const lmdj::domain::ProjectState& state, const EditPatternEvents& command) {
   const auto before = state;
   const auto result = lmdj::domain::apply(state, command, {});
-  LMDJ_CHECK(!result.has_value());
-  LMDJ_CHECK(result.error().code == code);
-  LMDJ_CHECK(result.error().details.at("reason") == reason);
-  LMDJ_CHECK(state == before);
+  if (!(state == before)) {
+    throw std::runtime_error("a refused edit changed the state");
+  }
+  if (result.has_value()) {
+    return std::nullopt;
+  }
+  return std::pair{result.error().code,
+                   result.error().details.value("reason", std::string{})};
+}
+
+std::optional<std::pair<ErrorCode, std::string>> refused(
+    ErrorCode code, std::string reason) {
+  return std::pair{code, std::move(reason)};
 }
 
 void test_edit_pattern_events_moves_resizes_and_adds_in_one_revision() {
@@ -862,39 +872,37 @@ void test_edit_pattern_events_put_replaces_by_key_and_keeps_overlap() {
 }
 
 void test_edit_pattern_events_refuses_a_missing_removal() {
-  check_edit_refused(
-      project_with_grid_pattern(),
-      edit_pattern(kEditCommand1, 1,
-                   {{PadSlotId{0, 0}, 0}, {PadSlotId{0, 3}, 0}}, {}),
-      ErrorCode::not_found, "pattern_event_missing");
+  LMDJ_CHECK(edit_refusal(project_with_grid_pattern(),
+                          edit_pattern(kEditCommand1, 1,
+                                       {{PadSlotId{0, 0}, 0}, {PadSlotId{0, 3}, 0}},
+                                       {})) ==
+             refused(ErrorCode::not_found, "pattern_event_missing"));
 }
 
 void test_edit_pattern_events_refuses_repeated_keys() {
   const auto state = project_with_grid_pattern();
-  check_edit_refused(
-      state,
-      edit_pattern(kEditCommand1, 1,
-                   {{PadSlotId{0, 0}, 0}, {PadSlotId{0, 0}, 0}}, {}),
-      ErrorCode::invalid_argument, "pattern_edit_duplicate_key");
-  check_edit_refused(
-      state,
-      edit_pattern(kEditCommand1, 1, {},
-                   {{PadSlotId{0, 2}, 0, 120, 100},
-                    {PadSlotId{0, 2}, 0, 240, 90}}),
-      ErrorCode::invalid_argument, "pattern_edit_duplicate_key");
+  LMDJ_CHECK(edit_refusal(state,
+                          edit_pattern(kEditCommand1, 1,
+                                       {{PadSlotId{0, 0}, 0}, {PadSlotId{0, 0}, 0}},
+                                       {})) ==
+             refused(ErrorCode::invalid_argument, "pattern_edit_duplicate_key"));
+  LMDJ_CHECK(edit_refusal(state,
+                          edit_pattern(kEditCommand1, 1, {},
+                                       {{PadSlotId{0, 2}, 0, 120, 100},
+                                        {PadSlotId{0, 2}, 0, 240, 90}})) ==
+             refused(ErrorCode::invalid_argument, "pattern_edit_duplicate_key"));
 }
 
 void test_edit_pattern_events_refuses_an_empty_or_unchanging_edit() {
   const auto state = project_with_grid_pattern();
-  check_edit_refused(state, edit_pattern(kEditCommand1, 1, {}, {}),
-                     ErrorCode::invalid_argument, "pattern_edit_empty");
+  LMDJ_CHECK(edit_refusal(state, edit_pattern(kEditCommand1, 1, {}, {})) ==
+             refused(ErrorCode::invalid_argument, "pattern_edit_empty"));
   // Removing a note and putting it back unchanged is a no-op, so it must not
   // become a revision or an Undo entry.
-  check_edit_refused(
-      state,
-      edit_pattern(kEditCommand1, 1, {{PadSlotId{0, 0}, 0}},
-                   {{PadSlotId{0, 0}, 0, 240, 100}}),
-      ErrorCode::invalid_argument, "pattern_edit_unchanged");
+  LMDJ_CHECK(edit_refusal(state,
+                          edit_pattern(kEditCommand1, 1, {{PadSlotId{0, 0}, 0}},
+                                       {{PadSlotId{0, 0}, 0, 240, 100}})) ==
+             refused(ErrorCode::invalid_argument, "pattern_edit_unchanged"));
 }
 
 void test_edit_pattern_events_refuses_a_note_across_the_loop_seam() {
@@ -905,11 +913,11 @@ void test_edit_pattern_events_refuses_a_note_across_the_loop_seam() {
 }
 
 void test_edit_pattern_events_refuses_an_unknown_pattern() {
-  check_edit_refused(
-      project_with_grid_pattern(),
-      edit_pattern(kEditCommand1, 1, {}, {{PadSlotId{0, 2}, 0, 120, 100}},
-                   kPattern2),
-      ErrorCode::not_found, "pattern_not_found");
+  LMDJ_CHECK(edit_refusal(project_with_grid_pattern(),
+                          edit_pattern(kEditCommand1, 1, {},
+                                       {{PadSlotId{0, 2}, 0, 120, 100}},
+                                       kPattern2)) ==
+             refused(ErrorCode::not_found, "pattern_not_found"));
 }
 
 void test_edit_pattern_events_is_revision_checked_and_replays() {

@@ -5854,6 +5854,8 @@ struct Application::Impl {
              "pattern_id", "remove", "put"}),
         "pattern.events.edit request shape is invalid");
     const auto path = absolute_path_field(request, "project_path");
+    const auto command_id = uuid_field(request, "command_id");
+    const auto revision = unsigned_field(request, "expected_revision");
     const auto pattern_id = uuid_field(request, "pattern_id");
     const auto& remove = request.at("remove");
     const auto& put = request.at("put");
@@ -5893,9 +5895,7 @@ struct Application::Impl {
     const auto edited = projects.execute(
         path,
         domain::EditPatternEvents{
-            domain::CommandMeta{
-                foundation::CommandId{uuid_field(request, "command_id")},
-                unsigned_field(request, "expected_revision")},
+            domain::CommandMeta{foundation::CommandId{command_id}, revision},
             foundation::PatternId{pattern_id},
             std::move(keys),
             std::move(events)});
