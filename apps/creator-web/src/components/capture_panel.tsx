@@ -60,6 +60,7 @@ export interface CapturePanelProps {
     {kind: "committed"} | {kind: "conflict"; message: string} | {kind: "failed"; message: string}
   >;
   onClose(): void;
+  onRecordGesture?(event: {isTrusted: boolean}): void;
   // Element focus returns to when the panel closes (P2-D2); the modal dialog
   // owns the restore so there is exactly one restore path.
   returnFocus?: HTMLElement | null;
@@ -107,6 +108,7 @@ export function CapturePanel({
   padLabel,
   onCommit,
   onClose,
+  onRecordGesture,
   returnFocus = null,
   makeController,
   stopRequest = 0,
@@ -747,7 +749,10 @@ export function CapturePanel({
           <button
             ref={primaryRef}
             type="button"
-            onClick={() => void handleRecord()}
+            onClick={(event) => {
+              onRecordGesture?.(event.nativeEvent);
+              void handleRecord();
+            }}
           >
             Record into {padLabel}
           </button>

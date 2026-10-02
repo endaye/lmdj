@@ -1,3 +1,4 @@
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 import {
@@ -52,7 +53,7 @@ async function enterSequenceAndActivate(page) {
   // "Sequence editor"; that region is the destination, whichever shell
   // mounts it.
   await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state"))
     .toHaveText("Audio running", {timeout: 30_000});
 }

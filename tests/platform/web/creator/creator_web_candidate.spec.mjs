@@ -1,3 +1,4 @@
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {createHash, randomUUID} from "node:crypto";
 import {expect, test} from "@playwright/test";
 import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
@@ -182,9 +183,9 @@ test("Creator Slice UI previews, explicitly adopts repeated recipes, and reopens
   const savedBefore = await files(page, projectId);
   expect(Object.keys(savedBefore).length).toBeGreaterThan(0);
   await page.getByRole("button", {name: "Preview slice 2", exact: true}).click();
-  await expect(page.getByText("Preview was not played. Activate audio and try again.")).toBeVisible();
+  await expect(page.getByText("Preview was not played. Tap a Pad to wake audio and try again.")).toBeVisible();
   expect(success((await last(page, "candidate.audition")).response).played).toBe(false);
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
   await page.getByRole("button", {name: "Preview slice 2", exact: true}).click();
   await expect(page.getByText("Preview started.")).toBeVisible();
@@ -367,7 +368,7 @@ for (const bank of [0, 1]) {
     // takes effect at a later musical boundary, after Bank acknowledgement.
     await page.getByRole("button", {name: "Refresh slices and Project"}).click();
     await expect.poll(async () => success((await last(page, "snapshot.reload")).response).pattern_id).toBe(emptyId);
-    await page.getByRole("button", {name: "Activate audio"}).click();
+    await wakeAudioWithPad(page);
     await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
     await target(page, 1, set.recipes[1].candidate_id, 0, bank);
     await page.getByRole("button", {name: "Adopt selected slices"}).click();

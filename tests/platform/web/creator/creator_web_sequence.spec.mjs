@@ -1,3 +1,4 @@
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 
@@ -20,6 +21,12 @@ async function installTransportProofRecorder(page) {
       },
       set(nativeHost) {
         const nativeTransport = nativeHost.transport;
+        window.__patternTransportVoiceProof = [];
+        nativeTransport.subscribe(message => {
+          if (message.event === "runtime.voice_state") {
+            window.__patternTransportVoiceProof.push(...message.payload.events);
+          }
+        });
         nativeHost.transport = Object.freeze({
           async send(...arguments_) {
             const [request] = arguments_;
@@ -88,6 +95,7 @@ async function installTransportProofRecorder(page) {
                 ok: response?.ok ?? null,
                 status: response?.result?.status ?? null,
                 accepted: response?.result?.accepted ?? null,
+                sequence: response?.result?.sequence ?? null,
               });
             }
             if (operation === "snapshot.reload") {
@@ -177,15 +185,32 @@ async function transportRequests(page) {
   return page.evaluate(() => window.__patternTransportRequests ?? []);
 }
 
-// Wait until the Runtime has durably admitted `count` Pad presses. The
-// trigger response is the far side of the journal append; pressing keys never
-// proves admission on its own. One-shot Pads send no release operation, so
-// only presses are gated here.
+// Require the Runtime's durable admission of `count` Pad presses before a
+// caller can close or lose the owner.
+// One-shot Pads send no release operation, so only presses are gated here.
 async function awaitAdmittedPresses(page, count) {
+  const wakeAdmissions = await page.evaluate(() => window.__wakeAudioAdmissionCount ?? 0);
   await expect.poll(() => page.evaluate(() =>
     (window.__patternTransportTriggerProof ?? [])
       .filter(({payload, ok}) => ok === true && payload?.velocity !== undefined)
-      .length), {timeout: 30_000}).toBe(count);
+      .length), {timeout: 30_000}).toBe(count + wakeAdmissions);
+}
+
+// The terminal cutoff excludes candidates at or after its frame. Record-off
+// journeys also require matching native VoiceStarted before that fence. Owner
+// loss keeps its separate deliberately unresolved held-press precondition.
+async function awaitRenderedPresses(page, count) {
+  await awaitAdmittedPresses(page, count);
+  const wakeAdmissions = await page.evaluate(() => window.__wakeAudioAdmissionCount ?? 0);
+  await expect.poll(() => page.evaluate(({count, wakeAdmissions}) => {
+    const presses = (window.__patternTransportTriggerProof ?? [])
+      .filter(({payload, ok}) => ok === true && payload?.velocity !== undefined)
+      .slice(wakeAdmissions);
+    const voices = window.__patternTransportVoiceProof ?? [];
+    return presses.length === count && presses.every(({sequence}) =>
+      Number.isSafeInteger(sequence) && sequence > 0 && voices.some(event =>
+        event.sequence === sequence && event.state === "started"));
+  }, {count, wakeAdmissions}), {timeout: 30_000}).toBe(true);
 }
 
 async function enterSequenceAndPlay(page) {
@@ -194,7 +219,7 @@ async function enterSequenceAndPlay(page) {
   // "Sequence editor"; that region is the destination, whichever shell
   // mounts it.
   await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state"))
     .toHaveText("Audio running", {timeout: 30_000});
 }
@@ -228,7 +253,7 @@ test("global Pattern transport plays, overdubs, survives navigation, stops, and 
   await transportStatus(page, "recording");
   await page.keyboard.press("KeyQ");
   await page.keyboard.press("KeyW");
-  await awaitAdmittedPresses(page, 2);
+  await awaitRenderedPresses(page, 2);
   // Nothing is committed while recording is open.
   expect((await inspectTruth(page)).patterns[patternId].events).toHaveLength(0);
 
@@ -313,7 +338,7 @@ test("records notes and sees them on both grids after reopen", async ({page, bro
   await transportStatus(page, "recording");
   await page.keyboard.press("KeyQ");
   await page.keyboard.press("KeyW");
-  await awaitAdmittedPresses(page, 2);
+  await awaitRenderedPresses(page, 2);
   await recordKey(page).click();
   await transportStatus(page, "playing");
   const committed = await inspectTruth(page);
@@ -390,15 +415,14 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   const authored = await inspectTruth(page);
   expect(authored.revision).toBe(imported.revision + 1);
 
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  // The first Record click must wake audio and start this same intent once.
+  await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
+  await recordKey(page).click();
   await expect(page.getByTestId("audio-state"))
     .toHaveText("Audio running", {timeout: 30_000});
-
-  // stopped → Record: start at the Pattern beginning, playing and recording.
-  await recordKey(page).click();
   await transportStatus(page, "recording");
   await page.keyboard.press("KeyQ");
-  await awaitAdmittedPresses(page, 1);
+  await awaitRenderedPresses(page, 1);
 
   // The Record-off ticket response is lost after the native side accepted
   // the command. The Creator shows the failure, keeps the command identity
@@ -472,7 +496,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
     throw error;
   }
   await page.keyboard.press("KeyW");
-  await awaitAdmittedPresses(page, 2);
+  await awaitRenderedPresses(page, 2);
   await recordKey(page).click();
   await transportStatus(page, "playing");
   const overdubbed = await inspectTruth(page);
@@ -596,12 +620,16 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
 
   await recordKey(page).click();
   await transportStatus(page, "recording");
-  await page.keyboard.press("KeyQ");
+  // Leave the press open: owner-loss recovery finalizes an interrupted held
+  // one-shot with its attack tail. A completed press/release records its real
+  // duration and cannot establish this precondition.
+  await page.keyboard.down("KeyQ");
   // The admission must be durable before the reload, or the recovery
   // assertion would be testing an empty journal instead of owner loss.
   await awaitAdmittedPresses(page, 1);
 
   await reopenProject(page);
+  await page.keyboard.up("KeyQ");
   const lostTruth = await inspectTruth(page);
   // Nothing was committed: the unresolved admission never reaches truth.
   expect(lostTruth.revision).toBe(imported.revision);
@@ -627,13 +655,13 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
     .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100, duration_tick: 240});
 
   // A fresh recording on the same session opens a new journal and commits.
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state"))
     .toHaveText("Audio running", {timeout: 30_000});
   await recordKey(page).click();
   await transportStatus(page, "recording");
   await page.keyboard.press("KeyW");
-  await awaitAdmittedPresses(page, 1);
+  await awaitRenderedPresses(page, 1);
   await recordKey(page).click();
   await transportStatus(page, "playing");
   const recovered = await inspectTruth(page);
