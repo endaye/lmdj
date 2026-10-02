@@ -47,8 +47,6 @@ button { font: inherit; }
   justify-content: space-between;
   gap: 1rem;
   padding-inline: clamp(1rem, 3vw, 2rem);
-  background: rgb(10 11 9 / 72%);
-  backdrop-filter: blur(14px);
 }
 .site-brand {
   display: flex;
@@ -57,13 +55,13 @@ button { font: inherit; }
 }
 .site-wordmark {
   color: #f1f2e9;
-  font-size: .95rem;
+  font-size: 1.3rem;
   font-weight: 800;
   letter-spacing: .22em;
 }
 .site-product {
   color: #ddf478;
-  font-size: .66rem;
+  font-size: .8rem;
   letter-spacing: .3em;
   text-transform: uppercase;
 }
