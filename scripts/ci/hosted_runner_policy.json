@@ -64,6 +64,12 @@
       "job": "build",
       "category": "platform",
       "reason": "Untrusted PR build code must not persist on reusable privileged self-hosted runners. A fresh standard Linux runner provides the isolated build boundary. Disabled unless an exact pilot branch variable is explicitly configured after budget approval; no broad activation or paid upgrade is authorized by this entry."
+    },
+    {
+      "workflow": "deploy-default-assets.yml",
+      "job": "deploy",
+      "category": "deploy-authority",
+      "reason": "The manually authorized independent asset Worker upload uses the protected creator-canary deployment token. CI runner users deliberately hold no deployment authority; this credentialed job must not route to a general self-hosted CI role."
     }
   ]
 }

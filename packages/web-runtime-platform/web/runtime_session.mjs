@@ -1404,6 +1404,10 @@ function createRuntimeSessionController(options = {}) {
   let foregroundLossEpoch = 0;
   const activeAdverseConditions = new Set();
   let lastContextState = null;
+  // Callback heartbeat sampled immediately after the last audio.activate
+  // resolved; the engine frame counter reset to zero at that moment, so this
+  // is the anchor of the current engine epoch.
+  let engineEpochHeartbeat = null;
   let recoveryEpoch = null;
   let nextRecoveryEpoch = 1;
   let activationReservation = null;
@@ -1507,6 +1511,25 @@ function createRuntimeSessionController(options = {}) {
     for (const listener of [...diagnosticsListeners]) {
       listener(value);
     }
+  }
+
+  function sampleAudioClock() {
+    if (
+      closing ||
+      machine.state !== "running" ||
+      audioContext === null ||
+      engineEpochHeartbeat === null
+    ) {
+      throw typedError(
+        "HOST_STATE_INVALID",
+        "Audio clock is unavailable; activate audio before sampling",
+      );
+    }
+    return Object.freeze({
+      contextTimeSeconds: audioContext.currentTime,
+      callbackHeartbeat: readAudioCallbackHeartbeat(),
+      engineEpochHeartbeat,
+    });
   }
 
   function performanceMasterCaptureStatus() {
@@ -2219,6 +2242,7 @@ function createRuntimeSessionController(options = {}) {
       if (recoveryEpoch !== epoch || machine.state !== "recovering") {
         return;
       }
+      engineEpochHeartbeat = readAudioCallbackHeartbeat();
       const status = await boundedRequest("host.status", {});
       if (recoveryEpoch === epoch) {
         completeRecovery(status);
@@ -2905,6 +2929,7 @@ function createRuntimeSessionController(options = {}) {
       if (!activationIsCurrent(reservation, "audio-suspended")) {
         return false;
       }
+      engineEpochHeartbeat = readAudioCallbackHeartbeat();
       const status = await boundedRequest("host.status", {});
       if (!activationIsCurrent(reservation, "audio-suspended")) {
         return false;
@@ -5600,6 +5625,7 @@ function createRuntimeSessionController(options = {}) {
     subscribeSequenceBarBoundary,
     subscribeVoiceState,
     diagnostics,
+    sampleAudioClock,
   });
   registerDiagnosticTransport(session, async (...arguments_) => {
     try {

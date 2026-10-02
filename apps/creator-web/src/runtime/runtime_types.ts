@@ -278,6 +278,17 @@ export interface CreatorRuntimeSession {
   reloadSnapshot(patternId: string): Promise<unknown>;
   activateAudio(token: unknown): Promise<boolean>;
   suspendAudio(): Promise<boolean>;
+  // One synchronous audio-clock sample. Within one engine epoch,
+  // engineFrame ≈ (callbackHeartbeat − engineEpochHeartbeat) × 128 at
+  // contextTimeSeconds, advancing 1:1 at 48 000 fps; see the platform type
+  // for the full semantics. Throws HOST_STATE_INVALID unless audio is
+  // running. Optional so test fakes that never drive the audio clock do not
+  // need to stub it; the real session always provides it.
+  sampleAudioClock?(): Readonly<{
+    contextTimeSeconds: number;
+    callbackHeartbeat: number;
+    engineEpochHeartbeat: number;
+  }>;
   trigger(
     slot: number,
     velocity: number,
@@ -364,6 +375,26 @@ export interface PatternCreateMutation {
   replayed: boolean;
 }
 
+// How the Runtime applied an edit's view: "none" for a non-current Pattern,
+// "published" swapped in while stopped, "live" swapped in place while playing,
+// "deferred" committed with its swap pending on a free Pattern slot, and
+// "failed" for a committed edit whose view could not swap.
+export type PatternEventsEditPublication =
+  "none" | "published" | "live" | "deferred" | "failed";
+
+export interface PatternEventsEditMutation {
+  committedRevision: number;
+  projectRevision: number;
+  patternId: string;
+  replayed: boolean;
+  publication: PatternEventsEditPublication;
+  patternPublication: Readonly<{
+    generation: number;
+    activationFrame: number;
+  }> | null;
+  snapshotError: Readonly<SampleSnapshotError> | null;
+}
+
 export interface CreatorSequenceRuntimeSession extends CreatorSampleRuntimeSession {
   createPattern(request: {
     patternId: string;
@@ -393,6 +424,12 @@ export interface CreatorSequenceRuntimeSession extends CreatorSampleRuntimeSessi
   }): Promise<boolean>;
   flushSequence(request: {sessionId: string; commandId: string}): Promise<SequenceMutation>;
   stopSequence(request: {sessionId: string; commandId: string}): Promise<SequenceMutation>;
+  editPatternEvents(request: {
+    patternId: string;
+    expectedRevision: number;
+    remove: readonly PatternEventKeyRequest[];
+    put: readonly PatternEventRequest[];
+  }): Promise<Readonly<PatternEventsEditMutation>>;
   requestPatternSwitch(request: {
     sessionId: string;
     nextPatternId: string;
@@ -419,6 +456,8 @@ export interface TypedRuntimeError extends Error {
   details?: Readonly<Record<string, unknown>>;
 }
 import type {
+  PatternEventKeyRequest,
+  PatternEventRequest,
   PerformanceRuntimeSession,
   WebPerformanceCaptureSession,
 } from "@lmdj/web-runtime-platform/runtime_types";

@@ -30,24 +30,24 @@ Host 向 Application Facade 发出命令；Authoring Domain 更新 Project Truth
 
 Undo/Redo 恢复创作内容并生成新的递增 revision，不回写旧 revision。Pad 清空保留 Pattern 事件；任务取消本身不入栈，Undo 不重新启动下载或 Provider。Redo 复用原产物，历史引用的素材必须保留。未结算录音或待恢复事务期间禁用并解释原因。保存和切页保留历史，关闭、刷新、重开、切换工程、接管或外部替换后清空；工程内容仍持久化。
 
-历史由 Application Facade/Core 拥有，Host 只发请求和展示状态，Runtime Snapshot 仍是派生状态。首版不持久化历史或实现跨设备撤销；未来协作须遵守“只撤销自己本设备的操作”。这项决策不授予 AI 自动改工程的权限，#536 继续开放；具体操作矩阵、失败恢复与验收场景见决策文件。当前最多保留 100 个动作；未结束录制分组暂留被替换的 Redo 和一个可能被挤出的旧动作，以便取消恢复。Pattern 播放期间要求先显式 Stop，撤销不会隐式停止。后续长按录音、Pad 管理和网格编辑的新交互仍由各自 Task 实现。
+历史由 Application Facade/Core 拥有，Host 只发请求和展示状态，Runtime Snapshot 仍是派生状态。首版不持久化历史或实现跨设备撤销；未来协作须遵守“只撤销自己本设备的操作”。这项决策不授予 AI 自动改工程的权限，#536 继续开放；具体操作矩阵、失败恢复与验收场景见决策文件。当前最多保留 100 个动作；未结束录制分组暂留被替换的 Redo 和一个可能被挤出的旧动作，以便取消恢复。Pattern 播放期间要求先显式 Stop，撤销不会隐式停止。后续长按录音与 Pad 管理的新交互仍由各自 Task 实现。
 
 ## Sequence 录音
 
 [2026-08-23 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-08-23-sequence-recording-semantics.md)已由全局 Pattern transport（#1230）取代 Stage 9 的页面级 Sequence 会话：一个 Facade 持有的 coordinator 拥有 journal 与 transport，录音向当前 Pattern 写入 tick-native PPQ 960 事件，没有 Take 产品对象或音频 bounce。Play/Stop 与 Record 是全局键，任何 mode 下都指向同一 projection 与命令身份，普通导航不停止 transport，Sample capture 与 master recording 由各自独立的 workflow 拥有。armed 空 Pad Capture 在 transport 录制中只停采并进入 trim overlay；journal 打开时 Sample 类提交保持 busy 守卫并被诚实拒绝，Record-off 结算后同一选区可提交，播放不中断；录制中 BPM、Quantize/Swing 被拒绝。未知 command 与 identity 冲突均 fail closed。Capture 在 manifest publication 前 durable 固定原 command/asset/artifact；若 Project 已提交而 journal completion 中断，fresh-command retry/restart 只按 exact receipt 与 Project Truth 完成原提交，不创建第二个 Asset 或 revision。若 publication 尚未发生，Discard/disarm 只在 writer lease 下确认无 receipt 且 Project 仍为 exact expected revision、原 Pad 仍空、command/Asset 均不存在后写入 durable abort；matching receipt 完成原提交，任何 identity/Truth 冲突均 fail closed。durable marker 存在时 BPM/Quantize/Swing 也必须先以 `armed_capture_recovery_pending` 拒绝，不能先提交 Project 再失败于 journal rebase。成功或 abort 后消费 arm，pending Sequence events 保留，之后的同 Pad hit 才进入演奏与录制 admission。每个被录制的 Pad 事件在 acknowledged admission/cutoff 区间内先 durable 保留为 candidate，drain 后按 exact fence 幂等提交；提交前它不是 Project Truth。Record-off 以 acknowledged cutoff 结算并提交且播放保持，Stop 先停止调度再结算；ticket 或 receipt 丢失时按同一命令身份 reconcile，绝不发出新的反向 toggle。切换 Pattern：播放中的 engagement 诚实拒绝跨身份 reload，停止态 reload 注销 engagement 并由下一条命令按当前 Pattern 重新 vend。owner-lost 的 transport admission 在列出时被 reconcile 密封为 owner_lost 候选：Apply 被诚实拒绝（fence 结果不可知），Discard 释放它；legacy recovery artifact 仍必须通过原 Pattern fingerprint 或用户明确选择的有效目标后才能提交或丢弃。
 
-## Sequence 网格编辑（已确认，尚未实现）
+## Sequence 网格编辑
 
-[2026-10-02 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-02-sequence-grid-editing.md)确定了 #1671 的首版，实施计划见 `docs/plans/2026-10-02-creator-sequence-grid.md`；当前 Creator 尚无网格，上屏 Sequence 仍只显示文字状态。
+[2026-10-02 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-02-sequence-grid-editing.md)确定了 #1671 的首版，实施计划见 `docs/plans/2026-10-02-creator-sequence-grid.md`，现已交付：
 
-- **布局。** 网格在 Sequence 触控区：行为当前 Bank 的 16 个 Pad，横轴为整个 Pattern，吸附默认 1/16。上屏保持只读，显示 64 行 Pattern 总览、播放头、触控区视窗框与选中信息。
-- **首版编辑。** 笔点增删音符、拖动改位置与长度、调力度、框选后批量删除或移动。一次手势或一次批量操作是一条撤销记录。
-- **播放与录音。** 只播放时可以编辑：被编辑的若是正在播放的 Pattern，提交后立即在原位替换，播放位置不变，播放头之后的新音符本圈就能听到（[2026-10-02 勘误](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-02-sequence-grid-live-edit.md)替代原先的"下一小节生效"）。录音中拒绝编辑，撤销仍需先 Stop。
-- **Contract。** 编辑在 `lmdj.project.v5` 现有的 `duration_tick` 与事件键规则内表达，不改 Contract。DICE 概率、Legato/Reverse/Stretch/Repeat/Double Up 与复制粘贴由后续 Task 处理。
+- **布局。** 网格在 Sequence 触控区：行为当前 Bank 的 16 个 Pad，横轴为整个 Pattern，吸附默认 1/16（可选 1/4、1/8、1/16、1/32 与关）。上屏保持只读，显示 64 行 Pattern 总览、播放头、触控区视窗框与选中信息（选中音符数、吸附精度、力度——选区力度一致时显示该值，不一致显示 mixed，无选区显示空）。
+- **编辑。** 笔点空格加音符（长度为一个吸附步进，吸附关闭时为 1/16；力度取网格上次设定的值，初始 100）、点音符删除、拖音符本体移动、拖末端改长度、VEL 模式下竖直拖动设力度（由指针在行内的高度绝对映射 1–127）、框选后批量删除或作为刚性整体批量移动。一次手势在手势结束时发出一条 `pattern.events.edit`（Pad 以 0–63 的扁平槽位寻址），即一条撤销记录；拖回原位不产生记录。移动与长度按所选吸附取齐，长度钳制到循环接缝，移动到已占用键时按键规则替换该音符。
+- **播放与录音。** 只播放时可以编辑：被编辑的若是正在播放的 Pattern，提交后立即原位替换它的 Runtime 视图，播放位置不变、发声中的音不被打断，播放头之后、本圈尚未播放的新音符本圈就能听到（[2026-10-02 勘误](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-02-sequence-grid-live-edit.md)替代原先的"下一小节生效"）；停止时编辑当前 Pattern 同样立即替换，下一次 Play 不会被待生效的发布挡住；编辑不是 Runtime 当前 Pattern 的 Pattern 只改 Project Truth。引擎 Pattern 槽位占满时编辑照常提交（deferred），Runtime 在槽位空出后按 Truth 自动补上原位替换——它与其他编辑一样是已提交的 Truth，界面不单独标记。transport 命令进行中（含待结算的排期发布）时编辑在提交前被拒绝并由 Host 自动重试，不显示为冲突。录音中编辑被禁用并给出原因；冲突或拒绝会从 Truth 恢复投影并显示原因。撤销与重做沿用现有的仅限停止状态的历史控件。
+- **Contract。** 编辑在 `lmdj.project.v5` 现有的 `duration_tick` 与事件键规则内表达，未改 Contract。DICE 概率、Legato/Reverse/Stretch/Repeat/Double Up 与复制粘贴由后续 Task 处理。
 
-## Tempo/Swing 直接调节与节拍器（已确认，尚未实现）
+## Tempo/Swing 直接调节与节拍器
 
-[2026-10-02 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-02-creator-tempo-metronome.md)确定了 #1672 的行为，实施计划见 `docs/plans/2026-10-02-creator-tempo-metronome.md`；当前 Creator 的 Tempo/Swing 仍是数值加显式 Apply，没有节拍器。
+[2026-10-02 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-02-creator-tempo-metronome.md)确定了 #1672 的行为，实施计划见 `docs/plans/2026-10-02-creator-tempo-metronome.md`；直接调节经 #1765 交付，音频时钟与节拍器经 #1672 的 T2–T4 交付，验收台账见 `docs/quality/2026-10-02-creator-tempo-metronome-acceptance.md`。
 
 - **直接调节。** 拖动只预览、手势结束提交一次；另有 ±1 步进与 Tap Tempo（最近至多 4 个间隔的中位数，夹取 40–240）。一次手势或步进是一条撤销记录，拖回原值不提交。
 - **生效边界。** 停止态立即生效；播放中改 BPM 从下一小节生效；Swing/Quantize 沿用 2026-08-23 决策，录入时烘焙进之后的新事件，不改变已录事件的播放。录音中 Tempo/Swing/Quantize 沿用现有拒绝。

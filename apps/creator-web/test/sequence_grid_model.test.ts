@@ -6,6 +6,17 @@ import {
   createSequenceGridThumbnail,
   DEFAULT_SEQUENCE_GRID_SNAP,
   SEQUENCE_GRID_SNAPS,
+  sequenceGridAddNote,
+  sequenceGridBatchDelete,
+  sequenceGridBatchMove,
+  sequenceGridMoveNote,
+  sequenceGridNotesInBox,
+  sequenceGridRemoveNote,
+  sequenceGridResizeNote,
+  sequenceGridLiveSelection,
+  sequenceGridSelectionVelocity,
+  sequenceGridVelocityNote,
+  sequenceGridFlatSlot,
   sequenceGridViewportForWindow,
   sequencePatternLengthTicks,
   sequencePlayheadTick,
@@ -194,4 +205,259 @@ describe("sequencePlayheadTick", () => {
       originFrame: 0, runtimeFrame: 100, bpm: 120, lengthTicks: 0,
     })).toBeNull();
   });
+});
+
+describe("grid editing gestures map to one exact command each", () => {
+  const gridNote = (pad: number, onsetTick: number, durationTick: number, velocity = 100) =>
+    Object.freeze({pad, onsetTick, durationTick, velocity});
+
+  test("a tap on an empty cell adds one snapped note with the grid defaults", () => {
+    expect(sequenceGridAddNote({
+      bank: 0, pad: 2, tick: 700, snapTicks: 240, velocity: 100, lengthTicks: 3840,
+    })).toEqual({
+      remove: [],
+      put: [{bank: 0, pad: 2, onsetTick: 480, durationTick: 240, velocity: 100}],
+    });
+    // Snap off keeps the exact tick and gives the note one 1/16 step.
+    expect(sequenceGridAddNote({
+      bank: 1, pad: 0, tick: 700, snapTicks: null, velocity: 100, lengthTicks: 3840,
+    })).toEqual({
+      remove: [],
+      put: [{bank: 1, pad: 0, onsetTick: 700, durationTick: 240, velocity: 100}],
+    });
+    // The last velocity set in the grid becomes the new note's velocity.
+    expect(sequenceGridAddNote({
+      bank: 0, pad: 2, tick: 0, snapTicks: 240, velocity: 88, lengthTicks: 3840,
+    })?.put[0]?.velocity).toBe(88);
+  });
+
+  test("an add clamps its length to the loop seam", () => {
+    expect(sequenceGridAddNote({
+      bank: 0, pad: 0, tick: 3700, snapTicks: 240, velocity: 100, lengthTicks: 3840,
+    })).toEqual({
+      remove: [],
+      put: [{bank: 0, pad: 0, onsetTick: 3600, durationTick: 240, velocity: 100}],
+    });
+    expect(sequenceGridAddNote({
+      bank: 0, pad: 0, tick: 3820, snapTicks: null, velocity: 100, lengthTicks: 3840,
+    })).toEqual({
+      remove: [],
+      put: [{bank: 0, pad: 0, onsetTick: 3820, durationTick: 20, velocity: 100}],
+    });
+    expect(sequenceGridAddNote({
+      bank: 0, pad: 0, tick: 3840, snapTicks: null, velocity: 100, lengthTicks: 3840,
+    })).toEqual({
+      remove: [],
+      put: [{bank: 0, pad: 0, onsetTick: 3839, durationTick: 1, velocity: 100}],
+    });
+  });
+
+  test("a tap on a note removes exactly its key", () => {
+    expect(sequenceGridRemoveNote({bank: 0, pad: 1, onsetTick: 240})).toEqual({
+      remove: [{bank: 0, pad: 1, onsetTick: 240}],
+      put: [],
+    });
+  });
+
+  test("a body drag moves by remove plus put; ending where it started sends nothing", () => {
+    const note = gridNote(1, 240, 480, 80);
+    expect(sequenceGridMoveNote({
+      bank: 0, note, toPad: 3, toTick: 1240, snapTicks: 240, lengthTicks: 3840,
+    })).toEqual({
+      remove: [{bank: 0, pad: 1, onsetTick: 240}],
+      put: [{bank: 0, pad: 3, onsetTick: 1200, durationTick: 480, velocity: 80}],
+    });
+    expect(sequenceGridMoveNote({
+      bank: 0, note, toPad: 1, toTick: 240, snapTicks: 240, lengthTicks: 3840,
+    })).toBeNull();
+    // A drag shorter than half a snap step snaps to the nearest grid line.
+    expect(sequenceGridMoveNote({
+      bank: 0, note, toPad: 1, toTick: 100, snapTicks: 240, lengthTicks: 3840,
+    })).toEqual({
+      remove: [{bank: 0, pad: 1, onsetTick: 240}],
+      put: [{bank: 0, pad: 1, onsetTick: 0, durationTick: 480, velocity: 80}],
+    });
+  });
+
+  test("a move snaps, clamps to the seam and replaces an occupied key", () => {
+    const note = gridNote(0, 0, 240);
+    // Snap nearest on the landing onset.
+    expect(sequenceGridMoveNote({
+      bank: 0, note, toPad: 0, toTick: 300, snapTicks: 240, lengthTicks: 3840,
+    })?.put[0]?.onsetTick).toBe(240);
+    // Duration can never cross the seam, so the onset clamps back.
+    expect(sequenceGridMoveNote({
+      bank: 0, note, toPad: 0, toTick: 3700, snapTicks: 240, lengthTicks: 3840,
+    })?.put[0]?.onsetTick).toBe(3600);
+    expect(sequenceGridMoveNote({
+      bank: 0, note, toPad: 0, toTick: 3700, snapTicks: null, lengthTicks: 3840,
+    })).toEqual({
+      remove: [{bank: 0, pad: 0, onsetTick: 0}],
+      put: [{bank: 0, pad: 0, onsetTick: 3600, durationTick: 240, velocity: 100}],
+    });
+    // The occupant at the landing key is replaced by the put (key rule).
+    const occupied = gridNote(2, 960, 240, 70);
+    const edit = sequenceGridMoveNote({
+      bank: 0, note: occupied, toPad: 2, toTick: 480, snapTicks: 240, lengthTicks: 3840,
+    });
+    expect(edit).toEqual({
+      remove: [{bank: 0, pad: 2, onsetTick: 960}],
+      put: [{bank: 0, pad: 2, onsetTick: 480, durationTick: 240, velocity: 70}],
+    });
+  });
+
+  test("an end drag resizes by same-key put with seam and minimum clamps", () => {
+    const note = gridNote(1, 240, 480, 80);
+    expect(sequenceGridResizeNote({
+      bank: 0, note, toEndTick: 1690, snapTicks: 240, lengthTicks: 3840,
+    })).toEqual({
+      remove: [],
+      put: [{bank: 0, pad: 1, onsetTick: 240, durationTick: 1440, velocity: 80}],
+    });
+    // Never longer than the seam, never shorter than one snap step.
+    expect(sequenceGridResizeNote({
+      bank: 0, note, toEndTick: 9999, snapTicks: 240, lengthTicks: 3840,
+    })?.put[0]?.durationTick).toBe(3600);
+    expect(sequenceGridResizeNote({
+      bank: 0, note, toEndTick: 100, snapTicks: 240, lengthTicks: 3840,
+    })?.put[0]?.durationTick).toBe(240);
+    expect(sequenceGridResizeNote({
+      bank: 0, note, toEndTick: 241, snapTicks: null, lengthTicks: 3840,
+    })?.put[0]?.durationTick).toBe(1);
+    expect(sequenceGridResizeNote({
+      bank: 0, note, toEndTick: 720, snapTicks: 240, lengthTicks: 3840,
+    })).toBeNull();
+  });
+
+  test("a velocity drag sets a clamped same-key put and suppresses no-ops", () => {
+    const note = gridNote(0, 0, 240, 100);
+    expect(sequenceGridVelocityNote({bank: 0, note, velocity: 64})).toEqual({
+      remove: [],
+      put: [{bank: 0, pad: 0, onsetTick: 0, durationTick: 240, velocity: 64}],
+    });
+    expect(sequenceGridVelocityNote({bank: 0, note, velocity: 999})?.put[0]?.velocity)
+      .toBe(127);
+    expect(sequenceGridVelocityNote({bank: 0, note, velocity: -5})?.put[0]?.velocity)
+      .toBe(1);
+    expect(sequenceGridVelocityNote({bank: 0, note, velocity: 100})).toBeNull();
+  });
+
+  test("a box selection deletes as one remove batch and moves as one rigid batch", () => {
+    const notes = [gridNote(0, 0, 240), gridNote(1, 240, 480, 80)];
+    const keys = notes.map((note) => ({bank: 0, pad: note.pad, onsetTick: note.onsetTick}));
+    expect(sequenceGridBatchDelete([])).toBeNull();
+    expect(sequenceGridBatchDelete(keys)).toEqual({remove: keys, put: []});
+    expect(sequenceGridBatchMove({
+      bank: 0, notes, deltaTicks: 1250, deltaPads: 2, snapTicks: 240, lengthTicks: 3840,
+    })).toEqual({
+      remove: keys,
+      put: [
+        {bank: 0, pad: 2, onsetTick: 1200, durationTick: 240, velocity: 100},
+        {bank: 0, pad: 3, onsetTick: 1440, durationTick: 480, velocity: 80},
+      ],
+    });
+    // The delta clamps so no selected note leaves the grid or crosses the seam.
+    expect(sequenceGridBatchMove({
+      bank: 0, notes, deltaTicks: 9999, deltaPads: 99, snapTicks: 240, lengthTicks: 3840,
+    })).toEqual({
+      remove: keys,
+      put: [
+        {bank: 0, pad: 14, onsetTick: 3120, durationTick: 240, velocity: 100},
+        {bank: 0, pad: 15, onsetTick: 3360, durationTick: 480, velocity: 80},
+      ],
+    });
+    expect(sequenceGridBatchMove({
+      bank: 0, notes, deltaTicks: 100, deltaPads: 0, snapTicks: 240, lengthTicks: 3840,
+    })).toBeNull();
+  });
+
+  test("a batch whose origin-side note binds moves every note by the one clamped delta", () => {
+    const notes = [gridNote(1, 240, 240, 90), gridNote(2, 1200, 480, 110)];
+    // The note at onset 240 can move back at most 240 ticks; the whole
+    // selection moves by that one delta, never by per-note deltas.
+    expect(sequenceGridBatchMove({
+      bank: 0, notes, deltaTicks: -9999, deltaPads: -99, snapTicks: 240,
+      lengthTicks: 3840,
+    })).toEqual({
+      remove: [
+        {bank: 0, pad: 1, onsetTick: 240},
+        {bank: 0, pad: 2, onsetTick: 1200},
+      ],
+      put: [
+        {bank: 0, pad: 0, onsetTick: 0, durationTick: 240, velocity: 90},
+        {bank: 0, pad: 1, onsetTick: 960, durationTick: 480, velocity: 110},
+      ],
+    });
+  });
+
+  test("a batch that hits an off-grid edge stops on the snap grid", () => {
+    // A recorded note at onset 100 can move back at most 100 ticks; with
+    // 1/16 snap the selection must not land 100 ticks back, off the grid.
+    const notes = [gridNote(0, 100, 240), gridNote(1, 1200, 240, 80)];
+    expect(sequenceGridBatchMove({
+      bank: 0, notes, deltaTicks: -9999, deltaPads: 0, snapTicks: 240,
+      lengthTicks: 3840,
+    })).toBeNull();
+    // A rightward drag still clamps inside the seam: the tightened bounds
+    // stay around zero, so no note lands past L − duration.
+    expect(sequenceGridBatchMove({
+      bank: 0, notes, deltaTicks: 9999, deltaPads: 0, snapTicks: 240,
+      lengthTicks: 3840,
+    })?.put.map((event) => event.onsetTick)).toEqual([2500, 3600]);
+    // Snap off keeps the exact edge.
+    expect(sequenceGridBatchMove({
+      bank: 0, notes, deltaTicks: -9999, deltaPads: 0, snapTicks: null,
+      lengthTicks: 3840,
+    })?.put.map((event) => event.onsetTick)).toEqual([0, 1100]);
+  });
+
+  test("the box hit test covers pads and intersecting tick windows", () => {
+    const notes = [
+      gridNote(0, 0, 240),
+      gridNote(1, 240, 480, 80),
+      gridNote(3, 480, 240, 127),
+      gridNote(1, 4800, 240, 64),
+    ];
+    expect(sequenceGridNotesInBox({
+      notes, fromPad: 0, toPad: 1, fromTick: 7000, toTick: 200,
+    })).toEqual([notes[0], notes[1], notes[3]]);
+    expect(sequenceGridNotesInBox({
+      notes, fromPad: 2, toPad: 2, fromTick: 0, toTick: 7680,
+    })).toEqual([]);
+    expect(sequenceGridSelectionVelocity(pattern(1, [
+      event(0, 0, 0, 240, 100), event(0, 1, 240, 480, 80),
+    ]), [{bank: 0, pad: 0, onsetTick: 0}])).toBe(100);
+    expect(sequenceGridSelectionVelocity(pattern(1, [
+      event(0, 0, 0, 240, 100), event(0, 1, 240, 480, 80),
+    ]), [
+      {bank: 0, pad: 0, onsetTick: 0},
+      {bank: 0, pad: 1, onsetTick: 240},
+    ])).toBe("mixed");
+    expect(sequenceGridSelectionVelocity(pattern(1, [
+      event(0, 0, 0, 240, 100),
+    ]), [])).toBeNull();
+    expect(sequenceGridSelectionVelocity(pattern(1, [
+      event(0, 0, 0, 240, 100),
+    ]), [{bank: 0, pad: 0, onsetTick: 480}])).toBeNull();
+  });
+});
+
+test("the Host addresses Pads as flat slots, bank × 16 + pad", () => {
+  expect(sequenceGridFlatSlot(0, 0)).toBe(0);
+  expect(sequenceGridFlatSlot(0, 15)).toBe(15);
+  expect(sequenceGridFlatSlot(1, 0)).toBe(16);
+  expect(sequenceGridFlatSlot(3, 15)).toBe(63);
+});
+
+test("the live selection keeps only keys the Pattern still holds", () => {
+  const events = pattern(1, [
+    {slot: {bank: 0, pad: 1}, onsetTick: 0, durationTick: 240, velocity: 100},
+    {slot: {bank: 0, pad: 2}, onsetTick: 480, durationTick: 240, velocity: 90},
+  ]);
+  const kept = {bank: 0, pad: 2, onsetTick: 480} as const;
+  const selection = [kept, {bank: 0, pad: 3, onsetTick: 0}] as const;
+  expect(sequenceGridLiveSelection(events, selection)).toEqual([kept]);
+  const unchanged = [kept];
+  expect(sequenceGridLiveSelection(events, unchanged)).toBe(unchanged);
+  expect(sequenceGridLiveSelection(undefined, unchanged)).toEqual([]);
 });

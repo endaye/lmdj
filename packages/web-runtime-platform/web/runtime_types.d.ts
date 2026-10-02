@@ -255,6 +255,37 @@ export interface WebPerformanceCaptureSession {
   ): Promise<PerformanceMasterCapture>;
 }
 
+/**
+ * One synchronous sample of the session audio clock.
+ *
+ * The engine frame counter resets to zero inside `audio.activate` and then
+ * advances exactly 128 frames per audio callback while the gate is open.
+ * `engineEpochHeartbeat` is the callback heartbeat sampled immediately after
+ * the activating `audio.activate` resolved, so within one engine epoch:
+ *
+ *   engineFrame ≈ (callbackHeartbeat − engineEpochHeartbeat) × 128
+ *
+ * at `contextTimeSeconds` (the AudioContext clock). The mapping advances 1:1
+ * at the render rate (48 000 frames per second) with a constant error of at
+ * most a couple of render quanta — the callbacks that ran between the gate
+ * opening and the epoch sample. A manual suspend/activate and an interruption
+ * recovery both re-run `audio.activate` and start a new epoch.
+ */
+export interface AudioClockSample {
+  readonly contextTimeSeconds: number;
+  readonly callbackHeartbeat: number;
+  readonly engineEpochHeartbeat: number;
+}
+
+export interface WebAudioClockSession {
+  /**
+   * Synchronously samples the audio clock. Throws HOST_STATE_INVALID before
+   * the first activation and whenever audio is not running.
+   */
+  sampleAudioClock(): AudioClockSample;
+}
+
+
 export type PerformanceFx =
   | "filter"
   | "delay"

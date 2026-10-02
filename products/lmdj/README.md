@@ -19,7 +19,7 @@ event-only Pattern data with no Take product object.
 
 - Designed: full new product/core architecture.
 - Implemented: Headless Core Proof, the Formal Native Host, Creator Web Host
-  `5.0.0`, Formal Web Runtime Host `4.3.5`, and Web Runtime Platform
+  `4.7.0`, Formal Web Runtime Host `4.3.5`, and Web Runtime Platform
   `5.5.0`, including Project Truth v5 and Stage 9 Sequence recording.
   Browser Hosts depend only on that Platform; Product Assembly owns exact Host
   identities and Provider catalog wiring. Both Web Hosts deploy to Cloudflare.

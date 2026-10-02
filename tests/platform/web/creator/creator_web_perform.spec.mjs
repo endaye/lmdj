@@ -11,6 +11,18 @@ import {chromium, expect, test} from "@playwright/test";
 import {WEB_RUNTIME_IDENTITY} from
   "../../../../products/lmdj/generated/web-runtime-identity.mjs";
 import {waitForBootProject, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
+import {
+  AUDIO_TRANSITION_TIMEOUT_MS,
+  PROJECT_TRANSITION_TIMEOUT_MS,
+  beginRecording,
+  exportPerformanceWav,
+  firstSignalFrame,
+  installPerformWitnessSample,
+  openPerform,
+  parsePcm16StereoWav,
+  pcm16Wav,
+  stopRecording,
+} from "./fixtures/perform_helpers.mjs";
 
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
@@ -23,8 +35,6 @@ const masterTapSource = resolve(
 );
 const RECORDING_FRAMES = 86_400_000;
 const RECORDING_QUEUE_BATCHES = 32;
-const AUDIO_TRANSITION_TIMEOUT_MS = 35_000;
-const PROJECT_TRANSITION_TIMEOUT_MS = 125_000;
 // A Pattern launch is one bounded 30-second Runtime request, and the pending
 // value it renders is visible only while that request is outstanding. Both
 // halves of the transition are held to the same budget, because Playwright's
@@ -55,6 +65,14 @@ test.afterEach(async ({page}) => {
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function inspectProjectTruth(page) {
+  const response = await page.evaluate(() => window.lmdjWebRuntimeHost.transport.send({
+    protocol_version: 1, request_id: crypto.randomUUID(), operation: "project.inspect", payload: {},
+  }));
+  expect(response.ok).toBe(true);
+  return response.result;
 }
 
 function canonicalJson(value) {
@@ -514,15 +532,6 @@ async function activateAudio(page) {
   });
 }
 
-async function openPerform(page) {
-  const perform = page.getByRole("button", {name: "Perform"});
-  await expect(perform).toBeEnabled({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
-  await perform.click();
-  await expect(page.getByRole("main", {name: "Perform"})).toBeVisible();
-  await expect(page.getByRole("button", {name: /^Launch Pattern /}))
-    .toHaveCount(16);
-}
-
 async function importActivateAndPerform(page, scenario = "none") {
   const candidate = await openCandidate(page, scenario);
   await importProject(page);
@@ -633,6 +642,13 @@ async function launchCrashableCreatorContext(userDataDir) {
     browser,
     context,
     page,
+    async close() {
+      const client = await browser.newBrowserCDPSession();
+      await client.send("Browser.close").catch(() => {});
+      await expect.poll(() => child.exitCode, {timeout: 30_000}).toBe(0);
+      killProcessGroup(child);
+      await browser.close().catch(() => {});
+    },
     async kill() {
       if (child.exitCode === null) {
         const exited = once(child, "exit");
@@ -642,6 +658,26 @@ async function launchCrashableCreatorContext(userDataDir) {
       await browser.close().catch(() => {});
     },
   });
+}
+
+// Confirm the remembered identity on disk before the separate owner-loss leg.
+// A clean cross-process reopen is the checkpoint, then SIGKILL still exercises
+// an active recording and automatic recovery on a new process.
+async function launchPersistedCreatorOwner(profile) {
+  let process = await launchCrashableCreatorContext(profile);
+  try {
+    const candidate = await importActivateAndPerform(process.page);
+    const url = candidate.routed ? `${candidate.origin}/index.html` : process.page.url();
+    const before = await inspectProjectTruth(process.page);
+    await process.close();
+    process = await launchCrashableCreatorContext(profile);
+    const page = await openProjectSuccessor(process.context, url);
+    expect((await inspectProjectTruth(page)).project).toEqual(before.project);
+    return {process, page, url};
+  } catch (error) {
+    await process.kill().catch(() => {});
+    throw error;
+  }
 }
 
 function projectRevisionLocator(page) {
@@ -722,15 +758,6 @@ async function assignThenMovePattern(page) {
   return movedRevision;
 }
 
-async function beginRecording(page) {
-  await page.getByRole("button", {name: "Record Performance"}).click();
-  const status = page.getByRole("status", {name: "Performance recording status"});
-  await expect(status).toContainText("recording", {
-    timeout: PROJECT_TRANSITION_TIMEOUT_MS,
-  });
-  return status;
-}
-
 async function beginFaultingRecording(page) {
   const before = await projectRevision(page);
   await page.getByRole("button", {name: "Record Performance"}).click();
@@ -753,12 +780,6 @@ async function applyRecoveryAfterOwnerRelease(page) {
   await expect(status).toContainText(/applied.*closed.*Pad/i);
 }
 
-async function stopRecording(page) {
-  await page.getByRole("button", {name: "Stop Performance"}).click();
-  await expect(page.getByRole("status", {name: "WAV recording status"}))
-    .toContainText("sealed", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-}
-
 async function armAttributeObservation(locator, attribute, value) {
   await locator.evaluate((element, expected) => {
     const proofAttribute = `data-proof-saw-${expected.attribute.replace(/^data-/, "")}`;
@@ -777,65 +798,6 @@ async function armAttributeObservation(locator, attribute, value) {
       attributeFilter: [expected.attribute],
     });
   }, {attribute, value});
-}
-
-function deterministicPcm16Sample(frame, channel) {
-  return Math.round((((frame + channel * 17) % 97) / 96 * 2 - 1) * 24_000);
-}
-
-function pcm16Wav({frames = 4_800, sampleRate = 48_000, channels = 1} = {}) {
-  const bytes = Buffer.alloc(44 + frames * channels * 2);
-  bytes.write("RIFF", 0, "ascii");
-  bytes.writeUInt32LE(bytes.length - 8, 4);
-  bytes.write("WAVE", 8, "ascii");
-  bytes.write("fmt ", 12, "ascii");
-  bytes.writeUInt32LE(16, 16);
-  bytes.writeUInt16LE(1, 20);
-  bytes.writeUInt16LE(channels, 22);
-  bytes.writeUInt32LE(sampleRate, 24);
-  bytes.writeUInt32LE(sampleRate * channels * 2, 28);
-  bytes.writeUInt16LE(channels * 2, 32);
-  bytes.writeUInt16LE(16, 34);
-  bytes.write("data", 36, "ascii");
-  bytes.writeUInt32LE(frames * channels * 2, 40);
-  for (let frame = 0; frame < frames; frame += 1) {
-    for (let channel = 0; channel < channels; channel += 1) {
-      const value = deterministicPcm16Sample(frame, channel);
-      bytes.writeInt16LE(value, 44 + (frame * channels + channel) * 2);
-    }
-  }
-  return bytes;
-}
-
-function parsePcm16StereoWav(bytes) {
-  expect(bytes.subarray(0, 4).toString("ascii")).toBe("RIFF");
-  expect(bytes.readUInt32LE(4)).toBe(bytes.byteLength - 8);
-  expect(bytes.subarray(8, 12).toString("ascii")).toBe("WAVE");
-  expect(bytes.subarray(12, 16).toString("ascii")).toBe("fmt ");
-  expect(bytes.readUInt32LE(16)).toBe(16);
-  expect(bytes.readUInt16LE(20)).toBe(1);
-  expect(bytes.readUInt16LE(22)).toBe(2);
-  expect(bytes.readUInt32LE(24)).toBe(48_000);
-  expect(bytes.readUInt32LE(28)).toBe(192_000);
-  expect(bytes.readUInt16LE(32)).toBe(4);
-  expect(bytes.readUInt16LE(34)).toBe(16);
-  expect(bytes.subarray(36, 40).toString("ascii")).toBe("data");
-  expect(bytes.readUInt32LE(40)).toBe(bytes.byteLength - 44);
-  expect((bytes.byteLength - 44) % 4).toBe(0);
-  return {
-    frames: (bytes.byteLength - 44) / 4,
-    left: Array.from({length: (bytes.byteLength - 44) / 4}, (_, frame) =>
-      bytes.readInt16LE(44 + frame * 4)),
-    right: Array.from({length: (bytes.byteLength - 44) / 4}, (_, frame) =>
-      bytes.readInt16LE(46 + frame * 4)),
-  };
-}
-
-function firstSignalFrame(channel, from = 0) {
-  const frame = channel.findIndex((sample, index) =>
-    index >= from && Math.abs(sample) > 256);
-  if (frame < 0) throw new Error(`No master-output signal after frame ${from}`);
-  return frame;
 }
 
 function changedFrameCount(left, right, tolerance = 32) {
@@ -876,12 +838,6 @@ function verifyDeterministicMasterOutput(wav) {
   expect(changedFrameCount(wetLeft, wetRight)).toBe(0);
 }
 
-async function exportPerformanceWav(page) {
-  const pending = page.waitForEvent("download");
-  await page.getByRole("button", {name: "Export Performance WAV"}).click();
-  return readFile(await (await pending).path());
-}
-
 async function opfsWavFiles(page) {
   return page.evaluate(async () => {
     const root = await navigator.storage.getDirectory();
@@ -905,29 +861,6 @@ async function opfsWavFiles(page) {
     await walk(root, "");
     return files.sort((left, right) => left.path.localeCompare(right.path));
   });
-}
-
-async function installPerformWitnessSample(page) {
-  await page.getByRole("button", {name: "Sample", exact: true}).click();
-  await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
-  await page.getByTestId("physical-controls").getByRole("button", {name: "Bank A", exact: true}).click();
-  const pad = page.getByRole("button", {name: /^Pad A1 — assigned — Key Q$/});
-  await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
-  await pad.evaluate((element) => element.click());
-  const chooser = page.waitForEvent("filechooser");
-  await page.getByRole("button", {name: "Replace Sample"}).click();
-  await (await chooser).setFiles({
-    name: "perform-master-witness-stereo.wav",
-    mimeType: "audio/wav",
-    buffer: pcm16Wav({channels: 2}),
-  });
-  await expect(page.getByRole("dialog", {name: "Replace Pad A1?"})).toBeVisible();
-  await page.getByRole("button", {name: "Confirm replace"}).click();
-  await expect(page.getByRole("button", {name: "Replace Sample"}))
-    .toBeEnabled({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  await expect(page.locator(".selected-sample"))
-    .toContainText("48 kHz · Mono · 4,800 frames");
-  await openPerform(page);
 }
 
 async function replacePadSample(page) {
@@ -1134,12 +1067,10 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
   let ownerProcess = null;
   let applyingProcess = null;
   try {
-    ownerProcess = await launchCrashableCreatorContext(applyProfile);
-    const ownerPage = ownerProcess.page;
-    const candidate = await importActivateAndPerform(ownerPage);
-    const candidateUrl = candidate.routed
-      ? `${candidate.origin}/index.html`
-      : ownerPage.url();
+    const owner = await launchPersistedCreatorOwner(applyProfile);
+    ownerProcess = owner.process;
+    const ownerPage = owner.page;
+    const candidateUrl = owner.url;
     const baselineWavs = await opfsWavFiles(ownerPage);
 
     await beginRecording(ownerPage);
@@ -1185,12 +1116,10 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
   let discardOwnerProcess = null;
   let discardingProcess = null;
   try {
-    discardOwnerProcess = await launchCrashableCreatorContext(discardProfile);
-    const discardOwnerPage = discardOwnerProcess.page;
-    const candidate = await importActivateAndPerform(discardOwnerPage);
-    const candidateUrl = candidate.routed
-      ? `${candidate.origin}/index.html`
-      : discardOwnerPage.url();
+    const owner = await launchPersistedCreatorOwner(discardProfile);
+    discardOwnerProcess = owner.process;
+    const discardOwnerPage = owner.page;
+    const candidateUrl = owner.url;
     await beginRecording(discardOwnerPage);
     await discardOwnerPage.getByRole("button", {name: /^Pad A2\b/}).dispatchEvent(
       "pointerdown",
@@ -1367,12 +1296,10 @@ test("owner process loss leaves one recoverable recording and no second capture 
   let ownerProcess = null;
   let successorProcess = null;
   try {
-    ownerProcess = await launchCrashableCreatorContext(profile);
-    const ownerPage = ownerProcess.page;
-    const candidate = await importActivateAndPerform(ownerPage);
-    const candidateUrl = candidate.routed
-      ? `${candidate.origin}/index.html`
-      : ownerPage.url();
+    const owner = await launchPersistedCreatorOwner(profile);
+    ownerProcess = owner.process;
+    const ownerPage = owner.page;
+    const candidateUrl = owner.url;
     await beginRecording(ownerPage);
     await ownerPage.getByRole("button", {name: /^Pad A1\b/}).dispatchEvent(
       "pointerdown",

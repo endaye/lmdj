@@ -6,12 +6,13 @@ import type {Bank} from "../state/creator_state";
 import type {SequenceState} from "../state/sequence_state";
 import {
   createSequenceGridThumbnail,
+  sequenceGridSelectionVelocity,
   sequencePlayheadTick,
+  type SequenceGridEventKey,
   type SequenceGridSnap,
   type SequenceGridViewport,
 } from "../state/sequence_grid_model";
 import type {PatternTransportState} from "../state/pattern_transport_state";
-import {transportStatusLabel} from "./transport_status";
 
 interface SequenceOverviewProps {
   project: ProjectView | null;
@@ -20,6 +21,7 @@ interface SequenceOverviewProps {
   bank: Bank;
   snap: SequenceGridSnap;
   viewport: SequenceGridViewport | null;
+  selection: readonly SequenceGridEventKey[];
 }
 
 // The Runtime advances 48 frames per millisecond at its fixed 48 kHz.
@@ -32,16 +34,26 @@ export function SequenceOverview({
   bank,
   snap,
   viewport,
+  selection,
 }: SequenceOverviewProps) {
   const selectedPatternId = state.selectedPatternId ?? project?.patternId ?? null;
   const pattern = selectedPatternId === null
     ? undefined
     : project?.patterns.find((item) => item.patternId === selectedPatternId);
   const pendingPatternId = state.status?.pendingPatternId ?? null;
-  const phase = transport === undefined
-    ? state.phase
-    : transportStatusLabel(transport);
+  // The 176 px display holds one status line: the most severe of the
+  // transport error, the Sequence error and a pending publication.
+  const statusLine = transport?.errorCode !== null && transport?.errorCode !== undefined
+    ? userMessage(transport.errorCode).message
+    : state.errorCode !== null
+      ? userMessage(state.errorCode).message
+      : transport?.status?.publicationPending === true
+        ? "Committed, publication pending"
+        : null;
   const thumbnail = pattern === undefined ? null : createSequenceGridThumbnail(pattern);
+  const selectionVelocity = pattern === undefined
+    ? null
+    : sequenceGridSelectionVelocity(pattern, selection);
   const bpm = project?.bpm ?? null;
   const status = transport?.status ?? null;
   const playing = status !== null && status.playing === true &&
@@ -125,6 +137,7 @@ export function SequenceOverview({
           )}
         </svg>
       ) : null}
+      <div className="sequence-overview-side">
       <dl className="overview-facts">
         <div>
           <dt>Quantize</dt>
@@ -135,20 +148,8 @@ export function SequenceOverview({
           <dd>{project ? `${project.sequenceSettings.swingPercent}%` : "—"}</dd>
         </div>
         <div>
-          <dt>Pattern</dt>
-          <dd>
-            {pattern === undefined
-              ? "—"
-              : `${pattern.bars} ${pattern.bars === 1 ? "bar" : "bars"}`}
-          </dd>
-        </div>
-        <div>
-          <dt>Phase</dt>
-          <dd>{phase}</dd>
-        </div>
-        <div>
           <dt>Selected</dt>
-          <dd>0</dd>
+          <dd>{selection.length}</dd>
         </div>
         <div>
           <dt>Snap</dt>
@@ -156,7 +157,7 @@ export function SequenceOverview({
         </div>
         <div>
           <dt>Velocity</dt>
-          <dd>—</dd>
+          <dd>{selectionVelocity === null ? "—" : selectionVelocity}</dd>
         </div>
         {pendingPatternId !== null ? (
           <div>
@@ -171,15 +172,10 @@ export function SequenceOverview({
           </div>
         ) : null}
       </dl>
-      {transport?.status?.publicationPending === true ? (
-        <p>Committed, publication pending</p>
-      ) : null}
-      {state.errorCode !== null ? (
-        <p>{userMessage(state.errorCode).message}</p>
-      ) : null}
-      {transport?.errorCode !== null && transport?.errorCode !== undefined ? (
-        <p>{userMessage(transport.errorCode).message}</p>
-      ) : null}
+      {statusLine === null ? null : (
+        <p className="sequence-overview-status">{statusLine}</p>
+      )}
+      </div>
     </div>
   );
 }

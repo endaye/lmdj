@@ -65,6 +65,7 @@ import {
 import {reloadPrepareJourney, retryPrepareJourney} from "./runtime/sample_actions";
 import {
   disarmSequenceCaptureJourney,
+  editPatternEventsJourney,
   isSequenceSession,
   reconcileSequenceAuthoringRevision,
   refreshSequenceJourney,
@@ -88,6 +89,7 @@ import type {
   CreatorPerformanceRuntimeSession,
   CreatorSampleRuntimeSession,
   LocalProjectSummary,
+  PatternEventsEditMutation,
   RuntimeSessionFactory,
   TypedRuntimeError,
   SequenceRecoveryCandidate,
@@ -105,12 +107,31 @@ import {
 } from "./state/creator_state";
 import {readLastProjectId, writeLastProjectId} from "./state/last_project";
 import {
+  readMetronomePreference,
+  writeMetronomePreference,
+} from "./state/metronome_preference";
+import {
+  contextSecondsToEngineFrame,
+  engineFrameToContextSeconds,
+  hasAnchor as hasAudioClockAnchor,
+  invalidate as invalidateAudioClockAnchor,
+  retainedAudioContext,
+  sampleAnchor as sampleAudioClockAnchor,
+} from "./runtime/audio_clock";
+import {beatsInWindow} from "./runtime/metronome_scheduler";
+import {createMetronomeClickLoop} from "./runtime/metronome_click";
+import {
   initialSequenceState,
   reduceSequence,
   type SequenceState,
 } from "./state/sequence_state";
 import {
   DEFAULT_SEQUENCE_GRID_SNAP,
+  sequenceGridFlatSlot,
+  sequenceGridLiveSelection,
+  type SequenceGridEdit,
+  type SequenceGridEditMode,
+  type SequenceGridEventKey,
   type SequenceGridSnap,
   type SequenceGridViewport,
 } from "./state/sequence_grid_model";
@@ -303,10 +324,28 @@ function Workspace({
     useState<SequenceGridSnap>(DEFAULT_SEQUENCE_GRID_SNAP);
   const [sequenceGridViewport, setSequenceGridViewport] =
     useState<SequenceGridViewport | null>(null);
+  const [sequenceGridMode, setSequenceGridMode] =
+    useState<SequenceGridEditMode>("note");
+  const [sequenceGridSelection, setSequenceGridSelection] =
+    useState<readonly SequenceGridEventKey[]>([]);
+  // A new note takes the last velocity the grid set; the grid starts at 100.
+  const [sequenceGridVelocity, setSequenceGridVelocity] = useState(100);
   const [performController, setPerformController] =
     useState<PerformController | null>(null);
   const [performCaptureConfigured, setPerformCaptureConfigured] = useState(false);
   const [captureTransportOverlay, setCaptureTransportOverlay] = useState(false);
+  // Per-device monitoring preference, never Project Truth; boot reads it back
+  // from the Host settings store.
+  const [metronomeOn, setMetronomeOn] = useState(false);
+  // The grid a bpm commit while playing activates at its activation frame:
+  // the old grid owns beats before it, the committed grid restarts there.
+  // State (not a ref) so the metronome effect rebuilds the moment a pending
+  // grid is recorded, independent of the other dependencies' timing.
+  const [metronomePendingGrid, setMetronomePendingGrid] = useState<Readonly<{
+    fromFrame: number;
+    previousBpm: number;
+    bpm: number;
+  }> | null>(null);
   const [candidateAudio, setCandidateAudio] = useState<Readonly<{
     projectId: string; revision: number; preparing: boolean;
   }> | null>(null);
@@ -387,6 +426,21 @@ function Workspace({
           ({patternId}) => patternId === sequence.selectedPatternId)) return;
     dispatchSequence({type: "selected", patternId: project.patternId});
   }, [state.project.current, sequence.selectedPatternId]);
+
+  // The box selection belongs to the Pattern and Bank it was drawn on.
+  useEffect(() => {
+    setSequenceGridSelection([]);
+  }, [sequence.selectedPatternId, state.activeBank, state.project.current?.projectId]);
+
+  // Events can change in place (Undo/Redo, a transport settle, another
+  // surface's edit); keys they removed leave the selection.
+  const selectedGridPattern = state.project.current?.patterns.find(
+    ({patternId}) => patternId ===
+      (sequence.selectedPatternId ?? state.project.current?.patternId));
+  useEffect(() => {
+    setSequenceGridSelection((selection) =>
+      sequenceGridLiveSelection(selectedGridPattern, selection));
+  }, [selectedGridPattern]);
 
   useEffect(() => {
     setMidi(null);
@@ -608,6 +662,9 @@ function Workspace({
     dispatch({type: "projects-listing"});
     // Read alongside the listing, so the library never shows while it waits.
     const remembered = readLastProjectId();
+    void readMetronomePreference().then((on) => {
+      if (active) setMetronomeOn(on);
+    });
     void listLocalProjectsJourney(session).then(
       async (projects) => {
         if (!active) return;
@@ -1613,12 +1670,210 @@ function Workspace({
     void refreshSequence();
   }, [transport.status]);
 
+  // The metronome is a Host monitoring loop: it runs only while the switch is
+  // on, audio is running and the transport is playing or recording, and it
+  // schedules clicks on the AudioContext clock from the engine-frame beat
+  // grid through the audio clock anchor. The anchor is re-sampled whenever
+  // audio (re)enters running — each activation is a new engine epoch — and
+  // invalidated when audio leaves running. Any grid-affecting change (a new
+  // transport origin, a committed bpm, a pending activation frame) rebuilds
+  // the loop, which cancels every click that has not sounded.
+  const metronomeAudioPhase = state.audio.phase;
+  const metronomePlaying = selectTransportPlaying(transport) ||
+    selectTransportRecording(transport);
+  const metronomeOriginFrame = transport.status?.originFrame ?? null;
+  const metronomeBpm = state.project.current?.bpm ?? null;
+  useEffect(() => {
+    const context = retainedAudioContext();
+    if (!metronomeOn || metronomeAudioPhase !== "running" || !metronomePlaying ||
+        session == null || context === null ||
+        metronomeOriginFrame === null || metronomeBpm === null) {
+      if (metronomeAudioPhase !== "running") invalidateAudioClockAnchor();
+      if (!metronomePlaying && metronomePendingGrid !== null) {
+        setMetronomePendingGrid(null);
+      }
+      return;
+    }
+    if (!hasAudioClockAnchor()) {
+      try {
+        sampleAudioClockAnchor(session);
+      } catch {
+        // Audio left running between the phase dispatch and this sample.
+        return;
+      }
+    }
+    if (metronomePendingGrid !== null &&
+        metronomePendingGrid.fromFrame <= metronomeOriginFrame) {
+      // The transport projection caught up with the committed grid.
+      setMetronomePendingGrid(null);
+    }
+    const segments = metronomePendingGrid !== null
+      ? [
+          {
+            fromFrame: 0,
+            originFrame: metronomeOriginFrame,
+            bpm: metronomePendingGrid.previousBpm,
+          },
+          {
+            fromFrame: metronomePendingGrid.fromFrame,
+            originFrame: metronomePendingGrid.fromFrame,
+            bpm: metronomePendingGrid.bpm,
+          },
+        ]
+      : [{fromFrame: 0, originFrame: metronomeOriginFrame, bpm: metronomeBpm}];
+    const loop = createMetronomeClickLoop({
+      context,
+      supply: (fromSeconds, untilSeconds) => {
+        const fromFrame = Math.max(
+          0, Math.ceil(contextSecondsToEngineFrame(fromSeconds)));
+        const toFrame = Math.max(
+          fromFrame, Math.ceil(contextSecondsToEngineFrame(untilSeconds)));
+        return beatsInWindow({fromFrame, toFrame, segments}).map((beat) => ({
+          contextTime: engineFrameToContextSeconds(beat.frame),
+          beat: beat.beat,
+          accent: beat.accent,
+        }));
+      },
+    });
+    loop.start(context.currentTime);
+    return () => loop.stop();
+  }, [
+    session,
+    metronomeOn,
+    metronomeAudioPhase,
+    metronomePlaying,
+    metronomeOriginFrame,
+    metronomeBpm,
+    metronomePendingGrid,
+  ]);
+
+  const onToggleMetronome = () => {
+    const next = !metronomeOn;
+    setMetronomeOn(next);
+    void writeMetronomePreference(next);
+  };
+
   const stopArmedCapture = async () => {
     const current = sequenceRef.current;
     if (current.phase === "flushing") return;
     setCaptureStopRequest((request) => request + 1);
   };
   armedCaptureStopIntent.current = () => { void stopArmedCapture(); };
+
+  // One grid gesture commits one atomic edit at gesture end. The command goes
+  // through the Runtime Session with flat Pad slots; a live or stopped edit of
+  // the current Pattern swaps in place immediately, a deferred one is
+  // committed Truth like any other, and only a failed swap is surfaced. A
+  // transport-busy or publication-pending refusal lands before the commit, so
+  // it is retried, never shown as a conflict; any other conflict or refusal
+  // restores the grid from Truth and shows the reason.
+  const editSequenceGridEvents = (edit: SequenceGridEdit): Promise<void> => {
+    const operation = sequenceAuthoringTail.current.then(async () => {
+      const project = stateRef.current.project.current;
+      if (!isSequenceSession(session) || project === null) return;
+      if (selectTransportRecording(transportRef.current)) {
+        // The grid is disabled while recording; a gesture that raced the
+        // transition is refused here as the Core would refuse it.
+        return;
+      }
+      const patternId = sequenceRef.current.selectedPatternId ?? project.patternId;
+      const request = {
+        patternId,
+        remove: edit.remove.map((key) => ({
+          slot: sequenceGridFlatSlot(key.bank, key.pad),
+          onsetTick: key.onsetTick,
+        })),
+        put: edit.put.map((event) => ({
+          slot: sequenceGridFlatSlot(event.bank, event.pad),
+          onsetTick: event.onsetTick,
+          durationTick: event.durationTick,
+          velocity: event.velocity,
+        })),
+      };
+      try {
+        let result: PatternEventsEditMutation | null = null;
+        // A pending bar-boundary publication can hold the admission for a
+        // bar; the bounded retry never reissues a committed edit because the
+        // refusal happens before the commit. Each attempt is a fresh domain
+        // command (the Session mints the command identity per call) naming
+        // the current revision: the busy window is exactly when a settle can
+        // land an intervening commit, so a frozen revision would die as a
+        // conflict.
+        for (let attempt = 0; attempt < 32; attempt += 1) {
+          try {
+            result = await editPatternEventsJourney(session, {
+              ...request,
+              expectedRevision: sequenceAuthoringRevision.current,
+            });
+            break;
+          } catch (error) {
+            const reason = errorDetails(error).reason;
+            if ((reason !== "pattern_transport_busy" &&
+                reason !== "pattern_publication_pending") ||
+                attempt === 31) {
+              throw error;
+            }
+            await new Promise((resolve) => {
+              window.setTimeout(resolve, 250);
+            });
+            if (stateRef.current.project.current?.projectId !== project.projectId) {
+              return;
+            }
+            // Re-read the revision the next attempt names, reconciled the
+            // way refreshSequence does — without its dispatches, which would
+            // put the project reducer ahead of this journey's own projection
+            // refresh token.
+            const inspected = await session.inspectProject();
+            const inspectedRevision =
+              inspected !== null && typeof inspected === "object" &&
+              "project_revision" in inspected &&
+              typeof inspected.project_revision === "number" &&
+              Number.isInteger(inspected.project_revision) &&
+              inspected.project_revision >= 0
+                ? inspected.project_revision
+                : null;
+            // Without a readable revision the next attempt would name a
+            // known-stale one and die as a conflict; surface this refusal.
+            if (inspectedRevision === null) throw error;
+            sequenceAuthoringRevision.current =
+              reconcileSequenceAuthoringRevision(
+                sequenceAuthoringRevision.current,
+                stateRef.current.project.current?.revision ?? 0,
+                inspectedRevision,
+              );
+          }
+        }
+        if (result === null) return;
+        sequenceAuthoringRevision.current = result.committedRevision;
+        dispatchTransport({type: "revision", revision: result.committedRevision});
+        try {
+          await refreshPerformProject();
+        } catch {
+          dispatch({
+            type: "project-revision-updated",
+            revision: result.committedRevision,
+          });
+        }
+        if (result.snapshotError !== null) {
+          // The edit committed; only the in-place swap failed. Say so
+          // instead of letting the grid look unheard.
+          dispatchSequence({
+            type: "failed",
+            errorCode: result.snapshotError.code,
+          });
+        }
+      } catch (error) {
+        try {
+          await refreshPerformProject();
+        } catch (refreshError) {
+          reportFailure("Restore Sequence grid projection", refreshError);
+        }
+        sequenceFailure("Edit Pattern events", error);
+      }
+    });
+    sequenceAuthoringTail.current = operation;
+    return operation;
+  };
 
   const updateSequenceSettings = (changes: Readonly<{
     bpm?: number;
@@ -1646,6 +1901,16 @@ function Workspace({
       });
       sequenceAuthoringRevision.current = result.committedRevision;
       dispatchTransport({type: "revision", revision: result.committedRevision});
+      if (result.patternPublication !== null &&
+          selectTransportPlaying(currentTransport)) {
+        // A bpm commit while playing activates the new grid at the returned
+        // activation frame; the metronome switches grids there.
+        setMetronomePendingGrid({
+          fromFrame: result.patternPublication.activationFrame,
+          previousBpm: project.bpm,
+          bpm: result.bpm,
+        });
+      }
       dispatch({
         type: "project-sequence-settings-updated",
         revision: result.committedRevision,
@@ -1979,6 +2244,7 @@ function Workspace({
               sequence={sequence}
               snap={sequenceGridSnap}
               viewport={sequenceGridViewport}
+              selection={sequenceGridSelection}
               transport={transport}
               midi={midi}
               {...(buildIdentity ? {buildIdentity} : {})}
@@ -2105,8 +2371,18 @@ function Workspace({
                 transport={transport}
                 bank={state.activeBank}
                 snap={sequenceGridSnap}
+                editMode={sequenceGridMode}
+                selection={sequenceGridSelection}
+                defaultVelocity={sequenceGridVelocity}
+                projectionRefreshing={state.projectProjectionRefresh !== null}
                 onSnapChange={setSequenceGridSnap}
+                onEditModeChange={setSequenceGridMode}
                 onViewportChange={setSequenceGridViewport}
+                onEdit={(edit) => { void editSequenceGridEvents(edit); }}
+                onSelectionChange={setSequenceGridSelection}
+                onVelocityChange={setSequenceGridVelocity}
+                metronomeOn={metronomeOn}
+                onToggleMetronome={onToggleMetronome}
                 onRefresh={() => {
                   void refreshSequence();
                   void reconcileTransport();

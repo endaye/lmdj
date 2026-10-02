@@ -13,7 +13,7 @@ from the active tree and remains recoverable from Git history.
 
 - Designed: full product and Core architecture.
 - Implemented: M1 Headless Core Proof, the Formal Native Host, the Creator Web
-  Host Sample Editor `5.0.0`, and Formal Web Runtime Host `4.3.5` in Product
+  Host Sample Editor `4.7.0`, and Formal Web Runtime Host `4.3.5` in Product
   Build `2.0.71.0`, with both Web Hosts deployed to Cloudflare. They use Web
   Runtime Platform `5.5.0`, Project Truth v5 over OPFS Project I/O, Stage 9
   Sequence recording, and C++ Audio Runtime through the same Wasm

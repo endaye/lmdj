@@ -14,7 +14,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 当前 Product Build 以上方从 active manifests 生成的 Build Identity 为准；各组件页面的身份也从同一份 manifest/Assembly Lock 事实生成，不以以下历史分配记录替代当前版本。
 
-当前分配的 Product Build `2.0.76.0` 在 `2.0.75.0` 之上只推进 Creator Web Host 身份：`creator-web` 由 `4.7.0` 升到 `5.0.0`。清单末尾增加 `host_favicon`（`assets/favicon.<sha256>.svg`），所以这次 Host 取 MAJOR。Contract、Module、Provider 与其余 Host 不变。Cardputer profile 同步到当前 Build 与 Assembly 摘要。
+当前分配的 Product Build `2.0.77.0` 在 `2.0.76.0` 之上只推进 Creator Web Host 身份：`creator-web` 由 `4.8.0` 升到 `5.0.0`。清单末尾增加 `host_favicon`（`assets/favicon.<sha256>.svg`），所以这次 Host 取 MAJOR。Contract、Module、Provider 与其余 Host 不变。Cardputer profile 同步到当前 Build 与 Assembly 摘要。
 
 它不是公共 Release、部署或 Channel 晋级。
 
@@ -22,12 +22,22 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 以下描述各次分配当时的变化，不声明当前组件版本或发布状态。
 
-Product Build `2.0.75.0` 曾在 `2.0.71.0` 之上只推进 Contract 身份：`lmdj.project.v5` 由 `5.1.0` 升到 `5.2.0`，
-Contract ID 不变，Pad `playback` 新增 #1667 的四个可选键：`attack_ms`（0..2000）、`release_ms`（0..4000）、`tone`（−100..+100）
-与 `eq`。`eq` 含可选的 `low`、`mid`、`high` 三段，缺席的一段即旁通；`low`/`high` 为 `{kind: shelf | cut, freq_hz, gain_millidb}`，
-`mid` 为 `{freq_hz, gain_millidb, q_milli}`。Module、Host 与 Provider 身份全部不变：读写这些键的 Core 实现随后由 #1667 的 Core PR 合入，
-Module 身份留待下一次结算；Facade、Web Runtime 与 MCP 的支持由 #1667 的 Host PR 合入，在那之前它们仍拒绝这些键。Cardputer profile 同步到该 Build 与 Assembly 摘要。
-`2.0.72.0`–`2.0.74.0` 已被尚未合入的 #1741 占用，所以该次分配跳过这三个号。
+Product Build `2.0.76.0` 曾在 `2.0.75.0` 之上结算自 `2.0.71.0` 以来欠下的 Module 身份，Contract 身份不变
+（`lmdj.project.v5` 仍为 `5.2.0`）。自上次结算以来所有公开头文件变化都逐项核验为纯追加，该次没有 MAJOR：
+
+- Foundation `0.5.0`（`Result` 追加重载与 `emplace_success`，#1749、#1773）、Authoring Domain `4.4.0`
+  （追加 `EditPatternEvents` 与 `PatternEventKey`，#1766）、Project I/O `6.1.0`（追加 `execute(EditPatternEvents)`
+  重载与性能改进，#1749、#1766、#1773）、Application Facade `6.5.0`（新增 `pattern.events.edit` 与
+  `performance.fx.gesture` 操作，#1766、#1768）、Web Runtime Platform `5.6.0`（这两个操作的桥接与协议，#1766、#1768）、
+  Creator Web `4.8.0`（#1751、#1757、#1772、#1777 的追加 Creator Host 行为，并吸收 #1759、#1765、#1774、#1775）
+  都是向后兼容的追加公开能力，升 MINOR。
+- Audio Runtime `5.1.1`、Project Cooker `2.0.1`、Provider SDK `2.2.1`、CLI `3.3.11`、Core MCP `3.5.1`、
+  Native Host `3.4.6`、Cardputer Host `1.0.6`、Web Runtime Host `4.3.6` 与三个本地 Provider
+  （local.proof.success `2.0.3`、local.proof.failure `2.0.3`、local.sample.slice `1.0.3`）只跟随依赖 pin 做 PATCH。
+- Cardputer profile 同步到该 Build、Cardputer Host `1.0.6` 与当时的 Assembly 摘要。
+- 该次结算不含 #1667 的 Core 实现（#1780）欠下的身份：它在该分支切出后合入，`2.0.77.0` 仍不结算这些 Module 身份。
+
+Product Build `2.0.75.0` 曾在 `2.0.71.0` 之上只推进 Contract 身份：`lmdj.project.v5` 由 `5.1.0` 升到 `5.2.0`，Contract ID 不变，Pad `playback` 新增 #1667 的四个可选键（`attack_ms`、`release_ms`、`tone` 与 `eq`；`eq` 含可选的 `low`、`mid`、`high` 三段，缺席的一段即旁通）。Module、Host 与 Provider 身份在该 Build 全部不变；读写这些键的 Core 实现随后由 #1667 的 Core PR 合入，Module 身份留待下一次结算。因 #1741 占用 `2.0.72.0`–`2.0.74.0`，该分配跳过了这三个号。
 
 Product Build `2.0.71.0` 曾在 `2.0.70.0` 之上结算 #1666 回放对齐与同期 Creator 工作流欠下的 Module 身份，
 Contract 身份不变（`lmdj.project.v5` 仍为 `5.1.0`）：

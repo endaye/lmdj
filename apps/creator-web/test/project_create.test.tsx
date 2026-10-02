@@ -452,6 +452,7 @@ function sequenceDuplicateFixture() {
         bars: request.bars};
     },
     updateSequenceSettings: async () => status(),
+    editPatternEvents: async () => status(),
     disarmSequenceCapture: async () => status(),
     stopSequence: async () => status(),
     requestPatternSwitch: async () => status(),

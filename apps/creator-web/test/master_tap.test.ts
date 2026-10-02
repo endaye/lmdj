@@ -25,7 +25,14 @@ test("production Creator statically supplies the platform capture factory", () =
     '  "@lmdj/web-runtime-platform/performance_master_capture.mjs";',
   );
   expect(source).toContain(
-    "seams: {\n      createPerformanceMasterTap,\n      ...seams,\n    },",
+    "seams: {\n" +
+    "      // The session owns the AudioContext; the factory retains a reference\n" +
+    "      // so the Host audio clock converts engine frames on the same device\n" +
+    "      // clock the engine renders to.\n" +
+    "      createAudioContext: createRetainedAudioContext,\n" +
+    "      createPerformanceMasterTap,\n" +
+    "      ...seams,\n" +
+    "    },",
   );
 });
 
