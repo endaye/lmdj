@@ -83,8 +83,12 @@ class CreatorServerTest(unittest.TestCase):
             json.dumps(lock),
             encoding="utf-8",
         )
+        self.ui.joinpath("favicon.svg").write_bytes(
+            (REPO_ROOT / "apps/creator-web/public/favicon.svg").read_bytes()
+        )
         self.ui.joinpath("index.html").write_text(
             '<!doctype html><html><head><meta charset="UTF-8" />'
+            '<link rel="icon" href="/favicon.svg" type="image/svg+xml" />'
             '<link rel="stylesheet" href="/assets/source.css"></head>'
             '<body><div id="root"></div>'
             '<script type="module" src="/assets/source.js"></script>'
@@ -153,6 +157,10 @@ class CreatorServerTest(unittest.TestCase):
             entry["path"] for entry in manifest["assets"]
             if entry["role"] == "runtime_wasm"
         )
+        self.favicon_path = self.dist / next(
+            entry["path"] for entry in manifest["assets"]
+            if entry["role"] == "host_favicon"
+        )
         self.server = self.module.make_server(
             self.dist, self.verifier, self.repo, "127.0.0.1", 0,
             catalog_upstream=self.catalog_upstream,
@@ -214,6 +222,16 @@ class CreatorServerTest(unittest.TestCase):
         self.assertEqual(payload, self.main_path.read_bytes())
         for marker in SAMPLE_EDITOR_MARKERS:
             self.assertIn(marker.encode("utf-8"), payload)
+
+        status, headers, payload = self.request(
+            "GET", "/" + self.favicon_path.relative_to(self.dist).as_posix()
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["content-type"], "image/svg+xml; charset=utf-8")
+        self.assertEqual(
+            headers["cache-control"], "public, max-age=31536000, immutable"
+        )
+        self.assertEqual(payload, self.favicon_path.read_bytes())
 
     def test_unowned_traversal_symlink_range_and_methods_fail_closed(self) -> None:
         outside = self.root / "secret.js"

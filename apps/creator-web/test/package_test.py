@@ -93,8 +93,12 @@ class CreatorPackageTest(unittest.TestCase):
         )
         identity = dict(lock)
         self.identity.write_text(json.dumps(identity), encoding="utf-8")
+        (self.ui / "favicon.svg").write_bytes(
+            (REPO_ROOT / "apps/creator-web/public/favicon.svg").read_bytes()
+        )
         (self.ui / "index.html").write_text(
             "<!doctype html>\n<html><head><meta charset=\"UTF-8\" />"
+            '<link rel="icon" href="/favicon.svg" type="image/svg+xml" />'
             "<link rel=\"stylesheet\" href=\"/assets/index-source.css\"></head>"
             "<body><div id=\"root\"></div>"
             "<script type=\"module\" src=\"/assets/index-source.js\"></script>"
@@ -200,8 +204,21 @@ class CreatorPackageTest(unittest.TestCase):
                 "host_style",
                 "capture_worklet",
                 "perform_master_tap_worklet",
+                "host_favicon",
             ],
         )
+        favicon = next(
+            entry for entry in manifest["assets"] if entry["role"] == "host_favicon"
+        )
+        self.assertTrue(favicon["path"].startswith("assets/favicon."))
+        self.assertTrue(favicon["path"].endswith(".svg"))
+        self.assertEqual(
+            (first / favicon["path"]).read_bytes(),
+            (REPO_ROOT / "apps/creator-web/public/favicon.svg").read_bytes(),
+        )
+        packaged_index = (first / "index.html").read_text(encoding="utf-8")
+        self.assertEqual(packaged_index.count(f'./{favicon["path"]}'), 1)
+        self.assertNotIn('href="/favicon.svg"', packaged_index)
         tap = [entry for entry in manifest["assets"] if entry["role"] == "perform_master_tap_worklet"]
         self.assertEqual(len(tap), 1)
         self.assertTrue(tap[0]["path"].startswith("assets/perform-master-tap."))
@@ -210,6 +227,26 @@ class CreatorPackageTest(unittest.TestCase):
         main_text = (first / main["path"]).read_text(encoding="utf-8")
         self.assertIn(f'"/{tap[0]["path"]}"', main_text)
         self.assertNotIn("performance_master_tap_worklet-fixture", main_text)
+
+    def test_requires_exactly_one_favicon(self) -> None:
+        destination = self.root / "dist"
+        favicon = self.ui / "favicon.svg"
+        payload = favicon.read_bytes()
+        favicon.unlink()
+        with self.assertRaisesRegex(self.module.PackageError, "Vite favicon is missing"):
+            self.build(destination)
+        favicon.write_bytes(payload)
+        index = self.ui / "index.html"
+        source = index.read_text(encoding="utf-8")
+        index.write_text(source.replace('href="/favicon.svg"', 'href="/other.svg"', 1), encoding="utf-8", newline="\n")
+        with self.assertRaisesRegex(self.module.PackageError, "exactly one favicon"):
+            self.build(destination)
+        index.write_text(source + '<link rel="icon" href="/favicon.svg" />\n', encoding="utf-8", newline="\n")
+        with self.assertRaisesRegex(self.module.PackageError, "exactly one favicon"):
+            self.build(destination)
+        index.write_text(source, encoding="utf-8", newline="\n")
+        self.build(destination)
+        self.module.verify_distribution(destination, self.repo)
 
     def test_requires_exactly_one_perform_master_tap_worklet(self) -> None:
         destination = self.root / "dist"

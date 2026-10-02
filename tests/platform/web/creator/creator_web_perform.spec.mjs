@@ -479,7 +479,12 @@ async function openCandidate(page, scenario = "none") {
     perform_recording_frames: RECORDING_FRAMES,
     perform_recording_queue_batches: RECORDING_QUEUE_BATCHES,
   });
-  expect(candidate.candidateManifest.assets.at(-1)).toEqual(candidate.tapEntry);
+  // host_favicon is the last packaged asset at Host 5.0.0. The tap this
+  // journey loads is the perform_master_tap_worklet entry, including the one
+  // a routed candidate appends after the formal inventory.
+  expect(candidate.candidateManifest.assets.filter(
+    ({role}) => role === "perform_master_tap_worklet",
+  ).at(-1)).toEqual(candidate.tapEntry);
   if (candidate.routed) {
     const {
       perform_recording_frames: _frames,

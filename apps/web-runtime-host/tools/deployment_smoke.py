@@ -63,6 +63,7 @@ CONTENT_TYPES = {
     ".css": "text/css",
     ".js": "text/javascript",
     ".mjs": "text/javascript",
+    ".svg": "image/svg+xml",
     ".wasm": "application/wasm",
 }
 EQUIVALENT_MEDIA_TYPES = {
@@ -70,7 +71,7 @@ EQUIVALENT_MEDIA_TYPES = {
 }
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 HASHED_ASSET_PATTERN = re.compile(
-    r"^assets/[a-z0-9-]+\.([0-9a-f]{64})\.(?:css|js|mjs|wasm)$"
+    r"^assets/[a-z0-9-]+\.([0-9a-f]{64})\.(?:css|js|mjs|svg|wasm)$"
 )
 # The manifest asset-role vocabulary is defined once, in `asset_roles.py`, and
 # consumed by both packagers as well as by this validator. Restating any role
@@ -82,6 +83,7 @@ ASSET_ROLES = _ASSET_ROLES
 ALLOWED_ASSET_ROLES = _ASSET_ROLES.ALLOWED_ASSET_ROLES
 SINGLETON_ASSET_ROLES = _ASSET_ROLES.SINGLETON_ASSET_ROLES
 CREATOR_CURRENT_ASSET_ROLES = _ASSET_ROLES.CREATOR_CURRENT_ASSET_ROLES
+CREATOR_V3_ASSET_ROLES = _ASSET_ROLES.CREATOR_V3_ASSET_ROLES
 CREATOR_LEGACY_ASSET_ROLES = _ASSET_ROLES.CREATOR_LEGACY_ASSET_ROLES
 DEPLOY_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
 MAX_INDEX_BYTES = 2 * 1024 * 1024
@@ -488,12 +490,15 @@ def _manifest_identity(
 
 
 def _creator_required_roles(host_version: str) -> frozenset[str]:
-    """Creator 3.0.0 added perform_master_tap_worklet; 2.x priors keep five roles."""
+    """5.x requires the favicon, 3.x and 4.x keep six roles, 2.x keeps five."""
     major, _, _ = host_version.partition(".")
     if not major.isdigit():
         raise SmokeError("Host version is invalid")
-    if int(major) >= 3:
+    major_number = int(major)
+    if major_number >= 5:
         return CREATOR_CURRENT_ASSET_ROLES
+    if major_number >= 3:
+        return CREATOR_V3_ASSET_ROLES
     return CREATOR_LEGACY_ASSET_ROLES
 
 
@@ -800,6 +805,14 @@ def smoke_http(
     style = next(entry for entry in assets if entry["role"] == _ASSET_ROLES.HOST_STYLE)
     _require_exact_once(index, f'src="./{main["path"]}"', "main asset binding")
     _require_exact_once(index, f'href="./{style["path"]}"', "style asset binding")
+    favicon = next(
+        (entry for entry in assets if entry["role"] == _ASSET_ROLES.HOST_FAVICON),
+        None,
+    )
+    if favicon is not None:
+        _require_exact_once(
+            index, f'href="./{favicon["path"]}"', "favicon asset binding"
+        )
 
     for path in NEGATIVE_PATHS:
         _require_negative(
