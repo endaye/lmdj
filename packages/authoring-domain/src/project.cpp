@@ -287,6 +287,22 @@ bool is_valid_playback(const PadPlayback& playback) noexcept {
              (*playback.trim_end_frame - loop_start) / 2;
 }
 
+bool is_valid_playback_for_source(
+    const PadPlayback& playback,
+    std::uint64_t source_frames) noexcept {
+  if (!is_valid_playback(playback)) {
+    return false;
+  }
+  const auto end = playback.trim_end_frame.value_or(source_frames);
+  if (playback.trim_start_frame >= end || end > source_frames) {
+    return false;
+  }
+  const auto loop_start =
+      playback.loop_start_frame.value_or(playback.trim_start_frame);
+  return loop_start < end &&
+         playback.loop_crossfade_frames <= (end - loop_start) / 2;
+}
+
 std::optional<Asset> resolve_slot_asset(
     const ProjectState& state,
     PadSlotId slot) {

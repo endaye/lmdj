@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#101216" />
+    <meta name="theme-color" content="#0a0b09" />
     <!-- S11-D6: the Sound Set Catalog endpoint is Workspace/Host
          settings and never Project Truth. A deployment that offers a
          Catalog sets it here; one that offers none browses only the
@@ -24,7 +24,22 @@
     <title>LMDJ Creator</title>
   </head>
   <body>
+    <!-- The shell carries no off-origin links on purpose: the packaged
+         document must make no off-origin reference, because connect-src
+         'self' is the exfiltration barrier around the Projects and audio
+         this Creator holds in OPFS. The packaged asset-inventory journey
+         fails on any https?:// byte outside comments. -->
+    <header class="site-header">
+      <span class="site-brand">
+        <span class="site-wordmark">LMDJ</span>
+        <span class="site-product">Creator</span>
+      </span>
+    </header>
     <div id="root"></div>
+    <footer class="site-footer">
+      <span>© 2026 LMDJ</span>
+      <span data-build-identity></span>
+    </footer>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

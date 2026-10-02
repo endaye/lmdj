@@ -19,6 +19,7 @@ EXPECTED = {
         "facade.sample_surface": "mutation",
         "facade.sample_surface.quota_replay": "quota-replay",
         "facade.sample_surface.projection": "projection",
+        "facade.sample_surface.playback_parity": "playback-parity",
     },
     "lmdj_application_c_api_stress_tests": {
         "facade.c_api_stress.independent_engines_0_63": (

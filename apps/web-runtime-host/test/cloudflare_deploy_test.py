@@ -4,6 +4,7 @@
 import contextlib
 import io
 import json
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -495,6 +496,70 @@ class EntryPointTest(unittest.TestCase):
                     passed = False
         self.browser_command = runner.call_args.args[0]
         return passed, runner.call_args.kwargs["env"]
+
+    def test_the_browser_runs_the_spec_under_the_given_root(self):
+        release = self.root / "release-source"
+        check = cloudflare_deploy.real_browser("creator-web", self.root, root=release)
+        result = type("R", (), {"returncode": 0, "stdout": self.report(), "stderr": ""})()
+        with patch.object(cloudflare_deploy.subprocess, "run", return_value=result) as runner, \
+                patch.dict(cloudflare_deploy.os.environ, {"PATH": "/usr/bin"}, clear=True):
+            self.assertTrue(check("https://creator.lmdj.workers.dev", "1.0.66.0", "1.2.3"))
+        command = runner.call_args.args[0]
+        self.assertEqual(command[command.index("--prefix") + 1],
+                         str(release / "tests/platform/web"))
+        self.assertEqual(Path(runner.call_args.kwargs["cwd"]), release)
+
+    def tagged_repository(self):
+        """A repository whose tag names its first commit, plus a later commit."""
+        repository = self.root / "repository"
+        repository.mkdir()
+
+        def git(*arguments, cwd=repository):
+            return subprocess.run(["git", "-c", "user.name=F", "-c", "user.email=f@e.invalid",
+                                   "-C", str(cwd), *arguments],
+                                  check=True, capture_output=True, text=True).stdout.strip()
+        git("init", "-q", "-b", "main")
+        git("commit", "-q", "--allow-empty", "-m", "release")
+        git("tag", "-a", "-m", "release", TAG)
+        target = git("rev-parse", "HEAD")
+        git("commit", "-q", "--allow-empty", "-m", "later main")
+        return repository, target, git
+
+    def test_the_release_browser_root_must_be_the_tag_s_target(self):
+        repository, target, git = self.tagged_repository()
+        on_target = self.root / "on-target"
+        git("worktree", "add", "-q", "--detach", str(on_target), target)
+        on_main = self.root / "on-main"
+        git("worktree", "add", "-q", "--detach", str(on_main), "main")
+        with patch.object(cloudflare_deploy, "ROOT", repository):
+            self.assertEqual(cloudflare_deploy.release_browser_root(on_target, TAG), on_target)
+            for refused in (on_main, Path("relative/release-source"), self.root / "absent"):
+                with self.subTest(refused=refused), self.assertRaises(CloudflareDeployError):
+                    cloudflare_deploy.release_browser_root(refused, TAG)
+            with self.assertRaises(CloudflareDeployError):
+                cloudflare_deploy.release_browser_root(on_target, "lmdj-v9.9.9.0")
+
+    def test_a_reviewed_smoke_revision_must_descend_from_the_target_on_main(self):
+        repository, target, git = self.tagged_repository()
+        later = git("rev-parse", "main")
+        git("update-ref", "refs/remotes/origin/main", later)
+        git("checkout", "-q", "-b", "side", target)
+        git("commit", "-q", "--allow-empty", "-m", "unreviewed")
+        side = git("rev-parse", "HEAD")
+        git("checkout", "-q", "main")
+        on_later = self.root / "on-later"
+        git("worktree", "add", "-q", "--detach", str(on_later), later)
+        on_side = self.root / "on-side"
+        git("worktree", "add", "-q", "--detach", str(on_side), side)
+        with patch.object(cloudflare_deploy, "ROOT", repository):
+            self.assertEqual(cloudflare_deploy.release_browser_root(on_later, TAG, later), on_later)
+            # The default stays the tag's own target.
+            with self.assertRaises(CloudflareDeployError):
+                cloudflare_deploy.release_browser_root(on_later, TAG)
+            # Not on protected main, not descending, or a checkout elsewhere.
+            for root, revision in ((on_side, side), (on_later, "f" * 40), (on_side, later)):
+                with self.subTest(revision=revision), self.assertRaises(CloudflareDeployError):
+                    cloudflare_deploy.release_browser_root(root, TAG, revision)
 
     def report(self, **stats):
         counts = {"expected": 1, "unexpected": 0, "flaky": 0, "skipped": 0}

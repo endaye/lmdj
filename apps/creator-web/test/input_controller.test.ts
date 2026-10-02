@@ -173,6 +173,12 @@ function sampleInspect(
       triggerMode,
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     },
     metadata: assetId === null
       ? null

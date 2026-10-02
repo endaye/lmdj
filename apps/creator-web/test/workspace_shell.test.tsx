@@ -189,6 +189,12 @@ test("keeps Sample editing in touch and one Bank row and Pad matrix on the rail"
           triggerMode: "one_shot",
           gainMillidb: 0,
           muted: false,
+          reverse: false,
+          pitchCents: 0,
+          pan: 0,
+          loopMode: "forward" as const,
+          loopStartFrame: null,
+          loopCrossfadeFrames: 0,
         },
         metadata: {sampleRate: 48_000, channels: 1, sourceFrames: 8},
         waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/2`,
@@ -263,6 +269,12 @@ test("advances the selected Sample playhead on the render clock and cancels it a
       triggerMode: "one_shot" as const,
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     },
     metadata: {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 48_000},
     waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/94`,
@@ -301,6 +313,11 @@ test("advances the selected Sample playhead on the render clock and cancels it a
         trimStartFrame: 0,
         trimEndFrame: 48_000,
         triggerMode: "one_shot",
+        reverse: false,
+        pitchCents: 0,
+        loopMode: "forward",
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       },
       savedRevision: 4,
       runtimeRevision: 4,
@@ -581,6 +598,12 @@ function sampleRuntimeFixture(
       triggerMode: "gate" as const,
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     },
     metadata: {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 8},
     waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/1`,
@@ -698,6 +721,12 @@ function mutableSampleRuntimeFixture() {
       triggerMode: "gate",
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     })],
   ]);
   let revision = 3;
@@ -717,6 +746,12 @@ function mutableSampleRuntimeFixture() {
       triggerMode: "one_shot" as const,
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     };
     return {
       projectRevision: revision,
@@ -1086,6 +1121,12 @@ test.each(["update", "reset"] as const)(
         triggerMode: "one_shot",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       }));
     }
     fixture.revision = 4;
@@ -1355,6 +1396,12 @@ test.each(["update", "reset"] as const)(
         triggerMode: "one_shot",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       }));
       return commit();
     };
@@ -1537,6 +1584,12 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
       triggerMode: "gate" as const,
       gainMillidb: 0,
       muted: false,
+      reverse: false,
+      pitchCents: 0,
+      pan: 0,
+      loopMode: "forward" as const,
+      loopStartFrame: null,
+      loopCrossfadeFrames: 0,
     },
     metadata: assigned.has(slot)
       ? {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 8}
@@ -1761,6 +1814,13 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
     const fixture = mutableSampleRuntimeFixture();
     const order: string[] = [];
     let triggerCount = 0;
+    // A Pad can sound only while audio runs, so the Host admits the press
+    // only then; the stop-first order applies to that state (#1724).
+    let hostListener: ((state: RuntimeHostState) => void) | undefined;
+    fixture.session.subscribeHostState = (listener) => {
+      hostListener = listener;
+      return () => {};
+    };
     fixture.session.trigger = async (slot, velocity, source) => {
       triggerCount += 1;
       return {sequence: triggerCount, slot, velocity, source};
@@ -1788,6 +1848,12 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
         triggerMode: "one_shot",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       }));
       fixture.revision = 4;
       return {
@@ -1813,6 +1879,12 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
         triggerMode: "one_shot",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       }));
       fixture.revision = 4;
       return {
@@ -1826,6 +1898,8 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
       <App initialState={ready} runtimeFactory={() => fixture.session} />,
     );
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await act(async () => hostListener?.({state: "running", errorCode: null, errorDetails: {}}));
+    await screen.findByText("Audio running");
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
     await screen.findByText("Asset 33333333");
     fireEvent.keyDown(screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"}), {
@@ -2538,6 +2612,255 @@ test.each(["pointerup", "pointercancel"])("Sample rail Pad %s releases a gate vo
   expect(pad.getAttribute("data-outcome")).toBe("idle");
 });
 
+// #1680: the reopen prompt over the existing recovery candidates.
+const INTERRUPTED = Object.freeze({
+  sessionId: "interrupted-session", patternId: ready.project.current!.patternId,
+  bars: 1 as const, reason: "owner_lost", eventCount: 3,
+});
+
+// The Performance surface of a Runtime Session with one interrupted take.
+function performanceSessionStubs(candidates: unknown[]) {
+  const listed = [...candidates];
+  return {
+    listed,
+    stubs: {
+      performanceMasterCaptureStatus: () => ({state: "unconfigured", error: null}),
+      subscribePerformanceMasterCaptureStatus: () => () => {},
+      startPerformanceMasterCapture: vi.fn(), beginPerformanceRecording: vi.fn(),
+      recordPerformanceEvent: vi.fn(), requestPerformancePatternLaunch: vi.fn(),
+      flushPerformanceRecording: vi.fn(), stopPerformanceRecording: vi.fn(),
+      queryPerformanceRecordingStatus: vi.fn(), assignPatternSlot: vi.fn(),
+      clearPatternSlot: vi.fn(), movePatternSlot: vi.fn(),
+      listPerformances: vi.fn(async () => []), inspectPerformance: vi.fn(),
+      savePerformance: vi.fn(), discardPerformance: vi.fn(), renamePerformance: vi.fn(),
+      deletePerformance: vi.fn(),
+      listPerformanceRecovery: vi.fn(async () => [...listed]),
+      applyPerformanceRecovery: vi.fn(async ({sessionId}: {sessionId: string}) => {
+        listed.splice(listed.findIndex((entry) =>
+          (entry as {sessionId: string}).sessionId === sessionId), 1);
+        return {committedRevision: 4, replayed: false, projectRevision: 4};
+      }),
+      discardPerformanceRecovery: vi.fn(),
+      bindPerformanceRecording: vi.fn(), beginPerformanceReplay: vi.fn(),
+      stopPerformanceReplay: vi.fn(),
+      queryPerformanceReplayStatus: vi.fn(() => new Promise(() => {})),
+      commitPerformanceResample: vi.fn(),
+    },
+  };
+}
+
+function interruptedSequenceSession(
+  fixture: ReturnType<typeof mutableSampleRuntimeFixture>,
+  overrides: Record<string, unknown> = {},
+) {
+  const listed: unknown[] = [INTERRUPTED];
+  const apply = vi.fn(async ({sessionId}: {sessionId: string}) => {
+    listed.splice(listed.findIndex((entry) =>
+      (entry as {sessionId: string}).sessionId === sessionId), 1);
+    return {...sequenceStatusStub(), committedRevision: 4};
+  });
+  const discard = vi.fn(async (sessionId: string) => {
+    listed.splice(listed.findIndex((entry) =>
+      (entry as {sessionId: string}).sessionId === sessionId), 1);
+    return true;
+  });
+  const list = vi.fn(async () => [...listed]);
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    listSequenceRecovery: list,
+    applySequenceRecovery: apply,
+    discardSequenceRecovery: discard,
+    ...overrides,
+  });
+  return {session, apply, discard, list};
+}
+
+const interruptedRegion = () => screen.findByRole("region", {name: "Interrupted recording"});
+
+test("a Project that opens with an interrupted recording asks once whether to keep it", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const {session, apply} = interruptedSequenceSession(fixture);
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  expect(region.textContent).toContain("A recording stopped before it was saved (1 in Sequence)");
+  expect(apply).not.toHaveBeenCalled();
+
+  await userEvent.click(within(region).getByRole("button", {name: "Keep recording"}));
+  expect(apply).toHaveBeenCalledExactlyOnceWith({
+    sessionId: "interrupted-session", destinationPatternId: null,
+  });
+  expect(await within(region).findByText("The interrupted recording is back in this Project."))
+    .toBeTruthy();
+  await userEvent.click(within(region).getByRole("button", {name: "Close"}));
+  // A revision change within the same open never asks again.
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
+  await flushAsyncTurns();
+  expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
+});
+
+test("a Project without interrupted recordings does not ask", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const list = vi.fn(async () => []);
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    listSequenceRecovery: list,
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(list).toHaveBeenCalled());
+  await flushAsyncTurns();
+  expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
+});
+
+test("Decide later leaves the recording in the Sequence recovery list", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const {session, apply, discard} = interruptedSequenceSession(fixture);
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  await userEvent.click(within(region).getByRole("button", {name: "Decide later"}));
+  expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
+  expect(await screen.findByRole("button", {name: "Recover original Pattern"})).toBeTruthy();
+  expect(apply).not.toHaveBeenCalled();
+  expect(discard).not.toHaveBeenCalled();
+  expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
+});
+
+test("a recording the Core refuses to keep stays listed and the prompt opens it", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const refusal = Object.assign(new Error("Sequence admission is unresolved"), {
+    code: "INVALID_ARGUMENT",
+    details: {reason: "sequence_admission_unresolved", journal_retained: true},
+  });
+  const {session} = interruptedSequenceSession(fixture, {
+    applySequenceRecovery: vi.fn().mockRejectedValue(refusal),
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  await userEvent.click(within(region).getByRole("button", {name: "Keep recording"}));
+  expect(await within(region).findByText(/could not be kept here\s+\(1 in Sequence\)/)).toBeTruthy();
+  await userEvent.click(within(region).getByRole("button", {name: "Open Sequence"}));
+  expect(screen.getByRole("button", {name: "Sequence"}).getAttribute("aria-current")).toBe("page");
+  expect(await screen.findByRole("button", {name: "Recover original Pattern"})).toBeTruthy();
+  await userEvent.click(screen.getByText(/^Developer diagnostics/));
+  expect(within(screen.getByRole("region", {name: "Developer diagnostics"}))
+    .getByText("Keep interrupted Sequence recording")).toBeTruthy();
+});
+
+test("Discard removes the interrupted recording only after confirmation", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const {session, discard} = interruptedSequenceSession(fixture);
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  await userEvent.click(within(region).getByRole("button", {name: "Discard…"}));
+  expect(discard).not.toHaveBeenCalled();
+  await userEvent.click(within(region).getByRole("button", {name: "Discard recording"}));
+  expect(discard).toHaveBeenCalledExactlyOnceWith("interrupted-session");
+  expect(await within(region).findByText("The interrupted recording was discarded.")).toBeTruthy();
+});
+
+test("an interrupted Performance take is kept through the Perform controller", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const take = {sessionId: "take-session", performanceId: "take", reason: "owner_lost",
+    durableEventCount: 2, pendingEventCount: 0, fingerprint: "f".repeat(64)};
+  const performance = performanceSessionStubs([take]);
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), performance.stubs);
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  expect(region.textContent).toContain("(1 in Perform)");
+  await userEvent.click(within(region).getByRole("button", {name: "Keep recording"}));
+  await waitFor(() => expect(performance.stubs.applyPerformanceRecovery)
+    .toHaveBeenCalledWith(expect.objectContaining({sessionId: "take-session"})));
+  expect(await within(region).findByText("The interrupted recording is back in this Project."))
+    .toBeTruthy();
+});
+
+test("a Keep overtaken by a Runtime replacement sends none of its remaining commands", async () => {
+  const first = mutableSampleRuntimeFixture();
+  let hostListener: ((state: RuntimeHostState) => void) | undefined;
+  first.session.subscribeHostState = (listener) => {
+    hostListener = listener;
+    return () => {};
+  };
+  const firstApply = deferred<ReturnType<typeof sequenceStatusStub> & {committedRevision: number}>();
+  const listed = [
+    INTERRUPTED,
+    {...INTERRUPTED, sessionId: "second-interrupted-session"},
+  ];
+  const apply = vi.fn(() => firstApply.promise);
+  const firstSession = Object.assign(first.session, sequenceSessionStubs(), {
+    listSequenceRecovery: async () => [...listed],
+    applySequenceRecovery: apply,
+  });
+  const second = mutableSampleRuntimeFixture();
+  const sessions = [firstSession, interruptedSequenceSession(second).session];
+  let created = 0;
+  render(<App initialState={ready} runtimeFactory={() => sessions[created++]!} />);
+  const region = await interruptedRegion();
+  expect(region.textContent).toContain("2 recordings");
+  await userEvent.click(within(region).getByRole("button", {name: "Keep recording"}));
+  await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+  await act(async () => hostListener?.({
+    state: "restart-required", errorCode: "HOST_RESTART_REQUIRED", errorDetails: {},
+  }));
+  await waitFor(() => expect(created).toBe(2));
+  await act(async () => firstApply.resolve({...sequenceStatusStub(), committedRevision: 4}));
+  await flushAsyncTurns();
+  expect(apply).toHaveBeenCalledTimes(1);
+  // The new open asks afresh; the abandoned Keep claims no result.
+  const fresh = await interruptedRegion();
+  expect(within(fresh).getByRole("button", {name: "Keep recording"})).toBeTruthy();
+  expect(within(fresh).queryByText(/back in this Project/)).toBeNull();
+});
+
+test("Keep reports the remainder the Sequence list was refreshed with", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  // The Core's list changes between reads: the first read after Keep is
+  // empty, and any later read would still show the recording. The reported
+  // remainder must be the read the Sequence list projected.
+  let applied = false;
+  let readsAfterApply = 0;
+  const list = vi.fn(async () => {
+    if (!applied) return [INTERRUPTED];
+    readsAfterApply += 1;
+    return readsAfterApply === 1 ? [] : [INTERRUPTED];
+  });
+  const apply = vi.fn(async () => {
+    applied = true;
+    return {...sequenceStatusStub(), committedRevision: 4};
+  });
+  const {session} = interruptedSequenceSession(fixture, {
+    listSequenceRecovery: list, applySequenceRecovery: apply,
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  await userEvent.click(within(region).getByRole("button", {name: "Keep recording"}));
+  expect(await within(region).findByText("The interrupted recording is back in this Project."))
+    .toBeTruthy();
+});
+
+test("a replacement Runtime Session asks again for the same Project", async () => {
+  const first = mutableSampleRuntimeFixture();
+  const second = mutableSampleRuntimeFixture();
+  let hostListener: ((state: RuntimeHostState) => void) | undefined;
+  first.session.subscribeHostState = (listener) => {
+    hostListener = listener;
+    return () => {};
+  };
+  const sessions = [
+    interruptedSequenceSession(first).session,
+    interruptedSequenceSession(second).session,
+  ];
+  let created = 0;
+  render(<App initialState={ready} runtimeFactory={() => sessions[created++]!} />);
+  const region = await interruptedRegion();
+  await userEvent.click(within(region).getByRole("button", {name: "Decide later"}));
+  await act(async () => hostListener?.({
+    state: "restart-required", errorCode: "HOST_RESTART_REQUIRED", errorDetails: {},
+  }));
+  await waitFor(() => expect(created).toBe(2));
+  expect(await interruptedRegion()).toBeTruthy();
+});
+
 test("recovery refusal retains its full diagnostic envelope across mode navigation", async () => {
   const fixture = mutableSampleRuntimeFixture();
   const message = "Sequence admission is unresolved; retain the recording until its input conversion is finalized, or explicitly discard it";
@@ -2627,6 +2950,87 @@ test("Delete failure remains visible and does not project an empty Pad", async (
   expect(screen.getByText("Asset 33333333")).toBeTruthy();
   expect(screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"})).toBeTruthy();
   expect(fixture.revision).toBe(3);
+});
+
+
+// #1724: the Runtime refuses `sample.stop` unless audio runs, and each Host
+// mutation stops the voice itself when it does. A Pad mutation must therefore
+// not depend on a separate stop while audio is stopped, and must keep its
+// stop-first order while audio runs.
+const PRE_STOP_MUTATIONS = ["delete", "reset", "mute", "replace"] as const;
+type PreStopMutation = typeof PRE_STOP_MUTATIONS[number];
+
+function preStopFixture(order: string[]) {
+  const fixture = sampleRuntimeFixture();
+  let hostListener: ((state: RuntimeHostState) => void) | undefined;
+  let audioRunning = false;
+  fixture.session.subscribeHostState = (listener) => {
+    hostListener = listener;
+    return () => {};
+  };
+  fixture.session.stopPad = async () => {
+    order.push("stop");
+    if (!audioRunning) {
+      throw Object.assign(new Error("runtime control is unavailable"), {
+        code: "HOST_STATE_INVALID", details: {},
+      });
+    }
+    return true;
+  };
+  const commit = (kind: PreStopMutation) => async () => {
+    order.push(kind);
+    return {committedRevision: 4, runtimeRevision: 4, runtimePublished: true, snapshotError: null};
+  };
+  fixture.session.deletePad = commit("delete");
+  fixture.session.resetPad = commit("reset");
+  fixture.session.updatePad = commit("mute");
+  fixture.session.importAssignSample = commit("replace");
+  const runAudio = async () => {
+    audioRunning = true;
+    await act(async () => hostListener?.({state: "running", errorCode: null, errorDetails: {}}));
+    await screen.findByText("Audio running");
+  };
+  return {fixture, runAudio};
+}
+
+async function performPadMutation(kind: PreStopMutation, container: HTMLElement) {
+  if (kind === "delete") {
+    await userEvent.click(screen.getByRole("button", {name: "Delete Pad A1"}));
+  } else if (kind === "reset") {
+    await userEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
+    await userEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
+  } else if (kind === "mute") {
+    await userEvent.click(screen.getByRole("button", {name: "Mute"}));
+  } else {
+    await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
+    await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("replace.wav"));
+    await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
+    await commitLongSourceSelection();
+  }
+}
+
+test.each(PRE_STOP_MUTATIONS)("%s with audio stopped commits without a Runtime stop", async (kind) => {
+  const order: string[] = [];
+  const {fixture} = preStopFixture(order);
+  const {container} = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  await performPadMutation(kind, container);
+  await waitFor(() => expect(order).toEqual([kind]));
+  expect(screen.queryByText("Sample operation is unavailable")).toBeNull();
+});
+
+test.each(PRE_STOP_MUTATIONS)("%s with audio running stops the voice before committing", async (kind) => {
+  const order: string[] = [];
+  const {fixture, runAudio} = preStopFixture(order);
+  const {container} = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await runAudio();
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  await performPadMutation(kind, container);
+  await waitFor(() => expect(order).toEqual(["stop", kind]));
 });
 
 

@@ -137,3 +137,13 @@ test("requires an explicit destination and preserves original recovery semantics
     expect.anything(), project.patterns[1]!.patternId,
   );
 });
+
+test("keeps restoring into another Pattern behind a collapsed More disclosure", () => {
+  renderSurface(true);
+  const more = screen.getByText("More", {selector: "summary"}).closest("details");
+  expect(more).not.toBeNull();
+  expect(more!.open).toBe(false);
+  expect(more!.contains(screen.getByRole("button", {name: "Recover to selected Pattern"}))).toBe(true);
+  expect(more!.contains(screen.getByRole("button", {name: "Recover original Pattern"}))).toBe(false);
+  expect(more!.contains(screen.getByRole("button", {name: "Discard"}))).toBe(false);
+});

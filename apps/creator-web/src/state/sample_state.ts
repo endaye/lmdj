@@ -4,6 +4,7 @@ import type {
   SampleCommit,
   SampleInspect,
   SampleMetadata,
+  SampleLoopMode,
   SampleSnapshotError,
   SampleTriggerMode,
   SnapshotPublication,
@@ -72,6 +73,12 @@ export interface SamplePlayheadRender {
   readonly trimStartFrame: number | null;
   readonly trimEndFrame: number | null;
   readonly triggerMode: SampleTriggerMode | null;
+  // The voice DSP settings the playhead models, as the kernel renders them.
+  readonly reverse: boolean;
+  readonly pitchCents: number;
+  readonly loopMode: SampleLoopMode;
+  readonly loopStartFrame: number | null;
+  readonly loopCrossfadeFrames: number;
 }
 
 export interface SampleState {
@@ -267,7 +274,27 @@ const DEFAULT_PLAYBACK: Readonly<PadPlayback> = Object.freeze({
   triggerMode: "one_shot",
   gainMillidb: 0,
   muted: false,
+  reverse: false,
+  pitchCents: 0,
+  pan: 0,
+  loopMode: "forward",
+  loopStartFrame: null,
+  loopCrossfadeFrames: 0,
 });
+
+const PLAYBACK_FIELDS = Object.freeze([
+  "trimStartFrame",
+  "trimEndFrame",
+  "triggerMode",
+  "gainMillidb",
+  "muted",
+  "reverse",
+  "pitchCents",
+  "pan",
+  "loopMode",
+  "loopStartFrame",
+  "loopCrossfadeFrames",
+] as const);
 
 export const initialSampleState: SampleState = Object.freeze({
   selectedSlot: null,
@@ -397,23 +424,14 @@ function freezePlayback(playback: PadPlayback): Readonly<PadPlayback> {
   return Object.freeze({...playback});
 }
 
-function playbackEquals(left: PadPlayback, right: PadPlayback): boolean {
-  return left.trimStartFrame === right.trimStartFrame &&
-    left.trimEndFrame === right.trimEndFrame &&
-    left.triggerMode === right.triggerMode &&
-    left.gainMillidb === right.gainMillidb &&
-    left.muted === right.muted;
+// The one Creator equality for a Pad's playback; every field takes part.
+export function playbackEquals(left: PadPlayback, right: PadPlayback): boolean {
+  return PLAYBACK_FIELDS.every((field) => left[field] === right[field]);
 }
 
 function validatePlayback(value: unknown): Readonly<PadPlayback> {
   assertPrivacySafe(value);
-  if (!exactKeys(value, [
-    "trimStartFrame",
-    "trimEndFrame",
-    "triggerMode",
-    "gainMillidb",
-    "muted",
-  ]) ||
+  if (!exactKeys(value, [...PLAYBACK_FIELDS]) ||
     !unsignedInteger(value.trimStartFrame) ||
     !(value.trimEndFrame === null ||
       (unsignedInteger(value.trimEndFrame) &&
@@ -423,7 +441,17 @@ function validatePlayback(value: unknown): Readonly<PadPlayback> {
     !Number.isSafeInteger(value.gainMillidb) ||
     (value.gainMillidb as number) < -60_000 ||
     (value.gainMillidb as number) > 6_000 ||
-    typeof value.muted !== "boolean") {
+    typeof value.muted !== "boolean" ||
+    typeof value.reverse !== "boolean" ||
+    !Number.isSafeInteger(value.pitchCents) ||
+    (value.pitchCents as number) < -2_400 ||
+    (value.pitchCents as number) > 2_400 ||
+    !Number.isSafeInteger(value.pan) ||
+    (value.pan as number) < -100 ||
+    (value.pan as number) > 100 ||
+    (value.loopMode !== "forward" && value.loopMode !== "ping_pong") ||
+    !(value.loopStartFrame === null || unsignedInteger(value.loopStartFrame)) ||
+    !unsignedInteger(value.loopCrossfadeFrames)) {
     throw new TypeError("Sample playback is invalid");
   }
   return freezePlayback({
@@ -432,6 +460,12 @@ function validatePlayback(value: unknown): Readonly<PadPlayback> {
     triggerMode: value.triggerMode as SampleTriggerMode,
     gainMillidb: value.gainMillidb as number,
     muted: value.muted,
+    reverse: value.reverse,
+    pitchCents: value.pitchCents as number,
+    pan: value.pan as number,
+    loopMode: value.loopMode,
+    loopStartFrame: value.loopStartFrame as number | null,
+    loopCrossfadeFrames: value.loopCrossfadeFrames as number,
   });
 }
 
@@ -684,13 +718,9 @@ export function updateSampleDraft(
   draft: SampleDraft,
   changes: Partial<PadPlayback>,
 ): SampleDraft {
-  if (!record(changes) || Object.keys(changes).some((key) => ![
-    "trimStartFrame",
-    "trimEndFrame",
-    "triggerMode",
-    "gainMillidb",
-    "muted",
-  ].includes(key))) {
+  if (!record(changes) || Object.keys(changes).some(
+    (key) => !(PLAYBACK_FIELDS as readonly string[]).includes(key),
+  )) {
     throw new TypeError("Sample draft changes are invalid");
   }
   const proposed = validatePlayback({...draft.proposed, ...changes});
@@ -1151,6 +1181,11 @@ export function applyRuntimeVoiceState(
         sourceFrame,
         ...renderBounds,
         triggerMode: playback?.triggerMode ?? null,
+        reverse: playback?.reverse ?? false,
+        pitchCents: playback?.pitchCents ?? 0,
+        loopMode: playback?.loopMode ?? "forward",
+        loopStartFrame: playback?.loopStartFrame ?? null,
+        loopCrossfadeFrames: playback?.loopCrossfadeFrames ?? 0,
       });
     }
   } else if (playhead?.sequence === event.sequence) {
@@ -1175,15 +1210,39 @@ export function samplePlayheadFrameAt(
     runtimeFrame <= playhead.runtimeFrame) {
     return playhead.sourceFrame;
   }
-  const initial = Math.min(Math.max(lower, playhead.sourceFrame), upper - 1);
-  const advanced = initial + Math.floor(
-    (runtimeFrame - playhead.runtimeFrame) * sampleRate / 48_000,
+  // Modelled in the kernel's logical space: frames from the trim start in
+  // playback order, so reverse is a mirror applied last.
+  const length = upper - lower;
+  const anchored = Math.min(Math.max(lower, playhead.sourceFrame), upper - 1) - lower;
+  const initial = playhead.reverse ? length - 1 - anchored : anchored;
+  const rate = 2 ** (playhead.pitchCents / 1_200);
+  let logical = initial + Math.floor(
+    (runtimeFrame - playhead.runtimeFrame) * sampleRate / 48_000 * rate,
   );
   if (playhead.triggerMode === "loop_gate" ||
     playhead.triggerMode === "loop_toggle") {
-    return lower + (advanced - lower) % (upper - lower);
+    const loopBegin = Math.min(
+      length - 1,
+      Math.max(0, (playhead.loopStartFrame ?? lower) - lower),
+    );
+    if (playhead.loopMode === "ping_pong") {
+      const top = length - 1;
+      const span = top - loopBegin;
+      if (span === 0) {
+        // A one-frame loop holds its only frame from the first advance.
+        if (logical > initial) logical = top;
+      } else if (logical > top) {
+        const phase = (logical - top) % (2 * span);
+        logical = phase <= span ? top - phase : loopBegin + (phase - span);
+      }
+    } else if (logical >= length) {
+      const resume = loopBegin + playhead.loopCrossfadeFrames;
+      logical = resume + (logical - length) % (length - resume);
+    }
+  } else {
+    logical = Math.min(logical, length - 1);
   }
-  return Math.min(advanced, upper - 1);
+  return playhead.reverse ? lower + (length - 1 - logical) : lower + logical;
 }
 
 export function applySampleOperationFailure(

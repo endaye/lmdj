@@ -201,23 +201,19 @@ bool valid_trigger_mode(domain::TriggerMode mode) noexcept {
 foundation::Result<ResolvedVoiceDsp> resolve_voice_dsp(
     const domain::PadPlayback& playback,
     std::uint32_t source_rate,
-    std::uint64_t source_end,
+    std::uint64_t source_frames,
     std::uint64_t runtime_start,
     std::uint64_t runtime_end) {
   const auto invalid = [](std::string_view message) {
     return foundation::Result<ResolvedVoiceDsp>::failure(foundation::Error{
         foundation::ErrorCode::invalid_argument, std::string(message)});
   };
-  if (!domain::is_valid_playback(playback)) {
+  // The domain cannot bound an open trim end; the source length can.
+  if (!domain::is_valid_playback_for_source(playback, source_frames)) {
     return invalid("Pad playback reverse, pitch, pan or loop settings are invalid");
   }
   const auto loop_start =
       playback.loop_start_frame.value_or(playback.trim_start_frame);
-  // The domain cannot bound an open trim end; the source length can.
-  if (loop_start >= source_end ||
-      playback.loop_crossfade_frames > (source_end - loop_start) / 2) {
-    return invalid("Pad playback loop point or crossfade is outside the trim");
-  }
   const auto runtime_loop_start = std::clamp<std::uint64_t>(
       loop_start * 48'000U / source_rate, runtime_start, runtime_end - 1);
   const auto runtime_loop_length = runtime_end - runtime_loop_start;
@@ -247,33 +243,63 @@ foundation::Result<ResolvedPlayback> resolve_playback(
   if (source.channels == 0 || prepared.channels == 0 ||
       source.interleaved.size() % source.channels != 0 ||
       prepared.interleaved.size() % prepared.channels != 0 ||
-      source.sample_rate == 0 || prepared.sample_rate != 48'000 ||
-      !valid_trigger_mode(playback.trigger_mode)) {
+      prepared.sample_rate != 48'000) {
     return foundation::Result<ResolvedPlayback>::failure(foundation::Error{
         foundation::ErrorCode::invalid_argument,
         "Pad playback cannot be resolved from invalid PCM or mode",
     });
   }
-  const auto source_frames = static_cast<std::uint64_t>(
-      source.interleaved.size() / source.channels);
-  const auto prepared_frames = static_cast<std::uint64_t>(
-      prepared.interleaved.size() / prepared.channels);
+  auto resolved = resolve_pad_playback(
+      playback,
+      source.sample_rate,
+      static_cast<std::uint64_t>(source.interleaved.size() / source.channels));
+  if (resolved.has_value() &&
+      resolved.value().end_frame >
+          prepared.interleaved.size() / prepared.channels) {
+    return foundation::Result<ResolvedPlayback>::failure(foundation::Error{
+        foundation::ErrorCode::invalid_argument,
+        "Pad playback runtime trim is outside prepared PCM bounds",
+    });
+  }
+  return resolved;
+}
+
+foundation::Result<std::shared_ptr<const RuntimeSnapshot>> failure(
+    foundation::ErrorCode code,
+    std::string_view message) {
+  return foundation::Result<std::shared_ptr<const RuntimeSnapshot>>::failure(
+      foundation::Error{code, std::string(message)});
+}
+
+}  // namespace
+
+foundation::Result<ResolvedPlayback> resolve_pad_playback(
+    const domain::PadPlayback& playback,
+    std::uint32_t source_rate,
+    std::uint64_t source_frames) {
+  if (source_rate == 0 || !valid_trigger_mode(playback.trigger_mode) ||
+      source_frames > std::numeric_limits<std::uint64_t>::max() / 48'000U) {
+    return foundation::Result<ResolvedPlayback>::failure(foundation::Error{
+        foundation::ErrorCode::invalid_argument,
+        "Pad playback cannot be resolved from invalid PCM or mode",
+    });
+  }
   const auto source_end = playback.trim_end_frame.value_or(source_frames);
-  if (playback.trim_start_frame >= source_end || source_end > source_frames ||
-      playback.trim_start_frame >
-          std::numeric_limits<std::uint64_t>::max() / 48'000U ||
-      source_end > std::numeric_limits<std::uint64_t>::max() / 48'000U) {
+  if (playback.trim_start_frame >= source_end || source_end > source_frames) {
     return foundation::Result<ResolvedPlayback>::failure(foundation::Error{
         foundation::ErrorCode::invalid_argument,
         "Pad playback trim is outside source bounds",
     });
   }
+  // The prepared length follows prepare_runtime_pcm's rounding.
+  const auto scaled_frames = source_frames * 48'000U;
+  const auto prepared_frames = scaled_frames / source_rate +
+                               (scaled_frames % source_rate == 0 ? 0U : 1U);
   const auto scaled_start = playback.trim_start_frame * 48'000U;
   const auto scaled_end = source_end * 48'000U;
-  const auto runtime_start = scaled_start / source.sample_rate;
+  const auto runtime_start = scaled_start / source_rate;
   const auto runtime_end =
-      scaled_end / source.sample_rate +
-      (scaled_end % source.sample_rate == 0 ? 0U : 1U);
+      scaled_end / source_rate + (scaled_end % source_rate == 0 ? 0U : 1U);
   if (runtime_start >= runtime_end || runtime_end > prepared_frames ||
       runtime_start > std::numeric_limits<std::uint32_t>::max() ||
       runtime_end > std::numeric_limits<std::uint32_t>::max()) {
@@ -305,22 +331,13 @@ foundation::Result<ResolvedPlayback> resolve_playback(
       playback.muted,
   };
   auto dsp = resolve_voice_dsp(
-      playback, source.sample_rate, source_end, runtime_start, runtime_end);
+      playback, source_rate, source_frames, runtime_start, runtime_end);
   if (!dsp.has_value()) {
     return foundation::Result<ResolvedPlayback>::failure(dsp.error());
   }
   resolved.dsp = dsp.value();
   return foundation::Result<ResolvedPlayback>::success(resolved);
 }
-
-foundation::Result<std::shared_ptr<const RuntimeSnapshot>> failure(
-    foundation::ErrorCode code,
-    std::string_view message) {
-  return foundation::Result<std::shared_ptr<const RuntimeSnapshot>>::failure(
-      foundation::Error{code, std::string(message)});
-}
-
-}  // namespace
 
 foundation::Result<std::shared_ptr<const RuntimeSnapshot>> cook(
     const domain::ProjectState& project,

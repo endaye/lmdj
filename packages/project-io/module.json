@@ -1,10 +1,10 @@
 {
   "contract": "lmdj.module.v1",
   "module": "project-io",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "api_version": 1,
   "dependencies": {
     "foundation": "0.4.0",
-    "authoring-domain": "4.2.0"
+    "authoring-domain": "4.3.0"
   }
 }

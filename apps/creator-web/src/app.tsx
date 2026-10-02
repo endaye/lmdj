@@ -13,6 +13,12 @@ import {
   appendDiagnostic, diagnosticRecord, DiagnosticsLog, type DiagnosticRecord,
 } from "./components/diagnostics_log";
 import {ErrorPanel} from "./components/error_panel";
+import {RecoveryPrompt, type RecoveryCounts} from "./components/recovery_prompt";
+import {
+  TakenOverPanel,
+  TakeoverPending,
+  takeoverNote,
+} from "./components/takeover_panel";
 import {
   HardwareConsole,
   retireCreatorLayoutPreference,
@@ -46,6 +52,10 @@ import {
   type ProjectActionToken,
 } from "./runtime/project_actions";
 import type {CreatorBuildIdentity} from "./runtime/build_identity";
+import type {
+  ProjectTakeoverCoordinator,
+  TakeoverOutcome,
+} from "./runtime/project_takeover";
 import {
   createCreatorInputController,
   type PerformancePadInputEvent,
@@ -78,6 +88,7 @@ import type {
   LocalProjectSummary,
   RuntimeSessionFactory,
   TypedRuntimeError,
+  SequenceRecoveryCandidate,
 } from "./runtime/runtime_types";
 import {
   creatorReducer,
@@ -108,6 +119,7 @@ import {
 import {
   createPerformController,
   type PerformController,
+  type PerformanceRecoverySummary,
 } from "./state/perform_state";
 import type {CapturePhase} from "./state/capture_state";
 
@@ -115,6 +127,7 @@ interface AppProps {
   initialState?: CreatorState;
   runtimeFactory?: RuntimeSessionFactory;
   buildIdentity?: CreatorBuildIdentity;
+  projectTakeover?: ProjectTakeoverCoordinator | null;
 }
 
 interface WorkspaceProps {
@@ -127,6 +140,8 @@ interface WorkspaceProps {
   runtimeHostState?: string;
   runtimeRecoveryProbeReady?: boolean;
   onRetryRuntime?: () => void;
+  onYieldRuntime?: () => Promise<boolean>;
+  projectTakeover?: ProjectTakeoverCoordinator | null;
   registerRuntimeShutdownBarrier?: (
     barrier: () => Promise<unknown>,
   ) => () => void;
@@ -254,6 +269,8 @@ function Workspace({
   runtimeHostState,
   runtimeRecoveryProbeReady,
   onRetryRuntime,
+  onYieldRuntime,
+  projectTakeover = null,
   registerRuntimeShutdownBarrier,
 }: WorkspaceProps) {
   const [state, dispatch] = useReducer(creatorReducer, initialState);
@@ -270,6 +287,11 @@ function Workspace({
   }, []);
   const [listAttempt, setListAttempt] = useState(0);
   const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
+  // #1679: this tab handed its Project to another tab, a Continue here is
+  // waiting for the holder, and why the last one did not end here.
+  const [yieldedProject, setYieldedProject] = useState<string | null>(null);
+  const [takeoverRequest, setTakeoverRequest] = useState<AbortController | null>(null);
+  const [takeoverOutcome, setTakeoverOutcome] = useState<TakeoverOutcome | null>(null);
   const [showLocalProjects, setShowLocalProjects] = useState(false);
   const [activeMode, setActiveMode] = useState<CreatorMode>("project");
   const [inputControllerEpoch, setInputControllerEpoch] = useState(0);
@@ -277,6 +299,8 @@ function Workspace({
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyPerformPhase, setHistoryPerformPhase] = useState("idle");
   const [capturePhase, setCapturePhase] = useState<CapturePhase>("idle");
+  const capturePhaseRef = useRef(capturePhase);
+  capturePhaseRef.current = capturePhase;
   const [armedCaptureSlot, setArmedCaptureSlot] = useState<number | null>(null);
   const [captureStopRequest, setCaptureStopRequest] = useState(0);
   const [midi, setMidi] = useState<MidiStatus | null>(null);
@@ -347,7 +371,7 @@ function Workspace({
   useEffect(() => { retireCreatorLayoutPreference(); }, []);
   const currentProjectId = state.project.current?.projectId ?? null;
   useEffect(() => {
-    if (currentProjectId !== null) writeLastProjectId(currentProjectId);
+    if (currentProjectId !== null) void writeLastProjectId(currentProjectId);
   }, [currentProjectId]);
   // A refused Duplicate describes the Project it was asked to copy.
   const [duplicateRefusal, setDuplicateRefusal] = useState<string | null>(null);
@@ -558,8 +582,12 @@ function Workspace({
     if (runtimePhase !== "ready") return;
     let active = true;
     dispatch({type: "projects-listing"});
+    // Read alongside the listing, so the library never shows while it waits.
+    const remembered = readLastProjectId();
     void listLocalProjectsJourney(session).then(
       async (projects) => {
+        if (!active) return;
+        const lastId = await remembered;
         if (!active) return;
         setBusyRetry(null);
         dispatch({type: "projects-loaded", projects});
@@ -568,7 +596,6 @@ function Workspace({
           // Boot: reopen the Project this device used last, or start a new
           // one when none is stored. A remembered Project that is gone while
           // others exist leaves the user in the library to choose.
-          const lastId = readLastProjectId();
           const last = lastId === null ? undefined :
             projects.find(({projectId}) => projectId === lastId);
           if (last === undefined && projects.length > 0) return;
@@ -833,6 +860,56 @@ function Workspace({
 
   const finishProjectAction = (token: ProjectActionToken) => {
     if (ownsProjectAction(token)) projectActions.finish(token);
+  };
+
+  // Holder side of #1679. A takeover is a Project change in this tab, so it
+  // obeys the same guard as opening another Project, plus idle capture and
+  // transport; otherwise it is refused and nothing changes. Accepting closes
+  // this Runtime through the pagehide barrier, which commits every
+  // acknowledged write before the writer lease is released.
+  const heldProjectId = runtimePhase === "ready"
+    ? state.project.current?.projectId ?? null
+    : null;
+  useEffect(() => {
+    if (projectTakeover === null || !onYieldRuntime || heldProjectId === null) return;
+    return projectTakeover.serve(heldProjectId, () => {
+      const current = transportRef.current;
+      if (capturePhaseRef.current !== "idle" || selectTransportBusy(current) ||
+        selectTransportPlaying(current) || selectTransportRecording(current)) {
+        return {accepted: false};
+      }
+      const token = beginProjectAction("open");
+      if (!token) return {accepted: false};
+      setYieldedProject(heldProjectId);
+      setTakeoverOutcome(null);
+      resetInputForAdverseLifecycle();
+      dispatchTransport({type: "disengaged"});
+      const released = onYieldRuntime().finally(() => finishProjectAction(token));
+      return {accepted: true, released};
+    });
+    // The guard reads refs and the current action lane, so only a change of
+    // holder identity re-registers.
+  }, [projectTakeover, onYieldRuntime, heldProjectId]);
+
+  // A note explains why a Continue here did not end with this tab holding
+  // the Project, so it lasts until an open replaces the Project view. A fresh
+  // Runtime reaching ready is not enough: a take-back reopen can still be busy.
+  useEffect(() => {
+    setTakeoverOutcome(null);
+  }, [state.project.current]);
+
+  // Requester side: ask the holder, then open as usual. Only a refusal or a
+  // cancel skips the open; any other outcome may have freed the writer.
+  const continueHere = async (projectId: string, open: () => unknown) => {
+    if (projectTakeover === null || takeoverRequest !== null) return;
+    const abort = new AbortController();
+    setTakeoverRequest(abort);
+    setTakeoverOutcome(null);
+    const outcome = await projectTakeover.request(projectId, {signal: abort.signal});
+    setTakeoverRequest((pending) => pending === abort ? null : pending);
+    if (outcome === "cancelled") return;
+    setTakeoverOutcome(outcome);
+    if (outcome !== "refused") open();
   };
 
   const openProject = async (summary: LocalProjectSummary) => {
@@ -1152,13 +1229,151 @@ function Workspace({
     URL.revokeObjectURL(url);
   };
 
+  // #1680: each time a Project opens in a Runtime Session, ask once about
+  // recordings an earlier owner left unfinished. The pair, not the revision,
+  // identifies an open, so in-session changes never ask again.
+  const recoveryOfferFor = useRef<Readonly<{session: unknown; projectId: string}> | null>(null);
+  const recoveryOfferId = useRef(0);
+  const [recoveryOffer, setRecoveryOffer] = useState<Readonly<{
+    id: number;
+    owner: Readonly<{session: unknown; projectId: string}>;
+    projectId: string;
+    sequence: readonly SequenceRecoveryCandidate[];
+    performance: readonly PerformanceRecoverySummary[];
+  }> | null>(null);
+  const openProjectId = runtimePhase === "ready" && state.project.phase === "ready"
+    ? state.project.current?.projectId ?? null
+    : null;
+  useEffect(() => {
+    if (session === undefined || openProjectId === null) return;
+    const last = recoveryOfferFor.current;
+    if (last !== null && last.session === session && last.projectId === openProjectId) return;
+    const owner = Object.freeze({session, projectId: openProjectId});
+    recoveryOfferFor.current = owner;
+    setRecoveryOffer(null);
+    void listInterruptedRecordings(openProjectId).then(({sequence, performance}) => {
+      if (recoveryOfferFor.current !== owner) return;
+      if (sequence.length + performance.length > 0) {
+        recoveryOfferId.current += 1;
+        setRecoveryOffer(Object.freeze({
+          id: recoveryOfferId.current, owner, projectId: openProjectId, sequence, performance,
+        }));
+      }
+    });
+    // Effects keep no cancellation: the owner check discards a stale reply,
+    // and a phase change within the same open must not lose the offer.
+  }, [session, openProjectId]);
+
+  const listInterruptedRecordings = async (projectId: string) => {
+    const [sequence, performance] = await Promise.all([
+      isSequenceSession(session)
+        ? session.listSequenceRecovery(projectId).catch((error: unknown) => {
+            reportFailure("List interrupted Sequence recordings", error);
+            return [] as readonly SequenceRecoveryCandidate[];
+          })
+        : Promise.resolve([] as readonly SequenceRecoveryCandidate[]),
+      isPerformanceSession(session)
+        ? (session.listPerformanceRecovery() as Promise<readonly PerformanceRecoverySummary[]>)
+          .catch((error: unknown) => {
+            reportFailure("List interrupted Performance recordings", error);
+            return [] as readonly PerformanceRecoverySummary[];
+          })
+        : Promise.resolve([] as readonly PerformanceRecoverySummary[]),
+    ]);
+    return {sequence, performance};
+  };
+
+  // The remainder is read from the same refresh that the Sequence and
+  // Perform lists project, so the counts the prompt reports are what the
+  // Open buttons then show. A list that could not be refreshed is read once.
+  const remainingRecordings = async (projectId: string): Promise<RecoveryCounts> => {
+    const sequence = await refreshSequence();
+    const controller = performControllerRef.current;
+    const performanceRefreshed = controller === null ? false
+      : await controller.refreshRecovery().then(() => true, () => false);
+    const fallback = sequence === null || !performanceRefreshed
+      ? await listInterruptedRecordings(projectId)
+      : null;
+    return {
+      sequence: (sequence ?? fallback!.sequence).length,
+      performance: performanceRefreshed
+        ? controller!.getState().recovery.length
+        : fallback!.performance.length,
+    };
+  };
+
+  // An offer acts only while its (Session, Project) open is current, so a
+  // Runtime replacement mid-Keep never sends the old list's commands.
+  const offerIsCurrent = (offer: NonNullable<typeof recoveryOffer>) =>
+    recoveryOfferFor.current === offer.owner;
+  const untouched = (offer: NonNullable<typeof recoveryOffer>): RecoveryCounts => ({
+    sequence: offer.sequence.length, performance: offer.performance.length,
+  });
+
+  // Keep restores each recording to where it was made; one the Core refuses
+  // stays in its list and is counted as remaining.
+  const keepInterruptedRecordings = async (): Promise<RecoveryCounts> => {
+    const offer = recoveryOffer;
+    if (offer === null) return {sequence: 0, performance: 0};
+    for (const candidate of offer.sequence) {
+      if (!isSequenceSession(session) || !offerIsCurrent(offer)) break;
+      try {
+        const status = await session.applySequenceRecovery({
+          sessionId: candidate.sessionId,
+          destinationPatternId: null,
+        });
+        if (status.committedRevision !== null) {
+          dispatch({type: "project-revision-updated", revision: status.committedRevision});
+        }
+      } catch (error) {
+        reportFailure("Keep interrupted Sequence recording", error);
+      }
+    }
+    for (const candidate of offer.performance) {
+      if (!offerIsCurrent(offer)) break;
+      try {
+        await performControllerRef.current?.applyRecovery(candidate.sessionId);
+      } catch (error) {
+        reportFailure("Keep interrupted Performance recording", error);
+      }
+    }
+    // An open replaced mid-Keep claims nothing: its prompt is gone and the
+    // new open asks again about whatever is still waiting.
+    if (!offerIsCurrent(offer)) return untouched(offer);
+    return remainingRecordings(offer.projectId);
+  };
+
+  const discardInterruptedRecordings = async (): Promise<RecoveryCounts> => {
+    const offer = recoveryOffer;
+    if (offer === null) return {sequence: 0, performance: 0};
+    for (const candidate of offer.sequence) {
+      if (!isSequenceSession(session) || !offerIsCurrent(offer)) break;
+      try {
+        await session.discardSequenceRecovery(candidate.sessionId);
+      } catch (error) {
+        reportFailure("Discard interrupted Sequence recording", error);
+      }
+    }
+    for (const candidate of offer.performance) {
+      if (!offerIsCurrent(offer)) break;
+      try {
+        await performControllerRef.current?.discardRecovery(candidate.sessionId);
+      } catch (error) {
+        reportFailure("Discard interrupted Performance recording", error);
+      }
+    }
+    if (!offerIsCurrent(offer)) return untouched(offer);
+    return remainingRecordings(offer.projectId);
+  };
+
   const sequenceFailure = (operation: string, error: unknown) => {
     dispatchSequence({type: "failed", errorCode: reportFailure(operation, error)});
   };
 
-  const refreshSequence = async () => {
+  // Resolves the recovery list it projected, or null when none was read.
+  const refreshSequence = async (): Promise<readonly SequenceRecoveryCandidate[] | null> => {
     const project = stateRef.current.project.current;
-    if (!isSequenceSession(session) || project === null) return;
+    if (!isSequenceSession(session) || project === null) return null;
     try {
       const authority = await refreshSequenceJourney(session, project.projectId);
       // The transport commits through its own coordinator, so the legacy
@@ -1174,7 +1389,7 @@ function Workspace({
           ? inspected.project_revision
           : null;
       // A refresh that outlived its Project describes the previous one.
-      if (stateRef.current.project.current?.projectId !== project.projectId) return;
+      if (stateRef.current.project.current?.projectId !== project.projectId) return null;
       const committedRevision = Math.max(
         authority.status.expectedRevision,
         inspectedRevision ?? 0,
@@ -1209,8 +1424,10 @@ function Workspace({
         }
       }
       dispatchSequence({type: "recovery", candidates: authority.recovery});
+      return authority.recovery;
     } catch (error) {
       sequenceFailure("Refresh Sequence authority", error);
+      return null;
     }
   };
 
@@ -1917,6 +2134,23 @@ function Workspace({
                 />
               </div>
               ) : null}
+              {recoveryOffer !== null &&
+                recoveryOffer.projectId === state.project.current?.projectId && (
+                <RecoveryPrompt
+                  key={recoveryOffer.id}
+                  counts={{
+                    sequence: recoveryOffer.sequence.length,
+                    performance: recoveryOffer.performance.length,
+                  }}
+                  onKeep={keepInterruptedRecordings}
+                  onDiscard={discardInterruptedRecordings}
+                  onOpen={(mode) => {
+                    setActiveMode(mode);
+                    setRecoveryOffer(null);
+                  }}
+                  onClose={() => setRecoveryOffer(null)}
+                />
+              )}
               <DiagnosticsLog records={diagnostics} />
               <ErrorPanel
                 code={state.runtime.errorCode}
@@ -1927,7 +2161,8 @@ function Workspace({
                       setListAttempt((attempt) => attempt + 1);
                     }}
                   : {})}
-                {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry
+                {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry &&
+                  takeoverRequest === null
                   ? {onRetryProject: () => {
                       if (busyRetry.kind === "list") {
                         setListAttempt((attempt) => attempt + 1);
@@ -1935,6 +2170,17 @@ function Workspace({
                         void openProject(busyRetry.project);
                       }
                     }}
+                  : {})}
+                {...(session && state.runtime.errorCode === "PROJECT_BUSY" &&
+                  busyRetry?.kind === "open" && projectTakeover !== null &&
+                  takeoverRequest === null
+                  ? {onContinueHere: () => {
+                      const project = busyRetry.project;
+                      void continueHere(project.projectId, () => openProject(project));
+                    }}
+                  : {})}
+                {...(state.runtime.errorCode === "PROJECT_BUSY" && takeoverOutcome !== null
+                  ? {note: takeoverNote(takeoverOutcome)}
                   : {})}
                 {...(state.runtime.errorCode === "HOST_RESTART_REQUIRED" ||
                   state.runtime.errorCode === "HOST_TIMEOUT") && onRetryRuntime
@@ -1944,6 +2190,23 @@ function Workspace({
                   ? {onDismiss: () => dispatch({type: "runtime-error-dismissed"})}
                   : {})}
               />
+              {yieldedProject !== null && runtimePhase === "closed" && (
+                <TakenOverPanel
+                  note={takeoverOutcome === null ? null : takeoverNote(takeoverOutcome)}
+                  {...(takeoverRequest === null && onRetryRuntime
+                    ? {onContinueHere: () => {
+                        void continueHere(yieldedProject, () => {
+                          setYieldedProject(null);
+                          // The fresh Runtime's boot reopens the retained Project.
+                          onRetryRuntime();
+                        });
+                      }}
+                    : {})}
+                />
+              )}
+              {takeoverRequest !== null && (
+                <TakeoverPending onCancel={() => takeoverRequest.abort()} />
+              )}
             </>
           }
         />
@@ -1955,7 +2218,12 @@ function Workspace({
 function ManagedWorkspace({
   initialState,
   buildIdentity,
-}: {initialState: CreatorState; buildIdentity?: CreatorBuildIdentity}) {
+  projectTakeover,
+}: {
+  initialState: CreatorState;
+  buildIdentity?: CreatorBuildIdentity;
+  projectTakeover: ProjectTakeoverCoordinator | null;
+}) {
   const runtime = useRuntime();
   return (
     <Workspace
@@ -1968,6 +2236,8 @@ function ManagedWorkspace({
       runtimeHostState={runtime.hostState}
       runtimeRecoveryProbeReady={runtime.recoveryProbeReady}
       onRetryRuntime={runtime.retryRuntime}
+      onYieldRuntime={runtime.yieldRuntime}
+      projectTakeover={projectTakeover}
       registerRuntimeShutdownBarrier={runtime.registerShutdownBarrier}
     />
   );
@@ -1977,12 +2247,17 @@ export function App({
   initialState = initialCreatorState,
   runtimeFactory,
   buildIdentity,
+  projectTakeover = null,
 }: AppProps) {
   const identity = buildIdentity ? {buildIdentity} : {};
   if (runtimeFactory) {
     return (
       <RuntimeProvider factory={runtimeFactory}>
-        <ManagedWorkspace initialState={initialState} {...identity} />
+        <ManagedWorkspace
+          initialState={initialState}
+          projectTakeover={projectTakeover}
+          {...identity}
+        />
       </RuntimeProvider>
     );
   }

@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -159,6 +160,34 @@ void test_pad_playback_parity_fields_default_to_prior_behaviour() {
   }
 }
 
+// Against an 8-frame source, the loop point must lie before the resolved end:
+// an open trim end resolves to the source length.
+void test_playback_for_source_bounds_the_loop_point_by_the_resolved_end() {
+  lmdj::domain::PadPlayback playback{
+      0, std::nullopt, lmdj::domain::TriggerMode::loop_gate, 0, false};
+  playback.loop_start_frame = 7;
+  LMDJ_CHECK(lmdj::domain::is_valid_playback_for_source(playback, 8));
+  playback.loop_start_frame = 8;
+  LMDJ_CHECK(!lmdj::domain::is_valid_playback_for_source(playback, 8));
+  playback.trim_end_frame = 7;
+  playback.loop_start_frame = 7;
+  LMDJ_CHECK(!lmdj::domain::is_valid_playback_for_source(playback, 8));
+  playback.trim_end_frame = 9;
+  playback.loop_start_frame = std::nullopt;
+  LMDJ_CHECK(!lmdj::domain::is_valid_playback_for_source(playback, 8));
+}
+
+// The crossfade may cover at most half of the loop the source leaves.
+void test_playback_for_source_bounds_the_crossfade_by_half_the_loop() {
+  lmdj::domain::PadPlayback playback{
+      0, std::nullopt, lmdj::domain::TriggerMode::loop_gate, 0, false};
+  playback.loop_start_frame = 2;
+  playback.loop_crossfade_frames = 3;
+  LMDJ_CHECK(lmdj::domain::is_valid_playback_for_source(playback, 8));
+  playback.loop_crossfade_frames = 4;
+  LMDJ_CHECK(!lmdj::domain::is_valid_playback_for_source(playback, 8));
+}
+
 void test_project_factory_accepts_only_supported_bpm_range() {
   LMDJ_CHECK(
       lmdj::domain::create_project(
@@ -218,6 +247,8 @@ int main() {
     test_pattern_merge_is_last_write_wins_and_canonically_ordered();
     test_pad_playback_defaults_are_project_v2_contract_values();
     test_pad_playback_parity_fields_default_to_prior_behaviour();
+    test_playback_for_source_bounds_the_loop_point_by_the_resolved_end();
+    test_playback_for_source_bounds_the_crossfade_by_half_the_loop();
     test_project_factory_accepts_only_supported_bpm_range();
     test_project_factory_rejects_non_contract_project_ids();
     test_sequence_session_id_is_a_distinct_strong_identity();

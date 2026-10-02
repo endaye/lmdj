@@ -25,6 +25,12 @@ const playback: Readonly<PadPlayback> = Object.freeze({
   triggerMode: "one_shot",
   gainMillidb: 0,
   muted: false,
+  reverse: false,
+  pitchCents: 0,
+  pan: 0,
+  loopMode: "forward" as const,
+  loopStartFrame: null,
+  loopCrossfadeFrames: 0,
 });
 
 const envelope: Readonly<WaveformEnvelope> = Object.freeze({
@@ -557,4 +563,95 @@ test("every handle and viewport action exposes a 44 px hit target", () => {
       action.getAttribute("aria-label") ?? action.textContent ?? action.tagName,
     ).toBe("44px");
   }
+});
+
+// --- Sample playback parity (lmdj.project.v5 5.1.0) ---
+
+test("loop point and crossfade appear only for a looping Pad", () => {
+  const plain = renderEditor();
+  expect(screen.queryByRole("spinbutton", {name: "Pad A1 Loop start time (seconds)"}))
+    .toBeNull();
+  expect(plain.container.querySelector('[data-handle="loop"]')).toBeNull();
+  plain.unmount();
+  const looped = renderEditor({playback: {...playback, triggerMode: "loop_gate"}});
+  expect(screen.getByRole("spinbutton", {name: "Pad A1 Loop start time (seconds)"}))
+    .toBeTruthy();
+  expect(screen.getByRole("spinbutton", {name: "Pad A1 Loop crossfade (milliseconds)"}))
+    .toBeTruthy();
+  expect(looped.container.querySelector('[data-handle="loop"]')).not.toBeNull();
+});
+
+test("a loop point edit previews, clamps into the trim and commits on blur", () => {
+  const {onPreview, onCommit} = renderEditor({
+    playback: {...playback, triggerMode: "loop_gate"},
+  });
+  const loop = screen.getByRole("spinbutton", {name: "Pad A1 Loop start time (seconds)"});
+  fireEvent.focus(loop);
+  fireEvent.change(loop, {target: {value: String(100 / 44_100)}});
+  // The trim ends at frame 7, so the loop point clamps to its last frame.
+  expect(onPreview).toHaveBeenLastCalledWith({
+    ...playback,
+    triggerMode: "loop_gate",
+    loopStartFrame: 6,
+  });
+  fireEvent.blur(loop);
+  expect(onCommit).toHaveBeenCalledTimes(1);
+});
+
+test("a crossfade edit is bounded by half of the remaining loop", () => {
+  const {onPreview} = renderEditor({
+    playback: {...playback, triggerMode: "loop_gate", loopStartFrame: 3},
+  });
+  const crossfade = screen.getByRole("spinbutton", {
+    name: "Pad A1 Loop crossfade (milliseconds)",
+  });
+  fireEvent.focus(crossfade);
+  fireEvent.change(crossfade, {target: {value: "1000"}});
+  // The loop runs from frame 3 to 7, so at most 2 frames blend.
+  expect(onPreview).toHaveBeenLastCalledWith({
+    ...playback,
+    triggerMode: "loop_gate",
+    loopStartFrame: 3,
+    loopCrossfadeFrames: 2,
+  });
+});
+
+// Reverse mirrors the region with its loop point (the kernel's logical
+// frames run End-first), so the marker sits where later passes wrap.
+test("a reversed loop draws and edits its loop point at the mirror", () => {
+  const forward = renderEditor({
+    playback: {...playback, triggerMode: "loop_gate", loopStartFrame: 5},
+  });
+  const forwardX = forward.container.querySelector('[data-handle="loop"]')!
+    .getAttribute("x1");
+  forward.unmount();
+  const reversed = {
+    ...playback,
+    triggerMode: "loop_gate" as const,
+    reverse: true,
+    loopStartFrame: 3,
+    loopCrossfadeFrames: 1,
+  };
+  const {container, onPreview} = renderEditor({playback: reversed});
+  // trim [1, 7): stored frame 3 mirrors to boundary 1 + 7 - 3 = 5.
+  expect(container.querySelector('[data-handle="loop"]')!.getAttribute("x1"))
+    .toBe(forwardX);
+  const loop = screen.getByRole("spinbutton", {name: "Pad A1 Loop start time (seconds)"});
+  expect(Number((loop as HTMLInputElement).value)).toBeCloseTo(5 / 44_100, 12);
+  // The crossfade window follows the pass's end, which is Start in reverse.
+  const fade = container.querySelector("rect[data-crossfade]")!;
+  expect(fade.getAttribute("x")).toBe(
+    container.querySelector('[data-handle="start"]')!.getAttribute("x1"));
+  fireEvent.focus(loop);
+  // Boundary 3 stores 1 + 7 - 3 = 5, a 2-frame loop that keeps its crossfade.
+  fireEvent.change(loop, {target: {value: String(3 / 44_100)}});
+  expect(onPreview).toHaveBeenLastCalledWith({...reversed, loopStartFrame: 5});
+});
+
+test("a reversed loop without a loop point marks End", () => {
+  const {container} = renderEditor({
+    playback: {...playback, triggerMode: "loop_gate", reverse: true},
+  });
+  expect(container.querySelector('[data-handle="loop"]')!.getAttribute("x1"))
+    .toBe(container.querySelector('[data-handle="end"]')!.getAttribute("x1"));
 });

@@ -2979,6 +2979,131 @@ void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
       }));
 }
 
+// The same full-shape payloads the Facade, protocol.mjs and runtime_session.mjs
+// tests assert, so no copy of the playback shape can drift alone.
+Json parity_playback_payload(std::string_view variant) {
+  const auto bytes = read_bytes(
+      std::filesystem::path(LMDJ_SOURCE_DIR) /
+      "tests/fixtures/contracts/pad-playback-full.json");
+  return Json::parse(std::string_view(
+                         reinterpret_cast<const char*>(bytes.data()),
+                         bytes.size()))
+      .at(std::string(variant));
+}
+
+void test_sample_parity_playback_crosses_the_fixed_control_wire() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(256);
+  import_and_assign(*runtime, wav, kAssetId, 781, 782, 0);
+  std::uint64_t revision = 2;
+  std::uint32_t command = 783;
+  const auto update = [&](const Json& playback) {
+    return runtime->dispatch(
+        "sample.update_pad",
+        {{"command_id", uuid(command++)},
+         {"expected_revision", revision},
+         {"slot", slot(0, 0)},
+         {"playback", playback}},
+        {});
+  };
+
+  for (const auto variant : {"forward", "ping_pong"}) {
+    const auto playback = parity_playback_payload(variant);
+    const auto committed = check_exact_success(
+        update(playback),
+        {"committed_revision", "runtime_revision", "runtime_published"});
+    LMDJ_CHECK(committed.at("committed_revision") == ++revision);
+    const auto inspected = check_exact_success(
+        runtime->dispatch("sample.inspect", {{"slot", slot(0, 0)}}, {}),
+        {"project_revision", "slot", "asset_id", "playback", "metadata",
+         "waveform_cache_identity"});
+    LMDJ_CHECK(inspected.at("playback") == playback);
+  }
+
+  auto unknown = parity_playback_payload("forward");
+  unknown["loop_points"] = Json::array();
+  check_error(update(unknown), "HOST_PROTOCOL_MISMATCH");
+  auto out_of_range = parity_playback_payload("forward");
+  out_of_range["pan"] = 101;
+  check_error(update(out_of_range), "HOST_PROTOCOL_MISMATCH");
+  // The wire shape is valid; only the 256-frame source refuses the loop point.
+  auto past_source = parity_playback_payload("ping_pong");
+  past_source["loop_start_frame"] = 256;
+  check_error(update(past_source), "INVALID_ARGUMENT");
+
+  // A preview needs live runtime control.
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  // Acknowledge whatever Bank generation the engine holds: several were
+  // published before activation.
+  FakeCoordinator coordinator;
+  coordinator.engine = &runtime->engine();
+  coordinator.observe_engine_generation = true;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  for (const auto variant : {"forward", "ping_pong"}) {
+    check_exact_success(
+        runtime->dispatch(
+            "sample.preview.set",
+            {{"slot", slot(0, 0)}, {"playback", parity_playback_payload(variant)}},
+            {}),
+        {"accepted"});
+  }
+  check_error(
+      runtime->dispatch(
+          "sample.preview.set",
+          {{"slot", slot(0, 0)}, {"playback", past_source}},
+          {}),
+      "INVALID_ARGUMENT");
+  LMDJ_CHECK(
+      inspect_project(temp.path(), kProjectId).at("project_revision") ==
+      revision);
+}
+
+void test_sample_preview_pitch_reaches_the_voice() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(256);
+  import_and_assign(*runtime, wav, kAssetId, 791, 792, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  // Acknowledge whatever Bank generation the engine holds: several were
+  // published before activation.
+  FakeCoordinator coordinator;
+  coordinator.engine = &runtime->engine();
+  coordinator.observe_engine_generation = true;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  constexpr std::uint32_t kFrames = 120;
+  std::array<float, kFrames> left{};
+  std::array<float, kFrames> right{};
+
+  // A 200-frame one-shot outlives 120 output frames at its own pitch and
+  // ends inside them an octave up, so only the preview's pitch_cents decides.
+  for (const auto& [cents, active] :
+       {std::pair{0, 1ULL}, std::pair{1'200, 0ULL}}) {
+    auto playback = playback_payload(0, 200, "one_shot");
+    if (cents != 0) playback["pitch_cents"] = cents;
+    check_success(runtime->dispatch(
+        "sample.preview.set",
+        {{"slot", slot(0, 0)}, {"playback", playback}},
+        {}));
+    check_success(runtime->dispatch(
+        "trigger", {{"slot", 0}, {"velocity", 127}}, {}));
+    runtime->engine().render(left.data(), right.data(), kFrames);
+    LMDJ_CHECK(runtime->engine().telemetry().active_voices == active);
+    runtime->engine().render(left.data(), right.data(), kFrames);
+    LMDJ_CHECK(runtime->engine().telemetry().active_voices == 0);
+  }
+}
+
 void test_sample_import_prevents_current_project_switch_until_terminal() {
   TempDirectory temp;
   constexpr std::string_view other_project_id =
@@ -7796,6 +7921,8 @@ int main() {
     test_pad_delete_stops_voice_preserves_rhythm_and_roundtrips_history();
     test_pad_delete_cancels_staged_host_import_and_releases_history();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
+    test_sample_parity_playback_crosses_the_fixed_control_wire();
+    test_sample_preview_pitch_reaches_the_voice();
     test_sample_import_prevents_current_project_switch_until_terminal();
     test_sample_import_protocol_failure_aborts_staging();
     test_sample_import_timeout_aborts_staging_and_fails_closed();

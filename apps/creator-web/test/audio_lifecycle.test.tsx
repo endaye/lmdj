@@ -338,7 +338,10 @@ test("Runtime replacement cannot leave an aborted import permanently visible", a
     "import-second:list",
   ]));
 
-  expect(screen.getByTestId("creator-phase").textContent).toBe("ready");
+  // The listing settles after the remembered-Project read, so ready follows it.
+  await waitFor(() =>
+    expect(screen.getByTestId("creator-phase").textContent).toBe("ready"));
+  expect(second.calls).toEqual(["import-second:start", "import-second:list"]);
   expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
     .toBe(false);
   expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
@@ -684,6 +687,12 @@ test("lifecycle matrix clears fresh loop toggles without duplicate Session stop 
         triggerMode: "loop_toggle",
         gainMillidb: 0,
         muted: false,
+        reverse: false,
+        pitchCents: 0,
+        pan: 0,
+        loopMode: "forward" as const,
+        loopStartFrame: null,
+        loopCrossfadeFrames: 0,
       },
       metadata: slot === 0
         ? {sampleRate: 48_000, channels: 1, sourceFrames: 8}
