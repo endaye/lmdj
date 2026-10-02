@@ -148,7 +148,7 @@ Koala 没有社区。首版只在 Project → 出 提供"分享"操作；社区�
   - Sample 编辑里加 **Tools**，放 Chop（对应 Stage 12A Slice）与 Split Stems（对应 Stage 12B Stem）。
   - **去掉单独的 Slice 模式**（现状：System 按钮进入，`app.tsx:1516-1525`，流程为选 Provider → 授权 → 选来源 → 分析 → 映射 → 采纳，`candidate_surface.tsx:82-266`）。
   - 导入整首歌 = 普通的导入 Pad，然后对该 Pad 执行 Tools；Project 不设单独的"导入歌曲"入口。
-  - 结果**依次放到当前 Bank 的空 Pad**，不够时放到下一个有空位的 Bank；原 Pad 默认保留（对应 Koala 的 KEEP ORIGINAL）；空位不足先提示，不自动覆盖。
+  - 按 [2026-10-03 确认](../prd/decisions/2026-10-03-stem-slice-provider-boundary.md)，结果先试听，再确认采纳。默认**依次提出当前 Bank 的空 Pad 映射**，不够时遍历后续 Bank（末尾回绕，每 Bank 一次）；原 Pad 默认保留。空位不足先提示；确认时重验占位，发生变化重新确认，不自动覆盖。
   - 运行位置：Chop 在本机；Split Stems 支持本机与云端，由 System 里的 Provider 选择决定；本机模型从资产服务器首次下载。具体取决于 Stage 12B 评测（[#1171](https://github.com/endaye/lmdj/issues/1171)、[#1172](https://github.com/endaye/lmdj/issues/1172)）。
   - 处理在后台进行，用户可继续演奏；目标 Pad 显示进度，行为同 §4 的"处理中"，删除即取消。
 

@@ -1,6 +1,11 @@
 # Stage 12B Stem：最小使用范围与执行边界
 
 日期：2026-10-02。状态：**T1 可评审建议；产品范围、环境和预算待确认**。
+后续状态（2026-10-03）：Provider 架构、四路角色和显式采纳方向已按
+[确认记录](../prd/decisions/2026-10-03-stem-slice-provider-boundary.md) 定稿；
+[交付计划](../plans/2026-10-03-stem-slice-provider-delivery.md) 先推进 Contract/SDK。
+本文保留 T1 评测提案；`vienna` 已作为候选主机检查，环境隔离资格、实测结果
+和生产 checkpoint 尚未取得。
 交付 [#1171](https://github.com/endaye/lmdj/issues/1171) 的设计准备；
 Relates to #1164、#1172、#472。
 依据：[独立交付计划](../plans/2026-09-10-stage12-independent-delivery.md)、
