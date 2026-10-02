@@ -139,27 +139,31 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
               <button type="button" onClick={() => props.onRecover(candidate, null)}>
                 Recover original Pattern
               </button>
-              <label>Recovery destination
-                <select aria-label={`Recovery destination ${candidate.sessionId}`}
-                  value={recoveryTargets[candidate.sessionId] ?? ""}
-                  onChange={(event) => setRecoveryTargets((current) => ({
-                    ...current,
-                    [candidate.sessionId]: event.currentTarget.value,
-                  }))}>
-                  <option value="">Select another Pattern</option>
-                  {project.patterns.filter(({patternId}) => patternId !== candidate.patternId)
-                    .map(({patternId}) => (
-                      <option key={patternId} value={patternId}>{patternId.slice(0, 8)}</option>
-                    ))}
-                </select>
-              </label>
-              <button type="button" disabled={!recoveryTargets[candidate.sessionId]}
-                onClick={() => props.onRecover(
-                  candidate,
-                  recoveryTargets[candidate.sessionId] ?? null,
-                )}>
-                Recover to selected Pattern
-              </button>
+              {/* #1680: restoring into another Pattern is the uncommon choice. */}
+              <details className="sequence-recovery-more">
+                <summary>More</summary>
+                <label>Recovery destination
+                  <select aria-label={`Recovery destination ${candidate.sessionId}`}
+                    value={recoveryTargets[candidate.sessionId] ?? ""}
+                    onChange={(event) => setRecoveryTargets((current) => ({
+                      ...current,
+                      [candidate.sessionId]: event.currentTarget.value,
+                    }))}>
+                    <option value="">Select another Pattern</option>
+                    {project.patterns.filter(({patternId}) => patternId !== candidate.patternId)
+                      .map(({patternId}) => (
+                        <option key={patternId} value={patternId}>{patternId.slice(0, 8)}</option>
+                      ))}
+                  </select>
+                </label>
+                <button type="button" disabled={!recoveryTargets[candidate.sessionId]}
+                  onClick={() => props.onRecover(
+                    candidate,
+                    recoveryTargets[candidate.sessionId] ?? null,
+                  )}>
+                  Recover to selected Pattern
+                </button>
+              </details>
               <button type="button" onClick={() => props.onDiscard(candidate)}>Discard</button>
             </article>
           ))}

@@ -226,7 +226,8 @@ class HostCommandTest(unittest.TestCase):
             actual = self.client.current['version_id'] if url == 'https://creator-recovery.lmdj.workers.dev' else (A if url.startswith('https://'+A[:8]) else B)
             checks.append((actual, tag, url))
             if tag != {A:'tag-A', B:'tag-B'}[actual]: raise RuntimeError('signed bytes mismatch')
-            if fail_cutover and actual == B and url == 'https://creator-recovery.lmdj.workers.dev' and not failed:
+            if fail_cutover and actual == B and url == 'https://creator-recovery.lmdj.workers.dev' \
+                    and (fail_cutover == 'persistent' or not failed):
                 failed = True; raise RuntimeError('post-cutover smoke failed')
             return {}
         with patch('cloudflare_host.CloudflareClient', return_value=self.client), patch('cloudflare_host.stage', side_effect=staged), patch('cloudflare_host.smoke', side_effect=http), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
@@ -241,8 +242,20 @@ class HostCommandTest(unittest.TestCase):
         self.assertEqual(self.client.publishes, [B])
         self.assertEqual([x[0] for x in checks], [A,A,B,B])
 
+    def test_a_lagging_cutover_settles_without_recovery(self):
+        # Production served the previous bytes once right after the cutover
+        # (1.0.66.0 Creator): the bounded wait sees the exact bytes and keeps it.
+        with patch('cloudflare_transaction.time.sleep') as sleep:
+            code, checks = self.main_journey(fail_cutover='once')
+        self.assertEqual(code, 0)
+        self.assertEqual(self.client.current['version_id'], B)
+        self.assertEqual(self.client.publishes, [B])
+        self.assertEqual([x[0] for x in checks], [A,A,B,B,B])
+        sleep.assert_called_once()
+
     def test_full_command_failed_cutover_rechecks_exact_prior_after_recovery(self):
-        code, checks = self.main_journey(fail_cutover=True)
+        with patch('cloudflare_transaction.SETTLE_SECONDS', 0):
+            code, checks = self.main_journey(fail_cutover='persistent')
         self.assertEqual(code, 2)
         self.assertEqual(self.client.current['version_id'], A)
         self.assertEqual(self.client.publishes, [B,A])

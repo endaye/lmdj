@@ -13,7 +13,10 @@
 #include <string>
 #include <vector>
 
+#include <cstring>
+
 #include <emscripten.h>
+#include <emscripten/stack.h>
 #include <nlohmann/json.hpp>
 #include <picosha2.h>
 
@@ -2078,8 +2081,48 @@ nlohmann::json run_suite() {
 
 }  // namespace
 
+// #1720: every action reports the deepest stack byte it wrote, so a Pad or
+// Project field that grows Project I/O's frames is measured against the Web
+// stack budget before it overflows. The unused stack below this frame is
+// painted once, and the first byte that no longer holds the paint, scanning up
+// from the stack end, marks the high-water mark.
+//
+// It measures written bytes, not the stack pointer. Stack a frame reserves but
+// never writes, or a run of paint-valued bytes at the very bottom of the
+// deepest write, reads as unused, so the mark can be low by that much. A
+// ProjectState copy is always constructed, so the defect the spec gates is
+// always seen. STACK_OVERFLOW_CHECK=2 still aborts on any real overflow of the
+// full stack. An action that never reaches the painted region reports the
+// painted top, which over-states its use rather than under-stating it.
+constexpr unsigned char kStackPaint = 0xA5;
+constexpr std::uintptr_t kPaintMargin = 4096;
+// STACK_OVERFLOW_CHECK keeps its cookie in the lowest stack words; never
+// paint over it.
+constexpr std::uintptr_t kCookieGuard = 64;
+
+[[gnu::noinline]] std::uintptr_t paint_unused_stack() {
+  const auto bottom = emscripten_stack_get_end() + kCookieGuard;
+  const auto top = emscripten_stack_get_current() - kPaintMargin;
+  std::memset(reinterpret_cast<void*>(bottom), kStackPaint, top - bottom);
+  return top;
+}
+
+nlohmann::json stack_report(std::uintptr_t painted_top) {
+  const auto end = emscripten_stack_get_end();
+  auto deepest = end + kCookieGuard;
+  while (deepest < painted_top &&
+         *reinterpret_cast<const unsigned char*>(deepest) == kStackPaint) {
+    ++deepest;
+  }
+  return {
+      {"size_bytes", emscripten_stack_get_base() - end},
+      {"high_water_bytes", emscripten_stack_get_base() - deepest},
+  };
+}
+
 int main() {
   nlohmann::json report;
+  const auto painted_top = paint_unused_stack();
   try {
     report_progress("native-suite-start");
     auto action = run_project_replacement_action();
@@ -2096,6 +2139,7 @@ int main() {
   } catch (const std::exception& error) {
     report = {{"complete", true}, {"result", {{"error", error.what()}}}};
   }
+  report["stack"] = stack_report(painted_top);
   const std::string encoded = report.dump();
   report_progress("terminal-publication-start");
   MAIN_THREAD_EM_ASM({ window.lmdjProjectIoWeb = JSON.parse(UTF8ToString($0)); },
