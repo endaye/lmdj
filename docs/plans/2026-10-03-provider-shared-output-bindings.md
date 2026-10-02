@@ -81,6 +81,7 @@ creator-web 4.8.1。各自以下 manifest 与派生身份同步，不改变 API 
 - `products/lmdj/generated/web-runtime-identity.mjs`
 - `tests/build/version_test.py`
 - `tests/conformance/version_lock_test.py`
+- `tests/host/native_host_source_boundary_test.py`（Native Host 精确 Facade 依赖断言）
 - `tests/conformance/module_graph_test.py`（精确版本断言随级联同步）
 - `tests/core/facade/assembly_loader_test.cpp`（精确版本断言随级联同步）
 - `tests/core/provider/sample_slice_test.cpp`（精确版本断言随级联同步）
