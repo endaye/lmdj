@@ -7174,7 +7174,9 @@ void test_pattern_events_edit_reports_a_failed_swap() {
   const auto& result = response.at("result");
   LMDJ_CHECK(result.at("publication") == "failed");
   LMDJ_CHECK(result.at("pattern_publication").is_null());
-  LMDJ_CHECK(result.at("snapshot_error").at("code") == "INVALID_ARGUMENT");
+  LMDJ_CHECK(result.at("snapshot_error").at("code") == "HOST_STATE_INVALID");
+  LMDJ_CHECK(result.at("snapshot_error").at("details").at("reason") ==
+             "pattern_publication_unavailable");
   LMDJ_CHECK(result.at("committed_revision") == 3);
   LMDJ_CHECK(runtime->engine().pattern_telemetry().accepted_publications == patterns);
   LMDJ_CHECK(grid_truth_events(*runtime) == 1);
@@ -7204,19 +7206,42 @@ void test_pattern_events_edit_after_stop_publishes_immediately() {
   LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
 }
 
-void test_pattern_events_edit_defers_a_swap_until_a_slot_frees() {
+void test_pattern_events_edit_stopped_supersedes_a_pending_publication() {
   TempDirectory temp;
   FakeCoordinator coordinator;
-  // 4 s one-shots outlive the 2 s bar, so each retiring view keeps its slot.
-  auto runtime = grid_edit_runtime(temp, coordinator, 192'000);
+  auto runtime = grid_edit_runtime(temp, coordinator);
   auto& engine = runtime->engine();
-  play_grid_transport(*runtime, 9623);
+  // Stopped with audio running, a BPM change still schedules its view.
+  check_success(runtime->dispatch("sequence.settings.update",
+      {{"command_id", uuid(9629)}, {"expected_revision", 2}, {"session_id", nullptr},
+       {"bpm", 100}, {"quantize_enabled", nullptr}, {"swing_percent", nullptr}}, {}));
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation != 0);
+  const auto response = runtime->dispatch("pattern.events.edit",
+      grid_edit(9630, 3, Json::array(), Json::array({grid_note(0, 0)})), {});
+  check_success(response);
+  LMDJ_CHECK(response.at("result").at("publication") == "published");
+  LMDJ_CHECK(!render_grid_frames(engine, 128));
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  play_grid_transport(*runtime, 9631);
+  LMDJ_CHECK(render_grid_frames(engine, 4'800));
+}
+
+// Four live edits whose notes each sound under their own view, then a fifth
+// edit that finds every slot held. 4 s one-shots outlive the 2 s bar.
+struct GridDeferral {
+  std::uint64_t origin;
+  std::uint64_t generation;
+};
+
+GridDeferral defer_a_grid_edit(ControlRuntime& runtime, std::uint32_t command) {
+  auto& engine = runtime.engine();
+  play_grid_transport(runtime, command);
   const auto origin = engine.current_pattern_origin_frame();
   LMDJ_CHECK(origin.has_value());
   std::uint64_t revision = 2;
-  const auto edit_at = [&](std::uint32_t command, unsigned onset) {
-    auto response = runtime->dispatch("pattern.events.edit",
-        grid_edit(command, revision, Json::array(), Json::array({grid_note(0, onset)})), {});
+  const auto edit_at = [&](std::uint32_t suffix, unsigned onset) {
+    auto response = runtime.dispatch("pattern.events.edit",
+        grid_edit(suffix, revision, Json::array(), Json::array({grid_note(0, onset)})), {});
     check_success(response);
     ++revision;
     return response.at("result").at("publication").get<std::string>();
@@ -7225,45 +7250,143 @@ void test_pattern_events_edit_defers_a_swap_until_a_slot_frees() {
     static_cast<void>(render_grid_frames(
         engine, *origin + frame - engine.telemetry().rendered_frames));
   };
-  // Each live edit's note sounds under its own view before the next edit,
-  // so every retiring view keeps a sounding voice and its slot.
-  LMDJ_CHECK(edit_at(9624, 480) == "live");
+  LMDJ_CHECK(edit_at(command + 1, 480) == "live");
   render_to(12'000 + 1'000);
-  LMDJ_CHECK(edit_at(9625, 960) == "live");
+  LMDJ_CHECK(edit_at(command + 2, 960) == "live");
   render_to(24'000 + 1'000);
-  LMDJ_CHECK(edit_at(9626, 1'920) == "live");
+  LMDJ_CHECK(edit_at(command + 3, 1'920) == "live");
   render_to(48'000 + 1'000);
-  LMDJ_CHECK(edit_at(9627, 2'880) == "live");
+  LMDJ_CHECK(edit_at(command + 4, 2'880) == "live");
   render_to(72'000 + 1'000);
   const auto generation = engine.pattern_telemetry().current_generation;
-  // Every slot is held by a sounding view: the edit commits and waits.
-  const auto deferred = runtime->dispatch("pattern.events.edit",
-      grid_edit(9628, revision, Json::array(), Json::array({grid_note(0, 240)})), {});
+  const auto deferred = runtime.dispatch("pattern.events.edit",
+      grid_edit(command + 5, revision, Json::array(), Json::array({grid_note(0, 240)})), {});
   check_success(deferred);
   LMDJ_CHECK(deferred.at("result").at("publication") == "deferred");
-  LMDJ_CHECK(deferred.at("result").at("pattern_publication").is_null());
-  LMDJ_CHECK(!deferred.at("result").contains("snapshot_error"));
-  LMDJ_CHECK(grid_truth_events(*runtime) == 5);
-  runtime->service_pattern_transport();
-  LMDJ_CHECK(engine.pattern_telemetry().current_generation == generation);
-  // The service cadence swaps it in place once the first voice ends.
-  std::uint64_t waited = 0;
-  while (engine.pattern_telemetry().current_generation == generation &&
-         waited < 192'000) {
-    static_cast<void>(render_grid_frames(engine, 128));
-    runtime->service_pattern_transport();
-    waited += 128;
-  }
-  LMDJ_CHECK(engine.pattern_telemetry().current_generation > generation);
-  LMDJ_CHECK(engine.current_pattern_origin_frame() == origin);
-  // The deferred note at tick 240 (frame 6000) starts the only voice there.
-  const auto loop = (engine.telemetry().rendered_frames - *origin) / 96'000 + 1;
-  render_to(loop * 96'000 + 6'000 - 256);
-  const auto voices = engine.telemetry().active_voices;
-  render_to(loop * 96'000 + 6'000 + 256);
-  LMDJ_CHECK(engine.telemetry().active_voices == voices + 1);
+  return {*origin, generation};
 }
 
+// Service ticks for up to `frames`, until the current generation changes.
+std::uint64_t serve_until_swapped(ControlRuntime& runtime, std::uint64_t generation,
+                                  std::uint64_t frames) {
+  std::uint64_t waited = 0;
+  while (runtime.engine().pattern_telemetry().current_generation == generation &&
+         waited < frames) {
+    static_cast<void>(render_grid_frames(runtime.engine(), 128));
+    runtime.service_pattern_transport();
+    waited += 128;
+  }
+  return waited;
+}
+
+// Whether a voice starts within 256 frames of `frame`.
+bool grid_voice_starts_at(RealtimeEngine& engine, std::uint64_t frame) {
+  static_cast<void>(render_grid_frames(engine, frame - 256 - engine.telemetry().rendered_frames));
+  const auto voices = engine.telemetry().active_voices;
+  static_cast<void>(render_grid_frames(engine, 512));
+  return engine.telemetry().active_voices == voices + 1;
+}
+
+void test_pattern_events_edit_defers_a_swap_until_a_slot_frees() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator, 192'000);
+  auto& engine = runtime->engine();
+  const auto deferral = defer_a_grid_edit(*runtime, 9623);
+  LMDJ_CHECK(grid_truth_events(*runtime) == 5);
+  // While every slot is held, a tick neither swaps nor prepares and retries.
+  const auto rejections = engine.pattern_telemetry().publication_rejections;
+  for (unsigned tick = 0; tick < 8; ++tick) {
+    static_cast<void>(render_grid_frames(engine, 128));
+    runtime->service_pattern_transport();
+  }
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation == deferral.generation);
+  LMDJ_CHECK(engine.pattern_telemetry().publication_rejections == rejections);
+  // The service cadence swaps it in place once the first voice ends.
+  static_cast<void>(serve_until_swapped(*runtime, deferral.generation, 192'000));
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation > deferral.generation);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == deferral.origin);
+  // The deferred note at tick 240 (frame 6000) starts the only voice there.
+  const auto loop = (engine.telemetry().rendered_frames - deferral.origin) / 96'000 + 1;
+  LMDJ_CHECK(grid_voice_starts_at(engine, deferral.origin + loop * 96'000 + 6'000));
+}
+
+void test_pattern_events_edit_superseded_deferral_publishes_nothing_more() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator, 192'000);
+  auto& engine = runtime->engine();
+  const auto deferral = defer_a_grid_edit(*runtime, 9632);
+  // Without service ticks: the first voice ends, a playing BPM change takes
+  // the freed slot, and its view, prepared from Truth, applies at the bar.
+  static_cast<void>(render_grid_frames(
+      engine, deferral.origin + 210'000 - engine.telemetry().rendered_frames));
+  check_success(runtime->dispatch("sequence.settings.update",
+      {{"command_id", uuid(9638)}, {"expected_revision", 7}, {"session_id", nullptr},
+       {"bpm", 100}, {"quantize_enabled", nullptr}, {"swing_percent", nullptr}}, {}));
+  static_cast<void>(render_grid_frames(
+      engine, deferral.origin + 290'000 - engine.telemetry().rendered_frames));
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation > deferral.generation);
+  const auto accepted = engine.pattern_telemetry().accepted_publications;
+  static_cast<void>(serve_until_swapped(
+      *runtime, engine.pattern_telemetry().current_generation, 192'000));
+  LMDJ_CHECK(engine.pattern_telemetry().accepted_publications == accepted);
+  // The BPM view carries the deferred note: tick 240 is frame 7200 of a
+  // 115200-frame bar, after every voice from before the switch has ended.
+  const auto origin = *engine.current_pattern_origin_frame();
+  const auto loop = (deferral.origin + 480'000 - origin) / 115'200 + 1;
+  LMDJ_CHECK(grid_voice_starts_at(engine, origin + loop * 115'200 + 7'200));
+}
+
+void test_pattern_events_edit_deferral_waits_out_a_recording() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator, 192'000);
+  auto& engine = runtime->engine();
+  const auto deferral = defer_a_grid_edit(*runtime, 9639);
+  const auto record = [&](std::uint32_t command, std::uint64_t epoch, bool recording) {
+    check_success(runtime->dispatch("pattern.transport.request",
+        pattern_transport_request_payload(kSequenceSessionId, command, epoch, "record"), {}));
+    for (unsigned step = 0; step < 64; ++step) {
+      static_cast<void>(render_grid_frames(engine, 128));
+      runtime->service_pattern_transport();
+      const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
+      if (status.at("recording") == recording && status.at("phase") == "idle" &&
+          status.at("publication_pending") == false) {
+        return;
+      }
+    }
+    throw std::runtime_error("Pattern transport recording did not settle");
+  };
+  record(9645, 2, true);
+  // The recording owns its publications: past the first voice's end, the
+  // deferred swap still waits.
+  static_cast<void>(serve_until_swapped(*runtime, deferral.generation, 192'000));
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation == deferral.generation);
+  record(9646, 3, false);
+  static_cast<void>(serve_until_swapped(*runtime, deferral.generation, 96'000));
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation > deferral.generation);
+  // The first loop after the swap: no earlier tick-240 voice can end there.
+  const auto origin = *engine.current_pattern_origin_frame();
+  const auto loop = (engine.telemetry().rendered_frames - origin) / 96'000 + 1;
+  LMDJ_CHECK(grid_voice_starts_at(engine, origin + loop * 96'000 + 6'000));
+}
+
+void test_pattern_events_edit_deferral_survives_an_audio_interruption() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator, 192'000);
+  auto& engine = runtime->engine();
+  const auto deferral = defer_a_grid_edit(*runtime, 9647);
+  check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  // The interruption retires the transport engagement; the swap still lands
+  // without a Play.
+  static_cast<void>(serve_until_swapped(*runtime, deferral.generation, 9'600));
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation > deferral.generation);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+}
 
 void test_pattern_transport_requires_opt_in_and_preserves_legacy() {
   TempDirectory temp;
@@ -8228,7 +8351,11 @@ int main() {
     test_pattern_events_edit_keeps_a_current_runtime_current();
     test_pattern_events_edit_reports_a_failed_swap();
     test_pattern_events_edit_after_stop_publishes_immediately();
+    test_pattern_events_edit_stopped_supersedes_a_pending_publication();
     test_pattern_events_edit_defers_a_swap_until_a_slot_frees();
+    test_pattern_events_edit_superseded_deferral_publishes_nothing_more();
+    test_pattern_events_edit_deferral_waits_out_a_recording();
+    test_pattern_events_edit_deferral_survives_an_audio_interruption();
     test_pad_delete_cancels_staged_host_import_and_releases_history();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
     test_sample_parity_playback_crosses_the_fixed_control_wire();

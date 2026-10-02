@@ -69,11 +69,12 @@ Checked on `dc0e5c2b`.
 - **An edit whose result equals the current Pattern** records no history entry. T1 pins the exact Store outcome (refused or accepted without a revision change) in a test, consistent with the existing no-op behaviour.
 - **Persistence and history.** Project I/O persists the command in its internal command log, which is not a Contract, following the `ApplyAuthoringDelta` precedent. History labels it "Edit Pattern".
 - **Host operation `pattern.events.edit`** carries `{pattern_id, remove, put, expected_revision, command_id}`.
-  - **Recording, a transport command in flight, or a scheduled Pattern publication not yet applied:** refused before commit (`sequence_session_active`, `pattern_transport_busy`, `pattern_publication_pending`); the Facade guard also refuses recording.
+  - **Recording, or a transport command in flight:** refused before commit (`sequence_session_active`, `pattern_transport_busy`); the Facade guard also refuses recording.
+  - **A scheduled Pattern publication not yet applied** (`pattern_publication_pending`): refused before commit when the edit would swap the playing Pattern in place, or when the scheduled view is of the edited, not current, Pattern. A stopped edit of the current Pattern publishes immediately and supersedes or follows it.
   - **Another Pattern than the Runtime's current one:** commit only (`publication: "none"`).
   - **Stopped, current Pattern:** commit, then replace the Pattern view immediately (`"published"`), so the next Play is not refused for a pending publication.
   - **Playing the current Pattern:** commit, then swap the view in place with `publish_pattern_view_preserving_phase` (`"live"`), per the [live-edit erratum](../prd/decisions/2026-10-02-sequence-grid-live-edit.md). The response returns `pattern_publication: {generation, activation_frame}`.
-  - **Every engine Pattern slot held by a sounding retiring view:** commit, then defer the swap (`"deferred"`). The transport service cadence swaps the view in place, prepared from Truth, once reclaim frees a slot; a later edit or any other publication supersedes it. The owner chose this over refusing the edit on 2026-10-02 ([erratum](../prd/decisions/2026-10-02-sequence-grid-live-edit.md) item 5).
+  - **Every engine Pattern slot held by a sounding retiring view:** commit, then defer the swap (`"deferred"`). The service cadence swaps the view in place, prepared from Truth, once reclaim frees a slot; a later edit or any other publication supersedes it. It waits out a transport command or an open recording, and survives an audio interruption. The owner chose this over refusing the edit on 2026-10-02 ([erratum](../prd/decisions/2026-10-02-sequence-grid-live-edit.md) item 5).
   - **A failed swap after commit** returns the committed revision with `"failed"` and a typed `snapshot_error`. It never misreports a committed edit.
   - A grid edit changes no Bank, so a Runtime current before it stays current (`runtime_revision`) after a swap, a deferral or an edit of another Pattern.
   - Each edited view is prepared by cooking the Project (`prepare_runtime_snapshot`), which reads every assigned Pad's artifact; only the Bank publication is avoided.
@@ -96,7 +97,11 @@ Checked on `dc0e5c2b`.
   - stopped publish applied by the next quantum, so the next Play sounds the edit;
   - a stopped edit after Play and Stop is applied immediately, with nothing left pending;
   - playing publish that keeps the origin and plays a new note ahead of the playhead in the same loop;
-  - a deferred swap that lands in place once a sounding view frees its slot, and whose note then sounds;
+  - a stopped edit of the current Pattern while a stopped BPM change is pending publishes immediately;
+  - a deferred swap that lands in place once a sounding view frees its slot, and whose note then sounds, with no retry while every slot is held;
+  - a deferral superseded by another publication publishes nothing more;
+  - a deferral waits out a recording and lands after it;
+  - a deferral survives an audio interruption;
   - another Pattern publishes nothing;
   - a failed swap reports `"failed"` with the committed revision;
   - a preview is still admitted after an edit;
@@ -157,7 +162,7 @@ Checked on `dc0e5c2b`.
   - its velocity is the last velocity set in the grid, starting at 100.
 - **Disabled and refused states:**
   - while recording, editing is disabled, with the reason given;
-  - while playing, edits commit and are heard in place from the next not-yet-played note; a `"deferred"` edit is heard once its swap lands;
+  - while playing, edits commit and are heard in place from the next not-yet-played note; a `"deferred"` edit is committed Truth like any other and is heard once its swap lands. T1 exposes no deferral status after the response, so the grid shows no separate deferred state;
   - a `pattern_transport_busy` or `pattern_publication_pending` refusal is retried, not shown as a conflict;
   - a conflict or refusal restores the projection from Truth and shows the reason.
 - **Undo and Redo.** The existing controls apply. They stay stop-only, per the 2026-09-30 decision.
@@ -174,7 +179,7 @@ Checked on `dc0e5c2b`.
 - Component:
   - one command per gesture;
   - disabled while recording;
-  - the deferred state while playing;
+  - a deferred edit treated as committed;
   - conflict recovery;
   - Undo/Redo refresh.
 - The packaged journey covers, with a far-side assertion per leg:

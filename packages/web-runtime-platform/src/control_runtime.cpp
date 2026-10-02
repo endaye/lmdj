@@ -1609,22 +1609,21 @@ struct ControlRuntime::Impl {
   EditedPatternPublication publish_edited_pattern(
       const foundation::PatternId& selected_pattern, bool playing) {
     deferred_pattern_edit.reset();
-#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
-    if (fail_next_pattern_publication) {
-      fail_next_pattern_publication = false;
-      return {std::nullopt, normalized_error(Error{
-          ErrorCode::invalid_argument,
-          "injected runtime Pattern publication failure",
-      }).at("error")};
-    }
-#endif
     auto pattern = prepare_project_pattern(selected_pattern);
     if (!pattern.has_value()) {
       return {std::nullopt, normalized_error(pattern.error()).at("error")};
     }
     static_cast<void>(engine.reclaim_retired_patterns());
     const auto telemetry = engine.pattern_telemetry();
-    const auto publication = playing
+    bool injected_rejection = false;
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+    // Stands in for an engine rejection other than full slots.
+    injected_rejection = std::exchange(fail_next_pattern_publication, false);
+#endif
+    const auto publication = injected_rejection
+        ? audio::PatternPublication{
+              audio::PatternPublishResult::publish_queue_full, 0, 0}
+        : playing
         ? engine.publish_pattern_view_preserving_phase(
               std::move(pattern.value()), telemetry.current_generation)
         : engine.publish_pattern_view_immediate(std::move(pattern.value()));
@@ -3586,10 +3585,18 @@ Json ControlRuntime::dispatch(
         }
         playing = transport.playing;
       }
-      // A scheduled publication (a playing BPM change, a Sequence switch or
-      // a reload) was prepared before this edit and would replace it at the
-      // boundary; refuse before commit, as for a transport command.
-      if (impl_->engine.pattern_telemetry().pending_generation != 0) {
+      // A scheduled publication (a BPM change, an Undo, a Pad edit or a
+      // reload) was prepared before this edit. An in-place swap cannot
+      // supersede it, and a view of another Pattern would apply stale at its
+      // boundary; refuse those before commit, as for a transport command. A
+      // stopped edit of the current Pattern publishes immediately, which
+      // supersedes or follows it.
+      const auto edits_current = impl_->pattern_id == edited_pattern;
+      const auto pending_pattern = impl_->engine.pending_pattern_id();
+      if (impl_->engine.pattern_telemetry().pending_generation != 0 &&
+          (edits_current ? playing
+                         : pending_pattern.has_value() &&
+                               pending_pattern->value() == edited_pattern)) {
         return host_error("HOST_STATE_INVALID",
             "Pattern events can change once the pending Pattern publication applies",
             {{"reason", "pattern_publication_pending"}});
@@ -3628,7 +3635,7 @@ Json ControlRuntime::dispatch(
       };
       // The Runtime holds only its current Pattern; another Pattern is
       // prepared from Truth whenever it is selected.
-      if (!impl_->pattern_id.has_value() || *impl_->pattern_id != edited_pattern) {
+      if (!edits_current) {
         advance_runtime_revision();
         result["publication"] = "none";
         return success(std::move(result));
@@ -5221,11 +5228,14 @@ ControlRuntime::drain_sequence_bar_boundary() {
 
 void ControlRuntime::service_pattern_transport() noexcept {
   try {
-    if (impl_->transport == nullptr ||
-        impl_->state != Impl::State::running) {
+    if (impl_->state != Impl::State::running) {
       return;
     }
+    // An audio interruption retires the engagement but not a deferral.
     impl_->retry_deferred_pattern_edit();
+    if (impl_->transport == nullptr) {
+      return;
+    }
     const auto status = impl_->transport->controller->inspect();
     // An open recording keeps the cadence alive even while idle: the
     // coordinator publishes the pending overlay from continue_operation
