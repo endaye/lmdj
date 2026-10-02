@@ -112,7 +112,8 @@ const PLAYBACK = Object.freeze({
   muted: false,
 });
 
-// A session playback always carries every field; parity fields default.
+// A session playback always carries every field; parity fields default, and
+// every EQ band is bypassed.
 const SESSION_PLAYBACK = Object.freeze({
   ...PLAYBACK,
   reverse: false,
@@ -121,6 +122,10 @@ const SESSION_PLAYBACK = Object.freeze({
   loopMode: "forward",
   loopStartFrame: null,
   loopCrossfadeFrames: 0,
+  attackMs: 0,
+  releaseMs: 0,
+  tone: 0,
+  eq: {low: null, mid: null, high: null},
 });
 
 // lmdj.project.v5 5.1.0: the shared fixture holds every PadPlayback copy to
@@ -145,6 +150,26 @@ function sessionPlaybackFrom(wire) {
     loopMode: wire.loop_mode ?? "forward",
     loopStartFrame: wire.loop_start_frame ?? null,
     loopCrossfadeFrames: wire.loop_crossfade_frames ?? 0,
+    attackMs: wire.attack_ms ?? 0,
+    releaseMs: wire.release_ms ?? 0,
+    tone: wire.tone ?? 0,
+    eq: {
+      low: wire.eq?.low === undefined ? null : {
+        kind: wire.eq.low.kind,
+        freqHz: wire.eq.low.freq_hz,
+        gainMillidb: wire.eq.low.gain_millidb,
+      },
+      mid: wire.eq?.mid === undefined ? null : {
+        freqHz: wire.eq.mid.freq_hz,
+        gainMillidb: wire.eq.mid.gain_millidb,
+        qMilli: wire.eq.mid.q_milli,
+      },
+      high: wire.eq?.high === undefined ? null : {
+        kind: wire.eq.high.kind,
+        freqHz: wire.eq.high.freq_hz,
+        gainMillidb: wire.eq.high.gain_millidb,
+      },
+    },
   };
 }
 
@@ -3007,6 +3032,32 @@ test("Sample playback crosses the session in both directions as the shared fixtu
     }),
     TypeError,
   );
+});
+
+// lmdj.project.v5 5.2.0: every tone field is range-checked before it reaches
+// the wire, and the EQ object always names all three bands.
+test("Sample playback refuses out-of-range tone parity fields", async () => {
+  const {session} = fixture({
+    send: async (envelope) => success(envelope, defaultResult(envelope.operation)),
+  });
+  await session.start();
+  const tone = sessionPlaybackFrom(PAD_PLAYBACK_FULL.tone);
+  for (const invalid of [
+    {...tone, attackMs: 2_001},
+    {...tone, releaseMs: -1},
+    {...tone, tone: 101},
+    {...tone, eq: {low: null, mid: null}},
+    {...tone, eq: {...tone.eq, low: {...tone.eq.low, kind: "bell"}}},
+    {...tone, eq: {...tone.eq, low: {...tone.eq.low, freqHz: 2_001}}},
+    {...tone, eq: {...tone.eq, high: {...tone.eq.high, freqHz: 999}}},
+    {...tone, eq: {...tone.eq, mid: {...tone.eq.mid, qMilli: 99}}},
+    {...tone, eq: {...tone.eq, mid: {...tone.eq.mid, gainMillidb: 18_001}}},
+  ]) {
+    await assert.rejects(
+      session.updatePad({slot: 0, expectedRevision: 1, playback: invalid}),
+      TypeError,
+    );
+  }
 });
 
 test("Sample inspect normalizes every fixture playback to the full session shape", async () => {
