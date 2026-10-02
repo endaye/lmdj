@@ -21,7 +21,7 @@ Authoring Domain 以当前 Project Contract 为领域真相：每个 Pad 的完�
 ## 3. 所有权与依赖
 Core/产品共同维护语义，仅依赖 Foundation。
 ## 4. 架构与数据流
-Pad playback 另有六个可选的 `lmdj.project.v5` `5.1.0` 字段：reverse、pitch_cents（−2400..+2400）、pan（−100..+100）、loop_mode（forward / ping_pong）、loop_start_frame 与 loop_crossfade_frames，缺省值即此前的行为。范围、循环点位于 trim 内、ping-pong 不带 crossfade、forward crossfade 不超过循环的一半，统一由导出的 `is_valid_playback` 校验，命令处理与撤销增量的内容校验共用它；trim 末端开放时，crossfade 上限由知道源长度的 Cooker 判定。
+Pad playback 另有六个可选的 `lmdj.project.v5` `5.1.0` 字段：reverse、pitch_cents（−2400..+2400）、pan（−100..+100）、loop_mode（forward / ping_pong）、loop_start_frame 与 loop_crossfade_frames，缺省值即此前的行为。范围、循环点位于 trim 内、ping-pong 不带 crossfade、forward crossfade 不超过循环的一半，统一由导出的 `is_valid_playback` 校验，命令处理与撤销增量的内容校验共用它；trim 末端开放时，crossfade 上限由知道源长度的 Cooker 判定。`5.2.0` 再加四个可选字段：attack_ms（0..2000）、release_ms（0..4000）、tone（−100..+100）与 eq。eq 的 low、mid、high 三段都可缺席，缺席即旁通：low 为 `{kind: shelf | cut, freq_hz 20..2000, gain_millidb −18000..+18000}`，mid 为 `{freq_hz 100..10000, gain_millidb −18000..+18000, q_milli 100..10000}`，high 与 low 同形、freq_hz 为 1000..20000。缺省值即此前的行为，同样由 `is_valid_playback` 校验。
 
 命令进入 Handler，经 `expected_revision` 验证后产生新的权威创作状态；playback 属于 Pad Slot，Pattern event 只引用 Pad Slot。整数 quantizer 是唯一量化与 Swing 权威。Performance event 沿用同一间接层：`pad_hit` 只引用 Pad Slot，`pattern_launch` 只引用 Pattern Slot 序号，两者都不直接引用 Asset；tick 仍是 PPQ 960 tick-native，不引入墙钟时间。Performance 的 canonical 事件顺序由领域自身定义，Host 不得自行重排。
 ## 5. API 与 Contract 边界
