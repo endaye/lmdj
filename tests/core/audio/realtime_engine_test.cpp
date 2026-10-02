@@ -3963,6 +3963,30 @@ void releasing_voices_keep_occupying_voice_capacity() {
   LMDJ_CHECK(outcomes.back().outcome == RuntimeTriggerOutcome::voice_capacity);
 }
 
+// A stop ends a voice over the 96-frame declick, not over the Pad's release:
+// only a release event plays the release (decision 2026-09-30 point 5, owner
+// 2026-10-02).
+void a_stop_ends_a_voice_over_the_declick() {
+  for (const auto kind : {PadControlKind::stop_all, PadControlKind::stop_slot}) {
+    RealtimeEngine engine;
+    const std::vector<float> sample(8000, 0.5F);
+    start_with_playback(
+        engine, sample, dsp_playback(0, 8000, TriggerMode::gate, envelope_dsp(0, 4800)));
+    LMDJ_CHECK(engine.enqueue_control(control(81, 0, PadControlKind::press, 127)) ==
+               EnqueueResult::accepted);
+    render_channels(engine, 200);
+    LMDJ_CHECK(engine.enqueue_control(control(82, 0, kind)) == EnqueueResult::accepted);
+    const auto tail = render_channels(engine, 97);
+    LMDJ_CHECK(tail.left[0] == 0.5F);
+    for (std::size_t frame = 1; frame < 96; ++frame) {
+      LMDJ_CHECK(tail.left[frame] ==
+                 0.5F * (static_cast<float>(96 - frame) * (1.0F / 96.0F)));
+    }
+    LMDJ_CHECK(tail.left[96] == 0.0F);
+    LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  }
+}
+
 void render_does_not_allocate_or_deallocate() {
   RealtimeEngine engine;
   const std::array<float, 2> old_sample{0.25F, 0.5F};
@@ -5338,6 +5362,7 @@ int main() {
   toggle_press_during_a_release_tail_restarts_the_pad();
   second_stop_during_a_long_release_fades_over_the_declick();
   releasing_voices_keep_occupying_voice_capacity();
+  a_stop_ends_a_voice_over_the_declick();
   toned_voice_is_filtered_in_the_engine();
   attack_ramps_to_full_gain_over_exactly_the_ramp_frames();
   non_loop_boundary_fades_to_exact_zero_at_end_frame();

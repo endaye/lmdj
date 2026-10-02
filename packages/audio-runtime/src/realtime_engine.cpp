@@ -499,7 +499,7 @@ void RealtimeEngine::apply_published_pattern(
   if (current != kNoPatternSlot) {
     for (auto& voice : voices_) {
       if (!preserve_phase && voice.active && voice.pattern_voice) {
-        stop_voice(voice, runtime_frame);
+        stop_voice(voice, runtime_frame, VoiceStop::declick);
       }
     }
     auto& previous = pattern_slots_[current];
@@ -619,7 +619,7 @@ void RealtimeEngine::schedule_pattern_events(
 }
 
 void RealtimeEngine::stop_voice(
-    Voice& voice, std::uint64_t runtime_frame) noexcept {
+    Voice& voice, std::uint64_t runtime_frame, VoiceStop how) noexcept {
   if (!voice.active) {
     return;
   }
@@ -661,6 +661,16 @@ void RealtimeEngine::stop_voice(
   // to avoid a step discontinuity; the logical stop (publication) has
   // already happened.
   voice.releasing = true;
+#if LMDJ_VOICE_DSP
+  // Only a release event plays the Pad's release; any other stop ends the
+  // voice over the declick (decision 2026-09-30 point 5, owner 2026-10-02).
+  if (how == VoiceStop::declick) {
+    voice.release_frames = kRealtimeRampFrames;
+    voice.release_scale = kRealtimeRampScale;
+  }
+#else
+  static_cast<void>(how);
+#endif
   voice.release_frames_remaining = voice.release_frames;
 }
 
@@ -1062,7 +1072,7 @@ void RealtimeEngine::apply_pattern_transport(std::uint64_t frame) noexcept {
       if (voice.active && voice.pattern_voice &&
           voice.pattern_slot < pattern_slots_.size() &&
           voice.pattern_generation == pattern_slots_[voice.pattern_slot].generation)
-        stop_voice(voice, frame);
+        stop_voice(voice, frame, VoiceStop::declick);
     }
   }
   receipt.origin_frame = pattern_origin_frame_;
@@ -2116,7 +2126,7 @@ void RealtimeEngine::render(
             voice.origin == PadControlOrigin::host_input &&
             (voice.trigger_mode == domain::TriggerMode::gate ||
              voice.trigger_mode == domain::TriggerMode::loop_gate)) {
-          stop_voice(voice, absolute_start_frame);
+          stop_voice(voice, absolute_start_frame, VoiceStop::release);
         }
       }
       continue;
@@ -2124,7 +2134,7 @@ void RealtimeEngine::render(
     if (event.kind == PadControlKind::audition_stop) {
       for (auto& voice : voices_) {
         if (voice.active && is_audition_bank_slot(voice.bank_slot)) {
-          stop_voice(voice, absolute_start_frame);
+          stop_voice(voice, absolute_start_frame, VoiceStop::declick);
         }
       }
       continue;
@@ -2138,7 +2148,7 @@ void RealtimeEngine::render(
         if (voice.active && !is_audition_bank_slot(voice.bank_slot) &&
             (event.kind == PadControlKind::stop_all ||
              voice.slot == event.slot)) {
-          stop_voice(voice, absolute_start_frame);
+          stop_voice(voice, absolute_start_frame, VoiceStop::declick);
         }
       }
       continue;
@@ -2153,7 +2163,7 @@ void RealtimeEngine::render(
             candidate.slot == event.slot &&
             candidate.origin == PadControlOrigin::host_input &&
             candidate.trigger_mode == domain::TriggerMode::loop_toggle) {
-          stop_voice(candidate, absolute_start_frame);
+          stop_voice(candidate, absolute_start_frame, VoiceStop::release);
           stopped_toggle = true;
         }
       }
@@ -2331,7 +2341,7 @@ void RealtimeEngine::render(
       if (voice.active && !voice.releasing &&
           voice.scheduled_release_frame != 0 &&
           runtime_frame >= voice.scheduled_release_frame) {
-        stop_voice(voice, runtime_frame);
+        stop_voice(voice, runtime_frame, VoiceStop::release);
       }
     }
     if (!pattern_transport_enabled_ || pattern_playing_)

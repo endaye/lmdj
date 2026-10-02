@@ -798,7 +798,12 @@ class RealtimeEngine final {
       RuntimeVoiceState state,
       std::uint64_t runtime_frame,
       std::uint32_t source_frame) noexcept;
-  void stop_voice(Voice& voice, std::uint64_t runtime_frame) noexcept;
+  // How a stopped voice ends: a release event (a gate release, a toggle
+  // re-press, a scheduled note-off) plays the Pad's release; every other stop
+  // ends it over the 96-frame declick.
+  enum class VoiceStop : std::uint8_t { release, declick };
+  void stop_voice(
+      Voice& voice, std::uint64_t runtime_frame, VoiceStop how) noexcept;
   void deactivate_voice(Voice& voice) noexcept;
   void trim_voice_scan_extent() noexcept;
   void apply_published_pattern(
