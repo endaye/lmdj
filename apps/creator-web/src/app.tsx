@@ -339,7 +339,9 @@ function Workspace({
   const [metronomeOn, setMetronomeOn] = useState(false);
   // The grid a bpm commit while playing activates at its activation frame:
   // the old grid owns beats before it, the committed grid restarts there.
-  const metronomePendingGridRef = useRef<Readonly<{
+  // State (not a ref) so the metronome effect rebuilds the moment a pending
+  // grid is recorded, independent of the other dependencies' timing.
+  const [metronomePendingGrid, setMetronomePendingGrid] = useState<Readonly<{
     fromFrame: number;
     previousBpm: number;
     bpm: number;
@@ -1687,7 +1689,9 @@ function Workspace({
         session == null || context === null ||
         metronomeOriginFrame === null || metronomeBpm === null) {
       if (metronomeAudioPhase !== "running") invalidateAudioClockAnchor();
-      if (!metronomePlaying) metronomePendingGridRef.current = null;
+      if (!metronomePlaying && metronomePendingGrid !== null) {
+        setMetronomePendingGrid(null);
+      }
       return;
     }
     if (!hasAudioClockAnchor()) {
@@ -1698,23 +1702,22 @@ function Workspace({
         return;
       }
     }
-    const pending = metronomePendingGridRef.current;
-    if (pending !== null && pending.fromFrame <= metronomeOriginFrame) {
+    if (metronomePendingGrid !== null &&
+        metronomePendingGrid.fromFrame <= metronomeOriginFrame) {
       // The transport projection caught up with the committed grid.
-      metronomePendingGridRef.current = null;
+      setMetronomePendingGrid(null);
     }
-    const pendingGrid = metronomePendingGridRef.current;
-    const segments = pendingGrid !== null
+    const segments = metronomePendingGrid !== null
       ? [
           {
             fromFrame: 0,
             originFrame: metronomeOriginFrame,
-            bpm: pendingGrid.previousBpm,
+            bpm: metronomePendingGrid.previousBpm,
           },
           {
-            fromFrame: pendingGrid.fromFrame,
-            originFrame: pendingGrid.fromFrame,
-            bpm: pendingGrid.bpm,
+            fromFrame: metronomePendingGrid.fromFrame,
+            originFrame: metronomePendingGrid.fromFrame,
+            bpm: metronomePendingGrid.bpm,
           },
         ]
       : [{fromFrame: 0, originFrame: metronomeOriginFrame, bpm: metronomeBpm}];
@@ -1741,6 +1744,7 @@ function Workspace({
     metronomePlaying,
     metronomeOriginFrame,
     metronomeBpm,
+    metronomePendingGrid,
   ]);
 
   const onToggleMetronome = () => {
@@ -1901,11 +1905,11 @@ function Workspace({
           selectTransportPlaying(currentTransport)) {
         // A bpm commit while playing activates the new grid at the returned
         // activation frame; the metronome switches grids there.
-        metronomePendingGridRef.current = {
+        setMetronomePendingGrid({
           fromFrame: result.patternPublication.activationFrame,
           previousBpm: project.bpm,
           bpm: result.bpm,
-        };
+        });
       }
       dispatch({
         type: "project-sequence-settings-updated",

@@ -112,9 +112,10 @@ export function createMetronomeClickLoop(options: {
         clearTimer(timer);
         timer = null;
       }
-      const nowSeconds = options.context.currentTime;
+      // Every queued click is torn down, sounding ones included: a click that
+      // already started keeps ringing for its decay if only its future peers
+      // are cancelled, and its nodes stay connected past the loop's lifetime.
       for (const click of scheduled.values()) {
-        if (click.contextTime <= nowSeconds) continue;
         try {
           click.oscillator.stop();
         } catch {

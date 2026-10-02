@@ -151,7 +151,7 @@ test("the timer only tops up: overlapping windows never double-schedule a beat",
   loop.stop();
 });
 
-test("stop cancels every click that has not sounded and keeps sounded ones", () => {
+test("stop tears down every queued click, sounding ones included", () => {
   const {context, oscillators, gains} = fakeContext();
   const loop = createMetronomeClickLoop({
     context,
@@ -167,10 +167,12 @@ test("stop cancels every click that has not sounded and keeps sounded ones", () 
 
   const sounded = oscillators[0]!;
   const pending = oscillators[1]!;
-  // The already-sounding click keeps its one scheduled stop and is left to
-  // decay; the pending one is stopped and disconnected immediately.
-  expect(sounded.stopCalls).toBe(1);
-  expect(sounded.disconnected).toBe(false);
+  // A click that already started is stopped (its second stop is the guarded
+  // no-op a real oscillator refuses) and disconnected like any other; the
+  // loop leaves no node connected past its own lifetime.
+  expect(sounded.stopCalls).toBe(2);
+  expect(sounded.disconnected).toBe(true);
+  expect(gains[0]!.disconnected).toBe(true);
   expect(pending.stopCalls).toBe(2);
   expect(pending.disconnected).toBe(true);
   expect(gains[1]!.disconnected).toBe(true);
