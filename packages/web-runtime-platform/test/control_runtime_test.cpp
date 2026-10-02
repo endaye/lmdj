@@ -7175,6 +7175,29 @@ void test_a_bpm_change_during_a_replay_publishes_nothing_over_it() {
   LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
 }
 
+// Creates and loads a second Project while the first one's replay plays.
+// A Project is replaced only with audio suspended; the replay plays on.
+void switch_grid_project(ControlRuntime& runtime) {
+  check_success(runtime.dispatch("audio.suspend", Json::object(), {}));
+  check_success(runtime.dispatch("project.create",
+      create_payload(uuid(9697), kNextPatternId), {}));
+  check_success(runtime.dispatch("snapshot.reload", {{"pattern_id", kNextPatternId}}, {}));
+  check_success(runtime.dispatch("audio.activate", Json::object(), {}));
+  static_cast<void>(render_grid_frames(runtime.engine(), 128));
+}
+
+// #1789: a replay holds the Runtime only for its own Project, so a Project
+// opened during it publishes its own Pattern view.
+void test_a_project_switch_during_a_replay_publishes_its_own_view() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  static_cast<void>(record_grid_performance(*runtime, 2, 2'400));
+  begin_grid_replay(*runtime);
+  switch_grid_project(*runtime);
+  LMDJ_CHECK(runtime->engine().current_pattern_id()->value() == kNextPatternId);
+}
+
 void test_a_pad_delete_during_a_replay_stops_only_the_live_voice() {
   TempDirectory temp;
   FakeCoordinator coordinator;
@@ -7657,6 +7680,37 @@ void test_a_deferred_swap_waits_out_a_replay() {
   LMDJ_CHECK(engine.current_pattern_origin_frame() == deferral.origin + 288'000);
   // No tick-240 voice sounded before the restore, so the first one is its own.
   LMDJ_CHECK(grid_voice_starts_at(engine, deferral.origin + 288'000 + 6'000));
+}
+
+// #1789: a restore the engine refuses, here because every slot is still
+// held, stays pending and lands at the bar after a slot frees.
+void test_a_refused_replay_restore_retries_until_a_slot_frees() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator, 192'000);
+  auto& engine = runtime->engine();
+  const auto revision = record_grid_performance(*runtime, 2, 192'000);
+  const auto deferral = defer_a_grid_edit(*runtime, 9700, revision);
+  begin_grid_replay(*runtime);
+  const auto serve_to = [&](std::uint64_t frame) {
+    while (engine.telemetry().rendered_frames < deferral.origin + frame) {
+      static_cast<void>(render_grid_frames(engine, 128));
+      runtime->service_pattern_transport();
+      static_cast<void>(runtime->service_performance());
+    }
+  };
+  check_success(runtime->dispatch("performance.replay.stop",
+      {{"replay_id", uuid(9682)}, {"request_id", uuid(9706)}}, {}));
+  for (unsigned tick = 0; tick < 64 && replay_state(*runtime) == "playing"; ++tick) {
+    serve_to(engine.telemetry().rendered_frames - deferral.origin + 128);
+  }
+  LMDJ_CHECK(replay_state(*runtime) != "playing");
+  // Until the first voice ends at frame 204000, every attempt is refused.
+  serve_to(200'000);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation == deferral.generation);
+  serve_to(288'000 + 128);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == deferral.origin + 288'000);
 }
 
 void test_pattern_transport_requires_opt_in_and_preserves_legacy() {
@@ -8617,6 +8671,7 @@ int main() {
     test_a_pad_delete_during_a_replay_stops_only_the_live_voice();
     test_an_undo_during_a_replay_publishes_nothing_over_it();
     test_a_bpm_change_during_a_replay_publishes_nothing_over_it();
+    test_a_project_switch_during_a_replay_publishes_its_own_view();
     test_pattern_events_edit_while_stopped_reaches_the_next_play();
     test_pattern_events_edit_while_playing_swaps_the_pattern_in_place();
     test_pattern_events_edit_of_another_pattern_publishes_nothing();
@@ -8633,6 +8688,7 @@ int main() {
     test_pattern_events_edit_deferral_waits_out_a_recording();
     test_pattern_events_edit_deferral_survives_an_audio_interruption();
     test_a_deferred_swap_waits_out_a_replay();
+    test_a_refused_replay_restore_retries_until_a_slot_frees();
     test_pad_delete_cancels_staged_host_import_and_releases_history();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
     test_sample_parity_playback_crosses_the_fixed_control_wire();

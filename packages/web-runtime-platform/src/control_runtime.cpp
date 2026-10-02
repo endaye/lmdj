@@ -1547,9 +1547,15 @@ struct ControlRuntime::Impl {
     }
     if (active_replay.has_value() && state != "playing" &&
         result.at("replay_id") == active_replay->replay_id) {
+      replay_restore_project = active_replay->project_id;
       active_replay.reset();
-      replay_restore_pending = true;
     }
+  }
+
+  // A replay holds the Runtime only for the Project it played; another
+  // Project opened meanwhile publishes its own view.
+  bool replay_holds_runtime() const {
+    return active_replay.has_value() && project_id == active_replay->project_id;
   }
 
   void observe_replay() {
@@ -1560,7 +1566,7 @@ struct ControlRuntime::Impl {
       // Another Project replaced the one the replay played; its open path
       // publishes that Project's own view.
       active_replay.reset();
-      replay_restore_pending = false;
+      replay_restore_project.reset();
       return;
     }
     const auto status = application.query({
@@ -1570,8 +1576,8 @@ struct ControlRuntime::Impl {
     });
     if (!status.value("ok", false)) {
       // An unreadable replay cannot be holding the Runtime any longer.
+      replay_restore_project = active_replay->project_id;
       active_replay.reset();
-      replay_restore_pending = true;
       return;
     }
     track_replay_response("performance.replay.status", status.at("result"));
@@ -1581,11 +1587,12 @@ struct ControlRuntime::Impl {
   // so the Host's selected Pattern comes back from Truth — at the next Bar
   // while the transport plays, as a Pattern switch does, otherwise at once.
   void restore_after_replay() {
-    if (!replay_restore_pending || active_replay.has_value()) {
+    if (!replay_restore_project.has_value() || active_replay.has_value()) {
       return;
     }
-    if (!session_available() || !pattern_id.has_value()) {
-      replay_restore_pending = false;
+    if (!session_available() || !pattern_id.has_value() ||
+        project_id != replay_restore_project) {
+      replay_restore_project.reset();
       return;
     }
     bool playing = false;
@@ -1603,10 +1610,13 @@ struct ControlRuntime::Impl {
     }
     const foundation::PatternId selected{*pattern_id};
     if (playing) {
+      // The restore carries any deferred edit, since both come from Truth. A
+      // refusal, such as every slot held by a sounding retiring view, stays
+      // pending and retries on the next turn, as the transport's settlement
+      // publication does; the Bank, and so `runtime_revision`, is current.
       deferred_pattern_edit.reset();
-      static_cast<void>(engine.reclaim_retired_patterns());
       if (publish_project_pattern(selected).has_value()) {
-        replay_restore_pending = false;
+        replay_restore_project.reset();
       }
       return;
     }
@@ -1615,7 +1625,7 @@ struct ControlRuntime::Impl {
       // The Runtime no longer reflects the revision it claimed.
       runtime_revision.reset();
     }
-    replay_restore_pending = false;
+    replay_restore_project.reset();
   }
 
   std::filesystem::path project_path(std::string_view project_id) const {
@@ -1770,7 +1780,7 @@ struct ControlRuntime::Impl {
   // and drops a deferral that another publication has superseded.
   void retry_deferred_pattern_edit() {
     // A replay holds the Pattern view; its end restores the selected one.
-    if (!deferred_pattern_edit.has_value() || active_replay.has_value()) {
+    if (!deferred_pattern_edit.has_value() || replay_holds_runtime()) {
       return;
     }
     const auto deferred = *deferred_pattern_edit;
@@ -2392,8 +2402,8 @@ struct ControlRuntime::Impl {
       // During a replay only the Pad's live voice stops; the replay's and its
       // Pattern's voices keep sounding.
       const auto stopped = enqueue_sample_control(
-          active_replay.has_value() ? audio::PadControlKind::stop_slot_live
-                                    : audio::PadControlKind::stop_slot,
+          replay_holds_runtime() ? audio::PadControlKind::stop_slot_live
+                                 : audio::PadControlKind::stop_slot,
           slot);
       if (stopped.has_value()) {
         return stopped;
@@ -2587,7 +2597,7 @@ struct ControlRuntime::Impl {
     const auto current_pattern = engine.current_pattern_id();
     // A replay holds the Pattern view; the Bank, which replay voices never
     // read, still publishes so live Pads and previews hear Truth.
-    const auto publish_pattern = !active_replay.has_value() && (force_pattern ||
+    const auto publish_pattern = !replay_holds_runtime() && (force_pattern ||
         engine.telemetry().state == audio::RealtimeState::stopped ||
         !current_pattern.has_value() ||
         current_pattern->value() != selected_pattern);
@@ -2868,7 +2878,8 @@ struct ControlRuntime::Impl {
     std::string replay_id;
   };
   std::optional<TrackedReplay> active_replay;
-  bool replay_restore_pending = false;
+  // The Project whose selected Pattern a replay's end restores.
+  std::optional<std::string> replay_restore_project;
   std::optional<SequenceSession> active_sequence;
   std::optional<PendingSequenceBoundary> pending_sequence_boundary;
   // Global Pattern transport engagement; present once a session has opted in
@@ -3798,7 +3809,7 @@ Json ControlRuntime::dispatch(
         return success(std::move(result));
       }
       result["pattern_publication"] = nullptr;
-      if (impl_->active_replay.has_value()) {
+      if (impl_->replay_holds_runtime()) {
         // The replay holds the Runtime; its end restores this Truth.
         advance_runtime_revision();
         result["publication"] = "deferred";
@@ -4876,7 +4887,7 @@ Json ControlRuntime::dispatch(
             return normalized_error(published.error());
           }
           pattern_publication = published.value();
-        } else if (!impl_->active_replay.has_value()) {
+        } else if (!impl_->replay_holds_runtime()) {
           // A replay keeps its own tempo; its end restores this Truth.
           auto published = impl_->publish_project_pattern(
               foundation::PatternId{*impl_->pattern_id});
