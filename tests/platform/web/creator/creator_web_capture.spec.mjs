@@ -411,8 +411,10 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
   // legacy busy guard (#1363): the refusal is honest, the take is retained,
   // and the panel keeps its controls.
   await panel.getByRole("button", {name: "Commit"}).click();
+  // The guard's code now selects its own Sample copy (#1680) instead of the
+  // former single generic sentence.
   await expect(panel.getByRole("alert"))
-    .toContainText("Creator could not change this sound.", {timeout: 30_000});
+    .toContainText("Creator could not apply that change to the Pad.", {timeout: 30_000});
   await expect(panel.getByRole("button", {name: "Commit"})).toBeVisible();
   await expect(panel.getByRole("slider", {name: /^Pad A1 End —/}))
     .toBeVisible();
