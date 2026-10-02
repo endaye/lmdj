@@ -70,9 +70,14 @@ const projectTruth = async (page) => (await rawRequest(page, "project.inspect"))
 const undoDepth = async (page) => (await rawRequest(page, "history.inspect")).undo_count;
 
 async function downloadReport(page) {
+  await page.getByRole("button", {name: "System", exact: true}).click();
+  await expect(page.getByRole("heading", {name: "System", exact: true})).toBeVisible();
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", {name: "Export report"}).click();
-  return JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
+  const result = JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
+  await page.getByRole("button", {name: "Back to music", exact: true}).click();
+  await expect(page.getByRole("heading", {name: "System", exact: true})).toBeHidden();
+  return result;
 }
 
 async function expectProjectRevision(page, expectedRevision) {
@@ -139,10 +144,14 @@ test("a second tab takes over the open Project and the first takes it back", asy
   // Leg 4 (normal): once the holder is suspended it hands over. The holder's
   // Runtime closes; the second tab opens the holder's committed write with an
   // empty history.
+  await page.getByRole("button", {name: "System", exact: true}).click();
+  await expect(page.getByRole("heading", {name: "System", exact: true})).toBeVisible();
   await page.getByRole("button", {name: "Suspend audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });
+  await page.getByRole("button", {name: "Back to music", exact: true}).click();
+  await expect(page.getByRole("heading", {name: "System", exact: true})).toBeHidden();
   await continueSecond.click();
   await expectTakenOver(page);
   await expect(second.getByTestId("creator-phase")).toHaveText("ready", {timeout: TAKEOVER_TIMEOUT_MS});

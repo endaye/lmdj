@@ -1,3 +1,4 @@
+import {clickCreatorSystemAction} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
@@ -269,7 +270,7 @@ async function importAndActivate(page) {
 
 async function report(page) {
   const pending = page.waitForEvent("download");
-  await page.getByRole("button", {name: "Export report"}).click();
+  await clickCreatorSystemAction(page, "Export report");
   return JSON.parse(await readFile(await (await pending).path(), "utf8"));
 }
 
@@ -418,7 +419,7 @@ test("suspend, restart, and reopen clear an active loop toggle before reactivati
   await importAndActivate(page);
   await enterLoopToggleSample(page);
   await latchLoopToggle(page);
-  await page.getByRole("button", {name: "Suspend audio"}).click();
+  await clickCreatorSystemAction(page, "Suspend audio");
   // An explicit Suspend publishes "Audio suspended" only after the Runtime has
   // committed the suspend, so the Host is already parked and the Activate
   // gesture that follows is guaranteed to be accepted.
@@ -552,7 +553,7 @@ test("packaged recovery timeout cleans one generation before automatic replaceme
   await installPackagedRecoveryProbe(page);
   await page.goto("/index.html");
   await importAndActivate(page);
-  await page.getByRole("button", {name: "Enable MIDI"}).click();
+  await clickCreatorSystemAction(page, "Enable MIDI");
 
   const initial = await page.evaluate(() => window.__creatorRuntimeProbe.snapshot());
   expect(initial.created_generations).toBe(1);
@@ -581,7 +582,7 @@ test("packaged recovery timeout cleans one generation before automatic replaceme
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
-  await page.getByRole("button", {name: "Enable MIDI"}).click();
+  await clickCreatorSystemAction(page, "Enable MIDI");
 
   await expect.poll(() => page.evaluate(() =>
     window.__creatorRuntimeProbe.snapshot()), {timeout: 30_000}).toMatchObject({
@@ -659,7 +660,7 @@ test.describe("synthetic Web MIDI", () => {
     await page.goto("/index.html");
     await importAndActivate(page);
     await page.getByTestId("physical-controls").getByRole("button", {name: "Bank C", exact: true}).click();
-    await page.getByRole("button", {name: "Enable MIDI"}).click();
+    await clickCreatorSystemAction(page, "Enable MIDI");
     await page.evaluate(() => {
       for (let note = 36; note <= 51; note += 1) window.__creatorMidi.emit(note);
     });
@@ -686,7 +687,7 @@ test("a denied MIDI permission does not mutate Runtime state or Trigger counts",
   });
   await page.goto("/index.html");
   await importAndActivate(page);
-  await page.getByRole("button", {name: "Enable MIDI"}).click();
+  await clickCreatorSystemAction(page, "Enable MIDI");
   const value = await report(page);
   expect([
     value.state,

@@ -1,3 +1,4 @@
+import {clickCreatorSystemAction} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
@@ -50,7 +51,7 @@ async function activate(page) {
 
 async function downloadReport(page) {
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", {name: "Export report"}).click();
+  await clickCreatorSystemAction(page, "Export report");
   const download = await downloadPromise;
   // The Build lives in the packaged manifest the app already loads; naming it
   // again here made an identity bump cost a CI cycle to discover.
