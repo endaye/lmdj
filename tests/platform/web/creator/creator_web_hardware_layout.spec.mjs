@@ -134,6 +134,12 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   await expect(page.getByRole("button", {name: "Activate audio"})).toBeVisible();
 
   await page.setViewportSize({width: 768, height: 600});
+  // Short stage: the auto margins collapse, so the console's top edge sits
+  // at or below the scrollport origin -- a justify-content-centred stage
+  // would clip it above the reachable area instead.
+  const shortStage = rounded(await page.locator(".hardware-workspace").boundingBox());
+  const shortConsole = rounded(await page.getByTestId("hardware-console").boundingBox());
+  expect(shortConsole.y).toBeGreaterThanOrEqual(shortStage.y);
   await page.getByRole("button", {name: "Activate audio"}).scrollIntoViewIfNeeded();
   await expect(page.getByRole("button", {name: "Activate audio"})).toBeVisible();
   await expect(page.getByTestId("overview-display").locator("button")).toHaveCount(0);
