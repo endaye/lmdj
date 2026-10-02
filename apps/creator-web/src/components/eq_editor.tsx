@@ -12,8 +12,10 @@ import type {
 // move, commits once when it ends (pointer up, key release or blur) and
 // cancels on Escape or pointercancel, as ValueSlider does.
 //
-// - Dragging a pole sets its frequency and gain. Dragging the low or high
-//   shelf below the gain floor, into the Cut strip, makes it a cut.
+// - Dragging a pole moves it by the pointer's travel, from wherever on its
+//   hit circle it was grabbed; a press that does not travel changes nothing.
+//   Dragging the low or high shelf below the gain floor, into the Cut strip,
+//   makes it a cut. Escape anywhere cancels a drag.
 // - A double tap on the mid pole and then a vertical drag sets its Q.
 // - A band returned to 0 dB is bypassed (absent), so a flat EQ leaves the
 //   Pad's playback neutral. The pole keeps its last frequency on screen.
@@ -32,18 +34,25 @@ const DEFAULT_Q_MILLI = 707;
 const GAIN_LIMIT = 18_000;
 const Q_RANGE = [100, 10_000] as const;
 const DOUBLE_TAP_MS = 350;
+// Pointer travel, in viewBox units, below which a press is still a tap.
+const TAP_SLOP = 2;
+// The keys a keyboard step uses; releasing one of them commits the run.
+const STEP_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Delete", "Backspace"]);
 
-// Plot geometry in viewBox units.
+// Plot geometry in viewBox units. The margins are wider than a pole's
+// 22-unit hit radius, so a pole at any edge keeps its whole hit circle.
 export const EQ_VIEW = Object.freeze({
   width: 320,
-  height: 176,
-  left: 16,
-  right: 304,
-  top: 12,
-  floor: 132,
+  height: 184,
+  left: 24,
+  right: 296,
+  top: 24,
+  floor: 136,
   // A pointer this far below the floor is in the Cut strip.
   cutThreshold: 10,
 });
+// Where a cut pole is drawn, below the Cut threshold.
+const CUT_Y = EQ_VIEW.floor + EQ_VIEW.cutThreshold + 8;
 const LOG_MIN = Math.log10(20);
 const LOG_SPAN = Math.log10(20_000) - LOG_MIN;
 
@@ -98,6 +107,11 @@ function eqEquals(left: PadEq, right: PadEq): boolean {
   return BANDS.every((band) => JSON.stringify(left[band]) === JSON.stringify(right[band]));
 }
 
+function isCut(eq: PadEq, band: EqBand): boolean {
+  const value = eq[band];
+  return value !== null && "kind" in value && value.kind === "cut";
+}
+
 function formatFreq(freqHz: number): string {
   return freqHz >= 1_000 ? `${(freqHz / 1_000).toFixed(freqHz >= 10_000 ? 1 : 2)} kHz` : `${freqHz} Hz`;
 }
@@ -126,7 +140,12 @@ interface Gesture {
   band: EqBand;
   pointerId: number | null;
   mode: "move" | "q";
+  // The press point, and the pole's offset from it, in viewBox units.
+  startX: number;
   startY: number;
+  grabX: number;
+  grabY: number;
+  travelled: boolean;
   startQ: number;
   base: PadEq;
   latest: PadEq;
@@ -167,19 +186,44 @@ export function EqEditor({
   }
   if (shown.high !== null) remembered.current.high = shown.high.freqHz;
 
+  // A pole never takes focus from a pointer press, so Escape during a drag is
+  // heard on the window rather than on the pole.
+  const escapeListener = useRef((event: KeyboardEvent) => {
+    if (event.key !== "Escape" || gesture.current?.pointerId == null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    cancelRef.current();
+  });
+  const listenForEscape = (listen: boolean) => {
+    if (listen) window.addEventListener("keydown", escapeListener.current, true);
+    else window.removeEventListener("keydown", escapeListener.current, true);
+  };
+
   const cancel = () => {
     if (gesture.current === null) return;
     gesture.current = null;
+    listenForEscape(false);
     setDraft(null);
     onCancel();
   };
   const cancelRef = useRef(cancel);
   cancelRef.current = cancel;
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
 
   // A suspended audio graph cannot preview, so a live gesture is dropped.
   useEffect(() => {
     if (audioSuspended) cancelRef.current();
   }, [audioSuspended]);
+
+  // Leaving mid-gesture (another Pad selected) clears the preview it started.
+  useEffect(() => () => {
+    window.removeEventListener("keydown", escapeListener.current, true);
+    if (gesture.current !== null) {
+      gesture.current = null;
+      onCancelRef.current();
+    }
+  }, []);
 
   const move = (next: PadEq) => {
     const active = gesture.current;
@@ -193,16 +237,26 @@ export function EqEditor({
     const active = gesture.current;
     if (active === null) return;
     gesture.current = null;
+    listenForEscape(false);
     setDraft(null);
     if (!eqEquals(active.base, active.latest)) onCommit({...playback, eq: active.latest});
   };
 
-  const begin = (band: EqBand, pointerId: number | null, mode: "move" | "q", startY: number) => {
+  const begin = (
+    band: EqBand,
+    pointerId: number | null,
+    mode: "move" | "q",
+    start: {x: number; y: number} = {x: 0, y: 0},
+  ) => {
     gesture.current = {
       band,
       pointerId,
       mode,
-      startY,
+      startX: start.x,
+      startY: start.y,
+      grabX: freqToX(bandFreq(band)) - start.x,
+      grabY: bandY(band) - start.y,
+      travelled: false,
       startQ: playback.eq.mid?.qMilli ?? remembered.current.mid.qMilli,
       base: playback.eq,
       latest: playback.eq,
@@ -237,9 +291,13 @@ export function EqEditor({
       return bellBand(xToFreq(x, band), yToGain(y), remembered.current.mid.qMilli);
     }
     const freqHz = xToFreq(x, band);
-    return y > EQ_VIEW.floor + EQ_VIEW.cutThreshold
-      ? shelfBand("cut", freqHz, -GAIN_LIMIT)
-      : shelfBand("shelf", freqHz, yToGain(y));
+    if (y > EQ_VIEW.floor + EQ_VIEW.cutThreshold) {
+      // A cut keeps the gain the band already carried (lmdj.project.v5 5.2.0
+      // keeps it in Project Truth), so leaving the cut by keyboard restores it.
+      const current = gesture.current!.latest[band] as PadEqShelf | null;
+      return shelfBand("cut", freqHz, current?.gainMillidb ?? -GAIN_LIMIT);
+    }
+    return shelfBand("shelf", freqHz, yToGain(y));
   };
 
   const pointerDown = (event: React.PointerEvent<SVGGElement>, band: EqBand) => {
@@ -251,7 +309,8 @@ export function EqEditor({
     const doubleTap = band === "mid" && lastTap.current?.band === "mid" &&
       now - lastTap.current.at <= DOUBLE_TAP_MS;
     lastTap.current = {band, at: now};
-    begin(band, event.pointerId, doubleTap ? "q" : "move", point.y);
+    begin(band, event.pointerId, doubleTap ? "q" : "move", point);
+    listenForEscape(true);
     try {
       event.currentTarget.setPointerCapture?.(event.pointerId);
     } catch {
@@ -264,7 +323,16 @@ export function EqEditor({
     if (active === null || active.pointerId !== event.pointerId) return;
     const point = viewPoint(event.clientX, event.clientY);
     if (point === null) return;
-    move(withBand(active.latest, active.band, bandAt(active.band, point.x, point.y, active.mode)));
+    if (!active.travelled) {
+      if (Math.abs(point.x - active.startX) <= TAP_SLOP &&
+        Math.abs(point.y - active.startY) <= TAP_SLOP) return;
+      active.travelled = true;
+    }
+    // Q mode reads the pointer's own vertical travel; a move carries the pole
+    // by the offset it was grabbed at.
+    const x = active.mode === "q" ? point.x : point.x + active.grabX;
+    const y = active.mode === "q" ? point.y : point.y + active.grabY;
+    move(withBand(active.latest, active.band, bandAt(active.band, x, y, active.mode)));
   };
 
   const pointerUp = (event: React.PointerEvent<SVGGElement>) => {
@@ -308,14 +376,16 @@ export function EqEditor({
     const shelf = eq[band] ?? {kind: "shelf" as const, freqHz: remembered.current[band], gainMillidb: 0};
     switch (event.key) {
       case "ArrowUp":
+        // Leaving a cut restores the gain it kept.
         return withBand(eq, band, shelf.kind === "cut"
-          ? shelfBand("shelf", shelf.freqHz, -GAIN_LIMIT)
+          ? shelfBand("shelf", shelf.freqHz, shelf.gainMillidb)
           : shelfBand("shelf", shelf.freqHz, clamp(shelf.gainMillidb + 500, -GAIN_LIMIT, GAIN_LIMIT)));
       case "ArrowDown":
         if (shelf.kind === "cut") return eq;
+        // A step stops at the floor; one more from the floor makes a cut.
         return withBand(eq, band, shelf.gainMillidb <= -GAIN_LIMIT
-          ? shelfBand("cut", shelf.freqHz, -GAIN_LIMIT)
-          : shelfBand("shelf", shelf.freqHz, shelf.gainMillidb - 500));
+          ? shelfBand("cut", shelf.freqHz, shelf.gainMillidb)
+          : shelfBand("shelf", shelf.freqHz, Math.max(-GAIN_LIMIT, shelf.gainMillidb - 500)));
       case "ArrowLeft":
       case "ArrowRight":
         if (eq[band] === null) return eq;
@@ -337,12 +407,12 @@ export function EqEditor({
     const next = keyStep(band, event);
     if (next === null) return;
     event.preventDefault();
-    if (gesture.current === null) begin(band, null, "move", 0);
+    if (gesture.current === null) begin(band, null, "move");
     move(next);
   };
 
   const keyUp = (event: React.KeyboardEvent<SVGGElement>) => {
-    if (gesture.current?.pointerId === null && event.key !== "Escape" && event.key !== "Shift") finish();
+    if (gesture.current?.pointerId === null && STEP_KEYS.has(event.key)) finish();
   };
 
   const bandFreq = (band: EqBand): number =>
@@ -352,7 +422,7 @@ export function EqEditor({
   const bandY = (band: EqBand): number => {
     const value = shown[band];
     if (value === null) return gainToY(0);
-    if ("kind" in value && value.kind === "cut") return EQ_VIEW.floor + EQ_VIEW.cutThreshold + 8;
+    if ("kind" in value && value.kind === "cut") return CUT_Y;
     return gainToY(value.gainMillidb);
   };
 
@@ -396,7 +466,7 @@ export function EqEditor({
               aria-label={`${padLabel} EQ ${BAND_NAMES[band]}`}
               aria-valuemin={-18}
               aria-valuemax={18}
-              aria-valuenow={gain / 1_000}
+              aria-valuenow={isCut(shown, band) ? -18 : gain / 1_000}
               aria-valuetext={describeBand(band, shown)}
               aria-disabled={disabled}
               transform={`translate(${freqToX(bandFreq(band))} ${bandY(band)})`}

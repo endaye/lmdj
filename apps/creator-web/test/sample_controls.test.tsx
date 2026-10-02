@@ -260,7 +260,7 @@ test("every toggle, value control, and confirmation action has a 44 px target", 
       // An EQ pole: a 22-unit hit circle in a plot that never renders
       // narrower than its 320-unit viewBox is at least 44 px across.
       const plot = action.closest("svg")!;
-      expect(plot.getAttribute("viewBox"), name).toBe("0 0 320 176");
+      expect(plot.getAttribute("viewBox"), name).toBe("0 0 320 184");
       expect(getComputedStyle(plot).minWidth, name).toBe("320px");
       expect(Number(action.querySelector(".eq-pole-hit")?.getAttribute("r")), name)
         .toBeGreaterThanOrEqual(22);

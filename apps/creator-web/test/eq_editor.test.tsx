@@ -235,3 +235,110 @@ test("suspending audio drops a live drag", () => {
   fireEvent.pointerUp(pole("Mid"), {pointerId: 1});
   expect(onCommit).not.toHaveBeenCalled();
 });
+
+// Review of #1799: a pole at any edge keeps its whole 22-unit hit circle
+// inside the plot, so the 44 px target holds there too.
+test("a pole at the plot's edge keeps its whole hit circle", () => {
+  const edges = {
+    ...playback,
+    eq: {
+      low: {kind: "shelf" as const, freqHz: 20, gainMillidb: 18_000},
+      mid: {freqHz: 100, gainMillidb: -18_000, qMilli: 707},
+      high: {kind: "cut" as const, freqHz: 20_000, gainMillidb: -18_000},
+    },
+  };
+  const {container} = renderEditor({playback: edges});
+  for (const pole of container.querySelectorAll(".eq-pole")) {
+    const [x, y] = pole.getAttribute("transform")!.match(/-?[\d.]+/g)!.map(Number);
+    expect(x! - 22).toBeGreaterThanOrEqual(0);
+    expect(x! + 22).toBeLessThanOrEqual(EQ_VIEW.width);
+    expect(y! - 22).toBeGreaterThanOrEqual(0);
+    expect(y! + 22).toBeLessThanOrEqual(EQ_VIEW.height);
+  }
+});
+
+test("ArrowDown just above the floor stops at it, and only the next step makes a cut", () => {
+  const near = {...playback, eq: {low: {kind: "shelf" as const, freqHz: 120, gainMillidb: -17_600}, mid: null, high: null}};
+  const {onPreview, onCommit} = renderEditor({playback: near});
+  fireEvent.keyDown(pole("Low"), {key: "ArrowDown"});
+  expect(onPreview).toHaveBeenLastCalledWith({...near, eq: {...near.eq, low: {kind: "shelf", freqHz: 120, gainMillidb: -18_000}}});
+  fireEvent.keyDown(pole("Low"), {key: "ArrowDown"});
+  fireEvent.keyUp(pole("Low"), {key: "ArrowDown"});
+  expect(onCommit).toHaveBeenCalledTimes(1);
+  expect(onCommit).toHaveBeenLastCalledWith({...near, eq: {...near.eq, low: {kind: "cut", freqHz: 120, gainMillidb: -18_000}}});
+});
+
+test("ArrowUp from a cut restores the gain the cut kept", () => {
+  const cut = {...playback, eq: {low: null, mid: null, high: {kind: "cut" as const, freqHz: 6_000, gainMillidb: 6_000}}};
+  const {onCommit} = renderEditor({playback: cut});
+  fireEvent.keyDown(pole("High"), {key: "ArrowUp"});
+  fireEvent.keyUp(pole("High"), {key: "ArrowUp"});
+  expect(onCommit).toHaveBeenLastCalledWith({...cut, eq: {...cut.eq, high: {kind: "shelf", freqHz: 6_000, gainMillidb: 6_000}}});
+});
+
+// A pointer press never focuses the pole, so a browser delivers Escape to
+// whatever had focus. The editor hears it on the window.
+test("Escape anywhere cancels a pointer drag", () => {
+  const {onPreview, onCommit, onCancel} = renderEditor();
+  drag(pole("Mid"), [
+    {x: freqToX(1_000), y: gainToY(0)},
+    {x: freqToX(1_000), y: gainToY(9_000)},
+  ]);
+  expect(onPreview).toHaveBeenCalled();
+  fireEvent.keyDown(document.body, {key: "Escape"});
+  expect(onCancel).toHaveBeenCalledTimes(1);
+  fireEvent.pointerUp(pole("Mid"), {pointerId: 1});
+  expect(onCommit).not.toHaveBeenCalled();
+  // Once the drag has ended, Escape elsewhere is not the editor's.
+  fireEvent.keyDown(document.body, {key: "Escape"});
+  expect(onCancel).toHaveBeenCalledTimes(1);
+});
+
+test("unmounting mid-drag cancels the preview it started", () => {
+  const {onCancel, onCommit, unmount} = renderEditor();
+  drag(pole("Low"), [
+    {x: freqToX(100), y: gainToY(0)},
+    {x: freqToX(100), y: gainToY(6_000)},
+  ]);
+  unmount();
+  expect(onCancel).toHaveBeenCalledTimes(1);
+  expect(onCommit).not.toHaveBeenCalled();
+});
+
+test("releasing a key that does not step leaves a held run open", () => {
+  const {onCommit} = renderEditor();
+  fireEvent.keyDown(pole("High"), {key: "ArrowUp"});
+  fireEvent.keyDown(pole("High"), {key: "a"});
+  fireEvent.keyUp(pole("High"), {key: "a"});
+  expect(onCommit).not.toHaveBeenCalled();
+  fireEvent.keyDown(pole("High"), {key: "ArrowUp"});
+  fireEvent.keyUp(pole("High"), {key: "ArrowUp"});
+  expect(onCommit).toHaveBeenCalledTimes(1);
+});
+
+test("a pole moves by the pointer's travel, not to the pointer", () => {
+  const shelved = {...playback, eq: {low: null, mid: null, high: {kind: "shelf" as const, freqHz: 8_000, gainMillidb: 3_000}}};
+  const {onCommit} = renderEditor({playback: shelved});
+  const centre = {x: freqToX(8_000), y: gainToY(3_000)};
+  // Grabbed 18 units above its centre, then moved 6 units right: the gain
+  // stays, and only the frequency follows the travel.
+  drag(pole("High"), [
+    {x: centre.x, y: centre.y - 18},
+    {x: centre.x + 6, y: centre.y - 18},
+  ]);
+  fireEvent.pointerUp(pole("High"), {pointerId: 1});
+  const committed = onCommit.mock.lastCall![0].eq.high;
+  expect(committed.gainMillidb).toBe(3_000);
+  expect(freqToX(committed.freqHz)).toBeCloseTo(centre.x + 6, 1);
+});
+
+// An active band, so a one-unit move would change it if it counted.
+test("a press that does not travel commits nothing", () => {
+  const shelved = {...playback, eq: {low: null, mid: null, high: {kind: "shelf" as const, freqHz: 8_000, gainMillidb: 3_000}}};
+  const {onPreview, onCommit} = renderEditor({playback: shelved});
+  const centre = {x: freqToX(8_000), y: gainToY(3_000)};
+  drag(pole("High"), [centre, {x: centre.x + 2, y: centre.y - 2}]);
+  fireEvent.pointerUp(pole("High"), {pointerId: 1});
+  expect(onPreview).not.toHaveBeenCalled();
+  expect(onCommit).not.toHaveBeenCalled();
+});
