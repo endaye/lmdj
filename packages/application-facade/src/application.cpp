@@ -175,6 +175,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"pattern.create", OperationKind::command},
       {"performance.delete", OperationKind::command},
       {"performance.discard", OperationKind::command},
+      {"performance.fx.gesture", OperationKind::command},
       {"performance.inspect", OperationKind::query},
       {"performance.list", OperationKind::query},
       {"performance.record.begin", OperationKind::command},
@@ -4001,6 +4002,9 @@ struct Application::Impl {
     if (operation == "performance.record.event") {
       return performance_event(request);
     }
+    if (operation == "performance.fx.gesture") {
+      return performance_fx_gesture(request);
+    }
     if (operation == "performance.record.launch-request") {
       return performance_launch_request(request);
     }
@@ -7282,6 +7286,52 @@ struct Application::Impl {
                              {"coalesced", coalesced},
                              {"replayed", false}},
                             std::nullopt);
+  }
+
+  nlohmann::json performance_fx_gesture(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "event"}),
+            "performance.fx.gesture request shape is invalid");
+    const auto &event = request.at("event");
+    require(event.is_object(), "Performance FX gesture is invalid");
+    require(event.contains("kind"), "Performance FX gesture kind is required");
+    const auto kind = string_field(event, "kind");
+    audio::FxGesture gesture;
+    if (kind == "fx_engage" || kind == "fx_move") {
+      require(exact_keys(event, {"kind", "fx", "value"}),
+              "fx_engage/fx_move gesture shape is invalid");
+      gesture = audio::FxGesture{
+          kind == "fx_engage" ? audio::FxGestureKind::engage
+                              : audio::FxGestureKind::move,
+          performance_fx(string_field(event, "fx")),
+          static_cast<std::uint16_t>(unsigned_field(event, "value", 1000U))};
+    } else if (kind == "fx_release") {
+      require(exact_keys(event, {"kind", "fx"}),
+              "fx_release gesture shape is invalid");
+      gesture = audio::FxGesture{audio::FxGestureKind::release,
+                                 performance_fx(string_field(event, "fx")), 0};
+    } else if (kind == "hold_on" || kind == "hold_off") {
+      require(exact_keys(event, {"kind"}), "hold gesture shape is invalid");
+      gesture = audio::FxGesture{
+          kind == "hold_on" ? audio::FxGestureKind::hold_on
+                            : audio::FxGestureKind::hold_off,
+          domain::PerformanceFx::filter, 0};
+    } else {
+      require(false, "Performance FX gesture kind is invalid");
+    }
+    if (!performance_gesture_sink) {
+      return error_envelope(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance FX authority is unavailable",
+          {{"reason", "performance_fx_authority_unavailable"}}));
+    }
+    // Session-free by design: the gesture is applied live to the master bus
+    // and journaled nowhere; a running recording journals the same gesture
+    // through performance.record.event as an independent toggle.
+    const auto applied = performance_gesture_sink->apply_gesture(gesture);
+    if (!applied.has_value()) {
+      return error_envelope(applied.error());
+    }
+    return success_envelope({{"applied", true}}, std::nullopt);
   }
 
   nlohmann::json performance_launch_request(const nlohmann::json &request) {

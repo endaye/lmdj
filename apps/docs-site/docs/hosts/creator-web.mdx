@@ -76,7 +76,7 @@ Sample 控件在 Volume 之外新增 Pitch（±24 半音，0.1 半音步进，�
 
 Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform surface 由 Pattern launch strip、FX slider bank、HOLD、Pad surface、录制面板与回放面板组成。
 
-FX 使用固定的八段链路顺序 `filter → delay → reverb → stutter → gate → reverse → crush → cutter`，与 Audio Runtime 的 `kFxChainOrder` 同一份真相；每个 slider 是 `0..1000` 整数范围、中性起点 `500`。滑杆按 engage/move/release 手势成对记录，disabled 或卸载时强制释放未闭合手势。HOLD 是链路级开关，只在 `recording` 或 `flushing` 阶段可操作。
+FX 使用固定的八段链路顺序 `filter → delay → reverb → stutter → gate → reverse → crush → cutter`，与 Audio Runtime 的 `kFxChainOrder` 同一份真相；每个 slider 是 `0..1000` 整数范围、中性起点 `500`。FX 随时可用（#1674）：滑杆按下即经 `performance.fx.gesture` 实时作用于 master bus，与演奏录音互不构成前置；录音进行中同一手势再经 `performance.record.event` 记入 journal，录音开始时已为开启状态的 FX 与 HOLD 会补记 engage/hold_on，录音停止不释放仍按住的 FX。折叠 FX / MORE 或卸载时强制释放未闭合手势。HOLD 是链路级开关，同样随时可切换。
 
 Pattern launch strip 呈现 16 个 Pattern Slot（Project 的可发射地址空间），槽位状态为 `idle` / `pending` / `acknowledged`：Creator 发出 `requestPerformancePatternLaunch` 后进入 pending，然后轮询 `performance.record.status`，直到该 `requestId` 出现在 authority 的 `lastLaunchAck` 才标记为已确认；空槽被确认时显式显示 silent gap。Pattern 的 assign/clear/move 只在录制 `idle` 时开放。状态输出中的 open Pad 手势数、open FX 手势数、HOLD 与最后一次 acknowledged launch 全部取自 Facade authority，不做本地预测。
 

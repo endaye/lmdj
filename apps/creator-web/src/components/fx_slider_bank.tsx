@@ -25,7 +25,6 @@ function isLive(fx: PerformanceFx): boolean {
 interface FxSliderBankProps {
   readonly order: readonly PerformanceFx[];
   readonly values: Readonly<Record<PerformanceFx, number>>;
-  readonly disabled?: boolean;
   readonly onEngage: (fx: PerformanceFx, value: number) => string;
   readonly onMove: (gestureId: string, fx: PerformanceFx, value: number) => void;
   readonly onRelease: (gestureId: string, fx: PerformanceFx) => void;
@@ -40,10 +39,6 @@ export function FxSliderBank(props: FxSliderBankProps) {
     gestures.current.delete(fx);
     props.onRelease(gestureId, fx);
   };
-  useEffect(() => {
-    if (!props.disabled) return;
-    for (const fx of [...gestures.current.keys()]) release(fx);
-  }, [props.disabled]);
   // Collapsing FX / MORE unmounts those inputs, so their open gestures close
   // here; the unmount effect below only fires when the whole bank goes away.
   useEffect(() => {
@@ -61,7 +56,6 @@ export function FxSliderBank(props: FxSliderBankProps) {
   const slider = (fx: PerformanceFx) => (
     <input type="range" min={0} max={1000} step={1}
       aria-label={LABELS[fx]} value={props.values[fx]}
-      disabled={props.disabled}
       onPointerDown={() => {
         if (!gestures.current.has(fx)) {
           gestures.current.set(fx, props.onEngage(fx, props.values[fx]));

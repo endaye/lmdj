@@ -22,6 +22,7 @@ const PERFORMANCE_OPERATIONS = Object.freeze([
   "performance.inspect",
   "performance.record.begin",
   "performance.record.event",
+  "performance.fx.gesture",
   "performance.record.launch-request",
   "performance.record.flush",
   "performance.record.stop",
@@ -75,6 +76,11 @@ function validRequests() {
       session_id: ids[2], event_id: ids[3], event,
     }]),
     ["performance.record.launch-request", {session_id: ids[2], request_id: ids[3], pattern_slot: 4}],
+    ["performance.fx.gesture", {event: {kind: "fx_engage", fx: "filter", value: 500}}],
+    ["performance.fx.gesture", {event: {kind: "fx_move", fx: "delay", value: 501}}],
+    ["performance.fx.gesture", {event: {kind: "fx_release", fx: "reverb"}}],
+    ["performance.fx.gesture", {event: {kind: "hold_on"}}],
+    ["performance.fx.gesture", {event: {kind: "hold_off"}}],
     ["performance.record.flush", {session_id: ids[2], command_id: ids[3]}],
     ["performance.record.stop", {session_id: ids[2], request_id: ids[3]}],
     ["performance.record.status", {}],
@@ -94,7 +100,7 @@ function validRequests() {
 }
 
 test("locks the complete Performance operation inventory", () => {
-  assert.equal(PERFORMANCE_OPERATIONS.length, 23);
+  assert.equal(PERFORMANCE_OPERATIONS.length, 24);
   assert.deepEqual(
     HOST_OPERATIONS.filter((operation) =>
       operation.startsWith("performance.") || operation.startsWith("pattern.slot.")),
@@ -197,6 +203,7 @@ function validResults() {
     ["performance.inspect", {performance: {id: ids[3], name: "Take 1", created_bpm: 120, recording_artifact: null, events: [{kind: "hold_on", tick: 0}, {kind: "hold_off", tick: 960}]}}],
     ["performance.record.begin", lifecycle],
     ["performance.record.event", {event_id: ids[3], accepted_tick: 0, input_sequence: 1, coalesced: false, replayed: false}],
+    ["performance.fx.gesture", {applied: true}],
     ["performance.record.launch-request", {request_id: ids[3], state: "pending", target_tick: 3840}],
     ["performance.record.flush", lifecycle],
     ["performance.record.stop", {request_id: ids[3], session_id: ids[2], performance_id: ids[4], state: "stopped", pending_event_count: 0, replayed: false}],

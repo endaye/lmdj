@@ -224,7 +224,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 93> operations{
+  static constexpr std::array<std::string_view, 94> operations{
       "host.status",
       "project.create",
       "project.duplicate",
@@ -280,6 +280,7 @@ bool supported_operation(std::string_view operation) {
       "performance.inspect",
       "performance.record.begin",
       "performance.record.event",
+      "performance.fx.gesture",
       "performance.record.launch-request",
       "performance.record.flush",
       "performance.record.stop",

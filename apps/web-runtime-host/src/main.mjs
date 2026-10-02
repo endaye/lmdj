@@ -212,6 +212,7 @@ export function createWebRuntimeHostController(options = {}) {
     inspectPerformance: session.inspectPerformance,
     beginPerformanceRecording: session.beginPerformanceRecording,
     recordPerformanceEvent: session.recordPerformanceEvent,
+    applyFxGesture: session.applyFxGesture,
     requestPerformancePatternLaunch: session.requestPerformancePatternLaunch,
     flushPerformanceRecording: session.flushPerformanceRecording,
     stopPerformanceRecording: session.stopPerformanceRecording,
