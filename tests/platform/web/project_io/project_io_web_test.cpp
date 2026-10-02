@@ -214,40 +214,62 @@ nlohmann::json prepare_sample_cache(
   };
 }
 
+// The harness keeps no ProjectState-sized value in mutate_sample_cache's own
+// frame. Each `value(...)` of a ProjectState result held two there (the result
+// and the returned state), six in all, which made this harness frame, not
+// Project I/O, the largest share of the action's stack high-water mark. The
+// load and each import run in their own frames, and the results that the
+// action checks later live on the heap (#1771).
+[[gnu::noinline]] std::uint64_t loaded_revision(
+    lmdj::project_io::ProjectStore& store,
+    const std::filesystem::path& bundle,
+    const char* operation) {
+  return value(store.load(bundle), operation).revision;
+}
+
+[[gnu::noinline]] std::unique_ptr<lmdj::domain::AppliedCommand>
+import_sample_bytes(
+    lmdj::project_io::ProjectStore& store,
+    const std::filesystem::path& bundle,
+    const lmdj::project_io::ProjectStore::ImportAssignSampleBytesRequest& request,
+    const char* operation) {
+  return std::make_unique<lmdj::domain::AppliedCommand>(
+      value(store.import_assign_sample_bytes(bundle, request), operation));
+}
+
 nlohmann::json mutate_sample_cache(
     const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
     const std::filesystem::path& bundle,
     std::string_view bundle_name) {
   using namespace lmdj;
   project_io::ProjectStore store{platform};
-  const auto current = value(store.load(bundle), "Sample Web Project load");
+  const auto current_revision =
+      loaded_revision(store, bundle, "Sample Web Project load");
   const foundation::AssetId asset_id{uuid("22")};
   const std::string sample_bytes{kSampleBytes};
   const auto request = project_io::ProjectStore::ImportAssignSampleBytesRequest{
-      domain::CommandMeta{foundation::CommandId{uuid("21")}, current.revision},
+      domain::CommandMeta{foundation::CommandId{uuid("21")}, current_revision},
       domain::PadSlotId{2, 7},
       asset_id,
       "audio/wav",
       bytes(sample_bytes),
   };
-  const auto imported = value(
-      store.import_assign_sample_bytes(bundle, request),
-      "Sample Web Project import and assign");
-  require(!imported.replayed, "first Sample import was replayed");
+  const auto imported = import_sample_bytes(
+      store, bundle, request, "Sample Web Project import and assign");
+  require(!imported->replayed, "first Sample import was replayed");
   require(
-      imported.state.contract == domain::ProjectContract::v5 &&
-          imported.state.revision == 1,
+      imported->state.contract == domain::ProjectContract::v5 &&
+          imported->state.revision == 1,
       "Sample import did not commit one v5 revision");
-  const auto replayed = value(
-      store.import_assign_sample_bytes(bundle, request),
-      "Sample Web Project exact replay");
+  const auto replayed = import_sample_bytes(
+      store, bundle, request, "Sample Web Project exact replay");
   require(
-      replayed.replayed && replayed.state == imported.state,
+      replayed->replayed && replayed->state == imported->state,
       "Sample import exact replay changed Project Truth");
 
-  const auto& pad = imported.state.banks.at(2).at(7);
+  const auto& pad = imported->state.banks.at(2).at(7);
   require(pad.asset_id == asset_id, "Sample Pad assignment changed");
-  const auto& artifact = imported.state.assets.at(asset_id).artifact;
+  const auto& artifact = imported->state.assets.at(asset_id).artifact;
   const auto artifact_bytes = value(
       store.read_artifact(bundle, artifact), "Sample Artifact read");
 
@@ -279,12 +301,12 @@ nlohmann::json mutate_sample_cache(
   const auto corrupt = value(cache.read(corrupt_key), "corrupt cache read");
 
   return {
-      {"revision", imported.state.revision},
+      {"revision", imported->state.revision},
       {"contract", "lmdj.project.v5"},
-      {"replayed", replayed.replayed},
+      {"replayed", replayed->replayed},
       {"padAssetId", pad.asset_id->value()},
       {"padPlayback", pad_playback_json(pad)},
-      {"assetCount", imported.state.assets.size()},
+      {"assetCount", imported->state.assets.size()},
       {"artifactSha256", artifact.sha256},
       {"artifactByteLength", artifact.byte_length},
       {"artifactBytes", text(artifact_bytes)},
