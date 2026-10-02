@@ -760,6 +760,60 @@ void test_cooker_resolves_parity_fields_into_48_khz_frames() {
                   3, 1, 700, -30, lmdj::cooker::ResolvedVoiceDsp::kReverse}));
 }
 
+lmdj::cooker::ResolvedVoiceDsp resolve_pad_dsp(const lmdj::domain::PadPlayback& playback) {
+  const auto resolved = lmdj::cooker::resolve_pad_playback(playback, 44'100, 8);
+  LMDJ_CHECK(resolved.has_value());
+  return resolved.value().dsp;
+}
+
+lmdj::domain::PadPlayback tone_playback() {
+  lmdj::domain::PadPlayback playback{1, 7, TriggerMode::gate, 0, false};
+  playback.attack_ms = 100;
+  playback.release_ms = 4'000;
+  playback.tone = -40;
+  playback.eq.low = lmdj::domain::PadEqShelf{lmdj::domain::EqBandKind::cut, 80, 0};
+  playback.eq.mid = lmdj::domain::PadEqBell{1'000, -600, 1'400};
+  playback.eq.high = lmdj::domain::PadEqShelf{lmdj::domain::EqBandKind::shelf, 9'000, 300};
+  return playback;
+}
+
+// Envelope milliseconds become 48 kHz output frames, and the tone and EQ keep
+// Project Truth's units, with presence and cut kinds as flags.
+void test_cooker_resolves_tone_fields() {
+  using lmdj::cooker::ResolvedVoiceDsp;
+  const auto artifact = fixture_artifact("mono-44100.wav");
+  auto project = project_with_pattern(artifact);
+  project.banks.at(0).at(0).playback = tone_playback();
+  const auto result = lmdj::cooker::cook(
+      project,
+      PatternId{kPatternId},
+      resolver_for({{artifact.sha256, fixture_bytes("mono-44100.wav")}}));
+  LMDJ_CHECK(result.has_value());
+  const auto& dsp = result.value()->pads.at(0).playback.dsp;
+  LMDJ_CHECK(dsp.attack_frames == 4'800);
+  LMDJ_CHECK(dsp.release_frames == 192'000);
+  LMDJ_CHECK(dsp.tone == -40);
+  LMDJ_CHECK(dsp.eq_flags == (ResolvedVoiceDsp::kEqLow | ResolvedVoiceDsp::kEqLowCut |
+                              ResolvedVoiceDsp::kEqMid | ResolvedVoiceDsp::kEqHigh));
+  LMDJ_CHECK(dsp.eq_low_freq_hz == 80 && dsp.eq_low_gain_millidb == 0);
+  LMDJ_CHECK(dsp.eq_mid_freq_hz == 1'000 && dsp.eq_mid_gain_millidb == -600 &&
+             dsp.eq_mid_q_milli == 1'400);
+  LMDJ_CHECK(dsp.eq_high_freq_hz == 9'000 && dsp.eq_high_gain_millidb == 300);
+  LMDJ_CHECK(resolve_pad_dsp(tone_playback()) == dsp);
+}
+
+// A tone inside its +/-2 deadband resolves to neutral, so it renders as the
+// untouched playback; just outside it, the tone is carried.
+void test_cooker_resolves_the_tone_deadband_to_neutral() {
+  auto playback = lmdj::domain::PadPlayback{1, 7, TriggerMode::one_shot, 0, false};
+  for (const std::int32_t value : {-2, -1, 1, 2}) {
+    playback.tone = value;
+    LMDJ_CHECK(lmdj::cooker::is_neutral(resolve_pad_dsp(playback)));
+  }
+  playback.tone = 3;
+  LMDJ_CHECK(resolve_pad_dsp(playback).tone == 3);
+}
+
 // The public resolver needs only the source rate and length, and yields what
 // cooking the same Pad yields, so a Host preview plays the cooked voice.
 void test_resolve_pad_playback_matches_the_cooked_playback() {
@@ -916,6 +970,8 @@ int main() {
     test_cooker_resolves_default_playback_to_a_neutral_dsp_block();
     test_cooker_resolves_parity_fields_into_48_khz_frames();
     test_cooker_rejects_a_crossfade_beyond_half_an_open_loop();
+    test_cooker_resolves_tone_fields();
+    test_cooker_resolves_the_tone_deadband_to_neutral();
     test_resolve_pad_playback_matches_the_cooked_playback();
     test_resolve_pad_playback_refuses_a_rate_or_trim_the_source_cannot_hold();
     test_cooker_rejects_invalid_tick_and_duration_bounds();

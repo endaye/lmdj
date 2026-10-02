@@ -195,9 +195,11 @@ bool valid_trigger_mode(domain::TriggerMode mode) noexcept {
   return false;
 }
 
-// Resolves the lmdj.project.v5 5.1.0 parity fields into 48 kHz output frames.
-// Source-frame values are rescaled exactly as the trim start is; a rounding
-// overshoot is clamped back inside the resolved loop so the block always fits.
+// Resolves the lmdj.project.v5 5.1.0 and 5.2.0 voice settings. Source-frame
+// values are rescaled to 48 kHz output frames exactly as the trim start is; a
+// rounding overshoot is clamped back inside the resolved loop so the block
+// always fits. Envelope milliseconds become 48 kHz output frames, a tone in
+// its +/-2 deadband resolves to neutral, and the EQ keeps its own units.
 foundation::Result<ResolvedVoiceDsp> resolve_voice_dsp(
     const domain::PadPlayback& playback,
     std::uint32_t source_rate,
@@ -210,7 +212,7 @@ foundation::Result<ResolvedVoiceDsp> resolve_voice_dsp(
   };
   // The domain cannot bound an open trim end; the source length can.
   if (!domain::is_valid_playback_for_source(playback, source_frames)) {
-    return invalid("Pad playback reverse, pitch, pan or loop settings are invalid");
+    return invalid("Pad playback voice settings are invalid");
   }
   const auto loop_start =
       playback.loop_start_frame.value_or(playback.trim_start_frame);
@@ -227,13 +229,41 @@ foundation::Result<ResolvedVoiceDsp> resolve_voice_dsp(
   if (playback.loop_mode == domain::LoopMode::ping_pong) {
     flags |= ResolvedVoiceDsp::kPingPong;
   }
-  return foundation::Result<ResolvedVoiceDsp>::success(ResolvedVoiceDsp{
+  ResolvedVoiceDsp dsp{
       static_cast<std::uint32_t>(runtime_loop_start - runtime_start),
       static_cast<std::uint32_t>(runtime_crossfade),
       static_cast<std::int16_t>(playback.pitch_cents),
       static_cast<std::int8_t>(playback.pan),
       flags,
-  });
+  };
+  dsp.attack_frames = static_cast<std::uint32_t>(playback.attack_ms) * 48U;
+  dsp.release_frames = static_cast<std::uint32_t>(playback.release_ms) * 48U;
+  dsp.tone = playback.tone >= -2 && playback.tone <= 2
+                 ? std::int8_t{0}
+                 : static_cast<std::int8_t>(playback.tone);
+  if (const auto& low = playback.eq.low; low.has_value()) {
+    dsp.eq_flags |= ResolvedVoiceDsp::kEqLow;
+    if (low->kind == domain::EqBandKind::cut) {
+      dsp.eq_flags |= ResolvedVoiceDsp::kEqLowCut;
+    }
+    dsp.eq_low_freq_hz = static_cast<std::uint16_t>(low->freq_hz);
+    dsp.eq_low_gain_millidb = static_cast<std::int16_t>(low->gain_millidb);
+  }
+  if (const auto& mid = playback.eq.mid; mid.has_value()) {
+    dsp.eq_flags |= ResolvedVoiceDsp::kEqMid;
+    dsp.eq_mid_freq_hz = static_cast<std::uint16_t>(mid->freq_hz);
+    dsp.eq_mid_gain_millidb = static_cast<std::int16_t>(mid->gain_millidb);
+    dsp.eq_mid_q_milli = static_cast<std::uint16_t>(mid->q_milli);
+  }
+  if (const auto& high = playback.eq.high; high.has_value()) {
+    dsp.eq_flags |= ResolvedVoiceDsp::kEqHigh;
+    if (high->kind == domain::EqBandKind::cut) {
+      dsp.eq_flags |= ResolvedVoiceDsp::kEqHighCut;
+    }
+    dsp.eq_high_freq_hz = static_cast<std::uint16_t>(high->freq_hz);
+    dsp.eq_high_gain_millidb = static_cast<std::int16_t>(high->gain_millidb);
+  }
+  return foundation::Result<ResolvedVoiceDsp>::success(dsp);
 }
 
 foundation::Result<ResolvedPlayback> resolve_playback(
