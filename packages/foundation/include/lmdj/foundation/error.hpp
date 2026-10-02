@@ -83,6 +83,14 @@ class Result {
     return Result(std::in_place_index<0>, value);
   }
 
+  // Constructs T in place from its constructor or aggregate arguments, so a
+  // composite such as an applied command holding a ProjectState is never a
+  // separate temporary in the returning frame (#1771).
+  template <typename... Args>
+  static Result emplace_success(Args&&... args) {
+    return Result(std::in_place_index<0>, std::forward<Args>(args)...);
+  }
+
   static Result failure(Error error) {
     return Result(std::in_place_index<1>, std::move(error));
   }
@@ -96,9 +104,9 @@ class Result {
   const Error& error() const { return std::get<Error>(storage_); }
 
  private:
-  template <std::size_t Index, typename Value>
-  Result(std::in_place_index_t<Index> index, Value&& value)
-      : storage_(index, std::forward<Value>(value)) {}
+  template <std::size_t Index, typename... Values>
+  Result(std::in_place_index_t<Index> index, Values&&... values)
+      : storage_(index, std::forward<Values>(values)...) {}
 
   std::variant<T, Error> storage_;
 };

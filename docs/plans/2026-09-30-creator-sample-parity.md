@@ -214,7 +214,7 @@ The PR 7 column shifts with them, and is re-derived from live `origin/main` when
 
 | Identity | Baseline (`2.0.70.0`) | PR 4 (4a: #1666 settle, `2.0.71.0`; 4b: `5.2.0` cut) | PR 7 (#1667 settle) | Reason |
 | --- | --- | --- | --- | --- |
-| Product Build | `2.0.70.0` | 4a: `2.0.71.0`; 4b: next free `2.0.*` BUILD | next free `2.0.*` BUILD | Contract and Module identity changes |
+| Product Build | `2.0.70.0` | 4a: `2.0.71.0`; 4b: `2.0.75.0` | next free `2.0.*` BUILD | Contract and Module identity changes |
 | `lmdj.project.v5` | `5.1.0` | 4b: `5.2.0` | unchanged | Backward-compatible optional fields, Contract MINOR (§7; precedent `lmdj.project.v4` `4.1.0`) |
 | `lmdj.runtime-content.v1` | `1.0.0` | unchanged | unchanged | Encoder refuses non-neutral DSP |
 | `authoring-domain` | `4.2.0` | `4.3.0` | `4.4.0` | New playback fields and refusals |
@@ -423,11 +423,15 @@ Branch prefixes are limited to `feat/`, `fix/` and `docs/` (`docs/governance/git
 - The settle lands alone as PR 4a, `feat/settle-module-versions-2-0-71`, Product Build `2.0.71.0`. It settles every Module identity owed since `2.0.69.0`: #1666's (#1717, #1735) and the concurrent Creator workflow PRs' (#1707, #1708, #1711, #1714, #1716, #1727, #1734). The owner chose MAJOR for project-io (`6.0.0`, the #1699 persistence precedent) and for project-cooker (`2.0.0`, `ResolvedPlayback` lost aggregate initialisation).
 - The `5.2.0` cut moves to PR 4b, opened only after #1720. #1667's Pad fields grow wasm32 `ProjectState` again, so its Web stack budget must be fixed or re-measured first (pitfall `web-project-io-stack-scales-with-project-state`).
 
-**Files (4b):** as Task 1, plus `tests/fixtures/contracts/project-v5-tone-parity-{valid,invalid}.json`
+**Files (4b):** as Task 1, with `tests/fixtures/contracts/project-v5-tone-parity-valid.json`, plus the Cardputer profile (`products/lmdj/src/cardputer_assembly.cpp`, `apps/cardputer-host/CMakeLists.txt`), which tracks the Build and the Assembly digest since 4a. As in Task 1, the invalid cases are bound mutations of the valid fixture in `schema_contract_test.py`, not a second fixture file.
 
 - [x] Settle the #1666 Module SemVer (PR 4a, `2.0.71.0`).
-- [ ] Add the #1667 optional keys to the schema: `attack_ms`, `release_ms`, `tone`, `eq` with `kind`, `freq_hz`, `gain_millidb` and `q_milli`.
-- [ ] Allocate one Product Build and freeze its snapshot as a separate commit.
+- [x] Add the #1667 optional keys to the schema: `attack_ms`, `release_ms`, `tone`, `eq` with `kind`, `freq_hz`, `gain_millidb` and `q_milli` (PR 4b).
+  - An absent EQ band is bypassed, and a present band carries every field.
+  - A `cut` band keeps its `gain_millidb`, which the DSP ignores, so a band dragged from cut back to shelf keeps its gain.
+  - `eq: {}` and other explicit defaults are accepted, as in `5.1.0`. Writers omit them.
+- [x] Allocate Product Build `2.0.75.0` and freeze its snapshot as a separate commit (PR 4b).
+  - `2.0.72.0` to `2.0.74.0` were skipped: open #1741 (P1 integration) carries snapshots for `2.0.72.0` and `2.0.73.0` and allocates `2.0.74.0`. By owner decision (2026-10-02 +0800), the first PR to merge keeps its number and the later one re-cuts, as with #1697 and #1699.
 
 ### Tasks 13–16: #1667 Core (envelope, tone, EQ)
 

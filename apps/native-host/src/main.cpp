@@ -97,7 +97,7 @@ enum class FacadeSurface {
   query,
 };
 
-constexpr std::array<std::pair<std::string_view, FacadeSurface>, 23>
+constexpr std::array<std::pair<std::string_view, FacadeSurface>, 24>
     kPerformanceOperations{{
         {"pattern.slot.assign", FacadeSurface::command},
         {"pattern.slot.clear", FacadeSurface::command},
@@ -106,6 +106,7 @@ constexpr std::array<std::pair<std::string_view, FacadeSurface>, 23>
         {"performance.inspect", FacadeSurface::query},
         {"performance.record.begin", FacadeSurface::command},
         {"performance.record.event", FacadeSurface::command},
+        {"performance.fx.gesture", FacadeSurface::command},
         {"performance.record.launch-request", FacadeSurface::command},
         {"performance.record.flush", FacadeSurface::command},
         {"performance.record.stop", FacadeSurface::command},

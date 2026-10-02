@@ -476,8 +476,14 @@ class RequestJournal(AbstractContextManager):
         records = state["transitions"]
         if len(records) == len(STEPS) and records[-1]["status"] == "verified":
             _fail("a completed release is history, not a retirement candidate")
-        if records and records[-1]["status"] == "intent":
+        if records and records[-1]["status"] == "intent" and "superseded_by_build" in retirement:
+            # A never-published candidate has no far side that settles what an
+            # outstanding operation did; it must be reconciled first.
             _fail("an outstanding intent needs reconciliation before retirement")
+        # A published supersession may retire over an outstanding intent: the
+        # caller proved this request's own Build is published and its exact-tag
+        # remote audit passes, which settles every step the intent could still
+        # be working toward. The intent stays in the retained original state.
         for name in sorted(os.listdir(self.directory)):
             if name.endswith(".alias") and self.read_alias(name[:-6])["original_id"] == request_id:
                 _fail("an alias still resolves to this request")
