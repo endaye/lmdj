@@ -1,3 +1,4 @@
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
@@ -102,7 +103,7 @@ test("a second tab takes over the open Project and the first takes it back", asy
   await page.goto("/index.html");
   await waitForBootProject(page);
   const shortId = (await overviewProjectId(page).textContent()).trim();
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });

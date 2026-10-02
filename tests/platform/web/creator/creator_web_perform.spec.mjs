@@ -1,3 +1,4 @@
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {createHash} from "node:crypto";
 import {spawn} from "node:child_process";
 import {once} from "node:events";
@@ -521,7 +522,7 @@ async function openLocalProject(page) {
 }
 
 async function activateAudio(page) {
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });
