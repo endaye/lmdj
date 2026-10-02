@@ -148,13 +148,22 @@ bool valid_trigger_mode(domain::TriggerMode mode) noexcept {
   return false;
 }
 
-bool valid_playback(
+// The playback's trim, mode and gain, without its DSP block. A trigger checks
+// the block by preparing it (prepare_voice_kernel), so a voice designs its
+// filters once per trigger, not once to validate and again to play.
+bool valid_playback_range(
     const cooker::ResolvedPlayback& playback,
     std::size_t frame_count) noexcept {
   return playback.start_frame < playback.end_frame &&
          playback.end_frame <= frame_count &&
          valid_trigger_mode(playback.trigger_mode) &&
-         std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F &&
+         std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F;
+}
+
+bool valid_playback(
+    const cooker::ResolvedPlayback& playback,
+    std::size_t frame_count) noexcept {
+  return valid_playback_range(playback, frame_count) &&
          detail::voice_dsp_fits(playback, frame_count);
 }
 
@@ -529,7 +538,7 @@ void RealtimeEngine::start_pattern_voice(
   const auto slot = global_slot(event.slot);
   const auto playback = event.playback;
   if (!valid_material(event.material) ||
-      !valid_playback(playback, event.material.frame_count)) {
+      !valid_playback_range(playback, event.material.frame_count)) {
     audio_invalid_events_ += 1;
     return;
   }
@@ -2191,7 +2200,7 @@ void RealtimeEngine::render(
                            audition_slot - kAuditionBankSlotBase))
         : replay ? SampleView{nullptr, event.material, event.material.frame_count}
                  : current_sample(event.slot);
-    if (!valid_playback(playback, sample.frame_count)) {
+    if (!valid_playback_range(playback, sample.frame_count)) {
       audio_invalid_events_ += 1;
       continue;
     }
