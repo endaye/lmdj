@@ -102,9 +102,10 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   // (script-src 'self') rejects blob:/data: AudioWorklet module URLs.
   // perform_master_tap_worklet joins the inventory at Product Build 1.0.42.0 and
   // ships same-origin for the same reason as capture_worklet.
+  // host_favicon joins at Creator Host 5.0.0, allocated as Product Build 2.0.76.0.
   expect(manifest.assets.map(({role}) => role)).toEqual([
     "host_main", "runtime_script", "runtime_wasm", "host_style", "capture_worklet",
-    "perform_master_tap_worklet",
+    "perform_master_tap_worklet", "host_favicon",
   ]);
   const index = await (await request.get(`${baseURL}/index.html`)).text();
   expect(index).toContain(createHash("sha256").update(manifestBytes).digest("hex"));
@@ -124,7 +125,7 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   if (index.includes("<!--")) expect(liveIndex).not.toContain("<!--");
   expect(liveIndex).not.toMatch(/https?:\/\//i);
   for (const asset of manifest.assets) {
-    expect(asset.path).toMatch(/^assets\/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|wasm)$/);
+    expect(asset.path).toMatch(/^assets\/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|svg|wasm)$/);
     expect(asset.path).not.toMatch(/(?:fixture|\.map$|test)/i);
     const response = await request.get(`${baseURL}/${asset.path}`);
     expect(response.ok()).toBe(true);
