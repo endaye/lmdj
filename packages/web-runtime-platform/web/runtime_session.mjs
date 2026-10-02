@@ -3583,6 +3583,96 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  // Grid editing (#1671): one atomic remove-then-put edit of a Pattern's
+  // events. Slots are flat 0..63, as for deletePad and trigger.
+  function editPatternEvents(request) {
+    const keyShape = (key) =>
+      exactKeys(key, ["slot", "onsetTick"]) && isUnsignedInteger(key.onsetTick);
+    const eventShape = (event) =>
+      exactKeys(event, ["slot", "onsetTick", "durationTick", "velocity"]) &&
+      isUnsignedInteger(event.onsetTick) &&
+      isUnsignedInteger(event.durationTick) &&
+      isUnsignedInteger(event.velocity);
+    let remove;
+    let put;
+    try {
+      if (
+        request === null ||
+        typeof request !== "object" ||
+        !exactKeys(request, ["patternId", "expectedRevision", "remove", "put"]) ||
+        !UUID_PATTERN.test(request.patternId) ||
+        !isUnsignedInteger(request.expectedRevision) ||
+        !Array.isArray(request.remove) || !request.remove.every(keyShape) ||
+        !Array.isArray(request.put) || !request.put.every(eventShape)
+      ) {
+        throw new TypeError("Pattern event edit request is invalid");
+      }
+      remove = request.remove.map((key) => ({
+        slot: flatSlotAddress(key.slot),
+        onset_tick: key.onsetTick,
+      }));
+      put = request.put.map((event) => ({
+        slot: flatSlotAddress(event.slot),
+        onset_tick: event.onsetTick,
+        duration_tick: event.durationTick,
+        velocity: event.velocity,
+      }));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest("pattern.events.edit", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        pattern_id: request.patternId,
+        remove,
+        put,
+      });
+      const base = [
+        "committed_revision", "project_revision", "pattern_id", "replayed",
+        "publication",
+      ];
+      const publication = value?.publication;
+      const swapped = publication === "published" || publication === "live";
+      const failed = publication === "failed";
+      const keys = publication === "none" ? base : failed
+        ? [...base, "pattern_publication", "snapshot_error"]
+        : [...base, "pattern_publication"];
+      const patternPublication = value?.pattern_publication;
+      if (
+        !exactKeys(value, keys) ||
+        !isUnsignedInteger(value.committed_revision) ||
+        value.project_revision !== value.committed_revision ||
+        value.pattern_id !== request.patternId ||
+        typeof value.replayed !== "boolean" ||
+        !["none", "published", "live", "deferred", "failed"].includes(publication) ||
+        (swapped
+          ? !(exactKeys(patternPublication, ["generation", "activation_frame"]) &&
+              isUnsignedInteger(patternPublication.generation) &&
+              isUnsignedInteger(patternPublication.activation_frame))
+          : publication !== "none" && patternPublication !== null)
+      ) {
+        throw protocolMismatch("Pattern event edit result is invalid");
+      }
+      return Object.freeze({
+        committedRevision: value.committed_revision,
+        projectRevision: value.project_revision,
+        patternId: value.pattern_id,
+        replayed: value.replayed,
+        publication,
+        patternPublication: swapped
+          ? Object.freeze({
+              generation: patternPublication.generation,
+              activationFrame: patternPublication.activation_frame,
+            })
+          : null,
+        snapshotError: failed
+          ? normalizeSnapshotError(value.snapshot_error)
+          : null,
+      });
+    });
+  }
+
   function updateSequenceSettings(request) {
     if (
       request === null ||
@@ -5471,6 +5561,7 @@ function createRuntimeSessionController(options = {}) {
     requestPatternTransport,
     inspectPatternTransport,
     createPattern,
+    editPatternEvents,
     updateSequenceSettings,
     querySequenceStatus,
     listSequenceRecovery,

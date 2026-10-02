@@ -108,7 +108,41 @@ export interface PatternTransportRuntimeSession {
   inspectPatternTransport(sessionId: string): Promise<PatternTransportStatus>;
 }
 
+export interface PatternEventKeyRequest {
+  /** Flat Pad slot, 0..63. */
+  readonly slot: number;
+  readonly onsetTick: number;
+}
+
+export interface PatternEventRequest extends PatternEventKeyRequest {
+  readonly durationTick: number;
+  readonly velocity: number;
+}
+
 export interface SequenceRuntimeSession {
+  /**
+   * Atomically removes the keyed events, then puts each event by key.
+   * `publication` is "none" when the edited Pattern is not the Runtime's
+   * current one, "published" when it was swapped in while stopped, "live"
+   * when it was swapped in place while playing, "deferred" when every
+   * Pattern slot was held by a sounding retiring view (it swaps in place by
+   * itself once one frees), and "failed" when the committed edit's view
+   * could not swap (`snapshotError`).
+   */
+  editPatternEvents(request: {
+    readonly patternId: string;
+    readonly expectedRevision: number;
+    readonly remove: readonly PatternEventKeyRequest[];
+    readonly put: readonly PatternEventRequest[];
+  }): Promise<Readonly<{
+    committedRevision: number;
+    projectRevision: number;
+    patternId: string;
+    replayed: boolean;
+    publication: "none" | "published" | "live" | "deferred" | "failed";
+    patternPublication: Readonly<{generation: number; activationFrame: number}> | null;
+    snapshotError: Readonly<{code: string; message: string; details: Readonly<Record<string, unknown>>}> | null;
+  }>>;
   createPattern(request: {
     readonly patternId: string;
     readonly bars: 1 | 2 | 4 | 8;

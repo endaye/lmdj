@@ -173,6 +173,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"pattern.slot.clear", OperationKind::command},
       {"pattern.slot.move", OperationKind::command},
       {"pattern.create", OperationKind::command},
+      {"pattern.events.edit", OperationKind::command},
       {"performance.delete", OperationKind::command},
       {"performance.discard", OperationKind::command},
       {"performance.fx.gesture", OperationKind::command},
@@ -3987,6 +3988,9 @@ struct Application::Impl {
     if (operation == "pattern.create") {
       return pattern_create(request);
     }
+    if (operation == "pattern.events.edit") {
+      return pattern_events_edit(request);
+    }
     if (operation == "pattern.slot.assign") {
       return pattern_slot_assign(request);
     }
@@ -5840,6 +5844,73 @@ struct Application::Impl {
          {"bars", bars},
          {"replayed", created.value().outcome.replayed}},
         created.value().outcome.state.revision);
+  }
+
+  // Grid editing (#1671): one atomic remove-then-put edit of a Pattern's
+  // events. Bounds here are the widest Pattern's; the Domain validates each
+  // event against the edited Pattern's own length and refuses missing or
+  // repeated keys and edits that change nothing.
+  nlohmann::json pattern_events_edit(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "command_id", "expected_revision",
+             "pattern_id", "remove", "put"}),
+        "pattern.events.edit request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto command_id = uuid_field(request, "command_id");
+    const auto revision = unsigned_field(request, "expected_revision");
+    const auto pattern_id = uuid_field(request, "pattern_id");
+    const auto& remove = request.at("remove");
+    const auto& put = request.at("put");
+    require(remove.is_array() && put.is_array(),
+            "pattern.events.edit edits must be arrays");
+    constexpr auto max_ticks = 8U * domain::kBarTicks4x4;
+    std::vector<domain::PatternEventKey> keys;
+    keys.reserve(remove.size());
+    for (const auto& key : remove) {
+      require(exact_keys(key, {"slot", "onset_tick"}),
+              "pattern event key shape is invalid");
+      keys.push_back(domain::PatternEventKey{
+          slot_value(key.at("slot")),
+          static_cast<std::uint32_t>(
+              unsigned_field(key, "onset_tick", max_ticks - 1U))});
+    }
+    std::vector<domain::PatternEvent> events;
+    events.reserve(put.size());
+    for (const auto& event : put) {
+      require(exact_keys(event,
+                         {"slot", "onset_tick", "duration_tick", "velocity"}),
+              "pattern event shape is invalid");
+      const auto onset = unsigned_field(event, "onset_tick", max_ticks - 1U);
+      const auto duration = unsigned_field(event, "duration_tick", max_ticks);
+      const auto velocity = unsigned_field(event, "velocity", 127);
+      require(velocity > 0 && duration > 0, "pattern event is invalid");
+      events.push_back(domain::PatternEvent{
+          slot_value(event.at("slot")),
+          static_cast<std::uint32_t>(onset),
+          static_cast<std::uint32_t>(duration),
+          static_cast<std::uint8_t>(velocity)});
+    }
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) {
+      return error_envelope(admitted.error());
+    }
+    const auto edited = projects.execute(
+        path,
+        domain::EditPatternEvents{
+            domain::CommandMeta{foundation::CommandId{command_id}, revision},
+            foundation::PatternId{pattern_id},
+            std::move(keys),
+            std::move(events)});
+    if (!edited.has_value()) {
+      return error_envelope(edited.error());
+    }
+    return success_envelope(
+        {{"committed_revision", edited.value().state.revision},
+         {"pattern_id", pattern_id},
+         {"replayed", edited.value().replayed}},
+        edited.value().state.revision);
   }
 
   nlohmann::json pattern_slot_assign(const nlohmann::json &request) {

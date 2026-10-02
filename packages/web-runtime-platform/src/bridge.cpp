@@ -242,6 +242,7 @@ bool supported_operation(std::string_view operation) {
       "asset.import",
       "pad.assign",
       "pattern.create",
+      "pattern.events.edit",
       "snapshot.reload",
       "snapshot.retry",
       "sample.inspect",
