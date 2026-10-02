@@ -5,10 +5,11 @@ const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
 
 // Records the app's own transport traffic: every pattern.transport.request
-// payload and ticket, and every snapshot.reload publication. The wrapper sits
-// on the same transport object the session sends through, so it can also drop
-// one ticket response (the bridge-timeout class) while the native side still
-// executes the command.
+// payload and ticket, every snapshot.reload publication, and every
+// sequence.settings.update command with its resolved pattern_publication. The wrapper sits on the same transport
+// object the session sends through, so it can also drop one ticket response
+// (the bridge-timeout class) while the native side still executes the
+// command, or fail one settings update before the native side executes it.
 async function installTransportProofRecorder(page) {
   await page.addInitScript(() => {
     let exposed;
@@ -23,7 +24,37 @@ async function installTransportProofRecorder(page) {
           async send(...arguments_) {
             const [request] = arguments_;
             const operation = request?.operation;
+            if (operation === "sequence.settings.update" &&
+                window.__failNextSettingsUpdate === true) {
+              window.__failNextSettingsUpdate = false;
+              window.__sequenceSettingsUpdateProof ??= [];
+              window.__sequenceSettingsUpdateProof.push({
+                payload: structuredClone(request.payload),
+                ok: null,
+                failed: true,
+              });
+              // The bridge-class failure rejects before the native side
+              // executes, so Truth cannot move; the Creator surfaces the
+              // error code and keeps the committed readout.
+              throw Object.assign(
+                new Error("sequence settings update failed"),
+                {code: "HOST_TIMEOUT"},
+              );
+            }
             const response = await nativeTransport.send(...arguments_);
+            if (operation === "sequence.settings.update") {
+              window.__sequenceSettingsUpdateProof ??= [];
+              window.__sequenceSettingsUpdateProof.push({
+                payload: structuredClone(request.payload),
+                ok: response?.ok ?? null,
+                failed: false,
+                patternPublication:
+                  response?.result?.pattern_publication === null ||
+                  response?.result?.pattern_publication === undefined
+                    ? null
+                    : structuredClone(response.result.pattern_publication),
+              });
+            }
             if (operation === "pattern.transport.request") {
               window.__patternTransportRequests ??= [];
               const entry = {
@@ -540,4 +571,200 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
   expect(recovered.patterns[patternId].events).toHaveLength(2);
   expect(recovered.patterns[patternId].events)
     .toContainEqual(expect.objectContaining({slot: {bank: 0, pad: 1}, velocity: 100}));
+});
+
+// Direct Tempo/Swing controls (#1672): a drag previews locally and commits
+// once on release, step buttons and TAP commit immediately, Escape cancels,
+// a failed commit surfaces honestly, a playing commit activates at the next
+// bar boundary, and recording locks the controls at two layers — the
+// disabled UI and the control layer's HOST_STATE_INVALID.
+test("direct Tempo and Swing controls commit once, cancel, fail honestly, and stay locked while recording", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(240_000);
+  await installTransportProofRecorder(page);
+  // TAP converts tap intervals, so the journey controls the clock it reads.
+  await page.addInitScript(() => {
+    window.__tapNow = null;
+    const realNow = performance.now.bind(performance);
+    performance.now = () => window.__tapNow ?? realNow();
+  });
+  await page.goto("/index.html");
+  await importProject(page);
+  const baseline = await inspectTruth(page);
+  await enterSequenceAndPlay(page);
+  const bpmFader = page.getByRole("slider", {name: "BPM"});
+  const swingFader = page.getByRole("slider", {name: "Swing"});
+  await expect(bpmFader).toBeVisible();
+  await expect(page.getByRole("button", {name: /Apply/})).toHaveCount(0);
+  const settingsUpdates = () =>
+    page.evaluate(() => window.__sequenceSettingsUpdateProof ?? []);
+
+  // Leg 1 — a drag previews locally and commits exactly once on release: one
+  // settings command, one revision, Truth carries the dragged tempo.
+  const direction = baseline.bpm <= 230 ? 1 : -1;
+  const dragged = baseline.bpm + 10 * direction;
+  await bpmFader.fill(String(dragged));
+  expect((await inspectTruth(page)).bpm).toBe(baseline.bpm);
+  expect(await settingsUpdates()).toHaveLength(0);
+  await bpmFader.dispatchEvent("pointerup");
+  await expect.poll(async () => (await inspectTruth(page)).bpm).toBe(dragged);
+  let truth = await inspectTruth(page);
+  expect(truth.revision).toBe(baseline.revision + 1);
+  let updates = await settingsUpdates();
+  expect(updates).toHaveLength(1);
+  expect(updates[0]).toMatchObject({ok: true, failed: false});
+  expect(updates[0].payload).toMatchObject({
+    bpm: dragged,
+    quantize_enabled: null,
+    swing_percent: null,
+  });
+
+  // Leg 2 — a step button commits immediately: one click, one command, one
+  // revision.
+  const stepped = dragged + direction;
+  await page.getByRole("button", {
+    name: direction > 0 ? "Increase BPM" : "Decrease BPM",
+  }).click();
+  await expect.poll(async () => (await inspectTruth(page)).bpm).toBe(stepped);
+  expect((await inspectTruth(page)).revision).toBe(baseline.revision + 2);
+  updates = await settingsUpdates();
+  expect(updates).toHaveLength(2);
+  expect(updates[1].payload).toMatchObject({bpm: stepped});
+
+  // Leg 3 — TAP: the first tap of a chain commits nothing; the second
+  // converts the synthetic 500 ms interval to 120 BPM and commits it.
+  await page.evaluate(() => {
+    window.__tapNow = 1_000;
+  });
+  await page.getByRole("button", {name: "Tap Tempo"}).click();
+  expect(await settingsUpdates()).toHaveLength(2);
+  await page.evaluate(() => {
+    window.__tapNow = 1_500;
+  });
+  await page.getByRole("button", {name: "Tap Tempo"}).click();
+  await page.evaluate(() => {
+    window.__tapNow = null;
+  });
+  await expect.poll(async () => (await inspectTruth(page)).bpm).toBe(120);
+  expect((await inspectTruth(page)).revision).toBe(baseline.revision + 3);
+  updates = await settingsUpdates();
+  expect(updates).toHaveLength(3);
+  expect(updates[2].payload).toMatchObject({bpm: 120});
+
+  // Leg 4 — Escape cancels a Swing draft: no command, no revision, and the
+  // control falls back to the committed value.
+  const baseSwing = baseline.sequence_settings.swing_percent;
+  const swung = baseSwing <= 65 ? baseSwing + 10 : baseSwing - 10;
+  await swingFader.fill(String(swung));
+  expect((await inspectTruth(page)).sequence_settings.swing_percent)
+    .toBe(baseSwing);
+  await swingFader.press("Escape");
+  await expect(swingFader).toHaveValue(String(baseSwing));
+  truth = await inspectTruth(page);
+  expect(truth.sequence_settings.swing_percent).toBe(baseSwing);
+  expect(truth.revision).toBe(baseline.revision + 3);
+  expect(await settingsUpdates()).toHaveLength(3);
+
+  // Leg 5 — a failed commit surfaces the failure and changes nothing:
+  // Truth keeps the committed value and the readout never adopted the draft.
+  // The alert speaks user language and the code is in Developer diagnostics
+  // (#1680).
+  await page.evaluate(() => {
+    window.__failNextSettingsUpdate = true;
+  });
+  await page.getByRole("button", {name: "Increase Swing"}).click();
+  const failure = page.getByRole("alert")
+    .filter({hasText: "The audio engine stopped responding."});
+  await expect(failure).toBeVisible({timeout: 30_000});
+  await expect(failure).not.toContainText("HOST_TIMEOUT");
+  await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
+  const log = page.getByRole("region", {name: "Developer diagnostics"});
+  await expect(log).toContainText("Update Sequence settings");
+  await expect(log).toContainText("HOST_TIMEOUT");
+  await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
+  truth = await inspectTruth(page);
+  expect(truth.sequence_settings.swing_percent).toBe(baseSwing);
+  expect(truth.revision).toBe(baseline.revision + 3);
+  await expect(swingFader).toHaveValue(String(baseSwing));
+  updates = await settingsUpdates();
+  expect(updates).toHaveLength(4);
+  expect(updates[3]).toMatchObject({ok: null, failed: true});
+
+  // Leg 6 — a playing commit republishes the current Pattern from the next
+  // bar boundary: the response's pattern_publication.activation_frame sits a
+  // whole number of old-tempo bars after the transport's origin_frame. The
+  // engine's bar math is fixed at 48 kHz transport frames
+  // (kBarTicks4x4/kTickDenominator/kTransportPpq in prepared_sample_bank).
+  const playingBpm = (await inspectTruth(page)).bpm;
+  await playStopKey(page).click();
+  await transportStatus(page, "playing");
+  const requests = await transportRequests(page);
+  const sessionId = requests[0].payload.session_id;
+  await expect.poll(async () =>
+    (await inspectTransport(page, sessionId)).playing, {timeout: 30_000})
+    .toBe(true);
+  const originFrame = (await inspectTransport(page, sessionId)).origin_frame;
+  expect(Number.isInteger(originFrame)).toBe(true);
+  expect(originFrame).toBeGreaterThanOrEqual(0);
+  const shifted = playingBpm >= 240 ? playingBpm - 1 : playingBpm + 1;
+  await bpmFader.fill(String(shifted));
+  await bpmFader.dispatchEvent("pointerup");
+  await expect.poll(async () => (await inspectTruth(page)).bpm).toBe(shifted);
+  updates = await settingsUpdates();
+  expect(updates).toHaveLength(5);
+  expect(updates[4].ok).toBe(true);
+  const publication = updates[4].patternPublication;
+  expect(publication).not.toBeNull();
+  expect(Number.isInteger(publication.activation_frame)).toBe(true);
+  expect(publication.activation_frame).toBeGreaterThan(originFrame);
+  // One 4/4 bar at the OLD tempo: ceil(3840 * 2_880_000 / (bpm * 960)).
+  const barFrames = Math.ceil(3_840 * 2_880_000 / (playingBpm * 960));
+  expect((publication.activation_frame - originFrame) % barFrames).toBe(0);
+  await playStopKey(page).click();
+  await transportStatus(page, "stopped");
+
+  // Leg 7 — recording locks every Tempo/Swing control and says why; the
+  // control layer itself refuses a direct settings write, so the refusal
+  // does not depend on the UI's pre-refusal.
+  await recordKey(page).click();
+  await transportStatus(page, "recording");
+  await expect(bpmFader).toBeDisabled();
+  await expect(swingFader).toBeDisabled();
+  for (const name of [
+    "Decrease BPM", "Increase BPM", "Tap Tempo",
+    "Decrease Swing", "Increase Swing",
+  ]) {
+    await expect(page.getByRole("button", {name, exact: true})).toBeDisabled();
+  }
+  await expect(page.getByText("Tempo and Swing are locked while recording"))
+    .toBeVisible();
+  truth = await inspectTruth(page);
+  const refused = await page.evaluate(async ({session, revision}) =>
+    window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "sequence.settings.update",
+      payload: {
+        command_id: crypto.randomUUID(),
+        expected_revision: revision,
+        session_id: session,
+        bpm: 133,
+        quantize_enabled: null,
+        swing_percent: null,
+      },
+    }), {session: sessionId, revision: truth.revision});
+  expect(refused.ok).toBe(false);
+  expect(refused.error?.code).toBe("HOST_STATE_INVALID");
+  truth = await inspectTruth(page);
+  expect(truth.bpm).toBe(shifted);
+  expect(truth.revision).toBe(baseline.revision + 4);
+  updates = await settingsUpdates();
+  expect(updates).toHaveLength(6);
+  expect(updates[5]).toMatchObject({ok: false, failed: false});
+  expect(updates[5].payload).toMatchObject({bpm: 133});
+
+  await recordKey(page).click();
+  await transportStatus(page, "playing");
+  await playStopKey(page).click();
+  await transportStatus(page, "stopped");
 });

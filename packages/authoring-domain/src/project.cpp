@@ -199,25 +199,23 @@ foundation::Result<ProjectState> create_project(
         });
   }
 
-  ProjectState state{
+  // Built in the caller's return slot, so the new Project is never also a
+  // local in this frame (#1771).
+  auto created = foundation::Result<ProjectState>::emplace_success(
       ProjectContract::v5,
       std::move(id),
-      0,
+      std::uint64_t{0},
       bpm,
       true,
-      50,
-      {},
-      {},
-      {},
-      {},
-  };
+      std::uint8_t{50});
+  auto& state = created.value();
   for (std::uint8_t bank = 0; bank < state.banks.size(); ++bank) {
     for (std::uint8_t pad = 0; pad < state.banks.at(bank).size(); ++pad) {
       state.banks.at(bank).at(pad) =
           PadSlot{PadSlotId{bank, pad}, std::nullopt, PadPlayback{}};
     }
   }
-  return foundation::Result<ProjectState>::success(std::move(state));
+  return created;
 }
 
 bool is_valid_uuid(std::string_view value) noexcept {

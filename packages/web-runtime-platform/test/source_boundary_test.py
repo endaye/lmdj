@@ -286,6 +286,7 @@ def main() -> int:
     formal_host_source = formal_host_main.read_text(encoding="utf-8")
     for required in (
         "recordPerformanceEvent: session.recordPerformanceEvent",
+        "applyFxGesture: session.applyFxGesture",
         "requestPerformancePatternLaunch: session.requestPerformancePatternLaunch",
     ):
         if required not in formal_host_source:

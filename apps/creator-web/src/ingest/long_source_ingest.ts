@@ -54,6 +54,13 @@ interface SourceMetadata {
   readonly normalizedFrames: number | null;
 }
 
+// #1680: what happened and what to do, as two plain sentences. The resource
+// token, observed value and limit stay in details for Developer diagnostics.
+function userSentences(why: string, remedy: string): string {
+  const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+  return `${sentence(why)}. ${sentence(remedy)}.`;
+}
+
 function resourceError(
   resource: string,
   observed: number,
@@ -63,7 +70,7 @@ function resourceError(
 ): LongSourceIngestError {
   return new LongSourceIngestError(
     "WEB_RUNTIME_RESOURCE_LIMIT",
-    `why: ${why}; remedy: ${remedy}`,
+    userSentences(why, remedy),
     {resource, observed, limit},
   );
 }
@@ -77,7 +84,7 @@ function unsupported(
 ): LongSourceIngestError {
   return new LongSourceIngestError(
     "UNSUPPORTED_AUDIO",
-    `why: ${why}; remedy: ${remedy}`,
+    userSentences(why, remedy),
     {resource, observed, limit},
   );
 }
@@ -113,8 +120,8 @@ function normalizedFrames(frames: number, sampleRate: number): number {
       "ingest_metadata",
       "invalid",
       "positive frame count and sample rate",
-      "the source duration metadata is invalid",
-      "export the source again with valid audio metadata",
+      "this file's length information is damaged",
+      "export it again from your audio app",
     );
   }
   return Math.ceil(frames * 48_000 / sampleRate);
@@ -125,8 +132,8 @@ function wavMetadata(bytes: Uint8Array): SourceMetadata {
       !hasAscii(bytes, 8, "WAVE")) {
     throw unsupported(
       "ingest_container", ascii(bytes, 0, 12), "RIFF/WAVE",
-      "the source is not a valid WAV container",
-      "export PCM16/24/32 or float32 WAV",
+      "this WAV file is damaged or incomplete",
+      "export it again as a standard WAV file",
     );
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -152,8 +159,8 @@ function wavMetadata(bytes: Uint8Array): SourceMetadata {
       if (!validPcm && !validFloat) {
         throw unsupported(
           "ingest_codec", `${resolvedFormat}/${bits}`, "PCM16/24/32 or float32",
-          "the WAV codec or sample width is unsupported",
-          "export PCM16/24/32 or float32 WAV",
+          "this WAV file uses an audio format Creator cannot read",
+          "export it again as a standard WAV file",
         );
       }
     } else if (hasAscii(bytes, offset, "data")) {
@@ -167,8 +174,8 @@ function wavMetadata(bytes: Uint8Array): SourceMetadata {
       dataBytes === null || channels < 1 || blockAlign < 1 || dataBytes < blockAlign) {
     throw unsupported(
       "ingest_metadata", "missing", "WAV fmt and data chunks",
-      "required WAV metadata is missing",
-      "export the source again as a complete WAV file",
+      "this WAV file is incomplete",
+      "export it again as a complete WAV file",
     );
   }
   return Object.freeze({
@@ -190,8 +197,8 @@ function flacMetadata(bytes: Uint8Array): SourceMetadata {
       if (size !== 34 || payload + size > bytes.byteLength) {
         throw unsupported(
           "ingest_metadata", "invalid", "FLAC STREAMINFO",
-          "the FLAC STREAMINFO block is invalid",
-          "export the source again as a complete FLAC file",
+          "this FLAC file is damaged",
+          "export it again as a complete FLAC file",
         );
       }
       const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -210,8 +217,8 @@ function flacMetadata(bytes: Uint8Array): SourceMetadata {
   }
   throw unsupported(
     "ingest_metadata", "missing", "FLAC STREAMINFO",
-    "the FLAC STREAMINFO block is missing",
-    "export the source again as a complete FLAC file",
+    "this FLAC file is incomplete",
+    "export it again as a complete FLAC file",
   );
 }
 
@@ -280,8 +287,8 @@ function mp3Metadata(bytes: Uint8Array): SourceMetadata {
   }
   throw unsupported(
     "ingest_codec", "invalid", "MPEG-1/2 Layer III",
-    "no supported MP3 audio frame was found",
-    "export MPEG-1 or MPEG-2 Layer III audio",
+    "Creator could not find playable audio in this MP3 file",
+    "export it again as a standard MP3 file",
   );
 }
 
@@ -300,8 +307,8 @@ function mp4Metadata(bytes: Uint8Array): SourceMetadata {
       mp4a + 26 > bytes.byteLength) {
     throw unsupported(
       "ingest_metadata", "missing", "MP4 mdhd and AAC mp4a",
-      "required M4A/AAC metadata is missing",
-      "export AAC-LC or HE-AAC in an M4A container",
+      "this M4A file is incomplete",
+      "export it again as a standard M4A (AAC) file",
     );
   }
   const version = bytes[mdhd + 8];
@@ -317,16 +324,16 @@ function mp4Metadata(bytes: Uint8Array): SourceMetadata {
       throw resourceError(
         "ingest_decoded_frames", Number.MAX_SAFE_INTEGER,
         Number.MAX_SAFE_INTEGER - 1,
-        "the M4A duration exceeds safe numeric bounds",
-        "shorten or re-export the source",
+        "this M4A file reports a length Creator cannot handle",
+        "shorten it or export it again",
       );
     }
     duration = Number(rawDuration);
   } else {
     throw unsupported(
       "ingest_metadata", `mdhd-v${String(version)}`, "mdhd version 0 or 1",
-      "the M4A duration metadata is invalid",
-      "export AAC-LC or HE-AAC in a standard M4A container",
+      "this M4A file's length information is damaged",
+      "export it again as a standard M4A (AAC) file",
     );
   }
   const channels = view.getUint16(mp4a + 24, false);
@@ -351,8 +358,8 @@ function sniffMetadata(bytes: Uint8Array): SourceMetadata {
     "ingest_container",
     ascii(bytes, 0, Math.min(12, bytes.byteLength)),
     "WAV, MP3, M4A/AAC, or FLAC",
-    "the source container is not supported",
-    "choose WAV, MP3, M4A/AAC, or FLAC audio",
+    "this type of audio file is not supported",
+    "choose a WAV, MP3, M4A/AAC or FLAC file",
   );
 }
 
@@ -360,16 +367,16 @@ function enforceMetadata(metadata: SourceMetadata, limits: LongSourceLimits): vo
   if (metadata.channels !== null && metadata.channels > limits.channels) {
     throw resourceError(
       "ingest_channels", metadata.channels, limits.channels,
-      "the source has too many channels",
-      `export mono or stereo audio with at most ${limits.channels} channels`,
+      "this file has more audio channels than Creator supports",
+      "export it again as mono or stereo audio",
     );
   }
   if (metadata.normalizedFrames !== null &&
       metadata.normalizedFrames > limits.decodedFrames) {
     throw resourceError(
       "ingest_decoded_frames", metadata.normalizedFrames, limits.decodedFrames,
-      "the decoded source would exceed the 48 kHz frame limit",
-      "shorten the source before importing it",
+      "this sound is longer than Creator can import",
+      "shorten it in your audio app, then import it again",
     );
   }
 }
@@ -379,8 +386,8 @@ async function decodeAt48Khz(bytes: ArrayBuffer): Promise<AudioBufferView> {
   if (typeof Context !== "function") {
     throw unsupported(
       "ingest_decoder", "unavailable", "OfflineAudioContext at 48 kHz",
-      "the browser cannot create the required offline decoder",
-      "use a supported current browser",
+      "this browser cannot open audio files for Creator",
+      "use a current version of another browser",
     );
   }
   const context = new Context(2, 1, 48_000);
@@ -470,8 +477,8 @@ export class DecodedLongSource {
     if (typeof Context !== "function") {
       throw unsupported(
         "ingest_preview", "unavailable", "AudioContext",
-        "browser audio preview is unavailable",
-        "continue without preview or use a supported current browser",
+        "this browser cannot preview the sound",
+        "continue without a preview, or use a current version of another browser",
       );
     }
     const context = new Context({sampleRate: 48_000});
@@ -520,15 +527,15 @@ export async function openLongSource(
       !validLimit(file.size) || typeof file.arrayBuffer !== "function") {
     throw unsupported(
       "ingest_source", "invalid", "non-empty browser File",
-      "the selected source is invalid",
-      "choose a non-empty local audio file",
+      "this file is empty or is not an audio file",
+      "choose an audio file from this device",
     );
   }
   if (file.size > limits.sourceBytes) {
     throw resourceError(
       "ingest_source_bytes", file.size, limits.sourceBytes,
-      "the compressed source exceeds the import byte limit",
-      "choose a smaller source file",
+      "this file is too large to import",
+      "choose a smaller file",
     );
   }
   let bytes: ArrayBuffer;
@@ -537,8 +544,8 @@ export async function openLongSource(
   } catch {
     throw unsupported(
       "ingest_source", "unreadable", "readable browser File",
-      "the selected source could not be read",
-      "choose the file again or export a new copy",
+      "Creator could not read this file",
+      "choose it again, or export a new copy",
     );
   }
   const metadata = sniffMetadata(new Uint8Array(bytes));
@@ -552,36 +559,36 @@ export async function openLongSource(
     if (error instanceof LongSourceIngestError) throw error;
     throw unsupported(
       "ingest_decoder", "failed", "successful browser decode",
-      "the browser could not decode this supported container",
-      "re-export the source with a supported codec",
+      "this browser could not read the audio in this file",
+      "export it again as a standard WAV or MP3 file",
     );
   }
   if (decoded.sampleRate !== 48_000) {
     throw resourceError(
       "ingest_sample_rate", decoded.sampleRate, 48_000,
-      "the offline decoder did not produce 48 kHz audio",
-      "retry in a supported browser",
+      "this browser could not convert the sound for Creator",
+      "try a current version of another browser",
     );
   }
   if (decoded.numberOfChannels > limits.channels) {
     throw resourceError(
       "ingest_channels", decoded.numberOfChannels, limits.channels,
-      "the decoded source has too many channels",
-      `export mono or stereo audio with at most ${limits.channels} channels`,
+      "this file has more audio channels than Creator supports",
+      "export it again as mono or stereo audio",
     );
   }
   if (decoded.length > limits.decodedFrames) {
     throw resourceError(
       "ingest_decoded_frames", decoded.length, limits.decodedFrames,
-      "the decoded source exceeds the 48 kHz frame limit",
-      "shorten the source before importing it",
+      "this sound is longer than Creator can import",
+      "shorten it in your audio app, then import it again",
     );
   }
   if (!validLimit(decoded.length) || decoded.numberOfChannels < 1) {
     throw unsupported(
       "ingest_decoder", "empty", "non-empty mono or stereo audio",
-      "the decoded source contains no usable audio",
-      "choose a non-empty mono or stereo source",
+      "this file contains no sound",
+      "choose a file with mono or stereo sound",
     );
   }
   return new DecodedLongSource(metadata.container, file.name, decoded);

@@ -311,7 +311,7 @@ describe("Creator Sample state", () => {
         runtimePublished: false,
         snapshotError: {
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details: {},
         },
       },
@@ -347,7 +347,7 @@ describe("Creator Sample state", () => {
       runtimePublished: false,
       snapshotError: {
         code: "COOK_FAILED",
-        message: "Sample runtime preparation failed",
+        message: "The sound was saved but is not ready to play yet.",
         details: {},
       },
     });
@@ -359,7 +359,7 @@ describe("Creator Sample state", () => {
     expect(state.pendingAction).toBeNull();
     expect(state.lastError).toEqual({
       code: "COOK_FAILED",
-      message: "Sample runtime preparation failed",
+      message: "The sound was saved but is not ready to play yet.",
       retryPrepare: true,
     });
 
@@ -528,6 +528,24 @@ describe("Creator Sample state", () => {
     expect(state.draft).toBeNull();
   });
 
+  test("accepts LOCAL_PROJECT_UNREADABLE from a Sample retry instead of throwing (#1680)", () => {
+    let state = inspectedState();
+    state = reduceSampleState(state, {
+      type: "pending-began",
+      pending: {kind: "import", slot: 17, expectedRevision: 42},
+    });
+    state = reduceSampleState(state, {
+      type: "operation-failed",
+      pending: state.pendingAction,
+      error: {code: "LOCAL_PROJECT_UNREADABLE", message: "unreadable"},
+    });
+    expect(state.pendingAction).toBeNull();
+    expect(state.lastError).toMatchObject({
+      code: "LOCAL_PROJECT_UNREADABLE",
+      message: "The local copy of this Project could not be read.",
+    });
+  });
+
   test("reduces pending success, conflict, retry, failure, and cancellation", () => {
     let state = inspectedState();
     state = reduceSampleState(state, {
@@ -546,7 +564,7 @@ describe("Creator Sample state", () => {
     expect(state.pendingAction).toBeNull();
     expect(state.lastError).toEqual({
       code: "IO_ERROR",
-      message: "Sample storage operation failed",
+      message: "Creator could not save the sound on this device.",
       retryPrepare: false,
       details: {storage_condition: "already_exists"},
     });
@@ -584,7 +602,7 @@ describe("Creator Sample state", () => {
         runtimePublished: false,
         snapshotError: {
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details: {},
         },
       },
@@ -649,7 +667,7 @@ describe("Creator Sample state", () => {
 
     expect(state.lastError).toEqual({
       code: "IO_ERROR",
-      message: "Sample storage operation failed",
+      message: "Creator could not save the sound on this device.",
       retryPrepare: false,
       details: {},
     });
@@ -674,7 +692,7 @@ describe("Creator Sample state", () => {
     expect(state.pendingAction).toBeNull();
     expect(state.lastError).toEqual({
       code: "HOST_PROTOCOL_MISMATCH",
-      message: "Sample Host response was invalid",
+      message: "This copy of Creator is out of date.",
       retryPrepare: false,
       details: {},
     });
@@ -759,7 +777,7 @@ describe("Creator Sample state", () => {
     expect(state.pendingAction).toEqual(pendingAction);
     expect(state.lastError).toEqual({
       code: "HOST_STATE_INVALID",
-      message: "Runtime preview failed",
+      message: "This sound could not be previewed.",
       retryPrepare: false,
     });
     expect(() => reduceSampleState(state, {
@@ -816,7 +834,7 @@ describe("Creator Sample state", () => {
         runtimePublished: false,
         snapshotError: {
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details: {},
         },
       },
@@ -1143,7 +1161,7 @@ describe("Creator Sample state", () => {
         runtimePublished: false,
         snapshotError: {
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details: {payload},
         },
       })).toThrow();
@@ -1187,7 +1205,7 @@ describe("Creator Sample state", () => {
       });
       expect(applied.lastError).toEqual({
         code: "COOK_FAILED",
-        message: "Sample runtime preparation failed",
+        message: "The sound was saved but is not ready to play yet.",
         retryPrepare: true,
       });
     }
@@ -1241,7 +1259,7 @@ describe("Creator Sample state", () => {
         runtimePublished: false,
         snapshotError: {
           code: "COOK_FAILED",
-          message: "Sample runtime preparation failed",
+          message: "The sound was saved but is not ready to play yet.",
           details,
         },
       })).toThrow();

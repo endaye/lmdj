@@ -82,6 +82,7 @@ function sessionFixture(initialStatus = status("ready")) {
       sessionId: string}) => ({eventId,
       acceptedTick: 1, inputSequence: 1, coalesced: false,
       replayed: false, projectRevision: null})),
+    fx: vi.fn(async (_event: Record<string, unknown>) => ({applied: true as const})),
     launch: vi.fn(async ({requestId}: {requestId: string; patternSlot: number}) => ({
       requestId, state: "pending" as const, targetTick: 1920, projectRevision: null,
     })),
@@ -106,6 +107,7 @@ function sessionFixture(initialStatus = status("ready")) {
     startPerformanceMasterCapture: calls.capture,
     beginPerformanceRecording: calls.begin,
     recordPerformanceEvent: calls.raw,
+    applyFxGesture: calls.fx,
     requestPerformancePatternLaunch: calls.launch,
     flushPerformanceRecording: calls.flush,
     stopPerformanceRecording: calls.stop,
@@ -535,6 +537,74 @@ test("default recording resources decorate real writer and store instances throu
   }
 });
 
+test("applies FX and HOLD live with no recording running and journals nothing", async () => {
+  const {fixture} = renderSurface();
+  const filter = screen.getByRole("slider", {name: "Filter"});
+  expect(filter.hasAttribute("disabled")).toBe(false);
+  fireEvent.pointerDown(filter, {pointerId: 3});
+  fireEvent.change(filter, {target: {value: "630"}});
+  fireEvent.pointerUp(filter, {pointerId: 3});
+  await waitFor(() => expect(fixture.runtime.calls.fx).toHaveBeenCalledTimes(3));
+  expect(fixture.runtime.calls.fx.mock.calls.map(([event]) => event)).toEqual([
+    {kind: "fx_engage", fx: "filter", value: 500},
+    {kind: "fx_move", fx: "filter", value: 630},
+    {kind: "fx_release", fx: "filter"},
+  ]);
+  expect(fixture.runtime.calls.raw).not.toHaveBeenCalled();
+
+  const hold = screen.getByRole("button", {name: "HOLD"});
+  expect(hold.hasAttribute("disabled")).toBe(false);
+  await userEvent.click(hold);
+  await waitFor(() => expect(fixture.runtime.calls.fx).toHaveBeenCalledTimes(4));
+  expect(hold.getAttribute("aria-pressed")).toBe("true");
+  await userEvent.click(hold);
+  await waitFor(() => expect(fixture.runtime.calls.fx).toHaveBeenCalledTimes(5));
+  expect(fixture.runtime.calls.fx.mock.calls.slice(3).map(([event]) => event))
+    .toEqual([{kind: "hold_on"}, {kind: "hold_off"}]);
+  expect(fixture.runtime.calls.raw).not.toHaveBeenCalled();
+});
+
+test("releases an open FX gesture when the pointer is cancelled", async () => {
+  const {fixture} = renderSurface();
+  const filter = screen.getByRole("slider", {name: "Filter"});
+  fireEvent.pointerDown(filter, {pointerId: 3});
+  fireEvent.change(filter, {target: {value: "640"}});
+  fireEvent.pointerCancel(filter, {pointerId: 3});
+  await waitFor(() => expect(fixture.runtime.calls.fx).toHaveBeenCalledTimes(3));
+  expect(fixture.runtime.calls.fx.mock.calls.map(([event]) => event.kind))
+    .toEqual(["fx_engage", "fx_move", "fx_release"]);
+});
+
+test("journals already-engaged FX and HOLD when recording begins", async () => {
+  const {fixture} = renderSurface();
+  const filter = screen.getByRole("slider", {name: "Filter"});
+  fireEvent.pointerDown(filter, {pointerId: 3});
+  fireEvent.change(filter, {target: {value: "640"}});
+  await userEvent.click(screen.getByRole("button", {name: "HOLD"}));
+  await waitFor(() => expect(fixture.runtime.calls.fx).toHaveBeenCalledTimes(3));
+  // Journaled hold_on makes Core's authority report HOLD on; the double
+  // mirrors that instead of its neutral default.
+  (fixture.runtime.session.queryPerformanceRecordingStatus as ReturnType<typeof vi.fn>)
+    .mockResolvedValue(authority({hold: true}));
+
+  await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
+  await waitFor(() => expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(2));
+  const journaled = fixture.runtime.calls.raw.mock.calls.map(([request]) => request.event);
+  expect(journaled[0]).toEqual({kind: "hold_on"});
+  expect(journaled[1]).toMatchObject({kind: "fx_engage", fx: "filter", value: 640});
+
+  // The gesture is still open: lifting the fader releases it through the
+  // journaled path (recording applies gestures live itself), and HOLD stays
+  // on because recording is an independent toggle.
+  fireEvent.pointerUp(filter, {pointerId: 3});
+  await waitFor(() => expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(3));
+  expect(fixture.runtime.calls.raw.mock.calls[2]?.[0].event)
+    .toMatchObject({kind: "fx_release", fx: "filter"});
+  expect(fixture.runtime.calls.fx.mock.calls.map(([event]) => event.kind))
+    .toEqual(["fx_engage", "fx_move", "hold_on"]);
+  expect(fixture.controller.getState().hold).toBe(true);
+});
+
 test("forwards every FX raw value with exact Core keys and no Host clock or source", async () => {
   const {fixture} = renderSurface();
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
@@ -556,6 +626,9 @@ test("forwards every FX raw value with exact Core keys and no Host clock or sour
     expect(request.event).not.toHaveProperty("runtimeFrame");
     expect(request.event).not.toHaveProperty("inputSequence");
   }
+  // During recording the journaled path applies each gesture live, so the
+  // session-free op stays silent and the gesture is applied exactly once.
+  expect(fixture.runtime.calls.fx).not.toHaveBeenCalled();
 });
 
 test("releases an open FX gesture when FX / MORE collapses it away", async () => {
@@ -578,7 +651,7 @@ test("releases an open FX gesture when FX / MORE collapses it away", async () =>
   expect(requests[2]?.event).toMatchObject({fx: "reverb"});
 });
 
-test("closes active gestures on stop and rejects their releases in the next recording", async () => {
+test("keeps FX engaged across stop and re-journals them in the next recording", async () => {
   const fixture = controllerFixture();
   renderSurface(fixture);
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
@@ -588,10 +661,16 @@ test("closes active gestures on stop and rejects their releases in the next reco
   await fixture.controller.stop();
   const firstKinds = fixture.runtime.calls.raw.mock.calls.map(([request]) =>
     request.event.kind);
-  expect(firstKinds).toEqual(["pad_press", "fx_engage", "pad_release", "fx_release"]);
+  // Stop closes Pad gestures; FX stay engaged because recording and FX are
+  // independent toggles — Core closes the journaled FX chain itself.
+  expect(firstKinds).toEqual(["pad_press", "fx_engage", "pad_release"]);
+  expect(fixture.controller.getState().fx.filter).toBe(650);
 
   await fixture.controller.discard();
   await fixture.controller.record();
+  await waitFor(() => expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(4));
+  expect(fixture.runtime.calls.raw.mock.calls[3]?.[0].event)
+    .toMatchObject({kind: "fx_engage", fx: "filter", value: 650});
   const before = fixture.runtime.calls.raw.mock.calls.length;
   await fixture.controller.recordRawEvent({kind: "pad_release", gestureId: "pad-old", slot: 0});
   expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(before);

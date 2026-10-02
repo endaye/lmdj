@@ -98,7 +98,7 @@ async function installHostProofRecorder(page) {
                     ...response.result,
                     snapshot_error: {
                       code: "COOK_FAILED",
-                      message: "Sample runtime preparation failed",
+                      message: "The sound was saved but is not ready to play yet.",
                       details: {},
                     },
                   },
@@ -480,7 +480,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   );
   await page.getByRole("button", {name: "Confirm replace"}).click();
   await expect(page.getByRole("alert")).toContainText(
-    "why: the source container is not supported; remedy: choose WAV, MP3, M4A/AAC, or FLAC audio",
+    "This type of audio file is not supported. Choose a WAV, MP3, M4A/AAC or FLAC file.",
     {timeout: 30_000},
   );
   await expectProjectRevision(page, 55);
@@ -700,9 +700,13 @@ test("Sample Editor WebKit capability boundary is explicit, private, and non-phy
     timeout: 30_000,
   });
   const alert = page.getByRole("alert");
-  await expect(alert).toContainText("UNSUPPORTED_WEB_RUNTIME");
+  // #1680: user language in the alert; the code is in Developer diagnostics.
+  await expect(alert).toContainText("This browser cannot run Creator.");
   const publicText = await alert.textContent();
-  expect(publicText).not.toMatch(/HOST_PROTOCOL_MISMATCH|\/Users\/|file:\/\/|\.lmdj|\.wav/i);
+  expect(publicText).not.toMatch(/UNSUPPORTED_WEB_RUNTIME|HOST_PROTOCOL_MISMATCH|\/Users\/|file:\/\/|\.lmdj|\.wav/i);
+  await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
+  await expect(page.getByRole("region", {name: "Developer diagnostics"}))
+    .toContainText("UNSUPPORTED_WEB_RUNTIME");
   expect(await page.evaluate(() => window.lmdjWebRuntimeHost === undefined)).toBe(true);
   await expect(page.getByRole("button", {name: "Activate audio"})).toBeDisabled();
   await expect(page.getByRole("button", {name: "Export report"})).toBeDisabled();
@@ -971,7 +975,7 @@ test("Sample playback parity commits, cancels, refuses, fails and reopens throug
   const reverse = page.getByRole("button", {name: "Reverse", exact: true});
   await page.evaluate(() => { window.__failNextSampleUpdate = true; });
   await reverse.click();
-  await expect(page.getByRole("alert")).toContainText("Sample operation failed");
+  await expect(page.getByRole("alert")).toContainText("Creator could not change this sound.");
   await expect(reverse).toHaveAttribute("aria-pressed", "true");
   expect(await page.evaluate(() => window.__failNextSampleUpdate)).toBe(false);
   await expectProjectRevision(page, 8);
@@ -1063,7 +1067,7 @@ test("Pad Delete commits while audio is inactive after a reopen", async ({page, 
   await page.getByRole("button", {name: "Delete Pad A1", exact: true}).click();
   await expectProjectRevision(page, 2);
   await expect(page.getByRole("button", {name: "Pad A1 — empty — Key Q", exact: true})).toBeVisible();
-  await expect(page.getByText("Sample operation is unavailable")).toHaveCount(0);
+  await expect(page.getByText("That can't be done right now.")).toHaveCount(0);
   const deleted = (await rawRequest(page, "project.inspect", {})).result.project;
   expect(deleted.banks[0].pads[0].asset_id).toBeNull();
   expect(deleted.patterns).toEqual(before.patterns);

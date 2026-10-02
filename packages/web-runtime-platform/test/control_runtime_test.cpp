@@ -3582,6 +3582,59 @@ void test_audio_activation_prepares_master_fx_for_perform() {
           0}) == lmdj::audio::FxEnqueueResult::accepted);
 }
 
+// #1674: the session-free op reaches the prepared master bus with no
+// recording session, and invalid gestures fail at the protocol boundary.
+void test_session_free_fx_gesture_reaches_the_master_bus() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+
+  const auto applied = check_exact_success(
+      runtime->dispatch(
+          "performance.fx.gesture",
+          {{"event", {{"kind", "fx_engage"}, {"fx", "filter"}, {"value", 630}}}},
+          {}),
+      {"applied", "project_revision"});
+  LMDJ_CHECK(applied.at("applied") == true);
+  LMDJ_CHECK(applied.at("project_revision").is_null());
+  check_success(runtime->dispatch(
+      "performance.fx.gesture", {{"event", {{"kind", "hold_on"}}}}, {}));
+  check_success(runtime->dispatch(
+      "performance.fx.gesture",
+      {{"event", {{"kind", "fx_release"}, {"fx", "filter"}}}}, {}));
+  LMDJ_CHECK(runtime->engine().master_fx_telemetry().enqueued_gestures == 3);
+
+  check_error(
+      runtime->dispatch(
+          "performance.fx.gesture",
+          {{"event", {{"kind", "fx_engage"}, {"fx", "flanger"}, {"value", 1}}}},
+          {}),
+      "HOST_PROTOCOL_MISMATCH");
+  check_error(
+      runtime->dispatch(
+          "performance.fx.gesture",
+          {{"event",
+            {{"kind", "fx_engage"},
+             {"gesture_id", uuid(901)},
+             {"fx", "filter"},
+             {"value", 1}}}},
+          {}),
+      "HOST_PROTOCOL_MISMATCH");
+  check_error(
+      runtime->dispatch(
+          "performance.fx.gesture",
+          {{"event", {{"kind", "pad_press"}, {"slot", 1}}}}, {}),
+      "HOST_PROTOCOL_MISMATCH");
+  LMDJ_CHECK(runtime->engine().master_fx_telemetry().enqueued_gestures == 3);
+}
+
 void test_trigger_queue_full_is_admission_failure() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -7930,6 +7983,7 @@ int main() {
     test_sample_post_claim_deadline_preserves_saved_truth();
     test_source_frames_are_admitted_by_prepared_pcm_quota();
     test_audio_activation_prepares_master_fx_for_perform();
+    test_session_free_fx_gesture_reaches_the_master_bus();
     test_trigger_queue_full_is_admission_failure();
     test_voice_capacity_is_sequence_addressed_execution_outcome();
     test_audio_activation_requires_ready_and_reports_explicit_ack();

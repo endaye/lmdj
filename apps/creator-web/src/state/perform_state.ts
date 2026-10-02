@@ -102,6 +102,7 @@ export type PerformAction =
   | {readonly type: "recovery-checking"}
   | {readonly type: "replay"; readonly replay: PerformanceReplayStatus | null}
   | {readonly type: "neutral"}
+  | {readonly type: "session-neutral"}
   | {readonly type: "recording-note"; readonly message: string | null}
   | {readonly type: "wav-status"; readonly message: string}
   | {readonly type: "binding-status"; readonly status: PerformState["bindingStatus"]}
@@ -182,6 +183,14 @@ export function reducePerform(state: PerformState, action: PerformAction): Perfo
       authority: null,
       hold: false,
       fx: EMPTY_FX,
+      replayNeutral: true,
+    });
+    // Recording start/stop is an independent toggle from FX (#1674): the live
+    // FX and HOLD the user is holding stay exactly where they are.
+    case "session-neutral": return Object.freeze({...state,
+      pendingLaunch: null,
+      lastLaunchAck: null,
+      authority: null,
       replayNeutral: true,
     });
     case "recording-note": return Object.freeze({...state,
@@ -578,7 +587,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
       }
       const setup = async () => {
         dispatch({type: "error", message: null});
-        dispatch({type: "neutral"});
+        dispatch({type: "session-neutral"});
         dispatch({type: "recording-note", message: null});
         dispatch({type: "wav-status", message: "recording"});
         dispatch({type: "binding-status", status: "unbound"});
@@ -589,7 +598,6 @@ export function createPerformController(options: PerformControllerOptions): Perf
           throw new Error("A playable Project is required for Performance recording");
         }
         openPadGestures.clear();
-        openFxGestures.clear();
         saveCommitted = false;
         saveOutcomeUnknown = false;
         savedName = null;
@@ -623,6 +631,17 @@ export function createPerformController(options: PerformControllerOptions): Perf
             return began;
           });
           setRecording("recording", {expectedRevision: receipt.committedRevision});
+          // FX engaged before Record are already audible (#1674); journal
+          // matching engage/hold events so the recording replays what the
+          // master bus is actually producing.
+          if (state.hold) {
+            void controller.recordRawEvent({kind: "hold_on"}).catch(fail);
+          }
+          for (const [fx, gestureId] of openFxGestures) {
+            void controller.recordRawEvent({
+              kind: "fx_engage", gestureId, fx, value: state.fx[fx],
+            }).catch(fail);
+          }
         } catch (error) {
           if (beganRevision !== null) {
             await session.stopPerformanceRecording({sessionId, requestId: createId()})
@@ -709,11 +728,6 @@ export function createPerformController(options: PerformControllerOptions): Perf
         for (const [gestureId, slot] of openPadGestures) {
           void appendRawEvent(sessionId, {kind: "pad_release", gestureId, slot});
         }
-        for (const [fx, gestureId] of openFxGestures) {
-          void appendRawEvent(sessionId, {kind: "fx_release", gestureId, fx});
-        }
-        if (state.hold) void appendRawEvent(sessionId, {kind: "hold_off"});
-        openFxGestures.clear();
         openPadGestures.clear();
         await rawEventTail;
         let coreError: unknown = null;
@@ -728,7 +742,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
           capture = null;
           setRecording("stopped", {wav});
           dispatch({type: "wav-status", message: `sealed · ${wav.reason ?? "stopped"}`});
-          dispatch({type: "neutral"});
+          dispatch({type: "session-neutral"});
           if (coreError !== null) throw coreError;
         } catch (error) { setRecording("stopped"); fail(error); }
       })();
@@ -882,29 +896,44 @@ export function createPerformController(options: PerformControllerOptions): Perf
     },
     engageFx(fx, value) {
       const gestureId = createId();
-      if (!["recording", "flushing"].includes(state.recording.phase)) {
-        return gestureId;
-      }
       dispatch({type: "fx", fx, value});
       openFxGestures.set(fx, gestureId);
-      void controller.recordRawEvent({kind: "fx_engage", gestureId, fx, value}).catch(fail);
+      // One live application per gesture: a running recording applies it live
+      // through the journaled event; outside recording the session-free op
+      // applies it directly (#1674).
+      if (["recording", "flushing"].includes(state.recording.phase)) {
+        void controller.recordRawEvent({kind: "fx_engage", gestureId, fx, value}).catch(fail);
+      } else {
+        void session.applyFxGesture({kind: "fx_engage", fx, value}).catch(fail);
+      }
       return gestureId;
     },
     moveFx(gestureId, fx, value) {
       if (openFxGestures.get(fx) !== gestureId) return;
       dispatch({type: "fx", fx, value});
-      void controller.recordRawEvent({kind: "fx_move", gestureId, fx, value}).catch(fail);
+      if (["recording", "flushing"].includes(state.recording.phase)) {
+        void controller.recordRawEvent({kind: "fx_move", gestureId, fx, value}).catch(fail);
+      } else {
+        void session.applyFxGesture({kind: "fx_move", fx, value}).catch(fail);
+      }
     },
     releaseFx(gestureId, fx) {
       if (openFxGestures.get(fx) !== gestureId) return;
       openFxGestures.delete(fx);
-      void controller.recordRawEvent({kind: "fx_release", gestureId, fx}).catch(fail);
+      if (["recording", "flushing"].includes(state.recording.phase)) {
+        void controller.recordRawEvent({kind: "fx_release", gestureId, fx}).catch(fail);
+      } else {
+        void session.applyFxGesture({kind: "fx_release", fx}).catch(fail);
+      }
     },
     toggleHold() {
-      if (!["recording", "flushing"].includes(state.recording.phase)) return;
       const value = !state.hold;
       dispatch({type: "hold", value});
-      void controller.recordRawEvent({kind: value ? "hold_on" : "hold_off"}).catch(fail);
+      if (["recording", "flushing"].includes(state.recording.phase)) {
+        void controller.recordRawEvent({kind: value ? "hold_on" : "hold_off"}).catch(fail);
+      } else {
+        void session.applyFxGesture({kind: value ? "hold_on" : "hold_off"}).catch(fail);
+      }
     },
     async launchPattern(patternSlot) {
       if (!["recording", "flushing"].includes(state.recording.phase) ||
