@@ -93,9 +93,11 @@ void render_kernel_voice(
       left = left_value * state.pan_left;
       right = right_value * state.pan_right;
     }
-    // The engine flushes filter memory once per render block of at most 128
-    // frames. The flushed words are far below one PCM16 step, so neither
-    // render's cadence changes its output.
+    // The engine flushes filter memory once per render block, wherever its
+    // blocks fall in the voice; this renderer flushes every 128 frames. A flush
+    // moves a word by less than 1e-20, far below one PCM16 step, so the renders
+    // agree within one step whatever their cadences (audio.voice_dsp_parity
+    // renders them at different ones).
     if (state.filter_count != 0 && (relative & 127U) == 127U) {
       detail::voice_dsp_flush_filters(state, memory[0]);
       detail::voice_dsp_flush_filters(state, memory[1]);
