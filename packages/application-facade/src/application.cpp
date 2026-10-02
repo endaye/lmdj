@@ -9321,77 +9321,85 @@ struct Application::Impl {
           loaded.value().revision);
     }
 
-    // Every quota decision happens before the first Project mutation.
-    std::uint64_t requested_bytes = 0;
-    std::uint64_t requested_frames = 0;
-    std::uint16_t written_pads = 0;
-    for (const auto& pad : write_set.value()) {
-      const auto& prepared =
-          decoded.value().slots.at(pad.slot_index)->audio.prepared;
-      // S11-D8: per-Pad residency. One Artifact on two Pads is two charges,
-      // so the sum is over the write set and not over unique hashes.
-      const auto next_bytes =
-          audio::checked_runtime_byte_sum(requested_bytes, prepared.bytes);
-      const auto next_frames =
-          audio::checked_runtime_byte_sum(requested_frames, prepared.frames);
-      if (!next_bytes.has_value() || !next_frames.has_value()) {
-        return error_envelope(Error{
-            ErrorCode::invalid_argument,
-            "installed Sound Set prepared PCM byte length overflowed",
-        });
+    // A slot retry with an older revision can only replay an existing receipt:
+    // ProjectStore checks its exact command identity and the monotonic revision
+    // under the writer lease before any mutation. Charging it against today's
+    // Bank can incorrectly refuse a receipt after the original Pad was cleared.
+    // New/current-revision commands still undergo the complete quota check.
+    if (!selected_slot.has_value() ||
+        expected_revision >= loaded.value().revision) {
+      // Every quota decision happens before the first Project mutation.
+      std::uint64_t requested_bytes = 0;
+      std::uint64_t requested_frames = 0;
+      std::uint16_t written_pads = 0;
+      for (const auto& pad : write_set.value()) {
+        const auto& prepared =
+            decoded.value().slots.at(pad.slot_index)->audio.prepared;
+        // S11-D8: per-Pad residency. One Artifact on two Pads is two charges,
+        // so the sum is over the write set and not over unique hashes.
+        const auto next_bytes =
+            audio::checked_runtime_byte_sum(requested_bytes, prepared.bytes);
+        const auto next_frames =
+            audio::checked_runtime_byte_sum(requested_frames, prepared.frames);
+        if (!next_bytes.has_value() || !next_frames.has_value()) {
+          return error_envelope(Error{
+              ErrorCode::invalid_argument,
+              "installed Sound Set prepared PCM byte length overflowed",
+          });
+        }
+        requested_bytes = *next_bytes;
+        requested_frames = *next_frames;
+        written_pads =
+            static_cast<std::uint16_t>(written_pads | (std::uint16_t{1} << pad.pad));
       }
-      requested_bytes = *next_bytes;
-      requested_frames = *next_frames;
-      written_pads =
-          static_cast<std::uint16_t>(written_pads | (std::uint16_t{1} << pad.pad));
-    }
 
-    if (!sample_limits.has_value()) {
-      return error_envelope(
-          invalid_sample_request("Sample quota is unavailable"));
-    }
-    const auto ledger = compute_bank_ledger(
-        project_path, loaded.value(), bank, written_pads);
-    if (!ledger.has_value()) {
-      return error_envelope(ledger.error());
-    }
-    const auto assessment = audio::assess_runtime_quota(
-        ledger.value().bank_used_bytes.at(bank),
-        ledger.value().project_used_bytes,
-        requested_bytes,
-        *sample_limits);
-    if (!assessment.has_value()) {
-      return error_envelope(Error{
-          ErrorCode::invalid_project,
-          "Sample quota ledger exceeds configured limits",
-      });
-    }
-    if (assessment->constraint == audio::RuntimeQuotaConstraint::user_bank) {
-      std::vector<nlohmann::json> consumed;
-      consumed.reserve(ledger.value().consumed.size());
-      for (const auto& entry : ledger.value().consumed) {
-        consumed.push_back({
-            {"pad", entry.slot.pad},
-            {"prepared_bytes", entry.prepared_bytes},
-            {"prepared_frames", entry.prepared_frames},
+      if (!sample_limits.has_value()) {
+        return error_envelope(
+            invalid_sample_request("Sample quota is unavailable"));
+      }
+      const auto ledger = compute_bank_ledger(
+          project_path, loaded.value(), bank, written_pads);
+      if (!ledger.has_value()) {
+        return error_envelope(ledger.error());
+      }
+      const auto assessment = audio::assess_runtime_quota(
+          ledger.value().bank_used_bytes.at(bank),
+          ledger.value().project_used_bytes,
+          requested_bytes,
+          *sample_limits);
+      if (!assessment.has_value()) {
+        return error_envelope(Error{
+            ErrorCode::invalid_project,
+            "Sample quota ledger exceeds configured limits",
         });
       }
-      return error_envelope(runtime_bank_quota_error(
-          domain::PadSlotId{bank, write_set.value().front().pad},
-          requested_bytes,
-          requested_frames,
-          assessment->user_bank_remaining_bytes,
-          sample_limits->maximum_user_bank_bytes,
-          consumed));
-    }
-    if (assessment->constraint == audio::RuntimeQuotaConstraint::generation) {
-      return error_envelope(runtime_project_quota_error(
-          requested_bytes,
-          requested_frames,
-          ledger.value().project_used_bytes,
-          assessment->generation_remaining_bytes,
-          sample_limits->maximum_generation_bytes,
-          ledger.value().bank_used_bytes));
+      if (assessment->constraint == audio::RuntimeQuotaConstraint::user_bank) {
+        std::vector<nlohmann::json> consumed;
+        consumed.reserve(ledger.value().consumed.size());
+        for (const auto& entry : ledger.value().consumed) {
+          consumed.push_back({
+              {"pad", entry.slot.pad},
+              {"prepared_bytes", entry.prepared_bytes},
+              {"prepared_frames", entry.prepared_frames},
+          });
+        }
+        return error_envelope(runtime_bank_quota_error(
+            domain::PadSlotId{bank, write_set.value().front().pad},
+            requested_bytes,
+            requested_frames,
+            assessment->user_bank_remaining_bytes,
+            sample_limits->maximum_user_bank_bytes,
+            consumed));
+      }
+      if (assessment->constraint == audio::RuntimeQuotaConstraint::generation) {
+        return error_envelope(runtime_project_quota_error(
+            requested_bytes,
+            requested_frames,
+            ledger.value().project_used_bytes,
+            assessment->generation_remaining_bytes,
+            sample_limits->maximum_generation_bytes,
+            ledger.value().bank_used_bytes));
+      }
     }
 
     std::vector<project_io::ProjectStore::SoundSetInstallSlotRequest> slots;
