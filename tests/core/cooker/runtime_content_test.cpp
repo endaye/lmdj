@@ -306,6 +306,11 @@ void encoder_rejects_invalid_sources() {
   // v1 has no field for the voice DSP block, so a non-neutral one is refused.
   rejected([](auto& s) { s.pads[0].playback.dsp.flags = 1; }, "voice_dsp");
   rejected([](auto& s) { s.pads[0].playback.dsp.pitch_cents = 100; }, "voice_dsp");
+  rejected([](auto& s) { s.pads[0].playback.dsp.release_frames = 4'800; }, "voice_dsp");
+  rejected([](auto& s) { s.pads[0].playback.dsp.tone = -40; }, "voice_dsp");
+  rejected([](auto& s) {
+    s.pads[0].playback.dsp.eq_flags = cooker::ResolvedVoiceDsp::kEqMid;
+  }, "voice_dsp");
   rejected([](auto& s) {
     s.pads[0].playback.trigger_mode = static_cast<domain::TriggerMode>(255);
   }, "playback");

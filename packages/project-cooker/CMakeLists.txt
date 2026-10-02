@@ -1,6 +1,5 @@
-add_library(
-  lmdj_project_cooker
-  STATIC
+set(
+  lmdj_project_cooker_sources
     src/wav_reader.cpp
     src/wav_selection.cpp
     src/sample_analysis.cpp
@@ -8,6 +7,7 @@ add_library(
     src/performance_replay.cpp
     src/runtime_content.cpp
 )
+add_library(lmdj_project_cooker STATIC ${lmdj_project_cooker_sources})
 add_library(lmdj::project_cooker ALIAS lmdj_project_cooker)
 
 target_include_directories(
@@ -26,6 +26,31 @@ lmdj_target_warnings(lmdj_project_cooker)
 lmdj_target_sanitizers(lmdj_project_cooker)
 
 if(BUILD_TESTING)
+  # The Cardputer builds this module and the Audio Runtime without the voice
+  # DSP (LMDJ_VOICE_DSP=0). CI never builds that firmware, so the host builds
+  # the same sources the same way for audio.voice_dsp_disabled.
+  add_library(
+    lmdj_project_cooker_without_voice_dsp
+    STATIC ${lmdj_project_cooker_sources}
+  )
+  target_include_directories(
+    lmdj_project_cooker_without_voice_dsp
+    PUBLIC
+      "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  )
+  target_compile_definitions(
+    lmdj_project_cooker_without_voice_dsp PUBLIC LMDJ_VOICE_DSP=0
+  )
+  target_link_libraries(
+    lmdj_project_cooker_without_voice_dsp
+    PUBLIC
+      lmdj::authoring_domain
+    PRIVATE
+      lmdj_picosha2
+  )
+  lmdj_target_warnings(lmdj_project_cooker_without_voice_dsp)
+  lmdj_target_sanitizers(lmdj_project_cooker_without_voice_dsp)
+
   add_executable(
     lmdj_runtime_content_tests
     "${CMAKE_SOURCE_DIR}/tests/core/cooker/runtime_content_test.cpp"

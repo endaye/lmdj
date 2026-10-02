@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <random>
 #include <vector>
 
 #include "tests/core/support/test.hpp"
@@ -76,6 +77,236 @@ void prepare_refuses_a_block_that_does_not_fit() {
   LMDJ_CHECK(lmdj::audio::detail::prepare_voice_dsp(
       playback(0, 20, TriggerMode::loop_gate, ResolvedVoiceDsp{10, 5, 0, 0, 0}),
       source.size(), state));
+}
+
+ResolvedVoiceDsp envelope(std::uint32_t attack, std::uint32_t release) {
+  ResolvedVoiceDsp dsp{};
+  dsp.attack_frames = attack;
+  dsp.release_frames = release;
+  return dsp;
+}
+
+// An envelope longer than Project Truth admits (2 s attack, 4 s release at
+// 48 kHz) is refused like an out-of-range pitch; the longest admitted fits.
+void prepare_refuses_an_over_long_envelope() {
+  const auto source = index_source(32);
+  VoiceDspState state{};
+  for (const auto& dsp : {envelope(96'001, 0), envelope(0, 192'001)}) {
+    LMDJ_CHECK(!lmdj::audio::detail::prepare_voice_dsp(
+        playback(0, 20, TriggerMode::gate, dsp), source.size(), state));
+  }
+  LMDJ_CHECK(lmdj::audio::detail::prepare_voice_dsp(
+      playback(0, 20, TriggerMode::gate, envelope(96'000, 192'000)),
+      source.size(), state));
+}
+
+// Envelope ramps last max(user, 96) output frames, and a one-shot keeps the
+// 96-frame declick for its release. At the default the scale is exactly the
+// declick's 1/96, so a default envelope renders bit-identically.
+void envelope_is_never_shorter_than_the_declick() {
+  using lmdj::audio::detail::voice_envelope;
+  const auto neutral = voice_envelope(playback(0, 20, TriggerMode::gate, {}));
+  LMDJ_CHECK(neutral.attack_frames == 96);
+  LMDJ_CHECK(neutral.release_frames == 96);
+  LMDJ_CHECK(neutral.attack_scale == 1.0F / 96.0F);
+  LMDJ_CHECK(neutral.release_scale == 1.0F / 96.0F);
+  const auto short_ramps =
+      voice_envelope(playback(0, 20, TriggerMode::gate, envelope(50, 95)));
+  LMDJ_CHECK(short_ramps.attack_frames == 96);
+  LMDJ_CHECK(short_ramps.release_frames == 96);
+  const auto long_ramps =
+      voice_envelope(playback(0, 20, TriggerMode::loop_gate, envelope(480, 4800)));
+  LMDJ_CHECK(long_ramps.attack_frames == 480);
+  LMDJ_CHECK(long_ramps.attack_scale == 1.0F / 480.0F);
+  LMDJ_CHECK(long_ramps.release_frames == 4800);
+  LMDJ_CHECK(long_ramps.release_scale == 1.0F / 4800.0F);
+  const auto one_shot =
+      voice_envelope(playback(0, 20, TriggerMode::one_shot, envelope(480, 4800)));
+  LMDJ_CHECK(one_shot.attack_frames == 480);
+  LMDJ_CHECK(one_shot.release_frames == 96);
+}
+
+// --- Tone and 3-band EQ (lmdj.project.v5 5.2.0) ---
+
+VoiceDspState filter_state(const ResolvedVoiceDsp& dsp) {
+  VoiceDspState state{};
+  LMDJ_CHECK(lmdj::audio::detail::prepare_voice_dsp(
+      playback(0, 20, TriggerMode::gate, dsp), 32, state));
+  return state;
+}
+
+// The steady-state gain, in dB, of the voice's filter stages for a sine at
+// `hz`: one second of 48 kHz input, measured over its second half.
+double gain_db(const VoiceDspState& state, double hz) {
+  lmdj::audio::detail::VoiceDspFilterMemory memory{};
+  double in = 0.0;
+  double out = 0.0;
+  for (int frame = 0; frame < 48'000; ++frame) {
+    const auto x = static_cast<float>(
+        0.25 * std::sin(6.28318530717958647692 * hz * frame / 48'000.0));
+    const auto y = lmdj::audio::detail::voice_dsp_filter(state, memory, x);
+    if (frame >= 24'000) {
+      in += static_cast<double>(x) * x;
+      out += static_cast<double>(y) * y;
+    }
+  }
+  return 10.0 * std::log10(out / in);
+}
+
+ResolvedVoiceDsp tone(std::int8_t value) {
+  ResolvedVoiceDsp dsp{};
+  dsp.tone = value;
+  return dsp;
+}
+
+// Tone -100 is a 12 dB/oct low-pass at 100 Hz: -3 dB there, flat below,
+// at least 40 dB down at 10 kHz.
+void tone_minus_100_is_a_100_hz_low_pass() {
+  const auto state = filter_state(tone(-100));
+  LMDJ_CHECK(state.filter_count == 1);
+  LMDJ_CHECK(std::abs(gain_db(state, 100.0) + 3.01) <= 0.1);
+  LMDJ_CHECK(std::abs(gain_db(state, 50.0)) <= 1.0);
+  LMDJ_CHECK(gain_db(state, 10'000.0) <= -40.0);
+}
+
+// Tone +100 is the mirror image: a 12 dB/oct high-pass at 8 kHz.
+void tone_plus_100_is_an_8_khz_high_pass() {
+  const auto state = filter_state(tone(100));
+  LMDJ_CHECK(state.filter_count == 1);
+  LMDJ_CHECK(std::abs(gain_db(state, 8'000.0) + 3.01) <= 0.1);
+  LMDJ_CHECK(std::abs(gain_db(state, 16'000.0)) <= 1.0);
+  LMDJ_CHECK(gain_db(state, 100.0) <= -40.0);
+}
+
+// |tone| <= 2 is a deadband: no stage at all, so the voice is unfiltered.
+void tone_deadband_adds_no_stage() {
+  for (const std::int8_t value : {-2, -1, 1, 2}) {
+    LMDJ_CHECK(filter_state(tone(value)).filter_count == 0);
+  }
+  LMDJ_CHECK(filter_state(tone(3)).filter_count == 1);
+  LMDJ_CHECK(filter_state(tone(-3)).filter_count == 1);
+}
+
+ResolvedVoiceDsp mid_band(std::uint16_t hz, std::int16_t millidb, std::uint16_t q_milli) {
+  ResolvedVoiceDsp dsp{};
+  dsp.eq_flags = ResolvedVoiceDsp::kEqMid;
+  dsp.eq_mid_freq_hz = hz;
+  dsp.eq_mid_gain_millidb = millidb;
+  dsp.eq_mid_q_milli = q_milli;
+  return dsp;
+}
+
+// The mid bell: +12 dB at 1 kHz with Q 1 measures 12 dB at its centre, and
+// leaves distant frequencies near unity.
+void mid_bell_reaches_its_gain_at_its_centre() {
+  const auto state = filter_state(mid_band(1'000, 12'000, 1'000));
+  LMDJ_CHECK(std::abs(gain_db(state, 1'000.0) - 12.0) <= 0.1);
+  LMDJ_CHECK(std::abs(gain_db(state, 50.0)) <= 0.5);
+}
+
+// A low cut is a high-pass at its frequency and a high cut a low-pass, both
+// -3 dB at the band frequency and blind to the band's gain.
+void cut_bands_are_minus_3_db_at_their_frequency() {
+  ResolvedVoiceDsp low{};
+  low.eq_flags = ResolvedVoiceDsp::kEqLow | ResolvedVoiceDsp::kEqLowCut;
+  low.eq_low_freq_hz = 200;
+  low.eq_low_gain_millidb = 18'000;
+  const auto low_state = filter_state(low);
+  LMDJ_CHECK(std::abs(gain_db(low_state, 200.0) + 3.01) <= 0.1);
+  LMDJ_CHECK(gain_db(low_state, 20.0) <= -35.0);
+  ResolvedVoiceDsp high{};
+  high.eq_flags = ResolvedVoiceDsp::kEqHigh | ResolvedVoiceDsp::kEqHighCut;
+  high.eq_high_freq_hz = 5'000;
+  high.eq_high_gain_millidb = -18'000;
+  const auto high_state = filter_state(high);
+  LMDJ_CHECK(std::abs(gain_db(high_state, 5'000.0) + 3.01) <= 0.1);
+  LMDJ_CHECK(gain_db(high_state, 20'000.0) <= -15.0);
+}
+
+// Shelves lift or cut everything beyond their frequency by their gain.
+void shelves_reach_their_gain_beyond_their_frequency() {
+  ResolvedVoiceDsp low{};
+  low.eq_flags = ResolvedVoiceDsp::kEqLow;
+  low.eq_low_freq_hz = 200;
+  low.eq_low_gain_millidb = 6'000;
+  const auto low_state = filter_state(low);
+  LMDJ_CHECK(std::abs(gain_db(low_state, 20.0) - 6.0) <= 0.2);
+  LMDJ_CHECK(std::abs(gain_db(low_state, 10'000.0)) <= 0.2);
+  ResolvedVoiceDsp high{};
+  high.eq_flags = ResolvedVoiceDsp::kEqHigh;
+  high.eq_high_freq_hz = 2'000;
+  high.eq_high_gain_millidb = -6'000;
+  const auto high_state = filter_state(high);
+  LMDJ_CHECK(std::abs(gain_db(high_state, 20'000.0) + 6.0) <= 0.3);
+  LMDJ_CHECK(std::abs(gain_db(high_state, 50.0)) <= 0.2);
+}
+
+ResolvedVoiceDsp every_stage() {
+  auto dsp = mid_band(10'000, 18'000, 10'000);
+  dsp.tone = 100;
+  dsp.eq_flags |= ResolvedVoiceDsp::kEqLow | ResolvedVoiceDsp::kEqLowCut |
+                  ResolvedVoiceDsp::kEqHigh;
+  dsp.eq_low_freq_hz = 2'000;
+  dsp.eq_high_freq_hz = 1'000;
+  dsp.eq_high_gain_millidb = 18'000;
+  return dsp;
+}
+
+// Ten seconds of noise through every stage at extreme settings stay finite,
+// and after the input stops, per-block flushing reaches exact zero.
+void extreme_filters_stay_finite_and_flush_to_zero() {
+  const auto state = filter_state(every_stage());
+  LMDJ_CHECK(state.filter_count == 4);
+  lmdj::audio::detail::VoiceDspFilterMemory memory{};
+  std::mt19937 random{1667};
+  std::uniform_real_distribution<float> noise{-1.0F, 1.0F};
+  for (int frame = 0; frame < 480'000; ++frame) {
+    const auto y = lmdj::audio::detail::voice_dsp_filter(state, memory, noise(random));
+    LMDJ_CHECK(std::isfinite(y));
+  }
+  for (int frame = 0; frame < 96'000; ++frame) {
+    lmdj::audio::detail::voice_dsp_filter(state, memory, 0.0F);
+    if ((frame & 127) == 127) {
+      lmdj::audio::detail::voice_dsp_flush_filters(state, memory);
+    }
+  }
+  for (const auto& stage : memory.z) {
+    LMDJ_CHECK(stage[0] == 0.0F && stage[1] == 0.0F);
+  }
+}
+
+// Tone and EQ values outside Project Truth's bounds, unknown EQ flags, and a
+// cut flag on an absent band are refused; the boundaries fit.
+void prepare_refuses_out_of_range_tone_and_eq() {
+  const auto source = index_source(32);
+  VoiceDspState state{};
+  const auto refused = [&](ResolvedVoiceDsp dsp) {
+    return !lmdj::audio::detail::prepare_voice_dsp(
+        playback(0, 20, TriggerMode::gate, dsp), source.size(), state);
+  };
+  ResolvedVoiceDsp bad = tone(101);
+  LMDJ_CHECK(refused(bad));
+  LMDJ_CHECK(refused(tone(-101)));
+  bad = {};
+  bad.eq_flags = 0x20;
+  LMDJ_CHECK(refused(bad));
+  bad.eq_flags = ResolvedVoiceDsp::kEqLowCut;
+  LMDJ_CHECK(refused(bad));
+  bad.eq_flags = ResolvedVoiceDsp::kEqHighCut;
+  LMDJ_CHECK(refused(bad));
+  LMDJ_CHECK(refused(mid_band(99, 0, 1'000)));
+  LMDJ_CHECK(refused(mid_band(1'000, 18'001, 1'000)));
+  LMDJ_CHECK(refused(mid_band(1'000, 0, 10'001)));
+  ResolvedVoiceDsp low{};
+  low.eq_flags = ResolvedVoiceDsp::kEqLow;
+  low.eq_low_freq_hz = 2'001;
+  LMDJ_CHECK(refused(low));
+  ResolvedVoiceDsp high{};
+  high.eq_flags = ResolvedVoiceDsp::kEqHigh;
+  high.eq_high_freq_hz = 999;
+  LMDJ_CHECK(refused(high));
+  LMDJ_CHECK(!refused(every_stage()));
+  LMDJ_CHECK(!refused(mid_band(100, -18'000, 100)));
 }
 
 void neutral_block_reads_the_source_exactly() {
@@ -275,6 +506,16 @@ void reversed_voice_publishes_descending_source_frames() {
 int main() {
   try {
     prepare_refuses_a_block_that_does_not_fit();
+    prepare_refuses_an_over_long_envelope();
+    envelope_is_never_shorter_than_the_declick();
+    tone_minus_100_is_a_100_hz_low_pass();
+    tone_plus_100_is_an_8_khz_high_pass();
+    tone_deadband_adds_no_stage();
+    mid_bell_reaches_its_gain_at_its_centre();
+    cut_bands_are_minus_3_db_at_their_frequency();
+    shelves_reach_their_gain_beyond_their_frequency();
+    extreme_filters_stay_finite_and_flush_to_zero();
+    prepare_refuses_out_of_range_tone_and_eq();
     neutral_block_reads_the_source_exactly();
     reverse_reads_the_mirrored_source_exactly();
     whole_octaves_halve_and_double_a_one_shot();

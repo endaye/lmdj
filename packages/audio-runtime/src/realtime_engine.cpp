@@ -148,13 +148,22 @@ bool valid_trigger_mode(domain::TriggerMode mode) noexcept {
   return false;
 }
 
-bool valid_playback(
+// The playback's trim, mode and gain, without its DSP block. A trigger checks
+// the block by preparing it (prepare_voice_kernel), so a voice designs its
+// filters once per trigger, not once to validate and again to play.
+bool valid_playback_range(
     const cooker::ResolvedPlayback& playback,
     std::size_t frame_count) noexcept {
   return playback.start_frame < playback.end_frame &&
          playback.end_frame <= frame_count &&
          valid_trigger_mode(playback.trigger_mode) &&
-         std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F &&
+         std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F;
+}
+
+bool valid_playback(
+    const cooker::ResolvedPlayback& playback,
+    std::size_t frame_count) noexcept {
+  return valid_playback_range(playback, frame_count) &&
          detail::voice_dsp_fits(playback, frame_count);
 }
 
@@ -190,6 +199,22 @@ bool valid_material(PreparedSampleMaterialView material) noexcept {
 
 constexpr float kRealtimeRampScale =
     1.0F / static_cast<float>(kRealtimeRampFrames);
+static_assert(kRealtimeRampFrames == detail::kVoiceDspRampFrames);
+
+// Fixes a voice's envelope at trigger: both ramp lengths, their scales and the
+// attack counter. A default envelope is the 96-frame declick at scale 1/96.
+template <typename VoiceType>
+void set_voice_envelope(
+    VoiceType& voice, const cooker::ResolvedPlayback& playback) noexcept {
+  const auto envelope = detail::voice_envelope(playback);
+  voice.attack_frames_remaining = envelope.attack_frames;
+#if LMDJ_VOICE_DSP
+  voice.attack_frames = envelope.attack_frames;
+  voice.attack_scale = envelope.attack_scale;
+  voice.release_frames = envelope.release_frames;
+  voice.release_scale = envelope.release_scale;
+#endif
+}
 
 std::uint8_t global_slot(domain::PadSlotId slot) noexcept {
   return static_cast<std::uint8_t>(slot.bank * 16U + slot.pad);
@@ -474,7 +499,7 @@ void RealtimeEngine::apply_published_pattern(
   if (current != kNoPatternSlot) {
     for (auto& voice : voices_) {
       if (!preserve_phase && voice.active && voice.pattern_voice) {
-        stop_voice(voice, runtime_frame);
+        stop_voice(voice, runtime_frame, VoiceStop::declick);
       }
     }
     auto& previous = pattern_slots_[current];
@@ -513,7 +538,7 @@ void RealtimeEngine::start_pattern_voice(
   const auto slot = global_slot(event.slot);
   const auto playback = event.playback;
   if (!valid_material(event.material) ||
-      !valid_playback(playback, event.material.frame_count)) {
+      !valid_playback_range(playback, event.material.frame_count)) {
     audio_invalid_events_ += 1;
     return;
   }
@@ -547,7 +572,7 @@ void RealtimeEngine::start_pattern_voice(
   voice->gain = (static_cast<float>(event.velocity) / 127.0F) *
                 playback.linear_gain;
   voice->trigger_mode = playback.trigger_mode;
-  voice->attack_frames_remaining = kRealtimeRampFrames;
+  set_voice_envelope(*voice, playback);
   voice->scheduled_release_frame =
       playback.trigger_mode == domain::TriggerMode::one_shot
           ? 0
@@ -594,16 +619,33 @@ void RealtimeEngine::schedule_pattern_events(
 }
 
 void RealtimeEngine::stop_voice(
-    Voice& voice, std::uint64_t runtime_frame) noexcept {
+    Voice& voice, std::uint64_t runtime_frame, VoiceStop how) noexcept {
   if (!voice.active) {
     return;
   }
   if (voice.releasing) {
-    // A second stop (stop_all after a gate release, a toggle re-press, or
-    // voice stealing) hard-kills the tail. The stopped edge was already
-    // published when the release began, so only the physical deactivation
-    // remains.
-    deactivate_voice(voice);
+    // A second stop (any stop that reaches a voice already in its release
+    // tail) ends the tail. The stopped edge was already published when the release began,
+    // so only the physical end remains. A neutral voice's 96-frame tail is
+    // hard-killed, as it always has been. A kernel voice never steps to
+    // silence: a tail with at most 96 frames left finishes, and a longer one
+    // fades from its current gain over the declick.
+    if (voice.release_frames_remaining <= kRealtimeRampFrames) {
+      if (!voice.dsp_active) {
+        deactivate_voice(voice);
+      }
+      return;
+    }
+#if LMDJ_VOICE_DSP
+    const float current =
+        voice.release_frames_remaining < voice.release_frames
+            ? static_cast<float>(voice.release_frames_remaining) *
+                  voice.release_scale
+            : 1.0F;
+    voice.release_scale = current / static_cast<float>(kRealtimeRampFrames);
+    voice.release_frames = kRealtimeRampFrames + 1;
+    voice.release_frames_remaining = kRealtimeRampFrames;
+#endif
     return;
   }
   // `RuntimeVoiceState` is keyed by Pad slot. An audition owns no Pad, so
@@ -617,10 +659,43 @@ void RealtimeEngine::stop_voice(
         voice.dsp_active ? detail::voice_dsp_source_frame(voice.dsp)
                          : voice.cursor));
   }
-  // The voice keeps rendering a kRealtimeRampFrames tail to avoid a step
-  // discontinuity; the logical stop (publication) has already happened.
+  // The voice keeps rendering its release tail (at least kRealtimeRampFrames)
+  // to avoid a step discontinuity; the logical stop (publication) has
+  // already happened.
   voice.releasing = true;
-  voice.release_frames_remaining = kRealtimeRampFrames;
+#if LMDJ_VOICE_DSP
+  // Only a release event plays the Pad's release; any other stop ends the
+  // voice over the declick (decision 2026-09-30 point 5, owner 2026-10-02).
+  if (how == VoiceStop::declick) {
+    voice.release_frames = kRealtimeRampFrames;
+    voice.release_scale = kRealtimeRampScale;
+  }
+  // A release that starts during a user attack fades from the attack's
+  // current level, so it never grows louder after the stop. The tail keeps
+  // its length; its first frame is that level, so nothing steps.
+  if (voice.attack_frames_remaining != 0 &&
+      voice.attack_frames > kRealtimeRampFrames) {
+    const float level =
+        static_cast<float>(voice.attack_frames - voice.attack_frames_remaining) *
+        voice.attack_scale;
+    if (level == 0.0F) {
+      // Released before its attack sounded (a press and its release in one
+      // callback): nothing to fade, so the voice ends now instead of holding
+      // a slot through a silent tail (owner 2026-10-02). An offline release
+      // always starts at least one frame into its voice.
+      deactivate_voice(voice);
+      return;
+    }
+    voice.attack_frames_remaining = 0;
+    voice.release_scale = level / static_cast<float>(voice.release_frames);
+    voice.release_frames_remaining = voice.release_frames;
+    voice.release_frames += 1;
+    return;
+  }
+#else
+  static_cast<void>(how);
+#endif
+  voice.release_frames_remaining = voice.release_frames;
 }
 
 void RealtimeEngine::capture_voice_start(
@@ -1021,7 +1096,7 @@ void RealtimeEngine::apply_pattern_transport(std::uint64_t frame) noexcept {
       if (voice.active && voice.pattern_voice &&
           voice.pattern_slot < pattern_slots_.size() &&
           voice.pattern_generation == pattern_slots_[voice.pattern_slot].generation)
-        stop_voice(voice, frame);
+        stop_voice(voice, frame, VoiceStop::declick);
     }
   }
   receipt.origin_frame = pattern_origin_frame_;
@@ -2068,12 +2143,14 @@ void RealtimeEngine::render(
     }
     if (event.kind == PadControlKind::release) {
       for (auto& voice : voices_) {
-        if (voice.active && voice.slot == event.slot &&
+        // A Pad already in its release tail is not released again, so a
+        // repeated release never shortens a long tail.
+        if (voice.active && !voice.releasing && voice.slot == event.slot &&
             !is_audition_bank_slot(voice.bank_slot) &&
             voice.origin == PadControlOrigin::host_input &&
             (voice.trigger_mode == domain::TriggerMode::gate ||
              voice.trigger_mode == domain::TriggerMode::loop_gate)) {
-          stop_voice(voice, absolute_start_frame);
+          stop_voice(voice, absolute_start_frame, VoiceStop::release);
         }
       }
       continue;
@@ -2081,7 +2158,7 @@ void RealtimeEngine::render(
     if (event.kind == PadControlKind::audition_stop) {
       for (auto& voice : voices_) {
         if (voice.active && is_audition_bank_slot(voice.bank_slot)) {
-          stop_voice(voice, absolute_start_frame);
+          stop_voice(voice, absolute_start_frame, VoiceStop::declick);
         }
       }
       continue;
@@ -2095,7 +2172,7 @@ void RealtimeEngine::render(
         if (voice.active && !is_audition_bank_slot(voice.bank_slot) &&
             (event.kind == PadControlKind::stop_all ||
              voice.slot == event.slot)) {
-          stop_voice(voice, absolute_start_frame);
+          stop_voice(voice, absolute_start_frame, VoiceStop::declick);
         }
       }
       continue;
@@ -2104,10 +2181,13 @@ void RealtimeEngine::render(
     bool stopped_toggle = false;
     if (!replay) {
       for (auto& candidate : voices_) {
-        if (candidate.active && candidate.slot == event.slot &&
+        // A toggle in its release tail is already off: a press then starts
+        // the Pad again, beside the fading tail.
+        if (candidate.active && !candidate.releasing &&
+            candidate.slot == event.slot &&
             candidate.origin == PadControlOrigin::host_input &&
             candidate.trigger_mode == domain::TriggerMode::loop_toggle) {
-          stop_voice(candidate, absolute_start_frame);
+          stop_voice(candidate, absolute_start_frame, VoiceStop::release);
           stopped_toggle = true;
         }
       }
@@ -2154,7 +2234,7 @@ void RealtimeEngine::render(
                            audition_slot - kAuditionBankSlotBase))
         : replay ? SampleView{nullptr, event.material, event.material.frame_count}
                  : current_sample(event.slot);
-    if (!valid_playback(playback, sample.frame_count)) {
+    if (!valid_playback_range(playback, sample.frame_count)) {
       audio_invalid_events_ += 1;
       continue;
     }
@@ -2219,7 +2299,7 @@ void RealtimeEngine::render(
                   playback.linear_gain;
     voice->trigger_mode = playback.trigger_mode;
     voice->bank_slot = bank_slot;
-    voice->attack_frames_remaining = kRealtimeRampFrames;
+    set_voice_envelope(*voice, playback);
     voice->scheduled_release_frame =
         replay && playback.trigger_mode != domain::TriggerMode::one_shot
             ? absolute_start_frame + event.duration_frames
@@ -2285,7 +2365,7 @@ void RealtimeEngine::render(
       if (voice.active && !voice.releasing &&
           voice.scheduled_release_frame != 0 &&
           runtime_frame >= voice.scheduled_release_frame) {
-        stop_voice(voice, runtime_frame);
+        stop_voice(voice, runtime_frame, VoiceStop::release);
       }
     }
     if (!pattern_transport_enabled_ || pattern_playing_)
@@ -2296,16 +2376,18 @@ void RealtimeEngine::render(
       if (!voice.active) {
         continue;
       }
-      // F6 amplitude ramps: attack from the per-voice counter (a looping
-      // voice attacks only on its initial trigger), a stateless boundary
-      // fade over the last kRealtimeRampFrames before end_frame for
-      // non-looping voices, and the stop_voice release tail. Each component
-      // is skipped at full scale so unramped output stays bit-identical.
+      // F6 amplitude ramps: the voice's attack (a looping voice attacks only
+      // on its initial trigger), a stateless boundary fade over the last
+      // kRealtimeRampFrames before end_frame for non-looping voices, and the
+      // stop_voice release tail. Attack and release use the voice's envelope
+      // lengths, which default to the same 96 frames at scale 1/96. Each
+      // component is skipped at full scale so unramped output stays
+      // bit-identical.
       float ramp = 1.0F;
       if (voice.attack_frames_remaining != 0) {
         ramp *= static_cast<float>(
-                    kRealtimeRampFrames - voice.attack_frames_remaining) *
-                kRealtimeRampScale;
+                    voice.attack_frames - voice.attack_frames_remaining) *
+                voice.attack_scale;
         --voice.attack_frames_remaining;
       }
       if (voice.dsp_active) {
@@ -2320,15 +2402,15 @@ void RealtimeEngine::render(
         }
       }
       if (voice.releasing &&
-          voice.release_frames_remaining < kRealtimeRampFrames) {
+          voice.release_frames_remaining < voice.release_frames) {
         ramp *=
             static_cast<float>(voice.release_frames_remaining) *
-            kRealtimeRampScale;
+            voice.release_scale;
       }
       if (voice.dsp_active) {
         const auto& material = voice.material;
         const float* const samples = voice.samples;
-        const auto value =
+        auto value =
             detail::voice_dsp_read(
                 voice.dsp,
                 [&material, samples](std::uint32_t source_frame) {
@@ -2337,6 +2419,19 @@ void RealtimeEngine::render(
                              : samples[source_frame];
                 }) *
             voice.gain * ramp;
+        // Tone and EQ follow the envelope. They are linear and the gain is
+        // constant, so filtering after it equals the decision's order.
+        if (voice.dsp.filter_count != 0) {
+          value = detail::voice_dsp_filter(
+              voice.dsp, voice.filter_memory, value);
+          // A filter still rings when its input reaches zero, so the declick
+          // that ends the voice runs again on the filtered output: its last
+          // 96 frames fade to zero instead of stepping to silence (owner
+          // decision 2026-10-02).
+          value *= detail::voice_dsp_end_fade(voice.dsp) *
+                   detail::voice_dsp_release_declick(
+                       voice.releasing, voice.release_frames_remaining);
+        }
         left[frame] += value * voice.dsp.pan_left;
         right[frame] += value * voice.dsp.pan_right;
       } else {
@@ -2407,6 +2502,15 @@ void RealtimeEngine::render(
     }
     left[frame] = std::clamp(left[frame], -1.0F, 1.0F);
     right[frame] = std::clamp(right[frame], -1.0F, 1.0F);
+  }
+
+  // A fading or silent voice's filter memory decays toward denormals; flush
+  // it to exact zero once per block.
+  for (std::size_t index = 0; index < voice_scan_extent_; ++index) {
+    auto& voice = voices_[index];
+    if (voice.active && voice.dsp_active && voice.dsp.filter_count != 0) {
+      detail::voice_dsp_flush_filters(voice.dsp, voice.filter_memory);
+    }
   }
 
   if (master_fx_.prepared()) {

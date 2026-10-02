@@ -25,9 +25,10 @@ live Pad 的不可变编码。规范位于 `contracts/runtime-content/README.md`
 未压缩 48 kHz mono/stereo PCM16 sample bodies 不包含 Project Bundle、路径或 URL。
 完整 SHA-256 与 byte length 单独传入；sample identity 同时绑定 PCM 格式和数据。
 
-Runtime Snapshot 的每个 resolved playback 末尾携带一个 12 字节、只含整数、可平凡复制的 voice DSP 块
-（循环点偏移、crossfade 帧数、pitch cents、pan、reverse 与 ping-pong 标志，单位为 48 kHz 输出帧）；全零即中性，
-中性块的渲染与此前完全一致。Runtime Content v1 编码（`contracts/runtime-content/README.md`）没有对应字段，encoder 遇到非中性块时以 `voice_dsp`
+Runtime Snapshot 的每个 resolved playback 末尾携带一个 36 字节、只含整数、可平凡复制的 voice DSP 块：
+#1666 的循环点偏移、crossfade 帧数、pitch cents、pan、reverse 与 ping-pong 标志，以及 #1667 的 attack/release 帧数、
+tone 与三段 EQ（存在位、cut 位与各段的频率、增益和 Q），帧数单位为 48 kHz 输出帧。全零即中性，
+中性块的渲染与此前完全一致。不带 voice DSP 的构建（`LMDJ_VOICE_DSP=0`，即 Cardputer）里该块为空、不占字节。Runtime Content v1 编码（`contracts/runtime-content/README.md`）没有对应字段，encoder 遇到非中性块时以 `voice_dsp`
 条件拒绝，不静默丢弃，因此设备不会以与导出它的桌面不同的方式播放 Pad。
 
 Core decoder 验证精确版本、能力集合、完整身份、顺序、引用、playback、所有 sample

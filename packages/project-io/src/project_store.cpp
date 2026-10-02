@@ -424,6 +424,38 @@ nlohmann::json playback_json(const domain::PadPlayback& playback) {
   if (playback.loop_crossfade_frames != 0) {
     encoded["loop_crossfade_frames"] = playback.loop_crossfade_frames;
   }
+  if (playback.attack_ms != 0) {
+    encoded["attack_ms"] = playback.attack_ms;
+  }
+  if (playback.release_ms != 0) {
+    encoded["release_ms"] = playback.release_ms;
+  }
+  if (playback.tone != 0) {
+    encoded["tone"] = playback.tone;
+  }
+  // Only present bands are written; an EQ with every band bypassed is omitted.
+  const auto shelf_json = [](const domain::PadEqShelf& band) {
+    return nlohmann::json{
+        {"freq_hz", band.freq_hz},
+        {"gain_millidb", band.gain_millidb},
+        {"kind", band.kind == domain::EqBandKind::cut ? "cut" : "shelf"}};
+  };
+  nlohmann::json eq = nlohmann::json::object();
+  if (playback.eq.low.has_value()) {
+    eq["low"] = shelf_json(*playback.eq.low);
+  }
+  if (playback.eq.mid.has_value()) {
+    eq["mid"] = nlohmann::json{
+        {"freq_hz", playback.eq.mid->freq_hz},
+        {"gain_millidb", playback.eq.mid->gain_millidb},
+        {"q_milli", playback.eq.mid->q_milli}};
+  }
+  if (playback.eq.high.has_value()) {
+    eq["high"] = shelf_json(*playback.eq.high);
+  }
+  if (!eq.empty()) {
+    encoded["eq"] = std::move(eq);
+  }
   return encoded;
 }
 
@@ -660,9 +692,12 @@ bool playback_keys_admitted(const nlohmann::json& input, PlaybackKeys keys) {
   static constexpr std::array<std::string_view, 5> base{
       "gain_millidb", "muted", "trigger_mode", "trim_end_frame",
       "trim_start_frame"};
-  static constexpr std::array<std::string_view, 6> parity{
-      "loop_crossfade_frames", "loop_mode", "loop_start_frame", "pan",
-      "pitch_cents", "reverse"};
+  // The 5.1.0 and 5.2.0 optional keys. A v5 checkpoint carries no MINOR, so
+  // every lmdj.project.v5 checkpoint admits both sets.
+  static constexpr std::array<std::string_view, 10> parity{
+      "attack_ms", "eq", "loop_crossfade_frames", "loop_mode",
+      "loop_start_frame", "pan", "pitch_cents", "release_ms", "reverse",
+      "tone"};
   if (!input.is_object()) {
     return false;
   }
@@ -682,6 +717,64 @@ bool playback_keys_admitted(const nlohmann::json& input, PlaybackKeys keys) {
     }
   }
   return true;
+}
+
+// The shape of a 5.2.0 `eq` object: each present band carries exactly its
+// fields. Ranges are the Domain's (is_valid_playback).
+std::optional<domain::PadEq> parse_playback_eq(const nlohmann::json& input) {
+  if (!input.is_object()) {
+    return std::nullopt;
+  }
+  for (const auto& [key, value] : input.items()) {
+    (void)value;
+    if (key != "low" && key != "mid" && key != "high") {
+      return std::nullopt;
+    }
+  }
+  const auto shelf = [](const nlohmann::json& band)
+      -> std::optional<domain::PadEqShelf> {
+    if (!exact_object_keys(band, {"kind", "freq_hz", "gain_millidb"}) ||
+        !band.at("kind").is_string()) {
+      return std::nullopt;
+    }
+    const auto kind = band.at("kind").get<std::string>();
+    const auto freq = int32_value(band.at("freq_hz"));
+    const auto gain = int32_value(band.at("gain_millidb"));
+    if ((kind != "shelf" && kind != "cut") || !freq.has_value() ||
+        !gain.has_value()) {
+      return std::nullopt;
+    }
+    return domain::PadEqShelf{
+        kind == "cut" ? domain::EqBandKind::cut : domain::EqBandKind::shelf,
+        *freq, *gain};
+  };
+  domain::PadEq eq;
+  if (input.contains("low")) {
+    eq.low = shelf(input.at("low"));
+    if (!eq.low.has_value()) {
+      return std::nullopt;
+    }
+  }
+  if (input.contains("high")) {
+    eq.high = shelf(input.at("high"));
+    if (!eq.high.has_value()) {
+      return std::nullopt;
+    }
+  }
+  if (input.contains("mid")) {
+    const auto& band = input.at("mid");
+    if (!exact_object_keys(band, {"freq_hz", "gain_millidb", "q_milli"})) {
+      return std::nullopt;
+    }
+    const auto freq = int32_value(band.at("freq_hz"));
+    const auto gain = int32_value(band.at("gain_millidb"));
+    const auto q = int32_value(band.at("q_milli"));
+    if (!freq.has_value() || !gain.has_value() || !q.has_value()) {
+      return std::nullopt;
+    }
+    eq.mid = domain::PadEqBell{*freq, *gain, *q};
+  }
+  return eq;
 }
 
 foundation::Result<domain::PadPlayback> parse_playback(
@@ -731,7 +824,10 @@ foundation::Result<domain::PadPlayback> parse_playback(
     }
     for (const auto& [key, field] :
          {std::pair{"pitch_cents", &domain::PadPlayback::pitch_cents},
-          std::pair{"pan", &domain::PadPlayback::pan}}) {
+          std::pair{"pan", &domain::PadPlayback::pan},
+          std::pair{"attack_ms", &domain::PadPlayback::attack_ms},
+          std::pair{"release_ms", &domain::PadPlayback::release_ms},
+          std::pair{"tone", &domain::PadPlayback::tone}}) {
       if (input.contains(key)) {
         const auto value = int32_value(input.at(key));
         if (!value.has_value()) {
@@ -767,6 +863,13 @@ foundation::Result<domain::PadPlayback> parse_playback(
         return shape_invalid();
       }
       playback.loop_crossfade_frames = *value;
+    }
+    if (input.contains("eq")) {
+      const auto eq = parse_playback_eq(input.at("eq"));
+      if (!eq.has_value()) {
+        return shape_invalid();
+      }
+      playback.eq = *eq;
     }
     if (!domain::is_valid_playback(playback)) {
       return foundation::Result<domain::PadPlayback>::failure(

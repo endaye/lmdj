@@ -67,18 +67,24 @@ std::int16_t wav_sample(const std::vector<std::byte>& bytes, std::size_t index) 
       (std::to_integer<std::uint16_t>(bytes.at(offset + 1)) << 8U));
 }
 
-// One mono non-neutral voice rendered live and offline agrees within one
-// PCM16 step on every frame of both channels: both run the shared kernel.
-// The offline event and the replay press both last one beat, 24 000 frames,
-// so a looping voice also crosses its gate release at the same frame.
-void expect_kernel_voice_matches_between_realtime_and_offline(
-    const ResolvedPlayback& playback,
-    std::size_t rendered_frames) {
+std::vector<std::int16_t> sine_source() {
   std::vector<std::int16_t> pcm(kSourceFrames);
   for (std::size_t frame = 0; frame < pcm.size(); ++frame) {
     pcm[frame] = static_cast<std::int16_t>(
         12'000.0 * std::sin(static_cast<double>(frame) * 0.031));
   }
+  return pcm;
+}
+
+// One mono non-neutral voice rendered live and offline agrees within one
+// PCM16 step on every frame of both channels: both run the shared kernel.
+// The offline event and the replay press both last one beat, 24 000 frames,
+// so a looping voice also crosses its gate release at the same frame.
+// Returns the live left channel.
+std::vector<float> expect_kernel_voice_matches_between_realtime_and_offline(
+    const ResolvedPlayback& playback,
+    std::size_t rendered_frames,
+    const std::vector<std::int16_t>& pcm = sine_source()) {
 
   // Offline: one event at tick 0 of a one-bar pattern.
   const auto sample = std::make_shared<const PcmSample>(PcmSample{48'000, 1, pcm});
@@ -115,13 +121,17 @@ void expect_kernel_voice_matches_between_realtime_and_offline(
   LMDJ_CHECK(engine.enqueue_control(PadControlEvent{
                  1, 0, 127, PadControlKind::press, playback,
                  PadControlOrigin::performance_replay, 24'000,
-                 PreparedSampleMaterialView{pcm.data(), kSourceFrames, 1}}) ==
+                 PreparedSampleMaterialView{
+                     pcm.data(), static_cast<std::uint32_t>(pcm.size()), 1}}) ==
              EnqueueResult::accepted);
+  // 100-frame blocks: the engine flushes filter memory once per block, so it
+  // flushes at different voice offsets from the offline renderer's 128-frame
+  // cadence.
   std::vector<float> left(rendered_frames);
   std::vector<float> right(rendered_frames);
-  for (std::size_t done = 0; done < left.size(); done += 128) {
+  for (std::size_t done = 0; done < left.size(); done += 100) {
     const auto frames =
-        static_cast<std::uint32_t>(std::min<std::size_t>(128, left.size() - done));
+        static_cast<std::uint32_t>(std::min<std::size_t>(100, left.size() - done));
     engine.render(left.data() + done, right.data() + done, frames);
   }
 
@@ -135,6 +145,7 @@ void expect_kernel_voice_matches_between_realtime_and_offline(
   }
   // The comparison covered audible frames, not only silence.
   LMDJ_CHECK(compared > 1'000);
+  return left;
 }
 
 ResolvedPlayback kernel_playback(TriggerMode mode, ResolvedVoiceDsp dsp) {
@@ -167,6 +178,84 @@ void reversed_ping_pong_loop_matches_between_realtime_and_offline() {
       24'000 + 512);
 }
 
+// A 100 ms user attack and a 200 ms user release on a gated loop: the same
+// envelope in realtime and offline, through the release tail's end.
+void user_envelope_matches_between_realtime_and_offline() {
+  ResolvedVoiceDsp dsp{};
+  dsp.attack_frames = 4'800;
+  dsp.release_frames = 9'600;
+  expect_kernel_voice_matches_between_realtime_and_offline(
+      kernel_playback(TriggerMode::loop_gate, dsp), 24'000 + 9'600 + 512);
+}
+
+// Tone and every EQ band on a gated loop, with a release: the same filter
+// stages in realtime and offline, through the release tail's end.
+void tone_and_eq_match_between_realtime_and_offline() {
+  ResolvedVoiceDsp dsp{};
+  dsp.release_frames = 4'800;
+  dsp.tone = -40;
+  dsp.eq_flags = ResolvedVoiceDsp::kEqLow | ResolvedVoiceDsp::kEqMid |
+                 ResolvedVoiceDsp::kEqHigh | ResolvedVoiceDsp::kEqHighCut;
+  dsp.eq_low_freq_hz = 150;
+  dsp.eq_low_gain_millidb = 6'000;
+  dsp.eq_mid_freq_hz = 1'200;
+  dsp.eq_mid_gain_millidb = -9'000;
+  dsp.eq_mid_q_milli = 2'000;
+  dsp.eq_high_freq_hz = 6'000;
+  expect_kernel_voice_matches_between_realtime_and_offline(
+      kernel_playback(TriggerMode::loop_gate, dsp), 24'000 + 4'800 + 512);
+}
+
+// The gate releases at frame 24 000, halfway through a 1 s user attack: both
+// renders fade from the attack's level over the release.
+void release_during_a_user_attack_matches_between_realtime_and_offline() {
+  ResolvedVoiceDsp dsp{};
+  dsp.attack_frames = 48'000;
+  dsp.release_frames = 9'600;
+  expect_kernel_voice_matches_between_realtime_and_offline(
+      kernel_playback(TriggerMode::loop_gate, dsp), 24'000 + 9'600 + 512);
+}
+
+// A filtered one-shot reaching its sample's end: both renders take the ending
+// declick on the filtered output at the same frames.
+void filtered_one_shot_end_matches_between_realtime_and_offline() {
+  ResolvedVoiceDsp dsp{};
+  dsp.tone = -100;
+  dsp.eq_flags = ResolvedVoiceDsp::kEqMid;
+  dsp.eq_mid_freq_hz = 200;
+  dsp.eq_mid_gain_millidb = 12'000;
+  dsp.eq_mid_q_milli = 4'000;
+  expect_kernel_voice_matches_between_realtime_and_offline(
+      kernel_playback(TriggerMode::one_shot, dsp), kSourceFrames + 512);
+}
+
+// A burst and then silence: every filter stage rings down through the flush
+// floor while the voice still plays, so the two renders zero their filter
+// memory at different offsets. They still agree within one step, and the
+// live tail reaches exact zero.
+void filter_flushes_at_different_offsets_keep_the_renders_together() {
+  constexpr std::uint32_t kFrames = 90'000;
+  auto pcm = sine_source();
+  pcm.resize(kFrames, 0);
+  ResolvedVoiceDsp dsp{};
+  dsp.tone = -100;
+  dsp.eq_flags = ResolvedVoiceDsp::kEqLow | ResolvedVoiceDsp::kEqMid;
+  dsp.eq_low_freq_hz = 80;
+  dsp.eq_low_gain_millidb = 6'000;
+  dsp.eq_mid_freq_hz = 100;
+  dsp.eq_mid_gain_millidb = 6'000;
+  dsp.eq_mid_q_milli = 5'000;
+  ResolvedPlayback playback{0, kFrames, TriggerMode::one_shot, 0.8F, false};
+  playback.dsp = dsp;
+  const auto live =
+      expect_kernel_voice_matches_between_realtime_and_offline(playback, kFrames, pcm);
+  // Flushed, the live tail is exact zero from about frame 45 000; unflushed it
+  // would still hold denormal residue at the voice's last frame.
+  for (std::size_t frame = 60'000; frame < live.size(); ++frame) {
+    LMDJ_CHECK(live[frame] == 0.0F);
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -174,6 +263,11 @@ int main() {
     reversed_pitched_one_shot_matches_between_realtime_and_offline();
     crossfaded_loop_and_release_match_between_realtime_and_offline();
     reversed_ping_pong_loop_matches_between_realtime_and_offline();
+    user_envelope_matches_between_realtime_and_offline();
+    tone_and_eq_match_between_realtime_and_offline();
+    release_during_a_user_attack_matches_between_realtime_and_offline();
+    filtered_one_shot_end_matches_between_realtime_and_offline();
+    filter_flushes_at_different_offsets_keep_the_renders_together();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
