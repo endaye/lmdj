@@ -574,10 +574,14 @@ test("reopening after owner loss asks once and keeps the heard take", async ({pa
   const patternId = await page.getByRole("combobox", {name: "Pattern"}).inputValue();
   await recordKey(page).click();
   await transportStatus(page, "recording");
-  await page.keyboard.press("KeyQ");
+  // Keep the press open through owner loss. A completed press/release has
+  // its real duration; only the interrupted held note guarantees the attack
+  // tail asserted after Keep recording below.
+  await page.keyboard.down("KeyQ");
   await awaitAdmittedPresses(page, 1);
 
   await reopenProject(page);
+  await page.keyboard.up("KeyQ");
   const prompt = page.getByRole("region", {name: "Interrupted recording"});
   await expect(prompt).toContainText("A recording stopped before it was saved (1 in Sequence)",
     {timeout: 60_000});
