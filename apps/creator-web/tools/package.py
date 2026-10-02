@@ -43,7 +43,7 @@ MANIFEST_TOOLCHAIN_KEYS = (
     "emcc_version",
 )
 HASHED_ASSET_PATTERN = re.compile(
-    r"^assets/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|wasm)$"
+    r"^assets/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|svg|wasm)$"
 )
 LOCAL_PATH_PATTERN = re.compile(rb"(?:/Users/|file:/+(?:Users|home)/|[A-Za-z]:\\)")
 SOURCE_SUFFIXES = {
@@ -194,9 +194,10 @@ def write_hashed_asset(
             "tools/web-runtime/runtime-identity.json, and rerun "
             "apps/web-runtime-host/test/manifest_asset_role_parity_test.py, "
             "all in this same change. A role that becomes required for every "
-            "Creator manifest also needs the Host-major split in "
-            "CREATOR_LEGACY_ASSET_ROLES, or the exact-tag deploy's prior "
-            "published rollback anchor stops validating."
+            "current Creator manifest also needs the Host-major split in "
+            "CREATOR_V3_ASSET_ROLES and CREATOR_LEGACY_ASSET_ROLES, or the "
+            "exact-tag deploy's prior published rollback anchor stops "
+            "validating."
         )
     digest = sha256(payload)
     path = assets_root / f"{stem}.{digest}{suffix}"
@@ -265,6 +266,10 @@ def build_distribution(
     source_index = require_file(ui_root / "index.html", "Vite index").read_text(
         encoding="utf-8"
     )
+    favicon_reference = 'href="/favicon.svg"'
+    if source_index.count(favicon_reference) != 1:
+        raise PackageError("Vite index must bind exactly one favicon")
+    source_favicon = require_file(ui_root / "favicon.svg", "Vite favicon")
     source_main_relative = unique_vite_asset(source_index, "js")
     source_style_relative = unique_vite_asset(source_index, "css")
     source_main = require_file(ui_root / source_main_relative, "Vite main")
@@ -352,7 +357,22 @@ def build_distribution(
             runtime_text.encode("utf-8"),
             ROLES.RUNTIME_SCRIPT,
         )
-        entries = [main_entry, runtime_entry, wasm_entry, style_entry, worklet_entry, tap_entry]
+        favicon_entry = write_hashed_asset(
+            assets_root,
+            "favicon",
+            ".svg",
+            source_favicon.read_bytes(),
+            ROLES.HOST_FAVICON,
+        )
+        entries = [
+            main_entry,
+            runtime_entry,
+            wasm_entry,
+            style_entry,
+            worklet_entry,
+            tap_entry,
+            favicon_entry,
+        ]
         manifest = {
             "assets": entries,
             "compatible_hosts": host_identity["compatible_hosts"],
@@ -375,6 +395,8 @@ def build_distribution(
             f'/{source_main_relative}', f'./{main_entry["path"]}', 1
         ).replace(
             f'/{source_style_relative}', f'./{style_entry["path"]}', 1
+        ).replace(
+            favicon_reference, f'href="./{favicon_entry["path"]}"', 1
         )
         charset = re.search(r"<meta charset=\"UTF-8\"\s*/?>", index)
         if charset is None:
@@ -551,7 +573,12 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
             raise DistributionError("index identity metadata mismatch")
     main = next(entry for entry in assets if entry["role"] == ROLES.HOST_MAIN)
     style = next(entry for entry in assets if entry["role"] == ROLES.HOST_STYLE)
-    if index.count(f'./{main["path"]}') != 1 or index.count(f'./{style["path"]}') != 1:
+    favicon = next(entry for entry in assets if entry["role"] == ROLES.HOST_FAVICON)
+    if (
+        index.count(f'./{main["path"]}') != 1
+        or index.count(f'./{style["path"]}') != 1
+        or index.count(f'./{favicon["path"]}') != 1
+    ):
         raise DistributionError("index production asset binding mismatch")
     if re.search(r"<script(?![^>]*\bsrc=)[^>]*>", index, re.IGNORECASE):
         raise DistributionError("index contains inline script")

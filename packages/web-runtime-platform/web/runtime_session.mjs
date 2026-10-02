@@ -1030,7 +1030,7 @@ function validatePackagedManifest(
       !Number.isSafeInteger(asset.bytes) ||
       asset.bytes < 1 ||
       typeof asset.path !== "string" ||
-      !/^assets\/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|wasm)$/.test(asset.path) ||
+      !/^assets\/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|svg|wasm)$/.test(asset.path) ||
       typeof asset.role !== "string" ||
       !/^[0-9a-f]{64}$/.test(asset.sha256) ||
       asset.path !== `${expectedAsset.prefix}${asset.sha256}${expectedAsset.suffix}` ||

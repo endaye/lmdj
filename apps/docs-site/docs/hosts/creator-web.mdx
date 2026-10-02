@@ -124,6 +124,8 @@ Safari `PASS`。
 
 `1.0.44.0` 的 Creator 同构建 distribution manifest 声明六个 expected asset：`host_main`（`assets/main.*.js`）、`runtime_script`（`assets/runtime.*.js`）、`runtime_wasm`（`assets/runtime.*.wasm`）、`host_style`（`assets/styles.*.css`）、`capture_worklet`（`assets/capture-worklet.*.js`），以及新增的 `perform_master_tap_worklet`（`assets/perform-master-tap.*.js`）；兼容的诊断 Host 身份为 `web-runtime-host 4.0.0`。`apps/creator-web/tools/package.py` 定位 Vite 产出的 master tap processor，按内容哈希为 `assets/perform-master-tap.<sha256>.js`，改写主 bundle 中唯一一处引用，并在匹配为零或多于一个时拒绝打包。共享 native manifest gate 对声明 `compatible_hosts` 的 Creator manifest 要求恰好一个 tap 资产（诊断 Host 为零个），并校验十三项资源上限——既有九项之外，本 Build 新增四项 Sound Set Set Store 上限 `maximum_soundset_manifest_bytes` 1 MiB、`maximum_soundset_blob_bytes` 65 MiB、`maximum_soundset_unique_bytes` 256 MiB 与 `maximum_soundset_staging_bytes` 512 MiB，每一项都必须是正 safe integer 并逐值比对。清单形状改变是 Creator Host 本次取 MAJOR 的依据。多余默认值、重复 role、缺失或错误的前后缀、digest 不匹配，以及无法解析到精确哈希资产的主 bundle URL 都 fail closed。更早的不可变包保持各自的精确身份，不被追溯要求携带 Stage 10 字段。私有协议版本仍为 `1`。
 
+Creator Host `5.0.0` 在这份清单末尾增加 `host_favicon`（`assets/favicon.<sha256>.svg`）。它是 Creator LogoIcon 的四条路径，铺在 `#0a0b09` 上，由 `index.html` 的同一来源图标链接引用，打包时改写成那一个哈希路径。Host 3.x 与 4.x 仍是上面的六项，不得携带 `host_favicon`；Host 2.x 仍是五项。`/favicon.ico` 继续 404。清单形状改变，所以这次 Host 取 MAJOR。这次 Assembly 变化分配 Product Build `2.0.76.0`。它不是公共 Release、部署或 Channel 晋级。
+
 ## 公共部署边界
 
 后续 Web 产品使用 `web-hosts` profile：同一 Product Release 精确包含 Creator 与 Runtime

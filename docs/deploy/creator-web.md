@@ -20,7 +20,7 @@
 Preview；这份配置本身不是上线证据。部署输入必须来自经签名验证的 Release，放在
 `build/deploy/cloudflare/creator/dist`，附加由已验证 manifest 生成的 `_headers`。
 使用 `python3 apps/creator-web/deploy/cloudflare_headers.py VERIFIED_DIST` 生成
-响应头；除既有安全与精确资产缓存规则外，显式声明 HTML/JS/CSS 的 UTF-8 charset。
+响应头；除既有安全与精确资产缓存规则外，显式声明 HTML/JS/CSS/SVG 的 UTF-8 charset。
 Cloudflare 版本 Preview 会覆盖 `X-Robots-Tag` 为 `noindex`，仅 Preview 检查接受此
 平台差异；固定地址检查要求完整 robots directives。
 `cloudflare_worker.mjs` 只处理 `/` 到 `index.html` 的内部映射，保持两者均直接返回
