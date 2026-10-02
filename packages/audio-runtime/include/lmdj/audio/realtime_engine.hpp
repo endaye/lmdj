@@ -732,6 +732,13 @@ class RealtimeEngine final {
     std::uint32_t attack_frames_remaining = 0;
     bool releasing = false;
     std::uint32_t release_frames_remaining = 0;
+    // The voice's envelope (detail::voice_envelope): ramp lengths and their
+    // per-frame scales, fixed at trigger. The release scale is rescaled when a
+    // second stop shortens a long tail to the declick.
+    std::uint32_t attack_frames = 0;
+    float attack_scale = 0.0F;
+    std::uint32_t release_frames = 0;
+    float release_scale = 0.0F;
     std::uint64_t scheduled_release_frame = 0;
     bool pattern_voice = false;
     PadControlOrigin origin = PadControlOrigin::host_input;

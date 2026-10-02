@@ -78,6 +78,53 @@ void prepare_refuses_a_block_that_does_not_fit() {
       source.size(), state));
 }
 
+ResolvedVoiceDsp envelope(std::uint32_t attack, std::uint32_t release) {
+  ResolvedVoiceDsp dsp{};
+  dsp.attack_frames = attack;
+  dsp.release_frames = release;
+  return dsp;
+}
+
+// An envelope longer than Project Truth admits (2 s attack, 4 s release at
+// 48 kHz) is refused like an out-of-range pitch; the longest admitted fits.
+void prepare_refuses_an_over_long_envelope() {
+  const auto source = index_source(32);
+  VoiceDspState state{};
+  for (const auto& dsp : {envelope(96'001, 0), envelope(0, 192'001)}) {
+    LMDJ_CHECK(!lmdj::audio::detail::prepare_voice_dsp(
+        playback(0, 20, TriggerMode::gate, dsp), source.size(), state));
+  }
+  LMDJ_CHECK(lmdj::audio::detail::prepare_voice_dsp(
+      playback(0, 20, TriggerMode::gate, envelope(96'000, 192'000)),
+      source.size(), state));
+}
+
+// Envelope ramps last max(user, 96) output frames, and a one-shot keeps the
+// 96-frame declick for its release. At the default the scale is exactly the
+// declick's 1/96, so a default envelope renders bit-identically.
+void envelope_is_never_shorter_than_the_declick() {
+  using lmdj::audio::detail::voice_envelope;
+  const auto neutral = voice_envelope(playback(0, 20, TriggerMode::gate, {}));
+  LMDJ_CHECK(neutral.attack_frames == 96);
+  LMDJ_CHECK(neutral.release_frames == 96);
+  LMDJ_CHECK(neutral.attack_scale == 1.0F / 96.0F);
+  LMDJ_CHECK(neutral.release_scale == 1.0F / 96.0F);
+  const auto short_ramps =
+      voice_envelope(playback(0, 20, TriggerMode::gate, envelope(50, 95)));
+  LMDJ_CHECK(short_ramps.attack_frames == 96);
+  LMDJ_CHECK(short_ramps.release_frames == 96);
+  const auto long_ramps =
+      voice_envelope(playback(0, 20, TriggerMode::loop_gate, envelope(480, 4800)));
+  LMDJ_CHECK(long_ramps.attack_frames == 480);
+  LMDJ_CHECK(long_ramps.attack_scale == 1.0F / 480.0F);
+  LMDJ_CHECK(long_ramps.release_frames == 4800);
+  LMDJ_CHECK(long_ramps.release_scale == 1.0F / 4800.0F);
+  const auto one_shot =
+      voice_envelope(playback(0, 20, TriggerMode::one_shot, envelope(480, 4800)));
+  LMDJ_CHECK(one_shot.attack_frames == 480);
+  LMDJ_CHECK(one_shot.release_frames == 96);
+}
+
 void neutral_block_reads_the_source_exactly() {
   const auto source = index_source(16);
   const auto output = render(
@@ -275,6 +322,8 @@ void reversed_voice_publishes_descending_source_frames() {
 int main() {
   try {
     prepare_refuses_a_block_that_does_not_fit();
+    prepare_refuses_an_over_long_envelope();
+    envelope_is_never_shorter_than_the_declick();
     neutral_block_reads_the_source_exactly();
     reverse_reads_the_mirrored_source_exactly();
     whole_octaves_halve_and_double_a_one_shot();

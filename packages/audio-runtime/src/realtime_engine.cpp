@@ -190,6 +190,20 @@ bool valid_material(PreparedSampleMaterialView material) noexcept {
 
 constexpr float kRealtimeRampScale =
     1.0F / static_cast<float>(kRealtimeRampFrames);
+static_assert(kRealtimeRampFrames == detail::kVoiceDspRampFrames);
+
+// Fixes a voice's envelope at trigger: both ramp lengths, their scales and the
+// attack counter. A default envelope is the 96-frame declick at scale 1/96.
+template <typename VoiceType>
+void set_voice_envelope(
+    VoiceType& voice, const cooker::ResolvedPlayback& playback) noexcept {
+  const auto envelope = detail::voice_envelope(playback);
+  voice.attack_frames = envelope.attack_frames;
+  voice.attack_scale = envelope.attack_scale;
+  voice.attack_frames_remaining = envelope.attack_frames;
+  voice.release_frames = envelope.release_frames;
+  voice.release_scale = envelope.release_scale;
+}
 
 std::uint8_t global_slot(domain::PadSlotId slot) noexcept {
   return static_cast<std::uint8_t>(slot.bank * 16U + slot.pad);
@@ -547,7 +561,7 @@ void RealtimeEngine::start_pattern_voice(
   voice->gain = (static_cast<float>(event.velocity) / 127.0F) *
                 playback.linear_gain;
   voice->trigger_mode = playback.trigger_mode;
-  voice->attack_frames_remaining = kRealtimeRampFrames;
+  set_voice_envelope(*voice, playback);
   voice->scheduled_release_frame =
       playback.trigger_mode == domain::TriggerMode::one_shot
           ? 0
@@ -599,11 +613,24 @@ void RealtimeEngine::stop_voice(
     return;
   }
   if (voice.releasing) {
-    // A second stop (stop_all after a gate release, a toggle re-press, or
-    // voice stealing) hard-kills the tail. The stopped edge was already
-    // published when the release began, so only the physical deactivation
-    // remains.
-    deactivate_voice(voice);
+    // A second stop (stop_all or stop_slot after a gate release) ends the
+    // tail. The stopped edge was already published when the release began,
+    // so only the physical end remains. Within the declick it hard-kills, as
+    // a 96-frame tail always has. A longer user release would step to
+    // silence, so it fades from the tail's current gain over the declick
+    // instead.
+    if (voice.release_frames_remaining <= kRealtimeRampFrames) {
+      deactivate_voice(voice);
+      return;
+    }
+    const float current =
+        voice.release_frames_remaining < voice.release_frames
+            ? static_cast<float>(voice.release_frames_remaining) *
+                  voice.release_scale
+            : 1.0F;
+    voice.release_scale = current / static_cast<float>(kRealtimeRampFrames);
+    voice.release_frames = kRealtimeRampFrames + 1;
+    voice.release_frames_remaining = kRealtimeRampFrames;
     return;
   }
   // `RuntimeVoiceState` is keyed by Pad slot. An audition owns no Pad, so
@@ -617,10 +644,11 @@ void RealtimeEngine::stop_voice(
         voice.dsp_active ? detail::voice_dsp_source_frame(voice.dsp)
                          : voice.cursor));
   }
-  // The voice keeps rendering a kRealtimeRampFrames tail to avoid a step
-  // discontinuity; the logical stop (publication) has already happened.
+  // The voice keeps rendering its release tail (at least kRealtimeRampFrames)
+  // to avoid a step discontinuity; the logical stop (publication) has
+  // already happened.
   voice.releasing = true;
-  voice.release_frames_remaining = kRealtimeRampFrames;
+  voice.release_frames_remaining = voice.release_frames;
 }
 
 void RealtimeEngine::capture_voice_start(
@@ -2068,7 +2096,9 @@ void RealtimeEngine::render(
     }
     if (event.kind == PadControlKind::release) {
       for (auto& voice : voices_) {
-        if (voice.active && voice.slot == event.slot &&
+        // A Pad already in its release tail is not released again, so a
+        // repeated release never shortens a long tail.
+        if (voice.active && !voice.releasing && voice.slot == event.slot &&
             !is_audition_bank_slot(voice.bank_slot) &&
             voice.origin == PadControlOrigin::host_input &&
             (voice.trigger_mode == domain::TriggerMode::gate ||
@@ -2104,7 +2134,10 @@ void RealtimeEngine::render(
     bool stopped_toggle = false;
     if (!replay) {
       for (auto& candidate : voices_) {
-        if (candidate.active && candidate.slot == event.slot &&
+        // A toggle in its release tail is already off: a press then starts
+        // the Pad again, beside the fading tail.
+        if (candidate.active && !candidate.releasing &&
+            candidate.slot == event.slot &&
             candidate.origin == PadControlOrigin::host_input &&
             candidate.trigger_mode == domain::TriggerMode::loop_toggle) {
           stop_voice(candidate, absolute_start_frame);
@@ -2219,7 +2252,7 @@ void RealtimeEngine::render(
                   playback.linear_gain;
     voice->trigger_mode = playback.trigger_mode;
     voice->bank_slot = bank_slot;
-    voice->attack_frames_remaining = kRealtimeRampFrames;
+    set_voice_envelope(*voice, playback);
     voice->scheduled_release_frame =
         replay && playback.trigger_mode != domain::TriggerMode::one_shot
             ? absolute_start_frame + event.duration_frames
@@ -2296,16 +2329,18 @@ void RealtimeEngine::render(
       if (!voice.active) {
         continue;
       }
-      // F6 amplitude ramps: attack from the per-voice counter (a looping
-      // voice attacks only on its initial trigger), a stateless boundary
-      // fade over the last kRealtimeRampFrames before end_frame for
-      // non-looping voices, and the stop_voice release tail. Each component
-      // is skipped at full scale so unramped output stays bit-identical.
+      // F6 amplitude ramps: the voice's attack (a looping voice attacks only
+      // on its initial trigger), a stateless boundary fade over the last
+      // kRealtimeRampFrames before end_frame for non-looping voices, and the
+      // stop_voice release tail. Attack and release use the voice's envelope
+      // lengths, which default to the same 96 frames at scale 1/96. Each
+      // component is skipped at full scale so unramped output stays
+      // bit-identical.
       float ramp = 1.0F;
       if (voice.attack_frames_remaining != 0) {
         ramp *= static_cast<float>(
-                    kRealtimeRampFrames - voice.attack_frames_remaining) *
-                kRealtimeRampScale;
+                    voice.attack_frames - voice.attack_frames_remaining) *
+                voice.attack_scale;
         --voice.attack_frames_remaining;
       }
       if (voice.dsp_active) {
@@ -2320,10 +2355,10 @@ void RealtimeEngine::render(
         }
       }
       if (voice.releasing &&
-          voice.release_frames_remaining < kRealtimeRampFrames) {
+          voice.release_frames_remaining < voice.release_frames) {
         ramp *=
             static_cast<float>(voice.release_frames_remaining) *
-            kRealtimeRampScale;
+            voice.release_scale;
       }
       if (voice.dsp_active) {
         const auto& material = voice.material;

@@ -61,7 +61,9 @@ bool prepare_voice_dsp(
       (dsp.flags & static_cast<std::uint8_t>(~kKnownFlags)) != 0 ||
       dsp.pitch_cents < domain::kPadPitchCentsMin ||
       dsp.pitch_cents > domain::kPadPitchCentsMax ||
-      dsp.pan < domain::kPadPanMin || dsp.pan > domain::kPadPanMax) {
+      dsp.pan < domain::kPadPanMin || dsp.pan > domain::kPadPanMax ||
+      dsp.attack_frames > kVoiceDspMaxAttackFrames ||
+      dsp.release_frames > kVoiceDspMaxReleaseFrames) {
     return false;
   }
   const auto length = playback.end_frame - playback.start_frame;

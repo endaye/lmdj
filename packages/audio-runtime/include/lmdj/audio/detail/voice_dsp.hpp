@@ -18,6 +18,39 @@
 namespace lmdj::audio::detail {
 
 inline constexpr std::uint32_t kVoiceDspRampFrames = 96;
+// The longest envelopes Project Truth admits (a 2 s attack and a 4 s
+// release), in 48 kHz output frames. A longer block is refused.
+inline constexpr std::uint32_t kVoiceDspMaxAttackFrames = 2'000 * 48;
+inline constexpr std::uint32_t kVoiceDspMaxReleaseFrames = 4'000 * 48;
+
+// A voice's linear envelope ramps (decision 2026-09-30, section 5). Attack and
+// release last max(user, 96) output frames, and a one-shot ignores the Pad's
+// release: it keeps the 96-frame declick, also when it is stopped. At the
+// default each scale is exactly the declick's 1 / 96, so a default envelope
+// renders bit-identically to the playback that predates it.
+struct VoiceEnvelope {
+  std::uint32_t attack_frames;
+  float attack_scale;
+  std::uint32_t release_frames;
+  float release_scale;
+};
+
+inline VoiceEnvelope voice_envelope(
+    const cooker::ResolvedPlayback& playback) noexcept {
+  const auto ramp = [](std::uint32_t user) {
+    return user > kVoiceDspRampFrames ? user : kVoiceDspRampFrames;
+  };
+  const auto attack = ramp(playback.dsp.attack_frames);
+  const auto release = playback.trigger_mode == domain::TriggerMode::one_shot
+                           ? kVoiceDspRampFrames
+                           : ramp(playback.dsp.release_frames);
+  return VoiceEnvelope{
+      attack,
+      1.0F / static_cast<float>(attack),
+      release,
+      1.0F / static_cast<float>(release),
+  };
+}
 
 struct VoiceDspState {
   // Logical read position from the voice's start frame, and its per-output-

@@ -16,7 +16,8 @@ struct PcmSample {
   std::vector<std::int16_t> interleaved;
 };
 
-// The resolved per-voice DSP settings of a Pad (lmdj.project.v5 5.1.0). It is
+// The resolved per-voice DSP settings of a Pad (lmdj.project.v5 5.1.0 and
+// 5.2.0). It is
 // integer-only and trivially copyable so it rides every realtime control
 // message, and all-zero is neutral: a neutral block renders exactly as the
 // playback that predates it. Frame values are 48 kHz output frames.
@@ -30,6 +31,11 @@ struct ResolvedVoiceDsp {
   std::int16_t pitch_cents;
   std::int8_t pan;
   std::uint8_t flags;
+  // Envelope ramp lengths (lmdj.project.v5 5.2.0). Zero, or anything shorter
+  // than the 96-frame declick, renders as the declick. The default member
+  // initializers keep the 5.1.0 positional form compiling unchanged.
+  std::uint32_t attack_frames = 0;
+  std::uint32_t release_frames = 0;
 
   bool operator==(const ResolvedVoiceDsp&) const = default;
 };
@@ -64,7 +70,7 @@ struct ResolvedPlayback {
   ResolvedVoiceDsp dsp;
 };
 
-static_assert(sizeof(ResolvedVoiceDsp) == 12);
+static_assert(sizeof(ResolvedVoiceDsp) == 20);
 static_assert(std::is_trivially_copyable_v<ResolvedVoiceDsp>);
 static_assert(std::is_trivially_copyable_v<ResolvedPlayback>);
 

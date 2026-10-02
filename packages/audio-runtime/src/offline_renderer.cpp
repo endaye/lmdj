@@ -16,9 +16,6 @@
 namespace lmdj::audio {
 namespace {
 
-constexpr float kKernelRampScale =
-    1.0F / static_cast<float>(detail::kVoiceDspRampFrames);
-
 // The inverse of prepared_pcm16_to_float, rounding to the nearest step.
 std::int16_t quantize_pcm16(float value) noexcept {
   const float scaled = value < 0.0F ? value * 32768.0F : value * 32767.0F;
@@ -27,9 +24,10 @@ std::int16_t quantize_pcm16(float value) noexcept {
 }
 
 // Renders one non-neutral voice exactly as the realtime engine does: the
-// shared kernel, the 2 ms attack, the kernel's end fade and, for a releasing
-// mode, the 2 ms release tail that starts at the event's release frame, in
-// the engine's operation order. Each output sample is quantized and then
+// shared kernel, the voice's attack, the kernel's end fade and, for a
+// releasing mode, the voice's release tail that starts at the event's release
+// frame, in the engine's operation order. Both envelope ramps come from
+// detail::voice_envelope, as in the engine. Each output sample is quantized and then
 // saturated into the mix in snapshot order, as a neutral event is.
 void render_kernel_voice(
     std::vector<std::int16_t>& output,
@@ -45,6 +43,7 @@ void render_kernel_voice(
       (static_cast<float>(velocity) / 127.0F) * playback.linear_gain;
   const bool releases =
       playback.trigger_mode != domain::TriggerMode::one_shot;
+  const auto envelope = detail::voice_envelope(playback);
   const auto release_at = release_frame - start_frame;
   bool releasing = false;
   std::uint32_t release_remaining = 0;
@@ -60,15 +59,15 @@ void render_kernel_voice(
        ++relative) {
     if (releases && !releasing && relative >= release_at) {
       releasing = true;
-      release_remaining = detail::kVoiceDspRampFrames;
+      release_remaining = envelope.release_frames;
     }
     float ramp = 1.0F;
-    if (relative < detail::kVoiceDspRampFrames) {
-      ramp *= static_cast<float>(relative) * kKernelRampScale;
+    if (relative < envelope.attack_frames) {
+      ramp *= static_cast<float>(relative) * envelope.attack_scale;
     }
     ramp *= detail::voice_dsp_end_fade(state);
-    if (releasing && release_remaining < detail::kVoiceDspRampFrames) {
-      ramp *= static_cast<float>(release_remaining) * kKernelRampScale;
+    if (releasing && release_remaining < envelope.release_frames) {
+      ramp *= static_cast<float>(release_remaining) * envelope.release_scale;
     }
     float left = 0.0F;
     float right = 0.0F;

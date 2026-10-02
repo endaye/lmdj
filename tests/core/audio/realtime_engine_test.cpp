@@ -3711,6 +3711,204 @@ void starting_kernel_voices_does_not_allocate() {
   LMDJ_CHECK(engine.telemetry().active_voices == 2);
 }
 
+// --- Voice envelope (Sample tone parity, lmdj.project.v5 5.2.0) ---
+
+lmdj::cooker::ResolvedVoiceDsp envelope_dsp(
+    std::uint32_t attack_frames, std::uint32_t release_frames) {
+  lmdj::cooker::ResolvedVoiceDsp dsp{};
+  dsp.attack_frames = attack_frames;
+  dsp.release_frames = release_frames;
+  return dsp;
+}
+
+RealtimeEngine& start_with_playback(
+    RealtimeEngine& engine, std::span<const float> sample,
+    const ResolvedPlayback& playback) {
+  LMDJ_CHECK(engine.publish_sample_bank(bank_with_playback(1, sample, playback)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  return engine;
+}
+
+// A user attack is linear over its own length and reaches full scale on
+// exactly its last frame.
+void user_attack_reaches_full_scale_exactly_at_its_length() {
+  RealtimeEngine engine;
+  const std::vector<float> sample(2000, 0.5F);
+  start_with_playback(
+      engine, sample, dsp_playback(0, 2000, TriggerMode::gate, envelope_dsp(480, 0)));
+  LMDJ_CHECK(engine.enqueue_control(control(60, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  const auto out = render_channels(engine, 600);
+  const float scale = 1.0F / 480.0F;
+  for (std::size_t frame = 0; frame < 480; ++frame) {
+    LMDJ_CHECK(out.left[frame] == 0.5F * (static_cast<float>(frame) * scale));
+  }
+  LMDJ_CHECK(out.left[479] < 0.5F);
+  LMDJ_CHECK(out.left[480] == 0.5F);
+  LMDJ_CHECK(out.right == out.left);
+}
+
+// A user attack shorter than the 2 ms declick renders as the declick.
+void a_short_user_attack_renders_as_the_declick() {
+  const std::vector<float> sample(1000, 0.5F);
+  std::vector<float> rendered[2];
+  std::uint32_t index = 0;
+  for (const std::uint32_t attack : {50U, 96U}) {
+    RealtimeEngine engine;
+    start_with_playback(
+        engine, sample, dsp_playback(0, 1000, TriggerMode::gate, envelope_dsp(attack, 0)));
+    LMDJ_CHECK(engine.enqueue_control(control(61, 0, PadControlKind::press, 127)) ==
+               EnqueueResult::accepted);
+    rendered[index++] = render_channels(engine, 200).left;
+  }
+  LMDJ_CHECK(rendered[0] == rendered[1]);
+  for (std::size_t frame = 0; frame < 96; ++frame) {
+    LMDJ_CHECK(rendered[0][frame] ==
+               0.5F * (static_cast<float>(frame) * (1.0F / 96.0F)));
+  }
+}
+
+// A gate release renders max(R, 96) frames of linear tail and ends at exact
+// zero, then frees the voice.
+void user_release_tail_lasts_its_length_and_ends_at_zero() {
+  RealtimeEngine engine;
+  const std::vector<float> sample(4000, 0.5F);
+  start_with_playback(
+      engine, sample, dsp_playback(0, 4000, TriggerMode::gate, envelope_dsp(0, 480)));
+  LMDJ_CHECK(engine.enqueue_control(control(62, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 200);
+  LMDJ_CHECK(engine.enqueue_control(control(63, 0, PadControlKind::release, 0)) ==
+             EnqueueResult::accepted);
+  const auto tail = render_channels(engine, 481);
+  const float scale = 1.0F / 480.0F;
+  LMDJ_CHECK(tail.left[0] == 0.5F);
+  for (std::size_t frame = 1; frame < 480; ++frame) {
+    LMDJ_CHECK(tail.left[frame] ==
+               0.5F * (static_cast<float>(480 - frame) * scale));
+  }
+  LMDJ_CHECK(tail.left[480] == 0.0F);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+}
+
+// A one-shot ignores the Pad's release: a stop still ends it over the
+// 96-frame declick.
+void one_shot_stop_ignores_the_pad_release() {
+  RealtimeEngine engine;
+  const std::vector<float> sample(4000, 0.5F);
+  start_with_playback(
+      engine, sample,
+      dsp_playback(0, 4000, TriggerMode::one_shot, envelope_dsp(0, 4800)));
+  LMDJ_CHECK(engine.enqueue_control(control(64, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 200);
+  LMDJ_CHECK(engine.enqueue_control(control(65, 0, PadControlKind::stop_slot)) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 96);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+}
+
+// A repeated release of an already releasing Pad leaves its tail alone.
+void a_repeated_release_leaves_a_long_tail_alone() {
+  RealtimeEngine engine;
+  const std::vector<float> sample(8000, 0.5F);
+  start_with_playback(
+      engine, sample, dsp_playback(0, 8000, TriggerMode::gate, envelope_dsp(0, 960)));
+  LMDJ_CHECK(engine.enqueue_control(control(66, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 200);
+  LMDJ_CHECK(engine.enqueue_control(control(67, 0, PadControlKind::release, 0)) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 100);
+  LMDJ_CHECK(engine.enqueue_control(control(68, 0, PadControlKind::release, 0)) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 859);
+  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+  render_channels(engine, 1);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+}
+
+// A toggle press while the Pad's only voice is in its release tail starts the
+// Pad again; the tail keeps fading beside the new voice.
+void toggle_press_during_a_release_tail_restarts_the_pad() {
+  RealtimeEngine engine;
+  const std::vector<float> sample(8000, 0.5F);
+  start_with_playback(
+      engine, sample,
+      dsp_playback(0, 8000, TriggerMode::loop_toggle, envelope_dsp(0, 4800)));
+  LMDJ_CHECK(engine.enqueue_control(control(70, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 200);
+  LMDJ_CHECK(engine.enqueue_control(control(71, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 100);
+  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+  LMDJ_CHECK(engine.enqueue_control(control(72, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 1);
+  LMDJ_CHECK(engine.telemetry().active_voices == 2);
+  const auto states = drain_voice_states(engine, 3);
+  LMDJ_CHECK(states.at(0).sequence == 70);
+  LMDJ_CHECK(states.at(0).state == RuntimeVoiceState::started);
+  LMDJ_CHECK(states.at(1).sequence == 70);
+  LMDJ_CHECK(states.at(1).state == RuntimeVoiceState::stopped);
+  LMDJ_CHECK(states.at(2).sequence == 72);
+  LMDJ_CHECK(states.at(2).state == RuntimeVoiceState::started);
+}
+
+// A second stop during a long release does not step to silence: the tail
+// continues from its current gain and fades out over the 96-frame declick.
+void second_stop_during_a_long_release_fades_over_the_declick() {
+  RealtimeEngine engine;
+  const std::vector<float> sample(8000, 0.5F);
+  start_with_playback(
+      engine, sample, dsp_playback(0, 8000, TriggerMode::gate, envelope_dsp(0, 4800)));
+  LMDJ_CHECK(engine.enqueue_control(control(73, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 200);
+  LMDJ_CHECK(engine.enqueue_control(control(74, 0, PadControlKind::release, 0)) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 1000);
+  LMDJ_CHECK(engine.enqueue_control(control(75, 0, PadControlKind::stop_all)) ==
+             EnqueueResult::accepted);
+  const auto fade = render_channels(engine, 97);
+  // The tail would next have rendered at 3800 / 4800; the fade starts there.
+  const float current = static_cast<float>(3800) * (1.0F / 4800.0F);
+  const float fade_scale = current / 96.0F;
+  for (std::size_t frame = 0; frame < 96; ++frame) {
+    LMDJ_CHECK(fade.left[frame] ==
+               0.5F * (static_cast<float>(96 - frame) * fade_scale));
+  }
+  LMDJ_CHECK(fade.left[96] == 0.0F);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+}
+
+// A voice in its release tail still holds its voice slot: with every slot
+// releasing, the next press reports voice_capacity.
+void releasing_voices_keep_occupying_voice_capacity() {
+  RealtimeEngine engine;
+  const std::vector<float> sample(8000, 0.5F);
+  start_with_playback(
+      engine, sample, dsp_playback(0, 8000, TriggerMode::gate, envelope_dsp(0, 4800)));
+  for (std::uint64_t sequence = 1; sequence <= lmdj::audio::kRealtimeVoiceCapacity; ++sequence) {
+    LMDJ_CHECK(engine.enqueue_control(control(sequence, 0, PadControlKind::press, 127)) ==
+               EnqueueResult::accepted);
+  }
+  render_channels(engine, 128);
+  LMDJ_CHECK(engine.enqueue_control(control(500, 0, PadControlKind::release, 0)) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 128);
+  LMDJ_CHECK(engine.telemetry().active_voices == lmdj::audio::kRealtimeVoiceCapacity);
+  LMDJ_CHECK(engine.enqueue_control(control(501, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  render_channels(engine, 128);
+  std::array<RuntimeTriggerOutcomeEvent, lmdj::audio::kRealtimeVoiceCapacity + 1> outcomes{};
+  LMDJ_CHECK(engine.drain_trigger_outcomes(outcomes) == outcomes.size());
+  LMDJ_CHECK(outcomes.back().sequence == 501);
+  LMDJ_CHECK(outcomes.back().outcome == RuntimeTriggerOutcome::voice_capacity);
+}
+
 void render_does_not_allocate_or_deallocate() {
   RealtimeEngine engine;
   const std::array<float, 2> old_sample{0.25F, 0.5F};
@@ -5078,6 +5276,14 @@ int main() {
   pattern_voice_renders_its_pad_dsp_block();
   replay_voice_renders_its_dsp_block();
   starting_kernel_voices_does_not_allocate();
+  user_attack_reaches_full_scale_exactly_at_its_length();
+  a_short_user_attack_renders_as_the_declick();
+  user_release_tail_lasts_its_length_and_ends_at_zero();
+  one_shot_stop_ignores_the_pad_release();
+  a_repeated_release_leaves_a_long_tail_alone();
+  toggle_press_during_a_release_tail_restarts_the_pad();
+  second_stop_during_a_long_release_fades_over_the_declick();
+  releasing_voices_keep_occupying_voice_capacity();
   attack_ramps_to_full_gain_over_exactly_the_ramp_frames();
   non_loop_boundary_fades_to_exact_zero_at_end_frame();
   stop_voice_renders_a_full_ramp_tail_then_deactivates();

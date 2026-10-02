@@ -167,6 +167,16 @@ void reversed_ping_pong_loop_matches_between_realtime_and_offline() {
       24'000 + 512);
 }
 
+// A 100 ms user attack and a 200 ms user release on a gated loop: the same
+// envelope in realtime and offline, through the release tail's end.
+void user_envelope_matches_between_realtime_and_offline() {
+  ResolvedVoiceDsp dsp{};
+  dsp.attack_frames = 4'800;
+  dsp.release_frames = 9'600;
+  expect_kernel_voice_matches_between_realtime_and_offline(
+      kernel_playback(TriggerMode::loop_gate, dsp), 24'000 + 9'600 + 512);
+}
+
 }  // namespace
 
 int main() {
@@ -174,6 +184,7 @@ int main() {
     reversed_pitched_one_shot_matches_between_realtime_and_offline();
     crossfaded_loop_and_release_match_between_realtime_and_offline();
     reversed_ping_pong_loop_matches_between_realtime_and_offline();
+    user_envelope_matches_between_realtime_and_offline();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
