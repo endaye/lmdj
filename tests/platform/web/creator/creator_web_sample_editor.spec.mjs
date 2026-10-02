@@ -1108,13 +1108,17 @@ test("Sample tone parity commits, cancels, refuses, fails and reopens through th
   await page.keyboard.up("ArrowUp");
   await expect(high).toHaveAttribute("aria-valuetext", "High shelf 8.00 kHz +1.0 dB");
   // A pointer press never focuses the pole, so the browser delivers Escape to
-  // whatever had focus; the drag still cancels.
+  // whatever had focus; the drag still cancels. Nothing in the editor holds
+  // focus here, so only the editor's window listener can hear it.
+  await page.evaluate(() => document.activeElement?.blur?.());
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
   const midText = await mid.getAttribute("aria-valuetext");
   const grab = await poleCentre();
   await page.mouse.move(grab.x, grab.y);
   await page.mouse.down();
   await page.mouse.move(grab.x - 20, grab.y + 20, {steps: 4});
   await expect(mid).not.toHaveAttribute("aria-valuetext", midText);
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
   await page.keyboard.press("Escape");
   await expect(mid).toHaveAttribute("aria-valuetext", midText);
   await page.mouse.up();
