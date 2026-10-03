@@ -6856,7 +6856,7 @@ void test_provider_owner_uses_retained_project_and_survives_restart() {
   TempDirectory temp;
   auto runtime = make_provider_runtime(temp.path());
   const auto listed = check_locked_success_result(runtime->dispatch("provider.list", Json::object(), {}));
-  LMDJ_CHECK(listed.at("providers").size() == 3);
+  LMDJ_CHECK(listed.at("providers").size() == 4);
   check_success(runtime->dispatch("provider.permissions.configure",
       {{"granted_permissions", Json::array({"sample.slice.execute"})}}, {}));
   check_success(runtime->dispatch("provider.select",

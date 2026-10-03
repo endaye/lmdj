@@ -32,6 +32,11 @@ Assembly 只注册此 test-platform Proof，不自动选择；默认策略不授
 - `tests/conformance/schema_contract_test.py`
 - `tests/build/version_test.py`
 - `tests/core/facade/assembly_loader_test.cpp`
+- `tests/core/facade/c_api_test.cpp`（安装清单的四项精确断言）
+- `tests/host/{cli_test.py,mcp_stdio_test.py,performance_cli_session_test.py}`（安装清单）
+- `tests/e2e/headless_core_proof.py`（跨 CLI/MCP 清单一致性）
+- `packages/web-runtime-platform/test/control_runtime_test.cpp`（安装清单）
+- `tests/platform/web/provider_owner_journey.mjs`（双 packaged Host 的四项清单）
 - `CMakeLists.txt`（Provider target / coverage object inventory）
 - `products/lmdj/{CMakeLists.txt,version.json,assembly.json,assembly.lock.json}`
 - `products/lmdj/src/{compiled_assembly.cpp,cardputer_assembly.cpp}`
@@ -96,3 +101,12 @@ Reason: 正式四角色/量化/参数定义、Proof 接线与准确限制需要�
 正式完整 check 已运行；新 Build 的 snapshot 尚未生成，在实现提交后以 clean HEAD 运行
 官方 version 命令，生成边界单独冻结，完整 Portal/投影验证通过后才允许 shipping。
 本 Task 未发现符合 ledger 的新流程坑；集合排序比较由 SDK 既有语义与测试表达覆盖。
+
+完整批次发现既有 Host/C ABI/Web 测试仍假定三个 Provider，补齐第四项的精确库存断言。
+这些测试路径和施工单不在已冻结 source projection 中；保持官方不可变快照，不重写它。
+修正后重跑受影响 native、sanitizer、coverage、packaged Web 和 package 验证。
+首次 review 发布因 GitHub primary rate limit 403 失败（run 37087536590/1）；
+保留原始失败证据，在日志给出的 reset 后重新运行完整 review，不以等待替代审查。
+
+库存修正定向测试：host.cli、host.mcp_stdio、host.performance-cli-session、
+facade.c_api、host.web_control_runtime、e2e.headless_core_proof，6/6 通过。
