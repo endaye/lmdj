@@ -266,6 +266,7 @@ assert assembly["providers"] == [
         "model_identity": None,
     },
     {"id": "local.sample.slice", "version": "1.0.4", "capabilities": [{"id": "sample.slice.v1", "version": "1.0.0"}], "model_identity": None},
+    {"id": "local.proof.stem", "version": "1.0.0", "capabilities": [{"id": "stem.split.v1", "version": "1.0.0"}], "model_identity": None},
 ]
 
 provider_module = repo_root / "providers/local-proof-success/module.json"
@@ -297,9 +298,12 @@ assert assembly["contracts"] == [
     {"id": "lmdj.audio.pcm16-wav.v1", "version": "1.0.0"},
     {"id": "lmdj.slice-points.v1", "version": "1.0.0"},
     {"id": "lmdj.cardputer-transfer.v1", "version": "1.0.0"},
+    {"id": "lmdj.audio.stem-pcm16-wav.v1", "version": "1.0.0"},
+    {"id": "lmdj.stem-parameters.v1", "version": "1.0.0"},
 ]
 
 expected_contract_sources = {
+    "contracts/stem/lmdj.stem-parameters.v1.schema.json": "1.0.0",
     "contracts/assembly/lmdj.assembly.v1.schema.json": "1.0.0",
     "contracts/assembly/lmdj.assembly.v2.schema.json": "2.0.0",
     "contracts/capability/lmdj.capability.v1.schema.json": "1.0.0",
@@ -353,6 +357,11 @@ for relative, contract_version in expected_contract_sources.items():
     )
 
 expected_provider_manifests = {
+    "providers/local-proof-stem/module.json": {
+        "contract": "lmdj.module.v1", "module": "local.proof.stem",
+        "version": "1.0.0", "api_version": 3,
+        "dependencies": {"provider-sdk": "2.3.0", "local.sample.slice": "1.0.4"},
+    },
     "providers/local-sample-slice/module.json": {
         "contract": "lmdj.module.v1", "module": "local.sample.slice",
         "version": "1.0.4", "api_version": 3,

@@ -1076,6 +1076,7 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
     )["structuredContent"]["result"]
     assert [provider["id"] for provider in result["providers"]] == [
         "local.proof.failure",
+        "local.proof.stem",
         "local.proof.success",
         "local.sample.slice",
     ]

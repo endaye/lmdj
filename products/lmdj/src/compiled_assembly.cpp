@@ -3,6 +3,7 @@
 #include <utility>
 
 #include <lmdj/providers/local_proof_failure/factory.hpp>
+#include <lmdj/providers/local_proof_stem/factory.hpp>
 #include <lmdj/providers/local_proof_success/factory.hpp>
 #include <lmdj/providers/local_sample_slice/factory.hpp>
 
@@ -13,7 +14,7 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
   using lmdj::facade::CompiledProvider;
   return lmdj::facade::CompiledAssemblyCatalog{
       "lmdj",
-      "2.0.78.0",
+      "2.0.80.0",
       "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
       {
           CompiledComponent{"foundation", "0.5.0"},
@@ -46,6 +47,8 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
           CompiledComponent{"lmdj.audio.pcm16-wav.v1", "1.0.0"},
           CompiledComponent{"lmdj.slice-points.v1", "1.0.0"},
           CompiledComponent{"lmdj.cardputer-transfer.v1", "1.0.0"},
+          CompiledComponent{"lmdj.audio.stem-pcm16-wav.v1", "1.0.0"},
+          CompiledComponent{"lmdj.stem-parameters.v1", "1.0.0"},
       },
       {
           CompiledProvider{
@@ -64,6 +67,12 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
               "local.sample.slice",
               "1.0.4",
               lmdj::providers::local_sample_slice_registration,
+              std::nullopt,
+          },
+          CompiledProvider{
+              "local.proof.stem",
+              "1.0.0",
+              lmdj::providers::local_proof_stem_registration,
               std::nullopt,
           },
       },

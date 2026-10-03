@@ -15,6 +15,7 @@
 
 #include <lmdj/foundation/error.hpp>
 #include <lmdj/providers/local_sample_slice/factory.hpp>
+#include <lmdj/providers/local_proof_stem/factory.hpp>
 #include <lmdj/provider/capability.hpp>
 #include <lmdj/provider/provider.hpp>
 #include <lmdj/provider/registry.hpp>
@@ -199,6 +200,8 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
           },
           CompiledProvider{"local.sample.slice", "1.0.4",
               lmdj::providers::local_sample_slice_registration, std::nullopt},
+          CompiledProvider{"local.proof.stem", "1.0.0",
+              lmdj::providers::local_proof_stem_registration, std::nullopt},
       },
   };
 }
@@ -231,7 +234,7 @@ void success_and_filtering() {
   auto loaded =
       lmdj::facade::load_assembly(assembly_path, schema_path, compiled);
   LMDJ_CHECK(loaded.has_value());
-  LMDJ_CHECK(loaded.value().providers->list().size() == 3);
+  LMDJ_CHECK(loaded.value().providers->list().size() == 4);
   LMDJ_CHECK(loaded.value().provider_policy.allowed_regions ==
              std::vector<std::string>{"local"});
   LMDJ_CHECK(
@@ -394,7 +397,7 @@ void installed_slice_reference_boundary() {
       std::filesystem::absolute("products/lmdj/assembly.json"));
   LMDJ_CHECK(loaded.has_value());
   const auto providers = loaded.value().providers->list();
-  LMDJ_CHECK(providers.size() == 3);
+  LMDJ_CHECK(providers.size() == 4);
   const auto slice = std::find_if(providers.begin(), providers.end(),
       [](const auto& value) { return value.id == "local.sample.slice"; });
   LMDJ_CHECK(slice != providers.end());
@@ -432,10 +435,56 @@ void installed_slice_reference_boundary() {
   }
 }
 
+void installed_stem_proof_boundary() {
+  const auto loaded = lmdj::facade::load_installed_assembly(
+      std::filesystem::absolute("products/lmdj/assembly.json"));
+  LMDJ_CHECK(loaded.has_value());
+  const auto providers = loaded.value().providers->list();
+  LMDJ_CHECK(providers.size() == 4);
+  const auto stem = std::find_if(providers.begin(), providers.end(),
+      [](const auto& value) { return value.id == "local.proof.stem"; });
+  LMDJ_CHECK(stem != providers.end());
+  const auto lock = read_json("products/lmdj/assembly.lock.json");
+  for (const auto& entry : lock.at("providers")) {
+    if (entry.at("id") == stem->id) {
+      LMDJ_CHECK(stem->artifact_sha256 == entry.at("sha256").get<std::string>());
+      LMDJ_CHECK(stem->version == entry.at("version").get<std::string>());
+    }
+  }
+  LMDJ_CHECK(stem->capabilities.front().platforms == std::vector<std::string>{"test"});
+  LMDJ_CHECK(!stem->model_identity.has_value());
+  LMDJ_CHECK(stem->capabilities.front().determinism == lmdj::provider::Determinism::nondeterministic);
+  TemporaryDirectory temp;
+  const auto clock = [] { return std::string("2026-09-09T00:00:00.000Z"); };
+  lmdj::provider::AttemptStore store(temp.path(), loaded.value().provider_policy, clock);
+  LMDJ_CHECK(!store.selected_provider("stem.split.v1").has_value());
+  LMDJ_CHECK(store.set_provider_selection("stem.split.v1", stem->id, *loaded.value().providers).has_value());
+  const CapabilityRequest request{"stem.split.v1", {{"source_audio", {std::string(64, 'a'), "audio/wav", 44}}},
+      nlohmann::json::object(), "public", "test", "local", {"stem.split.execute"}};
+  const lmdj::provider::ExecutionOptions options{nullptr, 16777216, 262144,
+      std::make_shared<lmdj::provider::StagingBudget>(67108864)};
+  const auto denied = store.execute(AttemptId{"stem-denied"}, request, *loaded.value().providers, options);
+  LMDJ_CHECK(denied.has_value() && denied.value().error.has_value());
+  LMDJ_CHECK(denied.value().error->code == lmdj::foundation::ErrorCode::permission_denied);
+  auto policy = loaded.value().provider_policy;
+  policy.granted_permissions.push_back("stem.split.execute");
+  lmdj::provider::AttemptStore authorized(temp.path(), policy, clock);
+  const auto missing = authorized.execute(AttemptId{"stem-no-owner"}, request, *loaded.value().providers, options);
+  LMDJ_CHECK(missing.has_value() && missing.value().error.has_value());
+  LMDJ_CHECK(missing.value().error->details.at("reason") == "input_artifact_unavailable");
+  lmdj::provider::AttemptStore reopened(temp.path(), policy, clock);
+  for (const auto& result : {denied.value(), missing.value()}) {
+    const auto terminal = reopened.inspect(result.attempt_id);
+    LMDJ_CHECK(terminal.has_value() && terminal.value().error->code == result.error->code);
+    LMDJ_CHECK(terminal.value().candidate_outputs.empty());
+  }
+}
+
 }  // namespace
 
 int main() {
   installed_slice_reference_boundary();
+  installed_stem_proof_boundary();
   success_and_filtering();
   rejects_invalid_and_unavailable_components();
   return 0;
