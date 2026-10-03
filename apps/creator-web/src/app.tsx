@@ -2319,20 +2319,6 @@ function Workspace({
   return (
     <DiagnosticsProvider value={reportFailure}>
     <div className="hardware-workspace">
-      {defaultSeedError !== null && <p role="status">{defaultSeedError}</p>}
-      {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "failed") &&
-        <button type="button" onClick={() => {defaultSeed.slots.forEach((slot, index) => {
-          if (slot.phase === "failed") void defaultSeedController.current?.retry(index);
-        });}}>Retry default sounds</button>}
-      {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "saved-unavailable") &&
-        <div><p role="status">Sounds saved; prepare playback to use them.</p>
-          <button type="button" onClick={() => {
-            const project = stateRef.current.project.current;
-            if (project === null || !isSampleSession(session)) return;
-            void retryPrepareJourney(session, project.patternId).then(
-              publication => defaultSeedController.current?.acceptPublication(publication),
-              error => reportFailure("Prepare default sounds", error));
-          }}>Prepare default sounds</button></div>}
         {/* History status stays in the accessibility tree; the rail lamps carry
             the visual state, so no software toolbar sits above the device. */}
         <div role="status" className="visually-hidden" data-testid="authoring-history-status">
@@ -2418,6 +2404,20 @@ function Workspace({
           pads={padSurface}
           touchWorkspace={
             <>
+              {defaultSeedError !== null && <p role="status">{defaultSeedError}</p>}
+              {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "failed") &&
+                <button type="button" onClick={() => {defaultSeed.slots.forEach((slot, index) => {
+                  if (slot.phase === "failed") void defaultSeedController.current?.retry(index);
+                });}}>Retry default sounds</button>}
+              {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "saved-unavailable") &&
+                <div><p role="status">Sounds saved; prepare playback to use them.</p>
+                  <button type="button" onClick={() => {
+                    const project = stateRef.current.project.current;
+                    if (project === null || !isSampleSession(session)) return;
+                    void retryPrepareJourney(session, project.patternId).then(
+                      publication => defaultSeedController.current?.acceptPublication(publication),
+                      error => reportFailure("Prepare default sounds", error));
+                  }}>Prepare default sounds</button></div>}
               <section className="touch-system" aria-label="System">
                 <button
                   type="button"
