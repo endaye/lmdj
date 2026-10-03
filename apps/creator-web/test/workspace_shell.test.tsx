@@ -431,6 +431,7 @@ test("Record on an empty Pad opens the capture panel with no replacement prompt"
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty — Key W"}));
+  await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A2"}));
 
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
   expect(screen.queryByRole("dialog", {name: "Replace Pad A2?"})).toBeNull();
@@ -465,6 +466,7 @@ test("audio recovery keeps an open capture panel instead of discarding it", asyn
 
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty — Key W"}));
+  await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A2"}));
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
   const dialog = screen.getByRole("dialog", {name: "Pad A2 Pad Capture"});
 
@@ -1231,6 +1233,7 @@ test("converges committed Sample and Project truth across interleaved revisions"
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
   await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty — Key W"}));
+  await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A2"}));
   const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
   await userEvent.upload(input, wavFile("interleaved.wav"));
   await commitLongSourceSelection();
@@ -1477,6 +1480,7 @@ test("keeps pre-commit Sample import abort ownership on unmount", async () => {
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
   await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty — Key W"}));
+  await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A2"}));
   const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
   await userEvent.upload(input, wavFile("abort.wav"));
   await commitLongSourceSelection();
@@ -1736,6 +1740,7 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
   await screen.findByText("Asset 33333333");
 
   await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty — Key W"}));
+  await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A2"}));
   await screen.findByRole("button", {name: "Add Sample to Pad A2"});
   const sampleInput = container.querySelector<HTMLInputElement>(".sample-file-input");
   expect(sampleInput).not.toBeNull();
@@ -1786,6 +1791,7 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
   await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty — Key W"}));
+  await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A2"}));
 
   const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
   expect(input.accept).toBe(
@@ -3200,6 +3206,7 @@ test("Delete invalidates a decoding source and discards its eventual result", as
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
     await screen.findByText("Asset 33333333");
     await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty — Key W"}));
+  await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A2"}));
     await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("decoding.wav"));
     await waitFor(() => expect(decode).toHaveBeenCalledTimes(1));
     await screen.findByText("Decoding long source…");
