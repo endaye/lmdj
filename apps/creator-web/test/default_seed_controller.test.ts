@@ -306,3 +306,66 @@ test("a journal write failure prevents the Facade dispatch and releases the unis
   expect(f.getProject().revision).toBe(0);
   expect(f.getProject().pads[0]?.assetId).toBeNull();
 });
+
+test("an older journal without assignment history cannot rebase an unknown stale command after reload", async () => {
+  const f = fixture(); keepOnlyFirstSlot(f);
+  f.seed.slots[0]!.request = {commandId: "44444444-4444-4444-8444-444444444444", expectedRevision: 0};
+  f.options.storage.setItem("", JSON.stringify(f.seed));
+  const retained = readDefaultSeed(f.options.storage, identity)!;
+  expect(retained.slots[0]?.assignmentObserved).toBeUndefined();
+  // An old Host observed assignment and Undo before this Host started; its
+  // journal cannot supply that history. Native can still recognize a receipt.
+  f.setProject({...f.getProject(), revision: 2});
+  let installed = 0;
+  f.commit.mockImplementation(async (_slot, request, admit) => {
+    if (admit?.() === false) return null;
+    if (request!.expectedRevision !== f.getProject().revision) {
+      throw Object.assign(new Error("unknown stale command"), {code: "REVISION_CONFLICT"});
+    }
+    installed++;
+    f.setProject({...f.getProject(), revision: 3, pads: f.getProject().pads.map(pad =>
+      pad.slot === 0 ? {...pad, assetId: "33333333-3333-4333-8333-333333333333"} : pad)});
+    return {committedRevision:3,runtimeRevision:3,published:true};
+  });
+  await createDefaultSeedController({...f.options, seed: retained}).start();
+  expect(installed).toBe(0);
+  expect(f.commit).toHaveBeenCalledTimes(1);
+  expect(retained.slots[0]?.request?.expectedRevision).toBe(0);
+  expect(retained.slots[0]?.phase).toBe("retired");
+  expect(f.getProject().revision).toBe(2);
+  expect(f.getProject().pads[0]?.assetId).toBeNull();
+  f.commit.mockClear(); f.acquire.mockClear();
+  await createDefaultSeedController({...f.options, seed: readDefaultSeed(f.options.storage, identity)!}).start();
+  expect(f.commit).not.toHaveBeenCalled();
+  expect(f.acquire).not.toHaveBeenCalled();
+});
+
+test("a newly admitted request can rebase after another Pad's edit without installing twice", async () => {
+  const f = fixture(); keepOnlyFirstSlot(f);
+  const sent: Array<{commandId:string;expectedRevision:number}> = [];
+  let installed = 0;
+  f.commit.mockImplementation(async (_slot, request, admit) => {
+    if (admit?.() === false) return null;
+    expect(f.seed.slots[0]?.assignmentObserved).toBe(false);
+    expect(readDefaultSeed(f.options.storage, identity)?.slots[0]?.assignmentObserved).toBe(false);
+    sent.push(structuredClone(request!));
+    if (sent.length === 1) {
+      f.setProject({...f.getProject(), revision: 1, pads: f.getProject().pads.map(pad =>
+        pad.slot === 1 ? {...pad, assetId: "33333333-3333-4333-8333-333333333333"} : pad)});
+      throw Object.assign(new Error("another slot committed"), {code: "REVISION_CONFLICT"});
+    }
+    expect(request?.expectedRevision).toBe(1);
+    installed++;
+    f.setProject({...f.getProject(), revision: 2, pads: f.getProject().pads.map(pad =>
+      pad.slot === 0 ? {...pad, assetId: "44444444-4444-4444-8444-444444444444"} : pad)});
+    return {committedRevision:2,runtimeRevision:2,published:true};
+  });
+  await createDefaultSeedController(f.options).start();
+  expect(sent).toEqual([{commandId:sent[0]!.commandId,expectedRevision:0},
+    {commandId:sent[0]!.commandId,expectedRevision:1}]);
+  expect(installed).toBe(1);
+  expect(f.seed.slots[0]?.phase).toBe("ready");
+  expect(f.getProject().revision).toBe(2);
+  expect(f.getProject().pads[0]?.assetId).toBe("44444444-4444-4444-8444-444444444444");
+  expect(f.getProject().pads[1]?.assetId).toBe("33333333-3333-4333-8333-333333333333");
+});

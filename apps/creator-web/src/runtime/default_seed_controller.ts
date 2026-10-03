@@ -54,6 +54,7 @@ export function createDefaultSeedController(options: {
                 state.phase = "retired"; persist(); return false;
               }
               state.request = request;
+              state.assignmentObserved = false;
               try {persist();} // Replay identity survives a lost commit response.
               catch (error) {state.request = null; throw error;}
             }
@@ -80,7 +81,10 @@ export function createDefaultSeedController(options: {
           if (code !== "REVISION_CONFLICT") throw error;
           await options.refresh();
           if (!owns() || retired()) return;
-          if (state.assignmentObserved ||
+          // Missing history in an older journal cannot prove that no user
+          // assignment preceded Undo. Only a newly admitted, unobserved
+          // request may rebase; a known receipt never enters this refusal.
+          if (state.assignmentObserved !== false ||
               options.current()!.pads.some(pad => pad.slot === slot && pad.assetId !== null)) {
             state.phase = "retired"; persist(); return;
           }
