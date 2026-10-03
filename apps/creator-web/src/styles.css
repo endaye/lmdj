@@ -1415,6 +1415,9 @@ button:disabled { color: #737b87; }
   margin: auto;
 }
 
+.touch-navigation { display: flex; flex-wrap: wrap; gap: .5rem; padding-block: .5rem; border-bottom: 1px solid var(--border, #777); }
+.system-surface header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.system-surface h2:focus { outline: 2px solid currentColor; outline-offset: 4px; }
 /* Session-wide authoring history is the rail's SHIFT chord: the status line
    stays in the accessibility tree without reintroducing a software toolbar. */
 .visually-hidden {
@@ -1428,6 +1431,7 @@ button:disabled { color: #737b87; }
   white-space: nowrap;
   border: 0;
 }
+
 
 /* Narrow portrait stage: the console keeps its fixed 880×592 hardware
    geometry, so a portrait phone shows the stage rotated 90°

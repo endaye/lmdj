@@ -791,11 +791,15 @@ test("direct Tempo and Swing controls commit once, cancel, fail honestly, and st
     .filter({hasText: "The audio engine stopped responding."});
   await expect(failure).toBeVisible({timeout: 30_000});
   await expect(failure).not.toContainText("HOST_TIMEOUT");
+  await page.getByRole("button", {name: "System", exact: true}).click();
+  await expect(page.getByRole("region", {name: "System", exact: true}))
+    .toBeVisible();
   await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
   const log = page.getByRole("region", {name: "Developer diagnostics"});
   await expect(log).toContainText("Update Sequence settings");
   await expect(log).toContainText("HOST_TIMEOUT");
   await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
+  await page.getByRole("button", {name: "Back to music", exact: true}).click();
   truth = await inspectTruth(page);
   expect(truth.sequence_settings.swing_percent).toBe(baseSwing);
   expect(truth.revision).toBe(baseline.revision + 3);
