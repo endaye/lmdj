@@ -439,6 +439,8 @@ class ProofHandler(BaseHTTPRequestHandler):
     def end_headers(self) -> None:
         for name, value in SECURITY_HEADERS.items():
             self.send_header(name, value)
+        if re.fullmatch(r"/assets/offline-worker\.[0-9a-f]{64}\.js", urlsplit(self.path).path):
+            self.send_header("Service-Worker-Allowed", "/")
         super().end_headers()
 
     def send_error(

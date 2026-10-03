@@ -328,7 +328,10 @@ struct SoundSetStore::Impl {
   // content-authenticated, and a Host reaches them with a hash `list` has
   // already answered for.
   bool enumerated(const std::string& manifest_sha256) const {
-    const auto root = sets_root();
+    return enumerated_at(sets_root(), manifest_sha256);
+  }
+
+  bool enumerated_at(const std::filesystem::path& root, std::string_view name) const {
     const auto present = platform->directory_exists(root);
     if (!present.has_value() || !present.value()) {
       return false;
@@ -338,15 +341,24 @@ struct SoundSetStore::Impl {
       return false;
     }
     return std::find(names.value().begin(), names.value().end(),
-                     manifest_sha256) != names.value().end();
+                     name) != names.value().end();
   }
 
   // Load a published Set from its own directory. A Set that is not there, or
   // whose bytes no longer answer to their own hash, is simply not published.
   foundation::Result<StoredSoundSet> load(
       std::string_view manifest_sha256) const {
+    return load_at(manifest_sha256, sets_root() / std::string{manifest_sha256});
+  }
+
+  std::filesystem::path slot_directory(std::string_view hash, std::uint8_t index) const {
+    return workspace_root / kHostDirectory / "soundset-slots" /
+      std::string{hash} / std::to_string(index);
+  }
+
+  foundation::Result<StoredSoundSet> load_at(
+      std::string_view manifest_sha256, const std::filesystem::path& directory) const {
     using Result = foundation::Result<StoredSoundSet>;
-    const auto directory = sets_root() / std::string{manifest_sha256};
     const auto present = platform->directory_exists(directory);
     if (!present.has_value()) {
       return Result::failure(
@@ -529,6 +541,21 @@ SoundSetStore::~SoundSetStore() = default;
 foundation::Result<StoredSoundSet> SoundSetStore::acquire(
     CatalogTransport& transport,
     const SoundSetCatalogEntry& entry) {
+  return acquire_selected(transport, entry, std::nullopt);
+}
+
+foundation::Result<StoredSoundSet> SoundSetStore::acquire_slot(
+    CatalogTransport& transport, const SoundSetCatalogEntry& entry,
+    std::uint8_t slot_index) {
+  if (slot_index >= 16) {
+    return foundation::Result<StoredSoundSet>::failure(invalid_argument("Sound Set slot is out of range"));
+  }
+  return acquire_selected(transport, entry, slot_index);
+}
+
+foundation::Result<StoredSoundSet> SoundSetStore::acquire_selected(
+    CatalogTransport& transport, const SoundSetCatalogEntry& entry,
+    std::optional<std::uint8_t> selected_slot) {
   using Result = foundation::Result<StoredSoundSet>;
   std::lock_guard lock(impl_->mutex);
   const auto workspace = impl_->validated_workspace();
@@ -541,14 +568,23 @@ foundation::Result<StoredSoundSet> SoundSetStore::acquire(
         invalid_argument("Catalog entry identity is not well formed"));
   }
 
-  const auto destination = impl_->sets_root() / entry.manifest_sha256;
-  const auto answer = [&entry](
+  const auto destination = selected_slot.has_value()
+    ? impl_->slot_directory(entry.manifest_sha256, *selected_slot)
+    : impl_->sets_root() / entry.manifest_sha256;
+  const auto load = [&]() {return impl_->load_at(entry.manifest_sha256, destination);};
+  const auto answer = [&](
                           const foundation::Result<StoredSoundSet>& stored) {
     if (stored.value().manifest.set_id != entry.set_id ||
         stored.value().manifest.version != entry.version) {
       return Result::failure(
           content_mismatch(
               "Stored Sound Set identity does not match the Catalog entry"));
+    }
+    if (selected_slot.has_value()) {
+      const auto artifact = read_slot_artifact(entry.manifest_sha256, *selected_slot);
+      if (!artifact.has_value()) return Result::failure(artifact.error());
+      const auto eligible = foundation::check_soundset_eligibility(stored.value().manifest, entry.license_summary);
+      if (!eligible.has_value()) return Result::failure(eligible.error());
     }
     return stored;
   };
@@ -561,8 +597,8 @@ foundation::Result<StoredSoundSet> SoundSetStore::acquire(
   // honest: an interrupted copy can leave a destination that reads perfectly
   // and is not published, and this path never takes the lease that would
   // recover it.
-  if (impl_->enumerated(entry.manifest_sha256)) {
-    const auto cached = impl_->load(entry.manifest_sha256);
+  if (impl_->enumerated_at(destination.parent_path(), destination.filename().string())) {
+    const auto cached = load();
     if (cached.has_value()) {
       return answer(cached);
     }
@@ -587,7 +623,7 @@ foundation::Result<StoredSoundSet> SoundSetStore::acquire(
             "Sound Set destination could not be leased"));
   }
   const auto already_present = impl_->platform->directory_exists(destination);
-  const auto published = impl_->load(entry.manifest_sha256);
+  const auto published = load();
   if (published.has_value()) {
     return answer(published);
   }
@@ -672,7 +708,16 @@ foundation::Result<StoredSoundSet> SoundSetStore::acquire(
         content_mismatch(
             "Sound Set unique byte total does not match the Catalog entry"));
   }
-  const auto staging = impl_->staging_root() / entry.manifest_sha256;
+  auto selected_artifacts = artifacts.value();
+  if (selected_slot.has_value()) {
+    const auto& slot = manifest.slots.at(*selected_slot);
+    if (!slot.occupied.has_value()) return Result::failure(invalid_argument("Sound Set slot is empty"));
+    selected_artifacts = {slot.occupied->artifact};
+  }
+  const auto acquisition_bytes = Impl::unique_total(selected_artifacts, manifest_object.size());
+  if (!acquisition_bytes.has_value()) return Result::failure(content_mismatch("Sound Set acquisition byte total does not fit"));
+  const auto staging = impl_->staging_root() / (entry.manifest_sha256 +
+    (selected_slot.has_value() ? "-slot-" + std::to_string(*selected_slot) : ""));
   auto lease = impl_->platform->acquire_writer(staging);
   if (!lease.has_value()) {
     return Result::failure(
@@ -691,7 +736,7 @@ foundation::Result<StoredSoundSet> SoundSetStore::acquire(
     discard();
     return Result::failure(staged.error());
   }
-  const auto staging_total = checked_sum(staged.value(), total.value());
+  const auto staging_total = checked_sum(staged.value(), acquisition_bytes.value());
   if (!staging_total.has_value() ||
       staging_total.value() > impl_->limits.maximum_soundset_staging_bytes) {
     discard();
@@ -722,7 +767,7 @@ foundation::Result<StoredSoundSet> SoundSetStore::acquire(
         sanitized_storage_error(
             wrote_manifest.error(), "Sound Set manifest could not be staged"));
   }
-  for (const auto& artifact : artifacts.value()) {
+  for (const auto& artifact : selected_artifacts) {
     const auto blob = transport.read_blob_object(
         artifact.sha256, impl_->limits.maximum_soundset_blob_bytes);
     if (!blob.has_value()) {
@@ -758,7 +803,7 @@ foundation::Result<StoredSoundSet> SoundSetStore::acquire(
     }
   }
 
-  const auto ensured = impl_->platform->ensure_directory(impl_->sets_root());
+  const auto ensured = impl_->platform->ensure_directory(destination.parent_path());
   if (!ensured.has_value()) {
     discard();
     return Result::failure(
@@ -777,6 +822,45 @@ foundation::Result<StoredSoundSet> SoundSetStore::acquire(
   }
   (void)impl_->platform->remove_tree(staging);
   return Result::success(StoredSoundSet{std::move(manifest), total.value()});
+}
+
+foundation::Result<StoredSoundSet> SoundSetStore::read_slot(
+    std::string_view set_id, std::string_view version,
+    std::string_view manifest_sha256, std::uint8_t slot_index) const {
+  using Result = foundation::Result<StoredSoundSet>;
+  const auto workspace = impl_->validated_workspace();
+  if (!workspace.has_value()) return Result::failure(workspace.error());
+  if (!lowercase_sha256(manifest_sha256) || slot_index >= 16)
+    return Result::failure(invalid_argument("Sound Set slot identity is invalid"));
+  const auto directory = impl_->slot_directory(manifest_sha256, slot_index);
+  if (!impl_->enumerated_at(directory.parent_path(), directory.filename().string()))
+    return Result::failure(not_found("Sound Set slot is not published"));
+  auto stored = impl_->load_at(manifest_sha256, directory);
+  if (!stored.has_value()) return stored;
+  if (stored.value().manifest.set_id != set_id || stored.value().manifest.version != version)
+    return Result::failure(not_found("Sound Set slot identity is not in the slot cache"));
+  return stored;
+}
+
+foundation::Result<std::vector<std::byte>> SoundSetStore::read_slot_artifact(
+    std::string_view manifest_sha256, std::uint8_t slot_index) const {
+  using Result = foundation::Result<std::vector<std::byte>>;
+  const auto workspace = impl_->validated_workspace();
+  if (!workspace.has_value()) return Result::failure(workspace.error());
+  if (!lowercase_sha256(manifest_sha256) || slot_index >= 16)
+    return Result::failure(invalid_argument("Sound Set slot identity is invalid"));
+  const auto directory = impl_->slot_directory(manifest_sha256, slot_index);
+  if (!impl_->enumerated_at(directory.parent_path(), directory.filename().string()))
+    return Result::failure(not_found("Sound Set slot is not published"));
+  const auto stored = impl_->load_at(manifest_sha256, directory);
+  if (!stored.has_value()) return Result::failure(stored.error());
+  const auto& occupied = stored.value().manifest.slots.at(slot_index).occupied;
+  if (!occupied.has_value()) return Result::failure(not_found("Sound Set slot is empty"));
+  auto bytes = impl_->platform->read_complete(directory / occupied->artifact.sha256);
+  if (!bytes.has_value()) return Result::failure(sanitized_storage_error(bytes.error(), "Sound Set slot Artifact could not be read"));
+  if (bytes.value().size() != occupied->artifact.byte_length || digest_of(bytes.value()) != occupied->artifact.sha256)
+    return Result::failure(content_mismatch("Stored Sound Set slot Artifact changed under the store"));
+  return bytes;
 }
 
 foundation::Result<std::vector<StoredSoundSet>> SoundSetStore::list() const {

@@ -1,7 +1,8 @@
+import type {SeedSlot} from "../state/default_seed";
 import {DEFAULT_KEYBOARD_MAPPING} from "@lmdj/web-runtime-platform/input_adapters.mjs";
 
 import {
-  selectCanTrigger,
+  selectCanStartGesture,
   selectVisiblePads,
   type CreatorState,
 } from "../state/creator_state";
@@ -10,6 +11,7 @@ import type {createCreatorInputController} from "../runtime/input_controller";
 
 interface PadSurfaceProps {
   state: CreatorState;
+  seedSlots?: readonly SeedSlot[];
   controller?: ReturnType<typeof createCreatorInputController>;
   armedCaptureSlot?: number | null;
   onSelectSample?: (slot: number) => void;
@@ -31,9 +33,9 @@ const KEYBOARD_KEY_BY_LOCAL_PAD: ReadonlyMap<number, string> = new Map(
 );
 
 export function PadSurface({
-  state, controller, armedCaptureSlot = null, onSelectSample, onChooseSample, onDropSample,
+  state, seedSlots, controller, armedCaptureSlot = null, onSelectSample, onChooseSample, onDropSample,
 }: PadSurfaceProps) {
-  const canTrigger = selectCanTrigger(state);
+  const canTrigger = selectCanStartGesture(state);
   return (
     <div className="pad-grid" aria-label="Playable Pads">
       {selectVisiblePads(state).map((pad) => {
@@ -41,6 +43,10 @@ export function PadSurface({
         const selected = state.sample.selectedSlot === pad.slot;
         const assigned = pad.assetId !== null || (onSelectSample !== undefined &&
           selected && state.sample.inspect?.assetId != null);
+        const seedPhase = pad.slot < 16 ? seedSlots?.[pad.slot]?.phase : undefined;
+        const blocked = seedPhase !== undefined && !["ready", "retired"].includes(seedPhase);
+        const status = blocked ? seedPhase === "processing" ? "Processing" :
+          seedPhase === "failed" || seedPhase === "saved-unavailable" ? "Failed" : "Loading" : null;
         const capturing = armedCaptureSlot === pad.slot;
         const outcome = state.pressed.get(pad.slot);
         const keyboardKey = KEYBOARD_KEY_BY_LOCAL_PAD.get(pad.slot % 16) ?? "—";
@@ -52,10 +58,10 @@ export function PadSurface({
             data-identity={String(pad.slot % 5)}
             data-assigned={assigned ? "true" : "false"}
             data-outcome={outcome ?? "idle"}
-            disabled={onSelectSample !== undefined
+            disabled={blocked || (onSelectSample !== undefined
               ? state.project.phase !== "ready" || state.project.current === null
-              : (!assigned && !capturing) || !canTrigger}
-            aria-label={`Pad ${address} — ${capturing ? "capturing" : assigned ? "assigned" : "empty"} — Key ${keyboardKey}`}
+              : (!assigned && !capturing) || !canTrigger)}
+            aria-label={`Pad ${address} — ${status?.toLowerCase() ?? (capturing ? "capturing" : assigned ? "assigned" : "empty")} — Key ${keyboardKey}`}
             key={pad.slot}
             onPointerDown={(event) => controller?.pointerDown(event, pad.slot)}
             onMouseDown={(event) => controller?.pointerDown(event, pad.slot)}
@@ -86,7 +92,8 @@ export function PadSurface({
                 pad.slot - state.activeBank * 16,
               );
               if (code !== undefined) {
-                controller.keyDown({code, repeat: false, target: document.body});
+                controller.keyDown({code, repeat: false, target: document.body,
+                  nativeEvent: event.nativeEvent});
               }
             }}
             onKeyUp={(event) => {
@@ -102,7 +109,7 @@ export function PadSurface({
             }}
           >
             <strong>{address}</strong>
-            <span>{capturing ? "Capturing" : assigned ? "Assigned" : "Empty"}</span>
+            <span>{status ?? (capturing ? "Capturing" : assigned ? "Assigned" : "Empty")}</span>
             <kbd aria-hidden="true">{keyboardKey}</kbd>
           </button>
         );

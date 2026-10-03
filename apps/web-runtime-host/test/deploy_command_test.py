@@ -199,17 +199,19 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
                 self.headers.get("Authorization", "")
             )
             self.server.append_log("netlify get-current-files")
-            self.send_json(
-                200,
+            files = (
                 self.server.site_files_response
                 if self.server.current_deploy_id
-                else [],
+                else []
             )
+            # Publish the controlled drift before the completed inventory
+            # response permits the client to issue its next Site read.
             if self.server.change_site_after_files:
                 self.server.current_deploy_id = "other-789"
                 self.server.current_deploy_url = (
                     "https://other-789--lmdj-runtime.netlify.app"
                 )
+            self.send_json(200, files)
             return
         if path != f"/api/v1/sites/{SITE_ID}":
             self.send_json(404, {"error": "not found"})

@@ -100,7 +100,7 @@ test("a full device during a Sample change says how to free space", () => {
 
 test("a preview failure points to activating audio rather than to a busy Project", () => {
   expect(sampleNextStep({code: "HOST_STATE_INVALID", message: SAMPLE_PREVIEW_FAILURE.message}))
-    .toBe("Activate audio, then preview again.");
+    .toBe("Play a Pad to start audio, then preview again.");
   expect(sampleNextStep({code: "HOST_STATE_INVALID", message: "That can't be done right now."}))
     .toBe(sampleMessage("HOST_STATE_INVALID").nextStep);
 });
@@ -112,9 +112,9 @@ test("the no-room message is user language", () => {
 test.each([
   ["capture-unsupported", "This browser cannot record a Performance. Use a current version of another browser."],
   ["tap-initialization-failed",
-    "Performance recording could not start. Reload the page and activate audio again, then record."],
+    "Performance recording could not start. Reload the page and play a Pad to start audio, then record."],
   ["tap-processor-failed",
-    "Performance recording could not start. Reload the page and activate audio again, then record."],
+    "Performance recording could not start. Reload the page and play a Pad to start audio, then record."],
   ["something-new", "Performance recording is not available. Reload the page, then try again."],
 ])("Performance capture %s says what to do without its code", (code, copy) => {
   expect(performCaptureUnavailableMessage(code)).toBe(copy);

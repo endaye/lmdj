@@ -584,8 +584,19 @@ void validate_soundset_operation_payload(
                  (value >= 'a' && value <= 'f');
         }));
   };
-  if (operation == "soundset.catalog.list") {
+  if (operation == "soundset.catalog.list" || operation == "soundset.catalog.describe") {
     require(exact_keys(payload, {}));
+  } else if (operation == "soundset.slot.acquire" || operation == "soundset.slot.install") {
+    if (operation == "soundset.slot.acquire") {
+      require(exact_keys(payload, {"set_id", "version", "manifest_sha256", "slot_index"}));
+    } else {
+      require(exact_keys(payload, {"command_id", "expected_revision", "bank_id", "set_id", "version", "manifest_sha256", "slot_index"}));
+      (void)uuid_field(payload, "command_id");
+      (void)safe_unsigned_field(payload, "expected_revision");
+      (void)safe_unsigned_field(payload, "bank_id", 3U);
+    }
+    (void)safe_unsigned_field(payload, "slot_index", 15U);
+    set_identity();
   } else if (operation == "soundset.audition") {
     // S11-D5's optional `slot_index` is the only field beyond the Set
     // identity: absent auditions the set-level `demo`, present auditions that
@@ -3278,6 +3289,9 @@ Json ControlRuntime::dispatch(
         {"soundset.audition", true},
         {"soundset.audition.stop", true},
         {"soundset.catalog.list", true},
+        {"soundset.catalog.describe", true},
+        {"soundset.slot.acquire", true},
+        {"soundset.slot.install", false},
         {"soundset.inspect", true},
         {"soundset.map.preview", true},
         {"soundset.install", false},
@@ -3306,7 +3320,8 @@ Json ControlRuntime::dispatch(
       }
 
       const bool project_scoped = operation == "soundset.map.preview" ||
-                                  operation == "soundset.install";
+                                  operation == "soundset.install" ||
+                                  operation == "soundset.slot.install";
       if (project_scoped && !impl_->session_available()) {
         return state_error();
       }

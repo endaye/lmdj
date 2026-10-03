@@ -263,6 +263,7 @@ void test_replayed_command_id_returns_the_stored_receipt() {
   ProjectStore store;
   LMDJ_CHECK(store.create(bundle, new_v4_project()).has_value());
   auto fixture = install_fixture("install-command", 0);
+  fixture.request.require_empty_targets = true;
   const auto installed = store.install_soundset(bundle, fixture.request);
   LMDJ_CHECK(installed.has_value());
   const auto manifest_after_commit = read_bytes(bundle / "manifest.json");
@@ -275,6 +276,13 @@ void test_replayed_command_id_returns_the_stored_receipt() {
   LMDJ_CHECK(read_bytes(bundle / "manifest.json") == manifest_after_commit);
   LMDJ_CHECK(directory_entry_count(bundle / "history/transactions") == 1);
   LMDJ_CHECK(directory_entry_count(bundle / "assets") == 3);
+
+  auto occupied = install_fixture("occupied-install", 1);
+  occupied.request.require_empty_targets = true;
+  const auto refused = store.install_soundset(bundle, occupied.request);
+  LMDJ_CHECK(!refused.has_value());
+  LMDJ_CHECK(refused.error().details.at("reason") == "soundset_occupied_conflict");
+  LMDJ_CHECK(read_bytes(bundle / "manifest.json") == manifest_after_commit);
 
   // The same command id bound to a different install is an identity collision.
   auto changed = install_fixture("install-command", 0);

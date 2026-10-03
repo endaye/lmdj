@@ -148,7 +148,9 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     await page.goto("/index.html");
     await waitForBootProject(page);
-    await expect(page.getByRole("button", {name: /^Pad A\d+ — empty — Key [QWERTYUIASDFGHJK]$/}))
+    // This proof has no Catalog upstream: first-project slots fail explicitly
+    // and cannot masquerade as empty or playable Pads.
+    await expect(page.getByRole("button", {name: /^Pad A\d+ — failed — Key [QWERTYUIASDFGHJK]$/}))
       .toHaveCount(16);
     expect(await page.evaluate(() =>
       document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -183,17 +185,16 @@ for (const viewport of [
     await expect(page.getByRole("button", {name: /^Perform/})).toBeEnabled();
     // The physical column is the rail now. Its keys are icons, so the walk
     // reads each stop's accessible name. Audio is not running in this case,
-    // so Record and Play/Stop are disabled and must be skipped along with the
-    // unassigned encoder keys and the direction row (its ← / → history chord
-    // stays inert until SHIFT is held, #1770), and Pads are played from the
-    // letter keys rather than tabbed to; landing on the touch workspace's
-    // first System action right after SHIFT is what proves all of that.
+    // The first transport/Pad gesture wakes audio. Unassigned encoders
+    // and directions are skipped; history directions stay inert until SHIFT
+    // is held. SHIFT remains reachable, followed by Record, Play/Stop and
+    // the first Pad, proving the complete physical rail.
     await page.getByTestId("physical-controls")
       .getByRole("button", {name: "Project", exact: true}).focus();
     const expectedFocusOrder = [
       "Sample", "Sequence", "Perform", "Bank A", "Bank B", "Bank C", "Bank D",
       "SHIFT — engage the Undo/Redo layer",
-      "Activate audio",
+      "Record", "Play/Stop", "Pad A1 — assigned — Key Q",
     ];
     const focusOrder = [];
     for (let index = 0; index < expectedFocusOrder.length; index += 1) {
@@ -246,6 +247,6 @@ test("WebKit capability boundary remains unsupported and is not physical accepta
   await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
   await expect(page.getByRole("region", {name: "Developer diagnostics"}))
     .toContainText("UNSUPPORTED_WEB_RUNTIME");
-  await expect(page.getByRole("button", {name: "Activate audio"})).toBeDisabled();
+  await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
   await expect(page.getByRole("button", {name: "Export report"})).toBeDisabled();
 });

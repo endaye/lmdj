@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <set>
 #include <string>
 
@@ -230,6 +231,7 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
   std::size_t runtime_scripts = 0;
   std::size_t runtime_wasm = 0;
   std::size_t perform_master_taps = 0;
+  std::size_t offline_workers = 0;
   for (const auto& asset : assets) {
     if (!exact_keys(asset, {"bytes", "path", "role", "sha256"}) ||
         !asset.at("path").is_string() ||
@@ -251,14 +253,22 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
     runtime_scripts += role == "runtime_script" ? 1U : 0U;
     runtime_wasm += role == "runtime_wasm" ? 1U : 0U;
     perform_master_taps += role == "perform_master_tap_worklet" ? 1U : 0U;
+    offline_workers += role == "offline_worker" ? 1U : 0U;
   }
   // Stage 10: the Creator distribution (the manifest that declares
   // compatible_hosts) ships exactly one platform-owned Perform master-tap
   // processor; the Web Runtime Host distribution ships none. A duplicate or a
   // stray entry is an inventory defect, not a tolerated default.
   const auto expected_taps = has_compatible_hosts ? 1U : 0U;
+  const auto major_end = host_version.find('.');
+  if (major_end == std::string::npos) return false;
+  unsigned int host_major = 0;
+  const auto parsed_major = std::from_chars(
+      host_version.data(), host_version.data() + major_end, host_major);
+  if (parsed_major.ec != std::errc{} || parsed_major.ptr != host_version.data() + major_end) return false;
+  const auto expected_offline = has_compatible_hosts && host_major >= 5 ? 1U : 0U;
   return runtime_scripts == 1U && runtime_wasm == 1U &&
-         perform_master_taps == expected_taps;
+         perform_master_taps == expected_taps && offline_workers == expected_offline;
 }
 
 }  // namespace

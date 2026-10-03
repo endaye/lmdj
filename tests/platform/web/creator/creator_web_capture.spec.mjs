@@ -1,3 +1,4 @@
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
@@ -372,7 +373,7 @@ test("armed Pad capture commit is guarded by the open transport journal and neve
   await page.goto("/index.html");
   await importV1SampleProject(page);
   const initialTruth = await inspectProjectTruth(page);
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: 30_000,
   });

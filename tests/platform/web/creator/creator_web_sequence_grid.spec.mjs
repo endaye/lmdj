@@ -1,5 +1,6 @@
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
+import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
@@ -142,7 +143,7 @@ async function awaitTruthEvents(page, patternId, expected) {
 async function enterSequenceAndPlay(page) {
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
   await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state"))
     .toHaveText("Audio running", {timeout: 30_000});
 }
