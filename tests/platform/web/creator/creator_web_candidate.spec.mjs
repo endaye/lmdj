@@ -1,3 +1,4 @@
+import {openCreatorSlice} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {createHash, randomUUID} from "node:crypto";
 import {expect, test} from "@playwright/test";
@@ -99,7 +100,7 @@ async function start(page, silent = false) {
     await window.lmdjWebRuntimeHost.providers.configureProviderPermissions([permission]);
     return permission;
   });
-  await page.getByRole("button", {name: "Slice", exact: true}).click();
+  await openCreatorSlice(page);
   await expect(page.getByRole("heading", {name: "Slice", exact: true})).toBeVisible();
   await expect(page.getByRole("combobox", {name: "Slice source"}).locator(`option[value="${sourceId}"]`)).toHaveCount(1);
   await page.getByRole("combobox", {name: "Slice source"}).selectOption(sourceId);
@@ -205,7 +206,7 @@ test("Creator Slice UI previews, explicitly adopts repeated recipes, and reopens
   expect(await truth(page)).toEqual(baseline);
   expect(await files(page, projectId)).toEqual(savedBefore);
   await expect(page.getByTestId("audio-state")).not.toHaveText("Audio running");
-  await page.getByRole("button", {name: "Slice", exact: true}).click();
+  await openCreatorSlice(page);
   await page.getByRole("combobox", {name: "Slice source"}).selectOption(sourceId);
   await expect(page.getByRole("button", {name: "Preview slice 2", exact: true})).toBeEnabled();
   expect(await evidence(page, "candidate.job.run")).toHaveLength(0);
@@ -249,7 +250,7 @@ test("Creator Slice UI previews, explicitly adopts repeated recipes, and reopens
   await reopen(page);
   expect(await truth(page)).toEqual(adopted);
   expect(await files(page, projectId)).toEqual(saved);
-  await page.getByRole("button", {name: "Slice", exact: true}).click();
+  await openCreatorSlice(page);
   await page.getByRole("combobox", {name: "Slice source"}).selectOption(sourceId);
   await page.getByRole("button", {name: "Discard slices"}).click();
   await expect(page.getByText("No active slices. Retry analysis to create a new result.")).toBeVisible();
@@ -362,7 +363,7 @@ for (const bank of [0, 1]) {
     const patterns = (await truth(page)).project.patterns;
     expect(patterns[emptyId].events).toEqual([]);
     for (const [id, recorded] of Object.entries(originalPatterns)) expect(patterns[id]).toEqual(recorded);
-    await page.getByRole("button", {name: "Slice", exact: true}).click();
+    await openCreatorSlice(page);
     await page.getByRole("combobox", {name: "Slice source"}).selectOption(sourceId);
     // Prepare this Pattern while stopped: a live Pattern change deliberately
     // takes effect at a later musical boundary, after Bank acknowledgement.
@@ -398,7 +399,7 @@ test("Creator adoption prepares the selected non-current Pattern", async ({page}
     options.map(option => option.value).find(value => value !== original), original);
   await pattern.selectOption(selected);
   await expect(pattern).toHaveValue(selected);
-  await page.getByRole("button", {name: "Slice", exact: true}).click();
+  await openCreatorSlice(page);
   await page.getByRole("combobox", {name: "Slice source"}).selectOption(sourceId);
   await target(page, 1, set.recipes[1].candidate_id, 0, 1);
   await page.getByRole("button", {name: "Adopt selected slices"}).click();

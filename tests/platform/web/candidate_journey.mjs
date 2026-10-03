@@ -1,3 +1,4 @@
+import {clickCreatorSystemAction} from "./creator/fixtures/creator_navigation.mjs";
 import {createHash} from "node:crypto";
 import {expect, test} from "@playwright/test";
 
@@ -96,7 +97,7 @@ async function setup(page, silent = false, host) {
       await expect(page.getByRole("heading", {name: "Project 00000000", exact: true})).toBeVisible();
     } catch (error) {
       const download = page.waitForEvent("download");
-      await page.getByRole("button", {name: "Export report", exact: true}).click();
+      await clickCreatorSystemAction(page, "Export report");
       const report = await download;
       await report.saveAs(test.info().outputPath("creator-open-report.json"));
       throw error;
@@ -183,7 +184,8 @@ export function registerCandidateJourneys(host, {wakeCreatorAudio} = {}) {
     expect(await files(page)).toEqual(committed);
     // Suspend through the owning session so its AudioContext and control lane
     // complete quiescence before the explicit Host close/reopen boundary.
-    await page.getByRole("button", {name: "Suspend audio", exact: true}).click();
+    if (host === "Creator Web") await clickCreatorSystemAction(page, "Suspend audio");
+    else await page.getByRole("button", {name: "Suspend audio", exact: true}).click();
     if (host === "Creator Web") await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended");
     else await expect(page.locator("#host-state")).toHaveText("audio-suspended");
     success(await send(page, "host.close"));
