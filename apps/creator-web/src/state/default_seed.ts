@@ -5,6 +5,7 @@ export interface SeedSlot {
   phase: SeedPhase;
   request: {commandId: string; expectedRevision: number} | null;
   committedRevision: number | null;
+  assignmentObserved?: boolean;
 }
 export interface DefaultSeed extends SoundSetIdentity {
   projectId: string;
@@ -21,6 +22,7 @@ export function readDefaultSeed(storage: SeedStorage, identity: SoundSetIdentity
       seed.manifestSha256 !== identity.manifestSha256 || !UUID.test(seed.projectId) ||
       !Array.isArray(seed.slots) || seed.slots.length !== 16 || seed.slots.some(slot =>
         slot === null || !PHASES.has(slot.phase) ||
+        (slot.assignmentObserved !== undefined && typeof slot.assignmentObserved !== "boolean") ||
         (slot.committedRevision !== null && (!Number.isSafeInteger(slot.committedRevision) || slot.committedRevision < 0)) ||
         (slot.request !== null && (!UUID.test(slot.request.commandId) ||
           !Number.isSafeInteger(slot.request.expectedRevision) || slot.request.expectedRevision < 0)))) {

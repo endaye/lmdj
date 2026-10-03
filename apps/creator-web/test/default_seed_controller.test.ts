@@ -1,5 +1,5 @@
 import {expect, test, vi} from "vitest";
-import {claimDefaultSeed, type SeedStorage} from "../src/state/default_seed";
+import {claimDefaultSeed, readDefaultSeed, type SeedStorage} from "../src/state/default_seed";
 import {createDefaultSeedController} from "../src/runtime/default_seed_controller";
 import type {CreatorSlotSoundSetRuntimeSession, ProjectView} from "../src/runtime/runtime_types";
 const identity = {setId: "11111111-1111-4111-8111-111111111111", version: "1.0.0", manifestSha256: "a".repeat(64)};
@@ -15,14 +15,16 @@ function fixture() {
     pads: Array.from({length:64},(_,slot) => ({slot,assetId:null}))};
   let nextId = 0;
   const acquire = vi.fn(async (_request: {slotIndex: number}) => ({}));
-  const commit = vi.fn(async (slot: number) => {
+  const commit = vi.fn(async (slot: number, _request?: {commandId: string; expectedRevision: number}, admit?: () => boolean) => {
+    if (admit?.() === false) return null;
     project = {...project, revision: project.revision + 1, pads: project.pads.map(pad =>
       pad.slot === slot ? {...pad,assetId: "asset"} : pad)};
     return {committedRevision: project.revision, runtimeRevision: project.revision, published: true};
   });
   const options = {seed, storage, session: {acquireSoundSetSlot: acquire} as unknown as CreatorSlotSoundSetRuntimeSession,
     current: () => project, commit, refresh: vi.fn(async () => {}), changed: vi.fn(),
-    uuid: () => `00000000-0000-4000-8000-${String(++nextId).padStart(12,"0")}`};
+    uuid: () => `00000000-0000-4000-8000-${String(++nextId).padStart(12,"0")}`,
+    pause: () => new Promise<void>(resolve => setTimeout(resolve, 100))};
   return {seed, options, acquire, commit, setProject: (value: ProjectView) => {project=value;}, getProject: () => project};
 }
 test("one slot is Ready while three other downloads remain blocked, with at most four workers", async () => {
@@ -53,7 +55,8 @@ test("ready slots are never reacquired when deleted or undone before reload", as
 });
 test("a revision conflict retires a target filled by a competing edit", async () => {
   const f=fixture();
-  f.commit.mockImplementationOnce(async slot => {
+  f.commit.mockImplementationOnce(async (slot, _request, admit) => {
+    if (admit?.() === false) return null;
     f.setProject({...f.getProject(), revision:1,pads:f.getProject().pads.map(pad => pad.slot===slot?{...pad,assetId:"user"}:pad)});
     throw Object.assign(new Error("changed"),{code:"REVISION_CONFLICT"});
   });
@@ -69,7 +72,10 @@ test("Project replacement after acquisition cancels late installations", async (
   expect(f.commit).not.toHaveBeenCalled();
 });
 test("durable commit without Runtime publication cannot be Ready", async () => {
-  const f=fixture();f.commit.mockImplementation(async()=>({committedRevision:1,runtimeRevision:0,published:false}));
+  const f=fixture();f.commit.mockImplementation(async(_slot, _request, admit)=>{
+    if (admit?.() === false) return null;
+    return {committedRevision:1,runtimeRevision:0,published:false};
+  });
   await createDefaultSeedController(f.options).start();
   expect(f.seed.slots.every(slot=>slot.phase==="saved-unavailable")).toBe(true);
   f.acquire.mockClear();await createDefaultSeedController(f.options).start();expect(f.acquire).not.toHaveBeenCalled();
@@ -78,19 +84,32 @@ test("durable commit without Runtime publication cannot be Ready", async () => {
 
 test("resume reuses the persisted command identity after a commit response was lost", async () => {
   const f=fixture();
+  keepOnlyFirstSlot(f);
   const request={commandId:"44444444-4444-4444-8444-444444444444",expectedRevision:0};
   f.seed.slots[0]!.phase="processing";f.seed.slots[0]!.request=request;
   f.setProject({...f.getProject(),revision:1,pads:f.getProject().pads.map(pad=>pad.slot===0?{...pad,assetId:"committed"}:pad)});
+  const before = structuredClone(f.getProject());
+  f.commit.mockImplementation(async (_slot, received, admit) => {
+    expect(received).toBe(request);
+    if (admit?.() === false) return null;
+    return {committedRevision:1,runtimeRevision:1,published:true};
+  });
   const controller = createDefaultSeedController(f.options);
   controller.observeProject(f.getProject());
   expect(f.seed.slots[0]?.phase).toBe("processing");
   await controller.start();
-  expect(f.commit.mock.calls[0]).toEqual([0,request]);
+  expect(f.commit).toHaveBeenCalledExactlyOnceWith(0, request, expect.any(Function));
+  expect(f.getProject()).toEqual(before);
+  expect(request.expectedRevision).toBe(0);
+  expect(f.seed.slots[0]?.assignmentObserved).toBe(true);
   expect(f.seed.slots[0]?.phase).toBe("ready");
 });
 
 test("explicit publication recovery readies saved slots without another install", async () => {
-  const f=fixture();f.commit.mockImplementation(async()=>({committedRevision:1,runtimeRevision:0,published:false}));
+  const f=fixture();f.commit.mockImplementation(async(_slot, _request, admit)=>{
+    if (admit?.() === false) return null;
+    return {committedRevision:1,runtimeRevision:0,published:false};
+  });
   const controller=createDefaultSeedController(f.options);await controller.start();f.commit.mockClear();
   controller.acceptPublication({projectId,patternId:projectId,projectRevision:1,runtimeRevision:1,
     generation:2,runtimeReady:true,snapshotError:null});
@@ -134,4 +153,156 @@ test("a download completing after a manual assignment cannot reclaim its retired
   expect(f.seed.slots[0]?.phase).toBe("retired");
   expect(f.commit).not.toHaveBeenCalled();
   expect(f.getProject().pads[0]?.assetId).toBe("user");
+});
+
+function keepOnlyFirstSlot(f: ReturnType<typeof fixture>) {
+  for (const slot of f.seed.slots.slice(1)) slot.phase = "retired";
+}
+
+function assignThenUndo(f: ReturnType<typeof fixture>, controller: ReturnType<typeof createDefaultSeedController>) {
+  f.setProject({...f.getProject(), revision: f.getProject().revision + 1,
+    pads: f.getProject().pads.map(pad => pad.slot === 0
+      ? {...pad, assetId: "33333333-3333-4333-8333-333333333333"} : pad)});
+  controller.observeProject(f.getProject());
+  f.setProject({...f.getProject(), revision: f.getProject().revision + 1,
+    pads: f.getProject().pads.map(pad => pad.slot === 0 ? {...pad, assetId: null} : pad)});
+  controller.observeProject(f.getProject());
+}
+
+test("a busy authoring lane cannot reserve a Pad through manual assignment and Undo", async () => {
+  const f = fixture(); keepOnlyFirstSlot(f);
+  const entered = deferred(); const resume = deferred();
+  let installed = 0;
+  f.options.pause = async () => {entered.resolve(); await resume.promise;};
+  f.commit.mockImplementationOnce(async () => null);
+  f.commit.mockImplementation(async (slot, request, admit) => {
+    if (admit?.() === false) return null;
+    if (request!.expectedRevision !== f.getProject().revision) {
+      throw Object.assign(new Error("unknown stale command"), {code: "REVISION_CONFLICT"});
+    }
+    installed++;
+    return {committedRevision: f.getProject().revision + 1,
+      runtimeRevision: f.getProject().revision + 1, published: true};
+  });
+  const controller = createDefaultSeedController(f.options);
+  const finished = controller.start(); await entered.promise;
+  assignThenUndo(f, controller); resume.resolve(); await finished;
+  expect(installed).toBe(0);
+  expect(f.getProject().pads[0]?.assetId).toBeNull();
+  expect(f.seed.slots[0]?.phase).toBe("retired");
+  expect(JSON.parse(f.options.storage.getItem("")!).slots[0].phase).toBe("retired");
+  f.acquire.mockClear(); f.commit.mockClear();
+  await createDefaultSeedController(f.options).start();
+  expect(f.acquire).not.toHaveBeenCalled();
+  expect(f.commit).not.toHaveBeenCalled();
+});
+
+test("a queued authoring admission checks retirement before its Facade dispatch", async () => {
+  const f = fixture(); keepOnlyFirstSlot(f);
+  const entered = deferred(); const resume = deferred();
+  let installed = 0;
+  f.commit.mockImplementation(async (_slot, request, admit) => {
+    entered.resolve(); await resume.promise;
+    if (admit?.() === false) return null;
+    if (request!.expectedRevision !== f.getProject().revision) {
+      throw Object.assign(new Error("unknown stale command"), {code: "REVISION_CONFLICT"});
+    }
+    installed++;
+    return {committedRevision: f.getProject().revision + 1,
+      runtimeRevision: f.getProject().revision + 1, published: true};
+  });
+  const controller = createDefaultSeedController(f.options);
+  const finished = controller.start(); await entered.promise;
+  assignThenUndo(f, controller); resume.resolve(); await finished;
+  expect(installed).toBe(0);
+  expect(f.seed.slots[0]?.phase).toBe("retired");
+  expect(f.getProject().pads[0]?.assetId).toBeNull();
+});
+
+test("an old journal request cannot rebase across an observed assignment and Undo", async () => {
+  const f = fixture(); keepOnlyFirstSlot(f);
+  const request = {commandId: "44444444-4444-4444-8444-444444444444", expectedRevision: 0};
+  f.seed.slots[0]!.request = request;
+  const entered = deferred(); const resume = deferred();
+  let installed = 0;
+  f.options.pause = async () => {entered.resolve(); await resume.promise;};
+  f.commit.mockImplementationOnce(async () => null);
+  f.commit.mockImplementation(async (_slot, received, admit) => {
+    if (admit?.() === false) return null;
+    if (received!.expectedRevision !== f.getProject().revision) {
+      throw Object.assign(new Error("unknown stale command"), {code: "REVISION_CONFLICT"});
+    }
+    installed++;
+    return {committedRevision: f.getProject().revision + 1,
+      runtimeRevision: f.getProject().revision + 1, published: true};
+  });
+  const controller = createDefaultSeedController(f.options);
+  const finished = controller.start(); await entered.promise;
+  assignThenUndo(f, controller); resume.resolve(); await finished;
+  expect(installed).toBe(0);
+  expect(request.expectedRevision).toBe(0);
+  expect(f.seed.slots[0]?.phase).toBe("retired");
+});
+
+test("a receipt committed before Undo replays without refilling the now-empty Pad", async () => {
+  const f = fixture(); keepOnlyFirstSlot(f);
+  const request = {commandId: "44444444-4444-4444-8444-444444444444", expectedRevision: 0};
+  f.seed.slots[0]!.request = request;
+  const controller = createDefaultSeedController(f.options);
+  assignThenUndo(f, controller);
+  const before = structuredClone(f.getProject());
+  f.commit.mockImplementation(async (_slot, received, admit) => {
+    expect(received).toBe(request);
+    if (admit?.() === false) return null;
+    return {committedRevision:1,runtimeRevision:2,published:true};
+  });
+  await controller.start();
+  expect(f.commit).toHaveBeenCalledExactlyOnceWith(0, request, expect.any(Function));
+  expect(f.seed.slots[0]?.phase).toBe("ready");
+  expect(f.getProject()).toEqual(before);
+  expect(f.getProject().pads[0]?.assetId).toBeNull();
+  expect(request.expectedRevision).toBe(0);
+});
+
+test("an observed assignment survives journal reload and refuses an unknown stale request", async () => {
+  const f = fixture(); keepOnlyFirstSlot(f);
+  const request = {commandId: "44444444-4444-4444-8444-444444444444", expectedRevision: 0};
+  f.seed.slots[0]!.request = request;
+  assignThenUndo(f, createDefaultSeedController(f.options));
+  const retained = readDefaultSeed(f.options.storage, identity)!;
+  expect(retained.slots[0]?.assignmentObserved).toBe(true);
+  f.commit.mockImplementation(async (_slot, received, admit) => {
+    if (admit?.() === false) return null;
+    expect(received?.expectedRevision).toBe(0);
+    throw Object.assign(new Error("unknown stale command"), {code: "REVISION_CONFLICT"});
+  });
+  await createDefaultSeedController({...f.options, seed: retained}).start();
+  expect(f.commit).toHaveBeenCalledTimes(1);
+  expect(retained.slots[0]?.phase).toBe("retired");
+  expect(retained.slots[0]?.request?.expectedRevision).toBe(0);
+  expect(readDefaultSeed(f.options.storage, identity)?.slots[0]?.phase).toBe("retired");
+  expect(f.getProject().revision).toBe(2);
+  expect(f.getProject().pads[0]?.assetId).toBeNull();
+});
+
+test("a journal write failure prevents the Facade dispatch and releases the unissued request", async () => {
+  const f = fixture(); keepOnlyFirstSlot(f);
+  const write = f.options.storage.setItem;
+  f.options.storage.setItem = (key, raw) => {
+    if (JSON.parse(raw).slots[0].request !== null) throw new Error("storage unavailable");
+    write(key, raw);
+  };
+  let installed = 0;
+  f.commit.mockImplementation(async (_slot, _request, admit) => {
+    if (admit?.() === false) return null;
+    installed++;
+    return {committedRevision:1,runtimeRevision:1,published:true};
+  });
+  await createDefaultSeedController(f.options).start();
+  expect(installed).toBe(0);
+  expect(f.seed.slots[0]?.request).toBeNull();
+  expect(f.seed.slots[0]?.phase).toBe("failed");
+  expect(readDefaultSeed(f.options.storage, identity)?.slots[0]?.request).toBeNull();
+  expect(f.getProject().revision).toBe(0);
+  expect(f.getProject().pads[0]?.assetId).toBeNull();
 });

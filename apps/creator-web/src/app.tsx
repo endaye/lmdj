@@ -544,7 +544,7 @@ function Workspace({
       changed: setDefaultSeed,
       failed: (_slot, error) => {reportFailure("Acquire default sound", error);},
       refresh: async () => {if (stateRef.current.project.current?.projectId === seed.projectId) await refreshPerformProject();},
-      commit: (slot, request) => {
+      commit: (slot, request, admit) => {
         const result = mutations.then(async () => {
           if (sessionRef.current !== session || stateRef.current.project.current?.projectId !== seed.projectId ||
               stateRef.current.project.phase !== "ready") return null;
@@ -553,6 +553,7 @@ function Workspace({
           const token = beginProjectAction("open", false);
           if (token === null) return null;
           try {
+            if (!admit()) return null;
             const receipt = await session.installSoundSetSlot({...CREATOR_DEFAULT_SOUND_SET,
               slotIndex: slot, bankId: 0, ...request});
             // A fulfilled receipt is durable Truth, not Runtime readiness.

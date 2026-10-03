@@ -10,7 +10,8 @@ export function createDefaultSeedController(options: {
   storage: SeedStorage;
   session: CreatorSlotSoundSetRuntimeSession;
   current: () => ProjectView | null;
-  commit: (slot: number, request: {commandId: string; expectedRevision: number}) => Promise<SeedCommit | null>;
+  commit: (slot: number, request: {commandId: string; expectedRevision: number},
+    admit: () => boolean) => Promise<SeedCommit | null>;
   refresh: () => Promise<void>;
   changed: (seed: DefaultSeed) => void;
   failed?: (slot: number, error: unknown) => void;
@@ -26,6 +27,7 @@ export function createDefaultSeedController(options: {
   async function acquire(slot: number) {
     if (!owns() || running.has(slot)) return;
     const state = seed.slots[slot]!;
+    const retired = () => state.phase === "retired";
     if (!["pending", "loading", "processing", "failed"].includes(state.phase)) return;
     running.add(slot);
     try {
@@ -38,14 +40,27 @@ export function createDefaultSeedController(options: {
       state.phase = "processing"; persist();
       // Only short authoring/publication work crosses the Project serial lane.
       for (let attempt = 0; attempt < 4 && owns(); attempt++) {
-        if (state.request === null) {
-          state.request = {commandId: options.uuid?.() ?? crypto.randomUUID(),
-            expectedRevision: options.current()!.revision};
-          persist(); // Replay identity survives a crash after durable commit.
-        }
+        if (retired()) return;
+        const request = state.request ?? {commandId: options.uuid?.() ?? crypto.randomUUID(),
+          expectedRevision: options.current()!.revision};
         try {
-          const result = await options.commit(slot, state.request);
+          const result = await options.commit(slot, request, () => {
+            // The Host calls this only after acquiring its authoring token,
+            // immediately before the Facade command. A queued candidate does
+            // not own a receipt or the Pad while another edit is in flight.
+            if (!owns() || retired()) return false;
+            if (state.request === null) {
+              if (options.current()!.pads.some(pad => pad.slot === slot && pad.assetId !== null)) {
+                state.phase = "retired"; persist(); return false;
+              }
+              state.request = request;
+              try {persist();} // Replay identity survives a lost commit response.
+              catch (error) {state.request = null; throw error;}
+            }
+            return true;
+          });
           if (result === null) {
+            if (!owns() || retired()) return;
             attempt--;
             await (options.pause?.() ?? new Promise<void>(resolve => setTimeout(resolve, 100)));
             continue;
@@ -64,12 +79,15 @@ export function createDefaultSeedController(options: {
           const code = (error as {code?: string}).code;
           if (code !== "REVISION_CONFLICT") throw error;
           await options.refresh();
-          if (!owns()) return;
-          if (options.current()!.pads.some(pad => pad.slot === slot && pad.assetId !== null)) {
+          if (!owns() || retired()) return;
+          if (state.assignmentObserved ||
+              options.current()!.pads.some(pad => pad.slot === slot && pad.assetId !== null)) {
             state.phase = "retired"; persist(); return;
           }
-          state.request.expectedRevision = options.current()!.revision;
-          persist();
+          if (state.request !== null) {
+            state.request.expectedRevision = options.current()!.revision;
+            persist();
+          }
         }
       }
       if (owns()) {state.phase = "failed"; persist();}
@@ -96,11 +114,13 @@ export function createDefaultSeedController(options: {
       for (const pad of project.pads) {
         if (pad.slot >= 16 || pad.assetId === null) continue;
         const slot = seed.slots[pad.slot]!;
-        // A saved/replayable default request still owns its receipt. Before
-        // any install request, an authoritative assignment belongs to the user.
-        if (slot.request === null && slot.committedRevision === null &&
-            !["ready", "retired"].includes(slot.phase)) {
-          slot.phase = "retired";
+        // A known request may replay its receipt after a lost response. If
+        // Native refuses it as stale, an assignment seen before Undo forbids
+        // rebasing an unknown command into a new automatic installation.
+        if (slot.committedRevision === null && !["ready", "retired"].includes(slot.phase) &&
+            (slot.request === null || !slot.assignmentObserved)) {
+          if (slot.request === null) slot.phase = "retired";
+          else slot.assignmentObserved = true;
           changed = true;
         }
       }
