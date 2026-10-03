@@ -6,8 +6,11 @@ recurrences:
   - date: 2026-10-02
     occurrence: https://github.com/endaye/lmdj/pull/1808
     observed_by: Codex
+  - date: 2026-10-03
+    occurrence: https://github.com/endaye/lmdj/pull/1810
+    observed_by: Codex
 exit: none
-escalation: none
+escalation: https://github.com/endaye/lmdj/issues/1811
 ---
 
 # A batch-only lane key can omit a test that the lane actually executes.
@@ -26,6 +29,17 @@ lanes execute this Host test through their full CTest selection. Input grouping
 by path ownership is therefore narrower than those commands' actual reads.
 A matching key alone cannot prove that a changed test was rerun. This occurrence
 found a failed run, not an observed false pass.
+
+In #1810, `package` executed and failed `facade.c_api` while its key omitted
+`tests/core/facade/c_api_test.cpp`. Correcting the old three-Provider assertion
+to the four installed Providers left the package key unchanged across
+`adeba557` and the corrected tree. The same inspection confirmed that Linux
+ASan/coverage also omit their executed `tests/host/mcp_stdio_test.py`. C2 ran
+the affected lanes with `--no-cache`; it retained failed transcripts, and did
+not claim that an unchanged key proved a rerun or an observed false pass.
+
+The input-closure repair is tracked in [the escalation Issue](https://github.com/endaye/lmdj/issues/1811);
+this product Task records the recurrence without changing the CI control plane.
 
 ## How to apply
 

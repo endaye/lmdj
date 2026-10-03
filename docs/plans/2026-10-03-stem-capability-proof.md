@@ -48,6 +48,7 @@ Assembly 只注册此 test-platform Proof，不自动选择；默认策略不授
 - `apps/docs-site/sidebars.ts`
 - `apps/docs-site/test/repo-facts.test.mjs`（新增 Provider/Contract 库存断言）
 - `apps/docs-site/scripts/lib/snapshot-provenance.mjs`（新页面使完整性库存从 49 增至 50）
+- `.agents/pitfalls/batch-key-omits-executed-host-test.md`（相同输入闭包问题第二次复发与升级 Issue）
 - 本施工单
 - 正式命令生成的 `apps/architecture-portal/versions.json`、
   `versioned_docs/version-PRODUCT_BUILD/**`、`versioned_metadata/version-PRODUCT_BUILD.json`、
@@ -110,3 +111,7 @@ Reason: 正式四角色/量化/参数定义、Proof 接线与准确限制需要�
 
 库存修正定向测试：host.cli、host.mcp_stdio、host.performance-cli-session、
 facade.c_api、host.web_control_runtime、e2e.headless_core_proof，6/6 通过。
+
+`package` 的 key 未包含实际执行的 C ABI test，跨库存修正仍不变；
+已记录既有 pitfall 第二次复发并升级 https://github.com/endaye/lmdj/issues/1811。本 Task 不修改 CI 控制面，
+受影响测试的旧失败与新 committed inputs 的 --no-cache 完整结果均保留。
