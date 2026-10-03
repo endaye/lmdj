@@ -91,13 +91,14 @@ class Fixture {
             "private", "test", "local", {"stem.split.execute"}};
   }
   AttemptResult execute(const CapabilityRequest& request, std::uint64_t output_limit = 67108864,
-                        std::uint64_t staging_limit = 83886080) {
+                        std::uint64_t staging_limit = 83886080,
+                        std::uint64_t input_limit = stem::maximum_wav_bytes) {
     auto budget = std::make_shared<StagingBudget>(staging_limit);
     const ExecutionOptions options{
         [&](const ArtifactRef& ref) -> Result<std::shared_ptr<const Bytes>> {
           const auto found = owners.find(ref.sha256); LMDJ_CHECK(found != owners.end());
           return Result<std::shared_ptr<const Bytes>>::success(found->second);
-        }, stem::maximum_wav_bytes, output_limit, budget};
+        }, input_limit, output_limit, budget};
     const auto result = store.execute(AttemptId{"stem-" + std::to_string(++sequence)}, request, registry, options);
     LMDJ_CHECK(result.has_value()); LMDJ_CHECK(budget->used_bytes() == 0);
     LMDJ_CHECK(read(root / "project-sentinel") == "a"); return result.value();
@@ -275,6 +276,30 @@ void canonical_replay() {
   LMDJ_CHECK(read(f.root / "source.wav") == std::string(reinterpret_cast<const char*>(source.data()), source.size()));
 }
 
+void oversized_source() {
+  Fixture f; f.install(); auto source = wav({0}, 44100, 1);
+  source.resize(stem::maximum_wav_bytes + 2);
+  set(source, 4, static_cast<std::uint32_t>(source.size() - 8), 4);
+  set(source, 40, static_cast<std::uint32_t>(source.size() - 44), 4);
+  LMDJ_CHECK(sample_slice::inspect_pcm16_wav(source).has_value());
+  const auto result = f.execute(f.request(f.supply(source)), 67108864, 83886080, source.size());
+  f.failure(result);
+  LMDJ_CHECK(result.error->code == ErrorCode::unsupported_audio);
+  LMDJ_CHECK(result.error->details.at("reason") == "source_audio_unsupported");
+}
+
+void substituted_input() {
+  Fixture f; unsigned calls = 0;
+  const auto implementation = local_proof_stem_registration().implementation;
+  f.install(inject([&](auto context) { ++calls; return implementation->run(std::move(context)); }));
+  const auto original = wav(); const auto ref = f.supply(original);
+  f.owners[ref.sha256] = std::make_shared<const Bytes>(wav({0.5, -0.5, 0.25, -0.25}));
+  const auto result = f.execute(f.request(ref)); f.failure(result);
+  LMDJ_CHECK(calls == 0 && result.error->code == ErrorCode::io_error);
+  LMDJ_CHECK(result.error->details.at("reason") == "input_artifact_mismatch");
+  LMDJ_CHECK(read(f.root / "source.wav") == std::string(reinterpret_cast<const char*>(original.data()), original.size()));
+}
+
 void invalid_role_set(int mutation) {
   Fixture f;
   const auto implementation = local_proof_stem_registration().implementation;
@@ -318,6 +343,7 @@ int main() {
     descriptor_and_parameters(); quantization(); replay(true, false); replay(false, true);
     provider_domain_failures();
     canonical_replay();
+    oversized_source(); substituted_input();
     conversion_failure(std::numeric_limits<double>::quiet_NaN(), "stem_output_nonfinite");
     conversion_failure(std::numeric_limits<double>::infinity(), "stem_output_nonfinite");
     conversion_failure(1.0, "stem_output_out_of_range");

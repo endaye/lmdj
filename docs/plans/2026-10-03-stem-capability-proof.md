@@ -53,7 +53,7 @@ Assembly 只注册此 test-platform Proof，不自动选择；默认策略不授
 - 正式命令生成的 `apps/architecture-portal/versions.json`、
   `versioned_docs/version-PRODUCT_BUILD/**`、`versioned_metadata/version-PRODUCT_BUILD.json`、
   `versioned_sidebars/version-PRODUCT_BUILD-sidebars.json`、`static/versions/PRODUCT_BUILD/diagrams/**`。
-  PRODUCT_BUILD = `2.0.79.0`；已核对最新 main 与全部 open PR 的实际 version.json，不删除旧快照。
+  PRODUCT_BUILD = `2.0.80.0`；已核对最新 main 与全部 open PR 的实际 version.json，不删除旧快照。
 
 如果定向检查证实存在其他精确身份断言，先将确切文件补入本施工单再修改。
 不改 CI policy、阈值、超时、并发机制或旧 Slice 行为。
@@ -85,7 +85,7 @@ Slice `1.0.4`。新 Capability `stem.split.v1` / `1.0.0`、输出 profile
 现存 SDK、Module、Host、Provider 和 wrapper Contract 无语义/依赖变化，不分配级联版本。
 新增 Assembly 成员分配新 Product Build，正式生成 lock/compiled catalog/Runtime identity；
 Cardputer product identity 同步，平台能力不扩大。正式 snapshot 与 squash provenance 必须通过。
-Product Build 分配：`2.0.79.0`，main 当前为 `2.0.78.0`，全部 open PR 最高为 `2.0.77.0`。
+Product Build 最终分配：`2.0.80.0`，重新核对 main 为 `2.0.78.0`，open PR 最高为本 PR 的未合入 `2.0.79.0`。
 
 ## Documentation Impact
 
@@ -115,3 +115,19 @@ facade.c_api、host.web_control_runtime、e2e.headless_core_proof，6/6 通过�
 `package` 的 key 未包含实际执行的 C ABI test，跨库存修正仍不变；
 已记录既有 pitfall 第二次复发并升级 https://github.com/endaye/lmdj/issues/1811。本 Task 不修改 CI 控制面，
 受影响测试的旧失败与新 committed inputs 的 --no-cache 完整结果均保留。
+
+## 当前 head 审查修正
+
+审查产物 37087536590/1 的超大输入分类意见已接受：Provider 自身的 16 MiB
+输入上限返回 UNSUPPORTED_AUDIO/source_audio_unsupported。测试允许 SDK 使用更大
+输入预算，再供应结构有效的大 WAV，经真实 execute/独立重开确认 typed failure，
+而不是只触发 SDK quota。输入替换意见通过 SDK custody 边界处置：替换 resolver
+bytes 的相同长度/形状反例在 Provider run 前拒绝，原始输入/终态保持不变。
+validator 明确记录 SDK 鉴权 immutable handle 的依赖，不重复哈希或访问 Project。
+
+源码修正改变已冻结 projection。`2.0.79.0` 从未合入 main，不重写其已冻结 bytes：
+保留原始 source/freeze 提交，撤回本 PR 最终树中的 79 生成目录及 versions 条目；
+只以官方命令在 clean 修正提交上冻结新 `2.0.80.0`。既有 main 快照全部保留。
+精确生成范围追加 `version-2.0.80.0/**`、metadata/sidebar、
+`static/versions/2.0.80.0/**` 和 versions.json；79 的 Task 自有生成边界仅撤回，
+不清理工作树、分支或原始 source commit。所有受源码/身份变化影响的 lanes 重跑。

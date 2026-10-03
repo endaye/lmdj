@@ -28,7 +28,9 @@ class StemProof final : public provider::Provider {
     if (!parameters.has_value()) return fail(context, parameters.error());
     const auto source = context.source("source_audio", 0);
     if (!source.has_value()) return execution_failed(context);
-    if (source.value()->bytes().size() > stem::maximum_wav_bytes) return execution_failed(context);
+    if (source.value()->bytes().size() > stem::maximum_wav_bytes)
+      return fail(context, {ErrorCode::unsupported_audio, "Stem Proof source exceeds its WAV bound",
+                            {{"reason", "source_audio_unsupported"}}});
     const auto decoded = sample_slice::inspect_pcm16_wav(source.value()->bytes());
     if (!decoded.has_value()) return fail(context, decoded.error());
     const auto& audio = decoded.value();

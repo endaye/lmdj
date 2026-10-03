@@ -37,7 +37,7 @@ SDK 在终态发布前逐角色调用独立 validator。校验角色、完整 Re
 ## 已验证与后续边界
 
 真实 Registry、AttemptStore.execute、落盘和独立重开读取覆盖四路静音、非静音、错误角色、
-错误采样率/声道/帧数、坏 WAV、量化边界、有限数和失败清理。每个输出最多 16 MiB；SDK
+错误采样率/声道/帧数、坏 WAV、量化边界、有限数和失败清理。Proof 输入和每个输出最多 16 MiB，超大源返回 UNSUPPORTED_AUDIO；SDK
 字节预算不构成 RSS 或强制超时保证，资源数字仍是建议值。
 
 Assembly 只注册 test 平台，不默认选择，不授予 stem.split.execute。它未接入 Stem Facade

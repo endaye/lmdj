@@ -83,6 +83,8 @@ provider::OutputValidation output_validation(std::string role) {
             inputs[0].binding.artifact.media_type != "audio/wav" ||
             output.artifact.media_type != "audio/wav" || output.artifact.byte_length != bytes.size())
           return Result<void>::failure(invalid_output());
+        // AttemptStore authenticates the complete input Ref before minting its
+        // immutable owned handle. The consumer reads that custody, not Project I/O.
         const auto source = sample_slice::inspect_pcm16_wav(inputs[0].handle->bytes());
         const auto decoded = sample_slice::inspect_pcm16_wav(bytes);
         if (!source.has_value() || !decoded.has_value()) return Result<void>::failure(invalid_output());

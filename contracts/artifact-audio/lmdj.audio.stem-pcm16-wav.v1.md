@@ -57,6 +57,8 @@ model_identity null and an authenticated source-package digest. It is not a
 trained model or an instrument separator. Its test-only descriptor declares
 CPU, 256 MiB and a 1000 ms advisory timeout; its codec bounds a single WAV at
 16777216 bytes and its logical output maximum is four times that bound.
+Proof also rejects source bytes above that bound as UNSUPPORTED_AUDIO /
+source_audio_unsupported, even when SDK input limits are larger.
 ExecutionOptions impose their own aggregate input/output/staging budgets.
 These numbers do not prove an enforced deadline or process-tree RSS bound.
 
