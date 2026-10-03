@@ -86,7 +86,7 @@ Platform CMake 从生成的 Runtime identity 注入全部九个资源上限，�
 ## 身份与完整性
 Product Build、每个组件版本和 source hash 被锁定；门户事实生成会拒绝任何漂移。
 `tests/build/version_test.py` 还直接校验真实仓库中两份生成的 Web Runtime identity（JSON 与 MJS）是否与 active manifests 一致；合成 fixture 只验证生成器行为，不能替代这项实际输入检查。漂移时先用 `python3 tools/web-runtime/generate_runtime_identity.py --repo-root .` 同步生成文件，再以 `--check` 验证；这不会分配新 Product Build，也不修改既有不可变快照。
-Project Bundle Contract 仍是 portable transfer 边界；Project v5 是唯一当前写入真相 Contract，v1/v2/v3/v4 只作为迁移输入被读取；同构建 Web transport 仍不是公开 Contract。Provider、Capability 与 model identity 未变化。
+Project Bundle Contract 仍是 portable transfer 边界；Project v5 是唯一当前写入真相 Contract，v1/v2/v3/v4 只作为迁移输入被读取；同构建 Web transport 仍不是公开 Contract。既有 Provider、Capability 与 model identity 在该历史组合中未变化。
 ## 限制
 Sequence recording 与 Perform 演奏录制、重放、resample 提交已实现；持久化 Asset 编辑、Crop Undo、生产 Provider、云能力、物理 Web 验收与 `beta`/`stable` 仍不能由当前 Assembly 成员关系或门户快照推导。Stage 10 尚无物理演奏验收，自动化通过只证明状态与边界。Build Identity 只证明当前页面绑定的 Product/Assembly 身份，不证明 tag、Release、immutable snapshot、部署或 Channel promotion 已发生。
 
@@ -105,3 +105,12 @@ Web Runtime Platform 及依赖 Host 身份；上方身份来自 active manifests
 和 Host 的精确版本及源身份由上方 active manifests 投影；Contract ID 和 wire
 shape 不变。此集成保留单 Candidate、逐端口验证及逻辑输出预算，不注册 Stem
 模型，不把参考 Slice 或共享内容读取证明作为生产分轨、隔离执行或性能验收。
+
+## Stem SDK Proof 注册
+
+当前 Assembly 新增 [Stem SDK Proof](../providers/local-proof-stem.mdx) 和 PCM16 输出/空参数
+伴随 Contract，版本与 source-package 身份由 active manifests 和 Lock 派生。Provider
+声明 test 平台、model_identity 为 null；默认 local/public/proof.execute policy 不变，
+不自动选择或授予 stem.split.execute。它验证四角色、共享 blob 与失败终态，不进行分离。
+本次 Product Build 保留 canary 文档快照；真实模型/隔离、生产平台注册、Stem Facade、
+Lineage 和 Creator 交互仍由后续阶段实现，不触发 Release 或部署。

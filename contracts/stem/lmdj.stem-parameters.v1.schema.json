@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lmdj.dev/contracts/stem/lmdj.stem-parameters.v1.schema.json",
+  "x-lmdj-contract-version": "1.0.0",
+  "title": "Stem parameters v1",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

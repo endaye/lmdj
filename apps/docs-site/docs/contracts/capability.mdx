@@ -4,7 +4,7 @@ area: contracts
 status: implemented
 owners: [core, providers]
 contracts: [lmdj.capability.v2]
-source_paths: [contracts/capability/lmdj.capability.v2.schema.json, contracts/capability/sample.slice.v1.json, packages/provider-sdk]
+source_paths: [contracts/capability/lmdj.capability.v2.schema.json, contracts/capability/sample.slice.v1.json, contracts/capability/stem.split.v1.json, contracts/artifact-audio/lmdj.audio.stem-pcm16-wav.v1.md, contracts/stem/lmdj.stem-parameters.v1.schema.json, packages/provider-sdk]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -37,3 +37,15 @@ Assembly 注册更新；当前页不从活跃源码直接导入版本，避免�
 SDK owned 字节接口、Slice 参考 Provider 和 Product Assembly 注册已实现。C++ descriptor 的测试平台与聚合字节
 预算不写入闭合的 Capability JSON。Host 必须显式授予消费方要求的权限；本地
 运行不代表自动授权。参考资源数值是待测起点，不能当成性能或原生平台验收结果。
+
+## Stem 消费方定义
+
+`stem.split.v1` 从一个 `source_audio` 输入生成一个 Candidate，包含四个 required 输出
+`drums`、`bass`、`vocals`、`other`，各 max_count=1。参数仅允许空对象；Capability 为
+nondeterministic。四路 WAV 与输入同采样率、声道和帧数，canonical PCM16 从第一帧开始。
+浮点乘 32768 后 ties-to-even，非有限数和越界拒绝，不归一化、削波或移位。
+
+[Stem SDK Proof](../providers/local-proof-stem.mdx) 展示清单派生的 Provider 与伴随
+Contract 身份。逐端口校验在终态前完成，任一路缺失或无效都失败。纯代码 Proof 重放
+输入，model_identity 为 null；它只验证字节与状态边界，不证明真实模型质量、声学对齐
+或隔离执行。默认 Assembly 策略不授予 Stem 执行权限。
