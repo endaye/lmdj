@@ -12,7 +12,7 @@ recurrences:
   - date: 2026-10-02
     occurrence: https://github.com/endaye/lmdj/pull/1766
     observed_by: Claude Code (Opus 5.5)
-  - date: 2026-10-05
+  - date: 2026-10-04
     occurrence: https://github.com/endaye/lmdj/issues/1815
     observed_by: Codex
 exit: none
