@@ -24,6 +24,7 @@
 | `ascii-matrix-camera` | 黑绿 ASCII、摄像头输入与视觉互动探索 | [README](ascii-matrix-camera/README.md) |
 | `launchpad-pad-exploded` | Pad 控制器 3D 爆炸图与传感方案；几何为示意重建 | [README](launchpad-pad-exploded/README.md)、[研究来源](launchpad-pad-exploded/RESEARCH.md) |
 | `lmdj-song-pipeline` | 高嘉丰提供的音频生成、分轨、loop finding、切片、MIDI 与 validation 参考工具 | [README](lmdj-song-pipeline/README.md)、[使用说明](lmdj-song-pipeline/SETUP_AND_USAGE.md) |
+| `lmdj-mark` | 用 Creator 标记做的三页站点，以及 1024、180 和标签页图标 | [README](lmdj-mark/README.md) |
 
 ## 路径迁移
 

@@ -39,24 +39,14 @@ void persistence_failure(bool publication) {
 }
 void journey(std::string boundary) {
   Fixture f;
-  auto registration = f.registration([](auto context) {
-    const std::array payload{std::byte{'a'}};
-    const auto output = context.output("candidate", payload, "application/x-lmdj-proof");
-    LMDJ_CHECK(output.has_value());
-    return AttemptResult{context.attempt_id,
-        Candidate{CandidateId{context.attempt_id.value()}, {{"candidate", output.value()}},
-                  nlohmann::json::object()}, std::nullopt};
-  });
-  registration.capabilities[0].max_output_bytes = 1;
-  registration.output_validation[0].validate = [](const auto&, auto, const auto&, auto bytes, auto) {
-    LMDJ_CHECK(bytes.size() == 1 && bytes[0] == std::byte{'a'});
-    return Result<void>::success();
-  };
+  auto registration = shared_registration(f);
   f.install(std::move(registration));
   auto baseline = f.execute(request(), options(), "immutable");
   LMDJ_CHECK(baseline.candidate.has_value());
   LMDJ_CHECK(baseline.candidate->outputs[0].artifact.sha256 == request().inputs[0].artifact.sha256);
   LMDJ_CHECK(baseline.candidate->outputs[0].artifact.byte_length == 1);
+  LMDJ_CHECK(baseline.candidate->outputs.size() == 2);
+  LMDJ_CHECK(baseline.candidate->outputs[0].artifact == baseline.candidate->outputs[1].artifact);
   crash_at = boundary;
   auto child = ::fork();
   LMDJ_CHECK(child >= 0);
@@ -78,6 +68,10 @@ void journey(std::string boundary) {
       const auto prior = restarted.inspect(AttemptId{"immutable"});
       LMDJ_CHECK(prior.has_value());
       LMDJ_CHECK(prior.value().candidate_outputs == baseline.candidate->outputs);
+      for (const auto& output : prior.value().candidate_outputs) {
+        const auto bytes = restarted.read_candidate_artifact(AttemptId{"immutable"}, output.artifact, 1);
+        LMDJ_CHECK(bytes.has_value() && bytes.value() == std::vector{std::byte{'a'}});
+      }
       const auto recovered = restarted.inspect(AttemptId{"interrupted"});
       if (boundary == "terminal") {
         LMDJ_CHECK(recovered.has_value());
@@ -88,6 +82,8 @@ void journey(std::string boundary) {
           auto actual = describe_artifact(path, output.artifact.media_type);
           LMDJ_CHECK(actual.has_value());
           LMDJ_CHECK(actual.value() == output.artifact);
+          const auto bytes = restarted.read_candidate_artifact(AttemptId{"interrupted"}, output.artifact, 1);
+          LMDJ_CHECK(bytes.has_value() && bytes.value() == std::vector{std::byte{'a'}});
         }
       } else {
         LMDJ_CHECK(!recovered.has_value());

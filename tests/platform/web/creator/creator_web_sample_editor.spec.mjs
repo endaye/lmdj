@@ -1035,6 +1035,171 @@ test("Sample playback parity commits, cancels, refuses, fails and reopens throug
   noErrors();
 });
 
+// lmdj.project.v5 5.2.0. Each EQ key step previews; releasing the key commits
+// once, so a held run of steps is one revision.
+async function holdKeySteps(page, target, key, steps) {
+  await target.focus();
+  for (let step = 0; step < steps; step += 1) await page.keyboard.down(key);
+  await page.keyboard.up(key);
+}
+
+test("Sample tone parity commits, cancels, refuses, fails and reopens through the real Runtime", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  const noErrors = recordPageErrors(page);
+  await installHostProofRecorder(page);
+  await page.goto("/index.html");
+  await waitForBootProject(page);
+  await activateAudio(page);
+  await chooseSampleFile(page, "Add Sample to Pad A1", "tone.wav", pcm16Wav({frames: 4800}));
+  await commitLongSourceSelection(page);
+  await expectProjectRevision(page, 1);
+  const base = await inspectedPlayback(page);
+  // Release applies once the Pad stops being a one-shot.
+  await page.getByRole("button", {name: "One Shot", exact: true}).click();
+  await expectProjectRevision(page, 2);
+
+  // normal: each control commits one revision.
+  await slideAndRelease(page.getByRole("slider", {name: "Pad A1 Attack"}), "120");
+  await expectProjectRevision(page, 3);
+  await slideAndRelease(page.getByRole("slider", {name: "Pad A1 Release"}), "900");
+  await expectProjectRevision(page, 4);
+  await slideAndRelease(page.getByRole("slider", {name: "Pad A1 Tone"}), "-40");
+  await expectProjectRevision(page, 5);
+  await holdKeySteps(page, page.getByRole("slider", {name: "Pad A1 EQ High"}), "ArrowUp", 2);
+  await expectProjectRevision(page, 6);
+  // 36 half-dB steps reach the floor; one more makes the low shelf a cut.
+  await holdKeySteps(page, page.getByRole("slider", {name: "Pad A1 EQ Low"}), "ArrowDown", 37);
+  await expectProjectRevision(page, 7);
+  // A real mouse drag up and right turns the mid band on, through the
+  // browser's own hit-testing, focus and pointer capture.
+  const mid = page.getByRole("slider", {name: "Pad A1 EQ Mid"});
+  const poleCentre = async () => {
+    await mid.scrollIntoViewIfNeeded();
+    const box = await mid.boundingBox();
+    return {x: box.x + box.width / 2, y: box.y + box.height / 2};
+  };
+  const centre = await poleCentre();
+  await page.mouse.move(centre.x, centre.y);
+  await page.mouse.down();
+  await page.mouse.move(centre.x + 30, centre.y - 30, {steps: 5});
+  await page.mouse.up();
+  await expectProjectRevision(page, 8);
+  const committed = await inspectedPlayback(page);
+  expect(committed).toEqual({
+    ...base,
+    trigger_mode: "gate",
+    attack_ms: 120,
+    release_ms: 900,
+    tone: -40,
+    eq: {
+      low: {kind: "cut", freq_hz: 100, gain_millidb: -18_000},
+      mid: {freq_hz: expect.any(Number), gain_millidb: expect.any(Number), q_milli: 707},
+      high: {kind: "shelf", freq_hz: 8_000, gain_millidb: 1_000},
+    },
+  });
+  expect(committed.eq.mid.freq_hz).toBeGreaterThan(1_000);
+  expect(committed.eq.mid.gain_millidb).toBeGreaterThan(0);
+
+  // cancelled: Escape mid-gesture previews, then restores without a commit,
+  // on a slider and on the EQ.
+  const tone = page.getByRole("slider", {name: "Pad A1 Tone"});
+  const toneReadout = page.locator(".tone-control output");
+  const cancelOffset = await page.evaluate(() => window.__sampleProofOperations.length);
+  const pointerId = ++pointerSequence;
+  await tone.dispatchEvent("pointerdown", {pointerId, isPrimary: true, button: 0});
+  await tone.fill("60");
+  await expect(toneReadout).toHaveText("HP 60");
+  await tone.press("Escape");
+  await expect(toneReadout).toHaveText("LP 40");
+  await tone.dispatchEvent("pointerup", {pointerId, isPrimary: true, button: 0});
+  const high = page.getByRole("slider", {name: "Pad A1 EQ High"});
+  await high.focus();
+  await page.keyboard.down("ArrowUp");
+  await expect(high).toHaveAttribute("aria-valuetext", "High shelf 8.00 kHz +1.5 dB");
+  await page.keyboard.down("Escape");
+  await page.keyboard.up("Escape");
+  await page.keyboard.up("ArrowUp");
+  await expect(high).toHaveAttribute("aria-valuetext", "High shelf 8.00 kHz +1.0 dB");
+  // A pointer press never focuses the pole, so the browser delivers Escape to
+  // whatever had focus; the drag still cancels. Nothing in the editor holds
+  // focus here, so only the editor's window listener can hear it.
+  await page.evaluate(() => document.activeElement?.blur?.());
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  const midText = await mid.getAttribute("aria-valuetext");
+  const grab = await poleCentre();
+  await page.mouse.move(grab.x, grab.y);
+  await page.mouse.down();
+  await page.mouse.move(grab.x - 20, grab.y + 20, {steps: 4});
+  await expect(mid).not.toHaveAttribute("aria-valuetext", midText);
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(mid).toHaveAttribute("aria-valuetext", midText);
+  await page.mouse.up();
+  await expect.poll(() => page.evaluate((offset) =>
+    window.__sampleProofOperations.slice(offset), cancelOffset))
+    .toEqual(expect.arrayContaining(["sample.preview.set", "sample.preview.clear"]));
+  expect(await page.evaluate((offset) =>
+    window.__sampleProofOperations.slice(offset), cancelOffset)).not.toContain("sample.update_pad");
+  await expectProjectRevision(page, 8);
+  expect(await inspectedPlayback(page)).toEqual(committed);
+
+  // refused: an out-of-range value and a stale revision change nothing.
+  const outOfRange = await rawRequest(page, "sample.update_pad", {
+    command_id: crypto.randomUUID(),
+    expected_revision: 8,
+    slot: SLOT_A1,
+    playback: {...committed, eq: {...committed.eq, mid: {...committed.eq.mid, q_milli: 10_001}}},
+  });
+  expect(outOfRange).toEqual(expect.objectContaining({
+    ok: false,
+    error: expect.objectContaining({code: "HOST_PROTOCOL_MISMATCH"}),
+  }));
+  const stale = await rawRequest(page, "sample.update_pad", {
+    command_id: crypto.randomUUID(),
+    expected_revision: 7,
+    slot: SLOT_A1,
+    playback: {...committed, tone: 0},
+  });
+  expect(stale).toEqual(expect.objectContaining({
+    ok: false,
+    error: expect.objectContaining({
+      code: "REVISION_CONFLICT",
+      details: {actual_revision: 8, expected_revision: 7},
+    }),
+  }));
+  await expectProjectRevision(page, 8);
+  expect(await inspectedPlayback(page)).toEqual(committed);
+
+  // failed: a failed commit reports, and the control keeps committed truth.
+  const attackReadout = page.locator(".attack-control output");
+  await page.evaluate(() => { window.__failNextSampleUpdate = true; });
+  await slideAndRelease(page.getByRole("slider", {name: "Pad A1 Attack"}), "500");
+  await expect(page.getByRole("alert")).toContainText("Creator could not change this sound.");
+  await expect(attackReadout).toHaveText("120 ms");
+  expect(await page.evaluate(() => window.__failNextSampleUpdate)).toBe(false);
+  await expectProjectRevision(page, 8);
+  expect(await inspectedPlayback(page)).toEqual(committed);
+
+  // reopened: the reload restores the same truth and the same controls.
+  const projectId = (await rawRequest(page, "project.inspect", {})).result.project.project_id;
+  await page.reload();
+  await waitForProjectReopen(page, projectId.slice(0, 8));
+  expect(await inspectedPlayback(page)).toEqual(committed);
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await selectPadWithoutPress(page, "Pad A1 — assigned — Key Q");
+  await expect(attackReadout).toHaveText("120 ms");
+  await expect(page.locator(".release-control output")).toHaveText("900 ms");
+  await expect(toneReadout).toHaveText("LP 40");
+  await expect(page.getByRole("slider", {name: "Pad A1 EQ Low"}))
+    .toHaveAttribute("aria-valuetext", "Low cut 100 Hz");
+  await expect(page.getByRole("slider", {name: "Pad A1 EQ High"}))
+    .toHaveAttribute("aria-valuetext", "High shelf 8.00 kHz +1.0 dB");
+  await expect(page.getByRole("slider", {name: "Pad A1 EQ Mid"}))
+    .not.toHaveAttribute("aria-valuetext", "Mid off");
+  noErrors();
+});
+
 test("Pattern history keeps the Project open when its inventory anchor changes", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(180_000);

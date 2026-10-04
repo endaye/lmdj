@@ -1,0 +1,88 @@
+{
+  "contract": "lmdj.capability.v2",
+  "capability_id": "stem.split.v1",
+  "contract_version": "1.0.0",
+  "input_artifacts": [
+    {
+      "name": "source_audio",
+      "media_types": [
+        "audio/wav"
+      ],
+      "schema_id": "lmdj.audio.pcm16-wav.v1",
+      "schema_version": "1.0.0",
+      "required": true,
+      "max_count": 1
+    }
+  ],
+  "output_artifacts": [
+    {
+      "name": "bass",
+      "media_types": [
+        "audio/wav"
+      ],
+      "schema_id": "lmdj.audio.stem-pcm16-wav.v1",
+      "schema_version": "1.0.0",
+      "required": true,
+      "max_count": 1
+    },
+    {
+      "name": "drums",
+      "media_types": [
+        "audio/wav"
+      ],
+      "schema_id": "lmdj.audio.stem-pcm16-wav.v1",
+      "schema_version": "1.0.0",
+      "required": true,
+      "max_count": 1
+    },
+    {
+      "name": "other",
+      "media_types": [
+        "audio/wav"
+      ],
+      "schema_id": "lmdj.audio.stem-pcm16-wav.v1",
+      "schema_version": "1.0.0",
+      "required": true,
+      "max_count": 1
+    },
+    {
+      "name": "vocals",
+      "media_types": [
+        "audio/wav"
+      ],
+      "schema_id": "lmdj.audio.stem-pcm16-wav.v1",
+      "schema_version": "1.0.0",
+      "required": true,
+      "max_count": 1
+    }
+  ],
+  "determinism": "nondeterministic",
+  "progress_events": [
+    "separating"
+  ],
+  "errors": [
+    "INVALID_ARGUMENT",
+    "PROVIDER_FAILED",
+    "UNSUPPORTED_AUDIO"
+  ],
+  "resources": {
+    "class": "cpu",
+    "memory_mib": 256
+  },
+  "execution": {
+    "timeout_ms": 1000,
+    "max_attempts": 1
+  },
+  "policy": {
+    "data_classifications": [
+      "private",
+      "public"
+    ],
+    "regions": [
+      "local"
+    ],
+    "required_permissions": [
+      "stem.split.execute"
+    ]
+  }
+}

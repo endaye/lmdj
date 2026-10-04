@@ -43,14 +43,14 @@ export function createOfflineShell({build, caches, fetch, crypto, scope, scriptU
           manifest.assets.filter(asset => asset.role === "offline_worker").length !== 1) {
         throw new Error("offline shell build graph mismatch");
       }
-      for (const role of ["host_main", "host_style"]) {
+      for (const role of ["host_main", "host_style", "host_favicon"]) {
         const asset = manifest.assets.find(asset => asset.role === role);
-        if (!index.includes(`./${asset.path}`)) throw new Error("offline index binds another build");
+        if (asset === undefined || !index.includes(`./${asset.path}`)) throw new Error("offline index binds another build");
       }
       const paths = new Set();
       for (const asset of manifest.assets) {
         if (typeof asset.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(asset.sha256) ||
-            !/^assets\/[a-z0-9-]+\.[0-9a-f]{64}\.(js|css|wasm)$/.test(asset.path) ||
+            !/^assets\/[a-z0-9-]+\.[0-9a-f]{64}\.(js|css|svg|wasm)$/.test(asset.path) ||
             !asset.path.includes(`.${asset.sha256}.`) || paths.has(asset.path) ||
             !Number.isSafeInteger(asset.bytes) || asset.bytes <= 0) {
           throw new Error("offline asset descriptor refused");

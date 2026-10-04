@@ -36,7 +36,7 @@ MANIFEST_TOOLCHAIN_KEYS = (
     "emcc_version",
 )
 HASHED_ASSET_PATTERN = re.compile(
-    r"^assets/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|wasm)$"
+    r"^assets/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|svg|wasm)$"
 )
 LOCAL_PATH_PATTERN = re.compile(rb"(?:/Users/|file:/+(?:Users|home)/|[A-Za-z]:\\)")
 SOURCE_SUFFIXES = {

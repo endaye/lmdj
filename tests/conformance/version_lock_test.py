@@ -570,7 +570,7 @@ with tempfile.TemporaryDirectory(prefix="lmdj-version-lock-") as temp:
         "providers": [
             {
                 "id": "local.proof.success",
-                "version": "2.0.3",
+                "version": "2.0.4",
                 "capabilities": [],
                 "model_identity": None,
             }
