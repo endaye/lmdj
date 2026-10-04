@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-10-02
     occurrence: https://github.com/endaye/lmdj/pull/1766
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-04
+    occurrence: https://github.com/endaye/lmdj/pull/1829
+    observed_by: Codex (GPT-6)
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/1752
 ---
@@ -42,3 +45,17 @@ Second recurrence (#1756). Same mechanism, a different handler: `libSystem_atfor
 Third recurrence (#1766). `project_io.candidate_adoption` failed under `TMPDIR=/private/tmp/lmdjt` (18 characters): 3 of 5 runs on main's base `738a3e48`, and 4 of 5 on the PR head, whose change does not touch Project I/O's link set. It passed under the default `TMPDIR`, and under fresh directories of 28 and 29 characters. The author first blamed concurrent sessions sharing that directory, but every passing control also changed the path length, which this mechanism already explains. On main `724576f8` the binary passed 25 of 25 runs under 18- and 30-character paths, outside the window, so the two causes could not be separated afterwards. The passing core_macos evidence ran under `TMPDIR=/private/tmp/lmdjt-pe`.
 
 The exit is [#1752](https://github.com/endaye/lmdj/issues/1752), its escalation Issue: the crash children re-exec the test binary instead of continuing after a bare `fork()`, and a deterministic source check keeps new bare forks out. No eligible mechanism exists until then, because no test-side call can tell how close the depot is to its next boundary.
+
+Fourth recurrence (#1829). The default
+`TMPDIR=/var/folders/k1/4rq4647n5gvgyys5x9jj_mfr0000gn/T/` failed
+`facade.candidate_store_stress` at `candidate_store_test.cpp:128` because the
+ready pipe reached EOF before the child wrote its signal. Diagnostic report
+`lmdj_facade_candidate_store_tests-2026-10-05-020307.ips` confirms
+`crashed on child side of fork pre-exec` and `os_unfair_lock is corrupt`:
+`libSystem_atfork_child` → `xpc_atfork_child` → `wrap_free` → ASan
+`StackDepotBase::Put` → `TwoLevelMap::Create` → `_os_unfair_lock_lock_slow`.
+This Task changes only CI routing/tests and this ledger; it changes no product
+allocation site. Keep the failed macOS lane visible and retain #1752 as the
+existing escalation; an input-bound passing lane or explicit owner risk
+acceptance is still required before merge. Do not move TMPDIR or disable ASan
+to turn this observation into a pass.
