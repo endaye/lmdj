@@ -102,7 +102,7 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   // (script-src 'self') rejects blob:/data: AudioWorklet module URLs.
   // perform_master_tap_worklet joins the inventory at Product Build 1.0.42.0 and
   // ships same-origin for the same reason as capture_worklet.
-  // host_favicon joins at Creator Host 5.0.0, allocated as Product Build 2.0.77.0.
+  // host_favicon joins at Creator Host 5.0.0, allocated as Product Build 2.0.81.0.
   expect(manifest.assets.map(({role}) => role)).toEqual([
     "host_main", "runtime_script", "runtime_wasm", "host_style", "capture_worklet",
     "perform_master_tap_worklet", "host_favicon",

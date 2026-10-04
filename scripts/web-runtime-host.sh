@@ -166,6 +166,7 @@ configure_host() {
   python3 "$repo_root/tools/web-runtime/verify_emscripten.py"
   cmake -E make_directory "$runtime_root"
   emcmake cmake \
+    -C "$repo_root/tools/web-runtime/emscripten-threads-cache-init.cmake" \
     -S "$repo_root" \
     -B "$cmake_root" \
     -DCMAKE_BUILD_TYPE=Release \

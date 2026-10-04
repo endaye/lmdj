@@ -14,13 +14,17 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 当前 Product Build 以上方从 active manifests 生成的 Build Identity 为准；各组件页面的身份也从同一份 manifest/Assembly Lock 事实生成，不以以下历史分配记录替代当前版本。
 
-当前分配的 Product Build `2.0.77.0` 在 `2.0.76.0` 之上只推进 Creator Web Host 身份：`creator-web` 由 `4.8.0` 升到 `5.0.0`。清单末尾增加 `host_favicon`（`assets/favicon.<sha256>.svg`），所以这次 Host 取 MAJOR。Contract、Module、Provider 与其余 Host 不变。Cardputer profile 同步到当前 Build 与 Assembly 摘要。
+当前分配的 Product Build `2.0.81.0` 在 `2.0.80.0` 之上只推进 Creator Web Host 身份：`creator-web` 由 `4.8.1` 升到 `5.0.0`。清单末尾增加 `host_favicon`（`assets/favicon.<sha256>.svg`），所以这次 Host 取 MAJOR。Contract、Module、Provider 与其余 Host 保持 `2.0.80.0` 的结算。Cardputer profile 同步到当前 Build 与 Assembly 摘要。
 
 它不是公共 Release、部署或 Channel 晋级。
 
 ## 历史分配记录
 
 以下描述各次分配当时的变化，不声明当前组件版本或发布状态。
+
+Product Build `2.0.80.0` 曾在 `2.0.78.0` 之上增加 Stem PCM16 Contract `lmdj.audio.stem-pcm16-wav.v1` `1.0.0`、`lmdj.stem-parameters.v1` `1.0.0` 与 Provider `local.proof.stem` `1.0.0`（#1810）。同一次修正替换了未保留的 `2.0.79.0`。Module 与 Host 身份保持 `2.0.78.0`。
+
+Product Build `2.0.78.0` 曾在 `2.0.76.0` 之上把 Provider SDK 从 `2.2.1` 升到 `2.3.0`（输出端口共享内容时保留角色，#1808）。跟随该依赖 pin 的 PATCH 是 Application Facade `6.5.1`、Web Runtime Platform `5.6.1`、Creator Web `4.8.1`、CLI `3.3.12`、Core MCP `3.5.2`、Native Host `3.4.7`、Cardputer Host `1.0.7`、Web Runtime Host `4.3.7`，以及既有本地 Provider `local.proof.success` `2.0.4`、`local.proof.failure` `2.0.4`、`local.sample.slice` `1.0.4`。
 
 Product Build `2.0.76.0` 曾在 `2.0.75.0` 之上结算自 `2.0.71.0` 以来欠下的 Module 身份，Contract 身份不变
 （`lmdj.project.v5` 仍为 `5.2.0`）。自上次结算以来所有公开头文件变化都逐项核验为纯追加，该次没有 MAJOR：
@@ -35,7 +39,7 @@ Product Build `2.0.76.0` 曾在 `2.0.75.0` 之上结算自 `2.0.71.0` 以来欠�
   Native Host `3.4.6`、Cardputer Host `1.0.6`、Web Runtime Host `4.3.6` 与三个本地 Provider
   （local.proof.success `2.0.3`、local.proof.failure `2.0.3`、local.sample.slice `1.0.3`）只跟随依赖 pin 做 PATCH。
 - Cardputer profile 同步到该 Build、Cardputer Host `1.0.6` 与当时的 Assembly 摘要。
-- 该次结算不含 #1667 的 Core 实现（#1780）欠下的身份：它在该分支切出后合入，`2.0.77.0` 仍不结算这些 Module 身份。
+- 该次结算不含 #1667 的 Core 实现（#1780）欠下的身份：它在该分支切出后合入，留待下一次结算。
 
 Product Build `2.0.75.0` 曾在 `2.0.71.0` 之上只推进 Contract 身份：`lmdj.project.v5` 由 `5.1.0` 升到 `5.2.0`，Contract ID 不变，Pad `playback` 新增 #1667 的四个可选键（`attack_ms`、`release_ms`、`tone` 与 `eq`；`eq` 含可选的 `low`、`mid`、`high` 三段，缺席的一段即旁通）。Module、Host 与 Provider 身份在该 Build 全部不变；读写这些键的 Core 实现随后由 #1667 的 Core PR 合入，Module 身份留待下一次结算。因 #1741 占用 `2.0.72.0`–`2.0.74.0`，该分配跳过了这三个号。
 
@@ -88,7 +92,7 @@ Platform CMake 从生成的 Runtime identity 注入全部九个资源上限，�
 ## 身份与完整性
 Product Build、每个组件版本和 source hash 被锁定；门户事实生成会拒绝任何漂移。
 `tests/build/version_test.py` 还直接校验真实仓库中两份生成的 Web Runtime identity（JSON 与 MJS）是否与 active manifests 一致；合成 fixture 只验证生成器行为，不能替代这项实际输入检查。漂移时先用 `python3 tools/web-runtime/generate_runtime_identity.py --repo-root .` 同步生成文件，再以 `--check` 验证；这不会分配新 Product Build，也不修改既有不可变快照。
-Project Bundle Contract 仍是 portable transfer 边界；Project v5 是唯一当前写入真相 Contract，v1/v2/v3/v4 只作为迁移输入被读取；同构建 Web transport 仍不是公开 Contract。Provider、Capability 与 model identity 未变化。
+Project Bundle Contract 仍是 portable transfer 边界；Project v5 是唯一当前写入真相 Contract，v1/v2/v3/v4 只作为迁移输入被读取；同构建 Web transport 仍不是公开 Contract。既有 Provider、Capability 与 model identity 在该历史组合中未变化。
 ## 限制
 Sequence recording 与 Perform 演奏录制、重放、resample 提交已实现；持久化 Asset 编辑、Crop Undo、生产 Provider、云能力、物理 Web 验收与 `beta`/`stable` 仍不能由当前 Assembly 成员关系或门户快照推导。Stage 10 尚无物理演奏验收，自动化通过只证明状态与边界。Build Identity 只证明当前页面绑定的 Product/Assembly 身份，不证明 tag、Release、immutable snapshot、部署或 Channel promotion 已发生。
 
@@ -100,3 +104,19 @@ Web Runtime Platform 及依赖 Host 身份；上方身份来自 active manifests
 
 当前 Assembly 新增 Slice 参考 Provider、PCM16 WAV profile 与 Slice Points Contract，身份均从清单和完整源字节生成。Provider 保留 test 平台，默认权限与用户选择不变。公开 Host 控制面可以使用已导入 Asset 执行参考 Slice；Facade 已支持显式目标 Pad 的原子 Candidate 采纳、精确 Attempt 取消与持久 Set 丢弃；生命周期与采纳共享 Workspace 所有权，已验证竞争顺序和重启后的终态/谱系。Creator Slice 界面与各 Host 的 Candidate 控制面现已接入：Core 验证片段，Native/Web 通过引擎试听，CLI/MCP 返回元数据；显式多 Pad 采纳保留源 Asset、谱系与 Pattern。
 同时为已合入的 Audio Runtime ABI 变更分配 MAJOR 身份，并更新 Facade、Platform 与 Host 的精确依赖重建版本；上方 Build Identity 是当前身份依据。
+
+## 输出角色共享内容
+
+当前依赖级联集成 SDK 跨输出端口共享完整 ArtifactRef 的能力。模块、Provider
+和 Host 的精确版本及源身份由上方 active manifests 投影；Contract ID 和 wire
+shape 不变。此集成保留单 Candidate、逐端口验证及逻辑输出预算，不注册 Stem
+模型，不把参考 Slice 或共享内容读取证明作为生产分轨、隔离执行或性能验收。
+
+## Stem SDK Proof 注册
+
+当前 Assembly 新增 [Stem SDK Proof](../providers/local-proof-stem.mdx) 和 PCM16 输出/空参数
+伴随 Contract，版本与 source-package 身份由 active manifests 和 Lock 派生。Provider
+声明 test 平台、model_identity 为 null；默认 local/public/proof.execute policy 不变，
+不自动选择或授予 stem.split.execute。它验证四角色、共享 blob 与失败终态，不进行分离。
+本次 Product Build 保留 canary 文档快照；真实模型/隔离、生产平台注册、Stem Facade、
+Lineage 和 Creator 交互仍由后续阶段实现，不触发 Release 或部署。

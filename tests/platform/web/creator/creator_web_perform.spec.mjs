@@ -1402,3 +1402,84 @@ test("a hard-left Pad pan silences the right channel of the recorded master outp
   expect(hit.filter((sample) => Math.abs(sample) > 256).length).toBeGreaterThan(2_400);
   expect(wav.right.filter((sample) => sample !== 0)).toEqual([]);
 });
+
+// lmdj.project.v5 5.2.0. Replaces an assigned Pad's sample with the stereo
+// 4 800-frame witness sawtooth (a ~495 Hz fundamental with every harmonic),
+// exactly as installPerformWitnessSample does for Pad A1.
+async function installWitnessOn(page, padName, key) {
+  const pad = page.getByRole("button", {name: new RegExp(`^${padName} — assigned — Key ${key}$`)});
+  await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
+  await pad.evaluate((element) => element.click());
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", {name: "Replace Sample"}).click();
+  await (await chooser).setFiles({
+    name: "tone-witness-stereo.wav",
+    mimeType: "audio/wav",
+    buffer: pcm16Wav({channels: 2}),
+  });
+  await expect(page.getByRole("dialog", {name: `Replace ${padName}?`})).toBeVisible();
+  await page.getByRole("button", {name: "Confirm replace"}).click();
+  // A replacement is committed through its selection, as replacePadSample's.
+  const longSource = page.getByRole("dialog", {name: `${padName} Long Source`});
+  await expect(longSource).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
+  await longSource.getByRole("button", {name: "Commit selection"}).click();
+  await expect(longSource).toBeHidden({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await expect(page.getByRole("button", {name: "Replace Sample"}))
+    .toBeEnabled({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+}
+
+function rms(samples) {
+  return Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) /
+    Math.max(1, samples.length));
+}
+
+test("a tone -100 Pad attenuates a bright source in the recorded master output", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  await importActivateAndPerform(page);
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
+  await page.getByTestId("physical-controls").getByRole("button", {name: "Bank A", exact: true}).click();
+  // The same witness on two Pads: A1 untouched, A2 low-passed at 100 Hz.
+  await installWitnessOn(page, "Pad A1", "Q");
+  await installWitnessOn(page, "Pad A2", "W");
+  const tone = page.getByRole("slider", {name: "Pad A2 Tone"});
+  await tone.dispatchEvent("pointerdown", {pointerId: 91, isPrimary: true, button: 0});
+  await tone.fill("-100");
+  await tone.dispatchEvent("pointerup", {pointerId: 91, isPrimary: true, button: 0});
+  await expect.poll(() => page.evaluate(async () => {
+    const response = await window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "sample.inspect",
+      payload: {slot: {bank: 0, pad: 1}},
+    });
+    return response.ok ? (response.result.playback.tone ?? 0) : response.error.code;
+  }), {timeout: PROJECT_TRANSITION_TIMEOUT_MS}).toBe(-100);
+  await expect(tone).toBeEnabled({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await openPerform(page);
+
+  await beginRecording(page);
+  for (const [name, pointerId] of [["Pad A1", 92], ["Pad A2", 93]]) {
+    const pad = page.getByRole("button", {name: new RegExp(`^${name}\\b`)});
+    await pad.dispatchEvent("pointerdown", {button: 0, isPrimary: true, pointerId});
+    await page.waitForTimeout(150);
+    await pad.dispatchEvent("pointerup", {button: 0, isPrimary: true, pointerId});
+    await page.waitForTimeout(400);
+  }
+  await stopRecording(page);
+  const wav = parsePcm16StereoWav(await exportPerformanceWav(page));
+
+  // The untouched hit carries the sawtooth; the low-passed one, ~250 ms
+  // later, keeps only a residue of its ~495 Hz fundamental: at least 20 dB
+  // below, and still sounding.
+  const first = firstSignalFrame(wav.left);
+  const open = wav.left.slice(first, first + 4_800);
+  const later = wav.left.slice(first + 4_800 + 2_400);
+  const second = later.findIndex((sample) => Math.abs(sample) > 8);
+  expect(second, "the low-passed hit sounded").toBeGreaterThanOrEqual(0);
+  const filtered = later.slice(second, second + 4_800);
+  expect(rms(open)).toBeGreaterThan(4_000);
+  expect(rms(filtered)).toBeLessThan(rms(open) / 10);
+  expect(rms(filtered)).toBeGreaterThan(0);
+});

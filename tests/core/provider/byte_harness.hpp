@@ -62,4 +62,28 @@ class Fixture {
   AttemptStore store;
   Registry registry;
 };
+// Two required roles sharing one byte; each role still owns a buffer and validator.
+inline AttemptResult shared_outputs(ProviderRunContext context) {
+  const std::array payload{std::byte{'a'}};
+  std::vector<ArtifactBinding> bindings;
+  for (const auto* port : {"primary", "secondary"}) {
+    const auto output = context.output(port, payload, "application/x-lmdj-proof");
+    LMDJ_CHECK(output.has_value());
+    bindings.push_back({port, output.value()});
+  }
+  return {context.attempt_id,
+      Candidate{CandidateId{context.attempt_id.value()}, bindings, nlohmann::json::object()},
+      std::nullopt};
+}
+inline ProviderRegistration shared_registration(Fixture& fixture, Run run = shared_outputs) {
+  auto registration = fixture.registration(std::move(run));
+  auto port = registration.capabilities[0].output_artifacts[0];
+  port.name = "primary";
+  registration.capabilities[0].output_artifacts = {port};
+  port.name = "secondary";
+  registration.capabilities[0].output_artifacts.push_back(port);
+  registration.capabilities[0].max_output_bytes = 2;
+  registration.output_validation.clear();
+  return opaque(std::move(registration));
+}
 } // namespace byte_fixture

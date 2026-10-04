@@ -59,22 +59,29 @@ export function SequenceOverview({
   const playing = status !== null && status.playing === true &&
     thumbnail !== null && bpm !== null;
   const originFrame = playing && status !== null ? status.originFrame : null;
+  // The last observed Runtime frame anchors the playhead, so remounting the
+  // overview mid-playback (leaving Sequence and coming back) resumes at the
+  // playing position instead of restarting at the origin.
+  const anchorFrame = playing && status !== null ? status.runtimeFrame : null;
+  const anchorObservedAt = playing && status !== null
+    ? status.observedAtMilliseconds
+    : null;
   const lengthTicks = thumbnail?.lengthTicks ?? null;
   const [playheadTick, setPlayheadTick] = useState<number | null>(null);
   useEffect(() => {
-    if (originFrame === null || lengthTicks === null || bpm === null) {
+    if (originFrame === null || anchorFrame === null || anchorObservedAt === null ||
+        lengthTicks === null || bpm === null) {
       setPlayheadTick(null);
       return;
     }
-    const observedAt = performance.now();
     const tickAt = (now: number) => sequencePlayheadTick({
       originFrame,
-      runtimeFrame: originFrame +
-        Math.floor(Math.max(0, now - observedAt) * FRAMES_PER_MILLISECOND),
+      runtimeFrame: anchorFrame +
+        Math.floor(Math.max(0, now - anchorObservedAt) * FRAMES_PER_MILLISECOND),
       bpm,
       lengthTicks,
     });
-    setPlayheadTick(tickAt(observedAt));
+    setPlayheadTick(tickAt(performance.now()));
     // A frame already dequeued when the cleanup runs escapes
     // cancelAnimationFrame; the flag is what stops it rescheduling.
     let cancelled = false;
@@ -87,7 +94,7 @@ export function SequenceOverview({
       cancelled = true;
       window.cancelAnimationFrame(animationFrame);
     };
-  }, [originFrame, lengthTicks, bpm]);
+  }, [originFrame, anchorFrame, anchorObservedAt, lengthTicks, bpm]);
   return (
     <div className="sequence-overview" data-testid="sequence-overview">
       {thumbnail !== null ? (

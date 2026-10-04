@@ -98,7 +98,8 @@ export function registerProviderOwnerJourneys(host) {
     "wrong-reference", "corrupt", "changed-length", "missing-file", "malformed-owner"]) {
     test(`${host}: Provider owner ${mode} survives a real Host restart`, async ({page}) => {
       await start(page, host);
-      expect(success(await provider(page, "listProviders")).providers).toHaveLength(3);
+      expect(success(await provider(page, "listProviders")).providers.map(value => value.id)).toEqual([
+        "local.proof.failure", "local.proof.stem", "local.proof.success", "local.sample.slice"]);
       success(await send(page, "project.create", {project_id: projectId, bpm: 120,
         initial_pattern: {pattern_id: patternId, bars: 1, events: []}}));
       const bytes = wav();

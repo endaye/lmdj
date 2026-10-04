@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-07
     occurrence: https://github.com/endaye/lmdj/issues/738
     observed_by: claude-fable-5-1
+  - date: 2026-10-02
+    occurrence: https://github.com/endaye/lmdj/pull/1799
+    observed_by: Claude Code (Opus 5.5)
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -51,3 +54,13 @@ Where reproducing a side effect would need a seam that must not exist in the
 packaged product, gate that half at the layer that can reach it — a component
 test over the state transition — and name that companion gate in a comment on
 the packaged journey, so the next reader cannot mistake one for both.
+
+The second occurrence (#1799) was keyboard focus. The EQ editor's pole called
+`preventDefault()` on `pointerdown`, so a real press never focused it, and a
+real Escape during the drag went to whatever had focus. The component test
+fired `keyDown` straight on the pole, and the packaged journey had focused
+another pole with an earlier keyboard step. Both delivered the key to a
+handler no browser would reach, and both stayed green while the cancel did
+nothing. Route a synthetic key through focus the way the platform does: assert
+which element holds focus, or move it away, before the key, and dispatch it
+where the browser would, on the focused element or on the body.

@@ -1,10 +1,10 @@
 {
   "contract": "lmdj.module.v1",
   "module": "native-host",
-  "version": "3.4.6",
+  "version": "3.4.7",
   "api_version": 2,
   "dependencies": {
-    "application-facade": "6.5.0",
+    "application-facade": "6.5.1",
     "audio-runtime": "5.1.1"
   }
 }

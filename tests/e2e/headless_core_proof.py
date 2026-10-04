@@ -517,6 +517,7 @@ def proof(
     )["providers"]
     assert [provider["id"] for provider in providers] == [
         "local.proof.failure",
+        "local.proof.stem",
         "local.proof.success",
         "local.sample.slice",
     ]

@@ -28,6 +28,7 @@ add_subdirectory(packages/provider-sdk)
 add_subdirectory(providers/local-proof-success)
 add_subdirectory(providers/local-proof-failure)
 add_subdirectory(providers/local-sample-slice)
+add_subdirectory(providers/local-proof-stem)
 add_subdirectory(tests/core/provider)
 add_subdirectory(packages/application-facade)
 
@@ -227,6 +228,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_provider_host_settings_invariant_tests
     lmdj_provider_spec_regression_tests
     lmdj_provider_sample_slice_tests
+    lmdj_provider_stem_split_tests
     lmdj_provider_artifact_source_tests
     lmdj_provider_output_validation_tests
     lmdj_provider_attempt_output_read_tests
