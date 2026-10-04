@@ -347,11 +347,12 @@ class AdmissionTests(unittest.TestCase):
         self.assertTrue(result["eligible"], result)
         self.assertEqual(result["evidence"][0]["backend"], "deepseek")
 
-    def current_workflow_archive(self):
+    def current_workflow_archive(self, diagnostic_padding=0):
         self.render_v2()
         # These are retained diagnostics, deliberately not canonical authority.
         self.source.documents.update({name: {"diagnostic": name, "status": "not-reviewed"}
             for name in ("t2-input.json", "collection-receipt.json", "t2-result.json")})
+        self.source.documents["t2-input.json"]["padding"] = "x" * diagnostic_padding
         source = (ROOT / ".github/workflows/pr-review.yml").read_text()
         upload = source.split("      - uses: actions/upload-artifact", 1)[1].split("      - name:", 1)[0]
         patterns = [line.strip().removeprefix("${{ env.REVIEW_DIR }}/")
@@ -367,7 +368,9 @@ class AdmissionTests(unittest.TestCase):
                             "why: producer upload path has no source-shaped fixture: " + pattern
                             + "; remedy: model its actual file before claiming reader compatibility")
             selected.update(matches)
+        diagnostics = {name: data for name, data in self.source.documents.items() if name not in selected}
         self.source.documents = selected
+        return diagnostics
 
     def test_current_producer_uploaded_v2_inventory_is_admitted_by_real_reader(self):
         self.current_workflow_archive()
@@ -376,6 +379,28 @@ class AdmissionTests(unittest.TestCase):
                         "why: actual producer member inventory is rejected by the reader; "
                         "remedy: reconcile only documented diagnostic members without weakening canonical receipts\n" + str(result))
         self.assertEqual(result["evidence"][0]["findings"], [])
+
+    def test_large_input_stays_outside_current_authentication_archive(self):
+        diagnostics = self.current_workflow_archive(diagnostic_padding=wait.failure.LIMIT + 306_831)
+        self.assertGreater(len(json.dumps(diagnostics["t2-input.json"]).encode()), wait.failure.LIMIT)
+        self.assertNotIn("t2-input.json", self.source.documents)
+        self.assertTrue(self.check()["eligible"])
+
+    def test_archive_budget_refusal_is_visible_in_review_diagnostics(self):
+        self.render_v2()
+        # Deflated historical archives still obey the unchanged expansion budget.
+        self.source.documents["t2-input.json"] = {"padding": "x" * wait.failure.LIMIT}
+        def compressed(artifact):
+            output = wait.io.BytesIO()
+            with wait.zipfile.ZipFile(output, "w", compression=wait.zipfile.ZIP_DEFLATED) as archive:
+                for name, document in self.source.documents.items():
+                    archive.writestr(name, json.dumps(document))
+            return output.getvalue()
+        self.source.download = compressed
+        result = self.check()
+        self.assertFalse(result["eligible"])
+        self.assertTrue(any("expanded review archive exceeds budget" in row["why"]
+                            for row in result["diagnostics"]), result)
 
     def test_diagnostic_members_remain_optional_for_historical_v2_receipts(self):
         names = ("t2-input.json", "collection-receipt.json", "t2-result.json")
@@ -436,6 +461,7 @@ class AdmissionTests(unittest.TestCase):
 
     def test_v2_diagnostics_keep_duplicate_members_and_json_errors_rejected(self):
         self.current_workflow_archive()
+        self.source.documents["t2-result.json"] = {}
         original = self.source.download
         for kind in ("duplicate-member", "duplicate-key", "invalid-json"):
             with self.subTest(kind=kind):

@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-09-16
     occurrence: https://github.com/endaye/lmdj/issues/1423
     observed_by: Kimi (agent)
+  - date: 2026-10-04
+    occurrence: https://github.com/endaye/lmdj/issues/1804
+    observed_by: Codex
 exit: gate:tests/build/ci_pr_agent_input_test.py
 ---
 
@@ -86,3 +89,16 @@ the publisher's re-derivation must apply the same filter —
 `test_publish_still_rejects_a_genuinely_divergent_inventory`,
 `test_legacy_collect_excludes_generated_artifacts_from_the_context_inventory`)
 gates both directions.
+
+### Retained evidence has a separate budget
+
+The complete T2 input can fit the model input budget and still exceed the
+4 MB retained review authentication budget, especially when repair requests
+repeat full original file contents (#1804). Keep full publisher input and model
+diagnostics in the exact-head/run/attempt `pr-review-diagnostics` artifact;
+the publisher downloads it alongside the canonical `pr-review-result` archive.
+Do not raise the authentication limit or remove content from model review.
+`tests/build/ci_pr_review_workflow_test.py` checks both artifact inventories and
+the publisher download, and `tests/build/ci_review_wait_test.py` authenticates
+the current producer inventory with an input larger than the reader budget.
+Historical archives remain bounded and their refusal reason must stay visible.
