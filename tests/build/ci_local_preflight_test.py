@@ -1042,6 +1042,152 @@ class CacheKeyTest(unittest.TestCase):
         self.assertNotIn("docs/guide.md", grouped["core_asan"])
         self.assertIn("docs/guide.md", grouped["docs_static"])
 
+    def grouped_keys(self, blobs):
+        grouped = self.preflight.lane_input_paths(
+            self.policy, blobs, self.classifier,
+        )
+        commands = self.preflight.load_lane_commands(policy=self.policy)
+        return {
+            lane: self.preflight.lane_cache_key(
+                lane, commands[lane]["commands"], inputs, blobs,
+            )
+            for lane, inputs in grouped.items()
+        }
+
+    def test_each_reported_omitted_test_invalidates_its_executing_lanes(self) -> None:
+        cases = {
+            "tests/core/facade/c_api_test.cpp": ("package",),
+            "tests/host/mcp_stdio_test.py": ("core_asan", "core_coverage"),
+            "tests/host/native_host_source_boundary_test.py": (
+                "core_asan", "core_coverage",
+            ),
+        }
+        blobs = {path: "a" * 40 for path in cases}
+        before = self.grouped_keys(blobs)
+        for path, lanes in cases.items():
+            after = self.grouped_keys({**blobs, path: "b" * 40})
+            for lane in lanes:
+                with self.subTest(path=path, lane=lane):
+                    self.assertNotEqual(before[lane], after[lane], msg=(
+                        f"why: editing executed test {path} leaves {lane}'s key "
+                        "unchanged; remedy: close lane_input_paths over the "
+                        "command's test inputs before reusing its pass"
+                    ))
+
+    def test_transitive_source_fixture_and_helper_reads_change_the_key(self) -> None:
+        cases = {
+            ("package", "tests/fixtures/provider-benchmark/sample-slice/manifest.json"),
+            ("package", "tools/provider-benchmark/tests/sample_slice_evaluation_test.py"),
+            ("core_asan", "apps/core-mcp/lmdj_core_mcp/server.py"),
+            ("core_coverage", "tests/conformance/schema_contract_test.py"),
+            ("core_macos", "providers/local-proof-stem/src/provider.cpp"),
+            ("creator", "tests/core/facade/c_api_test.cpp"),
+            ("web_toolchain", "packages/audio-runtime/src/voice_dsp.cpp"),
+            ("web_runtime_host", "providers/local-sample-slice/src/provider.cpp"),
+            ("portal", "scripts/version.py"),
+            ("deploy_contract", ".agents/skills/lmdj-release/SKILL.md"),
+            ("docs_static", "apps/native-host/src/main.cpp"),
+            ("ci_contract", "tests/host/mcp_stdio_test.py"),
+        }
+        for lane, path in sorted(cases):
+            with self.subTest(lane=lane, path=path):
+                before = self.grouped_keys({path: "a" * 40})
+                after = self.grouped_keys({path: "b" * 40})
+                self.assertNotEqual(before[lane], after[lane], msg=(
+                    f"why: {lane}'s transitive read {path} is not input-bound; "
+                    "remedy: include the producer/support/fixture read domain"
+                ))
+
+    def test_new_discovered_test_and_deleted_test_invalidate_the_key(self) -> None:
+        seed = {"packages/foundation/src/a.cpp": "a" * 40}
+        path = "tests/host/new_discovered_test.py"
+        with_test = {**seed, path: "b" * 40}
+        self.assertNotEqual(
+            self.grouped_keys(seed)["core_asan"],
+            self.grouped_keys(with_test)["core_asan"],
+        )
+        deleted = {**seed, path: self.preflight._DELETED}
+        self.assertNotEqual(
+            self.grouped_keys(with_test)["core_asan"],
+            self.grouped_keys(deleted)["core_asan"],
+        )
+
+    def test_unrelated_demo_content_keeps_native_and_web_keys(self) -> None:
+        path = "demos/chameleon-lab/src/main.js"
+        blobs = {"tests/core/facade/c_api_test.cpp": "a" * 40, path: "b" * 40}
+        before = self.grouped_keys(blobs)
+        after = self.grouped_keys({**blobs, path: "c" * 40})
+        for lane in (
+            "core_ubuntu", "core_macos", "core_asan", "core_coverage",
+            "package", "web_toolchain", "web_runtime_host", "creator",
+            "deploy_contract", "web_runtime_lab",
+        ):
+            with self.subTest(lane=lane):
+                self.assertEqual(before[lane], after[lane], msg=(
+                    f"why: unrelated Chameleon demo content invalidates {lane}; "
+                    "remedy: keep command read domains separate from demos"
+                ))
+        self.assertNotEqual(before["chameleon_lab"], after["chameleon_lab"])
+
+    def test_unknown_lane_binds_every_input_until_audited(self) -> None:
+        policy = {**self.policy, "lanes": [*self.policy["lanes"], "new_lane"]}
+        paths = ["docs/guide.md", "demos/chameleon-lab/src/main.js"]
+        grouped = self.preflight.lane_input_paths(policy, paths, self.classifier)
+        self.assertEqual(grouped["new_lane"], sorted(paths))
+
+    def test_every_defined_lane_has_an_audited_read_domain(self) -> None:
+        self.assertEqual(set(self.preflight.LANE_INPUT_ROOTS), set(self.policy["lanes"]), msg=(
+            "why: a defined command lane lacks an input audit (or an obsolete "
+            "domain remains); remedy: audit local_lanes.json and update "
+            "LANE_INPUT_ROOTS without narrowing scheduling ownership"
+        ))
+
+    def test_registered_ctest_and_shell_test_inputs_are_bound(self) -> None:
+        # Derive the witnesses from actual commands, not LANE_INPUT_ROOTS.
+        # Include every registration conservatively: builds compile targets
+        # independently of which CTest tier a lane later selects.
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        native_inputs = python_test_files(cmake)
+        for directory in ("packages", "providers", "tests/core"):
+            native_inputs.update(
+                str(path.relative_to(ROOT))
+                for path in (ROOT / directory).rglob("*")
+                if path.suffix in {".cpp", ".hpp"}
+            )
+        native_lanes = {"core_ubuntu", "core_macos", "core_asan", "core_coverage", "package"}
+        witnesses = {lane: set(native_inputs) for lane in native_lanes}
+        for lane, entry in self.preflight.load_lane_commands(policy=self.policy).items():
+            witnesses.setdefault(lane, set()).update(python_test_files("\n".join(entry["commands"])))
+            for command in entry["commands"]:
+                script = command.split()[0]
+                if script.startswith("scripts/") and (ROOT / script).is_file():
+                    source = (ROOT / script).read_text(encoding="utf-8")
+                    witnesses[lane].add(script)
+                    normalized = source.replace("$repo_root/", "").replace(
+                        "$web_test_root/", "tests/platform/web/",
+                    ).replace("$creator_root/", "apps/creator-web/")
+                    if lane in {"web_runtime_lab", "chameleon_lab"}:
+                        normalized = normalized.replace(
+                            "$lab_root/", "demos/" + lane.replace("_", "-") + "/",
+                        )
+                    witnesses[lane].update(
+                        path for path in python_test_files(normalized)
+                        if (ROOT / path).is_file()
+                    )
+                    witnesses[lane].update(re.findall(
+                        r'(?:\$repo_root/)([\w./-]+\.(?:py|sh|json|wav|cmake))', source,
+                    ))
+        all_paths = set().union(*witnesses.values())
+        grouped = self.preflight.lane_input_paths(self.policy, all_paths, self.classifier)
+        for lane, paths in witnesses.items():
+            for path in sorted(paths):
+                with self.subTest(lane=lane, path=path):
+                    self.assertIn(path, grouped[lane], msg=(
+                        f"why: actual registered/command input {path} is absent "
+                        f"from {lane}'s key; remedy: audit this command and "
+                        "extend its read domain in lane_input_paths"
+                    ))
+
     def test_cache_round_trip_only_accepts_a_recorded_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             cache = Path(directory)

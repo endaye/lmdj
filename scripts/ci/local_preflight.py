@@ -77,6 +77,51 @@ _PLACEHOLDER_REASON = re.compile(r"<[^>]*>|\b(?:tbd|todo|n/?a|fixme|xxx)\b", re.
 _DELETED = "0" * 40
 
 
+# Scheduling ownership is only a floor for execution inputs (#1811). Native
+# builds compile test targets even when CTest selects just unit/component;
+# Web distribution proofs also build native fixture producers. Bind entire
+# read domains so discovered tests, headers, fixtures and helpers cannot slip
+# out of the key on addition or deletion. These are conservative source roots,
+# not changes to Change Scope or its fail-closed lane selection.
+_NATIVE_INPUT_ROOTS = (
+    "packages/", "providers/", "apps/core-cli/", "apps/core-mcp/",
+    "apps/native-host/", "apps/cardputer-host/", "apps/web-runtime-host/",
+    "tests/", "scripts/", "packaging/", "tools/provider-benchmark/",
+    "tools/soundset-fixtures/", "tools/project-bundle/", "tools/release/",
+    ".github/", ".agents/skills/", "docs/governance/",
+    "AGENTS.md", "CLAUDE.md", "README.md", "LICENSE",
+)
+_WEB_INPUT_ROOTS = _NATIVE_INPUT_ROOTS + (
+    "apps/creator-web/", "tools/web-runtime/", "tools/asset-server/",
+)
+LANE_INPUT_ROOTS = {
+    # Whitespace checking and repository-wide ownership/fixture tests can
+    # inspect paths in every domain. An empty prefix includes every path.
+    "docs_static": ("",),
+    "ci_contract": ("",),
+    "portal": (
+        "apps/", "packages/", "providers/", "docs/", "scripts/",
+        "tools/", "tests/", ".agents/", ".github/", "AGENTS.md",
+        "CLAUDE.md", "README.md", "LICENSE",
+    ),
+    "core_ubuntu": _NATIVE_INPUT_ROOTS,
+    "core_macos": _NATIVE_INPUT_ROOTS,
+    "core_asan": _NATIVE_INPUT_ROOTS,
+    "core_coverage": _NATIVE_INPUT_ROOTS,
+    "package": _NATIVE_INPUT_ROOTS,
+    "web_toolchain": _WEB_INPUT_ROOTS,
+    "web_runtime_host": _WEB_INPUT_ROOTS,
+    "creator": _WEB_INPUT_ROOTS,
+    "deploy_contract": (
+        "apps/", "packages/", "providers/", "tests/", "scripts/",
+        "tools/", "packaging/", "docs/", ".agents/", ".github/",
+        "AGENTS.md", "CLAUDE.md", "README.md", "LICENSE",
+    ),
+    "web_runtime_lab": ("demos/web-runtime-lab/", "demos/README.md"),
+    "chameleon_lab": ("demos/chameleon-lab/",),
+}
+
+
 def load_classifier():
     """Load the production classifier so lane selection cannot diverge."""
     spec = importlib.util.spec_from_file_location(
@@ -270,7 +315,8 @@ def lane_input_paths(
     A path that matches a full rule, or that matches no rule at all, upgrades
     the whole run to full mode, so it is an input to *every* lane. Leaving
     those out would let a shared CMake or contract edit hit a stale cached
-    pass.
+    pass. Command read domains add inputs without shrinking that floor. A
+    new lane without an audited domain binds every path until it is audited.
     """
     lanes = list(policy["lanes"])
     grouped: dict[str, set[str]] = {lane: set() for lane in lanes}
@@ -283,7 +329,11 @@ def lane_input_paths(
             classifier._matches(rule["match"], path)
             for rule in policy["full_rules"]
         )
-        for lane in lanes if forces_full else matched:
+        readers = {
+            lane for lane in lanes
+            if path.startswith(LANE_INPUT_ROOTS.get(lane, ("",)))
+        }
+        for lane in set(lanes) if forces_full else matched | readers:
             grouped[lane].add(path)
     return {lane: sorted(members) for lane, members in grouped.items()}
 
