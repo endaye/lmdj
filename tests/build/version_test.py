@@ -1,3 +1,4 @@
+import hashlib
 import json
 import importlib.util
 import re
@@ -39,7 +40,7 @@ expected_modules = {
     ),
     "packages/project-cooker/module.json": (
         "project-cooker",
-        "2.0.1",
+        "2.1.0",
         1,
         {
             "foundation": "0.5.0",
@@ -48,7 +49,7 @@ expected_modules = {
     ),
     "packages/project-io/module.json": (
         "project-io",
-        "6.1.0",
+        "7.0.0",
         1,
         {
             "foundation": "0.5.0",
@@ -57,67 +58,67 @@ expected_modules = {
     ),
     "packages/audio-runtime/module.json": (
         "audio-runtime",
-        "5.1.1",
+        "5.2.0",
         2,
         {
             "foundation": "0.5.0",
-            "project-cooker": "2.0.1",
+            "project-cooker": "2.1.0",
         },
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "6.5.1",
+        "6.6.0",
         3,
         {
             "foundation": "0.5.0",
             "authoring-domain": "4.4.0",
-            "project-io": "6.1.0",
-            "project-cooker": "2.0.1",
-            "audio-runtime": "5.1.1",
+            "project-io": "7.0.0",
+            "project-cooker": "2.1.0",
+            "audio-runtime": "5.2.0",
             "provider-sdk": "2.3.0",
         },
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "5.6.1",
+        "5.7.0",
         2,
         {
-            "application-facade": "6.5.1",
-            "audio-runtime": "5.1.1",
+            "application-facade": "6.6.0",
+            "audio-runtime": "5.2.0",
         },
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "3.3.12",
+        "3.3.13",
         2,
-        {"application-facade": "6.5.1"},
+        {"application-facade": "6.6.0"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "3.5.2",
+        "3.6.0",
         2,
-        {"application-facade": "6.5.1"},
+        {"application-facade": "6.6.0"},
     ),
     "apps/native-host/module.json": (
         "native-host",
-        "3.4.7",
+        "3.4.8",
         2,
         {
-            "application-facade": "6.5.1",
-            "audio-runtime": "5.1.1",
+            "application-facade": "6.6.0",
+            "audio-runtime": "5.2.0",
         },
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "4.3.7",
+        "4.3.8",
         2,
-        {"web-runtime-platform": "5.6.1"},
+        {"web-runtime-platform": "5.7.0"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "5.0.0",
+        "5.0.1",
         2,
-        {"web-runtime-platform": "5.6.1"},
+        {"web-runtime-platform": "5.7.0"},
     ),
 }
 for relative, (
@@ -153,6 +154,42 @@ assert version == ProductVersion(
 assert str(version) == current
 assert version.product_tag() == f"lmdj-v{current}"
 assert version.display("canary", "a" * 40) == f"{current} · canary · gaaaaaaaa"
+
+# The Cardputer build hand-copies the Product Build, its Host version and the
+# Assembly digest; no generator owns them, so each must equal its source.
+cardputer_host_version = json.loads(
+    (repo_root / "apps/cardputer-host/module.json").read_text(encoding="utf-8")
+)["version"]
+assembly_digest = hashlib.sha256(
+    (repo_root / "products/lmdj/assembly.json").read_bytes()
+).hexdigest()
+cardputer_profile = re.search(
+    r'return \{\s*"([^"]+)",\s*"([^"]+)",\s*"([0-9a-f]{64})",',
+    (repo_root / "products/lmdj/src/cardputer_assembly.cpp").read_text(
+        encoding="utf-8"
+    ),
+)
+assert cardputer_profile, "Cardputer profile identity literals are missing"
+assert cardputer_profile.groups() == (
+    current, cardputer_host_version, assembly_digest
+), (
+    "why: products/lmdj/src/cardputer_assembly.cpp copies the Product Build, "
+    "the Cardputer Host version and sha256(products/lmdj/assembly.json) by "
+    f"hand, and they disagree with their sources: {cardputer_profile.groups()} "
+    f"!= {(current, cardputer_host_version, assembly_digest)}; remedy: rewrite "
+    "the three literals from products/lmdj/version.json, "
+    "apps/cardputer-host/module.json and the sha256 of "
+    "products/lmdj/assembly.json"
+)
+cardputer_project_version = re.search(
+    r'set\(PROJECT_VER "([^"]+)"\)',
+    (repo_root / "apps/cardputer-host/CMakeLists.txt").read_text(encoding="utf-8"),
+)
+assert cardputer_project_version and cardputer_project_version.group(1) == current, (
+    "why: apps/cardputer-host/CMakeLists.txt PROJECT_VER copies the Product "
+    "Build by hand and disagrees with products/lmdj/version.json; remedy: set "
+    f'it to "{current}"'
+)
 
 for invalid in (
     {"milestone": 0, "minor": 0, "build": 1, "patch": 0},
