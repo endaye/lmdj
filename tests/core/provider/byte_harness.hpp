@@ -33,7 +33,13 @@ class Fixture {
       ("lmdj-byte-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))),
       store(path, {{"local"}, {"public"}, {"proof.execute"}},
             [] { return std::string("2026-09-09T00:00:00.000Z"); }) {}
-  ~Fixture() { std::error_code ec; std::filesystem::remove_all(path, ec); }
+  explicit Fixture(std::filesystem::path existing_path)
+      : path(std::move(existing_path)),
+        store(path, {{"local"}, {"public"}, {"proof.execute"}},
+              [] { return std::string("2026-09-09T00:00:00.000Z"); }), owns_path(false) {}
+  ~Fixture() {
+    if (owns_path) { std::error_code ec; std::filesystem::remove_all(path, ec); }
+  }
   ProviderRegistration registration(Run run) {
     auto value = lmdj::providers::local_proof_success_registration();
     value.implementation = std::make_shared<FunctionProvider>(std::move(run));
@@ -61,6 +67,8 @@ class Fixture {
   std::filesystem::path path;
   AttemptStore store;
   Registry registry;
+ private:
+  bool owns_path = true;
 };
 // Two required roles sharing one byte; each role still owns a buffer and validator.
 inline AttemptResult shared_outputs(ProviderRunContext context) {

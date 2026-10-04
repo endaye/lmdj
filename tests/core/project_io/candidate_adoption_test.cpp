@@ -6,6 +6,7 @@
 #include <lmdj/project_io/project_store.hpp>
 #include "packages/project-io/src/testing_hooks.hpp"
 #include "tests/core/support/candidate_adoption.hpp"
+#include "tests/core/support/child_process.hpp"
 #if defined(__unix__) || defined(__APPLE__)
 #include <sys/wait.h>
 #include <unistd.h>
@@ -45,7 +46,20 @@ struct Fixture {
       request.slots.push_back({{static_cast<std::uint8_t>(i), static_cast<std::uint8_t>(i)},
           AssetId{uuid(4 + static_cast<unsigned>(i))}, "audio/wav", payloads[i], lineage(request.source_artifact)});
   }
-  ~Fixture() { set_fault_hook(nullptr); std::error_code ec; std::filesystem::remove_all(root, ec); }
+  // A child borrows the already-created bundle; only the parent removes it.
+  bool owns_root = true;
+  explicit Fixture(const std::filesystem::path& existing_root) : root(existing_root), owns_root(false) {
+    const auto loaded = store.load(root);
+    LMDJ_CHECK(loaded.has_value());
+    before = loaded.value();
+    for (std::size_t i = 0; i < payloads.size(); ++i)
+      request.slots.push_back({{static_cast<std::uint8_t>(i), static_cast<std::uint8_t>(i)},
+          AssetId{uuid(4 + static_cast<unsigned>(i))}, "audio/wav", payloads[i], lineage(request.source_artifact)});
+  }
+  ~Fixture() {
+    set_fault_hook(nullptr);
+    if (owns_root) { std::error_code ec; std::filesystem::remove_all(root, ec); }
+  }
   void unchanged() {
     const auto loaded = store.load(root);
     if (!loaded.has_value()) throw std::runtime_error(loaded.error().message);
@@ -155,13 +169,8 @@ void crash_recovery() {
   for (auto fail : {FaultPoint::sample_after_artifact_creation,
       FaultPoint::sample_after_manifest_preparation, FaultPoint::sample_after_manifest_publication}) {
     Fixture f;
-    const auto child = fork();
-    LMDJ_CHECK(child >= 0);
-    if (child == 0) {
-      point = fail; crash = true; set_fault_hook(inject);
-      (void)f.store.adopt_candidates(f.root, f.request);
-      _exit(72);
-    }
+    const auto child = lmdj::test::process::spawn(
+        {"--adoption-crash", f.root.string(), std::to_string(static_cast<int>(fail))});
     int status = 0;
     LMDJ_CHECK(waitpid(child, &status, 0) == child);
     LMDJ_CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 71);
@@ -184,7 +193,7 @@ void crash_recovery() {
   }
   std::cout << "candidate adoption crash recovery: " << completed << " crash points PASS\n";
 #else
-  std::cout << "candidate adoption crash recovery: SKIP (requires POSIX fork)\n";
+  std::cout << "candidate adoption crash recovery: SKIP (requires POSIX processes)\n";
 #endif
 }
 void legacy_promotion_and_model_evidence() {
@@ -220,7 +229,22 @@ void tampered_identity_rejected() {
   }
 }
 }
-int main() {
+int main(int argc, char** argv) {
+  lmdj::test::process::initialize(argv[0]);
+#if defined(__unix__) || defined(__APPLE__)
+  if (argc == 4 && std::string_view(argv[1]) == "--adoption-crash") {
+    try {
+      Fixture f{std::filesystem::path{argv[2]}};
+      point = static_cast<FaultPoint>(std::stoi(argv[3]));
+      crash = true; set_fault_hook(inject);
+      (void)f.store.adopt_candidates(f.root, f.request);
+      _exit(72);
+    } catch (const std::exception& error) {
+      std::cerr << error.what() << '\n'; return 1;
+    }
+  }
+#endif
+  if (argc != 1) return 2;
   try { unsupported_source_is_atomic(); success_and_explicit_repeat(); writer_source_checks(); failures(); crash_recovery(); legacy_promotion_and_model_evidence(); tampered_identity_rejected(); }
   catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
   std::cout << "candidate adoption ProjectIO: PASS\n";

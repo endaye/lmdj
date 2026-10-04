@@ -4,6 +4,7 @@
 #include <iostream>
 #include <fstream>
 #include "tests/core/provider/byte_harness.hpp"
+#include "tests/core/support/child_process.hpp"
 using namespace byte_fixture;
 std::string crash_at;
 std::string fail_at;
@@ -47,64 +48,68 @@ void journey(std::string boundary) {
   LMDJ_CHECK(baseline.candidate->outputs[0].artifact.byte_length == 1);
   LMDJ_CHECK(baseline.candidate->outputs.size() == 2);
   LMDJ_CHECK(baseline.candidate->outputs[0].artifact == baseline.candidate->outputs[1].artifact);
-  crash_at = boundary;
-  auto child = ::fork();
-  LMDJ_CHECK(child >= 0);
-  if (child == 0) {
-    (void) f.execute(request(), options(), "interrupted");
-    ::_exit(99);
-  }
+  auto child = lmdj::test::process::spawn({"--execute-crash", f.path.string(), boundary});
   int status = 0;
   LMDJ_CHECK(::waitpid(child, &status, 0) == child);
   LMDJ_CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL);
-  crash_at.clear();
-  // Restart in a separate process and inspect only persisted state.
-  child = ::fork();
-  LMDJ_CHECK(child >= 0);
-  if (child == 0) {
-    try {
-      AttemptStore restarted(f.path, {{"local"}, {"public"}, {"proof.execute"}},
-                             [] { return std::string("2026-09-09T00:00:01.000Z"); });
-      const auto prior = restarted.inspect(AttemptId{"immutable"});
-      LMDJ_CHECK(prior.has_value());
-      LMDJ_CHECK(prior.value().candidate_outputs == baseline.candidate->outputs);
-      for (const auto& output : prior.value().candidate_outputs) {
-        const auto bytes = restarted.read_candidate_artifact(AttemptId{"immutable"}, output.artifact, 1);
-        LMDJ_CHECK(bytes.has_value() && bytes.value() == std::vector{std::byte{'a'}});
-      }
-      const auto recovered = restarted.inspect(AttemptId{"interrupted"});
-      if (boundary == "terminal") {
-        LMDJ_CHECK(recovered.has_value());
-        LMDJ_CHECK(recovered.value().status == AttemptStatus::succeeded);
-        LMDJ_CHECK(recovered.value().candidate_outputs == baseline.candidate->outputs);
-        for (const auto& output : recovered.value().candidate_outputs) {
-          auto path = f.path / ".lmdj-workspace/attempts/interrupted/artifacts" / output.artifact.sha256;
-          auto actual = describe_artifact(path, output.artifact.media_type);
-          LMDJ_CHECK(actual.has_value());
-          LMDJ_CHECK(actual.value() == output.artifact);
-          const auto bytes = restarted.read_candidate_artifact(AttemptId{"interrupted"}, output.artifact, 1);
-          LMDJ_CHECK(bytes.has_value() && bytes.value() == std::vector{std::byte{'a'}});
-        }
-      } else {
-        LMDJ_CHECK(!recovered.has_value());
-        LMDJ_CHECK(recovered.error().code == ErrorCode::not_found);
-      }
-      LMDJ_CHECK(std::filesystem::exists(f.path / ".lmdj-workspace/attempts/interrupted"));
-      const auto reuse = restarted.execute(AttemptId{"interrupted"}, request(), f.registry, options());
-      LMDJ_CHECK(!reuse.has_value());
-      LMDJ_CHECK(reuse.error().code == ErrorCode::duplicate_id);
-      LMDJ_CHECK(restarted.inspect(AttemptId{"immutable"}).value().candidate_outputs ==
-                 baseline.candidate->outputs);
-      ::_exit(0);
-    } catch (const std::exception& error) {
-      std::cerr << boundary << ": " << error.what() << std::endl; ::_exit(1);
-    }
-  }
+  // Restart in a fresh process and inspect only persisted state.
+  child = lmdj::test::process::spawn({"--inspect-crash", f.path.string(), boundary});
   LMDJ_CHECK(::waitpid(child, &status, 0) == child);
   LMDJ_CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
-int main() {
+int run_child(std::string_view role, const std::filesystem::path& root, const std::string& boundary) {
+  Fixture f{root};
+  // The parent's Host settings and interrupted reservations already exist.
+  LMDJ_CHECK(f.registry.add(shared_registration(f)).has_value());
+  if (role == "--execute-crash") {
+    crash_at = boundary;
+    (void)f.execute(request(), options(), "interrupted");
+    ::_exit(99);
+  }
+  if (role != "--inspect-crash") return 2;
+  AttemptStore restarted(f.path, {{"local"}, {"public"}, {"proof.execute"}},
+                         [] { return std::string("2026-09-09T00:00:01.000Z"); });
+  const auto prior = restarted.inspect(AttemptId{"immutable"});
+  LMDJ_CHECK(prior.has_value());
+  const auto expected_artifact = lmdj::foundation::ArtifactRef{
+      request().inputs[0].artifact.sha256, "application/x-lmdj-proof", 1};
+  const std::vector<ArtifactBinding> expected_outputs{
+      {"primary", expected_artifact}, {"secondary", expected_artifact}};
+  LMDJ_CHECK(prior.value().candidate_outputs == expected_outputs);
+  for (const auto& output : prior.value().candidate_outputs) {
+    const auto bytes = restarted.read_candidate_artifact(AttemptId{"immutable"}, output.artifact, 1);
+    LMDJ_CHECK(bytes.has_value() && bytes.value() == std::vector{std::byte{'a'}});
+  }
+  const auto recovered = restarted.inspect(AttemptId{"interrupted"});
+  if (boundary == "terminal") {
+    LMDJ_CHECK(recovered.has_value());
+    LMDJ_CHECK(recovered.value().status == AttemptStatus::succeeded);
+    LMDJ_CHECK(recovered.value().candidate_outputs == prior.value().candidate_outputs);
+    for (const auto& output : recovered.value().candidate_outputs) {
+      auto path = f.path / ".lmdj-workspace/attempts/interrupted/artifacts" / output.artifact.sha256;
+      auto actual = describe_artifact(path, output.artifact.media_type);
+      LMDJ_CHECK(actual.has_value());
+      LMDJ_CHECK(actual.value() == output.artifact);
+      const auto bytes = restarted.read_candidate_artifact(AttemptId{"interrupted"}, output.artifact, 1);
+      LMDJ_CHECK(bytes.has_value() && bytes.value() == std::vector{std::byte{'a'}});
+    }
+  } else {
+    LMDJ_CHECK(!recovered.has_value());
+    LMDJ_CHECK(recovered.error().code == ErrorCode::not_found);
+  }
+  LMDJ_CHECK(std::filesystem::exists(f.path / ".lmdj-workspace/attempts/interrupted"));
+  const auto reuse = restarted.execute(AttemptId{"interrupted"}, request(), f.registry, options());
+  LMDJ_CHECK(!reuse.has_value());
+  LMDJ_CHECK(reuse.error().code == ErrorCode::duplicate_id);
+  LMDJ_CHECK(restarted.inspect(AttemptId{"immutable"}).value().candidate_outputs ==
+             prior.value().candidate_outputs);
+  ::_exit(0);
+}
+int main(int argc, char** argv) {
+  lmdj::test::process::initialize(argv[0]);
   try {
+    if (argc == 4) return run_child(argv[1], argv[2], argv[3]);
+    if (argc != 1) return 2;
     for (const auto* boundary : {"reserved", "inputs", "staged", "validated", "published", "terminal"})
       journey(boundary);
     persistence_failure(true); persistence_failure(false);
