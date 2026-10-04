@@ -22,6 +22,7 @@
 
 #include "packages/project-io/src/testing_hooks.hpp"
 #include "tests/core/support/test.hpp"
+#include "tests/core/support/child_process.hpp"
 
 namespace {
 
@@ -103,30 +104,27 @@ FileInventory file_inventory(const std::filesystem::path& root) {
   return files;
 }
 
+void run_owner_lock(const std::filesystem::path& lock_path, int ready_fd) {
+  const auto descriptor = ::open(
+      lock_path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+  const char result =
+      descriptor >= 0 && ::flock(descriptor, LOCK_EX | LOCK_NB) == 0 ? '1' : '0';
+  if (::write(ready_fd, &result, 1) != 1) _exit(1);
+  ::close(ready_fd);
+  if (result == '1') for (;;) ::pause();
+  _exit(1);
+}
+
 class OwnerLockHolder final {
  public:
   explicit OwnerLockHolder(const std::filesystem::path& lock_path) {
     int ready[2]{};
     LMDJ_CHECK(::pipe(ready) == 0);
-    process_ = ::fork();
-    LMDJ_CHECK(process_ >= 0);
-    if (process_ == 0) {
-      ::close(ready[0]);
-      const auto descriptor = ::open(
-          lock_path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
-      const char result =
-          descriptor >= 0 && ::flock(descriptor, LOCK_EX | LOCK_NB) == 0
-              ? '1'
-              : '0';
-      if (::write(ready[1], &result, 1) != 1) {
-        _exit(1);
-      }
-      if (result == '1') {
-        for (;;) {
-          ::pause();
-        }
-      }
-      _exit(1);
+    try {
+      process_ = lmdj::test::process::spawn(
+          {"--owner-lock", lock_path.string(), std::to_string(ready[1])}, {ready[0]});
+    } catch (...) {
+      ::close(ready[0]); ::close(ready[1]); throw;
     }
     ::close(ready[1]);
     char acquired{};
@@ -907,25 +905,12 @@ void test_orphan_reconciliation_requires_owner_lock_proof() {
 
   int ready[2]{};
   LMDJ_CHECK(::pipe(ready) == 0);
-  const auto child = ::fork();
-  LMDJ_CHECK(child >= 0);
-  if (child == 0) {
-    ::close(ready[0]);
-    const auto descriptor = ::open(
-        lock_path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
-    const char result =
-        descriptor >= 0 && ::flock(descriptor, LOCK_EX | LOCK_NB) == 0
-            ? '1'
-            : '0';
-    if (::write(ready[1], &result, 1) != 1) {
-      _exit(1);
-    }
-    if (result == '1') {
-      for (;;) {
-        ::pause();
-      }
-    }
-    _exit(1);
+  pid_t child;
+  try {
+    child = lmdj::test::process::spawn(
+        {"--owner-lock", lock_path.string(), std::to_string(ready[1])}, {ready[0]});
+  } catch (...) {
+    ::close(ready[0]); ::close(ready[1]); throw;
   }
   ::close(ready[1]);
   char acquired{};
@@ -1257,8 +1242,12 @@ void test_recovery_cleanup_faults_reconcile_exactly_once() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  lmdj::test::process::initialize(argv[0]);
   try {
+    if (argc == 4 && std::string_view(argv[1]) == "--owner-lock")
+      run_owner_lock(argv[2], std::stoi(argv[3]));
+    if (argc != 1) return 2;
     test_begin_stop_save_is_one_durable_draft_lifecycle();
     test_recording_revision_is_fixed_at_nonzero_begin_revision();
     test_stopped_draft_can_be_discarded();

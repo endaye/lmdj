@@ -25,6 +25,7 @@
 #include <lmdj/facade/c_api.h>
 
 #include "tests/core/support/test.hpp"
+#include "tests/core/support/child_process.hpp"
 
 namespace {
 
@@ -1283,6 +1284,31 @@ std::string deeply_nested_request(std::size_t depth) {
   return request;
 }
 
+void run_json_depth_child(const std::filesystem::path& root, std::size_t depth) {
+  const auto config = config_json(root);
+  lmdj_engine* child_engine = nullptr;
+  char* child_error = nullptr;
+  const auto created =
+      lmdj_engine_create(config.c_str(), &child_engine, &child_error);
+  if (child_error != nullptr) {
+    lmdj_string_free(child_error);
+  }
+  if (created != LMDJ_STATUS_OK || child_engine == nullptr) {
+    ::_exit(1);
+  }
+  char* response = reinterpret_cast<char*>(0x1);
+  const auto request = deeply_nested_request(depth);
+  const auto status =
+      lmdj_engine_query(child_engine, request.c_str(), &response);
+  const bool rejected =
+      status == LMDJ_STATUS_INVALID_ARGUMENT && response == nullptr;
+  if (response != nullptr) {
+    lmdj_string_free(response);
+  }
+  lmdj_engine_free(child_engine);
+  ::_exit(rejected ? 0 : 1);
+}
+
 void test_excessive_json_depth_is_rejected_without_crashing() {
   TempDirectory temp;
   const auto config = config_json(temp.path());
@@ -1301,31 +1327,8 @@ void test_excessive_json_depth_is_rejected_without_crashing() {
 
   bool all_children_rejected = true;
   for (const std::size_t depth : {64U, 200000U}) {
-    const auto child = ::fork();
-    LMDJ_CHECK(child >= 0);
-    if (child == 0) {
-      lmdj_engine* child_engine = nullptr;
-      char* child_error = nullptr;
-      const auto created =
-          lmdj_engine_create(config.c_str(), &child_engine, &child_error);
-      if (child_error != nullptr) {
-        lmdj_string_free(child_error);
-      }
-      if (created != LMDJ_STATUS_OK || child_engine == nullptr) {
-        ::_exit(1);
-      }
-      char* response = reinterpret_cast<char*>(0x1);
-      const auto request = deeply_nested_request(depth);
-      const auto status =
-          lmdj_engine_query(child_engine, request.c_str(), &response);
-      const bool rejected =
-          status == LMDJ_STATUS_INVALID_ARGUMENT && response == nullptr;
-      if (response != nullptr) {
-        lmdj_string_free(response);
-      }
-      lmdj_engine_free(child_engine);
-      ::_exit(rejected ? 0 : 1);
-    }
+    const auto child = lmdj::test::process::spawn(
+        {"--json-depth", temp.path().string(), std::to_string(depth)});
 
     int child_status = 0;
     LMDJ_CHECK(::waitpid(child, &child_status, 0) == child);
@@ -1524,8 +1527,12 @@ void test_locked_performance_surface_has_exact_kinds_and_request_shapes() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  lmdj::test::process::initialize(argv[0]);
   try {
+    if (argc == 4 && std::string_view(argv[1]) == "--json-depth")
+      run_json_depth_child(argv[2], std::stoull(argv[3]));
+    if (argc != 1) return 2;
     LMDJ_CHECK(LMDJ_CORE_C_API_VERSION == 1);
     test_create_command_query_and_owned_strings();
     test_assembly_composition_through_c_abi();

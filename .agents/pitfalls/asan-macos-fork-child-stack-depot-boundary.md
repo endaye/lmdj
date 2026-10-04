@@ -1,7 +1,7 @@
 ---
 id: asan-macos-fork-child-stack-depot-boundary
 area: core
-status: open
+status: absorbed
 recurrences:
   - date: 2026-10-01
     occurrence: https://github.com/endaye/lmdj/pull/1749
@@ -18,7 +18,7 @@ recurrences:
   - date: 2026-10-04
     occurrence: https://github.com/endaye/lmdj/issues/1815
     observed_by: Codex
-exit: none
+exit: gate:tests/core/support/no_bare_fork_test.py
 escalation: https://github.com/endaye/lmdj/issues/1752
 ---
 
@@ -47,7 +47,14 @@ Second recurrence (#1756). Same mechanism, a different handler: `libSystem_atfor
 
 Third recurrence (#1766). `project_io.candidate_adoption` failed under `TMPDIR=/private/tmp/lmdjt` (18 characters): 3 of 5 runs on main's base `738a3e48`, and 4 of 5 on the PR head, whose change does not touch Project I/O's link set. It passed under the default `TMPDIR`, and under fresh directories of 28 and 29 characters. The author first blamed concurrent sessions sharing that directory, but every passing control also changed the path length, which this mechanism already explains. On main `724576f8` the binary passed 25 of 25 runs under 18- and 30-character paths, outside the window, so the two causes could not be separated afterwards. The passing core_macos evidence ran under `TMPDIR=/private/tmp/lmdjt-pe`.
 
-The exit is [#1752](https://github.com/endaye/lmdj/issues/1752), its escalation Issue: the crash children re-exec the test binary instead of continuing after a bare `fork()`, and a deterministic source check keeps new bare forks out. No eligible mechanism exists until then, because no test-side call can tell how close the depot is to its next boundary.
+The enforcing exit is `tests/core/support/no_bare_fork_test.py`, run by
+`tests/build/test_active_tree.sh`. All seven native C++ test files launch fresh
+process roles with `posix_spawn`; the guard scans tracked and new native test
+sources, ignoring comments and literals, and rejects fork call tokens with a
+why/remedy diagnostic. Existing crashes, pipe readiness, SIGSTOP/SIGKILL and
+persisted recovery/replay assertions remain exercised. The parent owns fixture
+creation and deletion; fresh children attach to the exact existing paths.
+Python release-tooling tests are outside this ASan-instrumented native boundary.
 
 Fourth recurrence (#1829). The default
 `TMPDIR=/var/folders/k1/4rq4647n5gvgyys5x9jj_mfr0000gn/T/` failed
@@ -71,6 +78,6 @@ This accounts for the parent's ready-pipe EOF; no AF_UNIX endpoint exists in
 the Candidate Store path. A different TMPDIR changes allocations and does not
 prove a socket-path overflow. #1815 replaces all eleven bare spawn sites in
 this one test file with fresh `posix_spawn` roles, retaining the same hooks,
-pipes, crash boundaries, and parent-side assertions. The remaining six files
-and global source guard remain the scope of #1752; this partial repair does
-not absorb that repository-wide pitfall.
+pipes, crash boundaries, and parent-side assertions. That partial repair alone
+did not absorb the pitfall; #1752 completes the remaining six migrations and
+lands the source guard.
