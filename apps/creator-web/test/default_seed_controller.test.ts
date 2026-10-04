@@ -369,3 +369,73 @@ test("a newly admitted request can rebase after another Pad's edit without insta
   expect(f.getProject().pads[0]?.assetId).toBe("44444444-4444-4444-8444-444444444444");
   expect(f.getProject().pads[1]?.assetId).toBe("33333333-3333-4333-8333-333333333333");
 });
+
+test("a restored unobserved request cannot rebase across assignment and Undo during owner absence", async () => {
+  const f = fixture(); keepOnlyFirstSlot(f);
+  f.commit.mockImplementationOnce(async (_slot, _request, admit) => {
+    expect(admit?.()).toBe(true);
+    expect(readDefaultSeed(f.options.storage, identity)?.slots[0]?.assignmentObserved).toBe(false);
+    throw Object.assign(new Error("owner lost before receipt"), {code: "HOST_TIMEOUT"});
+  });
+  const first = createDefaultSeedController(f.options);
+  await first.start(); first.cancel();
+  expect(f.seed.slots[0]?.phase).toBe("failed");
+  const request = structuredClone(f.seed.slots[0]!.request!);
+  expect(request.expectedRevision).toBe(0);
+  f.setProject({...f.getProject(), revision: 1, pads: f.getProject().pads.map(pad =>
+    pad.slot === 0 ? {...pad, assetId: "33333333-3333-4333-8333-333333333333"} : pad)});
+  f.setProject({...f.getProject(), revision: 2, pads: f.getProject().pads.map(pad =>
+    pad.slot === 0 ? {...pad, assetId: null} : pad)});
+  const before = structuredClone(f.getProject());
+  const retained = readDefaultSeed(f.options.storage, identity)!;
+  expect(retained.slots[0]?.assignmentObserved).toBe(false);
+  expect(retained.slots[0]?.request).toEqual(request);
+  let installed = 0;
+  f.commit.mockClear();
+  f.commit.mockImplementation(async (slot, received, admit) => {
+    if (admit?.() === false) return null;
+    if (received!.expectedRevision !== f.getProject().revision) {
+      throw Object.assign(new Error("unknown stale command"), {code: "REVISION_CONFLICT"});
+    }
+    installed++;
+    f.setProject({...f.getProject(), revision: 3, pads: f.getProject().pads.map(pad =>
+      pad.slot === slot ? {...pad, assetId: "44444444-4444-4444-8444-444444444444"} : pad)});
+    return {committedRevision:3,runtimeRevision:3,published:true};
+  });
+  await createDefaultSeedController({...f.options, seed: retained}).start();
+  expect(installed).toBe(0);
+  expect(f.commit).toHaveBeenCalledExactlyOnceWith(0, request, expect.any(Function));
+  expect(f.getProject()).toEqual(before);
+  expect(retained.slots[0]?.request).toEqual(request);
+  expect(readDefaultSeed(f.options.storage, identity)?.slots[0]?.phase).toBe("retired");
+});
+
+test("a restored unobserved request replays a known receipt after Undo during owner absence", async () => {
+  const f = fixture(); keepOnlyFirstSlot(f);
+  f.commit.mockImplementationOnce(async (slot, _request, admit) => {
+    expect(admit?.()).toBe(true);
+    f.setProject({...f.getProject(), revision: 1, pads: f.getProject().pads.map(pad =>
+      pad.slot === slot ? {...pad, assetId: "44444444-4444-4444-8444-444444444444"} : pad)});
+    throw Object.assign(new Error("receipt response lost"), {code: "HOST_TIMEOUT"});
+  });
+  const first = createDefaultSeedController(f.options);
+  await first.start(); first.cancel();
+  const request = structuredClone(f.seed.slots[0]!.request!);
+  expect(request.expectedRevision).toBe(0);
+  f.setProject({...f.getProject(), revision: 2, pads: f.getProject().pads.map(pad =>
+    pad.slot === 0 ? {...pad, assetId: null} : pad)});
+  const before = structuredClone(f.getProject());
+  const retained = readDefaultSeed(f.options.storage, identity)!;
+  expect(retained.slots[0]?.assignmentObserved).toBe(false);
+  f.commit.mockClear();
+  f.commit.mockImplementation(async (_slot, received, admit) => {
+    expect(admit?.()).toBe(true);
+    expect(received).toEqual(request);
+    return {committedRevision:1,runtimeRevision:2,published:true};
+  });
+  await createDefaultSeedController({...f.options, seed: retained}).start();
+  expect(f.commit).toHaveBeenCalledExactlyOnceWith(0, request, expect.any(Function));
+  expect(f.getProject()).toEqual(before);
+  expect(retained.slots[0]?.request).toEqual(request);
+  expect(readDefaultSeed(f.options.storage, identity)?.slots[0]?.phase).toBe("ready");
+});

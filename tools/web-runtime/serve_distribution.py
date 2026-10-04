@@ -39,7 +39,7 @@ SECURITY_HEADERS = {
     "X-Robots-Tag": "noindex, nofollow, noarchive",
 }
 HASHED_ASSET = re.compile(
-    r"^assets/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|wasm)$"
+    r"^assets/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|svg|wasm)$"
 )
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -47,6 +47,7 @@ CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
     ".mjs": "text/javascript; charset=utf-8",
+    ".svg": "image/svg+xml; charset=utf-8",
     ".wasm": "application/wasm",
 }
 

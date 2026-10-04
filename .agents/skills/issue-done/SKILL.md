@@ -196,9 +196,11 @@ Read these before shipping; each is a real recurrence, not a hypothetical:
   unreproduced ones as an explicit gap beside the test. A `blur` dispatched
   into a page that owns an AudioContext is the worked example: the window
   event is the easy half, the context interruption is the half that hides
-  defects. When a side effect needs a seam the packaged product must not
-  carry, gate it in a component test and name that companion gate in a comment
-  on the packaged journey.
+  defects. A key event is the second example: fire it where focus actually is,
+  not on the handler's element, because a `pointerdown` that calls
+  `preventDefault()` never moves focus (#1799). When a side effect needs a seam
+  the packaged product must not carry, gate it in a component test and name
+  that companion gate in a comment on the packaged journey.
 
 ---
 

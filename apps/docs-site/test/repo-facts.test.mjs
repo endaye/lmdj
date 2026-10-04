@@ -66,15 +66,15 @@ test('facts match the current locked product composition', async () => {
     'web-runtime-platform',
   ]);
   assert.deepEqual(facts.hosts.map(({id, version}) => ({id, version})), [
-    {id: 'cardputer-host', version: '1.0.6'},
-    {id: 'core-cli', version: '3.3.11'},
-    {id: 'core-mcp', version: '3.5.1'},
-    {id: 'creator-web', version: '4.8.0'},
-    {id: 'native-host', version: '3.4.6'},
-    {id: 'web-runtime-host', version: '4.3.6'},
+    {id: 'cardputer-host', version: '1.0.7'},
+    {id: 'core-cli', version: '3.3.12'},
+    {id: 'core-mcp', version: '3.5.2'},
+    {id: 'creator-web', version: '5.0.0'},
+    {id: 'native-host', version: '3.4.7'},
+    {id: 'web-runtime-host', version: '4.3.7'},
   ]);
-  assert.equal(facts.providers.length, 3);
-  assert.equal(facts.contracts.length, 12);
+  assert.equal(facts.providers.length, 4);
+  assert.equal(facts.contracts.length, 14);
 });
 
 test('facts name each Product Build consumer that mismatches authority', async (t) => {
@@ -119,7 +119,7 @@ test('registered Slice validator and binary profile remain authenticated', async
     }
   }
   const inspect = () => readRepoFacts({repoRoot: root, revision: 'abcdef123456', channel: 'canary'});
-  assert.equal((await inspect()).providers.length, 3);
+  assert.equal((await inspect()).providers.length, 4);
   for (const relative of ['providers/local-sample-slice/src/validation.cpp',
     'providers/local-sample-slice/include/lmdj/providers/local_sample_slice/validation.hpp']) {
     const file = path.join(root, relative);

@@ -23,7 +23,12 @@ def render(dist: Path) -> bytes:
     blocks = validated.strip().split("\n\n")
     base = (blocks[0] + "\n").encode()
     manifest = json.loads((dist / "host-manifest.json").read_text())
-    types = {".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css"}
+    types = {
+        ".js": "text/javascript",
+        ".mjs": "text/javascript",
+        ".css": "text/css",
+        ".svg": "image/svg+xml",
+    }
     routes = [("/", "text/html"), ("/index.html", "text/html")]
     for asset in manifest["assets"]:
         suffix = Path(asset["path"]).suffix

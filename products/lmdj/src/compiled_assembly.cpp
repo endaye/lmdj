@@ -3,6 +3,7 @@
 #include <utility>
 
 #include <lmdj/providers/local_proof_failure/factory.hpp>
+#include <lmdj/providers/local_proof_stem/factory.hpp>
 #include <lmdj/providers/local_proof_success/factory.hpp>
 #include <lmdj/providers/local_sample_slice/factory.hpp>
 
@@ -13,7 +14,7 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
   using lmdj::facade::CompiledProvider;
   return lmdj::facade::CompiledAssemblyCatalog{
       "lmdj",
-      "2.0.76.0",
+      "2.0.81.0",
       "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
       {
           CompiledComponent{"foundation", "0.5.0"},
@@ -21,17 +22,17 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
           CompiledComponent{"project-io", "6.1.0"},
           CompiledComponent{"project-cooker", "2.0.1"},
           CompiledComponent{"audio-runtime", "5.1.1"},
-          CompiledComponent{"provider-sdk", "2.2.1"},
-          CompiledComponent{"application-facade", "6.5.0"},
-          CompiledComponent{"web-runtime-platform", "5.6.0"},
+          CompiledComponent{"provider-sdk", "2.3.0"},
+          CompiledComponent{"application-facade", "6.5.1"},
+          CompiledComponent{"web-runtime-platform", "5.6.1"},
       },
       {
-          CompiledComponent{"core-cli", "3.3.11"},
-          CompiledComponent{"core-mcp", "3.5.1"},
-          CompiledComponent{"native-host", "3.4.6"},
-          CompiledComponent{"cardputer-host", "1.0.6"},
-          CompiledComponent{"web-runtime-host", "4.3.6"},
-          CompiledComponent{"creator-web", "4.8.0"},
+          CompiledComponent{"core-cli", "3.3.12"},
+          CompiledComponent{"core-mcp", "3.5.2"},
+          CompiledComponent{"native-host", "3.4.7"},
+          CompiledComponent{"cardputer-host", "1.0.7"},
+          CompiledComponent{"web-runtime-host", "4.3.7"},
+          CompiledComponent{"creator-web", "5.0.0"},
       },
       {
           CompiledComponent{"lmdj.project.v5", "5.2.0"},
@@ -46,24 +47,32 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
           CompiledComponent{"lmdj.audio.pcm16-wav.v1", "1.0.0"},
           CompiledComponent{"lmdj.slice-points.v1", "1.0.0"},
           CompiledComponent{"lmdj.cardputer-transfer.v1", "1.0.0"},
+          CompiledComponent{"lmdj.audio.stem-pcm16-wav.v1", "1.0.0"},
+          CompiledComponent{"lmdj.stem-parameters.v1", "1.0.0"},
       },
       {
           CompiledProvider{
               "local.proof.success",
-              "2.0.3",
+              "2.0.4",
               lmdj::providers::local_proof_success_registration,
               std::nullopt,
           },
           CompiledProvider{
               "local.proof.failure",
-              "2.0.3",
+              "2.0.4",
               lmdj::providers::local_proof_failure_registration,
               std::nullopt,
           },
           CompiledProvider{
               "local.sample.slice",
-              "1.0.3",
+              "1.0.4",
               lmdj::providers::local_sample_slice_registration,
+              std::nullopt,
+          },
+          CompiledProvider{
+              "local.proof.stem",
+              "1.0.0",
+              lmdj::providers::local_proof_stem_registration,
               std::nullopt,
           },
       },

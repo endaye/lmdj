@@ -2,7 +2,7 @@
   "schema_version": 1,
   "meta": {
     "title": "Provider SDK Module",
-    "summary": "Owned ArtifactSource、共享预算、同步回调与验证后 terminal 可见性"
+    "summary": "Owned ArtifactSource、端口共享内容、逐端口验证与 terminal 可见性"
   },
   "boundaries": [],
   "components": [
@@ -67,8 +67,8 @@
       "body": "Foundation only."
     },
     {
-      "title": "Owned state",
-      "body": "Retained input handles keep leases; closed callbacks reject without terminal mutation."
+      "title": "Shared output content",
+      "body": "Distinct ports may share one complete ArtifactRef and one blob. Keep every role and validator; charge each logical output and retained buffer. Same-port duplicates or conflicting identities fail."
     },
     {
       "title": "Forbidden boundary",
