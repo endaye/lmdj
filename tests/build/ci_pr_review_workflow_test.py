@@ -210,10 +210,25 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
     def test_artifact_carries_every_file_the_v2_publisher_and_readers_need(self):
         upload = self.jobs["review"].split("      - uses: actions/upload-artifact", 1)[1].split("      - name:", 1)[0]
         for name in ("context.json", "history.json", "review.json", "result.json", "failure.json",
-                     "t2-input.json", "collection-receipt.json", "t2-config-witness.json", "t2-result.json",
+                     "t2-config-witness.json",
                      "collector.json", "coverage-*.json", "generated-only-receipt.json"):
             self.assertIn(f"${{{{ env.REVIEW_DIR }}}}/{name}", upload,
                           f"why: publish/wait/failure readers open {name} from the artifact; remedy: upload it")
+
+    def test_bulk_diagnostics_use_a_separate_exact_attempt_artifact(self):
+        review = self.jobs["review"]
+        canonical = review.split("      - uses: actions/upload-artifact", 1)[1].split("      - name:", 1)[0]
+        diagnostics = review.split("      - name: Retain publisher input and model diagnostics separately\n", 1)[1].split("      - name:", 1)[0]
+        download = self.jobs["publish"].split("      - name: Download publisher input and model diagnostics\n", 1)[1].split("      - name:", 1)[0]
+        for name in ("t2-input.json", "collection-receipt.json", "t2-result.json"):
+            self.assertNotIn("/" + name, canonical)
+            self.assertIn("/" + name, diagnostics)
+        identity = "pr-review-diagnostics-${{ needs.target.outputs.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}"
+        self.assertIn(identity, diagnostics)
+        self.assertIn(identity, download)
+        self.assertIn("steps.input.outputs.generated_only != 'true'", diagnostics)
+        self.assertIn("needs.review.outputs.generated_only != 'true'", download)
+        self.assertIn("path: ${{ runner.temp }}/review-publish", download)
 
     def test_generated_only_route_gates_model_steps_and_reaches_its_publisher(self):
         job = self.jobs["review"]
