@@ -14,13 +14,22 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 当前 Product Build 以上方从 active manifests 生成的 Build Identity 为准；各组件页面的身份也从同一份 manifest/Assembly Lock 事实生成，不以以下历史分配记录替代当前版本。
 
-当前分配的 Product Build `2.0.81.0` 在 `2.0.80.0` 之上只推进 Creator Web Host 身份：`creator-web` 由 `4.8.1` 升到 `5.0.0`。清单末尾增加 `host_favicon`（`assets/favicon.<sha256>.svg`），所以这次 Host 取 MAJOR。Contract、Module、Provider 与其余 Host 保持 `2.0.80.0` 的结算。Cardputer profile 同步到当前 Build 与 Assembly 摘要。
+当前分配的 Product Build `2.0.82.0` 在 `2.0.81.0` 之上结算自 `2.0.76.0` 以来欠下的 Module 身份（#1667 计划 Task 20，并收齐 #1671 与 #1789 的欠账），Contract 身份不变（`lmdj.project.v5` 仍为 `5.2.0`）：
+
+- Project I/O `7.0.0`（MAJOR）：#1780 起写出带 `5.2.0` 可选键的 checkpoint 与交易日志，`6.x` reader 拒绝读取，沿用 `2.0.71.0` 的 owner 先例（`6.0.0`）。
+- Audio Runtime `5.2.0`（用户包络、tone 与三段 EQ 内核、`LMDJ_VOICE_DSP` 开关，#1780；`stop_slot_live`，#1802）、Project Cooker `2.1.0`（`ResolvedVoiceDsp` 尾部字段带默认成员初始化，旧的按位置初始化照常编译，#1780）、Application Facade `6.6.0`（`sample.update_pad`/`sample.inspect` 接受并回显 `5.2.0` 键，#1799）、Web Runtime Platform `5.7.0`（#1792 的 `runtime_frame`、#1799 的协议与会话、#1802 的回放发布围栏、#1722、#1812）与 Core MCP `3.6.0`（`lmdj.sample.update_pad` schema 声明这些键，#1799）都是向后兼容的追加能力，升 MINOR。
+- Creator Web `5.0.1`、CLI `3.3.13`、Native Host `3.4.8`、Cardputer Host `1.0.8` 只跟随依赖 pin 做 PATCH；Web Runtime Host `4.3.8` 另含 #1800 的打包工具改动（只为 Creator 增加 `host_favicon` 角色，它自己的产物不变）。
+- Authoring Domain、Foundation、Provider SDK 与各 Provider 不变：#1780 的 Authoring Domain 追加已由 `2.0.76.0` 的 `4.4.0` 覆盖。
+
+Cardputer profile 同步到当前 Build、Host 与 Assembly 摘要。它的摘要自 `2.0.78.0` 起未随 Assembly 更新，本次改正，并由 `tests/build/version_test.py` 校验 profile 与 `PROJECT_VER` 不再与来源分离。
 
 它不是公共 Release、部署或 Channel 晋级。
 
 ## 历史分配记录
 
 以下描述各次分配当时的变化，不声明当前组件版本或发布状态。
+
+Product Build `2.0.81.0` 曾在 `2.0.80.0` 之上只推进 Creator Web Host 身份：`creator-web` 由 `4.8.1` 升到 `5.0.0`。清单末尾增加 `host_favicon`（`assets/favicon.<sha256>.svg`），所以这次 Host 取 MAJOR。Contract、Module、Provider 与其余 Host 保持 `2.0.80.0` 的结算。当时 Cardputer profile 的 Assembly 摘要没有同步（自 `2.0.78.0` 起即已过期），`2.0.82.0` 改正。
 
 Product Build `2.0.80.0` 曾在 `2.0.78.0` 之上增加 Stem PCM16 Contract `lmdj.audio.stem-pcm16-wav.v1` `1.0.0`、`lmdj.stem-parameters.v1` `1.0.0` 与 Provider `local.proof.stem` `1.0.0`（#1810）。同一次修正替换了未保留的 `2.0.79.0`。Module 与 Host 身份保持 `2.0.78.0`。
 
