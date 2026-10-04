@@ -36,6 +36,11 @@
           "prefix": "assets/perform-master-tap.",
           "role": "perform_master_tap_worklet",
           "suffix": ".js"
+        },
+        {
+          "prefix": "assets/favicon.",
+          "role": "host_favicon",
+          "suffix": ".svg"
         }
       ]
     },

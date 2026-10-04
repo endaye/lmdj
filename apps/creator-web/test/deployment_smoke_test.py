@@ -42,6 +42,7 @@ CONTENT_TYPES = {
     ".json": "application/json; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
+    ".svg": "image/svg+xml; charset=utf-8",
     ".wasm": "application/wasm",
 }
 
@@ -91,6 +92,15 @@ class Fixture:
         digest = hashlib.sha256(manifest).hexdigest()
         main = next(entry for entry in self.manifest["assets"] if entry["role"] == ROLES.HOST_MAIN)
         style = next(entry for entry in self.manifest["assets"] if entry["role"] == ROLES.HOST_STYLE)
+        favicon = next(
+            (entry for entry in self.manifest["assets"] if entry["role"] == ROLES.HOST_FAVICON),
+            None,
+        )
+        icon = (
+            f'<link rel="icon" href="./{favicon["path"]}" type="image/svg+xml">'
+            if favicon is not None
+            else ""
+        )
         index = (
             "<!doctype html><html><head>"
             f'<meta name="lmdj-host-manifest-sha256" content="{digest}">'
@@ -99,6 +109,7 @@ class Fixture:
             '<meta name="lmdj-host-id" content="creator-web">'
             f'<meta name="lmdj-host-version" content="{self.manifest["host_version"]}">'
             f'<link rel="stylesheet" href="./{style["path"]}">'
+            f"{icon}"
             f'<script type="module" src="./{main["path"]}"></script>'
             "</head><body>Creator</body></html>"
         ).encode()
@@ -334,6 +345,37 @@ class CreatorDeploymentSmokeTest(unittest.TestCase):
         self.fixture.update()
         with self.assertRaisesRegex(SmokeError, "manifest required asset role inventory is invalid"):
             self.run_smoke()
+
+    def _append_favicon(self) -> None:
+        payload = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"></svg>\n'
+        digest = hashlib.sha256(payload).hexdigest()
+        path = f"assets/favicon.{digest}.svg"
+        self.fixture.payloads[f"/{path}"] = payload
+        self.fixture.manifest["assets"].append(
+            {"bytes": len(payload), "path": path, "role": ROLES.HOST_FAVICON, "sha256": digest}
+        )
+
+    def test_accepts_creator_5_favicon_inventory(self) -> None:
+        self._append_favicon()
+        self.fixture.manifest["host_version"] = "5.0.0"
+        self.fixture.update()
+        result = self.run_smoke(expected_host="5.0.0")
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["host_version"], "5.0.0")
+        self.assertEqual(result["asset_count"], 7)
+
+    def test_rejects_creator_5_without_favicon(self) -> None:
+        self.fixture.manifest["host_version"] = "5.0.0"
+        self.fixture.update()
+        with self.assertRaisesRegex(SmokeError, "manifest required asset role inventory is invalid"):
+            self.run_smoke(expected_host="5.0.0")
+
+    def test_rejects_creator_4_carrying_favicon(self) -> None:
+        self._append_favicon()
+        self.fixture.manifest["host_version"] = "4.7.0"
+        self.fixture.update()
+        with self.assertRaisesRegex(SmokeError, "manifest required asset role inventory is invalid"):
+            self.run_smoke(expected_host="4.7.0")
 
     def test_rejects_creator_2_carrying_perform_master_tap_worklet(self) -> None:
         # The role did not exist before Creator Host 3.0.0, so a 2.x manifest

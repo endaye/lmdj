@@ -190,7 +190,9 @@ prepared from Truth when it is selected. A failed swap after commit returns the
 committed revision with `"failed"` and `snapshot_error`. Because a grid edit
 changes no Bank, a Runtime that was current before the edit, so that a
 Bank-bound `sample.preview.set` is admitted, stays current after a successful
-or deferred swap or an edit of another Pattern.
+or deferred swap or an edit of another Pattern. A `sequence.settings.update`
+(BPM, swing or quantize) changes no Bank either, and keeps a current Runtime
+current the same way (#1805).
 
 ## Performance replay authoring
 

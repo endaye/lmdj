@@ -19,6 +19,7 @@ from __future__ import annotations
 
 
 CAPTURE_WORKLET = "capture_worklet"
+HOST_FAVICON = "host_favicon"
 HOST_MAIN = "host_main"
 HOST_MODULE = "host_module"
 HOST_STYLE = "host_style"
@@ -36,6 +37,7 @@ RUNTIME_WASM = "runtime_wasm"
 ALLOWED_ASSET_ROLES = frozenset(
     (
         CAPTURE_WORKLET,
+        HOST_FAVICON,
         HOST_MAIN,
         HOST_MODULE,
         HOST_STYLE,
@@ -70,6 +72,7 @@ WEB_RUNTIME_HOST_EMITTED_ASSET_ROLES = frozenset(
 CREATOR_WEB_EMITTED_ASSET_ROLES = frozenset(
     (
         CAPTURE_WORKLET,
+        HOST_FAVICON,
         HOST_MAIN,
         HOST_STYLE,
         PERFORM_MASTER_TAP_WORKLET,
@@ -82,12 +85,14 @@ EMITTED_ASSET_ROLES_BY_HOST_ID = {
     "web-runtime-host": WEB_RUNTIME_HOST_EMITTED_ASSET_ROLES,
 }
 
-# A Creator manifest carries exactly this inventory, one asset per role.
-# Creator Host 3.0.0 added the Perform master tap; Creator Host 2.x priors,
-# which the exact-tag deploy still discovers as its rollback identity, must
-# keep the five-role inventory and must not claim the tap.
+# A Creator manifest carries exactly one inventory, one asset per role, chosen
+# by Host major. Creator Host 5.0.0 added the favicon. Creator Host 3.x and
+# 4.x keep the six-role inventory from 3.0.0 and must not claim the favicon.
+# Creator Host 2.x priors, which the exact-tag deploy still discovers as its
+# rollback identity, keep five roles and must not claim the tap.
 CREATOR_CURRENT_ASSET_ROLES = CREATOR_WEB_EMITTED_ASSET_ROLES
-CREATOR_LEGACY_ASSET_ROLES = CREATOR_CURRENT_ASSET_ROLES - frozenset(
+CREATOR_V3_ASSET_ROLES = CREATOR_CURRENT_ASSET_ROLES - frozenset((HOST_FAVICON,))
+CREATOR_LEGACY_ASSET_ROLES = CREATOR_V3_ASSET_ROLES - frozenset(
     (PERFORM_MASTER_TAP_WORKLET,)
 )
 
