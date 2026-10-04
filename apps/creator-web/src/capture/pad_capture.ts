@@ -37,22 +37,31 @@ export function createPadCapture(deps: PadCaptureDeps, source: PadCaptureSource)
   let startup: Promise<PadCaptureHandle> | null = null;
   let startupAbort: AbortController | null = null;
   let stopping: Promise<void> | null = null;
+  let saving: Promise<void> | null = null;
+  const preparing = new Set<Promise<void>>();
   let automatic = false;
   let generation = 0;
   const publish = (patch: Partial<PadCaptureState>) => {
     state = {...state, ...patch}; deps.changed({...state});
   };
-  async function save(retry = true) {
-    if (state.phase !== "review" || buffer === null || state.target === null) return;
+  function save(retry = true): Promise<void> {
+    if (saving !== null) return saving;
+    if (state.phase !== "review" || buffer === null || state.target === null) return Promise.resolve();
     const selection = audibleSelection(buffer);
-    if (selection === null) {publish({message: "No sound recorded. Discard this take and try again."}); return;}
+    if (selection === null) {publish({message: "No sound recorded. Discard this take and try again."}); return Promise.resolve();}
+    const take = buffer;
+    const target = state.target;
+    const commit = deps.commit;
     publish({phase: "saving", message: null});
-    try {
-      await deps.commit(state.target, buffer, selection, retry);
-      buffer = null; publish({phase: "idle", target: null, frames: 0});
-    } catch (error) {
-      publish({phase: "review", message: error instanceof Error ? error.message : "Unable to save this take."});
-    }
+    saving = Promise.resolve().then(async () => {
+      try {
+        await commit(target, take, selection, retry);
+        generation++; buffer = null; publish({phase: "idle", target: null, frames: 0});
+      } catch (error) {
+        publish({phase: "review", message: error instanceof Error ? error.message : "Unable to save this take."});
+      } finally {saving = null;}
+    });
+    return saving;
   }
   function seal(commit: boolean, message: string | null = null) {
     if (!["starting", "recording", "stopping"].includes(state.phase)) return Promise.resolve();
@@ -74,6 +83,9 @@ export function createPadCapture(deps: PadCaptureDeps, source: PadCaptureSource)
   }
   return {
     getState: () => ({...state}),
+    // The Workspace retains the take; only its current Facade/Host binding
+    // changes after the retiring Runtime's cleanup barrier has completed.
+    updateDeps(next: PadCaptureDeps) {deps = next;},
     setSource(next: PadCaptureSource) {
       if (state.phase !== "idle") return;
       publish({source: next});
@@ -84,7 +96,7 @@ export function createPadCapture(deps: PadCaptureDeps, source: PadCaptureSource)
       if (state.source === "microphone" && !deps.microphoneGranted()) {
         const token = ++generation;
         publish({phase: "permission", message: "Allow microphone access, then press an empty Pad again."});
-        void deps.prepareMicrophone().then(() => {
+        const preparation = deps.prepareMicrophone().then(() => {
           if (token === generation) {
             owner = null;
             publish({phase: "idle", message: "Microphone ready. Press an empty Pad to record."});
@@ -95,23 +107,26 @@ export function createPadCapture(deps: PadCaptureDeps, source: PadCaptureSource)
             publish({phase: "idle", message: error instanceof Error ? error.message : "Microphone unavailable."});
           }
         });
+        preparing.add(preparation);
+        void preparation.finally(() => preparing.delete(preparation));
         return true;
       }
+      const token = ++generation;
       automatic = false;
       buffer = new CaptureBuffer(state.source === "master" ? 2 : 1);
       publish({phase: "starting", target: {...target}, frames: 0, message: null});
       startupAbort = new AbortController();
       try {
         startup = deps.start(state.source, channels => {
-          if (buffer === null || !["starting", "recording", "stopping"].includes(state.phase)) return;
+          if (token !== generation || buffer === null || !["starting", "recording", "stopping"].includes(state.phase)) return;
           try {
             buffer.append(channels); publish({frames: buffer.frameCount});
             if (buffer.atCapacity) void seal(false, "60-second limit reached. Save or discard this take.");
           } catch {void seal(false, "Recording input changed. Save or discard this take.");}
-        }, message => {void seal(false, message);}, startupAbort.signal);
+        }, message => {if (token === generation) void seal(false, message);}, startupAbort.signal);
         void startup.then(() => {
-          if (state.phase === "starting") publish({phase: "recording"});
-        }, error => {void seal(false, error instanceof Error ? error.message : "Recording unavailable.");});
+          if (token === generation && state.phase === "starting") publish({phase: "recording"});
+        }, error => {if (token === generation) void seal(false, error instanceof Error ? error.message : "Recording unavailable.");});
       } catch (error) {
         startup = null; owner = null;
         publish({phase: "review", message: error instanceof Error ? error.message : "Recording unavailable."});
@@ -121,13 +136,15 @@ export function createPadCapture(deps: PadCaptureDeps, source: PadCaptureSource)
     release(gesture: object) {if (owner === gesture) void seal(true);},
     cancel(gesture?: object) {
       if (gesture !== undefined && owner !== gesture) return Promise.resolve();
+      automatic = false;
       if (state.phase === "permission") {generation++; owner = null; publish({phase: "idle"});}
-      return seal(false, "Recording interrupted. Save or discard this take.");
+      const sealed = seal(false, "Recording interrupted. Save or discard this take.");
+      return Promise.all([sealed, saving, ...preparing]).then(() => {});
     },
     save,
     discard() {
       if (state.phase !== "review") return;
-      buffer = null; publish({phase: "idle", target: null, frames: 0, message: null});
+      generation++; buffer = null; publish({phase: "idle", target: null, frames: 0, message: null});
     },
   };
 }

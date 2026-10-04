@@ -729,6 +729,150 @@ async function flushAsyncTurns(turns = 40) {
   });
 }
 
+// Real App/RuntimeProvider/PadCapture/Sources/CaptureController callbacks;
+// only browser devices and the Facade session are controlled here. This
+// proves replacement ownership, not trusted input or microphone hearing.
+test.each([
+  ["microphone", "save"], ["microphone", "discard"],
+  ["master", "save"], ["master", "discard"],
+  ["microphone", "occupied-target refusal"],
+])("Runtime replacement retains the original %s Pad take for explicit %s", async (source, resolution) => {
+  const closed = deferred<void>();
+  const acquired = deferred<void>();
+  const fixture = mutableSampleRuntimeFixture();
+  // An already-running controlled Runtime lets synthetic input exercise the
+  // master resource lifecycle without claiming trusted browser activation.
+  setRunningAudioFixture(fixture.session);
+  let restart!: (state: RuntimeHostState) => void;
+  fixture.session.subscribeHostState = listener => {restart = listener; return () => {};};
+  fixture.session.close = vi.fn(async () => true);
+  const originalImport = vi.fn(fixture.session.importAssignSample);
+  fixture.session.importAssignSample = originalImport;
+  const stopMaster = vi.fn(() => closed.promise);
+  const startMaster = vi.fn(async (callbacks: {onBatch(channels: Float32Array[]): void}) => {
+    callbacks.onBatch([new Float32Array([0, .25, .1]), new Float32Array([0, -.25, -.1])]);
+    await acquired.promise;
+    return {stop: stopMaster};
+  });
+  if (source === "master") {
+    Object.assign(fixture.session, performanceSessionStubs([]).stubs, {
+      startPerformanceMasterCapture: startMaster,
+    });
+  }
+  const importTake = vi.fn<CreatorSampleRuntimeSession["importAssignSample"]>(async (_file, options) => {
+    fixture.assigned.set(options.slot, "44444444-4444-4444-8444-444444444444");
+    fixture.revision++;
+    return {committedRevision: fixture.revision, runtimeRevision: fixture.revision,
+      runtimePublished: true, snapshotError: null};
+  });
+  const successor = {...fixture.session, importAssignSample: importTake};
+  const nodes: Array<{port: {onmessage: ((event: {data: unknown}) => void) | null}}> = [];
+  const tracks: Array<{stop: ReturnType<typeof vi.fn>}> = [];
+  let contexts = 0;
+  vi.stubGlobal("navigator", {
+    permissions: {query: async () => ({state: "granted"})},
+    mediaDevices: {getUserMedia: async () => {
+      const track = {stop: vi.fn(), addEventListener() {}, removeEventListener() {}};
+      tracks.push(track); return {getTracks: () => [track], getAudioTracks: () => [track]};
+    }},
+  });
+  vi.stubGlobal("AudioContext", class {
+    readonly first = ++contexts === 1;
+    audioWorklet = {addModule: async () => {}};
+    resume() {return Promise.resolve();}
+    close() {return this.first ? closed.promise : Promise.resolve();}
+    createMediaStreamSource() {return {connect() {}, disconnect() {}};}
+  });
+  vi.stubGlobal("AudioWorkletNode", class {
+    port = {onmessage: null};
+    constructor() {nodes.push(this);}
+    disconnect() {}
+  });
+  vi.stubGlobal("localStorage", {getItem: () => source === "master" ? "master" : null,
+    setItem() {}, removeItem() {}});
+  let creations = 0;
+  const sessions = [fixture.session, successor];
+  const rendered = render(<App initialState={ready} runtimeFactory={() => sessions[creations++]!} />);
+  try {
+    const pad = await screen.findByRole("button", {name: /^Pad A2 — empty/});
+    await flushAsyncTurns();
+    await waitFor(() => expect((pad as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.mouseDown(pad, {button: 0});
+    const recording = screen.getByRole("region", {name: "Pad recording"});
+    await waitFor(() => expect(recording.textContent).toContain(
+      `${source === "master" ? "starting" : "recording"} · Pad 2`));
+    if (source === "microphone") {
+      act(() => nodes[0]!.port.onmessage?.({data: {channels: [new Float32Array([0, .25, .1])], peak: .25}}));
+    } else {
+      await waitFor(() => expect(startMaster).toHaveBeenCalledOnce());
+    }
+    act(() => restart({state: "restart-required", errorCode: "HOST_RESTART_REQUIRED", errorDetails: {}}));
+    await flushAsyncTurns();
+    if (source === "master") {
+      // Master acquisition is not abortable: replacement must join the late
+      // handle, then its real stop promise, before retiring the Runtime.
+      expect(creations).toBe(1); expect(stopMaster).not.toHaveBeenCalled();
+      expect(fixture.session.close).not.toHaveBeenCalled();
+      await act(async () => acquired.resolve());
+      await waitFor(() => expect(stopMaster).toHaveBeenCalledOnce());
+    } else {
+      await waitFor(() => expect(tracks[0]!.stop).toHaveBeenCalledOnce());
+    }
+    // The old Context.close is pending: neither close nor factory can run.
+    expect(fixture.session.close).not.toHaveBeenCalled();
+    expect(creations).toBe(1);
+    expect(recording.textContent).toContain("stopping · Pad 2");
+    expect(importTake).not.toHaveBeenCalled();
+    await act(async () => closed.resolve());
+    await waitFor(() => expect(creations).toBe(2));
+    await screen.findByRole("button", {name: /^Pad A2 — empty/});
+    await flushAsyncTurns();
+    expect(recording.textContent).toContain("review · Pad 2");
+    // A different Pad cannot steal the unresolved take or open a source.
+    fireEvent.mouseDown(screen.getByRole("button", {name: /^Pad A3 — empty/}), {button: 0});
+    await flushAsyncTurns();
+    expect(source === "master" ? stopMaster.mock.calls.length : contexts).toBe(1);
+    expect(recording.textContent).toContain("review · Pad 2");
+    if (resolution === "occupied-target refusal") {
+      // A concurrent authoring result never becomes an implicit replacement.
+      fixture.assigned.set(1, "55555555-5555-4555-8555-555555555555");
+      await userEvent.click(within(recording).getByRole("button", {name: "Save Pad recording"}));
+      await within(recording).findByText("This Pad now contains a sound. Keep or discard this take.");
+      expect(importTake).not.toHaveBeenCalled();
+      expect(recording.textContent).toContain("review · Pad 2");
+      await userEvent.click(within(recording).getByRole("button", {name: "Discard Pad recording"}));
+      expect(fixture.assigned.get(1)).toBe("55555555-5555-4555-8555-555555555555");
+    } else if (resolution === "save") {
+      await userEvent.click(within(recording).getByRole("button", {name: "Save Pad recording"}));
+      await waitFor(() => expect(importTake).toHaveBeenCalledOnce());
+      expect(importTake.mock.calls[0]![1]).toMatchObject({slot: 1, expectedRevision: 3});
+      const file = importTake.mock.calls[0]![0];
+      const bytes = await new Promise<ArrayBuffer>((resolve, reject) => {
+        const reader = new FileReader(); reader.onload = () => resolve(reader.result as ArrayBuffer);
+        reader.onerror = reject; reader.readAsArrayBuffer(file);
+      });
+      expect(bytes.byteLength).toBe(source === "master" ? 52 : 48);
+      expect(new DataView(bytes).getInt16(44, true)).toBe(8192);
+      expect(new DataView(bytes).getInt16(source === "master" ? 48 : 46, true)).toBe(3277);
+      if (source === "master") expect(new DataView(bytes).getInt16(46, true)).toBe(-8192);
+      expect(fixture.assigned.get(1)).toBe("44444444-4444-4444-8444-444444444444");
+    } else {
+      await userEvent.click(within(recording).getByRole("button", {name: "Discard Pad recording"}));
+      expect(importTake).not.toHaveBeenCalled(); expect(fixture.assigned.has(1)).toBe(false);
+    }
+    await waitFor(() => expect(recording.textContent).toContain("idle"));
+    expect(originalImport).not.toHaveBeenCalled();
+    // After the deliberate resolution the successor can own a new take.
+    fireEvent.mouseDown(screen.getByRole("button", {name: /^Pad A3 — empty/}), {button: 0});
+    await waitFor(() => expect(recording.textContent).toContain("recording · Pad 3"));
+    if (source === "microphone") expect(contexts).toBe(2);
+    await flushAsyncTurns();
+    expect(recording.textContent).toContain("recording · Pad 3");
+  } finally {
+    acquired.resolve(); closed.resolve(); rendered.unmount(); await flushAsyncTurns(); vi.unstubAllGlobals();
+  }
+});
+
 function mutableSampleRuntimeFixture() {
   const assigned = new Map<number, string>([
     [0, "33333333-3333-4333-8333-333333333333"],

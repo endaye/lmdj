@@ -335,6 +335,7 @@ function Workspace({
   const [capturePhase, setCapturePhase] = useState<CapturePhase>("idle");
   const [padCaptureState, setPadCaptureState] = useState<PadCaptureState | null>(null);
   const padCapture = useRef<ReturnType<typeof createPadCapture> | null>(null);
+  const padCaptureSources = useRef<ReturnType<typeof createPadCaptureSources> | null>(null);
   const padCaptureWake = useRef<Promise<boolean> | null>(null);
   const capturePhaseRef = useRef(capturePhase);
   capturePhaseRef.current = capturePhase;
@@ -399,6 +400,8 @@ function Workspace({
   const gestureEpoch = useRef(0);
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  const runtimePhaseRef = useRef(runtimePhase);
+  runtimePhaseRef.current = runtimePhase;
   const gestureActivation = useRef<(event: {isTrusted: boolean}) => Promise<boolean> | null>(() => null);
   const activationInFlight = useRef<{session: CreatorRuntimeSession; promise: Promise<boolean>} | null>(null);
   const sequenceRef = useRef(sequence);
@@ -609,16 +612,16 @@ function Workspace({
 
   useEffect(() => {
     if (!isSampleSession(session) || runtimePhase !== "ready") return;
-    const sources = createPadCaptureSources();
+    const sources = padCaptureSources.current ??= createPadCaptureSources();
     let source: PadCaptureSource = "microphone";
     try {if (localStorage.getItem("lmdj.creator.pad-capture-source.v1") === "master") source = "master";} catch {}
-    const controller = createPadCapture({
+    const deps: Parameters<typeof createPadCapture>[0] = {
       ...sources,
       start: (chosen, batch, failed, signal) => sources.start(chosen,
         isPerformanceSession(session) ? session : null, padCaptureWake.current, batch, failed, signal),
       canStart: target => {
         const current = stateRef.current;
-        return sessionRef.current === session && current.project.phase === "ready" &&
+        return sessionRef.current === session && runtimePhaseRef.current === "ready" && current.project.phase === "ready" &&
           current.project.current?.projectId === target.projectId && current.project.current.revision === target.revision &&
           current.project.current.pads[target.slot]?.assetId === null && current.transfer.phase === "idle" &&
           current.sample.pendingAction === null && !projectActions.busy &&
@@ -629,6 +632,8 @@ function Workspace({
       commit: async (target, buffer, selection, retry) => {
         if (sessionRef.current !== session || stateRef.current.project.current?.projectId !== target.projectId)
           throw new Error("Return to the original Project to save this take.");
+        if (runtimePhaseRef.current !== "ready" || stateRef.current.project.phase !== "ready")
+          throw new Error("Wait for the original Project to reopen before saving this take.");
         if (selectTransportRecording(transportRef.current) ||
           !["idle", "saved", "discarded"].includes(performControllerRef.current?.getState().recording.phase ?? "idle"))
           throw new Error("Stop the other recording before saving this take.");
@@ -645,12 +650,21 @@ function Workspace({
           if (!result.commit.runtimePublished) reportFailure("Prepare Pad recording", {code: "COOK_FAILED"});
         } finally {finishProjectAction(token);}
       },
-      changed: setPadCaptureState,
-    }, source);
+      changed: next => {if (padCapture.current === controller) setPadCaptureState(next);},
+    };
+    const controller = padCapture.current ?? createPadCapture(deps, source);
+    controller.updateDeps(deps);
     padCapture.current = controller;
     setPadCaptureState(controller.getState());
-    return () => {void controller.cancel(); if (padCapture.current === controller) padCapture.current = null;};
-  }, [session, runtimePhase]);
+    const unregister = registerRuntimeShutdownBarrier?.(() => controller.cancel());
+    return () => {unregister?.(); void controller.cancel();};
+  }, [session, runtimePhase, registerRuntimeShutdownBarrier]);
+
+  useEffect(() => () => {
+    const retiring = padCapture.current;
+    padCapture.current = null;
+    void retiring?.cancel();
+  }, []);
 
   useEffect(() => {void padCapture.current?.cancel();}, [currentProjectId]);
 

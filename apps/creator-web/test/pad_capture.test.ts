@@ -106,9 +106,9 @@ test("permission cancellation belongs to the gesture that requested it", async (
   const owner = {}; f.controller.press(target, owner);
   await f.controller.cancel({});
   expect(f.controller.getState().phase).toBe("permission");
-  await f.controller.cancel(owner);
+  const cancelled = f.controller.cancel(owner);
   expect(f.controller.getState().phase).toBe("idle");
-  granted(); await settle();
+  granted(); await cancelled; await settle();
   expect(f.controller.getState().message).not.toBe("Microphone ready. Press an empty Pad to record.");
   expect(f.start).not.toHaveBeenCalled();
 });
@@ -119,4 +119,49 @@ test("revision refusal preserves exact take and explicit retry", async () => {
   const original = f.commit.mock.calls[0]?.[1];await f.controller.save();
   expect(f.commit.mock.calls[1]?.[1]).toBe(original);
   expect(f.commit.mock.calls[1]?.[3]).toBe(true);
+});
+
+test("late callbacks from a discarded take cannot stop or append to its successor", async () => {
+  const callbacks: Array<{batch: (channels: Float32Array[]) => void; failed: (message: string) => void}> = [];
+  const f = fixture({start: async (_source, batch, failed) => {
+    callbacks.push({batch, failed}); return {stop: f.stop};
+  }});
+  f.controller.press(target, {}); await settle();
+  callbacks[0]!.batch([new Float32Array([.1])]);
+  await f.controller.cancel(); f.controller.discard();
+  const next = {...target, slot: 18};
+  f.controller.press(next, {}); await settle();
+  callbacks[1]!.batch([new Float32Array([.2, .3])]);
+  callbacks[0]!.batch([new Float32Array([.9])]);
+  callbacks[0]!.failed("Retired source failure"); await settle();
+  expect(f.controller.getState()).toMatchObject({phase: "recording", target: next, frames: 2, message: null});
+  expect(f.stop).toHaveBeenCalledTimes(1);
+  await f.controller.cancel();
+});
+
+test("cancellation waits for microphone permission resources to finish", async () => {
+  let prepared!: () => void;
+  const f = fixture({microphoneGranted: () => false,
+    prepareMicrophone: () => new Promise(resolve => {prepared = resolve;})});
+  f.controller.press(target, {});
+  let cancelled = false;
+  const barrier = f.controller.cancel().then(() => {cancelled = true;});
+  await settle(); expect(cancelled).toBe(false);
+  prepared(); await barrier;
+  expect(f.controller.getState()).toMatchObject({phase: "idle", target: null});
+  expect(f.controller.getState().message).not.toBe("Microphone ready. Press an empty Pad to record.");
+  expect(f.start).not.toHaveBeenCalled();
+});
+
+test("cancellation joins an already admitted save before retiring its Session", async () => {
+  let finish!: () => void;
+  const f = fixture({commit: () => new Promise(resolve => {finish = resolve;})});
+  const key = {}; f.controller.press(target, key); f.batch();
+  f.controller.release(key); await settle();
+  expect(f.controller.getState().phase).toBe("saving");
+  let cancelled = false;
+  const barrier = f.controller.cancel().then(() => {cancelled = true;});
+  await settle(); expect(cancelled).toBe(false);
+  finish(); await barrier;
+  expect(f.controller.getState()).toMatchObject({phase: "idle", target: null, frames: 0});
 });
