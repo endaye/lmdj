@@ -130,8 +130,19 @@ void UsbTransferEndpoint::respond(std::uint8_t opcode, std::uint32_t request_id,
     (void)usb_serial_jtag_write_bytes(output_.data(), written, 0);
 }
 
+void UsbTransferEndpoint::record_result(TransferSessionResult result) noexcept {
+  // Stale or missequenced packets do not overwrite a live transfer's view.
+  if (result == TransferSessionResult::stale_session ||
+      result == TransferSessionResult::bad_request_id) return;
+  failed_ = result != TransferSessionResult::accepted &&
+      result != TransferSessionResult::duplicate &&
+      result != TransferSessionResult::committed &&
+      result != TransferSessionResult::aborted;
+}
+
 void UsbTransferEndpoint::respond_result(std::uint8_t opcode, std::uint32_t request_id,
                                          TransferSessionResult result) noexcept {
+  record_result(result);
   const std::array<std::byte, 2> payload{
       std::byte(wire_result(result)), std::byte{}};
   respond(opcode, request_id, payload);
@@ -152,6 +163,7 @@ void UsbTransferEndpoint::respond_result_with_extra(std::uint8_t opcode,
     respond_result(opcode, request_id, TransferSessionResult::invalid_transfer);
     return;
   }
+  record_result(result);
   std::array<std::byte, transfer_max_frame> payload{};
   payload[0] = std::byte(wire_result(result));
   std::copy(extra.begin(), extra.end(), payload.begin() + 2);
@@ -170,6 +182,8 @@ void UsbTransferEndpoint::handle_frame(const TransferFrame& frame) noexcept {
     }
     const auto result = session_.hello(frame.request_id, nonce);
     if (result == TransferSessionResult::accepted) {
+      failed_ = false;
+      received_offset_ = 0;
       std::array<std::byte, 4> payload{};
       payload[2] = std::byte(transfer_max_payload & 0xffU);
       payload[3] = std::byte((transfer_max_payload >> 8U) & 0xffU);
@@ -259,6 +273,11 @@ void UsbTransferEndpoint::handle_frame(const TransferFrame& frame) noexcept {
 
 void UsbTransferEndpoint::poll() noexcept {
   if (!installed_ && !install()) return;
+  if (session_.receiving() && !host_.read_status().armed) {
+    session_.cancel_local();
+    received_offset_ = 0;
+    failed_ = false;
+  }
   const auto available = usb_serial_jtag_read_bytes(input_.data() + input_size_,
                                                      input_.size() - input_size_, 0);
   if (available > 0) input_size_ += static_cast<std::size_t>(available);
@@ -285,7 +304,10 @@ void UsbTransferEndpoint::poll() noexcept {
               input_.begin() + static_cast<std::ptrdiff_t>(input_size_), input_.begin());
     input_size_ -= frame_size;
   }
-  (void)session_.expire(now_ms());
+  if (session_.expire(now_ms())) {
+    received_offset_ = 0;
+    failed_ = true;
+  }
 }
 
 }  // namespace lmdj::cardputer
