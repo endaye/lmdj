@@ -1,7 +1,7 @@
 ---
 id: batch-key-omits-executed-host-test
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-10-02
     occurrence: https://github.com/endaye/lmdj/pull/1808
@@ -9,7 +9,7 @@ recurrences:
   - date: 2026-10-03
     occurrence: https://github.com/endaye/lmdj/pull/1810
     observed_by: Codex
-exit: none
+exit: gate:tests/build/ci_local_preflight_test.py
 escalation: https://github.com/endaye/lmdj/issues/1811
 ---
 
@@ -38,8 +38,12 @@ ASan/coverage also omit their executed `tests/host/mcp_stdio_test.py`. C2 ran
 the affected lanes with `--no-cache`; it retained failed transcripts, and did
 not claim that an unchanged key proved a rerun or an observed false pass.
 
-The input-closure repair is tracked in [the escalation Issue](https://github.com/endaye/lmdj/issues/1811);
-this product Task records the recurrence without changing the CI control plane.
+The separate control-plane repair for [#1811](https://github.com/endaye/lmdj/issues/1811)
+keeps scheduling ownership as a floor and adds audited command read domains.
+Its deterministic regression mutates each omitted test, checks compiled and
+registered inputs from actual CMake/shell commands, and preserves unrelated
+Demo content reuse. The existing two observed occurrences remain the history;
+this repair is not another observed recurrence.
 
 ## How to apply
 
@@ -50,3 +54,8 @@ and retain the head and complete result in the PR, in addition to its key.
 Do not skip the test or widen timeouts. Fixing the CI input closure belongs in a
 separate control-plane Task; this record does not authorize changing it while
 shipping a product Task.
+
+Keep `LANE_INPUT_ROOTS` in `scripts/ci/local_preflight.py` aligned with every
+lane command, including compiled test targets and transitive fixture producers.
+The `CacheKeyTest` input-closure checks name missing inputs and their remedy;
+run `python3 tests/build/ci_local_preflight_test.py` when changing lane commands.
