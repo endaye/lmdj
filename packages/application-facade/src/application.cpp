@@ -503,15 +503,73 @@ std::string_view trigger_mode_name(domain::TriggerMode mode) {
   return "one_shot";
 }
 
-// The five 5.0.0 playback keys are required; a lmdj.project.v5 5.1.0 parity
-// key may be omitted, which means its default, and an unknown key is refused.
+// An EQ shelf band (lmdj.project.v5 5.2.0): exact keys, a shelf or cut
+// kind, and the band's frequency range.
+domain::PadEqShelf eq_shelf_value(
+    const nlohmann::json& encoded,
+    std::int32_t minimum_hz,
+    std::int32_t maximum_hz) {
+  require(exact_keys(encoded, {"kind", "freq_hz", "gain_millidb"}),
+          "eq band shape is invalid");
+  require(encoded.at("kind").is_string(), "eq band kind must be a string");
+  const auto& kind = encoded.at("kind").get_ref<const std::string&>();
+  require(kind == "shelf" || kind == "cut", "eq band kind is invalid");
+  return domain::PadEqShelf{
+      kind == "cut" ? domain::EqBandKind::cut : domain::EqBandKind::shelf,
+      static_cast<std::int32_t>(
+          signed_field(encoded, "freq_hz", minimum_hz, maximum_hz)),
+      static_cast<std::int32_t>(signed_field(
+          encoded, "gain_millidb", domain::kPadEqGainMillidbMin,
+          domain::kPadEqGainMillidbMax)),
+  };
+}
+
+// The three optional EQ bands; an absent band is bypassed.
+domain::PadEq eq_value(const nlohmann::json& encoded) {
+  require(encoded.is_object(), "eq shape is invalid");
+  for (const auto& [key, value] : encoded.items()) {
+    (void)value;
+    require(key == "low" || key == "mid" || key == "high",
+            "eq shape is invalid");
+  }
+  domain::PadEq eq;
+  if (encoded.contains("low")) {
+    eq.low = eq_shelf_value(encoded.at("low"), domain::kPadEqLowFreqHzMin,
+                            domain::kPadEqLowFreqHzMax);
+  }
+  if (encoded.contains("mid")) {
+    const auto& mid = encoded.at("mid");
+    require(exact_keys(mid, {"freq_hz", "gain_millidb", "q_milli"}),
+            "eq band shape is invalid");
+    eq.mid = domain::PadEqBell{
+        static_cast<std::int32_t>(signed_field(
+            mid, "freq_hz", domain::kPadEqMidFreqHzMin,
+            domain::kPadEqMidFreqHzMax)),
+        static_cast<std::int32_t>(signed_field(
+            mid, "gain_millidb", domain::kPadEqGainMillidbMin,
+            domain::kPadEqGainMillidbMax)),
+        static_cast<std::int32_t>(signed_field(
+            mid, "q_milli", domain::kPadEqMidQMilliMin,
+            domain::kPadEqMidQMilliMax)),
+    };
+  }
+  if (encoded.contains("high")) {
+    eq.high = eq_shelf_value(encoded.at("high"), domain::kPadEqHighFreqHzMin,
+                             domain::kPadEqHighFreqHzMax);
+  }
+  return eq;
+}
+
+// The five 5.0.0 playback keys are required; a lmdj.project.v5 5.1.0 or 5.2.0
+// parity key may be omitted, which means its default, and an unknown key is
+// refused.
 domain::PadPlayback playback_value(const nlohmann::json& encoded) {
   static constexpr std::array<std::string_view, 5> base{
       "trim_start_frame", "trim_end_frame", "trigger_mode", "gain_millidb",
       "muted"};
-  static constexpr std::array<std::string_view, 6> parity{
+  static constexpr std::array<std::string_view, 10> parity{
       "reverse", "pitch_cents", "pan", "loop_mode", "loop_start_frame",
-      "loop_crossfade_frames"};
+      "loop_crossfade_frames", "attack_ms", "release_ms", "tone", "eq"};
   require(encoded.is_object(), "playback shape is invalid");
   for (const auto key : base) {
     require(encoded.contains(std::string(key)), "playback shape is invalid");
@@ -564,6 +622,21 @@ domain::PadPlayback playback_value(const nlohmann::json& encoded) {
   if (encoded.contains("loop_crossfade_frames")) {
     playback.loop_crossfade_frames =
         unsigned_field(encoded, "loop_crossfade_frames");
+  }
+  if (encoded.contains("attack_ms")) {
+    playback.attack_ms = static_cast<std::int32_t>(
+        signed_field(encoded, "attack_ms", 0, domain::kPadAttackMsMax));
+  }
+  if (encoded.contains("release_ms")) {
+    playback.release_ms = static_cast<std::int32_t>(
+        signed_field(encoded, "release_ms", 0, domain::kPadReleaseMsMax));
+  }
+  if (encoded.contains("tone")) {
+    playback.tone = static_cast<std::int32_t>(signed_field(
+        encoded, "tone", domain::kPadToneMin, domain::kPadToneMax));
+  }
+  if (encoded.contains("eq")) {
+    playback.eq = eq_value(encoded.at("eq"));
   }
   return playback;
 }
@@ -659,6 +732,37 @@ nlohmann::json playback_json(const domain::PadPlayback& playback) {
   }
   if (playback.loop_crossfade_frames != 0) {
     encoded["loop_crossfade_frames"] = playback.loop_crossfade_frames;
+  }
+  if (playback.attack_ms != 0) {
+    encoded["attack_ms"] = playback.attack_ms;
+  }
+  if (playback.release_ms != 0) {
+    encoded["release_ms"] = playback.release_ms;
+  }
+  if (playback.tone != 0) {
+    encoded["tone"] = playback.tone;
+  }
+  // Only present bands are emitted, and no `eq` at all when all are bypassed.
+  const auto shelf = [](const domain::PadEqShelf& band) {
+    return nlohmann::json{
+        {"kind", band.kind == domain::EqBandKind::cut ? "cut" : "shelf"},
+        {"freq_hz", band.freq_hz},
+        {"gain_millidb", band.gain_millidb}};
+  };
+  nlohmann::json eq = nlohmann::json::object();
+  if (playback.eq.low.has_value()) {
+    eq["low"] = shelf(*playback.eq.low);
+  }
+  if (playback.eq.mid.has_value()) {
+    eq["mid"] = {{"freq_hz", playback.eq.mid->freq_hz},
+                 {"gain_millidb", playback.eq.mid->gain_millidb},
+                 {"q_milli", playback.eq.mid->q_milli}};
+  }
+  if (playback.eq.high.has_value()) {
+    eq["high"] = shelf(*playback.eq.high);
+  }
+  if (!eq.empty()) {
+    encoded["eq"] = std::move(eq);
   }
   return encoded;
 }

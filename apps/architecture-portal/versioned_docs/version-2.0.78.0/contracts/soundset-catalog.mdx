@@ -1,0 +1,43 @@
+---
+title: Sound Set Catalog Contract
+area: contracts
+status: implemented
+owners: [core, product, hosts]
+contracts: [lmdj.soundset-catalog.v1]
+source_paths:
+  - contracts/soundset-catalog/lmdj.soundset-catalog.v1.schema.json
+  - packages/project-io
+  - packages/application-facade
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="contracts" id="lmdj.soundset-catalog.v1" />
+
+## 权威内容
+
+`lmdj.soundset-catalog.v1 · 1.0.0` 是 Catalog 索引：一个 `entries` 数组，每一项声明
+`set_id`、`version`、`manifest_sha256`、`total_bytes`、`name`、`publisher`、
+`roles_summary` 与 `license_summary`，`bpm` 与 `key` 可选。索引只是**声明**：
+`manifest_sha256` 之外的每一个字段都是 Catalog 的说法，安装前一律以清单本身为准，
+`license_summary` 与清单不符的 Set 会被拒绝。
+
+## 与 Project Truth 的关系
+
+Catalog 是 Workspace/Host 状态，不是 Project Truth，也不是 Provider 选择。索引本身不
+经 `CatalogTransport` 取得——transport 只按 `{object_kind, sha256}` 解析对象，无法命名
+索引，因此拥有 Catalog endpoint 的 Host 负责取回索引字节并交给 Core。
+
+## 安全与发布
+
+Catalog 不可达不是致命错误：它以 `IO_ERROR` 与 `details.reason = catalog_unavailable`
+上报，且已发布进 Workspace Set Store 的每一个 Set 仍可列出、检查与安装。索引长度受
+Host 上限约束；本地目录、OPFS 缓存与网络 endpoint 是同一次读取的三种实现，Core 不含
+任何网络代码。
+
+## 使用方与证据
+
+原生 Host 使用 Workspace 本地的内容寻址目录与索引。Web Host 由浏览器侧执行 `fetch`
+并把字节暂存给 Core，暂存缓冲的字节数与对象数是 Host 容量，与四项 Set Store 上限相互
+独立。Schema conformance、Catalog transport 与缓存测试、以及 Catalog 不可达的降级用例
+固定该边界。

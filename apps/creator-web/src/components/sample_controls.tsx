@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState, type ReactNode} from "react";
 
+import {EqEditor} from "./eq_editor";
 import {ModalDialog} from "./modal_dialog";
 import {ParameterSlider} from "./parameter_slider";
 import type {
@@ -70,6 +71,17 @@ function formatPitch(cents: number): string {
 function formatPan(pan: number): string {
   if (pan === 0) return "C";
   return pan < 0 ? `L${-pan}` : `R${pan}`;
+}
+
+// A ramp never renders shorter than the 2 ms declick (lmdj.project.v5 5.2.0).
+function formatRamp(ms: number): string {
+  return ms <= 2 ? "2 ms" : `${ms} ms`;
+}
+
+// Negative is a low-pass and positive a high-pass; |tone| <= 2 is bypassed.
+function formatTone(tone: number): string {
+  if (tone >= -2 && tone <= 2) return "Off";
+  return tone < 0 ? `LP ${-tone}` : `HP ${tone}`;
 }
 
 // Ping-pong has no seam to blend, so choosing it clears the crossfade.
@@ -226,6 +238,67 @@ export function SampleControls({
         onCommit={onCommit}
         onCancel={onCancel}
       />
+      <ParameterSlider
+        label="Attack"
+        ariaLabel={`${padLabel} Attack`}
+        className="attack-control"
+        field="attackMs"
+        min={0}
+        max={2_000}
+        step={1}
+        scale={1}
+        format={formatRamp}
+        playback={playback}
+        disabled={disabled}
+        audioSuspended={audioSuspended}
+        onPreview={onPreview}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />
+      {/* A one-shot plays through and never plays its release. */}
+      <ParameterSlider
+        label="Release"
+        ariaLabel={`${padLabel} Release`}
+        className="release-control"
+        field="releaseMs"
+        min={0}
+        max={4_000}
+        step={1}
+        scale={1}
+        format={formatRamp}
+        playback={playback}
+        disabled={disabled || playback.triggerMode === "one_shot"}
+        audioSuspended={audioSuspended}
+        onPreview={onPreview}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />
+      <ParameterSlider
+        label="Tone"
+        ariaLabel={`${padLabel} Tone`}
+        className="tone-control"
+        field="tone"
+        min={-100}
+        max={100}
+        step={1}
+        scale={1}
+        format={formatTone}
+        playback={playback}
+        disabled={disabled}
+        audioSuspended={audioSuspended}
+        onPreview={onPreview}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />
+      <EqEditor
+        padLabel={padLabel}
+        playback={playback}
+        disabled={disabled}
+        audioSuspended={audioSuspended}
+        onPreview={onPreview}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />
       <button
         ref={resetTrigger}
         type="button"
@@ -242,7 +315,7 @@ export function SampleControls({
           onCancel={() => setConfirmingReset(false)}
         >
           <h2 id="reset-heading">Reset {padLabel}?</h2>
-          <p>Keep the Sample, restore its full range, One Shot, 0.0 dB, Mute off, and no reverse, pitch, pan or loop settings.</p>
+          <p>Keep the Sample, restore its full range, One Shot, 0.0 dB, Mute off, and no reverse, pitch, pan, loop, envelope, tone or EQ settings.</p>
           <div className="confirmation-actions">
             <button type="button" onClick={() => setConfirmingReset(false)}>
               Cancel reset

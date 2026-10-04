@@ -427,6 +427,24 @@ def input_schemas() -> dict[str, dict]:
         },
         ["bank", "pad"],
     )
+    def eq_shelf(minimum_hz: int, maximum_hz: int) -> dict:
+        return object_schema(
+            {
+                "kind": {"type": "string", "enum": ["shelf", "cut"]},
+                "freq_hz": {
+                    "type": "integer",
+                    "minimum": minimum_hz,
+                    "maximum": maximum_hz,
+                },
+                "gain_millidb": {
+                    "type": "integer",
+                    "minimum": -18_000,
+                    "maximum": 18_000,
+                },
+            },
+            ["kind", "freq_hz", "gain_millidb"],
+        )
+
     playback = object_schema(
         {
             "trim_start_frame": uint,
@@ -459,6 +477,37 @@ def input_schemas() -> dict[str, dict]:
             "loop_mode": {"type": "string", "enum": ["forward", "ping_pong"]},
             "loop_start_frame": {"oneOf": [uint, {"type": "null"}]},
             "loop_crossfade_frames": uint,
+            # lmdj.project.v5 5.2.0: optional; an absent EQ band is bypassed.
+            "attack_ms": {"type": "integer", "minimum": 0, "maximum": 2_000},
+            "release_ms": {"type": "integer", "minimum": 0, "maximum": 4_000},
+            "tone": {"type": "integer", "minimum": -100, "maximum": 100},
+            "eq": object_schema(
+                {
+                    "low": eq_shelf(20, 2_000),
+                    "mid": object_schema(
+                        {
+                            "freq_hz": {
+                                "type": "integer",
+                                "minimum": 100,
+                                "maximum": 10_000,
+                            },
+                            "gain_millidb": {
+                                "type": "integer",
+                                "minimum": -18_000,
+                                "maximum": 18_000,
+                            },
+                            "q_milli": {
+                                "type": "integer",
+                                "minimum": 100,
+                                "maximum": 10_000,
+                            },
+                        },
+                        ["freq_hz", "gain_millidb", "q_milli"],
+                    ),
+                    "high": eq_shelf(1_000, 20_000),
+                },
+                [],
+            ),
         },
         [
             "trim_start_frame",

@@ -114,6 +114,7 @@ bool valid_control_kind(PadControlKind kind) noexcept {
     case PadControlKind::release:
     case PadControlKind::stop_slot:
     case PadControlKind::stop_all:
+    case PadControlKind::stop_slot_live:
     case PadControlKind::preview_set:
     case PadControlKind::preview_clear:
     case PadControlKind::audition_start:
@@ -2158,6 +2159,16 @@ void RealtimeEngine::render(
     if (event.kind == PadControlKind::audition_stop) {
       for (auto& voice : voices_) {
         if (voice.active && is_audition_bank_slot(voice.bank_slot)) {
+          stop_voice(voice, absolute_start_frame, VoiceStop::declick);
+        }
+      }
+      continue;
+    }
+    if (event.kind == PadControlKind::stop_slot_live) {
+      for (auto& voice : voices_) {
+        if (voice.active && !is_audition_bank_slot(voice.bank_slot) &&
+            voice.slot == event.slot && !voice.pattern_voice &&
+            voice.origin == PadControlOrigin::host_input) {
           stop_voice(voice, absolute_start_frame, VoiceStop::declick);
         }
       }

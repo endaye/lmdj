@@ -108,8 +108,113 @@ void aggregate_output(bool exact) {
   else f.reason(result, ErrorCode::provider_failed, "output_contract_invalid");
   LMDJ_CHECK(config.staging_budget->used_bytes() == 0);
 }
+
+void shared_roles_validate_independently(bool reject_secondary) {
+  Fixture f;
+  auto registration = shared_registration(f);
+  std::vector<std::string> validated;
+  for (auto& validator : registration.output_validation) {
+    validator.validate = [&](const auto&, auto, const auto& binding, auto bytes, auto) {
+      validated.push_back(binding.port);
+      LMDJ_CHECK(bytes.size() == 1 && bytes[0] == std::byte{'a'});
+      if (reject_secondary && binding.port == "secondary")
+        return Result<void>::failure({ErrorCode::invalid_argument, "secondary schema"});
+      return Result<void>::success();
+    };
+  }
+  f.install(std::move(registration));
+  const auto config = options();
+  const bool reject_requested = reject_secondary;
+  reject_secondary = false;
+  const auto prior = f.execute(request(), config, "immutable");
+  LMDJ_CHECK(prior.candidate.has_value());
+  validated.clear();
+  reject_secondary = reject_requested;
+  const auto result = f.execute(request(), config);
+  LMDJ_CHECK(validated == (std::vector<std::string>{"primary", "secondary"}));
+  if (reject_secondary) {
+    f.reason(result, ErrorCode::provider_failed, "output_schema_invalid");
+    LMDJ_CHECK(f.store.inspect(result.attempt_id).value().minted_outputs.empty());
+    LMDJ_CHECK(!std::filesystem::exists(f.path / ".lmdj-workspace/attempts/attempt-bytes"));
+  } else LMDJ_CHECK(result.candidate.has_value());
+  LMDJ_CHECK(f.store.inspect(prior.attempt_id).value().candidate_outputs == prior.candidate->outputs);
+  for (const auto& binding : prior.candidate->outputs) {
+    const auto bytes = f.store.read_candidate_artifact(prior.attempt_id, binding.artifact, 1);
+    LMDJ_CHECK(bytes.has_value() && bytes.value() == std::vector{std::byte{'a'}});
+  }
+  LMDJ_CHECK(config.staging_budget->used_bytes() == 0);
+}
+void repeated_output_is_refused(bool same_port) {
+  Fixture f;
+  bool refused = false;
+  auto registration = shared_registration(f, [&](auto context) {
+    const std::array payload{std::byte{'a'}};
+    const auto first = context.output("primary", payload, "application/x-lmdj-proof");
+    LMDJ_CHECK(first.has_value());
+    const auto repeated = context.output(same_port ? "primary" : "secondary", payload,
+        same_port ? "application/x-lmdj-proof" : "application/octet-stream");
+    refused = !repeated.has_value();
+    // Ignoring the refusal must still fail the whole Attempt.
+    return AttemptResult{context.attempt_id, Candidate{CandidateId{context.attempt_id.value()},
+        {{"primary", first.value()}}, nlohmann::json::object()}, std::nullopt};
+  });
+  // Avoid testing only the per-port max_count or media-type allowlist.
+  registration.capabilities[0].output_artifacts[0].max_count = 2;
+  registration.capabilities[0].output_artifacts[1].media_types.push_back("application/octet-stream");
+  f.install(std::move(registration));
+  const auto config = options();
+  const auto result = f.execute(request(), config);
+  LMDJ_CHECK(refused);
+  f.reason(result, ErrorCode::provider_failed, "output_contract_invalid");
+  LMDJ_CHECK(config.staging_budget->used_bytes() == 0);
+  LMDJ_CHECK(!std::filesystem::exists(f.path / ".lmdj-workspace/attempts/attempt-bytes"));
+}
+void shared_candidate_binding_is_exact(int damage) {
+  Fixture f;
+  auto registration = shared_registration(f, [damage](auto context) {
+    auto result = shared_outputs(context);
+    auto& outputs = result.candidate->outputs;
+    if (damage == 0) outputs.pop_back();
+    if (damage == 1) outputs.push_back(outputs[0]);
+    if (damage == 2) ++outputs[1].artifact.byte_length;
+    if (damage == 3) outputs[1].artifact.media_type = "audio/wav";
+    if (damage == 4) outputs[1].port = "primary";
+    return result;
+  });
+  for (auto& port : registration.capabilities[0].output_artifacts) {
+    port.max_count = 2;
+    port.media_types.push_back("audio/wav");
+  }
+  f.install(std::move(registration));
+  const auto config = options();
+  const auto result = f.execute(request(), config);
+  f.reason(result, ErrorCode::provider_failed, "output_contract_invalid");
+  LMDJ_CHECK(f.store.inspect(result.attempt_id).value().candidate_outputs.empty());
+  LMDJ_CHECK(!std::filesystem::exists(f.path / ".lmdj-workspace/attempts/attempt-bytes"));
+  LMDJ_CHECK(config.staging_budget->used_bytes() == 0);
+}
+void shared_output_budget(bool staging, bool exact) {
+  Fixture f;
+  f.install(shared_registration(f));
+  auto config = options();
+  // One input byte plus two retained logical output buffers.
+  if (staging) config.staging_budget = std::make_shared<StagingBudget>(exact ? 3 : 2);
+  else config.maximum_output_bytes = exact ? 2 : 1;
+  const auto result = f.execute(request(), config);
+  if (exact) LMDJ_CHECK(result.candidate.has_value());
+  else {
+    f.reason(result, ErrorCode::provider_failed, "output_contract_invalid");
+    LMDJ_CHECK(!std::filesystem::exists(f.path / ".lmdj-workspace/attempts/attempt-bytes"));
+  }
+  LMDJ_CHECK(config.staging_budget->used_bytes() == 0);
+}
 int main() {
   try {
+    shared_roles_validate_independently(false); shared_roles_validate_independently(true);
+    repeated_output_is_refused(false); repeated_output_is_refused(true);
+    for (int damage = 0; damage < 5; ++damage) shared_candidate_binding_is_exact(damage);
+    for (bool staging : {false, true})
+      for (bool exact : {false, true}) shared_output_budget(staging, exact);
     missing_validator(); validator_rejects(false); validator_rejects(true);
     scratch_budget();
     for (int mode = 0; mode < 3; ++mode) ignored_sink_failure(mode);
