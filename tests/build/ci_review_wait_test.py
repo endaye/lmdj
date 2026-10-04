@@ -621,6 +621,78 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(result["status"], "pending")
         self.assertEqual(result["diagnostics"][0]["status"], "portal_gate_pending")
 
+    def portal_run(self, run_id, *, status="completed", conclusion="success",
+                   started_at="2026-09-10T01:00:00Z", completed_at="2026-09-10T01:05:00Z",
+                   name=None, head_sha=None):
+        return {"id": run_id, "name": wait.PORTAL_CHECK_RUN if name is None else name,
+                "head_sha": A if head_sha is None else head_sha, "status": status,
+                "conclusion": conclusion, "started_at": started_at, "completed_at": completed_at}
+
+    def test_two_green_portal_runs_on_one_head_stay_eligible(self):
+        # #1820: editing the PR body re-runs PR Contract and leaves a second
+        # successful Architecture Portal provenance run beside the first.
+        self.render_generated()
+        self.check_runs = [
+            self.portal_run(500, completed_at="2026-09-10T01:05:00Z"),
+            self.portal_run(502, name="PR Gate", conclusion="failure",
+                            completed_at="2026-09-10T01:20:00Z"),
+            self.portal_run(501, completed_at="2026-09-10T01:12:00Z"),
+        ]
+        result = self.check()
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["evidence"][0]["kind"], "generated")
+        self.assertEqual(result["diagnostics"], [])
+
+    def test_latest_failed_portal_run_stays_pending_beside_an_older_green_run(self):
+        self.render_generated()
+        self.check_runs = [
+            self.portal_run(100),
+            self.portal_run(300, conclusion="failure", completed_at="2026-09-10T01:30:00Z"),
+            self.portal_run(200, completed_at="2026-09-10T01:15:00Z"),
+        ]
+        result = self.check()
+        self.assertFalse(result["eligible"], result)
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(result["diagnostics"][0]["status"], "portal_gate_pending")
+        self.assertIn("found 3 check runs", result["diagnostics"][0]["why"])
+
+    def test_in_progress_latest_portal_run_stays_pending_beside_an_older_green_run(self):
+        self.render_generated()
+        self.check_runs = [
+            self.portal_run(100),
+            self.portal_run(300, status="in_progress", conclusion=None, completed_at=None,
+                            started_at="2026-09-10T01:25:00Z"),
+            self.portal_run(200, completed_at="2026-09-10T01:15:00Z"),
+        ]
+        result = self.check()
+        self.assertFalse(result["eligible"], result)
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(result["diagnostics"][0]["status"], "portal_gate_pending")
+        self.assertIn("found 3 check runs", result["diagnostics"][0]["why"])
+
+    def test_later_green_portal_run_admits_over_an_older_failure(self):
+        self.render_generated()
+        self.check_runs = [
+            self.portal_run(100, conclusion="failure"),
+            self.portal_run(300, completed_at="2026-09-10T01:30:00Z"),
+            self.portal_run(200, conclusion="failure", completed_at="2026-09-10T01:15:00Z"),
+        ]
+        result = self.check()
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["diagnostics"], [])
+
+    def test_older_unfinished_portal_run_does_not_hide_a_later_green_run(self):
+        self.render_generated()
+        self.check_runs = [
+            self.portal_run(200, conclusion="failure", completed_at="2026-09-10T01:20:00Z"),
+            self.portal_run(400, completed_at="2026-09-10T01:40:00Z"),
+            self.portal_run(100, status="in_progress", conclusion=None, completed_at=None,
+                            started_at="2026-09-10T00:30:00Z"),
+        ]
+        result = self.check()
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["diagnostics"], [])
+
     def test_v2_foreign_malformed_and_duplicate_markers_are_invalid(self):
         self.render_v2()
         for name, mutate in (
