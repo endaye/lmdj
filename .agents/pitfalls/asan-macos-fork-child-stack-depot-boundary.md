@@ -15,6 +15,9 @@ recurrences:
   - date: 2026-10-04
     occurrence: https://github.com/endaye/lmdj/pull/1829
     observed_by: Codex (GPT-6)
+  - date: 2026-10-04
+    occurrence: https://github.com/endaye/lmdj/issues/1815
+    observed_by: Codex
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/1752
 ---
@@ -59,3 +62,15 @@ allocation site. Keep the failed macOS lane visible and retain #1752 as the
 existing escalation; an input-bound passing lane or explicit owner risk
 acceptance is still required before merge. Do not move TMPDIR or disable ASan
 to turn this observation into a pass.
+
+Fifth recurrence (#1815). The retained 2026-10-04 23:22:24 crash report
+for `lmdj_facade_candidate_store_tests` identifies `retry_finishes_during_adoption`
+line 101 → `fork` → `_notify_fork_child` → intercepted `calloc` →
+`StackDepotBase::Put` → `TwoLevelMap::Create` → corrupt unfair lock / SIGKILL.
+This accounts for the parent's ready-pipe EOF; no AF_UNIX endpoint exists in
+the Candidate Store path. A different TMPDIR changes allocations and does not
+prove a socket-path overflow. #1815 replaces all eleven bare spawn sites in
+this one test file with fresh `posix_spawn` roles, retaining the same hooks,
+pipes, crash boundaries, and parent-side assertions. The remaining six files
+and global source guard remain the scope of #1752; this partial repair does
+not absorb that repository-wide pitfall.
