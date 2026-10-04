@@ -303,8 +303,10 @@ const PLAYBACK_BASE_FIELDS = Object.freeze([
   "gainMillidb",
   "muted",
 ]);
-// lmdj.project.v5 5.1.0. The session's playback object always carries every
-// field; the wire carries a parity field only when it differs from its default.
+// lmdj.project.v5 5.1.0 and 5.2.0. The session's playback object always
+// carries every field; the wire carries a parity field only when it differs
+// from its default. `eq` is handled separately below: it is an object of three
+// bands, each null when bypassed.
 const PLAYBACK_PARITY_DEFAULTS = Object.freeze({
   reverse: false,
   pitchCents: 0,
@@ -312,6 +314,9 @@ const PLAYBACK_PARITY_DEFAULTS = Object.freeze({
   loopMode: "forward",
   loopStartFrame: null,
   loopCrossfadeFrames: 0,
+  attackMs: 0,
+  releaseMs: 0,
+  tone: 0,
 });
 const PLAYBACK_PARITY_WIRE = Object.freeze({
   reverse: "reverse",
@@ -320,7 +325,52 @@ const PLAYBACK_PARITY_WIRE = Object.freeze({
   loopMode: "loop_mode",
   loopStartFrame: "loop_start_frame",
   loopCrossfadeFrames: "loop_crossfade_frames",
+  attackMs: "attack_ms",
+  releaseMs: "release_ms",
+  tone: "tone",
 });
+const PLAYBACK_EQ_BYPASSED = Object.freeze({low: null, mid: null, high: null});
+const PLAYBACK_EQ_SHELF_HZ = Object.freeze({
+  low: Object.freeze([20, 2_000]),
+  high: Object.freeze([1_000, 20_000]),
+});
+
+function integerIn(value, minimum, maximum) {
+  return Number.isSafeInteger(value) && value >= minimum && value <= maximum;
+}
+
+// One session EQ band (null is bypassed) to its wire form, or undefined when
+// the band is invalid.
+function wireEqBand(band, value) {
+  if (value === null) {
+    return null;
+  }
+  if (band === "mid") {
+    return hasFields(value, ["freqHz", "gainMillidb", "qMilli"], []) &&
+        integerIn(value.freqHz, 100, 10_000) &&
+        integerIn(value.gainMillidb, -18_000, 18_000) &&
+        integerIn(value.qMilli, 100, 10_000)
+      ? {freq_hz: value.freqHz, gain_millidb: value.gainMillidb, q_milli: value.qMilli}
+      : undefined;
+  }
+  const [minimumHz, maximumHz] = PLAYBACK_EQ_SHELF_HZ[band];
+  return hasFields(value, ["kind", "freqHz", "gainMillidb"], []) &&
+      ["shelf", "cut"].includes(value.kind) &&
+      integerIn(value.freqHz, minimumHz, maximumHz) &&
+      integerIn(value.gainMillidb, -18_000, 18_000)
+    ? {kind: value.kind, freq_hz: value.freqHz, gain_millidb: value.gainMillidb}
+    : undefined;
+}
+
+// One wire EQ band to its session form; a missing band is bypassed.
+function sessionEqBand(band, value) {
+  if (value === undefined) {
+    return null;
+  }
+  return band === "mid"
+    ? Object.freeze({freqHz: value.freq_hz, gainMillidb: value.gain_millidb, qMilli: value.q_milli})
+    : Object.freeze({kind: value.kind, freqHz: value.freq_hz, gainMillidb: value.gain_millidb});
+}
 
 function hasFields(value, required, optional) {
   return (
@@ -336,7 +386,7 @@ function hasFields(value, required, optional) {
 
 function wirePlayback(value) {
   if (
-    !hasFields(value, PLAYBACK_BASE_FIELDS, Object.keys(PLAYBACK_PARITY_WIRE)) ||
+    !hasFields(value, PLAYBACK_BASE_FIELDS, [...Object.keys(PLAYBACK_PARITY_WIRE), "eq"]) ||
     !isUnsignedInteger(value.trimStartFrame) ||
     !(
       value.trimEndFrame === null ||
@@ -369,9 +419,26 @@ function wirePlayback(value) {
     parity.pan > 100 ||
     !["forward", "ping_pong"].includes(parity.loopMode) ||
     !(parity.loopStartFrame === null || isUnsignedInteger(parity.loopStartFrame)) ||
-    !isUnsignedInteger(parity.loopCrossfadeFrames)
+    !isUnsignedInteger(parity.loopCrossfadeFrames) ||
+    !integerIn(parity.attackMs, 0, 2_000) ||
+    !integerIn(parity.releaseMs, 0, 4_000) ||
+    !integerIn(parity.tone, -100, 100)
   ) {
     throw new TypeError("Sample playback is invalid");
+  }
+  const eq = Object.hasOwn(value, "eq") ? value.eq : PLAYBACK_EQ_BYPASSED;
+  if (!hasFields(eq, ["low", "mid", "high"], [])) {
+    throw new TypeError("Sample playback is invalid");
+  }
+  const wireEq = {};
+  for (const band of ["low", "mid", "high"]) {
+    const encoded = wireEqBand(band, eq[band]);
+    if (encoded === undefined) {
+      throw new TypeError("Sample playback is invalid");
+    }
+    if (encoded !== null) {
+      wireEq[band] = Object.freeze(encoded);
+    }
   }
   const wire = {
     trim_start_frame: value.trimStartFrame,
@@ -385,11 +452,14 @@ function wirePlayback(value) {
       wire[key] = parity[field];
     }
   }
+  if (Object.keys(wireEq).length !== 0) {
+    wire.eq = Object.freeze(wireEq);
+  }
   return Object.freeze(wire);
 }
 
 function normalizePlayback(value) {
-  const parityKeys = Object.values(PLAYBACK_PARITY_WIRE);
+  const parityKeys = [...Object.values(PLAYBACK_PARITY_WIRE), "eq"];
   if (!hasFields(value, [
     "trim_start_frame",
     "trim_end_frame",
@@ -411,6 +481,23 @@ function normalizePlayback(value) {
       ? value[key]
       : PLAYBACK_PARITY_DEFAULTS[field];
   }
+  const eq = Object.hasOwn(value, "eq") ? value.eq : {};
+  // Each present band has exactly its own keys; a null or extended band is
+  // a protocol mismatch, never silently trimmed.
+  const bandKeys = {
+    low: ["kind", "freq_hz", "gain_millidb"],
+    mid: ["freq_hz", "gain_millidb", "q_milli"],
+    high: ["kind", "freq_hz", "gain_millidb"],
+  };
+  if (!hasFields(eq, [], ["low", "mid", "high"]) ||
+    Object.entries(eq).some(([band, encoded]) => !hasFields(encoded, bandKeys[band], []))) {
+    throw protocolMismatch("Sample playback result is invalid");
+  }
+  session.eq = Object.freeze({
+    low: sessionEqBand("low", eq.low),
+    mid: sessionEqBand("mid", eq.mid),
+    high: sessionEqBand("high", eq.high),
+  });
   try {
     wirePlayback(session);
   } catch {

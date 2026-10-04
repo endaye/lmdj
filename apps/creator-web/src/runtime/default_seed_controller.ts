@@ -21,6 +21,7 @@ export function createDefaultSeedController(options: {
   const seed = options.seed;
   let cancelled = false;
   const running = new Set<number>();
+  const locallyAdmitted = new Set<string>();
   const owns = () => !cancelled && options.current()?.projectId === seed.projectId;
   const persist = () => {saveDefaultSeed(options.storage, seed); options.changed(structuredClone(seed));};
   const identity = {setId: seed.setId, version: seed.version, manifestSha256: seed.manifestSha256};
@@ -57,6 +58,7 @@ export function createDefaultSeedController(options: {
               state.assignmentObserved = false;
               try {persist();} // Replay identity survives a lost commit response.
               catch (error) {state.request = null; throw error;}
+              locallyAdmitted.add(request.commandId);
             }
             return true;
           });
@@ -81,10 +83,11 @@ export function createDefaultSeedController(options: {
           if (code !== "REVISION_CONFLICT") throw error;
           await options.refresh();
           if (!owns() || retired()) return;
-          // Missing history in an older journal cannot prove that no user
-          // assignment preceded Undo. Only a newly admitted, unobserved
-          // request may rebase; a known receipt never enters this refusal.
-          if (state.assignmentObserved !== false ||
+          // A restored false marker describes the previous owner's history,
+          // not edits while it was absent. Rebase only this live Controller's
+          // unobserved admissions; a known receipt never enters this refusal.
+          if (state.request === null || !locallyAdmitted.has(state.request.commandId) ||
+              state.assignmentObserved !== false ||
               options.current()!.pads.some(pad => pad.slot === slot && pad.assetId !== null)) {
             state.phase = "retired"; persist(); return;
           }

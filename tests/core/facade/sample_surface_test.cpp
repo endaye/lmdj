@@ -1943,7 +1943,7 @@ void test_parity_playback_json_round_trips_through_inspect() {
   const auto project = parity_project(application, temp, 900);
   LMDJ_CHECK(inspected_playback(application, project).size() == 5);
   std::uint64_t revision = 1;
-  for (const auto variant : {"forward", "ping_pong"}) {
+  for (const auto variant : {"forward", "ping_pong", "tone"}) {
     check_success(
         application.command({
             {"operation", "sample.update_pad"},
@@ -1976,6 +1976,43 @@ void test_parity_playback_refuses_an_unknown_key() {
   });
   LMDJ_CHECK(response.at("ok") == false);
   LMDJ_CHECK(response.at("error").at("code") == "INVALID_ARGUMENT");
+}
+
+// lmdj.project.v5 5.2.0: each envelope, tone and EQ bound is a typed refusal
+// that leaves the Project untouched. The last two values would wrap to valid
+// ones (100 and -40) if narrowed to 32 bits before the Facade's range check, so
+// only that check can refuse them.
+void test_parity_playback_refuses_out_of_range_tone_fields() {
+  TempDirectory temp;
+  Application application(sample_config(temp.path()));
+  const auto project = parity_project(application, temp, 970);
+  const auto tone = parity_playback_json("tone");
+  std::vector<nlohmann::json> invalid(11, tone);
+  invalid[0]["attack_ms"] = 2'001;
+  invalid[1]["release_ms"] = -1;
+  invalid[2]["tone"] = 101;
+  invalid[3]["eq"]["band"] = nlohmann::json::object();
+  invalid[4]["eq"]["low"]["kind"] = "bell";
+  invalid[5]["eq"]["low"]["freq_hz"] = 2'001;
+  invalid[6]["eq"]["high"]["gain_millidb"] = 18'001;
+  invalid[7]["eq"]["mid"]["q_milli"] = 99;
+  invalid[8]["eq"]["mid"]["kind"] = "shelf";
+  invalid[9]["attack_ms"] = std::uint64_t{4'294'967'396};
+  invalid[10]["tone"] = std::int64_t{4'294'967'256};
+  std::uint32_t command = 980;
+  for (const auto& playback : invalid) {
+    const auto response = application.command({
+        {"operation", "sample.update_pad"},
+        {"project_path", project.generic_string()},
+        {"command_id", uuid(command++)},
+        {"expected_revision", 1},
+        {"slot", slot(0, 0)},
+        {"playback", playback},
+    });
+    LMDJ_CHECK(response.at("ok") == false);
+    LMDJ_CHECK(response.at("error").at("code") == "INVALID_ARGUMENT");
+  }
+  LMDJ_CHECK(inspected_playback(application, project).size() == 5);
 }
 
 // With an open trim end only the source length bounds the loop point.
@@ -2017,6 +2054,32 @@ void test_preview_resolution_carries_the_voice_dsp_block() {
   LMDJ_CHECK((resolved.value().dsp ==
               lmdj::cooker::ResolvedVoiceDsp{
                   3, 1, 700, -30, lmdj::cooker::ResolvedVoiceDsp::kReverse}));
+}
+
+// The preview resolution carries the 5.2.0 envelope, tone and EQ as cooking
+// does: milliseconds as 48 kHz frames, and the EQ in Project Truth's units.
+void test_preview_resolution_carries_the_tone_settings() {
+  using lmdj::cooker::ResolvedVoiceDsp;
+  TempDirectory temp;
+  Application application(sample_config(temp.path()));
+  const auto project = parity_project(application, temp, 990);
+  const auto inspected =
+      application.inspect_sample(SampleInspectRequest{project, {0, 0}});
+  LMDJ_CHECK(inspected.has_value());
+  PadPlayback playback{1, 7, TriggerMode::gate, 0, false};
+  playback.attack_ms = 120;
+  playback.release_ms = 900;
+  playback.tone = -40;
+  playback.eq.mid = lmdj::domain::PadEqBell{1'200, -600, 1'400};
+  const auto resolved =
+      lmdj::facade::resolve_sample_preview_playback(inspected.value(), playback);
+  LMDJ_CHECK(resolved.has_value());
+  const auto& dsp = resolved.value().dsp;
+  LMDJ_CHECK(dsp.attack_frames == 5'760 && dsp.release_frames == 43'200);
+  LMDJ_CHECK(dsp.tone == -40);
+  LMDJ_CHECK(dsp.eq_flags == ResolvedVoiceDsp::kEqMid);
+  LMDJ_CHECK(dsp.eq_mid_freq_hz == 1'200 && dsp.eq_mid_gain_millidb == -600 &&
+             dsp.eq_mid_q_milli == 1'400);
 }
 
 void test_sample_json_delayed_replays_report_current_project_revision() {
@@ -2326,11 +2389,13 @@ struct Shard {
   std::span<const Scenario> scenarios;
 };
 
-constexpr std::array<Scenario, 4> kPlaybackParityScenarios{
+constexpr std::array<Scenario, 6> kPlaybackParityScenarios{
     test_parity_playback_json_round_trips_through_inspect,
     test_parity_playback_refuses_an_unknown_key,
+    test_parity_playback_refuses_out_of_range_tone_fields,
     test_parity_playback_refuses_a_loop_point_past_the_source,
     test_preview_resolution_carries_the_voice_dsp_block,
+    test_preview_resolution_carries_the_tone_settings,
 };
 
 constexpr std::array<Shard, 4> kShards{

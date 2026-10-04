@@ -87,7 +87,16 @@ Gate／Loop Gate、取消、后台与 Session 替换会阻止迟到的发声。�
 
 Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按空间顺序映射：上方 `Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，下方 `A S D F G H J K` 对应 Pad 9–16；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。用户明确授权 Web MIDI 后，Creator 在 channels 1–16 上接受 Note `36..51` 并映射到当前 Bank；Platform 的可选单 channel filter 不由 Creator 启用。每个 Sample press 以串行 inspect→trigger admission 确定 Runtime-effective playback，release/cancel/stop 与 ordered Voice state 共同维护视觉和真实声音。播放头只消费已快照的 Voice render bounds 与 session-local 观察时间，不写 Project Truth、Runtime Snapshot 或音频线程；并发/retrigger 时最新开始的选中-Pad Voice 获得显示所有权。saved Project revision 与 Runtime revision 分开显示，Cook 失败只重试 prepare、不重放 mutation。恢复期间只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。
 
-Sample 控件在 Volume 之外新增 Pitch（±24 半音，0.1 半音步进，读数如 `+3.5 st`）与 Pan（`L100`–`C`–`R100`），三者共用一个 `ParameterSlider` 手势：拖动经 `sample.preview.set` 试听，松手（pointer up、方向键抬起或窗口级 pointerup）且值变化时只提交一次，Escape 或 pointercancel 取消并清除试听。Reverse 是 `aria-pressed` 开关；Loop 打开时出现 Forward / Ping-pong 分段，选 Ping-pong 会同时清除 crossfade，因为它没有可叠化的接缝。波形编辑器在 Loop 下画出循环点手柄与 crossfade 区，并提供 Loop start（秒）与 Crossfade（毫秒，仅 Forward）读数卡；读数卡聚焦即开始手势、失焦提交、Escape 取消。Reverse 时整个 trim 区间连同循环点一起镜像，循环点手柄、Loop start 读数与 crossfade 区都画在镜像位置，也就是之后各遍回卷处；未设循环点时手柄落在 End。播放头模型与内核一致：按 pitch 速率推进，forward 循环每遍从循环点之后 crossfade 帧继续，ping-pong 在两端反射，reverse 镜像源帧。Reset 恢复全部回放对齐参数的缺省值。
+Sample 控件在 Volume 之外新增 Pitch（±24 半音，0.1 半音步进，读数如 `+3.5 st`）与 Pan（`L100`–`C`–`R100`），三者共用一个 `ParameterSlider` 手势：拖动经 `sample.preview.set` 试听，松手（pointer up、方向键抬起或窗口级 pointerup）且值变化时只提交一次，Escape 或 pointercancel 取消并清除试听。Reverse 是 `aria-pressed` 开关；Loop 打开时出现 Forward / Ping-pong 分段，选 Ping-pong 会同时清除 crossfade，因为它没有可叠化的接缝。波形编辑器在 Loop 下画出循环点手柄与 crossfade 区，并提供 Loop start（秒）与 Crossfade（毫秒，仅 Forward）读数卡；读数卡聚焦即开始手势、失焦提交、Escape 取消。Reverse 时整个 trim 区间连同循环点一起镜像，循环点手柄、Loop start 读数与 crossfade 区都画在镜像位置，也就是之后各遍回卷处；未设循环点时手柄落在 End。播放头模型与内核一致：按 pitch 速率推进，forward 循环每遍从循环点之后 crossfade 帧继续，ping-pong 在两端反射，reverse 镜像源帧。Reset 恢复全部回放与音色参数的缺省值。
+
+#1667 在同一列控件中加入 Attack（0–2000 ms）、Release（0–4000 ms）与 Tone（−100…+100），同样用 `ParameterSlider`：不超过 2 ms 的斜坡显示为 `2 ms`，即实际渲染的 declick；Tone 在中点以下显示 `LP n`、以上显示 `HP n`，±2 死区内显示 `Off`；one-shot 从不播放 release，所以此时 Release 不可用。其下的 EQ 编辑器（`eq_editor.tsx`）把三段 EQ 画成一张图上的三个极点：横轴是 20 Hz–20 kHz 的对数频率，纵轴是 −18…+18 dB 增益。
+
+- 拖动极点时，极点按指针的位移移动，与按在命中圆的哪个位置无关；没有位移的按压不改变任何值。频率限于该段范围，增益 0.1 dB 步进，±0.5 dB 内吸附到 0。把低段或高段架式拖到底线以下的 Cut 区就变成 cut，cut 保留手势开始时该段的增益（已旁通的段保留底线），与拖动途中的采样无关。
+- 双击中段极点后上下拖动设定 Q。
+- 回到 0 dB 的架式或钟形被旁通，所以平直的 EQ 不让 Pad 变成非中性；极点仍停在原频率。
+- 键盘：上下键 0.5 dB，最多到底线，在底线再按一次变为 cut；从 cut 按上键恢复它保留的增益；左右键一个半音；Shift 加上下键调中段 Q；Delete/Backspace 旁通该段；松开这些步进键时提交，松开其他键不提交。
+- 拖动经 `sample.preview.set` 试听、pointer up 时只提交一次。指针按压不会让极点获得焦点，所以编辑器在 window 上监听 Escape：拖动中按 Escape、pointercancel、音频挂起或切换 Pad（编辑器卸载）都会取消并清除试听。
+- 每个极点是带频段描述的 slider。图的边距大于 22 单位的命中半径，所以极点在任一边缘都保有完整命中圆；图不会窄于 320 单位的 viewBox，所以目标不小于 44 px。
 
 Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform surface 由 Pattern launch strip、FX slider bank、HOLD、Pad surface、录制面板与回放面板组成。
 
@@ -97,7 +106,7 @@ Pattern launch strip 呈现 16 个 Pattern Slot（Project 的可发射地址空�
 
 录制阶段机为 `idle → starting → recording → flushing → stopping → stopped → saving | discarding`。录制面板提供 Record / Flush / Stop / Performance 名称 / Save / Discard / Export Performance WAV，并在 `bindingStatus === "retry"` 时额外提供 Retry WAV bind。WAV 绑定词汇是 `unbound | binding | retry | bound`；bind 或随后的 Project truth 刷新失败会回到 `stopped` 并保留 retry，不丢弃已落盘的 WAV 前缀。master tap 以每批最多 4,800 帧喂入流式 WAV writer，背压、写入失败、tap 投递失败与 30 分钟上限都以明确原因封存，durable WAV 前缀仍可保存。
 
-回放面板列出已保存的 Performance，可对其一发起 replay，并显示 `replay.state`、解析出的 revision 与 `neutral` 标记；同一面板提供 start frame / end frame / 目标 Pad Slot（`0..63`）的 resample commit，以及 Performance recovery 候选的 Apply recovery / Discard recovery。
+回放面板列出已保存的 Performance，可对其一发起 replay，并显示 `replay.state`、解析出的 revision 与 `neutral` 标记。回放期间可以照常编辑（网格、Pad、BPM）：编辑写入 Truth，回放仍按开始时的 revision 播放、不被打断，回放结束后选中的 Pattern 按 Truth 恢复（#1789）；同一面板提供 start frame / end frame / 目标 Pad Slot（`0..63`）的 resample commit，以及 Performance recovery 候选的 Apply recovery / Discard recovery。
 
 Host 只渲染 Facade 返回的 authority：录制状态、pending/acknowledged launch、replay 状态与 recovery 候选都来自 Core 查询结果。演奏输入本身不改写 Project Truth；只有显式的 Save、Discard 与 WAV bind 会带 `expected_revision` 经 Facade 提交 Project mutation，Creator 随后重读 Project truth，不自行推断 revision。
 
@@ -276,7 +285,7 @@ P1 默认 Bank A 仅属于第一次自动创建的 Project。Host 保留独立�
 导入、Duplicate、删除、撤销以及已完成槽位的重开都不会重新补种。下载与短暂的 authoring
 提交分离；失败重试仍受原 Project、目标空位、版本和原始素材身份约束。
 
-默认下载失败、仍在下载或等待 authoring 许可时，若权威 Project 投影显示用户已给该空 Pad 分配素材，尚未发出安装请求的默认预留会持久退役；迟到的下载与排队提交不会重新安装，Undo 清空该 Pad 后也不会自动补回。Host 取得编辑许可后，才在 Facade 调用前持久保存 command 身份与尚未观察到赋材的标记；日志写入失败不发出安装命令。已发出的默认请求仍可用同一身份恢复原 command receipt。日志会保留期间观察到的赋材：若 Native 不识别旧请求并拒绝过期版本，Host 会退役该预留，不能借 Undo 后的空位改写版本重新安装。旧日志缺少此标记时仍可读取并恢复已识别收据，但未知的过期命令会退役；只有明确未观察到目标赋材的新请求，才可因其他 Pad 的版本变化继续尝试。
+默认下载失败、仍在下载或等待 authoring 许可时，若权威 Project 投影显示用户已给该空 Pad 分配素材，尚未发出安装请求的默认预留会持久退役；迟到的下载与排队提交不会重新安装，Undo 清空该 Pad 后也不会自动补回。Host 取得编辑许可后，才在 Facade 调用前持久保存 command 身份与尚未观察到赋材的标记；日志写入失败不发出安装命令。已发出的默认请求仍可用同一身份恢复原 command receipt。日志会保留期间观察到的赋材。重开后的标记只描述旧 Host 观察到的历史，不能证明它缺席期间没有赋材再 Undo；不论标记缺失、为真或为假，恢复的未知过期命令均会退役，已识别的收据仍以原 command 身份与版本重放。只有由当前 Controller 实际准入、且在其连续持有期间未观察到目标赋材的新请求，才可因其他 Pad 的版本变化继续尝试。
 
 ## Continue in another tab
 

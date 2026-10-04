@@ -193,6 +193,10 @@ test("keeps Sample editing in touch and one Bank row and Pad matrix on the rail"
           loopMode: "forward" as const,
           loopStartFrame: null,
           loopCrossfadeFrames: 0,
+          attackMs: 0,
+          releaseMs: 0,
+          tone: 0,
+          eq: {low: null, mid: null, high: null},
         },
         metadata: {sampleRate: 48_000, channels: 1, sourceFrames: 8},
         waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/2`,
@@ -273,6 +277,10 @@ test("advances the selected Sample playhead on the render clock and cancels it a
       loopMode: "forward" as const,
       loopStartFrame: null,
       loopCrossfadeFrames: 0,
+      attackMs: 0,
+      releaseMs: 0,
+      tone: 0,
+      eq: {low: null, mid: null, high: null},
     },
     metadata: {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 48_000},
     waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/94`,
@@ -609,6 +617,10 @@ function sampleRuntimeFixture(
       loopMode: "forward" as const,
       loopStartFrame: null,
       loopCrossfadeFrames: 0,
+      attackMs: 0,
+      releaseMs: 0,
+      tone: 0,
+      eq: {low: null, mid: null, high: null},
     },
     metadata: {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 8},
     waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/1`,
@@ -732,6 +744,10 @@ function mutableSampleRuntimeFixture() {
       loopMode: "forward" as const,
       loopStartFrame: null,
       loopCrossfadeFrames: 0,
+      attackMs: 0,
+      releaseMs: 0,
+      tone: 0,
+      eq: {low: null, mid: null, high: null},
     })],
   ]);
   let revision = 3;
@@ -757,6 +773,10 @@ function mutableSampleRuntimeFixture() {
       loopMode: "forward" as const,
       loopStartFrame: null,
       loopCrossfadeFrames: 0,
+      attackMs: 0,
+      releaseMs: 0,
+      tone: 0,
+      eq: {low: null, mid: null, high: null},
     };
     return {
       projectRevision: revision,
@@ -1132,6 +1152,10 @@ test.each(["update", "reset"] as const)(
         loopMode: "forward" as const,
         loopStartFrame: null,
         loopCrossfadeFrames: 0,
+        attackMs: 0,
+        releaseMs: 0,
+        tone: 0,
+        eq: {low: null, mid: null, high: null},
       }));
     }
     fixture.revision = 4;
@@ -1409,6 +1433,10 @@ test.each(["update", "reset"] as const)(
         loopMode: "forward" as const,
         loopStartFrame: null,
         loopCrossfadeFrames: 0,
+        attackMs: 0,
+        releaseMs: 0,
+        tone: 0,
+        eq: {low: null, mid: null, high: null},
       }));
       return commit();
     };
@@ -1598,6 +1626,10 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
       loopMode: "forward" as const,
       loopStartFrame: null,
       loopCrossfadeFrames: 0,
+      attackMs: 0,
+      releaseMs: 0,
+      tone: 0,
+      eq: {low: null, mid: null, high: null},
     },
     metadata: assigned.has(slot)
       ? {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 8}
@@ -1865,6 +1897,10 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
         loopMode: "forward" as const,
         loopStartFrame: null,
         loopCrossfadeFrames: 0,
+        attackMs: 0,
+        releaseMs: 0,
+        tone: 0,
+        eq: {low: null, mid: null, high: null},
       }));
       fixture.revision = 4;
       return {
@@ -1896,6 +1932,10 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
         loopMode: "forward" as const,
         loopStartFrame: null,
         loopCrossfadeFrames: 0,
+        attackMs: 0,
+        releaseMs: 0,
+        tone: 0,
+        eq: {low: null, mid: null, high: null},
       }));
       fixture.revision = 4;
       return {

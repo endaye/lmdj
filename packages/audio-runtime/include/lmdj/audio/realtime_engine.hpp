@@ -178,6 +178,10 @@ enum class PadControlKind : std::uint8_t {
   // so `slot` is ignored and `stop_slot` / `stop_all` do not reach them.
   audition_start,
   audition_stop,
+  // Stops only the Pad's live voices: host input that is not a Pattern voice.
+  // A Performance replay's presses and the Pattern voices it launched keep
+  // sounding, so editing a Pad during a replay does not cut the replay.
+  stop_slot_live,
 };
 
 enum class PadControlOrigin : std::uint8_t {
