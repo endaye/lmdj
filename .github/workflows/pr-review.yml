@@ -146,15 +146,23 @@ jobs:
             ${{ env.REVIEW_DIR }}/review.json
             ${{ env.REVIEW_DIR }}/result.json
             ${{ env.REVIEW_DIR }}/failure.json
-            ${{ env.REVIEW_DIR }}/t2-input.json
-            ${{ env.REVIEW_DIR }}/collection-receipt.json
             ${{ env.REVIEW_DIR }}/collection-failure.json
             ${{ env.REVIEW_DIR }}/generated-only-receipt.json
             ${{ env.REVIEW_DIR }}/t2-config-witness.json
-            ${{ env.REVIEW_DIR }}/t2-result.json
             ${{ env.REVIEW_DIR }}/collector.json
             ${{ env.REVIEW_DIR }}/coverage-*.json
           if-no-files-found: error
+          retention-days: 30
+      - name: Retain publisher input and model diagnostics separately
+        uses: actions/upload-artifact@v6
+        if: ${{ always() && steps.input.outputs.reviewable != 'false' && steps.input.outputs.generated_only != 'true' }}
+        with:
+          name: pr-review-diagnostics-${{ needs.target.outputs.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.REVIEW_DIR }}/t2-input.json
+            ${{ env.REVIEW_DIR }}/collection-receipt.json
+            ${{ env.REVIEW_DIR }}/t2-result.json
+          if-no-files-found: ignore
           retention-days: 30
       - name: Manual takeover
         if: ${{ failure() }}
@@ -187,6 +195,12 @@ jobs:
         if: ${{ github.event.action != 'closed' }}
         with:
           name: pr-review-result-${{ needs.target.outputs.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/review-publish
+      - name: Download publisher input and model diagnostics
+        uses: actions/download-artifact@v7
+        if: ${{ github.event.action != 'closed' && needs.review.outputs.generated_only != 'true' }}
+        with:
+          name: pr-review-diagnostics-${{ needs.target.outputs.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/review-publish
       - name: Publish exact-head review and scope
         if: ${{ github.event.action != 'closed' && needs.review.outputs.generated_only != 'true' }}
