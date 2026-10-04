@@ -250,8 +250,9 @@ class VocabularyParity(unittest.TestCase):
             "deployment cannot validate itself.\n"
             "remedy: keep CREATOR_CURRENT_ASSET_ROLES equal to "
             "CREATOR_WEB_EMITTED_ASSET_ROLES in "
-            "apps/web-runtime-host/tools/asset_roles.py, and express any "
-            "Host-version difference in CREATOR_LEGACY_ASSET_ROLES instead.",
+            "apps/web-runtime-host/tools/asset_roles.py, and express the "
+            "Host 3.x and 4.x inventory in CREATOR_V3_ASSET_ROLES and the "
+            "Host 2.x inventory in CREATOR_LEGACY_ASSET_ROLES.",
         )
 
     def test_runtime_singleton_roles_are_producible(self):
@@ -489,13 +490,14 @@ class PublishedRollbackAnchors(unittest.TestCase):
                 asset["role"] for asset in manifest["assets"]
             )
             major = int(str(entry["host_version"]).partition(".")[0])
-            expected = (
-                ROLES.CREATOR_OFFLINE_ASSET_ROLES
-                if major >= 5
-                else ROLES.CREATOR_PRE_OFFLINE_ASSET_ROLES
-                if major >= 3
-                else ROLES.CREATOR_LEGACY_ASSET_ROLES
-            )
+            if major >= 6:
+                expected = ROLES.CREATOR_OFFLINE_ASSET_ROLES
+            elif major >= 5:
+                expected = ROLES.CREATOR_CURRENT_ASSET_ROLES
+            elif major >= 3:
+                expected = ROLES.CREATOR_V3_ASSET_ROLES
+            else:
+                expected = ROLES.CREATOR_LEGACY_ASSET_ROLES
             with self.subTest(fixture=entry["fixture"]):
                 self.assertEqual(
                     roles,
@@ -507,8 +509,9 @@ class PublishedRollbackAnchors(unittest.TestCase):
                     "manifest, so this published Build can no longer serve as "
                     "the deploy's rollback anchor.\n"
                     "remedy: adjust the Host-major split in "
-                    "CREATOR_CURRENT_ASSET_ROLES / CREATOR_LEGACY_ASSET_ROLES "
-                    "in apps/web-runtime-host/tools/asset_roles.py so each "
+                    "CREATOR_CURRENT_ASSET_ROLES, CREATOR_V3_ASSET_ROLES and "
+                    "CREATOR_LEGACY_ASSET_ROLES in "
+                    "apps/web-runtime-host/tools/asset_roles.py so each "
                     "published Host major keeps the inventory it actually "
                     "shipped.",
                 )

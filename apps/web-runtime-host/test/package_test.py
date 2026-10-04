@@ -569,7 +569,7 @@ class PackageTest(unittest.TestCase):
             self.assertEqual(set(asset), {"bytes", "path", "role", "sha256"})
             self.assertRegex(
                 asset["path"],
-                r"^assets/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|wasm)$",
+                r"^assets/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|svg|wasm)$",
             )
             path = self.dist / asset["path"]
             payload = path.read_bytes()
