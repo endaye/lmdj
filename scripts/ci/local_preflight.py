@@ -90,7 +90,10 @@ _NATIVE_INPUT_ROOTS = (
     "tests/", "scripts/", "packaging/", "tools/provider-benchmark/",
     "tools/soundset-fixtures/", "tools/project-bundle/", "tools/release/",
     ".github/", ".agents/skills/", "docs/governance/",
-    "docs/quality/core-test-policy.md",
+    "docs/quality/core-test-policy.md", "docs/deploy/web-runtime-host.md",
+    "docs/design/2026-08-08-web-runtime-public-deployment-design.md",
+    "docs/plans/2026-08-08-web-runtime-public-deployment.md",
+    "docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md",
     "AGENTS.md", "CLAUDE.md", "README.md", "LICENSE",
 )
 _WEB_INPUT_ROOTS = _NATIVE_INPUT_ROOTS + (
@@ -102,7 +105,7 @@ LANE_INPUT_ROOTS = {
     "docs_static": ("",),
     "ci_contract": ("",),
     "portal": (
-        "apps/", "packages/", "providers/", "docs/", "scripts/",
+        "apps/", "packages/", "providers/", "docs/", "scripts/", "demos/",
         "tools/", "tests/", ".agents/", ".github/", "AGENTS.md",
         "CLAUDE.md", "README.md", "LICENSE",
     ),

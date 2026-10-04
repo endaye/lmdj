@@ -9,6 +9,7 @@ actually run, or serves a cached pass after an input changed.
 from __future__ import annotations
 
 from collections.abc import Sequence
+import ast
 import contextlib
 import copy
 import importlib.util
@@ -1088,6 +1089,7 @@ class CacheKeyTest(unittest.TestCase):
             ("web_toolchain", "packages/audio-runtime/src/voice_dsp.cpp"),
             ("web_runtime_host", "providers/local-sample-slice/src/provider.cpp"),
             ("portal", "scripts/version.py"),
+            ("portal", "demos/README.md"),
             ("deploy_contract", ".agents/skills/lmdj-release/SKILL.md"),
             ("docs_static", "apps/native-host/src/main.cpp"),
             ("ci_contract", "tests/host/mcp_stdio_test.py"),
@@ -1150,13 +1152,25 @@ class CacheKeyTest(unittest.TestCase):
         # Include every registration conservatively: builds compile targets
         # independently of which CTest tier a lane later selects.
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        tracked = git(ROOT, "ls-files").splitlines()
         native_inputs = python_test_files(cmake)
-        for directory in ("packages", "providers", "tests/core"):
-            native_inputs.update(
-                str(path.relative_to(ROOT))
-                for path in (ROOT / directory).rglob("*")
-                if path.suffix in {".cpp", ".hpp"}
+        for name in tracked:
+            relative = Path(name)
+            if relative.name != "CMakeLists.txt":
+                continue
+            cmake_file = ROOT / relative
+            if relative.parts[0] not in {"packages", "providers", "apps", "tests"}:
+                continue
+            source = cmake_file.read_text(encoding="utf-8").replace(
+                "${CMAKE_CURRENT_SOURCE_DIR}/", str(relative.parent) + "/",
             )
+            native_inputs.update(path.lstrip("/") for path in python_test_files(source))
+        native_inputs.update(re.findall(r'((?:tests|tools)/[\w./-]+\.py)', cmake))
+        native_inputs.update(
+            name for name in tracked
+            if name.startswith(("packages/", "providers/", "tests/core/"))
+            and Path(name).suffix in {".cpp", ".hpp"}
+        )
         native_lanes = {"core_ubuntu", "core_macos", "core_asan", "core_coverage", "package"}
         witnesses = {lane: set(native_inputs) for lane in native_lanes}
         for lane, entry in self.preflight.load_lane_commands(policy=self.policy).items():
@@ -1180,12 +1194,45 @@ class CacheKeyTest(unittest.TestCase):
                     witnesses[lane].update(re.findall(
                         r'(?:\$repo_root/)([\w./-]+\.(?:py|sh|json|wav|cmake))', source,
                     ))
+        # Inspect literal repository-root reads inside the executed Python
+        # inputs too. This independently catches transitive domains absent
+        # from the table (e.g. Creator source in the native boundary check).
+        # It is deliberately a literal-path audit, not a general interpreter.
+        for lane, paths in witnesses.items():
+            for relative in sorted(paths.copy()):
+                if not relative.endswith(".py") or not (ROOT / relative).is_file():
+                    continue
+                if lane in native_lanes and Path(relative).name.startswith("release_"):
+                    continue  # core.sh excludes these CTest registrations
+                tree = ast.parse((ROOT / relative).read_text(encoding="utf-8"))
+                parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Div):
+                        continue
+                    parent = parents.get(node)
+                    if isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Div) and parent.left is node:
+                        continue
+                    parts = []
+                    current = node
+                    while isinstance(current, ast.BinOp) and isinstance(current.op, ast.Div):
+                        if isinstance(current.right, ast.Constant) and isinstance(current.right.value, str):
+                            parts.insert(0, current.right.value)
+                        else:
+                            parts = []  # retain only the prefix before a dynamic component
+                        current = current.left
+                    if not isinstance(current, ast.Name) or current.id not in {"ROOT", "REPO_ROOT"} or not parts:
+                        continue
+                    literal = "/".join(parts)
+                    if (ROOT / literal).is_file():
+                        paths.add(literal)
+                    elif (ROOT / literal).is_dir():
+                        paths.update(path for path in tracked if path.startswith(literal.rstrip("/") + "/"))
         all_paths = set().union(*witnesses.values())
         grouped = self.preflight.lane_input_paths(self.policy, all_paths, self.classifier)
         for lane, paths in witnesses.items():
             for path in sorted(paths):
                 with self.subTest(lane=lane, path=path):
-                    self.assertIn(path, grouped[lane], msg=(
+                    self.assertTrue(path in grouped[lane], msg=(
                         f"why: actual registered/command input {path} is absent "
                         f"from {lane}'s key; remedy: audit this command and "
                         "extend its read domain in lane_input_paths"

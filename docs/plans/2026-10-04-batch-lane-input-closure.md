@@ -23,7 +23,7 @@ fail-closed. Keys and PR evidence keep their existing format.
 | --- | --- |
 | docs_static | `git diff --check` checks all changed tracked source, including non-Markdown files. |
 | ci_contract | Discovery, real-Git fixture copies, ownership and graph tests inspect the repository inventory and control/product source; conservatively bind the whole repository. |
-| portal | Current facts hash active component source; tests, changelog/snapshot validators and source references read repository docs, tooling and manifests. |
+| portal | Current facts hash active component source; tests, changelog/snapshot validators and source references inspect repository docs, demos, tooling and manifests. |
 | core_ubuntu / core_macos | `core.sh proof` builds the complete native target graph, then runs CTest plus Host, conformance, distribution and e2e Python suites. Native ASan also compiles that graph. |
 | core_asan / core_coverage | Full CTest adds Host, conformance and e2e suites; source-boundary/module-graph checks read Creator and other Hosts, and taxonomy reads its prose policy; coverage also reads its thresholds, helper scripts and quality reports. |
 | package | Unqualified CMake build compiles test targets as well as libraries; fast CTest runs compiled Facade tests and Python provider evaluation. Packaging reads distribution scripts, manifests and licenses. |
@@ -34,7 +34,7 @@ fail-closed. Keys and PR evidence keep their existing format.
 
 Command-level source domains are deliberately conservative, not an interpreter
 for shell/Python/CMake. Keep an independent regression over literal registered
-CTest/script inputs and representative transitive reads to catch drift.
+CTest/script inputs, literal rooted reads inside Python command inputs, and representative transitive reads to catch drift. Dynamic paths/imports remain covered by conservative domains and command review, not by a general static interpreter.
 
 ## Verification
 
