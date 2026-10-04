@@ -25,7 +25,7 @@ fail-closed. Keys and PR evidence keep their existing format.
 | ci_contract | Discovery, real-Git fixture copies, ownership and graph tests inspect the repository inventory and control/product source; conservatively bind the whole repository. |
 | portal | Current facts hash active component source; tests, changelog/snapshot validators and source references read repository docs, tooling and manifests. |
 | core_ubuntu / core_macos | `core.sh proof` builds the complete native target graph, then runs CTest plus Host, conformance, distribution and e2e Python suites. Native ASan also compiles that graph. |
-| core_asan / core_coverage | Full CTest adds Host, conformance and e2e suites; coverage also reads its thresholds, helper scripts and quality reports. |
+| core_asan / core_coverage | Full CTest adds Host, conformance and e2e suites; source-boundary/module-graph checks read Creator and other Hosts, and taxonomy reads its prose policy; coverage also reads its thresholds, helper scripts and quality reports. |
 | package | Unqualified CMake build compiles test targets as well as libraries; fast CTest runs compiled Facade tests and Python provider evaluation. Packaging reads distribution scripts, manifests and licenses. |
 | web_toolchain | CMake builds shared modules and conformance probes; Node/Python/browser proofs read platform tests, fixtures and Web tools. |
 | web_runtime_host / creator | Distribution proofs build native Core fixtures and Web targets; package, browser and contract tests read shared modules, providers, Core test sources and fixture helpers. |

@@ -82,13 +82,15 @@ _DELETED = "0" * 40
 # Web distribution proofs also build native fixture producers. Bind entire
 # read domains so discovered tests, headers, fixtures and helpers cannot slip
 # out of the key on addition or deletion. These are conservative source roots,
-# not changes to Change Scope or its fail-closed lane selection.
+# not changes to Change Scope or its fail-closed lane selection. The native
+# source-boundary and module-graph suites inspect Hosts across apps/, including
+# Creator source/package identities; test taxonomy also reads its prose policy.
 _NATIVE_INPUT_ROOTS = (
-    "packages/", "providers/", "apps/core-cli/", "apps/core-mcp/",
-    "apps/native-host/", "apps/cardputer-host/", "apps/web-runtime-host/",
+    "packages/", "providers/", "apps/",
     "tests/", "scripts/", "packaging/", "tools/provider-benchmark/",
     "tools/soundset-fixtures/", "tools/project-bundle/", "tools/release/",
     ".github/", ".agents/skills/", "docs/governance/",
+    "docs/quality/core-test-policy.md",
     "AGENTS.md", "CLAUDE.md", "README.md", "LICENSE",
 )
 _WEB_INPUT_ROOTS = _NATIVE_INPUT_ROOTS + (
