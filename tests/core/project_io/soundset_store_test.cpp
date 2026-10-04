@@ -294,6 +294,73 @@ std::uint64_t declared_total(
   return total;
 }
 
+void test_slot_acquisition_fetches_only_its_blob_and_never_publishes_a_complete_set() {
+  TempDirectory workspace;
+  FakeCatalogTransport transport;
+  const std::string kick(64, 'k');
+  const std::string snare(96, 's');
+  const std::string demo(128, 'd');
+  const auto manifest = manifest_bytes_with_demo({{0, "kick", kick}, {1, "snare", snare}}, demo);
+  const auto entry = entry_for(manifest, declared_total(manifest, {kick, snare, demo}));
+  transport.publish(manifest);
+  transport.publish(kick);
+  auto limits = generous_limits();
+  limits.maximum_soundset_staging_bytes = manifest.size() + kick.size();
+  SoundSetStore store(workspace.path(), limits, platform_for(workspace.path()));
+  const auto slot = store.acquire_slot(transport, entry, 0);
+  LMDJ_CHECK(slot.has_value());
+  LMDJ_CHECK(slot.value().manifest.canonical_bytes == manifest);
+  LMDJ_CHECK(transport.reads(sha256_hex(kick)) == 1);
+  LMDJ_CHECK(transport.reads(sha256_hex(snare)) == 0);
+  LMDJ_CHECK(transport.reads(sha256_hex(demo)) == 0);
+  LMDJ_CHECK(store.list().value().empty());
+  LMDJ_CHECK(!store.read(kSetId, kVersion, entry.manifest_sha256).has_value());
+  LMDJ_CHECK(!store.read_slot(kSetId, kVersion, entry.manifest_sha256, 1).has_value());
+  LMDJ_CHECK(text_of(store.read_slot_artifact(entry.manifest_sha256, 0).value()) == kick);
+  transport.fail_everything();
+  const auto before = transport.total_reads();
+  SoundSetStore reopened(workspace.path(), limits, platform_for(workspace.path()));
+  LMDJ_CHECK(reopened.acquire_slot(transport, entry, 0).has_value());
+  LMDJ_CHECK(transport.total_reads() == before);
+  LMDJ_CHECK(reopened.list().value().empty());
+}
+
+void test_slot_cache_reauthenticates_bytes_before_offline_acquisition() {
+  TempDirectory workspace;
+  FakeCatalogTransport transport;
+  const std::string kick(64, 'k');
+  const auto manifest = manifest_bytes({{0, "kick", kick}});
+  const auto entry = entry_for(manifest, declared_total(manifest, {kick}));
+  transport.publish(manifest);
+  transport.publish(kick);
+  SoundSetStore store(workspace.path(), generous_limits(), platform_for(workspace.path()));
+  LMDJ_CHECK(store.acquire_slot(transport, entry, 0).has_value());
+  {std::ofstream file(workspace.path() / ".lmdj-host" / "soundset-slots" /
+    entry.manifest_sha256 / "0" / sha256_hex(kick), std::ios::binary | std::ios::trunc);
+    file << std::string(kick.size(), 'x');}
+  const auto result = store.acquire_slot(transport, entry, 0);
+  LMDJ_CHECK(!result.has_value());
+  LMDJ_CHECK(reason_of(result.error()) == "soundset_content_mismatch");
+  LMDJ_CHECK(!store.read_slot_artifact(entry.manifest_sha256, 0).has_value());
+}
+
+void test_slot_acquisition_validates_the_whole_manifest_before_a_blob_read() {
+  TempDirectory workspace;
+  FakeCatalogTransport transport;
+  const std::string kick(64, 'k');
+  const auto manifest = manifest_bytes({{0, "kick", kick}});
+  auto entry = entry_for(manifest, declared_total(manifest, {kick}));
+  entry.total_bytes += 1;
+  transport.publish(manifest);
+  transport.publish(kick);
+  SoundSetStore store(workspace.path(), generous_limits(), platform_for(workspace.path()));
+  const auto result = store.acquire_slot(transport, entry, 0);
+  LMDJ_CHECK(!result.has_value());
+  LMDJ_CHECK(reason_of(result.error()) == "soundset_content_mismatch");
+  LMDJ_CHECK(transport.reads(sha256_hex(kick)) == 0);
+  LMDJ_CHECK(!store.read_slot(kSetId, kVersion, entry.manifest_sha256, 0).has_value());
+}
+
 // A verified Set becomes readable as one unit, and its blobs are the same
 // bytes the Catalog served.
 void test_acquire_publishes_a_verified_set() {
@@ -1356,6 +1423,9 @@ void test_a_refused_artifact_read_names_the_step() {
 
 int main() {
   try {
+    test_slot_acquisition_fetches_only_its_blob_and_never_publishes_a_complete_set();
+    test_slot_cache_reauthenticates_bytes_before_offline_acquisition();
+    test_slot_acquisition_validates_the_whole_manifest_before_a_blob_read();
     test_acquire_publishes_a_verified_set();
     test_repeated_artifact_hash_is_fetched_once();
     test_content_faults_leave_staging_invisible();

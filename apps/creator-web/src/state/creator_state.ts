@@ -287,20 +287,20 @@ export function isCreatorActionAllowed(
         return selectCanActivateAudio(state);
       }
       if (action.phase === "suspending") {
-        return state.runtime.phase === "ready" && hasReadyProject(state) &&
+        return state.runtime.phase === "ready" &&
           state.transfer.phase === "idle" && state.audio.phase === "running";
       }
       if (action.phase === "recovering") {
-        return state.runtime.phase === "ready" && hasReadyProject(state) &&
+        return state.runtime.phase === "ready" &&
           state.transfer.phase === "idle" && state.audio.phase === "suspended";
       }
       if (action.phase === "running") {
-        return state.runtime.phase === "ready" && hasReadyProject(state) &&
+        return state.runtime.phase === "ready" &&
           state.transfer.phase === "idle" &&
           ["inactive", "activating", "suspending", "recovering", "suspended"]
             .includes(state.audio.phase);
       }
-      return state.runtime.phase === "ready" && hasReadyProject(state) &&
+      return state.runtime.phase === "ready" &&
         state.transfer.phase === "idle" &&
         ["activating", "suspending", "recovering", "running"]
           .includes(state.audio.phase);
@@ -750,8 +750,6 @@ export function selectVisiblePads(
 
 export function selectCanActivateAudio(state: CreatorState): boolean {
   return state.runtime.phase === "ready" &&
-    state.project.phase === "ready" &&
-    state.project.current !== null &&
     state.transfer.phase === "idle" &&
     (state.audio.phase === "inactive" || state.audio.phase === "suspended");
 }
@@ -790,4 +788,11 @@ export function selectCanTrigger(state: CreatorState): boolean {
     state.project.current !== null &&
     state.transfer.phase === "idle" &&
     (state.audio.phase === "running" || state.audio.phase === "recovering");
+}
+
+// A musical gesture may wake audio; an admission still requires running or
+// recovering audio. Keep those two boundaries distinct.
+export function selectCanStartGesture(state: CreatorState): boolean {
+  return state.runtime.phase === "ready" && hasReadyProject(state) &&
+    state.transfer.phase === "idle" && state.audio.phase !== "suspending";
 }

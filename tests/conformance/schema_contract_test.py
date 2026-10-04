@@ -10,6 +10,7 @@ repo_root = Path(__file__).resolve().parents[2]
 contract_root = repo_root / "contracts"
 
 schema_paths = {
+    "stem_parameters": contract_root / "stem" / "lmdj.stem-parameters.v1.schema.json",
     "slice_points": contract_root / "slice-points" / "lmdj.slice-points.v1.schema.json",
     "project_v5": contract_root / "project" / "lmdj.project.v5.schema.json",
     "project_bundle": (
@@ -1370,3 +1371,23 @@ assert json_schema.validate(
     "why: PERFORMANCE_NAME_MAX counts Unicode code points, not UTF-8 bytes; "
     "remedy: reject a 65-code-point non-BMP name while accepting 64"
 )
+
+# Stem has four required role outputs and no first-version knobs.
+stem = load_json(contract_root / "capability/stem.split.v1.json")
+json_schema.check(stem, schemas["capability_v2"], "stem.split.v1")
+assert stem["capability_id"] == "stem.split.v1"
+assert stem["contract_version"] == "1.0.0"
+assert stem["determinism"] == "nondeterministic"
+assert stem["input_artifacts"] == [{"name": "source_audio", "media_types": ["audio/wav"],
+    "schema_id": "lmdj.audio.pcm16-wav.v1", "schema_version": "1.0.0", "required": True, "max_count": 1}]
+assert {port["name"] for port in stem["output_artifacts"]} == {"drums", "bass", "vocals", "other"}
+assert len(stem["output_artifacts"]) == 4
+for port in stem["output_artifacts"]:
+    assert port == {"name": port["name"], "media_types": ["audio/wav"],
+        "schema_id": "lmdj.audio.stem-pcm16-wav.v1", "schema_version": "1.0.0", "required": True, "max_count": 1}
+assert schemas["stem_parameters"]["properties"] == {}
+vectors = load_json(repo_root / "tests/fixtures/contracts/stem/parameters.json")
+for value in vectors["valid"]:
+    json_schema.check(value, schemas["stem_parameters"], "valid Stem parameters")
+for value in vectors["invalid"]:
+    assert json_schema.validate(value, schemas["stem_parameters"]), "Stem parameters must reject knobs and non-objects"

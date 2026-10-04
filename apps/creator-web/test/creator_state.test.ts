@@ -172,6 +172,10 @@ describe("Creator state", () => {
             loopMode: "forward" as const,
             loopStartFrame: null,
             loopCrossfadeFrames: 0,
+            attackMs: 0,
+            releaseMs: 0,
+            tone: 0,
+            eq: {low: null, mid: null, high: null},
           },
           metadata: {sampleRate: 48_000, channels: 1, sourceFrames: 48_000},
           waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/94`,
@@ -420,9 +424,6 @@ describe("Creator state", () => {
       type: "transfer-progressed", completedBytes: 4,
     }],
     ["end absent transfer", readyState(), {type: "transfer-ended"}],
-    ["activate without Project", {
-      ...readyState(), project: {phase: "empty", projects: [], current: null},
-    }, {type: "audio-changed", phase: "activating"}],
     ["recover without suspend", readyState(), {
       type: "audio-changed", phase: "recovering",
     }],
@@ -439,6 +440,17 @@ describe("Creator state", () => {
   ])("rejects illegal %s from the reducer boundary", (_name, state, action) => {
     expect(isCreatorActionAllowed(state, action)).toBe(false);
     expect(creatorReducer(state, action)).toBe(state);
+  });
+
+  test("audio activation does not require a Project to be open", () => {
+    const state: CreatorState = {...readyState(), project: {phase: "empty", projects: [], current: null}};
+    expect(selectCanActivateAudio(state)).toBe(true);
+    const activating = creatorReducer(state, {type: "audio-changed", phase: "activating"});
+    expect(activating.audio.phase).toBe("activating");
+    const running = creatorReducer(activating, {type: "audio-changed", phase: "running"});
+    expect(running.audio.phase).toBe("running");
+    expect(selectCanTrigger(running)).toBe(false);
+    expect(creatorReducer(running, {type: "audio-changed", phase: "suspending"}).audio.phase).toBe("suspending");
   });
 
   test("keeps lifecycle cleanup legal after the Runtime becomes terminal", () => {
@@ -522,6 +534,10 @@ describe("Creator state", () => {
             loopMode: "forward" as const,
             loopStartFrame: null,
             loopCrossfadeFrames: 0,
+            attackMs: 0,
+            releaseMs: 0,
+            tone: 0,
+            eq: {low: null, mid: null, high: null},
           },
           metadata: null,
           waveformCacheIdentity: null,
@@ -568,6 +584,10 @@ describe("Creator state", () => {
           loopMode: "forward" as const,
           loopStartFrame: null,
           loopCrossfadeFrames: 0,
+          attackMs: 0,
+          releaseMs: 0,
+          tone: 0,
+          eq: {low: null, mid: null, high: null},
         },
         metadata: {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 8},
         waveformCacheIdentity: `${"b".repeat(64)}/1/max-abs-mirror/1`,
@@ -641,6 +661,10 @@ describe("Creator state", () => {
             loopMode: "forward" as const,
             loopStartFrame: null,
             loopCrossfadeFrames: 0,
+            attackMs: 0,
+            releaseMs: 0,
+            tone: 0,
+            eq: {low: null, mid: null, high: null},
           },
           metadata: null,
           waveformCacheIdentity: null,
@@ -686,6 +710,10 @@ describe("Creator state", () => {
         loopMode: "forward" as const,
         loopStartFrame: null,
         loopCrossfadeFrames: 0,
+        attackMs: 0,
+        releaseMs: 0,
+        tone: 0,
+        eq: {low: null, mid: null, high: null},
       },
       metadata: null,
       waveformCacheIdentity: null,

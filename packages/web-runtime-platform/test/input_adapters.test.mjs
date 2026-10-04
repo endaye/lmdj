@@ -151,6 +151,67 @@ test("Pointer suppresses Chromium rounded compatibility mouse coordinates", () =
   ]);
 });
 
+for (const release of ["pointerUp", "releasePointer"]) {
+  test(`Pointer ${release} retains touch compatibility deduplication after a long press`, () => {
+    const calls = [];
+    const target = {};
+    let clock = 0;
+    const pointer = createPointerAdapter({
+      trigger: (...args) => calls.push(args), velocity: 100, now: () => clock,
+    });
+    const touch = {button: 0, isPrimary: true, pointerType: "touch", pointerId: 7,
+      clientX: 20, clientY: 30, target};
+    pointer.pointerDown(touch, 4);
+    clock = 1000;
+    assert.equal(pointer[release](touch, 4), true);
+    // Browsers may emit this after pointerup, including after a long hold.
+    assert.equal(pointer.mouseDown({button: 0, clientX: 20, clientY: 30, target}, 4), false);
+    assert.equal(calls.length, 1);
+  });
+}
+
+test("Pointer refuses native touch-generated mouse even after the marker expires", () => {
+  const calls = [];
+  const pointer = createPointerAdapter({
+    trigger: (...args) => calls.push(args), velocity: 100, now: () => 1000,
+  });
+  assert.equal(pointer.mouseDown({button: 0,
+    sourceCapabilities: {firesTouchEvents: true}}, 4), false);
+  assert.equal(calls.length, 0);
+});
+
+test("Pointer accepts an explicitly genuine mouse after a released touch", () => {
+  const calls = [];
+  const target = {};
+  const pointer = createPointerAdapter({
+    trigger: (...args) => calls.push(args), velocity: 100, now: () => 0,
+  });
+  const touch = {button: 0, isPrimary: true, pointerType: "touch", pointerId: 7,
+    clientX: 20, clientY: 30, target};
+  pointer.pointerDown(touch, 4);
+  pointer.releasePointer(touch);
+  assert.equal(pointer.mouseDown({button: 0, clientX: 20, clientY: 30, target,
+    sourceCapabilities: {firesTouchEvents: false}}, 4), true);
+  assert.equal(calls.length, 2);
+});
+
+test("Pointer touch-release fallback expires before a later unidentified mouse", () => {
+  const calls = [];
+  const target = {};
+  let clock = 0;
+  const pointer = createPointerAdapter({
+    trigger: (...args) => calls.push(args), velocity: 100, now: () => clock,
+  });
+  const touch = {button: 0, isPrimary: true, pointerType: "touch", pointerId: 7,
+    clientX: 20, clientY: 30, target};
+  pointer.pointerDown(touch, 4);
+  clock = 1000;
+  pointer.releasePointer(touch);
+  clock = 1501;
+  assert.equal(pointer.mouseDown({button: 0, clientX: 20, clientY: 30, target}, 4), true);
+  assert.equal(calls.length, 2);
+});
+
 test("Pointer cancellation and marker expiry never suppress a later genuine mouse", () => {
   const calls = [];
   const target = {};

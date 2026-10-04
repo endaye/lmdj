@@ -1368,8 +1368,47 @@ void test_a_missing_stored_artifact_is_a_content_mismatch() {
 
 }  // namespace
 
+void test_slot_install_is_partial_replayable_and_empty_only() {
+  TempDirectory temp("slot-install");
+  auto source = std::make_shared<FakeCatalogSource>();
+  source->publish(fixture_catalog_index());
+  Application application(config(temp.path(),
+      lmdj::project_io::make_local_directory_catalog_transport(flatten_fixture_corpus(temp)), source));
+  const auto project = create_project(application, temp.path(), 0x900);
+  const auto described = application.query({{"operation", "soundset.catalog.describe"}});
+  LMDJ_CHECK(described.at("ok").get<bool>());
+  LMDJ_CHECK(!described.at("result").at("sets").empty());
+  const auto acquired = application.query({{"operation", "soundset.slot.acquire"},
+      {"set_id", kFoundrySetId}, {"version", kSetVersion},
+      {"manifest_sha256", kFoundryManifest}, {"slot_index", 0}});
+  LMDJ_CHECK(acquired.at("ok").get<bool>());
+  LMDJ_CHECK(acquired.at("result").at("slots").at(0).at("occupied") == true);
+  LMDJ_CHECK(acquired.at("result").at("slots").at(1).at("occupied") == false);
+  nlohmann::json request{{"operation", "soundset.slot.install"},
+      {"project_path", project.generic_string()}, {"command_id", uuid(0x902)},
+      {"expected_revision", 0}, {"bank_id", 0}, {"set_id", kFoundrySetId},
+      {"version", kSetVersion}, {"manifest_sha256", kFoundryManifest}, {"slot_index", 0}};
+  const auto installed = application.command(request);
+  LMDJ_CHECK(installed.at("ok").get<bool>());
+  LMDJ_CHECK(installed.at("result").at("installed").size() == 1);
+  const auto truth = inspect_project(application, project);
+  LMDJ_CHECK(bank_pads(truth, 0).at(0).at("asset_id") != nullptr);
+  LMDJ_CHECK(bank_pads(truth, 0).at(1).at("asset_id") == nullptr);
+  const auto replayed = application.command(request);
+  LMDJ_CHECK(replayed.at("ok").get<bool>());
+  LMDJ_CHECK(replayed.at("result").at("replayed") == true);
+  request["command_id"] = uuid(0x903);
+  request["expected_revision"] = 1;
+  check_refusal(application.command(request), "INVALID_ARGUMENT", "soundset_occupied_conflict");
+  LMDJ_CHECK(inspect_project(application, project) == truth);
+  request["occupied_pad_policy"] = "replace";
+  LMDJ_CHECK(!application.command(request).at("ok").get<bool>());
+  LMDJ_CHECK(inspect_project(application, project) == truth);
+}
+
 int main() {
   try {
+    test_slot_install_is_partial_replayable_and_empty_only();
     test_locked_operations_are_registered_with_exact_kinds();
     test_locked_requests_reject_extra_fields();
     test_catalog_list_publishes_only_eligible_sets();

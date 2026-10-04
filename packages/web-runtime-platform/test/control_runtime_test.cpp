@@ -672,6 +672,11 @@ struct FakeCoordinator final {
         ++self.acknowledgement_polls >= self.acknowledgement_delay_polls) {
       self.acknowledged = self.begin_acknowledgement;
     }
+    if (self.render_on_acknowledgement_poll && self.engine != nullptr) {
+      std::array<float, 128> left{};
+      std::array<float, 128> right{};
+      self.engine->render(left.data(), right.data(), 128);
+    }
     if (self.observe_engine_generation && self.engine != nullptr) {
       self.acknowledged =
           self.engine->bank_telemetry().current_generation;
@@ -697,6 +702,7 @@ struct FakeCoordinator final {
   bool timeout = false;
   bool called = false;
   bool render_during_await = false;
+  bool render_on_acknowledgement_poll = false;
   bool observe_engine_generation = false;
   bool observed_capture_idle = false;
   bool observed_engine_running = false;
@@ -3009,7 +3015,7 @@ void test_sample_parity_playback_crosses_the_fixed_control_wire() {
         {});
   };
 
-  for (const auto variant : {"forward", "ping_pong"}) {
+  for (const auto variant : {"forward", "ping_pong", "tone"}) {
     const auto playback = parity_playback_payload(variant);
     const auto committed = check_exact_success(
         update(playback),
@@ -3028,6 +3034,27 @@ void test_sample_parity_playback_crosses_the_fixed_control_wire() {
   auto out_of_range = parity_playback_payload("forward");
   out_of_range["pan"] = 101;
   check_error(update(out_of_range), "HOST_PROTOCOL_MISMATCH");
+  // lmdj.project.v5 5.2.0: each tone bound and band shape is a protocol
+  // failure on the fixed wire.
+  const auto tone = parity_playback_payload("tone");
+  std::vector<Json> invalid_tone(7, tone);
+  invalid_tone[0]["attack_ms"] = 2'001;
+  invalid_tone[1]["release_ms"] = -1;
+  invalid_tone[2]["tone"] = -101;
+  invalid_tone[3]["eq"]["band"] = Json::object();
+  invalid_tone[4]["eq"]["low"]["kind"] = "bell";
+  invalid_tone[5]["eq"]["high"]["freq_hz"] = 999;
+  invalid_tone[6]["eq"]["mid"]["q_milli"] = 10'001;
+  // Review of #1799: unsigned values above INT64_MAX that would wrap to -50
+  // and -600 if read as int64.
+  invalid_tone.push_back(tone);
+  invalid_tone.back()["tone"] = std::uint64_t{18'446'744'073'709'551'566ULL};
+  invalid_tone.push_back(tone);
+  invalid_tone.back()["eq"]["mid"]["gain_millidb"] =
+      std::uint64_t{18'446'744'073'709'551'016ULL};
+  for (const auto& invalid : invalid_tone) {
+    check_error(update(invalid), "HOST_PROTOCOL_MISMATCH");
+  }
   // The wire shape is valid; only the 256-frame source refuses the loop point.
   auto past_source = parity_playback_payload("ping_pong");
   past_source["loop_start_frame"] = 256;
@@ -3045,7 +3072,7 @@ void test_sample_parity_playback_crosses_the_fixed_control_wire() {
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
   check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-  for (const auto variant : {"forward", "ping_pong"}) {
+  for (const auto variant : {"forward", "ping_pong", "tone"}) {
     check_exact_success(
         runtime->dispatch(
             "sample.preview.set",
@@ -5149,6 +5176,27 @@ void test_host_supplied_catalog_resolves_only_addressed_objects() {
           "soundset.catalog.index", {{"available", true}}, index_bytes),
       {"staged"});
 
+  const auto description = check_locked_success_result(
+      runtime->dispatch("soundset.catalog.describe", Json::object(), {}));
+  LMDJ_CHECK(description.at("catalog_available") == true);
+  LMDJ_CHECK(!description.at("sets").empty());
+  LMDJ_CHECK(check_locked_success_result(
+      runtime->dispatch("soundset.catalog.pending", Json::object(), {}))
+          .at("objects").empty());
+  const Json slot_identity{{"set_id", "11111111-1111-4111-8111-111111111111"},
+      {"version", "1.0.0"},
+      {"manifest_sha256", "33175f66912a9add3e4e551d19d85072adcd1f0331fcc9fed80ab0bc18dd9111"},
+      {"slot_index", 0}};
+  auto bad_slot = slot_identity;
+  bad_slot["slot_index"] = 16;
+  check_error(runtime->dispatch("soundset.slot.acquire", bad_slot, {}), "HOST_PROTOCOL_MISMATCH");
+  // A first acquisition requests the original manifest, not host-selected bytes.
+  check_error(runtime->dispatch("soundset.slot.acquire", slot_identity, {}), "IO_ERROR");
+  const auto slot_pending = check_locked_success_result(
+      runtime->dispatch("soundset.catalog.pending", Json::object(), {}));
+  LMDJ_CHECK(slot_pending.at("objects").size() == 1);
+  LMDJ_CHECK(slot_pending.at("objects").at(0).at("object_kind") == "manifest");
+
   // Every address Core asks for is one basename under one object kind, and
   // one pass of the loop below stages exactly the addresses of the last pass.
   Json listed;
@@ -5453,6 +5501,23 @@ void test_soundset_audition_reports_whether_a_voice_started() {
   LMDJ_CHECK(
       inspect_project(temp.path(), kProjectId).at("project_revision") ==
       committed);
+}
+
+void test_bridge_routes_catalog_description_without_a_project() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto request_id = uuid(987);
+  const auto envelope = encode(request(
+      request_id, "soundset.catalog.describe", Json::object()));
+  LMDJ_CHECK(bridge->submit(envelope, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  LMDJ_CHECK(response.at("ok") == true);
+  LMDJ_CHECK(response.at("result").at("catalog_available") == false);
+  LMDJ_CHECK(response.at("result").at("sets").empty());
 }
 
 void test_bridge_routes_sample_operations_without_a_project_path() {
@@ -6829,7 +6894,7 @@ void test_provider_owner_uses_retained_project_and_survives_restart() {
   TempDirectory temp;
   auto runtime = make_provider_runtime(temp.path());
   const auto listed = check_locked_success_result(runtime->dispatch("provider.list", Json::object(), {}));
-  LMDJ_CHECK(listed.at("providers").size() == 3);
+  LMDJ_CHECK(listed.at("providers").size() == 4);
   check_success(runtime->dispatch("provider.permissions.configure",
       {{"granted_permissions", Json::array({"sample.slice.execute"})}}, {}));
   check_success(runtime->dispatch("provider.select",
@@ -7041,6 +7106,187 @@ bool render_grid_frames(RealtimeEngine& engine, std::uint64_t frames) {
 
 // #1671: a Host places the playhead from the frame the status was read at,
 // not from when it happened to look, so the status carries that frame.
+std::size_t grid_truth_events(ControlRuntime& runtime);
+
+// #1789: records and saves one Performance on a grid runtime at `revision`:
+// an A1 hit held for `hold_frames`, then a launch of Pattern slot 1 at the
+// next Bar. Returns the Project revision after the save.
+std::uint64_t record_grid_performance(
+    ControlRuntime& runtime, std::uint64_t revision, std::uint64_t hold_frames) {
+  const auto session = uuid(9680);
+  check_success(runtime.dispatch("pattern.slot.assign", {{"command_id", uuid(9670)},
+      {"expected_revision", revision}, {"pattern_slot", 1}, {"pattern_id", kPatternId}}, {}));
+  check_success(runtime.dispatch("performance.record.begin", {{"command_id", uuid(9671)},
+      {"expected_revision", revision + 1}, {"session_id", session},
+      {"performance_id", uuid(9681)}}, {}));
+  check_success(runtime.dispatch("performance.record.event", {{"session_id", session},
+      {"event_id", uuid(9672)}, {"event", {{"kind", "pad_press"},
+      {"gesture_id", uuid(9673)}, {"slot", 0}, {"velocity", 127}}}}, {}));
+  static_cast<void>(render_grid_frames(runtime.engine(), hold_frames));
+  check_success(runtime.dispatch("performance.record.event", {{"session_id", session},
+      {"event_id", uuid(9674)}, {"event", {{"kind", "pad_release"},
+      {"gesture_id", uuid(9673)}, {"slot", 0}}}}, {}));
+  const auto launch = runtime.dispatch("performance.record.launch-request",
+      {{"session_id", session}, {"request_id", uuid(9675)}, {"pattern_slot", 1}}, {});
+  check_success(launch);
+  const auto target_frame = launch.at("result").at("target_tick").get<std::uint64_t>() * 25;
+  const auto rendered = runtime.engine().telemetry().rendered_frames;
+  static_cast<void>(render_grid_frames(runtime.engine(),
+      (target_frame > rendered ? target_frame - rendered : 0) + 256));
+  static_cast<void>(runtime.service_performance());
+  check_success(runtime.dispatch("performance.record.stop",
+      {{"session_id", session}, {"request_id", uuid(9676)}}, {}));
+  const auto saved_at = runtime.dispatch("project.inspect", Json::object(), {})
+      .at("result").at("project").at("revision").get<std::uint64_t>();
+  check_success(runtime.dispatch("performance.save", {{"command_id", uuid(9677)},
+      {"expected_revision", saved_at}, {"performance_id", uuid(9681)},
+      {"name", "Grid replay"}, {"recording_artifact", nullptr}}, {}));
+  return runtime.dispatch("project.inspect", Json::object(), {})
+      .at("result").at("project").at("revision").get<std::uint64_t>();
+}
+
+std::string replay_state(ControlRuntime& runtime) {
+  return runtime.dispatch("performance.replay.status", {{"replay_id", uuid(9682)}}, {})
+      .at("result").at("state").get<std::string>();
+}
+
+void test_pattern_events_edit_during_a_replay_returns_at_its_end() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  auto& engine = runtime->engine();
+  const auto revision = record_grid_performance(*runtime, 2, 2'400);
+  check_success(runtime->dispatch("performance.replay.begin",
+      {{"replay_id", uuid(9682)}, {"performance_id", uuid(9681)}}, {}));
+  static_cast<void>(render_grid_frames(engine, 128));
+  static_cast<void>(runtime->service_performance());
+  LMDJ_CHECK(replay_state(*runtime) == "playing");
+  // The edit commits to Truth but publishes nothing over the replay.
+  const auto publications = engine.pattern_telemetry().accepted_publications;
+  const auto response = runtime->dispatch("pattern.events.edit",
+      grid_edit(9683, revision, Json::array(), Json::array({grid_note(0, 960)})), {});
+  check_success(response);
+  LMDJ_CHECK(response.at("result").at("publication") == "deferred");
+  LMDJ_CHECK(engine.pattern_telemetry().accepted_publications == publications);
+  LMDJ_CHECK(grid_truth_events(*runtime) == 1);
+  static_cast<void>(runtime->service_performance());
+  LMDJ_CHECK(engine.pattern_telemetry().accepted_publications == publications);
+  // Once the replay ends, the service cadence restores the selected Pattern.
+  check_success(runtime->dispatch("performance.replay.stop",
+      {{"replay_id", uuid(9682)}, {"request_id", uuid(9684)}}, {}));
+  for (unsigned tick = 0; tick < 64 && replay_state(*runtime) == "playing"; ++tick) {
+    static_cast<void>(render_grid_frames(engine, 128));
+    static_cast<void>(runtime->service_performance());
+  }
+  LMDJ_CHECK(replay_state(*runtime) != "playing");
+  static_cast<void>(runtime->service_performance());
+  LMDJ_CHECK(engine.pattern_telemetry().accepted_publications == publications + 1);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kPatternId);
+}
+
+// Starts the recorded replay and lets its first service turn run.
+void begin_grid_replay(ControlRuntime& runtime) {
+  check_success(runtime.dispatch("performance.replay.begin",
+      {{"replay_id", uuid(9682)}, {"performance_id", uuid(9681)}}, {}));
+  static_cast<void>(render_grid_frames(runtime.engine(), 128));
+  static_cast<void>(runtime.service_performance());
+  LMDJ_CHECK(replay_state(runtime) == "playing");
+}
+
+void test_an_undo_during_a_replay_publishes_nothing_over_it() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  auto& engine = runtime->engine();
+  const auto revision = record_grid_performance(*runtime, 2, 2'400);
+  check_success(runtime->dispatch("pattern.events.edit",
+      grid_edit(9686, revision, Json::array(), Json::array({grid_note(0, 960)})), {}));
+  begin_grid_replay(*runtime);
+  // Undo forces its Pattern view; a replay holds the Runtime instead.
+  const auto publications = engine.pattern_telemetry().accepted_publications;
+  const auto session = runtime->dispatch("history.inspect", Json::object(), {})
+      .at("result").at("session_id");
+  {
+    // Undo republishes the Bank, whose acknowledgement needs audio running.
+    ContinuousAudioDriver audio(engine);
+    check_success(runtime->dispatch("history.undo", {{"session_id", session},
+        {"command_id", uuid(9687)}, {"expected_revision", revision + 1}}, {}));
+  }
+  LMDJ_CHECK(grid_truth_events(*runtime) == 0);
+  LMDJ_CHECK(engine.pattern_telemetry().accepted_publications == publications);
+}
+
+void test_a_bpm_change_during_a_replay_publishes_nothing_over_it() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  auto& engine = runtime->engine();
+  const auto revision = record_grid_performance(*runtime, 2, 2'400);
+  begin_grid_replay(*runtime);
+  const auto publications = engine.pattern_telemetry().accepted_publications;
+  const auto response = runtime->dispatch("sequence.settings.update",
+      {{"command_id", uuid(9688)}, {"expected_revision", revision}, {"session_id", nullptr},
+       {"bpm", 100}, {"quantize_enabled", nullptr}, {"swing_percent", nullptr}}, {});
+  check_success(response);
+  LMDJ_CHECK(response.at("result").at("bpm") == 100);
+  LMDJ_CHECK(response.at("result").at("pattern_publication").is_null());
+  LMDJ_CHECK(engine.pattern_telemetry().accepted_publications == publications);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+}
+
+// Creates and loads a second Project while the first one's replay plays.
+// A Project is replaced only with audio suspended; the replay plays on.
+void switch_grid_project(ControlRuntime& runtime) {
+  check_success(runtime.dispatch("audio.suspend", Json::object(), {}));
+  check_success(runtime.dispatch("project.create",
+      create_payload(uuid(9697), kNextPatternId), {}));
+  check_success(runtime.dispatch("snapshot.reload", {{"pattern_id", kNextPatternId}}, {}));
+  check_success(runtime.dispatch("audio.activate", Json::object(), {}));
+  static_cast<void>(render_grid_frames(runtime.engine(), 128));
+}
+
+// #1789: a replay holds the Runtime only for its own Project, so a Project
+// opened during it publishes its own Pattern view.
+void test_a_project_switch_during_a_replay_publishes_its_own_view() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  static_cast<void>(record_grid_performance(*runtime, 2, 2'400));
+  begin_grid_replay(*runtime);
+  switch_grid_project(*runtime);
+  LMDJ_CHECK(runtime->engine().current_pattern_id()->value() == kNextPatternId);
+}
+
+void test_a_pad_delete_during_a_replay_stops_only_the_live_voice() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator, 192'000);
+  auto& engine = runtime->engine();
+  const auto revision = record_grid_performance(*runtime, 2, 96'000);
+  check_success(runtime->dispatch("performance.replay.begin",
+      {{"replay_id", uuid(9682)}, {"performance_id", uuid(9681)}}, {}));
+  static_cast<void>(render_grid_frames(engine, 256));
+  static_cast<void>(runtime->service_performance());
+  // The replay enqueues its held A1 hit on the service turn; it sounds from
+  // the next render.
+  static_cast<void>(render_grid_frames(engine, 128));
+  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+  check_success(runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 127}}, {}));
+  static_cast<void>(render_grid_frames(engine, 128));
+  LMDJ_CHECK(engine.telemetry().active_voices == 2);
+  // The Bank's acknowledgement needs audio. A continuous driver renders for
+  // as long as the delete takes, which under ASan outlasts the replay's hit,
+  // so each acknowledgement poll renders one callback instead.
+  coordinator.render_on_acknowledgement_poll = true;
+  check_success(runtime->dispatch("pad.delete", {{"command_id", uuid(9685)},
+      {"expected_revision", revision}, {"slot", slot(0, 0)}}, {}));
+  coordinator.render_on_acknowledgement_poll = false;
+  static_cast<void>(render_grid_frames(engine, 256));
+  // The live voice declicked out; the replay's held hit keeps sounding.
+  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+  LMDJ_CHECK(replay_state(*runtime) == "playing");
+}
+
 void test_pattern_transport_status_reports_the_rendered_frame() {
   TempDirectory temp;
   FakeCoordinator coordinator;
@@ -7301,12 +7547,12 @@ struct GridDeferral {
   std::uint64_t generation;
 };
 
-GridDeferral defer_a_grid_edit(ControlRuntime& runtime, std::uint32_t command) {
+GridDeferral defer_a_grid_edit(ControlRuntime& runtime, std::uint32_t command,
+                               std::uint64_t revision = 2) {
   auto& engine = runtime.engine();
   play_grid_transport(runtime, command);
   const auto origin = engine.current_pattern_origin_frame();
   LMDJ_CHECK(origin.has_value());
-  std::uint64_t revision = 2;
   const auto edit_at = [&](std::uint32_t suffix, unsigned onset) {
     auto response = runtime.dispatch("pattern.events.edit",
         grid_edit(suffix, revision, Json::array(), Json::array({grid_note(0, onset)})), {});
@@ -7454,6 +7700,79 @@ void test_pattern_events_edit_deferral_survives_an_audio_interruption() {
   static_cast<void>(serve_until_swapped(*runtime, deferral.generation, 9'600));
   LMDJ_CHECK(engine.pattern_telemetry().current_generation > deferral.generation);
   LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+}
+
+// #1789: a deferral from before a replay does not swap a view over it once a
+// slot frees. The replay's launch comes after its 192000-frame press, so the
+// window past the first voice's end holds no replay publication either. At the
+// replay's end the playing transport takes the restored view at the next Bar.
+void test_a_deferred_swap_waits_out_a_replay() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator, 192'000);
+  auto& engine = runtime->engine();
+  const auto revision = record_grid_performance(*runtime, 2, 192'000);
+  const auto deferral = defer_a_grid_edit(*runtime, 9690, revision);
+  begin_grid_replay(*runtime);
+  const auto serve_to = [&](std::uint64_t frame) {
+    while (engine.telemetry().rendered_frames < deferral.origin + frame) {
+      static_cast<void>(render_grid_frames(engine, 128));
+      runtime->service_pattern_transport();
+      static_cast<void>(runtime->service_performance());
+    }
+  };
+  // The first voice ends at frame 204000 and frees its slot.
+  serve_to(230'000);
+  LMDJ_CHECK(replay_state(*runtime) == "playing");
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation == deferral.generation);
+  check_success(runtime->dispatch("performance.replay.stop",
+      {{"replay_id", uuid(9682)}, {"request_id", uuid(9696)}}, {}));
+  for (unsigned tick = 0; tick < 64 && replay_state(*runtime) == "playing"; ++tick) {
+    serve_to(engine.telemetry().rendered_frames - deferral.origin + 128);
+  }
+  LMDJ_CHECK(replay_state(*runtime) != "playing");
+  static_cast<void>(runtime->service_performance());
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation != 0);
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation == deferral.generation);
+  serve_to(288'000 + 128);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == deferral.origin + 288'000);
+  // No tick-240 voice sounded before the restore, so the first one is its own.
+  LMDJ_CHECK(grid_voice_starts_at(engine, deferral.origin + 288'000 + 6'000));
+}
+
+// #1789: a restore the engine refuses because every slot is still held
+// neither prepares nor retries until a slot frees, then lands at the next bar.
+void test_a_refused_replay_restore_retries_until_a_slot_frees() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator, 192'000);
+  auto& engine = runtime->engine();
+  const auto revision = record_grid_performance(*runtime, 2, 192'000);
+  const auto deferral = defer_a_grid_edit(*runtime, 9700, revision);
+  begin_grid_replay(*runtime);
+  const auto serve_to = [&](std::uint64_t frame) {
+    while (engine.telemetry().rendered_frames < deferral.origin + frame) {
+      static_cast<void>(render_grid_frames(engine, 128));
+      runtime->service_pattern_transport();
+      static_cast<void>(runtime->service_performance());
+    }
+  };
+  check_success(runtime->dispatch("performance.replay.stop",
+      {{"replay_id", uuid(9682)}, {"request_id", uuid(9706)}}, {}));
+  for (unsigned tick = 0; tick < 64 && replay_state(*runtime) == "playing"; ++tick) {
+    serve_to(engine.telemetry().rendered_frames - deferral.origin + 128);
+  }
+  LMDJ_CHECK(replay_state(*runtime) != "playing");
+  // The first attempt was refused; until the first voice ends at frame
+  // 204000 no slot frees, so no further attempt is made.
+  const auto rejections = engine.pattern_telemetry().publication_rejections;
+  serve_to(200'000);
+  LMDJ_CHECK(engine.pattern_telemetry().publication_rejections == rejections);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation == deferral.generation);
+  serve_to(288'000 + 128);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == deferral.origin + 288'000);
 }
 
 void test_pattern_transport_requires_opt_in_and_preserves_legacy() {
@@ -8410,6 +8729,11 @@ int main() {
     test_authoring_history_restores_pattern_and_parameters();
     test_pad_delete_stops_voice_preserves_rhythm_and_roundtrips_history();
     test_pattern_transport_status_reports_the_rendered_frame();
+    test_pattern_events_edit_during_a_replay_returns_at_its_end();
+    test_a_pad_delete_during_a_replay_stops_only_the_live_voice();
+    test_an_undo_during_a_replay_publishes_nothing_over_it();
+    test_a_bpm_change_during_a_replay_publishes_nothing_over_it();
+    test_a_project_switch_during_a_replay_publishes_its_own_view();
     test_pattern_events_edit_while_stopped_reaches_the_next_play();
     test_pattern_events_edit_while_playing_swaps_the_pattern_in_place();
     test_pattern_events_edit_of_another_pattern_publishes_nothing();
@@ -8425,6 +8749,8 @@ int main() {
     test_pattern_events_edit_superseded_deferral_publishes_nothing_more();
     test_pattern_events_edit_deferral_waits_out_a_recording();
     test_pattern_events_edit_deferral_survives_an_audio_interruption();
+    test_a_deferred_swap_waits_out_a_replay();
+    test_a_refused_replay_restore_retries_until_a_slot_frees();
     test_pad_delete_cancels_staged_host_import_and_releases_history();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
     test_sample_parity_playback_crosses_the_fixed_control_wire();
@@ -8460,6 +8786,7 @@ int main() {
     test_host_supplied_catalog_resolves_only_addressed_objects();
     test_host_catalog_operations_need_a_wired_transport();
     test_soundset_audition_reports_whether_a_voice_started();
+    test_bridge_routes_catalog_description_without_a_project();
     test_bridge_routes_sample_operations_without_a_project_path();
     test_bridge_defers_parse_dispatch_and_copies_fixed_slots();
     test_bridge_rejects_duplicates_until_response_consumption();

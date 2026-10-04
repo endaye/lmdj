@@ -97,7 +97,7 @@ test("played false is honest, stop and teardown change no Project truth", async 
   const {session, truth, unmount} = setup(); const before = structuredClone(truth);
   session.auditionCandidate.mockResolvedValue({played: false, project_revision: 3});
   await source(); await userEvent.click(screen.getByRole("button", {name: "Preview slice 1"}));
-  expect(await screen.findByText("Preview was not played. Activate audio and try again.")).toBeTruthy();
+  expect(await screen.findByText("Preview was not played. Tap a Pad to wake audio and try again.")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Stop preview"}));
   await screen.findByText("Preview stopped.");
   const count = session.stopCandidateAudition.mock.calls.length; unmount();

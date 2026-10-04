@@ -182,6 +182,9 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "soundset.audition",
     "soundset.audition.stop",
     "soundset.catalog.list",
+    "soundset.catalog.describe",
+    "soundset.slot.acquire",
+    "soundset.slot.install",
     "soundset.catalog.index",
     "soundset.catalog.supply",
     "soundset.catalog.pending",
@@ -388,6 +391,21 @@ test("Sample playback payloads admit every parity key and refuse the rest", () =
     {...forward, reverse: "true"},
     {...forward, loop_start_frame: -1},
     {...forward, loop_crossfade_frames: 1.5},
+  ]) {
+    assert.throws(() => update(invalid), expectCode("HOST_PROTOCOL_MISMATCH"));
+  }
+  // lmdj.project.v5 5.2.0.
+  const tone = PAD_PLAYBACK_FULL.tone;
+  for (const invalid of [
+    {...tone, attack_ms: 2_001},
+    {...tone, release_ms: -1},
+    {...tone, tone: -101},
+    {...tone, eq: {...tone.eq, band: {}}},
+    {...tone, eq: {...tone.eq, low: {...tone.eq.low, kind: "bell"}}},
+    {...tone, eq: {...tone.eq, low: {...tone.eq.low, q_milli: 700}}},
+    {...tone, eq: {...tone.eq, high: {...tone.eq.high, freq_hz: 20_001}}},
+    {...tone, eq: {...tone.eq, mid: {...tone.eq.mid, kind: "shelf"}}},
+    {...tone, eq: {...tone.eq, mid: {...tone.eq.mid, q_milli: 10_001}}},
   ]) {
     assert.throws(() => update(invalid), expectCode("HOST_PROTOCOL_MISMATCH"));
   }

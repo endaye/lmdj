@@ -231,6 +231,9 @@ const std::map<std::string, OperationKind>& operations() {
       {"sequence.recovery.discard", OperationKind::command},
       {"soundset.audition", OperationKind::query},
       {"soundset.catalog.list", OperationKind::query},
+      {"soundset.catalog.describe", OperationKind::query},
+      {"soundset.slot.acquire", OperationKind::query},
+      {"soundset.slot.install", OperationKind::command},
       {"soundset.inspect", OperationKind::query},
       {"soundset.install", OperationKind::command},
       {"soundset.map.preview", OperationKind::query},
@@ -500,15 +503,73 @@ std::string_view trigger_mode_name(domain::TriggerMode mode) {
   return "one_shot";
 }
 
-// The five 5.0.0 playback keys are required; a lmdj.project.v5 5.1.0 parity
-// key may be omitted, which means its default, and an unknown key is refused.
+// An EQ shelf band (lmdj.project.v5 5.2.0): exact keys, a shelf or cut
+// kind, and the band's frequency range.
+domain::PadEqShelf eq_shelf_value(
+    const nlohmann::json& encoded,
+    std::int32_t minimum_hz,
+    std::int32_t maximum_hz) {
+  require(exact_keys(encoded, {"kind", "freq_hz", "gain_millidb"}),
+          "eq band shape is invalid");
+  require(encoded.at("kind").is_string(), "eq band kind must be a string");
+  const auto& kind = encoded.at("kind").get_ref<const std::string&>();
+  require(kind == "shelf" || kind == "cut", "eq band kind is invalid");
+  return domain::PadEqShelf{
+      kind == "cut" ? domain::EqBandKind::cut : domain::EqBandKind::shelf,
+      static_cast<std::int32_t>(
+          signed_field(encoded, "freq_hz", minimum_hz, maximum_hz)),
+      static_cast<std::int32_t>(signed_field(
+          encoded, "gain_millidb", domain::kPadEqGainMillidbMin,
+          domain::kPadEqGainMillidbMax)),
+  };
+}
+
+// The three optional EQ bands; an absent band is bypassed.
+domain::PadEq eq_value(const nlohmann::json& encoded) {
+  require(encoded.is_object(), "eq shape is invalid");
+  for (const auto& [key, value] : encoded.items()) {
+    (void)value;
+    require(key == "low" || key == "mid" || key == "high",
+            "eq shape is invalid");
+  }
+  domain::PadEq eq;
+  if (encoded.contains("low")) {
+    eq.low = eq_shelf_value(encoded.at("low"), domain::kPadEqLowFreqHzMin,
+                            domain::kPadEqLowFreqHzMax);
+  }
+  if (encoded.contains("mid")) {
+    const auto& mid = encoded.at("mid");
+    require(exact_keys(mid, {"freq_hz", "gain_millidb", "q_milli"}),
+            "eq band shape is invalid");
+    eq.mid = domain::PadEqBell{
+        static_cast<std::int32_t>(signed_field(
+            mid, "freq_hz", domain::kPadEqMidFreqHzMin,
+            domain::kPadEqMidFreqHzMax)),
+        static_cast<std::int32_t>(signed_field(
+            mid, "gain_millidb", domain::kPadEqGainMillidbMin,
+            domain::kPadEqGainMillidbMax)),
+        static_cast<std::int32_t>(signed_field(
+            mid, "q_milli", domain::kPadEqMidQMilliMin,
+            domain::kPadEqMidQMilliMax)),
+    };
+  }
+  if (encoded.contains("high")) {
+    eq.high = eq_shelf_value(encoded.at("high"), domain::kPadEqHighFreqHzMin,
+                             domain::kPadEqHighFreqHzMax);
+  }
+  return eq;
+}
+
+// The five 5.0.0 playback keys are required; a lmdj.project.v5 5.1.0 or 5.2.0
+// parity key may be omitted, which means its default, and an unknown key is
+// refused.
 domain::PadPlayback playback_value(const nlohmann::json& encoded) {
   static constexpr std::array<std::string_view, 5> base{
       "trim_start_frame", "trim_end_frame", "trigger_mode", "gain_millidb",
       "muted"};
-  static constexpr std::array<std::string_view, 6> parity{
+  static constexpr std::array<std::string_view, 10> parity{
       "reverse", "pitch_cents", "pan", "loop_mode", "loop_start_frame",
-      "loop_crossfade_frames"};
+      "loop_crossfade_frames", "attack_ms", "release_ms", "tone", "eq"};
   require(encoded.is_object(), "playback shape is invalid");
   for (const auto key : base) {
     require(encoded.contains(std::string(key)), "playback shape is invalid");
@@ -561,6 +622,21 @@ domain::PadPlayback playback_value(const nlohmann::json& encoded) {
   if (encoded.contains("loop_crossfade_frames")) {
     playback.loop_crossfade_frames =
         unsigned_field(encoded, "loop_crossfade_frames");
+  }
+  if (encoded.contains("attack_ms")) {
+    playback.attack_ms = static_cast<std::int32_t>(
+        signed_field(encoded, "attack_ms", 0, domain::kPadAttackMsMax));
+  }
+  if (encoded.contains("release_ms")) {
+    playback.release_ms = static_cast<std::int32_t>(
+        signed_field(encoded, "release_ms", 0, domain::kPadReleaseMsMax));
+  }
+  if (encoded.contains("tone")) {
+    playback.tone = static_cast<std::int32_t>(signed_field(
+        encoded, "tone", domain::kPadToneMin, domain::kPadToneMax));
+  }
+  if (encoded.contains("eq")) {
+    playback.eq = eq_value(encoded.at("eq"));
   }
   return playback;
 }
@@ -656,6 +732,37 @@ nlohmann::json playback_json(const domain::PadPlayback& playback) {
   }
   if (playback.loop_crossfade_frames != 0) {
     encoded["loop_crossfade_frames"] = playback.loop_crossfade_frames;
+  }
+  if (playback.attack_ms != 0) {
+    encoded["attack_ms"] = playback.attack_ms;
+  }
+  if (playback.release_ms != 0) {
+    encoded["release_ms"] = playback.release_ms;
+  }
+  if (playback.tone != 0) {
+    encoded["tone"] = playback.tone;
+  }
+  // Only present bands are emitted, and no `eq` at all when all are bypassed.
+  const auto shelf = [](const domain::PadEqShelf& band) {
+    return nlohmann::json{
+        {"kind", band.kind == domain::EqBandKind::cut ? "cut" : "shelf"},
+        {"freq_hz", band.freq_hz},
+        {"gain_millidb", band.gain_millidb}};
+  };
+  nlohmann::json eq = nlohmann::json::object();
+  if (playback.eq.low.has_value()) {
+    eq["low"] = shelf(*playback.eq.low);
+  }
+  if (playback.eq.mid.has_value()) {
+    eq["mid"] = {{"freq_hz", playback.eq.mid->freq_hz},
+                 {"gain_millidb", playback.eq.mid->gain_millidb},
+                 {"q_milli", playback.eq.mid->q_milli}};
+  }
+  if (playback.eq.high.has_value()) {
+    eq["high"] = shelf(*playback.eq.high);
+  }
+  if (!eq.empty()) {
+    encoded["eq"] = std::move(eq);
   }
   return encoded;
 }
@@ -4162,9 +4269,10 @@ struct Application::Impl {
     if (operation == "soundset.audition") {
       return soundset_audition(request);
     }
-    if (operation == "soundset.catalog.list") {
-      return soundset_catalog_list(request);
-    }
+    if (operation == "soundset.catalog.list") return soundset_catalog_list(request);
+    if (operation == "soundset.catalog.describe") return soundset_catalog_describe(request);
+    if (operation == "soundset.slot.acquire") return soundset_slot_acquire(request);
+    if (operation == "soundset.slot.install") return soundset_install(request);
     if (operation == "soundset.inspect") {
       return soundset_inspect(request);
     }
@@ -8774,16 +8882,18 @@ struct Application::Impl {
   foundation::Result<DecodedSoundSetAudio>
   decode_soundset_audio(
       const project_io::StoredSoundSet& stored,
-      std::string_view manifest_sha256) const {
+      std::string_view manifest_sha256,
+      std::optional<std::uint8_t> selected_slot = std::nullopt) const {
     using Decoded = DecodedSoundSetAudio;
     Decoded decoded;
     for (const auto& slot : stored.manifest.slots) {
-      if (!slot.occupied.has_value()) {
+      if (!slot.occupied.has_value() || (selected_slot.has_value() && slot.index != *selected_slot)) {
         continue;
       }
       const auto index = static_cast<std::uint8_t>(slot.index);
-      auto bytes = soundset_sets.read_artifact(
-          manifest_sha256, slot.occupied->artifact.sha256);
+      auto bytes = selected_slot.has_value()
+        ? soundset_sets.read_slot_artifact(manifest_sha256, *selected_slot)
+        : soundset_sets.read_artifact(manifest_sha256, slot.occupied->artifact.sha256);
       if (!bytes.has_value()) {
         return foundation::Result<Decoded>::failure(
             soundset_artifact_error(bytes.error()));
@@ -8798,7 +8908,7 @@ struct Application::Impl {
     }
     // S11-D5's set-level demo is under the same S8-D6 constraint. It is not a
     // slot, so its refusal carries no slot_index.
-    if (stored.manifest.demo.has_value()) {
+    if (!selected_slot.has_value() && stored.manifest.demo.has_value()) {
       const auto bytes = soundset_sets.read_artifact(
           manifest_sha256, stored.manifest.demo->sha256);
       if (!bytes.has_value()) {
@@ -8864,7 +8974,8 @@ struct Application::Impl {
   // PERMISSION_DENIED; unreachable Catalog leaves the cached manifest as the
   // sole authority.
   foundation::Result<ResolvedSoundSet> resolve_soundset(
-      const nlohmann::json& request) const {
+      const nlohmann::json& request,
+      std::optional<std::uint8_t> selected_slot = std::nullopt) const {
     const auto set_id = uuid_field(request, "set_id");
     const auto version = string_field(request, "version");
     require(semver_string(version), "version must be a SemVer string");
@@ -8872,7 +8983,9 @@ struct Application::Impl {
     require(
         lowercase_sha256(manifest_sha256),
         "manifest_sha256 must be 64 lowercase hex characters");
-    auto stored = soundset_sets.read(set_id, version, manifest_sha256);
+    auto stored = selected_slot.has_value()
+      ? soundset_sets.read_slot(set_id, version, manifest_sha256, *selected_slot)
+      : soundset_sets.read(set_id, version, manifest_sha256);
     if (!stored.has_value()) {
       return foundation::Result<ResolvedSoundSet>::failure(stored.error());
     }
@@ -8885,6 +8998,44 @@ struct Application::Impl {
     }
     return foundation::Result<ResolvedSoundSet>::success(
         ResolvedSoundSet{std::move(stored.value()), manifest_sha256});
+  }
+
+  nlohmann::json soundset_catalog_describe(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation"}), "soundset.catalog.describe request shape is invalid");
+    const auto entries = read_catalog_entries();
+    auto sets = nlohmann::json::array();
+    if (entries.has_value()) for (const auto& entry : *entries) {
+      sets.push_back({{"set_id", entry.set_id}, {"version", entry.version},
+        {"manifest_sha256", entry.manifest_sha256}, {"total_bytes", entry.total_bytes}});
+    }
+    return success_envelope({{"catalog_available", entries.has_value()}, {"sets", std::move(sets)}}, std::nullopt);
+  }
+
+  nlohmann::json soundset_slot_acquire(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "set_id", "version", "manifest_sha256", "slot_index"}),
+      "soundset.slot.acquire request shape is invalid");
+    const auto slot = static_cast<std::uint8_t>(unsigned_field(request, "slot_index", 15));
+    const auto set_id = uuid_field(request, "set_id");
+    const auto version = string_field(request, "version");
+    require(semver_string(version), "version must be a SemVer string");
+    const auto hash = string_field(request, "manifest_sha256");
+    require(lowercase_sha256(hash), "manifest_sha256 must be 64 lowercase hex characters");
+    const auto entries = read_catalog_entries();
+    if (entries.has_value()) for (const auto& entry : *entries) {
+      if (entry.set_id != set_id || entry.version != version || entry.manifest_sha256 != hash) continue;
+      if (!soundset_transport) return error_envelope(Error{ErrorCode::io_error, "Catalog transport is unavailable"});
+      const auto acquired = soundset_sets.acquire_slot(*soundset_transport, entry, slot);
+      if (!acquired.has_value()) return error_envelope(acquired.error());
+      break;
+    }
+    auto resolved = resolve_soundset(request, slot);
+    if (!resolved.has_value()) return error_envelope(resolved.error());
+    const auto decoded = decode_soundset_audio(resolved.value().stored, hash, slot);
+    if (!decoded.has_value()) return error_envelope(decoded.error());
+    auto selected = resolved.value().stored;
+    for (auto& item : selected.manifest.slots) if (item.index != slot) item.occupied.reset();
+    return success_envelope({{"set_id", set_id}, {"version", version}, {"manifest_sha256", hash},
+      {"slot_index", slot}, {"slots", soundset_slots_json(selected, decoded.value().slots)}}, std::nullopt);
   }
 
   nlohmann::json soundset_catalog_list(const nlohmann::json& request) {
@@ -9192,16 +9343,21 @@ struct Application::Impl {
   }
 
   nlohmann::json soundset_install(const nlohmann::json& request) {
+    const auto selected_slot = request.at("operation") == "soundset.slot.install"
+      ? std::optional<std::uint8_t>{static_cast<std::uint8_t>(unsigned_field(request, "slot_index", 15))}
+      : std::nullopt;
+    auto shape = request;
+    if (selected_slot.has_value()) shape.erase("slot_index");
     require(
         exact_keys(
-            request,
+            shape,
             {"operation", "project_path", "command_id", "expected_revision",
              "bank_id", "set_id", "version", "manifest_sha256"}) ||
-            exact_keys(
-                request,
+            (!selected_slot.has_value() && exact_keys(
+                shape,
                 {"operation", "project_path", "command_id",
                  "expected_revision", "bank_id", "set_id", "version",
-                 "manifest_sha256", "occupied_pad_policy"}),
+                 "manifest_sha256", "occupied_pad_policy"})),
         "soundset.install request shape is invalid");
     const auto project_path = absolute_path_field(request, "project_path");
     const auto command_id = uuid_field(request, "command_id");
@@ -9217,7 +9373,7 @@ struct Application::Impl {
       policy = value == "keep" ? domain::OccupiedPadPolicy::keep
                                : domain::OccupiedPadPolicy::replace;
     }
-    auto resolved = resolve_soundset(request);
+    auto resolved = resolve_soundset(request, selected_slot);
     if (!resolved.has_value()) {
       return error_envelope(resolved.error());
     }
@@ -9229,7 +9385,7 @@ struct Application::Impl {
     // once. Nothing has been written at this point, or below it until the
     // single commit.
     const auto decoded = decode_soundset_audio(
-        resolved.value().stored, resolved.value().manifest_sha256);
+        resolved.value().stored, resolved.value().manifest_sha256, selected_slot);
     if (!decoded.has_value()) {
       return error_envelope(decoded.error());
     }
@@ -9237,10 +9393,15 @@ struct Application::Impl {
     if (!loaded.has_value()) {
       return error_envelope(loaded.error());
     }
-    const auto mapping = domain::map_soundset(
-        resolved.value().stored.manifest, loaded.value().banks.at(bank));
+    auto selected_manifest = resolved.value().stored.manifest;
+    if (selected_slot.has_value()) for (auto& slot : selected_manifest.slots) {
+      if (slot.index != *selected_slot) slot.occupied.reset();
+    }
+    const auto mapping = domain::map_soundset(selected_manifest, loaded.value().banks.at(bank));
     const auto write_set =
-        domain::resolve_soundset_write_set(mapping, policy);
+        domain::resolve_soundset_write_set(mapping, selected_slot.has_value()
+            ? std::optional<domain::OccupiedPadPolicy>{domain::OccupiedPadPolicy::replace}
+            : policy);
     if (!write_set.has_value()) {
       // Carries the complete collisions list and soundset_occupied_conflict,
       // and nothing has been read, decoded or written at this point.
@@ -9264,77 +9425,85 @@ struct Application::Impl {
           loaded.value().revision);
     }
 
-    // Every quota decision happens before the first Project mutation.
-    std::uint64_t requested_bytes = 0;
-    std::uint64_t requested_frames = 0;
-    std::uint16_t written_pads = 0;
-    for (const auto& pad : write_set.value()) {
-      const auto& prepared =
-          decoded.value().slots.at(pad.slot_index)->audio.prepared;
-      // S11-D8: per-Pad residency. One Artifact on two Pads is two charges,
-      // so the sum is over the write set and not over unique hashes.
-      const auto next_bytes =
-          audio::checked_runtime_byte_sum(requested_bytes, prepared.bytes);
-      const auto next_frames =
-          audio::checked_runtime_byte_sum(requested_frames, prepared.frames);
-      if (!next_bytes.has_value() || !next_frames.has_value()) {
-        return error_envelope(Error{
-            ErrorCode::invalid_argument,
-            "installed Sound Set prepared PCM byte length overflowed",
-        });
+    // A slot retry with an older revision can only replay an existing receipt:
+    // ProjectStore checks its exact command identity and the monotonic revision
+    // under the writer lease before any mutation. Charging it against today's
+    // Bank can incorrectly refuse a receipt after the original Pad was cleared.
+    // New/current-revision commands still undergo the complete quota check.
+    if (!selected_slot.has_value() ||
+        expected_revision >= loaded.value().revision) {
+      // Every quota decision happens before the first Project mutation.
+      std::uint64_t requested_bytes = 0;
+      std::uint64_t requested_frames = 0;
+      std::uint16_t written_pads = 0;
+      for (const auto& pad : write_set.value()) {
+        const auto& prepared =
+            decoded.value().slots.at(pad.slot_index)->audio.prepared;
+        // S11-D8: per-Pad residency. One Artifact on two Pads is two charges,
+        // so the sum is over the write set and not over unique hashes.
+        const auto next_bytes =
+            audio::checked_runtime_byte_sum(requested_bytes, prepared.bytes);
+        const auto next_frames =
+            audio::checked_runtime_byte_sum(requested_frames, prepared.frames);
+        if (!next_bytes.has_value() || !next_frames.has_value()) {
+          return error_envelope(Error{
+              ErrorCode::invalid_argument,
+              "installed Sound Set prepared PCM byte length overflowed",
+          });
+        }
+        requested_bytes = *next_bytes;
+        requested_frames = *next_frames;
+        written_pads =
+            static_cast<std::uint16_t>(written_pads | (std::uint16_t{1} << pad.pad));
       }
-      requested_bytes = *next_bytes;
-      requested_frames = *next_frames;
-      written_pads =
-          static_cast<std::uint16_t>(written_pads | (std::uint16_t{1} << pad.pad));
-    }
 
-    if (!sample_limits.has_value()) {
-      return error_envelope(
-          invalid_sample_request("Sample quota is unavailable"));
-    }
-    const auto ledger = compute_bank_ledger(
-        project_path, loaded.value(), bank, written_pads);
-    if (!ledger.has_value()) {
-      return error_envelope(ledger.error());
-    }
-    const auto assessment = audio::assess_runtime_quota(
-        ledger.value().bank_used_bytes.at(bank),
-        ledger.value().project_used_bytes,
-        requested_bytes,
-        *sample_limits);
-    if (!assessment.has_value()) {
-      return error_envelope(Error{
-          ErrorCode::invalid_project,
-          "Sample quota ledger exceeds configured limits",
-      });
-    }
-    if (assessment->constraint == audio::RuntimeQuotaConstraint::user_bank) {
-      std::vector<nlohmann::json> consumed;
-      consumed.reserve(ledger.value().consumed.size());
-      for (const auto& entry : ledger.value().consumed) {
-        consumed.push_back({
-            {"pad", entry.slot.pad},
-            {"prepared_bytes", entry.prepared_bytes},
-            {"prepared_frames", entry.prepared_frames},
+      if (!sample_limits.has_value()) {
+        return error_envelope(
+            invalid_sample_request("Sample quota is unavailable"));
+      }
+      const auto ledger = compute_bank_ledger(
+          project_path, loaded.value(), bank, written_pads);
+      if (!ledger.has_value()) {
+        return error_envelope(ledger.error());
+      }
+      const auto assessment = audio::assess_runtime_quota(
+          ledger.value().bank_used_bytes.at(bank),
+          ledger.value().project_used_bytes,
+          requested_bytes,
+          *sample_limits);
+      if (!assessment.has_value()) {
+        return error_envelope(Error{
+            ErrorCode::invalid_project,
+            "Sample quota ledger exceeds configured limits",
         });
       }
-      return error_envelope(runtime_bank_quota_error(
-          domain::PadSlotId{bank, write_set.value().front().pad},
-          requested_bytes,
-          requested_frames,
-          assessment->user_bank_remaining_bytes,
-          sample_limits->maximum_user_bank_bytes,
-          consumed));
-    }
-    if (assessment->constraint == audio::RuntimeQuotaConstraint::generation) {
-      return error_envelope(runtime_project_quota_error(
-          requested_bytes,
-          requested_frames,
-          ledger.value().project_used_bytes,
-          assessment->generation_remaining_bytes,
-          sample_limits->maximum_generation_bytes,
-          ledger.value().bank_used_bytes));
+      if (assessment->constraint == audio::RuntimeQuotaConstraint::user_bank) {
+        std::vector<nlohmann::json> consumed;
+        consumed.reserve(ledger.value().consumed.size());
+        for (const auto& entry : ledger.value().consumed) {
+          consumed.push_back({
+              {"pad", entry.slot.pad},
+              {"prepared_bytes", entry.prepared_bytes},
+              {"prepared_frames", entry.prepared_frames},
+          });
+        }
+        return error_envelope(runtime_bank_quota_error(
+            domain::PadSlotId{bank, write_set.value().front().pad},
+            requested_bytes,
+            requested_frames,
+            assessment->user_bank_remaining_bytes,
+            sample_limits->maximum_user_bank_bytes,
+            consumed));
+      }
+      if (assessment->constraint == audio::RuntimeQuotaConstraint::generation) {
+        return error_envelope(runtime_project_quota_error(
+            requested_bytes,
+            requested_frames,
+            ledger.value().project_used_bytes,
+            assessment->generation_remaining_bytes,
+            sample_limits->maximum_generation_bytes,
+            ledger.value().bank_used_bytes));
+      }
     }
 
     std::vector<project_io::ProjectStore::SoundSetInstallSlotRequest> slots;
@@ -9368,6 +9537,7 @@ struct Application::Impl {
             domain::CommandMeta{
                 foundation::CommandId{command_id}, expected_revision},
             std::move(slots),
+            selected_slot.has_value(),
         });
     if (!committed.has_value()) {
       return error_envelope(committed.error());

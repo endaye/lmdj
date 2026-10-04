@@ -5,7 +5,13 @@ import type {PadPlayback} from "../runtime/runtime_types";
 // machinery (preview, commit-once-on-release, Escape/pointercancel cancel)
 // lives in ValueSlider; this wrapper keeps the PadPlayback-shaped interface:
 // the input works in display units and the stored value is display * scale.
-export type ParameterField = "gainMillidb" | "pitchCents" | "pan";
+export type ParameterField =
+  | "gainMillidb"
+  | "pitchCents"
+  | "pan"
+  | "attackMs"
+  | "releaseMs"
+  | "tone";
 
 interface ParameterSliderProps {
   label: string;

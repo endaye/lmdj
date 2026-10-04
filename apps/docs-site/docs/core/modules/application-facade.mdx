@@ -198,7 +198,7 @@ correlation。无录音时 admit 失败；pre-fence、closure 后或 owner-lost 
 ## 4. 架构与数据流
 Host 或 Web Runtime Platform 请求 → Facade → Domain/I/O/Cooker/Runtime/Provider SDK → typed response/stream result。Sequence session/receipt、pending-overlay projection、Sample import token、cache 与 Project writer lease 均由 Facade/Core 拥有；overlay projection 只复制当前内存事件，不扩大 JSON/C API 或持久化 surface。Performance 录制沿同一路径：Host 提交手势 → Facade 用 `PerformanceClock` 定 tick、用 `PerformanceInputSequencer` 定次序 → Project I/O 在 performance session kind 的 journal 上耐久 append → 返回权威 status；replay 则是 Project Truth → `cook_performance_replay` → `PerformanceReplayController` → Runtime sink 的单向派生流。
 ## 5. API 与 Contract 边界
-`sample.update_pad` 与 `sample.inspect` 的 `playback` 在五个必填键之外接受 `lmdj.project.v5` `5.1.0` 的六个可选回放对齐键（`reverse`、`pitch_cents`、`pan`、`loop_mode`、`loop_start_frame`、`loop_crossfade_frames`），缺失即缺省、未知键仍拒绝，回读只输出非缺省键；`update_sample_pad` 用 Authoring Domain 的 `is_valid_playback_for_source` 按 WAV 源帧数校验循环点与 crossfade。typed `resolve_sample_preview_playback(SampleInspectResult, PadPlayback)` 把试听交给 Project Cooker 的 `resolve_pad_playback`，所以试听与 Cook 得到同一个 `ResolvedPlayback`（含逐 voice DSP 块），未分配 Pad 返回 `missing_asset`，越界返回 `invalid_argument`。
+`sample.update_pad` 与 `sample.inspect` 的 `playback` 在五个必填键之外接受 `lmdj.project.v5` `5.1.0` 的六个可选回放对齐键（`reverse`、`pitch_cents`、`pan`、`loop_mode`、`loop_start_frame`、`loop_crossfade_frames`），缺失即缺省、未知键仍拒绝，回读只输出非缺省键；`update_sample_pad` 用 Authoring Domain 的 `is_valid_playback_for_source` 按 WAV 源帧数校验循环点与 crossfade。typed `resolve_sample_preview_playback(SampleInspectResult, PadPlayback)` 把试听交给 Project Cooker 的 `resolve_pad_playback`，所以试听与 Cook 得到同一个 `ResolvedPlayback`（含逐 voice DSP 块），未分配 Pad 返回 `missing_asset`，越界返回 `invalid_argument`。`5.2.0` 的 `attack_ms`、`release_ms`、`tone` 与 `eq` 遵循同一规则：每个值在收窄到 32 位之前先按领域范围检查，所以超出 32 位、收窄后会落回合法区间的值同样被拒绝；`eq` 的每一段要求键完全匹配、`kind` 只能是 `shelf` 或 `cut`，回读只输出出现的频段。这些用例在 `facade.sample_surface.playback_parity` 分片中，以同一个共享 fixture 的 `tone` 变体往返。
 
 C++ typed API 与严格 JSON/C API/MCP/CLI parity 保持跨 Host 边界；`sample.quota` 请求恰含 `operation/project_path/slot`，成功结果中的 `project_revision` 必须作为后续 `sample.import.begin.expected_revision`。Bundle/Sample streaming API 不暴露 Project internals；Assembly Loader 校验锁定身份。typed `duplicate_project(ProjectDuplicateRequest{source_project_id, project_id})` 在 Workspace 内按调用方提供的新 Project ID 复制一个本地 Project，返回与 `list_local_projects` 相同的 `LocalProjectSummary`（revision 0）；它只有 typed 入口，不增加 JSON/C API/MCP/CLI operation。复制期间持有 Project-scoped admission lock，本 Application 内的 Sequence、Pattern transport 或 Performance session 以 `sequence_session_active` / `performance_session_active` 拒绝；与普通 authoring 不同，duplicate 不 reconcile 孤儿 Journal，崩溃 owner 留下的 active Journal 由 Project I/O 拒绝并原样保留，取回 take 须重新打开源 Project。
 ## 6. 状态、错误与并发
@@ -524,3 +524,7 @@ or Performance session refuses the edit (`sequence_session_active` or
 Cancelled staging directories use the same best-effort disposal as ordinary import
 cleanup. A removal failure cannot turn a committed deletion into an unsaved result;
 the directory has no live token and is reclaimed by the existing aging sweep.
+
+## 分 Pad Sound Set 获取
+
+`soundset.catalog.describe` 返回经 Core 解析的 Catalog 身份与总字节，不获取整套素材。`soundset.slot.acquire` 校验并缓存一个已占用槽；`soundset.slot.install` 对同编号目标 Pad 提交一个 InstallSoundSet assignment，保留原 manifest 身份、lineage、配额及 revision/receipt 语义，且不允许 replace policy。

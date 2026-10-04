@@ -21,7 +21,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 2. 当前实现状态
 Creator Web 与诊断 Web Runtime Host 共用 Platform 和同一 Wasm Runtime。Platform 除 Sample surface 外，还桥接 revision-bound `sample.quota`、Sequence begin/event/flush/stop/next-Bar switch/status/settings/recovery，以及 Stage 10 的 Pattern Slot assign/clear/move 与整套 Performance 操作；当前 source 在 accepted event 后读取 Facade typed overlay projection，发布 committed snapshot + overlay；active-session BPM 更新保留同一 overlay/boundary，owner-loss seal 与 flush/Stop 发布 clean committed view，Stop publication failure 可由 exact replay 恢复。若 owner-loss clean publication 自身失败，Host 使用已安装 quiescence contract 停止并清空 Runtime Pattern 后才释放 owner。pointer、keyboard、MIDI admission 统一使用 Audio Runtime frame clock 与单调 `input_sequence`，JavaScript 不计算 musical time。本版新增 Platform 自有的 master tap 与录制通道。`web/performance_master_tap_worklet.js` 是注册为 `lmdj-perform-master-tap` 的 AudioWorklet processor：它把 master bus 直通到输出，同时按 4800 帧成批向控制侧投递。`web/performance_master_capture.mjs` 是唯一消费者，对每条消息做精确键校验：批次为 `{type:"batch", channels:[Float32Array, Float32Array], generation, sequence}`，两个声道等长且不超过 `MAX_BATCH_FRAMES = 4800`，`sequence` 必须严格递增一格；停止确认为 `{type:"stopped", finalSequence, generation}`，失败为 `{type:"failed", reason:"post-message-failed", droppedFrames, generation}`；停止确认的等待上限是 `STOP_ACK_TIMEOUT_MS = 30000`，超时按失败结算。generation 不匹配的消息一律丢弃，Host 无法用陈旧 generation 复活已结束的录制。
 
-`sample.update_pad` 与 `sample.preview.set` 的 `playback` 接受 `lmdj.project.v5` `5.1.0` 的六个可选回放对齐键：`protocol.mjs` 与 C++ control runtime 都按“五个必填键加可选键”的封闭集合校验，未知键与越界值返回 `HOST_PROTOCOL_MISMATCH`，形状合法但越过源末尾的循环点由 Facade 以 `INVALID_ARGUMENT` 拒绝。Runtime Session 的 `wirePlayback` 把 camelCase 字段映射为线上键并只发出非缺省键，`normalizePlayback` 把回读补全为带缺省值的完整对象。试听不再在 Platform 内自行换算帧，而是调用 Facade 的 `resolve_sample_preview_playback`，所以试听与 Cook 播放同一结果。C++、`protocol.test.mjs` 与 `runtime_session.test.mjs` 以同一个 `tests/fixtures/contracts/pad-playback-full.json` 断言这一形状，防止各副本单独漂移；`control_runtime_test.cpp` 另证明试听的 `pitch_cents` 确实到达 voice（升八度的 200 帧 one-shot 在 120 帧内结束）。
+`sample.update_pad` 与 `sample.preview.set` 的 `playback` 接受 `lmdj.project.v5` `5.1.0` 的六个可选回放对齐键：`protocol.mjs` 与 C++ control runtime 都按“五个必填键加可选键”的封闭集合校验，未知键与越界值返回 `HOST_PROTOCOL_MISMATCH`，形状合法但越过源末尾的循环点由 Facade 以 `INVALID_ARGUMENT` 拒绝。Runtime Session 的 `wirePlayback` 把 camelCase 字段映射为线上键并只发出非缺省键，`normalizePlayback` 把回读补全为带缺省值的完整对象。试听不再在 Platform 内自行换算帧，而是调用 Facade 的 `resolve_sample_preview_playback`，所以试听与 Cook 播放同一结果。C++、`protocol.test.mjs` 与 `runtime_session.test.mjs` 以同一个 `tests/fixtures/contracts/pad-playback-full.json` 断言这一形状，防止各副本单独漂移；`control_runtime_test.cpp` 另证明试听的 `pitch_cents` 确实到达 voice（升八度的 200 帧 one-shot 在 120 帧内结束）。`5.2.0` 的 `attack_ms`、`release_ms`、`tone` 与 `eq` 以同样方式经过两层：越界值与畸形频段在固定线上返回 `HOST_PROTOCOL_MISMATCH`；Runtime Session 的 playback 对象始终带 `attackMs`、`releaseMs`、`tone` 与 `eq: {low, mid, high}`（旁通的频段为 `null`），线上只发出非缺省键与出现的频段。共享 fixture 新增 `tone` 变体，三处副本都以它往返。
 ## 3. 所有权与依赖
 只依赖 Application Facade 与 Audio Runtime；当前身份由 Build Identity 派生。Bundle reader 接受 Project v5 transfer，旧 v1/v2/v3/v4 输入继续由 Core 迁移。Product CMake 注入 Product Build、Platform 版本、完整资源上限及精确 Host allowlist。
 ## 4. 架构与数据流
@@ -131,6 +131,10 @@ Native control-runtime tests cover import identity, exact retry, reopen isolatio
 parameters, Pattern restoration, recording refusal and grouped recorded events.
 
 
+## 分 Pad Sound Set 获取
+
+Host 支持 `soundset.catalog.describe`、`soundset.slot.acquire` 与 `soundset.slot.install`。资产获取只解析 Core 给出的 object_kind/sha256 地址，使用独立获取队列，网络等待不占用 Project mutation queue；完整 Set 浏览和 slot 获取共享该队列，避免 pending/supply 交错。安装仍串行提交；Runtime publication 由现有 snapshot 路径完成。
+
 ## Pad deletion and cancellation
 
 `RuntimeSession.deletePad({slot, expectedRevision})` cancels queued and active
@@ -190,3 +194,40 @@ committed revision with `"failed"` and `snapshot_error`. Because a grid edit
 changes no Bank, a Runtime that was current before the edit, so that a
 Bank-bound `sample.preview.set` is admitted, stays current after a successful
 or deferred swap or an edit of another Pattern.
+
+## Performance replay authoring
+
+Edits during a Performance replay follow the
+[2026-10-02 decision](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-02-performance-replay-authoring.md)
+and its [2026-10-03 erratum](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-03-performance-replay-authoring-erratum.md)
+(#1789). Control tracks a replay this Host began from the
+`performance.replay.begin`, `stop` and `status` results it forwards. Each
+service cadence queries its status once; any state other than `playing`, or a
+failed query, ends it. The replay holds the Runtime only for its own Project:
+another Project opened meanwhile publishes its own view, and the replay's end
+restores nothing into it.
+
+While the replay plays, edits commit to Truth as usual, but no Pattern view is
+published over the replay's:
+
+- `pattern.events.edit` of the current Pattern returns `publication: "deferred"`;
+- a BPM or Swing change returns `pattern_publication: null`;
+- Undo/Redo, a Pad edit's re-preparation and a reload publish the Bank only;
+- a slot-full deferral from before the replay does not swap its view in.
+
+Replay hits and the Pattern voices a replay launches carry their own material
+and never read the engine Bank, so the Bank still publishes and live presses and
+previews hear Truth at once. A Pad edit stops the Pad with `stop_slot_live`,
+which ends only that Pad's live voices; the replay's voices keep sounding.
+
+Once the replay ends, the service cadence restores the Host's selected Pattern
+from Truth: at the next bar while the transport plays, as a Pattern switch does,
+otherwise immediately. The restore waits while a transport command is in flight,
+a recording is open, the transport reports an error or a publication is pending.
+It is prepared from Truth, so it carries any deferred grid edit. While the
+transport plays, a restore that finds every slot held waits until reclaim frees
+one, and does not prepare again in the meantime. Any other refused or failed
+restore clears `runtime_revision`.
+
+Transport commands during a replay (Play/Stop, Record) still replace the
+replay's Pattern view; they are outside this change and tracked in #1801.
