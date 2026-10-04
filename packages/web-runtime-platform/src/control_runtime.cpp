@@ -1717,6 +1717,18 @@ struct ControlRuntime::Impl {
            (std::string(project_id) + ".lmdj");
   }
 
+  // A commit that changes no Bank, such as a grid edit or a settings change,
+  // keeps a Runtime that was current before it current at the new revision.
+  void keep_runtime_current(bool runtime_was_current) {
+    if (!runtime_was_current) {
+      return;
+    }
+    runtime_revision = project_revision;
+    if (deferred_pattern_edit.has_value()) {
+      deferred_pattern_edit->runtime_revision = runtime_revision;
+    }
+  }
+
   bool session_available() const noexcept {
     return project_id.has_value() && project_revision.has_value() &&
            retained_project_path.has_value() && writer_lease.has_value();
@@ -3882,13 +3894,7 @@ Json ControlRuntime::dispatch(
                   {"pattern_id", edited_pattern},
                   {"replayed", response.at("result").at("replayed")}};
       const auto advance_runtime_revision = [&] {
-        if (!runtime_was_current) {
-          return;
-        }
-        impl_->runtime_revision = impl_->project_revision;
-        if (impl_->deferred_pattern_edit.has_value()) {
-          impl_->deferred_pattern_edit->runtime_revision = impl_->runtime_revision;
-        }
+        impl_->keep_runtime_current(runtime_was_current);
       };
       // The Runtime holds only its current Pattern; another Pattern is
       // prepared from Truth whenever it is selected.
@@ -4946,6 +4952,9 @@ Json ControlRuntime::dispatch(
             "recording");
       }
       const auto runtime_frame = impl_->engine.telemetry().rendered_frames;
+      // Settings change no Bank: a Runtime current before them stays current.
+      const auto runtime_was_current = impl_->project_revision.has_value() &&
+          impl_->runtime_revision == impl_->project_revision;
       auto response = impl_->application.command({
           {"operation", "sequence.settings.update"},
           {"project_path", impl_->retained_project_path->generic_string()},
@@ -4993,6 +5002,7 @@ Json ControlRuntime::dispatch(
           };
         }
       }
+      impl_->keep_runtime_current(runtime_was_current);
       auto result = response.at("result");
       result["project_revision"] = response.at("project_revision");
       result["pattern_publication"] = std::move(publication);
