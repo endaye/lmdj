@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-10-02
     occurrence: https://github.com/endaye/lmdj/pull/1766
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-05
+    occurrence: https://github.com/endaye/lmdj/issues/1815
+    observed_by: Codex
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/1752
 ---
@@ -42,3 +45,15 @@ Second recurrence (#1756). Same mechanism, a different handler: `libSystem_atfor
 Third recurrence (#1766). `project_io.candidate_adoption` failed under `TMPDIR=/private/tmp/lmdjt` (18 characters): 3 of 5 runs on main's base `738a3e48`, and 4 of 5 on the PR head, whose change does not touch Project I/O's link set. It passed under the default `TMPDIR`, and under fresh directories of 28 and 29 characters. The author first blamed concurrent sessions sharing that directory, but every passing control also changed the path length, which this mechanism already explains. On main `724576f8` the binary passed 25 of 25 runs under 18- and 30-character paths, outside the window, so the two causes could not be separated afterwards. The passing core_macos evidence ran under `TMPDIR=/private/tmp/lmdjt-pe`.
 
 The exit is [#1752](https://github.com/endaye/lmdj/issues/1752), its escalation Issue: the crash children re-exec the test binary instead of continuing after a bare `fork()`, and a deterministic source check keeps new bare forks out. No eligible mechanism exists until then, because no test-side call can tell how close the depot is to its next boundary.
+
+Fourth recurrence (#1815). The retained 2026-10-04 23:22:24 crash report
+for `lmdj_facade_candidate_store_tests` identifies `retry_finishes_during_adoption`
+line 101 → `fork` → `_notify_fork_child` → intercepted `calloc` →
+`StackDepotBase::Put` → `TwoLevelMap::Create` → corrupt unfair lock / SIGKILL.
+This accounts for the parent's ready-pipe EOF; no AF_UNIX endpoint exists in
+the Candidate Store path. A different TMPDIR changes allocations and does not
+prove a socket-path overflow. #1815 replaces all eleven bare spawn sites in
+this one test file with fresh `posix_spawn` roles, retaining the same hooks,
+pipes, crash boundaries, and parent-side assertions. The remaining six files
+and global source guard remain the scope of #1752; this partial repair does
+not absorb that repository-wide pitfall.
