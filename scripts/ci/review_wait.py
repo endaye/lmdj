@@ -365,7 +365,7 @@ def check(reader, repository, number, head):
                     "remedy": "wait for the Architecture Portal lane to succeed on this exact head, or obtain owner-attested independent takeover"})
             except Exception as error:
                 result["diagnostics"].append({"review_id": posted["id"], "status": "invalid_or_unavailable",
-                    "why": str(error) if isinstance(error, Refused) else "retained review source could not be authenticated",
+                    "why": str(error) if isinstance(error, (Refused, failure.reporting.ReportingError)) else "retained review source could not be authenticated",
                     "remedy": "inspect exact run/attempt and publisher artifact, or obtain owner-attested independent takeover"})
         for comment in comments:
             try:
