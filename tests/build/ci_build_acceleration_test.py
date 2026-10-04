@@ -221,6 +221,14 @@ class CiBuildAccelerationTest(unittest.TestCase):
             # gates build Core twice on that same machine, so they join the
             # queue rather than supply the contention that move removed.
             "macos-primary",
+            # The four Web lanes run on the same netcup host as every
+            # native-heavy suite; unqueued, a full candidate batch's own
+            # concurrency flaked their fixed browser budgets three runs in a
+            # row (37019332485, 37037025368, 37071379300).
+            "web-toolchain-conformance",
+            "web-runtime-host",
+            "creator-web",
+            "web-runtime-lab",
         )
         self.assertEqual(
             source.count("group: lmdj-native-heavy"),

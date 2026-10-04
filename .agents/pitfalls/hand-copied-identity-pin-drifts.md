@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-16
     occurrence: https://github.com/endaye/lmdj/issues/1073
     observed_by: Hermes Agent (deepseek-v4-flash)
+  - date: 2026-10-04
+    occurrence: https://github.com/endaye/lmdj/pull/1808
+    observed_by: Claude Code (Opus 5.5)
 exit: gate:tests/build/version_test.py
 ---
 
@@ -30,6 +33,19 @@ fact that lane does not own, filed a second self-test Issue bucket beside the
 `core_ubuntu` one for the same drift, and left `main` red until the next full
 batch. The duplicate bought no detection the contract-tier table did not
 already have; it only doubled where one drift surfaced.
+
+The second occurrence was a product copy, not a test copy. The Cardputer profile in
+`products/lmdj/src/cardputer_assembly.cpp` repeats the Product Build, the
+Cardputer Host version and `sha256(products/lmdj/assembly.json)`, and
+`apps/cardputer-host/CMakeLists.txt` repeats the Build as `PROJECT_VER`. No
+generator writes them, and no check read them. The settle PRs kept the digest
+current, but the Build allocations of #1808, #1810 and #1800 left it at a value
+matching none of their Assemblies. Products `2.0.78.0` to `2.0.81.0` therefore
+shipped a Cardputer profile reporting a stale Assembly digest. The
+`2.0.82.0` settle repaired it, and extended the exit gate:
+`tests/build/version_test.py` now fails, with `why` and `remedy`, when either
+copy disagrees with `products/lmdj/version.json`,
+`apps/cardputer-host/module.json` or the Assembly's sha256.
 
 ## How to apply
 
