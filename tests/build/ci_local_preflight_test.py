@@ -856,14 +856,12 @@ class ManifestReuseTest(unittest.TestCase):
         self.assertEqual(plan["mode"], "focused")
         self.assertEqual(plan["selected"], ["docs_static"])
 
-    def test_core_module_change_selects_every_core_lane(self) -> None:
+    def test_web_compiled_core_module_selects_full_at_three_families(self) -> None:
         self.repository.write("packages/foundation/src/thing.cpp", "int a = 1;\n")
         self.repository.commit("core")
         plan = self.plan()
-        self.assertEqual(
-            set(plan["selected"]),
-            {"portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos"},
-        )
+        self.assertEqual(plan["mode"], "full")
+        self.assertEqual(set(plan["selected"]), LANES)
 
     def test_uncommitted_edits_are_classified_like_committed_ones(self) -> None:
         self.repository.write("docs/guide.md", "text\n")
@@ -1102,6 +1100,21 @@ class CacheKeyTest(unittest.TestCase):
                     f"why: {lane}'s transitive read {path} is not input-bound; "
                     "remedy: include the producer/support/fixture read domain"
                 ))
+
+    def test_project_io_inputs_invalidate_every_web_consumer_key(self) -> None:
+        for path in (
+            "packages/project-io/CMakeLists.txt",
+            "packages/project-io/src/project_store.cpp",
+            "packages/project-io/src/web/library_opfs_storage.js",
+        ):
+            before = self.grouped_keys({path: "a" * 40})
+            after = self.grouped_keys({path: "b" * 40})
+            for lane in ("web_toolchain", "web_runtime_host", "creator"):
+                with self.subTest(path=path, lane=lane):
+                    self.assertNotEqual(before[lane], after[lane], msg=(
+                        f"why: Project I/O edit {path} leaves {lane}'s key "
+                        "unchanged; remedy: bind the Web lane to its compiled inputs"
+                    ))
 
     def test_new_discovered_test_and_deleted_test_invalidate_the_key(self) -> None:
         seed = {"packages/foundation/src/a.cpp": "a" * 40}

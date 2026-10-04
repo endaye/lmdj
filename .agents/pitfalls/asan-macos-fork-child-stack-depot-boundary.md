@@ -13,6 +13,9 @@ recurrences:
     occurrence: https://github.com/endaye/lmdj/pull/1766
     observed_by: Claude Code (Opus 5.5)
   - date: 2026-10-04
+    occurrence: https://github.com/endaye/lmdj/pull/1829
+    observed_by: Codex (GPT-6)
+  - date: 2026-10-04
     occurrence: https://github.com/endaye/lmdj/issues/1815
     observed_by: Codex
 exit: none
@@ -46,7 +49,21 @@ Third recurrence (#1766). `project_io.candidate_adoption` failed under `TMPDIR=/
 
 The exit is [#1752](https://github.com/endaye/lmdj/issues/1752), its escalation Issue: the crash children re-exec the test binary instead of continuing after a bare `fork()`, and a deterministic source check keeps new bare forks out. No eligible mechanism exists until then, because no test-side call can tell how close the depot is to its next boundary.
 
-Fourth recurrence (#1815). The retained 2026-10-04 23:22:24 crash report
+Fourth recurrence (#1829). The default
+`TMPDIR=/var/folders/k1/4rq4647n5gvgyys5x9jj_mfr0000gn/T/` failed
+`facade.candidate_store_stress` at `candidate_store_test.cpp:128` because the
+ready pipe reached EOF before the child wrote its signal. Diagnostic report
+`lmdj_facade_candidate_store_tests-2026-10-05-020307.ips` confirms
+`crashed on child side of fork pre-exec` and `os_unfair_lock is corrupt`:
+`libSystem_atfork_child` → `xpc_atfork_child` → `wrap_free` → ASan
+`StackDepotBase::Put` → `TwoLevelMap::Create` → `_os_unfair_lock_lock_slow`.
+This Task changes only CI routing/tests and this ledger; it changes no product
+allocation site. Keep the failed macOS lane visible and retain #1752 as the
+existing escalation; an input-bound passing lane or explicit owner risk
+acceptance is still required before merge. Do not move TMPDIR or disable ASan
+to turn this observation into a pass.
+
+Fifth recurrence (#1815). The retained 2026-10-04 23:22:24 crash report
 for `lmdj_facade_candidate_store_tests` identifies `retry_finishes_during_adoption`
 line 101 → `fork` → `_notify_fork_child` → intercepted `calloc` →
 `StackDepotBase::Put` → `TwoLevelMap::Create` → corrupt unfair lock / SIGKILL.

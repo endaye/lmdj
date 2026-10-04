@@ -60,9 +60,20 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(scope.select(self.policy, ["packages/audio-runtime/src/clock.cpp"])["kind"], "full")
 
     def test_removing_concurrency_full_rule_breaks_full_invariant(self):
-        mutant = copy.deepcopy(self.policy)
+        # Live Core routing also reaches the three-expensive-family threshold.
+        # Isolate this independent full-prefix mechanism in a fixture so that
+        # its removal cannot be masked by the separate consumer-routing floor.
+        fixture = copy.deepcopy(self.policy)
+        for rule in fixture.routing["rules"]:
+            if rule["match"] == {"kind": "prefix", "value": "packages/audio-runtime/"}:
+                rule["lanes"] = ["core_ubuntu"]
+        path = "packages/audio-runtime/src/clock.cpp"
+        self.assertEqual(scope.select(fixture, [path])["kind"], "full",
+                         "why: concurrency fixture lost its full-prefix boundary; "
+                         "remedy: retain the concurrency rule before mutating it")
+        mutant = copy.deepcopy(fixture)
         mutant.config["full_prefixes"].remove("packages/audio-runtime/")
-        self.assertNotEqual(scope.select(mutant, ["packages/audio-runtime/src/clock.cpp"])["kind"], "full",
+        self.assertNotEqual(scope.select(mutant, [path])["kind"], "full",
                             "why: fixture no longer isolates the concurrency full rule; remedy: restore mutation fixture")
 
     def test_removing_contract_full_rule_breaks_full_invariant(self):
