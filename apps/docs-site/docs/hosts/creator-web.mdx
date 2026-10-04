@@ -110,7 +110,7 @@ Pattern launch strip 呈现 16 个 Pattern Slot（Project 的可发射地址空�
 
 录制阶段机为 `idle → starting → recording → flushing → stopping → stopped → saving | discarding`。录制面板提供 Record / Flush / Stop / Performance 名称 / Save / Discard / Export Performance WAV，并在 `bindingStatus === "retry"` 时额外提供 Retry WAV bind。WAV 绑定词汇是 `unbound | binding | retry | bound`；bind 或随后的 Project truth 刷新失败会回到 `stopped` 并保留 retry，不丢弃已落盘的 WAV 前缀。master tap 以每批最多 4,800 帧喂入流式 WAV writer，背压、写入失败、tap 投递失败与 30 分钟上限都以明确原因封存，durable WAV 前缀仍可保存。
 
-回放面板列出已保存的 Performance，可对其一发起 replay，并显示 `replay.state`、解析出的 revision 与 `neutral` 标记。回放期间可以照常编辑（网格、Pad、BPM）：编辑写入 Truth，回放仍按开始时的 revision 播放、不被打断，回放结束后选中的 Pattern 按 Truth 恢复（#1789）；同一面板提供 start frame / end frame / 目标 Pad Slot（`0..63`）的 resample commit，以及 Performance recovery 候选的 Apply recovery / Discard recovery。
+回放面板列出已保存的 Performance，可对其一发起 replay，并显示 `replay.state`、解析出的 revision 与 `neutral` 标记。回放期间可以照常编辑（网格、Pad、BPM）：编辑写入 Truth，回放仍按开始时的 revision 播放、不被打断，回放结束后选中的 Pattern 按 Truth 恢复（#1789）。内部回放内录通过选择 Internal playback 并按住空 Pad 完成：松手后将实际采集的 master 输出保存到该 Pad；中断或达到时长上限的素材由用户显式 Save 或 Discard。回放面板保留 Performance recovery 候选的 Apply recovery / Discard recovery。
 
 Host 只渲染 Facade 返回的 authority：录制状态、pending/acknowledged launch、replay 状态与 recovery 候选都来自 Core 查询结果。演奏输入本身不改写 Project Truth；只有显式的 Save、Discard 与 WAV bind 会带 `expected_revision` 经 Facade 提交 Project mutation，Creator 随后重读 Project truth，不自行推断 revision。
 

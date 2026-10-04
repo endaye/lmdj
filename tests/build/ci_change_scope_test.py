@@ -156,18 +156,11 @@ CASES = {
     "packages/web-runtime-platform/test/performance_protocol.test.mjs": {
         "portal", "web_toolchain", "web_runtime_host", "creator"
     },
-    "packages/web-runtime-platform/test/source_boundary_test.py": {
-        "portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos",
-        "web_toolchain", "web_runtime_host"
-    },
-    "packages/web-runtime-platform/test/control_runtime_test.cpp": {
-        "portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos",
-        "web_toolchain", "web_runtime_host"
-    },
-    "packages/web-runtime-platform/test/performance_bridge_test.cpp": {
-        "portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos",
-        "web_toolchain", "web_runtime_host"
-    },
+    # Core, Web Runtime and Creator are three expensive families: the existing
+    # fail-closed threshold promotes these shared inputs to full mode.
+    "packages/web-runtime-platform/test/source_boundary_test.py": LANES,
+    "packages/web-runtime-platform/test/control_runtime_test.cpp": LANES,
+    "packages/web-runtime-platform/test/performance_bridge_test.cpp": LANES,
     "tools/web-runtime/verify_emscripten.py": {
         "web_toolchain", "web_runtime_host", "creator"
     },
@@ -346,6 +339,34 @@ class ChangeScopeTest(unittest.TestCase):
 
     def true_lanes(self, manifest):
         return {name for name, selected in manifest["lanes"].items() if selected}
+
+    def test_web_compiled_core_modules_select_every_web_consumer(self):
+        # Project I/O conformance links Application Facade and its seven Core
+        # dependencies; both distribution proofs compile the Web Runtime Host.
+        modules = (
+            "application-facade", "audio-runtime", "authoring-domain",
+            "foundation", "project-cooker", "project-io", "provider-sdk",
+            "web-runtime-platform",
+        )
+        for module in modules:
+            for suffix in ("CMakeLists.txt", "include/public.hpp", "src/source.cpp"):
+                path = f"packages/{module}/{suffix}"
+                with self.subTest(path=path):
+                    lanes = self.lanes_for_path(path)
+                    for lane in ("web_toolchain", "web_runtime_host", "creator"):
+                        self.assertIn(lane, lanes, msg=(
+                            f"why: Web-compiled input {path} omits consumer {lane}; "
+                            "remedy: add the Web consumer to its scope-policy rule"
+                        ))
+
+    def test_project_io_web_storage_selects_every_web_consumer(self):
+        path = "packages/project-io/src/web/library_opfs_storage.js"
+        for lane in ("web_toolchain", "web_runtime_host", "creator"):
+            with self.subTest(lane=lane):
+                self.assertIn(lane, self.lanes_for_path(path), msg=(
+                    f"why: OPFS link library omits {lane}; remedy: route "
+                    "Project I/O Web storage to every compiling Web lane"
+                ))
 
     def test_policy_has_exact_closed_lanes_and_all_current_top_levels(self):
         self.assertEqual(set(self.policy["lanes"]), LANES)

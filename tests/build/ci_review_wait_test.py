@@ -347,11 +347,12 @@ class AdmissionTests(unittest.TestCase):
         self.assertTrue(result["eligible"], result)
         self.assertEqual(result["evidence"][0]["backend"], "deepseek")
 
-    def current_workflow_archive(self):
+    def current_workflow_archive(self, diagnostic_padding=0):
         self.render_v2()
         # These are retained diagnostics, deliberately not canonical authority.
         self.source.documents.update({name: {"diagnostic": name, "status": "not-reviewed"}
             for name in ("t2-input.json", "collection-receipt.json", "t2-result.json")})
+        self.source.documents["t2-input.json"]["padding"] = "x" * diagnostic_padding
         source = (ROOT / ".github/workflows/pr-review.yml").read_text()
         upload = source.split("      - uses: actions/upload-artifact", 1)[1].split("      - name:", 1)[0]
         patterns = [line.strip().removeprefix("${{ env.REVIEW_DIR }}/")
@@ -367,7 +368,9 @@ class AdmissionTests(unittest.TestCase):
                             "why: producer upload path has no source-shaped fixture: " + pattern
                             + "; remedy: model its actual file before claiming reader compatibility")
             selected.update(matches)
+        diagnostics = {name: data for name, data in self.source.documents.items() if name not in selected}
         self.source.documents = selected
+        return diagnostics
 
     def test_current_producer_uploaded_v2_inventory_is_admitted_by_real_reader(self):
         self.current_workflow_archive()
@@ -376,6 +379,28 @@ class AdmissionTests(unittest.TestCase):
                         "why: actual producer member inventory is rejected by the reader; "
                         "remedy: reconcile only documented diagnostic members without weakening canonical receipts\n" + str(result))
         self.assertEqual(result["evidence"][0]["findings"], [])
+
+    def test_large_input_stays_outside_current_authentication_archive(self):
+        diagnostics = self.current_workflow_archive(diagnostic_padding=wait.failure.LIMIT + 306_831)
+        self.assertGreater(len(json.dumps(diagnostics["t2-input.json"]).encode()), wait.failure.LIMIT)
+        self.assertNotIn("t2-input.json", self.source.documents)
+        self.assertTrue(self.check()["eligible"])
+
+    def test_archive_budget_refusal_is_visible_in_review_diagnostics(self):
+        self.render_v2()
+        # Deflated historical archives still obey the unchanged expansion budget.
+        self.source.documents["t2-input.json"] = {"padding": "x" * wait.failure.LIMIT}
+        def compressed(artifact):
+            output = wait.io.BytesIO()
+            with wait.zipfile.ZipFile(output, "w", compression=wait.zipfile.ZIP_DEFLATED) as archive:
+                for name, document in self.source.documents.items():
+                    archive.writestr(name, json.dumps(document))
+            return output.getvalue()
+        self.source.download = compressed
+        result = self.check()
+        self.assertFalse(result["eligible"])
+        self.assertTrue(any("expanded review archive exceeds budget" in row["why"]
+                            for row in result["diagnostics"]), result)
 
     def test_diagnostic_members_remain_optional_for_historical_v2_receipts(self):
         names = ("t2-input.json", "collection-receipt.json", "t2-result.json")
@@ -436,6 +461,7 @@ class AdmissionTests(unittest.TestCase):
 
     def test_v2_diagnostics_keep_duplicate_members_and_json_errors_rejected(self):
         self.current_workflow_archive()
+        self.source.documents["t2-result.json"] = {}
         original = self.source.download
         for kind in ("duplicate-member", "duplicate-key", "invalid-json"):
             with self.subTest(kind=kind):
@@ -620,6 +646,78 @@ class AdmissionTests(unittest.TestCase):
         self.assertFalse(result["eligible"], result)
         self.assertEqual(result["status"], "pending")
         self.assertEqual(result["diagnostics"][0]["status"], "portal_gate_pending")
+
+    def portal_run(self, run_id, *, status="completed", conclusion="success",
+                   started_at="2026-09-10T01:00:00Z", completed_at="2026-09-10T01:05:00Z",
+                   name=None, head_sha=None):
+        return {"id": run_id, "name": wait.PORTAL_CHECK_RUN if name is None else name,
+                "head_sha": A if head_sha is None else head_sha, "status": status,
+                "conclusion": conclusion, "started_at": started_at, "completed_at": completed_at}
+
+    def test_two_green_portal_runs_on_one_head_stay_eligible(self):
+        # #1820: editing the PR body re-runs PR Contract and leaves a second
+        # successful Architecture Portal provenance run beside the first.
+        self.render_generated()
+        self.check_runs = [
+            self.portal_run(500, completed_at="2026-09-10T01:05:00Z"),
+            self.portal_run(502, name="PR Gate", conclusion="failure",
+                            completed_at="2026-09-10T01:20:00Z"),
+            self.portal_run(501, completed_at="2026-09-10T01:12:00Z"),
+        ]
+        result = self.check()
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["evidence"][0]["kind"], "generated")
+        self.assertEqual(result["diagnostics"], [])
+
+    def test_latest_failed_portal_run_stays_pending_beside_an_older_green_run(self):
+        self.render_generated()
+        self.check_runs = [
+            self.portal_run(100),
+            self.portal_run(300, conclusion="failure", completed_at="2026-09-10T01:30:00Z"),
+            self.portal_run(200, completed_at="2026-09-10T01:15:00Z"),
+        ]
+        result = self.check()
+        self.assertFalse(result["eligible"], result)
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(result["diagnostics"][0]["status"], "portal_gate_pending")
+        self.assertIn("found 3 check runs", result["diagnostics"][0]["why"])
+
+    def test_in_progress_latest_portal_run_stays_pending_beside_an_older_green_run(self):
+        self.render_generated()
+        self.check_runs = [
+            self.portal_run(100),
+            self.portal_run(300, status="in_progress", conclusion=None, completed_at=None,
+                            started_at="2026-09-10T01:25:00Z"),
+            self.portal_run(200, completed_at="2026-09-10T01:15:00Z"),
+        ]
+        result = self.check()
+        self.assertFalse(result["eligible"], result)
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(result["diagnostics"][0]["status"], "portal_gate_pending")
+        self.assertIn("found 3 check runs", result["diagnostics"][0]["why"])
+
+    def test_later_green_portal_run_admits_over_an_older_failure(self):
+        self.render_generated()
+        self.check_runs = [
+            self.portal_run(100, conclusion="failure"),
+            self.portal_run(300, completed_at="2026-09-10T01:30:00Z"),
+            self.portal_run(200, conclusion="failure", completed_at="2026-09-10T01:15:00Z"),
+        ]
+        result = self.check()
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["diagnostics"], [])
+
+    def test_older_unfinished_portal_run_does_not_hide_a_later_green_run(self):
+        self.render_generated()
+        self.check_runs = [
+            self.portal_run(200, conclusion="failure", completed_at="2026-09-10T01:20:00Z"),
+            self.portal_run(400, completed_at="2026-09-10T01:40:00Z"),
+            self.portal_run(100, status="in_progress", conclusion=None, completed_at=None,
+                            started_at="2026-09-10T00:30:00Z"),
+        ]
+        result = self.check()
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["diagnostics"], [])
 
     def test_v2_foreign_malformed_and_duplicate_markers_are_invalid(self):
         self.render_v2()
