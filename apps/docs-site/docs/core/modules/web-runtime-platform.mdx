@@ -41,6 +41,11 @@ Runtime Session 启动只运行一次真实 Control Worker/OPFS capability probe
 C++ manifest/control/realtime tests、Node Runtime Session tests、Chromium/WebKit browser proof 与分发验证覆盖共享边界；C++ 生产路径精确验证 live hit 后 pending event 从下一 Bar 重复、BPM rebuild 不丢 overlay、owner loss 清理 active overlay、cleanup publication failure 停止/清空 engine、Stop exact replay 恢复一次 clean-publication failure，且无重复/空洞/陈旧 overlay。failure hook 只编入 private testable target，production archive symbol/marker gate 阻止泄漏。Node 精确断言 Host suspend 未完成时 `AudioContext` 仍为 running，Creator packaged Proof 覆盖真实 Sample Cook split 后的 suspend→activate→Retry Prepare，并继续覆盖 recovery readiness 的 `false -> true -> false -> running` 序列。Stage 10 的新增覆盖：`performance_master_tap_worklet.test.mjs` 覆盖 tap 的分批、控制消息精确形状与停止确认；`performance_master_capture.test.mjs` 覆盖消费侧的精确键校验、generation 隔离、sequence 连续性与停止超时结算；`performance_protocol.test.mjs` 覆盖 Pattern Slot 与 Performance 操作在 Host 协议上的注册与信封校验；`performance_bridge_test.cpp` 覆盖 Control 侧的 Performance 桥接；`manifest_gate_test.cpp` 覆盖九项 resource limit 与 `perform_master_tap_worklet` 角色计数门禁。
 ## 9. 限制与下一门禁
 
+Native manifest 回归直接采用生成身份声明的 Creator 资产库存，完成初始化后
+检查 ready 与 Runtime 创建。它不向现行 favicon 清单补入未声明的离线 worker；
+未来离线清单的 worker 缺失或重复都必须拒绝 ready 与 Runtime 创建。
+这些 Native 下层断言不替代浏览器启动、真实设备或离线更新验收。
+
 全局 Pattern transport 的 T0 conformance 使用 Facade 独立执行线程：真实 OPFS
 immutable write 在写入后、flush 前暂停时，同一 Control lane 仍完成既有 Bank
 准备、live press/voice receipt、release 与状态查询；释放后检查完整落盘字节，

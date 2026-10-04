@@ -266,7 +266,9 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
   const auto parsed_major = std::from_chars(
       host_version.data(), host_version.data() + major_end, host_major);
   if (parsed_major.ec != std::errc{} || parsed_major.ptr != host_version.data() + major_end) return false;
-  const auto expected_offline = has_compatible_hosts && host_major >= 5 ? 1U : 0U;
+  // Creator Host5 adds the favicon. The additional offline Worker belongs to
+  // the following Host MAJOR, not to the already published favicon inventory.
+  const auto expected_offline = has_compatible_hosts && host_major >= 6 ? 1U : 0U;
   return runtime_scripts == 1U && runtime_wasm == 1U &&
          perform_master_taps == expected_taps && offline_workers == expected_offline;
 }
