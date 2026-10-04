@@ -233,22 +233,51 @@ def automated(reader, posted, repo, number, head, bot):
             "body_observation": body_observation(posted)}
 
 
-def portal_gate(reader, repository, head):
-    """The deterministic Portal lane must be green on the exact same head.
+def portal_observation_key(check):
+    """Creation order, then start, then completion.
 
-    The check-runs inventory is complete and paginated; a missing, running or
-    failed Portal lane means the gate has not yet proven this head, which is a
-    pending condition, never an invalid marker.
+    A body edit appends a new check run, and GitHub ids increase with that
+    creation. completed_at alone hides the new run while it is unfinished,
+    and treating a missing completed_at as newest lets an older stuck run
+    hide a later green one.
+    """
+    ident = check.get("id")
+    started = check.get("started_at")
+    completed = check.get("completed_at")
+    return (ident if type(ident) is int else 0,
+            started if type(started) is str else "",
+            completed if type(completed) is str else "")
+
+
+def portal_run_green(check, head):
+    return (check.get("head_sha") == head and check.get("status") == "completed"
+            and check.get("conclusion") == "success")
+
+
+def portal_gate(reader, repository, head):
+    """The latest Portal lane run must be green on the exact same head.
+
+    A pull request body edit re-runs PR Contract on the same head, so the
+    paginated check-runs inventory can carry more than one Architecture
+    Portal provenance run. The latest run decides. A missing, running or
+    failed latest run has not yet proven this head, which is pending, never
+    an invalid marker.
     """
     checks = reader.pages(f"/repos/{repository}/commits/{head}/check-runs", "check_runs")
     selected = [c for c in checks if c.get("name") == PORTAL_CHECK_RUN]
-    if not (len(selected) == 1 and selected[0].get("head_sha") == head
-            and selected[0].get("status") == "completed"
-            and selected[0].get("conclusion") == "success"):
+    latest = max(selected, key=portal_observation_key) if selected else None
+    if latest is not None and portal_run_green(latest, head):
+        return
+    if len(selected) > 1:
         raise PortalGatePending(
-            "why: the Architecture Portal lane has no successful check run on this exact head; "
-            "remedy: wait for the portal gate to complete green on this head, or obtain "
+            "why: the Architecture Portal lane found "
+            f"{len(selected)} check runs on this exact head and the latest is not successful; "
+            "remedy: wait for the latest portal gate to complete green on this head, or obtain "
             "owner-attested independent takeover")
+    raise PortalGatePending(
+        "why: the Architecture Portal lane has no successful check run on this exact head; "
+        "remedy: wait for the portal gate to complete green on this head, or obtain "
+        "owner-attested independent takeover")
 
 
 def generated(reader, posted, repo, number, head, bot):
@@ -365,7 +394,7 @@ def check(reader, repository, number, head):
                     "remedy": "wait for the Architecture Portal lane to succeed on this exact head, or obtain owner-attested independent takeover"})
             except Exception as error:
                 result["diagnostics"].append({"review_id": posted["id"], "status": "invalid_or_unavailable",
-                    "why": str(error) if isinstance(error, Refused) else "retained review source could not be authenticated",
+                    "why": str(error) if isinstance(error, (Refused, failure.reporting.ReportingError)) else "retained review source could not be authenticated",
                     "remedy": "inspect exact run/attempt and publisher artifact, or obtain owner-attested independent takeover"})
         for comment in comments:
             try:

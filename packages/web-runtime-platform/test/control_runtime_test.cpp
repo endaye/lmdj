@@ -7476,6 +7476,33 @@ void test_pattern_events_edit_keeps_a_current_runtime_current() {
       {"accepted"});
 }
 
+// #1805: a settings commit changes no Bank either, so a BPM change keeps a
+// current Runtime current and a Bank-bound preview is still admitted.
+void test_a_bpm_change_keeps_a_current_runtime_current() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  check_success(runtime->dispatch("sequence.settings.update",
+      {{"command_id", uuid(9710)}, {"expected_revision", 2}, {"session_id", nullptr},
+       {"bpm", 100}, {"quantize_enabled", nullptr}, {"swing_percent", nullptr}}, {}));
+  check_exact_success(runtime->dispatch("sample.preview.set",
+      {{"slot", slot(0, 0)}, {"playback", playback_payload(0, std::nullopt)}}, {}),
+      {"accepted"});
+}
+
+// #1805: a swing change publishes nothing, and keeps a current Runtime current.
+void test_a_swing_change_keeps_a_current_runtime_current() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  check_success(runtime->dispatch("sequence.settings.update",
+      {{"command_id", uuid(9711)}, {"expected_revision", 2}, {"session_id", nullptr},
+       {"bpm", nullptr}, {"quantize_enabled", nullptr}, {"swing_percent", 60}}, {}));
+  check_exact_success(runtime->dispatch("sample.preview.set",
+      {{"slot", slot(0, 0)}, {"playback", playback_payload(0, std::nullopt)}}, {}),
+      {"accepted"});
+}
+
 void test_pattern_events_edit_reports_a_failed_swap() {
   TempDirectory temp;
   FakeCoordinator coordinator;
@@ -8742,6 +8769,8 @@ int main() {
     test_pattern_events_edit_refuses_a_pending_publication();
     test_pattern_events_edit_refuses_a_legacy_sequence_session();
     test_pattern_events_edit_keeps_a_current_runtime_current();
+    test_a_bpm_change_keeps_a_current_runtime_current();
+    test_a_swing_change_keeps_a_current_runtime_current();
     test_pattern_events_edit_reports_a_failed_swap();
     test_pattern_events_edit_after_stop_publishes_immediately();
     test_pattern_events_edit_stopped_supersedes_a_pending_publication();
