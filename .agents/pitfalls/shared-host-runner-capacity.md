@@ -9,16 +9,19 @@ recurrences:
   - date: 2026-09-04
     occurrence: https://github.com/endaye/lmdj/pull/624
     observed_by: claude-code/opus-5
-exit: gate:tests/build/ci_nightly_workflow_test.py
+  - date: 2026-10-03
+    occurrence: https://github.com/endaye/lmdj/actions/runs/37071379300
+    observed_by: Kimi
+exit: gate:tests/build/ci_build_acceleration_test.py
 ---
 
 
-<!-- exit names one gate, per the ledger's entry contract. The absorbed
-mechanism is split across two files because each pins a different workflow:
-`tests/build/ci_nightly_workflow_test.py` covers `core-nightly.yml` and is the
-gate that repairs this entry after the 2026-09-04 recurrence, so it is the
-recorded exit; `tests/build/ci_build_acceleration_test.py` continues to pin the
-five admitted `ci.yml` lanes. Neither file can cover the other's workflow. -->
+<!-- exit names one gate, per the ledger's entry contract. The recorded exit
+moves to the gate that repairs the latest recurrence:
+`tests/build/ci_build_acceleration_test.py` now pins the complete admitted
+`ci.yml` set including the four Web lanes (2026-10-03 recurrence);
+`tests/build/ci_nightly_workflow_test.py` continues to pin the two
+`core-nightly.yml` native jobs. Neither file can cover the other's workflow. -->
 # Separate self-hosted runner services on one physical host do not provide independent CPU capacity.
 
 ## Why
@@ -49,6 +52,19 @@ outside that file. The entry was absorbed for `ci.yml` and unguarded everywhere
 else, which is why a second workflow could carry the defect for as long as it
 did. **A gate's file scope is the true scope of the pitfall it absorbs.**
 
+The 2026-10-03 recurrence is the same shape one level up: `ci.yml`'s four Web
+lanes (`web-toolchain-conformance`, `web-runtime-host`, `creator-web`,
+`web-runtime-lab`) run on `ci-web-heavy` services of the same netcup host that
+carries every native-heavy suite, in no capacity queue. A full candidate
+batch's own concurrency was enough: runs 37019332485, 37037025368 and
+37071379300 each flaked one or two load-sensitive suites (browser
+`waitForFunction` 30 s budgets, a racy-Git assertion, a realtime SPSC 180 s
+stress budget) while the host was otherwise quiet. The -02/-03 batches ran
+with the host idle; the batch itself was the contention. The exit gate's
+membership count could not see the Web lanes because they were never counted.
+**A role without a queue is a queue of one per runner service, which on one
+host is no isolation at all.**
+
 Two failures that look like this one are not: PR #611 moved `queue-item` off
 hosted runners because a job that only waits should not be billed by the
 minute, which is cost rather than contention; and PR #632 fixed a golden fixture
@@ -60,11 +76,13 @@ are involved.
 
 ## How to apply
 
-Put every material job eligible for the shared Contabo host in the same
+Put every material job eligible for a shared host in the same
 repository-wide capacity queue, including Architecture Portal, ordinary Core
-proof and package jobs, ASan, and coverage. Retain every waiter with
-`queue: max`, keep `cancel-in-progress: false`, and gate the complete admitted
-job set. Do not widen product test budgets to absorb sibling-runner contention.
+proof and package jobs, ASan, coverage, and the four Web lanes on the netcup
+host (`ci-web-heavy` shares the machine with `ci-core` there). Retain every
+waiter with `queue: max`, keep `cancel-in-progress: false`, and gate the
+complete admitted job set. Do not widen product test budgets to absorb
+sibling-runner contention.
 
 Every workflow, not only `ci.yml`. `core-nightly.yml` is in scope and its two
 native jobs are pinned by
