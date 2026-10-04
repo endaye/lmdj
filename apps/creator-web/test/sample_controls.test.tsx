@@ -236,7 +236,7 @@ test("restores Reset confirmation focus to a safe enabled fallback", async () =>
 
 test("keeps editing available while audio preview is suspended", () => {
   renderControls({audioSuspended: true});
-  expect(screen.getByText("Activate Audio to preview")).toBeTruthy();
+  expect(screen.getByText("Tap a Pad to preview")).toBeTruthy();
   expect(screen.getByRole("button", {name: "Loop"}).hasAttribute("disabled"))
     .toBe(false);
   expect(screen.getByRole("slider", {name: "Pad A1 Volume"}).hasAttribute("disabled"))
