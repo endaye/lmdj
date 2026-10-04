@@ -300,6 +300,14 @@ Performance recording while playback may continue. Interrupted and capped takes
 require Save or Discard; leading digital zero alone is trimmed. Saved Performance
 replay remains available; internal playback capture replaces manual resample frames.
 
+Runtime replacement waits for Pad capture permission, startup, source cleanup and
+any admitted save before closing its Session. The Workspace keeps the interrupted
+take's original Project, Pad and audio until explicit Save or Discard. Reopening
+the same Project lets Save use the replacement Session after inspecting that
+original Pad as empty; opening another Project never redirects the take. Other
+empty Pads cannot start a new take until this one is resolved. Late callbacks from
+a resolved source cannot change a successor recording.
+
 麦克风采集在实际 Pad 按下时独立尝试唤醒自己的 AudioContext，不因播放音频暂停而
 等待其激活。是否允许启动由浏览器决定；拒绝或尚未完成的启动在松手、取消时完整
 释放资源，不把零帧录音提交为素材。内部回放采集仍等待播放 Context 可用。这些源路径
