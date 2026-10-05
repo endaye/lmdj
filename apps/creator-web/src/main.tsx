@@ -12,6 +12,7 @@ import {WEB_RUNTIME_IDENTITY} from
 
 import {App} from "./app";
 import {createRetainedAudioContext} from "./runtime/audio_clock";
+import {registerOfflineShell} from "./runtime/offline_shell";
 import {
   announceBuildIdentity,
   creatorBuildIdentity,
@@ -125,6 +126,11 @@ createRoot(root).render(
     projectTakeover={createBrowserProjectTakeover()}
   />,
 );
+
+void registerOfflineShell(document, navigator, crypto, window.fetch.bind(window), phase => {
+  Object.defineProperty(window, "__LMDJ_OFFLINE_SHELL__", {value: phase, configurable: true});
+  window.dispatchEvent(new CustomEvent("lmdj-offline-shell", {detail: phase}));
+});
 
 // Static shell dressing: the header/footer live in index.html so unit tests
 // that render <App/> never see them; both slots no-op when absent.

@@ -159,6 +159,37 @@ class CreatorPackageTest(unittest.TestCase):
             self.repo, self.ui, self.runtime, self.identity, destination
         )
 
+    def test_offline_inventory_requires_major_and_embeds_exact_build_graph(self) -> None:
+        identity_path = self.repo / "products/lmdj/generated/web-runtime-identity.json"
+        identity = json.loads(identity_path.read_text())
+        host = identity["hosts"]["creator-web"]
+        role = self.module.ROLES.OFFLINE_WORKER
+        host["expected_assets"].append({"role": role, "prefix": "assets/offline-worker.", "suffix": ".js"})
+        identity_path.write_text(json.dumps(identity))
+        worker = self.repo / "apps/creator-web/offline/worker.mjs"
+        worker.parent.mkdir(parents=True)
+        shutil.copyfile(REPO_ROOT / "apps/creator-web/offline/worker.mjs", worker)
+        subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "offline fixture"], check=True)
+        with self.assertRaisesRegex(self.module.PackageError, "MAJOR settlement"):
+            self.build(self.root / "refused")
+        next_major = str(int(host["version"].split(".")[0]) + 1) + ".0.0"
+        host["version"] = next_major
+        identity_path.write_text(json.dumps(identity))
+        subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "settle fixture major"], check=True)
+        dist = self.root / "offline-dist"
+        self.build(dist)
+        self.module.verify_distribution(dist, self.repo)
+        manifest = json.loads((dist / "host-manifest.json").read_text())
+        workers = [entry for entry in manifest["assets"] if entry["role"] == role]
+        self.assertEqual(len(workers), 1)
+        source = (dist / workers[0]["path"]).read_text()
+        graph = json.loads(source.split("=", 1)[1].split(";\n", 1)[0])
+        self.assertEqual(graph["assets"], [entry for entry in manifest["assets"] if entry["role"] != role])
+        self.assertEqual(graph["product_build"], manifest["product_build"])
+        self.assertEqual(graph["host_version"], next_major)
+
     def test_builds_exact_deterministic_creator_inventory(self) -> None:
         first = self.root / "first-dist"
         second = self.root / "second-dist"

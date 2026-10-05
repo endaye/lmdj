@@ -1,5 +1,6 @@
 #include <lmdj/web_runtime/manifest_gate.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <fstream>
@@ -145,6 +146,29 @@ std::string canonical_manifest(
       manifest_json(product, host, protocol));
 }
 
+nlohmann::json creator_manifest_json() {
+  auto creator = manifest_json();
+  const auto& identity = host_identity("creator-web");
+  creator["distribution_contract"] = identity.at("distribution_contract");
+  creator["host_id"] = identity.at("id");
+  creator["host_version"] = identity.at("version");
+  creator["compatible_hosts"] = identity.at("compatible_hosts");
+  creator["assets"] = nlohmann::json::array();
+  constexpr std::string_view digits = "0123456789abcdef";
+  std::size_t index = 0;
+  for (const auto& descriptor : identity.at("expected_assets")) {
+    const auto& prefix = descriptor.at("prefix").get_ref<const std::string&>();
+    const auto stem = std::string_view{prefix}.substr(
+        std::string_view{"assets/"}.size(),
+        prefix.size() - std::string_view{"assets/"}.size() - 1U);
+    creator["assets"].push_back(asset(
+        stem, digits.at(index++ % digits.size()),
+        descriptor.at("suffix").get_ref<const std::string&>(),
+        descriptor.at("role").get_ref<const std::string&>()));
+  }
+  return creator;
+}
+
 std::string sha256(std::string_view bytes) {
   return picosha2::hash256_hex_string(bytes.begin(), bytes.end());
 }
@@ -217,21 +241,19 @@ void test_digest_and_exact_identity_mismatches_fail_closed() {
 }
 
 void test_creator_contract_and_compatibility_inventory_are_bound() {
-  auto creator = manifest_json();
+  auto creator = creator_manifest_json();
   const auto& creator_host = host_identity("creator-web");
   const auto& runtime_host = host_identity("web-runtime-host");
-  creator["distribution_contract"] = creator_host.at("distribution_contract");
-  creator["host_id"] = creator_host.at("id");
-  creator["host_version"] = creator_host.at("version");
-  creator["compatible_hosts"] = nlohmann::json::array({
-      {{"host_id", runtime_host.at("id")},
-       {"host_version", runtime_host.at("version")}},
-  });
   // Stage 10: the Creator inventory ships exactly one Perform master-tap
   // processor; without it the Creator manifest is incomplete.
-  check_rejected(creator);
-  creator["assets"].push_back(
-      asset("perform-master-tap", '9', ".js", "perform_master_tap_worklet"));
+  auto without_tap = creator;
+  auto& assets = without_tap["assets"];
+  const auto tap = std::find_if(assets.begin(), assets.end(), [](const auto& item) {
+    return item.at("role") == "perform_master_tap_worklet";
+  });
+  LMDJ_CHECK(tap != assets.end());
+  assets.erase(tap);
+  check_rejected(without_tap);
   auto encoded = lmdj::foundation::canonical_json(creator);
   ManifestGate accepted;
   LMDJ_CHECK(
@@ -252,6 +274,78 @@ void test_creator_contract_and_compatibility_inventory_are_bound() {
   check_rejected(creator);
   creator["distribution_contract"] = creator_host.at("distribution_contract");
   creator["compatible_hosts"][0]["host_version"] = "9.9.9";
+  check_rejected(creator);
+}
+
+void test_offline_inventory_requires_exactly_one_worker_before_runtime_creation() {
+  auto offline = creator_manifest_json();
+  const auto& creator_host = host_identity("creator-web");
+  const auto& runtime_host = host_identity("web-runtime-host");
+  const auto current_version = creator_host.at("version").get<std::string>();
+  // Synthetic next-MAJOR fixture, not an allocated Host identity.
+  const auto future_version = std::to_string(
+      std::stoul(current_version.substr(0, current_version.find('.'))) + 1U) +
+      ".0.0";
+  offline["host_version"] = future_version;
+  auto& assets = offline["assets"];
+  if (std::none_of(assets.begin(), assets.end(), [](const auto& item) {
+        return item.at("role") == "offline_worker";
+      })) {
+    assets.push_back(asset("offline-worker", 'b', ".js", "offline_worker"));
+  }
+  const std::array offline_identities{
+      ManifestExpectation::ComponentIdentity{
+          creator_host.at("distribution_contract").get_ref<const std::string&>(),
+          creator_host.at("id").get_ref<const std::string&>(), future_version},
+      ManifestExpectation::ComponentIdentity{
+          runtime_host.at("distribution_contract").get_ref<const std::string&>(),
+          runtime_host.at("id").get_ref<const std::string&>(),
+          runtime_host.at("version").get_ref<const std::string&>()}};
+  auto offline_expected = expected();
+  offline_expected.allowed_hosts = offline_identities;
+  auto offline_encoded = lmdj::foundation::canonical_json(offline);
+  ManifestGate offline_gate;
+  LMDJ_CHECK(offline_gate.initialize(as_bytes(offline_encoded), sha256(offline_encoded),
+      offline_expected) == ManifestGateStatus::accepted);
+  LMDJ_CHECK(offline_gate.ready());
+  LMDJ_CHECK(offline_gate.begin_runtime());
+
+  auto incomplete = offline;
+  auto& incomplete_assets = incomplete["assets"];
+  const auto worker = std::find_if(
+      incomplete_assets.begin(), incomplete_assets.end(), [](const auto& item) {
+        return item.at("role") == "offline_worker";
+      });
+  LMDJ_CHECK(worker != incomplete_assets.end());
+  incomplete_assets.erase(worker);
+  auto duplicate = offline;
+  duplicate["assets"].push_back(asset("offline-worker", 'c', ".js", "offline_worker"));
+  for (const auto& invalid : {incomplete, duplicate}) {
+    const auto encoded = lmdj::foundation::canonical_json(invalid);
+    ManifestGate rejected;
+    LMDJ_CHECK(rejected.initialize(as_bytes(encoded), sha256(encoded),
+        offline_expected) == ManifestGateStatus::protocol_mismatch);
+    LMDJ_CHECK(!rejected.ready());
+    LMDJ_CHECK(!rejected.begin_runtime());
+  }
+}
+
+void test_generated_creator_inventory_accepts_before_runtime_creation() {
+  const auto creator = creator_manifest_json();
+  LMDJ_CHECK(creator.at("assets").size() ==
+      host_identity("creator-web").at("expected_assets").size());
+  const auto encoded = lmdj::foundation::canonical_json(creator);
+  ManifestGate gate;
+  LMDJ_CHECK(gate.initialize(as_bytes(encoded), sha256(encoded), expected()) ==
+      ManifestGateStatus::accepted);
+  LMDJ_CHECK(gate.ready());
+  LMDJ_CHECK(gate.begin_runtime());
+  LMDJ_CHECK(gate.ready());
+}
+
+void test_generated_creator_inventory_rejects_an_extra_worker() {
+  auto creator = creator_manifest_json();
+  creator["assets"].push_back(asset("offline-worker", 'c', ".js", "offline_worker"));
   check_rejected(creator);
 }
 
@@ -401,7 +495,10 @@ int main() {
     test_digest_and_exact_identity_mismatches_fail_closed();
     test_every_identity_schema_and_inventory_drift_fails_closed();
     test_generic_bounded_inventory_accepts_host_owned_assets();
+    test_generated_creator_inventory_accepts_before_runtime_creation();
+    test_generated_creator_inventory_rejects_an_extra_worker();
     test_creator_contract_and_compatibility_inventory_are_bound();
+    test_offline_inventory_requires_exactly_one_worker_before_runtime_creation();
     test_repeated_or_late_initialization_is_terminal_before_mutation();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

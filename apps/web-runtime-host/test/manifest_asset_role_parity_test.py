@@ -80,6 +80,29 @@ def walk_with_parameters(node: ast.AST, parameters: frozenset[str]):
         yield from walk_with_parameters(child, parameters)
 
 
+def writer_roles() -> frozenset[str]:
+    """Include version-gated producers before their coordinated identity bump."""
+    roles = set()
+    for relative in PACKAGERS.values():
+        for node in ast.walk(ast.parse((REPO_ROOT / relative).read_text())):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id not in ASSET_WRITERS:
+                continue
+            argument = next((item.value for item in node.keywords
+                             if item.arg == ROLE_PARAMETER), None)
+            position = ROLE_PARAMETER_POSITION[node.func.id]
+            if argument is None and len(node.args) > position:
+                argument = node.args[position]
+            if (isinstance(argument, ast.Attribute)
+                    and isinstance(argument.value, ast.Name)
+                    and argument.value.id == "ROLES"):
+                role = getattr(ROLES, argument.attr)
+                assert isinstance(role, str)
+                roles.add(role)
+    return frozenset(roles)
+
+
 def role_names() -> frozenset[str]:
     return frozenset(ROLES.ALLOWED_ASSET_ROLES)
 
@@ -198,7 +221,7 @@ class VocabularyParity(unittest.TestCase):
             )
         )
         orphans = sorted(
-            ROLES.ALLOWED_ASSET_ROLES - producible - published_roles()
+            ROLES.ALLOWED_ASSET_ROLES - producible - writer_roles() - published_roles()
         )
         self.assertEqual(
             orphans,
@@ -467,7 +490,9 @@ class PublishedRollbackAnchors(unittest.TestCase):
                 asset["role"] for asset in manifest["assets"]
             )
             major = int(str(entry["host_version"]).partition(".")[0])
-            if major >= 5:
+            if major >= 6:
+                expected = ROLES.CREATOR_OFFLINE_ASSET_ROLES
+            elif major >= 5:
                 expected = ROLES.CREATOR_CURRENT_ASSET_ROLES
             elif major >= 3:
                 expected = ROLES.CREATOR_V3_ASSET_ROLES
