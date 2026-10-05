@@ -17,6 +17,9 @@ import release_candidate_checks_test as checks_fixture
 from tools.release.candidate_preparation import CandidatePreparation, CandidatePreparationError
 from tools.release.model import canonical_json
 from tools.release.orchestration import RequestJournal
+from tools.release.candidate_inputs import CandidateInputs
+from tools.release.candidate_material import CandidateBuildMaterial
+from tools.release.candidate_material_scope import P1_MATERIAL_SCOPE
 
 
 SCRIPT = checks_fixture.SCRIPT.replace('case "$1" in', '''case "$1" in
@@ -306,6 +309,98 @@ class PreparationObserverBoundaryTest(checks_fixture.ChecksFixture):
         self.assertEqual(seen, [True, True])
         self.assertFalse((self.journal / 'snapshot-state.json').exists())
         self.assertEqual((self.check_calls(), self.commands()), calls)
+
+
+class CoordinatedPreparationFixture(PreparationFixture):
+    def setUp(self):
+        self.material_authorized = []
+        inputs = CandidateInputs(ROOT, material_scope=P1_MATERIAL_SCOPE)
+        frozen = inputs.freeze(inputs.git('rev-parse', 'HEAD').decode().strip())
+        exporter = CandidateBuildMaterial(ROOT, Path('unused'), material_scope=P1_MATERIAL_SCOPE)
+        original = setup_fixture.fixture.MaterialTest.commit
+        def seed(material):
+            exporter._export(frozen, material.root)
+            return original(material)
+        with patch.object(setup_fixture.fixture.MaterialTest, 'commit', seed):
+            super().setUp()
+
+    def new_parent(self, **changes):
+        changes.setdefault('material_scope', P1_MATERIAL_SCOPE)
+        changes.setdefault('authorize_material', lambda request, scope:
+                           self.material_authorized.append((request, scope)))
+        return super().new_parent(**changes)
+
+
+class CoordinatedPreparationTest(CoordinatedPreparationFixture):
+    def test_managed_carrier_scope_denial_cannot_provision_the_catalogue(self):
+        from tools.release.carriers import enroll_candidate
+        from tools.release.orchestration import JournalError
+        from tools.release.candidate import CATALOG
+        catalogue = self.fixture.state / CATALOG
+        catalogue.unlink()
+        def deny(request, scope):
+            raise ValueError('private scope denial')
+        with self.assertRaisesRegex(JournalError, 'scoped candidate material authority'):
+            enroll_candidate(request=self.request, preparation_root=self.parent_root,
+                repository_root=self.fixture.root, source_root=self.destination,
+                reservation_root=self.fixture.state, transition_root=self.fixture.container / 'transition',
+                witness_root=self.fixture.container / 'witness', repository_id=123,
+                client=object(), token='fixture-unused', authorize=self.authorized.append,
+                observe_main=lambda:self.main, review=lambda *args:None,
+                verify_merged=lambda *args:None, clock=lambda:2100000000,
+                path=interpreter.fixture_path(), author_name='Fixture',
+                author_email='fixture@example.invalid', source_timestamp=2000000000,
+                material_scope=P1_MATERIAL_SCOPE, authorize_material=deny)
+        self.assertFalse(catalogue.exists())
+        self.assertFalse(self.parent_root.exists())
+        self.assertFalse(self.destination.exists())
+
+    def test_scope_denial_precedes_freeze_enrollment_and_reservation(self):
+        before = self.catalogue(), self.fixture.git('show-ref')
+        def deny(request, scope):
+            raise ValueError('private authority response must not escape')
+        parent = self.new_parent(authorize_material=deny)
+        with patch.object(parent.material.inputs, 'freeze') as freeze:
+            with self.assertRaises(CandidatePreparationError) as caught:
+                parent.observe(initialize=True)
+            freeze.assert_not_called()
+        self.assertNotIn('private authority', str(caught.exception))
+        self.assertFalse(self.parent_root.exists())
+        self.assertFalse(self.destination.exists())
+        self.assertEqual(before, (self.catalogue(), self.fixture.git('show-ref')))
+
+    def test_enrollment_scope_cannot_be_adopted_by_a_legacy_resume(self):
+        self.assertEqual(self.enroll_parent()['status'], 'pending')
+        before = self.parent_state(), self.catalogue()
+        with self.assertRaisesRegex(CandidatePreparationError, 'rebound'):
+            self.new_parent(material_scope=None, authorize_material=None).observe()
+        self.assertEqual(before, (self.parent_state(), self.catalogue()))
+        self.assertFalse(self.destination.exists())
+
+    def test_actual_all_legs_scope_receipts_and_cold_resume_preserve_exact_22(self):
+        self.assertEqual(self.enroll_parent()['status'], 'pending')
+        result = self.prepare_parent()
+        self.assertEqual(result['status'], 'verified')
+        source, cut = result['source'], result['checked_cut']['cut']
+        self.assertEqual(source['material_scope'], P1_MATERIAL_SCOPE)
+        self.assertEqual(result['frozen']['material_scope'], P1_MATERIAL_SCOPE)
+        self.assertEqual(set(source['files']), self.parent.local.files)
+        self.assertEqual(len(source['files']), 22)
+        local = self.parent.local
+        self.assertEqual(local.revision(source['commit'] + '^'), self.fixture.base)
+        self.assertEqual(local.revision(cut['commit'] + '^'), self.fixture.base)
+        self.assertEqual(local.revision(cut['source_retention_ref']), source['commit'])
+        self.assertTrue(set(source['files']) < set(cut['files']))
+        for name in source['files']:
+            self.assertEqual(local.git('show', source['commit'] + ':' + name),
+                             local.git('show', cut['commit'] + ':' + name))
+        calls, catalogue, state = self.command_calls(), self.catalogue(), self.parent_state()
+        observed = self.new_parent().observe()
+        self.assertEqual(observed, result)
+        self.assertEqual((self.command_calls(), self.catalogue(), self.parent_state()), (calls, catalogue, state))
+        self.assertTrue(self.material_authorized)
+        self.assertTrue(all(request == self.request and scope == P1_MATERIAL_SCOPE
+                            for request, scope in self.material_authorized))
 
 
 if __name__ == '__main__':

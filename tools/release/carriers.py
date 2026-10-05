@@ -890,7 +890,8 @@ def enroll_candidate(*, request, preparation_root, repository_root, source_root,
                      reservation_root, transition_root, witness_root,
                      repository_id, client, token, authorize, observe_main,
                      review, verify_merged, clock, path, author_name,
-                     author_email, source_timestamp, drive=True):
+                     author_email, source_timestamp, drive=True,
+                     material_scope=None, authorize_material=None):
     """The managed `candidate` adapter for this exact frozen request.
 
     Managed, not self-driving: the returned `CandidateTransition` goes to the
@@ -917,10 +918,16 @@ def enroll_candidate(*, request, preparation_root, repository_root, source_root,
         source_root=source_root, reservation_root=reservation_root,
         request=request, authorize=authorize, observe_main=observe_main,
         path=path, author_name=author_name, author_email=author_email,
-        source_timestamp=source_timestamp, clock=clock)
+        source_timestamp=source_timestamp, clock=clock,
+        material_scope=material_scope, authorize_material=authorize_material)
     # The BUILD catalogue is provisioned once per repository by the trusted
     # entry, before the preparation's first reservation leg; enroll is
     # idempotent for existing storage (it only validates the binding).
+    if material_scope is not None:
+        try:
+            preparation._authorize_original()
+        except Exception:
+            _fail("scoped candidate material authority is unavailable")
     preparation.material.reservations.enroll(request["repository"])
     try:
         observed = preparation.observe(initialize=True)
@@ -941,7 +948,8 @@ def enroll_candidate(*, request, preparation_root, repository_root, source_root,
             request=request, authorize=authorize, observe_main=observe_main,
             path=recorded[0], author_name=author_name,
             author_email=author_email, source_timestamp=recorded[1],
-            clock=clock)
+            clock=clock, material_scope=material_scope,
+            authorize_material=authorize_material)
         observed = preparation.observe(initialize=True)
     if observed["status"] == "verified":
         driven = observed

@@ -12,7 +12,7 @@ import re
 import tempfile
 
 from .candidate_snapshot import CandidateSnapshotRun, read
-from .candidate_workspace import FILES, squash_witness_path
+from .candidate_workspace import squash_witness_path
 from .model import canonical_json, canonical_sha256
 from .task_verification import verify_tracked_bytes
 
@@ -128,7 +128,7 @@ class CandidateCutWorkspace:
                     local.git("update-index", "--add", "--cacheinfo", "100644," + oid + "," + name, index=index)
                 tree = local.revision_from_index(index)
                 changed = {name.decode() for name in local.git("diff-tree", "--no-ext-diff", "--no-commit-id", "--name-only", "-r", "-z", source["base_revision"], tree).split(b"\0") if name}
-                require(changed == FILES | set(expected), "final diff is not exact source plus snapshot")
+                require(changed == local.files | set(expected), "final diff is not exact source plus snapshot")
                 raw = self.commit_bytes(source, tree, snapshot_sha256, author_name, author_email, timestamp)
                 commit = local.git("hash-object", "-t", "commit", "-w", "--stdin", data=raw).decode().strip()
                 retention = "refs/lmdj/release-sources/" + source["operation_id"]

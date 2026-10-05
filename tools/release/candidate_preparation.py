@@ -12,6 +12,7 @@ from .candidate_source_setup import CandidateSourceSetup
 from .candidate_snapshot import CandidateSnapshotRun, read
 from .candidate_cut import CandidateCutWorkspace
 from .candidate_checks import CandidateTaskChecks
+from .candidate_material_scope import material_scope as validate_material_scope, scope_fields
 from .model import canonical_json, canonical_sha256
 from .orchestration import RequestJournal, validate_request
 
@@ -35,7 +36,7 @@ class CandidatePreparation:
 
     def __init__(self, root, *, repository_root, source_root, reservation_root,
                  request, authorize, observe_main, path, author_name, author_email,
-                 source_timestamp, clock):
+                 source_timestamp, clock, material_scope=None, authorize_material=None):
         validate_request(request)
         require(request["mode"] == "new" and all(callable(v) for v in (authorize, observe_main, clock)),
                 "requires original new request and trusted authority, main and clock")
@@ -49,7 +50,12 @@ class CandidatePreparation:
         self.observe_main, self.clock, self.path = observe_main, clock, path
         self.author = dict(author_name=author_name, author_email=author_email)
         self.timestamp = source_timestamp
-        self.material = CandidateBuildMaterial(repository_root, reservation_root)
+        self.material_scope = validate_material_scope(material_scope)
+        require(self.material_scope is None or callable(authorize_material),
+                "scoped material requires its own original authority callback")
+        self.authorize_material = authorize_material
+        self.material = CandidateBuildMaterial(repository_root, reservation_root,
+                                              material_scope=self.material_scope)
         self.local = CandidateSourceWorkspace(source_root, self.material)
         self.setup = CandidateSourceSetup(self.root / "source-setup", self.local,
             repository_root=repository_root, request=request, authorize=self._child_authorize,
@@ -59,9 +65,15 @@ class CandidatePreparation:
             control_revision=request["control_revision"], authorize=self._child_authorize, path=path)
         self.scope = dict(request=self.request, repository_root=str(self.setup.repository.root),
             source_root=str(self.local.root), reservation_root=str(Path(reservation_root).absolute()),
-            path=path, author=self.author, source_timestamp=source_timestamp)
+            path=path, author=self.author, source_timestamp=source_timestamp,
+            **scope_fields(self.material_scope))
         require(len(canonical_json(self.scope)) <= 8192, "scope exceeds its bound")
         self._active = None
+
+    def _authorize_original(self):
+        self.authorize(deepcopy(self.request))
+        if self.material_scope is not None:
+            self.authorize_material(deepcopy(self.request), deepcopy(self.material_scope))
 
     def _state(self, journal):
         marker, state = read(journal, self.MARKER, optional=True), read(journal, self.STATE, optional=True)
@@ -106,7 +118,7 @@ class CandidatePreparation:
         journal._active()
         require(same(self._state(journal), self._persisted) and same(state, self._persisted), "parent history changed")
         try:
-            self.authorize(deepcopy(self.request))
+            self._authorize_original()
             if before_write is not None:
                 before_write()
             main = self._main()
@@ -133,7 +145,7 @@ class CandidatePreparation:
         # performs no writes and the durable receipts it authenticates were
         # checkpointed under the drive's own writer.
         try:
-            self.authorize(deepcopy(self.request))
+            self._authorize_original()
             main = self._main()
         except Exception:
             raise CandidatePreparationError("why: candidate preparation authority or main is unavailable; remedy: restore the original trusted grant without exposing callback output or replaying effects") from None
@@ -201,6 +213,11 @@ class CandidatePreparation:
     def _run(self, *, mutate, initialize, before_write):
         require(self._active is None, "controller is already running")
         try:
+            if self.material_scope is not None:
+                try:
+                    self._authorize_original()
+                except Exception:
+                    raise CandidatePreparationError("why: candidate preparation material authority is unavailable; remedy: restore the original scoped grant before freezing inputs or creating history") from None
             self._frozen = self.material.inputs.freeze(self.request["base_revision"])
             with RequestJournal(self.root) as journal:
                 state = self._state(journal)
@@ -210,7 +227,7 @@ class CandidatePreparation:
                     if not initialize:
                         return dict(status="absent", evidence=None)
                     try:
-                        self.authorize(deepcopy(self.request))
+                        self._authorize_original()
                     except Exception:
                         # Same-type upstream refusals are private at enrollment
                         # too; the public channel never echoes callback output.
