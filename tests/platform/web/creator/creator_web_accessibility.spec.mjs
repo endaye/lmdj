@@ -1,3 +1,4 @@
+import {openCreatorSystem} from "./fixtures/creator_navigation.mjs";
 import {createHash} from "node:crypto";
 import {readFile} from "node:fs/promises";
 
@@ -176,8 +177,8 @@ for (const viewport of [
     }
     await expect(page.getByRole("button", {name: "Sample"})).toBeEnabled();
     await expect(page.getByRole("button", {name: "Sequence"})).toBeEnabled();
-    await expect(page.getByRole("button", {name: "Slice", exact: true})).toBeEnabled();
-    // Slice and Sound Sets live in the touch workspace's System group, not on
+    await expect(page.getByRole("button", {name: "Slice", exact: true})).toHaveCount(0);
+    // Project owns Sound Sets; Sample owns Slice. Both stay off
     // the physical column, so they are asserted enabled here and walked
     // separately from the rail below. Without this line a regression that
     // disables one would surface as an off-by-one tab-order diff -- the very
@@ -245,6 +246,7 @@ test("WebKit capability boundary remains unsupported and is not physical accepta
   // #1680: user language in the alert; the code is in Developer diagnostics.
   await expect(page.getByRole("alert")).toContainText("This browser cannot run Creator.");
   await expect(page.getByRole("alert")).not.toContainText("UNSUPPORTED_WEB_RUNTIME");
+  await openCreatorSystem(page);
   await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
   await expect(page.getByRole("region", {name: "Developer diagnostics"}))
     .toContainText("UNSUPPORTED_WEB_RUNTIME");

@@ -1,6 +1,7 @@
 import {userMessage} from "../state/error_messages";
 import {useReportFailure} from "../runtime/diagnostics_context";
 import {useEffect, useRef, useState} from "react";
+import {changeProviderPermission, subscribeProviderPermissions} from "../state/provider_permissions";
 import type {
   CandidateJobView, CandidateProviderList, CandidateRecipe,
   CreatorCandidateRuntimeSession, CreatorRuntimeSession,
@@ -66,13 +67,17 @@ export function CandidateSurface({session, projectId, projectRevision, onRefresh
   useEffect(() => {
     mounted.current = true;
     let active = true;
+    let permissionsChanged = false;
+    const unsubscribe = subscribeProviderPermissions(session, listing => {
+      permissionsChanged = true; setProviders(listing);
+    });
     void Promise.all([session.inspectProject(), session.listProviders()]).then(([inspection, listing]) => {
       const projection = candidateSources(inspection, projectId);
       if (!active) return;
       setSources(projection.sources);
-      setProviders(listing);
+      if (!permissionsChanged) setProviders(listing);
     }).catch(error => {if (active) setError(shownFailure(error));});
-    return () => {active = false; mounted.current = false;};
+    return () => {active = false; mounted.current = false; unsubscribe();};
   }, [session, projectId]);
   const settingsAction = async (action: () => Promise<void>) => {
     if (busyRef.current) return;
@@ -106,10 +111,7 @@ export function CandidateSurface({session, projectId, projectRevision, onRefresh
       <p>The local reference detector runs on its registered test platform, on this device.</p>
       <button type="button" disabled={!providers || providers.granted_permissions?.includes(permission)}
         onClick={() => void settingsAction(async () => {
-          const current = await session.listProviders();
-          if (!Array.isArray(current.granted_permissions)) throw new Error("Current permissions are unavailable; no permissions were changed.");
-          const result = await session.configureProviderPermissions([...new Set([...current.granted_permissions, permission])]);
-          if (mounted.current) setProviders({...current, granted_permissions: result.granted_permissions});
+          await changeProviderPermission(session, permission, true);
         })}>{providers?.granted_permissions?.includes(permission) ? "Analysis permission granted" : "Grant analysis permission"}</button>
     </fieldset>
     <label className="candidate-source">Source<select aria-label="Slice source" value={source}

@@ -168,9 +168,11 @@ async function expectUserLanguageFailure(code: string, message: string) {
   const alert = await screen.findByRole("alert");
   expect(alert.textContent).toContain(message);
   expect(alert.textContent).not.toContain(code);
+  fireEvent.click(screen.getByRole("button", {name: "System"}));
   fireEvent.click(screen.getByText(/^Developer diagnostics \(\d+\)$/));
   expect(within(screen.getByRole("region", {name: "Developer diagnostics"}))
     .getAllByText(code).length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole("button", {name: "Back to music"}));
 }
 
 test("suspend stays explicit and restart rebuilds, lists, and reopens without autoplay", async () => {
@@ -189,7 +191,9 @@ test("suspend stays explicit and restart rebuilds, lists, and reopens without au
 
   first.emit({state: "running", errorCode: null});
   await screen.findByText("Audio running");
+  await user.click(screen.getByRole("button", {name: "System"}));
   await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+  await user.click(screen.getByRole("button", {name: "Back to music"}));
   await screen.findByText("Audio suspended");
 
   first.emit({state: "restart-required", errorCode: "HOST_RESTART_REQUIRED"});
@@ -225,7 +229,9 @@ test("Project actions stay disabled until audio suspension settles", async () =>
   await act(async () => value.emit({state: "running", errorCode: null}));
   await screen.findByText("Audio running");
 
+  await user.click(screen.getByRole("button", {name: "System"}));
   await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+  await user.click(screen.getByRole("button", {name: "Back to music"}));
   await screen.findByText("Audio suspending");
   expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
     .toBe(true);
@@ -281,7 +287,9 @@ test("a refused audio suspension restores the running surface", async () => {
   await act(async () => value.emit({state: "running", errorCode: null}));
   await screen.findByText("Audio running");
 
+  await user.click(screen.getByRole("button", {name: "System"}));
   await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+  await user.click(screen.getByRole("button", {name: "Back to music"}));
   await screen.findByText("Audio running");
 });
 
@@ -379,6 +387,7 @@ test("a repeated Host notification of one Runtime error is recorded once", async
   for (let repeat = 0; repeat < 3; repeat += 1) {
     act(() => failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID", errorDetails: {}}));
   }
+  fireEvent.click(screen.getByRole("button", {name: "System"}));
   await screen.findByText("Developer diagnostics (1)");
   act(() => failed.emit({state: "failed", errorCode: "INTERNAL_ERROR", errorDetails: {}}));
   await screen.findByText("Developer diagnostics (2)");
@@ -397,6 +406,7 @@ test("a Runtime error with unserializable details is still shown and recorded", 
   failed.emit({state: "failed", errorCode: "HOST_STATE_INVALID", errorDetails: cyclic});
   render(<App runtimeFactory={() => failed.session} />);
   expect((await screen.findByRole("alert")).textContent).toContain("That can't be done right now.");
+  fireEvent.click(screen.getByRole("button", {name: "System"}));
   expect(await screen.findByText("Developer diagnostics (1)")).toBeTruthy();
 });
 
@@ -519,7 +529,9 @@ test("a refused activation leaves the surface in its prior phase", async () => {
     await screen.findByRole("heading", {name: "Project 11111111"});
     await act(async () => value.emit({state: "running", errorCode: null}));
     await screen.findByText("Audio running");
-    await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+    await user.click(screen.getByRole("button", {name: "System"}));
+  await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+  await user.click(screen.getByRole("button", {name: "Back to music"}));
     await screen.findByText("Audio suspended");
 
     expect(screen.queryByRole("button", {name: "Activate audio"})).toBeNull();
@@ -554,7 +566,9 @@ test("a failed activation with Runtime diagnostics restores its prior phase", as
     }));
     await screen.findByRole("heading", {name: "Project 11111111"});
     await act(async () => value.emit({state: "running", errorCode: null}));
-    await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+    await user.click(screen.getByRole("button", {name: "System"}));
+  await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+  await user.click(screen.getByRole("button", {name: "Back to music"}));
     await screen.findByText("Audio suspended");
 
     await user.keyboard("q");
@@ -581,7 +595,9 @@ test("a rejected activation restores its prior phase while reporting the error",
     }));
     await screen.findByRole("heading", {name: "Project 11111111"});
     await act(async () => value.emit({state: "running", errorCode: null}));
-    await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+    await user.click(screen.getByRole("button", {name: "System"}));
+  await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+  await user.click(screen.getByRole("button", {name: "Back to music"}));
     await screen.findByText("Audio suspended");
 
     await user.keyboard("q");
@@ -618,7 +634,9 @@ test("a Runtime publication during activation wins over later refusal", async ()
     }));
     await screen.findByRole("heading", {name: "Project 11111111"});
     await act(async () => value.emit({state: "running", errorCode: null}));
-    await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+    await user.click(screen.getByRole("button", {name: "System"}));
+  await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+  await user.click(screen.getByRole("button", {name: "Back to music"}));
     await screen.findByText("Audio suspended");
 
     await user.keyboard("q");
@@ -681,7 +699,9 @@ test("MIDI permission remains reachable when audio wake is refused", async () =>
     render(<App runtimeFactory={() => value.session} />);
     await userEvent.click(await screen.findByRole("button", {name: "Open Project 11111111"}));
     await screen.findByRole("heading", {name: "Project 11111111"});
+    await userEvent.click(screen.getByRole("button", {name: "System"}));
     await userEvent.click(screen.getByRole("button", {name: "Enable MIDI"}));
+    await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
     await waitFor(() => expect(permissionRequests).toBe(1));
     await waitFor(() => expect(screen.getByTestId("audio-state").textContent).toBe("Audio inactive"));
     expect(screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"}).hasAttribute("disabled")).toBe(false);
@@ -846,7 +866,9 @@ test("lifecycle matrix clears fresh loop toggles without duplicate Session stop 
   await waitFor(() => expect(pad.dataset.outcome).toBe("idle"));
 
   await latch(3);
+  await userEvent.click(screen.getByRole("button", {name: "System"}));
   await userEvent.click(screen.getByRole("button", {name: "Suspend audio"}));
+  await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
   await waitFor(() => expect(pad.dataset.outcome).toBe("idle"));
 
   await act(async () => value.emit({state: "running", errorCode: null}));

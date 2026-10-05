@@ -87,6 +87,9 @@ Gate／Loop Gate、取消、后台与 Session 替换会阻止迟到的发声。�
 恢复探针仍由 Runtime 的 armed window 决定，未完成的真实 Safari／触控听感验收不由
 组件测试替代。
 
+从 System 点击 `Back to music` 时，同一返回手势立即把焦点还给 System 入口；
+用户随后进入 Sample 参数控件的键盘手势保留自己的焦点，不被下一帧的导航回调打断。
+
 ## 演奏边界
 
 Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按空间顺序映射：上方 `Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，下方 `A S D F G H J K` 对应 Pad 9–16；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。用户明确授权 Web MIDI 后，Creator 在 channels 1–16 上接受 Note `36..51` 并映射到当前 Bank；Platform 的可选单 channel filter 不由 Creator 启用。每个 Sample press 以串行 inspect→trigger admission 确定 Runtime-effective playback，release/cancel/stop 与 ordered Voice state 共同维护视觉和真实声音。播放头只消费已快照的 Voice render bounds 与 session-local 观察时间，不写 Project Truth、Runtime Snapshot 或音频线程；并发/retrigger 时最新开始的选中-Pad Voice 获得显示所有权。saved Project revision 与 Runtime revision 分开显示，Cook 失败只重试 prepare、不重放 mutation。恢复期间只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。
@@ -324,6 +327,11 @@ a resolved source cannot change a successor recording.
 Capture 通过 Continue in Sequence 继续录音时，Pattern 播放仍可运行；停止录音后的裁剪/保存对话框由 Host 显示，不要求同时存在 Pattern 录音 journal。
 
 Capture 持有录音或待处理素材时，默认素材的网络下载可继续，但其 Project 安装/发布等待录音提交或丢弃，避免背景初始化改变录音目标的 revision。
+System is a touch subpage: Audio settings, MIDI connection, Provider permissions
+and diagnostics live there. Back to music restores the creative page and entry
+focus while the Pattern transport continues. Four physical page keys remain.
+Project owns Sound Sets; Sample owns Slice. Analysis authorization stays beside
+the analysis action; upper MIDI status remains read-only.
 
 ## 首次触屏唤醒
 
@@ -409,6 +417,7 @@ counts. A microphone that cannot start names what to do, for example allowing
 access, connecting a microphone or closing the other app, and never names the
 browser exception. Each Pad change, import, room check and recording start
 that fails is recorded in Developer diagnostics with its code and details.
+Recovery More options／Open Sequence／Open Perform 通过同一导航入口离开 System；拒绝恢复的 take 仍保留，导航不额外 apply 或 discard。
 P1 预览被播放音频暂停拒绝时，下一步提示为先演奏 Pad 启动音频，再重试预览；没有单独的音频激活按钮。
 
 Creator keeps a single set of accepted public codes, so a code accepted at one
