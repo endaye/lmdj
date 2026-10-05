@@ -102,6 +102,20 @@ CREATOR_LEGACY_ASSET_ROLES = CREATOR_V3_ASSET_ROLES - frozenset(
     (PERFORM_MASTER_TAP_WORKLET,)
 )
 
+
+def creator_roles_for_version(host_version: str) -> frozenset[str]:
+    """Select the inventory without changing published rollback anchors."""
+    major, _, _ = host_version.partition(".")
+    if not major.isdigit():
+        raise ValueError("Host version is invalid")
+    if int(major) >= 6:
+        return CREATOR_OFFLINE_ASSET_ROLES
+    if int(major) >= 5:
+        return CREATOR_PRE_OFFLINE_ASSET_ROLES
+    if int(major) >= 3:
+        return CREATOR_V3_ASSET_ROLES
+    return CREATOR_LEGACY_ASSET_ROLES
+
 RUNTIME_IDENTITY_RELATIVE_PATH = "tools/web-runtime/runtime-identity.json"
 GENERATED_RUNTIME_IDENTITY_RELATIVE_PATH = (
     "products/lmdj/generated/web-runtime-identity.json"

@@ -101,7 +101,7 @@ class MaterialTest(unittest.TestCase):
         # trusted generator run against the materialized tree (#1531).
         import importlib.util
         spec = importlib.util.spec_from_file_location(
-            "identity_check", ROOT / "tools/web-runtime/generate_runtime_identity.py")
+            "identity_check", self.root / candidate_material.RUNTIME_IDENTITY_GENERATOR)
         assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -113,7 +113,7 @@ class MaterialTest(unittest.TestCase):
 
         # Check both exported identity files, including the MJS projection,
         # after materializing the complete reserved candidate.
-        check = subprocess.run([sys.executable, str(ROOT / candidate_material.RUNTIME_IDENTITY_GENERATOR),
+        check = subprocess.run([sys.executable, str(self.root / candidate_material.RUNTIME_IDENTITY_GENERATOR),
                                 "--repo-root", str(self.root), "--check"],
                                capture_output=True, text=True)
         self.assertEqual(check.returncode, 0,
@@ -125,6 +125,53 @@ class MaterialTest(unittest.TestCase):
         assembly = version._verify_assembly(current, ROOT / "products/lmdj/assembly.json")
         version._verify_lock(current, ROOT / "products/lmdj/assembly.json", assembly,
                              ROOT / "products/lmdj/assembly.lock.json")
+
+    def test_frozen_future_host_selects_offline_asset_without_extra_material_outputs(self):
+        # Only this throwaway Git repository selects the future Host shape.
+        # The class template exports HEAD; copy current Source before freezing
+        # so precommit verification exercises the new passive policy as well.
+        for name in (candidate_material.RUNTIME_IDENTITY_GENERATOR,
+                     "tools/web-runtime/runtime-identity.json"):
+            shutil.copyfile(ROOT / name, self.root / name)
+        manifest_path = self.root / "apps/creator-web/module.json"
+        manifest = json.loads(manifest_path.read_bytes())
+        manifest["version"] = "6.0.0"
+        manifest_path.write_bytes(canonical_json(manifest))
+        assembly_path = self.root / "products/lmdj/assembly.json"
+        assembly = json.loads(assembly_path.read_bytes())
+        next(host for host in assembly["hosts"] if host["id"] == "creator-web")["version"] = "6.0.0"
+        assembly_path.write_bytes(canonical_json(assembly))
+        compiled = version._render_compiled_assembly(self.current, assembly, repo_root=self.root)
+        (self.root / "products/lmdj/src/compiled_assembly.cpp").write_bytes(compiled)
+        lock = version._lock_document(self.current, assembly_path, assembly, compiled, repo_root=self.root)
+        (self.root / "products/lmdj/assembly.lock.json").write_bytes(canonical_json(lock))
+        self.base = self.commit()
+        self.frozen = self.inputs.freeze(self.base)
+        self.request["base_revision"] = self.base
+        before = (self.git("status", "--porcelain"), self.git("write-tree"), self.git("show-ref"))
+        result = self.prepare()
+        self.assertEqual(before, (self.git("status", "--porcelain"), self.git("write-tree"), self.git("show-ref")))
+        identity = json.loads(result["files"]["products/lmdj/generated/web-runtime-identity.json"])
+        creator = identity["hosts"]["creator-web"]
+        self.assertEqual(creator["version"], "6.0.0")
+        policy = json.loads((self.root / "tools/web-runtime/runtime-identity.json").read_bytes())
+        self.assertEqual(creator["expected_assets"], [
+            *policy["hosts"]["creator-web"]["expected_assets"],
+            policy["hosts"]["creator-web"]["offline_asset"],
+        ])
+        self.assertEqual(len(creator["expected_assets"]), 8)
+        self.assertEqual(set(result["files"]), {
+            "products/lmdj/version.json", "products/lmdj/assembly.json",
+            "products/lmdj/assembly.lock.json", "products/lmdj/src/compiled_assembly.cpp",
+            "products/lmdj/generated/web-runtime-identity.json",
+            "products/lmdj/generated/web-runtime-identity.mjs",
+        })
+        self.assertEqual(identity["product_build"], result["binding"]["product_build"])
+        for name, raw in result["files"].items():
+            (self.root / name).write_bytes(raw)
+        check = subprocess.run([sys.executable, str(self.root / candidate_material.RUNTIME_IDENTITY_GENERATOR),
+                                "--repo-root", str(self.root), "--check"], capture_output=True, text=True)
+        self.assertEqual(check.returncode, 0, check.stderr)
 
     def test_passive_root_not_controller_root_owns_component_hashes(self):
         manifest = self.root / "packages/foundation/module.json"

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -130,9 +131,12 @@ def published_roles() -> frozenset[str]:
 
 class VocabularyParity(unittest.TestCase):
     def setUp(self) -> None:
-        self.identity = load_json(
-            REPO_ROOT / ROLES.RUNTIME_IDENTITY_RELATIVE_PATH
-        )
+        generator_path = REPO_ROOT / "tools/web-runtime/generate_runtime_identity.py"
+        spec = importlib.util.spec_from_file_location("role_parity_identity", generator_path)
+        assert spec is not None and spec.loader is not None
+        generator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(generator)
+        self.identity = generator.generate(REPO_ROOT)
         self.generated_identity = load_json(
             REPO_ROOT / ROLES.GENERATED_RUNTIME_IDENTITY_RELATIVE_PATH
         )
@@ -144,6 +148,8 @@ class VocabularyParity(unittest.TestCase):
         for host_id, declared in sorted(
             ROLES.EMITTED_ASSET_ROLES_BY_HOST_ID.items()
         ):
+            if host_id == "creator-web":
+                declared = ROLES.creator_roles_for_version(self.identity["hosts"][host_id]["version"])
             with self.subTest(host_id=host_id):
                 produced = self.producible(host_id)
                 self.assertEqual(
@@ -153,8 +159,9 @@ class VocabularyParity(unittest.TestCase):
                     f"{host_id!r} in apps/web-runtime-host/tools/asset_roles.py "
                     f"({sorted(declared)}) are not the roles its packager can "
                     f"ship ({sorted(produced)}), which are the role values of "
-                    f"hosts.{host_id}.expected_assets in "
-                    f"{ROLES.RUNTIME_IDENTITY_RELATIVE_PATH} -- the inventory "
+                    f"hosts.{host_id}.expected_assets derived by "
+                    "tools/web-runtime/generate_runtime_identity.py from "
+                    f"{ROLES.RUNTIME_IDENTITY_RELATIVE_PATH} and the actual Host version -- the inventory "
                     "the packager orders its manifest from and re-verifies "
                     "position by position. A declaration that does not match "
                     "the producer cannot gate the producer.\n"
@@ -163,8 +170,9 @@ class VocabularyParity(unittest.TestCase):
                     f"{ROLES.RUNTIME_IDENTITY_RELATIVE_PATH}, regenerate "
                     f"{ROLES.GENERATED_RUNTIME_IDENTITY_RELATIVE_PATH}, and "
                     "update ALLOWED_ASSET_ROLES together with the matching "
-                    "*_EMITTED_ASSET_ROLES set in "
-                    "apps/web-runtime-host/tools/asset_roles.py.",
+                    "version-selected inventory in "
+                    "apps/web-runtime-host/tools/asset_roles.py; preserve "
+                    "every historical Host inventory.",
                 )
 
     def test_generated_identity_agrees_with_its_source(self):
@@ -241,7 +249,7 @@ class VocabularyParity(unittest.TestCase):
 
     def test_creator_required_inventory_tracks_the_creator_packager(self):
         self.assertEqual(
-            ROLES.CREATOR_CURRENT_ASSET_ROLES,
+            ROLES.creator_roles_for_version(self.identity["hosts"]["creator-web"]["version"]),
             self.producible("creator-web"),
             "why: the inventory the validator requires of a current Creator "
             f"manifest ({sorted(ROLES.CREATOR_CURRENT_ASSET_ROLES)}) is not "
@@ -254,6 +262,15 @@ class VocabularyParity(unittest.TestCase):
             "Host 3.x and 4.x inventory in CREATOR_V3_ASSET_ROLES and the "
             "Host 2.x inventory in CREATOR_LEGACY_ASSET_ROLES.",
         )
+
+    def test_creator_version_selection_retains_each_historical_inventory(self):
+        for version, roles in (("2.0.0", ROLES.CREATOR_LEGACY_ASSET_ROLES),
+                               ("3.0.0", ROLES.CREATOR_V3_ASSET_ROLES),
+                               ("4.0.0", ROLES.CREATOR_V3_ASSET_ROLES),
+                               ("5.0.0", ROLES.CREATOR_PRE_OFFLINE_ASSET_ROLES),
+                               ("6.0.0", ROLES.CREATOR_OFFLINE_ASSET_ROLES)):
+            with self.subTest(version=version):
+                self.assertEqual(ROLES.creator_roles_for_version(version), roles)
 
     def test_runtime_singleton_roles_are_producible(self):
         missing = sorted(

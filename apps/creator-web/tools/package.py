@@ -373,8 +373,14 @@ def build_distribution(
             tap_entry,
             favicon_entry,
         ]
-        offline_declared = any(asset["role"] == ROLES.OFFLINE_WORKER
-                               for asset in host_identity["expected_assets"])
+        offline_count = sum(asset["role"] == ROLES.OFFLINE_WORKER
+                            for asset in host_identity["expected_assets"])
+        if int(host_identity["version"].split(".")[0]) >= 6 and offline_count != 1:
+            raise PackageError(
+                "why: Creator Host MAJOR6 requires exactly one offline Worker; "
+                "remedy: regenerate the version-selected Runtime identity"
+            )
+        offline_declared = offline_count != 0
         if offline_declared:
             if int(host_identity["version"].split(".")[0]) < 6:
                 raise PackageError("offline worker inventory requires Creator Host MAJOR settlement")

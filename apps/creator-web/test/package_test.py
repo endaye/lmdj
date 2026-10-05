@@ -88,6 +88,11 @@ class CreatorPackageTest(unittest.TestCase):
             REPO_ROOT / "products/lmdj/generated/web-runtime-identity.json",
             self.repo / "products/lmdj/generated/web-runtime-identity.json",
         )
+        fixture_identity = json.loads((self.repo / "products/lmdj/generated/web-runtime-identity.json").read_text())
+        if int(fixture_identity["hosts"]["creator-web"]["version"].split(".")[0]) >= 6:
+            worker = self.repo / "apps/creator-web/offline/worker.mjs"
+            worker.parent.mkdir(parents=True)
+            shutil.copyfile(REPO_ROOT / "apps/creator-web/offline/worker.mjs", worker)
         (self.repo / "tools/web-runtime/emscripten.lock.json").write_text(
             json.dumps(lock), encoding="utf-8"
         )
@@ -164,6 +169,9 @@ class CreatorPackageTest(unittest.TestCase):
         identity = json.loads(identity_path.read_text())
         host = identity["hosts"]["creator-web"]
         role = self.module.ROLES.OFFLINE_WORKER
+        # This is an isolated future-MAJOR fixture, even after production6 lands.
+        host["version"] = "5.0.0"
+        host["expected_assets"] = [entry for entry in host["expected_assets"] if entry["role"] != role]
         host["expected_assets"].append({"role": role, "prefix": "assets/offline-worker.", "suffix": ".js"})
         identity_path.write_text(json.dumps(identity))
         worker = self.repo / "apps/creator-web/offline/worker.mjs"
@@ -173,7 +181,7 @@ class CreatorPackageTest(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "offline fixture"], check=True)
         with self.assertRaisesRegex(self.module.PackageError, "MAJOR settlement"):
             self.build(self.root / "refused")
-        next_major = str(int(host["version"].split(".")[0]) + 1) + ".0.0"
+        next_major = "6.0.0"
         host["version"] = next_major
         identity_path.write_text(json.dumps(identity))
         subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
@@ -189,6 +197,23 @@ class CreatorPackageTest(unittest.TestCase):
         self.assertEqual(graph["assets"], [entry for entry in manifest["assets"] if entry["role"] != role])
         self.assertEqual(graph["product_build"], manifest["product_build"])
         self.assertEqual(graph["host_version"], next_major)
+
+    def test_future_major_refuses_missing_or_duplicate_offline_role(self) -> None:
+        path = self.repo / "products/lmdj/generated/web-runtime-identity.json"
+        identity = json.loads(path.read_text())
+        host = identity["hosts"]["creator-web"]
+        host["version"] = "6.0.0"
+        role = self.module.ROLES.OFFLINE_WORKER
+        ordinary = [entry for entry in host["expected_assets"] if entry["role"] != role]
+        worker = {"role": role, "prefix": "assets/offline-worker.", "suffix": ".js"}
+        for count in (0, 2):
+            with self.subTest(count=count):
+                host["expected_assets"] = [*ordinary, *([worker] * count)]
+                path.write_text(json.dumps(identity))
+                subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
+                subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "synthetic offline inventory"], check=True)
+                with self.assertRaisesRegex(self.module.PackageError, "requires exactly one offline Worker"):
+                    self.build(self.root / f"refused-{count}")
 
     def test_builds_exact_deterministic_creator_inventory(self) -> None:
         first = self.root / "first-dist"
@@ -236,7 +261,7 @@ class CreatorPackageTest(unittest.TestCase):
                 "capture_worklet",
                 "perform_master_tap_worklet",
                 "host_favicon",
-            ],
+            ] + ([self.module.ROLES.OFFLINE_WORKER] if int(module_version("apps/creator-web").split(".")[0]) >= 6 else []),
         )
         favicon = next(
             entry for entry in manifest["assets"] if entry["role"] == "host_favicon"

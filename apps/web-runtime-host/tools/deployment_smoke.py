@@ -491,17 +491,10 @@ def _manifest_identity(
 
 def _creator_required_roles(host_version: str) -> frozenset[str]:
     """6.x adds offline, 5.x adds favicon; 3/4.x keep six roles, 2.x five."""
-    major, _, _ = host_version.partition(".")
-    if not major.isdigit():
-        raise SmokeError("Host version is invalid")
-    major_number = int(major)
-    if major_number >= 6:
-        return _ASSET_ROLES.CREATOR_OFFLINE_ASSET_ROLES
-    if major_number >= 5:
-        return CREATOR_CURRENT_ASSET_ROLES
-    if major_number >= 3:
-        return CREATOR_V3_ASSET_ROLES
-    return CREATOR_LEGACY_ASSET_ROLES
+    try:
+        return _ASSET_ROLES.creator_roles_for_version(host_version)
+    except ValueError as error:
+        raise SmokeError(str(error)) from error
 
 
 def _validate_manifest(
