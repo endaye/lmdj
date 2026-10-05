@@ -2552,7 +2552,10 @@ function Workspace({
                   </button>}
               </nav>
               {systemOpen && <SystemSurface onBack={() => {
-                setSystemOpen(false); requestAnimationFrame(() => systemEntry.current?.focus());
+                setSystemOpen(false);
+                // The entry stays mounted. Restore focus in this gesture so
+                // a later frame cannot blur the user's next parameter edit.
+                systemEntry.current?.focus();
               }}>
               <section className="touch-system" aria-label="Audio and MIDI settings">
                 <button

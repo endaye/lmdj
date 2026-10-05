@@ -87,6 +87,9 @@ Gate／Loop Gate、取消、后台与 Session 替换会阻止迟到的发声。�
 恢复探针仍由 Runtime 的 armed window 决定，未完成的真实 Safari／触控听感验收不由
 组件测试替代。
 
+从 System 点击 `Back to music` 时，同一返回手势立即把焦点还给 System 入口；
+用户随后进入 Sample 参数控件的键盘手势保留自己的焦点，不被下一帧的导航回调打断。
+
 ## 演奏边界
 
 Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按空间顺序映射：上方 `Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，下方 `A S D F G H J K` 对应 Pad 9–16；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。用户明确授权 Web MIDI 后，Creator 在 channels 1–16 上接受 Note `36..51` 并映射到当前 Bank；Platform 的可选单 channel filter 不由 Creator 启用。每个 Sample press 以串行 inspect→trigger admission 确定 Runtime-effective playback，release/cancel/stop 与 ordered Voice state 共同维护视觉和真实声音。播放头只消费已快照的 Voice render bounds 与 session-local 观察时间，不写 Project Truth、Runtime Snapshot 或音频线程；并发/retrigger 时最新开始的选中-Pad Voice 获得显示所有权。saved Project revision 与 Runtime revision 分开显示，Cook 失败只重试 prepare、不重放 mutation。恢复期间只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。

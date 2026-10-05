@@ -3469,6 +3469,29 @@ test("System preserves the creative page and playing transport, then restores en
 });
 
 
+test("returning from System preserves focus acquired by the next creative control", () => {
+  const frames: FrameRequestCallback[] = [];
+  const request = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  try {
+    render(<App initialState={ready} />);
+    fireEvent.click(screen.getByRole("button", {name: "System"}));
+    fireEvent.click(screen.getByRole("button", {name: "Back to music"}));
+    const nextControl = screen.getByRole("button", {name: "Sample"});
+    act(() => {
+      nextControl.focus();
+      // The user can enter another control before the next browser frame.
+      // Pending navigation work must not blur that new keyboard gesture.
+      for (const callback of frames.splice(0)) callback(16);
+    });
+    expect(document.activeElement).toBe(nextControl);
+  } finally {
+    request.mockRestore();
+  }
+});
+
 test("recovery More options leaves System and opens its Sequence destination", async () => {
   const fixture = mutableSampleRuntimeFixture();
   const {session, apply, discard} = interruptedSequenceSession(fixture);
