@@ -59,6 +59,15 @@ class TransferSession final {
   std::uint32_t next_request_id() const noexcept { return next_request_id_; }
   const std::array<std::byte, 16>& nonce() const noexcept { return nonce_; }
   bool receiving() const noexcept { return receiver_.receiving(); }
+  std::uint64_t received_bytes() const noexcept { return receiver_.received_bytes(); }
+  // Local device cancellation has no remote request/nonce authority. Drop
+  // staging and invalidate the session before processing more remote frames.
+  void cancel_local() noexcept {
+    receiver_.disconnect();
+    active_ = false;
+    nonce_ = {};
+    next_request_id_ = 1;
+  }
 
  private:
   TransferSessionResult authorize(std::uint32_t request_id,

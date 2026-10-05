@@ -3,10 +3,169 @@
 #include <lmdj/foundation/artifact.hpp>
 #include "tests/core/facade/candidate_fixture.hpp"
 
+#include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+extern char** environ;
+
 namespace {
+std::string executable;
+
+// A fresh image avoids Darwin's ASan fork-child stack-depot growth hazard.
+// Pass only the fixture identity and pipe endpoints; no inherited C++ state.
+pid_t spawn_child(const Fixture& f, const char* role, const Json& data,
+                  const int* ready = nullptr, const int* resume = nullptr) {
+  auto root = f.root.string();
+  auto payload = data.dump();
+  auto ready_fd = std::to_string(ready ? ready[1] : -1);
+  auto resume_fd = std::to_string(resume ? resume[0] : -1);
+  char* arguments[] = {executable.data(), const_cast<char*>("--child"),
+      const_cast<char*>(role), root.data(), payload.data(), ready_fd.data(), resume_fd.data(), nullptr};
+  posix_spawn_file_actions_t actions;
+  LMDJ_CHECK(posix_spawn_file_actions_init(&actions) == 0);
+  if (ready) LMDJ_CHECK(posix_spawn_file_actions_addclose(&actions, ready[0]) == 0);
+  if (resume) LMDJ_CHECK(posix_spawn_file_actions_addclose(&actions, resume[1]) == 0);
+  pid_t child = -1;
+  const int result = posix_spawn(&child, executable.c_str(), &actions, nullptr, arguments, environ);
+  LMDJ_CHECK(posix_spawn_file_actions_destroy(&actions) == 0);
+  LMDJ_CHECK(result == 0);
+  return child;
+}
+void run_child(std::string_view role, Fixture& f, const Json& data,
+               const int* ready, const int* resume) {
+  if (role == "adoption") {
+    const auto discard = Json{{"operation", "candidate.set.discard"}, {"job_id", "slice"}, {"set_id", data.at("set_id")}};
+
+    try {
+      f.restart();
+      LMDJ_CHECK(::write(ready[1], "r", 1) == 1);
+      char signal; LMDJ_CHECK(::read(resume[0], &signal, 1) == 1);
+      const auto refused = f.app->command(discard);
+      error(refused, "INVALID_ARGUMENT");
+      LMDJ_CHECK(refused.at("error").at("details").at("reason") == "job_busy");
+      _exit(0);
+    } catch (const std::exception& e) { std::cerr << role << ": " << e.what() << '\n'; _exit(98); }
+  }
+  if (role == "retry") {
+    const auto owner_path = f.root / ".lmdj-host/candidates/state.json";
+
+    try {
+      f.restart(); f.grant(); bool paused = false, input_read = false;
+      f.storage->read_hook = [&](const auto& path) {
+        if (paused || path != f.blob()) return;
+        const auto raw = Json::parse(read(owner_path));
+        if (raw.at("jobs").at("slice").at("history").size() != 2) return;
+        input_read = true;
+      };
+      // Owned input reads hold the Project writer. Pause only after that
+      // real lease releases so adoption can acquire its own writer.
+      f.storage->release_hook = [&](const auto& path) {
+        if (paused || !input_read || path != f.project) return;
+        paused = true;
+        LMDJ_CHECK(::write(ready[1], "r", 1) == 1);
+        char signal; LMDJ_CHECK(::read(resume[0], &signal, 1) == 1);
+      };
+      const auto finished = f.app->command(job_request(f, "second"));
+      // Immutable SDK completion succeeds, but owner publication is fenced.
+      error(finished, "INVALID_ARGUMENT");
+      LMDJ_CHECK(finished.at("error").at("details").at("reason") == "job_busy");
+      _exit(0);
+    } catch (const std::exception& e) { std::cerr << role << ": " << e.what() << '\n'; _exit(98); }
+  }
+  if (role == "interrupt-run") {
+    f.restart(); f.grant();
+    f.storage->replace_hook = [&](const auto& path, bool after) {
+      if (after && path == f.root / ".lmdj-host/candidates/state.json") _exit(64);
+    };
+    f.app->command(job_request(f)); _exit(99);
+  }
+  if (role == "interrupt-recover") {
+    f.restart();
+    f.storage->replace_hook = [&](const auto& path, bool after) {
+      if (after && path == f.root / ".lmdj-host/candidates/state.json") _exit(65);
+    };
+    job(f); _exit(99);
+  }
+  if (role == "terminal-run") {
+    f.restart(); f.grant(); int replacements = 0;
+    f.storage->replace_hook = [&](const auto& path, bool completed) {
+      if (path == f.root / ".lmdj-host/candidates/state.json" && !completed && ++replacements == 2) _exit(61);
+    };
+    f.app->command(job_request(f)); _exit(99);
+  }
+  if (role == "lifecycle") {
+    const bool discard = data.at("discard"), after = data.at("after");
+
+    f.restart();
+    f.storage->replace_hook = [&](const auto& path, bool completed) {
+      if (path == f.root / ".lmdj-host/candidates/state.json" && completed == after) _exit(62);
+    };
+    const auto request = discard
+        ? Json{{"operation", "candidate.set.discard"}, {"job_id", "slice"}, {"set_id", data.at("set_id")}}
+        : Json{{"operation", "candidate.job.cancel"}, {"job_id", "slice"}, {"attempt_id", "first"}};
+    f.app->command(request); _exit(99);
+  }
+  if (role == "cancel") {
+    f.restart(); f.grant(); bool paused = false;
+    f.storage->read_hook = [&](const auto& path) {
+      if (paused || path != f.blob()) return;
+      const auto raw = Json::parse(read(f.root / ".lmdj-host/candidates/state.json"));
+      if (raw.at("jobs").at("slice").at("history").size() != 2) return;
+      paused = true; char signal = 'r';
+      if (::write(ready[1], &signal, 1) != 1 || ::read(resume[0], &signal, 1) != 1) _exit(98);
+    };
+    const auto result = f.app->command(job_request(f));
+    _exit(result.at("ok") == true ? 63 : 99);
+  }
+  if (role == "lease") {
+    const auto set = data.at("set_id").get<std::string>();
+
+    lmdj::facade::detail::CandidateStore store(f.root, f.storage);
+    lmdj::provider::AttemptStore attempts(f.root, {}, [] { return std::string{"test"}; });
+    auto held = store.lease_active("slice", set, attempts);
+    char signal = held.has_value() ? 'r' : 'f';
+    if (::write(ready[1], &signal, 1) != 1 || ::read(resume[0], &signal, 1) != 1) _exit(98);
+    _exit(0);
+  }
+  if (role == "denied") {
+    const auto set = data.at("set_id").get<std::string>();
+
+    lmdj::facade::detail::CandidateStore fresh(f.root, f.storage);
+    lmdj::provider::AttemptStore attempts(f.root, {}, [] { return std::string{"test"}; });
+    const auto denied = fresh.lease_active("slice", set, attempts);
+    _exit(!denied.has_value() && denied.error().details.at("reason") == "candidate_unavailable" ? 0 : 99);
+  }
+  if (role == "crash") {
+    const int boundary = data.at("boundary");
+
+    f.restart(); f.grant();
+    unsigned replacements = 0;
+    f.storage->replace_hook = [&](const auto& path, bool after) {
+      if (path != f.root / ".lmdj-host/candidates/state.json") return;
+      if (!after) ++replacements;
+      if ((boundary == 1 && replacements == 1 && after) ||
+          (boundary == 2 && replacements == 2 && !after) ||
+          (boundary == 3 && replacements == 2 && after)) _exit(70 + boundary);
+    };
+    f.app->command(job_request(f));
+    _exit(99);
+  }
+  if (role == "live") {
+    f.restart(); f.grant();
+    bool paused = false;
+    f.storage->read_hook = [&](const auto& path) {
+      if (paused || path != f.blob() ||
+          !std::filesystem::exists(f.root / ".lmdj-host/candidates/state.json")) return;
+      paused = true; char signal = 'r';
+      if (::write(ready[1], &signal, 1) != 1 || ::read(resume[0], &signal, 1) != 1) _exit(98);
+    };
+    const auto response = f.app->command(job_request(f));
+    _exit(response.at("ok").get<bool>() ? 0 : 99);
+  }
+  throw std::runtime_error("Unknown candidate child role");
+}
+
 Json adopt_request(const Fixture& f, const Json& set) {
   return {{"operation", "candidate.adopt"}, {"project_path", f.project.generic_string()},
       {"project_id", project_id}, {"expected_revision", 1}, {"command_id", other_id},
@@ -44,19 +203,7 @@ void adoption_excludes_discard_until_commit() {
   const auto discard = Json{{"operation", "candidate.set.discard"},
       {"job_id", "slice"}, {"set_id", set.at("set_id")}};
   int ready[2], resume[2]; LMDJ_CHECK(pipe(ready) == 0 && pipe(resume) == 0);
-  const auto child = fork(); LMDJ_CHECK(child >= 0);
-  if (child == 0) {
-    close(ready[0]); close(resume[1]);
-    try {
-      f.restart();
-      LMDJ_CHECK(::write(ready[1], "r", 1) == 1);
-      char signal; LMDJ_CHECK(::read(resume[0], &signal, 1) == 1);
-      const auto refused = f.app->command(discard);
-      error(refused, "INVALID_ARGUMENT");
-      LMDJ_CHECK(refused.at("error").at("details").at("reason") == "job_busy");
-      _exit(0);
-    } catch (...) { _exit(98); }
-  }
+  const auto child = spawn_child(f, "adoption", Json{{"set_id", set.at("set_id")}}, ready, resume);
   close(ready[1]); close(resume[0]);
   char signal; LMDJ_CHECK(::read(ready[0], &signal, 1) == 1);
   bool fenced = false;
@@ -98,32 +245,7 @@ void retry_finishes_during_adoption(bool cancelled) {
   const auto first_terminal = read(first_path);
   const auto owner_path = f.root / ".lmdj-host/candidates/state.json";
   int ready[2], resume[2]; LMDJ_CHECK(pipe(ready) == 0 && pipe(resume) == 0);
-  const auto child = fork(); LMDJ_CHECK(child >= 0);
-  if (child == 0) {
-    close(ready[0]); close(resume[1]);
-    try {
-      f.restart(); f.grant(); bool paused = false, input_read = false;
-      f.storage->read_hook = [&](const auto& path) {
-        if (paused || path != f.blob()) return;
-        const auto raw = Json::parse(read(owner_path));
-        if (raw.at("jobs").at("slice").at("history").size() != 2) return;
-        input_read = true;
-      };
-      // Owned input reads hold the Project writer. Pause only after that
-      // real lease releases so adoption can acquire its own writer.
-      f.storage->release_hook = [&](const auto& path) {
-        if (paused || !input_read || path != f.project) return;
-        paused = true;
-        LMDJ_CHECK(::write(ready[1], "r", 1) == 1);
-        char signal; LMDJ_CHECK(::read(resume[0], &signal, 1) == 1);
-      };
-      const auto finished = f.app->command(job_request(f, "second"));
-      // Immutable SDK completion succeeds, but owner publication is fenced.
-      error(finished, "INVALID_ARGUMENT");
-      LMDJ_CHECK(finished.at("error").at("details").at("reason") == "job_busy");
-      _exit(0);
-    } catch (...) { _exit(98); }
-  }
+  const auto child = spawn_child(f, "retry", Json::object(), ready, resume);
   close(ready[1]); close(resume[0]);
   char signal; LMDJ_CHECK(::read(ready[0], &signal, 1) == 1);
   if (cancelled) ok(f.app->command({{"operation", "candidate.job.cancel"},
@@ -222,23 +344,9 @@ void adoption_failure_releases_discard() {
 void interrupted_recovery_crash() {
   Fixture f; f.grant(); ok(f.app->command(job_request(f, "baseline")));
   const auto before = job(f); const auto truth = f.snapshot(); f.app.reset();
-  const auto runner = fork(); LMDJ_CHECK(runner >= 0);
-  if (runner == 0) {
-    f.restart(); f.grant();
-    f.storage->replace_hook = [&](const auto& path, bool after) {
-      if (after && path == f.root / ".lmdj-host/candidates/state.json") _exit(64);
-    };
-    f.app->command(job_request(f)); _exit(99);
-  }
+  const auto runner = spawn_child(f, "interrupt-run", Json::object());
   wait_exit(runner, 64);
-  const auto recovery = fork(); LMDJ_CHECK(recovery >= 0);
-  if (recovery == 0) {
-    f.restart();
-    f.storage->replace_hook = [&](const auto& path, bool after) {
-      if (after && path == f.root / ".lmdj-host/candidates/state.json") _exit(65);
-    };
-    job(f); _exit(99);
-  }
+  const auto recovery = spawn_child(f, "interrupt-recover", Json::object());
   wait_exit(recovery, 65); f.restart(); const auto after = job(f);
   LMDJ_CHECK(after.at("history")[1].at("status") == "interrupted");
   LMDJ_CHECK(after.at("active_set_id") == before.at("active_set_id"));
@@ -253,28 +361,11 @@ void lifecycle_crash(bool discard, bool after) {
   if (!discard) {
     // Leave a successful immutable terminal and pending owner intent. Cancel
     // must win even though recovery could otherwise publish the terminal.
-    f.app.reset(); const auto runner = fork(); LMDJ_CHECK(runner >= 0);
-    if (runner == 0) {
-      f.restart(); f.grant(); int replacements = 0;
-      f.storage->replace_hook = [&](const auto& path, bool completed) {
-        if (path == f.root / ".lmdj-host/candidates/state.json" && !completed && ++replacements == 2) _exit(61);
-      };
-      f.app->command(job_request(f)); _exit(99);
-    }
+    f.app.reset(); const auto runner = spawn_child(f, "terminal-run", Json::object());
     wait_exit(runner, 61);
   }
   const auto terminal = discard ? baseline_terminal : read(f.root / ".lmdj-workspace/attempts/first.json");
-  f.app.reset(); const auto child = fork(); LMDJ_CHECK(child >= 0);
-  if (child == 0) {
-    f.restart();
-    f.storage->replace_hook = [&](const auto& path, bool completed) {
-      if (path == f.root / ".lmdj-host/candidates/state.json" && completed == after) _exit(62);
-    };
-    const auto request = discard
-        ? Json{{"operation", "candidate.set.discard"}, {"job_id", "slice"}, {"set_id", before.at("active_set_id")}}
-        : Json{{"operation", "candidate.job.cancel"}, {"job_id", "slice"}, {"attempt_id", "first"}};
-    f.app->command(request); _exit(99);
-  }
+  f.app.reset(); const auto child = spawn_child(f, "lifecycle", Json{{"discard", discard}, {"after", after}, {"set_id", before.at("active_set_id")}});
   wait_exit(child, 62); f.restart(); const auto recovered = job(f);
   if (discard) {
     LMDJ_CHECK(recovered.at("history") == before.at("history"));
@@ -302,19 +393,7 @@ void cancellation_wins_over_live_success() {
   Fixture f; f.grant(); ok(f.app->command(job_request(f, "baseline")));
   const auto before = job(f); const auto truth = f.snapshot(); f.app.reset();
   int ready[2], resume[2]; LMDJ_CHECK(pipe(ready) == 0 && pipe(resume) == 0);
-  const auto child = fork(); LMDJ_CHECK(child >= 0);
-  if (child == 0) {
-    close(ready[0]); close(resume[1]); f.restart(); f.grant(); bool paused = false;
-    f.storage->read_hook = [&](const auto& path) {
-      if (paused || path != f.blob()) return;
-      const auto raw = Json::parse(read(f.root / ".lmdj-host/candidates/state.json"));
-      if (raw.at("jobs").at("slice").at("history").size() != 2) return;
-      paused = true; char signal = 'r';
-      if (::write(ready[1], &signal, 1) != 1 || ::read(resume[0], &signal, 1) != 1) _exit(98);
-    };
-    const auto result = f.app->command(job_request(f));
-    _exit(result.at("ok") == true ? 63 : 99);
-  }
+  const auto child = spawn_child(f, "cancel", Json::object(), ready, resume);
   close(ready[1]); close(resume[0]); char signal = 0;
   LMDJ_CHECK(::read(ready[0], &signal, 1) == 1); f.restart();
   const auto cancelled = f.app->command({{"operation", "candidate.job.cancel"}, {"job_id", "slice"}, {"attempt_id", "first"}});
@@ -332,16 +411,7 @@ void cross_process_eligibility_exclusion() {
   Fixture f; f.grant(); ok(f.app->command(job_request(f)));
   const auto before = job(f); const auto set = before.at("active_set_id").get<std::string>();
   f.app.reset(); int ready[2], resume[2]; LMDJ_CHECK(pipe(ready) == 0 && pipe(resume) == 0);
-  const auto child = fork(); LMDJ_CHECK(child >= 0);
-  if (child == 0) {
-    close(ready[0]); close(resume[1]);
-    lmdj::facade::detail::CandidateStore store(f.root, f.storage);
-    lmdj::provider::AttemptStore attempts(f.root, {}, [] { return std::string{"test"}; });
-    auto held = store.lease_active("slice", set, attempts);
-    char signal = held.has_value() ? 'r' : 'f';
-    if (::write(ready[1], &signal, 1) != 1 || ::read(resume[0], &signal, 1) != 1) _exit(98);
-    _exit(0);
-  }
+  const auto child = spawn_child(f, "lease", Json{{"set_id", set}}, ready, resume);
   close(ready[1]); close(resume[0]); char signal = 0; LMDJ_CHECK(::read(ready[0], &signal, 1) == 1);
   lmdj::facade::detail::CandidateStore store(f.root, f.storage);
   const auto refused = store.discard("slice", set);
@@ -349,13 +419,7 @@ void cross_process_eligibility_exclusion() {
   LMDJ_CHECK(signal == 'r'); LMDJ_CHECK(!refused.has_value() && refused.error().details.at("reason") == "job_busy");
   LMDJ_CHECK(store.discard("slice", set).has_value());
   // Reverse order: a fresh process cannot acquire eligibility after tombstone.
-  const auto reader = fork(); LMDJ_CHECK(reader >= 0);
-  if (reader == 0) {
-    lmdj::facade::detail::CandidateStore fresh(f.root, f.storage);
-    lmdj::provider::AttemptStore attempts(f.root, {}, [] { return std::string{"test"}; });
-    const auto denied = fresh.lease_active("slice", set, attempts);
-    _exit(!denied.has_value() && denied.error().details.at("reason") == "candidate_unavailable" ? 0 : 99);
-  }
+  const auto reader = spawn_child(f, "denied", Json{{"set_id", set}});
   wait_exit(reader, 0); f.restart();
   LMDJ_CHECK(job(f).at("sets")[0].at("status") == "discarded");
 }
@@ -365,21 +429,7 @@ void crash_recovery(int boundary, bool has_prior) {
   Json prior = nullptr;
   if (has_prior) { ok(f.app->command(job_request(f, "baseline"))); prior = job(f); }
   f.app.reset();
-  const auto child = fork();
-  LMDJ_CHECK(child >= 0);
-  if (child == 0) {
-    f.restart(); f.grant();
-    unsigned replacements = 0;
-    f.storage->replace_hook = [&](const auto& path, bool after) {
-      if (path != f.root / ".lmdj-host/candidates/state.json") return;
-      if (!after) ++replacements;
-      if ((boundary == 1 && replacements == 1 && after) ||
-          (boundary == 2 && replacements == 2 && !after) ||
-          (boundary == 3 && replacements == 2 && after)) _exit(70 + boundary);
-    };
-    f.app->command(job_request(f));
-    _exit(99);
-  }
+  const auto child = spawn_child(f, "crash", Json{{"boundary", boundary}});
   int status = 0;
   LMDJ_CHECK(waitpid(child, &status, 0) == child);
   LMDJ_CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 70 + boundary);
@@ -421,20 +471,7 @@ void live_job_is_not_recovered_or_reentered() {
   Fixture f; f.app.reset(); const auto truth = f.snapshot();
   int ready[2], resume[2];
   LMDJ_CHECK(pipe(ready) == 0 && pipe(resume) == 0);
-  const auto child = fork(); LMDJ_CHECK(child >= 0);
-  if (child == 0) {
-    close(ready[0]); close(resume[1]);
-    f.restart(); f.grant();
-    bool paused = false;
-    f.storage->read_hook = [&](const auto& path) {
-      if (paused || path != f.blob() ||
-          !std::filesystem::exists(f.root / ".lmdj-host/candidates/state.json")) return;
-      paused = true; char signal = 'r';
-      if (::write(ready[1], &signal, 1) != 1 || ::read(resume[0], &signal, 1) != 1) _exit(98);
-    };
-    const auto response = f.app->command(job_request(f));
-    _exit(response.at("ok").get<bool>() ? 0 : 99);
-  }
+  const auto child = spawn_child(f, "live", Json::object(), ready, resume);
   close(ready[1]); close(resume[0]);
   char signal = 0; LMDJ_CHECK(::read(ready[0], &signal, 1) == 1);
   f.restart(); f.grant();
@@ -462,6 +499,14 @@ void live_job_is_not_recovered_or_reentered() {
 }
 int main(int argc, char** argv) {
   try {
+    executable = std::filesystem::absolute(argv[0]).string();
+    if (argc == 7 && std::string_view(argv[1]) == "--child") {
+      Fixture f(Fixture::ExistingWorkspace{}, std::filesystem::path(argv[3]));
+      const int ready[2] = {-1, std::stoi(argv[5])};
+      const int resume[2] = {std::stoi(argv[6]), -1};
+      run_child(argv[2], f, Json::parse(argv[4]), ready, resume);
+      return 99;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--stress") {
       for (int iteration = 0; iteration < 100; ++iteration) {
         live_job_is_not_recovered_or_reentered();

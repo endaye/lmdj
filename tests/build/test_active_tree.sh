@@ -34,6 +34,8 @@ grep -Eq 'lmdj.patch.v1.*must not' "$repo_root/AGENTS.md"
 grep -Eq 'docs/governance/version-management.md' "$repo_root/AGENTS.md"
 cmp "$repo_root/AGENTS.md" "$repo_root/CLAUDE.md"
 
+python3 "$repo_root/tests/core/support/no_bare_fork_test.py"
+
 if [[ ! -x "$repo_root/scripts/release.sh" ]]; then
   echo "stable release command is missing or not executable" >&2
   exit 1

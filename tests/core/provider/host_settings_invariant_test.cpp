@@ -36,6 +36,7 @@
 #include <lmdj/providers/local_proof_success/factory.hpp>
 
 #include "tests/core/support/test.hpp"
+#include "tests/core/support/child_process.hpp"
 
 namespace {
 
@@ -70,6 +71,16 @@ class TempDirectory {
   std::filesystem::path path_;
 };
 
+void run_settings_lock(const std::filesystem::path& lock_path, int ready_fd) {
+  const auto descriptor = ::open(
+      lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+  if (descriptor == -1 || ::flock(descriptor, LOCK_EX) != 0) _exit(2);
+  constexpr char kReady = 'R';
+  if (::write(ready_fd, &kReady, 1) != 1) _exit(3);
+  ::close(ready_fd);
+  for (;;) ::pause();
+}
+
 class ChildSettingsLock {
  public:
   explicit ChildSettingsLock(const std::filesystem::path& lock_path) {
@@ -78,27 +89,14 @@ class ChildSettingsLock {
       throw std::runtime_error("failed to create child readiness pipe");
     }
 
-    child_ = ::fork();
-    if (child_ == -1) {
+    try {
+      child_ = lmdj::test::process::spawn(
+          {"--settings-lock", lock_path.string(), std::to_string(ready_pipe[1])},
+          {ready_pipe[0]});
+    } catch (...) {
       ::close(ready_pipe[0]);
       ::close(ready_pipe[1]);
-      throw std::runtime_error("failed to fork child lock owner");
-    }
-    if (child_ == 0) {
-      ::close(ready_pipe[0]);
-      const auto descriptor = ::open(
-          lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
-      if (descriptor == -1 || ::flock(descriptor, LOCK_EX) != 0) {
-        _exit(2);
-      }
-      constexpr char kReady = 'R';
-      if (::write(ready_pipe[1], &kReady, 1) != 1) {
-        _exit(3);
-      }
-      ::close(ready_pipe[1]);
-      for (;;) {
-        ::pause();
-      }
+      throw;
     }
 
     ::close(ready_pipe[1]);
@@ -528,8 +526,12 @@ void test_write_recovers_after_lock_owner_death() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  lmdj::test::process::initialize(argv[0]);
   try {
+    if (argc == 4 && std::string_view(argv[1]) == "--settings-lock")
+      run_settings_lock(argv[2], std::stoi(argv[3]));
+    if (argc != 1) return 2;
     test_selection_leaves_canonical_settings_and_safe_lock();
     test_repeated_selection_stays_canonical_and_readable();
     test_successful_writers_preserve_persistent_lock_inode();

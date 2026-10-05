@@ -24,6 +24,7 @@
 #include "packages/application-facade/src/pattern_admission_controller.hpp"
 
 #include "tests/core/support/test.hpp"
+#include "tests/core/support/child_process.hpp"
 
 namespace {
 
@@ -706,6 +707,31 @@ void test_owner_loss_apply_and_discard_are_explicit() {
   LMDJ_CHECK(recovery.list_sequence_recovery({project}).value().empty());
 }
 
+void run_sequence_owner_child(const std::filesystem::path& root) {
+  const auto project = root / "hard-owner-loss.lmdj";
+  const PatternId pattern_id{uuid(33)};
+  const SequenceSessionId session_id{uuid(34)};
+  Application owner(config(root));
+  const bool accepted =
+      owner.begin_sequence({project, session_id, pattern_id, 2, 0})
+          .has_value() &&
+      owner.record_sequence_event(
+               {project, session_id, {PadSlotId{0, 0}, 101, 0, 1, true}})
+          .has_value() &&
+      owner.record_sequence_event(
+               {project, session_id, {PadSlotId{0, 0}, 0, 12'000, 2, false}})
+          .has_value() &&
+      owner.record_sequence_event(
+               {project, session_id,
+                {PadSlotId{0, 0}, 77, 12'000, 3, true}})
+          .has_value();
+  if (!accepted) {
+    ::_exit(20);
+  }
+  ::raise(SIGSTOP);
+  ::_exit(21);
+}
+
 void test_sigkill_owner_recovers_acknowledged_unflushed_events() {
   TempDirectory temp;
   const auto project = temp.path() / "hard-owner-loss.lmdj";
@@ -716,29 +742,7 @@ void test_sigkill_owner_recovers_acknowledged_unflushed_events() {
     create_recordable_project(creator, project, pattern_id);
   }
 
-  const auto child = ::fork();
-  LMDJ_CHECK(child >= 0);
-  if (child == 0) {
-    Application owner(config(temp.path()));
-    const bool accepted =
-        owner.begin_sequence({project, session_id, pattern_id, 2, 0})
-            .has_value() &&
-        owner.record_sequence_event(
-                 {project, session_id, {PadSlotId{0, 0}, 101, 0, 1, true}})
-            .has_value() &&
-        owner.record_sequence_event(
-                 {project, session_id, {PadSlotId{0, 0}, 0, 12'000, 2, false}})
-            .has_value() &&
-        owner.record_sequence_event(
-                 {project, session_id,
-                  {PadSlotId{0, 0}, 77, 12'000, 3, true}})
-            .has_value();
-    if (!accepted) {
-      ::_exit(20);
-    }
-    ::raise(SIGSTOP);
-    ::_exit(21);
-  }
+  const auto child = lmdj::test::process::spawn({"--sequence-owner", temp.path().string()});
 
   int stopped_status = 0;
   LMDJ_CHECK(::waitpid(child, &stopped_status, WUNTRACED) == child);
@@ -1947,17 +1951,11 @@ void test_converted_admission_survives_lost_response_and_recovers_once() {
     LMDJ_CHECK(journals.retain_admission_fence(project, session, preparation.identity, fence).has_value());
     LMDJ_CHECK(journals.close_admission(project, session, preparation.identity,
         {11, SequenceAdmissionCloseReason::requested}).has_value());
-    const auto child = ::fork();
-    LMDJ_CHECK(child >= 0);
-    if (child == 0) {
-      SequenceJournal owner;
-      const auto transferred = commit_admission_transfer(owner, project, session,
-          preparation.identity, CommandId{uuid(947)}, 11, false);
-      if (!transferred.has_value()) ::_exit(20);
-      // The caller never receives this successful durable result.
-      ::raise(SIGSTOP);
-      ::_exit(21);
-    }
+    const auto child = lmdj::test::process::spawn(
+        {"--admission-transfer", project.string(), session.value(),
+         preparation.identity.operation_id.value(),
+         std::to_string(preparation.identity.runtime_generation),
+         std::to_string(preparation.identity.transport_epoch)});
     int status = 0;
     LMDJ_CHECK(::waitpid(child, &status, WUNTRACED) == child && WIFSTOPPED(status));
     LMDJ_CHECK(::kill(child, SIGKILL) == 0);
@@ -2049,6 +2047,27 @@ void run(std::span<const Scenario> scenarios) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  lmdj::test::process::initialize(argv[0]);
+  try {
+    if (argc == 3 && std::string_view(argv[1]) == "--sequence-owner") {
+      run_sequence_owner_child(argv[2]);
+      return 21;
+    }
+    if (argc == 7 && std::string_view(argv[1]) == "--admission-transfer") {
+      lmdj::project_io::SequenceJournal owner;
+      const lmdj::project_io::SequenceAdmissionIdentity identity{
+          CommandId{argv[4]}, std::stoull(argv[5]), std::stoull(argv[6])};
+      const auto transferred = lmdj::facade::detail::commit_admission_transfer(
+          owner, argv[2], SequenceSessionId{argv[3]}, identity,
+          CommandId{uuid(947)}, 11, false);
+      if (!transferred.has_value()) ::_exit(20);
+      // The caller never receives this successful durable result.
+      ::raise(SIGSTOP);
+      ::_exit(21);
+    }
+  } catch (const std::exception& error) {
+    std::cerr << error.what() << '\n'; return 1;
+  }
   if (argc == 2 && std::string_view(argv[1]) == "--list-shards") {
     std::size_t total{};
     for (const auto& shard : kShards) {
