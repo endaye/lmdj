@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState, type ReactNode} from "react";
 import type {CreatorCandidateRuntimeSession, CandidateProviderList} from "../runtime/runtime_types";
+import {changeProviderPermission, subscribeProviderPermissions} from "../state/provider_permissions";
 
 export function ProviderSettings({session}: {session: CreatorCandidateRuntimeSession}) {
   const [listing, setListing] = useState<CandidateProviderList | null>(null);
@@ -8,10 +9,14 @@ export function ProviderSettings({session}: {session: CreatorCandidateRuntimeSes
   const generation = useRef(0);
   useEffect(() => {
     const token = ++generation.current;
+    let changed = false;
+    const unsubscribe = subscribeProviderPermissions(session, value => {
+      changed = true; setListing(value); setError(null);
+    });
     void session.listProviders().then(value => {
-      if (generation.current === token) setListing(value);
-    }, () => {if (generation.current === token) setError("Provider settings unavailable. Try opening System again.");});
-    return () => {generation.current++;};
+      if (generation.current === token && !changed) setListing(value);
+    }, () => {if (generation.current === token && !changed) setError("Provider settings unavailable. Try opening System again.");});
+    return () => {generation.current++; unsubscribe();};
   }, [session]);
   return <section aria-label="Provider management">
     <h3>Providers</h3>
@@ -23,11 +28,8 @@ export function ProviderSettings({session}: {session: CreatorCandidateRuntimeSes
       {listing.granted_permissions.map(permission => <button key={permission} type="button" disabled={busy}
         onClick={() => {
           const token = generation.current; setBusy(true); setError(null);
-          void session.listProviders().then(current => session.configureProviderPermissions(
-            current.granted_permissions.filter(value => value !== permission),
-          )).then(result => {
-            if (generation.current === token) setListing({...listing, granted_permissions: result.granted_permissions});
-          }, () => {if (generation.current === token) setError("Permission was not changed. Refresh System before trying again.");})
+          void changeProviderPermission(session, permission, false)
+            .catch(() => {if (generation.current === token) setError("Permission was not changed. Refresh System before trying again.");})
             .finally(() => {if (generation.current === token) setBusy(false);});
         }}>Revoke {permission}</button>)}
     </>}
