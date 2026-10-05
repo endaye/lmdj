@@ -264,17 +264,19 @@ class ReleaseModelTest(unittest.TestCase):
             superseded.target_revision,
             "f4674ada631d6af7ad8b9dd9f440671c2736d293",
         )
-        allocated = ledger.intent_for_tag("lmdj-v1.0.21.0")
-        self.assertIsNotNone(allocated)
-        self.assertEqual(allocated.disposition.value, "allocated")  # type: ignore[union-attr]
+        # Superseded 2026-10-05: never released, and later published canary
+        # Builds (1.0.36.0 onward) supersede it on the same product line.
+        superseded21 = ledger.intent_for_tag("lmdj-v1.0.21.0")
+        self.assertIsNotNone(superseded21)
+        self.assertEqual(superseded21.disposition.value, "superseded-unreleased")  # type: ignore[union-attr]
         self.assertEqual(  # type: ignore[union-attr]
-            allocated.target_revision,
+            superseded21.target_revision,
             "5613158240f7e31385ccb5d175bded3c245ae33b",
         )
-        self.assertEqual(allocated.snapshot, "1.0.21.0")  # type: ignore[union-attr]
+        self.assertEqual(superseded21.snapshot, "1.0.21.0")  # type: ignore[union-attr]
         stage8 = ledger.intent_for_tag("lmdj-v1.0.22.0")
         self.assertIsNotNone(stage8)
-        self.assertEqual(stage8.disposition.value, "allocated")  # type: ignore[union-attr]
+        self.assertEqual(stage8.disposition.value, "superseded-unreleased")  # type: ignore[union-attr]
         # The squash merge of #137, matching how 1.0.21.0 above records the
         # squash merge of #134: a release target must be reachable on main,
         # because prepare requires main ancestry and checks the revision out.

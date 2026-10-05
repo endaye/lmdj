@@ -139,7 +139,21 @@ struct Fixture {
     source = inspected.at("result").at("project").at("assets").at(asset_id).at("artifact");
     select();
   }
-  ~Fixture() { app.reset(); std::error_code e; std::filesystem::remove_all(root, e); }
+  // Spawned roles attach to parent-owned truth without creating or removing it.
+  struct ExistingWorkspace {};
+  bool owns_workspace = true;
+  Fixture(ExistingWorkspace, std::filesystem::path existing_root)
+      : root(std::move(existing_root)), project(root / "source.lmdj"), owns_workspace(false) {
+    storage->owner = project;
+    restart();
+    const auto inspected = app->query({{"operation", "project.inspect"}, {"project_path", project.generic_string()}});
+    ok(inspected);
+    source = inspected.at("result").at("project").at("assets").at(asset_id).at("artifact");
+  }
+  ~Fixture() {
+    app.reset();
+    if (owns_workspace) { std::error_code e; std::filesystem::remove_all(root, e); }
+  }
   void restart() {
     app.reset();
     const auto loaded = lmdj::facade::load_installed_assembly(std::filesystem::absolute("products/lmdj/assembly.json"));
