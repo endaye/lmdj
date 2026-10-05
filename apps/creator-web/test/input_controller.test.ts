@@ -208,6 +208,10 @@ function deferred<T>() {
 }
 
 interface SampleFixtureOptions {
+  onEmptyPadPress?: (slot: number, key: object, source: import("../src/runtime/runtime_types").RuntimeTriggerSource,
+    activation: Promise<boolean> | null) => boolean;
+  onEmptyPadRelease?: (key: object) => void;
+  onEmptyPadCancel?: (key?: object) => void;
   canUsePad?: (slot: number) => boolean;
   audioState?: "audio-suspended" | "running";
   windowTarget?: Window;
@@ -274,6 +278,9 @@ function sampleFixture(options: SampleFixtureOptions = {}) {
   };
   const controller = createCreatorInputController({
     session,
+    ...(options.onEmptyPadPress === undefined ? {} : {onEmptyPadPress: options.onEmptyPadPress}),
+    ...(options.onEmptyPadRelease === undefined ? {} : {onEmptyPadRelease: options.onEmptyPadRelease}),
+    ...(options.onEmptyPadCancel === undefined ? {} : {onEmptyPadCancel: options.onEmptyPadCancel}),
     ...(options.windowTarget === undefined ? {} : {windowTarget: options.windowTarget}),
     ...(options.activateAudioForGesture === undefined ? {} : {activateAudioForGesture: options.activateAudioForGesture}),
     getActiveBank: () => 0,
@@ -313,6 +320,23 @@ async function settle() {
 }
 
 describe("Creator input controller", () => {
+  test.each(["mouse", "touch", "pen"])("empty %s Pad offers capture immediately while playback keeps its activation boundary", pointerType => {
+    const order: string[] = [];
+    let wakes = 0;
+    const value = sampleFixture({audioState: "audio-suspended", isAssigned: () => false,
+      activateAudioForGesture: async () => {wakes++; order.push("wake"); return true;},
+      onEmptyPadPress: () => {order.push("capture"); return true;},
+    });
+    const event = {type: "pointerdown", pointerType, pointerId: 18,
+      isPrimary: true, button: 0, isTrusted: true};
+    value.controller.pointerDown(event, 0);
+    expect(order).toEqual(pointerType === "mouse" ? ["wake", "capture"] : ["capture"]);
+    expect(wakes).toBe(pointerType === "mouse" ? 1 : 0);
+    value.controller.pointerUp({...event, type: "pointerup"}, 0);
+    expect(wakes).toBe(1);
+    value.controller.dispose();
+  });
+
   test("waits for native activation and retains the first released one-shot", async () => {
     const activation = deferred<boolean>();
     const events: Array<{isTrusted: boolean}> = [];
@@ -1959,4 +1983,41 @@ test("an unavailable streaming Pad neither wakes audio nor opens the empty-Pad p
   expect(value.triggers).toHaveLength(0);
   expect(activations).toBe(0);
   controller.dispose();
+});
+
+test("empty Pad capture consumes pointer release and cancellation without a file picker", () => {
+  const presses: object[] = []; const releases: object[] = [];
+  let cancels = 0;
+  const value = sampleFixture({isAssigned: () => false,
+    onEmptyPadPress: (_slot, key) => {presses.push(key); return true;},
+    onEmptyPadRelease: key => releases.push(key), onEmptyPadCancel: () => {cancels++;}});
+  const target = document.createElement("button");
+  const event = {type:"pointerdown",isPrimary:true,button:0,pointerId:77,clientX:1,clientY:1,target};
+  value.controller.pointerDown(event, 3);
+  value.controller.pointerUp({...event,type:"pointerup"},3);
+  expect(presses).toHaveLength(1);expect(releases).toEqual(presses);
+  expect(value.filePickIntents).toEqual([]);expect(value.triggers).toEqual([]);
+  value.controller.pointerDown({...event,pointerId:78},3);
+  value.controller.clearPressed();expect(cancels).toBe(1);
+  expect(releases).toHaveLength(1);
+  value.controller.dispose();
+});
+
+test("a busy primary pointer cancellation carries its own key while lifecycle cancellation is global", () => {
+  const presses: object[] = []; const cancels: Array<object | undefined> = [];
+  const value = sampleFixture({isAssigned: () => false,
+    onEmptyPadPress: (_slot, key) => {presses.push(key); return true;},
+    onEmptyPadCancel: key => {cancels.push(key);}});
+  value.controller.keyDown({type: "keydown", code: "KeyQ", repeat: false, target: document.body});
+  const event = {type: "pointerdown", pointerType: "mouse", isPrimary: true,
+    button: 0, pointerId: 77, target: document.createElement("button")};
+  value.controller.pointerDown(event, 1);
+  expect(presses).toHaveLength(2);
+  value.controller.pointerCancel({...event, type: "pointercancel"}, 1);
+  expect(cancels).toEqual([presses[1]]);
+  expect(value.filePickIntents).toEqual([]);
+  expect(value.triggers).toEqual([]);
+  value.controller.clearPressed();
+  expect(cancels).toEqual([presses[1], undefined]);
+  value.controller.dispose();
 });
