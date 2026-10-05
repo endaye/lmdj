@@ -407,6 +407,64 @@ void test_occupied_pad_policy_never_bypasses_quota() {
   LMDJ_CHECK(kept.at("result").at("installed").size() == 7);
 }
 
+void test_slot_replay_preserves_a_full_bank_after_the_original_pad_is_cleared() {
+  TempDirectory temp("slot-replay-full-bank");
+  Application application(config(
+      temp.path(),
+      lmdj::project_io::make_local_directory_catalog_transport(
+          flatten_fixture_corpus(temp)),
+      limits(kPadPreparedBytes, kSpaciousBytes)));
+  const auto project = create_project(application, temp.path(), 0x900);
+  LMDJ_CHECK(application.query({
+      {"operation", "soundset.slot.acquire"}, {"set_id", kFoundrySetId},
+      {"version", kSetVersion}, {"manifest_sha256", kFoundryManifest},
+      {"slot_index", 0}}).at("ok").get<bool>());
+  auto request = install_request(project, uuid(0x902), 0, 0,
+                                 kFoundrySetId, kFoundryManifest);
+  request["operation"] = "soundset.slot.install";
+  request["slot_index"] = 0;
+  LMDJ_CHECK(application.command(request).at("ok").get<bool>());
+  const auto asset = inspect_project(application, project)
+                         .at("banks").at(0).at("pads").at(0).at("asset_id");
+  LMDJ_CHECK(application.command({
+      {"operation", "pad.delete"}, {"project_path", project.generic_string()},
+      {"command_id", uuid(0x903)}, {"expected_revision", 1},
+      {"slot", {{"bank", 0}, {"pad", 0}}}}).at("ok").get<bool>());
+  LMDJ_CHECK(application.command({
+      {"operation", "pad.assign"}, {"project_path", project.generic_string()},
+      {"command_id", uuid(0x904)}, {"expected_revision", 2},
+      {"slot", {{"bank", 0}, {"pad", 1}}}, {"asset_id", asset}})
+                 .at("ok").get<bool>());
+  const auto before = inspect_project(application, project);
+  LMDJ_CHECK(before.at("banks").at(0).at("pads").at(0).at("asset_id").is_null());
+  LMDJ_CHECK(before.at("banks").at(0).at("pads").at(1).at("asset_id") == asset);
+  const auto replayed = application.command(request);
+  LMDJ_CHECK(replayed.at("ok").get<bool>());
+  LMDJ_CHECK(replayed.at("result").at("replayed") == true);
+  LMDJ_CHECK(inspect_project(application, project) == before);
+
+  // Recognizing the original receipt must neither admit a stale new write
+  // nor accept a different command identity under the original command id.
+  auto stale = request;
+  stale["command_id"] = uuid(0x905);
+  const auto stale_result = application.command(stale);
+  LMDJ_CHECK(!stale_result.at("ok").get<bool>());
+  LMDJ_CHECK(stale_result.at("error").at("code") == "REVISION_CONFLICT");
+  auto changed = request;
+  changed["bank_id"] = 1;
+  const auto changed_result = application.command(changed);
+  LMDJ_CHECK(!changed_result.at("ok").get<bool>());
+  LMDJ_CHECK(changed_result.at("error").at("code") == "INVALID_ARGUMENT");
+  LMDJ_CHECK(inspect_project(application, project) == before);
+
+  // A fresh request still costs a second residency, even for the same blob.
+  stale["expected_revision"] = 3;
+  const auto fresh = application.command(stale);
+  LMDJ_CHECK(!fresh.at("ok").get<bool>());
+  LMDJ_CHECK(fresh.at("error").at("code") == "BANK_QUOTA_EXHAUSTED");
+  LMDJ_CHECK(inspect_project(application, project) == before);
+}
+
 }  // namespace
 
 int main() {
@@ -414,6 +472,7 @@ int main() {
     test_a_duplicate_artifact_on_two_pads_is_charged_twice();
     test_the_generation_quota_refuses_with_zero_change();
     test_occupied_pad_policy_never_bypasses_quota();
+    test_slot_replay_preserves_a_full_bank_after_the_original_pad_is_cleared();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

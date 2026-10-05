@@ -84,6 +84,16 @@ class SoundSetStore final {
       CatalogTransport& transport,
       const SoundSetCatalogEntry& entry);
 
+  // Independently verified slot cache; never enumerated as a complete Set.
+  foundation::Result<StoredSoundSet> acquire_slot(
+      CatalogTransport& transport, const SoundSetCatalogEntry& entry,
+      std::uint8_t slot_index);
+  foundation::Result<StoredSoundSet> read_slot(
+      std::string_view set_id, std::string_view version,
+      std::string_view manifest_sha256, std::uint8_t slot_index) const;
+  foundation::Result<std::vector<std::byte>> read_slot_artifact(
+      std::string_view manifest_sha256, std::uint8_t slot_index) const;
+
   // Published Sets, ordered by manifest sha256.
   foundation::Result<std::vector<StoredSoundSet>> list() const;
 
@@ -98,6 +108,9 @@ class SoundSetStore final {
       std::string_view artifact_sha256) const;
 
  private:
+  foundation::Result<StoredSoundSet> acquire_selected(
+      CatalogTransport& transport, const SoundSetCatalogEntry& entry,
+      std::optional<std::uint8_t> slot_index);
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
