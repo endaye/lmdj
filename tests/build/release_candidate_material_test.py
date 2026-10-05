@@ -18,6 +18,7 @@ from scripts import version
 from tools.release.candidate import CATALOG
 from tools.release.candidate_inputs import CandidateInputs
 from tools.release.candidate_material import CandidateBuildMaterial
+from tools.release.candidate_material_scope import P1_MATERIAL_SCOPE, HEADER_INPUTS
 from tools.release import candidate_material
 from tools.release.model import canonical_json, canonical_sha256
 from tools.release.orchestration import JournalError
@@ -29,10 +30,11 @@ class MaterialTest(unittest.TestCase):
         cls.template = tempfile.TemporaryDirectory(prefix="lmdj-material-template-")
         cls.addClassCleanup(cls.template.cleanup)
         cls.source = Path(cls.template.name)
-        inputs = CandidateInputs(ROOT)
+        scope = getattr(cls, "material_scope", None)
+        inputs = CandidateInputs(ROOT, material_scope=scope)
         revision = inputs.git("rev-parse", "HEAD").decode().strip()
         frozen = inputs.freeze(revision)
-        CandidateBuildMaterial(ROOT, cls.source / "unused")._export(frozen, cls.source)
+        CandidateBuildMaterial(ROOT, cls.source / "unused", material_scope=scope)._export(frozen, cls.source)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="lmdj-material-test-")
@@ -45,10 +47,11 @@ class MaterialTest(unittest.TestCase):
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.invalid")
         self.base = self.commit()
-        self.inputs = CandidateInputs(self.root)
+        scope = getattr(self, "material_scope", None)
+        self.inputs = CandidateInputs(self.root, material_scope=scope)
         self.frozen = self.inputs.freeze(self.base)
         self.current = version.load_version(self.root / "products/lmdj/version.json")
-        self.tool = CandidateBuildMaterial(self.root, self.state)
+        self.tool = CandidateBuildMaterial(self.root, self.state, material_scope=scope)
         self.request = {"id":"release-1", "repository":"example/product", "actor_id":123,
                         "authority_ref":"thread:release-1", "policy_digest":"a" * 64,
                         "control_revision":"b" * 40, "base_revision":self.base,
@@ -319,6 +322,147 @@ class MaterialTest(unittest.TestCase):
                 self.tool._export({"entries":entries}, bad)
             self.assertFalse(bad.exists())
             self.assertFalse(any(call.args == ("cat-file", "--batch") for call in reader.call_args_list))
+
+
+class CoordinatedFixture(unittest.TestCase):
+    material_scope = P1_MATERIAL_SCOPE
+    @classmethod
+    def setUpClass(cls):
+        MaterialTest.setUpClass.__func__(cls)
+        inputs = CandidateInputs(ROOT)
+        revision = inputs.git("rev-parse", "HEAD").decode().strip()
+        for host in ("creator-web", "web-runtime-host"):
+            name = f"apps/{host}/CHANGELOG.md"
+            if inputs.git("ls-tree", revision, "--", name):
+                (cls.source / name).write_bytes(inputs.git("show", revision + ":" + name))
+    setUp = MaterialTest.setUp
+    git = MaterialTest.git
+    commit = MaterialTest.commit
+    prepare = MaterialTest.prepare
+
+
+class CoordinatedMaterialTest(CoordinatedFixture):
+    def test_actual_graph_material_has_exact_22_paths_and_far_side_identities(self):
+        import ast
+        from tools.release.candidate_workspace import FILES
+        before = self.git("write-tree"), self.git("show-ref"), self.git("status", "--porcelain")
+        result = self.prepare()
+        self.assertEqual(len(result["files"]), 22)
+        self.assertEqual(set(result["files"]), FILES | version.P1_BUILD_MATERIAL_FILES)
+        self.assertEqual(result["binding"]["material_scope"], P1_MATERIAL_SCOPE)
+        old_test = (self.root / "tests/build/version_test.py").read_bytes()
+        npm_before = {name:json.loads((self.root / name).read_bytes()) for name in
+                      ("apps/creator-web/package.json", "apps/creator-web/package-lock.json")}
+        profiles = {name:(self.root / name).read_bytes() for name in
+                    ("products/lmdj/src/cardputer_assembly.cpp", "apps/cardputer-host/CMakeLists.txt")}
+        headers = {name:(self.root / name).read_bytes() for name in HEADER_INPUTS}
+        self.assertEqual(before, (self.git("write-tree"), self.git("show-ref"), self.git("status", "--porcelain")))
+        for name, raw in result["files"].items():
+            self.assertNotEqual(raw, (self.root / name).read_bytes(), name)
+            (self.root / name).write_bytes(raw)
+        current = version.load_version(self.root / "products/lmdj/version.json")
+        assembly_path = self.root / "products/lmdj/assembly.json"
+        assembly = version._verify_assembly(current, assembly_path)
+        version._verify_lock(current, assembly_path, assembly,
+                             self.root / "products/lmdj/assembly.lock.json", repo_root=self.root)
+        identity = json.loads(result["files"]["products/lmdj/generated/web-runtime-identity.json"])
+        self.assertEqual(identity["product_build"], str(current))
+        creator = identity["hosts"]["creator-web"]
+        self.assertEqual(len(creator["expected_assets"]), 8)
+        self.assertEqual(sum(item["role"] == "offline_worker" for item in creator["expected_assets"]), 1)
+        old_tree, new_tree = ast.parse(old_test), ast.parse(result["files"]["tests/build/version_test.py"])
+        def baseline(tree):
+            node = next(node for node in tree.body if isinstance(node, ast.Assign)
+                        and any(isinstance(t, ast.Name) and t.id == "expected_modules" for t in node.targets))
+            value = ast.literal_eval(node.value)
+            tree.body.remove(node)
+            return value, ast.dump(tree, include_attributes=False)
+        old_rows, old_logic = baseline(old_tree)
+        new_rows, new_logic = baseline(new_tree)
+        self.assertEqual(old_logic, new_logic)
+        self.assertEqual(old_rows.keys(), new_rows.keys())
+        for path, row in new_rows.items():
+            manifest = json.loads((self.root / path).read_bytes())
+            self.assertEqual(row, (manifest["module"], manifest["version"], manifest["api_version"], manifest["dependencies"]))
+            self.assertEqual((row[0], row[2], row[3].keys()),
+                             (old_rows[path][0], old_rows[path][2], old_rows[path][3].keys()))
+        for name, old in npm_before.items():
+            after = json.loads((self.root / name).read_bytes())
+            after["version"] = old["version"]
+            if name.endswith("package-lock.json"):
+                after["packages"][""]["version"] = old["packages"][""]["version"]
+            self.assertEqual(after, old)
+        cardputer_version = json.loads((self.root / "apps/cardputer-host/module.json").read_bytes())["version"]
+        old_cardputer_version = json.loads(self.git("show", self.base + ":apps/cardputer-host/module.json"))["version"]
+        new_sha = sha256(result["files"]["products/lmdj/assembly.json"]).hexdigest()
+        old_sha = sha256(self.git("show", self.base + ":products/lmdj/assembly.json").encode() + b"\n").hexdigest()
+        for name, old in profiles.items():
+            expected = old.replace(str(self.current).encode(), str(current).encode())
+            if name.endswith(".cpp"):
+                expected = expected.replace(old_cardputer_version.encode(), cardputer_version.encode()).replace(old_sha.encode(), new_sha.encode())
+            self.assertEqual((self.root / name).read_bytes(), expected)
+        for name, old in headers.items():
+            old_header = next(line for line in old.splitlines() if line.startswith(b"Host: "))
+            after = (self.root / name).read_bytes()
+            new_header = next(line for line in after.splitlines() if line.startswith(b"Host: "))
+            self.assertEqual(after.replace(new_header, old_header, 1), old)
+        owning = ROOT / "apps/docs-site/scripts/lib/host-changelogs.mjs"
+        code = "import {projectChangelogs} from " + json.dumps(owning.as_uri()) + "; await projectChangelogs(process.argv[1]);"
+        subprocess.run(["node", "--input-type=module", "-e", code, str(self.root)],
+                       check=True, capture_output=True)
+
+    def test_scope_projection_freezes_headers_without_changing_legacy_projection(self):
+        from tools.release.candidate_inputs import CandidateInputError
+        legacy = CandidateInputs(self.root)
+        legacy_frozen = legacy.freeze(self.base)
+        self.assertNotIn("material_scope", legacy_frozen)
+        self.assertFalse(HEADER_INPUTS.intersection(e["path"] for e in legacy_frozen["entries"]))
+        self.assertTrue(HEADER_INPUTS <= {e["path"] for e in self.frozen["entries"]})
+        page = self.root / sorted(HEADER_INPUTS)[0]
+        page.write_bytes(page.read_bytes() + b"\nChanged source projection.\n")
+        current = self.commit()
+        legacy.verify(legacy_frozen, current)
+        with self.assertRaisesRegex(CandidateInputError, "changed since"):
+            self.inputs.verify(self.frozen, current)
+        self.assertEqual(legacy.freeze(self.base), legacy_frozen)
+        self.assertEqual(self.inputs.freeze(self.base), self.frozen)
+
+    def test_old_lock_is_verified_before_any_prospective_pin_and_failed_number_remains(self):
+        path = self.root / "products/lmdj/assembly.lock.json"
+        broken = json.loads(path.read_bytes())
+        broken["assembly_sha256"] = "0" * 64
+        path.write_bytes(canonical_json(broken))
+        base = self.commit()
+        frozen = self.inputs.freeze(base)
+        request = dict(self.request, base_revision=base)
+        before = self.git("write-tree"), self.git("status", "--porcelain")
+        with self.assertRaisesRegex(JournalError, "canonical candidate material generation refused"):
+            self.tool.prepare(request, frozen, base)
+        self.assertEqual(before, (self.git("write-tree"), self.git("status", "--porcelain")))
+        self.assertEqual(str(self.tool.reservations.recorded(request)),
+                         f"{self.current.milestone}.{self.current.minor}.{self.current.build + 1}.0")
+
+    def test_new_consumer_refuses_closed_closure_without_writing_source(self):
+        path = self.root / "apps/unexpected-host/module.json"
+        path.parent.mkdir(parents=True)
+        document = json.loads((self.root / "apps/creator-web/module.json").read_bytes())
+        document["module"] = "unexpected-host"
+        path.write_bytes(canonical_json(document))
+        base = self.commit()
+        before = self.git("write-tree")
+        with self.assertRaisesRegex(JournalError, "canonical candidate material generation refused"):
+            self.tool.prepare(dict(self.request, base_revision=base), self.inputs.freeze(base), base)
+        self.assertEqual(self.git("write-tree"), before)
+
+    def test_unknown_scope_and_original_reservation_rebind_are_refused(self):
+        with self.assertRaisesRegex(ValueError, "scope is unknown"):
+            CandidateBuildMaterial(self.root, self.state, material_scope=dict(P1_MATERIAL_SCOPE, files=[]))
+        self.prepare()
+        legacy = CandidateBuildMaterial(self.root, self.state)
+        before = (self.state / CATALOG).read_bytes()
+        with self.assertRaises(JournalError):
+            legacy.prepare(self.request, legacy.inputs.freeze(self.base), self.base)
+        self.assertEqual((self.state / CATALOG).read_bytes(), before)
 
 
 if __name__ == "__main__":

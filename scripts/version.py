@@ -1030,10 +1030,156 @@ def _verify_lock(
         )
 
 
+P1_COMPONENT_SEEDS = {"project-io": "minor", "application-facade": "minor",
+                      "web-runtime-platform": "minor", "creator-web": "major"}
+P1_COMPONENT_CONSUMERS = frozenset({"core-cli", "core-mcp", "native-host",
+                                   "cardputer-host", "web-runtime-host"})
+P1_MANIFEST_PATHS = {name: f"{'packages' if name in ('project-io', 'application-facade', 'web-runtime-platform') else 'apps'}/{name}/module.json"
+                     for name in P1_COMPONENT_SEEDS.keys() | P1_COMPONENT_CONSUMERS}
+P1_BUILD_MATERIAL_FILES = frozenset({
+    "products/lmdj/version.json", "products/lmdj/assembly.json",
+    "products/lmdj/assembly.lock.json", "products/lmdj/src/compiled_assembly.cpp",
+    *P1_MANIFEST_PATHS.values(), "products/lmdj/src/cardputer_assembly.cpp",
+    "apps/cardputer-host/CMakeLists.txt", "apps/creator-web/package.json",
+    "apps/creator-web/package-lock.json", "tests/build/version_test.py",
+    "apps/docs-site/docs/operations/creator-changelog.mdx",
+    "apps/docs-site/docs/operations/runtime-changelog.mdx"})
+
+
+def _p1_component_material(root, assembly):
+    """One frozen graph closure, with no new edges or API identities."""
+    from copy import deepcopy
+    documents, paths = {}, {}
+    for parent in ("packages", "apps"):
+        for path in sorted((root / parent).glob("*/module.json")):
+            document = _load_object(path, "component")
+            name = document.get("module")
+            if (type(name) is not str or name in documents
+                    or type(document.get("dependencies")) is not dict):
+                raise ValueError("P1 component graph is malformed")
+            _validate_component_source("modules" if parent == "packages" else "hosts",
+                                       name, document.get("version"), path)
+            documents[name], paths[name] = document, path.relative_to(root).as_posix()
+    if any(dependency not in documents or pinned != documents[dependency]["version"]
+           for doc in documents.values() for dependency, pinned in doc["dependencies"].items()):
+        raise ValueError("P1 frozen dependency pins differ from the manifest graph")
+    closure = set(P1_COMPONENT_SEEDS)
+    while True:
+        expanded = closure | {name for name, doc in documents.items()
+                              if closure.intersection(doc["dependencies"])}
+        if expanded == closure:
+            break
+        closure = expanded
+    if closure != P1_COMPONENT_SEEDS.keys() | P1_COMPONENT_CONSUMERS:
+        raise ValueError("P1 component consumer closure differs from the closed scope")
+    if any(paths.get(name) != path for name, path in P1_MANIFEST_PATHS.items()):
+        raise ValueError("P1 component paths differ from the closed scope")
+    versions = {}
+    for name in sorted(closure):
+        text = documents[name]["version"]
+        if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", text):
+            raise ValueError("P1 baseline component version is not canonical SemVer")
+        major, minor, patch = map(int, text.split("."))
+        level = P1_COMPONENT_SEEDS.get(name, "patch")
+        versions[name] = (f"{major + 1}.0.0" if level == "major" else
+                          f"{major}.{minor + 1}.0" if level == "minor" else
+                          f"{major}.{minor}.{patch + 1}")
+    changed = {}
+    for name in sorted(closure):
+        doc = deepcopy(documents[name])
+        doc["version"] = versions[name]
+        doc["dependencies"] = {key: versions.get(key, value)
+                               for key, value in doc["dependencies"].items()}
+        changed[paths[name]] = _canonical_json(doc).encode()
+    for field in ("modules", "hosts"):
+        for item in assembly[field]:
+            if item["id"] in versions:
+                item["version"] = versions[item["id"]]
+    return changed, documents, versions
+
+
+def _p1_identity_material(root, expected, reserved, old_assembly_sha, new_assembly_sha,
+                          documents, versions):
+    """Rewrite only authenticated passive identity literals, not test code."""
+    import ast
+    files = {}
+    for name in ("apps/creator-web/package.json", "apps/creator-web/package-lock.json"):
+        doc = _load_object(root / name, "Creator npm identity")
+        if doc.get("version") != documents["creator-web"]["version"]:
+            raise ValueError("Creator npm baseline identity differs")
+        doc["version"] = versions["creator-web"]
+        if name.endswith("package-lock.json"):
+            if doc.get("packages", {}).get("", {}).get("version") != documents["creator-web"]["version"]:
+                raise ValueError("Creator npm root lock identity differs")
+            doc["packages"][""]["version"] = versions["creator-web"]
+        files[name] = _canonical_json(doc).encode()
+    name = "tests/build/version_test.py"
+    raw = (root / name).read_bytes()
+    tree = ast.parse(raw)
+    matches = [node.value for node in tree.body if isinstance(node, ast.Assign)
+               and any(isinstance(target, ast.Name) and target.id == "expected_modules"
+                       for target in node.targets)]
+    if len(matches) != 1 or not isinstance(matches[0], ast.Dict):
+        raise ValueError("strict version baseline is not one literal mapping")
+    baseline = ast.literal_eval(matches[0])
+    expected_paths = {path for path in (str(p.relative_to(root)) for parent in ("packages", "apps")
+                     for p in (root / parent).glob("*/module.json"))
+                     if path != "apps/cardputer-host/module.json"}
+    if set(baseline) != expected_paths or len(baseline) != 13:
+        raise ValueError("strict version baseline inventory differs")
+    replacements = []
+    offsets = [0]
+    for line in raw.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
+    def replace(node, value):
+        if not isinstance(node, ast.Constant) or type(node.value) is not str:
+            raise ValueError("strict version identity is not a literal")
+        replacements.append((offsets[node.lineno - 1] + node.col_offset,
+                             offsets[node.end_lineno - 1] + node.end_col_offset,
+                             json.dumps(value).encode()))
+    for key, node in zip(matches[0].keys, matches[0].values):
+        path = ast.literal_eval(key)
+        item = baseline[path]
+        if type(item) is not tuple or len(item) != 4 or not isinstance(node, ast.Tuple):
+            raise ValueError("strict version baseline row differs")
+        doc = documents.get(item[0])
+        if doc is None or item != (doc["module"], doc["version"], doc["api_version"], doc["dependencies"]):
+            raise ValueError("strict version baseline facts differ from frozen manifests")
+        if item[0] in versions:
+            replace(node.elts[1], versions[item[0]])
+        if not isinstance(node.elts[3], ast.Dict):
+            raise ValueError("strict dependency baseline is not literal")
+        for dep, literal in zip(node.elts[3].keys, node.elts[3].values):
+            dependency = ast.literal_eval(dep)
+            if dependency in versions:
+                replace(literal, versions[dependency])
+    for start, end, value in sorted(replacements, reverse=True):
+        raw = raw[:start] + value + raw[end:]
+    files[name] = raw
+    substitutions = {
+        "products/lmdj/src/cardputer_assembly.cpp":
+            ('  return {\n      "' + str(expected) + '",\n      "' + documents["cardputer-host"]["version"] + '",\n      "' + old_assembly_sha + '",',
+             '  return {\n      "' + str(reserved) + '",\n      "' + versions["cardputer-host"] + '",\n      "' + new_assembly_sha + '",'),
+        "apps/cardputer-host/CMakeLists.txt":
+            (f'set(PROJECT_VER "{expected}")', f'set(PROJECT_VER "{reserved}")'),
+    }
+    for host, filename in (("creator-web", "creator"), ("web-runtime-host", "runtime")):
+        substitutions[f"apps/docs-site/docs/operations/{filename}-changelog.mdx"] = (
+            f'Host: `{host}`. Source manifest version: `{documents[host]["version"]}`.',
+            f'Host: `{host}`. Source manifest version: `{versions[host]}`.')
+    for name, (old, new) in substitutions.items():
+        raw = (root / name).read_bytes()
+        if raw.count(old.encode()) != 1:
+            raise ValueError("P1 passive identity baseline differs: " + name)
+        files[name] = raw.replace(old.encode(), new.encode(), 1)
+    return files
+
+
 def render_build_material(
     repo_root: Path,
     expected: ProductVersion,
     reserved: ProductVersion,
+    *, material_profile: str | None = None,
 ) -> dict[str, bytes]:
     """Render four candidate files using canonical Assembly generators.
 
@@ -1062,6 +1208,35 @@ def render_build_material(
     assembly = _verify_assembly(current, root / assembly_name, root / version_name)
     _verify_lock(current, root / assembly_name, assembly, root / lock_name,
                  root / version_name, repo_root=root)
+    if material_profile is not None:
+        if material_profile != "creator-p1":
+            raise ValueError("unknown candidate material profile")
+        import shutil
+        import tempfile
+        old_sha = hashlib.sha256((root / assembly_name).read_bytes()).hexdigest()
+        components, documents, versions = _p1_component_material(root, assembly)
+        # Old Assembly/lock were verified above, before any prospective pin.
+        with tempfile.TemporaryDirectory(prefix="lmdj-p1-prospective-") as directory:
+            prospective = Path(directory) / "tree"
+            shutil.copytree(root, prospective)
+            for name, raw in components.items():
+                (prospective / name).write_bytes(raw)
+            version_document = _load_object(root / version_name, "Product version")
+            version_document.update(milestone=reserved.milestone, minor=reserved.minor,
+                                    build=reserved.build, patch=reserved.patch)
+            assembly["product"]["version"] = str(reserved)
+            assembly_bytes = _canonical_json(assembly).encode()
+            compiled = _render_compiled_assembly(reserved, assembly, repo_root=prospective)
+            lock = _lock_document(reserved, prospective / assembly_name, assembly, compiled,
+                                  repo_root=prospective, assembly_bytes=assembly_bytes)
+        files = {version_name:_canonical_json(version_document).encode(),
+                 assembly_name:assembly_bytes, lock_name:_canonical_json(lock).encode(),
+                 compiled_name:compiled, **components}
+        files.update(_p1_identity_material(root, expected, reserved, old_sha,
+                     hashlib.sha256(assembly_bytes).hexdigest(), documents, versions))
+        if set(files) != P1_BUILD_MATERIAL_FILES:
+            raise ValueError("P1 material inventory differs from the closed scope")
+        return files
     version_document = _load_object(root / version_name, "Product version")
     version_document.update(milestone=reserved.milestone, minor=reserved.minor,
                             build=reserved.build, patch=reserved.patch)

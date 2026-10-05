@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 import release_candidate_cut_test as fixture
+import release_candidate_preparation_test as preparation_fixture
 from tools.release.candidate_source import CandidateSourceVerifier, CandidateSourceError
 
 
@@ -116,6 +117,32 @@ class SourceBindingTest(SourceFixture):
         merged = self.commit_tree(self.cut_receipt["tree"], self.fixture.base, self.source["commit"])
         with self.assertRaisesRegex(CandidateSourceError, "distinct squash"):
             self.check(main_revision=merged, merge_revision=merged)
+
+
+class CoordinatedSourceProjectionTest(preparation_fixture.CoordinatedPreparationFixture):
+    commit_tree = SourceFixture.commit_tree
+    changed_tree = SourceFixture.changed_tree
+
+    def test_real_22_file_cut_squash_and_preserved_document_parent(self):
+        self.enroll_parent()
+        result = self.prepare_parent()
+        self.tool = self.parent.local
+        source, cut = result['source'], result['checked_cut']['cut']
+        verifier = CandidateSourceVerifier(self.parent.checks.cut)
+        args = dict(request=self.request, source=source, cut=cut,
+                    frozen=result['frozen'], main_revision=self.fixture.base)
+        self.assertIsNone(verifier.verify(**args)['merge_sha'])
+        doc = 'docs/plans/preserve-parent.md'
+        parent = self.commit_tree(self.changed_tree(self.fixture.base, doc, b'parent documentation'), self.fixture.base)
+        merged = self.commit_tree(self.changed_tree(cut['tree'], doc, b'parent documentation'), parent)
+        self.main = merged
+        proof = verifier.verify(**dict(args, main_revision=merged, merge_revision=merged))
+        self.assertEqual((proof['merge_sha'], proof['merge_parent']), (merged, parent))
+        self.assertEqual(self.tool.git('show', merged + ':' + doc), b'parent documentation')
+        for name in cut['files']:
+            self.assertEqual(self.tool.git('show', merged + ':' + name),
+                             self.tool.git('show', cut['commit'] + ':' + name))
+        self.assertEqual(self.tool.revision(cut['source_retention_ref']), source['commit'])
 
 
 if __name__ == "__main__":

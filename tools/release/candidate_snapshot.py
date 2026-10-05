@@ -9,7 +9,8 @@ import json
 import os
 from pathlib import Path
 
-from .candidate_workspace import CandidateSourceWorkspace, FILES
+from .candidate_workspace import CandidateSourceWorkspace
+from .candidate_material_scope import scope_fields
 from .model import canonical_json, canonical_sha256
 from .orchestration import validate_request, JournalError
 from .publication_workspace import PublicationWorkspaceError
@@ -129,8 +130,10 @@ class CandidateSnapshotRun:
     def scope(self, request, source):
         validate_request(request)
         source = deepcopy(source)
-        require(source.pop("status", None) == "source-committed" and set(source.pop("files", [])) == FILES,
+        require(source.pop("status", None) == "source-committed" and set(source.pop("files", [])) == self.workspace.files,
                 "requires the completed source receipt")
+        require({key:source[key] for key in ("material_scope",) if key in source}
+                == scope_fields(self.workspace.material.material_scope), "material scope changed")
         require(source.get("request_sha256") == canonical_sha256(request), "request differs from source binding")
         return {"request":deepcopy(request), "source":source, "channel":"canary",
                 "path":self.path, "verification_limit":self.limit}

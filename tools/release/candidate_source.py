@@ -13,7 +13,6 @@ from .batch_reference import sha
 from .candidate_cut import CandidateCutWorkspace
 from .candidate_inputs import CandidateInputs
 from .candidate_snapshot import read
-from .candidate_workspace import FILES
 from .model import canonical_sha256
 
 
@@ -30,7 +29,7 @@ class CandidateSourceVerifier:
     def __init__(self, cut):
         require(type(cut) is CandidateCutWorkspace, "requires the concrete cut workspace")
         self.cut, self.local = cut, cut.local
-        self.inputs = CandidateInputs(self.local.root)
+        self.inputs = CandidateInputs(self.local.root, material_scope=self.local.material.material_scope)
 
     def _commit(self, revision):
         require(sha(revision), "revision is invalid")
@@ -86,7 +85,7 @@ class CandidateSourceVerifier:
             # Reconstruct the exact cut using the durable snapshot's raw bytes.
             inventory = state["snapshot"]
             names = [entry["path"] for entry in inventory]
-            require(len(names) == len(set(names)) and cut["files"] == sorted(FILES | set(names)),
+            require(len(names) == len(set(names)) and cut["files"] == sorted(local.files | set(names)),
                     "cut file inventory changed")
             changed = local.git("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", parents[0], binding["commit"])
             require(sorted(name.decode() for name in changed.split(b"\0") if name) == cut["files"],

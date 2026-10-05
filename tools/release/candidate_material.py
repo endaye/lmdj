@@ -11,6 +11,7 @@ import tempfile
 from scripts.version import ProductVersion, render_build_material
 from .candidate import CandidateReservations
 from .candidate_inputs import CandidateInputs
+from .candidate_material_scope import material_files, scope_fields
 from .model import canonical_sha256
 from .orchestration import JournalError
 
@@ -63,12 +64,19 @@ def _runtime_identity_files(root):
 
 
 class CandidateBuildMaterial:
-    def __init__(self, repository_root, reservation_root):
-        self.inputs = CandidateInputs(repository_root)
-        self.reservations = CandidateReservations(repository_root, reservation_root)
+    def __init__(self, repository_root, reservation_root, *, material_scope=None):
+        self.inputs = CandidateInputs(repository_root, material_scope=material_scope)
+        self.material_scope = self.inputs.material_scope
+        self.files = material_files(self.material_scope)
+        self.reservations = CandidateReservations(repository_root, reservation_root,
+                                                  material_scope=self.material_scope)
 
     def _export(self, frozen, destination):
-        selected = [entry for entry in frozen["entries"] if material_input(entry["path"])]
+        if self.material_scope is not None:
+            require(self.inputs.freeze(frozen["base_revision"]) == frozen,
+                    "frozen material scope or input projection changed")
+        selected = [entry for entry in frozen["entries"] if material_input(entry["path"])
+                    or (self.material_scope is not None and entry["path"] in self.files)]
         require(selected and all(entry["mode"] in ("100644", "100755") for entry in selected),
                 "generator inputs contain a symlink or Gitlink")
         objects = sorted({entry["object"] for entry in selected})
@@ -123,7 +131,8 @@ class CandidateBuildMaterial:
             expected = ProductVersion(*(int(part) for part in frozen["product_build"].split(".")))
             reserved = ProductVersion(*(int(part) for part in reservation["version"].split(".")))
             try:
-                files = render_build_material(root, expected, reserved)
+                files = render_build_material(root, expected, reserved,
+                    **({} if self.material_scope is None else {"material_profile":"creator-p1"}))
             except Exception:
                 raise JournalError("why: canonical candidate material generation refused; remedy: retain the reservation and repair the original input or reconcile a new candidate, never bypass Assembly validation") from None
             # render_build_material returns bytes without writing them; the
@@ -138,6 +147,7 @@ class CandidateBuildMaterial:
             except Exception:
                 raise JournalError("why: Runtime identity generation refused; remedy: retain the reservation and repair the identity generator inputs (tools/web-runtime policy and toolchain locks), never hand-edit the generated identity") from None
         self.inputs.verify(frozen, main_revision)
+        require(set(files) == self.files, "generated inventory differs from the closed material scope")
         require(lookup(request, frozen, main_revision) == reservation,
                 "reservation changed during generation")
         inventory = [{"path":name, "size":len(raw), "sha256":sha256(raw).hexdigest()}
@@ -145,5 +155,6 @@ class CandidateBuildMaterial:
         binding = {"schema":"lmdj.candidate-build-material.v1",
                    "base_revision":request["base_revision"],
                    "reservation_sha256":canonical_sha256(reservation),
-                   "product_build":reservation["version"], "files":inventory}
+                   "product_build":reservation["version"], "files":inventory,
+                   **scope_fields(self.material_scope)}
         return {"binding":binding, "sha256":canonical_sha256(binding), "files":files}

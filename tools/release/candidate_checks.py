@@ -6,6 +6,7 @@ from .batch_reference import digest, sha
 from .candidate_cut import CandidateCutWorkspace
 from .candidate_pr import pr_document, validate_spec
 from .candidate_snapshot import read
+from .candidate_material_scope import scope_fields
 from .model import canonical_json, canonical_sha256
 from .task_verification import PublicationTaskVerifier, _checks
 
@@ -38,8 +39,10 @@ class CandidateTaskChecks:
 
     def _scope(self, journal, binding):
         source = read(journal, "binding.json")
+        material_fields = scope_fields(self.local.material.material_scope)
         require(type(source) is dict and set(source) == {"schema", "operation_id", "request_sha256",
-            "base_revision", "material_sha256", "product_build", "tree", "commit", "branch"}
+            "base_revision", "material_sha256", "product_build", "tree", "commit", "branch"} | material_fields.keys()
+            and {key:source[key] for key in material_fields if key in source} == material_fields
             and source["schema"] == "lmdj.candidate-source-workspace.v1"
             and all(sha(source[k]) for k in ("base_revision", "tree", "commit"))
             and all(digest(source[k]) for k in ("operation_id", "request_sha256", "material_sha256"))

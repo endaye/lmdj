@@ -7,6 +7,7 @@ from .batch_reference import sha
 from .dispatch_receipt import unique
 from .model import canonical_json, canonical_sha256
 from .publication_workspace import PublicationWorkspace
+from .candidate_material_scope import material_scope as validate_material_scope, scope_fields, HEADER_INPUTS
 import json
 from copy import deepcopy
 
@@ -38,9 +39,10 @@ _PROJECTIONS = {}
 
 
 class CandidateInputs:
-    def __init__(self, root):
+    def __init__(self, root, *, material_scope=None):
         self.root = Path(root).resolve()
         self.git = PublicationWorkspace(root).git
+        self.material_scope = validate_material_scope(material_scope)
 
     def freeze(self, revision):
         try:
@@ -49,7 +51,8 @@ class CandidateInputs:
                     "history is shallow")
             require(self.git("cat-file", "-t", revision).strip() == b"commit",
                     "revision is not a commit")
-            key = (self.root, revision)
+            key = (self.root, revision) if self.material_scope is None else (
+                self.root, revision, canonical_sha256(self.material_scope))
             if key not in _PROJECTIONS:
                 _PROJECTIONS[key] = self._project(revision)
             document, blobs = _PROJECTIONS[key]
@@ -90,6 +93,11 @@ class CandidateInputs:
                 require(filename not in inventory, "tracked inventory is duplicated")
                 inventory[filename] = {"path":filename, "mode":mode, "object":oid}
             selected = {name for name in inventory if not documentation_only(name)}
+            if self.material_scope is not None:
+                require(HEADER_INPUTS <= inventory.keys()
+                        and all(inventory[name]["mode"] == "100644" for name in HEADER_INPUTS),
+                        "scoped Host header inputs are missing or unsafe")
+                selected.update(HEADER_INPUTS)
             directories = {str(parent) for name in inventory
                            for parent in PurePosixPath(name).parents}
             # Resolve only committed, direct in-tree targets. No filesystem reads,
@@ -138,7 +146,8 @@ class CandidateInputs:
                 version = str(load_version(version_file))
             return ({"schema":"lmdj.candidate-inputs.v1", "base_revision":revision,
                      "base_tree":tree, "product_build":version, "entries":entries,
-                     "projection_sha256":canonical_sha256(entries)}, blobs)
+                     "projection_sha256":canonical_sha256(entries),
+                     **scope_fields(self.material_scope)}, blobs)
         except CandidateInputError:
             raise
         except Exception:

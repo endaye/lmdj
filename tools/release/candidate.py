@@ -27,8 +27,8 @@ _FLOORS = {}
 
 
 class CandidateReservations:
-    def __init__(self, repository_root, state_root):
-        self.inputs = CandidateInputs(repository_root)
+    def __init__(self, repository_root, state_root, *, material_scope=None):
+        self.inputs = CandidateInputs(repository_root, material_scope=material_scope)
         self.state_root = Path(state_root)
 
     def _version(self, revision):

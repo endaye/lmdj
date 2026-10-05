@@ -8,14 +8,12 @@ import re
 import tempfile
 
 from .candidate_material import CandidateBuildMaterial
+from .candidate_material_scope import LEGACY_FILES, scope_fields
 from .model import canonical_json, canonical_sha256
 from .orchestration import validate_request
 from .publication_workspace import PublicationWorkspace, PublicationWorkspaceError
 
-FILES = {"products/lmdj/version.json", "products/lmdj/assembly.json",
-         "products/lmdj/assembly.lock.json", "products/lmdj/src/compiled_assembly.cpp",
-         "products/lmdj/generated/web-runtime-identity.json",
-         "products/lmdj/generated/web-runtime-identity.mjs"}
+FILES = LEGACY_FILES
 
 
 def squash_witness_path(product_build):
@@ -36,6 +34,7 @@ class CandidateSourceWorkspace(PublicationWorkspace):
         super().__init__(root)
         require(type(material) is CandidateBuildMaterial, "requires the concrete material generator")
         self.material = material
+        self.files = material.files
 
     def _visible_index(self):
         effective_root = self.git("rev-parse", "--path-format=absolute", "--show-toplevel").decode().strip()
@@ -92,12 +91,12 @@ class CandidateSourceWorkspace(PublicationWorkspace):
             if observe and previous is None:
                 return dict(status="absent", source=None)
             generated = (self.material.observe if observe else self.material.prepare)(request, frozen, main_revision)
-            require(set(generated["files"]) == FILES, "material inventory is not the six candidate files")
+            require(set(generated["files"]) == self.files, "material inventory differs from the closed scope")
             # The generator may use another worktree; authenticate this object's
             # base too before constructing any checkout state.
             selected = {}
             entries = {entry["path"]:entry for entry in frozen["entries"]}
-            for name in sorted(FILES):
+            for name in sorted(self.files):
                 require(name in entries and entries[name]["mode"] == "100644", "base material mode is invalid")
                 oid = self.git("rev-parse", base + ":" + name).decode().strip()
                 require(oid == entries[name]["object"], "base object differs from frozen input")
@@ -109,11 +108,11 @@ class CandidateSourceWorkspace(PublicationWorkspace):
                 for name, raw in sorted(expected.items()):
                     oid = self.git("hash-object", "-w", "--stdin", data=raw).decode().strip()
                     self.git("update-index", "--add", "--cacheinfo", "100644," + oid + "," + name, index=index)
-                require(not self.git("check-attr", "--cached", "--all", "--", *sorted(FILES), index=index),
+                require(not self.git("check-attr", "--cached", "--all", "--", *sorted(self.files), index=index),
                         "source paths have checkout-transforming attributes")
                 tree = self.revision_from_index(index)
                 files = {name.decode() for name in self.git("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", base, tree).split(b"\0") if name}
-                require(files == FILES, "generated tree changes unexpected paths")
+                require(files == self.files, "generated tree changes unexpected paths")
                 product_build = generated["binding"]["product_build"]
                 message = (f"chore(release): stage {product_build} snapshot source\n\n"
                            f"Release-operation: {operation}\nCandidate-material-sha256: {generated['sha256']}\n")
@@ -123,7 +122,8 @@ class CandidateSourceWorkspace(PublicationWorkspace):
                 binding = {"schema":"lmdj.candidate-source-workspace.v1", "operation_id":operation,
                            "request_sha256":canonical_sha256(request), "base_revision":base,
                            "material_sha256":generated["sha256"], "product_build":product_build,
-                           "tree":tree, "commit":commit, "branch":branch}
+                           "tree":tree, "commit":commit, "branch":branch,
+                           **scope_fields(self.material.material_scope)}
                 receipt = dict(binding, files=sorted(files), status="source-committed")
                 if observe:
                     require(canonical_json(previous) == canonical_json(binding), "observed source binding changed")
