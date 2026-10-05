@@ -285,6 +285,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_project_io_soundset_install_commit_tests
     lmdj_project_io_candidate_adoption_tests
     lmdj_application_c_api_stress_tests
+    lmdj_cardputer_usb_display_tests
     lmdj_cardputer_resource_observation_tests
     lmdj_cardputer_audio_diagnostics_tests
     lmdj_cardputer_dma_deadline_tests
