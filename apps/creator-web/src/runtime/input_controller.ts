@@ -63,6 +63,7 @@ export type PerformancePadInputEvent = Extract<
 
 interface CreatorInputControllerCommonOptions {
   onAdverseLifecycle?: () => void;
+  canUsePad?: (slot: number) => boolean;
   activateAudioForGesture?: (event: {isTrusted: boolean}) => Promise<boolean> | null;
   getActiveBank: () => Bank;
   dispatch: (action: CreatorAction) => void;
@@ -621,6 +622,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     source: RuntimeTriggerSource,
     gestureKey: object,
   ) {
+    if (options.canUsePad?.(slot) === false) return;
     const currentGesture = gesture(source, slot);
     // Called synchronously by the adapter, while the native musical event is
     // still active. Ignored keys and compatibility mouse events never get here.

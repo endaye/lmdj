@@ -65,7 +65,7 @@ import {dirname, resolve} from "node:path";
 import {fileURLToPath} from "node:url";
 
 import {expect, test} from "@playwright/test";
-import {openProjectPageAfterBoot} from "./fixtures/creator_boot.mjs";
+import {openProjectPageAfterBoot, waitForBootProject} from "./fixtures/creator_boot.mjs";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
@@ -322,6 +322,30 @@ async function lastSoundsetOperation(page, operation) {
   );
 }
 
+// This Catalog intentionally omits the default kit. Let all sixteen boot
+// acquisitions reach their real Native refusal before switching Projects, so
+// their traffic cannot overlap either of the two manual listings under proof.
+// Keep all traffic: manifest/blob accounting below still spans the whole page.
+async function finishUnavailableDefaultSeed(page, targets) {
+  await waitForBootProject(page);
+  await expect.poll(() => page.evaluate(() => {
+    const seed = JSON.parse(localStorage.getItem("lmdj.creator.default-seed.v1"));
+    return seed?.slots?.map(slot => slot.phase);
+  }), {timeout: REQUEST_TIMEOUT_MS}).toEqual(Array(16).fill("failed"));
+  const refusals = await page.evaluate(() => (window.__soundsetOperations ?? [])
+    .filter(entry => entry.operation === "soundset.slot.acquire" && !entry.ok && entry.error?.code === "NOT_FOUND"));
+  expect(refusals.map(entry => entry.payload.slot_index).sort((a, b) => a - b))
+    .toEqual(Array.from({length: 16}, (_, index) => index));
+  const seed = await page.evaluate(() => JSON.parse(localStorage.getItem("lmdj.creator.default-seed.v1")));
+  for (const refusal of refusals) expect(refusal.payload).toMatchObject({
+    set_id: seed.setId, version: seed.version, manifest_sha256: seed.manifestSha256,
+  });
+  expect(seed.slots.every(slot => slot.request === null && slot.committedRevision === null)).toBe(true);
+  const before = targets.filter(target => target === "/catalog/index.json").length;
+  expect(before).toBeGreaterThan(0);
+  return before;
+}
+
 async function soundsetOperationCount(page, operation) {
   return page.evaluate(
     (name) =>
@@ -350,6 +374,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   const targets = recordCatalogTraffic(page, origin);
   await installProjectTap(page, `${origin}${CATALOG_PREFIX}/`);
   await page.goto("/index.html");
+  const bootstrapIndexReads = await finishUnavailableDefaultSeed(page, targets);
   await importProject(page);
   await openSoundSets(page);
 
@@ -397,13 +422,13 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
     "Fixture Attribution Kit by Bea Waveform (CC BY 4.0)",
   );
 
-  // Two index reads, because there are two listings: the surface lists on
+  // Exactly two additional index reads after the completed boot seed: the surface lists on
   // mount and this leg clicks Refresh Catalog. What the second listing must
   // not do is fetch one object again -- every manifest and blob below appears
   // exactly once across both listings, which is how this leg proves the
   // Workspace Set Store answered the second one rather than the Catalog.
   expect(targets.filter((target) => target === "/catalog/index.json"))
-    .toHaveLength(2);
+    .toHaveLength(bootstrapIndexReads + 2);
   const objects = targets.filter((target) => target !== "/catalog/index.json");
   for (const target of objects) {
     expect(target).toMatch(/^\/object\/(manifest|blob)\/[0-9a-f]{64}$/);
@@ -766,6 +791,7 @@ test("Sound Set listing reaches a Catalog through the same-origin forward", asyn
   const targets = recordCatalogTraffic(page, origin);
   await installProjectTap(page, `${origin}${CATALOG_PREFIX}/`);
   await page.goto("/index.html");
+  const bootstrapIndexReads = await finishUnavailableDefaultSeed(page, targets);
   await importProject(page);
   await openSoundSets(page);
   await page.getByRole("button", {name: "Refresh Catalog"}).click();
@@ -773,10 +799,11 @@ test("Sound Set listing reaches a Catalog through the same-origin forward", asyn
   await expect(listing.getByRole("heading", {name: FOUNDRY}))
     .toBeVisible({timeout: REQUEST_TIMEOUT_MS});
   await expect(listing.getByRole("listitem")).toHaveCount(3);
-  // Two listings, one on mount and one on the Refresh click, and still exactly
+  // Two manual listings after the completed boot seed, one on mount and one
+  // on the Refresh click, and still exactly
   // one fetch of the hash the Attribution Kit names twice.
   expect(targets.filter((target) => target === "/catalog/index.json"))
-    .toHaveLength(2);
+    .toHaveLength(bootstrapIndexReads + 2);
   expect(
     targets.filter((target) =>
       target === `/object/blob/${ATTRIBUTION_SHARED_ARTIFACT}`),

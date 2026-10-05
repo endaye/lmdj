@@ -1,3 +1,7 @@
+import {CREATOR_DEFAULT_SOUND_SET} from "../../../products/lmdj/creator-defaults.mjs";
+import {claimDefaultSeed, readDefaultSeed, type DefaultSeed} from "./state/default_seed";
+import {createDefaultSeedController} from "./runtime/default_seed_controller";
+import type {CreatorSlotSoundSetRuntimeSession} from "./runtime/runtime_types";
 import {useAuthoringHistory} from "./components/authoring_history";
 import {CandidateSurface, isCandidateSession} from "./components/candidate_surface";
 import {
@@ -239,6 +243,13 @@ function isSampleSession(
     typeof candidate.subscribeVoiceState === "function";
 }
 
+function isDefaultSeedSession(session: CreatorRuntimeSession | undefined):
+  session is CreatorSlotSoundSetRuntimeSession & CreatorSampleRuntimeSession {
+  const candidate = session as Partial<CreatorSlotSoundSetRuntimeSession> | undefined;
+  return isSampleSession(session) && typeof candidate?.acquireSoundSetSlot === "function" &&
+    typeof candidate?.installSoundSetSlot === "function" && typeof candidate?.describeSoundSetCatalog === "function";
+}
+
 function isPerformanceSession(
   session: CreatorRuntimeSession | undefined,
 ): session is CreatorPerformanceRuntimeSession {
@@ -298,6 +309,11 @@ function Workspace({
     setDiagnostics((records) => appendDiagnostic(records, record));
     return record.code;
   }, []);
+  const [defaultSeed, setDefaultSeed] = useState<DefaultSeed | null>(null);
+  const defaultSeedRef = useRef(defaultSeed);
+  defaultSeedRef.current = defaultSeed;
+  const defaultSeedController = useRef<ReturnType<typeof createDefaultSeedController> | null>(null);
+  const [defaultSeedError, setDefaultSeedError] = useState<string | null>(null);
   const [listAttempt, setListAttempt] = useState(0);
   const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
   // #1679: this tab handed its Project to another tab, a Continue here is
@@ -511,6 +527,66 @@ function Workspace({
     void refreshSequence();
   }, [session, runtimePhase, state.project.current]);
 
+  useEffect(() => {
+    defaultSeedController.current?.cancel();
+    defaultSeedController.current = null;
+    setDefaultSeed(null);
+    if (!isDefaultSeedSession(session) || runtimePhase !== "ready" || currentProjectId === null) return;
+    let seed: DefaultSeed | null;
+    try {seed = readDefaultSeed(localStorage, CREATOR_DEFAULT_SOUND_SET);}
+    catch (error) {setDefaultSeedError("Default sounds unavailable; existing content is preserved"); reportFailure("Read default sounds", error); return;}
+    if (seed === null || seed.projectId !== currentProjectId) return;
+    setDefaultSeed(seed);
+    let mutations = Promise.resolve();
+    const controller = createDefaultSeedController({
+      seed, storage: localStorage, session,
+      current: () => stateRef.current.project.phase === "ready" ? stateRef.current.project.current : null,
+      changed: setDefaultSeed,
+      failed: (_slot, error) => {reportFailure("Acquire default sound", error);},
+      refresh: async () => {if (stateRef.current.project.current?.projectId === seed.projectId) await refreshPerformProject();},
+      commit: (slot, request, admit) => {
+        const result = mutations.then(async () => {
+          if (sessionRef.current !== session || stateRef.current.project.current?.projectId !== seed.projectId ||
+              stateRef.current.project.phase !== "ready") return null;
+          if (selectTransportRecording(transportRef.current) ||
+              !["idle", "saved", "discarded"].includes(performControllerRef.current?.getState().recording.phase ?? "idle")) return null;
+          const token = beginProjectAction("open", false);
+          if (token === null) return null;
+          try {
+            if (!admit()) return null;
+            const receipt = await session.installSoundSetSlot({...CREATOR_DEFAULT_SOUND_SET,
+              slotIndex: slot, bankId: 0, ...request});
+            // A fulfilled receipt is durable Truth, not Runtime readiness.
+            const project = await refreshPerformProject();
+            try {
+              const publication = await reloadPrepareJourney(session, project.patternId);
+              return {committedRevision: receipt.committedRevision, runtimeRevision: publication.runtimeRevision,
+                published: publication.projectId === seed.projectId && publication.runtimeReady && publication.snapshotError === null};
+            } catch (error) {
+              reportFailure("Publish default sound", error);
+              return {committedRevision: receipt.committedRevision, runtimeRevision: null, published: false};
+            }
+          } finally {finishProjectAction(token);}
+        });
+        mutations = result.then(() => {}, () => {});
+        return result;
+      },
+    });
+    defaultSeedController.current = controller;
+    void controller.start().catch(error => {
+      controller.cancel();
+      setDefaultSeedError("Default sounds unavailable; existing content is preserved");
+      reportFailure("Initialize default sounds", error);
+    });
+    return () => {controller.cancel(); if (defaultSeedController.current === controller) defaultSeedController.current = null;};
+  }, [session, runtimePhase, currentProjectId]);
+
+  useEffect(() => {
+    if (state.project.phase === "ready" && state.project.current !== null) {
+      defaultSeedController.current?.observeProject(state.project.current);
+    }
+  }, [state.project.phase, state.project.current]);
+
   const resetInputForAdverseLifecycle = () => {
     const current = inputController.current;
     if (current !== null) {
@@ -548,6 +624,11 @@ function Workspace({
           stateRef.current.sample.inspect?.assetId !== undefined),
       dispatch,
       onAdverseLifecycle: () => { gestureEpoch.current += 1; },
+      canUsePad: (slot: number) => {
+        const seed = defaultSeedRef.current;
+        return seed?.projectId !== stateRef.current.project.current?.projectId || slot >= 16 ||
+          ["ready", "retired"].includes(seed!.slots[slot]!.phase);
+      },
       activateAudioForGesture: (event: {isTrusted: boolean}) => gestureActivation.current(event),
       getArmedCaptureSlot: () => armedCaptureSlotRef.current,
       onArmedCaptureStop: () => armedCaptureStopIntent.current(),
@@ -694,6 +775,16 @@ function Workspace({
               ? await openProjectJourney(token.session, last)
               : await createProjectJourney(token.session);
             if (active && ownsProjectAction(token)) {
+              if (!last && isDefaultSeedSession(token.session)) {
+                try {
+                  await navigator.locks.request("lmdj.creator.default-seed.claim", () =>
+                    claimDefaultSeed(localStorage, CREATOR_DEFAULT_SOUND_SET, project.projectId));
+                } catch (error) {
+                  setDefaultSeedError("Default sounds unavailable; existing content is preserved");
+                  reportFailure("Claim default sounds", error);
+                }
+              }
+              if (!active || !ownsProjectAction(token)) return;
               dispatch({type: "project-ready", project});
               setActiveMode("sample");
             }
@@ -2185,6 +2276,7 @@ function Workspace({
   const padSurface = (
     <PadSurface
       state={state}
+      {...(defaultSeed?.projectId === currentProjectId ? {seedSlots: defaultSeed.slots} : {})}
       armedCaptureSlot={armedCaptureSlot}
       {...(activeMode === "sample" ? {
         onSelectSample: (slot: number) => {
@@ -2312,6 +2404,20 @@ function Workspace({
           pads={padSurface}
           touchWorkspace={
             <>
+              {defaultSeedError !== null && <p role="status">{defaultSeedError}</p>}
+              {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "failed") &&
+                <button type="button" onClick={() => {defaultSeed.slots.forEach((slot, index) => {
+                  if (slot.phase === "failed") void defaultSeedController.current?.retry(index);
+                });}}>Retry default sounds</button>}
+              {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "saved-unavailable") &&
+                <div><p role="status">Sounds saved; prepare playback to use them.</p>
+                  <button type="button" onClick={() => {
+                    const project = stateRef.current.project.current;
+                    if (project === null || !isSampleSession(session)) return;
+                    void retryPrepareJourney(session, project.patternId).then(
+                      publication => defaultSeedController.current?.acceptPublication(publication),
+                      error => reportFailure("Prepare default sounds", error));
+                  }}>Prepare default sounds</button></div>}
               <section className="touch-system" aria-label="System">
                 <button
                   type="button"

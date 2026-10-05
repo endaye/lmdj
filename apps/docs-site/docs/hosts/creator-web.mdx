@@ -283,7 +283,15 @@ WAV 检查、Worker 路由测试由 `scripts/asset-server.sh check` 执行，并
 验证入口。独立 Cloudflare Worker 只提供 Catalog、manifest、blob 与 health 路由，
 哈希对象不可变缓存，Catalog 短期重新验证。Creator 通过同源 Catalog proxy 访问。
 服务部署与每个对象的真实 GET/字节核验由独立 workflow 留证；源码验证不表示服务
-已部署。首次 Project 自动分 Pad 安装和完整同构建离线壳由后续 P1 Task 接入。
+已部署。首次 Project 的逐 Pad 下载与同构建离线壳由以下 Host 路径接入；实际
+浏览器离线验收仍需完成 P1 集成与版本结算。
+
+P1 默认 Bank A 仅属于第一次自动创建的 Project。Host 保留独立初始化日志：下载中、
+处理中的 Pad 不作为空 Pad；独立安装收据与 Runtime 发布均确认后才可演奏。手动新建、
+导入、Duplicate、删除、撤销以及已完成槽位的重开都不会重新补种。下载与短暂的 authoring
+提交分离；失败重试仍受原 Project、目标空位、版本和原始素材身份约束。
+
+默认下载失败、仍在下载或等待 authoring 许可时，若权威 Project 投影显示用户已给该空 Pad 分配素材，尚未发出安装请求的默认预留会持久退役；迟到的下载与排队提交不会重新安装，Undo 清空该 Pad 后也不会自动补回。Host 取得编辑许可后，才在 Facade 调用前持久保存 command 身份与尚未观察到赋材的标记；日志写入失败不发出安装命令。已发出的默认请求仍可用同一身份恢复原 command receipt。日志会保留期间观察到的赋材。重开后的标记只描述旧 Host 观察到的历史，不能证明它缺席期间没有赋材再 Undo；不论标记缺失、为真或为假，恢复的未知过期命令均会退役，已识别的收据仍以原 command 身份与版本重放。只有由当前 Controller 实际准入、且在其连续持有期间未观察到目标赋材的新请求，才可因其他 Pad 的版本变化继续尝试。
 
 ## Continue in another tab
 
