@@ -43,6 +43,7 @@ class CreatorServerTest(unittest.TestCase):
     # `CreatorCatalogProxyTest` re-runs this whole suite with one configured, so
     # the static surface and the CSP are asserted unchanged either way.
     catalog_upstream: str | None = None
+    offline_fixture = False
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="lmdj-creator-server-")
@@ -79,6 +80,19 @@ class CreatorServerTest(unittest.TestCase):
             json.dumps(lock), encoding="utf-8"
         )
         package = load_module("lmdj_creator_package_fixture", PACKAGE_TOOL)
+        fixture_identity_path = self.repo / "products/lmdj/generated/web-runtime-identity.json"
+        fixture_identity = json.loads(fixture_identity_path.read_text())
+        creator = fixture_identity["hosts"]["creator-web"]
+        if self.offline_fixture:
+            creator["version"] = "6.0.0"
+            if not any(entry["role"] == package.ROLES.OFFLINE_WORKER for entry in creator["expected_assets"]):
+                creator["expected_assets"].append({"role": package.ROLES.OFFLINE_WORKER,
+                                                  "prefix": "assets/offline-worker.", "suffix": ".js"})
+            fixture_identity_path.write_text(json.dumps(fixture_identity))
+        if int(creator["version"].split(".")[0]) >= 6:
+            worker = self.repo / "apps/creator-web/offline/worker.mjs"
+            worker.parent.mkdir(parents=True)
+            shutil.copyfile(REPO_ROOT / "apps/creator-web/offline/worker.mjs", worker)
         self.identity.write_text(
             json.dumps(lock),
             encoding="utf-8",
@@ -385,6 +399,34 @@ UPSTREAM_PARITY_ACCEPTED = (
     # Underscore hosts are real internal names, and both sides accept them.
     "https://a_b.example.test/b/",
 )
+
+
+class CreatorOfflineWorkerTest(CreatorServerTest):
+    """A synthetic6 instance alongside every original current5 Server case."""
+
+    offline_fixture = True
+
+    def test_serves_complete_same_build_worker_with_admitted_headers(self) -> None:
+        manifest = json.loads((self.dist / "host-manifest.json").read_bytes())
+        workers = [entry for entry in manifest["assets"]
+                   if entry["role"] == self.verifier.ROLES.OFFLINE_WORKER]
+        self.assertEqual(len(workers), 1)
+        worker = workers[0]
+        status, headers, payload = self.request("GET", "/" + worker["path"])
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["content-type"], "text/javascript; charset=utf-8")
+        self.assertEqual(headers["cross-origin-opener-policy"], "same-origin")
+        self.assertEqual(headers["cross-origin-embedder-policy"], "require-corp")
+        self.assertEqual(headers["cross-origin-resource-policy"], "same-origin")
+        self.assertEqual(headers["service-worker-allowed"], "/")
+        self.assertEqual(headers["cache-control"], "public, max-age=31536000, immutable")
+        self.assertEqual(payload, (self.dist / worker["path"]).read_bytes())
+        self.assertEqual(len(payload), worker["bytes"])
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), worker["sha256"])
+        graph = json.loads(payload.split(b"=", 1)[1].split(b";\n", 1)[0])
+        self.assertEqual(graph["host_version"], "6.0.0")
+        self.assertEqual(graph["product_build"], manifest["product_build"])
+        self.assertEqual(graph["assets"], [entry for entry in manifest["assets"] if entry not in workers])
 
 
 class CatalogUpstreamFixture(http.server.BaseHTTPRequestHandler):

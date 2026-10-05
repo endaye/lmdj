@@ -154,6 +154,14 @@ Safari `PASS`。
 
 Creator Host `5.0.0` 在这份清单末尾增加 `host_favicon`（`assets/favicon.<sha256>.svg`）。它是 Creator LogoIcon 的四条路径，铺在 `#0a0b09` 上，由 `index.html` 的同一来源图标链接引用，打包时改写成那一个哈希路径。Host 3.x 与 4.x 仍是上面的六项，不得携带 `host_favicon`；Host 2.x 仍是五项。`/favicon.ico` 继续 404。清单形状改变，所以这次 Host 取 MAJOR。这次 Assembly 变化分配 Product Build `2.0.81.0`。它不是公共 Release、部署或 Channel 晋级。
 
+离线 Worker 的第八项资产由实际 Host 版本选择：未来 Creator MAJOR6 及之后
+在既有七项后声明唯一的 `offline_worker`（`assets/offline-worker.<sha256>.js`），
+其内容绑定同一个构建的其余资产图。打包和验证都拒绝缺失或重复的 Worker；
+开发 HTTP 服务核验完整字节，并返回 JavaScript MIME、同源隔离、不可变缓存与
+`Service-Worker-Allowed: /`。当前 MAJOR5 继续生成七项资产，历史 MAJOR2 的五项、
+MAJOR3/4 的六项也保持各自的清单形状。条件选择源码不会分配新的 Product Build，
+也不代表离线安装、真实设备恢复或部署验收已经完成。
+
 ## 公共部署边界
 
 后续 Web 产品使用 `web-hosts` profile：同一 Product Release 精确包含 Creator 与 Runtime

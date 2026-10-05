@@ -42,7 +42,12 @@
           "role": "host_favicon",
           "suffix": ".svg"
         }
-      ]
+      ],
+      "offline_asset": {
+        "prefix": "assets/offline-worker.",
+        "role": "offline_worker",
+        "suffix": ".js"
+      }
     },
     "web-runtime-host": {
       "compatible_hosts": [],

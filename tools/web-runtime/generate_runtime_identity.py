@@ -304,7 +304,10 @@ def read_policy(repo_root: Path, components: dict[str, dict], toolchain: dict) -
     for host_id, host_policy in hosts.items():
         if not isinstance(host_policy, dict):
             raise IdentityError(f"{host_id} policy is invalid")
-        exact_keys(host_policy, {"compatible_hosts", "distribution_contract", "expected_assets"}, f"{host_id} policy")
+        policy_keys = {"compatible_hosts", "distribution_contract", "expected_assets"}
+        if host_id == "creator-web":
+            policy_keys.add("offline_asset")
+        exact_keys(host_policy, policy_keys, f"{host_id} policy")
         contract = safe_identity(host_policy["distribution_contract"], f"{host_id} distribution contract")
         compatible_ids = host_policy["compatible_hosts"]
         if not isinstance(compatible_ids, list) or len(set(compatible_ids)) != len(compatible_ids):
@@ -320,14 +323,19 @@ def read_policy(repo_root: Path, components: dict[str, dict], toolchain: dict) -
         assets = host_policy["expected_assets"]
         if not isinstance(assets, list) or not assets:
             raise IdentityError(f"{host_id} expected assets are invalid")
+        # Both policies are passive, frozen material inputs. The actual Host
+        # manifest chooses the new shape; current5 projections remain exact.
+        conditional_assets = [host_policy["offline_asset"]] if host_id == "creator-web" else []
         seen_assets = set()
-        for asset in assets:
+        for asset in [*assets, *conditional_assets]:
             if not isinstance(asset, dict) or set(asset) != {"prefix", "suffix", "role"}:
                 raise IdentityError(f"{host_id} expected asset is invalid")
             entry = tuple(asset[key] for key in ("prefix", "suffix", "role"))
             if not all(isinstance(value, str) and value for value in entry) or entry in seen_assets:
                 raise IdentityError(f"{host_id} expected asset is invalid")
             seen_assets.add(entry)
+        if host_id == "creator-web" and int(components[host_id]["version"].split(".")[0]) >= 6:
+            assets = [*assets, *conditional_assets]
         generated_hosts[host_id] = {
             "compatible_hosts": compatible_hosts,
             "distribution_contract": contract,
