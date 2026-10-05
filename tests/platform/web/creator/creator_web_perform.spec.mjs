@@ -76,6 +76,34 @@ async function inspectProjectTruth(page) {
   return response.result;
 }
 
+async function observeMasterCaptureBatches(page) {
+  await page.addInitScript(() => {
+    const NativeAudioWorkletNode = window.AudioWorkletNode;
+    window.__performMasterBatchProof = [];
+    window.AudioWorkletNode = class extends NativeAudioWorkletNode {
+      constructor(context, name, options) {
+        super(context, name, options);
+        if (name !== "lmdj-perform-master-tap") return;
+        // Read the real tap's delivered PCM. Do not replace its processor,
+        // sink, messages or audio graph with a deterministic capture source.
+        this.port.addEventListener("message", ({data}) => {
+          if (data?.type !== "batch") return;
+          let peak = 0;
+          for (const channel of data.channels) {
+            for (const sample of channel) peak = Math.max(peak, Math.abs(sample));
+          }
+          window.__performMasterBatchProof.push({
+            generation: data.generation,
+            sequence: data.sequence,
+            frames: data.channels[0].length,
+            peak,
+          });
+        });
+      }
+    };
+  });
+}
+
 function canonicalJson(value) {
   if (Array.isArray(value)) {
     return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
@@ -933,9 +961,10 @@ async function recordShortPerformance(
   await savePerformanceWithBusyRetry(page, name);
 }
 
-test("complete Perform journey persists projection, gestures, WAV, save, replay and resample", async ({page, browserName}) => {
+test("complete Perform journey persists projection, gestures, WAV, save, replay and empty Pad master capture", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(420_000);
+  await observeMasterCaptureBatches(page);
   await importActivateAndPerform(page);
   await installPerformWitnessSample(page);
 
@@ -1052,13 +1081,55 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await expect(replayStatus).toContainText(
     new RegExp(`resolved revision\\s*[:·]\\s*${revision}`, "i"),
   );
-  await page.getByRole("spinbutton", {name: "Resample start frame"}).fill("0");
-  await page.getByRole("spinbutton", {name: "Resample end frame"}).fill("4800");
-  await page.getByRole("spinbutton", {name: "Resample target Pad"}).fill("16");
-  await page.getByRole("button", {name: "Resample selection"}).click();
+  await page.getByRole("combobox", {name: "Pad recording source"}).selectOption("master");
+  await page.getByRole("button", {name: "Stop Replay"}).click();
+  await expect(replayStatus).toContainText("stopped", {timeout: 30_000});
+  // The shared Native proof fixture fills all64 Pads. Create the empty target
+  // through the ordinary Sample control, then prove its far-side Truth before
+  // the original Perform master-capture leg.
+  const beforeDelete = await inspectProjectTruth(page);
+  expect(beforeDelete.project.banks[1].pads[0].asset_id).not.toBeNull();
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await page.getByRole("button", {name: "Bank B", exact: true}).first().click();
+  await page.getByRole("button", {name: /^Pad B1 — assigned/}).focus();
+  await page.getByRole("button", {name: "Delete Pad B1", exact: true}).click();
+  revision = await expectRevisionAfter(page, revision);
+  const afterDelete = await inspectProjectTruth(page);
+  expect(afterDelete.project.banks[1].pads[0].asset_id).toBeNull();
+  expect(afterDelete.project.assets).toEqual(beforeDelete.project.assets);
+  expect(afterDelete.project.patterns).toEqual(beforeDelete.project.patterns);
+  await openPerform(page);
+  await page.getByRole("button", {name: "Bank B", exact: true}).first().click();
+  const empty = page.getByRole("button", {name: /^Pad B1 — empty/});
+  await empty.focus();
+  const beforeCaptureBatches = await page.evaluate(() =>
+    window.__performMasterBatchProof.length);
+  await page.keyboard.down("KeyQ");
+  await expect(page.getByRole("region", {name: "Pad recording"})).toContainText("recording");
+  await page.getByRole("button", {name: "Replay Night Set"}).click();
+  await expect(replayStatus).toContainText("playing", {
+    timeout: LAUNCH_TRANSITION_TIMEOUT_MS,
+  });
+  // A replay acknowledgement is not a captured audio frame. Release only
+  // after this take receives actual non-silent PCM through the real Master tap.
+  await expect.poll(() => page.evaluate((after) =>
+    window.__performMasterBatchProof.slice(after).some(({frames, peak}) =>
+      frames > 0 && Number.isFinite(peak) && peak > 0), beforeCaptureBatches), {
+    timeout: LAUNCH_TRANSITION_TIMEOUT_MS,
+    message: "Replay must deliver non-silent PCM to the active Master capture",
+  }).toBe(true);
+  await page.keyboard.up("KeyQ");
   await expectRevisionAfter(page, revision);
-  await expect(page.getByRole("status", {name: "Resample status"}))
-    .toContainText(/committed.*Pad B1/i);
+  await expect(page.getByRole("button", {name: /^Pad B1 — assigned/})).toBeVisible();
+  const captured = await inspectProjectTruth(page);
+  const capturedId = captured.project.banks[1].pads[0].asset_id;
+  expect(captured.project.assets[capturedId].artifact).toMatchObject({
+    byte_length: expect.any(Number), media_type: "audio/wav", sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+  });
+  expect(captured.project.assets[capturedId].artifact.byte_length).toBeGreaterThan(44);
+  await page.reload(); await openLocalProject(page);
+  const reopened = await inspectProjectTruth(page);
+  expect(reopened.project.assets[capturedId].artifact).toEqual(captured.project.assets[capturedId].artifact);
 });
 
 test("discard deletes its temporary WAV and owner-loss recovery applies or discards durable truth", async ({browserName}) => {
