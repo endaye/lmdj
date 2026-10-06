@@ -335,6 +335,10 @@ class CoordinatedFixture(unittest.TestCase):
             name = f"apps/{host}/CHANGELOG.md"
             if inputs.git("ls-tree", revision, "--", name):
                 (cls.source / name).write_bytes(inputs.git("show", revision + ":" + name))
+        for name in ("apps/core-mcp/pyproject.toml", "apps/core-mcp/lmdj_core_mcp/__init__.py"):
+            target = cls.source / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(inputs.git("show", revision + ":" + name))
     setUp = MaterialTest.setUp
     git = MaterialTest.git
     commit = MaterialTest.commit
@@ -342,12 +346,104 @@ class CoordinatedFixture(unittest.TestCase):
 
 
 class CoordinatedMaterialTest(CoordinatedFixture):
-    def test_actual_graph_material_has_exact_22_paths_and_far_side_identities(self):
+    def test_mcp_package_identities_follow_the_allocated_host(self):
+        import ast
+        import tomllib
+        names = ("apps/core-mcp/pyproject.toml", "apps/core-mcp/lmdj_core_mcp/__init__.py")
+        before = {name:(self.root / name).read_bytes() for name in names}
+        result = self.prepare()
+        host = json.loads(result["files"]["apps/core-mcp/module.json"])["version"]
+        project = tomllib.loads(result["files"][names[0]].decode())
+        self.assertEqual(project["project"]["version"], host)
+        tree = ast.parse(result["files"][names[1]])
+        assignment, = [node for node in tree.body if isinstance(node, ast.Assign)
+                       and any(isinstance(target, ast.Name) and target.id == "__version__"
+                               for target in node.targets)]
+        self.assertEqual(ast.literal_eval(assignment.value), host)
+        old_host = json.loads((self.root / "apps/core-mcp/module.json").read_bytes())["version"]
+        for name in names:
+            self.assertEqual(result["files"][name].replace(json.dumps(host).encode(),
+                             json.dumps(old_host).encode(), 1), before[name])
+
+    def test_mcp_project_version_rewrite_targets_the_field_instead_of_a_comment(self):
+        import tomllib
+        name = "apps/core-mcp/pyproject.toml"
+        old_host = json.loads((self.root / "apps/core-mcp/module.json").read_bytes())["version"]
+        before = (self.root / name).read_bytes().replace(
+            json.dumps(old_host).encode(), repr(old_host).encode(), 1)
+        before += ("\n# version = " + json.dumps(old_host) + "\n").encode()
+        (self.root / name).write_bytes(before)
+        self.base = self.commit()
+        self.request["base_revision"] = self.base
+        self.frozen = self.inputs.freeze(self.base)
+        result = self.prepare()
+        host = json.loads(result["files"]["apps/core-mcp/module.json"])["version"]
+        self.assertEqual(tomllib.loads(result["files"][name].decode())["project"]["version"], host)
+        self.assertEqual(result["files"][name], before.replace(
+            repr(old_host).encode(), repr(host).encode(), 1))
+
+    def test_mcp_runtime_version_utf8_bom_is_refused(self):
+        name = "apps/core-mcp/lmdj_core_mcp/__init__.py"
+        old_host = json.loads((self.root / "apps/core-mcp/module.json").read_bytes())["version"]
+        (self.root / name).write_bytes(b"\xef\xbb\xbf" +
+                                     ("__version__ = " + json.dumps(old_host) + "\n").encode())
+        self.base = self.commit()
+        self.request["base_revision"] = self.base
+        self.frozen = self.inputs.freeze(self.base)
+        with self.assertRaisesRegex(JournalError, "canonical candidate material generation refused"):
+            self.prepare()
+
+    def test_mcp_runtime_version_annotation_override_is_refused(self):
+        name = "apps/core-mcp/lmdj_core_mcp/__init__.py"
+        old_host = json.loads((self.root / "apps/core-mcp/module.json").read_bytes())["version"]
+        with (self.root / name).open("a") as stream:
+            stream.write("\n__version__: str = " + json.dumps(old_host) + "\n")
+        self.base = self.commit()
+        self.request["base_revision"] = self.base
+        self.frozen = self.inputs.freeze(self.base)
+        with self.assertRaisesRegex(JournalError, "canonical candidate material generation refused"):
+            self.prepare()
+
+    def test_mcp_runtime_version_nested_override_is_refused(self):
+        name = "apps/core-mcp/lmdj_core_mcp/__init__.py"
+        old_host = json.loads((self.root / "apps/core-mcp/module.json").read_bytes())["version"]
+        with (self.root / name).open("a") as stream:
+            stream.write("\nif True:\n    __version__ = " + json.dumps(old_host) + "\n")
+        self.base = self.commit()
+        self.request["base_revision"] = self.base
+        self.frozen = self.inputs.freeze(self.base)
+        with self.assertRaisesRegex(JournalError, "canonical candidate material generation refused"):
+            self.prepare()
+
+    def test_mcp_project_version_mismatch_is_refused(self):
+        name = "apps/core-mcp/pyproject.toml"
+        raw = (self.root / name).read_bytes()
+        old_host = json.loads((self.root / "apps/core-mcp/module.json").read_bytes())["version"]
+        (self.root / name).write_bytes(raw.replace(json.dumps(old_host).encode(), b'"0.0.0"', 1))
+        self.base = self.commit()
+        self.request["base_revision"] = self.base
+        self.frozen = self.inputs.freeze(self.base)
+        with self.assertRaisesRegex(JournalError, "canonical candidate material generation refused"):
+            self.prepare()
+
+    def test_mcp_runtime_version_expression_is_not_executed(self):
+        name = "apps/core-mcp/lmdj_core_mcp/__init__.py"
+        marker = self.container / "must-not-execute"
+        (self.root / name).write_text('__version__ = __import__("pathlib").Path(' +
+                                     repr(str(marker)) + ').touch()\n')
+        self.base = self.commit()
+        self.request["base_revision"] = self.base
+        self.frozen = self.inputs.freeze(self.base)
+        with self.assertRaisesRegex(JournalError, "canonical candidate material generation refused"):
+            self.prepare()
+        self.assertFalse(marker.exists())
+
+    def test_actual_graph_material_has_exact_24_paths_and_far_side_identities(self):
         import ast
         from tools.release.candidate_workspace import FILES
         before = self.git("write-tree"), self.git("show-ref"), self.git("status", "--porcelain")
         result = self.prepare()
-        self.assertEqual(len(result["files"]), 22)
+        self.assertEqual(len(result["files"]), 24)
         self.assertEqual(set(result["files"]), FILES | version.P1_BUILD_MATERIAL_FILES)
         self.assertEqual(result["binding"]["material_scope"], P1_MATERIAL_SCOPE)
         old_test = (self.root / "tests/build/version_test.py").read_bytes()
