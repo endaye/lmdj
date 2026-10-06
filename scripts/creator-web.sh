@@ -361,7 +361,7 @@ run_browser_gate() {
   export LMDJ_CREATOR_WEB_CANDIDATE_BUNDLE="$candidate_bundle"
   local requested_port="${LMDJ_CREATOR_WEB_PORT:-0}"
   local ready_file ready_nonce port="" status=0
-  local specs=()
+  local specs=() chromium_specs=() catalog_specs=()
   local tracked
   local required_relative="${required_sample_editor_spec#"$repo_root/tests/platform/web/"}"
   local capture_relative="${required_capture_spec#"$repo_root/tests/platform/web/"}"
@@ -380,11 +380,24 @@ run_browser_gate() {
   while IFS= read -r tracked; do
     case "${tracked#tests/platform/web/}" in
       "$required_relative"|"$capture_relative") ;;
-      *) specs+=("${tracked#tests/platform/web/}") ;;
+      *)
+        specs+=("${tracked#tests/platform/web/}")
+        case "${tracked#tests/platform/web/}" in
+          creator/creator_web_soundset.spec.mjs|creator/creator_web_default_streaming.spec.mjs)
+            catalog_specs+=("${tracked#tests/platform/web/}") ;;
+          *) chromium_specs+=("${tracked#tests/platform/web/}") ;;
+        esac
+        ;;
     esac
   done < <(git -C "$repo_root" ls-files 'tests/platform/web/creator/*.spec.mjs')
   [[ ${#specs[@]} -gt 0 ]] || {
     echo "Creator Web error: no tracked Creator browser specs" >&2
+    return 2
+  }
+  [[ ${#chromium_specs[@]} -gt 0 && ${#catalog_specs[@]} -eq 2 ]] || {
+    printf '%s\n' \
+      'Creator Web error: why: Proof requires independent specs and exactly two Catalog specs' \
+      'remedy: restore tracked creator_web_soundset.spec.mjs, creator_web_default_streaming.spec.mjs and the remaining general Creator specs' >&2
     return 2
   }
   cleanup_server
@@ -435,7 +448,17 @@ PY
     LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
     npm --prefix "$web_test_root" test -- \
-      --project=chromium "${specs[@]}" || status=$?
+      --project=chromium --workers=2 "${chromium_specs[@]}" || status=$?
+  # These specs replace the owned server's one Catalog upstream file. Keep
+  # them serial and outside the independent browser-context worker pool.
+  # Each invocation owns a separate result directory, including on failure.
+  LMDJ_WEB_RESULTS_SLOT=catalog-chromium \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+    LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
+    LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
+    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
+    npm --prefix "$web_test_root" test -- \
+      --project=chromium --workers=1 "${catalog_specs[@]}" || status=$?
   LMDJ_WEB_RESULTS_SLOT=sample-chromium \
     LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
