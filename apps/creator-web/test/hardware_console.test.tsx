@@ -180,6 +180,14 @@ test("physical Play/Stop and Record drive the global Pattern transport", () => {
   expect(onPlayStop).toHaveBeenCalledTimes(1);
 });
 
+// jsdom leaves var() unsubstituted in computed values while a browser
+// substitutes it; resolve one level so an assertion reads the token's value.
+function resolved(style: CSSStyleDeclaration, property: string): string {
+  const value = style.getPropertyValue(property);
+  const reference = /^var\((--[\w-]+)\)$/.exec(value);
+  return reference === null ? value : style.getPropertyValue(reference[1]!);
+}
+
 test("console body takes the Desktop Final mono stack and surfaces", () => {
   const style = document.createElement("style");
   style.textContent = readFileSync("src/styles.css", "utf8");
@@ -192,13 +200,10 @@ test("console body takes the Desktop Final mono stack and surfaces", () => {
       touchWorkspace={<span>touch</span>}
     />);
     const shell = getComputedStyle(screen.getByTestId("hardware-console"));
-    // jsdom leaves var() unsubstituted in computed font-family while a browser
-    // substitutes it; resolve one level so the assertion reads the stack either way.
-    const reference = /^var\((--[\w-]+)\)$/.exec(shell.fontFamily);
-    const fontFamily = reference === null ? shell.fontFamily : shell.getPropertyValue(reference[1]!);
-    expect(fontFamily).toMatch(/^"IBM Plex Mono",/);
-    expect(shell.getPropertyValue("--creator-base")).toBe("#202321");
-    expect(shell.getPropertyValue("--creator-screen")).toBe("#292d29");
+    const display = getComputedStyle(screen.getByRole("region", {name: "Overview display"}));
+    expect(resolved(shell, "font-family")).toMatch(/^"IBM Plex Mono",/);
+    expect(resolved(shell, "background")).toBe("#202321");
+    expect(resolved(display, "background")).toBe("#292d29");
   } finally {
     style.remove();
   }
