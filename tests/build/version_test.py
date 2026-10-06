@@ -49,7 +49,7 @@ expected_modules = {
     ),
     "packages/project-io/module.json": (
         "project-io",
-        "7.0.0",
+        "7.1.0",
         1,
         {
             "foundation": "0.5.0",
@@ -67,12 +67,12 @@ expected_modules = {
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "6.6.0",
+        "6.7.0",
         3,
         {
             "foundation": "0.5.0",
             "authoring-domain": "4.4.0",
-            "project-io": "7.0.0",
+            "project-io": "7.1.0",
             "project-cooker": "2.1.0",
             "audio-runtime": "5.2.0",
             "provider-sdk": "2.3.0",
@@ -80,45 +80,45 @@ expected_modules = {
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "5.7.0",
+        "5.8.0",
         2,
         {
-            "application-facade": "6.6.0",
+            "application-facade": "6.7.0",
             "audio-runtime": "5.2.0",
         },
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "3.3.13",
+        "3.3.14",
         2,
-        {"application-facade": "6.6.0"},
+        {"application-facade": "6.7.0"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "3.6.0",
+        "3.6.1",
         2,
-        {"application-facade": "6.6.0"},
+        {"application-facade": "6.7.0"},
     ),
     "apps/native-host/module.json": (
         "native-host",
-        "3.4.8",
+        "3.4.9",
         2,
         {
-            "application-facade": "6.6.0",
+            "application-facade": "6.7.0",
             "audio-runtime": "5.2.0",
         },
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "4.3.8",
+        "4.3.9",
         2,
-        {"web-runtime-platform": "5.7.0"},
+        {"web-runtime-platform": "5.8.0"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "5.0.1",
+        "6.0.0",
         2,
-        {"web-runtime-platform": "5.7.0"},
+        {"web-runtime-platform": "5.8.0"},
     ),
 }
 for relative, (

@@ -1,0 +1,1509 @@
+{
+  "schema_version": 2,
+  "product": {
+    "id": "lmdj",
+    "version": "2.0.86.0"
+  },
+  "channel": "canary",
+  "revision": "c4c9316480e60fdaedece2ab027ed68f96c7407d",
+  "assembly_lock_sha256": "a0189a0e282a8a3fe29e2899281df151829cff8c5bae1d1d00abfbcf00794af7",
+  "modules": [
+    {
+      "id": "application-facade",
+      "sha256": "c4ed0ce1822098c45a35d93490424eb18255d1ece0fb4b0fa3283bd58233127d",
+      "version": "6.7.0"
+    },
+    {
+      "id": "audio-runtime",
+      "sha256": "7410ab8835af05732248321d5c7efca45308f7d15905f37c9e97198bb8549c60",
+      "version": "5.2.0"
+    },
+    {
+      "id": "authoring-domain",
+      "sha256": "f5b08039aa46b2dea8ec1084c81bc95e19e10add191e1e974a467aaa7a69a5cc",
+      "version": "4.4.0"
+    },
+    {
+      "id": "foundation",
+      "sha256": "2ee693bb54d53804bedf45a382a79635ab409340ed780804c785efc83144251f",
+      "version": "0.5.0"
+    },
+    {
+      "id": "project-cooker",
+      "sha256": "bc1629f7ea00bc5c32d0b55041c9d740703132d5a9df6fc812bab6250ee87de9",
+      "version": "2.1.0"
+    },
+    {
+      "id": "project-io",
+      "sha256": "aa74be755b84fbdc9b81eb179cfb88df8661afc3cdc1aa7b4199cd191a133786",
+      "version": "7.1.0"
+    },
+    {
+      "id": "provider-sdk",
+      "sha256": "d723da9b2033a69b77f279532f3312c9e489b4ffc1c3559dc527bd31811dd119",
+      "version": "2.3.0"
+    },
+    {
+      "id": "web-runtime-platform",
+      "sha256": "025d2793cf302fe17238cd371ff4838ecd689330a5be0ddcad600368625d8529",
+      "version": "5.8.0"
+    }
+  ],
+  "hosts": [
+    {
+      "id": "cardputer-host",
+      "sha256": "188efa1ff3ee2d9643a92988414e909e1b12a42f686e55ad13927e3e49895cf2",
+      "version": "1.0.9"
+    },
+    {
+      "id": "core-cli",
+      "sha256": "2183a980d92376be4ff84f257ced0c6511fe5e002f65348edca055bfb2a5b8e1",
+      "version": "3.3.14"
+    },
+    {
+      "id": "core-mcp",
+      "sha256": "5143ff48a4565694e31a5b693d9645201b94391fc5b13d004a7f4fbdf1c69684",
+      "version": "3.6.1"
+    },
+    {
+      "id": "creator-web",
+      "sha256": "2f168b88e9ab30c6bdf2f779e7d605917fb46de9878e3ef60333d4029b3774aa",
+      "version": "6.0.0"
+    },
+    {
+      "id": "native-host",
+      "sha256": "1fefa4a5cd1337121fe167f3481319e5457701dba0d26b2e27c808ac02f83ee6",
+      "version": "3.4.9"
+    },
+    {
+      "id": "web-runtime-host",
+      "sha256": "cd75f9d582d17a265a19e7d4fde96a9e2732b9b9df2b3b18c2d11f0df0415ebf",
+      "version": "4.3.9"
+    }
+  ],
+  "providers": [
+    {
+      "id": "local.proof.failure",
+      "sha256": "a861be9dd1b73cdd060864a6bc6a0f8fc5ed9df80101b172d3c782eb96757d85",
+      "version": "2.0.4"
+    },
+    {
+      "id": "local.proof.stem",
+      "sha256": "a4d59c61466d671837f6099e7c67e3c75fd0b3546d9777692fabe08d6c8ab074",
+      "version": "1.0.0"
+    },
+    {
+      "id": "local.proof.success",
+      "sha256": "0314c2e64c7e45fb34054daf5727ab56582ac87cb21e83e81023acd698fb6278",
+      "version": "2.0.4"
+    },
+    {
+      "id": "local.sample.slice",
+      "sha256": "620b4f752322d32a973be7f52a5e9a92a4b5b21c44ce05302e35c713aa246d7f",
+      "version": "1.0.4"
+    }
+  ],
+  "contracts": [
+    {
+      "id": "lmdj.assembly.v2",
+      "sha256": "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
+      "version": "2.0.0"
+    },
+    {
+      "id": "lmdj.audio.pcm16-wav.v1",
+      "sha256": "a7941b175e54c4fa45b8f3dcaca8753294a10ef93a158a027ad40fa61aa95e8f",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.audio.stem-pcm16-wav.v1",
+      "sha256": "df07025173fd163710819df16d23bffd2e6c858abd20d42003ef22f635cae857",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.capability.v2",
+      "sha256": "213c05e55b2b4b4e90a7dbc02731936e452e589e104ad2a6143c2b7de2ead9fb",
+      "version": "2.0.0"
+    },
+    {
+      "id": "lmdj.cardputer-transfer.v1",
+      "sha256": "f81cb313de930051fd3137890d6fbc70f687ee1428d1501cb70000d079814912",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.error.v1",
+      "sha256": "089e94465199ae132e9b7d543a7c2530333964042b067d774487470f2e07a820",
+      "version": "1.1.0"
+    },
+    {
+      "id": "lmdj.module.v1",
+      "sha256": "6c765021c68b773e96ab5b7e4ba1e4ff9dab3ba69d87c4795d33770aa8344543",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.product-version.v1",
+      "sha256": "5e4012dee592dd0e99ee7e7217327fcf98d123f63cf6b5033745a05bbe790980",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.project-bundle.v1",
+      "sha256": "369016dbbe91379f8766637e28551f641a97033d903847dc88b909272e0415d6",
+      "version": "2.0.0"
+    },
+    {
+      "id": "lmdj.project.v5",
+      "sha256": "e47cff3fb0733eb52cae992ba5f9a380b8332a9d53362eafe34245f9bc34f7dd",
+      "version": "5.2.0"
+    },
+    {
+      "id": "lmdj.slice-points.v1",
+      "sha256": "219d28410d317634b84e090ba3a0e9441250ed92dc6b6233ea03718dea74c732",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.soundset-catalog.v1",
+      "sha256": "c931ec27f9c5b8179d4948a230499de20b0e53da0c3c111cdb114df7a93fba21",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.soundset.v1",
+      "sha256": "3b59eacfe60beb34a686484291f41bb42e41d12767064f73ec249ea02a294b7c",
+      "version": "1.1.0"
+    },
+    {
+      "id": "lmdj.stem-parameters.v1",
+      "sha256": "bde9a23ac2cf7b06f6baef84683ac426aad46c00b93d8d8ffcf87c32b08a490f",
+      "version": "1.0.0"
+    }
+  ],
+  "product_build": "2.0.86.0",
+  "source_commit": {
+    "raw_base64": "dHJlZSA0OTJjNjZmNzNmNjEyZjdjNjgzZTBhMDc2MGM2YTA0N2Y5Y2I1Y2UyCnBhcmVudCAyNjRhMDYzMDc1YTQ2MjVmYmE4OWI4MjdjNzE2YWFmMDkzOGU4NTZhCmF1dGhvciBlbmRheWUgPG9sZC5mYXIuaG90QGdtYWlsLmNvbT4gMTc5MTMwNDkyNyArMDAwMApjb21taXR0ZXIgZW5kYXllIDxvbGQuZmFyLmhvdEBnbWFpbC5jb20+IDE3OTEzMDQ5MjcgKzAwMDAKCmNob3JlKHJlbGVhc2UpOiBzdGFnZSAyLjAuODYuMCBzbmFwc2hvdCBzb3VyY2UKClJlbGVhc2Utb3BlcmF0aW9uOiA3ZWQyMDA3ODMzODNmNThjOWVlZDU4NGVlMGJlMjhkMDUzMjFkYjVjZTc3ZmZkODZiMGZhYmM4NDQxZTkyYjk4CkNhbmRpZGF0ZS1tYXRlcmlhbC1zaGEyNTY6IDg2NmExNjlkOTA3MzgzZDMwNjBhZTAzYTdiNzQ3ZTNmYzEyODA3ODRiNDZlODI1YjIyOWU1YjZiM2I2MWRiYTkK",
+    "committed_at_utc": "2026-10-06T16:42:07.000Z",
+    "tree": "492c66f73f612f7c683e0a0760c6a047f9cb5ce2"
+  },
+  "source_projection": {
+    "sha256": "f8a0790174dcef42a8c669f8d0040cdf026467e0000d9a1c9957a84fca7b5a26",
+    "files": [
+      {
+        "path": "apps/cardputer-host/module.json",
+        "bytes": 160,
+        "sha256": "188efa1ff3ee2d9643a92988414e909e1b12a42f686e55ad13927e3e49895cf2"
+      },
+      {
+        "path": "apps/core-cli/module.json",
+        "bytes": 131,
+        "sha256": "2183a980d92376be4ff84f257ced0c6511fe5e002f65348edca055bfb2a5b8e1"
+      },
+      {
+        "path": "apps/core-mcp/module.json",
+        "bytes": 130,
+        "sha256": "5143ff48a4565694e31a5b693d9645201b94391fc5b13d004a7f4fbdf1c69684"
+      },
+      {
+        "path": "apps/creator-web/module.json",
+        "bytes": 135,
+        "sha256": "2f168b88e9ab30c6bdf2f779e7d605917fb46de9878e3ef60333d4029b3774aa"
+      },
+      {
+        "path": "apps/docs-site/diagrams/application-facade.architecture.json",
+        "bytes": 6175,
+        "sha256": "255d84ebed04da7d09740e396e789b7d2184a5424b96ee968c3c9f3ce648d74b"
+      },
+      {
+        "path": "apps/docs-site/diagrams/audio-runtime.architecture.json",
+        "bytes": 3166,
+        "sha256": "155573d0c2487aba816555ddf08e462401808eb0a5ebc6e1b41410c8fc5cd892"
+      },
+      {
+        "path": "apps/docs-site/diagrams/authoring-domain.architecture.json",
+        "bytes": 1887,
+        "sha256": "bff9e798d9d6a43511cb41d933055507176058964b19a94ad8e65b55a30258a1"
+      },
+      {
+        "path": "apps/docs-site/diagrams/foundation.architecture.json",
+        "bytes": 1095,
+        "sha256": "ce4722b90afad09660fd0f9300637bd76a959669c0a867ef7c54eef9f0159b2c"
+      },
+      {
+        "path": "apps/docs-site/diagrams/lmdj-core.architecture.json",
+        "bytes": 3019,
+        "sha256": "633cf057ed45b4066079b58b0db47def6546e7d4415c19f83e9f108ed46d7b9e"
+      },
+      {
+        "path": "apps/docs-site/diagrams/lmdj-product.architecture.json",
+        "bytes": 3472,
+        "sha256": "1a4245349ee360741e4ced667e07d32666cdce0c2252dd32f61e4ce70aa1ef26"
+      },
+      {
+        "path": "apps/docs-site/diagrams/project-cooker.architecture.json",
+        "bytes": 2284,
+        "sha256": "55dd51f5d7e24d7f436a4041b2adb1ca51da25ed89a24264996a08987708811f"
+      },
+      {
+        "path": "apps/docs-site/diagrams/project-io.architecture.json",
+        "bytes": 2739,
+        "sha256": "b30078d5ac6cebbbbd8b3ac93c8fc1689414fe39802354109abc98135f9dc491"
+      },
+      {
+        "path": "apps/docs-site/diagrams/provider-sdk.architecture.json",
+        "bytes": 2029,
+        "sha256": "24a8ad6a680a3e1ae748042aa0f812486d1f978b3dc8241cd5c9783d5f08e33a"
+      },
+      {
+        "path": "apps/docs-site/diagrams/web-runtime-platform.architecture.json",
+        "bytes": 5586,
+        "sha256": "29605768582cb1815308bc66da44cdfe7f11cc392f13d7473b078542263785f9"
+      },
+      {
+        "path": "apps/docs-site/docs/assembly/lmdj.mdx",
+        "bytes": 18565,
+        "sha256": "c2bd3d3e07c67f88e3ca7e65e9892a94c9a655a2fcec84405981bfb03d09d0d1"
+      },
+      {
+        "path": "apps/docs-site/docs/contracts/artifact-audio.mdx",
+        "bytes": 1691,
+        "sha256": "aec70aaf507931f09e503a4df5cdc92a2899a751fc6110f5b6cfd6abaa54dcce"
+      },
+      {
+        "path": "apps/docs-site/docs/contracts/assembly.mdx",
+        "bytes": 827,
+        "sha256": "cc3a5c60fd6d46a9c77bc16d2cd7c802d758404c7126164aa5c3f063e18344b6"
+      },
+      {
+        "path": "apps/docs-site/docs/contracts/capability.mdx",
+        "bytes": 3258,
+        "sha256": "0d4995a415ad8fc18b8117f5b0ba5c057caf5df5b0911ee048f441c84cebc6cc"
+      },
+      {
+        "path": "apps/docs-site/docs/contracts/cardputer-transfer.mdx",
+        "bytes": 862,
+        "sha256": "b699f46928c3a1d1c63c09e5a17a397d325b57872f2c5ff8686baf409006e187"
+      },
+      {
+        "path": "apps/docs-site/docs/contracts/error-module-version.mdx",
+        "bytes": 1210,
+        "sha256": "93622b6ca787952a55ea9ddd8f538a87dc64365951f22426c252ae3a0e79b75e"
+      },
+      {
+        "path": "apps/docs-site/docs/contracts/overview.mdx",
+        "bytes": 1958,
+        "sha256": "6e75c313c033ebbc92bf4b38c735950d90c975b1203e3c29a9cacdb59e768691"
+      },
+      {
+        "path": "apps/docs-site/docs/contracts/project-bundle.mdx",
+        "bytes": 2857,
+        "sha256": "b90ffc624df47d99896f9abd5465b2d33dcf8ae59d37e2db3757eb8c72daec74"
+      },
+      {
+        "path": "apps/docs-site/docs/contracts/project.mdx",
+        "bytes": 10012,
+        "sha256": "4346acc2041dc61b740bd5aa425b80fc3128871dcfb4a625ad539ccf8fb66cb2"
+      },
+      {
+        "path": "apps/docs-site/docs/contracts/runtime-snapshot.mdx",
+        "bytes": 2850,
+        "sha256": "04095a7d80d8fc39663a4ce7e748664f2bf3582912c7cc7e5af3a1328569e9c2"
+      },
+      {
+        "path": "apps/docs-site/docs/contracts/slice-points.mdx",
+        "bytes": 2207,
+        "sha256": "f2cd26588824bb7db4298646942bb66e79358c03f6382bb2d789f74eea1838d0"
+      },
+      {
+        "path": "apps/docs-site/docs/contracts/soundset-catalog.mdx",
+        "bytes": 1943,
+        "sha256": "38c3dfdfa96613ff968dc8720f43fb83ebb7007cc50a757ca7cbb330d2e15a85"
+      },
+      {
+        "path": "apps/docs-site/docs/contracts/soundset.mdx",
+        "bytes": 7185,
+        "sha256": "70f5833f2a937bd0a288e22ac5eac4bc88bacec5e2bd4e1c1cc31b5dfdc0ee53"
+      },
+      {
+        "path": "apps/docs-site/docs/core/modules/application-facade.mdx",
+        "bytes": 51157,
+        "sha256": "34f1ab354b19c9897cf3bdf9846a74ca6bad11e651c90363781e28f7c5573204"
+      },
+      {
+        "path": "apps/docs-site/docs/core/modules/audio-runtime.mdx",
+        "bytes": 34534,
+        "sha256": "f410d4f9e6fe46ba8705b56a703a689424f55df70ff87efcda4b0958dedd4d5e"
+      },
+      {
+        "path": "apps/docs-site/docs/core/modules/authoring-domain.mdx",
+        "bytes": 8229,
+        "sha256": "c1c620217a1d7100ba1ceeb4d657933065eb2a421dbe151f68d208d3bb36acdb"
+      },
+      {
+        "path": "apps/docs-site/docs/core/modules/foundation.mdx",
+        "bytes": 1694,
+        "sha256": "ceff1cb40813819fcfc843cfb1251c7c9b355eff308b2bf476fdf429b9a177ff"
+      },
+      {
+        "path": "apps/docs-site/docs/core/modules/project-cooker.mdx",
+        "bytes": 6741,
+        "sha256": "f206d000cdaa4df9dc82f60773f6b6322b8ed6cd0722278a6950d0945a40fe6a"
+      },
+      {
+        "path": "apps/docs-site/docs/core/modules/project-io.mdx",
+        "bytes": 24277,
+        "sha256": "e9361904f073fd1c71d6561139c5d8daa94942d51631254031cb410847047e5e"
+      },
+      {
+        "path": "apps/docs-site/docs/core/modules/provider-sdk.mdx",
+        "bytes": 6656,
+        "sha256": "522f54830602a0f1de2d37e5740d6c3f37f0d8064ad68d5d6599f84ce57cada0"
+      },
+      {
+        "path": "apps/docs-site/docs/core/modules/web-runtime-platform.mdx",
+        "bytes": 27275,
+        "sha256": "ac684fa5cd470b87f77b76e0ac37f3152040f9fff30b5fb3f6c7a3e0f5e8c6b1"
+      },
+      {
+        "path": "apps/docs-site/docs/core/overview.mdx",
+        "bytes": 1394,
+        "sha256": "953243d015aeceef2056542d9f07451bdca47cd00a9f42e5a58a2ab09f9e465e"
+      },
+      {
+        "path": "apps/docs-site/docs/history/legacy-patch-architecture.mdx",
+        "bytes": 1319,
+        "sha256": "a05b53f9acfa8216d4ee9c48dbeebdcbd3a60de017197c060bc7eb34c3b53962"
+      },
+      {
+        "path": "apps/docs-site/docs/hosts/cardputer-host.mdx",
+        "bytes": 5830,
+        "sha256": "82e7763e1679022acf428884363a1e98002fa0d12505d4ec5e1891e734707d2a"
+      },
+      {
+        "path": "apps/docs-site/docs/hosts/core-cli.mdx",
+        "bytes": 5345,
+        "sha256": "4da279256951242feacf58c5a2eb36382cc9b9f43169d6e293577b66786303bb"
+      },
+      {
+        "path": "apps/docs-site/docs/hosts/core-mcp.mdx",
+        "bytes": 4843,
+        "sha256": "a049a8a4101d621e4a9956468ef76b0d98e7613a7e569924e105663b7e8b13e7"
+      },
+      {
+        "path": "apps/docs-site/docs/hosts/creator-web.mdx",
+        "bytes": 64968,
+        "sha256": "9fc6921b8e6603b2e5e96645cbd35c3b9d252962d7384bbc5e6820f0cb54b04b"
+      },
+      {
+        "path": "apps/docs-site/docs/hosts/native-host.mdx",
+        "bytes": 5880,
+        "sha256": "f08d66b90df6557d1a4ccbb629a07580356f669f161ba87631f72fb7c57b31c6"
+      },
+      {
+        "path": "apps/docs-site/docs/hosts/overview.mdx",
+        "bytes": 3702,
+        "sha256": "4e061a34b2bccb12841150b989612e0f73c8c2974dff04a1ec52047844b08627"
+      },
+      {
+        "path": "apps/docs-site/docs/hosts/web-runtime.mdx",
+        "bytes": 19972,
+        "sha256": "b981ba7e14e9bfe115a89c8260429a60c2680d6d151de25fec5b37e6a1a464fb"
+      },
+      {
+        "path": "apps/docs-site/docs/operations/creator-changelog.mdx",
+        "bytes": 908,
+        "sha256": "2781c3a5354aa461366d07db40ba8a135ca87a51ea3e7008130e7c46206d0bb5"
+      },
+      {
+        "path": "apps/docs-site/docs/operations/documentation-governance.mdx",
+        "bytes": 6770,
+        "sha256": "6d2ce3432225d176f065dd3e904b27e61bda0bcdabf7766951a26ef1ab3885d9"
+      },
+      {
+        "path": "apps/docs-site/docs/operations/runtime-changelog.mdx",
+        "bytes": 928,
+        "sha256": "bfb247b882efc5eb0e7f0184b83922d514e6053478040c32082d8a0111c78b31"
+      },
+      {
+        "path": "apps/docs-site/docs/operations/testing-and-proof.mdx",
+        "bytes": 118862,
+        "sha256": "b44e4f61061c6500b7a174e7b4aaa50953a580cadb1696ec7e9254a9987615d2"
+      },
+      {
+        "path": "apps/docs-site/docs/operations/version-and-release.mdx",
+        "bytes": 86660,
+        "sha256": "ee090ea078ca74a8d862abb15e2cb8860e34ed2a8ec8ed6f5ffb4dab8f4f50b2"
+      },
+      {
+        "path": "apps/docs-site/docs/overview/index.mdx",
+        "bytes": 4094,
+        "sha256": "ce3a4347a9796bb6ee300fd22a6b3c447d30beada43c2f8e6b01b5093d227fdc"
+      },
+      {
+        "path": "apps/docs-site/docs/platform/input.mdx",
+        "bytes": 8019,
+        "sha256": "db089d69003a840f955bde194688c027ecc6840c27acb4f53f003b429b87aef8"
+      },
+      {
+        "path": "apps/docs-site/docs/platform/native-audio.mdx",
+        "bytes": 9353,
+        "sha256": "bee8dc976a1afd1dee013a92c7b25cac2d3710ef00d6ed85b7bf0db10d8b0e5f"
+      },
+      {
+        "path": "apps/docs-site/docs/platform/storage.mdx",
+        "bytes": 4314,
+        "sha256": "f5e36f9513f630519c62e08244e44b03269373f5b482deefeef967d60c58606a"
+      },
+      {
+        "path": "apps/docs-site/docs/platform/web-runtime.mdx",
+        "bytes": 17822,
+        "sha256": "b0003f5d92fd1dfdf00ff778349d4c534c9bb6315fa94bd696b4ad28484a58c4"
+      },
+      {
+        "path": "apps/docs-site/docs/product/capability-map.mdx",
+        "bytes": 7316,
+        "sha256": "a3930206b934817a48cb60ef85d940b617465b79ee560d83106193f6b354217e"
+      },
+      {
+        "path": "apps/docs-site/docs/product/positioning.mdx",
+        "bytes": 1382,
+        "sha256": "74dc543cd6320c579a5a55c128a6450bf6c1749ace67e5a2880ee85eae375058"
+      },
+      {
+        "path": "apps/docs-site/docs/product/workflows.mdx",
+        "bytes": 17824,
+        "sha256": "b26222427ed80f6ecfacef86ed63eee7361ebb994a231939d9f69a16e6356030"
+      },
+      {
+        "path": "apps/docs-site/docs/providers/local-proof-stem.mdx",
+        "bytes": 2746,
+        "sha256": "b0e8458f38049cd22feff1f3f05df3b8aeadd4de4480b714cf9d1ed21a61b70c"
+      },
+      {
+        "path": "apps/docs-site/docs/providers/local-proof.mdx",
+        "bytes": 1189,
+        "sha256": "03d64b6fb92c69d33537bab72572fffe21f4244b0fdd465984eac52ffe178db1"
+      },
+      {
+        "path": "apps/docs-site/docs/providers/local-sample-slice.mdx",
+        "bytes": 2414,
+        "sha256": "af04b1bbbd3a0a9a4186410252e6a2db80e17d5d3fd62e1c6fd148e47b072aa3"
+      },
+      {
+        "path": "apps/docs-site/docs/providers/overview.mdx",
+        "bytes": 1476,
+        "sha256": "777c4724bdc7536f077f1cb5d22e3b3510fb41f35d35caf5391f1179745f0652"
+      },
+      {
+        "path": "apps/docs-site/docs/releases/1.0.61.0.mdx",
+        "bytes": 17551,
+        "sha256": "726f14728919c8b696c22a8bd2f316989aa9816ee2c9ea1bf6e4deadb40b9566"
+      },
+      {
+        "path": "apps/docs-site/docs/releases/1.0.66.0.mdx",
+        "bytes": 3668,
+        "sha256": "90b070c0b38b0654ee863b7391ec2f42f45b6b54a35a23aed9e7c2b249d86b02"
+      },
+      {
+        "path": "apps/docs-site/docs/releases/index.mdx",
+        "bytes": 917,
+        "sha256": "a45ad984fc14ecce2bc32d23a9602670c0c096e30ec806d306b23013a8a89f48"
+      },
+      {
+        "path": "apps/docs-site/docusaurus.config.ts",
+        "bytes": 3754,
+        "sha256": "8747ae65b8e2718254f57712d2d1c731fa67d49f5ed102d0d02d9b228fd52aa6"
+      },
+      {
+        "path": "apps/docs-site/sidebars.ts",
+        "bytes": 1963,
+        "sha256": "deec9035fc94ddf45f0991647b1cb9953114c53e577feee85f523d0756fd04f5"
+      },
+      {
+        "path": "apps/docs-site/src/components/BuildIdentity.tsx",
+        "bytes": 1304,
+        "sha256": "fb62026f1269bbf881655250fe0c24f002a16b2f0646dc8f6030a5d77ec4ad62"
+      },
+      {
+        "path": "apps/docs-site/src/components/DiagramFrame.tsx",
+        "bytes": 2594,
+        "sha256": "c55c5476902650be1712634d2286e285419fe826ec40cccfdf53e3f52c5bc635"
+      },
+      {
+        "path": "apps/docs-site/src/components/SectionCards.tsx",
+        "bytes": 1801,
+        "sha256": "01b33d2d9ef30a0e9984947c08271c1f8d972b4af59ef8b49445f726a712da1c"
+      },
+      {
+        "path": "apps/docs-site/src/components/StatusBadge.tsx",
+        "bytes": 449,
+        "sha256": "40df7894abf8899e97f519cd1bcc72a0168b95c37b6ae3bffed02d520759b53a"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/application-facade.html",
+        "bytes": 12418,
+        "sha256": "ce5c5bd34f0af8e9f1cd4e395f861dd82984911096d28cef4507b8e5dbd01582"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/application-facade.svg",
+        "bytes": 11458,
+        "sha256": "aeb83c4981e7d42c3198a4be1b2823c34bdac6903021aa3d8995334d5630ac3d"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/audio-runtime.html",
+        "bytes": 11112,
+        "sha256": "394a1232620c476fcdd439887647d6d191786479618de11a3490a7f3f50f4c98"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/audio-runtime.svg",
+        "bytes": 10157,
+        "sha256": "bf821b583d20fdee049cdba11816bff29303173bd0e174e7c0bc40052a38b08c"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/authoring-domain.html",
+        "bytes": 8035,
+        "sha256": "f6cb16dafab07f11bc3f0d358fafd0999b8d0a6fd5208aa0f5a8e0f28a4d69a5"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/authoring-domain.svg",
+        "bytes": 7077,
+        "sha256": "16d28106e6598905bccd89858b49c128b80e148e24b58684cc4232956eca8247"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/foundation.html",
+        "bytes": 6283,
+        "sha256": "3f468d458772471ce3eb6949b082b1881502be70b12224e10d09d8d89f3e0c30"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/foundation.svg",
+        "bytes": 5331,
+        "sha256": "a0f1f695e833da596453d9104816bf4a3dbe29c44e5471e65671c0a91cf2d1d9"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/lmdj-core.html",
+        "bytes": 10586,
+        "sha256": "c9288acbb2ac982f4a469d77d2d182f7fe5b3208dae92c3b3a5f016899721bcb"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/lmdj-core.svg",
+        "bytes": 9633,
+        "sha256": "3f8dac4bf6cc3a886b598ddfdc35371d2316cdd34058ecc33a6768280620c8e5"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/lmdj-product.html",
+        "bytes": 11405,
+        "sha256": "7916a004cc614cd0878477fc89d66558a937199c55d7edc2555db2adb05b9d3c"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/lmdj-product.svg",
+        "bytes": 10450,
+        "sha256": "caef0e8f7f99a8ef682a5bd29aa29b4c0d545c1264b806d4389d40af7eeec119"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/project-cooker.html",
+        "bytes": 8555,
+        "sha256": "d09b67699d8dcd88722bd9b80bd18abb2523057d37ecbc63dead3428d2aad901"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/project-cooker.svg",
+        "bytes": 7599,
+        "sha256": "b8366cc6fc6606bf8d4458c16f1e379917aaa54a321f9f461681af4b24958be8"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/project-io.html",
+        "bytes": 9398,
+        "sha256": "fcdb394fabd2c8e1c252529ec990eef68fe591282e0d4881878eb17495cdbfc6"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/project-io.svg",
+        "bytes": 8445,
+        "sha256": "d34f3e2237dda799ba81caa1a11a87d20d6e8bf711ab3348eb55be9abee60499"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/provider-sdk.html",
+        "bytes": 6899,
+        "sha256": "006a2b32e965d90a42e848249040503582ba837ae9fd5afd0733c033f439dc72"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/provider-sdk.svg",
+        "bytes": 5945,
+        "sha256": "26c57c052a06b98688cb5c648fac645e50bc6a7d195686493d567c2db573dcae"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/web-runtime-platform.html",
+        "bytes": 12194,
+        "sha256": "f601126186707ba118f1b72d3a0436a95213cba733e882460696e6e8d7b18a1a"
+      },
+      {
+        "path": "apps/docs-site/static/diagrams/web-runtime-platform.svg",
+        "bytes": 11232,
+        "sha256": "97be05fecd69f827da4ccdfbec29c2458d371901f7b3427c9c836629ce5c0574"
+      },
+      {
+        "path": "apps/native-host/module.json",
+        "bytes": 157,
+        "sha256": "1fefa4a5cd1337121fe167f3481319e5457701dba0d26b2e27c808ac02f83ee6"
+      },
+      {
+        "path": "apps/web-runtime-host/module.json",
+        "bytes": 140,
+        "sha256": "cd75f9d582d17a265a19e7d4fde96a9e2732b9b9df2b3b18c2d11f0df0415ebf"
+      },
+      {
+        "path": "contracts/artifact-audio/lmdj.audio.pcm16-wav.v1.md",
+        "bytes": 2591,
+        "sha256": "a7941b175e54c4fa45b8f3dcaca8753294a10ef93a158a027ad40fa61aa95e8f"
+      },
+      {
+        "path": "contracts/artifact-audio/lmdj.audio.stem-pcm16-wav.v1.md",
+        "bytes": 3774,
+        "sha256": "df07025173fd163710819df16d23bffd2e6c858abd20d42003ef22f635cae857"
+      },
+      {
+        "path": "contracts/assembly/lmdj.assembly.v1.schema.json",
+        "bytes": 3089,
+        "sha256": "2952af96b98a12c8e1fa6bb9050ce934242d4955cbd8866eb8930c5758760d88"
+      },
+      {
+        "path": "contracts/assembly/lmdj.assembly.v2.schema.json",
+        "bytes": 3849,
+        "sha256": "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4"
+      },
+      {
+        "path": "contracts/capability/lmdj.capability.v1.schema.json",
+        "bytes": 4414,
+        "sha256": "d38820d41132cf3dc54962bdb16e75a4843202f540c4518aa4ff19ac8753ec39"
+      },
+      {
+        "path": "contracts/capability/lmdj.capability.v2.schema.json",
+        "bytes": 6859,
+        "sha256": "213c05e55b2b4b4e90a7dbc02731936e452e589e104ad2a6143c2b7de2ead9fb"
+      },
+      {
+        "path": "contracts/cardputer-transfer/lmdj.cardputer-transfer.v1.schema.json",
+        "bytes": 824,
+        "sha256": "f81cb313de930051fd3137890d6fbc70f687ee1428d1501cb70000d079814912"
+      },
+      {
+        "path": "contracts/error/lmdj.error.v1.schema.json",
+        "bytes": 962,
+        "sha256": "089e94465199ae132e9b7d543a7c2530333964042b067d774487470f2e07a820"
+      },
+      {
+        "path": "contracts/module/lmdj.module.v1.schema.json",
+        "bytes": 1050,
+        "sha256": "6c765021c68b773e96ab5b7e4ba1e4ff9dab3ba69d87c4795d33770aa8344543"
+      },
+      {
+        "path": "contracts/project/lmdj.project-bundle.v1.schema.json",
+        "bytes": 2060,
+        "sha256": "369016dbbe91379f8766637e28551f641a97033d903847dc88b909272e0415d6"
+      },
+      {
+        "path": "contracts/project/lmdj.project.v5.schema.json",
+        "bytes": 26117,
+        "sha256": "e47cff3fb0733eb52cae992ba5f9a380b8332a9d53362eafe34245f9bc34f7dd"
+      },
+      {
+        "path": "contracts/runtime-content/lmdj.runtime-content.v1.schema.json",
+        "bytes": 4346,
+        "sha256": "59bb5edf4bc4eb6f367bbf85e86c44b564b44b6279b2b8ece8dd07fa3041024b"
+      },
+      {
+        "path": "contracts/slice-points/lmdj.slice-points.v1.schema.json",
+        "bytes": 1738,
+        "sha256": "219d28410d317634b84e090ba3a0e9441250ed92dc6b6233ea03718dea74c732"
+      },
+      {
+        "path": "contracts/soundset-catalog/lmdj.soundset-catalog.v1.schema.json",
+        "bytes": 2811,
+        "sha256": "c931ec27f9c5b8179d4948a230499de20b0e53da0c3c111cdb114df7a93fba21"
+      },
+      {
+        "path": "contracts/soundset/lmdj.soundset.v1.schema.json",
+        "bytes": 9162,
+        "sha256": "3b59eacfe60beb34a686484291f41bb42e41d12767064f73ec249ea02a294b7c"
+      },
+      {
+        "path": "contracts/stem/lmdj.stem-parameters.v1.schema.json",
+        "bytes": 288,
+        "sha256": "bde9a23ac2cf7b06f6baef84683ac426aad46c00b93d8d8ffcf87c32b08a490f"
+      },
+      {
+        "path": "contracts/version/lmdj.product-version.v1.schema.json",
+        "bytes": 1079,
+        "sha256": "5e4012dee592dd0e99ee7e7217327fcf98d123f63cf6b5033745a05bbe790980"
+      },
+      {
+        "path": "packages/application-facade/module.json",
+        "bytes": 252,
+        "sha256": "c4ed0ce1822098c45a35d93490424eb18255d1ece0fb4b0fa3283bd58233127d"
+      },
+      {
+        "path": "packages/audio-runtime/module.json",
+        "bytes": 188,
+        "sha256": "7410ab8835af05732248321d5c7efca45308f7d15905f37c9e97198bb8549c60"
+      },
+      {
+        "path": "packages/authoring-domain/module.json",
+        "bytes": 160,
+        "sha256": "f5b08039aa46b2dea8ec1084c81bc95e19e10add191e1e974a467aaa7a69a5cc"
+      },
+      {
+        "path": "packages/foundation/module.json",
+        "bytes": 125,
+        "sha256": "2ee693bb54d53804bedf45a382a79635ab409340ed780804c785efc83144251f"
+      },
+      {
+        "path": "packages/project-cooker/module.json",
+        "bytes": 191,
+        "sha256": "bc1629f7ea00bc5c32d0b55041c9d740703132d5a9df6fc812bab6250ee87de9"
+      },
+      {
+        "path": "packages/project-io/module.json",
+        "bytes": 151,
+        "sha256": "aa74be755b84fbdc9b81eb179cfb88df8661afc3cdc1aa7b4199cd191a133786"
+      },
+      {
+        "path": "packages/provider-sdk/module.json",
+        "bytes": 156,
+        "sha256": "d723da9b2033a69b77f279532f3312c9e489b4ffc1c3559dc527bd31811dd119"
+      },
+      {
+        "path": "packages/web-runtime-platform/module.json",
+        "bytes": 166,
+        "sha256": "025d2793cf302fe17238cd371ff4838ecd689330a5be0ddcad600368625d8529"
+      },
+      {
+        "path": "products/lmdj/CMakeLists.txt",
+        "bytes": 4594,
+        "sha256": "5927177f849c1e3d7898be2373be34b860053497f2c37aefbfba49adeae0a573"
+      },
+      {
+        "path": "products/lmdj/README.md",
+        "bytes": 2011,
+        "sha256": "8c65210a90f0ed519d298fcef1eec665b464e6c0fb406babbd13b8163238f095"
+      },
+      {
+        "path": "products/lmdj/assembly.json",
+        "bytes": 2020,
+        "sha256": "4db7a9ea9a9665c11e9c593c056bd58a14c41c24af33556b66aab24a1ce4c3c3"
+      },
+      {
+        "path": "products/lmdj/assembly.lock.json",
+        "bytes": 4175,
+        "sha256": "a0189a0e282a8a3fe29e2899281df151829cff8c5bae1d1d00abfbcf00794af7"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/RIGHTS.md",
+        "bytes": 867,
+        "sha256": "091c4f49dfd7b8001225ab1ef8ae36e2de8f3d4f12c09ae142ddb3f112764acb"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/13f629c5072a2009c90e336e542fee1bb2544d643126c6909eb770727a97e4cb",
+        "bytes": 25004,
+        "sha256": "13f629c5072a2009c90e336e542fee1bb2544d643126c6909eb770727a97e4cb"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/17b82981beaf282a6e9d3cc5a1dae58d871ccd19eddddd5a65ee1526d5929150",
+        "bytes": 19244,
+        "sha256": "17b82981beaf282a6e9d3cc5a1dae58d871ccd19eddddd5a65ee1526d5929150"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/29b6ca399e08b68c58dcf94ad850d1fe618b585c8c2f288675d872ba6d33f5bf",
+        "bytes": 30764,
+        "sha256": "29b6ca399e08b68c58dcf94ad850d1fe618b585c8c2f288675d872ba6d33f5bf"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/41b96b009edde0ce0ceb125f7d18f6fe5cabc53500a9fd9de0650a20082f71a2",
+        "bytes": 43244,
+        "sha256": "41b96b009edde0ce0ceb125f7d18f6fe5cabc53500a9fd9de0650a20082f71a2"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/46f4275b1e9a9c76a1adda33783b50e6497071d66cc3d02ce1218d8763cf998f",
+        "bytes": 32684,
+        "sha256": "46f4275b1e9a9c76a1adda33783b50e6497071d66cc3d02ce1218d8763cf998f"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/7a37ecd168d7eb9f2388b733429f3bc8f5361bd363a08efe45072a3497fdfb32",
+        "bytes": 46124,
+        "sha256": "7a37ecd168d7eb9f2388b733429f3bc8f5361bd363a08efe45072a3497fdfb32"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/9a4e01ed79fea3a16f1f56e68fab5da8e2c376f284efa55409dc0dd4280cf55b",
+        "bytes": 61484,
+        "sha256": "9a4e01ed79fea3a16f1f56e68fab5da8e2c376f284efa55409dc0dd4280cf55b"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/b3586d7ba0df40960b9c7ca50ca90d50aac46f4dd970400d48678105469cedb6",
+        "bytes": 23084,
+        "sha256": "b3586d7ba0df40960b9c7ca50ca90d50aac46f4dd970400d48678105469cedb6"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/c348b7c04b68824fb899f23534d582f9c6d97cc7c887354be503fd7cd4781627",
+        "bytes": 25004,
+        "sha256": "c348b7c04b68824fb899f23534d582f9c6d97cc7c887354be503fd7cd4781627"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/c41854d397830cf69f1e1ce3ee9c444271cc189dc5ad9240ea0eaf6630a6f62d",
+        "bytes": 16364,
+        "sha256": "c41854d397830cf69f1e1ce3ee9c444271cc189dc5ad9240ea0eaf6630a6f62d"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/c5b3924c4f48038369345ba3033e55faf5263d94079f88d0d3cd62f51a808c68",
+        "bytes": 40364,
+        "sha256": "c5b3924c4f48038369345ba3033e55faf5263d94079f88d0d3cd62f51a808c68"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/cc70230c538d41416db5b0dc8677acd1f1a37fcf55f836b5c94b7c5b71116855",
+        "bytes": 7724,
+        "sha256": "cc70230c538d41416db5b0dc8677acd1f1a37fcf55f836b5c94b7c5b71116855"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/dcdc69ff97878461c7641a0d6ccb5d77dc96d466bbe0d934b1bac1896e95be17",
+        "bytes": 23084,
+        "sha256": "dcdc69ff97878461c7641a0d6ccb5d77dc96d466bbe0d934b1bac1896e95be17"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/ecd564476c4107aad348cbbebcaa511979c150d10f27cb6681a556dcfe446b7e",
+        "bytes": 8684,
+        "sha256": "ecd564476c4107aad348cbbebcaa511979c150d10f27cb6681a556dcfe446b7e"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/f1f57ebc05f93b28b300330719c3f8370ea3fba201a5f4ff687a48da3003fa13",
+        "bytes": 110442,
+        "sha256": "f1f57ebc05f93b28b300330719c3f8370ea3fba201a5f4ff687a48da3003fa13"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/blob/ffba079d71875a506e8eb8e88516b80f20983711a00f9645a89e48461e9a6a0b",
+        "bytes": 9644,
+        "sha256": "ffba079d71875a506e8eb8e88516b80f20983711a00f9645a89e48461e9a6a0b"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/catalog/index.json",
+        "bytes": 415,
+        "sha256": "d363d133b5e4c17fe4ede5aee4c8691038a11f0e0f2f436da63512d2d042d6cb"
+      },
+      {
+        "path": "products/lmdj/assets/default-kit/manifest/0e0e9ca06f75ac189d4b481b0536c1b56c90eab2e35792aff026c5e7698eee84",
+        "bytes": 3189,
+        "sha256": "0e0e9ca06f75ac189d4b481b0536c1b56c90eab2e35792aff026c5e7698eee84"
+      },
+      {
+        "path": "products/lmdj/creator-defaults.mjs",
+        "bytes": 412,
+        "sha256": "139de80a04f1d9affa09c484779c6cad1fc2b1521fc1679c87421e3fbb45c6c3"
+      },
+      {
+        "path": "products/lmdj/generated/web-runtime-identity.json",
+        "bytes": 3449,
+        "sha256": "9117fdf717d27f07a473e17878e035ab292c4df6ccaafba48f8846fb0bce2067"
+      },
+      {
+        "path": "products/lmdj/generated/web-runtime-identity.mjs",
+        "bytes": 3682,
+        "sha256": "00c485e7ad2c2c6d0727967e0b952a377f8187d5121edf5d332bad07272b25b2"
+      },
+      {
+        "path": "products/lmdj/src/cardputer_assembly.cpp",
+        "bytes": 827,
+        "sha256": "44aaf3708a86f9c754ad43e89192124b2cf4a2ccbfdaa804c07bb566cfa504d3"
+      },
+      {
+        "path": "products/lmdj/src/compiled_assembly.cpp",
+        "bytes": 3274,
+        "sha256": "5277db186db4a08c3f1c87fe329b045882b2bab9134cf83c2ace34fd3791f004"
+      },
+      {
+        "path": "products/lmdj/version.json",
+        "bytes": 101,
+        "sha256": "fdc932b3df150aa9f91cd2a006f28420be40608a32950add594b48857b5b35f4"
+      },
+      {
+        "path": "providers/local-proof-failure/CMakeLists.txt",
+        "bytes": 2074,
+        "sha256": "4aa839c6f15902faae946f7087b34b8ef017d4791c3fc62b66bfae9baad4dab0"
+      },
+      {
+        "path": "providers/local-proof-failure/include/lmdj/providers/local_proof_failure/factory.hpp",
+        "bytes": 182,
+        "sha256": "0260007d360bbc3a6cb6c4d924bcc9437bb575d162b09c9744c520dab15da253"
+      },
+      {
+        "path": "providers/local-proof-failure/module.json",
+        "bytes": 165,
+        "sha256": "70978240a4c23dc3dfd1e260cf63ac915d3a4fc8ec549e04c8224cf89d77c2af"
+      },
+      {
+        "path": "providers/local-proof-failure/src/provider.cpp",
+        "bytes": 2715,
+        "sha256": "bd9f584528e34120cc0e951c72a59736b04d10219be79d3d796d97999bc8d77f"
+      },
+      {
+        "path": "providers/local-proof-stem/CMakeLists.txt",
+        "bytes": 1523,
+        "sha256": "35c9f1afb358c6e34101b1b66c0f3acf02b84ac28eb4427668907acf2b030c14"
+      },
+      {
+        "path": "providers/local-proof-stem/include/lmdj/providers/local_proof_stem/factory.hpp",
+        "bytes": 147,
+        "sha256": "dd3267e4aa00a37b63ddb7675f43303cf84fdf66ad708c177b5eb0d8efa37fd0"
+      },
+      {
+        "path": "providers/local-proof-stem/include/lmdj/providers/local_proof_stem/validation.hpp",
+        "bytes": 961,
+        "sha256": "3aaf8250eedc85bfbf5aad839b0c200af232619b9ef8601884292c170b281fa7"
+      },
+      {
+        "path": "providers/local-proof-stem/module.json",
+        "bytes": 197,
+        "sha256": "3039464ed787efe21f5c868c71921a47ef71d76614a2004782da09451b739948"
+      },
+      {
+        "path": "providers/local-proof-stem/src/provider.cpp",
+        "bytes": 4574,
+        "sha256": "bac6cbd221e97c61465cce8fa61701e219d3bcd383ada13b932c4255b7656a62"
+      },
+      {
+        "path": "providers/local-proof-stem/src/validation.cpp",
+        "bytes": 5671,
+        "sha256": "9db453048140fce81c1ae8c1ba58884426ffae0dc0155ff997348cbb8c060af6"
+      },
+      {
+        "path": "providers/local-proof-success/CMakeLists.txt",
+        "bytes": 2074,
+        "sha256": "4a038298772fd2cc32eac77702a8085c80d364e4e1528460376a0c1075261fb4"
+      },
+      {
+        "path": "providers/local-proof-success/include/lmdj/providers/local_proof_success/factory.hpp",
+        "bytes": 182,
+        "sha256": "e770cc1c5cffaba52e8fe25d796bdfeacc79c141ba573b3a924707592b3d8a35"
+      },
+      {
+        "path": "providers/local-proof-success/module.json",
+        "bytes": 165,
+        "sha256": "bec84537a8e919040452cff3abd5901e185773e7c7b2f283c246899059e17b9a"
+      },
+      {
+        "path": "providers/local-proof-success/src/provider.cpp",
+        "bytes": 3224,
+        "sha256": "ac7c8d260d1adad24324af1ab15a36ae4dbc53dc0ac39bdf93bd54da3d5051cc"
+      },
+      {
+        "path": "providers/local-sample-slice/CMakeLists.txt",
+        "bytes": 1526,
+        "sha256": "d5181e4b94b7461c3c75ff6257faecd58a0bc6da9774525566de993ea4100f8d"
+      },
+      {
+        "path": "providers/local-sample-slice/include/lmdj/providers/local_sample_slice/factory.hpp",
+        "bytes": 149,
+        "sha256": "25f39c616c189706b77f1f2143ad98290dd85cce6274ce9f697d6fa6825f066d"
+      },
+      {
+        "path": "providers/local-sample-slice/include/lmdj/providers/local_sample_slice/validation.hpp",
+        "bytes": 690,
+        "sha256": "72e4d770842a65957344ba987c1d2a33768696eb11805da2977f22005bf16b97"
+      },
+      {
+        "path": "providers/local-sample-slice/module.json",
+        "bytes": 164,
+        "sha256": "04866ec95de00f648f7c703fec0cd66dd71c84a8e6a29236f611192652226ed0"
+      },
+      {
+        "path": "providers/local-sample-slice/src/provider.cpp",
+        "bytes": 5458,
+        "sha256": "bbce24ae635b55192c6eda06e593c5a9cdeba0352866a796babc6800ca5b121c"
+      },
+      {
+        "path": "providers/local-sample-slice/src/validation.cpp",
+        "bytes": 8416,
+        "sha256": "01c58d80191f189894593c2968cc79e74d822e090c30538372a834c904b5770b"
+      }
+    ]
+  },
+  "source_documents": [
+    {
+      "source_path": "apps/docs-site/docs/assembly/lmdj.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/assembly/lmdj.mdx",
+      "bytes": 18565,
+      "sha256": "c2bd3d3e07c67f88e3ca7e65e9892a94c9a655a2fcec84405981bfb03d09d0d1"
+    },
+    {
+      "source_path": "apps/docs-site/docs/contracts/artifact-audio.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/contracts/artifact-audio.mdx",
+      "bytes": 1691,
+      "sha256": "aec70aaf507931f09e503a4df5cdc92a2899a751fc6110f5b6cfd6abaa54dcce"
+    },
+    {
+      "source_path": "apps/docs-site/docs/contracts/assembly.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/contracts/assembly.mdx",
+      "bytes": 827,
+      "sha256": "cc3a5c60fd6d46a9c77bc16d2cd7c802d758404c7126164aa5c3f063e18344b6"
+    },
+    {
+      "source_path": "apps/docs-site/docs/contracts/capability.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/contracts/capability.mdx",
+      "bytes": 3258,
+      "sha256": "0d4995a415ad8fc18b8117f5b0ba5c057caf5df5b0911ee048f441c84cebc6cc"
+    },
+    {
+      "source_path": "apps/docs-site/docs/contracts/cardputer-transfer.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/contracts/cardputer-transfer.mdx",
+      "bytes": 862,
+      "sha256": "b699f46928c3a1d1c63c09e5a17a397d325b57872f2c5ff8686baf409006e187"
+    },
+    {
+      "source_path": "apps/docs-site/docs/contracts/error-module-version.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/contracts/error-module-version.mdx",
+      "bytes": 1210,
+      "sha256": "93622b6ca787952a55ea9ddd8f538a87dc64365951f22426c252ae3a0e79b75e"
+    },
+    {
+      "source_path": "apps/docs-site/docs/contracts/overview.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/contracts/overview.mdx",
+      "bytes": 1958,
+      "sha256": "6e75c313c033ebbc92bf4b38c735950d90c975b1203e3c29a9cacdb59e768691"
+    },
+    {
+      "source_path": "apps/docs-site/docs/contracts/project-bundle.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/contracts/project-bundle.mdx",
+      "bytes": 2857,
+      "sha256": "b90ffc624df47d99896f9abd5465b2d33dcf8ae59d37e2db3757eb8c72daec74"
+    },
+    {
+      "source_path": "apps/docs-site/docs/contracts/project.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/contracts/project.mdx",
+      "bytes": 10012,
+      "sha256": "4346acc2041dc61b740bd5aa425b80fc3128871dcfb4a625ad539ccf8fb66cb2"
+    },
+    {
+      "source_path": "apps/docs-site/docs/contracts/runtime-snapshot.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/contracts/runtime-snapshot.mdx",
+      "bytes": 2850,
+      "sha256": "04095a7d80d8fc39663a4ce7e748664f2bf3582912c7cc7e5af3a1328569e9c2"
+    },
+    {
+      "source_path": "apps/docs-site/docs/contracts/slice-points.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/contracts/slice-points.mdx",
+      "bytes": 2207,
+      "sha256": "f2cd26588824bb7db4298646942bb66e79358c03f6382bb2d789f74eea1838d0"
+    },
+    {
+      "source_path": "apps/docs-site/docs/contracts/soundset-catalog.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/contracts/soundset-catalog.mdx",
+      "bytes": 1943,
+      "sha256": "38c3dfdfa96613ff968dc8720f43fb83ebb7007cc50a757ca7cbb330d2e15a85"
+    },
+    {
+      "source_path": "apps/docs-site/docs/contracts/soundset.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/contracts/soundset.mdx",
+      "bytes": 7185,
+      "sha256": "70f5833f2a937bd0a288e22ac5eac4bc88bacec5e2bd4e1c1cc31b5dfdc0ee53"
+    },
+    {
+      "source_path": "apps/docs-site/docs/core/modules/application-facade.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/core/modules/application-facade.mdx",
+      "bytes": 51157,
+      "sha256": "34f1ab354b19c9897cf3bdf9846a74ca6bad11e651c90363781e28f7c5573204"
+    },
+    {
+      "source_path": "apps/docs-site/docs/core/modules/audio-runtime.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/core/modules/audio-runtime.mdx",
+      "bytes": 34534,
+      "sha256": "f410d4f9e6fe46ba8705b56a703a689424f55df70ff87efcda4b0958dedd4d5e"
+    },
+    {
+      "source_path": "apps/docs-site/docs/core/modules/authoring-domain.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/core/modules/authoring-domain.mdx",
+      "bytes": 8229,
+      "sha256": "c1c620217a1d7100ba1ceeb4d657933065eb2a421dbe151f68d208d3bb36acdb"
+    },
+    {
+      "source_path": "apps/docs-site/docs/core/modules/foundation.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/core/modules/foundation.mdx",
+      "bytes": 1694,
+      "sha256": "ceff1cb40813819fcfc843cfb1251c7c9b355eff308b2bf476fdf429b9a177ff"
+    },
+    {
+      "source_path": "apps/docs-site/docs/core/modules/project-cooker.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/core/modules/project-cooker.mdx",
+      "bytes": 6741,
+      "sha256": "f206d000cdaa4df9dc82f60773f6b6322b8ed6cd0722278a6950d0945a40fe6a"
+    },
+    {
+      "source_path": "apps/docs-site/docs/core/modules/project-io.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/core/modules/project-io.mdx",
+      "bytes": 24277,
+      "sha256": "e9361904f073fd1c71d6561139c5d8daa94942d51631254031cb410847047e5e"
+    },
+    {
+      "source_path": "apps/docs-site/docs/core/modules/provider-sdk.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/core/modules/provider-sdk.mdx",
+      "bytes": 6656,
+      "sha256": "522f54830602a0f1de2d37e5740d6c3f37f0d8064ad68d5d6599f84ce57cada0"
+    },
+    {
+      "source_path": "apps/docs-site/docs/core/modules/web-runtime-platform.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/core/modules/web-runtime-platform.mdx",
+      "bytes": 27275,
+      "sha256": "ac684fa5cd470b87f77b76e0ac37f3152040f9fff30b5fb3f6c7a3e0f5e8c6b1"
+    },
+    {
+      "source_path": "apps/docs-site/docs/core/overview.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/core/overview.mdx",
+      "bytes": 1394,
+      "sha256": "953243d015aeceef2056542d9f07451bdca47cd00a9f42e5a58a2ab09f9e465e"
+    },
+    {
+      "source_path": "apps/docs-site/docs/history/legacy-patch-architecture.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/history/legacy-patch-architecture.mdx",
+      "bytes": 1319,
+      "sha256": "a05b53f9acfa8216d4ee9c48dbeebdcbd3a60de017197c060bc7eb34c3b53962"
+    },
+    {
+      "source_path": "apps/docs-site/docs/hosts/cardputer-host.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/hosts/cardputer-host.mdx",
+      "bytes": 5830,
+      "sha256": "82e7763e1679022acf428884363a1e98002fa0d12505d4ec5e1891e734707d2a"
+    },
+    {
+      "source_path": "apps/docs-site/docs/hosts/core-cli.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/hosts/core-cli.mdx",
+      "bytes": 5345,
+      "sha256": "4da279256951242feacf58c5a2eb36382cc9b9f43169d6e293577b66786303bb"
+    },
+    {
+      "source_path": "apps/docs-site/docs/hosts/core-mcp.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/hosts/core-mcp.mdx",
+      "bytes": 4843,
+      "sha256": "a049a8a4101d621e4a9956468ef76b0d98e7613a7e569924e105663b7e8b13e7"
+    },
+    {
+      "source_path": "apps/docs-site/docs/hosts/creator-web.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/hosts/creator-web.mdx",
+      "bytes": 64968,
+      "sha256": "9fc6921b8e6603b2e5e96645cbd35c3b9d252962d7384bbc5e6820f0cb54b04b"
+    },
+    {
+      "source_path": "apps/docs-site/docs/hosts/native-host.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/hosts/native-host.mdx",
+      "bytes": 5880,
+      "sha256": "f08d66b90df6557d1a4ccbb629a07580356f669f161ba87631f72fb7c57b31c6"
+    },
+    {
+      "source_path": "apps/docs-site/docs/hosts/overview.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/hosts/overview.mdx",
+      "bytes": 3702,
+      "sha256": "4e061a34b2bccb12841150b989612e0f73c8c2974dff04a1ec52047844b08627"
+    },
+    {
+      "source_path": "apps/docs-site/docs/hosts/web-runtime.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/hosts/web-runtime.mdx",
+      "bytes": 19972,
+      "sha256": "b981ba7e14e9bfe115a89c8260429a60c2680d6d151de25fec5b37e6a1a464fb"
+    },
+    {
+      "source_path": "apps/docs-site/docs/operations/creator-changelog.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/operations/creator-changelog.mdx",
+      "bytes": 908,
+      "sha256": "2781c3a5354aa461366d07db40ba8a135ca87a51ea3e7008130e7c46206d0bb5"
+    },
+    {
+      "source_path": "apps/docs-site/docs/operations/documentation-governance.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/operations/documentation-governance.mdx",
+      "bytes": 6770,
+      "sha256": "6d2ce3432225d176f065dd3e904b27e61bda0bcdabf7766951a26ef1ab3885d9"
+    },
+    {
+      "source_path": "apps/docs-site/docs/operations/runtime-changelog.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/operations/runtime-changelog.mdx",
+      "bytes": 928,
+      "sha256": "bfb247b882efc5eb0e7f0184b83922d514e6053478040c32082d8a0111c78b31"
+    },
+    {
+      "source_path": "apps/docs-site/docs/operations/testing-and-proof.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/operations/testing-and-proof.mdx",
+      "bytes": 118862,
+      "sha256": "b44e4f61061c6500b7a174e7b4aaa50953a580cadb1696ec7e9254a9987615d2"
+    },
+    {
+      "source_path": "apps/docs-site/docs/operations/version-and-release.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/operations/version-and-release.mdx",
+      "bytes": 86660,
+      "sha256": "ee090ea078ca74a8d862abb15e2cb8860e34ed2a8ec8ed6f5ffb4dab8f4f50b2"
+    },
+    {
+      "source_path": "apps/docs-site/docs/overview/index.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/overview/index.mdx",
+      "bytes": 4094,
+      "sha256": "ce3a4347a9796bb6ee300fd22a6b3c447d30beada43c2f8e6b01b5093d227fdc"
+    },
+    {
+      "source_path": "apps/docs-site/docs/platform/input.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/platform/input.mdx",
+      "bytes": 8019,
+      "sha256": "db089d69003a840f955bde194688c027ecc6840c27acb4f53f003b429b87aef8"
+    },
+    {
+      "source_path": "apps/docs-site/docs/platform/native-audio.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/platform/native-audio.mdx",
+      "bytes": 9353,
+      "sha256": "bee8dc976a1afd1dee013a92c7b25cac2d3710ef00d6ed85b7bf0db10d8b0e5f"
+    },
+    {
+      "source_path": "apps/docs-site/docs/platform/storage.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/platform/storage.mdx",
+      "bytes": 4314,
+      "sha256": "f5e36f9513f630519c62e08244e44b03269373f5b482deefeef967d60c58606a"
+    },
+    {
+      "source_path": "apps/docs-site/docs/platform/web-runtime.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/platform/web-runtime.mdx",
+      "bytes": 17822,
+      "sha256": "b0003f5d92fd1dfdf00ff778349d4c534c9bb6315fa94bd696b4ad28484a58c4"
+    },
+    {
+      "source_path": "apps/docs-site/docs/product/capability-map.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/product/capability-map.mdx",
+      "bytes": 7316,
+      "sha256": "a3930206b934817a48cb60ef85d940b617465b79ee560d83106193f6b354217e"
+    },
+    {
+      "source_path": "apps/docs-site/docs/product/positioning.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/product/positioning.mdx",
+      "bytes": 1382,
+      "sha256": "74dc543cd6320c579a5a55c128a6450bf6c1749ace67e5a2880ee85eae375058"
+    },
+    {
+      "source_path": "apps/docs-site/docs/product/workflows.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/product/workflows.mdx",
+      "bytes": 17824,
+      "sha256": "b26222427ed80f6ecfacef86ed63eee7361ebb994a231939d9f69a16e6356030"
+    },
+    {
+      "source_path": "apps/docs-site/docs/providers/local-proof-stem.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/providers/local-proof-stem.mdx",
+      "bytes": 2746,
+      "sha256": "b0e8458f38049cd22feff1f3f05df3b8aeadd4de4480b714cf9d1ed21a61b70c"
+    },
+    {
+      "source_path": "apps/docs-site/docs/providers/local-proof.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/providers/local-proof.mdx",
+      "bytes": 1189,
+      "sha256": "03d64b6fb92c69d33537bab72572fffe21f4244b0fdd465984eac52ffe178db1"
+    },
+    {
+      "source_path": "apps/docs-site/docs/providers/local-sample-slice.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/providers/local-sample-slice.mdx",
+      "bytes": 2414,
+      "sha256": "af04b1bbbd3a0a9a4186410252e6a2db80e17d5d3fd62e1c6fd148e47b072aa3"
+    },
+    {
+      "source_path": "apps/docs-site/docs/providers/overview.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/providers/overview.mdx",
+      "bytes": 1476,
+      "sha256": "777c4724bdc7536f077f1cb5d22e3b3510fb41f35d35caf5391f1179745f0652"
+    },
+    {
+      "source_path": "apps/docs-site/docs/releases/1.0.61.0.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/releases/1.0.61.0.mdx",
+      "bytes": 17551,
+      "sha256": "726f14728919c8b696c22a8bd2f316989aa9816ee2c9ea1bf6e4deadb40b9566"
+    },
+    {
+      "source_path": "apps/docs-site/docs/releases/1.0.66.0.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/releases/1.0.66.0.mdx",
+      "bytes": 3668,
+      "sha256": "90b070c0b38b0654ee863b7391ec2f42f45b6b54a35a23aed9e7c2b249d86b02"
+    },
+    {
+      "source_path": "apps/docs-site/docs/releases/index.mdx",
+      "snapshot_path": "versioned_docs/version-2.0.86.0/releases/index.mdx",
+      "bytes": 917,
+      "sha256": "a45ad984fc14ecce2bc32d23a9602670c0c096e30ec806d306b23013a8a89f48"
+    }
+  ],
+  "source_sidebar": {
+    "path": "apps/docs-site/sidebars.ts",
+    "bytes": 1963,
+    "sha256": "deec9035fc94ddf45f0991647b1cb9953114c53e577feee85f523d0756fd04f5"
+  },
+  "snapshot_sidebar": {
+    "path": "versioned_sidebars/version-2.0.86.0-sidebars.json",
+    "bytes": 2478,
+    "sha256": "812f055ee1df753c24a77536164912b51ccf9ebf2379d6fc9291005a5bfa077c"
+  },
+  "diagrams": {
+    "ids": [
+      "application-facade",
+      "audio-runtime",
+      "authoring-domain",
+      "foundation",
+      "lmdj-core",
+      "lmdj-product",
+      "project-cooker",
+      "project-io",
+      "provider-sdk",
+      "web-runtime-platform"
+    ],
+    "asset_base": "/versions/2.0.86.0/diagrams",
+    "assets": [
+      {
+        "id": "application-facade",
+        "format": "html",
+        "source_path": "apps/docs-site/static/diagrams/application-facade.html",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/application-facade.html",
+        "bytes": 12418,
+        "sha256": "ce5c5bd34f0af8e9f1cd4e395f861dd82984911096d28cef4507b8e5dbd01582"
+      },
+      {
+        "id": "application-facade",
+        "format": "svg",
+        "source_path": "apps/docs-site/static/diagrams/application-facade.svg",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/application-facade.svg",
+        "bytes": 11458,
+        "sha256": "aeb83c4981e7d42c3198a4be1b2823c34bdac6903021aa3d8995334d5630ac3d"
+      },
+      {
+        "id": "audio-runtime",
+        "format": "html",
+        "source_path": "apps/docs-site/static/diagrams/audio-runtime.html",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/audio-runtime.html",
+        "bytes": 11112,
+        "sha256": "394a1232620c476fcdd439887647d6d191786479618de11a3490a7f3f50f4c98"
+      },
+      {
+        "id": "audio-runtime",
+        "format": "svg",
+        "source_path": "apps/docs-site/static/diagrams/audio-runtime.svg",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/audio-runtime.svg",
+        "bytes": 10157,
+        "sha256": "bf821b583d20fdee049cdba11816bff29303173bd0e174e7c0bc40052a38b08c"
+      },
+      {
+        "id": "authoring-domain",
+        "format": "html",
+        "source_path": "apps/docs-site/static/diagrams/authoring-domain.html",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/authoring-domain.html",
+        "bytes": 8035,
+        "sha256": "f6cb16dafab07f11bc3f0d358fafd0999b8d0a6fd5208aa0f5a8e0f28a4d69a5"
+      },
+      {
+        "id": "authoring-domain",
+        "format": "svg",
+        "source_path": "apps/docs-site/static/diagrams/authoring-domain.svg",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/authoring-domain.svg",
+        "bytes": 7077,
+        "sha256": "16d28106e6598905bccd89858b49c128b80e148e24b58684cc4232956eca8247"
+      },
+      {
+        "id": "foundation",
+        "format": "html",
+        "source_path": "apps/docs-site/static/diagrams/foundation.html",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/foundation.html",
+        "bytes": 6283,
+        "sha256": "3f468d458772471ce3eb6949b082b1881502be70b12224e10d09d8d89f3e0c30"
+      },
+      {
+        "id": "foundation",
+        "format": "svg",
+        "source_path": "apps/docs-site/static/diagrams/foundation.svg",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/foundation.svg",
+        "bytes": 5331,
+        "sha256": "a0f1f695e833da596453d9104816bf4a3dbe29c44e5471e65671c0a91cf2d1d9"
+      },
+      {
+        "id": "lmdj-core",
+        "format": "html",
+        "source_path": "apps/docs-site/static/diagrams/lmdj-core.html",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/lmdj-core.html",
+        "bytes": 10586,
+        "sha256": "c9288acbb2ac982f4a469d77d2d182f7fe5b3208dae92c3b3a5f016899721bcb"
+      },
+      {
+        "id": "lmdj-core",
+        "format": "svg",
+        "source_path": "apps/docs-site/static/diagrams/lmdj-core.svg",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/lmdj-core.svg",
+        "bytes": 9633,
+        "sha256": "3f8dac4bf6cc3a886b598ddfdc35371d2316cdd34058ecc33a6768280620c8e5"
+      },
+      {
+        "id": "lmdj-product",
+        "format": "html",
+        "source_path": "apps/docs-site/static/diagrams/lmdj-product.html",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/lmdj-product.html",
+        "bytes": 11405,
+        "sha256": "7916a004cc614cd0878477fc89d66558a937199c55d7edc2555db2adb05b9d3c"
+      },
+      {
+        "id": "lmdj-product",
+        "format": "svg",
+        "source_path": "apps/docs-site/static/diagrams/lmdj-product.svg",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/lmdj-product.svg",
+        "bytes": 10450,
+        "sha256": "caef0e8f7f99a8ef682a5bd29aa29b4c0d545c1264b806d4389d40af7eeec119"
+      },
+      {
+        "id": "project-cooker",
+        "format": "html",
+        "source_path": "apps/docs-site/static/diagrams/project-cooker.html",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/project-cooker.html",
+        "bytes": 8555,
+        "sha256": "d09b67699d8dcd88722bd9b80bd18abb2523057d37ecbc63dead3428d2aad901"
+      },
+      {
+        "id": "project-cooker",
+        "format": "svg",
+        "source_path": "apps/docs-site/static/diagrams/project-cooker.svg",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/project-cooker.svg",
+        "bytes": 7599,
+        "sha256": "b8366cc6fc6606bf8d4458c16f1e379917aaa54a321f9f461681af4b24958be8"
+      },
+      {
+        "id": "project-io",
+        "format": "html",
+        "source_path": "apps/docs-site/static/diagrams/project-io.html",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/project-io.html",
+        "bytes": 9398,
+        "sha256": "fcdb394fabd2c8e1c252529ec990eef68fe591282e0d4881878eb17495cdbfc6"
+      },
+      {
+        "id": "project-io",
+        "format": "svg",
+        "source_path": "apps/docs-site/static/diagrams/project-io.svg",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/project-io.svg",
+        "bytes": 8445,
+        "sha256": "d34f3e2237dda799ba81caa1a11a87d20d6e8bf711ab3348eb55be9abee60499"
+      },
+      {
+        "id": "provider-sdk",
+        "format": "html",
+        "source_path": "apps/docs-site/static/diagrams/provider-sdk.html",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/provider-sdk.html",
+        "bytes": 6899,
+        "sha256": "006a2b32e965d90a42e848249040503582ba837ae9fd5afd0733c033f439dc72"
+      },
+      {
+        "id": "provider-sdk",
+        "format": "svg",
+        "source_path": "apps/docs-site/static/diagrams/provider-sdk.svg",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/provider-sdk.svg",
+        "bytes": 5945,
+        "sha256": "26c57c052a06b98688cb5c648fac645e50bc6a7d195686493d567c2db573dcae"
+      },
+      {
+        "id": "web-runtime-platform",
+        "format": "html",
+        "source_path": "apps/docs-site/static/diagrams/web-runtime-platform.html",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/web-runtime-platform.html",
+        "bytes": 12194,
+        "sha256": "f601126186707ba118f1b72d3a0436a95213cba733e882460696e6e8d7b18a1a"
+      },
+      {
+        "id": "web-runtime-platform",
+        "format": "svg",
+        "source_path": "apps/docs-site/static/diagrams/web-runtime-platform.svg",
+        "versioned_path": "static/versions/2.0.86.0/diagrams/web-runtime-platform.svg",
+        "bytes": 11232,
+        "sha256": "97be05fecd69f827da4ccdfbec29c2458d371901f7b3427c9c836629ce5c0574"
+      }
+    ]
+  },
+  "frozen_at_utc": "2026-10-06T16:52:11.483Z"
+}
