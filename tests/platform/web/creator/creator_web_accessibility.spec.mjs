@@ -99,11 +99,16 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   expect(manifest.compatible_hosts).toEqual(
     WEB_RUNTIME_IDENTITY.hosts["creator-web"].compatible_hosts,
   );
-  // The generated Host inventory owns the exact ordered roles, including the
-  // offline Worker from Creator 6. Every asset below must still be same-origin.
-  expect(manifest.assets.map(({role}) => role)).toEqual(
-    WEB_RUNTIME_IDENTITY.hosts["creator-web"].expected_assets.map(({role}) => role),
-  );
+  // Keep the role oracle independent of the generated inventory. Creator 5
+  // owns seven ordered roles; Host major >=6 adds exactly one offline Worker.
+  const expectedRoles = [
+    "host_main", "runtime_script", "runtime_wasm", "host_style",
+    "capture_worklet", "perform_master_tap_worklet", "host_favicon",
+  ];
+  if (Number(WEB_RUNTIME_IDENTITY.hosts["creator-web"].version.split(".")[0]) >= 6) {
+    expectedRoles.push("offline_worker");
+  }
+  expect(manifest.assets.map(({role}) => role)).toEqual(expectedRoles);
   const index = await (await request.get(`${baseURL}/index.html`)).text();
   expect(index).toContain(createHash("sha256").update(manifestBytes).digest("hex"));
   // The property is that the shipped document makes no off-origin reference,
