@@ -99,15 +99,11 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   expect(manifest.compatible_hosts).toEqual(
     WEB_RUNTIME_IDENTITY.hosts["creator-web"].compatible_hosts,
   );
-  // capture_worklet ships as its own same-origin asset because the CSP below
-  // (script-src 'self') rejects blob:/data: AudioWorklet module URLs.
-  // perform_master_tap_worklet joins the inventory at Product Build 1.0.42.0 and
-  // ships same-origin for the same reason as capture_worklet.
-  // host_favicon joins at Creator Host 5.0.0, allocated as Product Build 2.0.81.0.
-  expect(manifest.assets.map(({role}) => role)).toEqual([
-    "host_main", "runtime_script", "runtime_wasm", "host_style", "capture_worklet",
-    "perform_master_tap_worklet", "host_favicon",
-  ]);
+  // The generated Host inventory owns the exact ordered roles, including the
+  // offline Worker from Creator 6. Every asset below must still be same-origin.
+  expect(manifest.assets.map(({role}) => role)).toEqual(
+    WEB_RUNTIME_IDENTITY.hosts["creator-web"].expected_assets.map(({role}) => role),
+  );
   const index = await (await request.get(`${baseURL}/index.html`)).text();
   expect(index).toContain(createHash("sha256").update(manifestBytes).digest("hex"));
   // The property is that the shipped document makes no off-origin reference,
