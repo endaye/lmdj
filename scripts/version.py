@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 from typing import Any
 
 
@@ -1042,6 +1043,7 @@ P1_BUILD_MATERIAL_FILES = frozenset({
     *P1_MANIFEST_PATHS.values(), "products/lmdj/src/cardputer_assembly.cpp",
     "apps/cardputer-host/CMakeLists.txt", "apps/creator-web/package.json",
     "apps/creator-web/package-lock.json", "tests/build/version_test.py",
+    "apps/core-mcp/pyproject.toml", "apps/core-mcp/lmdj_core_mcp/__init__.py",
     "apps/docs-site/docs/operations/creator-changelog.mdx",
     "apps/docs-site/docs/operations/runtime-changelog.mdx"})
 
@@ -1102,6 +1104,7 @@ def _p1_identity_material(root, expected, reserved, old_assembly_sha, new_assemb
                           documents, versions):
     """Rewrite only authenticated passive identity literals, not test code."""
     import ast
+    from copy import deepcopy
     files = {}
     for name in ("apps/creator-web/package.json", "apps/creator-web/package-lock.json"):
         doc = _load_object(root / name, "Creator npm identity")
@@ -1113,6 +1116,55 @@ def _p1_identity_material(root, expected, reserved, old_assembly_sha, new_assemb
                 raise ValueError("Creator npm root lock identity differs")
             doc["packages"][""]["version"] = versions["creator-web"]
         files[name] = _canonical_json(doc).encode()
+    name = "apps/core-mcp/pyproject.toml"
+    raw = (root / name).read_bytes()
+    project = tomllib.loads(raw.decode("utf-8"))
+    if project.get("project", {}).get("version") != documents["core-mcp"]["version"]:
+        raise ValueError("why: MCP Python project version differs from its frozen Host; remedy: restore apps/core-mcp/pyproject.toml to the matching baseline identity before allocation")
+    expected_project = deepcopy(project)
+    expected_project["project"]["version"] = versions["core-mcp"]
+    pattern = (rb"(?m)^[ \t]*version[ \t]*=[ \t]*(?P<literal>(?P<quote>['\"])"
+               + re.escape(documents["core-mcp"]["version"].encode())
+               + rb"(?P=quote))[ \t]*(?:#[^\r\n]*)?\r?$")
+    candidates = []
+    for match in re.finditer(pattern, raw):
+        literal = match.group("quote") + versions["core-mcp"].encode() + match.group("quote")
+        candidate = raw[:match.start("literal")] + literal + raw[match.end("literal"):]
+        # Parsing the complete result binds this byte span to project.version,
+        # even when another table or a multiline string contains similar text.
+        if tomllib.loads(candidate.decode("utf-8")) == expected_project:
+            candidates.append(candidate)
+    if len(candidates) != 1:
+        raise ValueError("why: MCP Python project version is not one passive literal; remedy: restore its single version declaration without executing package code")
+    files[name] = candidates[0]
+    name = "apps/core-mcp/lmdj_core_mcp/__init__.py"
+    raw = (root / name).read_bytes()
+    def runtime_literal(source, identity):
+        try:
+            # AST columns count UTF-8 bytes. Parsing decoded text rejects BOM
+            # and non-UTF-8 input before those offsets address the original bytes.
+            tree = ast.parse(source.decode("utf-8"))
+        except (UnicodeDecodeError, SyntaxError):
+            raise ValueError("why: MCP Python runtime identity is not valid UTF-8 without a BOM; remedy: restore the passive UTF-8 __init__.py before allocation") from None
+        statements = list(tree.body)
+        if (statements and isinstance(statements[0], ast.Expr)
+                and isinstance(statements[0].value, ast.Constant)
+                and type(statements[0].value.value) is str):
+            statements.pop(0)
+        if (len(statements) != 1 or not isinstance(statements[0], ast.Assign)
+                or len(statements[0].targets) != 1
+                or not isinstance(statements[0].targets[0], ast.Name)
+                or statements[0].targets[0].id != "__version__"
+                or not isinstance(statements[0].value, ast.Constant)
+                or statements[0].value.value != identity):
+            raise ValueError("why: MCP Python runtime version is not one literal matching its frozen Host; remedy: restore the optional docstring and single __version__ assignment in apps/core-mcp/lmdj_core_mcp/__init__.py before allocation")
+        return statements[0].value
+    literal = runtime_literal(raw, documents["core-mcp"]["version"])
+    lines = raw.splitlines(keepends=True)
+    start = sum(map(len, lines[:literal.lineno - 1])) + literal.col_offset
+    end = sum(map(len, lines[:literal.end_lineno - 1])) + literal.end_col_offset
+    files[name] = raw[:start] + json.dumps(versions["core-mcp"]).encode() + raw[end:]
+    runtime_literal(files[name], versions["core-mcp"])
     name = "tests/build/version_test.py"
     raw = (root / name).read_bytes()
     tree = ast.parse(raw)

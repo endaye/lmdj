@@ -377,7 +377,7 @@ class CoordinatedPreparationTest(CoordinatedPreparationFixture):
         self.assertEqual(before, (self.parent_state(), self.catalogue()))
         self.assertFalse(self.destination.exists())
 
-    def test_actual_all_legs_scope_receipts_and_cold_resume_preserve_exact_22(self):
+    def test_actual_all_legs_scope_receipts_and_cold_resume_preserve_exact_24(self):
         self.assertEqual(self.enroll_parent()['status'], 'pending')
         result = self.prepare_parent()
         self.assertEqual(result['status'], 'verified')
@@ -385,7 +385,7 @@ class CoordinatedPreparationTest(CoordinatedPreparationFixture):
         self.assertEqual(source['material_scope'], P1_MATERIAL_SCOPE)
         self.assertEqual(result['frozen']['material_scope'], P1_MATERIAL_SCOPE)
         self.assertEqual(set(source['files']), self.parent.local.files)
-        self.assertEqual(len(source['files']), 22)
+        self.assertEqual(len(source['files']), 24)
         local = self.parent.local
         self.assertEqual(local.revision(source['commit'] + '^'), self.fixture.base)
         self.assertEqual(local.revision(cut['commit'] + '^'), self.fixture.base)

@@ -29,8 +29,12 @@ Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 Sem
 范围，需要原始请求之外的独立范围授权；不会按工作树状态或回执中的路径自动
 选择。工具先验证冻结基线的 Assembly 与 Lock，再从同一依赖图派生 P1 的组件
 版本及消费者 pin。Product、组件身份、Runtime identity、Cardputer 身份、严格
-版本测试基线、Creator npm 身份与两份 Host 日志的身份投影组成精确的 22 文件
-材料，其他测试断言、依赖边和 changelog 历史保持原字节。
+版本测试基线、Creator npm 身份、MCP Python 打包与运行时版本、两份 Host 日志的
+身份投影组成精确材料集合。MCP 的两个版本字段从已验证的 Host 身份同步派生；
+TOML 修改后重新解析并核验真实字段，Python 文件只接受无 BOM 的 UTF-8、可选
+docstring 与唯一的版本常量赋值，修改后再解析核验，不执行包代码。
+其他测试断言、依赖边、Python/TOML 源码及
+changelog 历史保持原字节。
 
 范围随冻结输入、原始 reservation 和准备记录绑定；重新授权、恢复、source、
 官方 canary snapshot、cut 与 squash 仍逐步核验原始身份和精确文件集合。

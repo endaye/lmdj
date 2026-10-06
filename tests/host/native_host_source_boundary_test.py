@@ -39,10 +39,19 @@ def main() -> int:
     manifest = json.loads(
         (source_root / "module.json").read_text(encoding="utf-8")
     )
-    assert manifest["dependencies"] == {
-        "application-facade": "6.6.0",
-        "audio-runtime": "5.2.0",
+    expected_dependencies = {
+        name: json.loads(
+            (source_root.parents[1] / "packages" / name / "module.json").read_text(
+                encoding="utf-8"
+            )
+        )["version"]
+        for name in ("application-facade", "audio-runtime")
     }
+    assert manifest["dependencies"] == expected_dependencies, (
+        f"why: {source_root / 'module.json'} dependencies {manifest['dependencies']} "
+        f"differ from the Native Host boundary {expected_dependencies}; remedy: "
+        "retain only application-facade and audio-runtime with their actual manifest versions"
+    )
 
     logical_dependencies = {
         value
