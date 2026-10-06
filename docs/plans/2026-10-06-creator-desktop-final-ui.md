@@ -70,30 +70,39 @@ Checked on `43c7f136f`.
 | D04 MASTER fader, LP/HP/BP type, Mute/Solo on the TARGET Pad | new question | Rendered only where a Host action exists. The others stay out, as `fx_slider_bank.tsx` already documents. |
 | Figma D02 lags the 10-04 decision | design update (owner) | Before T4/T5 review, the owner updates D02 or confirms that the decision text is the reference. |
 
-## T1 — design tokens and IBM Plex Mono inside the console
+## T1 — design tokens and the console font stack
+
+Amended when T1 started. The distribution CSP (`apps/creator-web/deploy/_headers`, which `apps/web-runtime-host/tools/deployment_smoke.py` matches exactly) has `default-src 'none'` and no `font-src`. It blocks every web font, whether a same-origin file or a `data:` URI. On 2026-10-06 the owner split font bundling into T1b. Button isolation moves to T5, where the touch kit takes over the styles the global `button` rule now supplies.
 
 **Behaviour.**
 
-- **Tokens.** `.hardware-console` declares CSS custom properties taken from Desktop Final:
-  - surfaces: device `#202321`, upper screen `#292d29`, touch `#252925`, raised `#343a34`;
-  - lines and text: line `#50584f`, text `#f1f2e9`, muted `#adb6aa`;
-  - page accents: Project `#9ec9f5`, Sequence `#ddf478`, Sample `#c5a5f4`, Perform `#f2af78`;
-  - tints: `#314352` and `#443750`;
-  - radii: key 4, button 8, card 10, touch area 12;
-  - spacing: 8, 12 and 16.
-- **Restyle.** Existing console rules switch from hex literals to the tokens with no visual change, except for the font.
-- **Font.** IBM Plex Mono (Regular and Medium, Latin subset, `woff2`) is bundled as a Creator static asset and listed in the offline shell inventory. The device body uses it; dialogs outside the console keep the system stack.
-- **Isolation.** Global `button`/`input` rules stop applying inside `.hardware-console`. The console's own rules take over, as decided in item 6 of the 10-04 decision.
+- **Tokens.** `:root` declares the Desktop Final colours as `--creator-*` custom properties. Only the ones in use are declared: base, screen, touch, raised, line, text, muted, lime, blue, purple, blue tint and purple tint.
+  - Every stylesheet literal equal to one of those values now reads the token.
+  - Accents are named by hue, not page, because #1821 and the Figma colour-clash note leave that meaning open.
+  - Radius and spacing tokens arrive with their first consumer, the T5 kit.
+- **Shared surfaces.** The console and the upper screen take the Desktop Final surfaces: `#202321` (was `#22241f`) and `#292d29` (was `#141613`).
+- **Font.** The console body uses a stack that starts with IBM Plex Mono and falls back to the system monospace font.
 
-**Declared files.** `src/styles.css`, new `src/theme/tokens.css`, the font assets under `public/fonts/`, `src/runtime/offline_shell.ts` and their tests, `tests/platform/web/creator/creator_web_offline.spec.mjs`, and portal `/hosts/creator-web/`.
+**Declared files.** `apps/creator-web/src/styles.css`, `apps/creator-web/test/hardware_console.test.tsx`, this plan, and portal `/hosts/creator-web/`.
+
+**Lowest-tier tests.** A component test that the console resolves the mono stack and the two surface tokens. A revert of the stylesheet fails it.
+
+**Gate defect caught.** The console silently keeping the old sans-serif face or the old surfaces.
+
+## T1b — bundle IBM Plex Mono (needs a CSP `font-src`)
+
+**Behaviour.**
+
+- Bundle IBM Plex Mono Regular (OFL, Latin subset) with Creator, so that it ships inside the packaged, offline-cached Host.
+- Add the narrowest `font-src` the bundling needs to the Creator CSP. Update the deployment smoke's expected CSP in the same change.
+- Keep validating previously published deployments, which carry the old CSP, as rollback anchors (see the `manifest-role-validator-sync` pitfall for that failure shape).
 
 **Lowest-tier tests.**
 
-- A unit test that the offline inventory lists the font files.
-- An offline journey leg: after going offline, the console's computed `font-family` resolves to the bundled face (`document.fonts.check`).
-- The existing hardware-layout journey, unchanged.
+- The deployment smoke accepts the new CSP and the prior published one.
+- An offline journey leg resolves the bundled face (`document.fonts.check`).
 
-**Gate defect caught.** Offline Creator silently falling back to a system font, or a font asset missing from the offline inventory.
+This Task selects the batch-only `deploy_contract` lane.
 
 ## T2 — scale the whole console to fit the window (needs owner confirmation)
 
@@ -153,7 +162,7 @@ Checked on `43c7f136f`.
 
 **Behaviour** (10-04 decision, items 6–7).
 
-- **Touch control kit.** `TouchButton`, `SegmentedSelect`, `ToggleSwitch`, `ValueCard` and `PatternStepper` are built to the D02 spec: 44 px tall, 8 px radius, `--raised` fill, solid accent with dark text when selected. They replace native `<select>` and checkboxes inside the Sequence touch area. D01, D03 and D04 later reuse the kit.
+- **Touch control kit.** `TouchButton`, `SegmentedSelect`, `ToggleSwitch`, `ValueCard` and `PatternStepper` are built to the D02 spec: 44 px tall, 8 px radius, `--raised` fill, solid accent with dark text when selected. They replace native `<select>` and checkboxes inside the Sequence touch area. D01, D03 and D04 later reuse the kit. The kit also stops the global `button` rule from applying inside the console; this was moved here from T1.
 - **Header.** `‹ GROOVE / NN ›` plus `current / total` replaces the Pattern combobox and is disabled while playing. EDIT and SETUP toggles sit on the right; EDIT is the default.
 - **EDIT layer.**
   - One toolbar row: snap 1/4, 1/8, 1/16, 1/32 or off, plus NOTE/VEL.
@@ -277,6 +286,7 @@ T1 ─┬─ T3 ─┬─ T4 ─ T5 ─ T6
     │      ├─ T9
     │      ├─ T10   (T9–T11 reuse the T5 kit; they can follow T5 in any order)
     │      └─ T11
+    ├─ T1b (font bundling + CSP; independent)
     └─ T2 (only after owner confirmation; independent)
 T7 ← #1821      T8 ← #1823
 ```
@@ -300,7 +310,7 @@ Version impact: none in this plan Pull Request (documentation only).
 
 The implementation Tasks owe bumps at the next coordinated version settlement. No numbers are pre-filled.
 
-- **`creator-web` MINOR** for T4, T5, T6, T9, T10 and T11, all user-visible capability or layout. T1, T2 and T3 owe at least a PATCH and fold into the same settlement.
+- **`creator-web` MINOR** for T4, T5, T6, T9, T10 and T11, all user-visible capability or layout. T1, T1b, T2 and T3 owe at least a PATCH and fold into the same settlement. T1b's CSP change is part of the Creator deploy surface, not a Product Build change.
 - **T8** (later plan) also owes MINOR bumps for `authoring-domain`, `application-facade` and `web-runtime-platform`.
 - **T7**, if Pad colour enters Truth, owes a Contract SemVer change.
 - No Product Build or Assembly change happens in these Tasks.
@@ -317,7 +327,6 @@ Each implementation Task is `required`:
 - T5 also updates `/product/workflows/`;
 - T6 also updates `/platform/input/`.
 
-`docs/design/2026-09-11-lmdj-hardware-ui-layout-reference.md` is updated in T1 to name Desktop Final page 0:1 as the current reference.
 
 ## Pitfall Impact
 

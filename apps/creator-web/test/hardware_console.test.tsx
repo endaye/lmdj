@@ -1,3 +1,5 @@
+import {readFileSync} from "node:fs";
+
 import {render, screen, within} from "@testing-library/react";
 import {fireEvent} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -176,4 +178,33 @@ test("physical Play/Stop and Record drive the global Pattern transport", () => {
     name: "Play/Stop — Pattern is playing",
   }));
   expect(onPlayStop).toHaveBeenCalledTimes(1);
+});
+
+// jsdom leaves var() unsubstituted in computed values while a browser
+// substitutes it; resolve one level so an assertion reads the token's value.
+function resolved(style: CSSStyleDeclaration, property: string): string {
+  const value = style.getPropertyValue(property);
+  const reference = /^var\((--[\w-]+)\)$/.exec(value);
+  return reference === null ? value : style.getPropertyValue(reference[1]!);
+}
+
+test("console body takes the Desktop Final mono stack and surfaces", () => {
+  const style = document.createElement("style");
+  style.textContent = readFileSync("src/styles.css", "utf8");
+  document.head.append(style);
+  try {
+    render(<HardwareConsole
+      physicalControls={<span>keys</span>}
+      overview={<output>Ready</output>}
+      pads={<span>pads</span>}
+      touchWorkspace={<span>touch</span>}
+    />);
+    const shell = getComputedStyle(screen.getByTestId("hardware-console"));
+    const display = getComputedStyle(screen.getByRole("region", {name: "Overview display"}));
+    expect(resolved(shell, "font-family")).toMatch(/^"IBM Plex Mono",/);
+    expect(resolved(shell, "background")).toBe("#202321");
+    expect(resolved(display, "background")).toBe("#292d29");
+  } finally {
+    style.remove();
+  }
 });
