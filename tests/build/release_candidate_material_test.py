@@ -130,7 +130,8 @@ class MaterialTest(unittest.TestCase):
                              ROOT / "products/lmdj/assembly.lock.json")
 
     def test_frozen_future_host_selects_offline_asset_without_extra_material_outputs(self):
-        # Only this throwaway Git repository selects the future Host shape.
+        # Only this throwaway Git repository selects a distinct future Host
+        # shape, including when the frozen source already contains Host 6.
         # The class template exports HEAD; copy current Source before freezing
         # so precommit verification exercises the new passive policy as well.
         for name in (candidate_material.RUNTIME_IDENTITY_GENERATOR,
@@ -138,11 +139,13 @@ class MaterialTest(unittest.TestCase):
             shutil.copyfile(ROOT / name, self.root / name)
         manifest_path = self.root / "apps/creator-web/module.json"
         manifest = json.loads(manifest_path.read_bytes())
-        manifest["version"] = "6.0.0"
+        future_host_version = f"{max(6, int(manifest['version'].split('.')[0]) + 1)}.0.0"
+        self.assertNotEqual(future_host_version, manifest["version"])
+        manifest["version"] = future_host_version
         manifest_path.write_bytes(canonical_json(manifest))
         assembly_path = self.root / "products/lmdj/assembly.json"
         assembly = json.loads(assembly_path.read_bytes())
-        next(host for host in assembly["hosts"] if host["id"] == "creator-web")["version"] = "6.0.0"
+        next(host for host in assembly["hosts"] if host["id"] == "creator-web")["version"] = future_host_version
         assembly_path.write_bytes(canonical_json(assembly))
         compiled = version._render_compiled_assembly(self.current, assembly, repo_root=self.root)
         (self.root / "products/lmdj/src/compiled_assembly.cpp").write_bytes(compiled)
@@ -156,7 +159,7 @@ class MaterialTest(unittest.TestCase):
         self.assertEqual(before, (self.git("status", "--porcelain"), self.git("write-tree"), self.git("show-ref")))
         identity = json.loads(result["files"]["products/lmdj/generated/web-runtime-identity.json"])
         creator = identity["hosts"]["creator-web"]
-        self.assertEqual(creator["version"], "6.0.0")
+        self.assertEqual(creator["version"], future_host_version)
         policy = json.loads((self.root / "tools/web-runtime/runtime-identity.json").read_bytes())
         self.assertEqual(creator["expected_assets"], [
             *policy["hosts"]["creator-web"]["expected_assets"],
