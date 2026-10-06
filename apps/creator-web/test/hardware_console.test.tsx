@@ -1,3 +1,5 @@
+import {readFileSync} from "node:fs";
+
 import {render, screen, within} from "@testing-library/react";
 import {fireEvent} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -176,4 +178,25 @@ test("physical Play/Stop and Record drive the global Pattern transport", () => {
     name: "Play/Stop — Pattern is playing",
   }));
   expect(onPlayStop).toHaveBeenCalledTimes(1);
+});
+
+test("console body takes the Desktop Final mono stack and surfaces", () => {
+  const style = document.createElement("style");
+  style.textContent = readFileSync("src/styles.css", "utf8");
+  document.head.append(style);
+  try {
+    render(<HardwareConsole
+      physicalControls={<span>keys</span>}
+      overview={<output>Ready</output>}
+      pads={<span>pads</span>}
+      touchWorkspace={<span>touch</span>}
+    />);
+    const shell = getComputedStyle(screen.getByTestId("hardware-console"));
+    expect(shell.fontFamily).toBe("var(--creator-font-mono)");
+    expect(shell.getPropertyValue("--creator-font-mono")).toMatch(/^"IBM Plex Mono",/);
+    expect(shell.getPropertyValue("--creator-base")).toBe("#202321");
+    expect(shell.getPropertyValue("--creator-screen")).toBe("#292d29");
+  } finally {
+    style.remove();
+  }
 });
