@@ -12,9 +12,6 @@ NEUTRAL_ROOTS = ("packages",)
 HOST_ROOT = REPO_ROOT / "apps"
 PROVIDER_ROOT = REPO_ROOT / "providers"
 FORBIDDEN_PACKAGE_REFERENCES = ("products/lmdj/", "apps/creator-web/")
-EXPECTED_WEB_HOST_DEPENDENCIES = {
-    "web-runtime-platform": "5.7.0",
-}
 
 
 def load_object(path: Path) -> dict:
@@ -166,23 +163,32 @@ for _, (path, manifest) in host_manifests.items():
     assert "project-io" not in manifest["dependencies"], path
 
 assert "web-runtime-host" in host_manifests, "Web Host manifest is missing"
+# Version settlement belongs to the Assembly lock. The graph above still
+# checks every dependency pin against its actual target manifest independently.
+assembly_lock = load_object(ASSEMBLY_PATH.with_name("assembly.lock.json"))
+locked_host_versions = inventory(assembly_lock, "hosts")
+expected_web_host_dependencies = {
+    "web-runtime-platform": inventory(assembly_lock, "modules")[
+        "web-runtime-platform"
+    ],
+}
 web_host_path, web_host_manifest = host_manifests["web-runtime-host"]
 assert web_host_path == REPO_ROOT / "apps/web-runtime-host/module.json"
 assert web_host_manifest == {
     "contract": "lmdj.module.v1",
     "module": "web-runtime-host",
-    "version": "4.3.8",
+    "version": locked_host_versions["web-runtime-host"],
     "api_version": 2,
-    "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
+    "dependencies": expected_web_host_dependencies,
 }, (web_host_path, web_host_manifest)
 creator_path, creator_manifest = host_manifests["creator-web"]
 assert creator_path == REPO_ROOT / "apps/creator-web/module.json"
 assert creator_manifest == {
     "contract": "lmdj.module.v1",
     "module": "creator-web",
-    "version": "5.0.1",
+    "version": locked_host_versions["creator-web"],
     "api_version": 2,
-    "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
+    "dependencies": expected_web_host_dependencies,
 }, (creator_path, creator_manifest)
 verify_creator_package_identity(REPO_ROOT)
 
