@@ -175,7 +175,7 @@ class CreatorPackageTest(unittest.TestCase):
         host["expected_assets"].append({"role": role, "prefix": "assets/offline-worker.", "suffix": ".js"})
         identity_path.write_text(json.dumps(identity))
         worker = self.repo / "apps/creator-web/offline/worker.mjs"
-        worker.parent.mkdir(parents=True)
+        worker.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(REPO_ROOT / "apps/creator-web/offline/worker.mjs", worker)
         subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
         subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "offline fixture"], check=True)
