@@ -30,7 +30,7 @@ function renderEditor(overrides: Partial<React.ComponentProps<typeof EqEditor>> 
   const onCancel = vi.fn();
   const view = render(
     <EqEditor
-      padLabel="Pad A1"
+      padLabel="Pad A01"
       playback={playback}
       disabled={false}
       audioSuspended={false}
@@ -52,7 +52,7 @@ function renderEditor(overrides: Partial<React.ComponentProps<typeof EqEditor>> 
 }
 
 const pole = (band: "Low" | "Mid" | "High") =>
-  screen.getByRole("slider", {name: `Pad A1 EQ ${band}`});
+  screen.getByRole("slider", {name: `Pad A01 EQ ${band}`});
 
 // jsdom ignores a timeStamp in the event init; a double tap is timed from the
 // event's own timeStamp, so the press carries one explicitly.
@@ -193,7 +193,7 @@ test("ArrowDown past the floor makes a shelf a cut, and Delete bypasses it", () 
   const cut = {...floor, eq: {...floor.eq, low: {kind: "cut" as const, freqHz: 120, gainMillidb: -18_000}}};
   expect(onCommit).toHaveBeenLastCalledWith(cut);
   rerender(
-    <EqEditor padLabel="Pad A1" playback={cut} disabled={false} audioSuspended={false}
+    <EqEditor padLabel="Pad A01" playback={cut} disabled={false} audioSuspended={false}
       onPreview={vi.fn()} onCommit={onCommit} onCancel={vi.fn()} />,
   );
   fireEvent.keyDown(pole("Low"), {key: "Delete"});
@@ -228,7 +228,7 @@ test("suspending audio drops a live drag", () => {
     {x: freqToX(1_000), y: gainToY(9_000)},
   ]);
   rerender(
-    <EqEditor padLabel="Pad A1" playback={playback} disabled={false} audioSuspended
+    <EqEditor padLabel="Pad A01" playback={playback} disabled={false} audioSuspended
       onPreview={vi.fn()} onCommit={onCommit} onCancel={onCancel} />,
   );
   expect(onCancel).toHaveBeenCalledTimes(1);

@@ -336,7 +336,7 @@ async function expectNativeLoopClear(page, afterSuspend) {
       response.result.state === "audio-suspended" && response.result.changed === true),
   afterSuspend), {timeout: 30_000}).toBe(true);
   await expect(page.getByRole("button", {
-    name: "Pad A1 — assigned — Key Q", exact: true,
+    name: "Pad A01 — assigned — Key Q", exact: true,
   })).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
 }
 
@@ -404,7 +404,7 @@ async function armPadOutcomeObservation(pad) {
 async function latchLoopToggle(page) {
   await expect(page.getByRole("button", {name: "Loop"}))
     .toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
-  const pad = page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true});
+  const pad = page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true});
   await expect(pad).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
   await pad.focus();
   await page.keyboard.down("Enter");
@@ -529,7 +529,7 @@ test("persisted page lifecycle retains the Project and live input surface", asyn
   await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {
     timeout: 30_000,
   });
-  const pad = page.getByTestId("pad-matrix").getByRole("button", {name: /^Pad A1 — assigned/});
+  const pad = page.getByTestId("pad-matrix").getByRole("button", {name: /^Pad A01 — assigned/});
   await armPadOutcomeObservation(pad);
   await page.keyboard.down("KeyQ");
   await expect(pad).toHaveAttribute("data-proof-outcome-observed", /.+/, {

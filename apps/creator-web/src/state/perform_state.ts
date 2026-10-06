@@ -24,6 +24,7 @@ import {
 } from "../record/wav_stream_writer";
 import type {CreatorPerformanceRuntimeSession} from "../runtime/runtime_types";
 import {selectCanTrigger, type Bank, type CreatorState} from "./creator_state";
+import {slotAddress} from "./view_model";
 
 export const PERFORMANCE_FX_ORDER = Object.freeze([
   "filter", "delay", "reverb", "stutter",
@@ -1047,9 +1048,8 @@ export function createPerformController(options: PerformControllerOptions): Perf
           expectedRevision: expectedProjectRevision(),
           performanceId, sourceStartFrame, sourceEndFrame, targetSlot,
         }));
-        const bank = String.fromCharCode(65 + Math.floor(targetSlot / 16));
         dispatch({type: "resample-status", message:
-          `committed · Pad ${bank}${targetSlot % 16 + 1}`});
+          `committed · Pad ${slotAddress(targetSlot)}`});
       } catch (error) { fail(error); }
     },
     async assignPattern(patternSlot, patternId) {

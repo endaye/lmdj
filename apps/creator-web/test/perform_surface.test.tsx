@@ -1151,7 +1151,7 @@ test("renders authoritative recording, WAV, launch, replay, recovery and resampl
   }).textContent).toMatch(/applied.*closed.*Pad/i));
 
   await fixture.controller.resample(ids.performance, 0, 4_800, 16);
-  expect(fixture.controller.getState().resampleStatus).toContain("committed · Pad B1");
+  expect(fixture.controller.getState().resampleStatus).toContain("committed · Pad B01");
 });
 
 test("blocks a second recording while owner-loss recovery is actionable", async () => {

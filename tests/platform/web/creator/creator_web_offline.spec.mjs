@@ -35,7 +35,7 @@ test("complete same-build Creator shell reopens its stored Project offline", asy
       manifest: document.querySelector('meta[name="lmdj-host-manifest-sha256"]').content,
       build: document.querySelector('meta[name="lmdj-product-build"]').content,
     }))).toEqual(before);
-    await expect(successor.getByRole("button", {name: /^Pad A1 — assigned/})).toBeVisible();
+    await expect(successor.getByRole("button", {name: /^Pad A01 — assigned/})).toBeVisible();
     // Cache must serve every immutable JS/Wasm/worklet object with its headers.
     for (const asset of manifest.assets) {
       expect(await successor.evaluate(async asset => {

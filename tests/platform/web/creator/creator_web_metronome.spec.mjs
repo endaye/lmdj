@@ -234,7 +234,7 @@ test("metronome never enters the Perform capture; the witness sample proves the 
   // Witness: the same session's capture chain records a real Pad signal, so
   // the silence above is routing, not a dead tap.
   await beginRecording(page);
-  const pad = page.getByRole("button", {name: /^Pad A1\b/});
+  const pad = page.getByRole("button", {name: /^Pad A01\b/});
   await pad.dispatchEvent("pointerdown", {
     button: 0,
     isPrimary: true,

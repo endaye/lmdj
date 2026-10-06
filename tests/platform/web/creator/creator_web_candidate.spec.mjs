@@ -378,7 +378,7 @@ for (const bank of [0, 1]) {
     const letter = bank === 0 ? "A" : "B";
     await page.getByRole("button", {name: `Bank ${letter}`, exact: true}).click();
     await page.evaluate(() => {window.__padAudio = {min: 0, max: 0};});
-    await page.getByRole("button", {name: new RegExp(`^Pad ${letter}1 — assigned`)}).click();
+    await page.getByRole("button", {name: new RegExp(`^Pad ${letter}01 — assigned`)}).click();
     await expect.poll(() => page.evaluate(() => window.__padAudio.max)).toBeGreaterThan(0.01);
     // Old A1 is negative PCM; old B1 is silent. Neither can satisfy this.
     expect(await page.evaluate(() => window.__padAudio.min)).toBeGreaterThan(-0.01);

@@ -157,7 +157,7 @@ test("physical key order addresses the matching Bank-A Pads and preserves the fu
   ];
   for (const [index, [code, key]] of keys.entries()) {
     const pad = page.getByRole("button", {
-      name: `Pad A${index + 1} — assigned — Key ${key}`,
+      name: `Pad A${String(index + 1).padStart(2, "0")} — assigned — Key ${key}`,
     });
     await armPadOutcomeObservation(pad);
     await page.keyboard.down(code);

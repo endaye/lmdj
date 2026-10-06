@@ -46,7 +46,7 @@ test("bounds selection by effective quota and retains it after a failed commit",
   );
 
   expect(screen.getByText(/Bank A: 0.00 s remaining/)).toBeTruthy();
-  expect(screen.getByText(/Pad usage: A1: 0.00 s/)).toBeTruthy();
+  expect(screen.getByText(/Pad usage: A01: 0.00 s/)).toBeTruthy();
   const length = screen.getByRole("slider", {name: "Long source selection length"});
   expect(length.getAttribute("max")).toBe("40");
   fireEvent.change(length, {target: {value: "25"}});

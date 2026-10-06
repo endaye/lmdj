@@ -4,7 +4,7 @@ import {useCallback, useEffect, useReducer} from "react";
 
 import {BankSelector} from "./bank_selector";
 import type {Bank} from "../state/creator_state";
-import {bankName} from "../state/view_model";
+import {bankName, slotAddress} from "../state/view_model";
 import {
   initialSoundSetState,
   reduceSoundSet,
@@ -442,7 +442,7 @@ export function SoundSetSurface({
                     data-plan={outcome.plan}
                   >
                     <strong>
-                      {bankName(state.preview!.bankId as Bank)}{outcome.pad + 1}
+                      {slotAddress(state.preview!.bankId * 16 + outcome.pad)}
                     </strong>
                     <span>
                       {outcome.plan === "install"

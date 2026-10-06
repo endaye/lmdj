@@ -94,11 +94,11 @@ test("default Bank A plays on the first native touch while the next object waits
     });
     await page.goto("/index.html");
     await expect.poll(() => read(`document.querySelector('[data-testid="creator-phase"]')?.textContent`), {timeout: 60_000}).toBe("ready");
-    const firstPadExpression = `[...document.querySelectorAll('.pad-grid button')].find(button => /^Pad A1 — assigned/.test(button.getAttribute('aria-label')))`;
+    const firstPadExpression = `[...document.querySelectorAll('.pad-grid button')].find(button => /^Pad A01 — assigned/.test(button.getAttribute('aria-label')))`;
     try {await expect.poll(() => read(`(${firstPadExpression})?.disabled`), {timeout:60_000}).toBe(false);}
     catch (error) {throw new Error(`${error.message}\nFacade responses: ${JSON.stringify(await read("window.__seedResponses"))}`);}
     await expect.poll(() => blocked).toBe(true);
-    expect(await read(`[...document.querySelectorAll('.pad-grid button')].find(button => /^Pad A2 — loading/.test(button.getAttribute('aria-label')))?.disabled`)).toBe(true);
+    expect(await read(`[...document.querySelectorAll('.pad-grid button')].find(button => /^Pad A02 — loading/.test(button.getAttribute('aria-label')))?.disabled`)).toBe(true);
     expect(await read("navigator.userActivation.hasBeenActive")).toBe(false);
     expect(await read(`document.querySelector('[data-testid="audio-state"]')?.textContent`)).toBe("Audio inactive");
     const box = await read(`(() => {const button = ${firstPadExpression}; button.scrollIntoView(); return button.getBoundingClientRect().toJSON();})()`);
@@ -155,7 +155,7 @@ test("default Bank A plays on the first native touch while the next object waits
     await page.getByRole("button", {name:"Project",exact:true}).click();
     await page.getByRole("button", {name:"New Project",exact:true}).click();
     await waitForBootProject(page);
-    await expect(page.getByRole("button", {name:/^Pad A1 — empty/})).toBeVisible();
+    await expect(page.getByRole("button", {name:/^Pad A01 — empty/})).toBeVisible();
     const manualId = await projectIdentity(page);
     expect(manualId).not.toBe(ownedId);
     expect(JSON.parse(await page.evaluate(() => localStorage.getItem("lmdj.creator.default-seed.v1"))).projectId).toBe(ownedId);
@@ -165,7 +165,7 @@ test("default Bank A plays on the first native touch while the next object waits
     await page.reload();
     await waitForBootProject(page);
     expect(await projectIdentity(page)).toBe(manualId);
-    await expect(page.getByRole("button", {name:/^Pad A1 — empty/})).toBeVisible();
+    await expect(page.getByRole("button", {name:/^Pad A01 — empty/})).toBeVisible();
     expect(blobs).toHaveLength(16);
   } finally {
     release(); await writeFile(upstreamFile, "");

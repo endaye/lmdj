@@ -88,7 +88,7 @@ const note = (pad: number) =>
 test("renders the active Bank's sixteen Pad rows with their notes", () => {
   renderGrid({bank: 0});
   const grid = screen.getByTestId("sequence-grid");
-  expect(within(grid).getAllByText(/^A(?:[1-9]|1[0-6])$/)).toHaveLength(16);
+  expect(within(grid).getAllByText(/^A(?:0[1-9]|1[0-6])$/)).toHaveLength(16);
   const first = note(0);
   expect(first.getAttribute("data-onset-tick")).toBe("0");
   expect(first.getAttribute("data-duration-tick")).toBe("240");
@@ -98,7 +98,7 @@ test("renders the active Bank's sixteen Pad rows with their notes", () => {
   expect(second.getAttribute("data-duration-tick")).toBe("480");
   expect(within(row(2)).queryByTestId("sequence-grid-note")).toBeNull();
   expect(screen.getByRole("img", {
-    name: "Pad A2 note · onset 240 · length 480 · velocity 80",
+    name: "Pad A02 note · onset 240 · length 480 · velocity 80",
   })).toBeTruthy();
 });
 
@@ -106,7 +106,7 @@ test("follows Bank switching to the other Bank's Pads and notes", () => {
   const {rerender} = renderGrid({bank: 0});
   rerender({bank: 1});
   const grid = screen.getByTestId("sequence-grid");
-  expect(within(grid).getAllByText(/^B(?:[1-9]|1[0-6])$/)).toHaveLength(16);
+  expect(within(grid).getAllByText(/^B(?:0[1-9]|1[0-6])$/)).toHaveLength(16);
   expect(within(row(0)).queryByTestId("sequence-grid-note")).toBeNull();
   const otherBankNote = note(2);
   expect(otherBankNote.getAttribute("data-onset-tick")).toBe("480");

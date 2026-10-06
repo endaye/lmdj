@@ -1,7 +1,7 @@
 import {useEffect, useRef, useState} from "react";
 
 import type {Bank} from "../state/creator_state";
-import {bankName} from "../state/view_model";
+import {slotAddress} from "../state/view_model";
 import {
   createSequenceGridModel,
   sameSequenceGridKey,
@@ -511,7 +511,7 @@ export function SequenceGrid(props: SequenceGridProps) {
         >
           {displayRows.map((row) => (
             <div className="sequence-grid-row" data-pad={row.pad} key={row.pad}>
-              <span className="sequence-grid-pad">{bankName(bank)}{row.pad + 1}</span>
+              <span className="sequence-grid-pad">{slotAddress(bank * 16 + row.pad)}</span>
               <div
                 className="sequence-grid-lane"
                 onPointerDown={lanePointerDown(row.pad)}
@@ -536,7 +536,7 @@ export function SequenceGrid(props: SequenceGridProps) {
                     data-velocity={note.velocity}
                     {...(note.preview ? {"data-preview": "true"} : {})}
                     role="img"
-                    aria-label={`Pad ${bankName(bank)}${note.pad + 1} note · onset ${note.onsetTick} · length ${note.durationTick} · velocity ${note.velocity}`}
+                    aria-label={`Pad ${slotAddress(bank * 16 + note.pad)} note · onset ${note.onsetTick} · length ${note.durationTick} · velocity ${note.velocity}`}
                     key={`${note.onsetTick}:${index}`}
                     {...(note.preview ? {} : {onPointerDown: notePointerDown(note, "body")})}
                     style={{

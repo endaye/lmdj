@@ -41,7 +41,7 @@ function renderControls(overrides: Partial<React.ComponentProps<typeof SampleCon
   const onReset = vi.fn();
   const view = render(
     <SampleControls
-      padLabel="Pad A1"
+      padLabel="Pad A01"
       playback={playback}
       audioSuspended={false}
       onPreview={onPreview}
@@ -57,7 +57,7 @@ test("Sample controls stay an editor, not an overview projection", () => {
   renderControls();
   expect(screen.getByRole("button", {name: "One Shot"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Loop"})).toBeTruthy();
-  expect(screen.getByRole("slider", {name: "Pad A1 Volume"})).toBeTruthy();
+  expect(screen.getByRole("slider", {name: "Pad A01 Volume"})).toBeTruthy();
 });
 
 test("Loop switches the trigger label from One Shot to Hold without overlapping state", async () => {
@@ -82,7 +82,7 @@ test("Mute is independent and Volume previews then commits in 0.1 dB steps", () 
   fireEvent.click(screen.getByRole("button", {name: "Mute"}));
   expect(onCommit).toHaveBeenLastCalledWith({...playback, muted: true});
 
-  const volume = screen.getByRole("slider", {name: "Pad A1 Volume"});
+  const volume = screen.getByRole("slider", {name: "Pad A01 Volume"});
   expect(volume.getAttribute("step")).toBe("0.1");
   fireEvent.pointerDown(volume, {pointerId: 2});
   fireEvent.change(volume, {target: {value: "-3.2"}});
@@ -95,7 +95,7 @@ test("Mute is independent and Volume previews then commits in 0.1 dB steps", () 
 
 test("ignores a non-finite Volume input without previewing or committing NaN", () => {
   const {onPreview, onCommit} = renderControls();
-  const volume = screen.getByRole("slider", {name: "Pad A1 Volume"});
+  const volume = screen.getByRole("slider", {name: "Pad A01 Volume"});
   Object.defineProperty(volume, "valueAsNumber", {
     configurable: true,
     get: () => Number.NaN,
@@ -111,7 +111,7 @@ test("ignores a non-finite Volume input without previewing or committing NaN", (
 
 test("commits Volume once when the pointer is released off the control", () => {
   const {onCommit} = renderControls();
-  const volume = screen.getByRole("slider", {name: "Pad A1 Volume"});
+  const volume = screen.getByRole("slider", {name: "Pad A01 Volume"});
 
   fireEvent.pointerDown(volume, {pointerId: 4});
   fireEvent.change(volume, {target: {value: "-2.5"}});
@@ -131,7 +131,7 @@ test.each(["pointer", "keyboard"] as const)(
       const [current, setCurrent] = useState(playback);
       return (
         <SampleControls
-          padLabel="Pad A1"
+          padLabel="Pad A01"
           playback={current}
           audioSuspended={false}
           onPreview={(next) => {
@@ -144,7 +144,7 @@ test.each(["pointer", "keyboard"] as const)(
       );
     }
     render(<ControlledControls />);
-    const volume = screen.getByRole("slider", {name: "Pad A1 Volume"});
+    const volume = screen.getByRole("slider", {name: "Pad A01 Volume"});
 
     if (completion === "pointer") {
       fireEvent.pointerDown(volume, {pointerId: 14});
@@ -167,7 +167,7 @@ test("Reset requires an explicit accessible confirmation", async () => {
   const user = userEvent.setup();
   const {onReset} = renderControls();
   await user.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
-  expect(screen.getByRole("dialog", {name: "Reset Pad A1?"})).toBeTruthy();
+  expect(screen.getByRole("dialog", {name: "Reset Pad A01?"})).toBeTruthy();
   await user.click(screen.getByRole("button", {name: "Cancel reset"}));
   expect(onReset).not.toHaveBeenCalled();
 
@@ -184,7 +184,7 @@ test("contains Reset focus, cancels with Escape, and restores its trigger", asyn
   reset.focus();
   await user.click(reset);
 
-  const dialog = screen.getByRole("dialog", {name: "Reset Pad A1?"});
+  const dialog = screen.getByRole("dialog", {name: "Reset Pad A01?"});
   const cancel = screen.getByRole("button", {name: "Cancel reset"});
   const confirm = screen.getByRole("button", {name: "Confirm reset"});
   expect(dialog.getAttribute("aria-modal")).toBe("true");
@@ -199,7 +199,7 @@ test("contains Reset focus, cancels with Escape, and restores its trigger", asyn
   expect(document.activeElement).toBe(confirm);
 
   fireEvent.keyDown(dialog, {key: "Escape"});
-  expect(screen.queryByRole("dialog", {name: "Reset Pad A1?"})).toBeNull();
+  expect(screen.queryByRole("dialog", {name: "Reset Pad A01?"})).toBeNull();
   expect(document.activeElement).toBe(reset);
 });
 
@@ -211,7 +211,7 @@ test("restores Reset confirmation focus to a safe enabled fallback", async () =>
       <div>
         <button type="button">Safe focus fallback</button>
         <SampleControls
-          padLabel="Pad A1"
+          padLabel="Pad A01"
           playback={playback}
           audioSuspended={false}
           disabled={disabled}
@@ -239,7 +239,7 @@ test("keeps editing available while audio preview is suspended", () => {
   expect(screen.getByText("Tap a Pad to preview")).toBeTruthy();
   expect(screen.getByRole("button", {name: "Loop"}).hasAttribute("disabled"))
     .toBe(false);
-  expect(screen.getByRole("slider", {name: "Pad A1 Volume"}).hasAttribute("disabled"))
+  expect(screen.getByRole("slider", {name: "Pad A01 Volume"}).hasAttribute("disabled"))
     .toBe(false);
 });
 
@@ -283,10 +283,10 @@ test("Reverse toggles the Pad's playback direction", async () => {
 
 test("Loop mode appears only while Loop is on", () => {
   const plain = renderControls();
-  expect(screen.queryByRole("group", {name: "Pad A1 Loop mode"})).toBeNull();
+  expect(screen.queryByRole("group", {name: "Pad A01 Loop mode"})).toBeNull();
   plain.unmount();
   renderControls({playback: {...playback, triggerMode: "loop_gate"}});
-  expect(screen.getByRole("group", {name: "Pad A1 Loop mode"})).toBeTruthy();
+  expect(screen.getByRole("group", {name: "Pad A01 Loop mode"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Forward"}).getAttribute("aria-pressed"))
     .toBe("true");
 });
@@ -305,7 +305,7 @@ test("Ping-pong clears the crossfade it cannot use", async () => {
 
 test("Pitch previews every move and commits once in cents", () => {
   const {onPreview, onCommit} = renderControls();
-  const pitch = screen.getByRole("slider", {name: "Pad A1 Pitch"});
+  const pitch = screen.getByRole("slider", {name: "Pad A01 Pitch"});
   fireEvent.pointerDown(pitch, {pointerId: 3});
   fireEvent.change(pitch, {target: {value: "3.5"}});
   expect(onPreview).toHaveBeenLastCalledWith({...playback, pitchCents: 350});
@@ -322,7 +322,7 @@ test.each(["Home", "End", "PageUp", "PageDown"])(
   "a %s key gesture commits on release",
   (key) => {
     const {onPreview, onCommit} = renderControls();
-    const pitch = screen.getByRole("slider", {name: "Pad A1 Pitch"});
+    const pitch = screen.getByRole("slider", {name: "Pad A01 Pitch"});
     fireEvent.keyDown(pitch, {key});
     fireEvent.change(pitch, {target: {value: "24"}});
     expect(onPreview).toHaveBeenLastCalledWith({...playback, pitchCents: 2_400});
@@ -334,7 +334,7 @@ test.each(["Home", "End", "PageUp", "PageDown"])(
 
 test("leaving a slider commits its pending keyboard gesture once", () => {
   const {onCommit} = renderControls();
-  const pan = screen.getByRole("slider", {name: "Pad A1 Pan"});
+  const pan = screen.getByRole("slider", {name: "Pad A01 Pan"});
   fireEvent.change(pan, {target: {value: "30"}});
   fireEvent.blur(pan);
   fireEvent.blur(pan);
@@ -345,7 +345,7 @@ test("leaving a slider commits its pending keyboard gesture once", () => {
 test("Pan previews every move and Escape cancels it", () => {
   const onCancel = vi.fn();
   const {onPreview, onCommit} = renderControls({onCancel});
-  const pan = screen.getByRole("slider", {name: "Pad A1 Pan"});
+  const pan = screen.getByRole("slider", {name: "Pad A01 Pan"});
   fireEvent.pointerDown(pan, {pointerId: 4});
   fireEvent.change(pan, {target: {value: "-40"}});
   expect(onPreview).toHaveBeenLastCalledWith({...playback, pan: -40});
@@ -359,7 +359,7 @@ test("Pan previews every move and Escape cancels it", () => {
 
 test("Attack previews every move and commits once in milliseconds", () => {
   const {onPreview, onCommit} = renderControls();
-  const attack = screen.getByRole("slider", {name: "Pad A1 Attack"});
+  const attack = screen.getByRole("slider", {name: "Pad A01 Attack"});
   fireEvent.pointerDown(attack, {pointerId: 5});
   fireEvent.change(attack, {target: {value: "250"}});
   expect(onPreview).toHaveBeenLastCalledWith({...playback, attackMs: 250});
@@ -378,12 +378,12 @@ test("a ramp at or under the declick reads as 2 ms", () => {
 
 test("Release edits a releasing Pad and is unavailable on a one-shot", () => {
   const oneShot = renderControls();
-  expect(screen.getByRole("slider", {name: "Pad A1 Release"}).hasAttribute("disabled"))
+  expect(screen.getByRole("slider", {name: "Pad A01 Release"}).hasAttribute("disabled"))
     .toBe(true);
   oneShot.unmount();
   const gated = {...playback, triggerMode: "gate" as const};
   const {onCommit} = renderControls({playback: gated});
-  const release = screen.getByRole("slider", {name: "Pad A1 Release"});
+  const release = screen.getByRole("slider", {name: "Pad A01 Release"});
   expect(release.hasAttribute("disabled")).toBe(false);
   fireEvent.change(release, {target: {value: "1200"}});
   fireEvent.blur(release);
@@ -392,7 +392,7 @@ test("Release edits a releasing Pad and is unavailable on a one-shot", () => {
 
 test("Tone is bipolar: low-pass below centre, high-pass above, off in the deadband", () => {
   const {onPreview, onCommit} = renderControls();
-  const tone = screen.getByRole("slider", {name: "Pad A1 Tone"});
+  const tone = screen.getByRole("slider", {name: "Pad A01 Tone"});
   expect(screen.getByText("Off")).toBeTruthy();
   fireEvent.pointerDown(tone, {pointerId: 6});
   fireEvent.change(tone, {target: {value: "-40"}});

@@ -59,7 +59,7 @@ function renderEditor(overrides: Partial<React.ComponentProps<typeof WaveformEdi
   const onCancel = vi.fn();
   const view = render(
     <WaveformEditor
-      padLabel="Pad A1"
+      padLabel="Pad A01"
       envelope={envelope}
       metadata={envelope.metadata}
       projectRevision={envelope.projectRevision}
@@ -149,7 +149,7 @@ test("initializes the real source viewport before an asynchronous envelope arriv
 
   view.rerender(
     <WaveformEditor
-      padLabel="Pad A1"
+      padLabel="Pad A01"
       envelope={envelope}
       metadata={envelope.metadata}
       projectRevision={envelope.projectRevision}
@@ -178,10 +178,10 @@ test("refuses to draw a waveform from a non-integer peak bucket", () => {
 
 test("exposes Pad and time labels on focusable handles and numeric inputs", () => {
   renderEditor();
-  expect(screen.getByRole("slider", {name: "Pad A1 Start — 0.000 s"})).toBeTruthy();
-  expect(screen.getByRole("slider", {name: "Pad A1 End — 0.000 s"})).toBeTruthy();
-  expect(screen.getByRole("spinbutton", {name: "Pad A1 Start time (seconds)"})).toBeTruthy();
-  expect(screen.getByRole("spinbutton", {name: "Pad A1 End time (seconds)"})).toBeTruthy();
+  expect(screen.getByRole("slider", {name: "Pad A01 Start — 0.000 s"})).toBeTruthy();
+  expect(screen.getByRole("slider", {name: "Pad A01 End — 0.000 s"})).toBeTruthy();
+  expect(screen.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"})).toBeTruthy();
+  expect(screen.getByRole("spinbutton", {name: "Pad A01 End time (seconds)"})).toBeTruthy();
   expect(screen.getByText("START / TAP TO EDIT")).toBeTruthy();
   expect(screen.getByText("END / TAP TO EDIT")).toBeTruthy();
 });
@@ -233,7 +233,7 @@ test.each(["pointercancel", "Escape"] as const)(
     if (cancellation === "pointercancel") {
       fireEvent.pointerCancel(start, {pointerId: 9});
     } else {
-      fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A1 Start/}), {
+      fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A01 Start/}), {
         key: "Escape",
       });
     }
@@ -364,7 +364,7 @@ test("disabled or invalid envelope removes the grip pointer path", () => {
 
 test("keyboard handles move one frame or the nearest 10 ms without crossing", () => {
   const oneFrame = renderEditor();
-  const start = screen.getByRole("slider", {name: /Pad A1 Start/});
+  const start = screen.getByRole("slider", {name: /Pad A01 Start/});
   fireEvent.keyDown(start, {key: "ArrowRight"});
   fireEvent.keyUp(start, {key: "ArrowRight"});
   expect(oneFrame.onPreview).toHaveBeenLastCalledWith({...playback, trimStartFrame: 2});
@@ -380,7 +380,7 @@ test("keyboard handles move one frame or the nearest 10 ms without crossing", ()
     envelope: longEnvelope,
     playback: {...playback, trimStartFrame: 1, trimEndFrame: 1_000},
   });
-  const shiftedStart = screen.getByRole("slider", {name: /Pad A1 Start/});
+  const shiftedStart = screen.getByRole("slider", {name: /Pad A01 Start/});
   fireEvent.keyDown(shiftedStart, {key: "ArrowRight", shiftKey: true});
   fireEvent.keyUp(shiftedStart, {key: "ArrowRight", shiftKey: true});
   expect(shifted.onCommit).toHaveBeenLastCalledWith({
@@ -391,7 +391,7 @@ test("keyboard handles move one frame or the nearest 10 ms without crossing", ()
   shifted.unmount();
 
   const bounded = renderEditor({playback: {...playback, trimStartFrame: 6}});
-  const boundedStart = screen.getByRole("slider", {name: /Pad A1 Start/});
+  const boundedStart = screen.getByRole("slider", {name: /Pad A01 Start/});
   fireEvent.keyDown(boundedStart, {key: "ArrowRight"});
   fireEvent.keyUp(boundedStart, {key: "ArrowRight"});
   expect(bounded.onCommit).not.toHaveBeenCalled();
@@ -399,7 +399,7 @@ test("keyboard handles move one frame or the nearest 10 ms without crossing", ()
 
 test("ignores non-finite numeric input instead of creating a NaN draft", () => {
   const {onPreview, onCommit} = renderEditor();
-  const start = screen.getByRole("spinbutton", {name: "Pad A1 Start time (seconds)"});
+  const start = screen.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"});
   Object.defineProperty(start, "valueAsNumber", {
     configurable: true,
     get: () => Number.NaN,
@@ -527,7 +527,7 @@ test("does not let an old Project query hide the current revision waveform", asy
   };
   view.rerender(
     <WaveformEditor
-      padLabel="Pad A1"
+      padLabel="Pad A01"
       envelope={currentEnvelope}
       metadata={currentEnvelope.metadata}
       projectRevision={currentEnvelope.projectRevision}
@@ -573,14 +573,14 @@ test("every handle and viewport action exposes a 44 px hit target", () => {
 
 test("loop point and crossfade appear only for a looping Pad", () => {
   const plain = renderEditor();
-  expect(screen.queryByRole("spinbutton", {name: "Pad A1 Loop start time (seconds)"}))
+  expect(screen.queryByRole("spinbutton", {name: "Pad A01 Loop start time (seconds)"}))
     .toBeNull();
   expect(plain.container.querySelector('[data-handle="loop"]')).toBeNull();
   plain.unmount();
   const looped = renderEditor({playback: {...playback, triggerMode: "loop_gate"}});
-  expect(screen.getByRole("spinbutton", {name: "Pad A1 Loop start time (seconds)"}))
+  expect(screen.getByRole("spinbutton", {name: "Pad A01 Loop start time (seconds)"}))
     .toBeTruthy();
-  expect(screen.getByRole("spinbutton", {name: "Pad A1 Loop crossfade (milliseconds)"}))
+  expect(screen.getByRole("spinbutton", {name: "Pad A01 Loop crossfade (milliseconds)"}))
     .toBeTruthy();
   expect(looped.container.querySelector('[data-handle="loop"]')).not.toBeNull();
 });
@@ -589,7 +589,7 @@ test("a loop point edit previews, clamps into the trim and commits on blur", () 
   const {onPreview, onCommit} = renderEditor({
     playback: {...playback, triggerMode: "loop_gate"},
   });
-  const loop = screen.getByRole("spinbutton", {name: "Pad A1 Loop start time (seconds)"});
+  const loop = screen.getByRole("spinbutton", {name: "Pad A01 Loop start time (seconds)"});
   fireEvent.focus(loop);
   fireEvent.change(loop, {target: {value: String(100 / 44_100)}});
   // The trim ends at frame 7, so the loop point clamps to its last frame.
@@ -607,7 +607,7 @@ test("a crossfade edit is bounded by half of the remaining loop", () => {
     playback: {...playback, triggerMode: "loop_gate", loopStartFrame: 3},
   });
   const crossfade = screen.getByRole("spinbutton", {
-    name: "Pad A1 Loop crossfade (milliseconds)",
+    name: "Pad A01 Loop crossfade (milliseconds)",
   });
   fireEvent.focus(crossfade);
   fireEvent.change(crossfade, {target: {value: "1000"}});
@@ -640,7 +640,7 @@ test("a reversed loop draws and edits its loop point at the mirror", () => {
   // trim [1, 7): stored frame 3 mirrors to boundary 1 + 7 - 3 = 5.
   expect(container.querySelector('[data-handle="loop"]')!.getAttribute("x1"))
     .toBe(forwardX);
-  const loop = screen.getByRole("spinbutton", {name: "Pad A1 Loop start time (seconds)"});
+  const loop = screen.getByRole("spinbutton", {name: "Pad A01 Loop start time (seconds)"});
   expect(Number((loop as HTMLInputElement).value)).toBeCloseTo(5 / 44_100, 12);
   // The crossfade window follows the pass's end, which is Start in reverse.
   const fade = container.querySelector("rect[data-crossfade]")!;

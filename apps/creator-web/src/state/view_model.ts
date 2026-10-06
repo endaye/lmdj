@@ -6,9 +6,14 @@ export function bankName(bank: Bank): (typeof BANK_NAMES)[Bank] {
   return BANK_NAMES[bank];
 }
 
+// A Pad address is the Bank letter plus a two-digit Pad number: A01–D16.
+export function slotAddress(slot: number): string {
+  const bank = Math.floor(slot / 16) as Bank;
+  return `${bankName(bank)}${String((slot % 16) + 1).padStart(2, "0")}`;
+}
+
 export function padAddress(pad: ProjectPadView): string {
-  const bank = Math.floor(pad.slot / 16) as Bank;
-  return `${bankName(bank)}${(pad.slot % 16) + 1}`;
+  return slotAddress(pad.slot);
 }
 
 export function shortProjectId(projectId: string): string {
