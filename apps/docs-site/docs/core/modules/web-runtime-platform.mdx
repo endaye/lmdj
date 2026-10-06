@@ -28,9 +28,10 @@ Creator Web 与诊断 Web Runtime Host 共用 Platform 和同一 Wasm Runtime。
 Creator/Diagnostic Host → Runtime Session → Application Facade；Project/Sample/Sequence actions 共享有界 Host lane，Runtime Session 的 `createProject` 在串行 Project action 上发出 `project.create`，先校验调用方给出的 Project/Pattern 身份、BPM 与 Bar 数，再只接受指名同一身份、revision 0 的结果；`duplicateProject({sourceProjectId, projectId})` 在同一串行 lane 上发出 `project.duplicate`，发送前拒绝非法或相同的身份，只接受指名新身份、revision 0 的 Local Project summary；Host 只复制、不替换当前打开的 Project、writer lease 或 Runtime，调用方另行 `openProject` 打开副本。Host 在 running、有 active Sequence 或未完成 Sample import 时以 `HOST_STATE_INVALID` 拒绝，另一标签页持有源 Project 时返回 `PROJECT_BUSY`，目标身份已被使用时返回 `DUPLICATE_ID`；源 Project 有未完成录制（含崩溃 owner 留下的 active Journal）时返回 `HOST_STATE_INVALID` 与 “source Project has an unfinished recording”，而不是被通用 sanitizer 还原成请求无效。发布前 deadline 已过则不发布任何副本，由 bridge 报告 `HOST_TIMEOUT`。Pointer、Keyboard、MIDI 汇入同一 frame-stamped admission。Control bridge 把 typed overlay projection 合成 immutable Prepared Pattern，AudioWorklet 在下一 Bar 消费并发布 Voice/Bar state；Project Truth 仍只在 flush/Stop commit 后变化。全局 Pattern transport 的 live overlay 发布由 Facade 协调器在控制节拍上驱动：Platform 实现 `publish_overlay` 能力（prepare 走 Runtime Snapshot），service tick 持续服务开着的录音，同 Pattern 的排队发布在落地前 coalesce，Record-off 等待其落地后在边界外结算——无 beat restart。
 ## 5. API 与 Contract 边界
 Platform 校验 canonical distribution manifest，但该同构建协议不是公开跨版本 Contract。`1.0.44.0` 的 manifest gate 要求恰好十三项 resource limit：`decoded_float_pcm_bytes_per_bank` 67108864、`decoded_float_pcm_bytes_total` 134217728、`decoded_float_pcm_bytes_resident` 268435456、`imported_wav_bytes` 68157440、`ingest_channels` 2、`ingest_decoded_frames` 43200000、`ingest_source_bytes` 104857600、`perform_recording_frames` 86400000、`perform_recording_queue_batches` 32，以及本 Build 新增的四项 Sound Set Set Store 上限 `maximum_soundset_manifest_bytes` 1048576、`maximum_soundset_blob_bytes` 68157440、`maximum_soundset_unique_bytes` 268435456 与 `maximum_soundset_staging_bytes` 536870912；键集是精确匹配，多一项默认值即拒绝，每一项都必须是正的安全整数并逐值比对。这正是 Platform 本次取 MAJOR 的依据：一份在 `1.0.43.0` 下合法的分发清单，在本 Build 的 gate 下被拒绝。四项上限是 Host 容量事实，经 `ApplicationConfig` 到达 Core；浏览器侧 Catalog 对象的暂存缓冲是另一回事，不在 manifest 内。资产清单同样精确：声明 `compatible_hosts` 的 Creator 分发必须恰好携带一个 `perform_master_tap_worklet` 角色的资产，诊断 Host 分发必须为零；重复路径、缺失或错误的角色计数、非法 digest 与资产路径，都是 fail-closed 的 inventory 缺陷而不是可容忍的默认值；resource limit、Emscripten 身份与 host allowlist 也逐项精确比对。更早的不可变分发包保留各自的精确身份，不被回溯要求携带 Stage 10 字段。Project Bundle 与 WAV sidecar 只通过 Facade 的 bounded streaming API 进入 Core，Browser 不解析 Project/WAV。
-Creator 离线分发清单按 Host 主版本区分资产集合。当前生成的 Creator 资产库存包含 favicon，
-不包含离线 worker；Native gate 将恰好一个 `offline_worker` 的要求留给随后的离线 Host MAJOR。
-已发布清单保留原有集合，未来离线清单缺失或重复 worker 均拒绝 ready 与 Runtime 创建。
+Creator 资产集合由实际 Host manifest 与生成的 `expected_assets` 选择。
+Native gate 对进入离线主版本范围的 Creator 清单要求恰好一个 `offline_worker`；
+此前的 Creator 清单与诊断 Host 清单要求零个。缺失、多余或重复均拒绝 ready
+与 Runtime 创建，已发布清单保留其原有集合。
 OPFS 的素材持久化不等同于离线启动。
 
 ## 6. 状态、错误与并发
@@ -38,14 +39,14 @@ Manifest mismatch、生命周期失效和 terminal failure 均 fail closed；Mai
 
 Runtime Session 启动只运行一次真实 Control Worker/OPFS capability probe，默认等待预算为 15 秒。明确缺少 Worker/Blob、Worker 返回 negative 或 Worker error 继续 fail closed 为 `UNSUPPORTED_WEB_RUNTIME`；纯调度预算耗尽精确进入 `HOST_TIMEOUT`，不能伪造 `opfs`、`opfsSyncAccessHandle` 或 `opfsWritableReplace` 缺失。message、error 与 timeout 三条 settlement 路径都由同一 `finally` terminate Worker 并 revoke Blob URL。显式暂停期间 Project 操作保持禁用，Host suspend 响应与浏览器 Context suspend 严格串行。
 ## 7. 产品使用方
-`creator-web 4.0.0` 与 `web-runtime-host 4.0.0`。Platform `4.0.0` 把 `MAX_ASSET_BYTES` 保持为 1 MiB sidecar/chunk 边界，并以 `MAX_SAMPLE_IMPORT_BYTES` 接受 manifest 锁定的完整选区 WAV 总量；协议创建失败不再被误当成 quota/snapshot truth。Sequence UI 只展示 Facade 返回的 authority state；pending switch 在 Bar acknowledgement 前保持旧 Pattern，recovery artifact、长素材解码缓冲与 CaptureBuffer 都不冒充 Project Truth。master tap 采集到的 PCM 批次同样只是瞬态 Host 资源：Runtime Session 的 capture 配置由 manifest 锁定的 `perform_recording_frames` 与 `perform_recording_queue_batches` 派生，两者缺失或不是正整数时状态停留在 `unconfigured`；这些批次在被 Facade 提交为 Artifact 之前都不是创作真相。
+Creator Web 与诊断 Web Runtime Host 共用此 Platform；实际身份由 Build Identity 派生。历史 Platform `4.0.0` 把 `MAX_ASSET_BYTES` 保持为 1 MiB sidecar/chunk 边界，并以 `MAX_SAMPLE_IMPORT_BYTES` 接受 manifest 锁定的完整选区 WAV 总量；协议创建失败不再被误当成 quota/snapshot truth。Sequence UI 只展示 Facade 返回的 authority state；pending switch 在 Bar acknowledgement 前保持旧 Pattern，recovery artifact、长素材解码缓冲与 CaptureBuffer 都不冒充 Project Truth。master tap 采集到的 PCM 批次同样只是瞬态 Host 资源：Runtime Session 的 capture 配置由 manifest 锁定的 `perform_recording_frames` 与 `perform_recording_queue_batches` 派生，两者缺失或不是正整数时状态停留在 `unconfigured`；这些批次在被 Facade 提交为 Artifact 之前都不是创作真相。
 ## 8. 测试与证据
 C++ manifest/control/realtime tests、Node Runtime Session tests、Chromium/WebKit browser proof 与分发验证覆盖共享边界；C++ 生产路径精确验证 live hit 后 pending event 从下一 Bar 重复、BPM rebuild 不丢 overlay、owner loss 清理 active overlay、cleanup publication failure 停止/清空 engine、Stop exact replay 恢复一次 clean-publication failure，且无重复/空洞/陈旧 overlay。failure hook 只编入 private testable target，production archive symbol/marker gate 阻止泄漏。Node 精确断言 Host suspend 未完成时 `AudioContext` 仍为 running，Creator packaged Proof 覆盖真实 Sample Cook split 后的 suspend→activate→Retry Prepare，并继续覆盖 recovery readiness 的 `false -> true -> false -> running` 序列。Stage 10 的新增覆盖：`performance_master_tap_worklet.test.mjs` 覆盖 tap 的分批、控制消息精确形状与停止确认；`performance_master_capture.test.mjs` 覆盖消费侧的精确键校验、generation 隔离、sequence 连续性与停止超时结算；`performance_protocol.test.mjs` 覆盖 Pattern Slot 与 Performance 操作在 Host 协议上的注册与信封校验；`performance_bridge_test.cpp` 覆盖 Control 侧的 Performance 桥接；`manifest_gate_test.cpp` 覆盖九项 resource limit 与 `perform_master_tap_worklet` 角色计数门禁。
 ## 9. 限制与下一门禁
 
-Native manifest 回归直接采用生成身份声明的 Creator 资产库存，完成初始化后
-检查 ready 与 Runtime 创建。它不向现行 favicon 清单补入未声明的离线 worker；
-未来离线清单的 worker 缺失或重复都必须拒绝 ready 与 Runtime 创建。
+Native manifest 回归直接采用当前生成的 `expected_assets`，不增删其角色，完成
+初始化后检查 ready 与 Runtime 创建。对须含 worker 的清单验证缺失或重复均拒绝；
+对不声明 worker 的清单验证额外 worker 拒绝 ready 与 Runtime 创建。
 这些 Native 下层断言不替代浏览器启动、真实设备或离线更新验收。
 
 全局 Pattern transport 的 T0 conformance 使用 Facade 独立执行线程：真实 OPFS
