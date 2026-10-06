@@ -1,0 +1,521 @@
+---
+title: Creator Web Host
+area: hosts
+status: implemented
+host: creator-web
+owners: [product, hosts, web]
+source_paths:
+  - apps/creator-web
+  - apps/creator-web/module.json
+  - packages/web-runtime-platform
+  - products/lmdj/assembly.json
+  - docs/quality/2026-08-07-stage7-creator-editor-acceptance.md
+  - docs/quality/2026-08-09-stage8-sample-editor-acceptance.md
+  - docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md
+  - docs/release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md
+  - docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md
+  - docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md
+  - docs/quality/2026-08-16-stage8b-pad-capture-acceptance.md
+  - docs/quality/2026-08-24-creator-capture-precommit-crop.md
+  - docs/design/2026-08-23-creator-capture-precommit-crop-design.md
+  - docs/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md
+  - docs/plans/2026-08-29-lmdj-stage9-switch-boundary-flush.md
+  - docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md
+  - docs/quality/2026-08-27-stage9-sequence-recording-review.md
+  - docs/prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md
+  - docs/prd/decisions/2026-08-24-capture-input-gate-and-identity.md
+  - docs/plans/2026-08-24-lmdj-capture-input-gate-and-identity.md
+  - scripts/creator-web.sh
+  - scripts/creator-web-deploy.sh
+  - docs/deploy/creator-web.md
+  - .github/workflows/deploy-creator-web.yml
+  - tests/platform/web/creator
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {StatusBadge} from '@site/src/components/StatusBadge';
+
+<BuildIdentity />
+
+Cloudflare 迁移使用固定入口 `https://creator.lmdj.workers.dev/`。
+部署版本来自独立验证的签名 Release，不由本页 current Assembly 推断；配置、
+平台响应差异与迁移验收见 [Creator 部署手册](https://github.com/endaye/lmdj/blob/main/docs/deploy/creator-web.md)。
+
+Creator P1 的离线外壳实现以整个构建为单位缓存入口、清单、JavaScript、Wasm、
+worklet 和哈希 SVG favicon，并在发布可用标记前核对摘要、长度与同源隔离响应头。
+入口对主程序、样式和 favicon 的引用必须绑定同一构建。不完整更新保留
+旧缓存；新 worker 等旧页面关闭后才激活，不中断演奏。新增分发资产需要 Creator
+Host 主版本协调升级；现有 favicon 主版本的七项清单不被追溯要求携带 worker。
+当前身份未声明该资产时不会启用，浏览器及实体离线验收仍待完成。
+Native 清单门禁接受当前实际声明的完整资产图，不额外补入尚未发布的 worker；
+将来声明离线资产的主版本必须恰好携带一个 worker，缺失或重复都在创建 Runtime 前拒绝。
+
+## 状态
+
+<StatusBadge status="implemented" /> Creator Web Host 已进入当前 Product Assembly，并只依赖 Web Runtime Platform。U1 增加的硬件四区外壳（Figma 880×592：实体控制 80×560、只读上屏 752×176、Pad 区与触摸区各 368×368）自 2026-09-17 起是默认布局——这是 owner 在 U7 物理行仍为 deferred 时做出的决定，记录在 `docs/quality/2026-09-11-creator-ui-migration-acceptance.md` §7，不是验收通过。U8 随后（同日、同一 owner 决定）移除了旧 workspace 壳：`Existing workspace` / `Hardware layout` 开关、`?layout=` 查询参数与 `lmdj.creator.layout` 偏好一并退役，启动时清除残留的偏好键；模式栏、状态栏、旧 Sequence 包装与其专用样式删除，`CreatorMode`、`midiLabel`、`transportStatusLabel` 迁到独立模块继续为四区外壳服务。四区外壳是唯一布局；上屏同时给出 Pads 与 Assets 计数。上屏没有操作控件；音频/MIDI/报告在触摸区的 System 组。六个模式的 surface 都挂在触摸屏（Slice / Sound Sets 自 U5 起在触摸子工作区，没有专属实体键）。实体键可访问名仍是 Figma 名称（Project、Sample、Sequence、Perform、Record、Play），V1 把 Logo、旋钮外观和模式/录放键换成 Desktop Final D01–D04 导出图标；Pad 保持槽号/快捷键/Assigned·Empty·Capturing，没有类别数据时不画 DRUMS/BASS 图标。Sequence 触摸区用 Tempo/Swing 推子卡、Bars 分段、Quantize 与 Create Pattern，不增加 Grid/Copy；#1672 T1 起 Tempo/Swing 是直接调节：拖动只本地预览、手势结束（松手/方向与 Home/End/Page 键抬起/blur）提交一次，Escape/pointercancel 取消，另有 ±1 步进与 Tap Tempo（最近至多 4 个间隔的中位数取整、夹取 40–240），不再有 Apply 按钮；录音中这些控件保持禁用并说明原因，control layer 同样以 HOST_STATE_INVALID 拒绝。同一设置行的 METRONOME 开关是设备级监听偏好（IndexedDB `lmdj.creator.host` 的 `metronome.v1`，默认关，重开恢复），不进 Project Truth，也不受 transport 录制禁用影响：click 由 Creator 侧 Web Audio 提前调度、直连 `AudioContext.destination`，绕过 Perform master tap，因此永不进入 Perform 录音或「主输出」重采样；拍点网格用引擎自己的 ceiling 公式在引擎帧上计算（播放中改 BPM 时在响应的 activation_frame 切换网格），经会话的 `sampleAudioClock()` 锚换算到 context 时间轴，常数误差 ≤ 约两个渲染量子（≈5 ms）、无逐拍漂移，每次音频中断恢复（新引擎帧纪元）重新取锚。实体 Play/Stop 与 Record 键已接入全局 Pattern transport（T3 的 `pattern.transport.request`/`inspect`）：Play/Stop 永远是 Pattern 播放/停止，Record 永远是当前 Pattern 的 overdub 录制，绝不表示 Sample capture 或 master recording；普通 mode 导航不再停止 transport。U2 把 Sequence 编序放进四区：上屏是只读 Quantize/Swing/Pattern/phase 投影，触摸区编辑 Tempo/Swing/Quantize、Pattern 选择与创建、恢复 apply/discard/retry；Play/Stop 与 Record 仍只走实体全局 transport，不是 journal stop、Sample capture 或 master WAV。U3 把 Project 列表/导入/打开和音频/MIDI/诊断/恢复留在触摸区：上屏是只读身份/加载/失败/运行时投影；选择不等于打开；New/Save As/完整工程导出保持缺席。V2 把该列表换成 D01 卡片（序号、短 ID、BPM、Pad/Asset 计数），每张卡片仍用 Open 打开，不增加 Save/New/Save As。U4 把 Sample 上屏做成只读波形/格式投影，裁切、试听、分配和采集留在触摸区；未提交 take 仍走现有失焦/中断保留路径。V3 把触摸波形编辑器换成 D03 外观（紫色谱、约 20 可见／40 命中的起止手柄、Start/End 读数卡），不改 trim 提交时机，也不把上屏变成编辑器。U5 把 Slice 与 Sound Sets 放进触摸子工作区，不为左栏增键；候选预览不写 Project Truth，只有明确 Adopt/Keep/Replace 才写入。U6 把 Perform Launch/HOLD/已确认八段 FX、演奏录音/保存/丢弃和回放/重采样留在触摸区；上屏只读；图中 LP/HP/BP 不是可执行控件。V4 把 Perform 换成 D04 外观：触摸区以 LIVE CONTROLS 开头，切换提示读的是真实的 queued/live 状态而不是写死的 NEXT BAR；Pattern 槽做成段落块，已确认实色、待切换描边，并各自带 Queued/Playing 文字，状态不只靠颜色；Filter 与 Delay 两段已有 FX 做成纵向推子卡并把 0–1000 的引擎值回读成百分比，其余六段收进 FX / MORE，折叠时连同未闭合手势一起释放；上屏改为只读的 Bank/Transport/Quantize/已分配 Slot 投影。图中的 MASTER 推子、LP/HP/BP 滤波类型与响应曲线、MUTE/SOLO、输出电平表与 BAR/BEAT 计数在 Host 没有对应动作，一律不画。Desktop Final 对齐计划（`docs/plans/2026-10-06-creator-desktop-final-ui.md`）T1 起，样式里与 Desktop Final 同值的颜色统一改用 `--creator-*` token（按色相命名，不按页面命名，因为颜色表示页面还是参数仍未决定）；机身与上屏底色改为 Desktop Final 的 `#202321` 与 `#292d29`；机身字体栈以 IBM Plex Mono 开头，只有设备上已安装时才使用，否则回落到系统等宽字体。部署 CSP 没有 `font-src`，不允许加载网页字体，所以打包字体是单独的 Task（T1b）。实体 Sequence 键与模式栏读同一个可达性判断：没有 Sequence 能力时两边同样禁用并给出同一条原因，不再挂出一个看着能用、每个动作却静默返回的 Sequence 编辑器；实体 Perform 键仍用较松的条件，因为它落到的是一个写明缺什么的占位页，不是假的可操作控件。六工作区可达性对照、上述缺陷与尚未取得的真机／听感／辅助技术证据记录在 `docs/quality/2026-09-11-creator-ui-migration-acceptance.md`。U7 的物理行仍为 deferred；默认切换与旧壳移除是 owner 决定，不是验收。Project Truth 的当前写出契约是 `lmdj.project.v5`（含 16 个 Pattern Slot 与 `performances`），v1/v2/v3/v4 仅作为只读迁移输入。Creator 支持 WAV、MP3、M4A/AAC 与 FLAC 的内容嗅探摄入，在 48 kHz `OfflineAudioContext` 中把长源解码到 Wasm 外的单一 Host 缓冲，随后提供波形、试听、revision-bound 配额显示和选区提交。Sample Editor 以 Runtime Voice 的 `runtimeFrame`/`sourceFrame` 边缘和 browser monotonic clock 插值选中 Pad 的播放头：one-shot/gate 向 End 推进并在终点收束，loop 模式只在有效 Start/End 选区内回绕；最新开始的选中-Pad Voice 确定性拥有播放头，旧 Voice 的终止边缘不能清除新指示器。停止、完成、选择切换、音频挂起/恢复或 Runtime 替换都会清理临时 Voice/playhead state。播放头对辅助技术隐藏、不是可编辑的裁剪控件；reduced-motion 设置不冻结这个时间真值。Capture 在完整波形上直接显示可独立移动的 Start/End grips，遮暗选区外区域，并以秒显示只读 Duration；内部与提交边界仍使用 `selectionStart + selectionFrames`。提交选区时 1 MiB 只作为单 chunk 上限，选区 WAV 总量仍由已验证 manifest 上限约束；非 quota 协议诊断会在 operation boundary 被收敛为空 details，不再击穿 reducer，Bank/Project quota details 仍严格校验。既有 Sequence Surface、Sample Editor、Pad Capture、pre-commit Crop、输入电平门与可恢复 `DUPLICATE_ID` 行为继续保留。本 Build 新增 Sound Set 目录与安装 surface：浏览 Catalog、检查单个 Set、预览映射，并以 `keep` 或 `replace` 安装到用户选定的 Bank；浏览器侧执行 `fetch` 并把字节交给 Core 暂存，Core 保留全部 Contract、哈希与准入判定。本 Build 起 Set 内音频可以试听：surface 上那两个自 Task 5 就写明的接入点现在各带一个控件——set 级 demo 与每个已占用槽——外加一个停止控件。Facade 解析、把关、解码后交回**已重采样**的 PCM，Host 只把它发布进引擎保留的双槽 audition 池并起声；浏览器侧从不触碰 Set Store 字节，跨边界的只有它播放了什么的几何信息。停止是幂等的 Host 操作，所以控件不判断此刻是否有声音在响——那个判断归引擎，而在渲染与点击之间声音结束时它一定会判错。试听对 Project Truth 是 query：不建 Asset、不动 Pad、不推进 revision，由原生验收 journey 第 10 腿在事情发生之后读回断言。
+
+阻断该 surface 的三个缺陷都已修复并合并。[#900](https://github.com/endaye/lmdj/issues/900) 曾使本 Build 产出的任何 Project 都无法导入——浏览器侧 Bundle reader 的枚举停在 `1.1.0` / v3，而导入 Bundle 是浏览器获得 Project 的唯一途径；[#901](https://github.com/endaye/lmdj/issues/901) 的 `connect-src 'self'` 曾拦截一切跨源 Catalog，Creator 现在通过同源前缀 `/soundset-catalog/` 取用，由 Host 转发到部署配置的上游，页面不再获得任何外部 origin，该指令对 OPFS 中 Project 与音频的外泄保护保持原样；[#902](https://github.com/endaye/lmdj/issues/902) 曾使 Workspace Set Store 在浏览器存储平台上从不发布。`tests/platform/web/creator/creator_web_soundset.spec.mjs` 的六腿 journey 现已无援转绿，并在两台独立搭建的环境上各跑通一次；其断言经逐条扰动验证，包括一次零写入 `keep` 安装不得推进 revision。
+
+## 创作边界
+
+当前 UI 提供 browser-local Project discovery/open、New Project（经共享 Runtime Session 在本机创建空 Project：120 BPM、1 Bar 初始 Pattern，创建后列入 Local Projects 并进入 Sample）、Duplicate Project（自动保存下取代 Save As：Host 以新身份复制当前 Project 的 Project Truth 与 Asset，原 Project、它的 writer 与 Runtime 不受影响，随后 Creator 打开副本——副本 revision 为 0，并成为本设备记住的 Project；音频运行或其他 Project action 进行中时不可用；复制被拒绝（另一标签页占用、未完成录音、播放或 Sample 导入进行中）时原 Project 保持打开，拒绝原因内联显示在 Project 页；副本已存但打开失败时照常报告打开错误，并把副本列入 Local Projects）、portable Project Bundle import、64 个稳定 Pad Slot、Sample Surface 与 Sequence Surface。长素材在读内容前检查 100 MiB source ceiling，可判定的声道/时长在 decode 前拒绝，decode 后再精确验证最多 2 声道和 43,200,000 帧；取消、替换、提交成功、Project 切换和后台恢复都会释放完整源缓冲。Capture 与导入选区都使用 `sample.quota` 返回的 target-exclusive effective headroom，不再有固定单 Pad 帧数上限；冲突或配额拒绝保留源与选区。Pointer、Keyboard、MIDI 经同一 Input Controller 同时进入 live trigger 和全局 Pattern transport 的 post-enqueue admission：candidate 由 Facade 持有的 coordinator 在 acknowledged admission/cutoff 区间内 durable 保留，Record-off 按 exact fence 结算提交，播放保持；Stop 先停调度再结算。实体 Play/Stop 与 Record 键在任何 mode 下都驱动同一 transport projection 与命令身份——Play/Stop 是 Pattern 播放/停止，Record 是当前 Pattern 的 overdub，绝不表示 Sample capture 或 master recording；普通 mode 导航不再停止 transport。Creator 只提交 intent 并渲染 projection：busy、refused、committed-but-not-published 与 recoverable 均如实显示，重试是 inspect/reconcile 同一命令身份，绝不发出新的反向 toggle。播放中的 engagement 诚实拒绝跨身份 Pattern reload；停止态 reload 注销 engagement，由下一条命令按当前 Pattern 重新 vend。Capture、空 Pad 录音与 Pattern／Performance 录音互斥，Pattern 播放仍可继续。敲击 armed Pad 只停采并进入 trim overlay；裁剪/保存由 Host 独立显示，无需 Pattern recording journal。armed 期间其他 Pad 仍可演奏，但不能改写 Capture 所拥有的 Sample selection。已有 transport journal 时，Core 的 Sample 提交 busy 守卫仍保持有效；take 保留，录音结算后可重试提交。Capture 提交的失败或取消仍由 Core 在 writer lease 下判定 exact receipt/Project Truth，冲突 fail closed。Sequence recovery 只允许 fingerprint 匹配的原 Pattern、用户明确选择的有效新 Pattern或 discard；owner-lost 的 transport admission 在列出时被 reconcile 密封为 owner_lost 候选；Apply 把演奏者听到的 take（按下在 attack tail 后结束）回放进目标 Pattern（#1515），只有输入转换尚未结束的 admission 才以 `sequence_admission_unresolved` 拒绝并保留 journal，Discard 释放它。Host 不解析 Bundle、Project、journal、quantizer 或 fingerprint，Project Truth、revision、receipt 与 Runtime publication 均由 Core 决定。
+
+Boot 直接进入一个 Project：本机没有 Project 时自动新建（与 New Project 相同的默认值）并进入 Sample；否则重开本设备上次打开的 Project。该记录只保存在 Host 本地存储（IndexedDB，打开即提交，浏览器崩溃后重启仍回到最后打开的 Project；Chromium 延迟且限频提交 localStorage，曾使崩溃前约一分钟内的记录丢失，#1726），不是 Project Truth；记录缺失、不可读或指向已不存在的 Project 时，Creator 停在 Local Projects 由用户选择，重开失败照常显示错误。Open local 在已有 Project 时仍保持可达；list/create/duplicate/import/open/reopen 属于同一串行 Project action 边界，后发 action 不得与旧 action 重叠或提交过期结果。ready Session 的 diagnostics 更新只同步 Runtime 呈现，不得重新进入 Project inventory/reopen；inventory 只随 Session、Runtime phase 或明确 list retry 变化。Suspend audio 进入显式 `suspending` 屏障：Runtime 发布 `audio-suspended` 只负责输入清理，Project actions 必须等 `session.suspendAudio()` 的 safety cleanup 与 transport response 全部 settle 后才重新开放；拒绝但 Runtime 仍 running 时恢复 running surface。旧 Runtime generation 的 import 被 replacement 取消时，过期 action 不能提交 Project 结果，但它拥有的 transfer UI 必须独立回到 `idle`，避免新 Session 已 ready 而 Creator 永久显示 `importing`。persisted `pagehide` retains the shared Runtime 并进入受控恢复契约；non-persisted terminal `pagehide` performs close。新 Runtime generation 只能在旧 generation 的资源清理完成后接管，Project 会自动 reopen，但 Audio 必须保持 inactive，直到用户再次敲击 Pad 或点击录音，以同一次真实手势唤醒音频。
+
+状态栏显示由生成的 Product Assembly identity 派生的 build 身份（Product Build、Host、Platform 与 protocol 版本），启动时同一身份写入浏览器 console 并暴露为只读的 `window.__LMDJ_CREATOR_BUILD__`；该显示只做呈现，不替代 Runtime Session 对部署 manifest 的验证。状态栏同时显示 Project revision 与 MIDI 授权/输入数；Project Surface 显示 import 传输进度，Local Projects 列表可返回已打开的 Project；Runtime `ready` 时的 advisory 错误可被 Dismiss，`restart-required`、`unsupported`、`failed` 与 `closed` 的 Runtime 错误则保留到 Runtime 自身改变 phase。
+
+Sample 触摸工作区只保留编辑与采集；Bank 导航和可演奏 Pad 网格统一在左侧实体栏／
+Pad 区。该 Pad 区在 Sample mode 同时提供选中态、空槽选样、拖入／替换，以及原有
+pointer／keyboard press、release 和 cancel。Sound Set 的 **Install target Bank**
+是独立安装目标，初始取进入该工作区时的 active Bank；修改它不切换演奏 Bank，之后
+切换实体 Bank 也不会悄悄改写该安装目标。
+
+开发诊断折叠面板在各模式的触摸工作区中保留当前 Workspace 最近 100 条错误。
+Sequence/transport 的恢复、丢弃、设置、切换与命令失败，以及 Project 与 Sample
+preparation 的 shell 错误，都经同一 helper 追加操作名、UTC 时间、code、message
+与 details；可直接读取 `sequence_admission_unresolved` 和 `journal_retained`。
+切换模式不清空记录，刷新页面会清空；不写存储、不上传，也不收集请求、Project
+内容或 stack。现有 alert 与恢复行为不变。此面板是开发辅助，最终用户可见性尚未决定。
+
+## 首次音乐手势
+
+Creator 不再提供专门的 Activate audio 门禁。可演奏 Pad 的 pointer／keyboard press、
+实体 Record／Play 与 Capture Record 点击会在原生可信事件中调用共享 Runtime 的音频唤醒。
+第一次 Pad 敲击等待唤醒完成后只提交一次；已松手的 one-shot 仍可演奏，提前松手的
+Gate／Loop Gate、取消、后台与 Session 替换会阻止迟到的发声。拒绝唤醒恢复原状态，
+下一次真实手势可重试。MIDI Note 不伪造浏览器用户手势；Enable MIDI 的明确点击可唤醒。
+恢复探针仍由 Runtime 的 armed window 决定，未完成的真实 Safari／触控听感验收不由
+组件测试替代。
+
+从 System 点击 `Back to music` 时，同一返回手势立即把焦点还给 System 入口；
+用户随后进入 Sample 参数控件的键盘手势保留自己的焦点，不被下一帧的导航回调打断。
+
+## 演奏边界
+
+Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按空间顺序映射：上方 `Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，下方 `A S D F G H J K` 对应 Pad 9–16；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。用户明确授权 Web MIDI 后，Creator 在 channels 1–16 上接受 Note `36..51` 并映射到当前 Bank；Platform 的可选单 channel filter 不由 Creator 启用。每个 Sample press 以串行 inspect→trigger admission 确定 Runtime-effective playback，release/cancel/stop 与 ordered Voice state 共同维护视觉和真实声音。播放头只消费已快照的 Voice render bounds 与 session-local 观察时间，不写 Project Truth、Runtime Snapshot 或音频线程；并发/retrigger 时最新开始的选中-Pad Voice 获得显示所有权。saved Project revision 与 Runtime revision 分开显示，Cook 失败只重试 prepare、不重放 mutation。恢复期间只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。
+
+Sample 控件在 Volume 之外新增 Pitch（±24 半音，0.1 半音步进，读数如 `+3.5 st`）与 Pan（`L100`–`C`–`R100`），三者共用一个 `ParameterSlider` 手势：拖动经 `sample.preview.set` 试听，松手（pointer up、方向键抬起或窗口级 pointerup）且值变化时只提交一次，Escape 或 pointercancel 取消并清除试听。Reverse 是 `aria-pressed` 开关；Loop 打开时出现 Forward / Ping-pong 分段，选 Ping-pong 会同时清除 crossfade，因为它没有可叠化的接缝。波形编辑器在 Loop 下画出循环点手柄与 crossfade 区，并提供 Loop start（秒）与 Crossfade（毫秒，仅 Forward）读数卡；读数卡聚焦即开始手势、失焦提交、Escape 取消。Reverse 时整个 trim 区间连同循环点一起镜像，循环点手柄、Loop start 读数与 crossfade 区都画在镜像位置，也就是之后各遍回卷处；未设循环点时手柄落在 End。播放头模型与内核一致：按 pitch 速率推进，forward 循环每遍从循环点之后 crossfade 帧继续，ping-pong 在两端反射，reverse 镜像源帧。Reset 恢复全部回放与音色参数的缺省值。
+
+#1667 在同一列控件中加入 Attack（0–2000 ms）、Release（0–4000 ms）与 Tone（−100…+100），同样用 `ParameterSlider`：不超过 2 ms 的斜坡显示为 `2 ms`，即实际渲染的 declick；Tone 在中点以下显示 `LP n`、以上显示 `HP n`，±2 死区内显示 `Off`；one-shot 从不播放 release，所以此时 Release 不可用。其下的 EQ 编辑器（`eq_editor.tsx`）把三段 EQ 画成一张图上的三个极点：横轴是 20 Hz–20 kHz 的对数频率，纵轴是 −18…+18 dB 增益。
+
+- 拖动极点时，极点按指针的位移移动，与按在命中圆的哪个位置无关；没有位移的按压不改变任何值。频率限于该段范围，增益 0.1 dB 步进，±0.5 dB 内吸附到 0。把低段或高段架式拖到底线以下的 Cut 区就变成 cut，cut 保留手势开始时该段的增益（已旁通的段保留底线），与拖动途中的采样无关。
+- 双击中段极点后上下拖动设定 Q。
+- 回到 0 dB 的架式或钟形被旁通，所以平直的 EQ 不让 Pad 变成非中性；极点仍停在原频率。
+- 键盘：上下键 0.5 dB，最多到底线，在底线再按一次变为 cut；从 cut 按上键恢复它保留的增益；左右键一个半音；Shift 加上下键调中段 Q；Delete/Backspace 旁通该段；松开这些步进键时提交，松开其他键不提交。
+- 拖动经 `sample.preview.set` 试听、pointer up 时只提交一次。指针按压不会让极点获得焦点，所以编辑器在 window 上监听 Escape：拖动中按 Escape、pointercancel、音频挂起或切换 Pad（编辑器卸载）都会取消并清除试听。
+- 每个极点是带频段描述的 slider。图的边距大于 22 单位的命中半径，所以极点在任一边缘都保有完整命中圆；图不会窄于 320 单位的 viewBox，所以目标不小于 44 px。
+
+Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform surface 由 Pattern launch strip、FX slider bank、HOLD、Pad surface、录制面板与回放面板组成。
+
+FX 使用固定的八段链路顺序 `filter → delay → reverb → stutter → gate → reverse → crush → cutter`，与 Audio Runtime 的 `kFxChainOrder` 同一份真相；每个 slider 是 `0..1000` 整数范围、中性起点 `500`。FX 随时可用（#1674）：滑杆按下即经 `performance.fx.gesture` 实时作用于 master bus，与演奏录音互不构成前置；录音进行中同一手势再经 `performance.record.event` 记入 journal，录音开始时已为开启状态的 FX 与 HOLD 会补记 engage/hold_on，录音停止不释放仍按住的 FX。折叠 FX / MORE 或卸载时强制释放未闭合手势。HOLD 是链路级开关，同样随时可切换。
+
+Pattern launch strip 呈现 16 个 Pattern Slot（Project 的可发射地址空间），槽位状态为 `idle` / `pending` / `acknowledged`：Creator 发出 `requestPerformancePatternLaunch` 后进入 pending，然后轮询 `performance.record.status`，直到该 `requestId` 出现在 authority 的 `lastLaunchAck` 才标记为已确认；空槽被确认时显式显示 silent gap。Pattern 的 assign/clear/move 只在录制 `idle` 时开放。状态输出中的 open Pad 手势数、open FX 手势数、HOLD 与最后一次 acknowledged launch 全部取自 Facade authority，不做本地预测。
+
+录制阶段机为 `idle → starting → recording → flushing → stopping → stopped → saving | discarding`。录制面板提供 Record / Flush / Stop / Performance 名称 / Save / Discard / Export Performance WAV，并在 `bindingStatus === "retry"` 时额外提供 Retry WAV bind。WAV 绑定词汇是 `unbound | binding | retry | bound`；bind 或随后的 Project truth 刷新失败会回到 `stopped` 并保留 retry，不丢弃已落盘的 WAV 前缀。master tap 以每批最多 4,800 帧喂入流式 WAV writer，背压、写入失败、tap 投递失败与 30 分钟上限都以明确原因封存，durable WAV 前缀仍可保存。
+
+回放面板列出已保存的 Performance，可对其一发起 replay，并显示 `replay.state`、解析出的 revision 与 `neutral` 标记。回放期间可以照常编辑（网格、Pad、BPM）：编辑写入 Truth，回放仍按开始时的 revision 播放、不被打断，回放结束后选中的 Pattern 按 Truth 恢复（#1789）。内部回放内录通过选择 Internal playback 并按住空 Pad 完成：松手后将实际采集的 master 输出保存到该 Pad；中断或达到时长上限的素材由用户显式 Save 或 Discard。回放面板保留 Performance recovery 候选的 Apply recovery / Discard recovery。
+
+Host 只渲染 Facade 返回的 authority：录制状态、pending/acknowledged launch、replay 状态与 recovery 候选都来自 Core 查询结果。演奏输入本身不改写 Project Truth；只有显式的 Save、Discard 与 WAV bind 会带 `expected_revision` 经 Facade 提交 Project mutation，Creator 随后重读 Project truth，不自行推断 revision。
+
+`1.0.40.0` 的 macOS Chrome M2 实体听感 8 个检查组全部通过：非零裁剪、One Shot、Gate release、Loop Gate、Loop Toggle、Volume/Mute、16 Pads 与 Replace/reload 均无可闻异常。约 40 ms 选区的快速重复纹理一度被描述为接缝咔哒；同一候选复听后，操作者明确修正为短片段高速循环的正常声音、没有明显独立接缝爆音。该 `PASS` 只适用于已记录的 Chrome 实体听感行，不表示其他浏览器或设备通过。
+
+同一 Build 的 macOS Chrome M3 Pointer 实体旅程也已通过：内置 MacBook 触控板逐一完成 A1–A16、B/C/D Bank 两端 Pad、十次分离点击与一次双击、drag-off/空隙/禁用控件、模式切换、Suspend→Activate→recovery probe 和报告导出。精确 packaged Creator revision `3aeba5c5` 的报告记录 115 admissions / 115 outcomes / 0 rejections，SHA-256 为 `80895963d297f304d85db5d2e8726bea1d85726e40231f473872c4acd1f4dc41`。该 `PASS` 只升级 Creator 的 M3 macOS Chrome Pointer 行，不替代其他浏览器、设备或输入方式。
+
+`1.0.41.0` 的 macOS Safari M8 Pointer + 实体听感旅程已在部署地址通过：MacBook Pro `Mac16,8` 的内置触控板逐项覆盖全部 Pad/Bank、分离与双击、drag-off/错误目标、模式导航、focus interruption 与显式 Suspend/Activate recovery probe；A1 的严格 `0.505–0.545 s` 非零选区、四种 trigger mode、`0.0 dB` / `-11.7 dB`、Mute 及 A15/A16 reload 持久化均由操作者实听确认。刷新后的最终报告绑定 Project/Runtime revision 83、Audio `running`、2 admissions / 2 outcomes / 0 rejections、无错误，SHA-256 为 `fb87f54f31196cc01211b9c7da8aec34f5f7659b7f7392bdeffd3f5ba1fcc340`。该 [M8 evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md) 只升级 Creator macOS Safari M8，不替代 Safari capture M7、Web Runtime Lab 或 Stage 9 Safari Sequence 行。
+
+同一部署 Build 的 macOS Safari M7 Capture 旅程未通过：正常录音、提交和实听成功，但 Command-Tab focus loss 后，约两秒的录音帧仍被保留，trim dialog 与全部恢复控件却一起消失，Sample 区域只剩空白；导出的报告同时记录 `recovering`、Project/Runtime revision 84，以及没有 Sequence session 的 `trim-overlay`。该 [M7 failure evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md) 绑定 [#625](https://github.com/endaye/lmdj/issues/625)，修复部署后必须从头重跑 #244，当前没有可继承的通过前缀。
+
+#625 的 current-source 修复门要求 Sequence reducer 拒绝没有 active session 的
+`trim-overlay`，并由 packaged Chromium 的确定性非零 Capture journey 验证
+focus loss 后 retained waveform、stop reason、selection、Commit/Discard/Close
+仍可见，导出报告保持 Sequence `stopped` / `session_id: null`。Playwright WebKit
+仍只证明既有 packaged `UNSUPPORTED_WEB_RUNTIME` capability boundary，不能作为
+Capture 渲染证据。
+
+在已部署 `1.0.42.0` 上重跑 M7 证实该 reducer 门生效：Sample 区域完整可见，导出
+报告读到 Sequence `stopped` / `session_id: null`。同一次重跑暴露出第二个、机制
+不同的缺陷 [#738](https://github.com/endaye/lmdj/issues/738)：真实 focus loss
+同时中断 AudioContext，Runtime 进入 audio recovery，而 Sample 区域此前会在
+recovery 时清空 capture target，把面板连同保留的录音一起卸载。修复后 audio
+recovery 只释放 decoded long-source 内存，capture 面板仅由自身的
+Close/Commit/Discard 关闭，与 Runtime session 替换时的既有行为一致。
+
+两个门覆盖各自的一半：packaged Chromium journey 用合成 `blur` 证明面板自身的
+stop 与 retained take，`apps/creator-web/test/workspace_shell.test.tsx` 的
+"audio recovery keeps an open capture panel instead of discarding it" 证明
+audio recovery 不会重建或卸载该面板。合成 `blur` 不会中断 AudioContext，而驱动
+recovery 需要 packaged app 不应存在的 Runtime 状态 seam，这正是 #738 能在
+journey 全绿的情况下逃逸的原因。该自动化只证明状态与渲染边界；在 #738 的修复
+进入已部署 Product Build 并从头重跑 #244 前，M7 仍为 `FAIL`，不能升级为物理
+Safari `PASS`。
+
+## 分发与身份
+
+`scripts/creator-web.sh package` 生成内容哈希资产和 canonical Creator distribution manifest；manifest 绑定 Product Build、Host、Platform、协议、固定 Emscripten 身份、heap 与资源上限，并显式声明兼容的诊断 Host 身份。共享 native manifest gate 只接受 Product Assembly 注入的精确 Host/contract/version 组合。该同构建 manifest ownership 协议不是公开跨版本 Contract。
+
+`1.0.44.0` 的 Creator 同构建 distribution manifest 声明六个 expected asset：`host_main`（`assets/main.*.js`）、`runtime_script`（`assets/runtime.*.js`）、`runtime_wasm`（`assets/runtime.*.wasm`）、`host_style`（`assets/styles.*.css`）、`capture_worklet`（`assets/capture-worklet.*.js`），以及新增的 `perform_master_tap_worklet`（`assets/perform-master-tap.*.js`）；兼容的诊断 Host 身份为 `web-runtime-host 4.0.0`。`apps/creator-web/tools/package.py` 定位 Vite 产出的 master tap processor，按内容哈希为 `assets/perform-master-tap.<sha256>.js`，改写主 bundle 中唯一一处引用，并在匹配为零或多于一个时拒绝打包。共享 native manifest gate 对声明 `compatible_hosts` 的 Creator manifest 要求恰好一个 tap 资产（诊断 Host 为零个），并校验十三项资源上限——既有九项之外，本 Build 新增四项 Sound Set Set Store 上限 `maximum_soundset_manifest_bytes` 1 MiB、`maximum_soundset_blob_bytes` 65 MiB、`maximum_soundset_unique_bytes` 256 MiB 与 `maximum_soundset_staging_bytes` 512 MiB，每一项都必须是正 safe integer 并逐值比对。清单形状改变是 Creator Host 本次取 MAJOR 的依据。多余默认值、重复 role、缺失或错误的前后缀、digest 不匹配，以及无法解析到精确哈希资产的主 bundle URL 都 fail closed。更早的不可变包保持各自的精确身份，不被追溯要求携带 Stage 10 字段。私有协议版本仍为 `1`。
+
+Creator Host `5.0.0` 在这份清单末尾增加 `host_favicon`（`assets/favicon.<sha256>.svg`）。它是 Creator LogoIcon 的四条路径，铺在 `#0a0b09` 上，由 `index.html` 的同一来源图标链接引用，打包时改写成那一个哈希路径。Host 3.x 与 4.x 仍是上面的六项，不得携带 `host_favicon`；Host 2.x 仍是五项。`/favicon.ico` 继续 404。清单形状改变，所以这次 Host 取 MAJOR。这次 Assembly 变化分配 Product Build `2.0.81.0`。它不是公共 Release、部署或 Channel 晋级。
+
+离线 Worker 的第八项资产由实际 Host 版本选择：Creator MAJOR6 及之后
+在既有七项后声明唯一的 `offline_worker`（`assets/offline-worker.<sha256>.js`），
+其内容绑定同一个构建的其余资产图。打包和验证都拒绝缺失或重复的 Worker；
+开发 HTTP 服务核验完整字节，并返回 JavaScript MIME、同源隔离、不可变缓存与
+`Service-Worker-Allowed: /`。MAJOR5 生成七项资产，历史 MAJOR2 的五项、
+MAJOR3/4 的六项也保持各自的清单形状。这项版本条件本身不分配新的 Product Build，
+也不代表离线安装、真实设备恢复或部署验收已经完成。
+
+## 公共部署边界
+
+后续 Web 产品使用 `web-hosts` profile：同一 Product Release 精确包含 Creator 与 Runtime
+各自的 ZIP、checksum、detached checksum signature，共六资产。Creator verifier 在闭合验证
+六资产后只选择 Creator triplet。当前固定入口由 Creator 和 Runtime 各自的 Cloudflare
+部署配置定义，分别为 `https://creator.lmdj.workers.dev/` 和 `https://lab.lmdj.workers.dev/`。
+两者独立部署、验证和恢复，使用 `scripts/cloudflare-host.sh` 消费已签名发布归档；
+Release publication 不 fan-out deployment。
+
+2026-09-08 用户授权删除两个旧 Host Netlify 站点，旧手动 workflow 已停用。
+历史 Netlify 工具源码与证据保留供审计，旧站点不再是回滚或数据迁移入口。
+删除远端托管内容未清除用户浏览器本地 Project；正式导出/导入另由 #961 设计。
+Cloudflare 自动化部署验证通过，Safari、真实听感及稳定观察仍由 #925 追踪。
+
+## 自动化证据
+
+Vitest 覆盖播放头的 normal/loop 时间推进、44.1/48 kHz source-frame 换算、最新 Voice 所有权、终止与生命周期清理，以及长素材容器嗅探、pre/post-decode boundary、单一缓冲、配额选区/拒绝保留，以及 Sequence recovery/trim-overlay 状态、Pattern transport reducer 的 stale 响应拒绝、失败命令身份保留与 absent/null revision 保留、统一输入、Capture 互操作与 privacy-safe acceptance report；Capture 单测另固定 full-buffer 初态、两端点独立操作、midpoint 命中区、grab offset、middle inert、越界/交叉限制、键盘/辅助技术秒值、Escape/cancel 回滚和精确 commit frame range。A9 的七个物理 fixture 由仓库脚本可复现并记录 SHA-256。packaged Playwright 使用真实 Facade 验证组合旅程：Sample Editor journey 在 reduced-motion 设置下断言播放头逐帧推进、对辅助技术隐藏、并在 Voice completion 后移除；并在完整 Capture 波形上移动 Start/End 后核对提交 artifact 的精确 byte length；transport journey 覆盖 Play→Record→live Pad→Record-off→导航→Stop→reopen 的精确 events/revision/单一 session、Record-off ticket 丢失后的同身份 reconcile、停止态切换后 overdub 进新 Pattern，以及 owner loss 后 owner_lost 候选经 Apply 恢复听到的 take、经重开询问 Keep 恢复同一 take 并在 reload 后持久；armed-Pad journey 先证明 journal 打开时 Sample 提交的 busy 守卫拒绝（take 保留），再在同一路程里 Discard、Record-off 结算、重录并提交（播放不中断）、录 A1，随后 Stop、reload/reopen 并检查 exact event delta/order/count、revision、Pad/Asset 以及 WAV media type/SHA-256/byte length Project Truth。Core fault journey另覆盖 pre-publication prepare failure 后的 Discard/disarm、continued flush/Stop 与 restart。回放对齐由 Vitest 固定 Pitch/Pan 的预览、提交与取消、Reverse 与 Loop mode 提交、Ping-pong 清除 crossfade、循环点与 crossfade 读数卡以及 reverse/ping-pong/pitch 下的播放头；packaged Playwright 的 parity journey 在真实 Runtime 上依次证明 normal（每个控件一次 revision 且 `sample.inspect` 回读精确 playback）、cancelled（Escape 后试听清除、无提交）、refused（越界值 `HOST_PROTOCOL_MISMATCH` 与旧 revision `REVISION_CONFLICT`）、failed（manufactured 提交失败显示 alert 且控件保持已提交值）与 reopened（reload 后 Truth 与控件一致），Perform journey 另证明 pan −100 时录下的 master 输出右声道逐样本为 0。Sequence 直接调节 journey 另证明：拖动仅预览、松手恰好提交一次且 revision +1、步进与 TAP 立即提交、Escape 取消不动 Truth、注入 HOST_TIMEOUT 后界面报错且 Truth/读数不变、播放中提交的 activation_frame 是旧 tempo 的下一小节边界、录音中 UI 禁用加 control layer 拒绝的双层拒绝，以及 reload 后 Truth 与界面一致。节拍器 journey 另证明：click 事件的 contextTime 间隔等于 60/bpm（±10%）且每 4 拍一个重音、录音中节拍器照常发声而 Pattern 事件不受影响、节拍器开着录 Perform 得到逐样本数字静音（同 session 的 witness 腿证明采集链有信号）、播放中关开关即停且未发声 click 被取消、reload 后开关状态从 IndexedDB 恢复（全新浏览器档案为默认关）。自动化不替代 #359 的 macOS/iPadOS Safari 内存证据、#605 要求的 macOS Safari 播放头可见运动与听感对齐实体确认，或物理 MIDI/Touch/音频验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
+
+自动化结论本身不是物理验收；M3 的 Chrome Pointer 与 M8 的 Safari Pointer/听感 `PASS` 均来自上述实体记录。Safari capture M7 已在 `1.0.41.0` 实体测试中失败并由 #625 阻塞；其他通过项不替代其完整重跑、Stage 9 Safari Sequence、Chrome MIDI 或 iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
+
+## 非能力
+
+当前不宣称离线安装/PWA、云同步、协作、素材智能、生产部署已执行、`beta`/`stable` 或未执行的物理设备体验已完成。Sequence recording 与 Pad 行网格编辑已交付，但超出 Pad 行的 piano-roll 编辑器、持久化 Asset DSP 与自动 slicing 仍不在当前能力内。Perform surface 已进入 `1.0.42.0` 源码，但 Stage 10 尚无任何物理验收：没有 Perform 的实体听感、实体输入或延迟结论，自动化只证明状态机、authority 归属与分发身份边界。同样不宣称当前 Product Build `1.0.44.0` 已获得 tag、Release、部署或 Channel promotion——匹配该 Build 的不可变门户快照随分配在同一 Pull Request 内冻结，而 tag、Release、部署与 Channel promotion 各自仍是独立的后续授权与验证边界。历史 `1.0.42.0` 自身的 tag、Release、快照、部署与 `dev` 晋级证据不自动升级为当前 Build 的结论。
+
+## Cloudflare 隔离恢复验证
+
+共享 HTTP 检查工具支持显式 `--recovery-target`，分别限制到
+`creator-recovery` 和 `lab-recovery` 的 workers.dev 地址。版本 URL 同时要求
+`--preview` 与实际版本短前缀；正式地址和恢复地址不会因标志缺省而混用。
+输入仍须先独立验证 Release 签名，检查包含完整已验证文件字节与响应规则。
+该命令只读取远端响应，不代表恢复演练或物理浏览器验收已经完成。
+
+## Cloudflare operator workflow
+
+The stable `scripts/cloudflare-host.sh` entry point provides signed candidate
+upload, exact-version HTTP verification, promotion, recovery and explicit
+reconciliation. Operations are requested by an operator; these Hosts do not
+automatically deploy on main pushes. The shared runbook at
+`docs/deploy/cloudflare-hosts.md` records command inputs, the common private
+journal directory, credential isolation and unknown-outcome handling.
+
+Promotion rechecks candidate and prior signed bytes. Recovery selects the exact
+retained prior version, while first publication failure disables its stable
+route. Reconciliation checks current live state and closes the pending local
+operation without a cloud write. Local locks require one coordinated operator
+host and do not lock dashboard changes. These HTTP checks do not establish
+browser, audio, storage migration or manual acceptance.
+
+## Provider 输入 owner 与会话权限
+
+Host 通过 Facade 提供 `provider.list`、`provider.permissions.configure`、
+`provider.select`、`provider.run` 和 `attempt.inspect`。输入必须先成为 Project Asset；
+owner 绑定完整 Artifact identity，读取与完整性检查由 Core 在 writer lease 内完成。
+权限配置替换当前会话的 grant，`provider.list` 回传当前 `granted_permissions`，以便显式授权时保留其他 grant；重启恢复默认 Proof 权限，选择 Provider 不自动授权。
+Slice 参考运行使用显式 `sample.slice.execute` grant 和既有 `test` 平台 token。
+成功或失败保存在 Attempt，重启后可检查；执行不改写 Project Truth。
+Candidate 分析、检查、取消、丢弃和显式采纳通过本 Host 接入；生产 Provider 的质量与平台选择仍未交付。当前身份由上方 Build Identity 派生。
+
+可信程序调用方使用 `window.lmdjWebRuntimeHost.providers` 中的 `listProviders()`、
+`configureProviderPermissions(grantedPermissions)`、`selectProvider(capability, providerId)`、
+`runProvider(request)` 与 `inspectAttempt(attemptId)`。
+Web `input_owners` 每项仅接受 `port/occurrence/project_id/asset_id`；路径由 ControlRuntime
+从当前 retained Project 注入，调用方传路径会被拒绝。无打开 Project 或其他窗口持有
+writer lease 时不能取得输入 owner；没有隐式授权或私有 Wasm 调用要求。
+
+## Slice
+
+Slice 从 Facade Project inspection 列出已保留的源 Asset（包括未分配到 Pad 的素材）。
+用户先选择参考 Provider 并显式授权，再确认此源素材可按当前 public 分类进行本地分析；成功但无 onset 时显示空结果。
+当前参考 Provider 使用既有 test 平台，选择不会自动授权，也不会启用生产 Provider。
+片段可独立试听/停止，未激活音频时如实提示未播放；退出 Slice、切换 Project 或
+关闭界面会停止试听。预览不写入 Project。
+
+每个目标行须明确选择片段、Bank 和 Pad，不预填目标。同一片段可采用到多个不同
+Pad，重复目标被拒绝。采用以当前 revision 和新命令提交一次，刷新 Project 后
+呈现新 Asset，并通过公开 Snapshot 路径准备当前 Pattern 的音频；准备期间阻止旧 Bank 播放。
+若提交已保存但音频准备失败，明确显示音频未就绪，重试只重新准备，不重复采用。
+源素材和已有 Pattern 保留。响应不确定时先检查 Project，
+不自动重发采用。Job 使用 Project/源 Asset 派生的稳定 ID，重新打开可检查
+历史与当前 Set；取消和丢弃显式进行，已采用素材不随 Set 丢弃而删除。
+
+## Project Undo and Redo
+
+The global history controls are shared by Sample, Sequence and Perform. They
+live on the rail as a shifted chord, not as a software toolbar: the full-width
+SHIFT key above the record/play row engages the modifier, ← / → step back and
+forward through the session, and each direction key's lamp lights while its
+direction is available instead of showing a greyed button pair. Desktop parity
+adds Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z, leaving native text undo to editable
+fields. The chord explains disabled states, including unfinished recording,
+import, recovery and Pattern playback. One drag commits at its existing
+gesture boundary.
+The rail requests Facade history; it keeps no Project snapshot or audio copy.
+A failed request retains its exact identity for an explicit retry, and successful
+restoration refreshes the current Project, Pattern and Sample projections.
+
+Navigation and committed saves retain history. Closing, refreshing, reopening,
+switching Project or losing ownership starts a fresh history; saved Truth remains.
+New edits clear Redo, while refused, failed, cancelled and no-op operations preserve
+it. Precommit CaptureBuffer crop remains outside Project Undo. Upcoming hold-record,
+Pad-management and grid-editing interactions remain in their own implementation Tasks.
+Automation verifies state and persistence only; no physical-device listening or
+lifecycle acceptance is claimed by this change.
+
+
+## Delete the selected Pad
+
+The Sample editor places Edit and Delete together for the selected Pad. Edit
+focuses its waveform controls; an empty Pad with no pending work or error disables
+Delete with an explanation.
+The long-source dialog exposes the same action while a selection is committing.
+Delete clears the binding and playback parameters, cancels that Pad's pending
+import and clears failed transient state. Pending browser decode is invalidated;
+its result is released on arrival because browser decode itself has no abort API.
+Late superseded results cannot
+replace the newer projection. Capture must finish or be cancelled first.
+Pattern events and Asset bytes remain; assigning another sound reuses the rhythm.
+One changed Pad is one action in the current Project session's shared Undo/Redo
+history. Future default-Set streaming and per-Pad processing producers must join
+the same cancellation boundary; this control does not implement those producers.
+
+## 默认素材的来源与资产服务
+
+P1 默认套件是 `products/lmdj/assets/default-kit` 中的十六个原创合成打击乐 WAV，
+许可与来源记录在 RIGHTS.md；它不引用 Sound Set 测试语料。生成器、schema/内容哈希与
+WAV 检查、Worker 路由测试由 `scripts/asset-server.sh check` 执行，并纳入 Creator
+验证入口。独立 Cloudflare Worker 只提供 Catalog、manifest、blob 与 health 路由，
+哈希对象不可变缓存，Catalog 短期重新验证。Creator 通过同源 Catalog proxy 访问。
+服务部署与每个对象的真实 GET/字节核验由独立 workflow 留证；源码验证不表示服务
+已部署。首次 Project 的逐 Pad 下载与同构建离线壳由以下 Host 路径接入；实际
+浏览器离线验收仍需完成 P1 集成与版本结算。
+
+P1 默认 Bank A 仅属于第一次自动创建的 Project。Host 保留独立初始化日志：下载中、
+处理中的 Pad 不作为空 Pad；独立安装收据与 Runtime 发布均确认后才可演奏。手动新建、
+导入、Duplicate、删除、撤销以及已完成槽位的重开都不会重新补种。下载与短暂的 authoring
+提交分离；失败重试仍受原 Project、目标空位、版本和原始素材身份约束。
+
+默认下载失败、仍在下载或等待 authoring 许可时，若权威 Project 投影显示用户已给该空 Pad 分配素材，尚未发出安装请求的默认预留会持久退役；迟到的下载与排队提交不会重新安装，Undo 清空该 Pad 后也不会自动补回。Host 取得编辑许可后，才在 Facade 调用前持久保存 command 身份与尚未观察到赋材的标记；日志写入失败不发出安装命令。已发出的默认请求仍可用同一身份恢复原 command receipt。日志会保留期间观察到的赋材。重开后的标记只描述旧 Host 观察到的历史，不能证明它缺席期间没有赋材再 Undo；不论标记缺失、为真或为假，恢复的未知过期命令均会退役，已识别的收据仍以原 command 身份与版本重放。只有由当前 Controller 实际准入、且在其连续持有期间未观察到目标赋材的新请求，才可因其他 Pad 的版本变化继续尝试。
+
+Empty Pads record on a native press and commit on release. The first microphone
+permission request prepares only; press again to record. Choose Microphone or
+Internal playback as a remembered Host preference. Capture excludes Pattern and
+Performance recording while playback may continue. Interrupted and capped takes
+require Save or Discard; leading digital zero alone is trimmed. Saved Performance
+replay remains available; internal playback capture replaces manual resample frames.
+
+Runtime replacement waits for Pad capture permission, startup, source cleanup and
+any admitted save before closing its Session. The Workspace keeps the interrupted
+take's original Project, Pad and audio until explicit Save or Discard. Reopening
+the same Project lets Save use the replacement Session after inspecting that
+original Pad as empty; opening another Project never redirects the take. Other
+empty Pads cannot start a new take until this one is resolved. Late callbacks from
+a resolved source cannot change a successor recording.
+
+麦克风采集在实际 Pad 按下时独立尝试唤醒自己的 AudioContext，不因播放音频暂停而
+等待其激活。是否允许启动由浏览器决定；拒绝或尚未完成的启动在松手、取消时完整
+释放资源，不把零帧录音提交为素材。内部回放采集仍等待播放 Context 可用。这些源路径
+不代替 Safari、iPad 或实体麦克风验收。
+
+Capture 通过 Continue in Sequence 继续录音时，Pattern 播放仍可运行；停止录音后的裁剪/保存对话框由 Host 显示，不要求同时存在 Pattern 录音 journal。
+
+Capture 持有录音或待处理素材时，默认素材的网络下载可继续，但其 Project 安装/发布等待录音提交或丢弃，避免背景初始化改变录音目标的 revision。
+System is a touch subpage: Audio settings, MIDI connection, Provider permissions
+and diagnostics live there. Back to music restores the creative page and entry
+focus while the Pattern transport continues. Four physical page keys remain.
+Project owns Sound Sets; Sample owns Slice. Analysis authorization stays beside
+the analysis action; upper MIDI status remains read-only.
+
+## 首次触屏唤醒
+
+首次触屏启动播放音频遵循浏览器用户激活事件：音频尚未启动时，touch／pen Pad 按下保留本次输入，在同一指针的真实 pointerup 中唤醒；在 Pad 外松手也沿用原手势身份。取消、失焦或销毁不唤醒、不迟发输入。一个合法主指针仍按住时，不阻塞另一种指针（如 pen）先松手的 Pad；非主指针不准入。首个 one-shot 松手后仍只演奏一次，已松手的 gate／loop gate 不迟发；音频已经运行时，触屏仍按下即演奏。该源路径和自动化验证不替代 iPad／Safari 实机听感验收。
+
+## Continue in another tab
+
+A Project has one writer at a time: the tab holding it owns an exclusive OPFS
+writer lease that no other tab can take away. When another tab opens the same
+Project and is refused as busy, the refusal offers **Continue here** next to
+Retry. Continue here asks the holding tab, over a same-origin Creator channel,
+to hand the Project over. The exchange belongs to the Creator Host. It changes
+no Host operation, Facade capability, lease semantics or Contract.
+
+The holding tab treats the request as a Project change. It applies the same
+guard as opening another Project, and also requires capture and Pattern
+transport to be idle. While it is playing, recording, capturing, saving or running
+another Project action, it refuses, and the requesting tab explains why. When it
+accepts, it closes its Runtime through the same barrier as closing the page:
+pending Performance saves finish, then `host.close` commits and releases the writer.
+It then shows that the Project is open in another tab, with its own Continue
+here to take it back; its controls stay unavailable until then.
+
+The requesting tab waits a bounded time for an answer and for the release, and
+can cancel the wait. A holder that is gone, frozen or does not answer counts as
+unanswered. After a release, an unanswered request or a release that did not
+finish, the requesting tab opens the Project once in the ordinary way. If it is
+still busy, the refusal returns with a note naming that outcome. The new holder
+reads only committed Project Truth and starts with an empty Undo/Redo history.
+The previous holder cannot undo afterwards.
+Automation covers the hand-over, refusal, take-back and reopen with two pages
+sharing one browser context. It is not real multi-window, frozen-tab or device
+lifecycle acceptance, and no listening acceptance is claimed.
+
+## Interrupted recordings on reopen
+
+When a Project opens in a Runtime Session and it holds recordings an earlier
+owner left unfinished, Creator asks once. The trigger is boot, a library open,
+a take-back, a reload or a Runtime replacement. Creator reads the Sequence and
+Performance recovery lists, then shows an **Interrupted recording** region.
+It names how many recordings there are and where each was made. A revision
+change within the same open never asks again. A recording interrupted while
+the Project stays open appears only in its existing list.
+
+**Keep recording** is the primary action. It restores each recording to its
+original destination through the existing recovery commands: Sequence apply
+to the original Pattern, and Performance apply through the Perform controller.
+A recording the Core refuses, such as an unresolved admission, stays in its
+list. The region then names it and offers **Open Sequence** or **Open
+Perform**. **Discard…** needs a second confirmation, because a discarded
+recording cannot be restored. **More options** opens the list where the
+recordings are, and **Decide later** closes the region. Neither changes
+anything. The region is not an alert, and it takes no focus, because Enter and
+Space also play Pads.
+
+In the Sequence recovery list, restoring into another Pattern now sits behind a
+**More** disclosure. Recover original Pattern and Discard stay visible.
+Automation covers the prompt in component tests and in a packaged owner-loss
+journey. That journey keeps the take, then reloads with the same persisted Truth
+and no prompt. Real crash and device-lifecycle acceptance is not claimed.
+
+## Error messages
+
+Creator keeps one message catalogue (`state/error_messages.ts`). It maps each
+public error code to what happened, in the user's terms, and to what to do
+next. Storage problems are matched by their storage condition: a full device
+says how to free space, and other storage failures say that saved work stays
+on this device. Audio engine stops say that the Project is saved and not
+affected, and point to Retry runtime. A code Creator does not know gets the
+general message, never the code itself.
+
+The error panel, the Duplicate refusal and Sequence and transport errors use the
+catalogue. The Project overview shows only that something needs attention.
+Codes, storage conditions and resource tokens never appear in that text. They
+are recorded in Developer diagnostics, together with Runtime boot and Host
+terminal errors. Button names are unchanged.
+
+Sample errors use the same catalogue, worded for the Pad and sound being edited,
+with a next step under the message. Long-source import failures read as two
+plain sentences, such as "This sound is longer than Creator can import. Shorten
+it in your audio app, then import it again." They carry no resource tokens or
+counts. A microphone that cannot start names what to do, for example allowing
+access, connecting a microphone or closing the other app, and never names the
+browser exception. Each Pad change, import, room check and recording start
+that fails is recorded in Developer diagnostics with its code and details.
+Recovery More options／Open Sequence／Open Perform 通过同一导航入口离开 System；拒绝恢复的 take 仍保留，导航不额外 apply 或 discard。
+P1 预览被播放音频暂停拒绝时，下一步提示为先演奏 Pad 启动音频，再重试预览；没有单独的音频激活按钮。
+
+Creator keeps a single set of accepted public codes, so a code accepted at one
+boundary is never rejected at the next.
+
+Slices, Sound Sets, Perform and Undo history also read from the catalogue, so no
+Creator surface shows a Host message, a raw `Error.message` or a code:
+
+- Slices keeps its four specific refusals and uses the catalogue for any other.
+- Sound Set refusals show the reason's guidance. The list of unavailable Sets
+  keeps each code and reason on its row as `data-code` and `data-reason` for
+  support and the cross-Host parity check.
+- Perform names the next action, such as "Choose Retry WAV bind" or "Choose Save
+  Performance again". It explains an unavailable recording by its capture code. After
+  a master-tap initialization or processor failure, the next step is to reload,
+  play a Pad to start audio, then record again.
+- Undo history says what happened and what to try.
+
+Each of these failures is recorded in Developer diagnostics.
+
+## Sequence Pattern grid editing
+
+The Sequence touch workspace edits the selected Pattern on a grid. Sixteen
+rows are the active Bank's sixteen Pads, so the grid follows the existing Bank
+keys and the Pattern selector. The horizontal axis is the whole Pattern — one,
+two, four or eight bars — with horizontal scrolling. A snap selector offers
+1/4, 1/8, 1/16, 1/32 and off, defaulting to 1/16. Each note renders as a
+rectangle whose position and length are its exact
+`onset_tick`/`duration_tick` from Project Truth; velocity reads as shade.
+
+One gesture is one `pattern.events.edit`, sent at gesture end through the
+Runtime Session with flat Pad slots (0–63), and one undo record: a pen tap on
+an empty cell adds a note (one snap step long — 1/16 with snap off — at the
+last velocity the grid set, starting at 100); a tap on a note removes it;
+dragging a note's body moves it and dragging its end resizes it; a vertical
+drag in VEL mode sets velocity from the pointer's height in the row; and a
+drag on empty space box-selects, after which the selection deletes or moves as
+one batch command. A gesture that ends where it started sends nothing. Moves
+and lengths snap to the selected grid, lengths clamp to the loop seam, and a
+move onto an occupied key replaces that note by the key rule.
+
+While the transport records, editing is disabled and the grid says so. While
+the transport only plays, an edit of the playing Pattern commits and swaps
+its Runtime view in place at once: the play position is unchanged, sounding
+voices are not interrupted, and new notes after the playhead are heard in the
+current loop — there is no next-bar wait. A stopped edit of the current
+Pattern also swaps immediately, so a later Play is never blocked by a pending
+publication; an edit of a non-current Pattern changes Project Truth only.
+When every engine Pattern slot is held by a sounding retiring view the edit
+still commits (`deferred`) and the Runtime swaps in place by itself once a
+slot frees — it is committed Truth like any other edit, so the grid shows no
+separate deferred state. A `pattern_transport_busy` or
+`pattern_publication_pending` refusal happens before the commit, and Creator
+retries it instead of showing a conflict, re-reading the current revision
+before every attempt because the busy window can land an intervening commit.
+The retry is bounded: 32 attempts 250 ms apart cover a bar boundary at the
+slowest tempo (6 s at 40 BPM). A longer wait, or a revision that cannot be
+re-read, shows the refusal itself ("can't be done right now"), never a
+stale-revision conflict. While the projection re-reads Truth after a commit no gesture
+starts; a box selection hit-tests the notes Truth holds when it is released,
+so it never names a key that no longer exists. Keys that an Undo or Redo, a
+transport settle or another surface's edit removes leave the selection. Any
+other conflict or refusal restores the projection from Truth and shows the
+reason; a committed edit whose swap fails surfaces the typed snapshot error
+honestly. Undo and Redo are the existing stop-only history controls.
+
+The upper display is a whole-Pattern overview. A 64-row thumbnail maps every
+event of all four Banks, and a frame marks the touch grid's current Bank and
+visible time window. The display is a fixed 752×176 that clips its overflow,
+so the Sequence facts sit beside the thumbnail rather than below it:
+
+- Quantize and Swing;
+- the live selection facts: selected note count, snap and velocity (the shared
+  value, `mixed` when the selection differs, empty with no selection);
+- a pending Pattern and a recovery count, when present.
+
+The bar count and transport phase stay in the display's own facts and primary
+line. Below the Sequence facts sits one status line, which shows the most
+severe of a transport error, a Sequence error and a pending publication.
+
+A live playhead advances at the Project tempo from the playing Pattern's
+origin frame. It is anchored on the last transport status: the Runtime frame
+that status was read at, plus the time since the Session received it. An
+overview that mounts mid-playback, for example after leaving Sequence and
+coming back, therefore resumes at the playing position.
+
+`ProjectView.patterns` keeps the canonical events, validated against the
+Contract's per-bar tick bounds at the inspection boundary. Both views re-read
+Truth after any authoring commit — including a recording that settles through
+the transport — and after Undo/Redo or reopen, so they never drift from the
+Pattern the Core holds. Automation covers the view model's snap columns, bar
+extents, loop seam, overlaps, Bank filtering and 64-row mapping; each gesture's
+exact remove/put mapping, no-op suppression, snap, seam clamp and key
+collision; the grid and overview components, including one command per
+gesture, disabled-while-recording, a deferred edit treated as committed,
+conflict recovery and Undo/Redo refresh; and a packaged journey that adds,
+moves, resizes, adjusts velocity, batch-deletes and batch-moves against
+`project.inspect` Truth, undoes and redoes each, is refused while recording,
+swaps a playback edit in place without restarting playback, and reopens with
+the same Truth and an empty history. Physical touch and drag ergonomics on
+iPad or touch screens and audible in-place swaps are not claimed.
