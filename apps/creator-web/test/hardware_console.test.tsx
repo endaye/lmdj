@@ -192,8 +192,11 @@ test("console body takes the Desktop Final mono stack and surfaces", () => {
       touchWorkspace={<span>touch</span>}
     />);
     const shell = getComputedStyle(screen.getByTestId("hardware-console"));
-    expect(shell.fontFamily).toBe("var(--creator-font-mono)");
-    expect(shell.getPropertyValue("--creator-font-mono")).toMatch(/^"IBM Plex Mono",/);
+    // jsdom leaves var() unsubstituted in computed font-family while a browser
+    // substitutes it; resolve one level so the assertion reads the stack either way.
+    const reference = /^var\((--[\w-]+)\)$/.exec(shell.fontFamily);
+    const fontFamily = reference === null ? shell.fontFamily : shell.getPropertyValue(reference[1]!);
+    expect(fontFamily).toMatch(/^"IBM Plex Mono",/);
     expect(shell.getPropertyValue("--creator-base")).toBe("#202321");
     expect(shell.getPropertyValue("--creator-screen")).toBe("#292d29");
   } finally {
