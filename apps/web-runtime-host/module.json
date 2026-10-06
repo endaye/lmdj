@@ -1,9 +1,1 @@
-{
-  "contract": "lmdj.module.v1",
-  "module": "web-runtime-host",
-  "version": "4.3.8",
-  "api_version": 2,
-  "dependencies": {
-    "web-runtime-platform": "5.7.0"
-  }
-}
+{"api_version":2,"contract":"lmdj.module.v1","dependencies":{"web-runtime-platform":"5.8.0"},"module":"web-runtime-host","version":"4.3.9"}
