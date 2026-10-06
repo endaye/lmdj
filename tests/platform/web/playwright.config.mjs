@@ -42,7 +42,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   reporter: [["line"]],
-  // The Creator proof drives Playwright six times in a row. Playwright clears
+  // The Creator proof drives Playwright seven times in a row. Playwright clears
   // outputDir at the start of every run, so a single shared directory means
   // each invocation destroys the previous one's traces and only the last
   // failure is ever diagnosable — including in the CI artifact upload. Give
