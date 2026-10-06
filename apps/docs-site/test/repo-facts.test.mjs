@@ -65,14 +65,17 @@ test('facts match the current locked product composition', async () => {
     'provider-sdk',
     'web-runtime-platform',
   ]);
-  assert.deepEqual(facts.hosts.map(({id, version}) => ({id, version})), [
-    {id: 'cardputer-host', version: '1.0.8'},
-    {id: 'core-cli', version: '3.3.13'},
-    {id: 'core-mcp', version: '3.6.0'},
-    {id: 'creator-web', version: '5.0.1'},
-    {id: 'native-host', version: '3.4.8'},
-    {id: 'web-runtime-host', version: '4.3.8'},
+  assert.deepEqual(facts.hosts.map(({id}) => id), [
+    'cardputer-host',
+    'core-cli',
+    'core-mcp',
+    'creator-web',
+    'native-host',
+    'web-runtime-host',
   ]);
+  const lock = JSON.parse(await readFile(path.join(repoRoot, 'products/lmdj/assembly.lock.json'), 'utf8'));
+  assert.deepEqual(facts.hosts.map(({id, version}) => ({id, version})),
+    lock.hosts.map(({id, version}) => ({id, version})).sort((left, right) => left.id.localeCompare(right.id)));
   assert.equal(facts.providers.length, 4);
   assert.equal(facts.contracts.length, 14);
 });
