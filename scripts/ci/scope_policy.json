@@ -162,6 +162,7 @@
     {"match": {"kind": "exact", "value": "scripts/prepare-opfs-webkit.sh"}, "lanes": ["web_toolchain"]},
     {"match": {"kind": "exact", "value": "scripts/web-runtime-host.sh"}, "lanes": ["web_runtime_host"]},
     {"match": {"kind": "exact", "value": "scripts/creator-web.sh"}, "lanes": ["creator"]},
+    {"match": {"kind": "exact", "value": "scripts/local-audio-output.py"}, "lanes": ["creator", "web_runtime_host", "ci_contract"]},
     {"match": {"kind": "exact", "value": "scripts/web-runtime-lab.sh"}, "lanes": ["web_runtime_lab"]},
     {"match": {"kind": "exact", "value": "scripts/chameleon-lab.sh"}, "lanes": ["chameleon_lab"]},
     {"match": {"kind": "exact", "value": "scripts/docs-site.sh"}, "lanes": ["portal"]},

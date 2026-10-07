@@ -1,7 +1,7 @@
 ---
 id: local-audio-proof-inherits-output-device
 area: web-host
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-30
     occurrence: https://github.com/endaye/lmdj/issues/1696
@@ -9,7 +9,7 @@ recurrences:
   - date: 2026-10-01
     occurrence: https://github.com/endaye/lmdj/issues/1730
     observed_by: claude-opus-5-5
-exit: none
+exit: gate:tests/build/ci_local_audio_output_test.py
 ---
 
 # A local browser audio proof runs on whatever output device the machine has selected, so a timing flake can follow the headphones rather than the load, and green reruns on another device prove nothing.
@@ -54,14 +54,20 @@ real code was in the diagnostics region of the retained trace.
   activation failure a refusal. See
   [`blind-search-reads-as-absence`](blind-search-reads-as-absence.md).
 
-No mechanism exits this entry. The harness cannot choose the machine's output
-device, and substituting a fake output would stop the proofs exercising the
-real output path.
+Creator and Web Runtime Host `proof` commands now automatically record the
+macOS default output at start and end via `scripts/local-audio-output.py`, also
+when invoked by `scripts/local-ci.sh`. Each record includes lane, PID, UTC time,
+device name and transport. The result flags Bluetooth and different endpoint
+routes, suggesting a wired/built-in rerun without changing the test verdict or
+substituting an output. Unavailable observations remain explicit and advisory.
+The enforcing mechanism is `tests/build/ci_local_audio_output_test.py`.
+Endpoint sampling cannot see a switch away and back between observations;
+device warnings alone do not establish a failure's cause.
 
 It recurred on 2026-10-01: three `creator` journeys failed within 14:10–14:13
 +0800 while coreaudiod logged 17 cold Bluetooth starts, and an immediate
 re-run on the built-in speakers passed with no Bluetooth start logged. The
 second recurrence escalates to
 [#1730](https://github.com/endaye/lmdj/issues/1730), which asks the local
-audio lanes to record and flag the default output device. The entry stays open
-until that mechanism lands.
+audio lanes to record and flag the default output device. That mechanism is
+delivered by the #1730 Task.

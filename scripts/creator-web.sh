@@ -568,6 +568,10 @@ case "$command_name" in
     ;;
   proof)
     [[ $# -eq 0 ]] || { usage; exit 64; }
+    if [[ "${LMDJ_AUDIO_OUTPUT_WRAPPED:-}" != creator ]]; then
+      exec python3 "$script_dir/local-audio-output.py" --lane creator -- \
+        bash "$script_dir/creator-web.sh" proof
+    fi
     proof_creator
     ;;
   package)
