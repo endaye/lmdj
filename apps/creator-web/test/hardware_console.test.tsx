@@ -208,3 +208,63 @@ test("console body takes the Desktop Final mono stack and surfaces", () => {
     style.remove();
   }
 });
+
+function railWith(props: Partial<Parameters<typeof PhysicalControls>[0]> = {}) {
+  return render(<PhysicalControls activeMode="sequence" activeBank={0}
+    onSelectMode={() => {}} onSelectBank={() => {}} {...props} />);
+}
+
+test("an unbound encoder stays unavailable and a bound one turns by key, wheel and drag", () => {
+  const onTurn = vi.fn();
+  railWith({encoders: {3: {label: "Tempo", onTurn}}});
+  expect(screen.getByRole("button", {name: /^Encoder 1 — unassigned/}).hasAttribute("disabled"))
+    .toBe(true);
+  const tempo = screen.getByRole("button", {name: "Encoder 3 — Tempo"});
+  fireEvent.keyDown(tempo, {key: "ArrowUp"});
+  fireEvent.keyDown(tempo, {key: "ArrowLeft"});
+  fireEvent.wheel(tempo, {deltaY: -40});
+  fireEvent.wheel(tempo, {deltaY: 40});
+  expect(onTurn.mock.calls.map(([detents]) => detents)).toEqual([1, -1, 1, -1]);
+  onTurn.mockClear();
+  // Sixteen pixels up is two clockwise detents; the remainder carries over.
+  fireEvent.pointerDown(tempo, {pointerId: 7, clientY: 100});
+  fireEvent.pointerMove(tempo, {pointerId: 7, clientY: 84});
+  fireEvent.pointerMove(tempo, {pointerId: 7, clientY: 80});
+  fireEvent.pointerMove(tempo, {pointerId: 7, clientY: 76});
+  fireEvent.pointerUp(tempo, {pointerId: 7});
+  expect(onTurn.mock.calls.map(([detents]) => detents)).toEqual([2, 1]);
+});
+
+test("a disabled encoder binding ignores turns", () => {
+  const onTurn = vi.fn();
+  railWith({encoders: {4: {label: "Swing", disabled: true, onTurn}}});
+  const swing = screen.getByRole("button", {name: "Encoder 4 — Swing"});
+  expect(swing.hasAttribute("disabled")).toBe(true);
+  fireEvent.keyDown(swing, {key: "ArrowUp"});
+  expect(onTurn).not.toHaveBeenCalled();
+});
+
+test("without SHIFT the arrows take the page's step; with SHIFT they are Undo / Redo", () => {
+  const onBack = vi.fn();
+  const onForward = vi.fn();
+  const history = {
+    shifted: false, onToggleShift: () => {}, undoAvailable: true, redoAvailable: false,
+    onUndo: vi.fn(), onRedo: vi.fn(), undoTitle: "Undo", redoTitle: "Redo",
+  };
+  const directionStep = {
+    backLabel: "Pattern back — ←", forwardLabel: "Pattern forward — →",
+    backAvailable: false, forwardAvailable: true, onBack, onForward,
+  };
+  const view = railWith({history, directionStep});
+  expect(screen.getByRole("button", {name: "Pattern back — ←"}).hasAttribute("disabled")).toBe(true);
+  fireEvent.click(screen.getByRole("button", {name: "Pattern forward — →"}));
+  expect(onForward).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("button", {name: "Undo — SHIFT + ←"})).toBeNull();
+  view.rerender(<PhysicalControls activeMode="sequence" activeBank={0}
+    onSelectMode={() => {}} onSelectBank={() => {}}
+    history={{...history, shifted: true}} directionStep={directionStep} />);
+  fireEvent.click(screen.getByRole("button", {name: "Undo — SHIFT + ←"}));
+  expect(history.onUndo).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("button", {name: "Pattern forward — →"})).toBeNull();
+  expect(onBack).not.toHaveBeenCalled();
+});

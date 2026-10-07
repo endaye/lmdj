@@ -1,4 +1,5 @@
 import {
+  createSequencePattern,
   selectedSequencePatternId,
   selectSequencePattern,
   sequencePattern,
@@ -899,4 +900,86 @@ test("direct Tempo and Swing controls commit once, cancel, fail honestly, and st
   await transportStatus(page, "playing");
   await playStopKey(page).click();
   await transportStatus(page, "stopped");
+});
+
+async function undoCount(page) {
+  const response = await page.evaluate(() =>
+    window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "history.inspect",
+      payload: {},
+    }));
+  expect(response.ok).toBe(true);
+  return response.result.undo_count;
+}
+
+test("Sequence encoders turn rows, Tempo and Swing, and ← → step Patterns while stopped", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(240_000);
+  await installTransportProofRecorder(page);
+  await page.goto("/index.html");
+  await importProject(page);
+  await enterSequenceAndPlay(page);
+  const encoder = (name) => physicalKey(page, name);
+  const rowNames = page.locator(".sequence-overview-names li");
+
+  // Encoder 2 scrolls the eight upper-screen rows one row per detent; a Bank
+  // key moves the window back to that Bank's first row.
+  await expect(rowNames.first()).toHaveText("A01");
+  await encoder("Encoder 2 — scroll track rows").focus();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await expect(rowNames.first()).toHaveText("A03");
+  await page.getByRole("button", {name: "Bank B", exact: true}).click();
+  await expect(rowNames.first()).toHaveText("B01");
+  await page.getByRole("button", {name: "Bank A", exact: true}).click();
+  await expect(rowNames.first()).toHaveText("A01");
+
+  // Three encoder 3 detents preview at once and commit once at rest: Truth
+  // moves by +3 BPM in one revision and one undo entry.
+  const before = await inspectTruth(page);
+  const undoBefore = await undoCount(page);
+  const step = before.bpm <= 237 ? 1 : -1;
+  await encoder("Encoder 3 — Tempo").focus();
+  for (let index = 0; index < 3; index += 1) {
+    await page.keyboard.press(step > 0 ? "ArrowUp" : "ArrowDown");
+  }
+  await expect(page.locator(".overview-bpm")).toHaveText(`${before.bpm + 3 * step} BPM`);
+  await expect.poll(async () => (await inspectTruth(page)).bpm, {timeout: 30_000})
+    .toBe(before.bpm + 3 * step);
+  const after = await inspectTruth(page);
+  expect(after.revision).toBe(before.revision + 1);
+  expect(await undoCount(page)).toBe(undoBefore + 1);
+
+  // Encoder 4 is Swing, one percent per detent.
+  const swingBefore = after.sequence_settings.swing_percent;
+  const swingStep = swingBefore >= 75 ? -1 : 1;
+  await encoder("Encoder 4 — Swing").focus();
+  await page.keyboard.press(swingStep > 0 ? "ArrowUp" : "ArrowDown");
+  await expect.poll(async () => (await inspectTruth(page)).sequence_settings.swing_percent,
+    {timeout: 30_000}).toBe(swingBefore + swingStep);
+
+  // ← → step Patterns while stopped and wait for Stop while playing.
+  const first = await selectedSequencePatternId(page);
+  await createSequencePattern(page);
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-count", "2", {timeout: 30_000});
+  await selectSequencePattern(page, first);
+  const forward = physicalKey(page, "Pattern forward — →");
+  await expect(forward).toBeEnabled();
+  await forward.click();
+  await expect(sequencePattern(page)).not.toHaveAttribute("data-pattern-id", first);
+  await physicalKey(page, "Pattern back — ←").click();
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", first);
+  await playStopKey(page).click();
+  await transportStatus(page, "playing");
+  await expect(forward).toBeDisabled();
+  await playStopKey(page).click();
+  await transportStatus(page, "stopped");
+
+  // SHIFT keeps the arrows on history: SHIFT + ← still undoes.
+  const undoBeforeShift = await undoCount(page);
+  await physicalKey(page, /^SHIFT/).click();
+  await physicalKey(page, "Undo — SHIFT + ←").click();
+  await expect.poll(() => undoCount(page), {timeout: 30_000}).toBe(undoBeforeShift - 1);
 });

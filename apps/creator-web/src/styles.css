@@ -807,6 +807,8 @@ button:disabled { color: #737b87; }
   width: 80px;
   height: 80px;
 }
+/* A page-bound encoder turns by wheel, vertical drag or arrow keys. */
+.physical-encoder.is-bound:not(:disabled) { cursor: ns-resize; touch-action: none; }
 /* As the System entry the brand mark is a button; the global button rule's
    border, padding, fill and 44 px minimum must not reshape the 80×80 mark. */
 button.physical-brand {
