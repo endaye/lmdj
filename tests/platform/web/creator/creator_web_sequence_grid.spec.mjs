@@ -219,7 +219,14 @@ async function expectSequenceLayoutFits(page) {
   const layout = await page.evaluate(() => {
     const display = document.querySelector('[data-testid="overview-display"]');
     const box = display.getBoundingClientRect();
-    const clipped = [...display.querySelectorAll("dt, dd, .sequence-overview-status")]
+    // Sequence keeps the phase and Project facts for assistive technology
+    // only (visually hidden); every drawn fact, the status line and the
+    // eight track rows must fit the display.
+    const clipped = [...display.querySelectorAll([
+      "dt", "dd", ".sequence-overview-status", ".sequence-overview-position",
+      ".overview-swing", "[data-testid='sequence-pattern-overview']",
+    ].join(", "))]
+      .filter((element) => element.closest(".visually-hidden") === null)
       .filter((element) => {
         const rect = element.getBoundingClientRect();
         return rect.width > 0 &&

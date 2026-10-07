@@ -374,6 +374,19 @@ test("records notes and sees them on both grids after reopen", async ({page, bro
   await expect(overviewGrid.locator("[data-row='0']")).toHaveCount(1);
   await expect(overviewGrid.locator("[data-row='1']")).toHaveCount(1);
 
+  // The overview shows eight of the 64 Pad rows. A Bank key moves its window
+  // to that Bank's first row, where these two Bank A notes are out of view,
+  // and back.
+  const rowNames = page.locator(".sequence-overview-names li");
+  await expect(rowNames.first()).toHaveText("A01");
+  await page.getByRole("button", {name: "Bank B", exact: true}).click();
+  await expect(rowNames.first()).toHaveText("B01");
+  await expect(rowNames.last()).toHaveText("B08");
+  await expect(overviewGrid.getByTestId("sequence-overview-note")).toHaveCount(0);
+  await page.getByRole("button", {name: "Bank A", exact: true}).click();
+  await expect(rowNames.first()).toHaveText("A01");
+  await expect(overviewGrid.getByTestId("sequence-overview-note")).toHaveCount(2);
+
   await playStopKey(page).click();
   await transportStatus(page, "stopped");
 

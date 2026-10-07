@@ -1231,43 +1231,91 @@ button:disabled { color: #737b87; }
   border: 0;
   padding: 0 12px;
 }
-/* The upper display is 752×176 with 16 px padding, so the Sequence row has
-   66 px below the primary, facts and build lines. The 64-row thumbnail takes
-   exactly that height; the Sequence facts and one status line sit beside it
-   instead of below, where the display's overflow would hide them. */
-.sequence-overview {
-  grid-template-columns: minmax(0, 1fr) max-content;
-  column-gap: 16px;
-  align-items: start;
+/* Sequence's upper display (2026-10-04 Sequence hardware UI decision): one
+   status line, one context line and eight 10 px track rows with 3 px gaps.
+   The display is 752×176 with 16 px padding, so 18 + 6 + 12 + 6 + 101 px
+   fills its 144 px content box. Transport and position sit at the status
+   line's right edge; the phase they replace is visually hidden. */
+.overview-display.is-sequence { gap: 6px; }
+.overview-display.is-sequence .overview-primary {
+  justify-content: flex-start;
+  gap: 40px;
+  line-height: 18px;
 }
-.sequence-overview-side { min-width: 0; }
-.sequence-overview .overview-facts {
-  display: grid;
-  grid-template-columns: repeat(3, max-content);
-  gap: 0 14px;
-  line-height: 16px;
+.overview-swing {
+  margin: 0;
+  color: var(--creator-blue);
+  font-size: 12px;
+  letter-spacing: .04em;
+  font-variant-numeric: tabular-nums;
 }
+.sequence-overview { gap: 6px; }
+.sequence-overview-position {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  margin: 0;
+  line-height: 18px;
+  color: var(--creator-muted);
+  font-size: 12px;
+  letter-spacing: .04em;
+  font-variant-numeric: tabular-nums;
+}
+.sequence-overview-context {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0 16px;
+  margin: 0;
+  line-height: 12px;
+  font-size: 10px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+}
+.sequence-overview-context div { display: flex; gap: 6px; white-space: nowrap; }
+.sequence-overview-context dt { color: var(--creator-muted); }
+.sequence-overview-context dd { margin: 0; color: var(--creator-text); }
 .sequence-overview-status {
   margin: 0;
-  line-height: 16px;
+  line-height: 12px;
+  font-size: 10px;
   contain: inline-size;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   color: #ffc0c0;
 }
-.sequence-overview-thumbnail {
+.sequence-overview-rows {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 8px;
+}
+.sequence-overview-names {
+  display: grid;
+  grid-auto-rows: 10px;
+  row-gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--creator-muted);
+  font-size: 8px;
+  line-height: 10px;
+  letter-spacing: .04em;
+}
+.sequence-overview-steps {
   display: block;
   width: 100%;
-  height: 64px;
-  border-radius: 4px;
-  background: #171b21;
+  height: 101px;
 }
-.sequence-overview-note { fill: var(--creator-lime); }
+.sequence-overview-cell.is-even { fill: #303530; }
+.sequence-overview-cell.is-odd { fill: #262a26; }
+.sequence-overview-onset { fill: var(--creator-lime); }
+.sequence-overview-tail { fill: rgb(221 244 120 / 40%); }
 .sequence-overview-frame {
   fill: none;
   stroke: var(--creator-blue);
-  stroke-width: 1.5px;
+  stroke-width: 1px;
   vector-effect: non-scaling-stroke;
 }
 .sequence-overview-playhead {

@@ -3,7 +3,8 @@ import {describe, expect, test} from "vitest";
 import {
   clampSequenceGridViewport,
   createSequenceGridModel,
-  createSequenceGridThumbnail,
+  clampSequenceOverviewRowOffset,
+  createSequenceOverviewWindow,
   DEFAULT_SEQUENCE_GRID_SNAP,
   SEQUENCE_GRID_SNAPS,
   sequenceGridAddNote,
@@ -18,6 +19,8 @@ import {
   sequenceGridVelocityNote,
   sequenceGridFlatSlot,
   sequenceGridViewportForWindow,
+  sequenceBarBeat,
+  sequenceOverviewFrame,
   sequencePatternLengthTicks,
   sequencePlayheadTick,
   sequenceSnapTicks,
@@ -130,21 +133,55 @@ test("the viewport clamps to the Pattern and an empty window falls back to the w
   expect(model.viewport).toEqual({startTick: 3840, endTick: 5760});
 });
 
-test("the thumbnail maps every Bank and Pad to one of 64 rows", () => {
-  const thumbnail = createSequenceGridThumbnail(pattern(4, [
+test("the overview window shows eight Pad rows and only their notes", () => {
+  const window = createSequenceOverviewWindow(pattern(4, [
     event(0, 0, 0, 240),
-    event(1, 15, 480, 240, 80),
-    event(3, 15, 960, 240, 127),
-    event(2, 8, 480, 240, 64),
-  ]));
-  expect(thumbnail.rowCount).toBe(64);
-  expect(thumbnail.lengthTicks).toBe(15360);
-  expect(thumbnail.notes).toEqual([
-    {row: 0, onsetTick: 0, durationTick: 240, velocity: 100},
-    {row: 31, onsetTick: 480, durationTick: 240, velocity: 80},
-    {row: 40, onsetTick: 480, durationTick: 240, velocity: 64},
-    {row: 63, onsetTick: 960, durationTick: 240, velocity: 127},
-  ]);
+    event(0, 9, 480, 240, 80),
+    event(1, 4, 960, 240, 127),
+    event(3, 15, 960, 240, 64),
+  ]), {rowOffset: 16, snap: "1/16"});
+  expect(window.rows).toEqual([16, 17, 18, 19, 20, 21, 22, 23]);
+  expect(window.lengthTicks).toBe(15360);
+  expect(window.stepCount).toBe(64);
+  expect(window.notes.map((note) => [note.row, note.windowRow])).toEqual([[20, 4]]);
+});
+
+test("the overview row offset stays within the 64 Pad rows", () => {
+  expect(clampSequenceOverviewRowOffset(-3)).toBe(0);
+  expect(clampSequenceOverviewRowOffset(56)).toBe(56);
+  expect(clampSequenceOverviewRowOffset(60)).toBe(56);
+  expect(clampSequenceOverviewRowOffset(Number.NaN)).toBe(0);
+});
+
+test("an overview note fills its onset step solid and the steps it covers as tail", () => {
+  const notes = (snap: "1/16" | "off" | "1/4") => createSequenceOverviewWindow(pattern(1, [
+    event(0, 0, 250, 500),
+    event(0, 1, 0, 100),
+  ]), {rowOffset: 0, snap}).notes;
+  // 250–750 at 1/16 (240): onset step 240, tail 480–960.
+  expect(notes("1/16")[1]).toMatchObject({onsetStepTick: 240, tailStartTick: 480, tailEndTick: 960});
+  // A note shorter than its step has no tail.
+  expect(notes("1/16")[0]).toMatchObject({onsetStepTick: 0, tailStartTick: 240, tailEndTick: 240});
+  // Snap off draws 1/16 steps; 1/4 draws beat steps.
+  expect(createSequenceOverviewWindow(pattern(1), {rowOffset: 0, snap: "off"}).stepTicks).toBe(240);
+  expect(notes("1/4")[1]).toMatchObject({onsetStepTick: 0, tailStartTick: 960, tailEndTick: 960});
+});
+
+test("the overview frame is the touch grid's Bank cut to the eight rows", () => {
+  const viewport = {startTick: 960, endTick: 4800};
+  expect(sequenceOverviewFrame(viewport, 1, 16)).toEqual(
+    {startTick: 960, endTick: 4800, firstWindowRow: 0, rowCount: 8});
+  expect(sequenceOverviewFrame(viewport, 1, 12)).toEqual(
+    {startTick: 960, endTick: 4800, firstWindowRow: 4, rowCount: 4});
+  expect(sequenceOverviewFrame(viewport, 0, 16)).toBeNull();
+});
+
+test("bar and beat count from 001:01", () => {
+  expect(sequenceBarBeat(null)).toBe("001:01");
+  expect(sequenceBarBeat(0)).toBe("001:01");
+  expect(sequenceBarBeat(959)).toBe("001:01");
+  expect(sequenceBarBeat(960)).toBe("001:02");
+  expect(sequenceBarBeat(3840 * 7 + 960 * 3)).toBe("008:04");
 });
 
 describe("sequenceGridViewportForWindow", () => {

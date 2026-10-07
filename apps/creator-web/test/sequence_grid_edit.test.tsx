@@ -459,5 +459,6 @@ test("an Undo that removes a selected note drops it from the selection", async (
   await shiftAndPress("Undo — SHIFT + ←");
   await waitFor(() =>
     expect(within(grid).queryByTestId("sequence-grid-note")).toBeNull());
-  await waitFor(() => expect(fact("Selected")).toBe("0"));
+  // An empty selection drops the Selected fact from the context line.
+  await waitFor(() => expect(within(overview()).queryByText("Selected")).toBeNull());
 });
