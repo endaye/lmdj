@@ -2671,14 +2671,14 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
 
   await user.click(screen.getByRole("button", {name: "Perform"}));
   expect(screen.getByTestId("overview-display").textContent ?? "").toContain("PERFORM");
-  expect(screen.getByTestId("perform-overview").textContent ?? "")
-    .toMatch(/Pictured LP\/HP\/BP are not Host controls/);
-  // D04's upper screen is read-only: real Bank/Quantize facts, never the
-  // pictured output meters, bar/beat counter or a control of any kind.
+  // D04's upper screen is read-only: the transport's bar and beat (from its
+  // frames, as on Sequence), real Bank/Quantize facts, never the pictured
+  // output meters or a control of any kind.
+  expect(screen.getByTestId("perform-counter").textContent).toBe("BAR 01 / 01 · BEAT 01 / 04");
   expect(screen.getByTestId("perform-overview").textContent ?? "")
     .toMatch(/Bank.*A.*Quantize/s);
   expect(screen.getByTestId("perform-overview").textContent ?? "")
-    .not.toMatch(/PEAK|NO CLIP|BEAT/);
+    .not.toMatch(/PEAK|NO CLIP/);
   expect(within(screen.getByRole("region", {name: "Overview display"}))
     .queryByRole("slider")).toBeNull();
   expect(within(screen.getByRole("region", {name: "Overview display"}))

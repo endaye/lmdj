@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useState} from "react";
+import {useMemo} from "react";
 
 import {userMessage} from "../state/error_messages";
 import type {ProjectView} from "../runtime/runtime_types";
@@ -15,7 +15,6 @@ import {
   sequenceBarBeat,
   sequenceGridSelectionVelocity,
   sequenceOverviewFrame,
-  sequencePlayheadTick,
   type SequenceGridEventKey,
   type SequenceGridSnap,
   type SequenceGridViewport,
@@ -23,6 +22,7 @@ import {
 import type {PatternTransportState} from "../state/pattern_transport_state";
 import {bankName, slotAddress} from "../state/view_model";
 import {transportStatusLabel} from "./transport_status";
+import {usePatternPlayheadTick} from "./use_pattern_playhead";
 
 interface SequenceOverviewProps {
   project: ProjectView | null;
@@ -36,8 +36,6 @@ interface SequenceOverviewProps {
   rowOffset?: number;
 }
 
-// The Runtime advances 48 frames per millisecond at its fixed 48 kHz.
-const FRAMES_PER_MILLISECOND = 48;
 
 export function SequenceOverview({
   project,
@@ -70,46 +68,7 @@ export function SequenceOverview({
     ? null
     : sequenceGridSelectionVelocity(pattern, selection);
   const bpm = project?.bpm ?? null;
-  const status = transport?.status ?? null;
-  const playing = status !== null && status.playing === true &&
-    overview !== null && bpm !== null;
-  const originFrame = playing && status !== null ? status.originFrame : null;
-  // The last observed Runtime frame anchors the playhead, so remounting the
-  // overview mid-playback (leaving Sequence and coming back) resumes at the
-  // playing position instead of restarting at the origin.
-  const anchorFrame = playing && status !== null ? status.runtimeFrame : null;
-  const anchorObservedAt = playing && status !== null
-    ? status.observedAtMilliseconds
-    : null;
-  const lengthTicks = overview?.lengthTicks ?? null;
-  const [playheadTick, setPlayheadTick] = useState<number | null>(null);
-  useEffect(() => {
-    if (originFrame === null || anchorFrame === null || anchorObservedAt === null ||
-        lengthTicks === null || bpm === null) {
-      setPlayheadTick(null);
-      return;
-    }
-    const tickAt = (now: number) => sequencePlayheadTick({
-      originFrame,
-      runtimeFrame: anchorFrame +
-        Math.floor(Math.max(0, now - anchorObservedAt) * FRAMES_PER_MILLISECOND),
-      bpm,
-      lengthTicks,
-    });
-    setPlayheadTick(tickAt(performance.now()));
-    // A frame already dequeued when the cleanup runs escapes
-    // cancelAnimationFrame; the flag is what stops it rescheduling.
-    let cancelled = false;
-    let animationFrame = window.requestAnimationFrame(function advance(now) {
-      if (cancelled) return;
-      setPlayheadTick(tickAt(now));
-      animationFrame = window.requestAnimationFrame(advance);
-    });
-    return () => {
-      cancelled = true;
-      window.cancelAnimationFrame(animationFrame);
-    };
-  }, [originFrame, anchorFrame, anchorObservedAt, lengthTicks, bpm]);
+  const playheadTick = usePatternPlayheadTick(transport, bpm, overview?.lengthTicks ?? null);
   // Step cells change only with the window's geometry, so the playhead's
   // per-frame render reuses the same elements.
   const cells = useMemo(() => overview === null ? null : overview.rows.flatMap((_, windowRow) =>

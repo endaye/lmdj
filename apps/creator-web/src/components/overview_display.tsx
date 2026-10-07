@@ -68,15 +68,18 @@ export function OverviewDisplay({
     : project.patterns.findIndex((item) => item.patternId === pattern.patternId) + 1;
   // Sequence shows only its own status and track rows (2026-10-04 Sequence
   // hardware UI decision), Project its summary and three columns (D01) and
-  // Sample its Pad, format, selection and whole waveform (D03).
+  // Sample its Pad, format, selection and whole waveform (D03), and Perform
+  // its transport, bar and beat (D04).
   // The Creator and audio phase, the Project facts and the build label stay
   // readable by assistive technology but are not drawn on those pages.
   const sequenceMode = activeMode === "sequence";
-  const ownScreen = sequenceMode || activeMode === "project" || activeMode === "sample";
+  const ownScreen = sequenceMode || activeMode === "project" || activeMode === "sample" ||
+    activeMode === "perform";
   const hiddenInSequence = ownScreen ? " visually-hidden" : "";
   return (
     <div className={`overview-display${sequenceMode ? " is-sequence" : ""}${
-      activeMode === "project" ? " is-project" : ""}${activeMode === "sample" ? " is-sample" : ""}`}>
+      activeMode === "project" ? " is-project" : ""}${activeMode === "sample" ? " is-sample" : ""}${
+      activeMode === "perform" ? " is-perform" : ""}`}>
       <div className="overview-primary">
         <output className="overview-context">
           {modeLabel(activeMode)}
