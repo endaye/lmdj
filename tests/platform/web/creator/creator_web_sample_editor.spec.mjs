@@ -1,4 +1,9 @@
-import {clickCreatorSystemAction, openCreatorSystem} from "./fixtures/creator_navigation.mjs";
+import {
+  clickCreatorSystemAction,
+  createSequencePattern,
+  openCreatorSystem,
+  sequencePattern,
+} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
@@ -1219,7 +1224,7 @@ test("Pattern history keeps the Project open when its inventory anchor changes",
     let next = 100;
     crypto.randomUUID = () => `00000000-0000-4000-8000-${String(next++).padStart(12, "0")}`;
   });
-  await page.getByRole("button", {name: "Create Pattern", exact: true}).click();
+  await createSequencePattern(page);
   await expectProjectRevision(page, 1);
   await page.evaluate(() => { crypto.randomUUID = window.__restoreHistoryProofUuid; });
   const created = (await rawRequest(page, "project.inspect", {})).result.project;
@@ -1232,7 +1237,7 @@ test("Pattern history keeps the Project open when its inventory anchor changes",
   await pressRailRedo(page);
   await expectProjectRevision(page, 3);
   await expect(page.getByTestId("creator-phase")).toHaveText("ready");
-  await expect(page.getByRole("combobox", {name: "Pattern"}).locator("option")).toHaveCount(2);
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-count", "2");
   expect((await rawRequest(page, "history.inspect", {})).result.session_id).toBe(history.session_id);
   await pressRailUndo(page);
   await expectProjectRevision(page, 4);

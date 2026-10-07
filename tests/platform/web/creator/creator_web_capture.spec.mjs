@@ -1,4 +1,4 @@
-import {clickCreatorSystemAction} from "./fixtures/creator_navigation.mjs";
+import {clickCreatorSystemAction, selectedSequencePatternId} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
@@ -402,7 +402,7 @@ test("armed Pad capture excludes the transport journal and never stops playback"
   await expect(recordKey(page)).toBeDisabled();
   await playStopKey(page).click();
   await expect.poll(async () => (await inspectTransportProjection(page)).playing).toBe(true);
-  const patternId = await page.getByRole("combobox", {name: "Pattern"}).inputValue();
+  const patternId = await selectedSequencePatternId(page);
   const initialEvents = structuredClone(initialTruth.project.patterns[patternId].events);
   await page.keyboard.press("KeyQ");
   await expect(panel.getByRole("slider", {name: /^Pad A01 End —/})).toBeVisible({timeout: 30_000});

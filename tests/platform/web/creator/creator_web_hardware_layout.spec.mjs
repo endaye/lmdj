@@ -1,3 +1,4 @@
+import {showSequenceLayer} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {expect, test} from "@playwright/test";
 import {waitForBootProject, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
@@ -226,6 +227,7 @@ test("commits Tempo only on release and keeps Project Truth across a reload", as
   // previews locally: the published tempo and Project Truth stay put, and no
   // Apply button exists to turn the draft into a commit.
   await page.getByRole("button", {name: "Sequence"}).click();
+  await showSequenceLayer(page, "SETUP");
   const bpmFader = page.getByRole("slider", {name: "BPM"});
   await expect(bpmFader).toBeVisible();
   await bpmFader.fill(String(committed + 12));

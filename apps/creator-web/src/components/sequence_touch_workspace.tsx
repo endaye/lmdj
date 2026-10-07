@@ -20,8 +20,16 @@ import {
   type PatternTransportState,
 } from "../state/pattern_transport_state";
 import {SequenceGrid} from "./sequence_grid";
+import {PatternStepper, TouchSegment, type TouchSegmentOption} from "./touch_kit";
 
 const BAR_COUNTS = [1, 2, 4, 8] as const;
+const BAR_OPTIONS: readonly TouchSegmentOption<1 | 2 | 4 | 8>[] = BAR_COUNTS.map((count) =>
+  ({value: count, label: String(count), ariaLabel: `${count} bars`}));
+type SequenceLayer = "edit" | "setup";
+const LAYER_OPTIONS: readonly TouchSegmentOption<SequenceLayer>[] = [
+  {value: "edit", label: "EDIT"},
+  {value: "setup", label: "SETUP"},
+];
 const NOOP = () => {};
 
 interface SequenceTouchWorkspaceProps {
@@ -60,6 +68,10 @@ interface SequenceTouchWorkspaceProps {
 export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   const {project, state, transport} = props;
   const [bars, setBars] = useState<1 | 2 | 4 | 8>(1);
+  // EDIT (the grid) is the default layer; SETUP holds the settings that are
+  // set once and rarely touched (2026-10-04 decision, item 7). View state only.
+  const [layer, setLayer] = useState<SequenceLayer>("edit");
+  const [choosingLength, setChoosingLength] = useState(false);
   const [recoveryTargets, setRecoveryTargets] = useState<Readonly<Record<string, string>>>({});
   const tapTempoRef = useRef<TapTempo | null>(null);
   // Step/TAP commits round-trip through the Host before the committed props
@@ -105,39 +117,46 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
     const tapped = tapTempoRef.current.tap();
     if (tapped !== null) requestBpm(tapped);
   };
+  const playing = selectTransportPlaying(transport);
+  const stepPattern = (offset: -1 | 1) => {
+    const next = project.patterns[patternIndex - 1 + offset];
+    if (next !== undefined) props.onSwitch(next.patternId);
+  };
   return (
-    <section className="sequence-touch-workspace" aria-label="Sequence editor">
+    <section className="sequence-touch-workspace" aria-label="Sequence editor"
+      data-layer={layer}>
       <header className="sequence-editor-header">
-        <h1>GROOVE / {String(Math.max(patternIndex, 1)).padStart(2, "0")}</h1>
-        <p className="sequence-editor-mode">SEQUENCE</p>
+        {/* Switching Pattern waits for Stop, as the ← → keys do. */}
+        <PatternStepper index={patternIndex} count={project.patterns.length}
+          patternId={selectedPatternId} disabled={disabled || playing}
+          onStep={stepPattern} />
+        <TouchSegment<SequenceLayer> label="Layer" className="sequence-layer" options={LAYER_OPTIONS}
+          value={layer} onChange={setLayer} />
       </header>
       {props.showRefresh === false || transport.status?.publicationPending !== true
         ? null
         : <p role="status">committed, publication pending</p>}
-      {props.showRefresh === false ? null : (
-        <>
-          <button type="button" onClick={props.onRefresh}>Refresh authority</button>
-          {transport.lastFailed !== null ? (
-            <p className="transport-hint">
-              Last {transport.lastFailed.intent === "record" ? "Record" : "Play/Stop"}
-              {" "}command failed; retry reconciles the same command.
-            </p>
-          ) : null}
-        </>
-      )}
+      {layer === "edit" ? (selectedPattern === undefined ? null : (
+        <SequenceGrid
+          pattern={selectedPattern}
+          bank={props.bank}
+          snap={props.snap}
+          editMode={props.editMode}
+          editing={{
+            enabled: editReason === null && !props.projectionRefreshing,
+            reason: editReason,
+          }}
+          selection={props.selection}
+          defaultVelocity={props.defaultVelocity}
+          onSnapChange={props.onSnapChange}
+          onEditModeChange={props.onEditModeChange}
+          onViewportChange={props.onViewportChange}
+          onEdit={props.onEdit}
+          onSelectionChange={props.onSelectionChange}
+          onVelocityChange={props.onVelocityChange}
+        />
+      )) : (
       <section aria-label="Sequence settings" className="sequence-settings">
-        <label className="sequence-pattern-select">Pattern
-          <select value={selectedPatternId}
-            disabled={disabled}
-            onChange={(event) => props.onSwitch(event.currentTarget.value)}>
-            {project.patterns.map((pattern, index) => (
-              <option value={pattern.patternId} key={pattern.patternId}>
-                {String(index + 1).padStart(2, "0")} · {pattern.bars}{" "}
-                {pattern.bars === 1 ? "bar" : "bars"}
-              </option>
-            ))}
-          </select>
-        </label>
         <div className="sequence-param-row">
           <div className="sequence-param-card sequence-param-tempo">
             <ValueSlider
@@ -158,9 +177,7 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
               <button type="button" aria-label="Decrease BPM"
                 disabled={disabled || (requestedBpmRef.current ?? bpm) <= 40}
                 onClick={() => requestBpm((requestedBpmRef.current ?? bpm) - 1)}>−</button>
-              <button type="button" aria-label="Tap Tempo"
-                disabled={disabled}
-                onClick={tapTempo}>TAP</button>
+              <span className="sequence-param-encoder">ENC 3</span>
               <button type="button" aria-label="Increase BPM"
                 disabled={disabled || (requestedBpmRef.current ?? bpm) >= 240}
                 onClick={() => requestBpm((requestedBpmRef.current ?? bpm) + 1)}>+</button>
@@ -185,6 +202,7 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
               <button type="button" aria-label="Decrease Swing"
                 disabled={disabled || (requestedSwingRef.current ?? swing) <= 50}
                 onClick={() => requestSwing((requestedSwingRef.current ?? swing) - 1)}>−</button>
+              <span className="sequence-param-encoder">ENC 4</span>
               <button type="button" aria-label="Increase Swing"
                 disabled={disabled || (requestedSwingRef.current ?? swing) >= 75}
                 onClick={() => requestSwing((requestedSwingRef.current ?? swing) + 1)}>+</button>
@@ -196,64 +214,74 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
             Tempo and Swing are locked while recording
           </p>
         ) : null}
-        <form className="sequence-bars-form" onSubmit={(event) => {
-          event.preventDefault();
-          props.onCreatePattern(bars);
-        }}>
-          <div className="sequence-segment" role="group" aria-label="Bars">
-            <span>BARS</span>
-            {BAR_COUNTS.map((count) => (
-              <button
-                key={count}
-                type="button"
-                aria-pressed={bars === count}
-                aria-label={`${count} bars`}
-                disabled={disabled}
-                onClick={() => setBars(count)}
-              >
-                {count}
-              </button>
-            ))}
-          </div>
-          <label className="sequence-quantize">Quantize
-            <input type="checkbox" checked={project.sequenceSettings.quantizeEnabled}
-              disabled={disabled} onChange={(event) => props.onSettingsChange({
-                quantizeEnabled: event.currentTarget.checked,
-              })} />
-          </label>
+        {/* BARS is the current Pattern's length. Changing an existing
+            Pattern's length waits for #1823, so it is read here only. */}
+        <div className="sequence-setup-row" role="group" aria-label="Pattern length">
+          <span>BARS</span>
+          <output className="sequence-bars-value">
+            {selectedPattern === undefined ? "—" : selectedPattern.bars}
+          </output>
+        </div>
+        <div className="sequence-setup-row sequence-setup-toggles">
+          <button type="button" className="touch-control" aria-label="Quantize"
+            aria-pressed={project.sequenceSettings.quantizeEnabled}
+            disabled={disabled} onClick={() => props.onSettingsChange({
+              quantizeEnabled: !project.sequenceSettings.quantizeEnabled,
+            })}>
+            QUANTIZE
+          </button>
           {/* The metronome is a monitoring switch, not a Transport setting:
               it must stay toggleable while recording. */}
-          <button type="button" className="sequence-metronome"
+          <button type="button" className="touch-control sequence-metronome"
             aria-label="Metronome"
             aria-pressed={props.metronomeOn}
             onClick={props.onToggleMetronome}>
             METRONOME
           </button>
-          <button type="submit" aria-label="Create Pattern"
-            disabled={disabled || selectTransportPlaying(transport)}>
-            + NEW
-          </button>
-        </form>
+        </div>
+        {choosingLength ? (
+          <form className="sequence-bars-form" onSubmit={(event) => {
+            event.preventDefault();
+            setChoosingLength(false);
+            props.onCreatePattern(bars);
+          }}>
+            <TouchSegment<1 | 2 | 4 | 8> label="Bars" options={BAR_OPTIONS} value={bars}
+              disabled={disabled} onChange={setBars} />
+            <div className="sequence-setup-row sequence-setup-actions">
+              <button type="button" className="touch-control"
+                onClick={() => setChoosingLength(false)}>CANCEL</button>
+              <button type="submit" className="touch-control is-primary" aria-label="Create Pattern"
+                disabled={disabled || playing}>
+                CREATE
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="sequence-setup-row sequence-setup-actions">
+            <button type="button" className="touch-control" aria-label="New Pattern"
+              aria-expanded={false} disabled={disabled || playing}
+              onClick={() => setChoosingLength(true)}>
+              + NEW
+            </button>
+            <button type="button" className="touch-control" aria-label="Tap Tempo"
+              disabled={disabled}
+              onClick={tapTempo}>TAP</button>
+          </div>
+        )}
+        {props.showRefresh === false ? null : (
+          <>
+            <button type="button" className="touch-control" onClick={props.onRefresh}>
+              Refresh authority
+            </button>
+            {transport.lastFailed !== null ? (
+              <p className="transport-hint">
+                Last {transport.lastFailed.intent === "record" ? "Record" : "Play/Stop"}
+                {" "}command failed; retry reconciles the same command.
+              </p>
+            ) : null}
+          </>
+        )}
       </section>
-      {selectedPattern === undefined ? null : (
-        <SequenceGrid
-          pattern={selectedPattern}
-          bank={props.bank}
-          snap={props.snap}
-          editMode={props.editMode}
-          editing={{
-            enabled: editReason === null && !props.projectionRefreshing,
-            reason: editReason,
-          }}
-          selection={props.selection}
-          defaultVelocity={props.defaultVelocity}
-          onSnapChange={props.onSnapChange}
-          onEditModeChange={props.onEditModeChange}
-          onViewportChange={props.onViewportChange}
-          onEdit={props.onEdit}
-          onSelectionChange={props.onSelectionChange}
-          onVelocityChange={props.onVelocityChange}
-        />
       )}
       {state.recovery.length > 0 ? (
         <section aria-label="Sequence recovery">

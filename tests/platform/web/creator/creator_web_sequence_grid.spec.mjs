@@ -1,3 +1,4 @@
+import {selectedSequencePatternId} from "./fixtures/creator_navigation.mjs";
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
@@ -272,7 +273,7 @@ test("grid gestures edit Truth one command at a time, with Undo/Redo, refusal wh
   await importProject(page);
   const baseline = await inspectTruth(page);
   await enterSequenceAndPlay(page);
-  const patternId = await page.getByRole("combobox", {name: "Pattern"}).inputValue();
+  const patternId = await selectedSequencePatternId(page);
   const bars = baseline.patterns[patternId].bars;
   const lengthTicks = bars * 3840;
   expect(baseline.patterns[patternId].events).toHaveLength(0);

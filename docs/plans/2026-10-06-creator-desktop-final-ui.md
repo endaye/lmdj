@@ -203,6 +203,11 @@ With them there, T5's EDIT layer cannot show all 16 grid rows. The owner chose t
   - `+ NEW`, which then chooses the new Pattern's length using the existing new-Pattern behaviour, and `TAP`.
   - `COPY` is not rendered until #1823.
 - **Grid editing.** Grid editing behaviour (#1671 T3) is unchanged, only re-laid out.
+- **Implementation notes, recorded when T5 started.**
+  - Selection uses aria-pressed toggle buttons rather than `radiogroup`/`switch`, keeping the existing Snap, Bars, mode and Metronome names.
+  - `+ NEW` opens the length choice and then CREATE.
+  - Refresh authority moves into SETUP.
+  - With ‹ › disabled while playing, the Sequence journey's "switch while playing is refused by the Host" leg becomes "‹ › are disabled while playing and no Pattern reload is attempted".
 
 **Declared files.** New `components/touch_kit/*.tsx`, `components/sequence_touch_workspace.tsx`, `components/sequence_grid.tsx` (layout only), `src/styles.css` and their tests, `creator_web_sequence.spec.mjs`, `creator_web_sequence_grid.spec.mjs`, `creator_web_metronome.spec.mjs`, and portal `/hosts/creator-web/` and `/product/workflows/`.
 

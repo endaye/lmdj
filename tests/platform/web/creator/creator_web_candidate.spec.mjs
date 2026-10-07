@@ -1,4 +1,10 @@
-import {openCreatorSlice} from "./fixtures/creator_navigation.mjs";
+import {
+  createSequencePattern,
+  openCreatorSlice,
+  selectedSequencePatternId,
+  selectSequencePattern,
+  sequencePattern,
+} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {createHash, randomUUID} from "node:crypto";
 import {expect, test} from "@playwright/test";
@@ -353,13 +359,12 @@ for (const bank of [0, 1]) {
     // otherwise legitimately mix its negative PCM into the adopted B1 audio.
     const originalPatterns = (await truth(page)).project.patterns;
     await page.getByRole("button", {name: "Sequence", exact: true}).click();
-    const pattern = page.getByRole("combobox", {name: "Pattern", exact: true});
-    await page.getByRole("button", {name: "Create Pattern", exact: true}).click();
-    await expect(pattern.locator("option")).toHaveCount(2);
-    const emptyId = await pattern.locator("option").evaluateAll((options, originals) =>
-      options.map(option => option.value).find(value => !Object.hasOwn(originals, value)), originalPatterns);
-    await pattern.selectOption(emptyId);
-    await expect(pattern).toHaveValue(emptyId);
+    await createSequencePattern(page);
+    await expect(sequencePattern(page)).toHaveAttribute("data-pattern-count", "2");
+    const emptyId = Object.keys((await truth(page)).project.patterns)
+      .find(id => !Object.hasOwn(originalPatterns, id));
+    await selectSequencePattern(page, emptyId);
+    await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", emptyId);
     const patterns = (await truth(page)).project.patterns;
     expect(patterns[emptyId].events).toEqual([]);
     for (const [id, recorded] of Object.entries(originalPatterns)) expect(patterns[id]).toEqual(recorded);
@@ -391,14 +396,12 @@ for (const bank of [0, 1]) {
 test("Creator adoption prepares the selected non-current Pattern", async ({page}) => {
   const {set} = await start(page);
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
-  const pattern = page.getByRole("combobox", {name: "Pattern", exact: true});
-  const original = await pattern.inputValue();
-  await page.getByRole("button", {name: "Create Pattern", exact: true}).click();
-  await expect(pattern.locator("option")).toHaveCount(2);
-  const selected = await pattern.locator("option").evaluateAll((options, original) =>
-    options.map(option => option.value).find(value => value !== original), original);
-  await pattern.selectOption(selected);
-  await expect(pattern).toHaveValue(selected);
+  const original = await selectedSequencePatternId(page);
+  await createSequencePattern(page);
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-count", "2");
+  const selected = Object.keys((await truth(page)).project.patterns).find(id => id !== original);
+  await selectSequencePattern(page, selected);
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", selected);
   await openCreatorSlice(page);
   await page.getByRole("combobox", {name: "Slice source"}).selectOption(sourceId);
   await target(page, 1, set.recipes[1].candidate_id, 0, 1);
@@ -410,5 +413,5 @@ test("Creator adoption prepares the selected non-current Pattern", async ({page}
   await expect(page.getByRole("region", {name: "Project audio status"})).toHaveCount(0);
   expect(await evidence(page, "candidate.adopt")).toHaveLength(1);
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
-  await expect(pattern).toHaveValue(selected);
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", selected);
 });
