@@ -213,9 +213,10 @@ and its [2026-10-03 erratum](https://github.com/endaye/lmdj/blob/main/docs/prd/d
 (#1789). Control tracks a replay this Host began from the
 `performance.replay.begin`, `stop` and `status` results it forwards. Each
 service cadence queries its status once; any state other than `playing`, or a
-failed query, ends it. The replay holds the Runtime only for its own Project:
-another Project opened meanwhile publishes its own view, and the replay's end
-restores nothing into it.
+failed query, ends it. Project create/open first stops the replay through its
+own Facade stop operation on the old Project, then replaces the session. The
+new Project publishes its own view; reopening the old Project does not resume
+the stopped replay.
 
 While the replay plays, edits commit to Truth as usual, but no Pattern view is
 published over the replay's:
@@ -239,5 +240,11 @@ transport plays, a restore that finds every slot held waits until reclaim frees
 one, and does not prepare again in the meantime. Any other refused or failed
 restore clears `runtime_revision`.
 
-Transport commands during a replay (Play/Stop, Record) still replace the
-replay's Pattern view; they are outside this change and tracked in #1801.
+Under the [#1801 decision](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-07-performance-replay-command-handoff.md),
+Play/Stop and Record first stop a playing replay, wait for its neutral-reset
+confirmation, and restore the selected Pattern from current Truth before the
+transport command runs. This restore applies immediately even when the replay
+launched a different Pattern. The original request deadline covers the complete handoff; a failed
+or timed-out stop prevents the command. Quiescent Engine Stop has already
+cleared FX, so replay Stop can complete with audio suspended before Project
+replacement. Replay and transport do not play side by side.

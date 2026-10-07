@@ -597,6 +597,14 @@ class EnginePerformanceReplaySink final : public PerformanceReplayRuntimeSink {
   }
 
   foundation::Result<NeutralResetProgress> reset_neutral() override {
+    // Quiescent Engine Stop clears the FX queue and resets the master bus.
+    // Project replacement stops a replay with audio already suspended; no
+    // callback can acknowledge newly enqueued gestures in that state.
+    if (engine_.telemetry().state == audio::RealtimeState::stopped) {
+      clear_reset_state();
+      return foundation::Result<NeutralResetProgress>::success(
+          NeutralResetProgress::complete);
+    }
     const auto start_epoch = engine_.telemetry().start_epoch;
     if (reset_epoch_.has_value() && *reset_epoch_ != start_epoch) {
       clear_reset_state();
