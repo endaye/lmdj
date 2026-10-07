@@ -136,6 +136,9 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
     .toEqual(keys);
 
   expect(screen.queryByRole("button", {name: "Activate audio"})).toBeNull();
+  // The brand mark is the System entry and the rail's first stop.
+  await user.tab();
+  expect(document.activeElement).toBe(screen.getByRole("button", {name: "System"}));
   await user.tab();
   expect(document.activeElement).toBe(projectMode);
   await user.tab();
@@ -796,6 +799,13 @@ test.each([
     const pad = await screen.findByRole("button", {name: /^Pad A02 — empty/});
     await flushAsyncTurns();
     await waitFor(() => expect((pad as HTMLButtonElement).disabled).toBe(false));
+    // The source is a System setting: no Pad recording row sits in the touch
+    // area until a take starts, and System shows the remembered source.
+    expect(screen.queryByRole("region", {name: "Pad recording"})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "System"}));
+    expect((screen.getByRole("combobox", {name: "Pad recording source"}) as HTMLSelectElement)
+      .value).toBe(source);
+    fireEvent.click(screen.getByRole("button", {name: "Back to music"}));
     fireEvent.mouseDown(pad, {button: 0});
     const recording = screen.getByRole("region", {name: "Pad recording"});
     await waitFor(() => expect(recording.textContent).toContain(
@@ -859,14 +869,17 @@ test.each([
       await userEvent.click(within(recording).getByRole("button", {name: "Discard Pad recording"}));
       expect(importTake).not.toHaveBeenCalled(); expect(fixture.assigned.has(1)).toBe(false);
     }
-    await waitFor(() => expect(recording.textContent).toContain("idle"));
+    // An idle Pad recording with nothing to report leaves the touch area.
+    await waitFor(() =>
+      expect(screen.queryByRole("region", {name: "Pad recording"})).toBeNull());
     expect(originalImport).not.toHaveBeenCalled();
     // After the deliberate resolution the successor can own a new take.
     fireEvent.mouseDown(screen.getByRole("button", {name: /^Pad A03 — empty/}), {button: 0});
-    await waitFor(() => expect(recording.textContent).toContain("recording · Pad A03"));
+    const next = () => screen.getByRole("region", {name: "Pad recording"});
+    await waitFor(() => expect(next().textContent).toContain("recording · Pad A03"));
     if (source === "microphone") expect(contexts).toBe(2);
     await flushAsyncTurns();
-    expect(recording.textContent).toContain("recording · Pad A03");
+    expect(next().textContent).toContain("recording · Pad A03");
   } finally {
     acquired.resolve(); closed.resolve(); rendered.unmount(); await flushAsyncTurns(); vi.unstubAllGlobals();
   }
@@ -2572,7 +2585,13 @@ test("hardware Project keeps list/import/open, offers New Project in touch and o
   expect(within(touch).queryByRole("button", {name: "Activate audio"})).toBeNull();
   expect(within(touch).queryByRole("button", {name: "Enable MIDI"})).toBeNull();
   expect(within(touch).queryByRole("button", {name: "Export report"})).toBeNull();
-  await userEvent.click(within(touch).getByRole("button", {name: "System"}));
+  // System is the brand mark on the rail, not a touch-area button, and the
+  // Pad recording source is a System setting rather than a touch-area row.
+  expect(within(touch).queryByRole("button", {name: "System"})).toBeNull();
+  expect(within(touch).queryByRole("region", {name: "Pad recording"})).toBeNull();
+  expect(within(touch).queryByRole("combobox", {name: "Pad recording source"})).toBeNull();
+  await userEvent.click(within(screen.getByRole("complementary", {name: "Physical controls"}))
+    .getByRole("button", {name: "System"}));
   expect(within(touch).getByRole("button", {name: "Enable MIDI"})).toBeTruthy();
   expect(within(touch).getByRole("button", {name: "Export report"})).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Back to music"}));

@@ -36,7 +36,8 @@ async function report(page, options = {}) {
     // While the capture dialog is modal the rest of the shell is inert, so a
     // role query cannot see the button; a CSS locator still can, and a
     // programmatic click is exactly what `force` means here.
-    await page.getByTestId("touch-workspace").locator("button").filter({hasText: /^System$/})
+    // System is entered from the brand mark on the physical column.
+    await page.getByTestId("physical-controls").locator("button.physical-brand")
       .evaluate(element => element.click());
     await page.getByTestId("touch-workspace").locator("button")
       .filter({hasText: "Export report"})
@@ -645,7 +646,10 @@ test("empty Pad microphone press commits one Artifact on release and reopens exa
   await page.goto("/index.html");
   await importV1SampleProject(page);
   const before = await inspectProjectTruth(page);
+  // The Pad recording source is a System setting (brand mark entry).
+  await page.getByRole("button", {name: "System", exact: true}).click();
   await page.getByRole("combobox", {name: "Pad recording source"}).selectOption("microphone");
+  await page.getByRole("button", {name: "Back to music", exact: true}).click();
   const pad = page.getByRole("button", {name: /^Pad A01 — empty/});
   const status = page.getByRole("region", {name: "Pad recording"});
   await pad.focus();await page.keyboard.down("KeyQ");

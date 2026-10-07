@@ -158,6 +158,33 @@ This Task selects the batch-only `deploy_contract` lane.
 - Component: the status and context text for a fixture Pattern, the playhead and the frame.
 - Journey: record notes on B05, press Bank B, and the overview shows the B05 row with its notes.
 
+## T5a — free the touch area: System entry on the brand mark
+
+Added on 2026-10-07, when T5 started. Three controls added during P1 sit at the top of every page's touch area and take about 150 of its 336 px:
+
+- the always-shown Pad recording source and status;
+- Retry default sounds;
+- the System button.
+
+With them there, T5's EDIT layer cannot show all 16 grid rows. The owner chose to free that height in a separate Task before T5.
+
+**Behaviour.**
+
+- **System entry.** The brand mark at the top of the physical column becomes the System entry, keeping the accessible name "System". Desktop Final START HERE names the brand mark as the settings entry. Back to music returns focus to it. The touch area loses its System button.
+- **Pad recording.** The row appears only while a take is recording, awaiting review or saving, or reporting a message.
+- **Recording source.** The source selector moves into System.
+- **Unchanged.** Retry default sounds still appears only on a default-sound failure. Sound Sets, Slice and their Back buttons are unchanged.
+
+**Declared files.** `src/app.tsx`, `src/components/physical_controls.tsx`, `src/styles.css`, `test/workspace_shell.test.tsx`, `creator_web_perform.spec.mjs`, `creator_web_capture.spec.mjs`, this plan, and portal `/hosts/creator-web/`.
+
+**Lowest-tier tests.** Component tests:
+
+- System is not in the touch area, and the brand mark opens it;
+- the rail's first tab stop is System;
+- no Pad recording row appears while idle;
+- System shows the remembered source;
+- the row leaves once a take is resolved, and returns for the next take.
+
 ## T5 — Sequence touch area: EDIT/SETUP layers and the touch control kit
 
 **Behaviour** (10-04 decision, items 6–7).
@@ -282,7 +309,7 @@ A separate plan follows once #1823 is decided. It adds Authoring Commands and Ho
 ## Order
 
 ```
-T1 ─┬─ T3 ─┬─ T4 ─ T5 ─ T6
+T1 ─┬─ T3 ─┬─ T4 ─ T5a ─ T5 ─ T6
     │      ├─ T9
     │      ├─ T10   (T9–T11 reuse the T5 kit; they can follow T5 in any order)
     │      └─ T11

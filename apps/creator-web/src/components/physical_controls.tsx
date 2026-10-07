@@ -1,4 +1,4 @@
-import type {ReactNode, MouseEvent} from "react";
+import type {ReactNode, MouseEvent, Ref} from "react";
 
 import type {CreatorMode} from "./creator_mode";
 import type {Bank} from "../state/creator_state";
@@ -45,6 +45,10 @@ interface PhysicalControlsProps {
   playEnabled?: boolean;
   playing?: boolean;
   history?: RailHistoryChord;
+  // The brand mark doubles as the System entry (Desktop Final START HERE).
+  onOpenSystem?: () => void;
+  systemOpen?: boolean;
+  systemEntryRef?: Ref<HTMLButtonElement>;
 }
 
 interface PhysicalKeyProps {
@@ -111,12 +115,22 @@ export function PhysicalControls({
   playEnabled = false,
   playing = false,
   history,
+  onOpenSystem,
+  systemOpen = false,
+  systemEntryRef,
 }: PhysicalControlsProps) {
   return (
     <div className="physical-controls">
-      <div className="physical-brand" aria-hidden="true">
-        <LogoIcon />
-      </div>
+      {onOpenSystem === undefined ? (
+        <div className="physical-brand" aria-hidden="true">
+          <LogoIcon />
+        </div>
+      ) : (
+        <button type="button" className="physical-brand" aria-label="System"
+          aria-expanded={systemOpen} ref={systemEntryRef} onClick={onOpenSystem}>
+          <LogoIcon />
+        </button>
+      )}
       <div className="physical-encoders" role="group" aria-label="Encoders" data-testid="physical-encoders">
         {ENCODER_POSITIONS.map((position) => (
           <button

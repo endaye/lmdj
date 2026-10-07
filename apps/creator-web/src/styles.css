@@ -807,6 +807,20 @@ button:disabled { color: #737b87; }
   width: 80px;
   height: 80px;
 }
+/* As the System entry the brand mark is a button; the global button rule's
+   border, padding, fill and 44 px minimum must not reshape the 80×80 mark. */
+button.physical-brand {
+  width: 80px;
+  height: 80px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  cursor: pointer;
+}
+button.physical-brand:not(:disabled):hover { background: rgb(241 242 233 / 6%); }
+button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--creator-lime); }
 .physical-encoders,
 .physical-keys {
   display: grid;
