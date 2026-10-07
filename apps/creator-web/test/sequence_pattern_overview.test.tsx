@@ -2,7 +2,9 @@ import {act, render, screen, within} from "@testing-library/react";
 import {expect, test, vi} from "vitest";
 
 import type {PatternTransportStatus} from "@lmdj/web-runtime-platform/runtime_types";
+import {OverviewDisplay} from "../src/components/overview_display";
 import {SequenceOverview} from "../src/components/sequence_overview";
+import {initialCreatorState, type CreatorState} from "../src/state/creator_state";
 import {initialSequenceState} from "../src/state/sequence_state";
 import {
   initialPatternTransportState,
@@ -70,16 +72,39 @@ function renderOverview(
   );
 }
 
-test("projects the whole Pattern as a 64-row thumbnail and drops the placeholder caption", () => {
-  renderOverview();
-  const overview = screen.getByTestId("sequence-pattern-overview");
-  const notes = within(overview as unknown as HTMLElement)
-    .getAllByTestId("sequence-overview-note");
-  expect(notes).toHaveLength(2);
-  expect(notes[0]!.getAttribute("data-row")).toBe("0");
-  expect(notes[1]!.getAttribute("data-row")).toBe("37");
+const overviewNotes = () => within(
+  screen.getByTestId("sequence-pattern-overview") as unknown as HTMLElement,
+).queryAllByTestId("sequence-overview-note");
+const rowNames = () => [...screen.getByTestId("sequence-overview")
+  .querySelectorAll(".sequence-overview-names li")].map((item) => item.textContent);
+
+test("shows eight Pad rows from the active Bank's first row", () => {
+  const view = renderOverview();
+  expect(rowNames()).toEqual(["A01", "A02", "A03", "A04", "A05", "A06", "A07", "A08"]);
+  expect(overviewNotes().map((note) => note.getAttribute("data-row"))).toEqual(["0"]);
+  // The C06 note (row 37) appears once the window is on Bank C.
+  view.rerender(<SequenceOverview project={project} state={initialSequenceState}
+    bank={2} snap="1/16" viewport={null} selection={[]} />);
+  expect(rowNames()[0]).toBe("C01");
+  expect(overviewNotes().map((note) => note.getAttribute("data-row"))).toEqual(["37"]);
   expect(screen.getByTestId("sequence-overview").textContent ?? "")
     .not.toMatch(/live projection target/);
+});
+
+test("draws step cells at the snap, alternating shade per beat", () => {
+  const view = renderOverview({snap: "1/4"});
+  const cells = () => view.container.querySelectorAll(".sequence-overview-cell");
+  // Two bars at 1/4 are eight steps on each of eight rows.
+  expect(cells()).toHaveLength(64);
+  expect([...cells()].slice(0, 3).map((cell) => cell.getAttribute("class")))
+    .toEqual([
+      "sequence-overview-cell is-even",
+      "sequence-overview-cell is-odd",
+      "sequence-overview-cell is-even",
+    ]);
+  view.rerender(<SequenceOverview project={project} state={initialSequenceState}
+    bank={0} snap="off" viewport={null} selection={[]} />);
+  expect(cells()).toHaveLength(8 * 32);
 });
 
 test("marks the touch grid's Bank and time window as the overview frame", () => {
@@ -87,24 +112,26 @@ test("marks the touch grid's Bank and time window as the overview frame", () => 
   const frame = screen.getByTestId("sequence-overview-frame");
   expect(frame.getAttribute("x")).toBe("960");
   expect(frame.getAttribute("width")).toBe("3840");
-  expect(frame.getAttribute("y")).toBe("16");
-  expect(frame.getAttribute("height")).toBe("16");
+  expect(frame.getAttribute("y")).toBe("0");
+  expect(frame.getAttribute("height")).toBe("101");
 });
 
-test("shows the existing facts plus the selection facts", () => {
+test("shows the context line, and the selection only when notes are selected", () => {
   renderOverview({snap: "1/32"});
   const overview = screen.getByTestId("sequence-overview");
   const fact = (name: string) =>
     within(overview).getByText(name).nextElementSibling?.textContent;
-  expect(fact("Quantize")).toBe("on");
-  expect(fact("Swing")).toBe("50%");
-  expect(fact("Selected")).toBe("0");
+  expect(fact("Bars")).toBe("01–02");
+  expect(fact("Steps")).toBe("64");
   expect(fact("Snap")).toBe("1/32");
-  expect(fact("Velocity")).toBe("—");
-  // The display's own facts and primary line already carry the bar count and
-  // phase; repeating them would push the Sequence facts out of the display.
-  expect(within(overview).queryByText("Pattern")).toBeNull();
-  expect(within(overview).queryByText("Phase")).toBeNull();
+  expect(fact("Tracks")).toBe("A01–A08 / 64");
+  expect(fact("Bank")).toBe("A");
+  expect(within(overview).queryByText("Selected")).toBeNull();
+  expect(within(overview).queryByText("Velocity")).toBeNull();
+  // Quantize and Swing moved to the touch SETUP layer and the status line.
+  expect(within(overview).queryByText("Quantize")).toBeNull();
+  expect(within(overview).queryByText("Swing")).toBeNull();
+  expect(screen.getByTestId("sequence-position").textContent).toBe("STOPPED / 001:01");
 });
 
 test("shows one status line, the most severe first", () => {
@@ -184,6 +211,7 @@ test("advances the playhead on the render clock while the transport plays", () =
     // Half a second at 120 BPM is 960 ticks; the loop is 7680 ticks.
     act(() => animationFrame?.(1_500));
     expect(playhead()?.getAttribute("x1")).toBe("960");
+    expect(screen.getByTestId("sequence-position").textContent).toBe("PLAYING / 001:02");
 
     view.rerender(
       <SequenceOverview
@@ -258,4 +286,28 @@ test("the selection facts follow the touch grid's live selection", () => {
   );
   expect(fact("Selected")).toBe("2");
   expect(fact("Velocity")).toBe("mixed");
+});
+
+test("Sequence draws only its status and rows; the phase and facts stay readable", () => {
+  const state: CreatorState = {
+    ...initialCreatorState,
+    project: {...initialCreatorState.project, phase: "ready", current: project},
+  };
+  const display = (activeMode: "sequence" | "project") => (
+    <OverviewDisplay state={state} activeMode={activeMode} sequence={initialSequenceState}
+      snap="1/16" viewport={null} selection={[]} />
+  );
+  const view = render(display("sequence"));
+  const hidden = (selector: string) =>
+    view.container.querySelector(selector)?.classList.contains("visually-hidden");
+  expect(view.container.querySelector(".overview-swing")?.textContent).toBe("SWING 50%");
+  expect(hidden(".overview-phase")).toBe(true);
+  expect(hidden(".overview-facts")).toBe(true);
+  expect(screen.getByTestId("audio-state").textContent).toMatch(/^Audio /);
+  expect(screen.getByText("Rev").nextElementSibling?.textContent).toBe("7");
+
+  view.rerender(display("project"));
+  expect(view.container.querySelector(".overview-swing")).toBeNull();
+  expect(hidden(".overview-phase")).toBe(false);
+  expect(hidden(".overview-facts")).toBe(false);
 });

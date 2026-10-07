@@ -115,8 +115,8 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
   expect(within(display).queryAllByRole("checkbox")).toHaveLength(0);
   expect(within(display).queryAllByRole("textbox")).toHaveLength(0);
   expect(within(display).queryAllByRole("slider")).toHaveLength(0);
-  expect(display.textContent ?? "").toMatch(/Quantize/);
-  expect(display.textContent ?? "").toMatch(/Swing/);
+  expect(display.textContent ?? "").toMatch(/Tracks/);
+  expect(display.textContent ?? "").toMatch(/STOPPED \/ 001:01/);
   expect(display.textContent ?? "").not.toMatch(/Copy/);
 
   const touch = screen.getByRole("region", {name: "Touch workspace"});

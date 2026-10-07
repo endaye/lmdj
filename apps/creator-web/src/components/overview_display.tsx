@@ -59,8 +59,13 @@ export function OverviewDisplay({
   const patternIndex = pattern === undefined || project === null
     ? null
     : project.patterns.findIndex((item) => item.patternId === pattern.patternId) + 1;
+  // Sequence shows only its own status and track rows (2026-10-04 Sequence
+  // hardware UI decision). The Creator and audio phase, the Project facts and
+  // the build label stay readable by assistive technology but are not drawn.
+  const sequenceMode = activeMode === "sequence";
+  const hiddenInSequence = sequenceMode ? " visually-hidden" : "";
   return (
-    <div className="overview-display">
+    <div className={`overview-display${sequenceMode ? " is-sequence" : ""}`}>
       <div className="overview-primary">
         <output className="overview-context">
           {modeLabel(activeMode)}
@@ -69,7 +74,12 @@ export function OverviewDisplay({
         <output className="overview-bpm">
           {project ? `${project.bpm} BPM` : "NO PROJECT"}
         </output>
-        <output className="overview-phase">
+        {sequenceMode && project ? (
+          <output className="overview-swing">
+            SWING {project.sequenceSettings.swingPercent}%
+          </output>
+        ) : null}
+        <output className={`overview-phase${hiddenInSequence}`}>
           <span data-testid="creator-phase">{selectCreatorPhase(state)}</span>
           {" / "}
           <span data-testid="audio-state">Audio {state.audio.phase}</span>
@@ -82,7 +92,7 @@ export function OverviewDisplay({
               : ""}
         </output>
       </div>
-      <dl className="overview-facts">
+      <dl className={`overview-facts${hiddenInSequence}`}>
         <div>
           <dt>Project</dt>
           <dd>{project ? shortProjectId(project.projectId) : "—"}</dd>
@@ -115,7 +125,7 @@ export function OverviewDisplay({
         ) : null}
       </dl>
       {buildIdentity ? (
-        <p className="overview-build" data-testid="build-identity"
+        <p className={`overview-build${hiddenInSequence}`} data-testid="build-identity"
           title={describeBuildIdentity(buildIdentity)}>
           {shortBuildLabel(buildIdentity)}
         </p>

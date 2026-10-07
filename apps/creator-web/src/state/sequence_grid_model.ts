@@ -56,18 +56,38 @@ export interface SequenceGridModel {
   readonly viewport: SequenceGridViewport;
 }
 
-export interface SequenceThumbnailNote {
+// The upper display shows an eight-row window over all 64 Pad rows
+// (row = bank × 16 + pad), each row 10 px high with a 3 px gap.
+export const SEQUENCE_ROW_COUNT = SEQUENCE_BANK_COUNT * SEQUENCE_BANK_PADS;
+export const SEQUENCE_OVERVIEW_ROWS = 8;
+export const SEQUENCE_OVERVIEW_ROW_HEIGHT = 10;
+export const SEQUENCE_OVERVIEW_ROW_PITCH = 13;
+export const SEQUENCE_OVERVIEW_HEIGHT =
+  SEQUENCE_OVERVIEW_ROWS * SEQUENCE_OVERVIEW_ROW_PITCH -
+  (SEQUENCE_OVERVIEW_ROW_PITCH - SEQUENCE_OVERVIEW_ROW_HEIGHT);
+export const SEQUENCE_TICKS_PER_BEAT = SEQUENCE_PPQ;
+
+// One note on the overview: its onset step is drawn solid and the steps its
+// length covers after that are drawn as a lighter tail.
+export interface SequenceOverviewNote {
   readonly row: number;
+  readonly windowRow: number;
   readonly onsetTick: number;
   readonly durationTick: number;
   readonly velocity: number;
+  readonly onsetStepTick: number;
+  readonly tailStartTick: number;
+  readonly tailEndTick: number;
 }
 
-export interface SequenceGridThumbnail {
+export interface SequenceOverviewWindow {
   readonly bars: 1 | 2 | 4 | 8;
   readonly lengthTicks: number;
-  readonly rowCount: number;
-  readonly notes: readonly SequenceThumbnailNote[];
+  readonly stepTicks: number;
+  readonly stepCount: number;
+  readonly rowOffset: number;
+  readonly rows: readonly number[];
+  readonly notes: readonly SequenceOverviewNote[];
 }
 
 export function sequencePatternLengthTicks(bars: 1 | 2 | 4 | 8): number {
@@ -153,19 +173,41 @@ export function createSequenceGridModel(
   });
 }
 
-// The upper display's whole-Pattern overview: every note of all four Banks on
-// one 64-row thumbnail, row = bank × 16 + pad.
-export function createSequenceGridThumbnail(
+export function clampSequenceOverviewRowOffset(offset: number): number {
+  const last = SEQUENCE_ROW_COUNT - SEQUENCE_OVERVIEW_ROWS;
+  if (!Number.isFinite(offset)) return 0;
+  return Math.min(Math.max(Math.trunc(offset), 0), last);
+}
+
+// The eight Pad rows from rowOffset, with step cells at the grid snap (1/16
+// when snap is off) and each note's onset step and tail in step bounds.
+export function createSequenceOverviewWindow(
   pattern: SequenceGridPattern,
-): SequenceGridThumbnail {
+  options: Readonly<{rowOffset: number; snap: SequenceGridSnap}>,
+): SequenceOverviewWindow {
   const lengthTicks = sequencePatternLengthTicks(pattern.bars);
-  const notes: SequenceThumbnailNote[] = [];
+  const stepTicks = sequenceSnapTicks(options.snap) ?? 240;
+  const rowOffset = clampSequenceOverviewRowOffset(options.rowOffset);
+  const rows = Array.from({length: SEQUENCE_OVERVIEW_ROWS}, (_, index) => rowOffset + index);
+  const notes: SequenceOverviewNote[] = [];
   for (const event of pattern.events) {
+    const row = event.slot.bank * SEQUENCE_BANK_PADS + event.slot.pad;
+    const windowRow = row - rowOffset;
+    if (windowRow < 0 || windowRow >= SEQUENCE_OVERVIEW_ROWS) continue;
+    const durationTick = Math.min(event.durationTick, lengthTicks - event.onsetTick);
+    const onsetStepTick = Math.floor(event.onsetTick / stepTicks) * stepTicks;
+    const tailStartTick = Math.min(onsetStepTick + stepTicks, lengthTicks);
+    const tailEndTick = Math.min(
+      Math.ceil((event.onsetTick + durationTick) / stepTicks) * stepTicks, lengthTicks);
     notes.push({
-      row: event.slot.bank * SEQUENCE_BANK_PADS + event.slot.pad,
+      row,
+      windowRow,
       onsetTick: event.onsetTick,
-      durationTick: Math.min(event.durationTick, lengthTicks - event.onsetTick),
+      durationTick,
       velocity: event.velocity,
+      onsetStepTick,
+      tailStartTick,
+      tailEndTick: Math.max(tailStartTick, tailEndTick),
     });
   }
   notes.sort((left, right) =>
@@ -173,9 +215,39 @@ export function createSequenceGridThumbnail(
   return Object.freeze({
     bars: pattern.bars,
     lengthTicks,
-    rowCount: SEQUENCE_BANK_COUNT * SEQUENCE_BANK_PADS,
+    stepTicks,
+    stepCount: lengthTicks / stepTicks,
+    rowOffset,
+    rows: Object.freeze(rows),
     notes: Object.freeze(notes),
   });
+}
+
+// The touch grid's Bank and time window, cut to the overview's eight rows.
+// Null when the touch grid's Bank is scrolled out of the overview.
+export function sequenceOverviewFrame(
+  viewport: SequenceGridViewport,
+  bank: Bank,
+  rowOffset: number,
+): Readonly<{startTick: number; endTick: number; firstWindowRow: number; rowCount: number}> | null {
+  const offset = clampSequenceOverviewRowOffset(rowOffset);
+  const first = Math.max(bank * SEQUENCE_BANK_PADS, offset);
+  const end = Math.min((bank + 1) * SEQUENCE_BANK_PADS, offset + SEQUENCE_OVERVIEW_ROWS);
+  if (end <= first) return null;
+  return {
+    startTick: viewport.startTick,
+    endTick: viewport.endTick,
+    firstWindowRow: first - offset,
+    rowCount: end - first,
+  };
+}
+
+// Bar and beat of a tick, both one-based: 001:01 is the Pattern start.
+export function sequenceBarBeat(tick: number | null): string {
+  const at = tick === null || !Number.isSafeInteger(tick) || tick < 0 ? 0 : tick;
+  const bar = Math.floor(at / SEQUENCE_TICKS_PER_BAR) + 1;
+  const beat = Math.floor((at % SEQUENCE_TICKS_PER_BAR) / SEQUENCE_TICKS_PER_BEAT) + 1;
+  return `${String(bar).padStart(3, "0")}:${String(beat).padStart(2, "0")}`;
 }
 
 // Grid editing gestures map to one atomic Truth change each: keys to remove,

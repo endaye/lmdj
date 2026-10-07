@@ -484,19 +484,33 @@ other conflict or refusal restores the projection from Truth and shows the
 reason; a committed edit whose swap fails surfaces the typed snapshot error
 honestly. Undo and Redo are the existing stop-only history controls.
 
-The upper display is a whole-Pattern overview. A 64-row thumbnail maps every
-event of all four Banks, and a frame marks the touch grid's current Bank and
-visible time window. The display is a fixed 752×176 that clips its overflow,
-so the Sequence facts sit beside the thumbnail rather than below it:
+The upper display follows the 2026-10-04 Sequence hardware UI decision. It
+draws three things:
 
-- Quantize and Swing;
-- the live selection facts: selected note count, snap and velocity (the shared
-  value, `mixed` when the selection differs, empty with no selection);
-- a pending Pattern and a recovery count, when present.
+- **A status line:** `SEQUENCE / NN`, the BPM and the Swing, with the transport
+  state and bar:beat position (for example `STOPPED / 001:01`) at its right
+  edge.
+- **A context line:** the bar range, the step count at the current snap, the
+  visible track range (`TRACKS A01–A08 / 64`) and the Bank. While notes are
+  selected it adds their count and velocity (the shared value, or `mixed`).
+  It also shows a pending Pattern and a recovery count when present.
+- **Eight track rows** over all 64 Pad rows. Each row is 10 px high with a
+  3 px gap, behind a row-name column that shows only the address. Step cells
+  follow the snap (1/16 when snap is off) and alternate shade per beat. A
+  note's onset step is solid and the steps its length covers are lighter. A
+  frame marks the part of the touch grid's Bank and time window that falls
+  inside the eight rows.
 
-The bar count and transport phase stay in the display's own facts and primary
-line. Below the Sequence facts sits one status line, which shows the most
-severe of a transport error, a Sequence error and a pending publication.
+The rows start at the active Bank's first row, so pressing a Bank key moves
+them to that Bank.
+
+When there is a status — the most severe of a transport error, a Sequence
+error and a pending publication — it takes the context line's place.
+
+On the Sequence page the Creator and audio phase, the Project facts row
+(Project, Rev, Pads, Assets, Key, MIDI) and the build label are not drawn. They
+stay in the accessibility tree, visually hidden, so assistive technology still
+reads them. The owner chose this on 2026-10-06.
 
 A live playhead advances at the Project tempo from the playing Pattern's
 origin frame. It is anchored on the last transport status: the Runtime frame
@@ -509,7 +523,7 @@ Contract's per-bar tick bounds at the inspection boundary. Both views re-read
 Truth after any authoring commit — including a recording that settles through
 the transport — and after Undo/Redo or reopen, so they never drift from the
 Pattern the Core holds. Automation covers the view model's snap columns, bar
-extents, loop seam, overlaps, Bank filtering and 64-row mapping; each gesture's
+extents, loop seam, overlaps, Bank filtering and the eight-row overview window; each gesture's
 exact remove/put mapping, no-op suppression, snap, seam clamp and key
 collision; the grid and overview components, including one command per
 gesture, disabled-while-recording, a deferred edit treated as committed,

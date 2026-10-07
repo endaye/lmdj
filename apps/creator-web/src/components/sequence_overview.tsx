@@ -1,18 +1,28 @@
-import {useEffect, useState} from "react";
+import {useEffect, useMemo, useState} from "react";
 
 import {userMessage} from "../state/error_messages";
 import type {ProjectView} from "../runtime/runtime_types";
 import type {Bank} from "../state/creator_state";
 import type {SequenceState} from "../state/sequence_state";
 import {
-  createSequenceGridThumbnail,
+  createSequenceOverviewWindow,
+  SEQUENCE_OVERVIEW_HEIGHT,
+  SEQUENCE_OVERVIEW_ROW_HEIGHT,
+  SEQUENCE_OVERVIEW_ROW_PITCH,
+  SEQUENCE_ROW_COUNT,
+  SEQUENCE_BANK_PADS,
+  SEQUENCE_TICKS_PER_BEAT,
+  sequenceBarBeat,
   sequenceGridSelectionVelocity,
+  sequenceOverviewFrame,
   sequencePlayheadTick,
   type SequenceGridEventKey,
   type SequenceGridSnap,
   type SequenceGridViewport,
 } from "../state/sequence_grid_model";
 import type {PatternTransportState} from "../state/pattern_transport_state";
+import {bankName, slotAddress} from "../state/view_model";
+import {transportStatusLabel} from "./transport_status";
 
 interface SequenceOverviewProps {
   project: ProjectView | null;
@@ -22,6 +32,8 @@ interface SequenceOverviewProps {
   snap: SequenceGridSnap;
   viewport: SequenceGridViewport | null;
   selection: readonly SequenceGridEventKey[];
+  // First of the eight overview rows (0–56); defaults to the Bank's first row.
+  rowOffset?: number;
 }
 
 // The Runtime advances 48 frames per millisecond at its fixed 48 kHz.
@@ -35,6 +47,7 @@ export function SequenceOverview({
   snap,
   viewport,
   selection,
+  rowOffset = bank * SEQUENCE_BANK_PADS,
 }: SequenceOverviewProps) {
   const selectedPatternId = state.selectedPatternId ?? project?.patternId ?? null;
   const pattern = selectedPatternId === null
@@ -50,14 +63,16 @@ export function SequenceOverview({
       : transport?.status?.publicationPending === true
         ? "Committed, publication pending"
         : null;
-  const thumbnail = pattern === undefined ? null : createSequenceGridThumbnail(pattern);
+  const overview = useMemo(() => pattern === undefined
+    ? null
+    : createSequenceOverviewWindow(pattern, {rowOffset, snap}), [pattern, rowOffset, snap]);
   const selectionVelocity = pattern === undefined
     ? null
     : sequenceGridSelectionVelocity(pattern, selection);
   const bpm = project?.bpm ?? null;
   const status = transport?.status ?? null;
   const playing = status !== null && status.playing === true &&
-    thumbnail !== null && bpm !== null;
+    overview !== null && bpm !== null;
   const originFrame = playing && status !== null ? status.originFrame : null;
   // The last observed Runtime frame anchors the playhead, so remounting the
   // overview mid-playback (leaving Sequence and coming back) resumes at the
@@ -66,7 +81,7 @@ export function SequenceOverview({
   const anchorObservedAt = playing && status !== null
     ? status.observedAtMilliseconds
     : null;
-  const lengthTicks = thumbnail?.lengthTicks ?? null;
+  const lengthTicks = overview?.lengthTicks ?? null;
   const [playheadTick, setPlayheadTick] = useState<number | null>(null);
   useEffect(() => {
     if (originFrame === null || anchorFrame === null || anchorObservedAt === null ||
@@ -95,77 +110,72 @@ export function SequenceOverview({
       window.cancelAnimationFrame(animationFrame);
     };
   }, [originFrame, anchorFrame, anchorObservedAt, lengthTicks, bpm]);
+  // Step cells change only with the window's geometry, so the playhead's
+  // per-frame render reuses the same elements.
+  const cells = useMemo(() => overview === null ? null : overview.rows.flatMap((_, windowRow) =>
+    Array.from({length: overview.stepCount}, (_, step) => {
+      const startTick = step * overview.stepTicks;
+      const beat = Math.floor(startTick / SEQUENCE_TICKS_PER_BEAT) % 2 === 0 ? "even" : "odd";
+      return (
+        <rect
+          className={`sequence-overview-cell is-${beat}`}
+          key={`${windowRow}:${step}`}
+          x={startTick}
+          y={windowRow * SEQUENCE_OVERVIEW_ROW_PITCH}
+          width={overview.stepTicks * 0.84}
+          height={SEQUENCE_OVERVIEW_ROW_HEIGHT}
+        />
+      );
+    })), [overview]);
+  const frame = overview === null || viewport === null
+    ? null
+    : sequenceOverviewFrame(viewport, bank, overview.rowOffset);
+  const firstRow = overview?.rowOffset ?? rowOffset;
+  const lastRow = firstRow + (overview?.rows.length ?? 8) - 1;
+  const transportLabel = transport === undefined ? "stopped" : transportStatusLabel(transport);
+  const bars = pattern?.bars ?? null;
   return (
     <div className="sequence-overview" data-testid="sequence-overview">
-      {thumbnail !== null ? (
-        <svg
-          className="sequence-overview-thumbnail"
-          data-testid="sequence-pattern-overview"
-          viewBox={`0 0 ${thumbnail.lengthTicks} ${thumbnail.rowCount}`}
-          preserveAspectRatio="none"
-          role="img"
-          aria-label="Pattern overview"
-        >
-          {thumbnail.notes.map((note) => (
-            <rect
-              className="sequence-overview-note"
-              data-testid="sequence-overview-note"
-              data-row={note.row}
-              data-onset-tick={note.onsetTick}
-              data-duration-tick={note.durationTick}
-              data-velocity={note.velocity}
-              key={`${note.row}:${note.onsetTick}`}
-              x={note.onsetTick}
-              y={note.row}
-              width={note.durationTick}
-              height={1}
-            />
-          ))}
-          {viewport === null ? null : (
-            <rect
-              className="sequence-overview-frame"
-              data-testid="sequence-overview-frame"
-              x={viewport.startTick}
-              y={bank * 16}
-              width={Math.max(1, viewport.endTick - viewport.startTick)}
-              height={16}
-            />
-          )}
-          {playheadTick === null ? null : (
-            <line
-              className="sequence-overview-playhead"
-              data-testid="sequence-playhead"
-              data-playhead
-              x1={playheadTick}
-              x2={playheadTick}
-              y1={0}
-              y2={thumbnail.rowCount}
-            />
-          )}
-        </svg>
-      ) : null}
-      <div className="sequence-overview-side">
-      <dl className="overview-facts">
+      <p className="sequence-overview-position" data-testid="sequence-position">
+        {transportLabel.toUpperCase()} / {sequenceBarBeat(playheadTick)}
+      </p>
+      {/* One context line: a status, when there is one, takes its place. */}
+      {statusLine !== null ? (
+        <p className="sequence-overview-status">{statusLine}</p>
+      ) : (
+      <dl className="sequence-overview-context">
         <div>
-          <dt>Quantize</dt>
-          <dd>{project?.sequenceSettings.quantizeEnabled === true ? "on" : "off"}</dd>
+          <dt>Bars</dt>
+          <dd>{bars === null ? "—" : `01–${String(bars).padStart(2, "0")}`}</dd>
         </div>
         <div>
-          <dt>Swing</dt>
-          <dd>{project ? `${project.sequenceSettings.swingPercent}%` : "—"}</dd>
-        </div>
-        <div>
-          <dt>Selected</dt>
-          <dd>{selection.length}</dd>
+          <dt>Steps</dt>
+          <dd>{overview === null ? "—" : overview.stepCount}</dd>
         </div>
         <div>
           <dt>Snap</dt>
           <dd>{snap}</dd>
         </div>
         <div>
-          <dt>Velocity</dt>
-          <dd>{selectionVelocity === null ? "—" : selectionVelocity}</dd>
+          <dt>Tracks</dt>
+          <dd>{`${slotAddress(firstRow)}–${slotAddress(lastRow)} / ${SEQUENCE_ROW_COUNT}`}</dd>
         </div>
+        <div>
+          <dt>Bank</dt>
+          <dd>{bankName(bank)}</dd>
+        </div>
+        {selection.length > 0 ? (
+          <>
+            <div>
+              <dt>Selected</dt>
+              <dd>{selection.length}</dd>
+            </div>
+            <div>
+              <dt>Velocity</dt>
+              <dd>{selectionVelocity === null ? "—" : selectionVelocity}</dd>
+            </div>
+          </>
+        ) : null}
         {pendingPatternId !== null ? (
           <div>
             <dt>Pending</dt>
@@ -179,10 +189,74 @@ export function SequenceOverview({
           </div>
         ) : null}
       </dl>
-      {statusLine === null ? null : (
-        <p className="sequence-overview-status">{statusLine}</p>
       )}
-      </div>
+      {overview !== null ? (
+        <div className="sequence-overview-rows">
+          <ol className="sequence-overview-names" aria-hidden="true">
+            {overview.rows.map((row) => <li key={row}>{slotAddress(row)}</li>)}
+          </ol>
+          <svg
+            className="sequence-overview-steps"
+            data-testid="sequence-pattern-overview"
+            viewBox={`0 0 ${overview.lengthTicks} ${SEQUENCE_OVERVIEW_HEIGHT}`}
+            preserveAspectRatio="none"
+            role="img"
+            aria-label={`Pattern overview, ${slotAddress(firstRow)} to ${slotAddress(lastRow)}`}
+          >
+            {cells}
+            {overview.notes.map((note) => (
+              <g
+                className="sequence-overview-note"
+                data-testid="sequence-overview-note"
+                data-row={note.row}
+                data-onset-tick={note.onsetTick}
+                data-duration-tick={note.durationTick}
+                data-velocity={note.velocity}
+                key={`${note.row}:${note.onsetTick}`}
+              >
+                <rect
+                  className="sequence-overview-onset"
+                  x={note.onsetStepTick}
+                  y={note.windowRow * SEQUENCE_OVERVIEW_ROW_PITCH}
+                  width={overview.stepTicks * 0.84}
+                  height={SEQUENCE_OVERVIEW_ROW_HEIGHT}
+                />
+                {note.tailEndTick > note.tailStartTick ? (
+                  <rect
+                    className="sequence-overview-tail"
+                    x={note.tailStartTick}
+                    y={note.windowRow * SEQUENCE_OVERVIEW_ROW_PITCH}
+                    width={note.tailEndTick - note.tailStartTick - overview.stepTicks * 0.16}
+                    height={SEQUENCE_OVERVIEW_ROW_HEIGHT}
+                  />
+                ) : null}
+              </g>
+            ))}
+            {frame === null ? null : (
+              <rect
+                className="sequence-overview-frame"
+                data-testid="sequence-overview-frame"
+                x={frame.startTick}
+                y={frame.firstWindowRow * SEQUENCE_OVERVIEW_ROW_PITCH}
+                width={Math.max(1, frame.endTick - frame.startTick)}
+                height={frame.rowCount * SEQUENCE_OVERVIEW_ROW_PITCH -
+                  (SEQUENCE_OVERVIEW_ROW_PITCH - SEQUENCE_OVERVIEW_ROW_HEIGHT)}
+              />
+            )}
+            {playheadTick === null ? null : (
+              <line
+                className="sequence-overview-playhead"
+                data-testid="sequence-playhead"
+                data-playhead
+                x1={playheadTick}
+                x2={playheadTick}
+                y1={0}
+                y2={SEQUENCE_OVERVIEW_HEIGHT}
+              />
+            )}
+          </svg>
+        </div>
+      ) : null}
     </div>
   );
 }
