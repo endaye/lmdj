@@ -187,5 +187,5 @@ test("published Creator completes authoring, playback, and durable reload", asyn
     await expect(page.getByRole("heading", {name: `Project ${imported}`}))
       .toBeVisible({timeout: 120_000});
   }
-  await expect(page.getByText("64 / 64")).toBeVisible();
+  await expect(page.getByText("64 / 64", {exact: true})).toBeVisible();
 });

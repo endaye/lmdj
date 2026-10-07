@@ -23,7 +23,7 @@ async function importProject(page) {
   await chooser.setFiles(bundle);
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.getByText("64 / 64")).toBeVisible();
+  await expect(page.getByText("64 / 64", {exact: true})).toBeVisible();
 }
 
 async function inspectProject(page) {
