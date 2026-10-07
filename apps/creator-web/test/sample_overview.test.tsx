@@ -41,3 +41,11 @@ test("an untrimmed end selects through the last frame", () => {
   render(<SampleOverview state={stateWith(0, null)} />);
   expect(screen.getByTestId("sample-overview").textContent).toContain("0.000 – 1.000 s");
 });
+
+test("a trim beyond the Sample's frames is drawn at the waveform's edge", () => {
+  render(<SampleOverview state={stateWith(4_800, 96_000)} />);
+  const overview = screen.getByTestId("sample-overview");
+  expect(overview.textContent).toContain("0.100 – 1.000 s");
+  const outside = overview.querySelectorAll(".sample-overview-outside");
+  expect([...outside].map((rect) => rect.getAttribute("width"))).toEqual(["72", "0"]);
+});

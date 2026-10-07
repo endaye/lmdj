@@ -22,9 +22,10 @@ export function SampleOverview({state}: SampleOverviewProps) {
   const playback = inspect?.playback ?? null;
   const envelope = state.sample.waveform;
   const frames = metadata?.sourceFrames ?? 0;
+  const clamp = (frame: number) => Math.min(Math.max(frame, 0), frames);
   const selection = metadata === null || playback === null
     ? null
-    : {start: playback.trimStartFrame, end: playback.trimEndFrame ?? frames};
+    : {start: clamp(playback.trimStartFrame), end: clamp(playback.trimEndFrame ?? frames)};
   const x = (frame: number) => frames === 0 ? 0 : Math.round(frame * WIDTH / frames);
   const bars = envelope === null || frames === 0 || envelope.metadata.sourceFrames !== frames
     ? []
