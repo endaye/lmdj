@@ -559,6 +559,10 @@ case "$command_name" in
     ;;
   proof)
     [[ $# -eq 0 ]] || { usage; exit 64; }
+    if [[ "${LMDJ_AUDIO_OUTPUT_WRAPPED:-}" != web_runtime_host ]]; then
+      exec python3 "$script_dir/local-audio-output.py" --lane web_runtime_host -- \
+        bash "$script_dir/web-runtime-host.sh" proof
+    fi
     proof_host
     ;;
   serve)
